@@ -12,7 +12,9 @@ forced-handoff. Prefer helpers.
 
 **Scope**: one selected issue; no open-ended Discover. Standard
 "Return to Discover" branches mean **STOP and report; do not claim**.
-Fresh candidate: before claim, if context pressure prevents completing Claim
+
+**Context-pressure stop** (before Claim execution step 2): Fresh
+candidate: before claim, if context pressure prevents completing Claim
 through F4, report for handoff; stop; do not claim. Recovery unchanged.
 Make no claim-stage event/marker, branch/worktree, or issue-state change.
 (#3144; preventive)
@@ -26,41 +28,35 @@ Make no claim-stage event/marker, branch/worktree, or issue-state change.
    fall through to the written tables in that situation.
 2. **When the repository is `instructions-only`** (no helper runtime
    shipped): skip the helper commands and use only the written tables;
-   an issue-only handoff on an open PR stops. That is the sole path where
-   the tables below are the primary control
-   surface. The `--record-tokens`/`--read-tokens` check
-   instead uses `docs/idd-helper-scripts.md`'s helper-free fallback.
+   an issue-only handoff on an open PR stops. The `--record-tokens` /
+   `--read-tokens` check instead uses `docs/idd-helper-scripts.md`'s
+   helper-free fallback.
 
 Every `node scripts/<name>.mjs` command below is the **source-repo /
-vendored-node** invocation form. Under `package-manager` /
-`ephemeral-npx` / `user-global` profiles, `scripts/` is not vendored — resolve each
-command's profile-selected equivalent from
-`docs/idd-helper-scripts.md`. A helper missing on the active profile falls
-under rule 1 (stop and ask), never a reason to fall through.
+vendored-node** form; other profiles resolve each command's profile-selected
+equivalent from `docs/idd-helper-scripts.md`. A helper missing on the active
+profile is a rule 1 stop, never a fall-through.
 
 `{agent-id}` is a tool/agent identifier shared across concurrent
 sessions of the same agent type — pick or confirm one before the first
 command that needs it (Claim execution step 4 at the latest).
-A unique session token (e.g., `copilot-8122ca35`) is recommended for
-auditability, not required. `{agent-id}` alone is never
-ownership proof; `{claim-id}` is the authoritative token.
+A unique session token is recommended for auditability, not required.
+`{agent-id}` alone is never ownership proof; `{claim-id}` is the
+authoritative token.
 
 ## Stop-and-ask
 
 Stop and ask the operator when:
 
-- an expected helper is missing, fails, or disagrees with live state;
 - pre-check (a)-(e) fails for any reason (see below) — no fallback
   candidate exists in lite scope;
 - the fresh-claim gate returns `already-claimed` for a non-owner, or the
   written rules find a non-stale competitor;
 - forced-handoff evidence exists but mismatches live claim/branch/PR
   state, or `forcedHandoff.mode` is not `human-gated`;
-- claim verification (below) fails any race-safe check;
-- branch pre-check (e) finds an orphaned branch with no active claim.
+- claim verification (below) fails any race-safe check.
 
-Never invent a forced-handoff marker. Only consume already-recorded,
-human-gated forced-handoff evidence from a trusted actor.
+Never invent a forced-handoff marker.
 
 ## Pre-checks (a)-(e) — all five must pass
 
@@ -126,8 +122,9 @@ node scripts/resume-claim-routing.mjs --issue <N> --claim-id <your-or-newClaimId
 ```
 
 Pass `--nonce` only when this session already recorded one for that
-`{claim-id}` (true after forced-handoff step 5); omit it otherwise.
-Pass `--worktree <path>` once the B1 worktree exists.
+`{claim-id}`; omit it otherwise.
+Pass `--worktree <path>` once the linked worktree exists (step 2 or B1
+creates it).
 
 <!-- dprint-ignore-start -->
 | Top-level `state` / `action` | Meaning |
@@ -208,9 +205,8 @@ first commit (the earliest). On success,
 the successor claim is **sticky**: adopt
 `newAgentId` / `newClaimId` **verbatim** as your own for the rest of
 the run (do not mint a fresh pair), and still post your own
-activation-nonce for `newClaimId` (see Claim verification) — the one
-activation path with no separate `claimed-by` post. On any failure, the
-active claim is unchanged; apply the rules above.
+activation-nonce for `newClaimId` (see Claim verification). On any failure,
+the active claim is unchanged; apply the rules above.
 
 ### (d) Open PR
 
@@ -268,30 +264,27 @@ activation.
 
 ## Claim execution
 
-Skip step 4 (the `claimed-by` post) in two cases, and treat them
-differently for step 5:
-
-- **Pre-check (c) found this session already owns the claim**: this is
-  a continuation, not a fresh activation — keep the recorded
-  `{claim-id}`/branch, post no new `claimed-by` **and no new
-  activation-nonce**. Skip straight to Claim verification (or Heartbeat
-  posting if you are extending the stale clock).
-- **Forced-handoff adopt-verbatim**: the handoff marker itself already
-  performed the transfer, so no separate `claimed-by` post is required
-  or allowed — but this **is** a fresh activation, so still run step 5
-  (activation-nonce) for it.
+Skip Claim execution for a continuation (pre-check (c) found this
+session's claim): keep its `{claim-id}`/branch, post no new `claimed-by`
+or nonce, and go to Claim verification (or Heartbeat). Adopt-verbatim posts
+no `claimed-by`, but it is a fresh activation, so it still runs step 5.
 
 1. **Branch name**: takeover, forced-handoff, or a fresh claim whose
    pre-check (e) scan matched an inheritable branch (released claim,
    legacy migration source, or matching PR) → reuse it verbatim, never
    recompute from the title (which may have changed since). No
    inheritable match → use the name pre-check (e) computed.
-2. **`{claim-id}`**: generate a fresh opaque token — **except**
-   forced-handoff adopt-verbatim, which reuses the marker's
-   `newClaimId` instead. Record it with the profile-selected
-   `claim-lock` helper's `--record-tokens` mode (`--worktree <path>
-   --agent-id <id> --claim-id <id>`; resolve the exact command from
-   `docs/idd-helper-scripts.md`) before step 4.
+2. **Worktree and `{claim-id}`**: on a fresh claim with no inheritable
+   branch (pre-check (e)), create the linked worktree first, under the
+   clone-scoped lock after `git fetch origin main`: `git worktree add
+   --no-track <path> -b <branch-name> origin/main`. B1 guard
+   checks 1-2 do not apply yet. Otherwise, and for forced-handoff
+   adopt-verbatim, `<path>` is the primary worktree and B1 creates the linked
+   one after the claim. Then generate a fresh opaque token (adopt-verbatim
+   reuses `newClaimId`) and record it with the `claim-lock` helper's
+   `--record-tokens` mode (`--worktree <path> --agent-id <id> --claim-id <id>`;
+   command in `docs/idd-helper-scripts.md`) before the first post (step 4, or
+   step 5 for adopt-verbatim).
 3. **`{prior-claim-id}` / `supersedes:`**: `none` for a fresh claim or
    legacy migration; the active claim's `{claim-id}` for a stale
    takeover. Not applicable to forced-handoff (step 4 is skipped
@@ -328,7 +321,7 @@ differently for step 5:
    or forced-handoff adopt-verbatim) also posts an activation-nonce —
    never for a plain heartbeat. Record it with the same
    `--record-tokens` invocation as step 2 plus `--nonce <nonce>`
-   (primary worktree) first:
+   (same `<path>`) first:
 
    ```sh
    node scripts/post-idd-marker.mjs --type activation-nonce \
@@ -345,23 +338,30 @@ differently for step 5:
    On a same-`{claim-id}` collision (2+ trusted nonce markers), the
    winner is the lexicographically earliest `{nonce}`.
 
+6. **Fresh claim with no inheritable branch: lock and assert before
+   verification.** On the linked worktree only, run the lock acquire and
+   `--read-tokens` (`instructions-only`: the written lock and Claim
+   verification checks replace these helpers and `--assert`). After
+   `claim.verifySettleDelay`, run
+   `resume-claim-routing.mjs` with `--assert`, `--issue`, `--claim-id`,
+   `--nonce`, and `--worktree`; it must return `already_owned`/`keep`, and
+   that post-acquire result alone counts. Any other result: claim contested;
+   apply Claim verification step 5, then STOP before the digest.
+
 ## Heartbeat posting
 
-Only when this session already owns the active claim and is extending
-its stale clock (holding past 12 h, or a phase will exceed 12 h):
-repost using the **same command and body as step 4 above**, with
-`{branch}` copied **verbatim** from the original claim (never
-recompute), `{claim-id}` / `{agent-id}` matching exactly, and
-`supersedes:` unchanged — a mismatch is anomalous and does not refresh
-the stale clock. Skip step 5 (activation-nonce).
+Only when this session owns the active claim and is extending its stale
+clock (holding past 12 h, or a phase will exceed 12 h): repost **step 4's
+command and body** with `{branch}` copied **verbatim**, and `{claim-id}`,
+`{agent-id}`, and `supersedes:` unchanged; a mismatch is anomalous and does
+not refresh the clock. Skip step 5.
 
 ## Claim verification
 
 **Already-owned continuation (no new post)**: pre-check (c)'s
-top-branch `already_owned` result verifies ownership. Skip checks 1–4, but run
-step 5's authoring guard; post no new `claimed-by` or nonce. Checks 1–4
-require a fresh `claimed-by` and apply only to fresh claims, takeovers, and
-legacy migrations.
+`already_owned` verifies ownership; skip checks 1–4 and post nothing new,
+but run step 5's authoring guard. Checks 1–4 apply only to fresh claims,
+takeovers, and legacy migrations.
 
 For fresh activation, after posting `claimed-by`, wait the settle delay
 (`claim.verifySettleDelay`, default `PT5S`), re-read all issue comments, then
@@ -404,23 +404,22 @@ effect. To move off it, either keep adopting it verbatim, or post
 pair (exact `{agent-id}`/`{claim-id}` each), then claim fresh.
 
 Once verified, record this `{claim-id}` (and any posted nonce) as your
-claim token for the rest of the run. Every later mutation (commit,
-push, comment, label, reply, resolve, reviewer request, merge) must
-re-verify this claim is still active — recompute the nonce winner too
-when you posted one, and stop if it no longer matches — and, inside
-the implementation worktree, that cwd and `git branch --show-current`
-both match the claimed branch, before proceeding — a mismatch means
-the claim was lost; stop, do not mutate further.
+claim token for the rest of the run. Before each later mutation, apply
+the pre-mutation guard in `idd-work-lite.instructions.md` with its scope
+rules (its checks 3-4 bind the cwd and branch once B2 starts); a failed
+check means stop, do not mutate further.
 
 **Digest**: after verification, upsert the issue's `idd-live-status`
 digest (only when exactly one exists, or none) — `Phase: A5 claimed`,
-`Claim`, `Branch`, `Open blockers: none`, `Next action: B1 create
-branch and worktree`. Multiple digests → report their URLs, do not
-edit either.
+`Claim`, `Branch`, `Open blockers: none`, and `Next action: B1 install dependencies`
+when step 2 created the worktree, otherwise `Next
+action: B1 create branch and worktree`. Multiple digests → report their URLs,
+do not edit either.
 
 ## Worktree-local lock (same-machine fast path)
 
-Once the B1 worktree exists, before every mutation:
+Once the linked worktree exists (linked only; `--acquire` on the primary is
+refused), before every mutation:
 
 ```sh
 node scripts/claim-lock.mjs --acquire --worktree <path> \
@@ -447,8 +446,9 @@ A matching `{claim-id}` re-acquires as a read-only check. A different
 
 No release step (F4 `git worktree remove` deletes it).
 
-Then continue to `idd-work-lite.instructions.md` when pre-check (d)
-matched no inherited open PR — except on `instructions-only`, where
-that file declines the profile in its own header; use
-`idd-work.instructions.md` instead. When it did, continue at
+Then, when pre-check (d) matched no inherited open PR, continue to
+`idd-work-lite.instructions.md`; on `instructions-only`, that file declines
+the profile, so use `idd-work.instructions.md`, from Step 3 if step 2 created
+the worktree, else from its start. When pre-check (d) matched an inherited PR
+and step 2 did not create a worktree, continue at
 `idd-resume-lite.instructions.md` Step 2.

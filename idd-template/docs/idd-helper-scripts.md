@@ -3611,7 +3611,8 @@ gets no self-referential-bootstrap-auto waiver, even when it also
 touches a bootstrap file. The check then passes only through a
 converged review, through an approving review of the current HEAD
 whose author is in `trustedMarkerActors`, or through the
-maintainer-authorized waiver after the deadline. Only the latest review per
+maintainer-authorized waiver, which applies after the deadline or while
+Copilot is terminally unavailable. Only the latest review per
 login that is not `COMMENTED` or `PENDING` counts, so a later
 `CHANGES_REQUESTED` review withdraws the approval and reruns the check.
 Dismissing the approval also withdraws it, but only on the check's next
@@ -3622,10 +3623,11 @@ verdict reports this as `waiver.decisionRuleFilesTouched` and
 review on any other pull request. GitHub does not let a pull request's
 author approve it, so the approving login must differ from the author;
 the maintainer-authorized waiver above stays the off-ramp after the
-deadline. Every other repository's profile-derived set has no
-decision-rule list and keeps the waiver as before. In this repository the
-posting job's allowlist is the bootstrap list, and it posts no marker for
-a diff that touches a decision-rule file. Observed
+deadline or while Copilot is terminally unavailable. Every other
+repository's profile-derived set has no decision-rule list and keeps the
+waiver as before. In this repository the posting job's allowlist is the
+bootstrap list, and it posts no marker for a diff that touches a
+decision-rule file. Observed
 incident: kurone-kito/idd-skill#3999 and kurone-kito/idd-skill#4000
 both merged through the waiver, and kurone-kito/idd-skill#4000 changed
 the cited-item rules that decide whether a finding counts as settled,
@@ -4405,9 +4407,12 @@ still fails closed:
 - **When to call `--record-tokens`**: once at A5 claim time, right after
   generating `{agent-id}`/`{claim-id}`, before posting the `claimed-by`
   marker (the B1 worktree does not exist yet, so `<path>` is then the
-  _primary_ worktree); again with `--nonce` right before posting the
-  activation-nonce marker; a third time at B1 once the sibling worktree
-  exists, again with `--nonce` carried over from the A5 write --
+  _primary_ worktree); on the worktree-first fresh path (no inheritable
+  branch), `idd-claim` step 2 creates the linked worktree before the claim,
+  so `<path>` is that linked worktree and the B1 write below does not apply;
+  again with `--nonce` right before posting the activation-nonce marker; a
+  third time at B1 once the sibling worktree exists, again with `--nonce`
+  carried over from the A5 write --
   mirroring the lock's own `--acquire` step, but into a distinct file in
   the new worktree's own admin directory, so the earlier primary-worktree
   write's `nonce` field must be copied forward rather than omitted (the
