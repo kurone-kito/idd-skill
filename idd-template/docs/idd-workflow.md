@@ -1252,20 +1252,24 @@ identify its old claims, and step 1 treats them as not its own.
    batch.
 4. **Recover reports.** Look for a finished worker's report draft in the
    scratchpad of the same session, under the issue-number prefix that the
-   fan-out variant already requires. If no draft is found, verify the terminal
-   outcome from live GitHub state (a merged or closed pull request, a released
-   claim), then build the record and append it with the profile-selected
-   `idd-worker-report append --file <path>` command. The record must validate
-   against `schemas/worker-report.schema.json`. `issue` and `claimId` come from
-   steps 1 and 2, and `pullRequest` is the claim's pull request, or null.
-   `harness` is the harness row of the worker mechanism table, and
+   fan-out variant already requires. If a draft is found, validate it against
+   `schemas/worker-report.schema.json` and append it. If no draft is found,
+   verify the terminal outcome from live GitHub state (a merged or closed pull
+   request, or a released claim), then build the record and append it with the
+   profile-selected `idd-worker-report append --file <path>` command. The
+   record must validate against `schemas/worker-report.schema.json`:
+   `schemaVersion` is `1`; `issue` is `owner/repo#<number>`, built from the
+   number in step 2; `claimId` comes from step 1; `pullRequest` is the claim's
+   pull request in the same form, or null; `harness` is the schema slug for the
+   harness row of the worker mechanism table, for example `claude-code`;
    `workerHandle` is the agent-listing handle, or the claim-id when no listing
    is available. `terminalPhase` is the last phase that live state proves,
    which is F4 for a merged claim that was released. `outcome` is `merged` for
    a merged pull request, `abandoned` for a closed unmerged one, `held` for a
-   claim still held, and `failed` otherwise. `verifiedAt` and `recordedAt` are
-   ISO 8601 UTC timestamps. Record the recovery in `frictions`, where each
-   entry needs a `phase` and a `summary`.
+   claim still held, `handed-off` when a handoff summary was posted before the
+   release, and `failed` otherwise. `verifiedAt` and `recordedAt` are ISO 8601
+   UTC timestamps. Record the recovery in `frictions`, where each entry needs a
+   `phase` and a `summary`.
 5. **Report the remainder.** An own claim with no matching worker after step 3
    is reported to the operator. Its worktree is not removed.
 
