@@ -63,7 +63,8 @@ Run AW1 with `--pr`, `--claim-id`, `--agent-id`,
 exact `allowedByPolicySetting: ciGate.allowNoRequiredChecksInGlobalOnly`
 and empty `checks[]`; `pending`/`failing`/`missing` defer
 Step 2. Require `outcome: SATISFIED`, or `CAP_EXHAUSTED` with
-`capExhaustedRoute: phase-specific`; otherwise stop/ask. Require
+`capExhaustedRoute: phase-specific`. `DISPOSITION_NEEDED` (#4070) goes to
+E14; otherwise stop/ask. Require
 `copilotRecovery.activeClaimProvided: true`; same-head:
 `lastCopilotCommit == prHeadSha`, off-head needs
 `staleRequestRecovery.action` `not-applicable` or completed AW3-S/cap;

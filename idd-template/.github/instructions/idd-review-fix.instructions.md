@@ -361,8 +361,9 @@ login).
    and `--trusted-marker-logins`. **SATISFIED** → E14 advisory-bot
    processing is done; proceed to E15. **DISPOSITION_NEEDED** (#4070) →
    not satisfied: answer each uncovered cited item (E6 of
-   `idd-review-triage.instructions.md`), then rerun AW1. Do not request
-   Copilot or go to E15.
+   `idd-review-triage.instructions.md`), or for an unreadable same-head
+   review post a trusted review-ack for HEAD; then rerun AW1. Do not
+   request Copilot or go to E15.
 3. Run **AW2** to fetch markers.
 4. Apply the **AW3** decision table:
    - **SATISFIED**, `COPILOT_PENDING` `"false"`, `COPILOT_PENDING_COVERS_HEAD`

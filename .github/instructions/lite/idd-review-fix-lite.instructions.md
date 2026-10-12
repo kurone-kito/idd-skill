@@ -340,7 +340,8 @@ self-critique and record risk.
    - `SATISFIED` (otherwise) → apply step 10 first, then continue to
      E15.
    - `DISPOSITION_NEEDED` (#4070): not satisfied; answer the cited items
-     (`idd-review-triage` E6), rerun the helper; do not go to E15.
+     (`idd-review-triage` E6), or review-ack an unreadable same-head
+     review, then rerun the helper; do not go to E15.
    - `RECOVERY_NEEDED`: post the recovery marker
      `advisory-wait-recovery: {agent-id} {PR_HEAD_SHA}
      {ISO8601-recovery-time}` as plain text. Do not request another
