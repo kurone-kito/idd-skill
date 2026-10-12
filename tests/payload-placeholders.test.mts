@@ -70,10 +70,12 @@ const completePolicy = {
 // #3822: every uppercase placeholder in the shared payload must have a mapping,
 // so a new placeholder cannot reach onboarding without its source field.
 test('every placeholder in the installed payload has a mapped source (#3822)', () => {
+  // Every regular file under both roots, whatever its extension, so a YAML or
+  // shell file added to the payload cannot ship with an unmapped placeholder.
   const files = [
     ...filesUnder(join(REPO_ROOT, 'idd-template', '.github', 'instructions')),
     ...filesUnder(join(REPO_ROOT, 'idd-template', 'docs')),
-  ].filter((path) => /\.(md|mdx|json|txt)$/.test(path));
+  ];
   const unmapped = new Set<string>();
   for (const file of files) {
     for (const match of readFileSync(file, 'utf8').matchAll(PLACEHOLDER)) {
