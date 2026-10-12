@@ -430,13 +430,10 @@ rules. Apply all race-safe checks below:
 
 If any check fails, treat the claim as contested.
 
-Return to Discover using the same selection mode that produced this
-target and pick the next eligible issue (orphan-first: continue the
-A0-O capable path; roadmap mode: continue the A3-ready path). Do not
-retry the same issue. For explicit-target A0-T runs, report the
-contested claim and stop unless the operator has explicitly switched to
-normal discovery, per `idd-discover.instructions.md`'s A0-T stop-don't-fallback
-rule.
+Return to Discover in the same selection mode and pick the next eligible
+issue (A0-O orphan path or A3-ready roadmap path). Do not retry the same
+issue. For explicit-target A0-T runs, stop and report the contested claim,
+per `idd-discover.instructions.md`'s A0-T stop-don't-fallback rule.
 
 Once verified, record this `{claim-id}` as your current claim token for
 the rest of the workflow.
@@ -464,11 +461,6 @@ pair still owns claim and nonce (or none competes), post/verify
 `unclaimed-by` for the adopted pair (this session cannot keep that
 activation); else leave the successor claim; then take the
 already-claimed/Discover fallback (A0-T stops).
-
-Always use the assigned pair verbatim: never invent `claimed-by` or reuse the
-displaced `{claim-id}`. A native agent-id that is not the assigned value fails
-later heartbeat or F2/F3 checks. Cite trusted forced-handoff evidence in the
-issue digest or resume report's `Authoritative by` field.
 
 **The successor claim is sticky**, not a one-shot unlock: forced-handoff
 re-derives the adopted pair as the active claim on every resolution
