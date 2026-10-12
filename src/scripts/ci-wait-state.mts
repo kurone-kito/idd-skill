@@ -261,7 +261,10 @@ export interface CiWaitStateSummary {
 export interface CiWaitGlobalOnlyPolicy {
   /** The trusted `ciGate.allowNoRequiredChecksInGlobalOnly` value. */
   optIn: boolean;
-  /** True when the global-only profile is active (the ignore list is non-empty). */
+  /**
+   * True when the global-only profile is active (the ignore list is non-empty).
+   * Resolved only when `optIn` is true, so it stays `false` otherwise.
+   */
   globalOnlyActive: boolean;
 }
 
@@ -485,10 +488,13 @@ export function collectCiWaitState(
     );
 
   // #4053: the global-only ignore list, resolved by the same helper and the
-  // same trusted base ref and head SHA that pre-merge readiness uses. Empty
-  // unless `--global-only` is passed and the profile is active.
+  // same trusted base ref and head SHA that pre-merge readiness uses. It is
+  // resolved only when the opt-in is on: with the setting unset or `false`,
+  // this call makes no activation or content reads, so that result is
+  // unchanged. `globalOnlyActive` is therefore only meaningful with `optIn`.
+  const optIn = ciGate.allowNoRequiredChecksInGlobalOnly === true;
   const globalOnlyIgnoredNames = resolveGlobalOnlyRunIgnores({
-    globalOnly: args.globalOnly,
+    globalOnly: args.globalOnly && optIn,
     activation: () => resolveActivation(owner, repo),
     port,
     owner,
@@ -497,7 +503,7 @@ export function collectCiWaitState(
     headSha: pr.headSha,
   });
   const globalOnlyPolicy: CiWaitGlobalOnlyPolicy = {
-    optIn: ciGate.allowNoRequiredChecksInGlobalOnly === true,
+    optIn,
     globalOnlyActive: globalOnlyIgnoredNames.length > 0,
   };
   const buildRollupSummary = (requiredCheckNames: string[]) =>

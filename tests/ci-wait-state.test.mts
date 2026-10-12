@@ -1828,6 +1828,32 @@ test('#4053: the setting unset or false defers the same zero-check global-only s
   }
 });
 
+test('#4053: with the setting unset or false, --global-only makes no activation read', () => {
+  for (const setting of [undefined, false]) {
+    let activationReads = 0;
+    const summary = collectCiWaitState(
+      ['--pr', '42', '--owner', 'o', '--repo', 'r', '--global-only'],
+      () => globalOnlyPort(),
+      () => ({
+        ciGate:
+          setting === undefined
+            ? {}
+            : { allowNoRequiredChecksInGlobalOnly: setting },
+      }),
+      () => {
+        activationReads += 1;
+        return GLOBAL_ONLY_ACTIVE;
+      },
+    );
+    assert.equal(activationReads, 0);
+    assert.deepEqual(summary.globalOnlyPolicy, {
+      optIn: false,
+      globalOnlyActive: false,
+    });
+    assert.equal(summary.allowedByPolicySetting, undefined);
+  }
+});
+
 test('#4053: the setting true still defers when the global-only profile is not active', () => {
   const cases: [string, ReturnType<typeof collectGlobalOnly>][] = [
     [
