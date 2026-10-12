@@ -165,9 +165,11 @@ self-critique and record risk.
    diff to a clean pass, then return to E1 before F1 — see
    `idd-review-fix.instructions.md`'s E10 repair path for the full
    procedure. Exception: once `critiqueLoop.e10MaxPasses` (default 2) E10
-   passes have run on the issue with no High or Medium finding open, the
-   per-issue cap in `idd-review-fix.instructions.md` applies: file the
-   remaining Low findings as a follow-up and go to E11.
+   passes have run on the issue, no High or Medium finding is open, and
+   `fix-validate` has passed on the current HEAD, the per-issue cap in
+   `idd-review-fix.instructions.md` applies: file the remaining Low findings
+   as a follow-up and go to E11. An unestablished count does not reach the
+   cap.
 9. Heuristic: several new, non-repeated same-area findings across
    rounds (3-4) may mean one structural fix converges faster than
    another patch. If that fix keeps drawing new findings, prefer

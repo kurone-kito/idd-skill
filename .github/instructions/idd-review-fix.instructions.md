@@ -106,8 +106,9 @@ High or Medium Accepted finding is open, and **fix-validate** has passed on
 the branch's current HEAD, stop the loop without fixing the remaining Low
 Accepted findings. File one follow-up issue (do not append) with one AC
 bullet per residual Low, exactly one `Refs #<originating-issue>` line, and
-the `<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->`
-marker; the follow-up then takes issue-authoring's Stage 2 narrow
+the defer-source marker that E6 uses for `review-fix-loop-cutoff`
+(`idd-review-triage.instructions.md`); the follow-up then takes
+issue-authoring's Stage 2 narrow
 auto-release, not the Stage 1 hold. Then continue to E11. The cap never
 applies while a High or Medium finding is open. If the count cannot be
 established, the cap is not reached. Observed on issue `#3878` (PR `#3919`).
