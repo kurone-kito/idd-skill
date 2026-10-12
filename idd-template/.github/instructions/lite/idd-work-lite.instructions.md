@@ -412,6 +412,6 @@ telemetry record.
 ### C6 — Return to C1
 
 1. Repeat the critique loop until it is clean.
-2. Treat the low-issue more-than-3-loop exit as clean once the floor has
+2. Treat the low-issue more-than-2-loop exit as clean once the floor has
    passed.
 3. Do not widen scope into review triage or merge phases from this file.
