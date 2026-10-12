@@ -5485,7 +5485,10 @@ export function formatAssertNextActions(
     }
     // #4063: the flag guidance is text-only, so the structured summary stays
     // one line. It follows the pointer's line, which ends with the pointer.
-    if (item.token === ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN.STAMPED_DISPOSITION_SUPPRESSED) {
+    if (
+      item.token ===
+      ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN.STAMPED_DISPOSITION_SUPPRESSED
+    ) {
       for (const guidance of STAMPED_DISPOSITION_GUIDANCE) {
         lines.push(`  ${guidance}`);
       }

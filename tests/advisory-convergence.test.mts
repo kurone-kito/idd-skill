@@ -9001,7 +9001,10 @@ test('stamped disposition (#4063): the pointer names the body-item helper and th
   const pointerAt = lines.findIndex((line) => line.includes(item.pointer));
   assert.ok(pointerAt >= 0);
   assert.ok(lines[pointerAt].endsWith(item.pointer));
-  assert.match(lines[pointerAt + 1] ?? '', /^ {2}For a PR with no linked issue, .* --claimless \(#2616\)\.$/);
+  assert.match(
+    lines[pointerAt + 1] ?? '',
+    /^ {2}For a PR with no linked issue, .* --claimless \(#2616\)\.$/,
+  );
   assert.match(
     lines[pointerAt + 2] ?? '',
     /^ {2}For a cited title that repeats within one review, .* --item-index <n> immediately before --apply\.$/,
