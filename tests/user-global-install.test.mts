@@ -820,3 +820,247 @@ test('install refuses a stale temporary file at the managed write path (#3825)',
     box.cleanup();
   }
 });
+
+test('cleanup refuses a skill subdirectory replaced by a symlink to an outside file (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options());
+    const skillDir = join(box.home, '.claude', 'skills', 'issue-authoring');
+    const outside = join(box.root, 'outside');
+    writeFixture(join(outside, 'contract.md'), 'keep me\n');
+    const digest = createHash('sha256').update('keep me\n').digest('hex');
+    rmSync(join(skillDir, 'references'), { recursive: true, force: true });
+    symlinkSync(outside, join(skillDir, 'references'));
+    const receiptPath = join(
+      box.root,
+      'data',
+      'idd-skill',
+      'user-global-receipt.json',
+    );
+    const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as {
+      skillFiles: { path: string; sha256: string }[];
+    };
+    receipt.skillFiles.push({
+      path: join(skillDir, 'references', 'contract.md'),
+      sha256: digest,
+    });
+    writeFileSync(receiptPath, JSON.stringify(receipt));
+    assert.throws(() => runUserGlobalUninstall(box.options()), /symlink/);
+    assert.equal(
+      readFileSync(join(outside, 'contract.md'), 'utf8'),
+      'keep me\n',
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install refuses a manifest entry that traverses out of the payload (#3825)', () => {
+  const box = sandbox();
+  const bundle = join(box.root, 'bundle');
+  try {
+    for (const dir of ['idd-template', 'skills', 'audit', 'package.json']) {
+      cpSync(join(REPO_ROOT, dir), join(bundle, dir), { recursive: true });
+    }
+    const manifestPath = join(bundle, 'audit', 'sync-manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+      generatedBlocks: { id: string; paths: string[] }[];
+    };
+    const block = manifest.generatedBlocks.find(
+      (b) => b.id === 'idd-template-core-files',
+    );
+    if (block === undefined) throw new Error('core block missing');
+    block.paths.push('idd-template/docs/../../outside.md');
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    writeFixture(join(box.root, 'data', 'outside.md'), 'keep me\n');
+    assert.throws(
+      () => runUserGlobalInstall({ ...box.options(), bundleRoot: bundle }),
+      /unsafe manifest path/,
+    );
+    assert.equal(
+      readFileSync(join(box.root, 'data', 'outside.md'), 'utf8'),
+      'keep me\n',
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install refuses an owned payload tree whose file was edited (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options());
+    const versionDir = join(box.root, 'data', 'idd-skill', '0.14.0');
+    const edited = join(versionDir, 'user-global', 'entry.md');
+    writeFileSync(edited, 'my own edit\n');
+    assert.throws(() => runUserGlobalInstall(box.options()), /edited/);
+    assert.equal(readFileSync(edited, 'utf8'), 'my own edit\n');
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install refuses a dangling symlink at a harness entry file (#3825)', () => {
+  const box = sandbox();
+  try {
+    mkdirSync(join(box.home, '.claude'), { recursive: true });
+    const missing = join(box.root, 'missing-target.md');
+    symlinkSync(missing, box.claudeFile);
+    assert.throws(
+      () => runUserGlobalInstall(box.options(['claude'])),
+      /dangling|symlink/,
+    );
+    assert.equal(lstatSync(box.claudeFile).isSymbolicLink(), true);
+    assert.equal(existsSync(missing), false);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install refuses a symlink in an ancestor of a harness entry file (#3825)', () => {
+  const box = sandbox();
+  try {
+    const outside = join(box.root, 'outside-claude');
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(outside, join(box.home, '.claude'));
+    assert.throws(
+      () => runUserGlobalInstall(box.options(['claude'])),
+      /symlink/,
+    );
+    assert.equal(existsSync(join(outside, 'CLAUDE.md')), false);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('re-pointing current records the superseded version so uninstall removes it (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options());
+    // Simulate a later package version: install created 0.14.0; a newer
+    // version becomes current on the next run.
+    const bundle = join(box.root, 'bundle-next');
+    for (const dir of ['idd-template', 'skills', 'audit']) {
+      cpSync(join(REPO_ROOT, dir), join(bundle, dir), { recursive: true });
+    }
+    writeFixture(
+      join(bundle, 'package.json'),
+      JSON.stringify({ name: 'bundle', version: '0.15.0' }),
+    );
+    runUserGlobalInstall({ ...box.options(), bundleRoot: bundle });
+    const older = join(box.root, 'data', 'idd-skill', '0.14.0');
+    assert.equal(
+      existsSync(older),
+      false,
+      'a superseded version is removed when current moves on',
+    );
+    runUserGlobalUninstall({ ...box.options(), bundleRoot: bundle });
+    assert.equal(
+      existsSync(older),
+      false,
+      'uninstall must remove every version install created',
+    );
+    assert.equal(existsSync(box.payloadRoot), false);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('uninstall refuses a payload version tree that contains a symlink out of it (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options());
+    const outside = join(box.root, 'outside-keep');
+    writeFixture(join(outside, 'keep.md'), 'keep me\n');
+    const versionDir = join(box.root, 'data', 'idd-skill', '0.14.0');
+    symlinkSync(outside, join(versionDir, 'docs-link'));
+    assert.throws(() => runUserGlobalUninstall(box.options()), /symlink/);
+    assert.equal(readFileSync(join(outside, 'keep.md'), 'utf8'), 'keep me\n');
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('uninstall refuses a harness entry file reached through a symlinked ancestor (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options(['claude']));
+    const outside = join(box.root, 'outside-claude');
+    mkdirSync(outside, { recursive: true });
+    writeFixture(
+      join(outside, 'CLAUDE.md'),
+      `${BEGIN_MARKER}\n@x\n<!-- idd-skill:user-global end -->\n`,
+    );
+    rmSync(join(box.home, '.claude'), { recursive: true, force: true });
+    symlinkSync(outside, join(box.home, '.claude'));
+    assert.throws(
+      () => runUserGlobalUninstall(box.options(['claude'])),
+      /symlink/,
+    );
+    assert.equal(
+      readFileSync(join(outside, 'CLAUDE.md'), 'utf8').includes(BEGIN_MARKER),
+      true,
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('uninstall refuses a skill marker reached through a symlinked skill directory (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options());
+    const skillDir = join(box.home, '.claude', 'skills', 'issue-authoring');
+    const outside = join(box.root, 'outside-skill');
+    writeFixture(join(outside, '.idd-user-global'), '{}\n');
+    rmSync(skillDir, { recursive: true, force: true });
+    symlinkSync(outside, skillDir);
+    assert.throws(() => runUserGlobalUninstall(box.options()), /symlink/);
+    assert.equal(existsSync(join(outside, '.idd-user-global')), true);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install refuses a skill manifest entry whose skill name traverses out (#3825)', () => {
+  const box = sandbox();
+  const bundle = join(box.root, 'bundle');
+  try {
+    for (const dir of ['idd-template', 'skills', 'audit', 'package.json']) {
+      cpSync(join(REPO_ROOT, dir), join(bundle, dir), { recursive: true });
+    }
+    const manifestPath = join(bundle, 'audit', 'sync-manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+      generatedBlocks: { id: string; paths: string[] }[];
+    };
+    const block = manifest.generatedBlocks.find(
+      (b) => b.id === 'issue-authoring-companion-files',
+    );
+    if (block === undefined) throw new Error('companion block missing');
+    block.paths.push('skills/../../escape/SKILL.md');
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    assert.throws(
+      () => runUserGlobalInstall({ ...box.options(), bundleRoot: bundle }),
+      /unsafe manifest path/,
+    );
+    assert.equal(existsSync(join(box.home, 'escape')), false);
+    assert.equal(existsSync(join(box.root, 'escape')), false);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install refuses a dangling symlink at an ancestor of a harness entry file (#3825)', () => {
+  const box = sandbox();
+  try {
+    symlinkSync(join(box.root, 'no-such-dir'), join(box.home, '.claude'));
+    assert.throws(
+      () => runUserGlobalInstall(box.options(['claude'])),
+      /symlink/,
+    );
+    assert.equal(existsSync(join(box.root, 'no-such-dir')), false);
+    assert.equal(lstatSync(join(box.home, '.claude')).isSymbolicLink(), true);
+  } finally {
+    box.cleanup();
+  }
+});

@@ -199,6 +199,16 @@ function lstatIfExists(path: string): Stats | null {
   }
 }
 
+/** `stat` follows links; null when the target is missing (a dangling link). */
+function statIfExists(path: string): Stats | null {
+  try {
+    return statSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
 function sha256(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
@@ -270,6 +280,11 @@ function payloadSources(bundleRoot: string): Map<string, string> {
     'idd-template-core-files',
   )) {
     if (!manifestPath.startsWith(DOCS_PREFIX)) continue;
+    if (!isSafeRelativePath(manifestPath)) {
+      throw new Error(
+        `user-global install: unsafe manifest path "${manifestPath}"; refusing to build a payload from it`,
+      );
+    }
     sources.set(
       manifestPath.slice('idd-template/'.length),
       join(bundleRoot, manifestPath),
@@ -283,6 +298,11 @@ function skillFiles(bundleRoot: string): SkillFile[] {
   const files: SkillFile[] = [];
   for (const id of SKILL_BLOCKS) {
     for (const manifestPath of readManifestBlock(bundleRoot, id)) {
+      if (!isSafeRelativePath(manifestPath)) {
+        throw new Error(
+          `user-global install: unsafe manifest path "${manifestPath}"; refusing to build a payload from it`,
+        );
+      }
       const parts = manifestPath.split('/');
       if (parts[0] !== 'skills' || parts.length < 3) {
         throw new Error(
@@ -689,6 +709,19 @@ function spliceOpencodeOut(
 // Receipt: the only record of what install created.
 // ---------------------------------------------------------------------------
 
+/**
+ * True when `relativePath` is one or more plain segments: no empty, ".", "..",
+ * or separator-bearing segment, and not absolute. A value failing this is never
+ * joined into a path.
+ */
+function isSafeRelativePath(relativePath: string): boolean {
+  if (relativePath.length === 0 || isAbsolute(relativePath)) return false;
+  if (relativePath.includes('\\')) return false;
+  return relativePath
+    .split('/')
+    .every((segment) => segment !== '' && segment !== '.' && segment !== '..');
+}
+
 function isSafeVersionName(name: unknown): name is string {
   return (
     typeof name === 'string' &&
@@ -776,6 +809,32 @@ function receiptBytes(receipt: Receipt): Buffer {
  * so a symlinked skills root stays the user's choice, and the rule covers
  * everything below it.
  */
+/**
+ * Refuse a symlink at any segment between `trustedRoot` and `target`, dangling
+ * or not, and refuse a non-directory ancestor. `lstat` decides what is there, so
+ * a link is never followed to find out.
+ */
+function assertNoSymlinkOnPath(trustedRoot: string, target: string): void {
+  const rest = relative(trustedRoot, target);
+  if (rest === '') return;
+  let current = trustedRoot;
+  for (const segment of rest.split(sep)) {
+    current = join(current, segment);
+    const stat = lstatIfExists(current);
+    if (stat === null) return;
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `user-global install: ${current} is a symlink on the path to ${target}; refusing to read or write through it`,
+      );
+    }
+    if (current !== target && !stat.isDirectory()) {
+      throw new Error(
+        `user-global install: ${current} is not a directory on the path to ${target}`,
+      );
+    }
+  }
+}
+
 function assertNoLinkBelow(root: string, target: string): void {
   const segments = relative(root, target).split(sep);
   let current = root;
@@ -828,6 +887,13 @@ function planPayload(
       pushChange(plan, versionDir, 'unchanged');
       return;
     }
+    const edited = [...expected.keys()].filter((rel) => {
+      const bytes = current.get(rel);
+      return bytes !== undefined && !bytes.equals(expected.get(rel) as Buffer);
+    });
+    throw new Error(
+      `user-global install: ${versionDir} was edited after install (${edited.join(', ') || 'a file is missing'}); refusing to replace it`,
+    );
   }
   pushChange(plan, versionDir, existing === null ? 'create' : 'update');
   ensureDirs(plan, [locations.dataRoot], createdDirs);
@@ -894,6 +960,14 @@ function planCurrentLink(
   const tmp = `${current}.tmp-${process.pid}`;
   plan.ops.push({ kind: 'symlink', target: linkTarget, path: tmp });
   plan.ops.push({ kind: 'rename', from: tmp, to: current });
+  // Item 2: the superseded version is removed once `current` no longer points at
+  // it. Only a real, marked version directory under the data root is removed.
+  const superseded = target;
+  const supersededStat = lstatIfExists(superseded);
+  if (supersededStat?.isDirectory() && !supersededStat.isSymbolicLink()) {
+    plan.ops.push({ kind: 'removeTree', path: superseded });
+    pushChange(plan, superseded, 'delete');
+  }
 }
 
 interface SkillReceipt {
@@ -978,6 +1052,40 @@ interface WireResult {
   keyCreated: boolean;
 }
 
+/**
+ * The harness entry file must be reached through real directories only. The
+ * trusted root is the directory the file sits in, reached from the filesystem
+ * root, so a link at any ancestor is caught; a link at the file (dangling or
+ * not) is refused too, because a dangling link would otherwise read as absent.
+ */
+function assertHarnessPathSafe(path: string): void {
+  const ancestors: string[] = [];
+  for (let dir = dirname(path); ; dir = dirname(dir)) {
+    ancestors.unshift(dir);
+    if (dirname(dir) === dir) break;
+  }
+  for (const dir of ancestors) {
+    const stat = lstatIfExists(dir);
+    if (stat === null) break;
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `user-global install: ${dir} is a symlink on the path to ${path}; refusing to read or write through it`,
+      );
+    }
+  }
+  // A live link to a regular file is the supported dotfile case and is kept. A
+  // dangling link, or a link to anything other than a regular file, is refused.
+  const leaf = lstatIfExists(path);
+  if (leaf?.isSymbolicLink()) {
+    const resolved = statIfExists(path);
+    if (resolved === null || !resolved.isFile()) {
+      throw new Error(
+        `user-global install: ${path} is a dangling or non-file symlink; refusing to read, follow, or overwrite it`,
+      );
+    }
+  }
+}
+
 function planHarnessFile(
   plan: Plan,
   prior: HarnessReceipt | undefined,
@@ -990,6 +1098,9 @@ function planHarnessFile(
       `user-global install: this harness is wired at ${prior.file}; uninstall that wiring before installing to ${path}`,
     );
   }
+  // Items 5 and the ancestor class: a link anywhere on the path, or a link at the
+  // file itself (dangling or not), refuses before anything is read or written.
+  assertHarnessPathSafe(path);
   const text = readUtf8IfExists(path);
   const next = wire(text);
   if (text !== null && next.text === text) {
@@ -1237,6 +1348,7 @@ export function runUserGlobalUninstall(
       continue;
     }
     const path = prior.file;
+    assertHarnessPathSafe(path);
     const text = readUtf8IfExists(path);
     if (text === null) {
       pushChange(plan, path, 'unchanged');
@@ -1372,16 +1484,60 @@ function assertReceiptInSkillRoots(
   }
 }
 
+/**
+ * Refuse any symlink anywhere inside `dir`. Removing a tree follows nothing
+ * deliberately, but a recursive removal does act on what a link points at, so
+ * a tree that holds a link is refused rather than removed.
+ */
+function assertNoSymlinkInTree(dir: string): void {
+  for (const name of readdirSync(dir)) {
+    const abs = join(dir, name);
+    const stat = lstatSync(abs);
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `user-global install: ${abs} is a symlink inside ${dir}; refusing to remove a tree that contains a link`,
+      );
+    }
+    if (stat.isDirectory()) assertNoSymlinkInTree(abs);
+  }
+}
+
+/** The skills root (Claude or shared) that a skill directory sits in. */
+function skillRootOf(dir: string, locations: Locations): string {
+  const roots = [locations.claudeSkillsRoot, locations.agentsSkillsRoot].map(
+    (r) => resolve(r),
+  );
+  const root = roots.find((r) => dir.startsWith(`${r}${sep}`));
+  if (root === undefined) {
+    throw new Error(
+      `user-global install: ${dir} is not under a skills root; refusing to clean it up`,
+    );
+  }
+  return root;
+}
+
 function removeOwned(plan: Plan, locations: Locations, receipt: Receipt): void {
   assertReceiptInSkillRoots(receipt, locations);
   const removed = new Set<string>();
   for (const dir of receipt.skillDirs) {
     const stat = lstatIfExists(dir);
-    if (stat === null || stat.isSymbolicLink() || !stat.isDirectory()) continue;
+    if (stat === null) continue;
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `user-global install: ${dir} is a symlink; refusing to remove a skill directory through a link`,
+      );
+    }
+    if (!stat.isDirectory()) continue;
+    assertNoSymlinkOnPath(
+      skillRootOf(dir, locations),
+      join(dir, SKILL_MARKER_NAME),
+    );
     const marker = lstatIfExists(join(dir, SKILL_MARKER_NAME));
     if (marker === null || marker.isSymbolicLink()) continue;
+    assertNoSymlinkInTree(dir);
     for (const file of receipt.skillFiles) {
       if (!file.path.startsWith(`${dir}${sep}`)) continue;
+      assertNoSymlinkOnPath(dir, file.path);
       if (!isUnchangedFile(file.path, file.sha256)) continue;
       removed.add(file.path);
       plan.ops.push({ kind: 'unlink', path: file.path });
@@ -1423,6 +1579,7 @@ function removeOwned(plan: Plan, locations: Locations, receipt: Receipt): void {
     const stat = lstatIfExists(dir);
     if (stat === null || stat.isSymbolicLink() || !stat.isDirectory()) continue;
     if (lstatIfExists(join(dir, PAYLOAD_MARKER_NAME)) === null) continue;
+    assertNoSymlinkInTree(dir);
     plan.ops.push({ kind: 'removeTree', path: dir });
     pushChange(plan, dir, 'delete');
   }
