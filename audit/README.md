@@ -43,7 +43,10 @@ manifest has these main responsibilities:
   then compared exactly with the target.
 - `structure`: Markdown heading levels and normalized heading text must
   match. Use this only when prose is intentionally different but the
-  navigational shape must stay aligned.
+  navigational shape must stay aligned. An optional `sharedSections` list
+  names section titles whose full text (the heading and its subsections)
+  must also match exactly; the rest of the pair stays heading-only (#4009).
+  `sharedSections` is valid only on `structure` pairs.
 - `contains`: the target must include each listed text fragment or
   regular expression. An optional `reference` file only asserts that the
   referenced source exists; it is not a semantic sync check.

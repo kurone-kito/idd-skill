@@ -1920,7 +1920,9 @@ target — matching the `idd-generated-from` banner already present on
    edited source. For `structure`/`contains` pairs, `sync-docs.mjs`
    only checks headings or text presence and does not auto-generate
    target content, so also apply the equivalent content change to the
-   target file by hand.
+   target file by hand. A `structure` pair may list `sharedSections`
+   (section titles); `audit-docs.mjs --check` then also requires those
+   sections to match exactly (#4009), so change them in both files.
 3. Run `node scripts/audit-docs.mjs --check` to confirm the pair is back
    in sync.
 

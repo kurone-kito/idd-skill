@@ -3595,6 +3595,44 @@ gate, since that path requires an actual human judgment call that this
 one never makes. Do not widen this exception to any other reason
 token, actor, or check selector.
 
+**Decision-rule files need an approval instead**
+(kurone-kito/idd-skill#4015): the source repository splits its trigger
+list into two lists. The bootstrap list
+(`SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES`) keeps the waiver above. The
+decision-rule list (`SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES`:
+`src/scripts/advisory-convergence.mts`,
+`src/scripts/advisory-wait-policy.mts`,
+`src/scripts/protocol-helpers.mts`, and the two modules the verdict
+delegates Clause 1 and cited-item rules to,
+`src/scripts/review-clause.mts` and
+`src/scripts/copilot-review-body.mts`) names the files that decide this
+check's verdicts. A pull request whose diff touches a decision-rule file
+gets no self-referential-bootstrap-auto waiver, even when it also
+touches a bootstrap file. The check then passes only through a
+converged review, through an approving review of the current HEAD
+whose author is in `trustedMarkerActors`, or through the
+maintainer-authorized waiver, which applies after the deadline or while
+Copilot is terminally unavailable. Only the latest review per
+login that is not `COMMENTED` or `PENDING` counts, so a later
+`CHANGES_REQUESTED` review withdraws the approval and reruns the check.
+Dismissing the approval also withdraws it, but only on the check's next
+run, because a dismissal does not rerun it; to revoke an approval at
+once, submit a `CHANGES_REQUESTED` review. The
+verdict reports this as `waiver.decisionRuleFilesTouched` and
+`waiver.decisionRuleApprovalValid`. The approval is not a substitute for
+review on any other pull request. GitHub does not let a pull request's
+author approve it, so the approving login must differ from the author;
+the maintainer-authorized waiver above stays the off-ramp after the
+deadline or while Copilot is terminally unavailable. Every other
+repository's profile-derived set has no decision-rule list and keeps the
+waiver as before. In this repository the posting job's allowlist is the
+bootstrap list, and it posts no marker for a diff that touches a
+decision-rule file. Observed
+incident: kurone-kito/idd-skill#3999 and kurone-kito/idd-skill#4000
+both merged through the waiver, and kurone-kito/idd-skill#4000 changed
+the cited-item rules that decide whether a finding counts as settled,
+with no independent check.
+
 **A narrow, inherent dead zone remains** (kurone-kito/idd-skill#2657,
 Codex review, PR #2895, round 9): being in the trigger-file allowlist
 does not mean every possible bug in that file can be self-bootstrapped.
@@ -4369,9 +4407,12 @@ still fails closed:
 - **When to call `--record-tokens`**: once at A5 claim time, right after
   generating `{agent-id}`/`{claim-id}`, before posting the `claimed-by`
   marker (the B1 worktree does not exist yet, so `<path>` is then the
-  _primary_ worktree); again with `--nonce` right before posting the
-  activation-nonce marker; a third time at B1 once the sibling worktree
-  exists, again with `--nonce` carried over from the A5 write --
+  _primary_ worktree); on the worktree-first fresh path (no inheritable
+  branch), `idd-claim` step 2 creates the linked worktree before the claim,
+  so `<path>` is that linked worktree and the B1 write below does not apply;
+  again with `--nonce` right before posting the activation-nonce marker; a
+  third time at B1 once the sibling worktree exists, again with `--nonce`
+  carried over from the A5 write --
   mirroring the lock's own `--acquire` step, but into a distinct file in
   the new worktree's own admin directory, so the earlier primary-worktree
   write's `nonce` field must be copied forward rather than omitted (the
@@ -6267,11 +6308,15 @@ reflexively as any other CLI option.
   Without `--assert` it always exits `0` (report-only). With `--assert` it
   exits non-zero unless `ready` is `true` (`ready = not_applicable ||
   converged || ((deadline passed || terminal-unavailable) && validly
-  waived) || autoWaiverValid`, the last disjunct added by
-  kurone-kito/idd-skill#2657 -- see the self-referential-bootstrap-auto
-  waiver section above; `waiver.autoWaiverValid` in the verdict reports
-  it directly, since every other `waiver.*` field stays gated behind the
-  deadline/terminal precondition this new disjunct is not).
+  waived) || autoWaiverValid || decisionRuleApprovalValid`. The
+  `autoWaiverValid` disjunct was added by kurone-kito/idd-skill#2657 --
+  see the self-referential-bootstrap-auto waiver section above -- and
+  `decisionRuleApprovalValid` by kurone-kito/idd-skill#4015 (the
+  decision-rule approval in that same section). The verdict reports both
+  directly as `waiver.autoWaiverValid` and
+  `waiver.decisionRuleApprovalValid`, since the other `waiver.*` fields
+  stay gated behind the deadline/terminal precondition these two
+  disjuncts are not).
 - **Structured `nextActions` (`#2143`)**: the verdict also reports a
   `nextActions` array populated from the same catalog the `--assert`
   failure stderr block uses (`collectAssertNextActions`). Each item
@@ -6368,9 +6413,11 @@ reflexively as any other CLI option.
   ordinary deadline has passed — but `ready` still requires a valid
   waiver in addition (`ready = not_applicable || converged ||
   ((deadline.passed || terminal.state == "COPILOT_UNAVAILABLE") &&
-  waived) || autoWaiverValid`, the last disjunct unaffected by this
-  section — kurone-kito/idd-skill#2657's self-referential-bootstrap-auto
-  waiver above); the terminal state alone never sets `ready: true`. A
+  waived) || autoWaiverValid || decisionRuleApprovalValid`, the last two
+  disjuncts unaffected by this section — kurone-kito/idd-skill#2657's
+  self-referential-bootstrap-auto waiver and kurone-kito/idd-skill#4015's
+  decision-rule approval above); the terminal state alone never sets
+  `ready: true`. A
   `not_applicable` applicability (including `reviewPolicy`
   `human-required` / `no-advisory`) is an independent ready path and
   does not change this waiver rule. Observed incident:

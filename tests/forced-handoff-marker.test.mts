@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mock, test } from 'node:test';
@@ -26,7 +26,11 @@ import {
   renderForcedHandoffComment,
   renderForcedHandoffConsentNote,
 } from '../src/scripts/protocol-helpers.mts';
+import { trackTempDirectories } from './temp-fixtures.mts';
 import { type FixtureGhRule, useFixtureGh } from './test-utils.mts';
+
+// #4049: every fixture directory below is removed when the file finishes.
+const makeTempDir = trackTempDirectories();
 
 // #3745: `main` below reads GitHub (the issue comments, their edit state, the
 // viewer and the `--forced-by` actor's permission). Serve those reads from the
@@ -449,7 +453,7 @@ test('resolveHelperActiveClaim keeps rejecting an issue-only handoff for a PR wh
 
 test('forced handoff helper refuses output when forced-handoff mode is disabled', () => {
   const originalCwd = process.cwd();
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-forced-handoff-marker-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-forced-handoff-marker-'));
   mkdirSync(join(sandbox, '.github', 'idd'), { recursive: true });
   writeFileSync(
     join(sandbox, '.github', 'idd', 'config.json'),
@@ -956,7 +960,7 @@ function inHumanGatedSandbox<T>(
   body: (output: () => string) => T,
 ): T {
   const originalCwd = process.cwd();
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-forced-handoff-marker-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-forced-handoff-marker-'));
   mkdirSync(join(sandbox, '.github', 'idd'), { recursive: true });
   writeFileSync(
     join(sandbox, '.github', 'idd', 'config.json'),
@@ -1185,7 +1189,7 @@ test('forced handoff --plan keeps markerBody and reports an ok preflight when ev
 
 test('forced handoff --plan with local mode disabled reports not-evaluated and reads no trusted copy (#3872)', () => {
   const originalCwd = process.cwd();
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-forced-handoff-marker-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-forced-handoff-marker-'));
   mkdirSync(join(sandbox, '.github', 'idd'), { recursive: true });
   writeFileSync(
     join(sandbox, '.github', 'idd', 'config.json'),
@@ -1423,7 +1427,7 @@ test('human-gated forced handoff needs an active claim from a trusted author', (
 
 test('nested forcedHandoff.mode=disabled refuses output', () => {
   const originalCwd = process.cwd();
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-forced-handoff-marker-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-forced-handoff-marker-'));
   mkdirSync(join(sandbox, '.github', 'idd'), { recursive: true });
   writeFileSync(
     join(sandbox, '.github', 'idd', 'config.json'),
@@ -1679,7 +1683,7 @@ test('planHandoff rejects prior issue-only handoff when PR is present (PR-scoped
 
 test('forcedHandoff.mode defaults to disabled when key is absent', () => {
   const originalCwd = process.cwd();
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-forced-handoff-marker-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-forced-handoff-marker-'));
   mkdirSync(join(sandbox, '.github', 'idd'), { recursive: true });
   writeFileSync(
     join(sandbox, '.github', 'idd', 'config.json'),
