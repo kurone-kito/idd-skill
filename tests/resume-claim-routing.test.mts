@@ -6375,6 +6375,73 @@ test('--own-worktree (#4067): a path other than the occupant still blocks at the
   }
 });
 
+test('--own-worktree (#4067): a remote branch force-pushed elsewhere blocks, with no local fetch', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    // Another clone force-pushes the branch. The worktree's own
+    // remote-tracking ref is not refreshed, so only a live read sees it.
+    const other = join(sandbox.root, 'other');
+    const origin = join(sandbox.root, 'origin.git');
+    execFileSync('git', ['clone', '--quiet', origin, other], {
+      env: sandbox.gitEnv,
+      stdio: 'ignore',
+    });
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '--quiet',
+        '--allow-empty',
+        '-m',
+        'elsewhere',
+      ],
+      { cwd: other, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    execFileSync(
+      'git',
+      [
+        'push',
+        '--quiet',
+        '--force',
+        'origin',
+        `HEAD:refs/heads/${sandbox.branch}`,
+      ],
+      { cwd: other, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a remote branch deleted elsewhere blocks, with no local fetch', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    const other = join(sandbox.root, 'other');
+    const origin = join(sandbox.root, 'origin.git');
+    execFileSync('git', ['clone', '--quiet', origin, other], {
+      env: sandbox.gitEnv,
+      stdio: 'ignore',
+    });
+    execFileSync(
+      'git',
+      ['push', '--quiet', 'origin', '--delete', sandbox.branch],
+      { cwd: other, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
 test('--own-worktree (#4019) without --fresh-claim-gate is a usage error', () => {
   const result = spawnSync(
     process.execPath,

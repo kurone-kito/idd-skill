@@ -397,7 +397,8 @@ export interface PristineOwnWorktreeCheck {
  *   reports as that worktree's own top level;
  * - its HEAD is `refs/heads/<branchName>`;
  * - `git status --porcelain --untracked-files=all` is empty;
- * - either `HEAD` equals `refs/remotes/origin/<branchName>` (#4067), or
+ * - either `HEAD` equals the live remote tip of `<branchName>`, read with
+ *   `git ls-remote` (#4067), or
  *   `origin/<base>` resolves and `HEAD` has no commit beyond it.
  */
 export function isPristineOwnWorktree(
@@ -448,21 +449,22 @@ export function isPristineOwnWorktree(
     return false;
   }
   // #4067: a released PR branch always carries pushed commits beyond the base,
-  // so a worktree at the branch's own pushed tip is accepted too. Nothing in it
-  // is unpublished. A missing ref falls through to the base check below.
-  const pushedTip = git([
-    'rev-parse',
-    '--verify',
-    '--quiet',
-    `refs/remotes/origin/${check.branchName}^{commit}`,
-  ])?.trim();
+  // so a worktree at the branch's live remote tip is accepted too. Nothing in
+  // it is unpublished. The tip comes from `ls-remote`, not a clone-local
+  // remote-tracking ref, so a force-push or deletion is seen without a fetch.
+  // Any failure leaves remoteTip unset and falls through to the base check.
+  const branchRef = `refs/heads/${check.branchName}`;
+  const remoteTip = git(['ls-remote', '--heads', 'origin', branchRef])
+    ?.split('\n')
+    .find((line) => line.endsWith(`\t${branchRef}`))
+    ?.split('\t')[0];
   const headCommit = git([
     'rev-parse',
     '--verify',
     '--quiet',
     'HEAD^{commit}',
   ])?.trim();
-  if (pushedTip && headCommit && pushedTip === headCommit) {
+  if (remoteTip && headCommit && remoteTip === headCommit) {
     return true;
   }
   let baseRef: string;
@@ -1729,9 +1731,9 @@ function printHelp(): void {
                       that branch, clean (no tracked or untracked changes),
                       and either has no commits beyond
                       origin/<developmentBranch> (origin/HEAD when the policy
-                      sets none), or sits at its own pushed tip
-                      refs/remotes/origin/<branch> (#4067), the gate ignores
-                      it. Any other occupant, or a failed check (including a
+                      sets none), or sits at its branch's live remote tip,
+                      read with git ls-remote (#4067), the gate ignores it.
+                      Any other occupant, or a failed check (including a
                       missing or outdated origin/HEAD on the base path, or an
                       invalid developmentBranch), still blocks. An empty
                       value is a usage error.
