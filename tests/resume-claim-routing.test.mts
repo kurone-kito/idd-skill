@@ -6523,6 +6523,60 @@ test('--own-worktree (#4067): a change made during the live remote read blocks',
   }
 });
 
+test('--own-worktree (#4067): a missing origin/HEAD blocks even at the pushed branch tip', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    // Without origin/HEAD the base cannot resolve, so the pushed-tip rule must
+    // not run: an unresolvable base is a hard refusal (#4059).
+    execFileSync('git', ['update-ref', '-d', 'refs/remotes/origin/HEAD'], {
+      cwd: sandbox.primary,
+      env: sandbox.gitEnv,
+      stdio: 'ignore',
+    });
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a commit created during the live remote read blocks', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    let committed = false;
+    // Wrap execFileSync so a new commit lands right after the live read. HEAD
+    // then no longer equals the remote tip, and the revalidation must refuse.
+    const execute = ((...callArgs: unknown[]) => {
+      const output = (execFileSync as (...args: unknown[]) => unknown)(
+        ...callArgs,
+      );
+      const args = callArgs[1] as string[];
+      if (!committed && args.includes('ls-remote')) {
+        committed = true;
+        commitInOwnWorktree(sandbox);
+      }
+      return output;
+    }) as unknown as typeof execFileSync;
+    const pristine = isPristineOwnWorktree({
+      ownWorktree: sandbox.own,
+      occupiedPath: sandbox.own,
+      branchName: sandbox.branch,
+      developmentBranch: null,
+      environment: sandbox.gitEnv,
+      execute,
+    });
+    assert.equal(committed, true, 'the live remote read must run');
+    assert.equal(pristine, false);
+  } finally {
+    sandbox.restore();
+  }
+});
+
 test('--own-worktree (#4019) without --fresh-claim-gate is a usage error', () => {
   const result = spawnSync(
     process.execPath,

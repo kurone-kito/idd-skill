@@ -170,10 +170,11 @@ function checkCurrentSessionOwner(claim, options) {
  *   reports as that worktree's own top level;
  * - its HEAD is `refs/heads/<branchName>`;
  * - `git status --porcelain --untracked-files=all` is empty;
- * - either `origin/<base>` resolves and `HEAD` has no commit beyond it, or
- *   (#4067) `HEAD`, `refs/remotes/origin/<branchName>`, and the live remote
- *   tip of `<branchName>` (`git ls-remote`) are all equal, and the worktree is
- *   still clean after that read.
+ * - `origin/<base>` resolves and either `HEAD` has no commit beyond it, or
+ *   (#4067) `HEAD` has commits beyond it and `HEAD`,
+ *   `refs/remotes/origin/<branchName>`, and the live remote tip of
+ *   `<branchName>` (`git ls-remote`) are all equal, and the worktree is still
+ *   clean after that read. An unresolvable base refuses outright.
  */
 export function isPristineOwnWorktree(check) {
   const execute = check.execute ?? execFileSync;
@@ -221,8 +222,9 @@ export function isPristineOwnWorktree(check) {
     return false;
   }
   // The base check reads local refs only, so the common fresh-claim path makes
-  // no network call. Only a worktree that fails it reaches the pushed-tip rule.
-  const noCommitsBeyondBase = () => {
+  // no network call. An unresolvable base is a hard refusal (#4059): only a
+  // resolved base with HEAD beyond it reaches the pushed-tip rule below.
+  const baseState = () => {
     let baseRef;
     if (check.developmentBranch) {
       baseRef = `origin/${check.developmentBranch}`;
@@ -234,7 +236,7 @@ export function isPristineOwnWorktree(check) {
         'refs/remotes/origin/HEAD',
       ])?.trim();
       if (!originHead?.startsWith('origin/')) {
-        return false;
+        return 'unresolved';
       }
       baseRef = originHead;
     }
@@ -246,14 +248,23 @@ export function isPristineOwnWorktree(check) {
         `refs/remotes/${baseRef}^{commit}`,
       ])?.trim()
     ) {
-      return false;
+      return 'unresolved';
     }
-    return (
-      git(['rev-list', '--count', `refs/remotes/${baseRef}..HEAD`])?.trim() ===
-      '0'
-    );
+    const beyond = git([
+      'rev-list',
+      '--count',
+      `refs/remotes/${baseRef}..HEAD`,
+    ])?.trim();
+    if (!beyond) {
+      return 'unresolved';
+    }
+    return beyond === '0' ? 'at-base' : 'beyond-base';
   };
-  if (noCommitsBeyondBase()) {
+  const base = baseState();
+  if (base === 'unresolved') {
+    return false;
+  }
+  if (base === 'at-base') {
     return true;
   }
   // #4067: a released PR branch always carries pushed commits beyond the base,
@@ -293,25 +304,29 @@ export function isPristineOwnWorktree(check) {
   } catch {
     remoteTip = undefined;
   }
-  const headCommit = git([
-    'rev-parse',
-    '--verify',
-    '--quiet',
-    'HEAD^{commit}',
-  ])?.trim();
-  // The local tracking ref and the live tip must both equal HEAD. A stale
-  // tracking ref fails closed rather than being trusted.
-  if (
-    !remoteTip ||
-    !headCommit ||
-    remoteTip !== headCommit ||
-    trackingTip !== headCommit
-  ) {
+  // HEAD, the local tracking ref, and the live tip must all be equal. A stale
+  // tracking ref fails closed rather than being trusted. The first two are read
+  // again after the status check, because the remote read can take seconds and
+  // a commit or a change made during it must not be ignored.
+  const headNow = () =>
+    git(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])?.trim() ||
+    undefined;
+  const trackingNow = () =>
+    git([
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `refs/remotes/origin/${check.branchName}^{commit}`,
+    ])?.trim() || undefined;
+  const matchesRemoteTip = () =>
+    Boolean(remoteTip) &&
+    headNow() === remoteTip &&
+    trackingNow() === remoteTip;
+  if (!matchesRemoteTip()) {
     return false;
   }
-  // The clean check above ran before the remote read, which can take seconds.
-  // Recheck so a change made during that read is not ignored.
-  return git(['status', '--porcelain', '--untracked-files=all']) === '';
+  const clean = git(['status', '--porcelain', '--untracked-files=all']) === '';
+  return clean && matchesRemoteTip();
 }
 export function evaluateResumeClaimRouting(input, options = {}) {
   const nowIso =
