@@ -5081,8 +5081,33 @@ test('#4015: every trigger file is in exactly one of the bootstrap and decision-
   assert.deepEqual([...SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES].sort(), [
     'src/scripts/advisory-convergence.mts',
     'src/scripts/advisory-wait-policy.mts',
+    'src/scripts/copilot-review-body.mts',
     'src/scripts/protocol-helpers.mts',
+    'src/scripts/review-clause.mts',
   ]);
+});
+
+test('#4015: the posting workflow keeps both lists in sync with the constants', () => {
+  const workflow = readFileSync(
+    new URL(
+      '../.github/workflows/idd-advisory-convergence.yml',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const readArray = (name: string): string[] => {
+    const match = new RegExp(`${name}=\\(([^)]*)\\)`).exec(workflow);
+    assert.ok(match, `expected a ${name}=( ... ) array in the workflow`);
+    return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
+  };
+  assert.deepEqual(
+    readArray('ALLOWLIST').sort(),
+    [...SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES].sort(),
+  );
+  assert.deepEqual(
+    readArray('DECISION_RULES').sort(),
+    [...SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES].sort(),
+  );
 });
 
 test('#4015: only this source repository resolves a decision-rule list', () => {

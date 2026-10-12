@@ -448,9 +448,10 @@ export const SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES = [
  * verdicts -- which review counts as converged, which finding counts as
  * settled, and the policy reads behind them. A diff that touches one of
  * these never receives the self-referential-bootstrap-auto waiver: it
- * passes only through a fresh converged review, or through an approving
+ * passes only through a fresh converged review, through an approving
  * review on the current HEAD from a login in the configured
- * `trustedMarkerActors` list (see `computeAdvisoryConvergenceVerdict`).
+ * `trustedMarkerActors` list (see `computeAdvisoryConvergenceVerdict`), or
+ * through the maintainer-authorized waiver after the deadline.
  * Observed incident: PR #3999 (issue #3945) and PR #4000 (issue #3942)
  * both merged through the waiver, and PR #4000 changed the cited-item
  * rules that decide whether a finding counts as settled, with no
@@ -460,12 +461,17 @@ export const SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES = [
   'src/scripts/advisory-convergence.mts',
   'src/scripts/advisory-wait-policy.mts',
   'src/scripts/protocol-helpers.mts',
+  // The verdict delegates Clause 1 selection and the cited-item rules to
+  // these two modules; PR #4000 changed both (Codex review, PR #4044).
+  'src/scripts/review-clause.mts',
+  'src/scripts/copilot-review-body.mts',
 ];
 /** The full self-referential trigger set for this source repository: the
  * union of {@link SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES} and
- * {@link SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES}. The posting job's
- * allowlist in `.github/workflows/idd-advisory-convergence.yml` is kept in
- * sync with it by hand. */
+ * {@link SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES}. The posting job in
+ * `.github/workflows/idd-advisory-convergence.yml` keeps a hand-synced
+ * copy of both lists: it posts only for a diff that touches a bootstrap
+ * file and no decision-rule file. */
 export const SELF_REFERENTIAL_WAIVER_TRIGGER_FILES = [
   ...SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES,
   ...SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES,
@@ -3553,15 +3559,16 @@ export function collectFromGitHub(
       staleAgeMs,
     },
   });
-  // kurone-kito/idd-skill#4015: also fetched when a configured trusted
-  // actor approved this HEAD in a repository with a decision-rule list, so
-  // that approval can count for a decision-rule diff even when no
-  // auto-waiver marker was posted (a failed or skipped posting job).
+  // kurone-kito/idd-skill#4015: always fetched in a repository with a
+  // decision-rule list (only this source repository), so
+  // `waiver.decisionRuleFilesTouched` is real evidence rather than a
+  // missing list read as `false`, and a trusted approval of a decision-rule
+  // diff counts even when no auto-waiver marker was posted (Copilot review,
+  // PR #4044).
   const needsDecisionRuleEvidence =
     resolveSelfReferentialDecisionRuleFiles(
       owner && repo ? `${owner}/${repo}` : '',
-    ).length > 0 &&
-    hasTrustedHeadApproval(reviews, prHeadSha, configuredTrustedActors);
+    ).length > 0;
   const changedFilePaths =
     autoWaiverRunIds.size > 0 || needsDecisionRuleEvidence
       ? [

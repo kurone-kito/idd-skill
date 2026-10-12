@@ -521,10 +521,10 @@ test('#4015: collectFromGitHub skips the changed-file fetch for a trusted approv
   });
 });
 
-test('#4015: collectFromGitHub skips the changed-file fetch for an approval outside trustedMarkerActors', () => {
+test('#4015: collectFromGitHub fetches changed files in the source repository even without a trusted approval', () => {
   withHermeticCwd(() => {
     const port = decisionRuleApprovalFixture('someone-else');
-    const { inputs } = collectFromGitHub(
+    const { inputs, options } = collectFromGitHub(
       parseArgs([
         '--pr',
         String(PR_NUMBER),
@@ -537,7 +537,13 @@ test('#4015: collectFromGitHub skips the changed-file fetch for an approval outs
       ]),
       () => port,
     );
-    assert.equal(inputs.changedFilePaths, undefined);
+    assert.deepEqual(inputs.changedFilePaths, [
+      'src/scripts/advisory-convergence.mts',
+    ]);
+    const verdict = computeAdvisoryConvergenceVerdict(inputs, options);
+    assert.equal(verdict.waiver.decisionRuleFilesTouched, true);
+    assert.equal(verdict.waiver.decisionRuleApprovalValid, false);
+    assert.equal(verdict.ready, false);
   });
 });
 
