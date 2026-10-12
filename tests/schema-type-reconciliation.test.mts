@@ -919,6 +919,10 @@ const exhaustivenessWitnesses: {
     WorkerReport,
     (typeof workerReportKeys)[number]
   >;
+  trialMergeAudit: CoversAllKeysOf<
+    TrialMergeAuditResult,
+    (typeof trialMergeAuditKeys)[number]
+  >;
 } = {
   advisoryWaitState: true,
   branchConflictState: true,
@@ -941,6 +945,7 @@ const exhaustivenessWitnesses: {
   tokenCostEvent: true,
   tokenCostSnapshot: true,
   workerReport: true,
+  trialMergeAudit: true,
 };
 
 // ---------------------------------------------------------------------------
