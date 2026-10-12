@@ -6442,6 +6442,25 @@ test('--own-worktree (#4067): a remote branch deleted elsewhere blocks, with no 
   }
 });
 
+test('--own-worktree (#4067): a missing local tracking ref blocks even when the server has the branch at HEAD', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    // The server still has the branch at HEAD, but the local remote-tracking
+    // ref is gone. The acceptance criterion requires a missing ref to fail closed.
+    execFileSync(
+      'git',
+      ['update-ref', '-d', `refs/remotes/origin/${sandbox.branch}`],
+      { cwd: sandbox.primary, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
 test('--own-worktree (#4019) without --fresh-claim-gate is a usage error', () => {
   const result = spawnSync(
     process.execPath,

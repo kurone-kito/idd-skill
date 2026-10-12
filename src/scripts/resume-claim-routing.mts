@@ -397,9 +397,9 @@ export interface PristineOwnWorktreeCheck {
  *   reports as that worktree's own top level;
  * - its HEAD is `refs/heads/<branchName>`;
  * - `git status --porcelain --untracked-files=all` is empty;
- * - either `HEAD` equals the live remote tip of `<branchName>`, read with
- *   `git ls-remote` (#4067), or
- *   `origin/<base>` resolves and `HEAD` has no commit beyond it.
+ * - either `origin/<base>` resolves and `HEAD` has no commit beyond it, or
+ *   (#4067) `refs/remotes/origin/<branchName>` exists and `HEAD` equals the
+ *   live remote tip of `<branchName>`, read with `git ls-remote`.
  */
 export function isPristineOwnWorktree(
   check: PristineOwnWorktreeCheck,
@@ -448,54 +448,86 @@ export function isPristineOwnWorktree(
   if (git(['status', '--porcelain', '--untracked-files=all']) !== '') {
     return false;
   }
+  // The base check reads local refs only, so the common fresh-claim path makes
+  // no network call. Only a worktree that fails it reaches the pushed-tip rule.
+  const noCommitsBeyondBase = (): boolean => {
+    let baseRef: string;
+    if (check.developmentBranch) {
+      baseRef = `origin/${check.developmentBranch}`;
+    } else {
+      const originHead = git([
+        'symbolic-ref',
+        '--quiet',
+        '--short',
+        'refs/remotes/origin/HEAD',
+      ])?.trim();
+      if (!originHead?.startsWith('origin/')) {
+        return false;
+      }
+      baseRef = originHead;
+    }
+    if (
+      !git([
+        'rev-parse',
+        '--verify',
+        '--quiet',
+        `refs/remotes/${baseRef}^{commit}`,
+      ])?.trim()
+    ) {
+      return false;
+    }
+    return (
+      git(['rev-list', '--count', `refs/remotes/${baseRef}..HEAD`])?.trim() ===
+      '0'
+    );
+  };
+  if (noCommitsBeyondBase()) {
+    return true;
+  }
   // #4067: a released PR branch always carries pushed commits beyond the base,
   // so a worktree at the branch's live remote tip is accepted too. Nothing in
-  // it is unpublished. The tip comes from `ls-remote`, not a clone-local
-  // remote-tracking ref, so a force-push or deletion is seen without a fetch.
-  // Any failure leaves remoteTip unset and falls through to the base check.
+  // it is unpublished. The local remote-tracking ref must exist, so a missing
+  // one fails closed. The live tip is read with `ls-remote`, so a force-push or
+  // deletion made without a fetch is seen. A failed or timed-out read rejects.
+  const trackingTip = git([
+    'rev-parse',
+    '--verify',
+    '--quiet',
+    `refs/remotes/origin/${check.branchName}^{commit}`,
+  ])?.trim();
+  if (!trackingTip) {
+    return false;
+  }
   const branchRef = `refs/heads/${check.branchName}`;
-  const remoteTip = git(['ls-remote', '--heads', 'origin', branchRef])
-    ?.split('\n')
-    .find((line) => line.endsWith(`\t${branchRef}`))
-    ?.split('\t')[0];
+  // A read that times out fails closed, so a stalled network cannot hang the gate.
+  const lsRemoteTimeoutMs = 30_000;
+  let remoteTip: string | undefined;
+  try {
+    remoteTip = String(
+      execute(
+        'git',
+        ['-C', ownRoot, 'ls-remote', '--heads', 'origin', branchRef],
+        {
+          encoding: 'utf8',
+          env: { ...env, GIT_TERMINAL_PROMPT: '0' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: lsRemoteTimeoutMs,
+        },
+      ),
+    )
+      .split('\n')
+      .find((line) => line.endsWith(`\t${branchRef}`))
+      ?.split('\t')[0];
+  } catch {
+    remoteTip = undefined;
+  }
   const headCommit = git([
     'rev-parse',
     '--verify',
     '--quiet',
     'HEAD^{commit}',
   ])?.trim();
-  if (remoteTip && headCommit && remoteTip === headCommit) {
-    return true;
-  }
-  let baseRef: string;
-  if (check.developmentBranch) {
-    baseRef = `origin/${check.developmentBranch}`;
-  } else {
-    const originHead = git([
-      'symbolic-ref',
-      '--quiet',
-      '--short',
-      'refs/remotes/origin/HEAD',
-    ])?.trim();
-    if (!originHead?.startsWith('origin/')) {
-      return false;
-    }
-    baseRef = originHead;
-  }
-  if (
-    !git([
-      'rev-parse',
-      '--verify',
-      '--quiet',
-      `refs/remotes/${baseRef}^{commit}`,
-    ])?.trim()
-  ) {
-    return false;
-  }
-  return (
-    git(['rev-list', '--count', `refs/remotes/${baseRef}..HEAD`])?.trim() ===
-    '0'
-  );
+  return Boolean(remoteTip && headCommit && remoteTip === headCommit);
 }
 
 export function evaluateResumeClaimRouting(
