@@ -30,7 +30,7 @@ unchanged. The cap applies per orchestrator session, not per host.
 
 ## 2. Roster
 
-Keep one entry per worker, with these fields:
+One entry per worker:
 
 - the issue number;
 - the claim ID;
@@ -39,7 +39,7 @@ Keep one entry per worker, with these fields:
 - the report draft path;
 - the worker's state (`running`, `reporting`, `disposed`, or `stalled`).
 
-The roster lives in the orchestrating session.
+Lost on restart: see [recovery](../../docs/idd-workflow.md#orchestrator-restart).
 
 ## 3. Dispatch
 
