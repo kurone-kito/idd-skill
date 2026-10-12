@@ -1698,7 +1698,8 @@ subsection describes for the issue-authoring reviewer.
    issue-authoring draft review (no issue filed).
 3. **Scratch files only in its own directory.** Scratch files go only
    in a directory the subagent creates (for example with `mktemp -d`
-   inside a per-user parent directory, never directly in `/tmp`)
+   inside a per-user parent directory such as `$XDG_RUNTIME_DIR`, never
+   directly in `/tmp`)
    outside the repository and the session scratchpad. When the parent
    has already created a scratch directory outside the repository and
    the session scratchpad and named it in the brief (the Claude Code
@@ -1749,12 +1750,15 @@ cleanup), the parent checks rule 3 itself:
 2. After the round, it lists the named directory recursively by its
    literal path without following symbolic links (for example
    `find <dir> -mindepth 1`) and lists the parent directory again.
-3. It resolves each reported path with `realpath` before comparing, so
-   the comparison is not only lexical. It flags, in the critique result
-   and in its final message, any reported path that resolves outside
-   the named directory, any symbolic link in the named directory (a
-   write through it can land outside, while the listing shows only the
-   link), any entry in the named directory the subagent did not report,
+3. It resolves the named directory and each reported path with
+   `realpath -m` before comparing, so the comparison is not only lexical;
+   a path that cannot be resolved is flagged. It flags, in the critique
+   result and in its final message, any reported path that resolves
+   outside the named directory, any symbolic link anywhere under the
+   named directory (a write through it can land outside, while the
+   listing shows only the link), any regular file under it with more
+   than one hard link (for example `find <dir> -type f -links +1`), any
+   entry in the named directory the subagent did not report,
    and any entry of the parent directory that appeared or vanished
    during the round, apart from directories the parent itself created
    for concurrent passes. It records
@@ -1770,7 +1774,8 @@ cleanup), the parent checks rule 3 itself:
 
 When the subagent created its own directory instead (the fallback),
 there is no pre-launch listing. The parent then checks only the paths
-the subagent reported, lists only a reported directory's own entries,
+the subagent reported, resolving them and flagging links as in step 3,
+lists only a reported directory's own entries,
 never lists `/tmp` itself, and records that the round had no named
 directory as residual risk.
 
@@ -1814,8 +1819,9 @@ Code session:
    launch). When it cannot confirm both, it does not launch, records the
    residual risk as the "cannot honor the ceiling" paragraph above
    requires, and uses structured self-critique.
-2. Creates, before the launch, a unique scratch directory outside the
-   worktree, names it in the launch prompt, and tells the subagent to put
+2. Creates, before the launch, a unique scratch directory placed as
+   step 1 of the post-round scratch check above requires, names it in
+   the launch prompt, and tells the subagent to put
    any scratch file only under it, to start any background job with a
    working directory under it, and to end its reply with every path it
    created, wrote or deleted. It takes the step-1 listings of the
