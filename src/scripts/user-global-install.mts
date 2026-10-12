@@ -32,7 +32,15 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import { buildHelperRuntimeManifest } from './helper-runtime-manifest.mts';
 import { resolveInstalledPayloadRoot } from './idd-activation.mts';
 import { isQualifiedConfigRoot } from './idd-config.mts';
@@ -117,6 +125,8 @@ interface Receipt {
   payloadRoot: string;
   /** Version directory names this receipt owns, under the data root. */
   payloadVersions: string[];
+  /** Per version: every payload file install wrote, with the digest it wrote. */
+  payloadFiles?: Record<string, Record<string, string>>;
   /** Skill directories this receipt owns (each holds the skill marker). */
   skillDirs: string[];
   /** Skill files this receipt wrote, with the digest it wrote. */
@@ -337,6 +347,9 @@ function expectedPayloadTree(
 }
 
 function treeOf(dir: string): Map<string, Buffer> {
+  // A link anywhere in the tree is refused before any file is read through it,
+  // so an owned tree that points outside itself is never compared or reused.
+  assertNoSymlinkInTree(dir);
   const tree = new Map<string, Buffer>();
   for (const rel of walkFiles(dir)) {
     tree.set(rel, readFileSync(join(dir, ...rel.split('/'))));
@@ -774,6 +787,7 @@ function readReceipt(path: string): Receipt | null {
     payloadRoot:
       typeof parsed.payloadRoot === 'string' ? parsed.payloadRoot : '',
     payloadVersions: strings(parsed.payloadVersions).filter(isSafeVersionName),
+    payloadFiles: validPayloadFiles(parsed.payloadFiles),
     skillDirs: strings(parsed.skillDirs).filter((dir) => isAbsolute(dir)),
     skillFiles: (Array.isArray(parsed.skillFiles)
       ? parsed.skillFiles
@@ -986,9 +1000,90 @@ function planCurrentLink(
   const superseded = target;
   const supersededStat = lstatIfExists(superseded);
   if (supersededStat?.isDirectory() && !supersededStat.isSymbolicLink()) {
+    assertSupersededIsUnedited(
+      superseded,
+      recordedDigestsFor(superseded, locations),
+    );
     plan.ops.push({ kind: 'removeTree', path: superseded });
     pushChange(plan, superseded, 'delete');
   }
+}
+
+/**
+ * Refuse to remove a superseded payload version unless every file in it matches
+ * the digest install recorded for that version, and nothing extra was added.
+ * A version with no record cannot be verified, so it is kept and the run refuses.
+ */
+function assertSupersededIsUnedited(
+  dir: string,
+  recorded: Record<string, string> | undefined,
+): void {
+  if (recorded === undefined) {
+    throw new Error(
+      `user-global install: superseded version ${dir} has no recorded digests; keeping it and refusing to remove it`,
+    );
+  }
+  assertNoSymlinkInTree(dir);
+  for (const rel of walkFiles(dir)) {
+    if (rel === PAYLOAD_MARKER_NAME) continue;
+    const expected = recorded[rel];
+    if (expected === undefined) {
+      throw new Error(
+        `user-global install: superseded version ${dir} holds ${rel}, which install did not write; keeping it and refusing to remove it`,
+      );
+    }
+    const bytes = readFileSync(join(dir, ...rel.split('/')));
+    if (sha256(bytes) !== expected) {
+      throw new Error(
+        `user-global install: superseded version ${dir} was edited (${rel}); keeping it and refusing to remove it`,
+      );
+    }
+  }
+}
+
+/** The digests recorded for a superseded directory, found by its version name. */
+function recordedDigestsFor(
+  dir: string,
+  locations: Locations,
+): Record<string, string> | undefined {
+  const receipt = readReceipt(locations.receiptPath);
+  const name = basename(dir);
+  return receipt?.payloadFiles?.[name];
+}
+
+/** The per-file digests of a payload tree, keyed by relative path. */
+function payloadDigestsOf(tree: Map<string, Buffer>): Record<string, string> {
+  const digests: Record<string, string> = {};
+  for (const [rel, bytes] of tree) digests[rel] = sha256(bytes);
+  return digests;
+}
+
+/** Keep only well-formed per-version digest records. */
+function validPayloadFiles(
+  value: unknown,
+): Record<string, Record<string, string>> | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    return undefined;
+  const out: Record<string, Record<string, string>> = {};
+  for (const [version, files] of Object.entries(
+    value as Record<string, unknown>,
+  )) {
+    if (
+      !isSafeVersionName(version) ||
+      files === null ||
+      typeof files !== 'object'
+    )
+      continue;
+    const digests: Record<string, string> = {};
+    for (const [rel, digest] of Object.entries(
+      files as Record<string, unknown>,
+    )) {
+      if (isSafeRelativePath(rel) && typeof digest === 'string')
+        digests[rel] = digest;
+    }
+    out[version] = digests;
+  }
+  return out;
 }
 
 interface SkillReceipt {
@@ -1316,6 +1411,12 @@ export function runUserGlobalInstall(
       ...(receipt?.payloadVersions ?? []),
       version,
     ]),
+    payloadFiles: {
+      ...(receipt?.payloadFiles ?? {}),
+      [version]: payloadDigestsOf(
+        expectedPayloadTree(options.bundleRoot, version),
+      ),
+    },
     skillDirs: uniqueSorted([
       ...(receipt?.skillDirs ?? []),
       ...skillReceipts.flatMap((s) => s.dirs),
@@ -1420,8 +1521,16 @@ export function runUserGlobalUninstall(
 
   // Payload and skills are shared by every harness, so they go only when all
   // three are named and a receipt says what install owns.
-  if (receipt !== null && Object.keys(remaining).length === 0) {
-    removeOwned(plan, locations, receipt);
+  if (receipt !== null) {
+    const roots: string[] = [];
+    if (options.harnesses.includes('claude'))
+      roots.push(resolve(locations.claudeSkillsRoot));
+    if (Object.keys(remaining).length === 0)
+      roots.push(resolve(locations.agentsSkillsRoot));
+    const fullUninstall = Object.keys(remaining).length === 0;
+    if (roots.length > 0) {
+      removeOwned(plan, locations, receipt, roots, fullUninstall);
+    }
   }
 
   if (receipt !== null) {
@@ -1553,10 +1662,19 @@ function skillRootOf(dir: string, locations: Locations): string {
   return root;
 }
 
-function removeOwned(plan: Plan, locations: Locations, receipt: Receipt): void {
+function removeOwned(
+  plan: Plan,
+  locations: Locations,
+  receipt: Receipt,
+  roots: readonly string[],
+  fullUninstall: boolean,
+): void {
   assertReceiptInSkillRoots(receipt, locations);
   const removed = new Set<string>();
   for (const dir of receipt.skillDirs) {
+    // Only skill directories under a root this uninstall may clean are touched.
+    // Any other recorded path is skipped, never removed.
+    if (!roots.some((root) => dir.startsWith(`${root}${sep}`))) continue;
     const stat = lstatIfExists(dir);
     if (stat === null) continue;
     if (stat.isSymbolicLink()) {
@@ -1600,6 +1718,8 @@ function removeOwned(plan: Plan, locations: Locations, receipt: Receipt): void {
     pushChange(plan, dir, 'delete');
   }
 
+  // The payload and the current link are shared, so only a full uninstall removes them.
+  if (!fullUninstall) return;
   const owned = new Set(
     receipt.payloadVersions.map((name) => join(locations.dataRoot, name)),
   );

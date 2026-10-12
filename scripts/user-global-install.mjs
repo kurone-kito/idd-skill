@@ -30,7 +30,15 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import { buildHelperRuntimeManifest } from './helper-runtime-manifest.mjs';
 import { resolveInstalledPayloadRoot } from './idd-activation.mjs';
 import { isQualifiedConfigRoot } from './idd-config.mjs';
@@ -217,6 +225,9 @@ function expectedPayloadTree(bundleRoot, version) {
   return tree;
 }
 function treeOf(dir) {
+  // A link anywhere in the tree is refused before any file is read through it,
+  // so an owned tree that points outside itself is never compared or reused.
+  assertNoSymlinkInTree(dir);
   const tree = new Map();
   for (const rel of walkFiles(dir)) {
     tree.set(rel, readFileSync(join(dir, ...rel.split('/'))));
@@ -576,6 +587,7 @@ function readReceipt(path) {
     payloadRoot:
       typeof parsed.payloadRoot === 'string' ? parsed.payloadRoot : '',
     payloadVersions: strings(parsed.payloadVersions).filter(isSafeVersionName),
+    payloadFiles: validPayloadFiles(parsed.payloadFiles),
     skillDirs: strings(parsed.skillDirs).filter((dir) => isAbsolute(dir)),
     skillFiles: (Array.isArray(parsed.skillFiles)
       ? parsed.skillFiles
@@ -769,9 +781,74 @@ function planCurrentLink(plan, locations, version) {
   const superseded = target;
   const supersededStat = lstatIfExists(superseded);
   if (supersededStat?.isDirectory() && !supersededStat.isSymbolicLink()) {
+    assertSupersededIsUnedited(
+      superseded,
+      recordedDigestsFor(superseded, locations),
+    );
     plan.ops.push({ kind: 'removeTree', path: superseded });
     pushChange(plan, superseded, 'delete');
   }
+}
+/**
+ * Refuse to remove a superseded payload version unless every file in it matches
+ * the digest install recorded for that version, and nothing extra was added.
+ * A version with no record cannot be verified, so it is kept and the run refuses.
+ */
+function assertSupersededIsUnedited(dir, recorded) {
+  if (recorded === undefined) {
+    throw new Error(
+      `user-global install: superseded version ${dir} has no recorded digests; keeping it and refusing to remove it`,
+    );
+  }
+  assertNoSymlinkInTree(dir);
+  for (const rel of walkFiles(dir)) {
+    if (rel === PAYLOAD_MARKER_NAME) continue;
+    const expected = recorded[rel];
+    if (expected === undefined) {
+      throw new Error(
+        `user-global install: superseded version ${dir} holds ${rel}, which install did not write; keeping it and refusing to remove it`,
+      );
+    }
+    const bytes = readFileSync(join(dir, ...rel.split('/')));
+    if (sha256(bytes) !== expected) {
+      throw new Error(
+        `user-global install: superseded version ${dir} was edited (${rel}); keeping it and refusing to remove it`,
+      );
+    }
+  }
+}
+/** The digests recorded for a superseded directory, found by its version name. */
+function recordedDigestsFor(dir, locations) {
+  const receipt = readReceipt(locations.receiptPath);
+  const name = basename(dir);
+  return receipt?.payloadFiles?.[name];
+}
+/** The per-file digests of a payload tree, keyed by relative path. */
+function payloadDigestsOf(tree) {
+  const digests = {};
+  for (const [rel, bytes] of tree) digests[rel] = sha256(bytes);
+  return digests;
+}
+/** Keep only well-formed per-version digest records. */
+function validPayloadFiles(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    return undefined;
+  const out = {};
+  for (const [version, files] of Object.entries(value)) {
+    if (
+      !isSafeVersionName(version) ||
+      files === null ||
+      typeof files !== 'object'
+    )
+      continue;
+    const digests = {};
+    for (const [rel, digest] of Object.entries(files)) {
+      if (isSafeRelativePath(rel) && typeof digest === 'string')
+        digests[rel] = digest;
+    }
+    out[version] = digests;
+  }
+  return out;
 }
 /**
  * Plan the skill copies. A file that differs from the bundle is overwritten
@@ -1046,6 +1123,12 @@ export function runUserGlobalInstall(options) {
       ...(receipt?.payloadVersions ?? []),
       version,
     ]),
+    payloadFiles: {
+      ...(receipt?.payloadFiles ?? {}),
+      [version]: payloadDigestsOf(
+        expectedPayloadTree(options.bundleRoot, version),
+      ),
+    },
     skillDirs: uniqueSorted([
       ...(receipt?.skillDirs ?? []),
       ...skillReceipts.flatMap((s) => s.dirs),
@@ -1144,8 +1227,16 @@ export function runUserGlobalUninstall(options) {
   }
   // Payload and skills are shared by every harness, so they go only when all
   // three are named and a receipt says what install owns.
-  if (receipt !== null && Object.keys(remaining).length === 0) {
-    removeOwned(plan, locations, receipt);
+  if (receipt !== null) {
+    const roots = [];
+    if (options.harnesses.includes('claude'))
+      roots.push(resolve(locations.claudeSkillsRoot));
+    if (Object.keys(remaining).length === 0)
+      roots.push(resolve(locations.agentsSkillsRoot));
+    const fullUninstall = Object.keys(remaining).length === 0;
+    if (roots.length > 0) {
+      removeOwned(plan, locations, receipt, roots, fullUninstall);
+    }
   }
   if (receipt !== null) {
     if (Object.keys(remaining).length === 0) {
@@ -1266,10 +1357,13 @@ function skillRootOf(dir, locations) {
   }
   return root;
 }
-function removeOwned(plan, locations, receipt) {
+function removeOwned(plan, locations, receipt, roots, fullUninstall) {
   assertReceiptInSkillRoots(receipt, locations);
   const removed = new Set();
   for (const dir of receipt.skillDirs) {
+    // Only skill directories under a root this uninstall may clean are touched.
+    // Any other recorded path is skipped, never removed.
+    if (!roots.some((root) => dir.startsWith(`${root}${sep}`))) continue;
     const stat = lstatIfExists(dir);
     if (stat === null) continue;
     if (stat.isSymbolicLink()) {
@@ -1312,6 +1406,8 @@ function removeOwned(plan, locations, receipt) {
     plan.ops.push({ kind: 'rmdir', path: dir });
     pushChange(plan, dir, 'delete');
   }
+  // The payload and the current link are shared, so only a full uninstall removes them.
+  if (!fullUninstall) return;
   const owned = new Set(
     receipt.payloadVersions.map((name) => join(locations.dataRoot, name)),
   );

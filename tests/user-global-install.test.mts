@@ -1161,3 +1161,75 @@ test('a clean full uninstall accepts every directory install really created (#38
     box.cleanup();
   }
 });
+
+test('re-pointing current refuses to delete a superseded version with an edited file (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options());
+    const older = join(box.root, 'data', 'idd-skill', '0.14.0');
+    writeFileSync(join(older, 'user-global', 'entry.md'), 'MY OWN NOTE\n');
+    const bundle = join(box.root, 'bundle-next');
+    for (const dir of ['idd-template', 'skills', 'audit']) {
+      cpSync(join(REPO_ROOT, dir), join(bundle, dir), { recursive: true });
+    }
+    writeFixture(
+      join(bundle, 'package.json'),
+      JSON.stringify({ name: 'bundle', version: '0.15.0' }),
+    );
+    assert.throws(
+      () => runUserGlobalInstall({ ...box.options(), bundleRoot: bundle }),
+      /superseded version .* was edited/,
+    );
+    assert.equal(
+      readFileSync(join(older, 'user-global', 'entry.md'), 'utf8'),
+      'MY OWN NOTE\n',
+      'the edited superseded version must survive',
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('a partial Claude uninstall removes only the Claude skill paths the receipt records (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options());
+    const claudeSkill = join(box.home, '.claude', 'skills', 'issue-authoring');
+    const userSkillFile = join(claudeSkill, 'mine.md');
+    writeFileSync(userSkillFile, 'my own skill note\n');
+    runUserGlobalUninstall(box.options(['claude']));
+    assert.equal(
+      existsSync(join(claudeSkill, 'SKILL.md')),
+      false,
+      'the recorded Claude skill file goes with the Claude uninstall',
+    );
+    assert.equal(
+      readFileSync(userSkillFile, 'utf8'),
+      'my own skill note\n',
+      'a path the receipt does not record must be left alone',
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('treeOf refuses a file symlink inside an owned payload tree (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options());
+    const v = join(box.root, 'data', 'idd-skill', '0.14.0');
+    const target = join(box.root, 'outside.md');
+    const expected = readFileSync(join(v, 'user-global', 'entry.md'));
+    writeFileSync(target, expected);
+    rmSync(join(v, 'user-global', 'entry.md'));
+    symlinkSync(target, join(v, 'user-global', 'entry.md'));
+    assert.throws(() => runUserGlobalInstall(box.options()), /symlink/);
+    assert.equal(
+      readFileSync(target).equals(expected),
+      true,
+      'the external file is untouched',
+    );
+  } finally {
+    box.cleanup();
+  }
+});
