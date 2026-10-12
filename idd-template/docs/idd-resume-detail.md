@@ -1127,27 +1127,46 @@ succeeded.
    `node scripts/post-idd-marker.mjs --target issue <N> --type
    activation-nonce --agent-id <id> --claim-id <id> --nonce <nonce>
    --timestamp <ISO8601> --apply`.
-5. Provision the local branch when it exists only as `origin/<branch>`, as
-   §W7 steps 1 and 2 do. Neither command moves the primary HEAD. Run both
+5. Provision the branch and attach its worktree as one locked command. Run it
    under the
-   [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock),
-   as B1 requires for every fetch and worktree add against a shared clone:
-   `node scripts/clone-lock.mjs --exec --agent-id <id> -- git fetch origin
-   +refs/heads/<branch>:refs/remotes/origin/<branch>`, then
-   `node scripts/clone-lock.mjs --exec --agent-id <id> -- git branch <branch>
-   origin/<branch>`.
-6. Attach the local branch to a sibling worktree, under the same lock:
-   `node scripts/clone-lock.mjs --exec --agent-id <id> -- git worktree add
-   <path> <branch>`, without `-b`.
-7. Carry the nonce forward on the linked worktree:
+   [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock), as B1
+   requires for every fetch and worktree add against a shared clone. The
+   single command keeps another session from interleaving between the fetch,
+   the branch creation, and the attach. Drop the `git branch` line when a
+   local `<branch>` already exists. Neither command moves the primary HEAD:
+
+   ```sh
+   node scripts/clone-lock.mjs --exec --agent-id <id> -- sh -c '
+     git fetch origin +refs/heads/<branch>:refs/remotes/origin/<branch> &&
+     git branch <branch> origin/<branch> &&
+     git worktree add <path> <branch>
+   '
+   ```
+
+   The attach has no `-b`, so the existing branch keeps its history.
+6. Carry the nonce forward on the linked worktree:
    `node scripts/claim-lock.mjs --record-tokens --worktree <linked>
    --agent-id <id> --claim-id <id> --nonce <nonce>`.
-8. Acquire on the linked worktree:
+7. Acquire on the linked worktree:
    `node scripts/claim-lock.mjs --acquire --worktree <linked> --agent-id <id>
    --claim-id <id>`.
-9. After the settle delay (`claim.verifySettleDelay`, default `PT5S`), assert:
+8. After the settle delay (`claim.verifySettleDelay`, default `PT5S`), assert:
    `node scripts/resume-claim-routing.mjs --issue <N> --assert --claim-id <id>
    --nonce <nonce> --worktree <linked>`. It returns `already_owned` with
    action `keep`. Do not assert before the delay: the nonce and the claim
    comments are eventually consistent, so an early assert can report a false
    failure while the markers are still propagating.
+
+If step 5 or 6 fails after the POSTs in steps 3 and 4, the claim is live with
+no linked worktree. Do not wait for it to go stale. Release your own pair
+first:
+
+```sh
+node scripts/post-idd-marker.mjs --target issue <N> --type unclaim \
+  --agent-id <id> --claim-id <id> --timestamp <ISO8601> --apply
+```
+
+The release is safe because you provably hold the pair, the same reasoning as
+the release-then-fresh rule in `idd-claim.instructions.md`. Then restart from
+step 1. The claim comes before the attach because #4071's decided sequence
+orders them that way. This paragraph covers the failure that order allows.
