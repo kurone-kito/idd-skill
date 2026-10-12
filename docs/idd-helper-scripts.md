@@ -5091,6 +5091,12 @@ still fails closed:
   stderr message now reads `failed to derive watermark fields from PR <n>:`
   then `incomplete review-activity collection:` then the cause; the exit
   code and error class are unchanged, so only that diagnostic text differs.
+- `--global-only` (`--from-pr --type watermark` only): resolves the
+  global-only profile in the required-CI read, so a zero-required-check run
+  can publish when the trusted `ciGate.allowNoRequiredChecksInGlobalOnly`
+  opt-in is `true` (see [global-only profile](global-only-profile.md)).
+  Without the flag, or with the profile inactive, the watermark defers as
+  before. Any other type, or a run without `--from-pr`, is rejected.
 - `--from-pr` HEAD pin (`--expected-head-sha <sha>`): optional, `--from-pr`
   only. Pass the E1 Step 1 stored `{head-SHA}` here to guard against the
   branch moving between Step 1 and the Step 2 post: if the fresh snapshot's
@@ -5429,6 +5435,11 @@ to post it is the consuming track's job.
   `summarizeBranchReviewRequirements` required-check-name resolution
   `pre-merge-readiness` already relies on — no forked required-check
   discovery.
+- `--global-only`: with the same profile and the trusted opt-in, the
+  snapshot names the opt-in in `allowedByPolicySetting` when a
+  zero-required-check run has no present check. `requiredChecks.status`
+  stays `no-required-checks` with an empty `checks[]`, which is the case
+  the E1 precondition accepts only with that marker.
 - Stable fields consumed by D-phase polling: top-level `headRefOid` (for
   caller-side HEAD-drift detection between polls); `checks[]`, each keyed
   by both `checkName` and (trimmed) `workflowName` so two check runs

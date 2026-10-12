@@ -83,7 +83,10 @@ outside the global-only profile, including an unprotected branch with the
 setting on. When the setting is the reason the gate passed, the readiness
 output names it in `ci.allowedByPolicySetting`
 (`ciGate.allowNoRequiredChecksInGlobalOnly`). The setting is read from the
-trusted base ref, so a pull request cannot enable it for itself.
+trusted base ref, so a pull request cannot enable it for itself. The E1
+watermark path applies the same exception: `post-idd-marker --from-pr
+--type watermark --global-only` and `ci-wait-state --global-only` read it
+from that base ref too.
 
 ## F4 cleanup
 

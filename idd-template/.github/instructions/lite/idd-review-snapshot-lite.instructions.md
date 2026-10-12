@@ -21,8 +21,7 @@ branch-sync/F1/F2 unverified.
 - The active claim is ambiguous, disputed, or lost.
 - A required helper is missing, fails, returns invalid JSON, or
   disagrees with live state.
-- The claim-lock helper reports a collision (a different claim id
-  already holds the worktree lock).
+- The claim-lock helper reports a collision.
 
 ## Pre-mutation guard
 
@@ -38,8 +37,7 @@ GitHub side effect, confirm all of the following:
 5. Acquire the worktree-local claim lock with the profile-selected
    `claim-lock` helper (`node scripts/claim-lock.mjs --acquire
    --worktree <this-worktree-path> --agent-id <id> --claim-id <id>`, or
-   the package-manager-profile `idd:claim-lock` command with the same
-   arguments, or the profile-selected equivalent (see
+   its `idd:claim-lock` package-manager form (see
    `docs/idd-helper-scripts.md`). A `collision` result is
    fail-closed: stop rather than proceed. Then, separately, run
    `--read-tokens --worktree <this-worktree-path> --claim-id <id>`
@@ -54,9 +52,11 @@ GitHub side effect, confirm all of the following:
 
 Run AW1 with `--pr`, `--claim-id`, `--agent-id`,
 `--trusted-marker-logins`, then profile-selected `ci-wait-state` with
-`--pr` (see `docs/idd-helper-scripts.md`).
-`requiredChecks.status: success`; `no-required-checks` only with
-non-empty all-success `checks[]`; `pending`/`failing`/`missing` defer
+`--pr` (plus `--global-only` if global-only; see
+`docs/idd-helper-scripts.md`). `requiredChecks.status: success`;
+`no-required-checks` only with non-empty all-success `checks[]`, or with
+`allowedByPolicySetting` and empty `checks[]`; `pending`/`failing`/
+`missing` defer
 Step 2. Require `outcome: SATISFIED`, or `CAP_EXHAUSTED` with
 `capExhaustedRoute: phase-specific`; otherwise stop/ask. Require
 `copilotRecovery.activeClaimProvided: true`; same-head:
@@ -122,7 +122,8 @@ the one-command path: `node
 scripts/post-idd-marker.mjs --type watermark --from-pr {pr-number}
 --expected-head-sha {head-SHA} --agent-id <id> --claim-id <id>
 --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" --apply`
-(or the package-manager equivalent). Always pass `--expected-head-sha`
+(plus `--global-only` if global-only; or the package-manager
+equivalent). Always pass `--expected-head-sha`
 with the exact Step 1 `{head-SHA}`; the helper fails closed (posts
 nothing) when the branch moved since Step 1 — on that failure, return
 to Step 1 and re-snapshot the moved branch, not a Step 2 retry.
@@ -162,10 +163,9 @@ trusted same-claim `review-watermark`/`review-baseline` comment as
 `OUTDATED`: `node scripts/minimize-superseded-markers.mjs
 --subject-ids "<id1>,<id2>,..." --classifier OUTDATED
 --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" --apply`.
-Skip this cleanup (not a stop condition) when the new watermark isn't
-verified, the candidate set is empty, or the helper is unavailable —
-F4 catches leftovers later. Never hide a different-claim watermark
-here.
+Skip this cleanup (not a stop condition) when the watermark is
+unverified, no candidate exists, or the helper is unavailable; F4 catches
+leftovers. Never hide a different-claim watermark here.
 
 Do not touch the PR live status digest after posting this watermark
 unless the next route is E1, an F3-blocked reroute to F1/D4, a
