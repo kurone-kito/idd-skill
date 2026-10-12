@@ -77,7 +77,7 @@ list), `secondaryRequestLogins` (still-unrequested subset), and
 
 Allowed `outcome`/`f3Outcome` values: `SATISFIED`, `REQUEST_NEEDED`,
 `RECOVERY_NEEDED`, `CAP_EXHAUSTED`, `WAIT`, `DISPOSITION_NEEDED`
-(#4070; never `SATISFIED`). `HOLD` is a protocol-level
+(#4070; never `SATISFIED`; also when same-head reviews disagree). `HOLD` is a protocol-level
 routing state for AW4/AW5 fail-closed stops only — caller-derived, not
 emitted by helper enums.
 
@@ -152,12 +152,12 @@ AW3 inputs:
 
 - `LAST_COPILOT_COMMIT` — `commit_id` of the latest Copilot review
   (empty if none); equals `PR_HEAD_SHA` short-circuits to **SATISFIED**
-  unless a cited item names a file or line (#4070); this path cannot
-  check dispositions, so it holds (AW4).
+  unless a cited item names a file or line (#4070): hold (AW4).
 - `COPILOT_PENDING` — `true` if Copilot is in `requested_reviewers`.
   Observed once: `false` can lag a re-request or empty on submit —
-  not idle proof. `LAST_COPILOT_COMMIT == PR_HEAD_SHA` is
-  **SATISFIED**. A same-head `false` uses the shorter settled window.
+  not idle proof. `LAST_COPILOT_COMMIT == PR_HEAD_SHA` is **SATISFIED**
+  unless a cited item holds (#4070). A same-head `false` uses the
+  shorter settled window.
 - `COPILOT_PENDING_COVERS_HEAD` — `true` if the latest Copilot
   `review_requested` event follows current HEAD's `committed` event.
 
