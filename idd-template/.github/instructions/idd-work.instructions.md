@@ -549,7 +549,7 @@ Decide Accept or Reject for each issue. Then check:
 - Accept count = 0 **and** the floor (C1) has passed → skip to
   `idd-pr-submit.instructions.md`
 - Loop count >
-  `critiqueLoop.cPhaseLowSeveritySkipAfter` (distributed default: `3`)
+  `critiqueLoop.cPhaseLowSeveritySkipAfter` (distributed default: `2`)
   and all remaining Accepts are Low **and** the floor has passed → skip
   to `idd-pr-submit.instructions.md`
 

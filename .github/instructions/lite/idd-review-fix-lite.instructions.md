@@ -143,12 +143,14 @@ self-critique and record risk.
    successful empty list, or a failed delegate that still emitted a
    readable list, is a genuine result.
 3. If the critique pass reports zero issues, continue to E11.
-4. If it reports additional issues, fix them, commit atomically, and
-   run E10 again.
+4. If it reports additional issues, first check the step 8 cap. If it
+   applies, take its close-out route instead of fixing. Otherwise fix them,
+   run `fix-validate`, commit atomically, and run E10 again.
 5. Count "meaningful progress" as removing at least one Accepted
    finding, narrowing a remaining finding's root cause or scope, or
    producing a materially new fix direction. A reworded duplicate
-   finding does not count.
+   finding does not count. A pass whose Accepted findings are all Low does
+   not count as progress through the narrowing prong alone.
 6. If the same Accepted findings recur for
    `critiqueLoop.e10NoProgressHoldAfter` (default 3) consecutive E10
    passes without meaningful progress, stop the loop, post a hold
@@ -157,13 +159,26 @@ self-critique and record risk.
 7. Do not use step 6 to bypass a serious issue: unresolved High or
    Medium findings stay blockers until fixed or explicitly redirected
    by a maintainer.
-8. **No confidence exception.** A fix's scope, or your own
-   confidence in it, never excuses skipping this pass — E10 must run
-   for every E9 fix batch before E11. Pushed a skipped round?
-   Disclose it, name the round(s), run E10 against the accumulated
-   diff to a clean pass, then return to E1 before F1 — see
-   `idd-review-fix.instructions.md`'s E10 repair path for the full
-   procedure.
+8. **No confidence exception.** A fix's scope, or your own confidence in it,
+   never excuses skipping this pass — E10 must run for every E9 fix batch before
+   E11. Pushed a skipped round? Disclose it, name the round(s), run E10 against
+   the accumulated diff to a clean pass, then return to E1 before F1 — see
+   `idd-review-fix.instructions.md`'s E10 repair path for the full procedure.
+   Exception: once `critiqueLoop.e10MaxPasses` (default 2) E10 passes have run
+   on the issue, no High or Medium Accepted finding is open, and `fix-validate`
+   has passed on the current HEAD, the per-issue cap in
+   `idd-review-fix.instructions.md` applies: file one follow-up issue (do not
+   append) with one AC bullet per residual Low finding, exactly one
+   `Refs #<originating-issue>` line, and the defer-source marker that E6 uses
+   for `review-fix-loop-cutoff` (`idd-review-triage.instructions.md`). That
+   follow-up takes issue-authoring's Stage 2 narrow auto-release, not the Stage
+   1 hold. Re-run this file's Pre-mutation guard immediately before filing. Each
+   residual Low finding takes the defer disposition in
+   `idd-review-triage.instructions.md` (a `**Rejected**` reply that names the
+   follow-up issue, with `e10MaxPasses` as its clause), not an `Accepted —
+   fixed` reply. This is an explicit exception to that Defer rule's exclusion of
+   an Accepted item mid-fix. Then go to E11. An unestablished count does not
+   reach the cap.
 9. Heuristic: several new, non-repeated same-area findings across
    rounds (3-4) may mean one structural fix converges faster than
    another patch. If that fix keeps drawing new findings, prefer

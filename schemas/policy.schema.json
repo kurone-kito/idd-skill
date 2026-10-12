@@ -723,12 +723,17 @@
         "cPhaseLowSeveritySkipAfter": {
           "type": "integer",
           "minimum": 1,
-          "description": "Loop-count threshold after which C4 may skip remaining Low-severity Accepted findings, once the objective diff validation floor has also passed. Optional; defaults to `3`."
+          "description": "Loop-count threshold after which C4 may skip remaining Low-severity Accepted findings, once the objective diff validation floor has also passed. Optional; defaults to `2`."
         },
         "e10NoProgressHoldAfter": {
           "type": "integer",
           "minimum": 1,
           "description": "Number of consecutive E10 review-fix critique passes without meaningful progress before the auto-loop stops and posts a hold for a maintainer decision. Optional; defaults to `3`."
+        },
+        "e10MaxPasses": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Per-issue cap on E10 review-fix critique passes, counted across E9 fix batches. Once this many passes have run, no High or Medium Accepted finding is open, and fix-validate has passed on the current HEAD, the loop stops and files the remaining Low findings into a follow-up issue instead of fixing them in the loop. An unestablished count does not count as reached. Optional; defaults to `2`."
         },
         "deferAfterRounds": {
           "type": "integer",
