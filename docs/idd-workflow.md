@@ -1718,8 +1718,7 @@ subsection describes for the issue-authoring reviewer.
    issue-authoring draft review (no issue filed).
 3. **Scratch files only in its own directory.** Scratch files go only
    in a directory the subagent creates (for example with `mktemp -d`
-   inside a per-user parent directory such as `$XDG_RUNTIME_DIR`, never
-   directly in `/tmp`)
+   inside a per-user parent directory, never directly in `/tmp`)
    outside the repository and the session scratchpad. When the parent
    has already created a scratch directory outside the repository and
    the session scratchpad and named it in the brief (the Claude Code
@@ -1763,16 +1762,17 @@ is only a fallback. Around each delegated per-agent critique round
 cleanup), the parent checks rule 3 itself:
 
 1. Before the launch, it creates the named directory empty inside a
-   dedicated per-user parent directory outside the session scratchpad,
-   never directly in `/tmp`, so every entry in it after the round
-   belongs to the round. It also lists the immediate entries of that
-   parent directory (for example `ls -A <parent>/`).
+   dedicated per-user parent directory outside the repository and the
+   session scratchpad, never directly in `/tmp`, so every entry in it
+   after the round belongs to the round. It also lists the immediate
+   entries of that parent directory (for example `ls -A <parent>/`).
 2. After the round, it lists the named directory recursively by its
    literal path without following symbolic links (for example
    `find <dir> -mindepth 1`) and lists the parent directory again.
 3. It resolves the named directory and each reported path with
-   `realpath -m` before comparing, so the comparison is not only lexical;
-   a path that cannot be resolved is flagged. It flags, in the critique
+   `realpath -m` (GNU coreutils) or an equivalent that follows symbolic
+   links without requiring the path to exist, so the comparison is not
+   only lexical; a path that cannot be resolved is flagged. It flags, in the critique
    result and in its final message, any reported path that resolves
    outside the named directory, any symbolic link anywhere under the
    named directory (a write through it can land outside, while the
@@ -1794,10 +1794,10 @@ cleanup), the parent checks rule 3 itself:
 
 When the subagent created its own directory instead (the fallback),
 there is no pre-launch listing. The parent then checks only the paths
-the subagent reported, resolving them and flagging links as in step 3,
-lists only a reported directory's own entries,
-never lists `/tmp` itself, and records that the round had no named
-directory as residual risk.
+the subagent reported. It treats the directory the subagent reported
+creating as the named directory for steps 2 and 3 (recursive listing,
+resolution, and link flags), never lists `/tmp` itself, and records
+that the round had no named directory as residual risk.
 
 The parent bounds its wait for each delegated per-agent critique pass by
 the resolved `critiqueLoop.subagentWaitCeiling`. Enforce that ceiling
