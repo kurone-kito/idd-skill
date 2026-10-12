@@ -78,9 +78,10 @@ readable findings list as a **hold**, not a clean "zero issues,
 proceed to E11" round: apply the shared Hold / suspend rules
 (`idd-overview-appendix.instructions.md`) instead of advancing.
 
-If the critique pass finds additional issues, fix them, run
-**fix-validate**, commit atomically, and run E10 again while the findings are
-converging.
+If the critique pass finds additional issues, first check the per-issue cap
+below. If the cap applies, take its close-out route instead of fixing.
+Otherwise fix them, run **fix-validate**, commit atomically, and run E10 again
+while the findings are converging.
 
 Convergence guardrails:
 
