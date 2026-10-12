@@ -2707,7 +2707,7 @@ test('#4065: classifyIssue reports an unresolvable origin with its bare number',
   );
   assert.equal(verdict.reason, 'blocked_by_defer_source_origin');
   assert.equal(verdict.details, 'unresolvable:#4019');
-  assert.equal(verdict.originNumber, 4019);
+  assert.equal((verdict as { originNumber?: number }).originNumber, 4019);
 });
 
 test('#4065: a closed origin keeps the defer-source follow-up an orphan', () => {
@@ -2789,3 +2789,45 @@ test('#4065: filterOrphanIssues reports an unresolvable defer-source origin as a
     { issue: 4059, reference: 4019, reason: 'issue-not-found-or-inaccessible' },
   ]);
 });
+
+// #4065 review fix: both defer-source values reach the same origin states.
+for (const value of ['review-fix-loop-cutoff', 'review-needs-decision']) {
+  const marker = `<!-- idd-skill-authoring-defer-source: ${value} -->`;
+  test(`#4065: the ${value} marker is blocked on each origin state`, () => {
+    const withOrigin = (body: string) => deferFollowUp(`${marker}\n\n${body}`);
+    const open = classifyIssue(withOrigin('Refs #4019\n'), {
+      issueStateByNumber: new Map([[4019, 'OPEN']]),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    });
+    assert.equal(open.reason, 'blocked_by_defer_source_origin');
+    assert.equal(open.details, 'open:#4019');
+
+    const missing = classifyIssue(withOrigin('No origin named.\n'), {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'CLOSED',
+    });
+    assert.equal(missing.details, 'missing_refs_line');
+
+    const ambiguous = classifyIssue(withOrigin('Refs #4019\n\nRefs #4020\n'), {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'CLOSED',
+    });
+    assert.equal(ambiguous.details, 'ambiguous_refs_line');
+
+    const unresolvable = classifyIssue(withOrigin('Refs #4019\n'), {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    });
+    assert.equal(unresolvable.details, 'unresolvable:#4019');
+    assert.equal(
+      (unresolvable as { originNumber?: number }).originNumber,
+      4019,
+    );
+
+    const closed = classifyIssue(withOrigin('Refs #4019\n'), {
+      issueStateByNumber: new Map([[4019, 'CLOSED']]),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    });
+    assert.equal(closed.reason, 'orphan');
+  });
+}
