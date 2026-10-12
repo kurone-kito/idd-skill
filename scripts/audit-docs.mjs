@@ -802,12 +802,22 @@ function resolveBlockFiles(block) {
 // rules for the other audits. Its fence scan does not know that an HTML block's
 // raw content has no fences, so HTML block content is masked before the fence
 // scan. Inline comments and inline code spans hide nothing, because a heading
-// can interrupt a paragraph. Headings inside blockquotes are not boundaries
-// here, as in headingSignature, so the section runs past them, which only makes
-// the comparison stricter. List items are not modeled as containers: a fence
-// inside a list item that the list then ends stays open here until a closing
-// fence. Checked against a CommonMark parser, that case differs only in
-// generated documents, not in any tracked Markdown file.
+// can interrupt a paragraph.
+//
+// Two sets of headings come out. A top-level heading is an unindented ATX line,
+// or one indented up to three spaces outside a list item; it is a section
+// boundary. A nested heading sits in a blockquote or a list item, and is only
+// recorded so that a listed title found there can fail the check. This scan does
+// not track paragraph state, so a list-like line that CommonMark would read as
+// paragraph text is still recorded as nested. That over-count fails the audit
+// loudly, which is the safe direction for a guard.
+function expandTabs(line) {
+  let expanded = '';
+  for (const char of line) {
+    expanded += char === '\t' ? ' '.repeat(4 - (expanded.length % 4)) : char;
+  }
+  return expanded;
+}
 function markdownOutline(text) {
   const normalized = normalizeText(text);
   const lines = normalized.split('\n');
@@ -826,21 +836,16 @@ function markdownOutline(text) {
   const nestedTitles = [];
   // Declared here, not at module level: audit-docs runs main() before any
   // later module-level const is initialized.
-  // A list marker needs a following space or tab; a blockquote marker may
-  // omit it. So "-## Title" is text, not a heading (CommonMark).
-  // Any indentation is allowed: a list item nested under another item is often
-  // indented four or more spaces. Lines hidden as code or HTML were skipped above.
-  // A list-like line that continues a paragraph with four spaces also matches.
-  // That over-counts, and an over-count fails the check loudly rather than
-  // letting drift through.
+  //
+  // Spacing is checked on the expanded line, so tabs count as CommonMark's
+  // four-column tab stops. A list marker takes one to four columns before its
+  // content (five or more make indented code); a blockquote marker takes up to
+  // four. "-## Title" is text, since the marker needs a following space.
   const containerHeading =
-    /^[ \t]*(?:>[ \t]{0,4}|(?:[-*+]|\d{1,9}[.)])[ \t]{1,4})+(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
-  // An indented heading is nested when the helper finds it inside a list item,
-  // and a top-level boundary only with one to three spaces outside one. Four or
-  // more spaces outside a list item is paragraph text, not a heading.
-  const indentedHeading = /^[ \t]+(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
-  const standaloneHeading =
-    /^ {1,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+    /^ *(?:>[ ]{0,4}|(?:[-*+]|\d{1,9}[.)]) {1,4})+(#{1,6}) +(.+?)(?: +#+)? *$/;
+  const indentedHeading = /^ +(#{1,6})(?: +(.*?))?(?: +#+)? *$/;
+  const standaloneHeading = /^ {1,3}(#{1,6})(?: +(.*?))?(?: +#+)? *$/;
+  const plainHeading = /^(#{1,6})(?: +(.*?))?(?: +#+)? *$/;
   // The helper keeps list state from line to line, so it is called for every
   // visible line in order, not only for indented ones.
   const listContext = {
@@ -848,10 +853,6 @@ function markdownOutline(text) {
     nextLineStart: 0,
   };
   let offset = 0;
-  // Whether a paragraph is open at this line, tracked from what the previous
-  // line was: visible text opens one, and a blank, hidden, or heading line closes
-  // it. Only a bullet list, or an ordered list starting at 1, can interrupt one.
-  let paragraphOpen = false;
   for (const [index, line] of lines.entries()) {
     const isHidden = hidden.some(
       (range) => offset >= range.start && offset < range.end,
@@ -863,59 +864,30 @@ function markdownOutline(text) {
       stripEnclosingListContentIndent(normalized, offset, listContext) !==
         null &&
       listContext.contentIndent > 0;
-    let headingLine = false;
     if (!isHidden) {
-      const container = containerHeading.exec(line);
-      const indented = indentedHeading.exec(line);
-      const standalone = standaloneHeading.exec(line);
-      // CommonMark separates the hashes from the title with a space or tab only,
-      // so a non-breaking space does not make a heading (#4009 review).
-      const plain = /^(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/.exec(line);
-      // Four or more spaces outside a list item is paragraph text, so a list-like
-      // line there is not a nested heading.
-      const indentedCode = /^(?: {4}|\t)/.test(line);
-      // Only a bullet or an ordered list starting at 1 can interrupt a paragraph,
-      // so "2. ## Title" directly under paragraph text is paragraph text.
-      const ordered = /^[ \t]*(\d{1,9})[.)][ \t]/.exec(line);
-      const paragraphText =
-        ordered !== null &&
-        Number(ordered[1]) !== 1 &&
-        paragraphOpen &&
-        !inListItem;
-      if (
-        container !== null &&
-        !paragraphText &&
-        (!indentedCode || inListItem)
-      ) {
-        nestedTitles.push(normalizeHeading(container[2]));
-        headingLine = true;
+      const expanded = expandTabs(line);
+      const container = containerHeading.exec(expanded);
+      const indented = indentedHeading.exec(expanded);
+      const standalone = standaloneHeading.exec(expanded);
+      const plain = plainHeading.exec(expanded);
+      if (container !== null) {
+        nestedTitles.push(normalizeHeading(container[2] ?? ''));
       } else if (indented !== null && inListItem) {
         nestedTitles.push(normalizeHeading(indented[2] ?? ''));
-        headingLine = true;
       } else if (standalone !== null) {
         headings.push({
           index,
           level: standalone[1].length,
           title: normalizeHeading(standalone[2] ?? ''),
         });
-        headingLine = true;
       } else if (plain !== null) {
         headings.push({
           index,
           level: plain[1].length,
           title: normalizeHeading(plain[2] ?? ''),
         });
-        headingLine = true;
       }
     }
-    // A thematic break, or a setext underline that makes a heading, ends the
-    // paragraph on its own line (#4009 review).
-    const endsBlock =
-      /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|=+[ \t]*)$/.test(
-        line,
-      );
-    paragraphOpen =
-      !isHidden && !headingLine && !endsBlock && line.trim() !== '';
     offset += line.length + 1;
   }
   const sections = headings.map((heading, position) => {

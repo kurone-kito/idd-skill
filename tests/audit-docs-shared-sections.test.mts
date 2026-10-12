@@ -753,18 +753,39 @@ test('a non-breaking space after the hashes does not make a heading', (t) => {
   assert.match(result.stderr, /shared section "Shared rule" differs between/);
 });
 
-test('a four-space list-like line that continues a paragraph is not a nested heading', (t) => {
-  // "    - ## Shared rule" continues the paragraph above it, so CommonMark renders
-  // it as text. It must not count as a nested copy of the listed title.
-  const continuation = `${BASE}\nSome paragraph text\n    - ## Shared rule\n\nMore text.\n`;
+test('a tab-padded list marker is measured in columns, so a tab-expanded code line is not a heading', (t) => {
+  // "-\t\t## Shared rule" pads the marker to seven columns, which is indented
+  // code in CommonMark, so it must not count as a nested copy. Both sides carry
+  // the same line, so the check passes.
+  const tabCode = `${BASE}\n-\t\t## Shared rule\n\nCode, not a heading.\n`;
   const { dir, cleanup } = makeFixture([
     structurePair({ sharedSections: ['Shared rule'] }),
   ]);
   t.after(cleanup);
-  seed(dir, continuation, continuation);
+  seed(dir, tabCode, tabCode);
 
   const result = runAuditDocs(dir);
   assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('a tab after a list marker is one nested heading column, so it counts as nested', (t) => {
+  // "-\t## Shared rule" pads the marker to three columns, which is still a list
+  // item in CommonMark, so the source-only copy must fail.
+  const tabHeading = `${BASE}\n-\t## Shared rule\n\nListed copy.\n`;
+  const { dir, cleanup } = makeFixture([
+    structurePair({ sharedSections: ['Shared rule'] }),
+  ]);
+  t.after(cleanup);
+  seed(dir, tabHeading, BASE);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    new RegExp(
+      `${PAIR_ID}: shared section "Shared rule" appears inside a blockquote or list item in ${SOURCE}`,
+    ),
+  );
 });
 
 test('a nested blockquote heading with extra spaces after its markers counts as nested', (t) => {
@@ -853,19 +874,25 @@ test('five spaces after a list marker make indented code, not a nested heading',
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
-test('an ordered marker other than 1 cannot interrupt a paragraph, so it is not a nested heading', (t) => {
-  // "2. ## Shared rule" directly under paragraph text is paragraph text in
-  // CommonMark, because only a list starting at 1 can interrupt a paragraph.
-  // Both sides carry the same line, so the check must pass.
-  const interrupted = `${BASE}\nSome paragraph text\n2. ## Shared rule\n\nMore text.\n`;
+test('a list-like line directly under paragraph text is counted as nested, so the check fails closed', (t) => {
+  // "2. ## Shared rule" under paragraph text may be paragraph text in CommonMark,
+  // but this scan does not track paragraph state. It is recorded as nested, so
+  // the listed title fails loudly rather than letting a real duplicate slip by.
+  const underParagraph = `${BASE}\nSome paragraph text\n2. ## Shared rule\n\nMore text.\n`;
   const { dir, cleanup } = makeFixture([
     structurePair({ sharedSections: ['Shared rule'] }),
   ]);
   t.after(cleanup);
-  seed(dir, interrupted, interrupted);
+  seed(dir, underParagraph, underParagraph);
 
   const result = runAuditDocs(dir);
-  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    new RegExp(
+      `${PAIR_ID}: shared section "Shared rule" appears inside a blockquote or list item in ${SOURCE}`,
+    ),
+  );
 });
 
 test('an ordered marker after a closed fence starts a list, so its nested heading counts', (t) => {
