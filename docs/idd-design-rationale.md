@@ -614,6 +614,36 @@ explicitly as a known, accepted limitation in both
 `idd-claim.instructions.md` and `docs/idd-workflow.md`'s Orchestrator
 fan-out variant section.
 
+### Lite claim rationale (moved out of the lite file)
+
+The lite claim file keeps only the rules; their rationale lives here.
+
+- **Forced-handoff author bind.** The lite file requires the comment
+  author to equal the marker's `forcedBy` field unconditionally, which is
+  stricter than the full spec's opt-in `requireAuthorMatchesForcedBy`. It
+  blocks a same-identity self-signed hijack, where a displaced session
+  spoofs a different `forcedBy` name while posting the marker itself.
+- **Sticky successor pair.** Forced-handoff re-derives the adopted pair as
+  the active claim on every resolution pass, so a later plain
+  `claimed-by supersedes: none` cannot activate and reads as contested.
+- **Heartbeat branch invariant.** A `claimed-by` with the active
+  `{claim-id}` but a different `{agent-id}` or `branch:` is not a
+  heartbeat. The claim-id is public, not a secret, so it proves nothing
+  about the poster on its own.
+- **Later claims stay diagnostic (`#3268`).** A later trusted
+  `claimed-by` with a different `{claim-id}` cannot dispute Claim
+  verification step 3, because Claim-state parsing rules 4 and 6 could
+  never have activated it while the current claim is active.
+- **Pre-mutation guard scope.** The work-lite guard's checks 3-4 bind the
+  cwd and branch only once B2 starts; before that, the claim check alone
+  applies.
+- **Claim-comment body.** `gh issue comment` and `gh api -f body=` silently
+  reject HTML-comment-first bodies, so the written fallback posts a JSON
+  payload instead.
+- **Pre-check (c) before the gate.** The fresh-claim gate ignores
+  `--claim-id`, so it cannot tell "yours" from "a competitor's"; pre-check
+  (c) runs first for that reason.
+
 ## Work and self-review
 
 ### B1 Step 3 — install-deps silent under-install detection

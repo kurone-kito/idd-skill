@@ -40,7 +40,6 @@ profile is a rule 1 stop, never a fall-through.
 `{agent-id}` is a tool/agent identifier shared across concurrent
 sessions of the same agent type — pick or confirm one before the first
 command that needs it (Claim execution step 4 at the latest).
-A unique session token is recommended for auditability, not required.
 `{agent-id}` alone is never ownership proof; `{claim-id}` is the
 authoritative token.
 
@@ -48,8 +47,7 @@ authoritative token.
 
 Stop and ask the operator when:
 
-- pre-check (a)-(e) fails for any reason (see below) — no fallback
-  candidate exists in lite scope;
+- pre-check (a)-(e) fails for any reason (see below);
 - the fresh-claim gate returns `already-claimed` for a non-owner, or the
   written rules find a non-stale competitor;
 - forced-handoff evidence exists but mismatches live claim/branch/PR
@@ -60,9 +58,8 @@ Never invent a forced-handoff marker.
 
 ## Pre-checks (a)-(e) — all five must pass
 
-Re-fetch the issue immediately before these checks. All five are
-target-issue local: claims on related roadmap or child issues never block
-them. Owner protocol:
+Re-fetch the issue immediately before these checks. Target-issue
+local: related roadmap or child-issue claims never block them. Owner protocol:
 `docs/idd-autonomy-contract.md#portable-authoring-owner-protocol`.
 
 ### (a) Issue-author approval
@@ -79,10 +76,9 @@ directly (no helper for that profile).
 
 - If `.github/idd/config.json` has `skipIssueAuthorApprovalGate: true`
   → skip this check.
-- Otherwise use `maintainerApprovalActorPolicy` (default:
-  `owners-and-maintainers-only`). `owners-and-maintainers-only` admits
-  owners plus Maintain/Admin collaborators; `all-write-permission-actors`
-  also admits Write collaborators. Do not reuse the trusted marker
+- Otherwise use `maintainerApprovalActorPolicy` (default
+  `owners-and-maintainers-only`: owners plus Maintain/Admin;
+  `all-write-permission-actors` adds Write). Do not reuse the trusted marker
   actor set for this check, and do not count automation or the current
   agent unless repository policy explicitly grants it maintainer
   approval authority.
@@ -109,10 +105,9 @@ status must be "not started". Either condition failing → **STOP**.
 
 ### (c) Claim state
 
-**Check first, before the fresh-claim gate** (which always ignores
-`--claim-id`, so it cannot tell "yours" from "a competitor's"), when
-either holds: this session already recorded a `{claim-id}` for this
-issue (resume/heartbeat continuation); or a trusted, live
+**Check first, before the fresh-claim gate** (which ignores
+`--claim-id`), when either holds: this session already recorded a
+`{claim-id}` for this issue (resume/heartbeat continuation); or a trusted, live
 forced-handoff marker names this session `newAgentId` — treat its
 `newClaimId` as the `{claim-id}` to check, before Claim execution's
 forced-handoff steps:
@@ -168,8 +163,7 @@ ignore every other author for claim state. A `claimed-by` with a **new**
 claim's `{claim-id}` **and** that claim is already stale at the new
 comment's `created_at`. A `claimed-by` whose `{claim-id}` matches the
 active claim but whose `{agent-id}` **or `branch:`** differs from the
-active claim is ignored as invalid — it is **not** a heartbeat
-(heartbeat branch invariant; claim-id is public, not a secret). An
+active claim is ignored as invalid — it is **not** a heartbeat. An
 `unclaimed-by` releases only when both `{agent-id}` and `{claim-id}`
 match the active claim. **Stale** = latest valid `claimed-by`'s GitHub
 `created_at` is ≥ 24 h ago (`claim-stale-age`, default `24 h`). No
@@ -190,12 +184,9 @@ takeover, migrate with a fresh `{claim-id}` and `supersedes: none`.
 **Forced-handoff** (`<!-- forced-handoff: {...} -->`): transfers the
 active claim to `newAgentId` / `newClaimId` only when **all** hold: the
 comment author is a trusted marker actor; the author (case-insensitive)
-equals the marker's `forcedBy` field — unconditionally, a
-deliberately stricter bind than the full spec's opt-in
-(`requireAuthorMatchesForcedBy`) — this blocks a
-same-identity self-signed hijack where a displaced session spoofs a
-different `forcedBy` name while posting the marker itself; that author
-is authorized under `forcedHandoff.authorityPolicy`;
+equals the marker's `forcedBy` field (unconditionally; rationale in
+`docs/idd-design-rationale.md#lite-claim-rationale-moved-out-of-the-lite-file`);
+that author is authorized under `forcedHandoff.authorityPolicy`;
 `forcedHandoff.mode` is `human-gated`; `oldAgentId` / `oldClaimId` /
 `branch` all match the active claim; and, when an open PR already backs
 this claim, the marker's evidence has `contextScope` of
@@ -272,8 +263,7 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
 1. **Branch name**: takeover, forced-handoff, or a fresh claim whose
    pre-check (e) scan matched an inheritable branch (released claim,
    legacy migration source, or matching PR) → reuse it verbatim, never
-   recompute from the title (which may have changed since). No
-   inheritable match → use the name pre-check (e) computed.
+   recompute from the title. No inheritable match → use the name pre-check (e) computed.
 2. **Worktree and `{claim-id}`**: on a fresh claim with no inheritable
    branch (pre-check (e)), create the linked worktree first, under the
    clone-scoped lock after `git fetch origin main`: `git worktree add
@@ -298,14 +288,10 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
      --timestamp <ISO8601> --apply
    ```
 
-   Written fallback (`instructions-only` profile only) — `gh issue
-   comment` and `gh api -f body=` both silently reject
-   HTML-comment-first bodies, so post this exact body with a direct
-   HTTP `POST` carrying a JSON payload instead — for example
-   `gh api --method POST repos/{owner}/{repo}/issues/{N}/comments
-   --input -` fed the JSON on stdin, or `curl` with
-   `-H "Content-Type: application/json"` and
-   `-d '{"body":"<exact body below>"}'`:
+   Written fallback (`instructions-only` profile only): post this exact
+   body as a JSON payload (`gh api --method POST
+   repos/{owner}/{repo}/issues/{N}/comments --input -`), not `gh issue
+   comment` or `gh api -f`, which reject HTML-comment-first bodies:
 
    ```markdown
    <!-- claimed-by: {agent-id} {claim-id} supersedes: {prior-claim-id|none} {ISO8601-timestamp} branch: {branch-name} -->
@@ -373,9 +359,7 @@ check steps 1–4. Step 5 applies to both paths:
    (case-sensitive ASCII compare).
 3. Verify the active claim now uses **your** `{claim-id}` after that
    tie-break; another winner means claim contested. A later trusted
-   `claimed-by` with a different `{claim-id}` never disputes this
-   check (#3268): Claim-state parsing rules 4/6 could never have
-   activated it, so it stays diagnostic only.
+   `claimed-by` with a different `{claim-id}` never disputes this check (#3268).
 4. If you posted an activation-nonce for this `{claim-id}`, recompute
    its winner and confirm it is yours (no marker posted → treat as
    passed).
@@ -389,24 +373,23 @@ check steps 1–4. Step 5 applies to both paths:
 
 Any failure → claim contested → **STOP**, do not proceed.
 
-**Forced-handoff adopt-verbatim** only: skip steps 1-3 (no
-`claimed-by` was posted for this path). Repeat the authoring guard above
-before posting the activation nonce; only step 4 applies — wait the settle
-delay (`claim.verifySettleDelay`, default `PT5S`), then recompute the nonce
+**Forced-handoff adopt-verbatim** only: skip steps 1-3. Repeat the
+authoring guard above before posting the activation nonce; only step 4
+applies — wait the settle delay (`claim.verifySettleDelay`, default
+`PT5S`), then recompute the nonce
 winner for the adopted `newClaimId` and confirm it is yours. Repeat the
 authoring guard after nonce verification; on a mismatch or hold, re-resolve
 the pair and nonce before fallback, and release only after both remain
 verified.
-The successor pair is **sticky**: it re-activates on every resolution
-pass, so a later plain `claimed-by supersedes: none` will not take
-effect. To move off it, either keep adopting it verbatim, or post
-`unclaimed-by` for both the sticky pair and the original displaced
-pair (exact `{agent-id}`/`{claim-id}` each), then claim fresh.
+The successor pair is **sticky**: a later plain `claimed-by supersedes:
+none` does not take effect. Keep adopting it verbatim, or post
+`unclaimed-by` for it and the displaced pair (exact ids each), then claim
+fresh.
 
 Once verified, record this `{claim-id}` (and any posted nonce) as your
 claim token for the rest of the run. Before each later mutation, apply
 the pre-mutation guard in `idd-work-lite.instructions.md` with its scope
-rules (its checks 3-4 bind the cwd and branch once B2 starts); a failed
+rules; a failed
 check means stop, do not mutate further.
 
 **Digest**: after verification, upsert the issue's `idd-live-status`
@@ -437,8 +420,8 @@ A matching `{claim-id}` re-acquires as a read-only check. A different
 
 - `already-claimed` naming **your own** verified `{claim-id}`, with a
   top-level `reason` that is not `released-claim-*`: only the local lock
-  drifted (crash / worktree recreation) — you still own the GitHub
-  claim. Retry the lock with `--takeover` directly.
+  drifted; you still own the GitHub claim. Retry the lock with
+  `--takeover` directly.
 - Every other result — a `released-claim-*` reason, `already-claimed`
   naming a different id, or `claimable`/`stale-reclaimable`: the claim
   itself was lost. **STOP** and report; post no new claim from this
