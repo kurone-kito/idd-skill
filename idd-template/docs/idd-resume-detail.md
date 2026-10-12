@@ -1112,7 +1112,9 @@ succeeded.
 1. Fresh-claim gate with no worktree:
    `node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate`
    returns `claimable`.
-2. Before the claim POST, record the tokens on the primary worktree:
+2. Before the claim POST, validate the branch name and record the tokens on
+   the primary worktree. A branch name that fails
+   `git check-ref-format "refs/heads/<branch>"` holds here, before any POST:
    `node scripts/claim-lock.mjs --record-tokens --worktree <primary>
    --agent-id <id> --claim-id <id>`.
 3. Claim POST, with the branch of the existing PR:
@@ -1135,11 +1137,12 @@ succeeded.
    and attaches it with no `-b`, so the existing history is kept. It never
    moves the primary HEAD.
 
-   The branch and the path are the two trailing arguments, `"$1"` and
-   `"$2"`. Never paste them into the script text, as the resume guidance
-   requires for a recovered branch name. When a local `<branch>` already
-   exists, the script attaches it only if it equals `origin/<branch>`. A
-   local ref that differs exits 1 and is never overwritten:
+   The branch and the path are the two trailing arguments. Single-quote each
+   one at the call site, writing an embedded single quote as `'\''`, so the
+   outer shell passes it through unchanged. Never paste them into the script
+   text. When a local `<branch>` already exists, the script attaches it only
+   if it equals `origin/<branch>`. A local ref that differs exits 1 and is
+   never overwritten:
 
    ```sh
    node scripts/clone-lock.mjs --exec --agent-id <id> -- sh -c '
@@ -1152,7 +1155,7 @@ succeeded.
        git branch "$1" "origin/$1"
      fi &&
      git worktree add "$2" "$1"
-   ' sh <branch> <path>
+   ' sh '<branch>' '<path>'
    ```
 
 6. Carry the nonce forward on the linked worktree:
@@ -1160,36 +1163,43 @@ succeeded.
    --agent-id <id> --claim-id <id> --nonce <nonce>`.
 7. Acquire on the linked worktree:
    `node scripts/claim-lock.mjs --acquire --worktree <linked> --agent-id <id>
-   --claim-id <id>`.
+   --claim-id <id>`. A collision with another claim id means the claim is
+   contested, not yours. Stop, as the failure rules below require.
 8. After the settle delay (`claim.verifySettleDelay`, default `PT5S`), assert:
    `node scripts/resume-claim-routing.mjs --issue <N> --assert --claim-id <id>
-   --nonce <nonce> --worktree <linked>`. It returns `already_owned` with
-   action `keep`. Do not assert before the delay: the nonce and the claim
-   comments are eventually consistent, so an early assert can report a false
-   failure while the markers are still propagating.
+   --nonce <nonce> --worktree <linked>`. Only `already_owned` with action
+   `keep` continues. Any other result stops the sequence. Do not assert before
+   the delay: the nonce and the claim comments are eventually consistent, so an
+   early assert can report a false failure while the markers are still
+   propagating.
 
-A failure after the POSTs in steps 3 and 4 leaves a live claim, and the next
-action depends on whether a linked worktree exists.
+A failure after the POSTs in steps 3 and 4 leaves a live claim. The next
+action depends on how far the sequence got.
 
-If step 5 fails, no linked worktree was attached, and the claim has no
-worktree. Do not wait for it to go stale. Release your own pair first:
+- Step 5 fails: no linked worktree was attached. Do not wait for the claim to
+  go stale. Release your own pair first:
 
-```sh
-node scripts/post-idd-marker.mjs --target issue <N> --type unclaim \
-  --agent-id <id> --claim-id <id> --timestamp <ISO8601> --apply
-```
+  ```sh
+  node scripts/post-idd-marker.mjs --target issue <N> --type unclaim \
+    --agent-id <id> --claim-id <id> --timestamp <ISO8601> --apply
+  ```
 
-The release is safe because you provably hold the pair, the same reasoning as
-the release-then-fresh rule in `idd-claim.instructions.md`. Then restart from
-step 1. A local branch that the script already created is attached again on
-the restart, because the script attaches a local branch that equals
-`origin/<branch>`. A local ref that differs fails the same check on every
-restart, so resolve that ref first.
-
-If step 6, 7, or 8 fails, the linked worktree exists and the claim is yours.
-Do not release it and do not restart from step 1, because the existing
-worktree blocks the no-worktree gate. Repeat the failed step, then continue
-with the next one.
+  The release is safe because you provably hold the pair, the same reasoning
+  as the release-then-fresh rule in `idd-claim.instructions.md`. Then restart
+  from step 1. A local branch that the script already created is attached
+  again on the restart, because the script attaches a local branch that equals
+  `origin/<branch>`. A local ref that differs fails the same check on every
+  restart, so resolve that ref first.
+- Step 6 fails with an infrastructure error: the linked worktree exists and
+  the claim is yours. Revalidate the claim, then repeat step 6. Do not
+  restart from step 1, because the existing worktree blocks the no-worktree
+  gate.
+- Step 7 or 8 returns a verdict other than success: the claim is contested or
+  lost. Do not repeat the step. Revalidate the claim and the lock, then stop
+  and report to the operator. Post no new claim from this sequence; the
+  claim-verification rules in `idd-claim.instructions.md` govern what follows.
+  Retry only an infrastructure error, and only after the claim is confirmed as
+  yours.
 
 The claim comes before the attach because #4071's decided sequence orders
 them that way.
