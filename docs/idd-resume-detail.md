@@ -1120,8 +1120,11 @@ succeeded.
 
    ```sh
    BRANCH='<branch>'
-   git check-ref-format "refs/heads/$BRANCH"
+   git check-ref-format "refs/heads/$BRANCH" && [ "${BRANCH#-}" = "$BRANCH" ]
    ```
+
+   The leading-hyphen test is needed because `git check-ref-format` accepts a
+   name such as `-x`, but `git branch` refuses it.
 
    Then record the tokens:
    `node scripts/claim-lock.mjs --record-tokens --worktree <primary>
@@ -1161,9 +1164,9 @@ succeeded.
          "$(git rev-parse "refs/remotes/origin/$1")" ] ||
          { echo "local $1 differs from origin/$1: hold" >&2; exit 1; }
      else
-       git branch "$1" "origin/$1"
+       git branch -- "$1" "origin/$1"
      fi &&
-     git worktree add "$2" "$1"
+     git worktree add -- "$2" "$1"
    ' sh '<branch>' '<path>'
    ```
 
