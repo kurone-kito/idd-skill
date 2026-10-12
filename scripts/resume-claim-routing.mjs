@@ -171,8 +171,9 @@ function checkCurrentSessionOwner(claim, options) {
  * - its HEAD is `refs/heads/<branchName>`;
  * - `git status --porcelain --untracked-files=all` is empty;
  * - either `origin/<base>` resolves and `HEAD` has no commit beyond it, or
- *   (#4067) `refs/remotes/origin/<branchName>` exists and `HEAD` equals the
- *   live remote tip of `<branchName>`, read with `git ls-remote`.
+ *   (#4067) `HEAD`, `refs/remotes/origin/<branchName>`, and the live remote
+ *   tip of `<branchName>` (`git ls-remote`) are all equal, and the worktree is
+ *   still clean after that read.
  */
 export function isPristineOwnWorktree(check) {
   const execute = check.execute ?? execFileSync;
@@ -298,7 +299,19 @@ export function isPristineOwnWorktree(check) {
     '--quiet',
     'HEAD^{commit}',
   ])?.trim();
-  return Boolean(remoteTip && headCommit && remoteTip === headCommit);
+  // The local tracking ref and the live tip must both equal HEAD. A stale
+  // tracking ref fails closed rather than being trusted.
+  if (
+    !remoteTip ||
+    !headCommit ||
+    remoteTip !== headCommit ||
+    trackingTip !== headCommit
+  ) {
+    return false;
+  }
+  // The clean check above ran before the remote read, which can take seconds.
+  // Recheck so a change made during that read is not ignored.
+  return git(['status', '--porcelain', '--untracked-files=all']) === '';
 }
 export function evaluateResumeClaimRouting(input, options = {}) {
   const nowIso =

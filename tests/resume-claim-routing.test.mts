@@ -46,6 +46,7 @@ import {
   evaluateFreshClaimGate as evaluateFreshClaimGateImpl,
   evaluateResumeClaimRouting as evaluateResumeClaimRoutingImpl,
   fetchOpenLinkedPrReferences,
+  isPristineOwnWorktree,
   loadPolicy,
   resolveAssertOutcome,
   resolveResumeLinkedPrState,
@@ -6456,6 +6457,67 @@ test('--own-worktree (#4067): a missing local tracking ref blocks even when the 
       { cwd: sandbox.primary, env: sandbox.gitEnv, stdio: 'ignore' },
     );
     assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a stale local tracking ref blocks even when the server has the branch at HEAD', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    // Point the local tracking ref at another commit. The server still has HEAD.
+    const other = execFileSync('git', ['rev-parse', 'origin/main'], {
+      cwd: sandbox.primary,
+      env: sandbox.gitEnv,
+      encoding: 'utf8',
+    }).trim();
+    execFileSync(
+      'git',
+      ['update-ref', `refs/remotes/origin/${sandbox.branch}`, other],
+      { cwd: sandbox.primary, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a change made during the live remote read blocks', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    let dirtied = false;
+    // Wrap execFileSync so the worktree is dirtied right after the live read,
+    // which runs after the clean check. The recheck must then refuse it.
+    const execute = ((...callArgs: unknown[]) => {
+      const output = (execFileSync as (...args: unknown[]) => unknown)(
+        ...callArgs,
+      );
+      const args = callArgs[1] as string[];
+      if (!dirtied && args.includes('ls-remote')) {
+        dirtied = true;
+        writeFileSync(
+          join(sandbox.own, 'scratch.txt'),
+          'changed during the remote read\n',
+        );
+      }
+      return output;
+    }) as unknown as typeof execFileSync;
+    const pristine = isPristineOwnWorktree({
+      ownWorktree: sandbox.own,
+      occupiedPath: sandbox.own,
+      branchName: sandbox.branch,
+      developmentBranch: null,
+      environment: sandbox.gitEnv,
+      execute,
+    });
+    assert.equal(dirtied, true, 'the live remote read must run');
+    assert.equal(pristine, false);
   } finally {
     sandbox.restore();
   }
