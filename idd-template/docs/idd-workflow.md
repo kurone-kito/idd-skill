@@ -1259,10 +1259,9 @@ identify its old claims, and step 1 treats them as not its own.
    rejects an empty candidate list and a zero batch.
 4. **Recover reports.** Run this step for each matched finished worker, under
    that worker's own listed handle. For a released claim with no matched
-   worker, first check the `reports.jsonl` store, which the worker final report
-   store section of `docs/idd-helper-scripts.md` locates, for a line whose
-   `claimId` is this claim-id. If one exists, the claim is already recorded, so
-   append nothing. Otherwise run this step under the claim-id as its handle. A
+   worker, run this step under the claim-id as its handle. The append's own
+   duplicate check, which uses the claim-id, the handle, and the terminal phase,
+   decides whether that record already exists. A
    matched running worker gets no record. A released claim whose only matched
    worker is still running gets no record and is reported in step 5. Look for
    the worker's report draft in the scratchpad of the same session, under the
