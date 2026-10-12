@@ -500,7 +500,7 @@ per-round JSON record that C2/C4 below invoke but that never gates
 control flow; see `docs/idd-workflow.md`'s "Critique pass invocation"
 section for both. If possible, a per-agent critique subagent's brief
 names a parent-created scratch directory and quotes rule 3: "the
-subagent uses only that directory and creates none"; then run the
+subagent uses only that directory and creates none"; always run the
 post-round scratch check.
 
 **Objective diff validation floor**: neither C2 nor C4 below may skip to
