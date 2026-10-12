@@ -161,10 +161,13 @@ name: IDD advisory-convergence gate
 # `runAdvisoryConvergenceWithPoll` instead of asserting
 # immediately: when (and ONLY when) the verdict's sole blocking reason
 # is literally "{bot} has not reviewed this pull request yet" --
-# `isSoleCopilotNotReviewedYetReason` in the .mts source -- it polls a
-# short, bounded window (a few seconds apart, capped around a minute,
+# `isSoleCopilotNotReviewedYetReason` in the .mts source, or a stale head
+# whose Copilot re-review was requested after the head commit (#3944,
+# `isSoleStaleHeadCopilotReviewReason`) -- it polls a
+# short, bounded window (a few seconds apart, capped at 10 minutes (#3944),
 # wall-clock bounded) before its real assert-driven exit. Every OTHER
-# not-ready reason (a stale-HEAD review, unresolved threads, an
+# not-ready reason (a stale-HEAD review with no re-review request, unresolved
+# threads, an
 # indeterminate claim scope, a deadline/terminal-unavailability reason,
 # etc.) still fails immediately on the first pass with no wait, exactly
 # as before this change. This does not weaken the check's required,

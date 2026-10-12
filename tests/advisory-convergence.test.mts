@@ -22,6 +22,7 @@ import {
   classifyPendingReviewWatch,
   collectAssertNextActions,
   computeAdvisoryConvergenceVerdict,
+  createCopilotRequestCoverage,
   createPendingReviewWatch,
   DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS,
   DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
@@ -9302,4 +9303,130 @@ test('runAdvisoryConvergenceWithPoll: a stale head with an extra blocking reason
 
 test('DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS is the 10-minute ceiling #3944 decided', () => {
   assert.equal(DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS, 600_000);
+});
+
+// --- #3944: the production request-coverage reader ---
+
+function timelineGhStub(events: unknown[]): string {
+  return [
+    "const joined = process.argv.join(' ');",
+    'if (/\\/issues\\/[0-9]+\\/timeline/.test(joined)) {',
+    `  process.stdout.write(${JSON.stringify(JSON.stringify(events))} + '\\n');`,
+    '  process.exit(0);',
+    '}',
+    "process.stderr.write('unexpected gh call: ' + joined + '\\n');",
+    'process.exit(1);',
+  ].join('\n');
+}
+
+const REQUESTED_COPILOT_LOGIN = 'copilot-pull-request-reviewer[bot]';
+const REPO_ARGV = ['--pr', '1234', '--owner', 'o', '--repo', 'r'];
+
+test('createCopilotRequestCoverage: true when a Copilot review was requested after the head commit', () => {
+  const restore = stubExecutable(
+    'gh',
+    timelineGhStub([
+      { event: 'committed', sha: HEAD },
+      {
+        event: 'review_requested',
+        requested_reviewer: { login: REQUESTED_COPILOT_LOGIN },
+      },
+    ]),
+  );
+  try {
+    const covers = createCopilotRequestCoverage();
+    assert.equal(
+      covers(REPO_ARGV, HEAD, 'copilot-pull-request-reviewer'),
+      true,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('createCopilotRequestCoverage: false when the request came before the head commit', () => {
+  const restore = stubExecutable(
+    'gh',
+    timelineGhStub([
+      {
+        event: 'review_requested',
+        requested_reviewer: { login: REQUESTED_COPILOT_LOGIN },
+      },
+      { event: 'committed', sha: HEAD },
+    ]),
+  );
+  try {
+    const covers = createCopilotRequestCoverage();
+    assert.equal(
+      covers(REPO_ARGV, HEAD, 'copilot-pull-request-reviewer'),
+      false,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('createCopilotRequestCoverage: false when no Copilot review was requested at all', () => {
+  const restore = stubExecutable(
+    'gh',
+    timelineGhStub([{ event: 'committed', sha: HEAD }]),
+  );
+  try {
+    const covers = createCopilotRequestCoverage();
+    assert.equal(
+      covers(REPO_ARGV, HEAD, 'copilot-pull-request-reviewer'),
+      false,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('createCopilotRequestCoverage: false when the timeline read fails, so the stale-head failure stands', () => {
+  const restore = stubExecutable(
+    'gh',
+    "process.stderr.write('HTTP 500\\n');\nprocess.exit(1);",
+  );
+  try {
+    const covers = createCopilotRequestCoverage();
+    assert.equal(
+      covers(REPO_ARGV, HEAD, 'copilot-pull-request-reviewer'),
+      false,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('createCopilotRequestCoverage: false without a resolvable repository, and makes no gh call', () => {
+  const covers = createCopilotRequestCoverage(() => ({ owner: '', repo: '' }));
+  assert.equal(
+    covers(['--pr', '1234'], HEAD, 'copilot-pull-request-reviewer'),
+    false,
+  );
+});
+
+test('createCopilotRequestCoverage: resolves the repository from the checkout when argv omits it', () => {
+  const restore = stubExecutable(
+    'gh',
+    timelineGhStub([
+      { event: 'committed', sha: HEAD },
+      {
+        event: 'review_requested',
+        requested_reviewer: { login: REQUESTED_COPILOT_LOGIN },
+      },
+    ]),
+  );
+  try {
+    const covers = createCopilotRequestCoverage(() => ({
+      owner: 'o',
+      repo: 'r',
+    }));
+    assert.equal(
+      covers(['--pr', '1234'], HEAD, 'copilot-pull-request-reviewer'),
+      true,
+    );
+  } finally {
+    restore();
+  }
 });
