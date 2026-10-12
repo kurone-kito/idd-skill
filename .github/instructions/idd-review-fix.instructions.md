@@ -117,10 +117,8 @@ non-blocking hardening, treat them as PATH B (disposition-only,
 E4-E7) rather than opening another E9-E10 round.
 
 **Second escalation tier (Tier 2; heuristic, not a hard rule): when the
-structural fix itself doesn't converge.** The heuristic above names
-one escalation (patch-by-patch → one structural fix); it does not say
-what to do when that structural fix keeps drawing new same-area
-findings for a further few rounds. The natural default — a second,
+structural fix itself doesn't converge** (new same-area findings keep
+arriving). The natural default — a second,
 more elaborate structural redesign — tends to cost more rounds, not
 fewer, since the same race or defect class often regenerates at each
 added layer of recovery machinery. Prefer removing or substantially
@@ -237,9 +235,7 @@ falls outside the touched-file scope; or either bound is reached.
 fold-in rule is unchanged); never changes PATH A/B routing or triage
 timing (still happens at the next E1 pass — only push timing changes);
 and relaxes nothing else: E14 re-review, `review-watermark`
-invalidation, and individual E6 replies stay as before; the
-[claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
-runs immediately before push.
+invalidation, and individual E6 replies stay as before.
 
 **PR body sync.** If this round's fix changes a claim the PR body
 makes (round count, a documented residual limitation, a scope
@@ -278,11 +274,9 @@ unambiguous:
   the thread**, using the same resolve-review-thread mechanism as
   `idd-review-triage.instructions.md`'s E6 (profile-selected helper
   command, reply-before-resolve, manual REST + GraphQL
-  `resolveReviewThread` fallback — see
-  `idd-review-triage.instructions.md`'s E6 for the exact command and
-  flags). Resolution means "agent acted", not "reviewer agreed" — a
-  disagreeing reviewer can reopen the thread, re-surfacing it in the
-  next E1 pass.
+  `resolveReviewThread` fallback). Resolution means "agent acted", not
+  "reviewer agreed" — a disagreeing reviewer can reopen the thread,
+  re-surfacing it in the next E1 pass.
 - **Regular comments**: reply only; do not resolve.
 - **Persistent non-review notices**: a non-review notice already
   dispositioned `**Rejected** — {bot} did not review HEAD …` in a prior
