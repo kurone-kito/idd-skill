@@ -1,6 +1,5 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-
 import {
   buildCiWaitStateSummary,
   ciWaitSummaryIsPreMergeCiPassing,
@@ -11,7 +10,11 @@ import {
   requiredCiHeadAgreementFromSummary,
   selectLatestCheckEntry,
 } from '../src/scripts/ci-wait-state.mts';
-import { classifyCiChecks } from '../src/scripts/protocol-helpers.mts';
+import type { ActivationResult } from '../src/scripts/idd-activation.mts';
+import {
+  classifyCiChecks,
+  isPreMergeCiAllPassing,
+} from '../src/scripts/protocol-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
@@ -1683,4 +1686,375 @@ test('#3670: a green advisory-convergence run the downgrade blocks is named as b
     'docs',
     'idd-advisory-convergence',
   ]);
+});
+
+// --- #4053: the zero-check global-only opt-in on the E1 watermark path. The
+// pass predicate, the `ci-wait-state` JSON the E1 precondition reads, and the
+// watermark agreement all reach the same answer. The setting passes only the
+// named region (zero required checks, no present run, active profile); every
+// MUST-KEEP shape keeps deferring.
+
+const GLOBAL_ONLY_HEAD = 'c'.repeat(40);
+const GLOBAL_ONLY_OPT_IN = 'ciGate.allowNoRequiredChecksInGlobalOnly';
+const ADVISORY_CHECK = 'idd-advisory-convergence';
+const ADVISORY_WORKFLOW = '.github/workflows/idd-advisory-convergence.yml';
+const GLOBAL_ONLY_ACTIVE: ActivationResult = {
+  active: true,
+  tier: 'user-global-override',
+  instructionsRoot: '/payload/idd',
+  reason: 'repository-policy-minimal-import',
+};
+const REPOSITORY_LOCAL_ACTIVATION: ActivationResult = {
+  active: true,
+  tier: 'repository-local',
+  instructionsRoot: '/repo/.github/instructions',
+  reason: 'repository-instruction-files',
+};
+
+interface GlobalOnlyPortOptions {
+  rollup?: unknown[];
+  /** `null` leaves both governance reads absent, so they are unreadable. */
+  branchRules?: unknown[] | null;
+  /** Plants the advisory workflow file at this ref, so the profile is inactive. */
+  workflowAt?: string;
+}
+
+function globalOnlyPort(options: GlobalOnlyPortOptions = {}) {
+  const readable = options.branchRules !== null;
+  return createFakeProviderAdapter({
+    changeRequestBranchAndChecks: {
+      42: {
+        headSha: GLOBAL_ONLY_HEAD,
+        baseRefName: 'main',
+        statusCheckRollup: options.rollup ?? [],
+      },
+    },
+    branchRules: readable ? { 'o/r/main': options.branchRules ?? [] } : {},
+    branchProtection: readable ? { 'o/r/main': {} } : {},
+    // The root listing must read back as an array on both the trusted ref and
+    // the head SHA, so `baseWorkflowAbsentAt` proves absence.
+    repositoryContentAtRef: {
+      'o/r/@main': [],
+      [`o/r/@${GLOBAL_ONLY_HEAD}`]: [],
+      ...(options.workflowAt
+        ? { [`o/r/${ADVISORY_WORKFLOW}@${options.workflowAt}`]: { name: 'x' } }
+        : {}),
+    },
+  });
+}
+
+interface GlobalOnlyCollectOptions {
+  /** `undefined` leaves the setting absent from the trusted config. */
+  setting?: boolean;
+  globalOnly?: boolean;
+  activation?: ActivationResult | null;
+  /** Records each ref the trusted-config loader is asked for. */
+  loads?: string[];
+}
+
+function collectGlobalOnly(
+  port: ReturnType<typeof globalOnlyPort>,
+  options: GlobalOnlyCollectOptions = {},
+) {
+  const globalOnly = options.globalOnly ?? true;
+  return collectCiWaitState(
+    [
+      '--pr',
+      '42',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      ...(globalOnly ? ['--global-only'] : []),
+    ],
+    () => port,
+    (_owner, _repo, ref) => {
+      options.loads?.push(ref);
+      return options.setting === undefined
+        ? {}
+        : { ciGate: { allowNoRequiredChecksInGlobalOnly: options.setting } };
+    },
+    () =>
+      options.activation === undefined
+        ? GLOBAL_ONLY_ACTIVE
+        : options.activation,
+  );
+}
+
+test('#4053: the zero-check global-only opt-in passes CI on the E1 precondition and the watermark agreement', () => {
+  const summary = collectGlobalOnly(globalOnlyPort(), { setting: true });
+  assert.deepEqual(summary.checks, []);
+  assert.equal(summary.requiredChecks.status, 'no-required-checks');
+  assert.equal(summary.allowedByPolicySetting, GLOBAL_ONLY_OPT_IN);
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(summary), true);
+
+  const agreement = requiredCiHeadAgreementFromSummary(summary);
+  assert.equal(agreement.headRefOid, GLOBAL_ONLY_HEAD);
+  assert.equal(agreement.requiredChecksPassing, true);
+  assert.equal(agreement.noRequiredChecksConfigured, true);
+  assert.equal(agreement.latestPassingCompletedAt, 'none');
+});
+
+test('#4053: the advisory name the ruleset requires is dropped under the profile, so the opt-in reaches zero required checks', () => {
+  const rules = [
+    {
+      type: 'required_status_checks',
+      parameters: { required_status_checks: [{ context: ADVISORY_CHECK }] },
+    },
+  ];
+  const passing = collectGlobalOnly(globalOnlyPort({ branchRules: rules }), {
+    setting: true,
+  });
+  assert.equal(passing.requiredChecks.status, 'no-required-checks');
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(passing), true);
+
+  // With the setting unset, the rollup stays unfiltered: the advisory name
+  // is still required and missing, so the gate defers as it did before.
+  const unset = collectGlobalOnly(globalOnlyPort({ branchRules: rules }), {});
+  assert.equal(unset.requiredChecks.status, 'missing');
+  assert.equal(unset.allowedByPolicySetting, undefined);
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(unset), false);
+});
+
+test('#4053: the setting unset or false defers the same zero-check global-only state', () => {
+  for (const setting of [undefined, false]) {
+    const summary = collectGlobalOnly(globalOnlyPort(), { setting });
+    assert.equal(summary.allowedByPolicySetting, undefined);
+    assert.equal(ciWaitSummaryIsPreMergeCiPassing(summary), false);
+    assert.equal(
+      requiredCiHeadAgreementFromSummary(summary).requiredChecksPassing,
+      false,
+    );
+  }
+});
+
+test('#4053: with the setting unset or false, --global-only makes no activation read', () => {
+  for (const setting of [undefined, false]) {
+    let activationReads = 0;
+    const summary = collectCiWaitState(
+      ['--pr', '42', '--owner', 'o', '--repo', 'r', '--global-only'],
+      () => globalOnlyPort(),
+      () => ({
+        ciGate:
+          setting === undefined
+            ? {}
+            : { allowNoRequiredChecksInGlobalOnly: setting },
+      }),
+      () => {
+        activationReads += 1;
+        return GLOBAL_ONLY_ACTIVE;
+      },
+    );
+    assert.equal(activationReads, 0);
+    assert.deepEqual(summary.globalOnlyPolicy, {
+      optIn: false,
+      globalOnlyActive: false,
+    });
+    assert.equal(summary.allowedByPolicySetting, undefined);
+  }
+});
+
+test('#4053: the setting true still defers when the global-only profile is not active', () => {
+  const cases: [string, ReturnType<typeof collectGlobalOnly>][] = [
+    [
+      'no --global-only flag',
+      collectGlobalOnly(globalOnlyPort(), {
+        setting: true,
+        globalOnly: false,
+      }),
+    ],
+    [
+      'a repository-local activation',
+      collectGlobalOnly(globalOnlyPort(), {
+        setting: true,
+        activation: REPOSITORY_LOCAL_ACTIVATION,
+      }),
+    ],
+    [
+      'no resolvable activation',
+      collectGlobalOnly(globalOnlyPort(), {
+        setting: true,
+        activation: null,
+      }),
+    ],
+    [
+      'the advisory workflow present on the trusted base ref',
+      collectGlobalOnly(globalOnlyPort({ workflowAt: 'main' }), {
+        setting: true,
+      }),
+    ],
+    [
+      'the advisory workflow present on the pull-request head',
+      collectGlobalOnly(globalOnlyPort({ workflowAt: GLOBAL_ONLY_HEAD }), {
+        setting: true,
+      }),
+    ],
+  ];
+  for (const [label, summary] of cases) {
+    assert.equal(summary.allowedByPolicySetting, undefined, label);
+    assert.equal(ciWaitSummaryIsPreMergeCiPassing(summary), false, label);
+  }
+});
+
+test('#4053: the setting true still defers a pending or failing present run', () => {
+  const pending = [
+    {
+      __typename: 'CheckRun',
+      name: 'lint',
+      status: 'IN_PROGRESS',
+      conclusion: null,
+      workflowName: 'CI',
+      detailsUrl: '',
+      startedAt: '2026-10-12T00:00:00Z',
+      completedAt: null,
+    },
+  ];
+  const failing = [
+    {
+      __typename: 'CheckRun',
+      name: 'lint',
+      status: 'COMPLETED',
+      conclusion: 'FAILURE',
+      workflowName: 'CI',
+      detailsUrl: '',
+      startedAt: '2026-10-12T00:00:00Z',
+      completedAt: '2026-10-12T00:05:00Z',
+    },
+  ];
+  for (const rollup of [pending, failing]) {
+    const summary = collectGlobalOnly(globalOnlyPort({ rollup }), {
+      setting: true,
+    });
+    // The run is present, so the region is left: no allowance, no pass.
+    assert.equal(summary.checks.length, 1);
+    assert.equal(summary.allowedByPolicySetting, undefined);
+    assert.equal(ciWaitSummaryIsPreMergeCiPassing(summary), false);
+  }
+});
+
+test('#4053: the setting true still defers when protection reads are unreadable', () => {
+  const summary = collectGlobalOnly(globalOnlyPort({ branchRules: null }), {
+    setting: true,
+  });
+  assert.equal(summary.requiredChecks.protectionReadsUnreadable, true);
+  assert.equal(summary.requiredChecks.status, 'unreadable');
+  assert.equal(summary.allowedByPolicySetting, undefined);
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(summary), false);
+});
+
+test('#4053: the setting true still defers a source-pinned required-check requirement', () => {
+  // An unnamed `workflows` ruleset rule: source-pinned with no name to drop.
+  const unnamed = collectGlobalOnly(
+    globalOnlyPort({ branchRules: [{ type: 'workflows', parameters: {} }] }),
+    { setting: true },
+  );
+  assert.equal(unnamed.requiredChecks.status, 'source-pinned');
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(unnamed), false);
+
+  // A named advisory requirement pinned to an integration: the profile must
+  // not drop it, so it stays required and missing.
+  const named = collectGlobalOnly(
+    globalOnlyPort({
+      branchRules: [
+        {
+          type: 'required_status_checks',
+          parameters: {
+            required_status_checks: [
+              { context: ADVISORY_CHECK, integration_id: 15368 },
+            ],
+          },
+        },
+      ],
+    }),
+    { setting: true },
+  );
+  assert.equal(named.requiredChecks.requiredCheckSourcePinned, true);
+  assert.deepEqual(named.requiredChecks.names, [ADVISORY_CHECK]);
+  assert.equal(named.requiredChecks.status, 'missing');
+  assert.equal(named.allowedByPolicySetting, undefined);
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(named), false);
+});
+
+test('#4053: a stray allowedByPolicySetting marker without the matching state is not trusted', () => {
+  // A zero-check summary with the marker but no opt-in inputs (the pure
+  // builder leaves `globalOnlyPolicy` absent, which means off).
+  const stray = buildCiWaitStateSummary(
+    { headRefOid: GLOBAL_ONLY_HEAD, statusCheckRollup: [] },
+    { requiredCheckNames: [] },
+  );
+  stray.allowedByPolicySetting = GLOBAL_ONLY_OPT_IN;
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(stray), false);
+
+  // The opt-in inputs are on, but a present run is pending: the marker names
+  // a state the summary does not have, so it does not pass.
+  const pendingRun = buildCiWaitStateSummary(
+    {
+      headRefOid: GLOBAL_ONLY_HEAD,
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'lint',
+          status: 'IN_PROGRESS',
+          conclusion: null,
+          workflowName: 'CI',
+          detailsUrl: '',
+          startedAt: '2026-10-12T00:00:00Z',
+          completedAt: null,
+        },
+      ],
+    },
+    { requiredCheckNames: [] },
+  );
+  pendingRun.allowedByPolicySetting = GLOBAL_ONLY_OPT_IN;
+  pendingRun.globalOnlyPolicy = { optIn: true, globalOnlyActive: true };
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(pendingRun), false);
+
+  // The pass predicate re-checks the matching state on its own.
+  assert.equal(
+    isPreMergeCiAllPassing({
+      allowedByPolicySetting: GLOBAL_ONLY_OPT_IN,
+      noRequiredChecksConfigured: false,
+      presentRunConclusion: 'none',
+      protectionReadsUnreadable: false,
+      requiredChecksPassing: false,
+      status: 'failed',
+    }),
+    false,
+  );
+  assert.equal(
+    isPreMergeCiAllPassing({
+      allowedByPolicySetting: GLOBAL_ONLY_OPT_IN,
+      noRequiredChecksConfigured: true,
+      presentRunConclusion: 'some-failing',
+      protectionReadsUnreadable: false,
+      requiredChecksPassing: false,
+      status: 'failed',
+    }),
+    false,
+  );
+});
+
+test('#4053: the opt-in is read from the trusted base ref only, never a pull-request head value', () => {
+  const loads: string[] = [];
+  // Only the head branch name carries the opt-in. The loader is asked for the
+  // trusted base ref alone, and that config has no opt-in, so the gate defers.
+  const summary = collectCiWaitState(
+    ['--pr', '42', '--owner', 'o', '--repo', 'r', '--global-only'],
+    () => globalOnlyPort(),
+    (_owner, _repo, ref) => {
+      loads.push(ref);
+      return {
+        ciGate: { allowNoRequiredChecksInGlobalOnly: ref === 'feature/head' },
+      };
+    },
+    () => GLOBAL_ONLY_ACTIVE,
+  );
+  assert.deepEqual(loads, ['main']);
+  assert.equal(summary.allowedByPolicySetting, undefined);
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(summary), false);
+});
+
+test('#4053: parseArgs reads --global-only and defaults it off', () => {
+  assert.equal(parseArgs(['--pr', '42', '--global-only']).globalOnly, true);
+  assert.equal(parseArgs(['--pr', '42']).globalOnly, false);
 });

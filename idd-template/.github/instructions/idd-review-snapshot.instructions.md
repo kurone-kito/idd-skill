@@ -79,12 +79,17 @@ CI pass exists yet for this HEAD.
 **CI precondition.** Run profile-selected AW1 `advisory-wait-state` with
 `--pr {pr-number}`, `--claim-id {claim-id}`, `--agent-id {agent-id}`,
 and `--trusted-marker-logins <trusted-logins>`; then profile-selected
-`ci-wait-state` with `--pr {pr-number}` (see
-`docs/idd-helper-scripts.md`). Require `outcome: SATISFIED`, or
+`ci-wait-state` with `--pr {pr-number}` (add `--global-only` on a
+global-only run; see `docs/idd-helper-scripts.md`). Require
+`outcome: SATISFIED`, or
 `CAP_EXHAUSTED` with `capExhaustedRoute: phase-specific`; otherwise
 defer. Require `copilotRecovery.activeClaimProvided: true`,
 `staleRequestRecovery.action`, and `requiredChecks.status: success` (or
-`no-required-checks` with non-empty all-success `checks[]`). No helper:
+`no-required-checks` with non-empty all-success `checks[]`, or
+`no-required-checks` with empty `checks[]` and the exact
+`allowedByPolicySetting: ciGate.allowNoRequiredChecksInGlobalOnly` marker
+(any other value defers), the global-only opt-in in
+[global-only profile](../../docs/global-only-profile.md)). No helper:
 finish AW1-AW3; missing CI contract:
 stop/ask; else read rulesets/protection and normalize
 `gh pr checks {pr-number} --json name,state,bucket,startedAt,completedAt,link`
@@ -107,7 +112,8 @@ Persist all six values by posting a PR comment with this format (when
 helper runtime is enabled, prefer the **one-command** profile-selected
 post-idd-marker watermark path — `--type watermark --from-pr <pr-number>
 --expected-head-sha {head-SHA} --agent-id <id> --claim-id <id>
---apply --operation-local` — one capture derives the fields; forward
+--apply --operation-local` (add `--global-only` on a global-only run) — one
+capture derives the fields; forward
 `--trusted-marker-logins` and Step 1's boundary as `--prior-head-sha
 {head-SHA} --prior-total-item-count {total-item-count}
 --prior-max-activity-at {max-activity-updatedAt}`). **Always pass
