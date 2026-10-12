@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
   cpSync,
   existsSync,
@@ -763,6 +764,58 @@ test('install and uninstall refuse a receipt path that is a symlink (#3825)', ()
       /receipt .*symlink/,
     );
     assert.equal(readFileSync(target, 'utf8'), 'keep me\n');
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('uninstall refuses a receipt that names a skill directory outside the skill roots (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options());
+    const outside = join(box.root, 'outside-skill');
+    writeFixture(join(outside, '.idd-user-global'), '{}\n');
+    writeFixture(join(outside, 'SKILL.md'), 'keep me\n');
+    const receiptPath = join(
+      box.root,
+      'data',
+      'idd-skill',
+      'user-global-receipt.json',
+    );
+    const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as {
+      skillDirs: string[];
+      skillFiles: { path: string; sha256: string }[];
+    };
+    const digest = createHash('sha256').update('keep me\n').digest('hex');
+    receipt.skillDirs.push(outside);
+    receipt.skillFiles.push({
+      path: join(outside, 'SKILL.md'),
+      sha256: digest,
+    });
+    writeFileSync(receiptPath, JSON.stringify(receipt));
+    assert.throws(
+      () => runUserGlobalUninstall(box.options()),
+      /outside the skill roots/,
+    );
+    assert.equal(readFileSync(join(outside, 'SKILL.md'), 'utf8'), 'keep me\n');
+    assert.equal(existsSync(join(outside, '.idd-user-global')), true);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install refuses a stale temporary file at the managed write path (#3825)', () => {
+  const box = sandbox();
+  try {
+    writeFixture(box.claudeFile, '# mine\n');
+    const stale = `${box.claudeFile}.idd-tmp-${process.pid}`;
+    writeFixture(stale, 'user content\n');
+    assert.throws(
+      () => runUserGlobalInstall(box.options(['claude'])),
+      /temporary file .* already exists/,
+    );
+    assert.equal(readFileSync(stale, 'utf8'), 'user content\n');
+    assert.equal(readFileSync(box.claudeFile, 'utf8'), '# mine\n');
   } finally {
     box.cleanup();
   }

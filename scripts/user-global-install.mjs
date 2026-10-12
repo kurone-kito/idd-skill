@@ -1054,7 +1054,53 @@ function isUnchangedFile(path, digest) {
  * install wrote, their marked directories once nothing else is left in them,
  * the owned payload versions, and the current link when it names one of them.
  */
+/**
+ * Refuse any recorded skill directory, skill file, or created directory that
+ * lies outside the skill roots this invocation resolves. Cleanup must not act
+ * on a path the receipt merely names.
+ */
+function assertReceiptInSkillRoots(receipt, locations) {
+  const skillRoots = [
+    locations.claudeSkillsRoot,
+    locations.agentsSkillsRoot,
+  ].map((root) => resolve(root));
+  // Every directory install creates above what it wires: the payload's data
+  // directory and its parent, the OpenCode config directory and its parent,
+  // and the Claude and Codex roots. Anything else a receipt names is foreign.
+  const ancestorsOf = (path) => {
+    const chain = [];
+    for (let dir = resolve(path); ; dir = dirname(dir)) {
+      chain.push(dir);
+      if (dirname(dir) === dir) break;
+    }
+    return chain;
+  };
+  const wiredRoots = [
+    ...ancestorsOf(locations.dataRoot),
+    ...ancestorsOf(dirname(locations.opencodeFile)),
+    resolve(locations.claudeRoot),
+    resolve(locations.codexRoot),
+  ];
+  const within = (path, roots) =>
+    roots.some((root) => path === root || path.startsWith(`${root}${sep}`));
+  const outsideSkills = [
+    ...receipt.skillDirs,
+    ...receipt.skillFiles.map((file) => file.path),
+  ]
+    .map((path) => resolve(path))
+    .filter((path) => !within(path, skillRoots));
+  const outsideCreated = receipt.dirsCreated
+    .map((path) => resolve(path))
+    .filter((path) => !within(path, [...skillRoots, ...wiredRoots]));
+  const offending = [...outsideSkills, ...outsideCreated][0];
+  if (offending !== undefined) {
+    throw new Error(
+      `user-global install: the receipt names ${offending}, outside the skill roots; refusing to clean up from a receipt that does not match this environment`,
+    );
+  }
+}
 function removeOwned(plan, locations, receipt) {
+  assertReceiptInSkillRoots(receipt, locations);
   const removed = new Set();
   for (const dir of receipt.skillDirs) {
     const stat = lstatIfExists(dir);
@@ -1130,7 +1176,12 @@ function writeAtomically(path, content, mode) {
   const real = existsSync(path) ? realpathSync(path) : path;
   mkdirSync(dirname(real), { recursive: true });
   const tmp = `${real}.idd-tmp-${process.pid}`;
-  writeFileSync(tmp, content, { mode: mode ?? 0o644 });
+  if (lstatIfExists(tmp) !== null) {
+    throw new Error(
+      `user-global install: the temporary file ${tmp} already exists; refusing to overwrite it`,
+    );
+  }
+  writeFileSync(tmp, content, { mode: mode ?? 0o644, flag: 'wx' });
   if (mode !== undefined) chmodSync(tmp, mode);
   renameSync(tmp, real);
 }
