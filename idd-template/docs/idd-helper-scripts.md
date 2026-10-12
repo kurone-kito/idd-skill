@@ -5254,8 +5254,10 @@ still fails closed:
   `--fresh-claim-gate`; without it, or with an empty value, the call is a
   usage error raised before any `gh` call. For a released claim's branch
   only, the gate drops an occupant that resolves to `<path>` when that
-  worktree is on the branch, `git status --porcelain --untracked-files=all`
-  is empty, and the base resolves to `origin/<developmentBranch>` (or
+  worktree is on the branch, `git status --porcelain --untracked-files=all
+  --ignore-submodules=none` is empty (submodules count even under
+  `diff.ignoreSubmodules`), and the base resolves to
+  `origin/<developmentBranch>` (or
   `refs/remotes/origin/HEAD` when the policy sets none; an unresolvable base,
   including a missing `origin/HEAD` or an invalid `developmentBranch`, refuses
   the worktree outright). Then either `HEAD` has no commits beyond the base, or
