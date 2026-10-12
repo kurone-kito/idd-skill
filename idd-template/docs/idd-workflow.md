@@ -1254,11 +1254,18 @@ identify its old claims, and step 1 treats them as not its own.
    scratchpad of the same session, under the issue-number prefix that the
    fan-out variant already requires. If no draft is found, verify the terminal
    outcome from live GitHub state (a merged or closed pull request, a released
-   claim), then append a report with the profile-selected
-   `idd-worker-report append --file <path>` command. Record the recovery in
-   its `frictions`, where each entry needs a `phase` and a `summary`. Use the
-   agent-listing handle as `workerHandle` when one is available, and the
-   claim-id otherwise.
+   claim), then build the record and append it with the profile-selected
+   `idd-worker-report append --file <path>` command. The record must validate
+   against `schemas/worker-report.schema.json`. `issue` and `claimId` come from
+   steps 1 and 2, and `pullRequest` is the claim's pull request, or null.
+   `harness` is the harness row of the worker mechanism table, and
+   `workerHandle` is the agent-listing handle, or the claim-id when no listing
+   is available. `terminalPhase` is the last phase that live state proves,
+   which is F4 for a merged claim that was released. `outcome` is `merged` for
+   a merged pull request, `abandoned` for a closed unmerged one, `held` for a
+   claim still held, and `failed` otherwise. `verifiedAt` and `recordedAt` are
+   ISO 8601 UTC timestamps. Record the recovery in `frictions`, where each
+   entry needs a `phase` and a `summary`.
 5. **Report the remainder.** An own claim with no matching worker after step 3
    is reported to the operator. Its worktree is not removed.
 
