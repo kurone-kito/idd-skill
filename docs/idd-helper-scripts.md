@@ -299,14 +299,14 @@ failure; five of the six never return a non-zero exit code as their own
 verdict, so they produce no `kind: "gate"`. `resume-claim-routing.mjs`
 does under `--assert` (see its `gate` cell).
 
-| Helper                           | `usage`                                                                                                              | `not-found` / `transport`                                                                                                                | `gate`                                                      | `internal`              |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------- |
-| `pre-merge-readiness.mjs`        | missing/invalid `--pr`, `--claim-issue`, or a flag-combination error                                                 | a `gh` failure while resolving the repo, PR, or checks (still prints the existing `{"error": ...}` stdout JSON, unchanged by this track) | —                                                           | an unexpected exception |
-| `resume-claim-routing.mjs`       | missing/invalid `--issue`, an unknown flag, `--assert` without `--claim-id`, or `--assert` with `--fresh-claim-gate` | a `gh` failure resolving claim state                                                                                                     | `--assert` when the verdict is not `already_owned` / `keep` | an unexpected exception |
-| `authoring-owner-provenance.mjs` | missing/invalid `--issue`, or an unknown flag                                                                        | a `gh` failure resolving comment/marker history                                                                                          | —                                                           | an unexpected exception |
-| `discover-readiness-check.mjs`   | missing `--issue`/`--issues`, or an unknown flag                                                                     | a `gh` failure resolving issue state                                                                                                     | —                                                           | an unexpected exception |
-| `discover-viability-gate.mjs`    | missing `--issue`/`--issues`, or an unknown flag                                                                     | a `gh` failure resolving issue state                                                                                                     | —                                                           | an unexpected exception |
-| `ci-wait-state.mjs`              | missing/invalid `--pr`, or an unknown flag                                                                           | a `gh` failure resolving CI state                                                                                                        | —                                                           | an unexpected exception |
+| Helper                           | `usage`                                                                                                                                                                            | `not-found` / `transport`                                                                                                                | `gate`                                                      | `internal`              |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------- |
+| `pre-merge-readiness.mjs`        | missing/invalid `--pr`, `--claim-issue`, or a flag-combination error                                                                                                               | a `gh` failure while resolving the repo, PR, or checks (still prints the existing `{"error": ...}` stdout JSON, unchanged by this track) | —                                                           | an unexpected exception |
+| `resume-claim-routing.mjs`       | missing/invalid `--issue`, an unknown flag, `--assert` without `--claim-id`, `--assert` with `--fresh-claim-gate`, or `--own-worktree` that is empty or lacks `--fresh-claim-gate` | a `gh` failure resolving claim state                                                                                                     | `--assert` when the verdict is not `already_owned` / `keep` | an unexpected exception |
+| `authoring-owner-provenance.mjs` | missing/invalid `--issue`, or an unknown flag                                                                                                                                      | a `gh` failure resolving comment/marker history                                                                                          | —                                                           | an unexpected exception |
+| `discover-readiness-check.mjs`   | missing `--issue`/`--issues`, or an unknown flag                                                                                                                                   | a `gh` failure resolving issue state                                                                                                     | —                                                           | an unexpected exception |
+| `discover-viability-gate.mjs`    | missing `--issue`/`--issues`, or an unknown flag                                                                                                                                   | a `gh` failure resolving issue state                                                                                                     | —                                                           | an unexpected exception |
+| `ci-wait-state.mjs`              | missing/invalid `--pr`, or an unknown flag                                                                                                                                         | a `gh` failure resolving CI state                                                                                                        | —                                                           | an unexpected exception |
 
 ### Migrated helpers (review and merge batch)
 
@@ -778,6 +778,14 @@ in this preamble, since the fallback differs per helper.
   (referenced in
   [kurone-kito/idd-skill#2243](https://github.com/kurone-kito/idd-skill/issues/2243);
   see its `--help` for the fetch-scope and staleness details)
+  Default-on (not opt-in): excludes a defer-source follow-up, a body with an
+  `<!-- {prefix}-authoring-defer-source: ... -->` marker, while its single
+  `Refs` origin issue is open, bucketed under
+  `filtered.blocked_by_defer_source_origin` with `details` `open:#N`,
+  `missing_refs_line`, `ambiguous_refs_line`, or `unresolvable:#N` (the last
+  also lists the origin in the top-level `unresolvable` array), or
+  `needs_decision_label_conflicts_with_authoring_label` when the configured
+  authoring and needs-decision labels collide (issue #4065)
 - `scripts/discover-roadmap-graph.mjs` for A1.5/A2 recursive roadmap graph
   enumeration and classification
 - `scripts/idd-roadmap-audit-execute.mjs` for the A1.5 roadmap-completion
@@ -3595,6 +3603,44 @@ gate, since that path requires an actual human judgment call that this
 one never makes. Do not widen this exception to any other reason
 token, actor, or check selector.
 
+**Decision-rule files need an approval instead**
+(kurone-kito/idd-skill#4015): the source repository splits its trigger
+list into two lists. The bootstrap list
+(`SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES`) keeps the waiver above. The
+decision-rule list (`SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES`:
+`src/scripts/advisory-convergence.mts`,
+`src/scripts/advisory-wait-policy.mts`,
+`src/scripts/protocol-helpers.mts`, and the two modules the verdict
+delegates Clause 1 and cited-item rules to,
+`src/scripts/review-clause.mts` and
+`src/scripts/copilot-review-body.mts`) names the files that decide this
+check's verdicts. A pull request whose diff touches a decision-rule file
+gets no self-referential-bootstrap-auto waiver, even when it also
+touches a bootstrap file. The check then passes only through a
+converged review, through an approving review of the current HEAD
+whose author is in `trustedMarkerActors`, or through the
+maintainer-authorized waiver, which applies after the deadline or while
+Copilot is terminally unavailable. Only the latest review per
+login that is not `COMMENTED` or `PENDING` counts, so a later
+`CHANGES_REQUESTED` review withdraws the approval and reruns the check.
+Dismissing the approval also withdraws it, but only on the check's next
+run, because a dismissal does not rerun it; to revoke an approval at
+once, submit a `CHANGES_REQUESTED` review. The
+verdict reports this as `waiver.decisionRuleFilesTouched` and
+`waiver.decisionRuleApprovalValid`. The approval is not a substitute for
+review on any other pull request. GitHub does not let a pull request's
+author approve it, so the approving login must differ from the author;
+the maintainer-authorized waiver above stays the off-ramp after the
+deadline or while Copilot is terminally unavailable. Every other
+repository's profile-derived set has no decision-rule list and keeps the
+waiver as before. In this repository the posting job's allowlist is the
+bootstrap list, and it posts no marker for a diff that touches a
+decision-rule file. Observed
+incident: kurone-kito/idd-skill#3999 and kurone-kito/idd-skill#4000
+both merged through the waiver, and kurone-kito/idd-skill#4000 changed
+the cited-item rules that decide whether a finding counts as settled,
+with no independent check.
+
 **A narrow, inherent dead zone remains** (kurone-kito/idd-skill#2657,
 Codex review, PR #2895, round 9): being in the trigger-file allowlist
 does not mean every possible bug in that file can be self-bootstrapped.
@@ -4369,9 +4415,12 @@ still fails closed:
 - **When to call `--record-tokens`**: once at A5 claim time, right after
   generating `{agent-id}`/`{claim-id}`, before posting the `claimed-by`
   marker (the B1 worktree does not exist yet, so `<path>` is then the
-  _primary_ worktree); again with `--nonce` right before posting the
-  activation-nonce marker; a third time at B1 once the sibling worktree
-  exists, again with `--nonce` carried over from the A5 write --
+  _primary_ worktree); on the worktree-first fresh path (no inheritable
+  branch), `idd-claim` step 2 creates the linked worktree before the claim,
+  so `<path>` is that linked worktree and the B1 write below does not apply;
+  again with `--nonce` right before posting the activation-nonce marker; a
+  third time at B1 once the sibling worktree exists, again with `--nonce`
+  carried over from the A5 write --
   mirroring the lock's own `--acquire` step, but into a distinct file in
   the new worktree's own admin directory, so the earlier primary-worktree
   write's `nonce` field must be copied forward rather than omitted (the
@@ -5050,6 +5099,12 @@ still fails closed:
   stderr message now reads `failed to derive watermark fields from PR <n>:`
   then `incomplete review-activity collection:` then the cause; the exit
   code and error class are unchanged, so only that diagnostic text differs.
+- `--global-only` (`--from-pr --type watermark` only): resolves the
+  global-only profile in the required-CI read, so a zero-required-check run
+  can publish when the trusted `ciGate.allowNoRequiredChecksInGlobalOnly`
+  opt-in is `true` (see [global-only profile](global-only-profile.md)).
+  Without the flag, or with the profile inactive, the watermark defers as
+  before. Any other type, or a run without `--from-pr`, is rejected.
 - `--from-pr` HEAD pin (`--expected-head-sha <sha>`): optional, `--from-pr`
   only. Pass the E1 Step 1 stored `{head-SHA}` here to guard against the
   branch moving between Step 1 and the Step 2 post: if the fresh snapshot's
@@ -5193,6 +5248,33 @@ still fails closed:
   removed (observed 2026-09-25, issue `#3436`, PR `#3451`). Omitting it
   keeps reading from `process.cwd()` unchanged. The helper still reads
   owner evidence only from `--worktree` or `process.cwd()`.
+- Optional `--own-worktree <path>` (kurone-kito/idd-skill#4019): names the
+  caller's own worktree for the second `--fresh-claim-gate` read of the
+  fresh-claim order, which runs after `git worktree add`. It requires
+  `--fresh-claim-gate`; without it, or with an empty value, the call is a
+  usage error raised before any `gh` call. For a released claim's branch
+  only, the gate drops an occupant that resolves to `<path>` when that
+  worktree is on the branch, `git status --porcelain --untracked-files=all
+  --ignore-submodules=none` is empty (submodules count even under
+  `diff.ignoreSubmodules`), and the base resolves to
+  `origin/<developmentBranch>` (or
+  `refs/remotes/origin/HEAD` when the policy sets none; an unresolvable base,
+  including a missing `origin/HEAD` or an invalid `developmentBranch`, refuses
+  the worktree outright). Then either `HEAD` has no commits beyond the base, or
+  (#4067: a released PR branch's own pushed tip) `HEAD` has commits beyond it
+  and `HEAD`, `refs/remotes/origin/<branch>`, and the branch's live remote tip
+  (`git ls-remote origin refs/heads/<branch>`) are all equal, and the worktree
+  is still clean after that read. The base check runs first and makes no
+  network call. A missing or stale tracking ref, a failed read, a timed-out
+  read, or a change made during the read keeps the worktree blocked. The
+  occupant still has to resolve to `<path>`. With no occupant left, the
+  verdict is `claimable` and `warnings[]` names the ignored path. Another
+  occupant or any failed check keeps `already-claimed` with reason
+  `released-claim-local-worktree-occupied`. An `unreadable` probe and a
+  stale claim's probe are never relaxed and keep their existing
+  `released-claim-*` or `stale-claim-*` reason. Observed 2026-10-11,
+  issues `#3944` and `#3952`: the caller's own new worktree blocked both
+  issues.
 - `--trusted-marker-logins` (kurone-kito/idd-skill#3272): trusted actors now
   resolve through the same ladder `pre-merge-readiness.mts` uses
   (`resolveTrustedMarkerActors`: flag, then `IDD_TRUSTED_MARKER_ACTORS`,
@@ -5370,6 +5452,11 @@ to post it is the consuming track's job.
   `summarizeBranchReviewRequirements` required-check-name resolution
   `pre-merge-readiness` already relies on — no forked required-check
   discovery.
+- `--global-only`: with the same profile and the trusted opt-in, the
+  snapshot names the opt-in in `allowedByPolicySetting` when a
+  zero-required-check run has no present check. `requiredChecks.status`
+  stays `no-required-checks` with an empty `checks[]`, which is the case
+  the E1 precondition accepts only with that marker.
 - Stable fields consumed by D-phase polling: top-level `headRefOid` (for
   caller-side HEAD-drift detection between polls); `checks[]`, each keyed
   by both `checkName` and (trimmed) `workflowName` so two check runs
@@ -6249,11 +6336,15 @@ reflexively as any other CLI option.
   Without `--assert` it always exits `0` (report-only). With `--assert` it
   exits non-zero unless `ready` is `true` (`ready = not_applicable ||
   converged || ((deadline passed || terminal-unavailable) && validly
-  waived) || autoWaiverValid`, the last disjunct added by
-  kurone-kito/idd-skill#2657 -- see the self-referential-bootstrap-auto
-  waiver section above; `waiver.autoWaiverValid` in the verdict reports
-  it directly, since every other `waiver.*` field stays gated behind the
-  deadline/terminal precondition this new disjunct is not).
+  waived) || autoWaiverValid || decisionRuleApprovalValid`. The
+  `autoWaiverValid` disjunct was added by kurone-kito/idd-skill#2657 --
+  see the self-referential-bootstrap-auto waiver section above -- and
+  `decisionRuleApprovalValid` by kurone-kito/idd-skill#4015 (the
+  decision-rule approval in that same section). The verdict reports both
+  directly as `waiver.autoWaiverValid` and
+  `waiver.decisionRuleApprovalValid`, since the other `waiver.*` fields
+  stay gated behind the deadline/terminal precondition these two
+  disjuncts are not).
 - **Structured `nextActions` (`#2143`)**: the verdict also reports a
   `nextActions` array populated from the same catalog the `--assert`
   failure stderr block uses (`collectAssertNextActions`). Each item
@@ -6277,6 +6368,18 @@ reflexively as any other CLI option.
   `convergenceScope` value for this. Do not register
   `idd-advisory-convergence` as a required check unless the policy
   actually wants an advisory-bot gate.
+- **Bounded re-review poll for a new head (`#3944`)**: a stale head,
+  where the primary bot's latest review targets an older commit, polls
+  under the same ceiling, but only when the verdict's sole reason is that
+  stale-coverage reason and a Copilot `review_requested` event is recorded
+  after the head commit (`computeCopilotPendingCoversHead`). A stale head
+  with no such request, or with any other blocking reason, still fails at
+  once, as before. The timeline is read once per observed head and only for
+  this verdict shape. Each poll tick adds the same watch call as the `#2015`
+  poll. The workflow runs with `cancel-in-progress: true`, so a later push
+  or trigger can cancel a long poll; the next run then re-evaluates the new
+  head. The `idd-advisory-convergence` job has `timeout-minutes: 14`, which
+  stays under the runner's 15-minute limit.
 - **Bounded "not reviewed yet" poll (`#2015`)**: the CLI entry point runs
   through `runAdvisoryConvergenceWithPoll`, not `runAdvisoryConvergence`
   directly. When (and only when) the verdict's sole blocking reason is
@@ -6284,7 +6387,8 @@ reflexively as any other CLI option.
   bot has never reviewed the PR at all yet, not merely an off-HEAD review —
   it polls a short, bounded window (every
   `DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS`, default 7.5s, up to
-  `DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS`, default 60s) before its real
+  `DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS`, default 10 minutes (`#3944`;
+  it was 60 s) before its real
   `--assert`-driven exit, absorbing the common race where the hosting
   workflow's `pull_request`/`pull_request_target` `synchronize` trigger
   fires before the primary bot's own review has landed. (Through
@@ -6350,9 +6454,11 @@ reflexively as any other CLI option.
   ordinary deadline has passed — but `ready` still requires a valid
   waiver in addition (`ready = not_applicable || converged ||
   ((deadline.passed || terminal.state == "COPILOT_UNAVAILABLE") &&
-  waived) || autoWaiverValid`, the last disjunct unaffected by this
-  section — kurone-kito/idd-skill#2657's self-referential-bootstrap-auto
-  waiver above); the terminal state alone never sets `ready: true`. A
+  waived) || autoWaiverValid || decisionRuleApprovalValid`, the last two
+  disjuncts unaffected by this section — kurone-kito/idd-skill#2657's
+  self-referential-bootstrap-auto waiver and kurone-kito/idd-skill#4015's
+  decision-rule approval above); the terminal state alone never sets
+  `ready: true`. A
   `not_applicable` applicability (including `reviewPolicy`
   `human-required` / `no-advisory`) is an independent ready path and
   does not change this waiver rule. Observed incident:
@@ -6946,6 +7052,57 @@ same as `AW4`/`AW5`.
 - Fail closed: if execution fails, output is invalid JSON, or required
   fields are missing, discard helper output and apply written D4/E-phase
   branch-sync checks directly.
+
+### Trial merge audit
+
+- Command, by helper-runtime profile: where the profile vends the bin wrapper,
+  `idd-trial-merge-audit --pr <pr-number>`. Under `vendored-node` and in this
+  source repository, `node scripts/trial-merge-audit.mjs --pr <pr-number>`.
+  Use the invocation that the profile's helper-runtime manifest names.
+- Output: one JSON object matching `schemas/trial-merge-audit.schema.json`,
+  with `verdict` (`passed`, `failed`, or `not-run`), `prHeadSha`, `baseSha`,
+  `trialCommit`, `commands` (`audit-docs`, `sync-docs`, `typecheck`, each with
+  `argv`, `exitCode`, and `passed`), `toolingChanged`, `install`,
+  `worktreeRemoved`, and `reasons`.
+- The helper builds the merged tree of the PR head and the current base tip
+  with `git merge-tree --write-tree` (git 2.38 or later), creates a trial
+  commit with `git commit-tree`, and runs the three fixed commands in a
+  temporary detached worktree.
+- Tooling comes from the base tip: `scripts/`, `src/`, `bin/`, `schemas/`,
+  `audit/`, `.husky/`, `.githooks/`, the lockfile, `pnpm-workspace.yaml`,
+  `.npmrc`, root `tsconfig*.json` and pnpmfiles, and `.github/idd/config.json`.
+  At any depth, the tooling set also covers `package.json` files, `tsconfig*.json`
+  files, `.gitignore` and `.gitattributes` files, and any `node_modules` tree.
+  A pull request that changes any of them gets `not-run` with reason
+  `tooling-changed`, and the commands still run against base-tip tooling as
+  evidence only.
+- The verification commands run with an empty global and excludes config, so
+  a host's Git configuration cannot change which untracked files they check.
+- The merge base is resolved before `merge-tree`, under the clone lock, with
+  the bounded deepen steps `MERGE_BASE_FETCH_STEPS` from
+  `branch-conflict-state`. If it stays unreachable, for example in a shallow
+  clone, the verdict is `not-run` with reason `merge-base-unreachable`, never
+  `content-conflict`.
+- A command whose script is absent from the base tip records a null
+  `exitCode` and `passed: false`. When `toolingChanged` is empty, the verdict
+  is `not-run` with reason `commands-unavailable`, even when another command
+  also fails. An adopter repository without these scripts gets that verdict
+  rather than `failed`.
+- A run that exceeds its timeout gives `not-run`: reason `command-timed-out`
+  for a verification command (10 minutes each), and `install-failed` for the
+  install (15 minutes). The audit then returns a verdict instead of hanging.
+- Install is a fresh, frozen-lockfile install with lifecycle scripts
+  disabled, run in the temporary worktree. No `node_modules` is linked from
+  the checkout. The install is pnpm-only: a repository that declares
+  dependencies but has no `pnpm-lock.yaml`, including an npm or Yarn
+  repository, gets `install-failed` (`not-run`). Observed 2026-10-12 on
+  issue #4051, by a fixture with dependencies and no lockfile whose frozen
+  install failed with `ERR_PNPM_NO_LOCKFILE`.
+- Ref-safe: the helper never pushes and never updates a ref. The fetch,
+  `worktree add` and `worktree remove` steps run under the clone-scoped
+  lock. It does not run `git worktree prune`, because a plain prune is
+  clone-wide.
+- The verdict is evidence only. It does not change F1 routing.
 
 ### Effective C1 critique delegate
 

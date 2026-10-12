@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { IssueAuthoringDelegateReport } from '../src/scripts/idd-issue-authoring-delegate.mts';
 import { buildIssueAuthoringDelegateReport } from '../src/scripts/idd-issue-authoring-delegate.mts';
+import { trackTempDirectories } from './temp-fixtures.mts';
+
+// #4049: every fixture directory below is removed when the file finishes.
+const makeTempDir = trackTempDirectories();
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const CLI_PATH = join(REPO_ROOT, 'scripts/idd-issue-authoring-delegate.mjs');
@@ -24,7 +28,7 @@ const ABSENT_REPORT: IssueAuthoringDelegateReport = {
  * config never leaks, and neutralize GITHUB_ACTIONS the same way
  * idd-critique-delegate.test.mts does. */
 function runCli(args: string[], env?: NodeJS.ProcessEnv): unknown {
-  const isolatedHome = mkdtempSync(
+  const isolatedHome = makeTempDir(
     join(tmpdir(), 'idd-issue-authoring-delegate-home-'),
   );
   const output = execFileSync(process.execPath, [CLI_PATH, ...args], {
@@ -98,7 +102,7 @@ test('reports repository-local-explicit-disable for a null local delegate (#3599
 });
 
 test('a malformed repository-local delegate fails closed and never inherits a global delegate (#3599)', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-issue-authoring-delegate-malformed-'),
   );
   const globalPath = join(sandbox, 'config.json');
@@ -136,7 +140,7 @@ test('a malformed repository-local delegate fails closed and never inherits a gl
 });
 
 test('an unknown adversarialReview key fails closed instead of looking absent (#3599)', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-issue-authoring-delegate-typo-'),
   );
   const globalPath = join(sandbox, 'config.json');
@@ -164,7 +168,7 @@ test('an unknown adversarialReview key fails closed instead of looking absent (#
 });
 
 test('inherits a user-global delegate only when the local delegate is absent, and ignores the global ceiling (#3599)', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-issue-authoring-delegate-global-'),
   );
   const globalPath = join(sandbox, 'config.json');
@@ -202,7 +206,7 @@ test('inherits a user-global delegate only when the local delegate is absent, an
 });
 
 test('consults an $HOME-resolved user-global delegate outside GITHUB_ACTIONS (#3599)', () => {
-  const home = mkdtempSync(
+  const home = makeTempDir(
     join(tmpdir(), 'idd-issue-authoring-delegate-remote-home-'),
   );
   mkdirSync(join(home, '.config', 'idd-skill'), { recursive: true });
@@ -229,7 +233,7 @@ test('consults an $HOME-resolved user-global delegate outside GITHUB_ACTIONS (#3
 });
 
 test('skips the user-global delegate under GITHUB_ACTIONS=true (#3599)', () => {
-  const home = mkdtempSync(
+  const home = makeTempDir(
     join(tmpdir(), 'idd-issue-authoring-delegate-actions-home-'),
   );
   mkdirSync(join(home, '.config', 'idd-skill'), { recursive: true });
@@ -249,7 +253,7 @@ test('skips the user-global delegate under GITHUB_ACTIONS=true (#3599)', () => {
 });
 
 test('skips the user-global delegate when noUserGlobal is passed (#3599)', () => {
-  const home = mkdtempSync(
+  const home = makeTempDir(
     join(tmpdir(), 'idd-issue-authoring-delegate-nouser-home-'),
   );
   mkdirSync(join(home, '.config', 'idd-skill'), { recursive: true });
@@ -269,7 +273,7 @@ test('skips the user-global delegate when noUserGlobal is passed (#3599)', () =>
 });
 
 test('noUserGlobal clears an explicit globalConfigPath (#3599)', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-issue-authoring-delegate-explicit-global-'),
   );
   const globalPath = join(sandbox, 'config.json');
@@ -289,7 +293,7 @@ test('noUserGlobal clears an explicit globalConfigPath (#3599)', () => {
 });
 
 test('GITHUB_ACTIONS=true clears an explicit globalConfigPath (#3599)', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-issue-authoring-delegate-explicit-ci-'),
   );
   const globalPath = join(sandbox, 'config.json');
@@ -328,7 +332,7 @@ test('CLI --help exits 0 and names the trusted-command boundary (#3599)', () => 
 });
 
 test('CLI --policy resolves an absent local delegate (#3599)', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-issue-authoring-delegate-cli-'),
   );
   const policyPath = join(sandbox, 'config.json');
@@ -346,7 +350,7 @@ test('CLI --policy resolves an absent local delegate (#3599)', () => {
 });
 
 test('CLI --policy resolves a configured local delegate (#3599)', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-issue-authoring-delegate-cli-local-'),
   );
   const policyPath = join(sandbox, 'config.json');
@@ -373,7 +377,7 @@ test('CLI --policy resolves a configured local delegate (#3599)', () => {
 });
 
 test('CLI --no-user-global skips an otherwise-picked-up $HOME delegate (#3599)', () => {
-  const home = mkdtempSync(
+  const home = makeTempDir(
     join(tmpdir(), 'idd-issue-authoring-delegate-cli-home-'),
   );
   mkdirSync(join(home, '.config', 'idd-skill'), { recursive: true });
@@ -385,7 +389,7 @@ test('CLI --no-user-global skips an otherwise-picked-up $HOME delegate (#3599)',
       },
     }),
   );
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-issue-authoring-delegate-cli-empty-'),
   );
   const policyPath = join(sandbox, 'config.json');

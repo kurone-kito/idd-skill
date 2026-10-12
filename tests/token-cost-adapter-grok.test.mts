@@ -1,11 +1,5 @@
 import assert from 'node:assert/strict';
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -18,6 +12,10 @@ import {
   scanGrokSessions,
 } from '../src/scripts/token-cost-adapter-grok.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
+import { trackTempDirectories } from './temp-fixtures.mts';
+
+// #4049: every fixture directory below is removed when the file finishes.
+const makeTempDir = trackTempDirectories();
 
 const FIXTURE_DIR = 'tests/fixtures/token-cost/grok';
 
@@ -315,7 +313,7 @@ function writeSessionDir(
 }
 
 test('scanGrokSessions keeps an idd-skill session and skips a non-idd-skill session, decoding the encoded-cwd directory name', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-token-cost-adapter-grok-test-'),
   );
   const iddCwd = '/home/testuser/ghq/github.com/kurone-kito/idd-skill';
@@ -341,7 +339,7 @@ test('scanGrokSessions keeps an idd-skill session and skips a non-idd-skill sess
 });
 
 test('scanGrokSessions rolls a subagents/ subdirectory into the parent sample', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-token-cost-adapter-grok-test-'),
   );
   const iddCwd = '/home/testuser/ghq/github.com/kurone-kito/idd-skill';
@@ -367,7 +365,7 @@ test('scanGrokSessions rolls a subagents/ subdirectory into the parent sample', 
 });
 
 test('scanGrokSessions skips a malformed session that fails to harvest, keeping the rest', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-token-cost-adapter-grok-test-'),
   );
   const iddCwd = '/home/testuser/ghq/github.com/kurone-kito/idd-skill';
@@ -403,7 +401,7 @@ test('scanGrokSessions skips a malformed session that fails to harvest, keeping 
 test('scanGrokSessions skips an unreadable updates.jsonl, keeping the rest', {
   skip: process.platform === 'win32',
 }, () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-token-cost-adapter-grok-test-'),
   );
   const iddCwd = '/home/testuser/ghq/github.com/kurone-kito/idd-skill';
@@ -432,7 +430,7 @@ test('scanGrokSessions skips an unreadable updates.jsonl, keeping the rest', {
 });
 
 test('scanGrokSessions on an empty directory returns no results', () => {
-  const sandbox = mkdtempSync(
+  const sandbox = makeTempDir(
     join(tmpdir(), 'idd-token-cost-adapter-grok-test-'),
   );
   assert.deepEqual(scanGrokSessions({ sessionsDir: sandbox }), []);

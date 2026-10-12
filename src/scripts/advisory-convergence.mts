@@ -78,14 +78,17 @@
 // this file now runs through `runAdvisoryConvergenceWithPoll` instead of
 // `runAdvisoryConvergence` directly: when (and ONLY when) the verdict's
 // sole blocking reason is that the primary bot has not reviewed the PR AT
-// ALL yet (`isSoleCopilotNotReviewedYetReason` -- excludes a stale-HEAD
-// review, unresolved threads, an indeterminate claim scope, or any other
-// reason, all of which still fail immediately with no wait, exactly as
-// before), it polls a short, bounded window (every
+// ALL yet (`isSoleCopilotNotReviewedYetReason`), or is a stale head whose
+// Copilot re-review was requested after the head commit (#3944,
+// `isSoleStaleHeadCopilotReviewReason` plus the timeline check), it polls a
+// bounded window (every
 // `DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS`, up to
-// `DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS` total, wall-clock bounded --
-// see `runAdvisoryConvergenceWithPoll`'s own doc comment) before its real
-// assert-driven exit. This changes nothing about `--assert`'s exit-code
+// `DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS` total, 10 minutes since #3944,
+// wall-clock bounded -- see `runAdvisoryConvergenceWithPoll`'s own doc
+// comment) before its real assert-driven exit. Any other reason, including a
+// stale head with no re-review request, an unresolved thread, an
+// indeterminate claim scope, or an extra blocking reason, still fails
+// immediately with no wait, exactly as before. This changes nothing about `--assert`'s exit-code
 // contract, roadmap #1342's deterministic-convergence policy, or this
 // check's required/fail-closed/non-bypassable nature: if the review still
 // has not landed by the end of the window, or lands with outstanding
@@ -162,8 +165,10 @@ import {
   attachReviewThreadCommentEditHistories,
   buildEffectiveTrustedMarkerLogins,
   classifyPrLoopMembership,
+  computeCopilotPendingCoversHead,
   filterTrustedClaimFamilyEvents,
   hasTrustedReviewAckAfter,
+  indexLatestGatingReviewsByAuthor,
   normalizeTrustedMarkerLogins,
   operationalMarkerPrefix,
   readClaimStaleAgeMs,
@@ -455,19 +460,60 @@ export const ADVISORY_CONVERGENCE_CHECK_SELECTOR =
  * an adopter who reads only this file's own trust chain (not
  * `external-check-waiver.mts`'s posting-side logic too) could otherwise
  * read "step succeeded" as an unconditional proof of posting. */
-export const SELF_REFERENTIAL_WAIVER_TRIGGER_FILES = [
-  'src/scripts/advisory-convergence.mts',
+// The doc comment above (kurone-kito/idd-skill#2657 and later rounds)
+// describes the whole trigger set. kurone-kito/idd-skill#4015 splits that
+// set into the two lists below, and SELF_REFERENTIAL_WAIVER_TRIGGER_FILES
+// after them is their union.
+
+/** kurone-kito/idd-skill#4015: the trigger files whose own edit still
+ * receives the self-referential-bootstrap-auto waiver -- the waiver's
+ * trust path and its policy and workflow inputs, but none of the files
+ * in {@link SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES}. */
+export const SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES = [
   'src/scripts/advisory-wait-state.mts',
-  'src/scripts/advisory-wait-policy.mts',
   'src/scripts/rerun-advisory-convergence.mts',
   'src/scripts/external-check-waiver.mts',
   'src/scripts/marker-helpers.mts',
-  'src/scripts/protocol-helpers.mts',
   'src/scripts/provider-adapter-github.mts',
   '.github/idd/config.json',
   '.github/workflows/idd-advisory-convergence.yml',
   '.github/workflows/idd-advisory-convergence-comment.yml',
 ] as const;
+
+/** kurone-kito/idd-skill#4015: the trigger files that decide this gate's
+ * verdicts -- which review counts as converged, which finding counts as
+ * settled, and the policy reads behind them. A diff that touches one of
+ * these never receives the self-referential-bootstrap-auto waiver: it
+ * passes only through a fresh converged review, through an approving
+ * review on the current HEAD from a login in the configured
+ * `trustedMarkerActors` list (see `computeAdvisoryConvergenceVerdict`), or
+ * through the maintainer-authorized waiver, which applies after the
+ * deadline or while Copilot is terminally unavailable.
+ * Observed incident: PR #3999 (issue #3945) and PR #4000 (issue #3942)
+ * both merged through the waiver, and PR #4000 changed the cited-item
+ * rules that decide whether a finding counts as settled, with no
+ * independent check. A test pins that each trigger file is in exactly one
+ * of this list and {@link SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES}. */
+export const SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES = [
+  'src/scripts/advisory-convergence.mts',
+  'src/scripts/advisory-wait-policy.mts',
+  'src/scripts/protocol-helpers.mts',
+  // The verdict delegates Clause 1 selection and the cited-item rules to
+  // these two modules; PR #4000 changed both (Codex review, PR #4044).
+  'src/scripts/review-clause.mts',
+  'src/scripts/copilot-review-body.mts',
+] as const;
+
+/** The full self-referential trigger set for this source repository: the
+ * union of {@link SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES} and
+ * {@link SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES}. The posting job in
+ * `.github/workflows/idd-advisory-convergence.yml` keeps a hand-synced
+ * copy of both lists: it posts only for a diff that touches a bootstrap
+ * file and no decision-rule file. */
+export const SELF_REFERENTIAL_WAIVER_TRIGGER_FILES: readonly string[] = [
+  ...SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES,
+  ...SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES,
+];
 
 /** kurone-kito/idd-skill#2657 (Codex + Copilot review, PR #2895): the
  * source repository's own identity, used ONLY to select
@@ -558,6 +604,64 @@ export function resolveSelfReferentialTriggerFiles(
     default:
       return basePaths;
   }
+}
+
+/** kurone-kito/idd-skill#4015: the decision-rule paths a given
+ * repository verifies against at consume time -- a diff that touches one
+ * of them gets no self-referential-bootstrap-auto waiver. Only this source
+ * repository has a decision-rule list
+ * ({@link SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES}); every other
+ * repository's profile-derived set from
+ * {@link resolveSelfReferentialTriggerFiles} stays bootstrap-only, so
+ * adopters keep today's behavior. */
+export function resolveSelfReferentialDecisionRuleFiles(
+  repositoryFullName: string | undefined,
+): readonly string[] {
+  return String(repositoryFullName ?? '').toLowerCase() ===
+    SELF_REFERENTIAL_ALLOWLIST_ORIGIN_REPOSITORY
+    ? SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES
+    : [];
+}
+
+/** kurone-kito/idd-skill#4015: whether the latest gating review from some
+ * login in `approverLogins` is an `APPROVED` review of `prHeadSha`. "Latest
+ * gating review" is the merge gate's own rule
+ * (`indexLatestGatingReviewsByAuthor`): `COMMENTED` and `PENDING` reviews
+ * never replace an earlier verdict, a later `CHANGES_REQUESTED` review
+ * withdraws an earlier approval, and dismissing the approval sets that
+ * same review's state to `DISMISSED`. */
+export function hasTrustedHeadApproval(
+  reviews: readonly ReviewPayload[],
+  prHeadSha: string,
+  approverLogins: readonly string[],
+): boolean {
+  const approvers = new Set(
+    approverLogins
+      .map((login) =>
+        String(login ?? '')
+          .trim()
+          .toLowerCase(),
+      )
+      .filter(Boolean),
+  );
+  const head = String(prHeadSha ?? '')
+    .trim()
+    .toLowerCase();
+  if (approvers.size === 0 || head === '') return false;
+  for (const [login, review] of indexLatestGatingReviewsByAuthor([
+    ...reviews,
+  ])) {
+    if (
+      approvers.has(login) &&
+      String(review.state ?? '') === 'APPROVED' &&
+      String(review.commitId ?? '')
+        .trim()
+        .toLowerCase() === head
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** kurone-kito/idd-skill#2657: this gate's own workflow file path, as
@@ -778,7 +882,8 @@ export interface AdvisoryConvergenceWaiver {
   /** kurone-kito/idd-skill#2657 (Copilot review, PR #2895): whether a
    * valid, run-bound `self-referential-bootstrap-auto` waiver makes
    * `ready` true through the independent disjunct in the `ready`
-   * formula. Unlike every other field on this object, this one is
+   * formula. Like `decisionRuleApprovalValid` (kurone-kito/idd-skill#4015),
+   * and unlike the other fields on this object, it is
    * evaluated UNCONDITIONALLY -- never gated behind
    * `deadlinePassed`/`terminalUnavailable` the way `validCount`/
    * `outageRelieved` (and the `waived` field they feed) are. Reported
@@ -786,6 +891,17 @@ export interface AdvisoryConvergenceWaiver {
    * is self-explaining, rather than leaving every other waiver/
    * readiness field false/inapplicable with no visible cause. */
   autoWaiverValid: boolean;
+  /** kurone-kito/idd-skill#4015: whether this pull request's diff touches
+   * a decision-rule trigger file
+   * ({@link resolveSelfReferentialDecisionRuleFiles}). When `true`,
+   * `autoWaiverValid` is always `false`. */
+  decisionRuleFilesTouched: boolean;
+  /** kurone-kito/idd-skill#4015: whether a login in the configured
+   * `trustedMarkerActors` list approved the current HEAD of a pull request
+   * whose diff touches a decision-rule file. Like `autoWaiverValid`, it
+   * feeds `ready` unconditionally. Always `false` when
+   * `decisionRuleFilesTouched` is `false`. */
+  decisionRuleApprovalValid: boolean;
 }
 
 /** Scope gate evidence for the advisory-convergence verdict.
@@ -1106,9 +1222,12 @@ export interface AdvisoryConvergenceInputs {
     { id: string; bodyDigest: string }[]
   >;
   /** kurone-kito/idd-skill#2657 (Codex review, PR #2895): the PR's own
-   * changed file paths, fetched by `collectFromGitHub` only when at
-   * least one candidate self-referential-bootstrap-auto marker exists
-   * (same cost-optimization scope as `autoWaiverRunLookups`) --
+   * changed file paths. In this source repository, which has a
+   * decision-rule list, `collectFromGitHub` fetches them on every run
+   * (kurone-kito/idd-skill#4015; see its comment above the fetch). In
+   * every other repository it fetches them only when at least one
+   * candidate self-referential-bootstrap-auto marker exists (same
+   * cost-optimization scope as `autoWaiverRunLookups`) --
    * `undefined`/`[]` otherwise, which correctly makes `autoWaiverValid`
    * always `false` in that case regardless (no candidate marker to
    * validate against either). This independent, consume-time check is
@@ -1218,6 +1337,13 @@ export interface AdvisoryConvergenceOptions {
    * value). Omitted/unrecognized resolves to the two workflow paths
    * only, the safe default (never widens). */
   helperRuntimeProfile?: string;
+  /** kurone-kito/idd-skill#4015: the logins whose approving review on the
+   * current HEAD lets a pull request that touches a decision-rule trigger
+   * file pass -- the configured `trustedMarkerActors` list itself, never
+   * the widened `trustedMarkerLogins` set (which also folds in the viewer
+   * and discovered collaborators). Omitted/empty means no approval can
+   * count, the safe default. */
+  decisionRuleApproverLogins?: readonly string[];
   /** #2353: whether an active `providerOutage.declarationTarget`
    * declaration exists for THIS gate's own selector, already resolved by
    * the caller (fetch, validity, actor authority -- see
@@ -2475,6 +2601,19 @@ export function computeAdvisoryConvergenceVerdict(
   const touchesSelfReferentialAllowlist = (inputs.changedFilePaths ?? []).some(
     (path) => selfReferentialTriggerFiles.includes(path),
   );
+  // kurone-kito/idd-skill#4015: a diff that touches a decision-rule file
+  // never receives the auto-waiver, even when it also touches a bootstrap
+  // file. It passes only through a converged review, a trusted
+  // maintainer's approval of the current HEAD (`decisionRuleApprovalValid`
+  // below), or the maintainer-authorized waiver after the deadline or
+  // while Copilot is terminally unavailable.
+  const decisionRuleFiles = resolveSelfReferentialDecisionRuleFiles(
+    autoWaiverRepositoryFullName,
+  );
+  const touchedDecisionRuleFiles = decisionRuleFiles.filter((path) =>
+    (inputs.changedFilePaths ?? []).includes(path),
+  );
+  const decisionRuleFilesTouched = touchedDecisionRuleFiles.length > 0;
   // Defense in depth: the trust-set extension above already scopes the
   // call to one login, but a marker's `reason`/`runId` are still
   // attacker-shaped input from that login's own comment body, so this
@@ -2531,6 +2670,7 @@ export function computeAdvisoryConvergenceVerdict(
     !(scopeIndeterminate && !claim.activeClaimPresent) &&
     !claimCandidateAmbiguous &&
     touchesSelfReferentialAllowlist &&
+    !decisionRuleFilesTouched &&
     autoWaiverEvidence.valid.some(
       (entry) =>
         entry.checkSelector === waiverCheckSelector &&
@@ -2571,6 +2711,35 @@ export function computeAdvisoryConvergenceVerdict(
         ),
     );
 
+  // kurone-kito/idd-skill#4015: the approval that replaces the auto-waiver
+  // for a decision-rule diff. Only the latest review per login counts (a
+  // later `CHANGES_REQUESTED` review, or dismissing the approval, withdraws
+  // it; a dismissal does not rerun the check, so it takes effect only on
+  // the next run), it must be bound to the current HEAD, and its author must be in
+  // the configured `trustedMarkerActors` list. Not a Copilot substitute for
+  // any other pull request. Deliberately gated like the maintainer-
+  // authorized waiver (`!scopeNotApplicable` only), not like
+  // `autoWaiverValid`: the claim guards there exist because no human
+  // judges the auto-waiver, while this path is a trusted human's judgment.
+  const decisionRuleApprovalValid =
+    !scopeNotApplicable &&
+    decisionRuleFilesTouched &&
+    hasTrustedHeadApproval(
+      reviews,
+      prHeadSha,
+      options.decisionRuleApproverLogins ?? [],
+    );
+  if (
+    !scopeNotApplicable &&
+    !converged &&
+    decisionRuleFilesTouched &&
+    !decisionRuleApprovalValid
+  ) {
+    reasons.push(
+      `this pull request changes the gate's own decision rules (${touchedDecisionRuleFiles.join(', ')}), so the self-referential-bootstrap-auto waiver does not apply: it needs a converged review, an approving review on the current HEAD from a login in trustedMarkerActors, or a maintainer-authorized waiver after the deadline or while Copilot is terminally unavailable`,
+    );
+  }
+
   const waiver: AdvisoryConvergenceWaiver = {
     mode: waiverMode,
     checkSelector: waiverCheckSelector,
@@ -2578,6 +2747,8 @@ export function computeAdvisoryConvergenceVerdict(
     validCount: validWaiverCount,
     outageRelieved: outageRelief.relieved,
     autoWaiverValid,
+    decisionRuleFilesTouched,
+    decisionRuleApprovalValid,
   };
   const waived =
     !scopeNotApplicable && (validWaiverCount > 0 || outageRelief.relieved);
@@ -2599,7 +2770,8 @@ export function computeAdvisoryConvergenceVerdict(
     scopeNotApplicable ||
     converged ||
     ((deadlinePassed || terminalUnavailable) && waived) ||
-    autoWaiverValid;
+    autoWaiverValid ||
+    decisionRuleApprovalValid;
 
   // kurone-kito/idd-skill#2657 (Copilot review, PR #2895): the
   // `reasons.push` guards above only exclude `waived`, so a `ready`
@@ -2939,6 +3111,17 @@ export interface AdvisoryConvergenceDeps {
     argv: string[],
     previousFingerprint: string | null,
   ) => PendingReviewWatchResult;
+  /**
+   * #3944: whether a Copilot `review_requested` event is recorded after the
+   * current head commit. Consulted only for a stale-head verdict whose sole
+   * reason is that the primary bot's latest review targets an older commit.
+   * Omitted, or `false`, keeps the immediate failure.
+   */
+  copilotReviewRequestCoversHead?: (
+    argv: string[],
+    prHeadSha: string,
+    primaryBotLogin: string,
+  ) => boolean;
 }
 
 const defaultDeps: AdvisoryConvergenceDeps = {
@@ -3014,8 +3197,10 @@ export function runAdvisoryConvergence(
  * check would fail is '{bot} has not reviewed this pull request yet' --
  * not on any other failure reason"), not an accidental scope gap: a later
  * push invalidating an earlier review is a different race with a different
- * reason string, and is intentionally left to fail immediately with no
- * wait, same as every other not-ready reason.
+ * reason string. #3944 reverses that for one case only: a stale head whose
+ * re-review was requested after the head commit now polls, through
+ * {@link isSoleStaleHeadCopilotReviewReason}. Any other stale-head shape still
+ * fails at once, as does a push whose re-review was never requested.
  *
  * `reasons.length === 1` is defense-in-depth, not redundant with the
  * `pending`/`review.found` pair: an unusually short configured deadline
@@ -3035,14 +3220,36 @@ export function isSoleCopilotNotReviewedYetReason(
   );
 }
 
+/**
+ * #3944: `true` only for a stale-head verdict whose sole reason is that the
+ * primary bot's latest review targets an older commit than the current HEAD.
+ * On its own this does not justify a poll: {@link runAdvisoryConvergenceWithPoll}
+ * also needs a Copilot `review_requested` event recorded after the head commit,
+ * so a head nobody asked Copilot to review still fails at once.
+ */
+export function isSoleStaleHeadCopilotReviewReason(
+  verdict: AdvisoryConvergenceVerdict,
+): boolean {
+  return (
+    verdict.pending &&
+    verdict.review.found &&
+    !verdict.review.matchesHead &&
+    verdict.reasons.length === 1 &&
+    verdict.reasons[0] ===
+      `latest ${verdict.primaryBotLogin} review (commit ${verdict.review.commitId || '<unknown>'}) does not cover current HEAD ${verdict.prHeadSha}`
+  );
+}
+
 /** Poll interval for {@link runAdvisoryConvergenceWithPoll}'s bounded wait
  * (#2015), within the issue's suggested 5-10s cadence. */
 export const DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS = 7_500;
 
 /** Total bounded wait budget, across all poll attempts, for
- * {@link runAdvisoryConvergenceWithPoll} (#2015) -- the issue's suggested
- * ~60s ceiling. */
-export const DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS = 60_000;
+ * {@link runAdvisoryConvergenceWithPoll}. #2015 set ~60 s, which is too short
+ * for a re-review of a new head: #3944 measured 3 to 7 minutes from the
+ * request to Copilot's review, so the ceiling is 10 minutes. The job's
+ * `timeout-minutes` is raised to match, and stays under the runner's limit. */
+export const DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS = 600_000;
 
 const POLICY_SCHEMA = loadJson('schemas/policy.schema.json');
 
@@ -3327,6 +3534,56 @@ export const watchPendingReviewFromGitHub = createPendingReviewWatch();
 defaultDeps.watchPendingReview = watchPendingReviewFromGitHub;
 
 /**
+ * #3944: production answer to "has a Copilot re-review of this head been
+ * requested after the head commit?", read from the PR timeline with the same
+ * check the advisory-wait path uses. Fails closed: an unresolvable repository,
+ * a failed read, or a missing head yields `false`, which keeps the immediate
+ * stale-head failure.
+ */
+export function createCopilotRequestCoverage(
+  resolveRepository: () => {
+    owner: string;
+    repo: string;
+  } = resolveCurrentGithubRepository,
+): NonNullable<AdvisoryConvergenceDeps['copilotReviewRequestCoversHead']> {
+  let resolved: { owner: string; repo: string } | null = null;
+  return (argv, prHeadSha, primaryBotLogin) => {
+    try {
+      const args = parseArgs(argv);
+      if (!args.prNumber || !prHeadSha) return false;
+      let currentRepo = resolved;
+      if (!(args.owner && args.repo) && currentRepo === null) {
+        currentRepo = resolveRepository();
+        if (currentRepo.owner && currentRepo.repo) resolved = currentRepo;
+      }
+      const owner = args.owner || currentRepo?.owner || '';
+      const repo = args.repo || currentRepo?.repo || '';
+      if (!owner || !repo) return false;
+      const port = createGithubProviderAdapter(owner, repo);
+      const timeline = port.getWorkItemTimeline(
+        Number(args.prNumber),
+      ) as Parameters<typeof computeCopilotPendingCoversHead>[0];
+      return computeCopilotPendingCoversHead(
+        timeline,
+        prHeadSha,
+        primaryBotLogin,
+      );
+    } catch {
+      return false;
+    }
+  };
+}
+
+defaultDeps.copilotReviewRequestCoversHead = createCopilotRequestCoverage();
+
+/**
+ * #3944: the same poll also covers a stale head whose Copilot re-review was
+ * requested after the head commit ({@link isSoleStaleHeadCopilotReviewReason}
+ * plus `deps.copilotReviewRequestCoversHead`, read once per observed head and
+ * only for that verdict shape). A stale head with no such request, or with any
+ * other blocking reason, still fails on the first pass. A review that never
+ * lands still fails at the ceiling.
+ *
  * #2015: wraps {@link runAdvisoryConvergence} with a short, bounded poll
  * for the narrow case {@link isSoleCopilotNotReviewedYetReason} identifies
  * -- absorbing the common race where the `pull_request`/`pull_request_target`
@@ -3429,11 +3686,26 @@ export function runAdvisoryConvergenceWithPoll(
     },
   };
   let result = runAdvisoryConvergence(argv, collectingDeps);
-  if (
-    result.exitCode !== 0 &&
-    result.verdict &&
-    isSoleCopilotNotReviewedYetReason(result.verdict)
-  ) {
+  // #3944: the timeline is read once per head, and only for a stale-head
+  // verdict. Any other not-ready shape never reaches the read.
+  let requestCover: { head: string; covers: boolean } | null = null;
+  const pollable = (verdict: AdvisoryConvergenceVerdict): boolean => {
+    if (isSoleCopilotNotReviewedYetReason(verdict)) return true;
+    if (!isSoleStaleHeadCopilotReviewReason(verdict)) return false;
+    if (requestCover === null || requestCover.head !== verdict.prHeadSha) {
+      requestCover = {
+        head: verdict.prHeadSha,
+        covers:
+          deps.copilotReviewRequestCoversHead?.(
+            argv,
+            verdict.prHeadSha,
+            verdict.primaryBotLogin,
+          ) ?? false,
+      };
+    }
+    return requestCover.covers;
+  };
+  if (result.exitCode !== 0 && result.verdict && pollable(result.verdict)) {
     const pollIntervalMs = positiveMsOrDefault(
       pollOptions.pollIntervalMs,
       DEFAULT_COPILOT_REVIEW_POLL_INTERVAL_MS,
@@ -3448,9 +3720,7 @@ export function runAdvisoryConvergenceWithPoll(
     let fingerprint: string | null = null;
     let watchBaselineOk = false;
     const solePending = (): boolean =>
-      result.exitCode !== 0 &&
-      !!result.verdict &&
-      isSoleCopilotNotReviewedYetReason(result.verdict);
+      result.exitCode !== 0 && !!result.verdict && pollable(result.verdict);
     // Re-anchor after every still-pending verdict. A watch that names a
     // different HEAD, or reviews the verdict missed, must not become the
     // unchanged baseline. Once the deadline has passed, do not start the
@@ -4365,9 +4635,12 @@ export function collectFromGitHub(
     }
   }
 
-  // kurone-kito/idd-skill#2657 (Codex review, PR #2895): fetched only
-  // when a candidate marker exists (same cost-optimization scope as the
-  // run-id lookups above) -- see `AdvisoryConvergenceInputs.changedFilePaths`'s
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895): in every
+  // repository other than this source repository, fetched only when a
+  // candidate marker exists (same cost-optimization scope as the run-id
+  // lookups above); this source repository fetches the paths on every
+  // run (kurone-kito/idd-skill#4015, see the comment above the fetch
+  // below) -- see `AdvisoryConvergenceInputs.changedFilePaths`'s
   // doc comment for why the pure verdict function needs this
   // independent evidence rather than trusting the posting job's own
   // internal allowlist check.
@@ -4408,8 +4681,18 @@ export function collectFromGitHub(
     },
   });
 
+  // kurone-kito/idd-skill#4015: always fetched in a repository with a
+  // decision-rule list (only this source repository), so
+  // `waiver.decisionRuleFilesTouched` is real evidence rather than a
+  // missing list read as `false`, and a trusted approval of a decision-rule
+  // diff counts even when no auto-waiver marker was posted (Copilot review,
+  // PR #4044).
+  const needsDecisionRuleEvidence =
+    resolveSelfReferentialDecisionRuleFiles(
+      owner && repo ? `${owner}/${repo}` : '',
+    ).length > 0;
   const changedFilePaths =
-    autoWaiverRunIds.size > 0
+    autoWaiverRunIds.size > 0 || needsDecisionRuleEvidence
       ? [
           ...retryTransientGhFailure(() =>
             port.listChangeRequestChangedFiles(Number(args.prNumber)),
@@ -4469,6 +4752,7 @@ export function collectFromGitHub(
       waivableSelectors: policy?.ciGate?.externalChecks?.waivable ?? [],
       repositoryFullName: owner && repo ? `${owner}/${repo}` : '',
       helperRuntimeProfile,
+      decisionRuleApproverLogins: configuredTrustedActors,
       outageDeclarationActive,
       sameHeadRerollCap,
       pendingWindowMinutes,
@@ -5088,8 +5372,11 @@ export function collectAssertNextActions(
   const { citedCount, citationFreeCount, citedDispositionsSatisfied } =
     verdict.review.suppressedCitation;
   if (citedCount > 0 && !citedDispositionsSatisfied) {
-    const pointer = `gh pr comment ${pr} --body-file <file>`;
-    const summary = `Latest ${bot} review reports ${citedCount} suppressed comment(s) that name a file or line. Each needs a stamped disposition reply (#3942): a trusted, unedited PR comment posted after the review. Its body carries <!-- {markerPrefix}-review-reply --> (markerPrefix from .github/idd/config.json) and opens with **Accepted**, with **Rejected** naming the file or line as evidence, or with the recorded deferral **Rejected** — deferred to follow-up issue #<n> (<clause>): <reason>. A review-ack does not cover these. Post it with: ${pointer}`;
+    const pointer = `node scripts/resolve-review-thread.mjs --pr ${pr} --review-id <review-id> --item-title "<item-title>" --body "<reply-body>" --claim-issue <claim-issue> --claim-id <claim-id> --apply`;
+    // --review-id takes the numeric REST id; the verdict carries the GraphQL
+    // node id, so the summary gives the lookup that maps one to the other.
+    const reviewNodeId = verdict.review.reviewId ?? '<review-node-id>';
+    const summary = `Latest ${bot} review reports ${citedCount} suppressed comment(s) that name a file or line. Each needs a stamped disposition reply (#3942): a trusted, unedited PR comment posted after the review. Its body carries <!-- {markerPrefix}-review-reply --> (markerPrefix from .github/idd/config.json) and opens with **Accepted**, with **Rejected** naming the file or line as evidence, or with the recorded deferral **Rejected** — deferred to follow-up issue #<n> (<clause>): <reason>. A review-ack does not cover these. A cited item outside a Previously missed section (a legacy Suppressed comments body has none) has no helper path: report it to the operator and do not answer it with a direct PR comment. The <review-id> is the numeric REST id of review ${reviewNodeId}; find it with gh api repos/<owner>/<repo>/pulls/${pr}/reviews --paginate --jq '.[] | select(.node_id == "${reviewNodeId}") | .id'. Post it with: ${pointer}`;
     items.push({
       token: T.STAMPED_DISPOSITION_SUPPRESSED,
       summary,
@@ -5167,6 +5454,18 @@ export function collectAssertNextActions(
 }
 
 /**
+ * Lines printed under the stamped-disposition next action (#4063). The flag
+ * lines refine the pointer and exist only here. The last line repeats the
+ * summary's no-helper-path rule for text readers. The structured `summary`
+ * stays one line by contract, so the rule must also live in it.
+ */
+const STAMPED_DISPOSITION_GUIDANCE: readonly string[] = [
+  'For a PR with no linked issue, replace --claim-issue <claim-issue> --claim-id <claim-id> with --claimless (#2616).',
+  'For a cited title that repeats within one review, add --item-index <n> immediately before --apply.',
+  'A cited item outside a Previously missed section has no helper path: report it to the operator and do not answer it with a direct PR comment.',
+];
+
+/**
  * Compact next-action guidance for a non-ready `--assert` verdict (#2142).
  * Formats {@link collectAssertNextActions}; does not read
  * `verdict.nextActions`, so a spread-mutated verdict stays consistent
@@ -5187,6 +5486,16 @@ export function formatAssertNextActions(
     if (item.pointer.includes('\n')) {
       for (const extra of item.pointer.split('\n')) {
         lines.push(`  ${extra}`);
+      }
+    }
+    // #4063: the flag guidance is text-only, so the structured summary stays
+    // one line. It follows the pointer's line, which ends with the pointer.
+    if (
+      item.token ===
+      ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN.STAMPED_DISPOSITION_SUPPRESSED
+    ) {
+      for (const guidance of STAMPED_DISPOSITION_GUIDANCE) {
+        lines.push(`  ${guidance}`);
       }
     }
   }

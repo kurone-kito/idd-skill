@@ -1580,8 +1580,10 @@ supports these keys:
 
 - `discover.activeClaimPreScanBatchSize` (default `10`)
 - `claim.verifySettleDelay` (default `PT5S`)
-- `critiqueLoop.cPhaseLowSeveritySkipAfter` (default `3`)
+- `critiqueLoop.cPhaseLowSeveritySkipAfter` (default `2`)
 - `critiqueLoop.e10NoProgressHoldAfter` (default `3`)
+- `critiqueLoop.e10MaxPasses` (default `2`; per-issue cap on E10 passes,
+  active only while no High or Medium Accepted finding is open)
 - `critiqueLoop.deferAfterRounds` (default `12`)
 - `critiqueLoop.deferByUrgency` (default `off`; `low`,
   `low-and-medium`, or `severity-tiered`). High stays ineligible under
@@ -1920,7 +1922,9 @@ target — matching the `idd-generated-from` banner already present on
    edited source. For `structure`/`contains` pairs, `sync-docs.mjs`
    only checks headings or text presence and does not auto-generate
    target content, so also apply the equivalent content change to the
-   target file by hand.
+   target file by hand. A `structure` pair may list `sharedSections`
+   (section titles); `audit-docs.mjs --check` then also requires those
+   sections to match exactly (#4009), so change them in both files.
 3. Run `node scripts/audit-docs.mjs --check` to confirm the pair is back
    in sync.
 

@@ -52,6 +52,7 @@ export const COVERED_HELPERS = [
   'merged-pr-feedback-sweep',
   'phase-id-resolver',
   'pre-merge-readiness',
+  'pre-push-trial-budget',
   'provider-health',
   'provider-outage-declaration',
   'provider-outage-park',
@@ -68,6 +69,7 @@ export const COVERED_HELPERS = [
   'suitability-close-execute',
   'suitability-triage',
   'sweep-authoring-markers',
+  'trial-merge-audit',
   'verify-import-mirror',
   'verify-install-deps',
   'verify-workshop-integrity',
@@ -133,6 +135,8 @@ const INTERNAL_ENTRY_REASONS = {
   'scripts/token-cost-harvest.mjs': 'source-repository token-cost log reader',
   'scripts/check-stray-commit-closes.mjs':
     'source-repository pre-push closing-keyword check',
+  'scripts/pre-push-trial-budget.mjs':
+    'source-repository pre-push trial-merge budget check',
   'scripts/idd-critique-harvest.mjs': 'source-repository critique log reader',
   'scripts/idd-critique-report.mjs': 'source-repository critique report',
   'scripts/copilot-review-wave-audit.mjs':
@@ -165,6 +169,8 @@ const DOGFOOD_ONLY_TOOLS = {
     'source-repository token-cost reporter, not an adopter CLI',
   'scripts/check-stray-commit-closes.mjs':
     'source-repository pre-push check, not an adopter CLI',
+  'scripts/pre-push-trial-budget.mjs':
+    'source-repository pre-push trial-merge budget check, not an adopter CLI',
 };
 const BIN_ALLOWLIST = {
   'idd-onboard':

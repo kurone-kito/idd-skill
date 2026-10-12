@@ -26,6 +26,7 @@ export interface CritiqueLoopDelegate {
 interface CritiqueLoopPolicy {
   cPhaseLowSeveritySkipAfter: number;
   e10NoProgressHoldAfter: number;
+  e10MaxPasses: number;
   deferAfterRounds: number;
   deferByUrgency: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
   /**
@@ -509,6 +510,7 @@ interface RawConfig {
     };
     trustEmptyProtectionReads?: unknown;
     trustSourcePinnedRequiredChecks?: unknown;
+    allowNoRequiredChecksInGlobalOnly?: unknown;
   };
   discover?: {
     activeClaimPreScanBatchSize?: unknown;
@@ -521,6 +523,7 @@ interface RawConfig {
   critiqueLoop?: {
     cPhaseLowSeveritySkipAfter?: unknown;
     e10NoProgressHoldAfter?: unknown;
+    e10MaxPasses?: unknown;
     deferAfterRounds?: unknown;
     deferByUrgency?: unknown;
     deferRelaxAtRounds?: unknown;
@@ -728,6 +731,11 @@ export const POLICY_DEFAULTS = Object.freeze({
     // check's green state stays untrusted by default rather than silently
     // treated as passing.
     trustSourcePinnedRequiredChecks: false,
+    // Option A (issue #4011): default false keeps the CI gate fail-closed for a
+    // global-only run with zero required checks. Only an explicit operator
+    // opt-in lets that run pass, and only while the global-only profile is
+    // active (see pre-merge-readiness.mts and protocol-helpers.mts).
+    allowNoRequiredChecksInGlobalOnly: false,
   }),
   discover: Object.freeze({
     activeClaimPreScanBatchSize: 10,
@@ -752,8 +760,9 @@ export const POLICY_DEFAULTS = Object.freeze({
   // `.critiqueLoop.delegate` on every caller. The runtime object still has
   // no `delegate` key at all -- see the clone() doc comment's invariant.
   critiqueLoop: Object.freeze({
-    cPhaseLowSeveritySkipAfter: 3,
+    cPhaseLowSeveritySkipAfter: 2,
     e10NoProgressHoldAfter: 3,
+    e10MaxPasses: 2,
     deferAfterRounds: 12,
     deferByUrgency: 'off',
     deferRelaxAtRounds: Object.freeze([]),
@@ -1006,6 +1015,10 @@ export function normalizePolicyConfig(config: unknown) {
     e10NoProgressHoldAfter: parsePositiveInteger(
       c?.critiqueLoop?.e10NoProgressHoldAfter,
       POLICY_DEFAULTS.critiqueLoop.e10NoProgressHoldAfter,
+    ),
+    e10MaxPasses: parsePositiveInteger(
+      c?.critiqueLoop?.e10MaxPasses,
+      POLICY_DEFAULTS.critiqueLoop.e10MaxPasses,
     ),
     deferAfterRounds: parsePositiveInteger(
       c?.critiqueLoop?.deferAfterRounds,
@@ -1283,6 +1296,8 @@ export function normalizePolicyConfig(config: unknown) {
       trustEmptyProtectionReads: c?.ciGate?.trustEmptyProtectionReads === true,
       trustSourcePinnedRequiredChecks:
         c?.ciGate?.trustSourcePinnedRequiredChecks === true,
+      allowNoRequiredChecksInGlobalOnly:
+        c?.ciGate?.allowNoRequiredChecksInGlobalOnly === true,
     },
     discover: {
       activeClaimPreScanBatchSize: parsePositiveInteger(

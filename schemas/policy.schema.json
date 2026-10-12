@@ -412,7 +412,7 @@
         "copilotReviewPollMaxWait": {
           "type": "string",
           "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
-          "description": "ISO 8601 duration ceiling, across all re-checks, for the same bounded poll. Optional; defaults to `PT60S`, matching the pre-#2333 hardcoded 60000ms ceiling."
+          "description": "ISO 8601 duration ceiling, across all re-checks, for the same bounded poll. Optional; defaults to `PT10M` (#3944: a re-review of a new head needs 3 to 7 minutes, so the former `PT60S` ceiling was raised)."
         }
       },
       "description": "Container for the idd-advisory-convergence required check's own short, bounded Copilot-review poll (#2333). Optional; omitting any nested key keeps that key's own distributed default."
@@ -523,6 +523,10 @@
         "trustSourcePinnedRequiredChecks": {
           "type": "boolean",
           "description": "Opt-in toggle for trusting a source-pinned required check (a ruleset or classic branch-protection entry whose `app_id`/`integration_id` names a specific GitHub App/integration as the expected producer) once it is present, matched by name, and pass-equivalent (default false; absent means false). Default `false` fails closed: the CI gate downgrades an otherwise-passing named check to unresolved (`unknown` in `pre-merge-readiness`, `source-pinned` in the ci-wait-state helper) whenever any required-check rule entry is source-pinned, because no producer-identity data (the actual GitHub App that created the check) is fetched anywhere in this codebase's check-run reads, so the pinning cannot be verified at runtime. Set `true` only when the repository operator has verified out-of-band that the pinned integration is the sole producer of the named required check(s); this is a git-committed, human-authorized decision, not a runtime check of actual producer identity. It never relaxes a fully unnamed pinned requirement (e.g. a ruleset `workflows` rule with no enumerable check name), which stays unconditionally conservative."
+        },
+        "allowNoRequiredChecksInGlobalOnly": {
+          "type": "boolean",
+          "description": "Opt-in toggle (issue #4011) that lets a global-only run with zero required checks pass the CI gate (default false; absent means false). Default `false` keeps the gate fail-closed: a repository with no required checks and no present check runs is held as `noRequiredChecksConfigured`. The toggle passes that state only when the global-only profile is active (`pre-merge-readiness --global-only` with the activation and base/head workflow checks of docs/global-only-profile.md) AND no present check run exists (`presentRunConclusion` is `none`). A pending or failing present run still holds the gate, and so does an unprotected run outside the global-only profile. The readiness output names this setting when it is the reason the gate passed. Set `true` only when the repository operator has recorded that this profile may merge with no required check; this is a git-committed, human-authorized decision, not a runtime check."
         }
       },
       "description": "Container for repo-external CI-check classification and the maintainer-authorized external-check waiver policy. Optional; omitting it keeps no external overrides and disabled waivers."
@@ -719,12 +723,17 @@
         "cPhaseLowSeveritySkipAfter": {
           "type": "integer",
           "minimum": 1,
-          "description": "Loop-count threshold after which C4 may skip remaining Low-severity Accepted findings, once the objective diff validation floor has also passed. Optional; defaults to `3`."
+          "description": "Loop-count threshold after which C4 may skip remaining Low-severity Accepted findings, once the objective diff validation floor has also passed. Optional; defaults to `2`."
         },
         "e10NoProgressHoldAfter": {
           "type": "integer",
           "minimum": 1,
           "description": "Number of consecutive E10 review-fix critique passes without meaningful progress before the auto-loop stops and posts a hold for a maintainer decision. Optional; defaults to `3`."
+        },
+        "e10MaxPasses": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Per-issue cap on E10 review-fix critique passes, counted across E9 fix batches. Once this many passes have run, no High or Medium Accepted finding is open, and fix-validate has passed on the current HEAD, the loop stops and files the remaining Low findings into a follow-up issue instead of fixing them in the loop. An unestablished count does not count as reached. Optional; defaults to `2`."
         },
         "deferAfterRounds": {
           "type": "integer",

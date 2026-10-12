@@ -3,7 +3,6 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -25,6 +24,10 @@ import {
   resolveLauncher,
   resolveSourcePackageMetadata,
 } from '../src/scripts/helper-runtime-manifest.mts';
+import { trackTempDirectories } from './temp-fixtures.mts';
+
+// #4049: every fixture directory below is removed when the file finishes.
+const makeTempDir = trackTempDirectories();
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DEFAULT_PACKAGE_SPEC =
@@ -206,7 +209,7 @@ test('vendored-node recommends linguist-vendored per managed file; other profile
 });
 
 test('detectPackageManager respects package metadata and lockfiles', () => {
-  const packageJsonRoot = mkdtempSync(
+  const packageJsonRoot = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-package-json-'),
   );
   writeFileSync(
@@ -215,13 +218,13 @@ test('detectPackageManager respects package metadata and lockfiles', () => {
   );
   assert.equal(detectPackageManager(packageJsonRoot), 'npm');
 
-  const lockfileRoot = mkdtempSync(
+  const lockfileRoot = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-lockfile-'),
   );
   writeFileSync(join(lockfileRoot, 'yarn.lock'), '# lockfile');
   assert.equal(detectPackageManager(lockfileRoot), 'yarn');
 
-  const ambiguousRoot = mkdtempSync(
+  const ambiguousRoot = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-ambiguous-lockfile-'),
   );
   writeFileSync(join(ambiguousRoot, 'package-lock.json'), '{}');
@@ -230,7 +233,7 @@ test('detectPackageManager respects package metadata and lockfiles', () => {
 });
 
 test('helper runtime evidence and recommendation stay fail-closed around package-manager detection', () => {
-  const packageJsonRoot = mkdtempSync(
+  const packageJsonRoot = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-recommend-package-json-'),
   );
   writeFileSync(
@@ -251,7 +254,7 @@ test('helper runtime evidence and recommendation stay fail-closed around package
     },
   });
 
-  const lockfileRoot = mkdtempSync(
+  const lockfileRoot = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-recommend-lockfile-'),
   );
   writeFileSync(join(lockfileRoot, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'");
@@ -269,7 +272,7 @@ test('helper runtime evidence and recommendation stay fail-closed around package
     },
   });
 
-  const packageJsonOnlyRoot = mkdtempSync(
+  const packageJsonOnlyRoot = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-recommend-package-json-only-'),
   );
   writeFileSync(
@@ -299,7 +302,7 @@ test('helper runtime evidence and recommendation stay fail-closed around package
     },
   });
 
-  const ambiguousRoot = mkdtempSync(
+  const ambiguousRoot = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-recommend-ambiguous-'),
   );
   writeFileSync(join(ambiguousRoot, 'package-lock.json'), '{}');
@@ -322,7 +325,7 @@ test('helper runtime evidence and recommendation stay fail-closed around package
     },
   });
 
-  const emptyRoot = mkdtempSync(
+  const emptyRoot = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-recommend-empty-'),
   );
   assert.deepEqual(recommendHelperRuntimeProfile(emptyRoot), {
@@ -342,7 +345,7 @@ test('helper runtime evidence and recommendation stay fail-closed around package
 });
 
 test('source package metadata falls back when vendored into another repository', () => {
-  const foreignRoot = mkdtempSync(
+  const foreignRoot = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-foreign-root-'),
   );
   writeFileSync(
@@ -356,7 +359,7 @@ test('source package metadata falls back when vendored into another repository',
     version: 'unknown',
   });
 
-  const missingRoot = mkdtempSync(
+  const missingRoot = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-missing-root-'),
   );
   assert.deepEqual(resolveSourcePackageMetadata(missingRoot), {
@@ -368,7 +371,7 @@ test('source package metadata falls back when vendored into another repository',
 });
 
 test('source package metadata accepts repository objects with url', () => {
-  const sourceRoot = mkdtempSync(
+  const sourceRoot = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-source-root-'),
   );
   writeFileSync(
@@ -398,7 +401,7 @@ test('source package metadata accepts repository objects with url', () => {
 // package.json) must fall back to the sentinel rather than stringify to a
 // misleading value like "[object Object]".
 test('source package metadata falls back on a non-string version field', () => {
-  const nonStringVersionRoot = mkdtempSync(
+  const nonStringVersionRoot = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-non-string-version-'),
   );
   writeFileSync(
@@ -415,7 +418,7 @@ test('source package metadata falls back on a non-string version field', () => {
     version: 'unknown',
   });
 
-  const emptyStringVersionRoot = mkdtempSync(
+  const emptyStringVersionRoot = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-empty-version-'),
   );
   writeFileSync(
@@ -734,7 +737,7 @@ test('resolveHelperCommandForProfile returns null for an unknown helper id or pr
 });
 
 test('buildHelperRuntimeManifest falls back to a configured helperRuntime.packageSpec when no --package-spec is passed (idd-skill#1731)', () => {
-  const dir = mkdtempSync(
+  const dir = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-manifest-configured-spec-'),
   );
   mkdirSync(join(dir, '.github/idd'), { recursive: true });
@@ -760,7 +763,7 @@ test('buildHelperRuntimeManifest falls back to a configured helperRuntime.packag
 });
 
 test('buildHelperRuntimeManifest lets an explicit --package-spec win over a configured one', () => {
-  const dir = mkdtempSync(
+  const dir = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-manifest-explicit-wins-'),
   );
   mkdirSync(join(dir, '.github/idd'), { recursive: true });
@@ -782,7 +785,7 @@ test('buildHelperRuntimeManifest lets an explicit --package-spec win over a conf
 });
 
 test('buildHelperRuntimeManifest falls back to the default package spec when no config or flag pins one', () => {
-  const dir = mkdtempSync(
+  const dir = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-manifest-no-pin-'),
   );
   const manifest = buildHelperRuntimeManifest({ targetRoot: dir });
@@ -790,7 +793,7 @@ test('buildHelperRuntimeManifest falls back to the default package spec when no 
 });
 
 test('buildHelperRuntimeManifest also reads a configured packageSpec from the legacy idd-policy.json path', () => {
-  const dir = mkdtempSync(
+  const dir = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-manifest-legacy-spec-'),
   );
   writeFileSync(
@@ -811,7 +814,7 @@ test('buildHelperRuntimeManifest also reads a configured packageSpec from the le
 const USER_GLOBAL_SPEC = 'https://mirror.example/idd-skill-user-global.tgz';
 
 function makeTargetRoot(prefix: string, files: Record<string, string>) {
-  const root = mkdtempSync(join(tmpdir(), prefix));
+  const root = makeTempDir(join(tmpdir(), prefix));
   for (const [name, contents] of Object.entries(files)) {
     writeFileSync(join(root, name), contents);
   }
@@ -1009,7 +1012,7 @@ test('a user-global to user-global switch removes nothing and lists no uninstall
 
 // #3830: the ephemeral-npx launcher, the pnpm probe and the --launcher flag.
 function targetRootWithLauncher(launcher: string | undefined): string {
-  const dir = mkdtempSync(join(tmpdir(), 'idd-launcher-target-'));
+  const dir = makeTempDir(join(tmpdir(), 'idd-launcher-target-'));
   if (launcher !== undefined) {
     mkdirSync(join(dir, '.github', 'idd'), { recursive: true });
     writeFileSync(

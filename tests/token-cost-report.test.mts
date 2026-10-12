@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -18,6 +18,10 @@ import {
   replaceMarkedRegion,
   resolveDefaultBranchGuard,
 } from '../src/scripts/token-cost-report.mts';
+import { trackTempDirectories } from './temp-fixtures.mts';
+
+// #4049: every fixture directory below is removed when the file finishes.
+const makeTempDir = trackTempDirectories();
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -82,7 +86,7 @@ function issueLoopSample(
 /** Run `fn` inside a fresh sandbox cwd with README.md/README.ja.md/docs/token-cost.md seeded to the unpublishable stub. */
 function withSandboxCwd(fn: () => void): void {
   const originalCwd = process.cwd();
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-report-test-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-report-test-'));
   process.chdir(sandbox);
   try {
     mkdirSync('docs', { recursive: true });
@@ -571,7 +575,7 @@ test('resolveDefaultBranchGuard passes through unaffected on a non-default branc
 
 test('resolveDefaultBranchGuard real getDefaultBranch falls back to "main" when origin/HEAD is unset locally (#2452)', () => {
   const originalCwd = process.cwd();
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-report-git-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-report-git-'));
   process.chdir(sandbox);
   try {
     execFileSync('git', ['init', '-b', 'main', '-q']);
@@ -613,7 +617,7 @@ test('resolveDefaultBranchGuard real getDefaultBranch falls back to "main" when 
  * git subprocess calls end to end (#2452). */
 function withGitSandboxCwd(branch: string, fn: () => void): void {
   const originalCwd = process.cwd();
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-report-cli-git-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-report-cli-git-'));
   process.chdir(sandbox);
   try {
     execFileSync('git', ['init', '-b', branch, '-q']);

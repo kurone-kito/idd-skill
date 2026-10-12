@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
@@ -33,11 +33,15 @@ import {
   renderLiveStatusDigest,
   retireLiveStatusDigestBody,
 } from '../src/scripts/protocol-helpers.mts';
+import { trackTempDirectories } from './temp-fixtures.mts';
 import {
   pinLoadControlOff,
   stubExecutable,
   useFixtureGh,
 } from './test-utils.mts';
+
+// #4049: every fixture directory below is removed when the file finishes.
+const makeTempDir = trackTempDirectories();
 
 // #3746: the audit reads the authenticated viewer once per process
 // (`currentViewerLogin()` caches it with no reset hook), so the fixture `gh`
@@ -2199,7 +2203,7 @@ function withSandboxConfig<T>(
   trustedMarkerActors: string[] = ['kurone-kito'],
 ): T {
   const originalCwd = process.cwd();
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-audit-pr-cleanup-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-audit-pr-cleanup-'));
   mkdirSync(join(sandbox, '.github', 'idd'), { recursive: true });
   writeFileSync(
     join(sandbox, '.github', 'idd', 'config.json'),

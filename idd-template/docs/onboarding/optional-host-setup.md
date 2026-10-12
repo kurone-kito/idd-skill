@@ -731,14 +731,8 @@ source repository uses `linguist-generated` only for its own built
 
 The helper-runtime manifest emits the exact lines from the same
 `managedFiles` import-graph it uses to vend the bundle, so the attribute
-list never drifts from what you copied. Append them to your
-`.gitattributes`:
-
-```sh
-node scripts/helper-runtime-manifest.mjs --profile vendored-node \
-  | node -e 'const m=JSON.parse(require("node:fs").readFileSync(0,"utf8"));process.stdout.write(m.profiles["vendored-node"].recommendedGitattributes.join("\n")+"\n")' \
-  >> .gitattributes
-```
+list never drifts from what you copied. Append them with the command in
+[`template-distribution.md`](template-distribution.md#gitattributes-linguist-vendored-convention-vendored-node).
 
 Other profiles vend no files and emit no recommendation, so they need
 nothing here.

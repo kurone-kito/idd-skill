@@ -46,7 +46,8 @@ non-helper alternative of its own for that case.
 
 ## F1 — Branch-state check (read-only)
 
-This check never rebases, merges, or pushes.
+This check never rebases, merges, or pushes. The push-free trial-merge audit
+is standard-profile evidence and is not run here.
 
 1. Run the profile-selected branch-conflict-state helper: `node
    scripts/branch-conflict-state.mjs --pr <pr-number>`, or the

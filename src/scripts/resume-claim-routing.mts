@@ -5,6 +5,9 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 
+import { execFileSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
+
 import { parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mts';
@@ -25,6 +28,7 @@ import { loadPolicyConfig } from './idd-config.mts';
 import {
   inspectLocalWorktreeBranch,
   type LocalWorktreeInspection,
+  sanitizedGitEnvironment,
 } from './local-worktree-occupancy.mts';
 import {
   listActivationNonces,
@@ -32,7 +36,10 @@ import {
   parseLegacyClaimComment,
   resolveLegacyClaimState,
 } from './marker-helpers.mts';
-import { normalizePolicyConfig } from './policy-helpers.mts';
+import {
+  inspectDevelopmentBranch,
+  normalizePolicyConfig,
+} from './policy-helpers.mts';
 import type {
   ParsedClaimMarker,
   ParsedForcedHandoffMarker,
@@ -177,6 +184,16 @@ interface ResumeClaimRoutingOptions {
   forcedHandoffRefusalExplainer?: (
     forcedHandoff: ParsedForcedHandoffMarker,
   ) => ForcedHandoffRefusalCause | null;
+  /**
+   * #4019: true only for the caller's own pre-created worktree (named by
+   * `--own-worktree`) when it is clean and either has no commits beyond the
+   * base or sits at its branch's own pushed tip (#4067).
+   * Consulted only for an `occupied` probe of a released claim's branch:
+   * a path it accepts is dropped from the occupants, and a probe left with
+   * no occupant counts as `absent`. An `unreadable` probe and a stale
+   * claim's probe are never relaxed.
+   */
+  isOwnPristineWorktree?: (path: string, branchName: string) => boolean;
 }
 
 /**
@@ -211,6 +228,7 @@ interface ResumeClaimRoutingArgs {
   freshClaimGate: boolean;
   assert: boolean;
   worktree: string;
+  ownWorktree: string;
   format: string;
   help: boolean;
 }
@@ -241,6 +259,7 @@ const RESUME_CLAIM_ROUTING_FLAG_SPEC = {
   '--fresh-claim-gate': { type: 'boolean', default: false },
   '--assert': { type: 'boolean', default: false },
   '--worktree': { type: 'string' },
+  '--own-worktree': { type: 'string' },
   '--format': { type: 'string', default: 'json' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
@@ -349,6 +368,209 @@ function checkCurrentSessionOwner(
     unproven: !(structured ? structured.owner : verdict),
     evidence: probe !== undefined && structured ? structured.evidence : null,
   };
+}
+
+/** Inputs to {@link isPristineOwnWorktree}. */
+export interface PristineOwnWorktreeCheck {
+  /** The `--own-worktree` path the caller named. */
+  ownWorktree: string;
+  /** One occupant path reported by the occupancy probe. */
+  occupiedPath: string;
+  /** The released claim's branch the occupant holds. */
+  branchName: string;
+  /**
+   * The configured `developmentBranch`, or `null` to read the base from
+   * `refs/remotes/origin/HEAD`. The base ref is `origin/<branch>`.
+   */
+  developmentBranch: string | null;
+  environment?: NodeJS.ProcessEnv;
+  execute?: typeof execFileSync;
+}
+
+/**
+ * #4019: decide whether one occupant of a released claim's branch is the
+ * caller's own new worktree, left exactly as `git worktree add --no-track
+ * <path> -b <branch> origin/<base>` created it. Every condition must hold,
+ * and any failed read returns `false`, so the occupant keeps blocking:
+ *
+ * - the occupant and `ownWorktree` resolve to the same real path, which Git
+ *   reports as that worktree's own top level;
+ * - its HEAD is `refs/heads/<branchName>`;
+ * - `git status --porcelain --untracked-files=all` is empty;
+ * - `origin/<base>` resolves and either `HEAD` has no commit beyond it, or
+ *   (#4067) `HEAD` has commits beyond it and `HEAD`,
+ *   `refs/remotes/origin/<branchName>`, and the live remote tip of
+ *   `<branchName>` (`git ls-remote`) are all equal, and the worktree is still
+ *   clean after that read. An unresolvable base refuses outright.
+ */
+export function isPristineOwnWorktree(
+  check: PristineOwnWorktreeCheck,
+): boolean {
+  const execute = check.execute ?? execFileSync;
+  const env = sanitizedGitEnvironment(check.environment ?? process.env);
+  let ownRoot: string;
+  try {
+    ownRoot = realpathSync(check.ownWorktree);
+    if (realpathSync(check.occupiedPath) !== ownRoot) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  const git = (args: string[]): string | null => {
+    try {
+      return String(
+        execute('git', ['-C', ownRoot, ...args], {
+          encoding: 'utf8',
+          env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }),
+      );
+    } catch {
+      return null;
+    }
+  };
+  const topLevel = git(['rev-parse', '--show-toplevel']);
+  try {
+    if (
+      topLevel === null ||
+      realpathSync(topLevel.replace(/\n$/, '')) !== ownRoot
+    ) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  if (
+    git(['symbolic-ref', '--quiet', 'HEAD'])?.trim() !==
+    `refs/heads/${check.branchName}`
+  ) {
+    return false;
+  }
+  // --ignore-submodules=none overrides diff.ignoreSubmodules and per-submodule
+  // ignore settings, so a dirty submodule still counts as dirty.
+  if (
+    git([
+      'status',
+      '--porcelain',
+      '--untracked-files=all',
+      '--ignore-submodules=none',
+    ]) !== ''
+  ) {
+    return false;
+  }
+  // The base check reads local refs only, so the common fresh-claim path makes
+  // no network call. An unresolvable base is a hard refusal (#4059): only a
+  // resolved base with HEAD beyond it reaches the pushed-tip rule below.
+  const baseState = (): 'at-base' | 'beyond-base' | 'unresolved' => {
+    let baseRef: string;
+    if (check.developmentBranch) {
+      baseRef = `origin/${check.developmentBranch}`;
+    } else {
+      const originHead = git([
+        'symbolic-ref',
+        '--quiet',
+        '--short',
+        'refs/remotes/origin/HEAD',
+      ])?.trim();
+      if (!originHead?.startsWith('origin/')) {
+        return 'unresolved';
+      }
+      baseRef = originHead;
+    }
+    if (
+      !git([
+        'rev-parse',
+        '--verify',
+        '--quiet',
+        `refs/remotes/${baseRef}^{commit}`,
+      ])?.trim()
+    ) {
+      return 'unresolved';
+    }
+    const beyond = git([
+      'rev-list',
+      '--count',
+      `refs/remotes/${baseRef}..HEAD`,
+    ])?.trim();
+    if (!beyond) {
+      return 'unresolved';
+    }
+    return beyond === '0' ? 'at-base' : 'beyond-base';
+  };
+  const base = baseState();
+  if (base === 'unresolved') {
+    return false;
+  }
+  if (base === 'at-base') {
+    return true;
+  }
+  // #4067: a released PR branch always carries pushed commits beyond the base,
+  // so a worktree at the branch's live remote tip is accepted too. Nothing in
+  // it is unpublished. The local remote-tracking ref must exist, so a missing
+  // one fails closed. The live tip is read with `ls-remote`, so a force-push or
+  // deletion made without a fetch is seen. A failed or timed-out read rejects.
+  const trackingTip = git([
+    'rev-parse',
+    '--verify',
+    '--quiet',
+    `refs/remotes/origin/${check.branchName}^{commit}`,
+  ])?.trim();
+  if (!trackingTip) {
+    return false;
+  }
+  const branchRef = `refs/heads/${check.branchName}`;
+  // A read that times out fails closed, so a stalled network cannot hang the gate.
+  const lsRemoteTimeoutMs = 30_000;
+  let remoteTip: string | undefined;
+  try {
+    remoteTip = String(
+      execute(
+        'git',
+        ['-C', ownRoot, 'ls-remote', '--heads', 'origin', branchRef],
+        {
+          encoding: 'utf8',
+          env: { ...env, GIT_TERMINAL_PROMPT: '0' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: lsRemoteTimeoutMs,
+        },
+      ),
+    )
+      .split('\n')
+      .find((line) => line.endsWith(`\t${branchRef}`))
+      ?.split('\t')[0];
+  } catch {
+    remoteTip = undefined;
+  }
+  // HEAD, the local tracking ref, and the live tip must all be equal. A stale
+  // tracking ref fails closed rather than being trusted. The first two are read
+  // again after the status check, because the remote read can take seconds and
+  // a commit or a change made during it must not be ignored.
+  const headNow = (): string | undefined =>
+    git(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])?.trim() ||
+    undefined;
+  const trackingNow = (): string | undefined =>
+    git([
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `refs/remotes/origin/${check.branchName}^{commit}`,
+    ])?.trim() || undefined;
+  const matchesRemoteTip = (): boolean =>
+    Boolean(remoteTip) &&
+    headNow() === remoteTip &&
+    trackingNow() === remoteTip;
+  if (!matchesRemoteTip()) {
+    return false;
+  }
+  const clean =
+    git([
+      'status',
+      '--porcelain',
+      '--untracked-files=all',
+      '--ignore-submodules=none',
+    ]) === '';
+  return clean && matchesRemoteTip();
 }
 
 export function evaluateResumeClaimRouting(
@@ -550,6 +772,35 @@ export function evaluateResumeClaimRouting(
       '';
     if (branch) {
       localWorktree = options.inspectLocalWorktree(branch);
+      // #4019: the fresh-claim order creates the caller's own worktree
+      // before its second gate read, so a released branch otherwise always
+      // reads as occupied by that new, empty worktree.
+      if (
+        worktreeSource === 'released' &&
+        localWorktree.status === 'occupied' &&
+        options.isOwnPristineWorktree
+      ) {
+        const isOwn = options.isOwnPristineWorktree;
+        const ownPaths = localWorktree.paths.filter((path) =>
+          isOwn(path, branch),
+        );
+        if (ownPaths.length > 0) {
+          const others = localWorktree.paths.filter(
+            (path) => !ownPaths.includes(path),
+          );
+          warnings.push(
+            `released branch ${branch}: ignored the caller's own clean worktree ${ownPaths.join(', ')} (--own-worktree)`,
+          );
+          localWorktree =
+            others.length > 0
+              ? { ...localWorktree, paths: others }
+              : {
+                  status: 'absent',
+                  paths: [],
+                  reason: `only the caller's own clean worktree occupies ${branch}`,
+                };
+        }
+      }
       if (localWorktree.status !== 'absent') {
         routeState = 'local_worktree_occupied';
         action = 'stop';
@@ -804,6 +1055,11 @@ function runCli(): HelperCliResult {
       new Error('--assert cannot be combined with --fresh-claim-gate'),
     );
   }
+  if (args.ownWorktree && !args.freshClaimGate) {
+    throw markCliUsageError(
+      new Error('--own-worktree requires --fresh-claim-gate'),
+    );
+  }
   if (args.ghToken) {
     process.env.GH_TOKEN = args.ghToken;
     process.env.GITHUB_TOKEN = args.ghToken;
@@ -920,6 +1176,19 @@ function runCli(): HelperCliResult {
         args.worktree || undefined,
       ),
     linkedPrLookupFailed,
+    // #4019: only with --own-worktree, which requires --fresh-claim-gate.
+    ...(args.ownWorktree
+      ? {
+          isOwnPristineWorktree: (occupiedPath: string, branchName: string) =>
+            policy.developmentBranch.status !== 'invalid' &&
+            isPristineOwnWorktree({
+              ownWorktree: args.ownWorktree,
+              occupiedPath,
+              branchName,
+              developmentBranch: policy.developmentBranch.branch ?? null,
+            }),
+        }
+      : {}),
   };
   const result = evaluateResumeClaimRouting(
     {
@@ -1472,6 +1741,13 @@ function parseArgs(argv: string[]): ResumeClaimRoutingArgs {
   // hit `unknown argument: --format` here. This helper only ever emits
   // JSON, so `json` is a no-op; every other value fails loudly instead of
   // silently degrading to JSON.
+  // #4019: an empty value would read as "flag absent" and skip the
+  // --fresh-claim-gate usage check, so reject it outright.
+  if (values['own-worktree'] === '') {
+    throw markCliUsageError(
+      new Error('--own-worktree requires a non-empty path'),
+    );
+  }
   const format = values.format as string;
   if (format !== 'json') {
     throw markCliUsageError(
@@ -1503,6 +1779,7 @@ function parseArgs(argv: string[]): ResumeClaimRoutingArgs {
     freshClaimGate: values['fresh-claim-gate'] as boolean,
     assert: values.assert as boolean,
     worktree: (values.worktree as string | undefined) ?? '',
+    ownWorktree: (values['own-worktree'] as string | undefined) ?? '',
     format,
     help,
   };
@@ -1510,7 +1787,7 @@ function parseArgs(argv: string[]): ResumeClaimRoutingArgs {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--gh-token <token>] [--claim-id <token>] [--nonce <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"] [--fresh-claim-gate] [--assert] [--worktree <path>] [--format json]
+  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--gh-token <token>] [--claim-id <token>] [--nonce <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"] [--fresh-claim-gate] [--own-worktree <path>] [--assert] [--worktree <path>] [--format json]
   Deprecated aliases (one release): --token -> --gh-token
 
   --format json       output format (default: json). JSON is the only
@@ -1522,6 +1799,19 @@ function printHelp(): void {
                       fresh claim owns none yet). Run it on a fresh fetch
                       immediately before the claim write; it re-uses the same
                       resolver so claim-state logic never forks.
+  --own-worktree <path>
+                      with --fresh-claim-gate only (#4019): the caller's own
+                      pre-created worktree. When a released claim's branch is
+                      occupied by exactly this path, and the worktree is on
+                      that branch, clean (no tracked or untracked changes),
+                      and either has no commits beyond
+                      origin/<developmentBranch> (origin/HEAD when the policy
+                      sets none), or sits at its branch's live remote tip,
+                      read with git ls-remote (#4067), the gate ignores it.
+                      Any other occupant, or a failed check (including a
+                      missing or outdated origin/HEAD on the base path, or an
+                      invalid developmentBranch), still blocks. An empty
+                      value is a usage error.
   --assert            exit 0 only when the verdict is state already_owned with
                       action keep; any other verdict exits non-zero (a gate
                       failure) and writes one stderr line naming state,
@@ -1619,6 +1909,8 @@ export function loadPolicy(policyPath: string) {
     // already-normalized `claimTiming.staleAge` (fail-safe to `PT24H`), so
     // a schema-invalid value resolves identically everywhere.
     staleAgeMs: readClaimStaleAgeMs(typedConfig),
+    // #4019: the --own-worktree base; an invalid value fails closed.
+    developmentBranch: inspectDevelopmentBranch(config),
     trustedMarkerActors: Array.isArray(typedConfig?.trustedMarkerActors)
       ? (typedConfig.trustedMarkerActors as unknown[])
           .map((value) => String(value ?? '').trim())

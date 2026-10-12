@@ -222,8 +222,8 @@
     },
     "waiver": {
       "type": "object",
-      "description": "Escape-hatch evidence for a maintainer-authorized external-check waiver, evaluated only once deadline.passed or terminal.state is COPILOT_UNAVAILABLE -- except autoWaiverValid below, which is unconditional.",
-      "required": ["mode", "checkSelector", "activeClaimId", "validCount", "outageRelieved", "autoWaiverValid"],
+      "description": "Escape-hatch evidence for a maintainer-authorized external-check waiver, evaluated only once deadline.passed or terminal.state is COPILOT_UNAVAILABLE -- except autoWaiverValid and decisionRuleApprovalValid below, which are unconditional.",
+      "required": ["mode", "checkSelector", "activeClaimId", "validCount", "outageRelieved", "autoWaiverValid", "decisionRuleFilesTouched", "decisionRuleApprovalValid"],
       "additionalProperties": false,
       "properties": {
         "mode": {
@@ -249,7 +249,15 @@
         },
         "autoWaiverValid": {
           "type": "boolean",
-          "description": "kurone-kito/idd-skill#2657: true when a valid, run-bound self-referential-bootstrap-auto waiver makes ready true through the independent ready-formula disjunct. Unlike every other field here, this one is evaluated UNCONDITIONALLY, never gated behind deadline.passed or terminal.state."
+          "description": "kurone-kito/idd-skill#2657: true when a valid, run-bound self-referential-bootstrap-auto waiver makes ready true through the independent ready-formula disjunct. Like decisionRuleApprovalValid, and unlike the other fields here, it is evaluated UNCONDITIONALLY, never gated behind deadline.passed or terminal.state. Always false when decisionRuleFilesTouched is true (kurone-kito/idd-skill#4015)."
+        },
+        "decisionRuleFilesTouched": {
+          "type": "boolean",
+          "description": "kurone-kito/idd-skill#4015: true when this pull request's diff touches a trigger file that decides this gate's verdicts. Such a diff never receives the self-referential-bootstrap-auto waiver. Only the source repository has a decision-rule list; elsewhere this is always false."
+        },
+        "decisionRuleApprovalValid": {
+          "type": "boolean",
+          "description": "kurone-kito/idd-skill#4015: true when decisionRuleFilesTouched is true and the latest gating review from a login in trustedMarkerActors approves the current HEAD. Feeds ready unconditionally, like autoWaiverValid."
         }
       }
     },
@@ -416,7 +424,7 @@
     },
     "ready": {
       "type": "boolean",
-      "description": "Overall pass gate: true when the scope does not apply, or converged is true, or the deadline has passed (or terminal is COPILOT_UNAVAILABLE) and the gate is waived, or waiver.autoWaiverValid is true (kurone-kito/idd-skill#2657) -- this last disjunct is independent of the deadline/terminal-unavailable precondition the others share."
+      "description": "Overall pass gate: true when the scope does not apply, or converged is true, or the deadline has passed (or terminal is COPILOT_UNAVAILABLE) and the gate is waived, or waiver.autoWaiverValid is true (kurone-kito/idd-skill#2657), or waiver.decisionRuleApprovalValid is true (kurone-kito/idd-skill#4015) -- these last two disjuncts are independent of the deadline/terminal-unavailable precondition the others share."
     },
     "reasons": {
       "type": "array",

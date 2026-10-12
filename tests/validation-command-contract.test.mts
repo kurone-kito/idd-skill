@@ -23,6 +23,7 @@ const EXPECTED_ORDER = [
   'pnpm run doctor:github',
   'node scripts/token-cost-report.mjs --check',
   'node scripts/check-stray-commit-closes.mjs',
+  'node scripts/pre-push-trial-budget.mjs',
 ];
 
 // The chain joins its steps with `&&` only, so stopping at the first failing
@@ -67,8 +68,14 @@ test('a failing doctor stops the chain before token-cost and stray run', () => {
   assert.deepEqual(run.calls, EXPECTED_ORDER.slice(0, 2));
 });
 
-test('a failing stray check is the last step and still fails the chain', () => {
+test('a failing stray check stops the chain before the trial budget check runs (#4010)', () => {
   const run = runChain('node scripts/check-stray-commit-closes.mjs');
+  assert.notEqual(run.status, 0);
+  assert.deepEqual(run.calls, EXPECTED_ORDER.slice(0, 4));
+});
+
+test('a failing trial budget check is the last step and still fails the chain (#4010)', () => {
+  const run = runChain('node scripts/pre-push-trial-budget.mjs');
   assert.notEqual(run.status, 0);
   assert.deepEqual(run.calls, EXPECTED_ORDER);
 });

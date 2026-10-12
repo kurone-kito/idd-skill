@@ -771,6 +771,35 @@ test('policy schema rejects a critiqueLoop.delegate mode outside the enum (#2324
   );
 });
 
+test('policy schema accepts critiqueLoop.e10MaxPasses as a positive integer (#3943)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const e10MaxPasses of [1, 2, 5]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = { ...instance.critiqueLoop, e10MaxPasses };
+    assert.deepEqual(
+      validate(instance, schema),
+      [],
+      `expected e10MaxPasses ${e10MaxPasses} to validate`,
+    );
+  }
+});
+
+test('policy schema rejects a non-positive or non-integer critiqueLoop.e10MaxPasses (#3943)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const e10MaxPasses of [0, -1, 1.5, '2']) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = { ...instance.critiqueLoop, e10MaxPasses };
+    assert.ok(
+      validate(instance, schema).length > 0,
+      `expected e10MaxPasses ${String(e10MaxPasses)} to be rejected`,
+    );
+  }
+});
+
 test('policy schema accepts every critiqueLoop.deferByUrgency value (#3311)', () => {
   const schema = loadJson('schemas/policy.schema.json');
   for (const deferByUrgency of [
@@ -3580,6 +3609,41 @@ test('branch-conflict-state invalid fixture fails validation', () => {
   const { ok } = validateFixture(
     'schemas/branch-conflict-state.schema.json',
     'fixtures/schemas/branch-conflict-state.invalid.json',
+    false,
+  );
+  assert.ok(ok, 'Expected invalid fixture to fail schema validation');
+});
+
+test('trial-merge-audit schema uses only allowed keywords', () => {
+  const schema = loadJson('schemas/trial-merge-audit.schema.json');
+  assert.deepEqual(checkSchemaKeywords(schema), []);
+});
+
+test('trial-merge-audit schema publishes metadata fields', () => {
+  const schema = loadJson(
+    'schemas/trial-merge-audit.schema.json',
+  ) as JsonRecord;
+  assert.equal(schema.$schema, 'https://json-schema.org/draft/2020-12/schema');
+  assert.equal(
+    schema.$id,
+    'https://kurone-kito.github.io/idd-skill/schemas/trial-merge-audit.schema.json',
+  );
+  assert.equal(schema.title, 'Trial Merge Audit');
+});
+
+test('trial-merge-audit valid fixture passes validation', () => {
+  const { ok, errors } = validateFixture(
+    'schemas/trial-merge-audit.schema.json',
+    'fixtures/schemas/trial-merge-audit.valid.json',
+    true,
+  );
+  assert.ok(ok, errors.join('\n'));
+});
+
+test('trial-merge-audit invalid fixture fails validation', () => {
+  const { ok } = validateFixture(
+    'schemas/trial-merge-audit.schema.json',
+    'fixtures/schemas/trial-merge-audit.invalid.json',
     false,
   );
   assert.ok(ok, 'Expected invalid fixture to fail schema validation');

@@ -39,6 +39,7 @@ import type {
   TokenCostSample,
   TokenCostSnapshot,
 } from '../src/scripts/token-cost-core.mts';
+import type { TrialMergeAuditResult } from '../src/scripts/trial-merge-audit.mts';
 import {
   checkSchemaKeywords,
   loadJson,
@@ -271,6 +272,7 @@ interface PolicyConfigFile {
     };
     trustEmptyProtectionReads?: boolean;
     trustSourcePinnedRequiredChecks?: boolean;
+    allowNoRequiredChecksInGlobalOnly?: boolean;
   };
   discover?: {
     activeClaimPreScanBatchSize?: number;
@@ -282,6 +284,7 @@ interface PolicyConfigFile {
   critiqueLoop?: {
     cPhaseLowSeveritySkipAfter?: number;
     e10NoProgressHoldAfter?: number;
+    e10MaxPasses?: number;
     deferAfterRounds?: number;
     deferByUrgency?: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
     deferRelaxAtRounds?: readonly number[];
@@ -819,6 +822,19 @@ export const providerHealthKeys = [
 type CoversAllKeysOf<T, Covered extends PropertyKey> =
   Exclude<keyof T, Covered> extends never ? true : false;
 
+export const trialMergeAuditKeys = [
+  'protocolVersion',
+  'verdict',
+  'prHeadSha',
+  'baseSha',
+  'trialCommit',
+  'commands',
+  'toolingChanged',
+  'install',
+  'worktreeRemoved',
+  'reasons',
+] as const satisfies readonly (keyof TrialMergeAuditResult)[];
+
 const exhaustivenessWitnesses: {
   advisoryWaitState: CoversAllKeysOf<
     AdvisoryWaitStateReport,
@@ -904,6 +920,10 @@ const exhaustivenessWitnesses: {
     WorkerReport,
     (typeof workerReportKeys)[number]
   >;
+  trialMergeAudit: CoversAllKeysOf<
+    TrialMergeAuditResult,
+    (typeof trialMergeAuditKeys)[number]
+  >;
 } = {
   advisoryWaitState: true,
   branchConflictState: true,
@@ -926,6 +946,7 @@ const exhaustivenessWitnesses: {
   tokenCostEvent: true,
   tokenCostSnapshot: true,
   workerReport: true,
+  trialMergeAudit: true,
 };
 
 // ---------------------------------------------------------------------------
@@ -982,6 +1003,8 @@ const advisoryConvergenceFixture = {
     validCount: 0,
     outageRelieved: false,
     autoWaiverValid: false,
+    decisionRuleFilesTouched: false,
+    decisionRuleApprovalValid: false,
   },
   dispositionEvidence: {
     missingRegularCommentCount: 0,
@@ -1071,6 +1094,26 @@ const advisoryWaitStateFixture = {
     reason: 'not-pending',
   },
 } satisfies AdvisoryWaitStateReport;
+
+const trialMergeAuditFixture = {
+  protocolVersion: '1',
+  verdict: 'passed',
+  prHeadSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  baseSha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+  trialCommit: 'cccccccccccccccccccccccccccccccccccccccc',
+  commands: [
+    {
+      id: 'audit-docs',
+      argv: ['node', 'scripts/audit-docs.mjs', '--check'],
+      exitCode: 0,
+      passed: true,
+    },
+  ],
+  toolingChanged: [],
+  install: { exitCode: 0, passed: true },
+  worktreeRemoved: true,
+  reasons: [],
+} satisfies TrialMergeAuditResult;
 
 const branchConflictStateFixture = {
   protocolVersion: '1',
@@ -1496,6 +1539,7 @@ const policyConfigFixture = {
     },
     trustEmptyProtectionReads: true,
     trustSourcePinnedRequiredChecks: true,
+    allowNoRequiredChecksInGlobalOnly: true,
   },
   discover: {
     activeClaimPreScanBatchSize: 10,
@@ -1504,8 +1548,9 @@ const policyConfigFixture = {
   },
   claim: { verifySettleDelay: 'PT5S' },
   critiqueLoop: {
-    cPhaseLowSeveritySkipAfter: 3,
+    cPhaseLowSeveritySkipAfter: 2,
     e10NoProgressHoldAfter: 3,
+    e10MaxPasses: 2,
     deferAfterRounds: 12,
     deferByUrgency: 'off',
     deferRelaxAtRounds: [4, 7],
@@ -1938,6 +1983,10 @@ const SCHEMA_TEST_DATA: Record<CatalogSchemaFile, SchemaTestData> = {
   'branch-conflict-state.schema.json': {
     keys: branchConflictStateKeys,
     fixture: branchConflictStateFixture,
+  },
+  'trial-merge-audit.schema.json': {
+    keys: trialMergeAuditKeys,
+    fixture: trialMergeAuditFixture,
   },
   'provider-health.schema.json': {
     keys: providerHealthKeys,

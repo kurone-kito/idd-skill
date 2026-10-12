@@ -43,6 +43,7 @@ words:
   - OICIID
   - OICIIOID
   - PAIAR
+  - pnpmfile
   - pylint
   - pytest
   - pyproject
@@ -50,6 +51,7 @@ words:
   - requir
   - SAFA
   - SDDL
+  - tmpfs
   - TOCTOU
   - tsfile
   - undispositioned

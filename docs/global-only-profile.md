@@ -68,6 +68,26 @@ misconfigured ruleset. A repository that wants to merge under this profile
 with no other required check needs its own recorded decision before the
 merge gate can pass.
 
+That decision is the opt-in `ciGate.allowNoRequiredChecksInGlobalOnly` in
+`.github/idd/config.json`. It defaults to `false`, and the operator sets it
+to `true` only after recording that decision. The setting passes the CI gate
+only when all of these hold:
+
+- the global-only profile is active for this run (`--global-only`, with both
+  conditions above met);
+- no required check remains after the advisory check is removed;
+- no check run is present on the head (`presentRunConclusion` is `none`).
+
+A pending or failing check run still holds the gate, and so does a run
+outside the global-only profile, including an unprotected branch with the
+setting on. When the setting is the reason the gate passed, the readiness
+output names it in `ci.allowedByPolicySetting`
+(`ciGate.allowNoRequiredChecksInGlobalOnly`). The setting is read from the
+trusted base ref, so a pull request cannot enable it for itself. The E1
+watermark path applies the same exception: `post-idd-marker --from-pr
+--type watermark --global-only` and `ci-wait-state --global-only` read it
+from that base ref too.
+
 ## F4 cleanup
 
 Under this profile no `post-merge-cleanup.yml` run exists. Do not wait for

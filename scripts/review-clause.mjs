@@ -229,6 +229,7 @@ export function fetchReviewsAndHeadCommit(
     itemCount: node.commentCount,
     body: node.body,
     replyOnly: node.replyOnly,
+    state: node.state ?? null,
   }));
   return { reviews, headCommittedAt };
 }

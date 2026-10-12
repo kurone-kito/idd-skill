@@ -720,6 +720,43 @@ function formatBlockingRunNames(names: readonly string[]): string {
 }
 
 /**
+ * #4053: the required-CI/HEAD agreement the `--from-pr --type watermark` path
+ * compares. Forwards `--global-only` into {@link collectCiWaitState}, which
+ * resolves the global-only ignore list and reads the trusted base-ref
+ * `ciGate.allowNoRequiredChecksInGlobalOnly` opt-in itself, since it already
+ * owns the trusted ref, the head SHA, and the provider port. The port, config
+ * loader, and activation resolver are injectable so tests drive this without
+ * a live `gh` process.
+ */
+export function readWatermarkRequiredCiAgreement(input: {
+  prNumber: number;
+  owner: string;
+  repo: string;
+  globalOnly: boolean;
+  createPort?: Parameters<typeof collectCiWaitState>[1];
+  loadTrustedConfig?: Parameters<typeof collectCiWaitState>[2];
+  resolveActivation?: Parameters<typeof collectCiWaitState>[3];
+}): RequiredCiHeadAgreement {
+  const argv = [
+    '--pr',
+    String(input.prNumber),
+    '--owner',
+    input.owner,
+    '--repo',
+    input.repo,
+    ...(input.globalOnly ? ['--global-only'] : []),
+  ];
+  return requiredCiHeadAgreementFromSummary(
+    collectCiWaitState(
+      argv,
+      input.createPort,
+      input.loadTrustedConfig,
+      input.resolveActivation,
+    ),
+  );
+}
+
+/**
  * Derive watermark fields from one fresh activity capture, then compare a
  * separate required-CI/HEAD agreement read. Does not accept a saved snapshot.
  * `collectRichActivity` runs once per call; a later operation must call again.
@@ -936,6 +973,12 @@ interface CliArgs {
   expectedHeadSha: string;
   /** `--operation-local`: return the capture and defer the post when CI is incomplete. */
   operationLocal: boolean;
+  /**
+   * `--global-only`: `--from-pr --type watermark` only (#4053). Forwarded to
+   * the CI-wait read, which resolves the global-only profile so the
+   * `ciGate.allowNoRequiredChecksInGlobalOnly` opt-in can pass.
+   */
+  globalOnly: boolean;
   priorHeadSha: string;
   priorTotalItemCount: number | null;
   priorMaxActivityAt: string;
@@ -1703,6 +1746,7 @@ export function parseArgs(rawArgv: string[]): CliArgs {
     fromPr: null,
     expectedHeadSha: '',
     operationLocal: false,
+    globalOnly: false,
     priorHeadSha: '',
     priorTotalItemCount: null,
     priorMaxActivityAt: '',
@@ -1726,6 +1770,10 @@ export function parseArgs(rawArgv: string[]): CliArgs {
     }
     if (token === '--operation-local') {
       args.operationLocal = true;
+      continue;
+    }
+    if (token === '--global-only') {
+      args.globalOnly = true;
       continue;
     }
     if (!token.startsWith('--')) {
@@ -1805,6 +1853,11 @@ its claim-revalidation gate before --apply, as the manual POST path it replaces.
                        fresh snapshot's live HEAD no longer matches it, i.e.
                        the branch moved between E1 Step 1 and this Step 2
                        call.
+  --global-only        --from-pr --type watermark only: resolve the global-only
+                       profile in the CI read, so a zero-required-check run
+                       can publish under the trusted
+                       ciGate.allowNoRequiredChecksInGlobalOnly opt-in. Any
+                       other path rejects the flag.
   --operation-local    --from-pr --type watermark only: also return the review
                        activity capture in the JSON envelope's operationLocal
                        field, and make a defer non-fatal: while required checks
@@ -2556,6 +2609,14 @@ function main(): HelperCliResult {
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, kind: 'usage', message };
   }
+  // #4053: --global-only only changes the --from-pr --type watermark CI read.
+  // Elsewhere it would be silently ignored, so reject it like --expected-head-sha.
+  if (args.globalOnly && (args.fromPr === null || args.type !== 'watermark')) {
+    const message =
+      '--global-only is only valid together with --from-pr --type watermark';
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
+  }
   if (
     args.operationLocal &&
     (args.type !== 'watermark' || args.fromPr === null)
@@ -2680,16 +2741,12 @@ function main(): HelperCliResult {
               port: createGithubProviderAdapter(args.owner, args.repo),
             }),
           readRequiredCiAgreement: () =>
-            requiredCiHeadAgreementFromSummary(
-              collectCiWaitState([
-                '--pr',
-                String(args.fromPr),
-                '--owner',
-                args.owner,
-                '--repo',
-                args.repo,
-              ]),
-            ),
+            readWatermarkRequiredCiAgreement({
+              prNumber: args.fromPr ?? 0,
+              owner: args.owner,
+              repo: args.repo,
+              globalOnly: args.globalOnly,
+            }),
         });
         if (local.decision !== 'publish') {
           const message = local.reason ?? 'refusing to post watermark';
