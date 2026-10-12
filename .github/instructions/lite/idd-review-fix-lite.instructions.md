@@ -167,8 +167,12 @@ self-critique and record risk.
    procedure. Exception: once `critiqueLoop.e10MaxPasses` (default 2) E10
    passes have run on the issue, no High or Medium finding is open, and
    `fix-validate` has passed on the current HEAD, the per-issue cap in
-   `idd-review-fix.instructions.md` applies: file the remaining Low findings
-   as a follow-up and go to E11. An unestablished count does not reach the
+   `idd-review-fix.instructions.md` applies: file one follow-up issue (do not
+   append) with one AC bullet per residual Low finding, exactly one
+   `Refs #<originating-issue>` line, and the defer-source marker that E6 uses
+   for `review-fix-loop-cutoff` (`idd-review-triage.instructions.md`). That
+   follow-up takes issue-authoring's Stage 2 narrow auto-release, not the
+   Stage 1 hold. Then go to E11. An unestablished count does not reach the
    cap.
 9. Heuristic: several new, non-repeated same-area findings across
    rounds (3-4) may mean one structural fix converges faster than
