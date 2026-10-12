@@ -171,15 +171,13 @@ test('isToolingPath names the overlay set and nothing else', () => {
     '.husky/pre-commit',
     'node_modules/.bin/tsc',
     'packages/x/node_modules/dep/index.js',
+    'packages/x/tsconfig.json',
+    'packages/x/.gitignore',
+    '.gitignore',
   ]) {
     assert.equal(isToolingPath(path), true, path);
   }
-  for (const path of [
-    'docs/a.md',
-    'tests/a.test.mts',
-    'idd-template/x.md',
-    'packages/x/tsconfig.json',
-  ]) {
+  for (const path of ['docs/a.md', 'tests/a.test.mts', 'idd-template/x.md']) {
     assert.equal(isToolingPath(path), false, path);
   }
 });
@@ -393,6 +391,22 @@ test('PR-only tooling leaves the scratch index, so commands cannot list it', () 
   });
   assert.deepEqual(result.toolingChanged, ['scripts/pr-only.mjs']);
   assert.equal(listed?.includes('scripts/pr-only.mjs'), false);
+});
+
+test('a non-ASCII tooling path is listed in toolingChanged, not quoted away', () => {
+  // Without -z, git quotes this name, and the path would miss the classifier.
+  const fixture = makeFixture({
+    featureChanges: { 'packages/café/package.json': '{}\n' },
+  });
+  const result = runTrialMergeAudit(fixture.work, '1', 'o', 'r', {
+    readPr: stubPr(fixture),
+    runInstall: realInstall,
+    runCommand: () => ({ exitCode: 0 }),
+    lockTimeoutMs: 2000,
+  });
+  assert.deepEqual(result.toolingChanged, ['packages/café/package.json']);
+  assert.equal(result.verdict, 'not-run');
+  assert.deepEqual(result.reasons, ['tooling-changed']);
 });
 
 test('clone lock held by another session: not-run, and no worktree is added', () => {

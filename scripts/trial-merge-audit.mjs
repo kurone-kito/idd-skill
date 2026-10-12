@@ -18,7 +18,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { devNull as nullDevice, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
   MERGE_BASE_FETCH_STEPS,
@@ -65,6 +65,10 @@ export function isToolingPath(path) {
   // A node_modules tree committed by the PR would be read by the install and
   // the commands, so it counts as tooling at any depth (review, 2026-10-12).
   if (path.split('/').includes('node_modules')) return true;
+  // A nested tsconfig can be reached through a root config's extends, and a
+  // tracked .gitignore changes which files the commands enumerate (review).
+  const name = path.split('/').pop() ?? '';
+  if (/^tsconfig[^/]*\.json$/.test(name) || name === '.gitignore') return true;
   if (TOOLING_DIRS.some((dir) => path.startsWith(dir))) return true;
   return TOOLING_ROOT_PATTERNS.some((pattern) => pattern.test(path));
 }
@@ -181,9 +185,10 @@ function gitAtLeast(hooksDir, major, minor) {
   return gotMajor > major || (gotMajor === major && gotMinor >= minor);
 }
 function listFiles(repo, hooksDir, rev) {
-  const out = git(repo, hooksDir, ['ls-tree', '-r', '--name-only', rev]);
+  // -z for the same reason as the diff below: quoted names would not match.
+  const out = git(repo, hooksDir, ['ls-tree', '-r', '-z', '--name-only', rev]);
   if (out.status !== 0) return null;
-  return out.stdout.split('\n').filter((line) => line.length > 0);
+  return out.stdout.split('\0').filter((line) => line.length > 0);
 }
 function defaultReadPr(owner, repo, pr) {
   const raw = ghText([
@@ -201,11 +206,23 @@ function defaultReadPr(owner, repo, pr) {
 }
 function defaultRun(argv, cwd, extraEnv = {}) {
   const [command, ...args] = argv;
+  // Pin the excludes file for the verification commands. audit-docs and
+  // sync-docs enumerate untracked files with --exclude-standard, so a host's
+  // core.excludesFile would change which files they check (review, 2026-10-12).
+  // Command-line config outranks the repository's own config. The fetch keeps
+  // its credentials, because it runs through sanitizedEnv() on its own.
+  const pinnedExcludes = {
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'core.excludesFile',
+    GIT_CONFIG_VALUE_0: nullDevice,
+    GIT_CONFIG_GLOBAL: nullDevice,
+    GIT_CONFIG_NOSYSTEM: '1',
+  };
   // On Windows pnpm is a .cmd shim, which only a shell resolves.
   const result = spawnSync(command, args, {
     cwd,
     stdio: 'ignore',
-    env: { ...sanitizedEnv(), ...extraEnv },
+    env: { ...sanitizedEnv(), ...pinnedExcludes, ...extraEnv },
     shell: process.platform === 'win32',
   });
   return {
@@ -470,8 +487,11 @@ function audit(args) {
   // Overlay base-tip tooling. A tooling path that the PR changed is replaced
   // by the base tip's copy, and a tooling path the base lacks is removed.
   // Every such path is listed as toolingChanged.
+  // -z keeps a path verbatim: without it git quotes a non-ASCII name, so the
+  // path would miss both toolingChanged and the base-tip overlay.
   const changed = git(repo, hooksDir, [
     'diff',
+    '-z',
     '--no-renames',
     '--name-only',
     mergeBase,
@@ -487,7 +507,7 @@ function audit(args) {
     });
   }
   const toolingChanged = changed.stdout
-    .split('\n')
+    .split('\0')
     .filter((path) => path.length > 0 && isToolingPath(path))
     .sort();
   const baseTooling = baseFiles.filter(isToolingPath);
