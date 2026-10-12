@@ -652,21 +652,29 @@ worktree add` (review comment `4242624517`); an `unclaimed-by` posted after
 an authoring hold that followed a successful assert (`4242624520`); removal
 outside the clone-scoped lock (`4242577825`); and `git branch -d` refusing
 a branch whose tip is not merged into a lagging local `main`, so the branch
-survived (`4242489039`). The decided policy (maintainer hearing,
-2026-10-12):
+survived (`4242489039`). A later review of the cleanup itself (PR `#4058`)
+found three more gaps: an ambiguous route state, such as `disputed` after an
+activation-nonce mismatch, can still name this session's claim, so only a
+clearly unheld state may remove; `git status --porcelain` does not list
+ignored files, which `git worktree remove` can delete; and the procedure
+needed a helper-free path for `instructions-only`. The decided policy
+(maintainer hearing, 2026-10-12), as implemented:
 
-- Remove only a pristine worktree: no tracked or untracked changes, and a
-  branch tip equal to the local `origin/main` ref. The procedure reads
-  that ref as it stands and does not fetch. Otherwise keep both.
+- Remove only a pristine worktree: no tracked, untracked, or ignored
+  changes, and a branch tip equal to the local `origin/{development-branch}`
+  ref. The procedure reads that ref as it stands and does not fetch.
+  Otherwise keep both.
 - Run the re-check and the removal in one hold of the clone-scoped lock.
   Acquire the worktree-local claim lock, re-read the claim, and remove only
-  when no active claim is held by this session. A collision, a failed
-  acquire, or an unreadable claim state keeps the worktree. Never
-  `--takeover`.
-- Git refuses `git branch -D` on a branch checked out in any worktree, so
-  the worktree is detached first. If the delete fails, the procedure
-  reattaches the branch and keeps both, so a kept worktree keeps its
-  branch.
+  when the route state is `unclaimed`, `stale`, or `non_inheritable` and no
+  active claim carries this session's `{claim-id}`. A collision, a failed
+  acquire, `already_owned`, `disputed`, `owner_evidence_required`, or an
+  unreadable state keeps the worktree. Never `--takeover`.
+- Git refuses `git branch -D` on a branch checked out in any worktree, so the
+  worktree is detached first. If the delete fails, the procedure reattaches
+  the branch and keeps both, so a kept worktree keeps its branch. Plain
+  `git branch -d` is not used, because it refuses against a lagging local
+  `main`.
 
 ## Work and self-review
 

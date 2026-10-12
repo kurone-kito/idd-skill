@@ -321,41 +321,40 @@ claim or activation-nonce post (step 3), a `--acquire` collision or any other
 non-success exit (step 4), an `--assert` result other than
 `already_owned`/`keep` (step 5), or an `unclaimed-by` posted after an
 authoring hold that followed a successful assert (Claim verification step 5).
-Never use `--takeover`. Steps 1-5 run in one hold of the
-[clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)
-(`node scripts/clone-lock.mjs --exec --agent-id {agent-id} -- bash -c '...'`),
-so the re-check (steps 1-3) and the removal (steps 4-5) both run under it.
-Any keep reports the worktree path.
+Never use `--takeover`. Save the script below with the placeholders filled in,
+then run it as one hold of the
+[clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock):
+`node scripts/clone-lock.mjs --exec --agent-id {agent-id} -- bash <script>`.
+The re-check (steps 1-3) and the removal (steps 4-5) both run under that hold.
+Any nonzero exit keeps the worktree and branch and reports the path.
 
 ```sh
-# 1. Lock. Continue only on exit 0; a collision keeps both worktree and branch.
+set -eu
 node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}
-# 2. Re-read. Keep if the read fails or is malformed, the state is
-#    owner_evidence_required, or it is already_owned (this session still holds
-#    the claim). Any other state means no active claim is held by this session.
-#    On instructions-only, read the claim state under Claim-state parsing below.
-node scripts/resume-claim-routing.mjs --issue <n> --claim-id {claim-id} --worktree <path>
-# 3. Pristine gate, read-only, no fetch: status must print nothing, and the
-#    branch tip must equal origin/{development-branch}. Otherwise keep both.
-git -C <path> status --porcelain
-git rev-parse <branch>
-git rev-parse origin/{development-branch}
-# 4. Delete the branch. Detach first: git refuses to delete a branch checked
-#    out in any worktree. If the delete fails, run
-#    git -C <path> checkout <branch> and keep both.
+route=$(node scripts/resume-claim-routing.mjs --issue <n> --claim-id {claim-id} --worktree <path>)
+printf '%s\n' "$route" | grep -Eq '^  "state": "(unclaimed|stale|non_inheritable)"' || exit 1
+if printf '%s\n' "$route" | grep -q '"claim_id": "{claim-id}"'; then exit 1; fi
+test -z "$(git -C <path> status --porcelain --ignored)"
+test "$(git rev-parse <branch>)" = "$(git rev-parse origin/{development-branch})"
 git -C <path> checkout --detach
-git branch -D <branch>
-# 5. Remove the worktree, without --force; git's unclean-tree refusal is a
-#    second guard. Removal also deletes the worktree-local lock and the
-#    generated-tokens record.
+git branch -D <branch> || { git -C <path> checkout <branch>; exit 1; }
 git worktree remove <path>
 ```
 
-Plain `git branch -d` is not used, because it refuses against a lagging local
-`main`. A branch cut from an earlier base, or one with commits beyond
-`origin/{development-branch}`, is kept with its worktree. If step 5 fails after
-step 4 succeeded, report the path: the worktree is then detached and pristine,
-and its branch is already gone.
+The route gate removes only when the re-read state is `unclaimed`, `stale`, or
+`non_inheritable` and no active claim carries `{claim-id}`. `already_owned`,
+`owner_evidence_required`, `disputed`, any other state, and an unreadable result
+all keep both. The pristine gate also covers ignored files, because
+`git worktree remove` can delete them. Git refuses to delete a branch checked
+out in any worktree, so the worktree is detached before `git branch -D`, and a
+failed delete reattaches the branch. A branch cut from an earlier base, or
+one with commits beyond `origin/{development-branch}`, is kept with its
+worktree. If `git worktree remove` fails after the branch is deleted, report the
+path: the worktree is then detached and pristine, and its branch is already gone.
+
+On `instructions-only`, use the helper-free fallbacks in
+`docs/idd-helper-scripts.md` for the lock and the clone-scoped hold, and read the
+claim state under Claim-state parsing below for the route gate.
 
 Observed in PR `#4018` review (comments `4242489039`, `4242624517`,
 `4242624520`, `4242577825`); rationale in

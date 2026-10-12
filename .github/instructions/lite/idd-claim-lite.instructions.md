@@ -28,9 +28,8 @@ Make no claim-stage event/marker, branch/worktree, or issue-state change.
    fall through to the written tables in that situation.
 2. **When the repository is `instructions-only`** (no helper runtime
    shipped): skip the helper commands and use only the written tables;
-   an issue-only handoff on an open PR stops. The `--record-tokens` /
-   `--read-tokens` check instead uses `docs/idd-helper-scripts.md`'s
-   helper-free fallback.
+   an issue-only handoff on an open PR stops. `--record-tokens` /
+   `--read-tokens` use `docs/idd-helper-scripts.md`'s helper-free fallback.
 
 Commands below are the **source-repo / vendored-node** form; other profiles
 use the profile-selected equivalent in `docs/idd-helper-scripts.md`. A helper
@@ -128,13 +127,11 @@ creates it).
 | anything else | Not yours — forced-handoff: Stop-and-ask; else fall through below |
 <!-- dprint-ignore-end -->
 
-`already_owned`/`keep` splits in two: if `--nonce` was passed above
-(resume/heartbeat continuation), skip to Claim verification (or
-Heartbeat). If it was omitted (first-time forced-handoff entry, not
-yet activated by you), go to Claim execution step 5 (post your own
-activation-nonce for `newClaimId`) first, then Claim verification's
-**Forced-handoff adopt-verbatim** case (step 4's settle-delay + nonce
-recompute only).
+`already_owned`/`keep` splits in two: with `--nonce` (resume/heartbeat),
+skip to Claim verification (or Heartbeat). Without it (first-time
+forced-handoff entry), go to Claim execution step 5 first, then Claim
+verification's **Forced-handoff adopt-verbatim** case (settle delay and
+nonce recompute only).
 
 **Otherwise** (no recorded `{claim-id}`, no forced-handoff evidence, or
 verified released-owner retry), run write-gate before claim write:
@@ -270,10 +267,9 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
    checks 1-2 do not apply yet. Otherwise, and for forced-handoff
    adopt-verbatim, `<path>` is the primary worktree and B1 creates the linked
    one after the claim. Then generate a fresh opaque token (adopt-verbatim
-   reuses `newClaimId`) and record it with the `claim-lock` helper's
-   `--record-tokens` mode (`--worktree <path> --agent-id <id> --claim-id <id>`;
-   command in `docs/idd-helper-scripts.md`) before the first post (step 4, or
-   step 5 for adopt-verbatim).
+   reuses `newClaimId`) and record it with `claim-lock --record-tokens`
+   (`docs/idd-helper-scripts.md`) before the first post (step 4; step 5 for
+   adopt-verbatim).
 3. **`{prior-claim-id}` / `supersedes:`**: `none` for a fresh claim or
    legacy migration; the active claim's `{claim-id}` for a stale
    takeover. Not applicable to forced-handoff (step 4 is skipped
@@ -338,24 +334,22 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
 After step 2's `git worktree add`, at any exit where this session no longer
 holds the claim (failed `--record-tokens` or claim post; step 6 lock
 collision or `--assert` not `already_owned`/`keep`; verification step 5
-`unclaimed-by`), run the block below in one clone-scoped lock hold
-(`clone-lock.mjs --exec --agent-id <agent-id> -- bash -c '…'`). Never
-`--takeover`. Any keep → report `<path>`.
+`unclaimed-by`), run the script below as one clone-scoped hold
+(`node scripts/clone-lock.mjs --exec --agent-id <agent-id> -- bash <script>`).
+Never `--takeover`. Any nonzero exit keeps both and reports `<path>`.
+Instructions-only: helper-free fallbacks in `docs/idd-helper-scripts.md`.
 
 ```sh
+set -eu
 node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id <agent-id> --claim-id <claim-id>
-# continue only on exit 0; else keep both
-node scripts/resume-claim-routing.mjs --issue <N> --claim-id <claim-id> --worktree <path>
-# keep on read failure, owner_evidence_required, or already_owned (instructions-only: written Claim-state rules)
-git -C <path> status --porcelain
-# must print nothing (no fetch); tip must equal origin/main, else keep both:
-git rev-parse <branch>
-git rev-parse origin/main
+route=$(node scripts/resume-claim-routing.mjs --issue <N> --claim-id <claim-id> --worktree <path>)
+printf '%s\n' "$route" | grep -Eq '^  "state": "(unclaimed|stale|non_inheritable)"' || exit 1
+if printf '%s\n' "$route" | grep -q '"claim_id": "<claim-id>"'; then exit 1; fi
+test -z "$(git -C <path> status --porcelain --ignored)"
+test "$(git rev-parse <branch>)" = "$(git rev-parse origin/main)"
 git -C <path> checkout --detach
-git branch -D <branch>
-# on failure: git -C <path> checkout <branch>; keep both
+git branch -D <branch> || { git -C <path> checkout <branch>; exit 1; }
 git worktree remove <path>
-# no --force
 ```
 
 ## Heartbeat posting
