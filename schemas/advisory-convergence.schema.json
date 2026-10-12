@@ -222,7 +222,7 @@
     },
     "waiver": {
       "type": "object",
-      "description": "Escape-hatch evidence for a maintainer-authorized external-check waiver, evaluated only once deadline.passed or terminal.state is COPILOT_UNAVAILABLE -- except autoWaiverValid below, which is unconditional.",
+      "description": "Escape-hatch evidence for a maintainer-authorized external-check waiver, evaluated only once deadline.passed or terminal.state is COPILOT_UNAVAILABLE -- except autoWaiverValid and decisionRuleApprovalValid below, which are unconditional.",
       "required": ["mode", "checkSelector", "activeClaimId", "validCount", "outageRelieved", "autoWaiverValid", "decisionRuleFilesTouched", "decisionRuleApprovalValid"],
       "additionalProperties": false,
       "properties": {
@@ -249,7 +249,7 @@
         },
         "autoWaiverValid": {
           "type": "boolean",
-          "description": "kurone-kito/idd-skill#2657: true when a valid, run-bound self-referential-bootstrap-auto waiver makes ready true through the independent ready-formula disjunct. Unlike every other field here, this one is evaluated UNCONDITIONALLY, never gated behind deadline.passed or terminal.state. Always false when decisionRuleFilesTouched is true (kurone-kito/idd-skill#4015)."
+          "description": "kurone-kito/idd-skill#2657: true when a valid, run-bound self-referential-bootstrap-auto waiver makes ready true through the independent ready-formula disjunct. Like decisionRuleApprovalValid, and unlike the other fields here, it is evaluated UNCONDITIONALLY, never gated behind deadline.passed or terminal.state. Always false when decisionRuleFilesTouched is true (kurone-kito/idd-skill#4015)."
         },
         "decisionRuleFilesTouched": {
           "type": "boolean",

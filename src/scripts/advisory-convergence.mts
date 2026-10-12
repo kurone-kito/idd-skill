@@ -877,7 +877,8 @@ export interface AdvisoryConvergenceWaiver {
   /** kurone-kito/idd-skill#2657 (Copilot review, PR #2895): whether a
    * valid, run-bound `self-referential-bootstrap-auto` waiver makes
    * `ready` true through the independent disjunct in the `ready`
-   * formula. Unlike every other field on this object, this one is
+   * formula. Like `decisionRuleApprovalValid` (kurone-kito/idd-skill#4015),
+   * and unlike the other fields on this object, it is
    * evaluated UNCONDITIONALLY -- never gated behind
    * `deadlinePassed`/`terminalUnavailable` the way `validCount`/
    * `outageRelieved` (and the `waived` field they feed) are. Reported
