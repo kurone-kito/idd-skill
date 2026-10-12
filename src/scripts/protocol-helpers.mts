@@ -7233,6 +7233,8 @@ function sameHeadReviewsSettled({
 }): boolean {
   const isDefaultCopilotBot =
     primaryBotLogin === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  let requiredCited = 0;
+  let earliestCitedReviewAt = '';
   for (const review of reviews) {
     const author = {
       login: review.user?.login ?? review.author?.login ?? '',
@@ -7249,12 +7251,24 @@ function sameHeadReviewsSettled({
     ) {
       continue;
     }
+    const submittedAt = String(review.submitted_at ?? review.submittedAt ?? '');
     const { shape, suppressedCount } = classifyCopilotReviewBody(body);
     if (shape !== 'overview-v2' && shape !== 'overview-legacy') {
       // A configured non-Copilot bot has no known shapes, so it is not judged
-      // here. For the default bot, an empty body is no content, and any other
-      // unreadable body disagrees with the recognized review (fail closed).
-      if (isDefaultCopilotBot && String(body ?? '').trim() !== '') {
+      // here. For the default bot, an empty body is no content. Any other
+      // unreadable body disagrees with the recognized review unless a trusted
+      // review-ack for this head follows it, the same clearing rule the gate
+      // applies to an unrecognized body (fail closed otherwise).
+      if (
+        isDefaultCopilotBot &&
+        String(body ?? '').trim() !== '' &&
+        !hasTrustedReviewAckAfter(
+          comments,
+          trustedMarkerLogins,
+          submittedAt,
+          prHeadSha,
+        )
+      ) {
         return false;
       }
       continue;
@@ -7263,15 +7277,28 @@ function sameHeadReviewsSettled({
       continue;
     }
     const citation = citationBreakdown(body, suppressedCount);
-    const submittedAt = String(review.submitted_at ?? review.submittedAt ?? '');
+    requiredCited += citation.citedCount;
     if (
-      countCitedItemDispositions(comments, trustedMarkerLogins, submittedAt) <
-      citation.citedCount
+      citation.citedCount > 0 &&
+      (earliestCitedReviewAt === '' ||
+        compareIsoTimestamps(submittedAt, earliestCitedReviewAt) < 0)
     ) {
-      return false;
+      earliestCitedReviewAt = submittedAt;
     }
   }
-  return true;
+  if (requiredCited === 0) {
+    return true;
+  }
+  // One disposition answers one cited item, so the required citations of all
+  // same-head reviews are summed and compared with the dispositions posted
+  // after the earliest cited review. A reply is never counted twice.
+  return (
+    countCitedItemDispositions(
+      comments,
+      trustedMarkerLogins,
+      earliestCitedReviewAt,
+    ) >= requiredCited
+  );
 }
 
 export function evaluateAdvisoryWaitOutcome(

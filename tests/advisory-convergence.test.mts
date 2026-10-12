@@ -9709,3 +9709,61 @@ test('union (#4070): an empty-body same-head review alongside a clean recognized
   ]);
   assert.equal(summary.outcome, 'SATISFIED');
 });
+
+// --- 9i. Same-head union: one reply answers one item (#4070, round 3) -------
+
+test('union (#4070): two same-head reviews with one cited item each, answered by one reply posted after both, do not settle (Codex P1 on #4082)', () => {
+  const summary = helperSummaryFor(
+    [
+      restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+      {
+        ...restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+        submitted_at: LATER_SAME_HEAD_REVIEW,
+      },
+    ],
+    [citedDispositionComment({ createdAt: '2026-07-11T11:30:00Z' })],
+  );
+  assert.equal(summary.outcome, 'DISPOSITION_NEEDED');
+  assert.equal(summary.f3Outcome, 'DISPOSITION_NEEDED');
+});
+
+test('union (#4070): two cited items across two same-head reviews, answered by two replies posted after the later review, settle', () => {
+  const summary = helperSummaryFor(
+    [
+      restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+      {
+        ...restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+        submitted_at: LATER_SAME_HEAD_REVIEW,
+      },
+    ],
+    [
+      citedDispositionComment({ createdAt: '2026-07-11T11:30:00Z' }),
+      citedDispositionComment({ createdAt: '2026-07-11T11:31:00Z' }),
+    ],
+  );
+  assert.equal(summary.outcome, 'SATISFIED');
+});
+
+test('union (#4070): an unreadable same-head review that a trusted review-ack for the head follows is settled, as the gate clears it', () => {
+  const summary = helperSummaryFor(
+    [
+      restCopilotReview(MINIMAL_V2_REVIEW_BODY, HEAD),
+      {
+        ...restCopilotReview(
+          'Copilot could not review this pull request.',
+          HEAD,
+        ),
+        submitted_at: LATER_SAME_HEAD_REVIEW,
+      },
+    ],
+    [
+      {
+        author: { login: TRUSTED },
+        body: `review-ack: ${AGENT_ID} ${HEAD} 2026-07-11T11:30:00Z`,
+        createdAt: '2026-07-11T11:30:00Z',
+        lastEditedAt: null,
+      },
+    ],
+  );
+  assert.equal(summary.outcome, 'SATISFIED');
+});
