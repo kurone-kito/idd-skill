@@ -303,8 +303,10 @@ never clears by polling: follow its `detail`.
   Route by `ci.presentRunConclusion` over the actual HEAD runs:
   - `all-passing` → the CI gate may pass (every present run green).
   - `pending` → wait per `idd-ci.instructions.md`, then re-evaluate F2.
-  - `some-failing`, or `none` (no runs at all) → **hold**; never merge
-    on a vacuous green.
+  - `some-failing` → **hold**; never merge on a vacuous green.
+  - `none` (no runs at all) → **hold**, unless `ci.allowedByPolicySetting`
+    is set (the global-only opt-in; see
+    [Global-only profile](../../docs/global-only-profile.md)).
 
   **External-check waivers**: When `pre-merge-readiness` reports a check
   `coveredByWaiver: true`, a trusted maintainer authorized skipping it

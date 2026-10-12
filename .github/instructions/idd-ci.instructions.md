@@ -126,7 +126,8 @@ interpreting `gh pr checks` output.
    otherwise derive the equivalent from actual runs at the head SHA:
    `all-passing` may proceed; `pending` → wait/re-check; `some-failing`
    or `none` (no runs) → **hold** — never treat an empty required-check
-   set as a vacuous pass. Full routing table:
+   set as a vacuous pass, except `ci.allowedByPolicySetting` (the
+   global-only opt-in). Full routing table:
    [F2 — Pre-merge condition check](idd-pre-merge.instructions.md#f2--pre-merge-condition-check).
 
 When caller phases already provide a trusted required-check set, reuse
