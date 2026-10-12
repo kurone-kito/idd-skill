@@ -48,8 +48,8 @@ E5's "Verify before accept" rule):
 
 Run a critique pass to verify that the fixes in E9 address the root
 causes and are correct (see `idd-overview-appendix.instructions.md` for per-agent
-implementation). As at C1, a delegated per-agent subagent's brief names
-a parent-created scratch directory and quotes rule 3 of
+implementation). As at C1, if possible, a per-agent subagent's brief
+names a parent-created scratch directory and quotes rule 3 of
 `docs/idd-workflow.md`'s "Critique pass invocation" section: "the
 subagent uses only that directory and creates none"; run that section's
 post-round scratch check after each pass.
