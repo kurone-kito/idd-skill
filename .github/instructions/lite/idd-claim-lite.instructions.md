@@ -106,10 +106,8 @@ forced-handoff steps:
 node scripts/resume-claim-routing.mjs --issue <N> --claim-id <your-or-newClaimId> [--nonce <your-recorded-nonce>] [--worktree <path>]
 ```
 
-Pass `--nonce` only when this session already recorded one for that
-`{claim-id}`; omit it otherwise.
-Pass `--worktree <path>` once the linked worktree exists (step 2 or B1
-creates it).
+Pass `--nonce` only if this session recorded one for `{claim-id}`; pass
+`--worktree <path>` once the linked worktree exists (step 2 or B1).
 
 <!-- dprint-ignore-start -->
 | Top-level `state` / `action` | Meaning |
@@ -325,14 +323,14 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
 After step 2's `git worktree add`, at any exit where this session no longer
 holds the claim (failed `--record-tokens`, claim, or nonce post; step 6 lock
 collision or `--assert` not `already_owned`/`keep`; verification step 5
-`unclaimed-by`), run the script below as one clone-scoped hold
-(`node scripts/clone-lock.mjs --exec --agent-id <agent-id> -- bash <script>`).
-Never `--takeover`. Fill each placeholder as a single-quoted shell word. The gates
-run before removal. Any failure before removal
-keeps the worktree, branch, and lock on purpose. If `git branch -D` fails after
-removal, or the harness denies it, report a leftover branch at `<branch>`.
-Instructions-only: helper-free lock fallback (`docs/idd-helper-scripts.md`); one
-clone per worker (`docs/idd-workflow.md`); route by pre-check (c)'s written rules.
+`unclaimed-by`), run the script below from the primary checkout as one
+clone-scoped hold (`node scripts/clone-lock.mjs --exec --agent-id <agent-id>
+-- bash <script>`). Never `--takeover`. Quote each placeholder as a single
+shell word. Failures before removal keep the worktree, branch, and lock on
+purpose. If `git branch -D` fails after removal or is denied, report a
+leftover branch at `<branch>`. Instructions-only: helper-free lock fallback
+(`docs/idd-helper-scripts.md`); one clone per worker (`docs/idd-workflow.md`);
+route by pre-check (c)'s written rules.
 
 ```sh
 set -eu
@@ -340,8 +338,11 @@ node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id <agent-id> --
 route=$(node scripts/resume-claim-routing.mjs --issue <N> --claim-id <claim-id> --worktree <path>)
 printf '%s\n' "$route" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const a=JSON.parse(s).active_claim;process.exit(!a||a.claim_id!=="<claim-id>"?0:1)})'
 test "$(git -C <path> symbolic-ref -q HEAD)" = refs/heads/<branch>
-test -z "$(git -C <path> status --porcelain --ignored --untracked-files=all --ignore-submodules=none)"
-test "$(git rev-parse <branch>)" = "$(git rev-parse origin/main)"
+dirty=$(git -C <path> status --porcelain --ignored --untracked-files=all --ignore-submodules=none)
+test -z "$dirty"
+tip=$(git rev-parse <branch>)
+base=$(git rev-parse origin/{development-branch})
+test "$tip" = "$base"
 git worktree remove <path>
 git branch -D <branch>
 ```
@@ -397,11 +398,10 @@ none` does not take effect. Keep adopting it verbatim, or post
 `unclaimed-by` for it and the displaced pair (exact ids each), then claim
 fresh.
 
-Once verified, record this `{claim-id}` (and any posted nonce) as your
-claim token for the rest of the run. Before each later mutation, apply
-the pre-mutation guard in `idd-work-lite.instructions.md` with its scope
-rules; a failed
-check means stop, do not mutate further.
+Once verified, record this `{claim-id}` (and any posted nonce) as your claim
+token for the rest of the run. Before each later mutation, apply the
+pre-mutation guard in `idd-work-lite.instructions.md`; a failed check means
+stop, do not mutate further.
 
 **Digest**: after verification, upsert the issue's `idd-live-status` digest
 (only when exactly one exists, or none) — `Phase: A5 claimed`, `Claim`,

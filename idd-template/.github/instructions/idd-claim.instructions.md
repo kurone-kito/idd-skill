@@ -320,7 +320,8 @@ the placeholders of the script, each as a single-quoted shell word (write a `'`
 as `'\''`), resolve each helper as in A5(a), and run it as one hold of the
 [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock):
 `node scripts/clone-lock.mjs --exec --agent-id {agent-id} -- bash <script>`.
-The gates and the removal both run under that hold.
+The gates and removal run under that hold, from the primary checkout (or with
+`--repo`), never from the worktree being removed.
 
 ```sh
 set -eu
@@ -328,8 +329,11 @@ node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id {agent-id} --
 route=$(node scripts/resume-claim-routing.mjs --issue <n> --claim-id {claim-id} --worktree <path>)
 printf '%s\n' "$route" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const a=JSON.parse(s).active_claim;process.exit(!a||a.claim_id!=="{claim-id}"?0:1)})'
 test "$(git -C <path> symbolic-ref -q HEAD)" = refs/heads/<branch>
-test -z "$(git -C <path> status --porcelain --ignored --untracked-files=all --ignore-submodules=none)"
-test "$(git rev-parse <branch>)" = "$(git rev-parse origin/{development-branch})"
+dirty=$(git -C <path> status --porcelain --ignored --untracked-files=all --ignore-submodules=none)
+test -z "$dirty"
+tip=$(git rev-parse <branch>)
+base=$(git rev-parse origin/{development-branch})
+test "$tip" = "$base"
 git worktree remove <path>
 git branch -D <branch>
 ```
@@ -347,13 +351,12 @@ distributed Claude baseline denies `Bash(git branch -D*)`), report a leftover
 branch at `<branch>`. The worktree is already gone, and the A5(e) orphan hold
 covers the next claimant.
 
-Instructions-only: take the lock from the helper-free fallback in
-`docs/idd-helper-scripts.md`, read the claim state under Claim-state parsing for
-the route gate, and give each worker its own clone for the clone-scoped steps
+Instructions-only: take the lock from `docs/idd-helper-scripts.md`'s helper-free
+fallback, read the claim state under Claim-state parsing, and give each worker
+its own clone
 ([fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)).
 
-Observed in PR `#4018` review (comments `4242489039`, `4242624517`,
-`4242624520`, `4242577825`); rationale in
+Observed in PR `#4018` review; rationale in
 [docs/idd-design-rationale.md](../../docs/idd-design-rationale.md#lost-claim-cleanup-issue-4042).
 
 ## Activation-nonce format
