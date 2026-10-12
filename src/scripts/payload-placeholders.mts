@@ -71,15 +71,36 @@ function hasValue(value: unknown): boolean {
 }
 
 /**
+ * Reasons whose activation serves the installed payload as `instructionsRoot`.
+ * `repository-policy-minimal-import` is a repository with only a policy file,
+ * and `user-global-override-match` is a repository matched by a user-global
+ * override. Both use the `repository-local` or `user-global-override` tier,
+ * so the tier alone cannot tell them from a repository that serves its own
+ * instruction files.
+ */
+const PAYLOAD_SERVED_REASONS: ReadonlySet<string> = new Set([
+  'repository-policy-minimal-import',
+  'user-global-override-match',
+]);
+
+/** Whether the activation serves the installed payload, not its own files. */
+export function servesInstalledPayload(activation: ActivationResult): boolean {
+  return (
+    activation.active &&
+    activation.instructionsRoot !== null &&
+    PAYLOAD_SERVED_REASONS.has(activation.reason)
+  );
+}
+
+/**
  * The warnings for a payload-served repository whose effective policy lacks a
- * field that a placeholder needs. Only the `user-global-override` tier serves
- * the payload, so every other tier returns no warnings.
+ * field that a placeholder needs. Every other activation returns no warnings.
  */
 export function evaluatePayloadPolicyCoverage(options: {
   activation: ActivationResult;
   policy: unknown;
 }): string[] {
-  if (options.activation.tier !== 'user-global-override') return [];
+  if (!servesInstalledPayload(options.activation)) return [];
   const warnings: string[] = [];
   for (const [name, source] of Object.entries(PAYLOAD_PLACEHOLDER_FIELDS)) {
     if (source.kind === 'repository-name') continue;
@@ -99,14 +120,19 @@ export function evaluatePayloadPolicyCoverage(options: {
 
 /**
  * The doctor's entry point: compute the activation for `cwd` and check the
- * effective policy against it. A failure to compute either is reported as a
- * warning, so the doctor never silently skips the check.
+ * effective policy against it. `env` and `homedir` reach both the activation
+ * and the policy load, so a test can place the installed payload in a scratch
+ * home. A failure to compute either is reported as a warning, so the doctor
+ * never silently skips the check.
  */
-export function payloadPolicyCoverageWarnings(cwd: string): string[] {
+export function payloadPolicyCoverageWarnings(
+  cwd: string,
+  options: { env?: NodeJS.ProcessEnv; homedir?: string } = {},
+): string[] {
   try {
-    const activation = computeActivation({ cwd });
-    if (activation.tier !== 'user-global-override') return [];
-    const loaded = loadLayeredLocalPolicy({ cwd });
+    const activation = computeActivation({ cwd, ...options });
+    if (!servesInstalledPayload(activation)) return [];
+    const loaded = loadLayeredLocalPolicy({ cwd, ...options });
     return evaluatePayloadPolicyCoverage({
       activation,
       policy: loaded.config,
