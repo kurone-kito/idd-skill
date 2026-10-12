@@ -3,13 +3,16 @@
 // The scripts/user-global-install.mjs copy is generated from this .mts source
 // by `pnpm run build`. Edit the .mts source, never the generated .mjs. See
 // docs/typescript-sources.md.
+//
 // User-global install of the IDD payload, skills, and harness wiring (#3825).
 //
 // The `idd-onboard --install-user-global` mode calls into this module. A plan
 // is computed once and shared by --dry-run and the apply path, so a dry run
 // cannot drift from what an apply would do. Nothing outside the managed block
-// (Markdown) or the one inserted array element (opencode.json) is rewritten,
-// and uninstall deletes only what the receipt says install created.
+// (Markdown) or the one inserted array element (opencode.json) is rewritten.
+// Uninstall deletes only what the receipt names, and only while it is still
+// the content install wrote.
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -27,7 +30,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { buildHelperRuntimeManifest } from './helper-runtime-manifest.mjs';
 import { resolveInstalledPayloadRoot } from './idd-activation.mjs';
 import { isQualifiedConfigRoot } from './idd-config.mjs';
@@ -94,12 +97,16 @@ function lstatIfExists(path) {
     throw error;
   }
 }
+function sha256(bytes) {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+/** Relative paths of every file under `dir`, sorted. */
 function walkFiles(dir, prefix = '') {
   const found = [];
   for (const name of readdirSync(dir).sort()) {
     const abs = join(dir, name);
     const rel = prefix === '' ? name : `${prefix}/${name}`;
-    if (statSync(abs).isDirectory()) {
+    if (lstatSync(abs).isDirectory()) {
       found.push(...walkFiles(abs, rel));
     } else {
       found.push(rel);
@@ -487,6 +494,20 @@ function spliceOpencodeOut(text, entry, keyCreated, path) {
 // ---------------------------------------------------------------------------
 // Receipt: the only record of what install created.
 // ---------------------------------------------------------------------------
+function isSafeVersionName(name) {
+  return (
+    typeof name === 'string' &&
+    name.length > 0 &&
+    name !== '.' &&
+    name !== '..' &&
+    !name.includes('/') &&
+    !name.includes('\\')
+  );
+}
+/**
+ * Read the receipt and normalize it. Missing arrays become empty, and any
+ * entry that could name a path outside what install owns is dropped.
+ */
 function readReceipt(path) {
   const text = readUtf8IfExists(path);
   if (text === null) return null;
@@ -494,7 +515,29 @@ function readReceipt(path) {
   if (parsed.schema !== 1) {
     throw new Error(`user-global install: unknown receipt schema in ${path}`);
   }
-  return parsed;
+  const strings = (value) =>
+    Array.isArray(value)
+      ? value.filter((entry) => typeof entry === 'string')
+      : [];
+  return {
+    schema: 1,
+    version: typeof parsed.version === 'string' ? parsed.version : '',
+    payloadRoot:
+      typeof parsed.payloadRoot === 'string' ? parsed.payloadRoot : '',
+    payloadVersions: strings(parsed.payloadVersions).filter(isSafeVersionName),
+    skillDirs: strings(parsed.skillDirs).filter((dir) => isAbsolute(dir)),
+    skillFiles: (Array.isArray(parsed.skillFiles)
+      ? parsed.skillFiles
+      : []
+    ).filter(
+      (entry) =>
+        typeof entry?.path === 'string' &&
+        isAbsolute(entry.path) &&
+        typeof entry.sha256 === 'string',
+    ),
+    dirsCreated: strings(parsed.dirsCreated).filter((dir) => isAbsolute(dir)),
+    harnesses: parsed.harnesses ?? {},
+  };
 }
 function receiptBytes(receipt) {
   return Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`);
@@ -502,18 +545,57 @@ function receiptBytes(receipt) {
 // ---------------------------------------------------------------------------
 // Payload, current link, and skills.
 // ---------------------------------------------------------------------------
+/**
+ * Refuse any symlink between `root`'s children and `target`, and a symlink at
+ * `target` itself. The root is the skill directory the marker proves we own,
+ * so a symlinked skills root stays the user's choice, and the rule covers
+ * everything below it.
+ */
+function assertNoLinkBelow(root, target) {
+  const relative = target.slice(root.length + 1).split('/');
+  let current = root;
+  for (const segment of relative) {
+    current = join(current, segment);
+    const stat = lstatIfExists(current);
+    if (stat === null) return;
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `user-global install: ${current} is a symlink inside a skill directory; refusing to write through it`,
+      );
+    }
+    if (current !== target && !stat.isDirectory()) {
+      throw new Error(
+        `user-global install: ${current} is not a directory; refusing to write skills through it`,
+      );
+    }
+  }
+}
 function planPayload(plan, locations, bundleRoot, version, createdDirs) {
   const versionDir = join(locations.dataRoot, version);
   const expected = expectedPayloadTree(bundleRoot, version);
   const existing = lstatIfExists(versionDir);
-  if (existing !== null && !existing.isDirectory()) {
-    throw new Error(
-      `user-global install: ${versionDir} exists and is not a directory; refusing to replace it`,
-    );
-  }
-  if (existing !== null && sameTree(expected, treeOf(versionDir))) {
-    pushChange(plan, versionDir, 'unchanged');
-    return;
+  if (existing !== null) {
+    if (existing.isSymbolicLink() || !existing.isDirectory()) {
+      throw new Error(
+        `user-global install: ${versionDir} is not a directory; refusing to replace it`,
+      );
+    }
+    if (lstatIfExists(join(versionDir, PAYLOAD_MARKER_NAME)) === null) {
+      throw new Error(
+        `user-global install: ${versionDir} exists without the ${PAYLOAD_MARKER_NAME} marker; refusing to replace user content`,
+      );
+    }
+    const current = treeOf(versionDir);
+    const extra = [...current.keys()].filter((rel) => !expected.has(rel));
+    if (extra.length > 0) {
+      throw new Error(
+        `user-global install: ${versionDir} holds files install did not write (${extra.join(', ')}); refusing to replace them`,
+      );
+    }
+    if (sameTree(expected, current)) {
+      pushChange(plan, versionDir, 'unchanged');
+      return;
+    }
   }
   pushChange(plan, versionDir, existing === null ? 'create' : 'update');
   ensureDirs(plan, [locations.dataRoot], createdDirs);
@@ -521,7 +603,6 @@ function planPayload(plan, locations, bundleRoot, version, createdDirs) {
     locations.dataRoot,
     `.staging-${version}-${process.pid}`,
   );
-  const old = `${versionDir}.old`;
   for (const [rel, bytes] of expected) {
     plan.ops.push({
       kind: 'write',
@@ -530,13 +611,14 @@ function planPayload(plan, locations, bundleRoot, version, createdDirs) {
     });
   }
   if (existing !== null) {
-    plan.ops.push({ kind: 'removeTree', path: old });
-    plan.ops.push({ kind: 'rename', from: versionDir, to: old });
+    // The old tree is moved aside under a unique name and only then removed.
+    const replaced = `${versionDir}.replaced-${process.pid}-${Date.now()}`;
+    plan.ops.push({ kind: 'rename', from: versionDir, to: replaced });
+    plan.ops.push({ kind: 'rename', from: staging, to: versionDir });
+    plan.ops.push({ kind: 'removeTree', path: replaced });
+    return;
   }
   plan.ops.push({ kind: 'rename', from: staging, to: versionDir });
-  if (existing !== null) {
-    plan.ops.push({ kind: 'removeTree', path: old });
-  }
 }
 function planCurrentLink(plan, locations, version) {
   const current = locations.payloadRoot;
@@ -571,7 +653,13 @@ function planCurrentLink(plan, locations, version) {
   plan.ops.push({ kind: 'symlink', target: linkTarget, path: tmp });
   plan.ops.push({ kind: 'rename', from: tmp, to: current });
 }
-function planSkills(plan, skillsRoot, files, createdDirs) {
+/**
+ * Plan the skill copies. A file that differs from the bundle is overwritten
+ * only when its current digest is one install wrote before; a user edit is
+ * refused, so re-install never silently discards it.
+ */
+function planSkills(plan, skillsRoot, files, createdDirs, priorFiles) {
+  const receipt = { dirs: [], files: [] };
   const skills = [...new Set(files.map((file) => file.skill))].sort();
   for (const skill of skills) {
     const dir = join(skillsRoot, skill);
@@ -582,7 +670,8 @@ function planSkills(plan, skillsRoot, files, createdDirs) {
           `user-global install: ${dir} is not a plain directory; refusing to write skills into it`,
         );
       }
-      if (lstatIfExists(join(dir, SKILL_MARKER_NAME)) === null) {
+      const marker = lstatIfExists(join(dir, SKILL_MARKER_NAME));
+      if (marker === null || marker.isSymbolicLink()) {
         throw new Error(
           `user-global install: ${dir} exists without the ${SKILL_MARKER_NAME} marker; refusing to overwrite user content`,
         );
@@ -592,9 +681,19 @@ function planSkills(plan, skillsRoot, files, createdDirs) {
     let action = stat === null ? 'create' : 'unchanged';
     for (const file of files.filter((f) => f.skill === skill)) {
       const target = join(dir, ...file.relative.split('/'));
+      assertNoLinkBelow(dir, target);
       const bytes = readFileSync(file.source);
+      receipt.files.push({ path: target, sha256: sha256(bytes) });
       const current = readBytesIfExists(target);
       if (current?.equals(bytes)) continue;
+      if (current !== null) {
+        const prior = priorFiles.get(target);
+        if (prior === undefined || prior.sha256 !== sha256(current)) {
+          throw new Error(
+            `user-global install: ${target} was edited after install; refusing to overwrite it`,
+          );
+        }
+      }
       ensureDirs(plan, [dirname(target)], createdDirs);
       plan.ops.push({ kind: 'write', path: target, content: bytes });
       if (action === 'unchanged') action = 'update';
@@ -602,19 +701,23 @@ function planSkills(plan, skillsRoot, files, createdDirs) {
     const marker = Buffer.from(
       `${JSON.stringify({ source: 'idd-skill', skill })}\n`,
     );
-    const currentMarker = readBytesIfExists(join(dir, SKILL_MARKER_NAME));
+    const markerPath = join(dir, SKILL_MARKER_NAME);
+    const currentMarker = readBytesIfExists(markerPath);
     if (currentMarker === null || !currentMarker.equals(marker)) {
-      plan.ops.push({
-        kind: 'write',
-        path: join(dir, SKILL_MARKER_NAME),
-        content: marker,
-      });
+      plan.ops.push({ kind: 'write', path: markerPath, content: marker });
       if (action === 'unchanged') action = 'update';
     }
     pushChange(plan, dir, action);
+    receipt.dirs.push(dir);
   }
+  return receipt;
 }
 function planHarnessFile(plan, prior, path, wire, createdDirs) {
+  if (prior !== undefined && prior.file !== path) {
+    throw new Error(
+      `user-global install: this harness is wired at ${prior.file}; uninstall that wiring before installing to ${path}`,
+    );
+  }
   const text = readUtf8IfExists(path);
   const next = wire(text);
   if (text !== null && next.text === text) {
@@ -640,14 +743,16 @@ function markdownBody(harness, entryPath, entryText) {
   if (harness === 'claude') return [`@${entryPath}`];
   return entryText.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n');
 }
-function installHints(bundleRoot, version) {
-  const packageSpec = `@kurone-kito/idd-skill@${version}`;
+/**
+ * The install commands for the operator. The package is private, so the
+ * helper manifest's own default source is used rather than a registry spec.
+ */
+function installHints(bundleRoot) {
   const hints = [];
   for (const packageManager of ['npm', 'pnpm', 'yarn']) {
     const manifest = buildHelperRuntimeManifest({
       profile: 'user-global',
       packageManager,
-      packageSpec,
       targetRoot: bundleRoot,
     });
     const command = manifest.profiles['user-global']?.installCommand ?? '';
@@ -660,6 +765,9 @@ function harnessFile(locations, harness) {
   return harness === 'claude'
     ? join(locations.claudeRoot, 'CLAUDE.md')
     : join(locations.codexRoot, 'AGENTS.md');
+}
+function uniqueSorted(values) {
+  return [...new Set(values)].sort();
 }
 export function runUserGlobalInstall(options) {
   const locations = resolveLocations(options);
@@ -675,15 +783,35 @@ export function runUserGlobalInstall(options) {
   );
   planPayload(plan, locations, options.bundleRoot, version, createdDirs);
   planCurrentLink(plan, locations, version);
+  const priorFiles = new Map(
+    (receipt?.skillFiles ?? []).map((entry) => [entry.path, entry]),
+  );
   const files = skillFiles(options.bundleRoot);
+  const skillReceipts = [];
   if (options.harnesses.includes('claude')) {
-    planSkills(plan, locations.claudeSkillsRoot, files, createdDirs);
+    skillReceipts.push(
+      planSkills(
+        plan,
+        locations.claudeSkillsRoot,
+        files,
+        createdDirs,
+        priorFiles,
+      ),
+    );
   }
   if (
     options.harnesses.includes('codex') ||
     options.harnesses.includes('opencode')
   ) {
-    planSkills(plan, locations.agentsSkillsRoot, files, createdDirs);
+    skillReceipts.push(
+      planSkills(
+        plan,
+        locations.agentsSkillsRoot,
+        files,
+        createdDirs,
+        priorFiles,
+      ),
+    );
   }
   for (const harness of options.harnesses) {
     const path = harnessFile(locations, harness);
@@ -711,13 +839,30 @@ export function runUserGlobalInstall(options) {
       createdDirs,
     );
   }
+  const skillFileMap = new Map();
+  for (const entry of [
+    ...(receipt?.skillFiles ?? []),
+    ...skillReceipts.flatMap((s) => s.files),
+  ]) {
+    skillFileMap.set(entry.path, entry);
+  }
   const nextReceipt = {
     schema: 1,
     version,
     payloadRoot: locations.payloadRoot,
-    dirsCreated: [
-      ...new Set([...(receipt?.dirsCreated ?? []), ...createdDirs]),
-    ],
+    payloadVersions: uniqueSorted([
+      ...(receipt?.payloadVersions ?? []),
+      version,
+    ]),
+    skillDirs: uniqueSorted([
+      ...(receipt?.skillDirs ?? []),
+      ...skillReceipts.flatMap((s) => s.dirs),
+    ]),
+    skillFiles: [...skillFileMap.values()],
+    dirsCreated: uniqueSorted([
+      ...(receipt?.dirsCreated ?? []),
+      ...createdDirs,
+    ]),
     harnesses: { ...(receipt?.harnesses ?? {}), ...harnessReceipts },
   };
   const receiptContent = receiptBytes(nextReceipt);
@@ -740,7 +885,7 @@ export function runUserGlobalInstall(options) {
     version,
     locations,
     plan,
-    installHints(options.bundleRoot, version),
+    installHints(options.bundleRoot),
   );
 }
 export function runUserGlobalUninstall(options) {
@@ -748,7 +893,6 @@ export function runUserGlobalUninstall(options) {
   const version = readVersion(options.bundleRoot);
   const receipt = readReceipt(locations.receiptPath);
   const plan = { ops: [], changes: [] };
-  const entryPath = join(locations.payloadRoot, 'user-global', 'entry.md');
   const remaining = {
     ...(receipt?.harnesses ?? {}),
   };
@@ -756,21 +900,28 @@ export function runUserGlobalUninstall(options) {
     options.harnesses.includes(name),
   );
   for (const harness of options.harnesses) {
-    const path = harnessFile(locations, harness);
     const prior = receipt?.harnesses[harness];
     delete remaining[harness];
+    // Without a receipt entry, install did not wire this harness, so uninstall
+    // leaves its file alone. The recorded path is used, never the current env.
+    if (prior === undefined) {
+      pushChange(plan, harnessFile(locations, harness), 'unchanged');
+      continue;
+    }
+    const path = prior.file;
     const text = readUtf8IfExists(path);
     if (text === null) {
       pushChange(plan, path, 'unchanged');
       continue;
     }
+    const entryPath = join(locations.payloadRoot, 'user-global', 'entry.md');
     if (harness === 'opencode') {
-      const next = prior?.entryAdded
+      const next = prior.entryAdded
         ? spliceOpencodeOut(text, entryPath, prior.keyCreated, path)
         : null;
       if (next === null) {
         pushChange(plan, path, 'unchanged');
-      } else if (prior?.fileCreated && isEmptyObjectJson(next)) {
+      } else if (prior.fileCreated && isEmptyObjectJson(next)) {
         plan.ops.push({ kind: 'unlink', path });
         pushChange(plan, path, 'delete');
       } else {
@@ -782,7 +933,7 @@ export function runUserGlobalUninstall(options) {
     const next = unwireMarkdown(text, path);
     if (next === null) {
       pushChange(plan, path, 'unchanged');
-    } else if (prior?.fileCreated && next.length === 0) {
+    } else if (prior.fileCreated && next.length === 0) {
       plan.ops.push({ kind: 'unlink', path });
       pushChange(plan, path, 'delete');
     } else {
@@ -790,14 +941,16 @@ export function runUserGlobalUninstall(options) {
       pushChange(plan, path, 'remove');
     }
   }
-  if (allHarnesses) {
-    removePayloadAndSkills(plan, locations, options.bundleRoot);
+  // Payload and skills are shared by every harness, so they go only when all
+  // three are named and a receipt says what install owns.
+  if (allHarnesses && receipt !== null) {
+    removeOwned(plan, locations, receipt);
   }
   if (receipt !== null) {
     if (allHarnesses && Object.keys(remaining).length === 0) {
       plan.ops.push({ kind: 'unlink', path: locations.receiptPath });
       pushChange(plan, locations.receiptPath, 'delete');
-      for (const dir of [...receipt.dirsCreated].reverse()) {
+      for (const dir of [...receipt.dirsCreated].sort().reverse()) {
         plan.ops.push({ kind: 'rmdir', path: dir });
       }
     } else {
@@ -824,39 +977,72 @@ function isEmptyObjectJson(text) {
     return false;
   }
 }
-/** Remove the payload, the current link, and the marked skill copies. */
-function removePayloadAndSkills(plan, locations, bundleRoot) {
-  const files = skillFiles(bundleRoot);
-  for (const root of [locations.claudeSkillsRoot, locations.agentsSkillsRoot]) {
-    for (const skill of [...new Set(files.map((file) => file.skill))].sort()) {
-      const dir = join(root, skill);
-      const stat = lstatIfExists(dir);
-      if (stat === null || stat.isSymbolicLink() || !stat.isDirectory())
-        continue;
-      if (lstatIfExists(join(dir, SKILL_MARKER_NAME)) === null) continue;
-      for (const file of files.filter((f) => f.skill === skill)) {
-        plan.ops.push({
-          kind: 'unlink',
-          path: join(dir, ...file.relative.split('/')),
-        });
-      }
-      plan.ops.push({ kind: 'unlink', path: join(dir, SKILL_MARKER_NAME) });
-      plan.ops.push({ kind: 'rmdir', path: dir });
-      pushChange(plan, dir, 'remove');
+/** Whether `path` is a plain regular file with exactly `digest`. */
+function isUnchangedFile(path, digest) {
+  const stat = lstatIfExists(path);
+  if (stat === null || !stat.isFile()) return false;
+  const bytes = readBytesIfExists(path);
+  return bytes !== null && sha256(bytes) === digest;
+}
+/**
+ * Remove only what the receipt owns: skill files still byte-identical to what
+ * install wrote, their marked directories once nothing else is left in them,
+ * the owned payload versions, and the current link when it names one of them.
+ */
+function removeOwned(plan, locations, receipt) {
+  const removed = new Set();
+  for (const dir of receipt.skillDirs) {
+    const stat = lstatIfExists(dir);
+    if (stat === null || stat.isSymbolicLink() || !stat.isDirectory()) continue;
+    const marker = lstatIfExists(join(dir, SKILL_MARKER_NAME));
+    if (marker === null || marker.isSymbolicLink()) continue;
+    for (const file of receipt.skillFiles) {
+      if (!file.path.startsWith(`${dir}/`)) continue;
+      if (!isUnchangedFile(file.path, file.sha256)) continue;
+      removed.add(file.path);
+      plan.ops.push({ kind: 'unlink', path: file.path });
+      pushChange(plan, file.path, 'remove');
     }
+    const survivors = walkFiles(dir)
+      .map((rel) => join(dir, ...rel.split('/')))
+      .filter(
+        (path) => path !== join(dir, SKILL_MARKER_NAME) && !removed.has(path),
+      );
+    if (survivors.length > 0) {
+      pushChange(plan, dir, 'unchanged');
+      continue;
+    }
+    plan.ops.push({ kind: 'unlink', path: join(dir, SKILL_MARKER_NAME) });
+    // Directories install created below this skill directory go first, deepest
+    // first, so the skill directory itself can be removed last.
+    const below = receipt.dirsCreated
+      .filter((sub) => sub.startsWith(`${dir}/`))
+      .sort((a, b) => b.length - a.length);
+    for (const sub of below) plan.ops.push({ kind: 'rmdir', path: sub });
+    plan.ops.push({ kind: 'rmdir', path: dir });
+    pushChange(plan, dir, 'delete');
   }
+  const owned = new Set(
+    receipt.payloadVersions.map((name) => join(locations.dataRoot, name)),
+  );
   const current = locations.payloadRoot;
   const currentStat = lstatIfExists(current);
   if (currentStat?.isSymbolicLink()) {
     const target = resolve(dirname(current), readlinkSync(current));
-    if (lstatIfExists(join(target, PAYLOAD_MARKER_NAME)) !== null) {
+    if (owned.has(target)) {
       plan.ops.push({ kind: 'unlink', path: current });
       pushChange(plan, current, 'delete');
-      plan.ops.push({ kind: 'removeTree', path: target });
-      pushChange(plan, target, 'delete');
     }
   }
+  for (const dir of owned) {
+    const stat = lstatIfExists(dir);
+    if (stat === null || stat.isSymbolicLink() || !stat.isDirectory()) continue;
+    if (lstatIfExists(join(dir, PAYLOAD_MARKER_NAME)) === null) continue;
+    plan.ops.push({ kind: 'removeTree', path: dir });
+    pushChange(plan, dir, 'delete');
+  }
 }
+/** Flush the plan: dry run reports it, apply runs it. */
 function finish(options, mode, version, locations, plan, hints) {
   const changed = plan.changes.filter((c) => c.action !== 'unchanged').length;
   if (!options.dryRun) applyOps(plan.ops);

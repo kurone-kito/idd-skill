@@ -415,3 +415,200 @@ test('a single-harness install wires only that harness and its shared skills (#3
     box.cleanup();
   }
 });
+
+test('refuses an existing version directory that lacks the payload marker (#3825)', () => {
+  const box = sandbox();
+  try {
+    const versionDir = join(box.root, 'data', 'idd-skill', '0.14.0');
+    writeFixture(join(versionDir, 'mine.md'), 'user content');
+    assert.throws(
+      () => runUserGlobalInstall(box.options()),
+      /exists without the \.idd-user-global-payload marker/,
+    );
+    assert.equal(
+      readFileSync(join(versionDir, 'mine.md'), 'utf8'),
+      'user content',
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('refuses to write a skill through a symlink inside its directory (#3825)', () => {
+  const box = sandbox();
+  try {
+    const skillDir = join(box.home, '.claude', 'skills', 'issue-authoring');
+    writeFixture(join(skillDir, '.idd-user-global'), '{}\n');
+    const outside = join(box.root, 'outside');
+    mkdirSync(outside, { recursive: true });
+    mkdirSync(join(skillDir, 'references'), { recursive: true });
+    symlinkSync(outside, join(skillDir, 'references', 'contract.md'));
+    assert.throws(
+      () => runUserGlobalInstall(box.options(['claude'])),
+      /symlink inside a skill directory/,
+    );
+    assert.deepEqual(readdirSync(outside), []);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('uninstall without a receipt removes no payload and no skills (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options());
+    rmSync(join(box.root, 'data', 'idd-skill', 'user-global-receipt.json'));
+    runUserGlobalUninstall(box.options());
+    assert.ok(existsSync(box.payloadRoot));
+    assert.ok(
+      existsSync(
+        join(box.home, '.claude', 'skills', 'issue-authoring', 'SKILL.md'),
+      ),
+    );
+    assert.ok(readFileSync(box.claudeFile, 'utf8').includes(BEGIN_MARKER));
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('uninstall keeps a skill file the user edited after install (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options());
+    const edited = join(
+      box.home,
+      '.claude',
+      'skills',
+      'issue-authoring',
+      'SKILL.md',
+    );
+    writeFileSync(edited, `${readFileSync(edited, 'utf8')}\nuser note\n`);
+    runUserGlobalUninstall(box.options());
+    assert.ok(readFileSync(edited, 'utf8').endsWith('user note\n'));
+    // The unedited copies go; the empty references/ directory goes with them.
+    assert.equal(
+      existsSync(
+        join(box.home, '.claude', 'skills', 'issue-authoring', 'references'),
+      ),
+      false,
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('uninstall removes every payload version the receipt records (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options());
+    const older = join(box.root, 'data', 'idd-skill', '0.13.0');
+    writeFixture(join(older, '.idd-user-global-payload'), '{}\n');
+    const receiptPath = join(
+      box.root,
+      'data',
+      'idd-skill',
+      'user-global-receipt.json',
+    );
+    const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as {
+      payloadVersions: string[];
+    };
+    receipt.payloadVersions.push('0.13.0');
+    writeFileSync(receiptPath, JSON.stringify(receipt));
+    runUserGlobalUninstall(box.options());
+    assert.equal(existsSync(older), false);
+    assert.equal(existsSync(box.payloadRoot), false);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('uninstall leaves a Markdown block that the receipt does not name (#3825)', () => {
+  const box = sandbox();
+  try {
+    const block = `${BEGIN_MARKER}\n@/elsewhere/entry.md\n<!-- idd-skill:user-global end -->\n`;
+    writeFixture(box.claudeFile, `# mine\n\n${block}`);
+    runUserGlobalUninstall(box.options(['claude']));
+    assert.equal(readFileSync(box.claudeFile, 'utf8'), `# mine\n\n${block}`);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('re-install refuses to overwrite a skill file the user edited (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options());
+    const edited = join(
+      box.home,
+      '.claude',
+      'skills',
+      'issue-authoring',
+      'SKILL.md',
+    );
+    writeFileSync(edited, `${readFileSync(edited, 'utf8')}\nuser note\n`);
+    assert.throws(
+      () => runUserGlobalInstall(box.options()),
+      /edited after install/,
+    );
+    assert.ok(readFileSync(edited, 'utf8').endsWith('user note\n'));
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('re-install refuses a version directory that holds files install did not write (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options());
+    writeFixture(
+      join(box.root, 'data', 'idd-skill', '0.14.0', 'mine.md'),
+      'user content',
+    );
+    assert.throws(
+      () => runUserGlobalInstall(box.options()),
+      /holds files install did not write/,
+    );
+    assert.equal(
+      readFileSync(
+        join(box.root, 'data', 'idd-skill', '0.14.0', 'mine.md'),
+        'utf8',
+      ),
+      'user content',
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('install refuses a harness whose recorded wiring is at another path (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options(['claude']));
+    const moved = {
+      ...box.options(['claude']),
+      env: { ...box.options().env, CLAUDE_CONFIG_DIR: join(box.root, 'alt') },
+    };
+    assert.throws(
+      () => runUserGlobalInstall(moved),
+      /uninstall that wiring before installing/,
+    );
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('uninstall removes the wiring at the recorded path, not at the current env path (#3825)', () => {
+  const box = sandbox();
+  try {
+    runUserGlobalInstall(box.options(['claude']));
+    const different = {
+      ...box.options(['claude']),
+      env: { ...box.options().env, CLAUDE_CONFIG_DIR: join(box.root, 'alt') },
+    };
+    runUserGlobalUninstall(different);
+    assert.equal(existsSync(box.claudeFile), false);
+    assert.equal(existsSync(join(box.root, 'alt', 'CLAUDE.md')), false);
+  } finally {
+    box.cleanup();
+  }
+});
