@@ -154,11 +154,10 @@ node scripts/branch-name.mjs --number <issue-number> --title <issue-title>
 <profile-selected-branch-name-command> --number <issue-number> --title <issue-title>
 ```
 
-Resolve `<profile-selected-branch-name-command>` the same way as A5(a)
-above. It prints `issue/<number>-<slug>` and implements the algorithm
-below exactly. The written algorithm remains the canonical spec and
-fallback; use it when the helper is unavailable or its output is
-malformed:
+Resolve `<profile-selected-branch-name-command>` as in A5(a). The helper
+prints `issue/<number>-<slug>` and implements the algorithm below exactly;
+the written algorithm is the canonical spec and fallback when the helper is
+unavailable or malformed:
 
 1. Convert the issue title to lowercase.
 2. Replace every character outside ASCII `a-z` and `0-9` with `-`.
@@ -247,9 +246,8 @@ Determine `{branch-name}`:
   branch name from the inheritable claim comment or trusted
   forced-handoff evidence identified in pre-check (d). Do not compute a
   new name.
-- **Fresh claim**: compute a new name using the IDD naming convention:
-  `issue/<number>-<slug>` where `<slug>` follows the deterministic title
-  normalization algorithm from pre-check (e).
+- **Fresh claim**: compute a new name as `issue/<number>-<slug>` per
+  the normalization algorithm in pre-check (e).
 
 Generate a fresh `{claim-id}` — **except in forced-handoff recovery**, where
 the successor adopts the marker's pre-recorded `new-agent-id` / `new-claim-id`
@@ -298,19 +296,15 @@ Fresh-claim order, worktree first. `--record-tokens` and `--acquire` take
    `idd-work.instructions.md`.
 
 **Nothing appended after the note.** A `claimed-by` / `unclaimed-by`
-marker body must be exactly the HTML comment token followed by, at
-most, the single italic note from Claim format above — never more. Any
-deviation
-— trailing content, a missing note, or a note that fails the required
-grammar — fails the parser's whole-body anchor, so the comment is not
-recognized as a live claim event. Such a deviation is still
-**detectable** as a malformed marker
-(`detectMalformedOperationalMarker` in `marker-helpers.mts`) rather
-than reading as unremarkable "other" content, but detection is
-diagnostic only: never salvage a malformed post as valid — always
-re-post a clean marker with nothing appended. A marker merely quoted
-or embedded mid-prose (not the literal first bytes of the body) is
-never treated as live or flagged; anti-spoofing is unaffected.
+marker body must be exactly the HTML comment token, followed by at most
+the single italic note from Claim format above. Trailing content, a
+missing note, or a note that fails the grammar fails the parser's
+whole-body anchor, so the comment is not a live claim event. Such a
+malformed marker is still **detectable** (`detectMalformedOperationalMarker`
+in `marker-helpers.mts`), but detection is diagnostic only: never salvage
+it; re-post a clean marker with nothing appended. A marker merely quoted
+or embedded mid-prose (not the literal first bytes of the body) is never
+treated as live or flagged.
 
 **Also post an [activation-nonce marker](#activation-nonce-format)** for
 every fresh `{claim-id}`.
@@ -385,13 +379,11 @@ with the four fields defined in `docs/idd-helper-scripts.md`.
 
 ## Heartbeat posting
 
-When posting a heartbeat (the issue is already claimed by this current
-session and you are extending its stale clock), copy the `{branch}`
-field **verbatim** from the original `claimed-by` comment — do not
-recompute or derive a new name. The heartbeat's `{claim-id}` and
-`{agent-id}` must match the original claim exactly, and `{branch}` must
-match exactly too, to satisfy the heartbeat branch invariant (rule 3.5
-in this file's Claim-state parsing section).
+When posting a heartbeat (extending the stale clock of this session's own
+live claim), copy the `{branch}` field **verbatim** from the original
+`claimed-by` comment — do not recompute or derive a new name — and keep
+`{agent-id}` and `{claim-id}` identical too. Any mismatch fails the
+heartbeat rules in Claim-state parsing (rules 3 and 3.5).
 
 ## Claim verification
 
@@ -447,7 +439,8 @@ pre-recorded `new-agent-id` / `new-claim-id` pair (Claim-state parsing
 rule 7). Adopt **both fields verbatim** as your own `{agent-id}` /
 `{claim-id}` for the rest of the run — including `--agent-id` and
 `--claim-id` at F2/F3's `pre-merge-readiness` — instead of minting a
-fresh claim-id or keeping your own native agent-id; no separate
+fresh claim-id, keeping your own native agent-id, or reusing the displaced
+`{claim-id}`; no separate
 `claimed-by supersedes: none` post is required for the transfer itself.
 
 **Adopt-verbatim is still an activation**: immediately before this nonce,
@@ -465,10 +458,8 @@ pair still owns claim and nonce (or none competes), post/verify
 activation); else leave the successor claim; then take the
 already-claimed/Discover fallback (A0-T stops).
 
-Always use the assigned pair verbatim: never invent `claimed-by` or reuse the
-displaced `{claim-id}`. A native agent-id that is not the assigned value fails
-later heartbeat or F2/F3 checks. Cite trusted forced-handoff evidence in the
-issue digest or resume report's `Authoritative by` field.
+Cite trusted forced-handoff evidence in the issue digest or resume report's
+`Authoritative by` field.
 
 **The successor claim is sticky**, not a one-shot unlock: forced-handoff
 re-derives the adopted pair as the active claim on every resolution
@@ -507,8 +498,7 @@ closed issue.
 ### Orchestrator delegation
 
 An orchestrating session that delegates a verified claim reads
-`claim-orchestrator.instructions.md`
-before it writes the delegation brief. That file holds the delegation rules.
+`claim-orchestrator.instructions.md` before it writes the delegation brief.
 
 ### Hide displaced claim chain on takeover
 
@@ -714,8 +704,7 @@ Treat trusted legacy comments as **migration-only** inputs:
   (distributed default: `24 h`): younger → claimed by another live
   session, even when `{agent-id}` matches — apply the
   **already-claimed routing** above; older → stale, proceed and replace
-  it with a new-format claim. A matching legacy agent ID is not enough
-  to prove same live-session ownership.
+  it with a new-format claim.
 - Then immediately post a new-format `claimed-by` comment with a fresh
   `{claim-id}` and visible note before any further side effects, using
   `supersedes: none` for that one-time migration claim (the legacy
