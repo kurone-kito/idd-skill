@@ -349,8 +349,10 @@ jobs:
     runs-on: ubuntu-slim
     # No observed run history yet (new workflow). Bounds pathological
     # hangs with the same headroom as idd-doctor.yml's own estimate
-    # until real durations are available to tighten this.
-    timeout-minutes: 10
+    # until real durations are available to tighten this. #3944 raised it to
+    # 14 minutes so the 10-minute Copilot re-review poll and collection fit;
+    # the runner ends a job at 15 minutes, so this stays below that.
+    timeout-minutes: 14
     # kurone-kito/idd-skill#2657 (Codex review, PR #2895): sequenced after
     # the self-waiver job below so an allowlisted PR's own bootstrap
     # marker is guaranteed to exist (posted or definitively not posted)

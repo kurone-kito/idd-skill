@@ -29,6 +29,7 @@ import {
   hasTrustedClaimMarkerHistory,
   hasTrustedHeadApproval,
   isSoleCopilotNotReviewedYetReason,
+  isSoleStaleHeadCopilotReviewReason,
   parseArgs,
   pendingReviewFingerprint,
   pickResolvingClaimEvents,
@@ -9116,4 +9117,189 @@ test('stamped disposition (#4007): the GitHub notice leads with the stamped item
     .split('\n')
     .find((line) => line.startsWith('::notice::'));
   assert.match(notice ?? '', /name a file or line/);
+});
+
+// --- #3944: a stale head polls only when a Copilot re-review was requested ---
+
+test('isSoleStaleHeadCopilotReviewReason: true for a stale head with no other reason', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] }),
+    baseOptions(),
+  );
+  assert.equal(verdict.pending, true);
+  assert.equal(verdict.review.found, true);
+  assert.equal(isSoleStaleHeadCopilotReviewReason(verdict), true);
+  assert.equal(isSoleCopilotNotReviewedYetReason(verdict), false);
+});
+
+test('isSoleStaleHeadCopilotReviewReason: false when the verdict is ready', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview()] }),
+    baseOptions(),
+  );
+  assert.equal(verdict.ready, true);
+  assert.equal(isSoleStaleHeadCopilotReviewReason(verdict), false);
+});
+
+test('isSoleStaleHeadCopilotReviewReason: false when the bot has never reviewed', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [] }),
+    baseOptions(),
+  );
+  assert.equal(isSoleStaleHeadCopilotReviewReason(verdict), false);
+});
+
+test('isSoleStaleHeadCopilotReviewReason: false when an unrelated reason accompanies the stale one', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] }),
+    baseOptions({
+      headCommittedAt: OLD,
+      headObservedAt: OLD,
+      waiverMode: 'disabled',
+    }),
+  );
+  assert.ok(verdict.reasons.length > 1);
+  assert.equal(isSoleStaleHeadCopilotReviewReason(verdict), false);
+});
+
+test('runAdvisoryConvergenceWithPoll: a stale head whose re-review was requested polls until the review lands', () => {
+  const requestedFor: string[] = [];
+  const { deps, collectCalls } = pollDepsFor(
+    [
+      baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] }),
+      baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] }),
+      baseInputs({ reviews: [copilotReview()] }),
+    ],
+    baseOptions(),
+  );
+  deps.copilotReviewRequestCoversHead = (_argv, prHeadSha) => {
+    requestedFor.push(prHeadSha);
+    return true;
+  };
+  const { sleep, now, calls } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    {
+      maxWaitMs: DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
+      pollIntervalMs: 7_500,
+      sleep,
+      now,
+    },
+  );
+  assert.equal(verdict?.ready, true);
+  assert.equal(exitCode, 0);
+  // 1 initial collection + 2 re-checks; the review lands on the third.
+  assert.equal(collectCalls(), 3);
+  assert.equal(calls(), 2);
+  // The timeline is read once for the head, not once per tick.
+  assert.deepEqual(requestedFor, [HEAD]);
+});
+
+test('runAdvisoryConvergenceWithPoll: a stale head whose re-review never lands fails once the 10-minute ceiling is reached', () => {
+  const { deps } = pollDepsFor(
+    [baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] })],
+    baseOptions(),
+  );
+  deps.copilotReviewRequestCoversHead = () => true;
+  const { sleep, now, sleptMs } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    {
+      maxWaitMs: DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
+      pollIntervalMs: 7_500,
+      sleep,
+      now,
+    },
+  );
+  assert.equal(verdict?.ready, false);
+  assert.equal(exitCode, 1);
+  assert.ok(
+    verdict?.reasons.some((reason) =>
+      reason.includes('does not cover current HEAD'),
+    ),
+  );
+  assert.equal(
+    sleptMs().reduce((total, ms) => total + ms, 0),
+    600_000,
+  );
+});
+
+test('runAdvisoryConvergenceWithPoll: a stale head with no re-review request fails at once', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] })],
+    baseOptions(),
+  );
+  deps.copilotReviewRequestCoversHead = () => false;
+  const { sleep, now, calls } = fakeClock();
+  const { exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    {
+      maxWaitMs: DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
+      pollIntervalMs: 7_500,
+      sleep,
+      now,
+    },
+  );
+  assert.equal(exitCode, 1);
+  assert.equal(collectCalls(), 1);
+  assert.equal(calls(), 0);
+});
+
+test('runAdvisoryConvergenceWithPoll: a stale head without the request check configured fails at once', () => {
+  const { deps, collectCalls } = pollDepsFor(
+    [baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] })],
+    baseOptions(),
+  );
+  const { sleep, now, calls } = fakeClock();
+  const { exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    {
+      maxWaitMs: DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
+      pollIntervalMs: 7_500,
+      sleep,
+      now,
+    },
+  );
+  assert.equal(exitCode, 1);
+  assert.equal(collectCalls(), 1);
+  assert.equal(calls(), 0);
+});
+
+test('runAdvisoryConvergenceWithPoll: a stale head with an extra blocking reason never consults the request check', () => {
+  const { deps } = pollDepsFor(
+    [baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] })],
+    baseOptions({
+      headCommittedAt: OLD,
+      headObservedAt: OLD,
+      waiverMode: 'disabled',
+    }),
+  );
+  let consulted = false;
+  deps.copilotReviewRequestCoversHead = () => {
+    consulted = true;
+    return true;
+  };
+  const { sleep, now, calls } = fakeClock();
+  const { verdict, exitCode } = runAdvisoryConvergenceWithPoll(
+    ['--pr', '1234', '--assert'],
+    deps,
+    {
+      maxWaitMs: DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS,
+      pollIntervalMs: 7_500,
+      sleep,
+      now,
+    },
+  );
+  assert.ok((verdict?.reasons.length ?? 0) > 1);
+  assert.equal(exitCode, 1);
+  assert.equal(consulted, false);
+  assert.equal(calls(), 0);
+});
+
+test('DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS is the 10-minute ceiling #3944 decided', () => {
+  assert.equal(DEFAULT_COPILOT_REVIEW_POLL_MAX_WAIT_MS, 600_000);
 });

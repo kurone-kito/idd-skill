@@ -412,7 +412,7 @@
         "copilotReviewPollMaxWait": {
           "type": "string",
           "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
-          "description": "ISO 8601 duration ceiling, across all re-checks, for the same bounded poll. Optional; defaults to `PT60S`, matching the pre-#2333 hardcoded 60000ms ceiling."
+          "description": "ISO 8601 duration ceiling, across all re-checks, for the same bounded poll. Optional; defaults to `PT10M` (#3944: a re-review of a new head needs 3 to 7 minutes, so the former `PT60S` ceiling was raised)."
         }
       },
       "description": "Container for the idd-advisory-convergence required check's own short, bounded Copilot-review poll (#2333). Optional; omitting any nested key keeps that key's own distributed default."
