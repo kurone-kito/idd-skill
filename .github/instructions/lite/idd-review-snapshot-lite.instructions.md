@@ -60,8 +60,8 @@ Run AW1 with `--pr`, `--claim-id`, `--agent-id`,
 `--pr` (plus `--global-only` if global-only; see
 `docs/idd-helper-scripts.md`). `requiredChecks.status: success`;
 `no-required-checks` only with non-empty all-success `checks[]`, or with
-`allowedByPolicySetting` and empty `checks[]`; `pending`/`failing`/
-`missing` defer
+`allowedByPolicySetting: ciGate.allowNoRequiredChecksInGlobalOnly` and
+empty `checks[]`; `pending`/`failing`/`missing` defer
 Step 2. Require `outcome: SATISFIED`, or `CAP_EXHAUSTED` with
 `capExhaustedRoute: phase-specific`; otherwise stop/ask. Require
 `copilotRecovery.activeClaimProvided: true`; same-head:
@@ -142,7 +142,7 @@ require each required `(checkName, workflowName)`
 producer to pass for `{head-SHA}` and verify advisory identity/event;
 raw names are insufficient. Otherwise skip Step 2 and use E15/E14.
 
-The rendered body is exactly:
+Rendered body:
 
 ```markdown
 <!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} -->
@@ -250,8 +250,7 @@ after posting and return to E1 if it changed. Rendered body:
 _{agent-id}: critique baseline — IDD automation marker. Do not edit._
 ```
 
-Match the PR body's language, same rule as the watermark; nothing may
-follow the note here either.
+Match the PR body's language; nothing may follow the note here either.
 
 ## E3 — Empty/non-empty routing
 
