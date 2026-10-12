@@ -12,8 +12,7 @@ The shared CI wait defaults are listed in
 [IDD policy constants](../../docs/policy-constants.md). Resolve via
 `.github/idd/config.json` `ciWait.runningTimeout`,
 `ciWait.generationTimeout`, and `ciWait.rerunPolicy` when present and
-valid; otherwise keep the distributed defaults (`PT30M`, `PT10M`,
-`rerun-once`).
+valid; otherwise keep the distributed defaults.
 
 When helper support is installed, use the profile-selected ci-wait
 policy helper command as the canonical read-only policy resolver.
@@ -401,8 +400,7 @@ See [REST](../../docs/idd-helper-scripts.md#rest).
   before a heavy local command (a full build, test, lint, or doctor
   run) expected to run long, rather than discovering the
   auto-background only after the fact (issue `#2933`). Never blindly
-  re-issue a
-  heavy local command (a full build, test, or lint run) that
+  re-issue a heavy local command that
   auto-backgrounds past the tool's default timeout — being idempotent
   does not make it safe to run twice at once; two concurrent instances
   can still collide on shared output (e.g. a `coverage/` directory).
@@ -438,8 +436,7 @@ See [REST](../../docs/idd-helper-scripts.md#rest).
   outside the full build/test suite, instead of re-running everything.
 
 This trims only wasteful dimensions (context re-read, CI minutes) —
-review rounds stay full. Same discipline applies to the advisory-wait
-and review-fix wait points.
+review rounds stay full.
 
 **Known residual risk**: workers can still stall here — expected and
 budgeted. Recovery: one message citing live state (PR number, check
