@@ -10,8 +10,9 @@ the local CLI. E14's timing defaults live in
 
 Apply the
 [shared claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
-before E9, before filing the E10 follow-up, the E12 push, and each E13/E14/E15 GitHub side effect
-(reply, resolve, reviewer request, hold comment, or digest update).
+before E9, before filing the E10 follow-up, the E12 push, and each
+E13/E14/E15 GitHub side effect (reply, resolve, reviewer request, hold
+comment, or digest update).
 
 ## E9 — Fix accepted issues
 
@@ -98,20 +99,20 @@ skipping this pass — always run it before E11. Pushed and skipped
 one? Disclose on the PR, name the round(s), run E10 on the
 accumulated diff to a clean pass, then return to E1.
 
-**E10 per-issue pass cap (the one exception to the paragraph above).**
-Count every E10 pass on the issue across E9 batches; this count is
-separate from the per-batch count above. Once
-`critiqueLoop.e10MaxPasses` passes have run (distributed default `2`), no
-High or Medium Accepted finding is open, and **fix-validate** has passed on
-the branch's current HEAD, stop the loop without fixing the remaining Low
-Accepted findings. File one follow-up issue (do not append) with one AC
-bullet per residual Low, exactly one `Refs #<originating-issue>` line, and
-the defer-source marker that E6 uses for `review-fix-loop-cutoff`
-(`idd-review-triage.instructions.md`); the follow-up then takes
-issue-authoring's Stage 2 narrow
-auto-release, not the Stage 1 hold. Re-run the claim revalidation gate (`idd-overview-core.instructions.md`) immediately before filing. Then continue to E11. The cap never
-applies while a High or Medium Accepted finding is open. If the count cannot be
-established, the cap is not reached.
+**E10 per-issue pass cap (the one exception to the paragraph above).** Count
+every E10 pass on the issue across E9 batches; this count is separate from the
+per-batch count above. Once `critiqueLoop.e10MaxPasses` passes have run
+(distributed default `2`), no High or Medium Accepted finding is open, and
+**fix-validate** has passed on the branch's current HEAD, stop the loop without
+fixing the remaining Low Accepted findings. File one follow-up issue (do not
+append) with one AC bullet per residual Low, exactly one
+`Refs #<originating-issue>` line, and the defer-source marker that E6 uses for
+`review-fix-loop-cutoff` (`idd-review-triage.instructions.md`); the follow-up
+then takes issue-authoring's Stage 2 narrow auto-release, not the Stage 1 hold.
+Re-run the claim revalidation gate (`idd-overview-core.instructions.md`)
+immediately before filing. Then continue to E11. The cap never applies while a
+High or Medium Accepted finding is open. If the count cannot be established, the
+cap is not reached.
 
 **Round-count heuristic for genuinely-new findings (Tier 1).** The guard above
 covers a _repeating_ finding; a different pattern is each round
