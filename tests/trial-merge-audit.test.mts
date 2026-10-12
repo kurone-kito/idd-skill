@@ -169,6 +169,8 @@ test('isToolingPath names the overlay set and nothing else', () => {
     '.pnpmfile.cjs',
     '.github/idd/config.json',
     '.husky/pre-commit',
+    'node_modules/.bin/tsc',
+    'packages/x/node_modules/dep/index.js',
   ]) {
     assert.equal(isToolingPath(path), true, path);
   }

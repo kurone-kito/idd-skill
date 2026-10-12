@@ -62,6 +62,9 @@ export function isToolingPath(path) {
   if (TOOLING_FILES.has(path)) return true;
   // A workspace package manifest is an install input at any depth.
   if (path.endsWith('/package.json')) return true;
+  // A node_modules tree committed by the PR would be read by the install and
+  // the commands, so it counts as tooling at any depth (review, 2026-10-12).
+  if (path.split('/').includes('node_modules')) return true;
   if (TOOLING_DIRS.some((dir) => path.startsWith(dir))) return true;
   return TOOLING_ROOT_PATTERNS.some((pattern) => pattern.test(path));
 }
@@ -123,6 +126,35 @@ const FETCH_TIMEOUT_MS = 180_000;
  * output buffer, which would make the listing read as empty or fail.
  */
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+/**
+ * One budget for the whole deepen sequence of the merge-base retry. The
+ * sequence runs under the clone-wide lock, so it must not multiply the fetch
+ * timeout by the number of steps (review, 2026-10-12).
+ */
+const MERGE_BASE_DEEPEN_BUDGET_MS = 120_000;
+/**
+ * Splits paths into checkout argument lists that stay well under Windows'
+ * command-line limit. The count cap alone does not bound a long path list.
+ */
+function batchPaths(paths, maxCount = 500, maxChars = 8000) {
+  const batches = [];
+  let current = [];
+  let chars = 0;
+  for (const path of paths) {
+    if (
+      current.length > 0 &&
+      (current.length >= maxCount || chars + path.length > maxChars)
+    ) {
+      batches.push(current);
+      current = [];
+      chars = 0;
+    }
+    current.push(path);
+    chars += path.length + 1;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
 function git(cwd, hooksDir, args, env, timeout) {
   const result = spawnSync(
     'git',
@@ -335,26 +367,32 @@ function audit(args) {
     // shallow clone the base can be missing, and merge-tree would then report
     // a conflict that is not there. The bounded deepen steps run first, under
     // this lock, the same way branch-conflict-state runs them.
+    const deepenDeadline = Date.now() + MERGE_BASE_DEEPEN_BUDGET_MS;
     mergeBase =
       resolveMergeBaseWithRetry(
         () =>
           git(repo, hooksDir, ['merge-base', baseSha, headSha]).stdout.trim(),
-        (step) =>
-          git(
-            repo,
-            hooksDir,
-            [
-              'fetch',
-              '--no-write-fetch-head',
-              '--no-tags',
-              ...MERGE_BASE_FETCH_STEPS[step],
-              args.fetchUrl,
-              pull.baseRefName,
-              `pull/${pr}/head`,
-            ],
-            undefined,
-            FETCH_TIMEOUT_MS,
-          ).status === 0,
+        (step) => {
+          const remaining = deepenDeadline - Date.now();
+          if (remaining <= 0) return false;
+          return (
+            git(
+              repo,
+              hooksDir,
+              [
+                'fetch',
+                '--no-write-fetch-head',
+                '--no-tags',
+                ...MERGE_BASE_FETCH_STEPS[step],
+                args.fetchUrl,
+                pull.baseRefName,
+                `pull/${pr}/head`,
+              ],
+              undefined,
+              Math.min(FETCH_TIMEOUT_MS, remaining),
+            ).status === 0
+          );
+        },
         MERGE_BASE_FETCH_STEPS.length,
       ) ?? '';
     if (mergeBase.length === 0) {
@@ -450,13 +488,8 @@ function audit(args) {
       rmSync(join(tmp, path), { force: true });
     }
   }
-  for (let i = 0; i < baseTooling.length; i += 500) {
-    const overlay = git(tmp, hooksDir, [
-      'checkout',
-      baseSha,
-      '--',
-      ...baseTooling.slice(i, i + 500),
-    ]);
+  for (const batch of batchPaths(baseTooling)) {
+    const overlay = git(tmp, hooksDir, ['checkout', baseSha, '--', ...batch]);
     if (overlay.status !== 0) {
       return emptyResult('overlay-failed', {
         prHeadSha: headSha,
@@ -472,6 +505,9 @@ function audit(args) {
     eventPath,
     JSON.stringify({ pull_request: { base: { sha: baseSha } } }),
   );
+  // Any node_modules the PR committed is already removed as tooling above; a
+  // fresh install starts from a directory with no node_modules at all.
+  rmSync(join(tmp, 'node_modules'), { recursive: true, force: true });
   const install = args.runInstall(tmp, INSTALL_ARGV);
   if (install.error !== undefined || install.exitCode !== 0) {
     return {
