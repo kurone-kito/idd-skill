@@ -1102,8 +1102,9 @@ inheritable branch whose commits beyond the base must be kept. The
 fresh-branch order in `idd-claim.instructions.md` creates a new branch from
 its base ref and does not apply. The full claim file's fresh-branch order
 starts from `origin/{development-branch}`, and the lite file's starts from
-`origin/main`. This sequence attaches the existing branch instead, and its
-history base is `origin/{development-branch}`. Observed 2026-10-12,
+`origin/main`. This sequence attaches the existing branch instead and chooses
+no new base ref: the branch keeps its own history, which may be based on
+`origin/main` or another ref. Observed 2026-10-12,
 `kurone-kito/idd-skill#3708` (PR `#4030`): the claimant attached the existing
 PR branch as a sibling worktree before the claim, and the lite order
 succeeded.
