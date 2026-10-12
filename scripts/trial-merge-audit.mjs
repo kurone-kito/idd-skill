@@ -20,7 +20,11 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { resolveFetchOrigin } from './branch-conflict-state.mjs';
+import {
+  MERGE_BASE_FETCH_STEPS,
+  resolveFetchOrigin,
+  resolveMergeBaseWithRetry,
+} from './branch-conflict-state.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { acquireCloneLock, releaseCloneLock } from './clone-lock.mjs';
 import { ghText, resolveGhOwnerRepo } from './gh-exec.mjs';
@@ -114,6 +118,11 @@ function sanitizedEnv() {
 }
 /** A fetch that stalls is cut off, so it cannot hold the clone lock forever. */
 const FETCH_TIMEOUT_MS = 180_000;
+/**
+ * A file listing of a large repository exceeds spawnSync's 1 MiB default
+ * output buffer, which would make the listing read as empty or fail.
+ */
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 function git(cwd, hooksDir, args, env, timeout) {
   const result = spawnSync(
     'git',
@@ -123,6 +132,7 @@ function git(cwd, hooksDir, args, env, timeout) {
       encoding: 'utf8',
       env: env ?? sanitizedEnv(),
       timeout,
+      maxBuffer: GIT_MAX_BUFFER,
     },
   );
   return {
@@ -272,7 +282,7 @@ function audit(args) {
   }
   const headSha = pull.headRefOid;
   const baseSha = pull.baseRefOid;
-  // Lock scope 1: fetch, merge-tree, commit-tree and worktree add.
+  // Lock scope 1: fetch, merge-base, merge-tree, commit-tree and worktree add.
   let lock;
   try {
     lock = acquireCloneLock(repo, args.agentId, args.lockTimeoutMs);
@@ -283,6 +293,7 @@ function audit(args) {
     });
   }
   let trialCommit = '';
+  let mergeBase = '';
   try {
     const fetched = git(
       repo,
@@ -319,6 +330,38 @@ function audit(args) {
       ) {
         return emptyResult('fetch-failed', { prHeadSha: headSha, baseSha });
       }
+    }
+    // Decision 2 (2026-10-12): resolve the merge base before merge-tree. On a
+    // shallow clone the base can be missing, and merge-tree would then report
+    // a conflict that is not there. The bounded deepen steps run first, under
+    // this lock, the same way branch-conflict-state runs them.
+    mergeBase =
+      resolveMergeBaseWithRetry(
+        () =>
+          git(repo, hooksDir, ['merge-base', baseSha, headSha]).stdout.trim(),
+        (step) =>
+          git(
+            repo,
+            hooksDir,
+            [
+              'fetch',
+              '--no-write-fetch-head',
+              '--no-tags',
+              ...MERGE_BASE_FETCH_STEPS[step],
+              args.fetchUrl,
+              pull.baseRefName,
+              `pull/${pr}/head`,
+            ],
+            undefined,
+            FETCH_TIMEOUT_MS,
+          ).status === 0,
+        MERGE_BASE_FETCH_STEPS.length,
+      ) ?? '';
+    if (mergeBase.length === 0) {
+      return emptyResult('merge-base-unreachable', {
+        prHeadSha: headSha,
+        baseSha,
+      });
     }
     const merged = git(repo, hooksDir, [
       'merge-tree',
@@ -379,11 +422,6 @@ function audit(args) {
   // Overlay base-tip tooling. A tooling path that the PR changed is replaced
   // by the base tip's copy, and a tooling path the base lacks is removed.
   // Every such path is listed as toolingChanged.
-  const mergeBaseRead = git(repo, hooksDir, ['merge-base', baseSha, headSha]);
-  const mergeBase = mergeBaseRead.stdout.trim();
-  if (mergeBaseRead.status !== 0 || mergeBase.length === 0) {
-    return emptyResult('merge-base-failed', { prHeadSha: headSha, baseSha });
-  }
   const changed = git(repo, hooksDir, [
     'diff',
     '--no-renames',
@@ -450,9 +488,13 @@ function audit(args) {
     };
   }
   // The commands always run, even when tooling changed, as evidence against
-  // base-tip tooling. A command whose script is absent on the base tip fails.
+  // base-tip tooling. A command whose script is absent on the base tip is
+  // recorded with a null exit code and passed false (decision 1, 2026-10-12),
+  // and the verdict then names commands-unavailable.
+  const absent = [];
   const commands = FIXED_COMMANDS.map((command) => {
     if (!scriptPresent(tmp, command.script)) {
+      absent.push(command.id);
       return {
         id: command.id,
         argv: command.argv,
@@ -475,6 +517,9 @@ function audit(args) {
   if (toolingChanged.length > 0) {
     verdict = 'not-run';
     reasons.push('tooling-changed');
+  } else if (absent.length > 0) {
+    verdict = 'not-run';
+    reasons.push('commands-unavailable');
   } else if (commands.every((command) => command.passed)) {
     verdict = 'passed';
   } else {

@@ -7033,6 +7033,16 @@ same as `AW4`/`AW5`.
   `.github/idd/config.json`. A pull request that changes any of them gets
   `not-run` with reason `tooling-changed`, and the commands still run against
   base-tip tooling as evidence only.
+- The merge base is resolved before `merge-tree`, under the clone lock, with
+  the bounded deepen steps `MERGE_BASE_FETCH_STEPS` from
+  `branch-conflict-state`. If it stays unreachable, for example in a shallow
+  clone, the verdict is `not-run` with reason `merge-base-unreachable`, never
+  `content-conflict`.
+- A command whose script is absent from the base tip records a null
+  `exitCode` and `passed: false`. When `toolingChanged` is empty, the verdict
+  is `not-run` with reason `commands-unavailable`, even when another command
+  also fails. An adopter repository without these scripts gets that verdict
+  rather than `failed`.
 - Install is a fresh, frozen-lockfile install with lifecycle scripts
   disabled, run in the temporary worktree. No `node_modules` is linked from
   the checkout.

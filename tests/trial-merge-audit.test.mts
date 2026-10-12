@@ -68,7 +68,12 @@ interface Fixture {
  * merge.
  */
 function makeFixture(
-  options: { featureChanges?: Record<string, string>; conflict?: boolean } = {},
+  options: {
+    featureChanges?: Record<string, string>;
+    conflict?: boolean;
+    omitAuditDocs?: boolean;
+    unrelated?: boolean;
+  } = {},
 ): Fixture {
   const root = mkdtempSync(join(tmpdir(), 'trial-merge-audit-test-'));
   createdRoots.push(root);
@@ -89,12 +94,19 @@ function makeFixture(
     '{"scripts":{"typecheck":"node -e \\"process.exit(0)\\""}}\n',
   );
   write(work, 'pnpm-lock.yaml', 'lockfileVersion: 9\n');
-  write(work, 'scripts/audit-docs.mjs', '// exit 0\n');
+  if (!options.omitAuditDocs)
+    write(work, 'scripts/audit-docs.mjs', '// exit 0\n');
   write(work, 'scripts/sync-docs.mjs', '// exit 0\n');
   write(work, 'docs/shared.md', 'shared base\n');
   git(work, ['add', '-A']);
   git(work, ['commit', '--quiet', '-m', 'base']);
-  git(work, ['checkout', '--quiet', '-b', 'feature']);
+  // An orphan head shares no history with the base, so no merge base exists.
+  git(work, [
+    'checkout',
+    '--quiet',
+    ...(options.unrelated ? ['--orphan'] : ['-b']),
+    'feature',
+  ]);
   for (const [path, body] of Object.entries(
     options.featureChanges ?? { 'docs/feature.md': 'feature\n' },
   )) {
@@ -280,7 +292,7 @@ test('failed: a command failure on the merged content gives failed', () => {
   );
 });
 
-test('a command whose script is absent on the base tip counts as failed', () => {
+test('an absent script in a PR that changes tooling is tooling-changed', () => {
   // The script is removed from the base tip and from the PR head.
   const fixture = makeFixture();
   git(fixture.work, ['checkout', '--quiet', 'feature']);
@@ -317,6 +329,42 @@ test('a command whose script is absent on the base tip counts as failed', () => 
   assert.deepEqual(result.toolingChanged, ['scripts/sync-docs.mjs']);
   assert.equal(result.verdict, 'not-run');
   assert.deepEqual(result.reasons, ['tooling-changed']);
+});
+
+test('commands-unavailable: an absent script with no tooling change is not-run, not failed', () => {
+  // Neither the base tip nor the PR head has scripts/audit-docs.mjs, so the PR
+  // changes no tooling, and the absent command decides the verdict.
+  const fixture = makeFixture({ omitAuditDocs: true });
+  const result = runTrialMergeAudit(fixture.work, '1', 'o', 'r', {
+    readPr: stubPr(fixture),
+    runInstall: realInstall,
+    runCommand: (argv) => ({
+      exitCode: argv[1] === 'scripts/sync-docs.mjs' ? 1 : 0,
+    }),
+    lockTimeoutMs: 2000,
+  });
+  const audit = result.commands.find((command) => command.id === 'audit-docs');
+  assert.equal(audit?.passed, false);
+  assert.equal(audit?.exitCode, null);
+  assert.deepEqual(result.toolingChanged, []);
+  // A failing sync-docs does not turn the verdict into failed: the check could
+  // not run every command, so commands-unavailable takes precedence.
+  assert.equal(result.verdict, 'not-run');
+  assert.deepEqual(result.reasons, ['commands-unavailable']);
+});
+
+test('merge-base-unreachable: a PR head with no common ancestor is not-run, not a conflict', () => {
+  const fixture = makeFixture({ unrelated: true });
+  const result = runTrialMergeAudit(fixture.work, '1', 'o', 'r', {
+    readPr: stubPr(fixture),
+    runInstall: realInstall,
+    runCommand: () => ({ exitCode: 0 }),
+    lockTimeoutMs: 2000,
+  });
+  assert.equal(result.verdict, 'not-run');
+  assert.deepEqual(result.reasons, ['merge-base-unreachable']);
+  assert.equal(result.trialCommit, null);
+  assert.equal(result.worktreeRemoved, true);
 });
 
 test('clone lock held by another session: not-run, and no worktree is added', () => {

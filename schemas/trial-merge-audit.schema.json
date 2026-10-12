@@ -28,7 +28,7 @@
         "failed",
         "not-run"
       ],
-      "description": "passed only when every command passed, install succeeded, and toolingChanged is empty; failed when a command failed on the merged content; not-run for setup failures and for a non-empty toolingChanged."
+      "description": "passed only when every command passed, install succeeded, and toolingChanged is empty; failed when a command failed on the merged content; not-run for setup failures, for a non-empty toolingChanged, and for absent commands with an empty toolingChanged (commands-unavailable)."
     },
     "prHeadSha": {
       "type": [
