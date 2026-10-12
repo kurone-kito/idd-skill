@@ -1218,9 +1218,12 @@ export interface AdvisoryConvergenceInputs {
     { id: string; bodyDigest: string }[]
   >;
   /** kurone-kito/idd-skill#2657 (Codex review, PR #2895): the PR's own
-   * changed file paths, fetched by `collectFromGitHub` only when at
-   * least one candidate self-referential-bootstrap-auto marker exists
-   * (same cost-optimization scope as `autoWaiverRunLookups`) --
+   * changed file paths. In this source repository, which has a
+   * decision-rule list, `collectFromGitHub` fetches them on every run
+   * (kurone-kito/idd-skill#4015; see its comment above the fetch). In
+   * every other repository it fetches them only when at least one
+   * candidate self-referential-bootstrap-auto marker exists (same
+   * cost-optimization scope as `autoWaiverRunLookups`) --
    * `undefined`/`[]` otherwise, which correctly makes `autoWaiverValid`
    * always `false` in that case regardless (no candidate marker to
    * validate against either). This independent, consume-time check is
@@ -4529,9 +4532,12 @@ export function collectFromGitHub(
     }
   }
 
-  // kurone-kito/idd-skill#2657 (Codex review, PR #2895): fetched only
-  // when a candidate marker exists (same cost-optimization scope as the
-  // run-id lookups above) -- see `AdvisoryConvergenceInputs.changedFilePaths`'s
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895): in every
+  // repository other than this source repository, fetched only when a
+  // candidate marker exists (same cost-optimization scope as the run-id
+  // lookups above); this source repository fetches the paths on every
+  // run (kurone-kito/idd-skill#4015, see the comment above the fetch
+  // below) -- see `AdvisoryConvergenceInputs.changedFilePaths`'s
   // doc comment for why the pure verdict function needs this
   // independent evidence rather than trusting the posting job's own
   // internal allowlist check.
