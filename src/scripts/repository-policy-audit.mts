@@ -65,6 +65,10 @@ const PR_SUBMIT =
 const REVIEW_FIX =
   'idd-template/.github/instructions/idd-review-fix.instructions.md';
 const LIVE_REVIEW_FIX = '.github/instructions/idd-review-fix.instructions.md';
+const REVIEW_FIX_LITE =
+  'idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md';
+const LIVE_REVIEW_FIX_LITE =
+  '.github/instructions/lite/idd-review-fix-lite.instructions.md';
 const LIVE_PR_SUBMIT = '.github/instructions/idd-pr-submit.instructions.md';
 const REVIEW_POLICY_PROFILES =
   'idd-template/docs/idd-review-policy-profiles.md';
@@ -686,6 +690,16 @@ export const E10_PASS_CAP_PINS: readonly PinnedClauseGroup[] = [
       'File one follow-up issue (do not append) with one AC bullet per residual Low, exactly one `Refs #<originating-issue>` line, and the defer-source marker that E6 uses for `review-fix-loop-cutoff`',
       'The cap never applies while a High or Medium Accepted finding is open.',
       'If the count cannot be established, the cap is not reached.',
+      'A pass whose Accepted findings are all Low does not count as progress through the narrowing prong alone.',
+    ],
+  },
+  {
+    id: 'e10-pass-cap-review-fix-lite',
+    paths: [REVIEW_FIX_LITE, LIVE_REVIEW_FIX_LITE],
+    phrases: [
+      'Exception: once `critiqueLoop.e10MaxPasses` (default 2) E10 passes have run on the issue, no High or Medium Accepted finding is open, and `fix-validate` has passed on the current HEAD',
+      'Each residual Low finding takes the defer disposition in `idd-review-triage.instructions.md`',
+      'An unestablished count does not reach the cap.',
       'A pass whose Accepted findings are all Low does not count as progress through the narrowing prong alone.',
     ],
   },
