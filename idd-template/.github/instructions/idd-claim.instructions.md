@@ -317,7 +317,8 @@ non-success exit (step 4), an `--assert` result other than
 `already_owned`/`keep` (step 5), or an `unclaimed-by` posted after an
 authoring hold that followed a successful assert (Claim verification step 5).
 Never use `--takeover`. Save the script below with the placeholders filled in,
-then run it as one hold of the
+resolve each helper as in A5(a) for the active profile, then run it as one
+hold of the
 [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock):
 `node scripts/clone-lock.mjs --exec --agent-id {agent-id} -- bash <script>`.
 The re-check (steps 1-3) and the removal (steps 4-5) both run under that hold.
@@ -329,7 +330,7 @@ node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id {agent-id} --
 route=$(node scripts/resume-claim-routing.mjs --issue <n> --claim-id {claim-id} --worktree <path>)
 printf '%s\n' "$route" | grep -Eq '^  "state": "(unclaimed|stale|non_inheritable)"' || exit 1
 if printf '%s\n' "$route" | grep -q '"claim_id": "{claim-id}"'; then exit 1; fi
-test -z "$(git -C <path> status --porcelain --ignored)"
+test -z "$(git -C <path> status --porcelain --ignored --untracked-files=all)"
 test "$(git rev-parse <branch>)" = "$(git rev-parse origin/{development-branch})"
 git -C <path> checkout --detach
 git branch -D <branch> || { git -C <path> checkout <branch>; exit 1; }
@@ -339,8 +340,7 @@ git worktree remove <path>
 The route gate removes only when the re-read state is `unclaimed`, `stale`, or
 `non_inheritable` and no active claim carries `{claim-id}`. `already_owned`,
 `owner_evidence_required`, `disputed`, any other state, and an unreadable result
-all keep both. The pristine gate also covers ignored files, because
-`git worktree remove` can delete them. Git refuses to delete a branch checked
+all keep both. Git refuses to delete a branch checked
 out in any worktree, so the worktree is detached before `git branch -D`, and a
 failed delete reattaches the branch. A branch cut from an earlier base, or
 one with commits beyond `origin/{development-branch}`, is kept with its

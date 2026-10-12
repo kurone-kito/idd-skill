@@ -333,7 +333,7 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
 ## Lost-claim cleanup (`lost-claim-cleanup`)
 
 After step 2's `git worktree add`, at any exit where this session no longer
-holds the claim (failed `--record-tokens` or claim post; step 6 lock
+holds the claim (failed `--record-tokens`, claim, or nonce post; step 6 lock
 collision or `--assert` not `already_owned`/`keep`; verification step 5
 `unclaimed-by`), run the script below as one clone-scoped hold
 (`node scripts/clone-lock.mjs --exec --agent-id <agent-id> -- bash <script>`).
@@ -346,7 +346,7 @@ node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id <agent-id> --
 route=$(node scripts/resume-claim-routing.mjs --issue <N> --claim-id <claim-id> --worktree <path>)
 printf '%s\n' "$route" | grep -Eq '^  "state": "(unclaimed|stale|non_inheritable)"' || exit 1
 if printf '%s\n' "$route" | grep -q '"claim_id": "<claim-id>"'; then exit 1; fi
-test -z "$(git -C <path> status --porcelain --ignored)"
+test -z "$(git -C <path> status --porcelain --ignored --untracked-files=all)"
 test "$(git rev-parse <branch>)" = "$(git rev-parse origin/main)"
 git -C <path> checkout --detach
 git branch -D <branch> || { git -C <path> checkout <branch>; exit 1; }
