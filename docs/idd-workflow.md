@@ -1224,27 +1224,30 @@ worktrees, and the harness's agent listing. A session with a new id cannot
 identify its old claims, and step 1 treats them as not its own.
 
 1. **Find own claims.** For each worktree in `git worktree list --porcelain`,
-   list `idd-generated-tokens-*.json` in that worktree's private admin
-   directory (`git -C <worktree> rev-parse --absolute-git-dir`). Each file
-   holds `agentId` and `claimId`, and a `nonce` when one was recorded. One
-   worktree can hold several files. A claim is own only when its `agentId`
-   equals this session's session-suffixed agent-id. If the session cannot
-   determine that id, every claim is not own. Claims that are not own are not
-   dispatched again, and they are reported to the operator.
-   F4 removes the worktree, with its admin directory and this token file,
-   before it posts the final `unclaimed-by` marker, so a claim that F4
-   completed has no token file. For each such claim, take the issue number
-   from the worker's brief in the agent listing, or from the issue-number
-   prefix of its report draft in the session scratchpad. Then read that
-   issue's trusted `claimed-by` and `unclaimed-by` markers for the agent-id
-   and claim-id, and apply the same agent-id test.
-2. **Verify each own claim.** Take `--issue` from the worktree's branch,
-   `issue/<number>-<slug>`, and confirm it against the trusted `claimed-by`
-   marker that carries the same claim-id, because the token record holds no
-   issue number. Run the profile-selected `resume-claim-routing` command (see
-   `docs/idd-helper-scripts.md`) with `--assert`, `--issue`, `--claim-id`,
-   `--nonce` (when the file holds one), and `--worktree <path>`. Continue to
-   step 3 only when the command exits 0, which means the state is
+   list `idd-generated-tokens-*.json` in that worktree's private admin directory
+   (`git -C <worktree> rev-parse --absolute-git-dir`). Each file holds `agentId`
+   and `claimId`, and a `nonce` when one was recorded. One worktree can hold
+   several files. A claim is own only when its `agentId` equals this session's
+   session-suffixed agent-id. If the session cannot determine that id, every
+   claim is not own. Claims that are not own are not dispatched again, and they
+   are reported to the operator. F4 removes the linked worktree, with its admin
+   directory and this token file, before it posts the final `unclaimed-by`
+   marker. So a claim whose F4 removed its linked worktree has no token file
+   there. A record in the primary worktree's directory can survive F4. Keep at
+   most one record per claim-id: prefer the linked worktree's record, and when
+   only a primary-directory record exists, treat the claim as worktree-less and
+   route it as step 2 describes. For a worktree-less claim, take the issue
+   number from the worker's brief in the agent listing, or from the issue-number
+   prefix of its report draft in the session scratchpad, and never from a `main`
+   branch. Then read that issue's trusted `claimed-by` and `unclaimed-by`
+   markers for the agent-id and claim-id, and apply the same agent-id test.
+2. **Verify each own claim.** For a claim with a linked worktree, take `--issue`
+   from its branch, `issue/<number>-<slug>`, and confirm it against the trusted
+   `claimed-by` marker that carries the same claim-id, because the token record
+   holds no issue number. Run the profile-selected `resume-claim-routing`
+   command (see `docs/idd-helper-scripts.md`) with `--assert`, `--issue`,
+   `--claim-id`, `--nonce` (when the file holds one), and `--worktree <path>`.
+   Continue to step 3 only when the command exits 0, which means the state is
    `already_owned` with action `keep`. A claim that a worker released with its
    `unclaimed-by` marker, as F4 does as its last mutation before returning the
    final report, is the one exception: when `evidence.released_claim.claim_id`
@@ -1254,8 +1257,8 @@ identify its old claims, and step 1 treats them as not its own.
    goes to the takeover path in `idd-resume.instructions.md`. A claim with no
    worktree needs no `--worktree`: run the command without `--assert` and read
    its `state`, which gives the same released-claim result. Any other result,
-   including an unreadable worktree, is reported to the operator with its
-   state, and no further action is taken on that issue.
+   including an unreadable worktree, is reported to the operator with its state,
+   and no further action is taken on that issue.
 3. **Re-attach workers.** Read the live worker list from the harness's agent
    listing, and match each entry, by the issue number in the worker's brief,
    to an own claim. Count every running matched worker in `--running`,
