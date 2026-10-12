@@ -1277,13 +1277,17 @@ identify its old claims, and step 1 treats them as not its own.
    scratchpad of the same session, under the issue-number prefix that the
    fan-out variant already requires. If a draft is found, validate it against
    `schemas/worker-report.schema.json` and append it. If no draft is found,
-   verify the terminal outcome from live GitHub state (a merged or closed pull
-   request, or a released claim), then build the record and append it with the
-   profile-selected `idd-worker-report append --file <path>` command. The
-   record must validate against `schemas/worker-report.schema.json`:
-   `schemaVersion` is `1`; `issue` is `owner/repo#<number>`, built from the
-   number in step 2; `claimId` comes from step 1; `pullRequest` is the claim's
-   pull request in the same form, or null; `harness` is the schema slug for the
+   build a record, but only for a released claim from step 2 or for a matched
+   worker that has finished or been disposed. A worker that is still running
+   gets no record; step 3 governs it. Verify the terminal outcome from live
+   GitHub state (a merged or closed pull request, or a released claim), then
+   append the record with the profile-selected `idd-worker-report append --file
+   <path>` command. The record must validate against
+   `schemas/worker-report.schema.json`: `schemaVersion` is `1`; `issue` is
+   `owner/repo#<number>`, with owner and repo from the `repository` field of the
+   routing output and the number that step 2 verified; `claimId` comes from
+   step 1; `pullRequest` is the claim's pull request as live GitHub state
+   shows it, in the same form, or null; `harness` is the schema slug for the
    harness row of the worker mechanism table, for example `claude-code`;
    `workerHandle` is the agent-listing handle, or the claim-id when no listing
    is available. `terminalPhase` is the last phase that live state proves,
