@@ -1098,12 +1098,15 @@ or log — never as an issue/PR comment on a non-owned claim:
 ## Re-claim an inheritable branch
 
 Use this sequence when a fresh claim must reuse an existing PR branch, an
-inheritable branch whose commits beyond `origin/{development-branch}` must be
-kept. The fresh-branch order in `idd-claim.instructions.md` creates a new
-branch from its base ref and does not apply. This sequence attaches the
-existing branch instead. Observed 2026-10-12, `kurone-kito/idd-skill#3708`
-(PR `#4030`): the claimant attached the existing PR branch as a sibling
-worktree before the claim, and the lite order succeeded.
+inheritable branch whose commits beyond the base must be kept. The
+fresh-branch order in `idd-claim.instructions.md` creates a new branch from
+its base ref and does not apply. The full claim file's fresh-branch order
+starts from `origin/{development-branch}`, and the lite file's starts from
+`origin/main`. This sequence attaches the existing branch instead, and its
+history base is `origin/{development-branch}`. Observed 2026-10-12,
+`kurone-kito/idd-skill#3708` (PR `#4030`): the claimant attached the existing
+PR branch as a sibling worktree before the claim, and the lite order
+succeeded.
 
 1. Fresh-claim gate with no worktree:
    `node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate`
@@ -1124,11 +1127,17 @@ worktree before the claim, and the lite order succeeded.
    activation-nonce --agent-id <id> --claim-id <id> --nonce <nonce>
    --timestamp <ISO8601> --apply`.
 5. Provision the local branch when it exists only as `origin/<branch>`, as
-   §W7 steps 1 and 2 do. Neither command moves the primary HEAD:
-   `git fetch origin +refs/heads/<branch>:refs/remotes/origin/<branch>`,
-   then `git branch <branch> origin/<branch>`.
-6. Attach the local branch to a sibling worktree:
-   `git worktree add <path> <branch>`, without `-b`.
+   §W7 steps 1 and 2 do. Neither command moves the primary HEAD. Run both
+   under the
+   [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock),
+   as B1 requires for every fetch and worktree add against a shared clone:
+   `node scripts/clone-lock.mjs --exec --agent-id <id> -- git fetch origin
+   +refs/heads/<branch>:refs/remotes/origin/<branch>`, then
+   `node scripts/clone-lock.mjs --exec --agent-id <id> -- git branch <branch>
+   origin/<branch>`.
+6. Attach the local branch to a sibling worktree, under the same lock:
+   `node scripts/clone-lock.mjs --exec --agent-id <id> -- git worktree add
+   <path> <branch>`, without `-b`.
 7. Carry the nonce forward on the linked worktree:
    `node scripts/claim-lock.mjs --record-tokens --worktree <linked>
    --agent-id <id> --claim-id <id> --nonce <nonce>`.
