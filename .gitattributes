@@ -105,6 +105,7 @@ scripts/phase-id-resolver.mjs linguist-generated=true
 scripts/policy-helpers.mjs linguist-generated=true
 scripts/post-idd-marker.mjs linguist-generated=true
 scripts/pre-merge-readiness.mjs linguist-generated=true
+scripts/pre-push-trial-budget.mjs linguist-generated=true
 scripts/protocol-helpers.mjs linguist-generated=true
 scripts/provider-adapter-fake.mjs linguist-generated=true
 scripts/provider-adapter-github.mjs linguist-generated=true

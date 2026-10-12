@@ -278,6 +278,23 @@ test('parseIsoDurationToMs parses supported ISO durations', () => {
   assert.equal(parseIsoDurationToMs('invalid'), null);
 });
 
+test('critiqueLoop.e10MaxPasses keeps a configured positive integer and falls back to 2 otherwise (#3943)', () => {
+  assert.equal(POLICY_DEFAULTS.critiqueLoop.e10MaxPasses, 2);
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { e10MaxPasses: 5 } }).critiqueLoop
+      .e10MaxPasses,
+    5,
+  );
+  for (const invalid of [0, -1, 1.5, '3', null]) {
+    assert.equal(
+      normalizePolicyConfig({ critiqueLoop: { e10MaxPasses: invalid } })
+        .critiqueLoop.e10MaxPasses,
+      2,
+      `e10MaxPasses ${String(invalid)} must fall back to the default`,
+    );
+  }
+});
+
 test('critiqueLoop.deferByUrgency defaults to off and accepts low / low-and-medium / severity-tiered', () => {
   assert.equal(POLICY_DEFAULTS.critiqueLoop.deferByUrgency, 'off');
   assert.equal(normalizePolicyConfig({}).critiqueLoop.deferByUrgency, 'off');

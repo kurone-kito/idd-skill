@@ -65,6 +65,10 @@ const PR_SUBMIT =
 const REVIEW_FIX =
   'idd-template/.github/instructions/idd-review-fix.instructions.md';
 const LIVE_REVIEW_FIX = '.github/instructions/idd-review-fix.instructions.md';
+const REVIEW_FIX_LITE =
+  'idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md';
+const LIVE_REVIEW_FIX_LITE =
+  '.github/instructions/lite/idd-review-fix-lite.instructions.md';
 const LIVE_PR_SUBMIT = '.github/instructions/idd-pr-submit.instructions.md';
 const REVIEW_POLICY_PROFILES =
   'idd-template/docs/idd-review-policy-profiles.md';
@@ -670,6 +674,37 @@ export const REGRESSION_DEFINITION_PINS: readonly PinnedClauseGroup[] = [
   },
 ];
 
+// The E10 per-issue pass cap (#3943) is the one explicit exception to "always
+// run E10 before E11". These pins keep the cap paragraph, its fail-closed
+// condition, and the Low-only progress rule from being dropped. Each phrase is
+// a verbatim substring that occurs once per file, matched on whitespace-
+// collapsed text.
+// audit:ignore-dead-export: tests delete each pinned phrase from the real files.
+export const E10_PASS_CAP_PINS: readonly PinnedClauseGroup[] = [
+  {
+    id: 'e10-pass-cap-review-fix',
+    paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
+    phrases: [
+      'E10 per-issue pass cap (the one exception to the paragraph above).',
+      "Once `critiqueLoop.e10MaxPasses` passes have run (distributed default `2`), no High or Medium Accepted finding is open, and **fix-validate** has passed on the branch's current HEAD, stop the loop without fixing the remaining Low Accepted findings, which take the defer disposition below.",
+      'File one follow-up issue (do not append) with one AC bullet per residual Low, exactly one `Refs #<originating-issue>` line, and the defer-source marker that E6 uses for `review-fix-loop-cutoff`',
+      'The cap never applies while a High or Medium Accepted finding is open.',
+      'If the count cannot be established, the cap is not reached.',
+      'A pass whose Accepted findings are all Low does not count as progress through the narrowing prong alone.',
+    ],
+  },
+  {
+    id: 'e10-pass-cap-review-fix-lite',
+    paths: [REVIEW_FIX_LITE, LIVE_REVIEW_FIX_LITE],
+    phrases: [
+      'Exception: once `critiqueLoop.e10MaxPasses` (default 2) E10 passes have run on the issue, no High or Medium Accepted finding is open, and `fix-validate` has passed on the current HEAD',
+      'Each residual Low finding takes the defer disposition in `idd-review-triage.instructions.md`',
+      'An unestablished count does not reach the cap.',
+      'A pass whose Accepted findings are all Low does not count as progress through the narrowing prong alone.',
+    ],
+  },
+];
+
 const PINNED_CLAUSE_GROUPS: readonly PinnedClauseGroup[] = [
   ...NEEDS_DECISION_ROUTE_PINS,
   ...REVIEW_TRIAGE_DONOR_PINS,
@@ -677,6 +712,7 @@ const PINNED_CLAUSE_GROUPS: readonly PinnedClauseGroup[] = [
   ...WAVE_GRADIENT_PINS,
   ...PR_HEAD_FRESHNESS_PINS,
   ...REGRESSION_DEFINITION_PINS,
+  ...E10_PASS_CAP_PINS,
 ];
 
 const RULES: readonly RuleDefinition[] = [

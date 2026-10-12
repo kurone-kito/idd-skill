@@ -455,14 +455,19 @@ test('the stray fixture phrase appears in no other file', () => {
   assert.deepEqual(found, ['tests/check-stray-commit-closes.test.mts']);
 });
 
-test('pre-push-validate ends with the helper, and the overview row references it', () => {
+test('pre-push-validate ends with the trial budget check, and the overview row references it', () => {
   const config = JSON.parse(
     readFileSync(join(REPO_ROOT, '.github', 'idd', 'config.json'), 'utf8'),
   );
   const command: string = config.commands['pre-push-validate'];
   assert.equal(
     command.split(' && ').at(-1),
-    'node scripts/check-stray-commit-closes.mjs',
+    'node scripts/pre-push-trial-budget.mjs',
+  );
+  assert.ok(
+    command
+      .split(' && ')
+      .includes('node scripts/check-stray-commit-closes.mjs'),
   );
   // The overview row references the config entry; the command text lives only
   // in config.json, so the row must not repeat it.

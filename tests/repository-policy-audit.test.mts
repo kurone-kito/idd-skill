@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   collectRepositoryPolicyViolationsFromDocuments,
+  E10_PASS_CAP_PINS,
   NEEDS_DECISION_ROUTE_PINS,
   PR_HEAD_FRESHNESS_PINS,
   REGRESSION_DEFINITION_PINS,
@@ -58,6 +59,7 @@ const PINNED_CLAUSE_GROUPS = [
   ...WAVE_GRADIENT_PINS,
   ...PR_HEAD_FRESHNESS_PINS,
   ...REGRESSION_DEFINITION_PINS,
+  ...E10_PASS_CAP_PINS,
 ];
 
 function readPositiveFixture(): Map<string, string> {

@@ -15,8 +15,9 @@ the local CLI. E14's timing defaults live in
 
 Apply the
 [shared claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate)
-before E9, the E12 push, and each E13/E14/E15 GitHub side effect
-(reply, resolve, reviewer request, hold comment, or digest update).
+before E9, before filing the E10 follow-up and posting its defer replies,
+the E12 push, and each E13/E14/E15 GitHub side effect (reply, resolve,
+reviewer request, hold comment, or digest update).
 
 ## E9 — Fix accepted issues
 
@@ -77,14 +78,18 @@ readable findings list as a **hold**, not a clean "zero issues,
 proceed to E11" round: apply the shared Hold / suspend rules
 (`idd-overview-appendix.instructions.md`) instead of advancing.
 
-If the critique pass finds additional issues, fix them, commit
-atomically, and run E10 again while the findings are converging.
+If the critique pass finds additional issues, first check the per-issue cap
+below. If the cap applies, take its close-out route instead of fixing.
+Otherwise fix them, run **fix-validate**, commit atomically, and run E10 again
+while the findings are converging.
 
 Convergence guardrails:
 
 - "Meaningful progress" means a pass removes at least one Accepted
   finding, narrows a remaining finding's root cause/scope, or yields a
-  materially new fix direction. Reworded duplicates do not count.
+  materially new fix direction. Reworded duplicates do not count. A pass
+  whose Accepted findings are all Low does not count as progress through
+  the narrowing prong alone.
 - If the same Accepted findings recur for
   `critiqueLoop.e10NoProgressHoldAfter` consecutive E10 passes (default
   `3`) without progress, stop the auto-loop: post a hold comment
@@ -100,6 +105,26 @@ Convergence guardrails:
 skipping this pass — always run it before E11. Pushed and skipped
 one? Disclose on the PR, name the round(s), run E10 on the
 accumulated diff to a clean pass, then return to E1.
+
+**E10 per-issue pass cap (the one exception to the paragraph above).** Count
+every E10 pass on the issue across E9 batches; this count is separate from the
+per-batch count above. Once `critiqueLoop.e10MaxPasses` passes have run
+(distributed default `2`), no High or Medium Accepted finding is open, and
+**fix-validate** has passed on the branch's current HEAD, stop the loop without
+fixing the remaining Low Accepted findings, which take the defer disposition
+below. File one follow-up issue (do not append) with one AC bullet per residual
+Low, exactly one `Refs #<originating-issue>` line, and the defer-source marker
+that E6 uses for `review-fix-loop-cutoff` (`idd-review-triage.instructions.md`);
+the follow-up then takes issue-authoring's Stage 2 narrow auto-release, not the
+Stage 1 hold. Re-run the claim revalidation gate
+(`idd-overview-core.instructions.md`) immediately before filing. Each residual
+Low finding then takes the defer disposition in
+`idd-review-triage.instructions.md` (a `**Rejected**` reply that names the
+follow-up issue, with `e10MaxPasses` as its clause), not an `Accepted — fixed`
+reply, and is resolved as deferred. This is an explicit exception to that Defer
+rule's exclusion of an Accepted item mid-fix. Then continue to E11. The cap
+never applies while a High or Medium Accepted finding is open. If the count
+cannot be established, the cap is not reached.
 
 **Round-count heuristic for genuinely-new findings (Tier 1).** The guard above
 covers a _repeating_ finding; a different pattern is each round
