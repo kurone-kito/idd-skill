@@ -1027,7 +1027,7 @@ external scheduler.
 
 The operating rules for this variant are in the
 `.github/instructions/idd-orchestrator.instructions.md`, which an agent
-reads only when its activation conditions hold.
+reads only when its activation conditions hold or a fan-out session restarts.
 
 Running this variant safely requires:
 

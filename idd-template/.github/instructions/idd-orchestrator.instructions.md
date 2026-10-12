@@ -1,14 +1,17 @@
 # IDD — Orchestrator Phase (fan-out)
 
-Read this file only when the activation conditions below hold. Everything
-else in the IDD loop, including Discover, Claim, and the per-issue gates, is
-unchanged. The fan-out requirements themselves live in
+Read this file only when the activation conditions below hold or a fan-out
+session restarts. Everything else in the IDD loop, including Discover, Claim,
+and the per-issue gates, is unchanged. The fan-out requirements themselves live
+in
 [Orchestrator fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)
 and in
-[Orchestrator delegation](idd-claim.instructions.md#orchestrator-delegation);
-this file links to them rather than restating them.
+[Orchestrator delegation](idd-claim.instructions.md#orchestrator-delegation).
 
 ## 1. Activation
+
+A fan-out session that restarts with its session id intact skips this section
+and goes to section 2.
 
 Activate fan-out only when every condition holds:
 
@@ -26,7 +29,7 @@ Activate fan-out only when every condition holds:
 - `GITHUB_ACTIONS` is not `true`.
 
 Otherwise, continue with [idd-discover.instructions.md](idd-discover.instructions.md)
-unchanged. The cap applies per orchestrator session, not per host.
+unchanged. The cap is per orchestrator session, not per host.
 
 ## 2. Roster
 
@@ -107,5 +110,4 @@ Lost on restart: see [recovery](../../docs/idd-workflow.md#orchestrator-restart)
 ## 6. Worker span
 
 A worker runs from B1 to the merge policy's terminal phase: F4 under
-`fully_autonomous_merge`, and F2.5 otherwise. The orchestrator creates the
-worktree before the claim, and the worker takes it over at B1.
+`fully_autonomous_merge`, and F2.5 otherwise.
