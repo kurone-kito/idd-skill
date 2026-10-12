@@ -299,14 +299,14 @@ failure; five of the six never return a non-zero exit code as their own
 verdict, so they produce no `kind: "gate"`. `resume-claim-routing.mjs`
 does under `--assert` (see its `gate` cell).
 
-| Helper                           | `usage`                                                                                                              | `not-found` / `transport`                                                                                                                | `gate`                                                      | `internal`              |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------- |
-| `pre-merge-readiness.mjs`        | missing/invalid `--pr`, `--claim-issue`, or a flag-combination error                                                 | a `gh` failure while resolving the repo, PR, or checks (still prints the existing `{"error": ...}` stdout JSON, unchanged by this track) | —                                                           | an unexpected exception |
-| `resume-claim-routing.mjs`       | missing/invalid `--issue`, an unknown flag, `--assert` without `--claim-id`, or `--assert` with `--fresh-claim-gate` | a `gh` failure resolving claim state                                                                                                     | `--assert` when the verdict is not `already_owned` / `keep` | an unexpected exception |
-| `authoring-owner-provenance.mjs` | missing/invalid `--issue`, or an unknown flag                                                                        | a `gh` failure resolving comment/marker history                                                                                          | —                                                           | an unexpected exception |
-| `discover-readiness-check.mjs`   | missing `--issue`/`--issues`, or an unknown flag                                                                     | a `gh` failure resolving issue state                                                                                                     | —                                                           | an unexpected exception |
-| `discover-viability-gate.mjs`    | missing `--issue`/`--issues`, or an unknown flag                                                                     | a `gh` failure resolving issue state                                                                                                     | —                                                           | an unexpected exception |
-| `ci-wait-state.mjs`              | missing/invalid `--pr`, or an unknown flag                                                                           | a `gh` failure resolving CI state                                                                                                        | —                                                           | an unexpected exception |
+| Helper                           | `usage`                                                                                                                                                                            | `not-found` / `transport`                                                                                                                | `gate`                                                      | `internal`              |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------- |
+| `pre-merge-readiness.mjs`        | missing/invalid `--pr`, `--claim-issue`, or a flag-combination error                                                                                                               | a `gh` failure while resolving the repo, PR, or checks (still prints the existing `{"error": ...}` stdout JSON, unchanged by this track) | —                                                           | an unexpected exception |
+| `resume-claim-routing.mjs`       | missing/invalid `--issue`, an unknown flag, `--assert` without `--claim-id`, `--assert` with `--fresh-claim-gate`, or `--own-worktree` that is empty or lacks `--fresh-claim-gate` | a `gh` failure resolving claim state                                                                                                     | `--assert` when the verdict is not `already_owned` / `keep` | an unexpected exception |
+| `authoring-owner-provenance.mjs` | missing/invalid `--issue`, or an unknown flag                                                                                                                                      | a `gh` failure resolving comment/marker history                                                                                          | —                                                           | an unexpected exception |
+| `discover-readiness-check.mjs`   | missing `--issue`/`--issues`, or an unknown flag                                                                                                                                   | a `gh` failure resolving issue state                                                                                                     | —                                                           | an unexpected exception |
+| `discover-viability-gate.mjs`    | missing `--issue`/`--issues`, or an unknown flag                                                                                                                                   | a `gh` failure resolving issue state                                                                                                     | —                                                           | an unexpected exception |
+| `ci-wait-state.mjs`              | missing/invalid `--pr`, or an unknown flag                                                                                                                                         | a `gh` failure resolving CI state                                                                                                        | —                                                           | an unexpected exception |
 
 ### Migrated helpers (review and merge batch)
 
@@ -5234,6 +5234,24 @@ still fails closed:
   removed (observed 2026-09-25, issue `#3436`, PR `#3451`). Omitting it
   keeps reading from `process.cwd()` unchanged. The helper still reads
   owner evidence only from `--worktree` or `process.cwd()`.
+- Optional `--own-worktree <path>` (kurone-kito/idd-skill#4019): names the
+  caller's own worktree for the second `--fresh-claim-gate` read of the
+  fresh-claim order, which runs after `git worktree add`. It requires
+  `--fresh-claim-gate`; without it, or with an empty value, the call is a
+  usage error raised before any `gh` call. For a released claim's branch
+  only, the gate drops an occupant that resolves to `<path>` when that
+  worktree is on the branch, `git status --porcelain --untracked-files=all`
+  is empty, and `HEAD` has no commits beyond `origin/<developmentBranch>`
+  (`refs/remotes/origin/HEAD` when the policy sets none; a missing or
+  outdated `origin/HEAD`, or an invalid `developmentBranch`, keeps the
+  block). With no occupant left, the verdict is `claimable` and
+  `warnings[]` names the ignored path. Another occupant or any failed
+  check keeps `already-claimed` with reason
+  `released-claim-local-worktree-occupied`. An `unreadable` probe and a
+  stale claim's probe are never relaxed and keep their existing
+  `released-claim-*` or `stale-claim-*` reason. Observed 2026-10-11,
+  issues `#3944` and `#3952`: the caller's own new worktree blocked both
+  issues.
 - `--trusted-marker-logins` (kurone-kito/idd-skill#3272): trusted actors now
   resolve through the same ladder `pre-merge-readiness.mts` uses
   (`resolveTrustedMarkerActors`: flag, then `IDD_TRUSTED_MARKER_ACTORS`,

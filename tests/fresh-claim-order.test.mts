@@ -42,7 +42,9 @@ test('the claim instructions state the worktree-first steps in sequence', () => 
     'Fresh-claim order, worktree first.',
     '1. Create the worktree and branch: `git worktree add --no-track <path> -b',
     '2. `--record-tokens --worktree <path> --agent-id {agent-id} --claim-id {claim-id}`.',
-    '3. Post the claim comment per',
+    // #4019: the second gate read names the caller's own worktree.
+    '3. Re-run the A5(c) gate with `--fresh-claim-gate --own-worktree <path>`,',
+    'Only on `claimable`, post',
     '4. `--acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}`,',
     '   on the linked worktree only.',
     '5. After the settle delay, `resume-claim-routing.mjs --issue <n> --assert',
