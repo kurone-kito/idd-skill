@@ -8,7 +8,7 @@
  *
  * This module imports only `node:` builtins.
  */
-import { mkdtempSync, realpathSync, rmdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { after } from 'node:test';
@@ -34,8 +34,11 @@ function isStrictlyInside(root: string, path: string): boolean {
  * (symbolic links followed) must be that directory's real path or below it;
  * otherwise the call throws before anything is created. A prefix in a nested
  * fixture directory is allowed. The real path of each created directory is
- * checked the same way and is what the hook removes, so a symbolic link
- * cannot redirect the removal.
+ * checked the same way when it is created; if a concurrent change to the
+ * file system still moved it outside, the call throws and leaves it in
+ * place. The hook resolves each real path again just before removing it and
+ * skips one that no longer resolves strictly below the root, for example
+ * because a test replaced one of its ancestors with a symbolic link.
  *
  * On `win32` a removal failure is ignored, because Windows refuses to remove
  * a directory that holds a running executable image (issue #3680); the
@@ -49,8 +52,19 @@ export function trackTempDirectories(): (prefix: string) => string {
   after(() => {
     const failures: unknown[] = [];
     for (const directory of created.splice(0)) {
+      let current = '';
       try {
-        rmSync(directory, {
+        current = realpathSync(directory);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        // Already gone, for example removed with a tracked ancestor.
+        if (code === 'ENOENT' || code === 'ENOTDIR') continue;
+        if (process.platform !== 'win32') failures.push(error);
+        continue;
+      }
+      if (!isStrictlyInside(realRoot, current)) continue;
+      try {
+        rmSync(current, {
           recursive: true,
           force: true,
           maxRetries: 3,
@@ -91,10 +105,8 @@ export function trackTempDirectories(): (prefix: string) => string {
     const real = realpathSync(directory);
     if (!isStrictlyInside(realRoot, real)) {
       // Unreachable given the checks above unless the file system changed
-      // in between; the hook must never remove a directory outside the
-      // temporary root. The new directory is empty, so a non-recursive
-      // removal is enough.
-      rmdirSync(real);
+      // in between. Nothing outside the temporary root is ever removed, not
+      // even this new empty directory: throw and leave it in place.
       throw new Error(
         `trackTempDirectories: refusing to track ${directory} outside ${root}`,
       );
