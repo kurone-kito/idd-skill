@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
+import { acquireCloneLock, releaseCloneLock } from './clone-lock.mjs';
 /** Flag spec for `parseCliArgs`. */
 export const PRE_PUSH_TRIAL_BUDGET_FLAG_SPEC = {
   '--cwd': { type: 'string' },
@@ -80,6 +81,8 @@ export function runPrePushTrialBudget(options) {
   const repo = options.cwd;
   const base = options.base ?? DEFAULT_BASE;
   const runGit = options.runGit ?? defaultGitRunner;
+  const lockTimeoutMs = options.lockTimeoutMs ?? 60_000;
+  const agentId = `pre-push-trial-budget-${process.pid}`;
   const headSha = resolveCommit(runGit, repo, 'HEAD');
   const baseSha = resolveCommit(runGit, repo, base);
   const finish = (outcome, behind, extra = {}, cleanupFailed = false) => {
@@ -121,21 +124,33 @@ export function runPrePushTrialBudget(options) {
   const cleanupFailures = [];
   // The trial: resolves to an outcome and the audit lines, and never cleans up.
   const trial = () => {
-    // Each worktree is recorded before its status is checked, so a worktree a
-    // failed add still created is removed by the cleanup below.
-    created.push(trialTree);
-    if (
-      gitScratch(repo, ['worktree', 'add', '--detach', trialTree, headSha])
-        .status !== 0
-    ) {
-      return { outcome: 'worktree-failed' };
+    // The shared worktree records are changed only under the clone lock, as
+    // the trial-merge helper does, so concurrent pre-push checks do not race.
+    let lock;
+    try {
+      lock = acquireCloneLock(repo, agentId, lockTimeoutMs);
+    } catch {
+      return { outcome: 'clone-lock-unavailable' };
     }
-    created.push(baseTooling);
-    if (
-      gitScratch(repo, ['worktree', 'add', '--detach', baseTooling, baseSha])
-        .status !== 0
-    ) {
-      return { outcome: 'worktree-failed' };
+    try {
+      // Each worktree is recorded before its status is checked, so a worktree
+      // a failed add still created is removed by the cleanup below.
+      created.push(trialTree);
+      if (
+        gitScratch(repo, ['worktree', 'add', '--detach', trialTree, headSha])
+          .status !== 0
+      ) {
+        return { outcome: 'worktree-failed' };
+      }
+      created.push(baseTooling);
+      if (
+        gitScratch(repo, ['worktree', 'add', '--detach', baseTooling, baseSha])
+          .status !== 0
+      ) {
+        return { outcome: 'worktree-failed' };
+      }
+    } finally {
+      releaseCloneLock(lock);
     }
     const merged = gitScratch(trialTree, [
       ...GIT_IDENTITY,
@@ -179,14 +194,38 @@ export function runPrePushTrialBudget(options) {
   try {
     verdict = trial();
   } finally {
-    for (const path of created.reverse()) {
-      // Only the worktree this check created is unregistered. No branch or ref
-      // is touched, and `prune` is not run because it is repository-wide.
-      const removed = gitScratch(repo, ['worktree', 'remove', '--force', path]);
-      // A path that a failed add never created is not a cleanup failure.
-      if (removed.status !== 0 && existsSync(path)) {
-        cleanupFailures.push(path);
+    // Unregistering a worktree also changes shared records, so it is done under
+    // the clone lock again. A lock that cannot be taken leaves every created
+    // worktree for the operator and counts as a cleanup failure.
+    let cleanupLock = null;
+    if (created.length > 0) {
+      try {
+        cleanupLock = acquireCloneLock(repo, agentId, lockTimeoutMs);
+      } catch {
+        cleanupLock = null;
       }
+    }
+    if (created.length > 0 && cleanupLock === null) {
+      cleanupFailures.push(...created.filter((path) => existsSync(path)));
+    }
+    try {
+      for (const path of created.reverse()) {
+        if (cleanupLock === null) break;
+        // Only the worktree this check created is unregistered. No branch or
+        // ref is touched, and `prune` is not run because it is repository-wide.
+        const removed = gitScratch(repo, [
+          'worktree',
+          'remove',
+          '--force',
+          path,
+        ]);
+        // A path that a failed add never created is not a cleanup failure.
+        if (removed.status !== 0 && existsSync(path)) {
+          cleanupFailures.push(path);
+        }
+      }
+    } finally {
+      if (cleanupLock !== null) releaseCloneLock(cleanupLock);
     }
     // The scratch directory is kept when a worktree stayed registered, so the
     // operator can recover it.

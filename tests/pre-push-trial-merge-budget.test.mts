@@ -13,6 +13,10 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
+  acquireCloneLock,
+  releaseCloneLock,
+} from '../src/scripts/clone-lock.mts';
+import {
   defaultGitRunner,
   type GitRunner,
   runPrePushTrialBudget,
@@ -311,4 +315,19 @@ test('a worktree that cannot be unregistered fails the check closed (#4010)', (t
   assert.equal(result.cleanupFailed, true);
   assert.equal(result.exitCode, 1);
   assert.ok(removals.length > 0, 'the check tried to remove its worktrees');
+});
+
+test('a held clone lock fails the check closed before any worktree is created (#4010)', (t) => {
+  const f = behindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  advanceMain(f, 'unrelated.txt', 'main work\n');
+  const held = acquireCloneLock(f.work, 'another-session', 60_000);
+  t.after(() => releaseCloneLock(held));
+  const before = git(f.work, ['worktree', 'list', '--porcelain']);
+
+  const result = runPrePushTrialBudget({ cwd: f.work, lockTimeoutMs: 200 });
+
+  assert.equal(result.outcome, 'clone-lock-unavailable');
+  assert.equal(result.exitCode, 1);
+  assert.equal(git(f.work, ['worktree', 'list', '--porcelain']), before);
 });
