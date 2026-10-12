@@ -1107,7 +1107,8 @@ no new base ref: the branch keeps its own history, which may be based on
 `origin/main` or another ref. Observed 2026-10-12,
 `kurone-kito/idd-skill#3708` (PR `#4030`): the claimant attached the existing
 PR branch as a sibling worktree before the claim, and the lite order
-succeeded.
+succeeded. Run all five pre-checks in `idd-claim.instructions.md` before
+step 1. This sequence does not repeat them.
 
 1. Fresh-claim gate with no worktree:
    `node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate`
@@ -1128,7 +1129,10 @@ succeeded.
 
    Then record the tokens:
    `node scripts/claim-lock.mjs --record-tokens --worktree <primary>
-   --agent-id <id> --claim-id <id>`.
+   --agent-id <id> --claim-id <id>`. Immediately before the claim POST in
+   step 3, re-fetch the labels and the owner and claim logs, as the claim
+   pre-checks require. An authoring hold, or a competing claim that appeared
+   since step 1, aborts here before any POST.
 3. Claim POST, with the branch of the existing PR:
    `node scripts/post-idd-marker.mjs --target issue <N> --type claim
    --agent-id <id> --claim-id <id> --timestamp <ISO8601> --branch "$BRANCH"
@@ -1165,6 +1169,10 @@ succeeded.
          { echo "local $1 differs from origin/$1: hold" >&2; exit 1; }
      else
        git branch -- "$1" "origin/$1"
+     fi &&
+     if git worktree list --porcelain | grep -Fqx "branch refs/heads/$1"; then
+       echo "branch $1 is checked out in another worktree: hold" >&2
+       exit 1
      fi &&
      git worktree add -- "$2" "$1"
    ' sh '<branch>' '<path>'
@@ -1212,7 +1220,8 @@ the claim verification rules in `idd-claim.instructions.md`.
   A local branch that the script already created is attached again on the
   restart, because the script attaches a local branch that equals
   `origin/<branch>`. A local ref that differs fails the same check on every
-  restart, so resolve that ref first.
+  restart, so resolve that ref first. The same holds for a branch that is
+  already checked out in another worktree.
 - Step 6 failed with an infrastructure error, and the proof holds. The linked
   worktree exists, so do not release or restart from step 1, because the
   worktree blocks the no-worktree gate. Repeat step 6.
