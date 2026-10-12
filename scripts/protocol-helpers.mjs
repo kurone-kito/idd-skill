@@ -5592,8 +5592,9 @@ export function summarizeAdvisoryWaitMarkers(
  * picks. Returns `false` when any same-head review has a cited suppressed item
  * (one that names a file or line) without a qualifying disposition, or when a
  * same-head review body the default Copilot shapes cannot read sits next to the
- * rest. An empty body is no content and is skipped, the way the gate skips a
- * reply-only review. Off-head reviews never count here.
+ * rest. An empty body is unreadable like any other, so it blocks until a
+ * trusted review-ack for the head follows it, and the shell check holds on it
+ * too. Off-head reviews never count here.
  *
  * This is deliberately stricter than the gate in one direction: a later clean
  * same-head review does not clear an earlier uncovered item, which the gate
