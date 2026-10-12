@@ -1268,6 +1268,30 @@ items do not match its count fails closed, and a body with no per-item view
 counts every item as cited when it names a file or line anywhere. A reply that
 is edited, untrusted, or posted before the review was submitted does not count.
 
+### E10 per-issue pass cap (kurone-kito/idd-skill#3943)
+
+Issue `#3878` (PR `#3919`) ran about ten E10 passes in one review cycle.
+Most later passes raised Low, wording-level findings on one growing bullet,
+and each pass found new wording rather than repeating old findings.
+`critiqueLoop.e10NoProgressHoldAfter` did not stop it. The hold fires only
+when the same Accepted findings recur across consecutive passes, and a pass
+that keeps producing new findings counts as convergence, not stagnation.
+
+`critiqueLoop.e10MaxPasses` (default `2`, issue `#3943`) caps E10 passes per
+issue, counted across E9 batches. The cap applies only while no High or
+Medium Accepted finding is open, so blocking findings keep their status.
+Residual Low findings go to one follow-up issue under the
+`review-fix-loop-cutoff` defer source, as the E4/E5 round-count defer does.
+The cap is an explicit exception to the rule that E10 runs before E11. It
+keeps the validation floor as a precondition: `fix-validate` must have passed
+on the current HEAD.
+
+No code counts E10 passes, so the count lives in the agent's own record. A
+session that cannot establish the count does not treat the cap as reached.
+The C-phase guard `critiqueLoop.cPhaseLowSeveritySkipAfter` was lowered from
+3 to 2 for the same reason. Its remaining Low Accepts stay unfixed, as before,
+and nothing files them.
+
 ### E4/E5 round-count defer cutoff
 
 E4/E5 scored each PATH A item Low/Medium/High with no ceiling on how

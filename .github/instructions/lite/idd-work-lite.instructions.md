@@ -393,8 +393,9 @@ pass asks, never a separate pass to run on top of the one that ran.
 2. If accepted issues remain and the floor has not passed, continue to C5.
 3. Otherwise, if no accepted issues remain and the floor has passed, open and
    follow `idd-pr-submit-lite.instructions.md` now.
-4. Otherwise, if only low accepted issues remain after more than 3 loops and
-   the floor has passed, open and follow `idd-pr-submit-lite.instructions.md` now.
+4. Otherwise, if only low accepted issues remain after more than
+   `critiqueLoop.cPhaseLowSeveritySkipAfter` loops and the floor has passed,
+   open and follow `idd-pr-submit-lite.instructions.md` now.
 5. Otherwise continue to C5.
 
 Once the exit above is chosen (before C5, PR submission, or a C4 hold),
@@ -417,6 +418,6 @@ telemetry record.
 ### C6 — Return to C1
 
 1. Repeat the critique loop until it is clean.
-2. Treat the low-issue more-than-3-loop exit as clean once the floor has
+2. Treat the low-issue exit from C4 step 4 as clean once the floor has
    passed.
 3. Do not widen scope into review triage or merge phases from this file.

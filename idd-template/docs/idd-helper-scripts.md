@@ -7085,7 +7085,11 @@ same as `AW4`/`AW5`.
   install (15 minutes). The audit then returns a verdict instead of hanging.
 - Install is a fresh, frozen-lockfile install with lifecycle scripts
   disabled, run in the temporary worktree. No `node_modules` is linked from
-  the checkout.
+  the checkout. The install is pnpm-only: a repository that declares
+  dependencies but has no `pnpm-lock.yaml`, including an npm or Yarn
+  repository, gets `install-failed` (`not-run`). Observed 2026-10-12 on
+  issue #4051, by a fixture with dependencies and no lockfile whose frozen
+  install failed with `ERR_PNPM_NO_LOCKFILE`.
 - Ref-safe: the helper never pushes and never updates a ref. The fetch,
   `worktree add` and `worktree remove` steps run under the clone-scoped
   lock. It does not run `git worktree prune`, because a plain prune is

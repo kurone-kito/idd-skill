@@ -284,6 +284,7 @@ interface PolicyConfigFile {
   critiqueLoop?: {
     cPhaseLowSeveritySkipAfter?: number;
     e10NoProgressHoldAfter?: number;
+    e10MaxPasses?: number;
     deferAfterRounds?: number;
     deferByUrgency?: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
     deferRelaxAtRounds?: readonly number[];
@@ -1547,8 +1548,9 @@ const policyConfigFixture = {
   },
   claim: { verifySettleDelay: 'PT5S' },
   critiqueLoop: {
-    cPhaseLowSeveritySkipAfter: 3,
+    cPhaseLowSeveritySkipAfter: 2,
     e10NoProgressHoldAfter: 3,
+    e10MaxPasses: 2,
     deferAfterRounds: 12,
     deferByUrgency: 'off',
     deferRelaxAtRounds: [4, 7],
