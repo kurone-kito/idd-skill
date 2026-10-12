@@ -86,8 +86,9 @@ global-only run; see `docs/idd-helper-scripts.md`). Require
 defer. Require `copilotRecovery.activeClaimProvided: true`,
 `staleRequestRecovery.action`, and `requiredChecks.status: success` (or
 `no-required-checks` with non-empty all-success `checks[]`, or
-`no-required-checks` with empty `checks[]` and `allowedByPolicySetting:
-ciGate.allowNoRequiredChecksInGlobalOnly`, the global-only opt-in in
+`no-required-checks` with empty `checks[]` and the exact
+`allowedByPolicySetting: ciGate.allowNoRequiredChecksInGlobalOnly` marker
+(any other value defers), the global-only opt-in in
 [global-only profile](../../docs/global-only-profile.md)). No helper:
 finish AW1-AW3; missing CI contract:
 stop/ask; else read rulesets/protection and normalize
