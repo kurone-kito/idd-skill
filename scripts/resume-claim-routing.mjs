@@ -170,7 +170,11 @@ function checkCurrentSessionOwner(claim, options) {
  *   reports as that worktree's own top level;
  * - its HEAD is `refs/heads/<branchName>`;
  * - `git status --porcelain --untracked-files=all` is empty;
- * - `origin/<base>` resolves, and `HEAD` has no commit beyond it.
+ * - `origin/<base>` resolves and either `HEAD` has no commit beyond it, or
+ *   (#4067) `HEAD` has commits beyond it and `HEAD`,
+ *   `refs/remotes/origin/<branchName>`, and the live remote tip of
+ *   `<branchName>` (`git ls-remote`) are all equal, and the worktree is still
+ *   clean after that read. An unresolvable base refuses outright.
  */
 export function isPristineOwnWorktree(check) {
   const execute = check.execute ?? execFileSync;
@@ -214,38 +218,130 @@ export function isPristineOwnWorktree(check) {
   ) {
     return false;
   }
-  if (git(['status', '--porcelain', '--untracked-files=all']) !== '') {
-    return false;
-  }
-  let baseRef;
-  if (check.developmentBranch) {
-    baseRef = `origin/${check.developmentBranch}`;
-  } else {
-    const originHead = git([
-      'symbolic-ref',
-      '--quiet',
-      '--short',
-      'refs/remotes/origin/HEAD',
-    ])?.trim();
-    if (!originHead?.startsWith('origin/')) {
-      return false;
-    }
-    baseRef = originHead;
-  }
+  // --ignore-submodules=none overrides diff.ignoreSubmodules and per-submodule
+  // ignore settings, so a dirty submodule still counts as dirty.
   if (
-    !git([
-      'rev-parse',
-      '--verify',
-      '--quiet',
-      `refs/remotes/${baseRef}^{commit}`,
-    ])?.trim()
+    git([
+      'status',
+      '--porcelain',
+      '--untracked-files=all',
+      '--ignore-submodules=none',
+    ]) !== ''
   ) {
     return false;
   }
-  return (
-    git(['rev-list', '--count', `refs/remotes/${baseRef}..HEAD`])?.trim() ===
-    '0'
-  );
+  // The base check reads local refs only, so the common fresh-claim path makes
+  // no network call. An unresolvable base is a hard refusal (#4059): only a
+  // resolved base with HEAD beyond it reaches the pushed-tip rule below.
+  const baseState = () => {
+    let baseRef;
+    if (check.developmentBranch) {
+      baseRef = `origin/${check.developmentBranch}`;
+    } else {
+      const originHead = git([
+        'symbolic-ref',
+        '--quiet',
+        '--short',
+        'refs/remotes/origin/HEAD',
+      ])?.trim();
+      if (!originHead?.startsWith('origin/')) {
+        return 'unresolved';
+      }
+      baseRef = originHead;
+    }
+    if (
+      !git([
+        'rev-parse',
+        '--verify',
+        '--quiet',
+        `refs/remotes/${baseRef}^{commit}`,
+      ])?.trim()
+    ) {
+      return 'unresolved';
+    }
+    const beyond = git([
+      'rev-list',
+      '--count',
+      `refs/remotes/${baseRef}..HEAD`,
+    ])?.trim();
+    if (!beyond) {
+      return 'unresolved';
+    }
+    return beyond === '0' ? 'at-base' : 'beyond-base';
+  };
+  const base = baseState();
+  if (base === 'unresolved') {
+    return false;
+  }
+  if (base === 'at-base') {
+    return true;
+  }
+  // #4067: a released PR branch always carries pushed commits beyond the base,
+  // so a worktree at the branch's live remote tip is accepted too. Nothing in
+  // it is unpublished. The local remote-tracking ref must exist, so a missing
+  // one fails closed. The live tip is read with `ls-remote`, so a force-push or
+  // deletion made without a fetch is seen. A failed or timed-out read rejects.
+  const trackingTip = git([
+    'rev-parse',
+    '--verify',
+    '--quiet',
+    `refs/remotes/origin/${check.branchName}^{commit}`,
+  ])?.trim();
+  if (!trackingTip) {
+    return false;
+  }
+  const branchRef = `refs/heads/${check.branchName}`;
+  // A read that times out fails closed, so a stalled network cannot hang the gate.
+  const lsRemoteTimeoutMs = 30_000;
+  let remoteTip;
+  try {
+    remoteTip = String(
+      execute(
+        'git',
+        ['-C', ownRoot, 'ls-remote', '--heads', 'origin', branchRef],
+        {
+          encoding: 'utf8',
+          env: { ...env, GIT_TERMINAL_PROMPT: '0' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: lsRemoteTimeoutMs,
+        },
+      ),
+    )
+      .split('\n')
+      .find((line) => line.endsWith(`\t${branchRef}`))
+      ?.split('\t')[0];
+  } catch {
+    remoteTip = undefined;
+  }
+  // HEAD, the local tracking ref, and the live tip must all be equal. A stale
+  // tracking ref fails closed rather than being trusted. The first two are read
+  // again after the status check, because the remote read can take seconds and
+  // a commit or a change made during it must not be ignored.
+  const headNow = () =>
+    git(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])?.trim() ||
+    undefined;
+  const trackingNow = () =>
+    git([
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `refs/remotes/origin/${check.branchName}^{commit}`,
+    ])?.trim() || undefined;
+  const matchesRemoteTip = () =>
+    Boolean(remoteTip) &&
+    headNow() === remoteTip &&
+    trackingNow() === remoteTip;
+  if (!matchesRemoteTip()) {
+    return false;
+  }
+  const clean =
+    git([
+      'status',
+      '--porcelain',
+      '--untracked-files=all',
+      '--ignore-submodules=none',
+    ]) === '';
+  return clean && matchesRemoteTip();
 }
 export function evaluateResumeClaimRouting(input, options = {}) {
   const nowIso =
@@ -1360,10 +1456,12 @@ function printHelp() {
                       pre-created worktree. When a released claim's branch is
                       occupied by exactly this path, and the worktree is on
                       that branch, clean (no tracked or untracked changes),
-                      and has no commits beyond origin/<developmentBranch>
-                      (origin/HEAD when the policy sets none), the gate
-                      ignores it. Any other occupant, or a failed check
-                      (including a missing or outdated origin/HEAD, or an
+                      and either has no commits beyond
+                      origin/<developmentBranch> (origin/HEAD when the policy
+                      sets none), or sits at its branch's live remote tip,
+                      read with git ls-remote (#4067), the gate ignores it.
+                      Any other occupant, or a failed check (including a
+                      missing or outdated origin/HEAD on the base path, or an
                       invalid developmentBranch), still blocks. An empty
                       value is a usage error.
   --assert            exit 0 only when the verdict is state already_owned with

@@ -5254,13 +5254,22 @@ still fails closed:
   `--fresh-claim-gate`; without it, or with an empty value, the call is a
   usage error raised before any `gh` call. For a released claim's branch
   only, the gate drops an occupant that resolves to `<path>` when that
-  worktree is on the branch, `git status --porcelain --untracked-files=all`
-  is empty, and `HEAD` has no commits beyond `origin/<developmentBranch>`
-  (`refs/remotes/origin/HEAD` when the policy sets none; a missing or
-  outdated `origin/HEAD`, or an invalid `developmentBranch`, keeps the
-  block). With no occupant left, the verdict is `claimable` and
-  `warnings[]` names the ignored path. Another occupant or any failed
-  check keeps `already-claimed` with reason
+  worktree is on the branch, `git status --porcelain --untracked-files=all
+  --ignore-submodules=none` is empty (submodules count even under
+  `diff.ignoreSubmodules`), and the base resolves to
+  `origin/<developmentBranch>` (or
+  `refs/remotes/origin/HEAD` when the policy sets none; an unresolvable base,
+  including a missing `origin/HEAD` or an invalid `developmentBranch`, refuses
+  the worktree outright). Then either `HEAD` has no commits beyond the base, or
+  (#4067: a released PR branch's own pushed tip) `HEAD` has commits beyond it
+  and `HEAD`, `refs/remotes/origin/<branch>`, and the branch's live remote tip
+  (`git ls-remote origin refs/heads/<branch>`) are all equal, and the worktree
+  is still clean after that read. The base check runs first and makes no
+  network call. A missing or stale tracking ref, a failed read, a timed-out
+  read, or a change made during the read keeps the worktree blocked. The
+  occupant still has to resolve to `<path>`. With no occupant left, the
+  verdict is `claimable` and `warnings[]` names the ignored path. Another
+  occupant or any failed check keeps `already-claimed` with reason
   `released-claim-local-worktree-occupied`. An `unreadable` probe and a
   stale claim's probe are never relaxed and keep their existing
   `released-claim-*` or `stale-claim-*` reason. Observed 2026-10-11,

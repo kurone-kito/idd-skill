@@ -46,6 +46,7 @@ import {
   evaluateFreshClaimGate as evaluateFreshClaimGateImpl,
   evaluateResumeClaimRouting as evaluateResumeClaimRoutingImpl,
   fetchOpenLinkedPrReferences,
+  isPristineOwnWorktree,
   loadPolicy,
   resolveAssertOutcome,
   resolveResumeLinkedPrState,
@@ -6067,7 +6068,8 @@ test('a caller that supplies the explainer but omits authorization reports the g
 // #4019: the fresh-claim order creates its own worktree before the second
 // gate read, so a released claim's branch read as occupied by that new,
 // empty worktree. --own-worktree names it; the gate ignores exactly that
-// path, and only while it is clean with no commits beyond origin/main.
+// path, and only while it is clean and either has no commits beyond
+// origin/main or sits at its own pushed tip (#4067).
 
 interface OwnWorktreeSandbox {
   root: string;
@@ -6280,6 +6282,352 @@ test('--own-worktree (#4019): a commit beyond origin/main still blocks', () => {
         'work',
       ],
       { cwd: sandbox.own, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+// #4067: a released PR branch always carries pushed commits beyond the base,
+// so the own worktree is also dropped when it is clean and its HEAD equals the
+// branch's own pushed tip. Nothing in it is unpublished.
+function pushOwnBranch(sandbox: OwnWorktreeSandbox): void {
+  execFileSync('git', ['push', '--quiet', 'origin', sandbox.branch], {
+    cwd: sandbox.own,
+    env: sandbox.gitEnv,
+    stdio: 'ignore',
+  });
+}
+
+function commitInOwnWorktree(sandbox: OwnWorktreeSandbox): void {
+  execFileSync(
+    'git',
+    [
+      '-c',
+      'commit.gpgsign=false',
+      'commit',
+      '--quiet',
+      '--allow-empty',
+      '-m',
+      'work',
+    ],
+    { cwd: sandbox.own, env: sandbox.gitEnv, stdio: 'ignore' },
+  );
+}
+
+test('--own-worktree (#4067): a clean worktree at the pushed branch tip reads claimable', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+
+    const read = sandbox.gate(['--own-worktree', sandbox.own]);
+    assert.equal(read.status, 0, read.stderr);
+    assert.equal(read.output.fresh_claim_gate.verdict, 'claimable');
+    assert.equal(read.output.fresh_claim_gate.winning_claim_id, null);
+    assert.ok(
+      read.output.warnings.some((warning) =>
+        warning.includes(`ignored the caller's own clean worktree`),
+      ),
+      JSON.stringify(read.output.warnings),
+    );
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a commit beyond the pushed branch tip still blocks', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    commitInOwnWorktree(sandbox);
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a tracked change at the pushed branch tip still blocks', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    writeFileSync(join(sandbox.own, 'README.md'), 'edited\n');
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a path other than the occupant still blocks at the pushed branch tip', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.primary]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a remote branch force-pushed elsewhere blocks, with no local fetch', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    // Another clone force-pushes the branch. The worktree's own
+    // remote-tracking ref is not refreshed, so only a live read sees it.
+    const other = join(sandbox.root, 'other');
+    const origin = join(sandbox.root, 'origin.git');
+    execFileSync('git', ['clone', '--quiet', origin, other], {
+      env: sandbox.gitEnv,
+      stdio: 'ignore',
+    });
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '--quiet',
+        '--allow-empty',
+        '-m',
+        'elsewhere',
+      ],
+      { cwd: other, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    execFileSync(
+      'git',
+      [
+        'push',
+        '--quiet',
+        '--force',
+        'origin',
+        `HEAD:refs/heads/${sandbox.branch}`,
+      ],
+      { cwd: other, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a remote branch deleted elsewhere blocks, with no local fetch', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    const other = join(sandbox.root, 'other');
+    const origin = join(sandbox.root, 'origin.git');
+    execFileSync('git', ['clone', '--quiet', origin, other], {
+      env: sandbox.gitEnv,
+      stdio: 'ignore',
+    });
+    execFileSync(
+      'git',
+      ['push', '--quiet', 'origin', '--delete', sandbox.branch],
+      { cwd: other, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a missing local tracking ref blocks even when the server has the branch at HEAD', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    // The server still has the branch at HEAD, but the local remote-tracking
+    // ref is gone. The acceptance criterion requires a missing ref to fail closed.
+    execFileSync(
+      'git',
+      ['update-ref', '-d', `refs/remotes/origin/${sandbox.branch}`],
+      { cwd: sandbox.primary, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a stale local tracking ref blocks even when the server has the branch at HEAD', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    // Point the local tracking ref at another commit. The server still has HEAD.
+    const other = execFileSync('git', ['rev-parse', 'origin/main'], {
+      cwd: sandbox.primary,
+      env: sandbox.gitEnv,
+      encoding: 'utf8',
+    }).trim();
+    execFileSync(
+      'git',
+      ['update-ref', `refs/remotes/origin/${sandbox.branch}`, other],
+      { cwd: sandbox.primary, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a change made during the live remote read blocks', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    let dirtied = false;
+    // Wrap execFileSync so the worktree is dirtied right after the live read,
+    // which runs after the clean check. The recheck must then refuse it.
+    const execute = ((...callArgs: unknown[]) => {
+      const output = (execFileSync as (...args: unknown[]) => unknown)(
+        ...callArgs,
+      );
+      const args = callArgs[1] as string[];
+      if (!dirtied && args.includes('ls-remote')) {
+        dirtied = true;
+        writeFileSync(
+          join(sandbox.own, 'scratch.txt'),
+          'changed during the remote read\n',
+        );
+      }
+      return output;
+    }) as unknown as typeof execFileSync;
+    const pristine = isPristineOwnWorktree({
+      ownWorktree: sandbox.own,
+      occupiedPath: sandbox.own,
+      branchName: sandbox.branch,
+      developmentBranch: null,
+      environment: sandbox.gitEnv,
+      execute,
+    });
+    assert.equal(dirtied, true, 'the live remote read must run');
+    assert.equal(pristine, false);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a missing origin/HEAD blocks even at the pushed branch tip', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    // Without origin/HEAD the base cannot resolve, so the pushed-tip rule must
+    // not run: an unresolvable base is a hard refusal (#4059).
+    execFileSync('git', ['update-ref', '-d', 'refs/remotes/origin/HEAD'], {
+      cwd: sandbox.primary,
+      env: sandbox.gitEnv,
+      stdio: 'ignore',
+    });
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a commit created during the live remote read blocks', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    commitInOwnWorktree(sandbox);
+    pushOwnBranch(sandbox);
+    let committed = false;
+    // Wrap execFileSync so a new commit lands right after the live read. HEAD
+    // then no longer equals the remote tip, and the revalidation must refuse.
+    const execute = ((...callArgs: unknown[]) => {
+      const output = (execFileSync as (...args: unknown[]) => unknown)(
+        ...callArgs,
+      );
+      const args = callArgs[1] as string[];
+      if (!committed && args.includes('ls-remote')) {
+        committed = true;
+        commitInOwnWorktree(sandbox);
+      }
+      return output;
+    }) as unknown as typeof execFileSync;
+    const pristine = isPristineOwnWorktree({
+      ownWorktree: sandbox.own,
+      occupiedPath: sandbox.own,
+      branchName: sandbox.branch,
+      developmentBranch: null,
+      environment: sandbox.gitEnv,
+      execute,
+    });
+    assert.equal(committed, true, 'the live remote read must run');
+    assert.equal(pristine, false);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--own-worktree (#4067): a dirty submodule blocks even when diff.ignoreSubmodules hides it', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    // A submodule repository, committed into the claimed branch before the push.
+    const subRepo = join(sandbox.root, 'sub-src');
+    mkdirSync(subRepo, { recursive: true });
+    execFileSync('git', ['init', '--quiet', '-b', 'main'], {
+      cwd: subRepo,
+      env: sandbox.gitEnv,
+      stdio: 'ignore',
+    });
+    writeFileSync(join(subRepo, 'lib.txt'), 'lib\n');
+    execFileSync('git', ['add', 'lib.txt'], {
+      cwd: subRepo,
+      env: sandbox.gitEnv,
+      stdio: 'ignore',
+    });
+    execFileSync(
+      'git',
+      ['-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'lib'],
+      { cwd: subRepo, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    sandbox.addOwnWorktree();
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'protocol.file.allow=always',
+        'submodule',
+        'add',
+        '--quiet',
+        subRepo,
+        'sub',
+      ],
+      { cwd: sandbox.own, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    execFileSync(
+      'git',
+      ['-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'add sub'],
+      { cwd: sandbox.own, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    pushOwnBranch(sandbox);
+    // Hide submodule changes from status, then dirty the submodule.
+    execFileSync('git', ['config', 'diff.ignoreSubmodules', 'all'], {
+      cwd: sandbox.primary,
+      env: sandbox.gitEnv,
+      stdio: 'ignore',
+    });
+    writeFileSync(
+      join(sandbox.own, 'sub', 'edit.txt'),
+      'dirty submodule work\n',
     );
     assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
   } finally {
