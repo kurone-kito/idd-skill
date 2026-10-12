@@ -6577,6 +6577,64 @@ test('--own-worktree (#4067): a commit created during the live remote read block
   }
 });
 
+test('--own-worktree (#4067): a dirty submodule blocks even when diff.ignoreSubmodules hides it', () => {
+  const sandbox = ownWorktreeSandbox();
+  try {
+    // A submodule repository, committed into the claimed branch before the push.
+    const subRepo = join(sandbox.root, 'sub-src');
+    mkdirSync(subRepo, { recursive: true });
+    execFileSync('git', ['init', '--quiet', '-b', 'main'], {
+      cwd: subRepo,
+      env: sandbox.gitEnv,
+      stdio: 'ignore',
+    });
+    writeFileSync(join(subRepo, 'lib.txt'), 'lib\n');
+    execFileSync('git', ['add', 'lib.txt'], {
+      cwd: subRepo,
+      env: sandbox.gitEnv,
+      stdio: 'ignore',
+    });
+    execFileSync(
+      'git',
+      ['-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'lib'],
+      { cwd: subRepo, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    sandbox.addOwnWorktree();
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'protocol.file.allow=always',
+        'submodule',
+        'add',
+        '--quiet',
+        subRepo,
+        'sub',
+      ],
+      { cwd: sandbox.own, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    execFileSync(
+      'git',
+      ['-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'add sub'],
+      { cwd: sandbox.own, env: sandbox.gitEnv, stdio: 'ignore' },
+    );
+    pushOwnBranch(sandbox);
+    // Hide submodule changes from status, then dirty the submodule.
+    execFileSync('git', ['config', 'diff.ignoreSubmodules', 'all'], {
+      cwd: sandbox.primary,
+      env: sandbox.gitEnv,
+      stdio: 'ignore',
+    });
+    writeFileSync(
+      join(sandbox.own, 'sub', 'edit.txt'),
+      'dirty submodule work\n',
+    );
+    assertOccupiedByOwnWorktree(sandbox, ['--own-worktree', sandbox.own]);
+  } finally {
+    sandbox.restore();
+  }
+});
+
 test('--own-worktree (#4019) without --fresh-claim-gate is a usage error', () => {
   const result = spawnSync(
     process.execPath,

@@ -447,7 +447,16 @@ export function isPristineOwnWorktree(
   ) {
     return false;
   }
-  if (git(['status', '--porcelain', '--untracked-files=all']) !== '') {
+  // --ignore-submodules=none overrides diff.ignoreSubmodules and per-submodule
+  // ignore settings, so a dirty submodule still counts as dirty.
+  if (
+    git([
+      'status',
+      '--porcelain',
+      '--untracked-files=all',
+      '--ignore-submodules=none',
+    ]) !== ''
+  ) {
     return false;
   }
   // The base check reads local refs only, so the common fresh-claim path makes
@@ -554,7 +563,13 @@ export function isPristineOwnWorktree(
   if (!matchesRemoteTip()) {
     return false;
   }
-  const clean = git(['status', '--porcelain', '--untracked-files=all']) === '';
+  const clean =
+    git([
+      'status',
+      '--porcelain',
+      '--untracked-files=all',
+      '--ignore-submodules=none',
+    ]) === '';
   return clean && matchesRemoteTip();
 }
 
