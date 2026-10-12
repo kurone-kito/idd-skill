@@ -622,39 +622,41 @@ The lite claim file keeps only the rules; their rationale lives here.
   author to equal the marker's `forcedBy` field unconditionally, which is
   stricter than the full spec's opt-in `requireAuthorMatchesForcedBy`. It
   blocks a same-identity self-signed hijack, where a displaced session
-  spoofs a different `forcedBy` name while posting the marker itself.
+  spoofs a different `forcedBy` name while posting the marker itself
+  (preventive; no observed incident yet).
 - **Sticky successor pair.** Forced-handoff re-derives the adopted pair as
   the active claim on every resolution pass, so a later plain
-  `claimed-by supersedes: none` cannot activate and reads as contested.
+  `claimed-by supersedes: none` cannot activate and reads as contested
+  (preventive; no observed incident yet).
 - **Heartbeat branch invariant.** A `claimed-by` with the active
   `{claim-id}` but a different `{agent-id}` or `branch:` is not a
   heartbeat. The claim-id is public, not a secret, so it proves nothing
-  about the poster on its own.
+  about the poster on its own (preventive; no observed incident yet).
 - **Later claims stay diagnostic (`#3268`).** A later trusted
   `claimed-by` with a different `{claim-id}` cannot dispute Claim
   verification step 3, because Claim-state parsing rules 4 and 6 could
   never have activated it while the current claim is active.
 - **Pre-mutation guard scope.** The work-lite guard's checks 3-4 bind the
   cwd and branch only once B2 starts; before that, the claim check alone
-  applies.
+  applies (preventive; no observed incident yet).
 - **Claim-comment body.** `gh issue comment` and `gh api -f body=` silently
   reject HTML-comment-first bodies, so the written fallback posts a JSON
-  payload instead.
+  payload instead (preventive; no observed incident yet).
 - **Pre-check (c) before the gate.** The fresh-claim gate ignores
   `--claim-id`, so it cannot tell "yours" from "a competitor's"; pre-check
-  (c) runs first for that reason.
+  (c) runs first for that reason (preventive; no observed incident yet).
 
 ### Lost-claim cleanup (issue `#4042`)
 
-PR `#4018` review raised four edge cases for the pre-claim worktree that a
-lost fresh claim leaves behind: a `--record-tokens` failure after `git
-worktree add` (review comment `4242624517`); an `unclaimed-by` posted after
-an authoring hold that followed a successful assert (`4242624520`); removal
-outside the clone-scoped lock (`4242577825`); and `git branch -d` refusing
-a branch whose tip is not merged into a lagging local `main`, so the branch
-survived (`4242489039`). The decided policy (maintainer hearing,
-2026-10-12) covers them. A later review of the procedure (PR `#4058`) led to
-the amendments below.
+On 2026-10-12, PR `#4018` review raised four edge cases for the pre-claim
+worktree that a lost fresh claim leaves behind: a `--record-tokens` failure
+after `git worktree add` (review comment `4242624517`); an `unclaimed-by` posted
+after an authoring hold that followed a successful assert (`4242624520`);
+removal outside the clone-scoped lock (`4242577825`); and `git branch -d`
+refusing a branch whose tip is not merged into a lagging local `main`, so the
+branch survived (`4242489039`). The decided policy (maintainer hearing,
+2026-10-12) covers them. A later review of the procedure (PR `#4058`) led to the
+amendments below.
 
 - Gates run before removal, under one hold of the clone-scoped lock, after
   the worktree-local claim lock is acquired. The route gate reads
