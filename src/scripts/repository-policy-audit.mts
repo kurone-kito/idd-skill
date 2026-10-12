@@ -682,7 +682,7 @@ export const E10_PASS_CAP_PINS: readonly PinnedClauseGroup[] = [
     paths: [REVIEW_FIX, LIVE_REVIEW_FIX],
     phrases: [
       'E10 per-issue pass cap (the one exception to the paragraph above).',
-      "Once `critiqueLoop.e10MaxPasses` passes have run (distributed default `2`), no High or Medium Accepted finding is open, and **fix-validate** has passed on the branch's current HEAD, stop the loop without fixing the remaining Low Accepted findings.",
+      "Once `critiqueLoop.e10MaxPasses` passes have run (distributed default `2`), no High or Medium Accepted finding is open, and **fix-validate** has passed on the branch's current HEAD, stop the loop without fixing the remaining Low Accepted findings, which take the defer disposition below.",
       'File one follow-up issue (do not append) with one AC bullet per residual Low, exactly one `Refs #<originating-issue>` line, and the defer-source marker that E6 uses for `review-fix-loop-cutoff`',
       'The cap never applies while a High or Medium Accepted finding is open.',
       'If the count cannot be established, the cap is not reached.',

@@ -105,15 +105,18 @@ every E10 pass on the issue across E9 batches; this count is separate from the
 per-batch count above. Once `critiqueLoop.e10MaxPasses` passes have run
 (distributed default `2`), no High or Medium Accepted finding is open, and
 **fix-validate** has passed on the branch's current HEAD, stop the loop without
-fixing the remaining Low Accepted findings. File one follow-up issue (do not
-append) with one AC bullet per residual Low, exactly one
-`Refs #<originating-issue>` line, and the defer-source marker that E6 uses for
-`review-fix-loop-cutoff` (`idd-review-triage.instructions.md`); the follow-up
-then takes issue-authoring's Stage 2 narrow auto-release, not the Stage 1 hold.
-Re-run the claim revalidation gate (`idd-overview-core.instructions.md`)
-immediately before filing. Then continue to E11. The cap never applies while a
-High or Medium Accepted finding is open. If the count cannot be established, the
-cap is not reached.
+fixing the remaining Low Accepted findings, which take the defer disposition
+below. File one follow-up issue (do not append) with one AC bullet per residual
+Low, exactly one `Refs #<originating-issue>` line, and the defer-source marker
+that E6 uses for `review-fix-loop-cutoff` (`idd-review-triage.instructions.md`);
+the follow-up then takes issue-authoring's Stage 2 narrow auto-release, not the
+Stage 1 hold. Re-run the claim revalidation gate
+(`idd-overview-core.instructions.md`) immediately before filing. Each residual
+Low finding then takes the defer disposition in
+`idd-review-triage.instructions.md` (a `**Rejected**` reply that names the
+follow-up issue), not an `Accepted — fixed` reply, and is resolved as deferred.
+Then continue to E11. The cap never applies while a High or Medium Accepted
+finding is open. If the count cannot be established, the cap is not reached.
 
 **Round-count heuristic for genuinely-new findings (Tier 1).** The guard above
 covers a _repeating_ finding; a different pattern is each round

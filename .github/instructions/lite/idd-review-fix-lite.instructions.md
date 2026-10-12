@@ -171,8 +171,11 @@ self-critique and record risk.
    `Refs #<originating-issue>` line, and the defer-source marker that E6 uses
    for `review-fix-loop-cutoff` (`idd-review-triage.instructions.md`). That
    follow-up takes issue-authoring's Stage 2 narrow auto-release, not the Stage
-   1 hold. Re-run this file's Pre-mutation guard immediately before filing. Then
-   go to E11. An unestablished count does not reach the cap.
+   1 hold. Re-run this file's Pre-mutation guard immediately before filing. Each
+   residual Low finding takes the defer disposition in
+   `idd-review-triage.instructions.md` (a `**Rejected**` reply that names the
+   follow-up issue), not an `Accepted — fixed` reply. Then go to E11. An
+   unestablished count does not reach the cap.
 9. Heuristic: several new, non-repeated same-area findings across
    rounds (3-4) may mean one structural fix converges faster than
    another patch. If that fix keeps drawing new findings, prefer
