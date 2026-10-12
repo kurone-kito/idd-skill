@@ -1771,21 +1771,20 @@ cleanup), the parent checks rule 3 itself:
    `find <dir> -mindepth 1`) and lists the parent directory again.
 3. It resolves the named directory and each reported path with
    `realpath -m` (GNU coreutils) or an equivalent that follows symbolic
-   links without requiring the path to exist, so the comparison is not
-   only lexical; a path that cannot be resolved is flagged. It flags, in the critique
-   result and in its final message, any reported path that resolves
-   outside the named directory, any symbolic link anywhere under the
-   named directory (a write through it can land outside, while the
-   listing shows only the link), any regular file under it with more
+   links without requiring the path to exist, so the comparison is not only
+   lexical; a path that cannot be resolved is flagged. It flags, in the
+   critique result and in its final message, any reported path that
+   resolves outside the named directory, any symbolic link anywhere
+   under the named directory (a write through it can land outside, while
+   the listing shows only the link), any regular file under it with more
    than one hard link (for example `find <dir> -type f -links +1`), any
-   entry in the named directory the subagent did not report,
-   and any entry of the parent directory that appeared or vanished
-   during the round, apart from directories the parent itself created
-   for concurrent passes. It records
-   the listings in the critique result before the named directory is
-   removed. For a pass stopped before it returned, the subagent
-   reported nothing, so the parent lists every entry as residual risk
-   rather than as a violation.
+   entry in the named directory the subagent did not report, and any
+   entry of the parent directory that appeared or vanished during the
+   round, apart from directories the parent itself created for
+   concurrent passes. It records the listings in the critique result
+   before the named directory is removed. For a pass stopped before it
+   returned, the subagent reported nothing, so the parent lists every
+   entry as residual risk rather than as a violation.
 4. It does not scan all of `/tmp` or any other shared directory beyond
    the parent directory's own entries, and it deletes nothing it
    cannot attribute to the round. Other sessions under the same OS user
