@@ -451,7 +451,8 @@ export const SELF_REFERENTIAL_WAIVER_BOOTSTRAP_FILES = [
  * passes only through a fresh converged review, through an approving
  * review on the current HEAD from a login in the configured
  * `trustedMarkerActors` list (see `computeAdvisoryConvergenceVerdict`), or
- * through the maintainer-authorized waiver after the deadline.
+ * through the maintainer-authorized waiver, which applies after the
+ * deadline or while Copilot is terminally unavailable.
  * Observed incident: PR #3999 (issue #3945) and PR #4000 (issue #3942)
  * both merged through the waiver, and PR #4000 changed the cited-item
  * rules that decide whether a finding counts as settled, with no
@@ -1804,9 +1805,10 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   );
   // kurone-kito/idd-skill#4015: a diff that touches a decision-rule file
   // never receives the auto-waiver, even when it also touches a bootstrap
-  // file. It passes only through a converged review or a trusted
+  // file. It passes only through a converged review, a trusted
   // maintainer's approval of the current HEAD (`decisionRuleApprovalValid`
-  // below).
+  // below), or the maintainer-authorized waiver after the deadline or
+  // while Copilot is terminally unavailable.
   const decisionRuleFiles = resolveSelfReferentialDecisionRuleFiles(
     autoWaiverRepositoryFullName,
   );
@@ -1935,7 +1937,7 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     !decisionRuleApprovalValid
   ) {
     reasons.push(
-      `this pull request changes the gate's own decision rules (${touchedDecisionRuleFiles.join(', ')}), so the self-referential-bootstrap-auto waiver does not apply: it needs a converged review, an approving review on the current HEAD from a login in trustedMarkerActors, or a maintainer-authorized waiver after the deadline`,
+      `this pull request changes the gate's own decision rules (${touchedDecisionRuleFiles.join(', ')}), so the self-referential-bootstrap-auto waiver does not apply: it needs a converged review, an approving review on the current HEAD from a login in trustedMarkerActors, or a maintainer-authorized waiver after the deadline or while Copilot is terminally unavailable`,
     );
   }
   const waiver = {
@@ -3517,9 +3519,12 @@ export function collectFromGitHub(
       autoWaiverRunArtifactBindings[runId] = [];
     }
   }
-  // kurone-kito/idd-skill#2657 (Codex review, PR #2895): fetched only
-  // when a candidate marker exists (same cost-optimization scope as the
-  // run-id lookups above) -- see `AdvisoryConvergenceInputs.changedFilePaths`'s
+  // kurone-kito/idd-skill#2657 (Codex review, PR #2895): in every
+  // repository other than this source repository, fetched only when a
+  // candidate marker exists (same cost-optimization scope as the run-id
+  // lookups above); this source repository fetches the paths on every
+  // run (kurone-kito/idd-skill#4015, see the comment above the fetch
+  // below) -- see `AdvisoryConvergenceInputs.changedFilePaths`'s
   // doc comment for why the pure verdict function needs this
   // independent evidence rather than trusting the posting job's own
   // internal allowlist check.

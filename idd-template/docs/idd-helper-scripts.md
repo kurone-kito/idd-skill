@@ -3611,7 +3611,8 @@ gets no self-referential-bootstrap-auto waiver, even when it also
 touches a bootstrap file. The check then passes only through a
 converged review, through an approving review of the current HEAD
 whose author is in `trustedMarkerActors`, or through the
-maintainer-authorized waiver after the deadline. Only the latest review per
+maintainer-authorized waiver, which applies after the deadline or while
+Copilot is terminally unavailable. Only the latest review per
 login that is not `COMMENTED` or `PENDING` counts, so a later
 `CHANGES_REQUESTED` review withdraws the approval and reruns the check.
 Dismissing the approval also withdraws it, but only on the check's next
@@ -3622,10 +3623,11 @@ verdict reports this as `waiver.decisionRuleFilesTouched` and
 review on any other pull request. GitHub does not let a pull request's
 author approve it, so the approving login must differ from the author;
 the maintainer-authorized waiver above stays the off-ramp after the
-deadline. Every other repository's profile-derived set has no
-decision-rule list and keeps the waiver as before. In this repository the
-posting job's allowlist is the bootstrap list, and it posts no marker for
-a diff that touches a decision-rule file. Observed
+deadline or while Copilot is terminally unavailable. Every other
+repository's profile-derived set has no decision-rule list and keeps the
+waiver as before. In this repository the posting job's allowlist is the
+bootstrap list, and it posts no marker for a diff that touches a
+decision-rule file. Observed
 incident: kurone-kito/idd-skill#3999 and kurone-kito/idd-skill#4000
 both merged through the waiver, and kurone-kito/idd-skill#4000 changed
 the cited-item rules that decide whether a finding counts as settled,
