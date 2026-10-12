@@ -411,7 +411,7 @@ check means stop, do not mutate further.
 
 **Digest**: after verification, upsert the issue's `idd-live-status`
 digest (only when exactly one exists, or none) — `Phase: A5 claimed`,
-`Claim`, `Branch`, `Open blockers: none`, and `Next action: B1 Step 3`
+`Claim`, `Branch`, `Open blockers: none`, and `Next action: B1 install dependencies`
 when step 2 created the worktree, otherwise `Next
 action: B1 create branch and worktree`. Multiple digests → report their URLs,
 do not edit either.
