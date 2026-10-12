@@ -1252,9 +1252,14 @@ identify its old claims, and step 1 treats them as not its own.
    `idd-worker-budget` command with `--running <n> --startable <n>`, where
    `--running` is the number of re-attached running workers and `--startable`
    is the number of startable candidates still in the orchestrator's cached
-   graph (0 when none). Run `discover-shared-file-overlap --issues <n,...>
-   --batch <k>`, with one `--in-flight <n>` for each re-attached worker's
-   issue.
+   graph (0 when none). When `--startable` is at least 1 and the budget's
+   `slots` is at least 1, run the profile-selected
+   `discover-shared-file-overlap` command with `--issues <n,...>` (the
+   startable candidates), `--batch <k>` (the `slots` value), `--check-overlap`,
+   one `--in-flight <n>` for each re-attached worker's issue, and
+   `--desync-token` when `discover.selectionDesync` is `session-offset`.
+   Otherwise skip it: the helper rejects an empty candidate list and a zero
+   batch.
 4. **Recover reports.** Look for a finished worker's report draft in the
    scratchpad of the same session, under the issue-number prefix that the
    fan-out variant already requires. If no draft is found, verify the terminal
