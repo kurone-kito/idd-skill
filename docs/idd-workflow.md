@@ -1241,22 +1241,24 @@ identify its old claims, and step 1 treats them as not its own.
    `already_owned` with action `keep`. A claim that a worker released with its
    `unclaimed-by` marker, as F4 does as its last mutation before returning the
    final report, is the one exception: when `evidence.released_claim.claim_id`
-   equals this claim-id and the state is `unclaimed`, or the reason is
-   `released-claim-local-worktree-occupied`, skip step 3 and go to step 4 for
-   it. `stale` goes to the takeover path in `idd-resume.instructions.md`. Any
-   other result, including an unreadable worktree, is reported to the operator
-   with its state, and no further action is taken on that issue.
+   equals this claim-id and either the state is `unclaimed`, or the state is
+   `local_worktree_occupied` with the reason
+   `released-claim-local-worktree-occupied`, the claim goes to step 4. `stale`
+   goes to the takeover path in `idd-resume.instructions.md`. Any other result,
+   including an unreadable worktree, is reported to the operator with its
+   state, and no further action is taken on that issue.
 3. **Re-attach workers.** Read the live worker list from the harness's agent
    listing, and match each entry to an own claim by the issue number in the
    worker's brief. Match finished workers as well as running ones, and count
    only running workers in `--running`. If the harness offers no agent
    listing, no worker is matched, and every own claim that reached this step
-   goes to step 5. For a matched worker that the runtime can still message,
-   apply the existing worker-death rules by reference, under the bullet titled
-   "Resume-specific recovery when a worker dies mid-turn" in the
-   [fan-out variant](#orchestrator-fan-out-variant). A matched worker that
-   cannot be messaged is replaced by a fresh subagent only when step 2 verified
-   its claim. Then recount the roster. Run the profile-selected
+   goes to step 5. A matched finished worker goes to step 4. For a matched
+   running worker that the runtime can still message, apply the existing
+   worker-death rules by reference, under the bullet titled "Resume-specific
+   recovery when a worker dies mid-turn" in the
+   [fan-out variant](#orchestrator-fan-out-variant). A matched running worker
+   that cannot be messaged is replaced by a fresh subagent only when step 2
+   verified its claim. Then recount the roster. Run the profile-selected
    `idd-worker-budget` command with `--running <n> --startable <n>`, where
    `--running` is the number of re-attached running workers and `--startable`
    is the number of startable candidates still in the orchestrator's cached
@@ -1269,10 +1271,11 @@ identify its old claims, and step 1 treats them as not its own.
    `discover.selectionDesync` is `session-offset`. Otherwise skip it: the
    helper rejects an empty candidate list and a zero batch.
 4. **Recover reports.** Run this step for a released claim from step 2 and for
-   a matched worker that has finished. A worker that is still running gets no
-   record; step 3 governs it. Look for the worker's report draft in the
-   scratchpad of the same session, under the issue-number prefix that the
-   fan-out variant already requires. If a draft is found, validate it against
+   a matched finished worker. A claim whose issue still has a running worker
+   in the live listing gets no record: count that worker in `--running` and
+   leave it to step 3. Look for the worker's report draft in the scratchpad of
+   the same session, under the issue-number prefix that the fan-out variant
+   already requires. If a draft is found, validate it against
    `schemas/worker-report.schema.json` and append it with the profile-selected
    `idd-worker-report append --file <path>` command. If no draft is found,
    verify the terminal outcome from live GitHub state, build the record from
@@ -1293,9 +1296,10 @@ identify its old claims, and step 1 treats them as not its own.
    timestamps. Record the recovery in `deviations`, where each entry needs a
    `phase` and a `summary`, because `frictions` lists instruction text that
    caused friction.
-5. **Report the remainder.** An own claim with no matching worker after step 3,
-   other than a released claim from step 2, is reported to the operator. Its
-   worktree is not removed.
+5. **Report the remainder.** An own claim that reached step 3 and has no
+   matching worker is reported to the operator, and so is a matched finished
+   worker whose recorded outcome is `held`. A released claim is not reported
+   here, because step 4 handles it. Its worktree is not removed.
 
 ### Discover re-run cadence
 
