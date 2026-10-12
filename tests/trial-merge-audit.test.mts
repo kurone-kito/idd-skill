@@ -369,6 +369,31 @@ test('merge-base-unreachable: a PR head with no common ancestor is not-run, not 
   assert.equal(result.worktreeRemoved, true);
 });
 
+test('PR-only tooling leaves the scratch index, so commands cannot list it', () => {
+  // The PR adds a script the base tip lacks. The audit deletes it from the
+  // scratch worktree, and the commands must not see it through the index.
+  const fixture = makeFixture({
+    featureChanges: { 'scripts/pr-only.mjs': '// pr only\n' },
+  });
+  let listed: string[] | undefined;
+  const result = runTrialMergeAudit(fixture.work, '1', 'o', 'r', {
+    readPr: stubPr(fixture),
+    runInstall: realInstall,
+    runCommand: (argv, cwd) => {
+      if (argv[1] === 'scripts/audit-docs.mjs') {
+        listed = execFileSync('git', ['ls-files', '--cached'], {
+          cwd,
+          encoding: 'utf8',
+        }).split('\n');
+      }
+      return { exitCode: 0 };
+    },
+    lockTimeoutMs: 2000,
+  });
+  assert.deepEqual(result.toolingChanged, ['scripts/pr-only.mjs']);
+  assert.equal(listed?.includes('scripts/pr-only.mjs'), false);
+});
+
 test('clone lock held by another session: not-run, and no worktree is added', () => {
   const fixture = makeFixture();
   const worktreesBefore = git(fixture.work, [

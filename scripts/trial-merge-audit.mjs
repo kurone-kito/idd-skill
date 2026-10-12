@@ -336,8 +336,9 @@ function audit(args) {
         '--no-write-fetch-head',
         '--no-tags',
         args.fetchUrl,
-        pull.baseRefName,
-        `pull/${pr}/head`,
+        // Fully qualified, so a branch name can never parse as a git option.
+        `refs/heads/${pull.baseRefName}`,
+        `refs/pull/${pr}/head`,
       ],
       undefined,
       FETCH_TIMEOUT_MS,
@@ -367,6 +368,15 @@ function audit(args) {
     // shallow clone the base can be missing, and merge-tree would then report
     // a conflict that is not there. The bounded deepen steps run first, under
     // this lock, the same way branch-conflict-state runs them.
+    // Deepening only applies to a clone that is already shallow. A `--depth`
+    // fetch into a complete clone would make the shared clone shallow, so a
+    // complete clone with no merge base is reported as unreachable as it is.
+    const shallow =
+      git(repo, hooksDir, [
+        'rev-parse',
+        '--is-shallow-repository',
+      ]).stdout.trim() === 'true';
+    const deepenSteps = shallow ? MERGE_BASE_FETCH_STEPS.slice(1) : [];
     const deepenDeadline = Date.now() + MERGE_BASE_DEEPEN_BUDGET_MS;
     mergeBase =
       resolveMergeBaseWithRetry(
@@ -383,17 +393,17 @@ function audit(args) {
                 'fetch',
                 '--no-write-fetch-head',
                 '--no-tags',
-                ...MERGE_BASE_FETCH_STEPS[step],
+                ...deepenSteps[step],
                 args.fetchUrl,
-                pull.baseRefName,
-                `pull/${pr}/head`,
+                `refs/heads/${pull.baseRefName}`,
+                `refs/pull/${pr}/head`,
               ],
               undefined,
               Math.min(FETCH_TIMEOUT_MS, remaining),
             ).status === 0
           );
         },
-        MERGE_BASE_FETCH_STEPS.length,
+        deepenSteps.length,
       ) ?? '';
     if (mergeBase.length === 0) {
       return emptyResult('merge-base-unreachable', {
@@ -483,9 +493,27 @@ function audit(args) {
   const baseTooling = baseFiles.filter(isToolingPath);
   const mergedTooling = mergedFiles.filter(isToolingPath);
   const baseSet = new Set(baseTooling);
-  for (const path of mergedTooling) {
-    if (!baseSet.has(path)) {
-      rmSync(join(tmp, path), { force: true });
+  const prOnlyTooling = mergedTooling.filter((path) => !baseSet.has(path));
+  for (const path of prOnlyTooling) {
+    rmSync(join(tmp, path), { force: true });
+  }
+  // The scratch index still lists these paths, and the commands enumerate it
+  // with git ls-files --cached, so they must leave the index as well.
+  for (const batch of batchPaths(prOnlyTooling)) {
+    const removal = git(tmp, hooksDir, [
+      'rm',
+      '--cached',
+      '--quiet',
+      '--ignore-unmatch',
+      '--',
+      ...batch,
+    ]);
+    if (removal.status !== 0) {
+      return emptyResult('overlay-failed', {
+        prHeadSha: headSha,
+        baseSha,
+        trialCommit,
+      });
     }
   }
   for (const batch of batchPaths(baseTooling)) {
