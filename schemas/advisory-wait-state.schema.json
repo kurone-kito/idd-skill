@@ -68,7 +68,7 @@
     },
     "f3Outcome": {
       "type": "string",
-      "description": "F3-authoritative outcome; treats copilotPending=false as SATISFIED so F3 may merge a settled-but-not-re-reviewed advisory state. F3 uses this field exclusively when helper output is valid, which is why it can diverge from outcome.",
+      "description": "F3-authoritative outcome; treats copilotPending=false as SATISFIED so F3 may merge a settled-but-not-re-reviewed advisory state, except a same-head DISPOSITION_NEEDED (#4070), which never merges. F3 uses this field exclusively when helper output is valid, which is why it can diverge from outcome.",
       "enum": [
         "SATISFIED",
         "REQUEST_NEEDED",

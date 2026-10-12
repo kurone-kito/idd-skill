@@ -58,9 +58,9 @@ any bot but `advisoryWait.primaryBotLogin`.
 ## Fast path — common case
 
 Run the Helper-first canonical path below. Once `lastCopilotCommit`
-equals `prHeadSha`, the gate is **SATISFIED** unless **DISPOSITION_NEEDED**
-(#4070) — take the caller's
-`SATISFIED` action. For off-head `SATISFIED`, apply the header's
+equals `prHeadSha` and `outcome` is `SATISFIED`, take the caller's
+`SATISFIED` action (`DISPOSITION_NEEDED`, #4070, goes to the E14 table).
+For off-head `SATISFIED`, apply the header's
 `staleRequestRecovery`; lite hands off `attempt` for AW3-S.
 
 ## Helper-first canonical path
@@ -104,7 +104,7 @@ yourself. A missing field is a malformed helper response: stop and ask.
 | `RECOVERY_NEEDED` | post the recovery marker (do not request another review), then poll |
 | `CAP_EXHAUSTED` | `phase-specific` (default): proceed to CI wait. `hold`: stop and ask (`HOLD`'s only route; see above) |
 | `WAIT` | keep polling |
-| `DISPOSITION_NEEDED` (#4070) | not `SATISFIED`: answer the uncovered cited items (E6), then rerun the helper |
+| `DISPOSITION_NEEDED` (#4070) | answer the cited items (E6), then rerun the helper |
 <!-- dprint-ignore-end -->
 
 `capExhaustedRoute: phase-specific` lets E14 continue past
@@ -145,7 +145,9 @@ moved HEAD is the caller's job (E14 in `idd-review-fix-lite`).
 4. If `outcome` is now `SATISFIED`, exit this wait and continue. The
    helper folds the window values into `outcome` on every call; never
    re-derive that by hand.
-5. Otherwise (`outcome` is `WAIT`, or any other non-terminal value),
+5. If `outcome` is `DISPOSITION_NEEDED` (#4070), exit this wait and
+   answer the cited items per the E14 table; never keep polling.
+   Otherwise (`outcome` is `WAIT`, or any other non-terminal value),
    keep polling.
 
 ## Secondary advisory bot(s) (non-gating, optional)
