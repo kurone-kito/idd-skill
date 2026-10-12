@@ -135,7 +135,8 @@ layered on top of the distributed IDD defaults:
   A diff that touches one of the check's decision-rule files gets no
   such waiver; it needs a converged review, an approval of its HEAD
   from a `trustedMarkerActors` login, or the maintainer-authorized
-  waiver after the deadline (issue `#4015`). See
+  waiver after the deadline or while Copilot is terminally unavailable
+  (issue `#4015`). See
   [docs/idd-helper-scripts.md](docs/idd-helper-scripts.md#automated-self-referential-bootstrap-auto-waiver-kurone-kitoidd-skill2657)
   for the full trust model.
 - **ciGate F2 bootstrap**: This source repository follows the

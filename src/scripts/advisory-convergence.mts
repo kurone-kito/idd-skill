@@ -2599,9 +2599,10 @@ export function computeAdvisoryConvergenceVerdict(
   );
   // kurone-kito/idd-skill#4015: a diff that touches a decision-rule file
   // never receives the auto-waiver, even when it also touches a bootstrap
-  // file. It passes only through a converged review or a trusted
+  // file. It passes only through a converged review, a trusted
   // maintainer's approval of the current HEAD (`decisionRuleApprovalValid`
-  // below).
+  // below), or the maintainer-authorized waiver after the deadline or
+  // while Copilot is terminally unavailable.
   const decisionRuleFiles = resolveSelfReferentialDecisionRuleFiles(
     autoWaiverRepositoryFullName,
   );
