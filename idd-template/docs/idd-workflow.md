@@ -1214,7 +1214,10 @@ identify its old claims, and step 1 treats them as not its own.
    equals this session's session-suffixed agent-id. If the session cannot
    determine that id, every claim is not own. Claims that are not own are not
    dispatched again, and they are reported to the operator.
-2. **Verify each own claim.** Run the profile-selected `resume-claim-routing`
+2. **Verify each own claim.** Take `--issue` from the worktree's branch,
+   `issue/<number>-<slug>`, because the token record holds no issue number.
+   Confirm that number against the trusted `claimed-by` marker that carries
+   the same claim-id. Then run the profile-selected `resume-claim-routing`
    command (see `docs/idd-helper-scripts.md`) with `--assert`, `--issue`,
    `--claim-id`, `--nonce` (when the file holds one), and `--worktree <path>`.
    Continue to step 3 only when the command exits 0, which means the state is
