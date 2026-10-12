@@ -124,15 +124,15 @@ For the full fallback order and policy matrix, see
 After Step 1A and Step 1C, you should have final values for these seven
 placeholders:
 
-| Placeholder                      | Meaning                                                   | Example                            |
-| -------------------------------- | --------------------------------------------------------- | ---------------------------------- |
-| `{{REPO_NAME}}`                  | Repository short name used in worktree examples           | `my-app`                           |
-| `{{PROJECT_MARKER_PREFIX}}`      | Hidden issue-body marker prefix                           | `my-app`                           |
-| `{{TRUSTED_MARKER_ACTOR}}`       | Single JSON-escaped login allowed to post trusted markers | `trusted-user-a`                   |
-| `{{FIX_VALIDATE_COMMANDS}}`      | Auto-fix plus validate command row                        | `npm run lint:fix && npm run lint` |
-| `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Non-mutating verify command row                           | `npm run lint && npm run test`     |
-| `{{POST_FIX_VALIDATE_COMMANDS}}` | Post-fix validate command row                             | `npm run lint:fix && npm test`     |
-| `{{INSTALL_DEPS_COMMAND}}`       | Dependency install command, or `true` when unnecessary    | `npm install`                      |
+| Placeholder                      | Meaning                                                   | Example                            | Policy field                 |
+| -------------------------------- | --------------------------------------------------------- | ---------------------------------- | ---------------------------- |
+| `{{REPO_NAME}}`                  | Repository short name used in worktree examples           | `my-app`                           | (repo name)                  |
+| `{{PROJECT_MARKER_PREFIX}}`      | Hidden issue-body marker prefix                           | `my-app`                           | `markerPrefix`               |
+| `{{TRUSTED_MARKER_ACTOR}}`       | Single JSON-escaped login allowed to post trusted markers | `trusted-user-a`                   | `trustedMarkerActors[0]`     |
+| `{{FIX_VALIDATE_COMMANDS}}`      | Auto-fix plus validate command row                        | `npm run lint:fix && npm run lint` | `commands.fix-validate`      |
+| `{{PRE_PUSH_VALIDATE_COMMANDS}}` | Non-mutating verify command row                           | `npm run lint && npm run test`     | `commands.pre-push-validate` |
+| `{{POST_FIX_VALIDATE_COMMANDS}}` | Post-fix validate command row                             | `npm run lint:fix && npm test`     | `commands.post-fix-validate` |
+| `{{INSTALL_DEPS_COMMAND}}`       | Dependency install command, or `true` when unnecessary    | `npm install`                      | `commands.install-deps`      |
 
 ### No-op substitution
 
