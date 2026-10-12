@@ -1221,20 +1221,23 @@ identify its old claims, and step 1 treats them as not its own.
    command (see `docs/idd-helper-scripts.md`) with `--assert`, `--issue`,
    `--claim-id`, `--nonce` (when the file holds one), and `--worktree <path>`.
    A claim that a worker released with its `unclaimed-by` marker, as F4 does
-   as its last mutation before returning the final report, routes to
-   `unclaimed` with action `re_claim`, or to `local_worktree_occupied` with
-   action `stop` while its worktree still exists. It does not return
-   `already_owned`. Skip step 3 for it and go to step 4, which verifies its
-   terminal state from live GitHub state. For any other claim, continue to
-   step 3 only when the command exits 0, which means the state is
-   `already_owned` with action `keep`. When it does not exit 0, read the
-   `state` field. `stale` goes to the takeover path in
-   `idd-resume.instructions.md`. Any other state is reported to the operator
-   with its name, and no further action is taken on that issue.
+   as its last mutation before returning the final report, has the result
+   `unclaimed` with `evidence.released_claim` present, or the result
+   `local_worktree_occupied` with the reason
+   `released-claim-local-worktree-occupied` while its worktree still exists.
+   A released claim does not return `already_owned`. Skip step 3 for it and go
+   to step 4, which verifies its terminal state from live GitHub state. For any
+   other claim, continue to step 3 only when the command exits 0, which means
+   the state is `already_owned` with action `keep`. When it does not exit 0,
+   read the `state` field. `stale` goes to the takeover path in
+   `idd-resume.instructions.md`. Any other state, including an unreadable
+   worktree, is reported to the operator with its name, and no further action
+   is taken on that issue.
 3. **Re-attach workers.** Read the live worker list from the harness's agent
    listing, and match each entry to an own claim by the issue number in the
    worker's brief. If the harness offers no agent listing, no worker is
-   matched, and every own claim goes to step 5. For a matched worker that the
+   matched, and every own claim that reached step 3 goes to step 5. A released claim
+   from step 2 still goes to step 4. For a matched worker that the
    runtime can still message, apply the existing worker-death rules by
    reference, under the bullet titled
    "Resume-specific recovery when a worker dies mid-turn" in the
