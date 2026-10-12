@@ -200,10 +200,8 @@ node scripts/idd-onboard.mjs --import \
   --source "$CLONE_DIR" --target "$TARGET_REPO" --profile vendored-node
 ```
 
-Both `--source` and an explicit `--target` are required — `--target`
-defaults to the current directory, which would import into the clone
-itself if left unset while running from inside it. `$CLONE_DIR` and
-`$TARGET_REPO` stay shell variables (never angle brackets) in the
+The `--source` and `--target` rules above apply here too. `$CLONE_DIR`
+and `$TARGET_REPO` stay shell variables (never angle brackets) in the
 published issue body: the release checklist requires no unsubstituted
 placeholder remain before the authoring hold is released, and these
 have nothing to substitute until the executor runs the command. The
