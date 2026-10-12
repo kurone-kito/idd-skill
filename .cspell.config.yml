@@ -43,6 +43,7 @@ words:
   - OICIID
   - OICIIOID
   - PAIAR
+  - pnpmfile
   - pylint
   - pytest
   - pyproject

@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/trial-merge-audit.schema.json",
+  "title": "Trial Merge Audit",
+  "description": "Push-free local evidence for a PR: the verification commands run on the merged tree under base-tip tooling. Evidence only; it does not change F1 routing.",
+  "type": "object",
+  "required": [
+    "protocolVersion",
+    "verdict",
+    "prHeadSha",
+    "baseSha",
+    "trialCommit",
+    "commands",
+    "toolingChanged",
+    "install",
+    "worktreeRemoved",
+    "reasons"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "pattern": "^1$",
+      "description": "Protocol version of the trial-merge audit document."
+    },
+    "verdict": {
+      "enum": [
+        "passed",
+        "failed",
+        "not-run"
+      ],
+      "description": "passed only when every command passed, install succeeded, and toolingChanged is empty; failed when a command failed on the merged content; not-run for setup failures, for a non-empty toolingChanged, for absent commands with an empty toolingChanged (commands-unavailable), and for a command cut off by its timeout (command-timed-out)."
+    },
+    "prHeadSha": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^$|^[0-9a-f]{40}$",
+      "description": "PR head commit SHA, or null when it could not be read."
+    },
+    "baseSha": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^$|^[0-9a-f]{40}$",
+      "description": "Base tip commit SHA, or null when it could not be read."
+    },
+    "trialCommit": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^$|^[0-9a-f]{40}$",
+      "description": "Trial commit that holds the merged tree, or null when none was created. It is an object only and no ref points at it."
+    },
+    "commands": {
+      "type": "array",
+      "description": "The fixed verification commands in order, with their exit codes.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "argv",
+          "exitCode",
+          "passed"
+        ],
+        "properties": {
+          "id": {
+            "enum": [
+              "audit-docs",
+              "sync-docs",
+              "typecheck"
+            ],
+            "description": "Fixed command identifier."
+          },
+          "argv": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Argument vector the command ran with."
+          },
+          "exitCode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Exit code, or null when the command did not run."
+          },
+          "passed": {
+            "type": "boolean",
+            "description": "Whether the command exited 0 on the merged content."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "toolingChanged": {
+      "type": "array",
+      "description": "Tooling paths where the PR head differs from the base tip.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "install": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Result of the fresh frozen-lockfile install in the scratch worktree, or null when no install ran.",
+      "required": [
+        "exitCode",
+        "passed"
+      ],
+      "properties": {
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Install exit code, or null when the install did not run."
+        },
+        "passed": {
+          "type": "boolean",
+          "description": "Whether the frozen-lockfile install succeeded."
+        }
+      },
+      "additionalProperties": false
+    },
+    "worktreeRemoved": {
+      "type": "boolean",
+      "description": "Whether no scratch worktree remains after the run."
+    },
+    "reasons": {
+      "type": "array",
+      "description": "Why the verdict is not passed, such as tooling-changed, content-conflict, install-failed, or command-failed.",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}
