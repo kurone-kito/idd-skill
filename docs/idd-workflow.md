@@ -1717,15 +1717,30 @@ subsection describes for the issue-authoring reviewer.
    (no issue records the incident itself), and 2026-09-30 in an
    issue-authoring draft review (no issue filed).
 3. **Scratch files only in its own directory.** Scratch files go only
-   in a directory the subagent creates (for example with `mktemp -d`)
+   in a directory the subagent creates (for example with `mktemp -d`
+   inside a per-user parent directory, never directly in `/tmp`)
    outside the repository and the session scratchpad. When the parent
    has already created a scratch directory outside the repository and
    the session scratchpad and named it in the brief (the Claude Code
    recipe below has the parent create a scratch directory and name it
    in the launch prompt), the subagent uses only that directory and
-   creates none. This rule is preventive; no observed incident yet (the
-   `kurone-kito/idd-skill#3648` vector was the symlink, not the
-   location).
+   creates none. It never deletes an entry it did not create. The
+   subagent ends its reply with every absolute path it created, wrote or
+   deleted, each labeled with that action, including any directory it
+   created itself. Observed 2026-10-09, in
+   E10 critique rounds 5 and 6 for `kurone-kito/idd-skill#3872`: one
+   subagent wrote a bare file under `/tmp`, another left a `mktemp`
+   directory under `/tmp`, and one reported its scratch file deleted
+   while it was still present (the run notes do not record whether
+   those briefs named a directory). Observed again 2026-10-10, in an E10
+   critique round for `kurone-kito/idd-skill#3752` (pull request
+   `kurone-kito/idd-skill#3851`): a subagent deleted five entries in a
+   shared scratch directory that it had not created. Both are recorded
+   in the "Incident record" comments on `kurone-kito/idd-skill#3961`
+   ([first](https://github.com/kurone-kito/idd-skill/issues/3961#issuecomment-6085458916),
+   [second](https://github.com/kurone-kito/idd-skill/issues/3961#issuecomment-6096199282)).
+   The parent checks this rule with the post-round scratch check below
+   instead of trusting the subagent's own report.
 4. **No reading of session-private state.** The subagent does not read
    the claim lock file `idd-claim.lock`, the `idd-generated-*` files in
    the git directory, the session scratchpad (except a file the brief
@@ -1740,6 +1755,55 @@ subsection describes for the issue-authoring reviewer.
    background process the subagent itself started before it returns.
    Observed 2026-10-01, during the plan critique for
    `kurone-kito/idd-skill#3705` (no issue records the incident itself).
+
+**Post-round scratch check.** The parent names a scratch directory in
+the brief whenever it can create one, so a subagent-created directory
+is only a fallback. Around each delegated per-agent critique round
+(step 1 before the launch, the rest after the round and any process
+cleanup), the parent checks rule 3 itself. The check catches accidental
+violations by a cooperating subagent, the shape of every incident rule
+3 cites. Like the brief, it is not a sandbox, and it does not prove
+that rule 3 held:
+
+1. Before the launch, it creates the named directory empty inside a
+   dedicated per-user parent directory outside the repository and the
+   session scratchpad, never directly in `/tmp`, so every entry in it
+   after the round belongs to the round. It also lists the immediate
+   entries of that parent directory (for example `ls -A <parent>/`).
+2. After the round, it lists the named directory recursively by its
+   literal path without following symbolic links (for example
+   `find <dir> -mindepth 1`) and lists the parent directory again.
+3. It resolves the named directory and each reported path with
+   `realpath -m` (GNU coreutils) or an equivalent that follows symbolic
+   links without requiring the path to exist, so the comparison is not
+   only lexical; a path that cannot be resolved is flagged. It flags,
+   in the critique result and in its final message, any reported path
+   that resolves outside the named directory, any symbolic link
+   anywhere under the named directory, any entry in the named directory
+   the subagent did not report as created or written, any path reported
+   as deleted that is still present, and any entry of the parent
+   directory that appeared or vanished during the round. It records the
+   listings in the critique result before the named directory is
+   removed. For a pass stopped before it returned, the subagent
+   reported nothing, so the parent lists every entry as residual risk
+   rather than as a violation.
+4. It does not scan all of `/tmp` or any other shared directory beyond
+   the parent directory's own entries, and it deletes nothing it
+   cannot attribute to the round. Other sessions under the same OS user
+   write to these locations too, so a flagged entry there is a lead to
+   check, not proof of a violation; that includes the directories of
+   other passes the parent runs at the same time. A write outside the
+   named directory and the parent directory that the subagent does not
+   report stays unverified; the parent records that limit rather than
+   claiming that rule 3 held.
+
+When the subagent created its own directory instead (the fallback),
+there is no pre-launch listing. The parent then checks only the paths
+the subagent reported. It treats the directory the subagent reported
+creating as the named directory for steps 2 and 3 (the recursive
+listing, the resolution, and every step-3 flag), never lists `/tmp`
+itself, and records that the round had no named directory as residual
+risk.
 
 The parent bounds its wait for each delegated per-agent critique pass by
 the resolved `critiqueLoop.subagentWaitCeiling`. Enforce that ceiling
@@ -1781,10 +1845,13 @@ Code session:
    launch). When it cannot confirm both, it does not launch, records the
    residual risk as the "cannot honor the ceiling" paragraph above
    requires, and uses structured self-critique.
-2. Creates, before the launch, a unique scratch directory outside the
-   worktree, names it in the launch prompt, and tells the subagent to put
-   any scratch file only under it and to start any background job with a
-   working directory under it.
+2. Creates, before the launch, a unique scratch directory placed as
+   step 1 of the post-round scratch check above requires, names it in
+   the launch prompt, and tells the subagent to put any scratch file
+   only under it, to start any background job with a working directory
+   under it, and to end its reply with every absolute path it created,
+   wrote or deleted, each labeled with that action. It takes the
+   step-1 listings of the post-round scratch check above.
 3. Launches the pass with `Agent`, notes the launch time, and arms the
    wake-up for the ceiling, deliberately the ceiling and not the expected
    completion because the ceiling is the only moment a decision is
@@ -1804,7 +1871,8 @@ Code session:
    those whose working directory or command line is under the scratch
    directory, never the session's own shell or the listing command itself.
    It reports any other leftover as residual risk, without ending it, and
-   it never ends processes by a name pattern. It removes the scratch
+   it never ends processes by a name pattern. It then runs the
+   post-round scratch check above. It removes the scratch
    directory by its exact literal path (never a possibly unset shell
    variable) only after that cleanup and only when no process under it
    remains; otherwise it leaves the directory and records the residual
