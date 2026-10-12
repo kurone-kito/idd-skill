@@ -272,6 +272,7 @@ interface PolicyConfigFile {
     };
     trustEmptyProtectionReads?: boolean;
     trustSourcePinnedRequiredChecks?: boolean;
+    allowNoRequiredChecksInGlobalOnly?: boolean;
   };
   discover?: {
     activeClaimPreScanBatchSize?: number;
@@ -996,6 +997,8 @@ const advisoryConvergenceFixture = {
     validCount: 0,
     outageRelieved: false,
     autoWaiverValid: false,
+    decisionRuleFilesTouched: false,
+    decisionRuleApprovalValid: false,
   },
   dispositionEvidence: {
     missingRegularCommentCount: 0,
@@ -1530,6 +1533,7 @@ const policyConfigFixture = {
     },
     trustEmptyProtectionReads: true,
     trustSourcePinnedRequiredChecks: true,
+    allowNoRequiredChecksInGlobalOnly: true,
   },
   discover: {
     activeClaimPreScanBatchSize: 10,
@@ -1907,6 +1911,9 @@ const resolveReviewThreadKeys = [
   'commentId',
   'threadId',
   'alreadyResolved',
+  'reviewId',
+  'itemTitle',
+  'itemIndex',
   'body',
   'status',
   'replyId',

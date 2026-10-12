@@ -4,6 +4,8 @@
 // The scripts/resume-claim-routing.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+import { execFileSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
 import {
@@ -17,14 +19,20 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mjs';
 import { loadPolicyConfig } from './idd-config.mjs';
-import { inspectLocalWorktreeBranch } from './local-worktree-occupancy.mjs';
+import {
+  inspectLocalWorktreeBranch,
+  sanitizedGitEnvironment,
+} from './local-worktree-occupancy.mjs';
 import {
   listActivationNonces,
   parseForcedHandoffComment,
   parseLegacyClaimComment,
   resolveLegacyClaimState,
 } from './marker-helpers.mjs';
-import { normalizePolicyConfig } from './policy-helpers.mjs';
+import {
+  inspectDevelopmentBranch,
+  normalizePolicyConfig,
+} from './policy-helpers.mjs';
 import {
   buildForcedHandoffRefusalExplainer,
   DEFAULT_STALE_AGE_MS,
@@ -70,6 +78,7 @@ const RESUME_CLAIM_ROUTING_FLAG_SPEC = {
   '--fresh-claim-gate': { type: 'boolean', default: false },
   '--assert': { type: 'boolean', default: false },
   '--worktree': { type: 'string' },
+  '--own-worktree': { type: 'string' },
   '--format': { type: 'string', default: 'json' },
   '--help': { type: 'boolean', short: 'h' },
 };
@@ -150,6 +159,93 @@ function checkCurrentSessionOwner(claim, options) {
     unproven: !(structured ? structured.owner : verdict),
     evidence: probe !== undefined && structured ? structured.evidence : null,
   };
+}
+/**
+ * #4019: decide whether one occupant of a released claim's branch is the
+ * caller's own new worktree, left exactly as `git worktree add --no-track
+ * <path> -b <branch> origin/<base>` created it. Every condition must hold,
+ * and any failed read returns `false`, so the occupant keeps blocking:
+ *
+ * - the occupant and `ownWorktree` resolve to the same real path, which Git
+ *   reports as that worktree's own top level;
+ * - its HEAD is `refs/heads/<branchName>`;
+ * - `git status --porcelain --untracked-files=all` is empty;
+ * - `origin/<base>` resolves, and `HEAD` has no commit beyond it.
+ */
+export function isPristineOwnWorktree(check) {
+  const execute = check.execute ?? execFileSync;
+  const env = sanitizedGitEnvironment(check.environment ?? process.env);
+  let ownRoot;
+  try {
+    ownRoot = realpathSync(check.ownWorktree);
+    if (realpathSync(check.occupiedPath) !== ownRoot) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  const git = (args) => {
+    try {
+      return String(
+        execute('git', ['-C', ownRoot, ...args], {
+          encoding: 'utf8',
+          env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }),
+      );
+    } catch {
+      return null;
+    }
+  };
+  const topLevel = git(['rev-parse', '--show-toplevel']);
+  try {
+    if (
+      topLevel === null ||
+      realpathSync(topLevel.replace(/\n$/, '')) !== ownRoot
+    ) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  if (
+    git(['symbolic-ref', '--quiet', 'HEAD'])?.trim() !==
+    `refs/heads/${check.branchName}`
+  ) {
+    return false;
+  }
+  if (git(['status', '--porcelain', '--untracked-files=all']) !== '') {
+    return false;
+  }
+  let baseRef;
+  if (check.developmentBranch) {
+    baseRef = `origin/${check.developmentBranch}`;
+  } else {
+    const originHead = git([
+      'symbolic-ref',
+      '--quiet',
+      '--short',
+      'refs/remotes/origin/HEAD',
+    ])?.trim();
+    if (!originHead?.startsWith('origin/')) {
+      return false;
+    }
+    baseRef = originHead;
+  }
+  if (
+    !git([
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `refs/remotes/${baseRef}^{commit}`,
+    ])?.trim()
+  ) {
+    return false;
+  }
+  return (
+    git(['rev-list', '--count', `refs/remotes/${baseRef}..HEAD`])?.trim() ===
+    '0'
+  );
 }
 export function evaluateResumeClaimRouting(input, options = {}) {
   const nowIso =
@@ -344,6 +440,35 @@ export function evaluateResumeClaimRouting(input, options = {}) {
       '';
     if (branch) {
       localWorktree = options.inspectLocalWorktree(branch);
+      // #4019: the fresh-claim order creates the caller's own worktree
+      // before its second gate read, so a released branch otherwise always
+      // reads as occupied by that new, empty worktree.
+      if (
+        worktreeSource === 'released' &&
+        localWorktree.status === 'occupied' &&
+        options.isOwnPristineWorktree
+      ) {
+        const isOwn = options.isOwnPristineWorktree;
+        const ownPaths = localWorktree.paths.filter((path) =>
+          isOwn(path, branch),
+        );
+        if (ownPaths.length > 0) {
+          const others = localWorktree.paths.filter(
+            (path) => !ownPaths.includes(path),
+          );
+          warnings.push(
+            `released branch ${branch}: ignored the caller's own clean worktree ${ownPaths.join(', ')} (--own-worktree)`,
+          );
+          localWorktree =
+            others.length > 0
+              ? { ...localWorktree, paths: others }
+              : {
+                  status: 'absent',
+                  paths: [],
+                  reason: `only the caller's own clean worktree occupies ${branch}`,
+                };
+        }
+      }
       if (localWorktree.status !== 'absent') {
         routeState = 'local_worktree_occupied';
         action = 'stop';
@@ -574,6 +699,11 @@ function runCli() {
       new Error('--assert cannot be combined with --fresh-claim-gate'),
     );
   }
+  if (args.ownWorktree && !args.freshClaimGate) {
+    throw markCliUsageError(
+      new Error('--own-worktree requires --fresh-claim-gate'),
+    );
+  }
   if (args.ghToken) {
     process.env.GH_TOKEN = args.ghToken;
     process.env.GITHUB_TOKEN = args.ghToken;
@@ -685,6 +815,19 @@ function runCli() {
         args.worktree || undefined,
       ),
     linkedPrLookupFailed,
+    // #4019: only with --own-worktree, which requires --fresh-claim-gate.
+    ...(args.ownWorktree
+      ? {
+          isOwnPristineWorktree: (occupiedPath, branchName) =>
+            policy.developmentBranch.status !== 'invalid' &&
+            isPristineOwnWorktree({
+              ownWorktree: args.ownWorktree,
+              occupiedPath,
+              branchName,
+              developmentBranch: policy.developmentBranch.branch ?? null,
+            }),
+        }
+      : {}),
   };
   const result = evaluateResumeClaimRouting(
     {
@@ -1156,6 +1299,13 @@ function parseArgs(argv) {
   // hit `unknown argument: --format` here. This helper only ever emits
   // JSON, so `json` is a no-op; every other value fails loudly instead of
   // silently degrading to JSON.
+  // #4019: an empty value would read as "flag absent" and skip the
+  // --fresh-claim-gate usage check, so reject it outright.
+  if (values['own-worktree'] === '') {
+    throw markCliUsageError(
+      new Error('--own-worktree requires a non-empty path'),
+    );
+  }
   const format = values.format;
   if (format !== 'json') {
     throw markCliUsageError(
@@ -1186,13 +1336,14 @@ function parseArgs(argv) {
     freshClaimGate: values['fresh-claim-gate'],
     assert: values.assert,
     worktree: values.worktree ?? '',
+    ownWorktree: values['own-worktree'] ?? '',
     format,
     help,
   };
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--gh-token <token>] [--claim-id <token>] [--nonce <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"] [--fresh-claim-gate] [--assert] [--worktree <path>] [--format json]
+  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--gh-token <token>] [--claim-id <token>] [--nonce <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"] [--fresh-claim-gate] [--own-worktree <path>] [--assert] [--worktree <path>] [--format json]
   Deprecated aliases (one release): --token -> --gh-token
 
   --format json       output format (default: json). JSON is the only
@@ -1204,6 +1355,17 @@ function printHelp() {
                       fresh claim owns none yet). Run it on a fresh fetch
                       immediately before the claim write; it re-uses the same
                       resolver so claim-state logic never forks.
+  --own-worktree <path>
+                      with --fresh-claim-gate only (#4019): the caller's own
+                      pre-created worktree. When a released claim's branch is
+                      occupied by exactly this path, and the worktree is on
+                      that branch, clean (no tracked or untracked changes),
+                      and has no commits beyond origin/<developmentBranch>
+                      (origin/HEAD when the policy sets none), the gate
+                      ignores it. Any other occupant, or a failed check
+                      (including a missing or outdated origin/HEAD, or an
+                      invalid developmentBranch), still blocks. An empty
+                      value is a usage error.
   --assert            exit 0 only when the verdict is state already_owned with
                       action keep; any other verdict exits non-zero (a gate
                       failure) and writes one stderr line naming state,
@@ -1293,6 +1455,8 @@ export function loadPolicy(policyPath) {
     // already-normalized `claimTiming.staleAge` (fail-safe to `PT24H`), so
     // a schema-invalid value resolves identically everywhere.
     staleAgeMs: readClaimStaleAgeMs(typedConfig),
+    // #4019: the --own-worktree base; an invalid value fails closed.
+    developmentBranch: inspectDevelopmentBranch(config),
     trustedMarkerActors: Array.isArray(typedConfig?.trustedMarkerActors)
       ? typedConfig.trustedMarkerActors
           .map((value) => String(value ?? '').trim())

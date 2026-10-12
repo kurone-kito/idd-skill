@@ -51,6 +51,7 @@ words:
   - requir
   - SAFA
   - SDDL
+  - tmpfs
   - TOCTOU
   - tsfile
   - undispositioned

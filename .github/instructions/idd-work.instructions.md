@@ -143,19 +143,11 @@ Non-interactive/automation: append `-x <noop>` (e.g. `-x true`) so
 WorkTrunk creates, runs the pre-start hook, and exits without
 changing the caller's directory.
 
-**Pre-start hook approval hang** (confirmed live 2026-09-09, issue
-`#2797`): even with `-x <noop>`, `wt switch --create` still hangs
-non-interactively when the `[pre-start]` hook's own install command has
-not already been approved — WorkTrunk's own `approvals.toml` mechanism
-prompts for command approval on first run and fails outright outside a
-TTY, with `Cannot prompt for approval in non-interactive environment. To
-skip prompts in CI/CD, add --yes`. Before the first `wt switch --create`
-in such an environment, run `wt config approvals add --yes` once from
-the primary worktree to pre-approve the project's hook and alias
-commands (stored in `~/.config/worktrunk/approvals.toml`, scoped to the
-git project so the approval carries over to every sibling worktree).
-Prefer this pre-approval to the global `-y`/`--yes` flag, which would
-also skip approval for every other command WorkTrunk runs.
+**Pre-start hook approval hang** (issue `#2797`): with `-x <noop>`,
+`wt switch --create` hangs if the `[pre-start]` hook is unapproved. Before the
+first switch, run `wt config approvals add --yes` once from the primary
+worktree. The approval is project-scoped, so sibling worktrees share it.
+Avoid the global `-y`/`--yes` flag; it skips all approvals.
 
 If WorkTrunk is unavailable, choose the correct case:
 
@@ -491,10 +483,9 @@ worker-side authoring.
 
 ### C1 — Critique pass
 
-Run a critique pass on this branch's diff. Ask it to check whether the
-implementation is correct, whether the issue's requirements are
-satisfied, whether adequate test coverage exists, and whether any other
-problems exist. See `idd-overview-appendix.instructions.md` for per-agent
+Run a critique pass on this branch's diff. Ask it to check correctness,
+whether the issue's requirements are satisfied, test coverage, and any
+other problems. See `idd-overview-appendix.instructions.md` for per-agent
 implementation. The distributed defaults for the C-phase skip and loop
 guards are listed in `docs/policy-constants.md`. A repository may
 configure `critiqueLoop.delegate` to point this step at a different
@@ -510,18 +501,19 @@ resolution order directly instead: repo-local `critiqueLoop.delegate`
 always wins outright, and only when it is genuinely absent does a
 local runtime's user-global config file apply. A repository may also
 configure `critiqueLoop.telemetryHook` for a separate fire-and-forget
-per-round JSON record (round, repo, issue, PR,
-findings/severity/accepted/rejected counts, delegate usage, timestamp)
-that C2/C4 below invoke but that never gates control flow; see
-`docs/idd-workflow.md`'s "Critique pass invocation" section for both.
+per-round JSON record that C2/C4 below invoke but that never gates
+control flow; see `docs/idd-workflow.md`'s "Critique pass invocation"
+section for both. If possible, a per-agent subagent's brief names a
+parent-created scratch directory and quotes rule 3: "the subagent uses
+only that directory and creates none"; run the post-round scratch check
+after each such pass.
 
 **Objective diff validation floor**: neither C2 nor C4 below may skip to
 `idd-pr-submit.instructions.md` unless **fix-validate** — the same
 command set C5 runs — has passed against the branch's current HEAD;
 re-run it after every new commit. This floor is independent of D2's own
 **pre-push-validate** gate and never substitutes for it, and it applies
-**uniformly** regardless of self-classifying as "no-subagent" (see
-`docs/idd-workflow.md`'s "Critique pass invocation" section): on a
+**uniformly** regardless of self-classifying as "no-subagent": on a
 no-subagent runtime, where critique degrades to same-response
 self-critique, the critique verdict is **advisory** and this floor is
 **load-bearing** instead. If the floor has not passed, C2 and C4

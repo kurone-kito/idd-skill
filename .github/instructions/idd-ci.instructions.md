@@ -12,8 +12,7 @@ The shared CI wait defaults are listed in
 [IDD policy constants](../../docs/policy-constants.md). Resolve via
 `.github/idd/config.json` `ciWait.runningTimeout`,
 `ciWait.generationTimeout`, and `ciWait.rerunPolicy` when present and
-valid; otherwise keep the distributed defaults (`PT30M`, `PT10M`,
-`rerun-once`).
+valid; otherwise keep the distributed defaults.
 
 When helper support is installed, use the profile-selected ci-wait
 policy helper command as the canonical read-only policy resolver.
@@ -126,7 +125,8 @@ interpreting `gh pr checks` output.
    otherwise derive the equivalent from actual runs at the head SHA:
    `all-passing` may proceed; `pending` → wait/re-check; `some-failing`
    or `none` (no runs) → **hold** — never treat an empty required-check
-   set as a vacuous pass. Full routing table:
+   set as a vacuous pass, except `ci.allowedByPolicySetting` (the
+   global-only opt-in). Full routing table:
    [F2 — Pre-merge condition check](idd-pre-merge.instructions.md#f2--pre-merge-condition-check).
 
 When caller phases already provide a trusted required-check set, reuse
@@ -296,7 +296,8 @@ job is a documented no-op rather than a failure). See
 for the marker shape, the seven acceptance conditions, and why this one
 waiver kind is evaluated independent of the deadline/terminal-unavailable
 gate. This does not replace the manual flow for any other reason token,
-actor, or check.
+actor, or check. In `kurone-kito/idd-skill`, a PR touching a
+decision-rule file gets none (kurone-kito/idd-skill#4015).
 
 **Stale workflow definition after a rerun.** `gh run rerun` reuses the
 original event's commit and workflow definition (`pull_request`: that
@@ -399,8 +400,7 @@ See [REST](../../docs/idd-helper-scripts.md#rest).
   before a heavy local command (a full build, test, lint, or doctor
   run) expected to run long, rather than discovering the
   auto-background only after the fact (issue `#2933`). Never blindly
-  re-issue a
-  heavy local command (a full build, test, or lint run) that
+  re-issue a heavy local command that
   auto-backgrounds past the tool's default timeout — being idempotent
   does not make it safe to run twice at once; two concurrent instances
   can still collide on shared output (e.g. a `coverage/` directory).
@@ -436,8 +436,7 @@ See [REST](../../docs/idd-helper-scripts.md#rest).
   outside the full build/test suite, instead of re-running everything.
 
 This trims only wasteful dimensions (context re-read, CI minutes) —
-review rounds stay full. Same discipline applies to the advisory-wait
-and review-fix wait points.
+review rounds stay full.
 
 **Known residual risk**: workers can still stall here — expected and
 budgeted. Recovery: one message citing live state (PR number, check

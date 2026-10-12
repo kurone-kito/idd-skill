@@ -220,16 +220,16 @@ const CITATION_ANYWHERE_PATTERN =
 /** A `<details>` or `</details>` tag, for the wrapper-bounded scan below. */
 const DETAILS_TAG_PATTERN = /<(\/?)details>/g;
 /**
- * The Previously missed items of an `overview-v2` body, in order, each
- * flagged `cited` when its text names a file or line anywhere (#3942). The
- * items are the `<details>` blocks directly inside the Previously missed
- * wrapper, and only those with their own `<summary>`. The scan stops where the
- * wrapper closes, so a later section is never read as an item. `null` when the
- * body is not `overview-v2`, has no such section, or never closes its wrapper.
- * Read from the raw body: {@link stripMarkdownCodeRegions} would blank the
- * code span that carries the citation.
+ * The raw `<details>` blocks of an `overview-v2` body's Previously missed
+ * section, in order. The items are the `<details>` blocks directly inside the
+ * Previously missed wrapper, and only those with their own `<summary>`. The
+ * scan stops where the wrapper closes, so a later section is never read as an
+ * item. `null` when the body is not `overview-v2`, has no such section, or
+ * never closes its wrapper. Read from the raw body:
+ * {@link stripMarkdownCodeRegions} would blank the code span that carries the
+ * citation.
  */
-export function extractPreviouslyMissedItems(body) {
+function previouslyMissedItemBlocks(body) {
   if (typeof body !== 'string' || !V2_MARKER_PATTERN.test(body.trimStart())) {
     return null;
   }
@@ -240,7 +240,7 @@ export function extractPreviouslyMissedItems(body) {
   if (body.lastIndexOf('<details>', heading.index) < 0) {
     return null;
   }
-  const items = [];
+  const blocks = [];
   let depth = 1;
   let itemStart = -1;
   const tags = new RegExp(DETAILS_TAG_PATTERN.source, 'g');
@@ -256,21 +256,142 @@ export function extractPreviouslyMissedItems(body) {
     if (depth === 2 && itemStart >= 0) {
       const block = body.slice(itemStart, m.index + m[0].length);
       if (block.includes('<summary>')) {
-        items.push({
-          cited: block
-            .replace(ZERO_WIDTH_CHARS_PATTERN, '')
-            .split(/\r?\n/)
-            .some((line) => CITATION_ANYWHERE_PATTERN.test(line)),
-        });
+        blocks.push(block);
       }
       itemStart = -1;
     }
     depth -= 1;
     if (depth === 0) {
-      return items;
+      return blocks;
     }
   }
   return null;
+}
+/**
+ * The Previously missed items of an `overview-v2` body, in order, each
+ * flagged `cited` when its text names a file or line anywhere (#3942). See
+ * {@link previouslyMissedItemBlocks} for which blocks count as items and when
+ * the result is `null`.
+ */
+export function extractPreviouslyMissedItems(body) {
+  const blocks = previouslyMissedItemBlocks(body);
+  return blocks === null
+    ? null
+    : blocks.map((block) => ({
+        cited: block
+          .replace(ZERO_WIDTH_CHARS_PATTERN, '')
+          .split(/\r?\n/)
+          .some((line) => CITATION_ANYWHERE_PATTERN.test(line)),
+      }));
+}
+/** The named HTML character references a `<summary>` title is decoded from
+ * for matching: the markup-significant ones, the typographic punctuation a
+ * prose title can carry (dashes, quotes, ellipsis, arrows, comparison signs),
+ * and a few common symbols. A name outside this table is kept as written.
+ * Numeric references (`&#39;`, `&#x27;`) are decoded separately, for every
+ * valid code point. */
+const SUMMARY_TITLE_NAMED_ENTITIES = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+  ndash: '\u2013',
+  mdash: '\u2014',
+  hellip: '\u2026',
+  lsquo: '\u2018',
+  rsquo: '\u2019',
+  sbquo: '\u201A',
+  ldquo: '\u201C',
+  rdquo: '\u201D',
+  bdquo: '\u201E',
+  laquo: '\u00AB',
+  raquo: '\u00BB',
+  lsaquo: '\u2039',
+  rsaquo: '\u203A',
+  bull: '\u2022',
+  middot: '\u00B7',
+  larr: '\u2190',
+  uarr: '\u2191',
+  rarr: '\u2192',
+  darr: '\u2193',
+  harr: '\u2194',
+  rArr: '\u21D2',
+  lArr: '\u21D0',
+  hArr: '\u21D4',
+  le: '\u2264',
+  ge: '\u2265',
+  ne: '\u2260',
+  minus: '\u2212',
+  times: '\u00D7',
+  divide: '\u00F7',
+  plusmn: '\u00B1',
+  deg: '\u00B0',
+  sect: '\u00A7',
+  para: '\u00B6',
+  copy: '\u00A9',
+  reg: '\u00AE',
+  trade: '\u2122',
+};
+/** A named or numeric (decimal or hex) character reference. */
+const CHARACTER_REFERENCE_PATTERN =
+  /&(?:#(\d{1,7})|#[xX]([\da-fA-F]{1,6})|([a-zA-Z]+));/g;
+/** Decode one character reference, or keep it as written when it is a name
+ * outside {@link SUMMARY_TITLE_NAMED_ENTITIES} or not a valid code point. */
+function decodeCharacterReference(reference, decimal, hex, name) {
+  if (name !== undefined) {
+    return SUMMARY_TITLE_NAMED_ENTITIES[name] ?? reference;
+  }
+  const codePoint =
+    decimal !== undefined
+      ? Number.parseInt(decimal, 10)
+      : Number.parseInt(hex ?? '', 16);
+  return Number.isInteger(codePoint) &&
+    codePoint > 0 &&
+    codePoint <= 0x10ffff &&
+    (codePoint < 0xd800 || codePoint > 0xdfff)
+    ? String.fromCodePoint(codePoint)
+    : reference;
+}
+/**
+ * The plain-text form of a Previously missed item title, for an exact match
+ * (#4012): character references are decoded (decimal and hex numeric ones,
+ * and the named ones in {@link SUMMARY_TITLE_NAMED_ENTITIES}, such as
+ * `&amp;`, `&lt;`, `&apos;`, and `&mdash;`),
+ * zero-width characters are removed, and whitespace runs collapse to one
+ * space. Applied to the caller's title as given, so a title with literal
+ * angle-bracket text (`Use <T>`) keeps that text. The body's `<summary>`
+ * markup is dropped first, by {@link extractPreviouslyMissedItemTitles},
+ * before the same normalization.
+ */
+export function normalizePreviouslyMissedItemTitle(title) {
+  return title
+    .replace(CHARACTER_REFERENCE_PATTERN, decodeCharacterReference)
+    .replace(ZERO_WIDTH_CHARS_PATTERN, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+/**
+ * The normalized titles of an `overview-v2` body's Previously missed items, in
+ * order (#4012). Each title is the text of the item's own `<summary>` with its
+ * HTML tags (the severity `<picture>` icon, `<strong>`) dropped, before any
+ * entity is decoded, so an escaped `&lt;T&gt;` survives as `<T>`. The result
+ * then passes through {@link normalizePreviouslyMissedItemTitle}. `null`
+ * under the same conditions as {@link extractPreviouslyMissedItems}.
+ */
+export function extractPreviouslyMissedItemTitles(body) {
+  const blocks = previouslyMissedItemBlocks(body);
+  return blocks === null
+    ? null
+    : blocks.map((block) =>
+        normalizePreviouslyMissedItemTitle(
+          (block.match(/<summary>([\s\S]*?)<\/summary>/)?.[1] ?? '').replace(
+            /<[^>]*>/g,
+            ' ',
+          ),
+        ),
+      );
 }
 /** True when `body` names a file or line anywhere in its text (#3942). */
 export function namesFileOrLine(body) {

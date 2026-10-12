@@ -8789,3 +8789,45 @@ test('trust safety keeps a std* value in an indented block that touches a fence 
   } as Context);
   assert.equal(result.pass, false);
 });
+
+// The authoring rule in skills/issue-authoring/references/contract.md (the
+// Check 3 descriptive-text rule) depends on these three behaviours: a bare
+// descriptive sentence fails the trust check, the whole sentence wrapped in one
+// code span passes, and a single word wrapped in a span does not.
+const DESCRIPTIVE_OVERRIDE_SENTENCE =
+  'The existing F2 override already lifts the gate when every blocking item is ack-only.';
+
+test('trust safety fails a bare descriptive sentence that matches the policy-override detector', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n${DESCRIPTIVE_OVERRIDE_SENTENCE}`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety passes the same descriptive sentence once it sits wholly inside one code span', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\n${tick}${DESCRIPTIVE_OVERRIDE_SENTENCE}${tick}`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety still fails when only one word of the descriptive sentence is in a code span', () => {
+  const tick = String.fromCharCode(96);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${BASE_ISSUE.body}\nThe existing F2 ${tick}override${tick} already lifts the gate when every blocking item is ack-only.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});

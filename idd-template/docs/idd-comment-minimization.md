@@ -664,6 +664,15 @@ with an empty `body-sha256` on closed issue #2689 caused
 `authoring-set-members` to fail closed on the Stage 2 release of
 issue #3547.
 
+The post check of `post-idd-marker` (issue `#3899`) reads the same
+markers. Before it sends an `authoring-owner` heartbeat, release,
+release-guard, release-complete or resume, it refuses when the set or
+anchor disagrees with the latest trusted owner marker of the target. A
+marker minimized as `OUTDATED` is skipped by that check as well, while an
+edited, unparseable or other-target latest marker refuses the post. A
+wrong newest marker that is not yet hidden therefore blocks every later
+owner post on its issue, as the next subsection describes.
+
 ### Clearing a comment that blocks the scan
 
 When the helper's reason names a comment, it is an edited, unparseable or
@@ -727,6 +736,38 @@ The hide command for statement 3, run from the source repository, is:
 ```sh
 node scripts/minimize-superseded-markers.mjs --subject-ids <node-id> --classifier OUTDATED --trusted-marker-logins <login> --apply
 ```
+
+### Clearing a marker that blocks the post check
+
+When `post-idd-marker` refuses an owner post because the latest trusted
+owner marker of the target disagrees on set or anchor, or cannot be read,
+the refusal names that comment's id. The sweep does not clear it:
+`sweep-authoring-markers` keeps the newest marker of each target, so the
+newest one is never hidden by the sweep. Clear it only when it was posted
+in error, by these rules:
+
+1. A maintainer or an operator outside the IDD loop hides it as
+   `OUTDATED` with the command that statement 3 above gives. The session
+   whose post was refused never hides it.
+2. Do not hide a correct marker. Hiding the newest marker of a live set
+   makes the check compare with the marker before it, which may name
+   another set, so a correct marker needs no hiding.
+3. A trusted comment that quotes the owner-marker string in prose and does
+   not parse blocks every owner post on its issue until it is hidden
+   (preventive; no observed incident yet), so keep that string out of prose
+   (statement 5 above). With no trusted
+   logins configured, any commenter's such comment counts, so the exposure
+   is widest in a repository that does not configure `trustedMarkerActors`.
+4. A losing acquire can be the newest marker of its target (preventive; no
+   observed incident yet). While it stays
+   visible, the first set's heartbeats and releases are refused, because the
+   check compares with the newest marker and not with the opener of the set
+   that is running. Whether it was posted in error is the maintainer's
+   decision under rule 1; a losing acquire is never hidden only to unblock a
+   post.
+5. A trusted marker that parses but names another target, and sits on this
+   issue, blocks every owner post on it until it is hidden (preventive; no
+   observed incident yet). The check refuses it rather than skipping it.
 
 ## Dry Run Shape
 

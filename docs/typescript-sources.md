@@ -240,10 +240,11 @@ runtime-file lists in item 4, which were checked against the source.
    `noticeUtilizationPct` in `contextCeiling` (`audit/sync-manifest.json`). It
    fails a bundle that is not exempt in two cases: its configured `limitBytes`
    is above `maxBundleLimitBytes`, even below the utilization limit, or its
-   utilization is above `maxUtilizationPct`. `bundle-work-phase` is exempt from
-   both ceiling errors. It still gets the notice, and its byte total is still
-   checked against its own `limitBytes`. Measure each bundle the change touches
-   before you edit. A successful audit prints a figure only at or above
+   utilization is above `maxUtilizationPct`. No bundle is exempt from either
+   ceiling error now: `bundle-work-phase` was exempted until its approval note
+   was trimmed (issue `#4032`). Every bundle still gets the notice, and its byte
+   total is checked against its own `limitBytes`. Measure each bundle the change
+   touches before you edit. A successful audit prints a figure only at or above
    `noticeUtilizationPct`. Below that, sum the byte length of each file in the
    bundle's `bundleBudgets` entry in `audit/sync-manifest.json`, with the
    `idd-generated-from` banner removed, and compare the total with `limitBytes`.
@@ -409,6 +410,27 @@ path to the real `gh` inside a script a payload runs, a script that rewrites
 directory or leaves `PATH` unset (preventive; no observed incident yet).
 The `Windows platform tests` job runs the two `path shim: windows` cases by
 name pattern.
+
+The preload also gives each test file its own temporary directory
+(kurone-kito/idd-skill#4049). Before the state root, it creates an
+`idd-test-tmp-*` directory under the caller's temporary directory and sets
+`TMPDIR`, `TEMP` and `TMP` to it, so `os.tmpdir()` resolves to it on every
+platform. At exit, after the GitHub CLI ledger check and the state-root scan,
+it names every entry left directly in that directory and then removes it. It
+skips its own `idd-test-state-*` and `idd-test-gh-guard-*` roots and Node's
+`node-compile-cache`. A leftover fails the file on every platform except
+`win32`, where it is only printed as a warning: Windows can keep an
+`idd-stub-*` or `idd-fixture-gh-*` directory locked while its executable
+runs (kurone-kito/idd-skill#3680), and no Windows leftover has been measured.
+`tests/temp-leftovers.mts` holds that rule as a pure function. A test removes
+each fixture it creates in an `after` hook or a `finally` block;
+`trackTempDirectories` in `tests/temp-fixtures.mts` does that for a whole
+file. Observed on 2026-10-11: 16 of 216 test files left fixtures in `/tmp`, a
+tmpfs, which then held about 90,000 `idd-*` entries, after
+kurone-kito/idd-skill#2396 had fixed the same pattern in one file. A child
+spawned with an explicit environment that omits all three variables is not
+covered, a run stopped by a signal leaves the directory behind, and on
+`win32` a locked leftover keeps the directory behind too.
 
 Unit tests import the typed `src/scripts/*.mts`
 sources so assertions are checked against the real signatures;

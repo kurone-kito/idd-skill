@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   enumerateRoadmapGraph,
@@ -33,6 +34,9 @@ import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.
 import { fixtureEnv } from './test-utils.mts';
 
 const ROADMAP = 995;
+const CLI_SCRIPT = fileURLToPath(
+  new URL('../scripts/idd-roadmap-audit-execute.mjs', import.meta.url),
+);
 const CLAIM_ID = 'claim-20260626T000000Z-995';
 const AGENT_ID = 'github-copilot-cli';
 const CLAIM_BRANCH = 'roadmap-audit/995-completed-roadmap';
@@ -2964,4 +2968,118 @@ test('the same mention as a standalone closing line is an open-child blocker (#3
 
   assert.equal(verdict.ready, false);
   assert.ok(verdict.blockers.some((blocker) => blocker.kind === 'open-child'));
+});
+
+// ---------------------------------------------------------------------------
+// --criteria-note (#4034): the roadmap's success criteria, recorded on the
+// evidence body. The helper does not verify them, so a fixed line says so
+// when the flag is absent.
+// ---------------------------------------------------------------------------
+
+const FIXED_CRITERIA_LINE =
+  'Success criteria: not verified by this helper; the closing caller is expected to confirm them where feasible.';
+
+test('the body records the criteria note on its own line before the closing line', () => {
+  const body = buildRoadmapCompletionAuditBody(
+    readyReport(),
+    'every child shipped with a test',
+  );
+  assert.ok(
+    body
+      .split('\n')
+      .includes('Success criteria: every child shipped with a test'),
+    body,
+  );
+  assert.ok(
+    body.indexOf('Success criteria:') <
+      body.indexOf('Closing the roadmap as completed.'),
+  );
+  assert.equal(body.split('\n').includes(FIXED_CRITERIA_LINE), false);
+});
+
+test('the body without a note carries the fixed caveat line', () => {
+  const body = buildRoadmapCompletionAuditBody(readyReport());
+  assert.ok(body.split('\n').includes(FIXED_CRITERIA_LINE), body);
+});
+
+test('--criteria-note reaches the dry-run evidence body and the applied comment', async () => {
+  const dry = makeDeps(readyReport());
+  const dryResult = await runRoadmapAuditExecute(
+    [
+      '--roadmap',
+      String(ROADMAP),
+      '--criteria-note',
+      '  every child shipped  ',
+    ],
+    dry.deps,
+  );
+  assert.ok(
+    dryResult.verdict.evidenceBody
+      .split('\n')
+      .includes('Success criteria: every child shipped'),
+    dryResult.verdict.evidenceBody,
+  );
+
+  const applied = makeDeps(readyReport());
+  const appliedResult = await runRoadmapAuditExecute(
+    [...APPLY_ARGS, '--criteria-note', 'every child shipped'],
+    applied.deps,
+  );
+  assert.equal(appliedResult.exitCode, 0);
+  assert.ok(
+    (applied.calls.comments[0]?.body ?? '')
+      .split('\n')
+      .includes('Success criteria: every child shipped'),
+  );
+});
+
+test('--apply without --criteria-note posts the fixed caveat line', async () => {
+  const { deps, calls } = makeDeps(readyReport());
+  await runRoadmapAuditExecute(APPLY_ARGS, deps);
+  assert.ok(
+    (calls.comments[0]?.body ?? '').split('\n').includes(FIXED_CRITERIA_LINE),
+  );
+});
+
+test('an empty or whitespace-only --criteria-note is a usage error that posts nothing', async () => {
+  for (const note of ['', '   ']) {
+    const { deps, calls } = makeDeps(readyReport());
+    await assert.rejects(
+      runRoadmapAuditExecute([...APPLY_ARGS, '--criteria-note', note], deps),
+      /--criteria-note must not be empty/,
+    );
+    assert.deepEqual(calls.comments, []);
+    assert.deepEqual(calls.closed, []);
+  }
+});
+
+test('the CLI exits 1 on an empty --criteria-note before any roadmap lookup', () => {
+  const result = spawnSync(
+    process.execPath,
+    [CLI_SCRIPT, '--roadmap', String(ROADMAP), '--criteria-note', ''],
+    { encoding: 'utf8', env: fixtureEnv(), stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stderr, /--criteria-note must not be empty/);
+});
+
+test('hasTrustedCompletionEvidenceComment recognises the body with and without the criteria line', () => {
+  for (const body of [
+    buildRoadmapCompletionAuditBody(readyReport(), 'every child shipped'),
+    buildRoadmapCompletionAuditBody(readyReport()),
+  ]) {
+    assert.equal(
+      hasTrustedCompletionEvidenceComment(
+        [
+          {
+            body,
+            createdAt: '2026-06-26T00:00:00Z',
+            author: { login: 'kurone-kito' },
+          },
+        ],
+        () => true,
+      ),
+      true,
+    );
+  }
 });

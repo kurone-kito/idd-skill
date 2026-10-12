@@ -116,6 +116,34 @@ function cleanFiles(): FixtureFiles {
   return files;
 }
 
+// A failing fixture git call used to throw with no stderr or exit status, so a
+// load-dependent failure could not be read from the error. The stderr is
+// captured and the status is named in the message instead.
+function runFixtureGit(args: string[]): void {
+  try {
+    execFileSync('git', args, {
+      env: fixtureEnv(),
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+  } catch (error) {
+    const failure = error as {
+      status?: number | null;
+      signal?: string | null;
+      stderr?: Buffer | string | null;
+    };
+    const status =
+      failure.status === null || failure.status === undefined
+        ? failure.signal
+          ? `signal ${failure.signal}`
+          : 'no exit status (spawn error)'
+        : `exit status ${failure.status}`;
+    const stderr = String(failure.stderr ?? '').trim();
+    throw new Error(
+      `git ${args.join(' ')} failed with ${status}${stderr ? `: ${stderr}` : ''}`,
+    );
+  }
+}
+
 /**
  * Writes `files` under a fresh scratch directory and, unless `git` is false,
  * turns it into a git repository with everything staged (the NUL rule reads
@@ -137,14 +165,8 @@ function buildFixture(
     writeFileSync(absolute, content);
   }
   if (git) {
-    execFileSync('git', ['init', '-q', root], {
-      env: fixtureEnv(),
-      stdio: 'ignore',
-    });
-    execFileSync('git', ['-C', root, 'add', '-A'], {
-      env: fixtureEnv(),
-      stdio: 'ignore',
-    });
+    runFixtureGit(['init', '-q', root]);
+    runFixtureGit(['-C', root, 'add', '-A']);
   }
   afterTrack(root);
   return root;
@@ -152,17 +174,31 @@ function buildFixture(
 
 function runCli(
   args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; script?: string } = {},
-): { status: number | null; stdout: string; stderr: string } {
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    script?: string;
+    timeout?: number;
+  } = {},
+): {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  error: NodeJS.ErrnoException | undefined;
+  signal: NodeJS.Signals | null;
+} {
   const result = spawnSync(process.execPath, [options.script ?? CLI, ...args], {
     cwd: options.cwd ?? tmpdir(),
     env: options.env ?? fixtureEnv(),
     encoding: 'utf8',
+    timeout: options.timeout ?? 0,
   });
   return {
     status: result.status,
     stdout: result.stdout,
     stderr: result.stderr,
+    error: result.error as NodeJS.ErrnoException | undefined,
+    signal: result.signal,
   };
 }
 
@@ -2577,20 +2613,28 @@ test('a file nested deeply enough to exhaust the scan stack is reported without 
   assert.doesNotMatch(stderr, /file:\/\//);
 });
 
+// A hang or a super-linear scan fails at this bound. Wall-clock assertions are
+// avoided: a host under load can exceed a fixed elapsed-time ceiling without a
+// scanner regression.
+const SCAN_SPAWN_TIMEOUT_MS = 120000;
+
 for (const [label, unit] of [
   ['a<', 'a<'],
   ['a<b ', 'a<b '],
 ] as const) {
-  test(`a same-line ${label} run of 40,000 repetitions finishes quickly and still reports the import`, () => {
+  test(`a same-line ${label} run of 200,000 repetitions finishes within the spawn timeout and still reports the import`, () => {
     const root = buildFixture((files) =>
       files.set(
         'src/main.mts',
-        `${unit.repeat(40000)}\nimport bare from 'yaml';\n`,
+        `${unit.repeat(200000)}\nimport bare from 'yaml';\n`,
       ),
     );
-    const started = Date.now();
-    const lines = nodeImportLines(runCli(['--root', root]).stderr);
-    assert.ok(Date.now() - started < 15000, 'scan took too long');
+    const result = runCli(['--root', root], {
+      timeout: SCAN_SPAWN_TIMEOUT_MS,
+    });
+    assert.notEqual(result.error?.code, 'ETIMEDOUT', 'scan timed out');
+    assert.equal(result.signal, null, `scan was killed by ${result.signal}`);
+    const lines = nodeImportLines(result.stderr);
     assert.equal(lines.length, 1, lines.join('\n'));
     assert.match(lines[0], /yaml$/);
   });
@@ -2831,3 +2875,33 @@ for (const row of [
     assert.match(lines[0], /found: \.\/helper\.mjs$/);
   });
 }
+
+test('a failing fixture git call names its exit status and stderr in the error', () => {
+  // The expected status and stderr come from the same failing command run
+  // here, with the same env, so the assertion does not depend on git's locale.
+  const args = [
+    '-C',
+    join(tmpdir(), `idd-lint-boundaries-missing-${process.pid}-${Date.now()}`),
+    'status',
+  ];
+  const expected = spawnSync('git', args, {
+    env: fixtureEnv(),
+    encoding: 'utf8',
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  assert.notEqual(expected.status, 0, 'the fixture command must fail');
+  const stderr = expected.stderr.trim();
+  assert.ok(stderr.length > 0, 'git must report the failure on stderr');
+  let message = '';
+  try {
+    runFixtureGit(args);
+  } catch (error) {
+    message = (error as Error).message;
+  }
+  assert.ok(
+    message.length > 0,
+    'runFixtureGit must throw on a failing command',
+  );
+  assert.ok(message.includes(`exit status ${expected.status}`), message);
+  assert.ok(message.includes(stderr), message);
+});

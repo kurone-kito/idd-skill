@@ -67,8 +67,6 @@ node scripts/advisory-wait-state.mjs \
   --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
 ```
 
-The package-manager / ephemeral-npx / user-global equivalent takes the same options.
-
 Contract: `docs/idd-helper-scripts.md#stable-helper-evidence-outputs`
 and `schemas/advisory-wait-state.schema.json`.
 
@@ -124,9 +122,7 @@ marker. A bot check alone never confirms review of current HEAD.
 `secondaryBotLogin` accepts one login or a list; request every
 `secondaryRequestLogins` entry, not only the first, never polling any.
 Trigger condition and per-login procedure:
-`idd-review-fix.instructions.md`'s E14 step 5 — never poll/wait there,
-E1, or E2; only F2's `secondary-quiet-window` blocker
-(`idd-pre-merge.instructions.md`) waits, folded across every login.
+`idd-review-fix.instructions.md`'s E14 step 5.
 
 ### F3-specific interpretation
 
@@ -185,10 +181,6 @@ AW3 inputs:
 - `SAME_HEAD_REQUEST_MARKER_PRESENT` (`#2327`) — `true` only when a
   trusted marker for current `PR_HEAD_SHA` is specifically the plain
   request form (`advisory-wait:`), excluding `advisory-wait-recovery:`.
-  Distinct from `EARLIEST_SAME_HEAD_AT`'s presence (which a
-  recovery-only marker also satisfies) and from `REQUEST_MARKER_COUNT`
-  (which is not head-scoped) — `AW3-S`'s non-pending entry needs this
-  narrower, head-scoped, request-only signal specifically.
 
 See [shell fallback AW2](../../docs/idd-advisory-wait-shell-fallback.md#aw2)
 for commands.
@@ -324,10 +316,9 @@ After a new `advisory-wait`/`advisory-wait-recovery` marker is verified
 for the current `PR_HEAD_SHA`, minimize every trusted prior marker of
 the `advisory-wait:`/`advisory-wait-recovery:`/`<!-- advisory-wait:`/
 `advisory-reroll:` family whose embedded HEAD SHA does **not** match,
-as `OUTDATED` (cuts F4 backlog and review-page noise — a stale-HEAD
-`advisory-reroll:` marker is exactly as much operational noise as a
-stale advisory-wait one). Find candidate IDs (trusted markers of that
-family with a differing embedded SHA), then call the minimize-markers
+as `OUTDATED` (cuts F4 backlog and review-page noise). Find candidate
+IDs (trusted markers of that family with a differing embedded SHA),
+then call the minimize-markers
 command:
 [shell fallback AW3-H](../../docs/idd-advisory-wait-shell-fallback.md#aw3-h).
 

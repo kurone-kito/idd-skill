@@ -953,6 +953,39 @@ Validation expectations:
   [Completed-draft adversarial review](#completed-draft-adversarial-review)
   and [Mechanical pre-publish gate](#mechanical-pre-publish-gate))
 
+### Gate-rule verdict table
+
+A drafted issue that changes a rule which decides a verdict (a gate,
+classifier, threshold, or routing rule) carries a verdict table in its
+acceptance criteria. An orphan or child issue puts the table under
+`## Acceptance criteria`. A roadmap issue puts it under
+`## Success criteria`, the section that the roadmap shape defines. The
+table has one row per decision-relevant input case, with three columns:
+
+- **Input**: the observable inputs of the case, such as a reply's
+  author, its timing, its body shape, or a count.
+- **Expected verdict**: the outcome the rule must return for that input.
+- **Source decision**: the recorded decision or evidence that sets the
+  row's verdict.
+
+For an unbounded value such as a count, a duration, or a timestamp, a
+row covers an equivalence class or a boundary (below, at, and above a
+threshold), not every value. Every recorded decision that changes such a
+rule maps to at least one row. A decision that names a rule without its
+edge cases leaves the gap the table closes.
+
+Observed incidents:
+
+- Observed 2026-10-10 to 2026-10-11, issue
+  `kurone-kito/idd-skill#3942` and PR `kurone-kito/idd-skill#4000`: the
+  cited-item disposition rule took 13 Copilot review rounds and 14 commits
+  to settle. The recorded decision did not name whether a **Rejected**
+  reply counts, under what evidence, or how an empty or count-mismatched
+  per-item view is judged.
+- Observed 2026-10-10, issue `kurone-kito/idd-skill#3947`: the published
+  issue holds a recorded decision whose premise its own reproduction
+  contradicts, and the marker the decision names is absent from the source.
+
 ## Drafted issue prose language
 
 A drafted issue's human-readable prose sections — `## Background` (or
@@ -993,6 +1026,16 @@ authoring skill should catch these issues before publishing:
 | Actionability (Check 5)  | `ready` or escalated | Ensure the issue describes concrete work; escalate if blocked by human decision |
 | Autonomy (Check 6)       | `ready` or escalated | Ensure agent can complete without external coordination                         |
 | Verifiability (Check 7)  | `ready` or escalated | Ensure success is verifiable; escalate if it requires subjective approval       |
+
+**Check 3 descriptive-text rule**: a descriptive sentence can match the
+policy-override detector even when it only explains existing behavior, for
+example a sentence that uses the word "override" next to "the gate". Observed
+2026-10-11 on issue `#3947`: one such sentence failed the trust check and
+stopped Discover. The whole sentence must sit inside one code span or one fenced
+block, which the body's code-region mask skips. A single word inside a span is
+not enough. The detector stays fail-closed. For `orphan` and `child` drafts,
+`audit-authored-issue` runs the same check before publication, so a sentence
+that is not reworded fails there rather than at Discover time.
 
 **Check 7 escape-hatch pattern**: an either/or acceptance-criteria bullet
 where one branch is a substantive change and the other reads as "or

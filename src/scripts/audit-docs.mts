@@ -59,6 +59,15 @@ import {
   collectHelperFlagDriftViolations,
 } from './helper-flag-drift.mts';
 import { ONBOARDING_PLACEHOLDERS } from './idd-onboard.mts';
+import {
+  type EnclosingListContentIndentCache,
+  findFencedCodeRanges,
+  findHtmlBlockRanges,
+  findIndentedCodeRanges,
+  type MarkdownCodeRange,
+  mergeMarkdownCodeRanges,
+  stripEnclosingListContentIndent,
+} from './markdown-code.mts';
 import type { MarkdownLinkAuditConfig } from './markdown-link-audit.mts';
 import {
   collectMarkdownLinkAuditViolations,
@@ -115,6 +124,11 @@ interface SyncPair {
   reference?: string;
   requiredText?: string[];
   requiredPatterns?: string[];
+  /**
+   * `structure` pairs only: section titles whose full text (the heading and
+   * its subsections) must match exactly between source and target (#4009).
+   */
+  sharedSections?: string[];
 }
 
 interface BundleBudget {
@@ -946,9 +960,231 @@ function resolveBlockFiles(block: GeneratedBlock): string[] {
   return files;
 }
 
+/**
+ * One Markdown section for a `structure` pair's `sharedSections` check: the
+ * heading line and every line up to the next heading of the same or a higher
+ * level, so a section includes its subsections (#4009).
+ */
+interface MarkdownSection {
+  title: string;
+  body: string;
+}
+
+interface MarkdownOutline {
+  sections: MarkdownSection[];
+  // Titles of headings nested in a blockquote or list item (#4009 review).
+  nestedTitles: string[];
+}
+
+// Splits Markdown into sections the way CommonMark renders it (#4009). A
+// heading is an ATX line outside fenced code, indented code, and HTML blocks
+// (an HTML comment block is one of those). The block ranges come from
+// markdown-code.mts, which applies CommonMark's fence, comment, and HTML-block
+// rules for the other audits. Its fence scan does not know that an HTML block's
+// raw content has no fences, so HTML block content is masked before the fence
+// scan. Inline comments and inline code spans hide nothing, because a heading
+// can interrupt a paragraph.
+//
+// Two sets of headings come out. A top-level heading is an unindented ATX line,
+// or one indented up to three spaces outside a list item; it is a section
+// boundary. A nested heading sits in a blockquote or a list item, and is only
+// recorded so that a listed title found there can fail the check. This scan does
+// not track paragraph state, so a list-like line that CommonMark would read as
+// paragraph text is still recorded as nested. That over-count fails the audit
+// loudly, which is the safe direction for a guard.
+function expandTabs(line: string): string {
+  let expanded = '';
+  for (const char of line) {
+    expanded += char === '\t' ? ' '.repeat(4 - (expanded.length % 4)) : char;
+  }
+  return expanded;
+}
+
+function markdownOutline(text: string): MarkdownOutline {
+  const normalized = normalizeText(text);
+  const lines = normalized.split('\n');
+  const htmlFirstPass = findHtmlBlockRanges(
+    normalized,
+    findFencedCodeRanges(normalized),
+  );
+  const masked = maskRanges(normalized, htmlFirstPass);
+  const fenced = findFencedCodeRanges(masked);
+  const hidden = mergeMarkdownCodeRanges([
+    ...fenced,
+    ...findIndentedCodeRanges(masked, fenced),
+    ...findHtmlBlockRanges(normalized, fenced),
+  ]);
+  const headings: { index: number; level: number; title: string }[] = [];
+  const nestedTitles: string[] = [];
+  // Declared here, not at module level: audit-docs runs main() before any
+  // later module-level const is initialized.
+  //
+  // Spacing is checked on the expanded line, so tabs count as CommonMark's
+  // four-column tab stops. A list marker takes one to four columns before its
+  // content (five or more make indented code); a blockquote marker takes up to
+  // four. "-## Title" is text, since the marker needs a following space.
+  const containerHeading =
+    /^ *(?:>[ ]{0,4}|(?:[-*+]|\d{1,9}[.)]) {1,4})+(#{1,6}) +(.+?)(?: +#+)? *$/;
+  const indentedHeading = /^ +(#{1,6})(?: +(.*?))?(?: +#+)? *$/;
+  const standaloneHeading = /^ {1,3}(#{1,6})(?: +(.*?))?(?: +#+)? *$/;
+  const plainHeading = /^(#{1,6})(?: +(.*?))?(?: +#+)? *$/;
+  // The helper keeps list state from line to line, so it is called for every
+  // visible line in order, not only for indented ones.
+  const listContext: EnclosingListContentIndentCache = {
+    contentIndent: 0,
+    nextLineStart: 0,
+  };
+  let offset = 0;
+  for (const [index, line] of lines.entries()) {
+    const isHidden = hidden.some(
+      (range) => offset >= range.start && offset < range.end,
+    );
+    // The helper also answers for paragraph lines, so a list item is only known
+    // when it reports a positive content indent as well.
+    const inListItem =
+      !isHidden &&
+      stripEnclosingListContentIndent(normalized, offset, listContext) !==
+        null &&
+      listContext.contentIndent > 0;
+    if (!isHidden) {
+      const expanded = expandTabs(line);
+      const container = containerHeading.exec(expanded);
+      const indented = indentedHeading.exec(expanded);
+      const standalone = standaloneHeading.exec(expanded);
+      const plain = plainHeading.exec(expanded);
+      if (container !== null) {
+        nestedTitles.push(normalizeHeading(container[2] ?? ''));
+      } else if (indented !== null && inListItem) {
+        nestedTitles.push(normalizeHeading(indented[2] ?? ''));
+      } else if (standalone !== null) {
+        headings.push({
+          index,
+          level: standalone[1].length,
+          title: normalizeHeading(standalone[2] ?? ''),
+        });
+      } else if (plain !== null) {
+        headings.push({
+          index,
+          level: plain[1].length,
+          title: normalizeHeading(plain[2] ?? ''),
+        });
+      }
+    }
+    offset += line.length + 1;
+  }
+  const sections = headings.map((heading, position) => {
+    let end = lines.length;
+    for (const next of headings.slice(position + 1)) {
+      if (next.level <= heading.level) {
+        end = next.index;
+        break;
+      }
+    }
+    return {
+      title: heading.title,
+      body: lines.slice(heading.index, end).join('\n'),
+    };
+  });
+  return { sections, nestedTitles };
+}
+
+// Blanks the given ranges, keeping every newline, so later scans see the same
+// line structure with the ranges' content removed.
+function maskRanges(text: string, ranges: MarkdownCodeRange[]): string {
+  const chars = text.split('');
+  for (const range of ranges) {
+    for (let index = range.start; index < range.end; index += 1) {
+      if (chars[index] !== '\n') {
+        chars[index] = ' ';
+      }
+    }
+  }
+  return chars.join('');
+}
+
+// Compares each `sharedSections` title exactly between source and target. A
+// title must appear exactly once on each side: a missing or duplicated title
+// fails closed rather than passing silently.
+function checkSharedSections(pair: SyncPair, source: string, target: string) {
+  if (!Object.hasOwn(pair, 'sharedSections')) {
+    return;
+  }
+  const titles: unknown = pair.sharedSections;
+  if (
+    !Array.isArray(titles) ||
+    titles.some((title) => typeof title !== 'string' || title.trim() === '')
+  ) {
+    errors.push(
+      `${pair.id}: sharedSections must be an array of non-empty section titles`,
+    );
+    return;
+  }
+  const sourceOutline = markdownOutline(source);
+  const targetOutline = markdownOutline(target);
+  for (const title of titles as string[]) {
+    const key = normalizeHeading(title);
+    // A listed title nested in a blockquote or list item is not a boundary the
+    // scan can use, so it fails rather than slipping past the count below.
+    const nestedIn = [
+      { file: pair.source, outline: sourceOutline },
+      { file: pair.target, outline: targetOutline },
+    ].filter(({ outline }) => outline.nestedTitles.includes(key));
+    if (nestedIn.length > 0) {
+      for (const side of nestedIn) {
+        errors.push(
+          `${pair.id}: shared section "${title}" appears inside a blockquote or list item in ${side.file}`,
+        );
+      }
+      continue;
+    }
+    const sides = [
+      {
+        file: pair.source,
+        matches: sourceOutline.sections.filter(
+          (section) => section.title === key,
+        ),
+      },
+      {
+        file: pair.target,
+        matches: targetOutline.sections.filter(
+          (section) => section.title === key,
+        ),
+      },
+    ];
+    let resolved = true;
+    for (const side of sides) {
+      if (side.matches.length === 0) {
+        errors.push(
+          `${pair.id}: shared section "${title}" is missing from ${side.file}`,
+        );
+        resolved = false;
+      } else if (side.matches.length > 1) {
+        errors.push(
+          `${pair.id}: shared section "${title}" appears ${side.matches.length} times in ${side.file}`,
+        );
+        resolved = false;
+      }
+    }
+    if (!resolved) {
+      continue;
+    }
+    if (sides[0].matches[0].body !== sides[1].matches[0].body) {
+      errors.push(
+        `${pair.id}: shared section "${title}" differs between ${pair.source} and ${pair.target}`,
+      );
+    }
+  }
+}
+
 function checkSyncPairs(pairs: SyncPair[]) {
   errors.push(...collectDuplicateSyncPairTargets(pairs));
   for (const pair of pairs) {
+    // Checked before the mode branches below, which `continue` early.
+    if (Object.hasOwn(pair, 'sharedSections') && pair.mode !== 'structure') {
+      errors.push(
+        `${pair.id}: sharedSections is only valid on a "structure" pair, not "${pair.mode}"`,
+      );
+    }
     if (pair.mode === 'contains') {
       checkContainsPair(pair);
       continue;
@@ -987,6 +1223,7 @@ function checkSyncPairs(pairs: SyncPair[]) {
           `${pair.id}: heading structure differs between ${pair.source} and ${pair.target}`,
         );
       }
+      checkSharedSections(pair, source, target);
       continue;
     }
 
@@ -1376,7 +1613,13 @@ function buildRemediation(currentErrors: string[]): string[] {
   const hasMirrorDrift = containsMirrorDrift(currentErrors);
   const hasManifestListMismatch = containsManifestListMismatch(currentErrors);
   const hasLinkAuditFailure = containsLinkAuditFailure(currentErrors);
-  if (!hasMirrorDrift && !hasManifestListMismatch && !hasLinkAuditFailure) {
+  const hasSharedSectionDrift = containsSharedSectionDrift(currentErrors);
+  if (
+    !hasMirrorDrift &&
+    !hasManifestListMismatch &&
+    !hasLinkAuditFailure &&
+    !hasSharedSectionDrift
+  ) {
     return [];
   }
   const lines: string[] = [];
@@ -1397,6 +1640,12 @@ function buildRemediation(currentErrors: string[]): string[] {
       );
     }
   }
+  if (hasSharedSectionDrift) {
+    // sync-docs skips structure pairs, so it cannot refresh a shared section.
+    lines.push(
+      'align the listed shared section in both files by hand (sync-docs does not regenerate structure pairs), or remove the title from `sharedSections` in `audit/sync-manifest.json`',
+    );
+  }
   if (hasManifestListMismatch) {
     // A manifest-list mismatch is not mirror drift: `docs:sync` reads
     // `generatedBlocks[].paths` as-is, so it cannot resolve a disagreement
@@ -1412,6 +1661,14 @@ function buildRemediation(currentErrors: string[]): string[] {
 function containsMirrorDrift(currentErrors: string[]): boolean {
   return currentErrors.some((error) =>
     /generated block .* is stale|shell file list .* is stale| and .* differ in (exact|concreted) mode|heading structure differs between|target is missing|target has unexpected|is missing a syncPairs entry/.test(
+      error,
+    ),
+  );
+}
+
+function containsSharedSectionDrift(currentErrors: string[]): boolean {
+  return currentErrors.some((error) =>
+    /shared section ".*" (differs between|is missing from|appears \d+ times in|appears inside a blockquote or list item in)/.test(
       error,
     ),
   );

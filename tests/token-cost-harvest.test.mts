@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -38,7 +38,11 @@ import {
   type VendorSession,
   vendorSessionKey,
 } from '../src/scripts/token-cost-harvest.mts';
+import { trackTempDirectories } from './temp-fixtures.mts';
 import { readJson, stubExecutable } from './test-utils.mts';
+
+// #4049: every fixture directory below is removed when the file finishes.
+const makeTempDir = trackTempDirectories();
 
 const ms = (iso: string) => Date.parse(iso);
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -140,7 +144,7 @@ test('extractClaudeUsageTimeline sums per-message deltas, sorted by timestamp', 
 test('scanClaudeVendorSessions warns (not silently returns []) when projectDir does not exist -- #2439', (t) => {
   const stderrWrite = t.mock.method(process.stderr, 'write', () => true);
   const missingDir = join(
-    mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-missing-')),
+    makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-missing-')),
     'does-not-exist',
   );
 
@@ -164,7 +168,7 @@ test('scanClaudeVendorSessions warns (not silently returns []) when projectDir d
 });
 
 test("scanClaudeVendorSessions scopes each cwd segment's timeline to just that segment's records -- #2404", () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-test-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-test-'));
   writeFileSync(
     join(sandbox, 'session-multi.jsonl'),
     // Mirrors tests/fixtures/token-cost/claude/session-multi-cwd-segments.jsonl:
@@ -252,7 +256,7 @@ function writeEventsFile(lines: readonly string[]): {
   dir: string;
   path: string;
 } {
-  const dir = mkdtempSync(join(tmpdir(), 'idd-token-cost-events-'));
+  const dir = makeTempDir(join(tmpdir(), 'idd-token-cost-events-'));
   const path = join(dir, 'events.jsonl');
   writeFileSync(path, `${lines.join('\n')}\n`);
   return { dir, path };
@@ -419,7 +423,7 @@ test('segmentRecordsByEventWindow: a record at the exact instant one window ends
 });
 
 test('scanClaudeVendorSessions: a CLOSED event window supplies issueNumber when cwd-inference fails', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew.jsonl'),
     `${[
@@ -473,7 +477,7 @@ test('scanClaudeVendorSessions: a CLOSED event window supplies issueNumber when 
 });
 
 test('scanClaudeVendorSessions: two CLOSED event windows in one file produce two distinct #ew samples', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew2.jsonl'),
     `${[
@@ -514,7 +518,7 @@ test('scanClaudeVendorSessions: two CLOSED event windows in one file produce two
 });
 
 test('scanClaudeVendorSessions: two DIFFERENT cwd-segments in one file that both fall in the SAME issue window produce exactly one #ew sample, not a duplicate-keyed pair (Copilot review finding, #2423)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew-multiseg.jsonl'),
     `${[
@@ -554,7 +558,7 @@ test('scanClaudeVendorSessions: two DIFFERENT cwd-segments in one file that both
 });
 
 test('scanClaudeVendorSessions: an OPEN event window (no cleanup exit yet) never produces an event-window sample', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew-open.jsonl'),
     '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-open-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
@@ -598,7 +602,7 @@ test("buildCompletedIssueWindows: a REVERSED cleanup window (a re-attempt's ente
 });
 
 test('scanClaudeVendorSessions: a reversed cleanup window never produces an event-window sample', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew-reversed.jsonl'),
     '{"type":"assistant","timestamp":"2026-01-01T01:30:00.000Z","sessionId":"sess-ew-reversed-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
@@ -1072,7 +1076,7 @@ test('buildCompletedIssueWindows: claimId-matched windows that are exactly back-
 });
 
 test("scanClaudeVendorSessions: a completed cleanup window does not absorb a later retry's activity", () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew-retry.jsonl'),
     `${[
@@ -1108,7 +1112,7 @@ test("scanClaudeVendorSessions: a completed cleanup window does not absorb a lat
 });
 
 test('scanClaudeVendorSessions: the event-window fallback is skipped for the whole file when ANY segment already resolved a cwd-inferred issue number (Copilot review finding round 2, #2423)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew-mixed.jsonl'),
     `${[
@@ -1152,7 +1156,7 @@ test('scanClaudeVendorSessions: the event-window fallback is skipped for the who
 });
 
 test('scanClaudeVendorSessions: two DIFFERENT project log files both matching the same issue window are BOTH dropped (cross-file ambiguity guard, Codex review finding, #2423)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew-fileA.jsonl'),
     '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-fileA-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
@@ -1192,7 +1196,7 @@ test('scanClaudeVendorSessions: two DIFFERENT project log files both matching th
 
 test('scanClaudeVendorSessions: two DIFFERENT project log files matching the same issue window with DISJOINT (non-overlapping) activity ranges are STILL both dropped, not merged (#2425 -- merge investigated and rejected, see docstring)', (t) => {
   const stderrWrite = t.mock.method(process.stderr, 'write', () => true);
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew-disjointA.jsonl'),
     // Clearly-disjoint, wide-ish range: 00:10 to 00:14.
@@ -1242,7 +1246,7 @@ test('scanClaudeVendorSessions: two DIFFERENT project log files matching the sam
 });
 
 test("scanClaudeVendorSessions: a cross-file match is resolved (not skipped) when exactly one candidate file's own sessionId matches the window's vendorSessionId (#2424)", () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   // The file that actually posted the winning cleanup attempt's events.
   writeFileSync(
     join(sandbox, 'session-ew-idA.jsonl'),
@@ -1290,7 +1294,7 @@ test("scanClaudeVendorSessions: a cross-file match is resolved (not skipped) whe
 });
 
 test("scanClaudeVendorSessions: a cross-file match resolves via the SAME basename fallback claudeAdapter.harvest() uses, when the winning file's own records carry no top-level sessionId (Copilot review finding, PR #2430, #2424)", () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   // No top-level "sessionId" field on this file's records -- extractSessionId()
   // alone returns undefined here; only the basename fallback recovers the
   // real id ($CLAUDE_CODE_SESSION_ID matches a session log's own basename).
@@ -1335,7 +1339,7 @@ test("scanClaudeVendorSessions: a cross-file match resolves via the SAME basenam
 });
 
 test("scanClaudeVendorSessions: falls back to classify-and-skip when no candidate file's sessionId matches the window's vendorSessionId (#2424)", () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew-idC.jsonl'),
     '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-idC-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
@@ -1382,7 +1386,7 @@ test("scanClaudeVendorSessions: a SOLE candidate file is still skipped when the 
   // upstream (one of its segments already resolved a cwd-inferred issue
   // number), leaving only an unrelated concurrent session as the sole
   // candidate.
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew-idF.jsonl'),
     '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-idF-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
@@ -1423,7 +1427,7 @@ test('scanClaudeVendorSessions: two DIFFERENT issues whose completed windows ove
   // record timestamped inside the overlap matched both windows and was
   // dropped from both -- even though each file's own identified
   // `vendorSessionId` unambiguously ties it to just one of the two issues.
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew-601.jsonl'),
     '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-601-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
@@ -1490,7 +1494,7 @@ test('scanClaudeVendorSessions: two DIFFERENT issues whose completed windows ove
 });
 
 test('scanClaudeVendorSessions: a SOLE candidate file is still harvested unconditionally when the window carries no identity (backward compat, #2424)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew-idH.jsonl'),
     '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-idH-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
@@ -1522,7 +1526,7 @@ test('scanClaudeVendorSessions: a genuine handoff (matching claimId, differing v
   // true min/max, so a naive "concatenate contributing after primary"
   // merge would produce startedAt > endedAt and throw. The merge must
   // sort by timestamp before harvesting.
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew-contrib.jsonl'),
     '{"type":"assistant","timestamp":"2026-01-01T00:01:00.000Z","sessionId":"sess-contrib-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":3}}}\n',
@@ -1576,7 +1580,7 @@ test('scanClaudeVendorSessions: a same-issue match from an unrelated concurrent 
   // branch's negative case through the full merge pipeline: fileB's
   // own file is present and structurally eligible (unattributed,
   // timestamp inside the widened window), but must never be pulled in.
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew-idA.jsonl'),
     '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-idA-0001","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
@@ -1620,7 +1624,7 @@ test('scanClaudeVendorSessions: a same-issue match from an unrelated concurrent 
 });
 
 test('scanClaudeVendorSessions: a contributing session whose file cannot be uniquely resolved skips the whole issue rather than freezing an undercount (#2432, Codex review PR #2627)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   // No file in this sandbox has sessionId 'sess-contrib-missing' -- the
   // contributing window's own file was never scanned (e.g. rotated out,
   // or on a different machine).
@@ -1667,7 +1671,7 @@ test('scanClaudeVendorSessions: a contributing candidate whose file already inde
   // cwd-attributed sample and must never also be pulled in as a
   // contributing session for issue 503's merged #ew sample, even though
   // its own sessionId matches the contributing window's vendorSessionId.
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-cwd-attributed.jsonl'),
     '{"type":"assistant","timestamp":"2026-01-01T00:01:00.000Z","sessionId":"sess-contrib-0003","cwd":"/home/user/repo.issue-4242-x","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":3}}}\n',
@@ -1709,7 +1713,7 @@ test('scanClaudeVendorSessions: a contributing candidate whose file already inde
 });
 
 test('scanClaudeVendorSessions: one vendorSessionId contributing two stages merges both stages worth of that session file, not just the last one (#2432)', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew-contrib.jsonl'),
     `${[
@@ -1767,7 +1771,7 @@ test('scanClaudeVendorSessions: a cwd-attributed primary (cleanup session launch
   // own worktree, so it cwd-resolves normally and is excluded from the
   // #2418 unattributed-record fallback pool -- the merge must still fire
   // by resolving this cwd-attributed file as primary directly.
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-primary-506.jsonl'),
     '{"type":"assistant","timestamp":"2026-01-01T00:24:00.000Z","sessionId":"sess-primary-0005","cwd":"/home/user/repo.issue-506-x","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":7}}}\n',
@@ -1819,7 +1823,7 @@ test('scanClaudeVendorSessions: a cwd-attributed primary whose contributor canno
   // just skip creating the merged one, or a later successful merge would
   // append a second, differently-keyed sample for the same completed
   // loop (permanent double-count).
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-primary-509.jsonl'),
     '{"type":"assistant","timestamp":"2026-01-01T00:24:00.000Z","sessionId":"sess-primary-0008","cwd":"/home/user/repo.issue-509-x","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":7}}}\n',
@@ -1864,7 +1868,7 @@ test('scanClaudeVendorSessions: a cwd-attributed primary that moved out of and b
   // in) -- this must not read as "matched more than one file" and reject
   // the resolution; both segments' records belong to the one, uniquely
   // resolved primary file.
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-primary-508.jsonl'),
     `${[
@@ -1926,7 +1930,7 @@ test('scanClaudeVendorSessions: an EARLIER contributor that resolved fine is not
   // failure is even discovered, would permanently suppress its own solo
   // sample with nothing to replace it: real usage silently lost, not
   // merely double-counted.
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-primary-512.jsonl'),
     '{"type":"assistant","timestamp":"2026-01-01T00:24:00.000Z","sessionId":"sess-primary-0009","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":7}}}\n',
@@ -1988,7 +1992,7 @@ test('scanClaudeVendorSessions: a contributor eligible for one contributing wind
   // (#100) much earlier, at a time that does not overlap this contributing
   // window at all -- the file-wide eligibility check must not reject the
   // contributor on that basis alone.
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-contrib-507.jsonl'),
     `${[
@@ -2037,7 +2041,7 @@ test('scanClaudeVendorSessions: a multi-hop handoff across THREE different sessi
   // A -> B -> C: three different vendorSessionIds, one shared claimId,
   // each contributing a different stage from its own file. The primary
   // (cleanup-owning) session is C.
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-hop-a.jsonl'),
     '{"type":"assistant","timestamp":"2026-01-01T00:00:30.000Z","sessionId":"sess-hop-A","cwd":"/repo","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":2}}}\n',
@@ -2095,7 +2099,7 @@ test('scanClaudeVendorSessions: a multi-hop handoff across THREE different sessi
 });
 
 test('scanClaudeVendorSessions: an event window is ignored when the segment already has a cwd-inferred issueNumber', () => {
-  const sandbox = mkdtempSync(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
+  const sandbox = makeTempDir(join(tmpdir(), 'idd-token-cost-harvest-ew-'));
   writeFileSync(
     join(sandbox, 'session-ew-cwd.jsonl'),
     '{"type":"assistant","timestamp":"2026-01-01T00:20:00.000Z","sessionId":"sess-ew-cwd-0001","cwd":"/repo.issue-777-x","message":{"model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}\n',
@@ -2942,7 +2946,7 @@ test('readEventWindows: missing file returns an empty map', () => {
 });
 
 test('readEventWindows: pairs a trusted enter/exit for the same (issueNumber, stageId)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'idd-token-cost-events-'));
+  const dir = makeTempDir(join(tmpdir(), 'idd-token-cost-events-'));
   const path = join(dir, 'events.jsonl');
   writeFileSync(
     path,
@@ -3250,7 +3254,7 @@ test('token-cost-harvest CLI: reports issue-less open events during dry-run', ()
       vendor: 'codex',
     }),
   ]);
-  const home = mkdtempSync(join(dir, 'home-'));
+  const home = makeTempDir(join(dir, 'home-'));
   const result = spawnSync(
     process.execPath,
     [
@@ -3287,7 +3291,7 @@ test('token-cost-harvest CLI: reports issue-less open events during dry-run', ()
 });
 
 test('readEventWindows: does not pair an enter/exit across two different vendors for the same issue/stage', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'idd-token-cost-events-'));
+  const dir = makeTempDir(join(tmpdir(), 'idd-token-cost-events-'));
   const path = join(dir, 'events.jsonl');
   writeFileSync(
     path,
@@ -4678,7 +4682,7 @@ test('readExistingVendorSessionKeys: missing file returns an empty set', () => {
 });
 
 test('readExistingVendorSessionKeys: reads (vendor, vendorSessionId) pairs and skips a malformed line', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'idd-token-cost-samples-'));
+  const dir = makeTempDir(join(tmpdir(), 'idd-token-cost-samples-'));
   const path = join(dir, 'samples.jsonl');
   writeFileSync(
     path,

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -18,6 +18,10 @@ import {
   resolveMergeBaseWithRetry,
   resolveRequiresUpToDateHead,
 } from '../src/scripts/branch-conflict-state.mts';
+import { trackTempDirectories } from './temp-fixtures.mts';
+
+// #4049: every fixture directory below is removed when the file finishes.
+const makeTempDir = trackTempDirectories();
 
 type ClassifyOptions = NonNullable<
   Parameters<typeof classifyBranchConflictState>[1]
@@ -77,7 +81,7 @@ let sharedTwoCommitRepo: { dir: string; older: string; newer: string } | null =
  */
 function createTwoCommitRepo(): { dir: string; older: string; newer: string } {
   if (sharedTwoCommitRepo) return sharedTwoCommitRepo;
-  const dir = mkdtempSync(join(tmpdir(), 'idd-branch-conflict-state-'));
+  const dir = makeTempDir(join(tmpdir(), 'idd-branch-conflict-state-'));
   const git = (args: string[]) =>
     execFileSync('git', ['-c', 'core.autocrlf=false', ...args], {
       cwd: dir,
@@ -159,7 +163,7 @@ function createUpstreamRepo(): {
   featureCommits: string[];
 } {
   if (sharedUpstreamRepo) return sharedUpstreamRepo;
-  const dir = mkdtempSync(join(tmpdir(), 'idd-branch-conflict-upstream-'));
+  const dir = makeTempDir(join(tmpdir(), 'idd-branch-conflict-upstream-'));
   gitNoSign(dir, ['init', '-q']);
   gitNoSign(dir, ['config', 'user.email', 'test@example.invalid']);
   gitNoSign(dir, ['config', 'user.name', 'Test']);
@@ -173,7 +177,7 @@ function createUpstreamRepo(): {
   const branch = gitNoSign(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
 
   const featureBranch = 'feature';
-  const featureWorktreeDir = mkdtempSync(
+  const featureWorktreeDir = makeTempDir(
     join(tmpdir(), 'idd-branch-conflict-feature-wt-'),
   );
   gitNoSign(dir, [
@@ -226,7 +230,7 @@ function createUpstreamRepo(): {
  * `upstreamDir` contains characters that need URL escaping (e.g. spaces).
  */
 function createFreshShallowClone(upstreamDir: string): string {
-  const shallowDir = mkdtempSync(
+  const shallowDir = makeTempDir(
     join(tmpdir(), 'idd-branch-conflict-shallow-'),
   );
   execFileSync(
@@ -505,7 +509,7 @@ test('createTwoCommitRepo: commits succeed even with global commit signing force
   // actually forces a rebuild under the poisoned config, rather than
   // silently reusing an already-built repo from an earlier test and
   // passing for the wrong reason.
-  const configDir = mkdtempSync(
+  const configDir = makeTempDir(
     join(tmpdir(), 'idd-branch-conflict-state-gitconfig-'),
   );
   const configPath = join(configDir, 'gitconfig');

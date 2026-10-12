@@ -43,12 +43,19 @@ repository already states for its own helper:
 ```sh
 # source repo / vendored-node
 node scripts/idd-roadmap-audit-execute.mjs --roadmap <number> \
-  --claim-id <claim-id> --agent-id <agent-id> --apply
+  --claim-id <claim-id> --agent-id <agent-id> --apply \
+  [--criteria-note "<confirmed success criteria>"]
 
 # package-manager / ephemeral-npx / user-global
 <profile-selected-roadmap-audit-execute-command> --roadmap <number> \
-  --claim-id <claim-id> --agent-id <agent-id> --apply
+  --claim-id <claim-id> --agent-id <agent-id> --apply \
+  [--criteria-note "<confirmed success criteria>"]
 ```
+
+When the caller has confirmed the roadmap's success criteria, pass them with
+`--criteria-note` on the `--apply` call. Arguments are not kept between
+invocations, so a flag given only to the dry-run does not reach the completion
+evidence, which then states that the helper did not verify the criteria.
 
 `<claim-id>` must be the roadmap-audit-scoped claim (branch
 `roadmap-audit/<number>-<slug>`) posted per the written claim step
