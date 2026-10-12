@@ -1,9 +1,18 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { trackTempDirectories } from './temp-fixtures.mts';
+
+/**
+ * A prefix unique to one run, so a leftover from an earlier run or another
+ * process in the shared parent directory cannot match it.
+ */
+function uniquePrefix(label: string): string {
+  return `idd-temp-fixtures-${label}-${randomUUID()}-`;
+}
 
 // Pins `tests/temp-fixtures.mts` (issue #4049): the tracked directories are
 // removed by a file-level after hook, so a prefix must never let that
@@ -26,12 +35,13 @@ test('a prefix inside a nested fixture directory is allowed (#4049)', () => {
 });
 
 test('a prefix outside tmpdir() throws and creates nothing (#4049)', () => {
-  const outside = join(resolve(tmpdir()), '..', 'idd-temp-fixtures-escape-');
+  const escapePrefix = uniquePrefix('escape');
+  const outside = join(resolve(tmpdir()), '..', escapePrefix);
   assert.throws(() => makeTempDir(outside), /must resolve below/);
-  // Matched by name: other processes may write to that parent at any time.
+  // Matched by this run's unique prefix: other processes write there too.
   assert.deepEqual(
     readdirSync(dirname(resolve(outside))).filter((name) =>
-      name.startsWith('idd-temp-fixtures-escape-'),
+      name.startsWith(escapePrefix),
     ),
     [],
   );
@@ -59,6 +69,7 @@ test('a prefix through a symbolic link that leaves tmpdir() throws and creates n
 }, () => {
   // The link points at tmpdir()'s own parent, which is outside it.
   const outside = dirname(resolve(tmpdir()));
+  const viaLink = uniquePrefix('via-link');
   const parent = makeTempDir(join(tmpdir(), 'idd-temp-fixtures-link-'));
   symlinkSync(outside, join(parent, 'link'));
   // Also with a trailing separator or `.` segment, which `resolve` drops.
@@ -67,17 +78,15 @@ test('a prefix through a symbolic link that leaves tmpdir() throws and creates n
   // dot-prefixed random name there, which cannot be told apart from what
   // other processes write.
   for (const prefix of [
-    join(parent, 'link', 'idd-temp-fixtures-via-link-'),
+    join(parent, 'link', viaLink),
     `${join(parent, 'link')}/`,
     `${join(parent, 'link')}/.`,
   ]) {
     assert.throws(() => makeTempDir(prefix), /must resolve below/, prefix);
   }
-  // Matched by name: other processes may write to that parent at any time.
+  // Matched by this run's unique prefix: other processes write there too.
   assert.deepEqual(
-    readdirSync(outside).filter((name) =>
-      name.startsWith('idd-temp-fixtures-via-link-'),
-    ),
+    readdirSync(outside).filter((name) => name.startsWith(viaLink)),
     [],
   );
 });
