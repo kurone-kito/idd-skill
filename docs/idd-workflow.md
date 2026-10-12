@@ -1215,6 +1215,55 @@ Running this variant safely requires:
   claim before dispatching further workers, rather than assuming success
   or failure either way.
 
+### Orchestrator restart
+
+This subsection covers an orchestrating session that restarts and keeps its
+session id, as the 2026-10-11 session did (issue `#4014`). The roster is not
+stored anywhere locally, so the steps below rebuild it from the forge, the
+worktrees, and the harness's agent listing. A session with a new id cannot
+identify its old claims, and step 1 treats them as not its own.
+
+1. **Find own claims.** For each worktree in `git worktree list --porcelain`,
+   list `idd-generated-tokens-*.json` in that worktree's private admin
+   directory (`git -C <worktree> rev-parse --absolute-git-dir`). Each file
+   holds `agentId` and `claimId`, and a `nonce` when one was recorded. One
+   worktree can hold several files. A claim is own only when its `agentId`
+   equals this session's session-suffixed agent-id. If the session cannot
+   determine that id, every claim is not own. Claims that are not own are not
+   dispatched again, and they are reported to the operator.
+2. **Verify each own claim.** Run `resume-claim-routing --assert` with
+   `--issue`, `--claim-id`, `--nonce` (when the file holds one), and
+   `--worktree <path>`. Continue to step 3 only when the command exits 0,
+   which means the state is `already_owned` with action `keep`. When it does
+   not exit 0, read the `state` field. `stale` goes to the takeover path in
+   `idd-resume.instructions.md`. Any other state is reported to the operator
+   with its name, and no further action is taken on that issue.
+3. **Re-attach workers.** Read the live worker list from the harness's agent
+   listing, and match each entry to an own claim by the issue number in the
+   worker's brief. If the harness offers no agent listing, no worker is
+   matched, and every own claim goes to step 5. For a matched worker that the
+   runtime can still message, apply the existing worker-death rules by
+   reference, under the bullet titled
+   "Resume-specific recovery when a worker dies mid-turn" in the
+   [fan-out variant](#orchestrator-fan-out-variant). A matched worker that
+   cannot be messaged is replaced by a fresh subagent only when step 2
+   verified its claim. Then recount the roster. Run `idd-worker-budget
+   --running <n> --startable <n>`, where `--running` is the number of
+   re-attached running workers and `--startable` is the number of startable
+   candidates still in the orchestrator's cached graph (0 when none). Run
+   `discover-shared-file-overlap --issues <n,...> --batch <k>`, with one
+   `--in-flight <n>` for each re-attached worker's issue.
+4. **Recover reports.** Look for a finished worker's report draft in the
+   scratchpad of the same session, under the issue-number prefix that the
+   fan-out variant already requires. If no draft is found, verify the terminal
+   outcome from live GitHub state (a merged or closed pull request, a released
+   claim), then append a report with `idd-worker-report append --file <path>`.
+   Record the recovery in its `frictions`, where each entry needs a `phase` and
+   a `summary`. Use the agent-listing handle as `workerHandle` when one is
+   available, and the claim-id otherwise.
+5. **Report the remainder.** An own claim with no matching worker after step 3
+   is reported to the operator. Its worktree is not removed.
+
 ### Discover re-run cadence
 
 Re-running the full Discover enumeration this session established
