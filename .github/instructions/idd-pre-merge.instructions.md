@@ -250,6 +250,7 @@ never clears by polling: follow its `detail`.
        unchanged and continues to the CI check.
      - **SATISFIED** (otherwise) → this check is **satisfied**;
        continue to the CI check.
+     - **DISPOSITION_NEEDED** (#4070) → do not merge; return to E14.
      - **HOLD** → post the hold comment from **AW4** and stop.
      - **RECOVERY_NEEDED** → post the recovery marker from **AW3-R**
        without requesting another Copilot review, then enter the normal
