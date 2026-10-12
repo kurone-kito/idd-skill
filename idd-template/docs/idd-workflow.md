@@ -1232,56 +1232,50 @@ identify its old claims, and step 1 treats them as not its own.
    state, and no further action is taken on that issue.
 3. **Re-attach workers.** Read the live worker list from the harness's agent
    listing, and match each entry, by the issue number in the worker's brief,
-   only to an own claim that step 2 sent to step 3. A worker that matches no
-   such claim is neither messaged, replaced, nor sent to step 4. Match finished
-   workers as well as running ones, and count only running workers in
-   `--running`. If the harness offers no agent listing, no worker is matched,
-   and every own claim that reached this step goes to step 5. A matched
-   finished worker goes to step 4. For a matched running worker that the
-   runtime can still message, apply the existing worker-death rules by
-   reference, under the bullet titled "Resume-specific recovery when a worker
-   dies mid-turn" in the [fan-out variant](#orchestrator-fan-out-variant). A
-   matched running worker that cannot be messaged is replaced by a fresh
-   subagent only when step 2 verified its claim. Then recount the roster. Run
-   the profile-selected `idd-worker-budget` command with
-   `--running <n> --startable <n>`, where `--running` is the number of
-   re-attached running workers and `--startable` is the number of startable
-   candidates still in the orchestrator's cached graph (0 when none). When
-   `--startable` is at
-   least 1 and the budget's `slots` is at least 1, run the profile-selected
-   `discover-shared-file-overlap` command with `--issues <n,...>` (the
-   startable candidates), `--batch <k>` (the `slots` value), `--check-overlap`,
-   one `--in-flight <n>` for each re-attached worker's issue, and
-   `--desync-token <session-suffixed agent-id>` when
-   `discover.selectionDesync` is `session-offset`. Otherwise skip it: the
-   helper rejects an empty candidate list and a zero batch.
-4. **Recover reports.** Run this step for a released claim from step 2 and for
-   a matched finished worker, once per claim even when both apply. A claim
-   whose issue still has a running worker in the live listing gets no record:
-   count that worker in `--running` and send it no message. Look for the
-   worker's report draft in the scratchpad of the same session, under the
-   issue-number prefix that the fan-out variant already requires. If a draft is
-   found, validate it against `schemas/worker-report.schema.json` and append it
-   with the profile-selected `idd-worker-report append --file <path>` command.
-   If no draft is found, verify the terminal outcome from live GitHub state,
-   build the record from the fields below, and append it the same way. The
-   record validates against `schemas/worker-report.schema.json`: `schemaVersion`
-   is `1`; `issue` is `owner/repo#<number>`, with `owner` and `repo` from the
-   `repository.owner` and `repository.repo` fields of the routing output and the
-   number verified in step 2; `claimId` is the claim-id; `pullRequest` is the
-   claim's pull request from live GitHub state, in the same form, or null;
-   `harness` is the schema slug for this session's row of the worker mechanism
-   table, or `other` when that row has no slug; `workerHandle` is the
-   agent-listing handle of the listed worker whose issue number matches,
-   finished or running, and the claim-id only when no listed worker matches;
-   `terminalPhase` is the last phase that live state proves, which is F4 for a
-   merged claim that was released; `outcome` is `merged` for a merged pull
-   request, `abandoned` for a closed unmerged one, `held` for a claim still
-   held, `handed-off` when a handoff summary was posted before the release, and
-   `failed` otherwise; `verifiedAt` and `recordedAt` are ISO 8601 UTC
-   timestamps. Record the recovery in `deviations`, where each entry needs a
-   `phase` and a `summary`, because `frictions` lists instruction text that
-   caused friction.
+   to an own claim. Count every running matched worker in `--running`,
+   including the running worker of a released claim, and pass its issue as an
+   `--in-flight` value below. A matched finished worker goes to step 4. A
+   matched running worker of a claim that step 2 sent to step 3 is handled as
+   follows: if the runtime can still message it, apply the existing worker-death
+   rules by reference, under the bullet titled
+   "Resume-specific recovery when a worker dies mid-turn" in the
+   [fan-out variant](#orchestrator-fan-out-variant); if it cannot be messaged,
+   replace it with a fresh subagent only when step 2 verified its claim. A
+   worker that matches no own claim is neither messaged nor replaced. If the
+   harness offers no agent listing, no worker is matched, and every own claim
+   that reached this step goes to step 5. Then recount the roster. Run the
+   profile-selected `idd-worker-budget` command with
+   `--running <n> --startable <n>`, where `--running` is the count above and
+   `--startable` is the number of startable candidates still in the
+   orchestrator's cached graph (0 when none). When `--startable` is at least 1
+   and the budget's `slots` is at least 1, run the profile-selected
+   `discover-shared-file-overlap` command with
+   `--issues <n,...>` (the startable candidates), `--batch <k>` (the `slots`
+   value), `--check-overlap`, one `--in-flight <n>` for each counted running
+   worker's issue, and `--desync-token <session-suffixed agent-id>` when
+   `discover.selectionDesync` is `session-offset`. Otherwise skip it: the helper
+   rejects an empty candidate list and a zero batch.
+4. **Recover reports.** Run this step for each matched finished worker, under
+   that worker's own listed handle, and for a released claim with no matched
+   worker, under the claim-id as its handle. A matched running worker gets no
+   record. A released claim whose only matched worker is still running gets no
+   record and is reported in step 5. Look for the worker's report draft in the
+   scratchpad of the same session, under the issue-number prefix that the
+   fan-out variant already requires. If a draft is found, verify its outcome,
+   `pullRequest`, and `terminalPhase` against live GitHub state, set
+   `verifiedAt` to that check and `recordedAt` to the time of the append, then
+   append it. If no draft is found, verify the terminal outcome from live GitHub
+   state, build the record as the
+   [worker final report store](idd-helper-scripts.md#worker-final-report-store)
+   describes, and append it the same way. In both cases, validate the record
+   against `schemas/worker-report.schema.json` first, then append it with the
+   profile-selected `idd-worker-report append --file <path>` command. Map
+   `outcome` as the store describes: `merged` for a merged pull request,
+   `abandoned` for a closed unmerged one, `held` for a claim still held,
+   `handed-off` when a handoff summary was posted before the release, and
+   `failed` otherwise. Record the recovery in `frictions`, naming
+   `docs/idd-workflow.md` in `file`, because that is the instruction path the
+   recovery followed.
 5. **Report the remainder.** An own claim that reached step 3 and has no
    matching worker is reported to the operator, and so is a matched finished
    worker whose recorded outcome is `held`. A released claim is reported here
