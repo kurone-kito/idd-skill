@@ -9699,14 +9699,66 @@ test('union (#4070): a same-head review whose body the helper cannot read disagr
   assert.equal(summary.f3Outcome, 'DISPOSITION_NEEDED');
 });
 
-test('union (#4070): an empty-body same-head review alongside a clean recognized one is no content, so SATISFIED', () => {
-  const summary = helperSummaryFor([
+test('union (#4070, fail closed): an empty-body same-head review blocks as unreadable, and a trusted review-ack for the head clears it', () => {
+  const blocked = helperSummaryFor([
     restCopilotReview(MINIMAL_V2_REVIEW_BODY, HEAD),
     {
       ...restCopilotReview('', HEAD),
       submitted_at: LATER_SAME_HEAD_REVIEW,
     },
   ]);
+  assert.equal(blocked.outcome, 'DISPOSITION_NEEDED');
+  const cleared = helperSummaryFor(
+    [
+      restCopilotReview(MINIMAL_V2_REVIEW_BODY, HEAD),
+      {
+        ...restCopilotReview('', HEAD),
+        submitted_at: LATER_SAME_HEAD_REVIEW,
+      },
+    ],
+    [
+      {
+        author: { login: TRUSTED },
+        body: `review-ack: ${AGENT_ID} ${HEAD} 2026-07-11T11:30:00Z`,
+        createdAt: '2026-07-11T11:30:00Z',
+        lastEditedAt: null,
+      },
+    ],
+  );
+  assert.equal(cleared.outcome, 'SATISFIED');
+});
+
+test('union (#4070): a reply posted before a later cited review cannot answer it, so two replies after the first review do not settle both (Codex P1 on #4082)', () => {
+  const summary = helperSummaryFor(
+    [
+      restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+      {
+        ...restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+        submitted_at: '2026-07-11T11:00:00Z',
+      },
+    ],
+    [
+      citedDispositionComment({ createdAt: '2026-07-11T10:30:00Z' }),
+      citedDispositionComment({ createdAt: '2026-07-11T10:40:00Z' }),
+    ],
+  );
+  assert.equal(summary.outcome, 'DISPOSITION_NEEDED');
+});
+
+test('union (#4070): one reply for the first review and one posted after the later review settle both', () => {
+  const summary = helperSummaryFor(
+    [
+      restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+      {
+        ...restCopilotReview(CITED_PREVIOUSLY_MISSED_BODY, HEAD),
+        submitted_at: '2026-07-11T11:00:00Z',
+      },
+    ],
+    [
+      citedDispositionComment({ createdAt: '2026-07-11T10:30:00Z' }),
+      citedDispositionComment({ createdAt: '2026-07-11T11:30:00Z' }),
+    ],
+  );
   assert.equal(summary.outcome, 'SATISFIED');
 });
 

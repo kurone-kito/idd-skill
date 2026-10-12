@@ -5128,6 +5128,49 @@ const REVIEW_REPLY_STAMP_PATTERN = /<!--\s*[\w-]+-review-reply\s*-->/iu;
  * stamp, and was posted strictly after the latest primary-bot review was
  * submitted. A bare `review-ack` never counts for these items.
  */
+/**
+ * #3942: the createdAt times of the trusted, unedited disposition replies that
+ * settle a Previously missed item naming a file or line, sorted ascending. A
+ * reply counts when it opens with `**Accepted**` or the recorded-deferral
+ * form, carries the review-reply stamp, and, for a `**Rejected**`, names a
+ * file or line. A bare `review-ack` never counts for these items.
+ */
+export function qualifyingCitedDispositionTimes(comments, trustedMarkerLogins) {
+  const trusted = new Set(
+    trustedMarkerLogins.map((login) => login.trim().toLowerCase()),
+  );
+  return comments
+    .filter((comment) => {
+      const body = String(comment.body ?? '').trimEnd();
+      const login = String(comment.author?.login ?? comment.user?.login ?? '')
+        .trim()
+        .toLowerCase();
+      const createdAt = String(comment.createdAt ?? comment.created_at ?? '');
+      if (!trusted.has(login) || !isValidIsoTimestamp(createdAt)) {
+        return false;
+      }
+      if (classifyCommentEditState(comment) !== 'unedited') {
+        return false;
+      }
+      return (
+        (DISPOSITION_ACCEPTED_PREFIX_RE.test(body) ||
+          RECORDED_DEFERRAL_REPLY_PATTERN.test(body) ||
+          // #3942 (maintainer decision, 2026-10-11): a Rejected reply counts
+          // when it names a file or line as the evidence, as the PATH A
+          // verification rule allows for a claim the live evidence contradicts.
+          (DISPOSITION_REJECTED_PREFIX_RE.test(body) &&
+            namesFileOrLine(body))) &&
+        REVIEW_REPLY_STAMP_PATTERN.test(body)
+      );
+    })
+    .map((comment) => String(comment.createdAt ?? comment.created_at ?? ''))
+    .sort(compareIsoTimestamps);
+}
+/**
+ * #3942: counts the qualifying disposition replies posted strictly after
+ * `reviewSubmittedAt`. A reply in the review's own second is not provably
+ * later, the same ordering hasTrustedReviewAckAfter uses.
+ */
 export function countCitedItemDispositions(
   comments,
   trustedMarkerLogins,
@@ -5136,37 +5179,9 @@ export function countCitedItemDispositions(
   if (!isValidIsoTimestamp(reviewSubmittedAt)) {
     return 0;
   }
-  const trusted = new Set(
-    trustedMarkerLogins.map((login) => login.trim().toLowerCase()),
-  );
-  return comments.filter((comment) => {
-    const body = String(comment.body ?? '').trimEnd();
-    const login = String(comment.author?.login ?? comment.user?.login ?? '')
-      .trim()
-      .toLowerCase();
-    const createdAt = String(comment.createdAt ?? comment.created_at ?? '');
-    // Strictly after the review, the same ordering hasTrustedReviewAckAfter uses:
-    // a reply in the review's own second is not provably later.
-    if (
-      !trusted.has(login) ||
-      !isValidIsoTimestamp(createdAt) ||
-      compareIsoTimestamps(createdAt, reviewSubmittedAt) <= 0
-    ) {
-      return false;
-    }
-    if (classifyCommentEditState(comment) !== 'unedited') {
-      return false;
-    }
-    return (
-      (DISPOSITION_ACCEPTED_PREFIX_RE.test(body) ||
-        RECORDED_DEFERRAL_REPLY_PATTERN.test(body) ||
-        // #3942 (maintainer decision, 2026-10-11): a Rejected reply counts when
-        // it names a file or line as the evidence, as the PATH A verification
-        // rule allows for a claim the live evidence contradicts.
-        (DISPOSITION_REJECTED_PREFIX_RE.test(body) && namesFileOrLine(body))) &&
-      REVIEW_REPLY_STAMP_PATTERN.test(body)
-    );
-  }).length;
+  return qualifyingCitedDispositionTimes(comments, trustedMarkerLogins).filter(
+    (createdAt) => compareIsoTimestamps(createdAt, reviewSubmittedAt) > 0,
+  ).length;
 }
 export function isCopilotPending(
   requestedReviewers,
@@ -5594,8 +5609,7 @@ function sameHeadReviewsSettled({
 }) {
   const isDefaultCopilotBot =
     primaryBotLogin === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
-  let requiredCited = 0;
-  let earliestCitedReviewAt = '';
+  const cited = [];
   for (const review of reviews) {
     const author = {
       login: review.user?.login ?? review.author?.login ?? '',
@@ -5615,14 +5629,13 @@ function sameHeadReviewsSettled({
     const submittedAt = String(review.submitted_at ?? review.submittedAt ?? '');
     const { shape, suppressedCount } = classifyCopilotReviewBody(body);
     if (shape !== 'overview-v2' && shape !== 'overview-legacy') {
-      // A configured non-Copilot bot has no known shapes, so it is not judged
-      // here. For the default bot, an empty body is no content. Any other
-      // unreadable body disagrees with the recognized review unless a trusted
-      // review-ack for this head follows it, the same clearing rule the gate
-      // applies to an unrecognized body (fail closed otherwise).
+      // Fail closed for the default bot: any body this helper cannot read,
+      // an empty one included, blocks until a trusted review-ack for this head
+      // follows it. A configured non-Copilot bot has no known shapes and is not
+      // judged here. The gate applies the same clearing rule to an unrecognized
+      // body.
       if (
         isDefaultCopilotBot &&
-        String(body ?? '').trim() !== '' &&
         !hasTrustedReviewAckAfter(
           comments,
           trustedMarkerLogins,
@@ -5638,28 +5651,37 @@ function sameHeadReviewsSettled({
       continue;
     }
     const citation = citationBreakdown(body, suppressedCount);
-    requiredCited += citation.citedCount;
-    if (
-      citation.citedCount > 0 &&
-      (earliestCitedReviewAt === '' ||
-        compareIsoTimestamps(submittedAt, earliestCitedReviewAt) < 0)
-    ) {
-      earliestCitedReviewAt = submittedAt;
+    if (citation.citedCount > 0) {
+      cited.push({ submittedAt, count: citation.citedCount });
     }
   }
-  if (requiredCited === 0) {
+  if (cited.length === 0) {
     return true;
   }
-  // One disposition answers one cited item, so the required citations of all
-  // same-head reviews are summed and compared with the dispositions posted
-  // after the earliest cited review. A reply is never counted twice.
-  return (
-    countCitedItemDispositions(
-      comments,
-      trustedMarkerLogins,
-      earliestCitedReviewAt,
-    ) >= requiredCited
+  // Allocate in submission order: each cited review takes the earliest unused
+  // disposition posted after it. One reply answers one item, so a later review
+  // never inherits a reply that predates it.
+  const times = qualifyingCitedDispositionTimes(comments, trustedMarkerLogins);
+  const used = times.map(() => false);
+  cited.sort((left, right) =>
+    compareIsoTimestamps(left.submittedAt, right.submittedAt),
   );
+  for (const { submittedAt, count } of cited) {
+    if (!isValidIsoTimestamp(submittedAt)) {
+      return false;
+    }
+    let remaining = count;
+    for (let index = 0; index < times.length && remaining > 0; index += 1) {
+      if (!used[index] && compareIsoTimestamps(times[index], submittedAt) > 0) {
+        used[index] = true;
+        remaining -= 1;
+      }
+    }
+    if (remaining > 0) {
+      return false;
+    }
+  }
+  return true;
 }
 export function evaluateAdvisoryWaitOutcome(input) {
   const { requestCap, pendingWindowMinutes, settledWindowMinutes } =
