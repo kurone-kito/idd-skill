@@ -71,9 +71,11 @@ LAST_COPILOT_COMMIT=$(
 )
 
 # #4070: this path cannot run the gate's cited-item check, so it fails closed.
-# A same-head Copilot review whose body is empty, or carries a suppressed-items
-# heading (v2 "Previously missed" or legacy "Suppressed comments"), holds (AW4).
-# The helper decides the precise rule; this check never grants SATISFIED.
+# A same-head Copilot review holds (AW4) unless its body opens with the v2
+# marker and has no "Previously missed" heading. This check recognizes fewer
+# shapes than the helper, so holding is the fail-closed side: an unrecognized,
+# empty, legacy, or error body holds here, including "Copilot could not review
+# this pull request." The helper decides the precise rule.
 SAME_HEAD_REVIEWS_JSON=$(gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/reviews" --paginate) || {
   echo "reviews read failed; not trusted (#4070)" >&2
   exit 2
@@ -83,11 +85,11 @@ SAME_HEAD_UNCLEARED=$(
       [ .[][] | select(.commit_id == $sha
           and ((.user.login // "") | ascii_downcase
                | . == "copilot" or . == "copilot-pull-request-reviewer" or . == "copilot-pull-request-reviewer[bot]")
-          and (((.body // "") | ascii_downcase) as $b
-               | $b == "" or ($b | contains("previously missed")) or ($b | contains("suppressed comments")))) ] | length'
+          and ( ((.body // "") | sub("^\\s+"; "") | startswith("<!-- ccr-overview-v2 -->") | not)
+                or ((.body // "") | ascii_downcase | contains("previously missed")) )) ] | length'
 )
 [ "${SAME_HEAD_UNCLEARED}" = "0" ] || {
-  echo "same-head Copilot review is unreadable or has suppressed items; hold (AW4) #4070" >&2
+  echo "same-head Copilot review is unrecognized or has suppressed items; hold (AW4) #4070" >&2
   exit 2
 }
 

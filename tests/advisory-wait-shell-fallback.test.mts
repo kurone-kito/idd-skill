@@ -1151,3 +1151,60 @@ test('differential: an edited request marker reads the same in shell and runtime
   assertAw2Parity(run, summary);
   assert.equal(summary.requestMarkerCount, 1);
 });
+
+// #4070: the AW1 review check fails closed on any same-head Copilot body it
+// cannot recognize. "Copilot could not review this pull request." is the
+// explicit fail-open case from the review, and the others follow the same rule.
+function sameHeadReview(body: string) {
+  return {
+    user: { login: `${BOT_LOGIN}[bot]` },
+    submitted_at: '2026-10-08T09:00:00Z',
+    commit_id: HEAD_SHA,
+    id: 901,
+    body,
+  };
+}
+
+test('AW1 holds on "Copilot could not review this pull request." (#4070, fail closed)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runAw1({
+    timeline: `${TIMELINE_HEAD}\n${TIMELINE_REQUEST}`,
+    reviews: [sameHeadReview('Copilot could not review this pull request.')],
+  });
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(run.stderr, /hold \(AW4\) #4070/);
+});
+
+test('AW1 holds on an empty same-head Copilot body (#4070, fail closed)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runAw1({
+    timeline: `${TIMELINE_HEAD}\n${TIMELINE_REQUEST}`,
+    reviews: [sameHeadReview('')],
+  });
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(run.stderr, /hold \(AW4\) #4070/);
+});
+
+test('AW1 holds on a legacy suppressed-items body, not only the v2 wording (#4070)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runAw1({
+    timeline: `${TIMELINE_HEAD}\n${TIMELINE_REQUEST}`,
+    reviews: [sameHeadReview('### Suppressed comments (1)\n\nlegacy finding')],
+  });
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(run.stderr, /hold \(AW4\) #4070/);
+});
+
+test('AW1 passes a clean v2 same-head body (#4070, pins the recognized side)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runAw1({
+    timeline: `${TIMELINE_HEAD}\n${TIMELINE_REQUEST}`,
+    reviews: [sameHeadReview('<!-- ccr-overview-v2 -->\n\nNo findings.')],
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.covers, 'true');
+});
