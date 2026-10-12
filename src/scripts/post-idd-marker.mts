@@ -1853,6 +1853,11 @@ its claim-revalidation gate before --apply, as the manual POST path it replaces.
                        fresh snapshot's live HEAD no longer matches it, i.e.
                        the branch moved between E1 Step 1 and this Step 2
                        call.
+  --global-only        --from-pr --type watermark only: resolve the global-only
+                       profile in the CI read, so a zero-required-check run
+                       can publish under the trusted
+                       ciGate.allowNoRequiredChecksInGlobalOnly opt-in. Any
+                       other path rejects the flag.
   --operation-local    --from-pr --type watermark only: also return the review
                        activity capture in the JSON envelope's operationLocal
                        field, and make a defer non-fatal: while required checks
