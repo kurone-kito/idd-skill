@@ -332,6 +332,32 @@ test('critiqueLoop.deferByUrgency defaults to off and accepts low / low-and-medi
   );
 });
 
+test('critiqueLoop.triageRecord defaults to off and accepts record / enforce (#4185)', () => {
+  assert.equal(POLICY_DEFAULTS.critiqueLoop.triageRecord, 'off');
+  assert.equal(normalizePolicyConfig({}).critiqueLoop.triageRecord, 'off');
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { triageRecord: 'off' } })
+      .critiqueLoop.triageRecord,
+    'off',
+  );
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { triageRecord: 'record' } })
+      .critiqueLoop.triageRecord,
+    'record',
+  );
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { triageRecord: 'enforce' } })
+      .critiqueLoop.triageRecord,
+    'enforce',
+  );
+  // Unknown or invalid value falls back to the default.
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { triageRecord: 'bogus' } })
+      .critiqueLoop.triageRecord,
+    'off',
+  );
+});
+
 test('critiqueLoop.deferNeedsDecision defaults to on and only exact on/off pass through (#3777)', () => {
   assert.equal(POLICY_DEFAULTS.critiqueLoop.deferNeedsDecision, 'on');
   // A missing field (absent key, undefined value, absent or non-object

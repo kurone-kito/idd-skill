@@ -745,6 +745,11 @@
           "enum": ["off", "low", "low-and-medium", "severity-tiered"],
           "description": "Independent E4/E5 defer trigger, active from round 1, that disposes a PATH A item `Reject (defer)` and is not gated by round count. `off` (default): the trigger is disabled and E4/E5 behavior is unchanged. `low` and `low-and-medium`: a PATH A item that is not adopt-now (see `idd-review-triage.instructions.md`'s Defer rule) defers when its defer-eligibility severity is within the mode's ceiling. `low`: Low-severity items only. `low-and-medium`: Low or Medium. High is never eligible under either. Under either mode, clause (d) of the adopt-now test cascades: once one finding of a pass is Accepted, another finding of that pass whose fix stays within that push's files is adopt-now and is not deferred. `severity-tiered`: the mode without that cascade. It does not apply the binary adopt-now gate; it defers by the severity-and-urgency matrix, whose `high` urgency still reads adopt-now conditions (a)-(c). At relax step 0 (the whole matrix while `deferRelaxAtRounds` below is unset or invalid) that includes High only at urgency `very-low`. Independent of, and does not change, `deferAfterRounds` above. Optional; defaults to `off`."
         },
+        "triageRecord": {
+          "type": "string",
+          "enum": ["off", "record", "enforce"],
+          "description": "Triage recording for PATH A replies made through the `resolve-review-thread` helper. `off` (default): the helper records no tier or urgency. `record`: the helper requires the tier and urgency on every Accepted or Rejected PATH A reply, and records them with the relax step in a `Triage:` line. `enforce`: like `record`, and the helper also refuses an Accepted reply that the defer matrix says to defer, unless a reason is given; it takes effect only when `deferByUrgency` is `severity-tiered`, and otherwise behaves as `record`. No helper reads this key yet, so it has no effect until one does. Optional; defaults to \"off\"."
+        },
         "deferRelaxAtRounds": {
           "type": "array",
           "minItems": 1,
