@@ -111,7 +111,7 @@ function isOverrun(effort: string | null, changedFiles: number): boolean {
 // Wording that would turn the overrun back into a human question.
 const QUESTION_PATTERNS = [/needs-decision/i, /\bask\b/i, /\?/] as const;
 
-const PROHIBITION = 'Never add the needs-decision label or ask a human';
+const PROHIBITION = 'Never add needs-decision or ask a human';
 
 /**
  * The route steps, in the order the worker must perform them: the
@@ -119,17 +119,18 @@ const PROHIBITION = 'Never add the needs-decision label or ask a human';
  * fallback proposal), the claim release, then the companion handoff.
  */
 const ORDERED_STEPS = [
-  '`effort-candidate-file-limit` threshold',
-  'or a split child',
-  'stop coding',
-  'Do not push',
-  'Comment the estimate, the candidate files, the changed files',
+  '`audit-authored-issue --shape child` fails',
+  '`effort-candidate-file-limit` on the issue',
+  'a copy listing the canonical changed files as candidates',
+  'stop coding without pushing',
+  'a release, not a hold',
+  'Comment the estimate, candidate files, changed files',
   'without the companion, the split proposal',
   'release with `unclaimed-by` and the current `{claim-id}`',
-  'reset to base and run `lost-claim-cleanup`',
+  'reset to base, `git clean -fdx`, run `lost-claim-cleanup`',
   'With the companion, hand it a held split draft',
-  'held roadmap whose children each record `Split out of #<n>`',
-  'comments the roadmap link',
+  'held roadmap whose children record `Split out of #<n>`',
+  'comments its link',
   PROHIBITION,
 ] as const;
 
@@ -140,6 +141,27 @@ test('a diff over the effort estimate is an overrun; one within it is not', () =
   const limitS = EFFORT_CANDIDATE_FILE_LIMITS.S;
   assert.equal(isOverrun('S', limitS + 1), true);
   assert.equal(isOverrun('S', limitS), false);
+});
+
+test('an issue within its estimate whose diff is over it is an overrun through the changed files', () => {
+  // The issue's own candidate list passes the check...
+  assert.equal(isOverrun('M', 3), false);
+  // ...but the same issue with the canonical changed files in place of
+  // its candidate files fails it, which is the route's second trigger.
+  assert.equal(isOverrun('M', EFFORT_CANDIDATE_FILE_LIMITS.M + 1), true);
+});
+
+test('an orphan issue is checked only because the route passes --shape child', () => {
+  // The motivating overrun (#4064) was an orphan issue. Audited under its
+  // own shape the threshold is not applicable, so the route must name
+  // the child shape for the check to apply.
+  const body = issueWithChangedFiles('M', EFFORT_CANDIDATE_FILE_LIMITS.M + 1);
+  const asOrphan = auditAuthoredIssue(body, { shape: 'orphan' }).findings.find(
+    (entry) => entry.id === 'effort-candidate-file-limit',
+  );
+  assert.equal(asOrphan?.result, 'pass');
+  assert.match(asOrphan?.detail ?? '', /^not applicable:/);
+  assert.equal(isOverrun('M', EFFORT_CANDIDATE_FILE_LIMITS.M + 1), true);
 });
 
 test('L and a missing effort hint are never checked, so they never trigger the route', () => {

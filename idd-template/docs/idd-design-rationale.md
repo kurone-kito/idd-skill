@@ -937,11 +937,16 @@ This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
 
 - **Stop, do not push.** An over-threshold diff is what the authoring
   check would have split before publication, so finishing it only
-  produces an oversized pull request. The trigger counts canonical
-  files, not generated mirrors, and never fires for `L`, a missing
-  effort hint, or a child that carries a `Split out of #<n>` line,
-  which the threshold exempts too. Returning a split child would only
-  split it again.
+  produces an oversized pull request. The trigger is the distributed
+  `audit-authored-issue` helper's own check, run on the issue body and
+  again on a copy whose `## Candidate files` section lists the
+  canonical changed files (not generated mirrors). Reusing the check
+  keeps its counting rule and its applicability: only a coherent `S`
+  or `M` effort marker is checked, and a body that carries a
+  `Split out of #<n>` line is exempt, since returning a split child
+  would only split it again. The route passes `--shape child` for
+  every issue, because the check reports any other shape as not
+  applicable, and #4064, the motivating overrun, was an orphan issue.
 - **Evidence first.** The comment records the estimate, the candidate
   files, and the changed files, so the next author sees the overrun
   without redoing the work.
@@ -950,10 +955,12 @@ This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
   instead of keeping a hold, and does not apply the needs-decision
   label, which would turn the overrun back into a question. It then
   resets the branch to base, which discards the local work on purpose
-  (the evidence comment keeps the file lists), and runs the claim
-  phase's `lost-claim-cleanup` from the primary checkout: a released
-  claim whose branch still holds commits blocks a later fresh claim on
-  the same branch name. That procedure runs only after `unclaimed-by`,
+  (the evidence comment keeps the file lists), removes untracked and
+  ignored files with `git clean -fdx` (the procedure's clean-tree gate
+  also checks ignored files such as installed dependencies), and runs
+  the claim phase's `lost-claim-cleanup` from the primary checkout: a
+  released claim whose branch still holds commits blocks a later
+  fresh claim on the same branch name. That procedure runs only after `unclaimed-by`,
   which its active-claim gate requires, and any gate it fails leaves
   the worktree for the claim phase's orphan hold.
 - **The companion owns the hold.** The authoring label is the
