@@ -344,7 +344,7 @@
     },
     {
       "id": "bundle-orchestrator-phase",
-      "description": "Orchestrator fan-out phase file: idd-orchestrator (loaded with bundle-core and bundle-discovery-phase, only when its activation conditions hold)",
+      "description": "Orchestrator fan-out phase file: idd-orchestrator (loaded with bundle-core and bundle-discovery-phase, only when its activation conditions hold or a fan-out session restarts)",
       "files": [
         ".github/instructions/idd-orchestrator.instructions.md"
       ],
