@@ -154,9 +154,12 @@ export const EFFORT_CANDIDATE_FILE_LIMITS: Readonly<Record<'S' | 'M', number>> =
 // contract's reuse-first rule records it. Line-anchored, with an optional
 // blockquote marker, an optional bullet or ordered-list marker, and an
 // optional `_`/`*` emphasis opener, so a mid-sentence mention never counts
-// as the provenance line.
+// as the provenance line. The issue number must end at a real token
+// boundary (whitespace or end of line, after optional closing emphasis
+// and sentence punctuation), so `#12_foo`, `#12-foo`, or `#12/3` never
+// exempts a child.
 const SPLIT_OUT_OF_LINE_PATTERN =
-  /^[ \t]*(?:>[ \t]*)?(?:(?:[-*+]|\d+[.)])[ \t]+)?[_*]{0,2}Split out of (?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#\d+(?![0-9A-Za-z])/m;
+  /^[ \t]*(?:>[ \t]*)?(?:(?:[-*+]|\d+[.)])[ \t]+)?[_*]{0,2}Split out of (?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#\d+(?=[_*]{0,2}[.,;:!?)]*(?:[ \t]|$))/m;
 
 // Shared "not applicable" detail for every triage-a4-*/triage-a45-*/
 // triage-title-missing finding (#3289) when `shape === 'roadmap'`: Discover
@@ -2547,8 +2550,11 @@ function checkCandidateFilesNotEmpty(
  * split before publication, unless the body carries a plain-text
  * `Split out of #<n>` provenance line (it is already the product of a
  * split). Not applicable to a bucket audit, a non-child shape, an `L`
- * hint, or a missing/malformed effort marker (the latter already fails
- * `effort-visible-line-agreement`, so it is not reported twice).
+ * hint, or a missing/malformed hidden effort marker. Only the hidden
+ * marker is read. A malformed or duplicated marker already fails
+ * `effort-visible-line-agreement`; a body with no effort footer at all
+ * is out of scope, since the rule targets drafts whose author estimated
+ * S or M.
  */
 function checkEffortCandidateFileLimit(
   rawText: string,

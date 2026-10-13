@@ -1643,9 +1643,10 @@ out of backticks. A body that is already the product of a split is
 exempt when it carries a plain-text `Split out of #<n>` line (not inside
 backticks or an HTML comment). The exemption is self-asserted, so a
 reviewer confirms the referenced issue is the real parent. The rule
-checks only the child shape, and only when a coherent effort marker is
-present; it also checks a human-bucket child audited without
-`--expect-bucket`. `audit-authored-issue`'s
+checks only the child shape, and only when a coherent hidden effort
+marker is present (a draft with no effort footer is not checked); it
+also checks a human-bucket child audited without `--expect-bucket`.
+`audit-authored-issue`'s
 `effort-candidate-file-limit` check enforces this table, which is the
 single source of the values.
 

@@ -2576,6 +2576,25 @@ test('effort-candidate-file-limit passes an over-limit M child that carries a Sp
     });
     assert.equal(effortLimitResult(body), 'pass', line);
   }
+  assert.equal(
+    effortLimitResult(
+      childBody({
+        effort: 'S',
+        candidateFiles: candidatePaths(4),
+        extraMarkers: 'Split out of #12',
+      }),
+    ),
+    'pass',
+  );
+});
+
+test('effort-candidate-file-limit still checks a human-bucket child audited without --expect-bucket', () => {
+  const body = childBody({
+    effort: 'S',
+    candidateFiles: candidatePaths(4),
+    extraMarkers: '<!-- idd-skill-authoring-bucket: needs-decision -->',
+  });
+  assert.equal(effortLimitResult(body), 'fail');
 });
 
 test('effort-candidate-file-limit ignores a Split out of mention in code, an HTML comment, mid-sentence, or without a real number', () => {
@@ -2586,6 +2605,10 @@ test('effort-candidate-file-limit ignores a Split out of mention in code, an HTM
     'This draft was Split out of #12 earlier.',
     'Split out of #<n>',
     'Split out of #12a',
+    'Split out of #12_foo',
+    'Split out of #12-foo',
+    'Split out of #12/3',
+    'Split out of #12.5',
   ]) {
     const body = childBody({
       effort: 'M',
