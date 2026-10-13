@@ -897,6 +897,11 @@ function main(): HelperCliResult {
   // to be needed) come from this single read.
   const iddConfig = loadIddConfig();
   const markerPrefixRaw = iddConfig?.markerPrefix;
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  const port = createGithubProviderAdapter(owner, repo);
   // `--body` is optional in dry-run. `parseCliArgs` defaults it to '', but
   // coerce anyway so a missing value cannot throw on `.trim()` before the
   // report is written.
@@ -907,11 +912,6 @@ function main(): HelperCliResult {
         typeof markerPrefixRaw === 'string' ? markerPrefixRaw : undefined,
       )
     : '';
-  const currentRepo =
-    args.owner && args.repo ? null : resolveCurrentGithubRepository();
-  const owner = args.owner || currentRepo?.owner || '';
-  const repo = args.repo || currentRepo?.repo || '';
-  const port = createGithubProviderAdapter(owner, repo);
 
   // #2616: fast fail-closed preview for both dry-run and --apply -- the
   // per-mutation re-check below (inside assertClaim) is the one that
