@@ -355,7 +355,8 @@ verdict for the latest pass: e11, continue, defer, or hold. Read-only.
   --passes <file.json>  {"passes": [[record, ...], ...]}, oldest pass first;
                         each record is {file, rule, construct, severity,
                         disposition}; rule is one of:
-                        ${E10_FINGERPRINT_RULES.join(', ')}
+                        ${E10_FINGERPRINT_RULES.join(', ')};
+                        severity is low, medium, or high in any case
   --hold-after <n>      override critiqueLoop.e10NoProgressHoldAfter
 `);
 }
