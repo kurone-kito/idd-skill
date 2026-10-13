@@ -415,7 +415,7 @@ export async function evaluateDiscoverReadiness(
     typeof fetchCommentsByIssueNumber === 'function' &&
     Array.isArray(trustedMarkerLogins) &&
     trustedMarkerLogins.length > 0;
-  // Route the three label-name options through normalizePolicyConfig rather
+  // Route the four label-name options through normalizePolicyConfig rather
   // than a bare destructure default (which only applies on `undefined`), so
   // an invalid or empty-string input also falls back to POLICY_DEFAULTS
   // instead of silently disabling the blocked-label / roadmap-label checks

@@ -108,7 +108,7 @@ test('advisoryWait.exemptBotAuthoredPrs defaults to false and only a literal tru
   );
 });
 
-test('POLICY_DEFAULTS.labels exposes the three reserved label name defaults plus untrustedLabelerLogins', () => {
+test('POLICY_DEFAULTS.labels exposes the four reserved label name defaults plus untrustedLabelerLogins', () => {
   // Additive only (#1272): POLICY_DEFAULTS carries the literal defaults,
   // and normalizePolicyConfig normalizes this namespace too (for shape
   // parity — see its labels branch), but no consuming helper outside
