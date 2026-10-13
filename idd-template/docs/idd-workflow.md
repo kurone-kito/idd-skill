@@ -1202,10 +1202,10 @@ Running this variant safely requires:
 ### Orchestrator restart
 
 This subsection covers an orchestrating session that restarts and keeps its
-session id, as the 2026-10-11 session did (issue `#4014`). The roster is not
-stored anywhere locally, so the steps below rebuild it from the forge, the
-worktrees, and the harness's agent listing. A session with a new id cannot
-identify its old claims, and step 1 treats them as not its own.
+session id, as the 2026-10-11 session did (issue `kurone-kito/idd-skill#4014`).
+The roster is not stored anywhere locally, so the steps below rebuild it from
+the forge, the worktrees, and the harness's agent listing. A session with a new
+id cannot identify its old claims, and step 1 treats them as not its own.
 
 1. **Find own claims.** For each worktree in `git worktree list --porcelain`,
    list `idd-generated-tokens-*.json` in that worktree's private admin directory
@@ -1294,13 +1294,12 @@ identify its old claims, and step 1 treats them as not its own.
    command with `--issues <n,...>` (the startable candidates), `--batch <k>`
    (the `slots` value), `--check-overlap`, one `--in-flight <n>` for each
    counted worker's issue, and `--desync-token` set to this session's
-   session-suffixed agent-id, or to the session-local token that Discover
-   generated at its entry when the session has no suffix, whenever
-   `discover.selectionDesync` is `session-offset`. Otherwise skip it: the helper
-   rejects an empty candidate list and a zero batch. Each selected candidate
-   then goes through section 3, steps 4 to 6 (A4.5, the fresh-claim order
-   through claim verification, and the worker start), and its started worker is
-   recorded as a running roster entry before section 4 resumes.
+   session-suffixed agent-id whenever `discover.selectionDesync` is
+   `session-offset`. Otherwise skip it: the helper rejects an empty candidate
+   list and a zero batch. Each selected candidate then goes through section 3,
+   steps 4 to 6 (A4.5, the fresh-claim order through claim verification, and the
+   worker start), and its started worker is recorded as a running roster entry
+   before section 4 resumes.
 4. **Recover reports.** Run this step for each matched finished worker, once its
    worktree, claim, and child processes show no live background work. The
    fan-out variant's completed-notice rule names these live-evidence checks, and
@@ -1331,8 +1330,11 @@ identify its old claims, and step 1 treats them as not its own.
    orchestrator phase file describes. Map `outcome` as the store describes:
    `merged` for a merged pull request, `abandoned` for a closed unmerged one,
    `held` for a claim still held, `handed-off` when a handoff summary was posted
-   before the release, and `failed` otherwise. Record the recovery in
-   `frictions`, naming `docs/idd-workflow.md` in `file`, because that is the
+   before the release, and `failed` otherwise. Set `terminalPhase` to `F4` for a
+   claim released after a merge, and to `F2.5` when a handoff summary is posted
+   on the issue, because the release happens only at those phases. Record the
+   recovery in `frictions`, with its `phase` (F4 or F2.5), a non-empty
+   `summary`, and `docs/idd-workflow.md` in `file`, because that is the
    instruction path the recovery followed. If verification or the append fails
    for a matched worker, keep it addressable, mark it `stalled`, and follow the
    worker-specific recovery in the fan-out variant, as section 5 of the
