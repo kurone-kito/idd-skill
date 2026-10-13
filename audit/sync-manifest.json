@@ -1150,7 +1150,7 @@
       "lite": [
         {
           "file": "idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md",
-          "heading": "D1 — Sync main before first push",
+          "heading": "D1 — Sync {development-branch} before first push",
           "contains": "continue at D2 (claim re-read, **pre-push-validate**, then a"
         },
         {

@@ -388,6 +388,17 @@ export interface RerunPlanFinalizedInstance
    * recovery plan -- it is no longer absent from every plan (its own bounded
    * rerun IS queued there), so this flag would mislead if left `true` for it. */
   rerunBudgetHeld: boolean;
+  /**
+   * The check-run id of the same workflow run's latest row, when this
+   * instance is proven to belong to an earlier attempt of that run (see
+   * `findSupersedingLatest` in `computeRerunPlan`); `null` otherwise. That
+   * latest row is always a `pass` classification of the same run, never this
+   * instance itself. A superseded `pass` instance keeps its `pass` bucket; a
+   * superseded non-pass instance is counted in
+   * {@link RerunAdvisoryConvergencePlan.counts.superseded}. Reporting only:
+   * this field changes no classification and no plan or recovery plan.
+   */
+  supersededBy: string | null;
 }
 
 /** One entry in the ordered, deduplicated-by-run-id rerun plan. */
@@ -436,8 +447,17 @@ export interface RerunAdvisoryConvergencePlan {
      * {@link RerunPlanFinalizedInstance.rerunBudgetHeld} flag. Excludes
      * (#2549/#3539) instances promoted into either bounded recovery plan --
      * they are being handled, not withheld, matching `rerunBudgetHeld`'s
-     * own per-instance exclusion. */
+     * own per-instance exclusion. Superseded instances (`supersededBy` set)
+     * are counted in neither this bucket nor `rerunEligible`. */
     rerunBudgetHeld: number;
+    /**
+     * Non-pass instances proven superseded by a later passing attempt of the
+     * same workflow run (`supersededBy` set). Each is counted here instead of
+     * its classification bucket, so the buckets still sum to `total` and
+     * `rerunEligible` covers only rows a plan can still act on. A superseded
+     * `pass` instance is not counted here; it stays in `pass`.
+     */
+    superseded: number;
     total: number;
   };
   plan: RerunPlanCommand[];
@@ -770,16 +790,21 @@ export function computeRerunPlan(
   const instanceByCheckRunId = new Map(
     instances.map((instance) => [instance.checkRunId, instance]),
   );
-  const isSupersededHistoricalCheckRun = (checkRunId: string): boolean => {
+  // Returns the latest row of the same workflow run when `checkRunId` is
+  // proven to belong to an earlier attempt of that run and that latest row
+  // passes; otherwise null. The reported `supersededBy` is that row's id.
+  const findSupersedingLatest = (
+    checkRunId: string,
+  ): RerunPlanClassifiedInstance | null => {
     const instance = instanceByCheckRunId.get(checkRunId);
-    if (!instance) return false;
+    if (!instance) return null;
     const runId = String(instance.runId ?? '').trim();
-    if (!runId) return false;
+    if (!runId) return null;
     const latest = latestInstancesByRun.find(
       (candidate) => String(candidate.runId ?? '').trim() === runId,
     );
-    if (!latest || latest.checkRunId === checkRunId) return false;
-    if (latest.classification !== 'pass') return false;
+    if (!latest || latest.checkRunId === checkRunId) return null;
+    if (latest.classification !== 'pass') return null;
 
     // A later pass from the same run is not enough to discard another row:
     // one workflow run can expose multiple jobs with the same check name.
@@ -789,14 +814,16 @@ export function computeRerunPlan(
     const latestAttemptStartedAt = parseCompletedAt(latest.runStartedAt);
     const latestCompletedAt = parseCompletedAt(latest.completedAt);
     const rowCompletedAt = parseCompletedAt(instance.completedAt);
-    return (
+    const proven =
       latestAttemptStartedAt !== null &&
       latestCompletedAt !== null &&
       latestCompletedAt >= latestAttemptStartedAt &&
       rowCompletedAt !== null &&
-      rowCompletedAt < latestAttemptStartedAt
-    );
+      rowCompletedAt < latestAttemptStartedAt;
+    return proven ? latest : null;
   };
+  const isSupersededHistoricalCheckRun = (checkRunId: string): boolean =>
+    findSupersedingLatest(checkRunId) !== null;
   const hasRemainingNonPassRow = (runId: string): boolean =>
     instances.some(
       (candidate) =>
@@ -1103,6 +1130,8 @@ export function computeRerunPlan(
   const finalInstances = instances.map((instance) => ({
     ...instance,
     rerunBudgetHeld: budgetHeldCheckRunIds.has(instance.checkRunId),
+    supersededBy:
+      findSupersedingLatest(instance.checkRunId)?.checkRunId ?? null,
   }));
 
   const counts = {
@@ -1113,10 +1142,12 @@ export function computeRerunPlan(
     awaitingFreshReview: 0,
     rerunEligible: 0,
     rerunBudgetHeld: budgetHeldCheckRunIds.size,
+    superseded: 0,
     total: instances.length,
   };
-  for (const instance of instances) {
+  for (const instance of finalInstances) {
     if (instance.classification === 'pass') counts.pass += 1;
+    else if (instance.supersededBy !== null) counts.superseded += 1;
     else if (instance.classification === 'pending') counts.pending += 1;
     else if (instance.classification === 'bot-gated-skip')
       counts.botGatedSkip += 1;
@@ -2652,6 +2683,20 @@ export function buildRerunPlanTextSections(
       ].join('\n'),
     );
   }
+  if (plan.counts.superseded > 0) {
+    const supersedingIds = [
+      ...new Set(
+        plan.instances.flatMap((instance) =>
+          instance.classification !== 'pass' && instance.supersededBy !== null
+            ? [instance.supersededBy]
+            : [],
+        ),
+      ),
+    ];
+    sections.push(
+      `${plan.counts.superseded} instance(s) superseded by a later attempt of the same run (${supersedingIds.length === 1 ? 'check run' : 'check runs'} ${supersedingIds.join(', ')}); the later attempt passed, so they are not counted as rerun-eligible`,
+    );
+  }
   return sections;
 }
 
@@ -4050,7 +4095,11 @@ function main(): HelperCliResult {
       plan.recoveryRefreshPlan.length === 0 &&
       plan.liveCoverageRecoveryPlan.length === 0 &&
       plan.passedSiblingRecoveryPlan.length === 0 &&
-      !plan.rerunPolicyHoldNotice
+      !plan.rerunPolicyHoldNotice &&
+      // A superseded-only diagnosis is fully described by its supersession
+      // line; "Every instance is pass-equivalent" would misdescribe a
+      // superseded failure whose classification is still rerun-eligible.
+      plan.counts.superseded === 0
     ) {
       // Genuinely nothing to report at all.
       process.stderr.write(`\n${describeNoActionState(plan)}\n`);

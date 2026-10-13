@@ -35,6 +35,7 @@ import {
   extractDeferSourceRefsIssueNumbers,
   hasDeferSourceMarker,
 } from './discover-readiness-check.mts';
+import { buildDispositionPlan } from './disposition-non-review-notices.mts';
 import {
   type AuthorityEvidence,
   normalizeAuthorityEvidence,
@@ -63,6 +64,7 @@ import {
   resolveEffectiveDevelopmentBranch,
 } from './policy-helpers.mts';
 import type {
+  DispositionEvidenceSummary,
   ExternalCheckWaiverAuthorityLookup,
   PrClosingIssueClaimState,
   PrCommitPayload,
@@ -74,6 +76,7 @@ import {
   buildPreMergeReadinessSummary,
   classifyIddPrComment,
   classifyPrLoopMembership,
+  DEFAULT_ADVISORY_BOT_LOGINS,
   deriveIddAgentLogins,
   extractSameRepoClosingIssueNumbers,
   NOW_FLAG_USAGE_MESSAGE,
@@ -442,6 +445,10 @@ const PRE_MERGE_READINESS_FLAG_SPEC = {
 export type PreMergeReadinessReport = ReturnType<
   typeof buildPreMergeReadinessSummary
 > & {
+  // #4163: the optional hint the collector attaches (see
+  // dispositionNoticeCommandHint). Declared here so a caller can read it
+  // without a cast; the shared gate-summary type is unchanged.
+  dispositionEvidence?: DispositionEvidenceWithHint;
   trustedMarkerActors: string[];
   trustedMarkerActorsSource: TrustedMarkerActorResolution['source'];
 };
@@ -1705,11 +1712,171 @@ export function collectPreMergeReadiness(
     },
   );
 
+  // #4163: name the E6 helper command when it would record exactly the missing
+  // bot items (see dispositionNoticeCommandHint). The hint is the only field
+  // this adds; the verdict and every count are unchanged.
+  const dispositionNoticeHint = summary.dispositionEvidence
+    ? dispositionNoticeCommandHint({
+        dispositionEvidence: summary.dispositionEvidence,
+        comments: normalizedComments,
+        prHeadSha,
+        prNumber: args.prNumber,
+        owner,
+        repo,
+        claimIssueNumber: args.claimIssueNumber,
+        claimId: args.expectedClaimId,
+        trustedMarkerLogins,
+        advisoryBotLogins,
+        iddAgentLogins,
+      })
+    : null;
+
   return {
     ...summary,
+    ...(summary.dispositionEvidence && dispositionNoticeHint !== null
+      ? {
+          dispositionEvidence: {
+            ...summary.dispositionEvidence,
+            hint: dispositionNoticeHint,
+          } satisfies DispositionEvidenceWithHint,
+        }
+      : {}),
     trustedMarkerActors: configuredTrustedActors,
     trustedMarkerActorsSource,
   } as PreMergeReadinessReport;
+}
+
+/** `dispositionEvidence` plus the optional #4163 next-step hint. */
+type DispositionEvidenceWithHint = DispositionEvidenceSummary & {
+  hint?: string;
+};
+
+// #4163: the shapes the hint may print unquoted. A login is a GitHub login
+// (a bot login carries a `[bot]` suffix); an owner, repo or claim id is a
+// plain token. Anything else fails closed to no hint.
+const HINT_LOGIN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]*(?:\[bot\])?$/;
+const HINT_TOKEN_PATTERN = /^[A-Za-z0-9._-]+$/;
+const HINT_POSITIVE_INTEGER_PATTERN = /^[1-9]\d*$/;
+
+export interface DispositionNoticeHintInput {
+  dispositionEvidence: DispositionEvidenceSummary;
+  /** The normalized PR regular comments the gate evaluated. */
+  comments: readonly {
+    id: string;
+    author: { login: string };
+    body: string;
+    createdAt: string;
+    updatedAt: string;
+    lastEditedAt?: string | null;
+  }[];
+  prHeadSha: string;
+  prNumber: number | null;
+  owner: string;
+  repo: string;
+  claimIssueNumber: number | null;
+  claimId: string;
+  trustedMarkerLogins: readonly string[];
+  advisoryBotLogins: readonly string[];
+  iddAgentLogins: readonly string[];
+}
+
+/**
+ * #4163: the E6 PATH B helper-first command that records the bot summaries and
+ * non-review notices a readiness run lists as missing, or `null` when no hint is
+ * safe. The helper's own planner (`buildDispositionPlan`) must plan exactly the
+ * missing set, so the command records the blocking items and nothing more.
+ * Fail closed: a missing thread, a human item, a claim or login input the
+ * command cannot reproduce, or an IDD-agent login outside the trusted set
+ * returns `null`. The hint never changes `route`, `reason`, or any count.
+ */
+export function dispositionNoticeCommandHint(
+  input: DispositionNoticeHintInput,
+): string | null {
+  const evidence = input.dispositionEvidence;
+  if (
+    evidence.missingRegularComments.length === 0 ||
+    evidence.missingThreads.length > 0
+  ) {
+    return null;
+  }
+  const { prNumber, claimIssueNumber, owner, repo, claimId } = input;
+  const trusted = input.trustedMarkerLogins;
+  // An empty readiness list means no flag, env or config value was set. The
+  // helper then falls back to this same default pair. For regular comments the
+  // gate already treats those two review bots as handled with an empty list, so
+  // naming the default is equivalent there. The hint reads regular comments
+  // only, and a missing thread already suppresses it, so thread dating does not
+  // matter here.
+  const advisory =
+    input.advisoryBotLogins.length > 0
+      ? input.advisoryBotLogins
+      : DEFAULT_ADVISORY_BOT_LOGINS;
+  if (
+    prNumber === null ||
+    !HINT_POSITIVE_INTEGER_PATTERN.test(String(prNumber)) ||
+    claimIssueNumber === null ||
+    !HINT_POSITIVE_INTEGER_PATTERN.test(String(claimIssueNumber)) ||
+    !HINT_TOKEN_PATTERN.test(owner) ||
+    !HINT_TOKEN_PATTERN.test(repo) ||
+    !HINT_TOKEN_PATTERN.test(claimId) ||
+    trusted.length === 0 ||
+    ![...trusted, ...advisory].every((login) => HINT_LOGIN_PATTERN.test(login))
+  ) {
+    return null;
+  }
+  // The gate credits a notice disposition by its IDD-agent author, while the
+  // helper credits only trusted authors. An IDD-agent login outside the trusted
+  // set could make the helper post a disposition the gate would not credit.
+  const trustedLower = new Set(trusted.map((login) => login.toLowerCase()));
+  if (
+    !input.iddAgentLogins.every((login) =>
+      trustedLower.has(login.toLowerCase()),
+    )
+  ) {
+    return null;
+  }
+  if (
+    !input.comments.every((comment) =>
+      HINT_POSITIVE_INTEGER_PATTERN.test(comment.id),
+    )
+  ) {
+    return null;
+  }
+  const plan = buildDispositionPlan(
+    {
+      headSha: input.prHeadSha,
+      comments: input.comments.map((comment) => ({
+        id: Number(comment.id),
+        login: comment.author.login,
+        body: comment.body,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+        lastEditedAt: comment.lastEditedAt,
+      })),
+    },
+    { advisoryBotLogins: [...advisory], trustedMarkerLogins: [...trusted] },
+  );
+  const missingIds = new Set(
+    evidence.missingRegularComments.map((entry) => entry.id),
+  );
+  const plannedIds = new Set(
+    plan.planned.map((entry) => String(entry.noticeId)),
+  );
+  const exact =
+    [...missingIds].every((id) => plannedIds.has(id)) &&
+    [...plannedIds].every((id) => missingIds.has(id));
+  if (!exact) {
+    return null;
+  }
+  return (
+    'E6 PATH B helper-first: node scripts/disposition-non-review-notices.mjs' +
+    ` --pr ${prNumber} --apply --owner ${owner} --repo ${repo}` +
+    ` --claim-issue ${claimIssueNumber} --claim-id ${claimId}` +
+    ` --trusted-marker-logins '${trusted.join(',')}'` +
+    ` --advisory-bot-logins '${advisory.join(',')}'` +
+    ' records these dispositions; then re-run pre-merge-readiness' +
+    ' (drop --apply for a dry run)'
+  );
 }
 
 interface ChangedFilesUnavailable {

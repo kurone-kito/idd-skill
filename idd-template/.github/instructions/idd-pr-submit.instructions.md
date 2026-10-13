@@ -105,6 +105,7 @@ naming the branch state and stop; do not push.
    is missing, released, or held by a different `{claim-id}` (even under
    the same agent ID), the claim was lost — report this and stop.
 2. Run **pre-push-validate**.
+   A budget breach follows `idd-review-fix.instructions.md`'s E12 order.
 
    (E2E tests are verified by CI; do not run them locally.)
 
@@ -519,25 +520,12 @@ completion.
    remains, post a hold note on the issue citing the PR URL and stop
    before D4.
 
-   **Scripted-rebase hazards**: `rebase.abbreviateCommands=true` can
-   make a non-interactive todo list use `p`/`r` instead of
-   `pick`/`reword`; check `git config --get rebase.abbreviateCommands` or
-   match both forms. Disable `rebase.updateRefs` process-wide so an
-   inner rebase launched by a signing wrapper cannot move a safety
-   backup or sibling branch:
-
-   ```sh
-   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=rebase.updateRefs \
-   GIT_CONFIG_VALUE_0=false GIT_SEQUENCE_EDITOR='...' git rebase -i ...
-   ```
-
-   An outer `-c rebase.updateRefs=false` may not reach that subprocess.
+   **Scripted-rebase hazards**: before a scripted reword or rebase,
+   apply the
+   [abbreviated-command and `rebase.updateRefs` guards](../../docs/idd-helper-scripts.md#scripted-rebase-hazards).
    After any scripted reword or rebase, verify that the target message
    changed and rerun the stray-keyword scan; do not trust only the exit
    status or `Successfully rebased` text.
-
-   These hazards were observed while recovering [PR #3431](https://github.com/kurone-kito/idd-skill/pull/3431)
-   for issue #3285; the field report is tracked in issue #3552.
 
    **Re-run before merge**: this scan only covers commits present at
    D3.5 time. Later branch commits — accepted review fixes
