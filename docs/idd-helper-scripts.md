@@ -2938,6 +2938,31 @@ The adopted helper boundaries are intentionally narrow:
   so repeat notices from the same bot at the same HEAD stay
   byte-distinguishable (#1482); it is a human-readable disambiguator only
   and plays no part in gate recognition or pairing.
+- **Which bot comments it handles (#4122)**: the readiness gate's set
+  (`isGateAdvisoryBotLogin`): the known review bots (CodeRabbit, Codex,
+  Copilot) plus every configured `advisoryBotLogins` entry, so a known
+  bot left out of a custom list is still handled. Every comment of that
+  set that the helper does not plan is listed in `skipped` with a
+  reason; none is dropped silently, as happened on
+  kurone-kito/setup.ubuntu PR 204, where the gate listed two bot
+  comments and the helper printed empty lists.
+- **Skip reasons**: `already-dispositioned`,
+  `coderabbit-review-in-progress`,
+  `summary-resolved-no-actionable-comments`, `codex-review-running` (a
+  Codex status row for the current HEAD that is not Completed, Failed
+  included), `codex-no-result-for-head` (a Codex status table with no
+  row for the current HEAD, an unparseable table or no table, or a Codex
+  no-find result for an older HEAD), and `unrecognized-notice-body`
+  (any other handled comment, for example a CodeRabbit acknowledgement
+  or a regular Copilot or Codex comment). A `codex-no-result-for-head`
+  comment is reported, not dispositioned, because Codex can still add a
+  row for the current HEAD; the manual E4 `**Rejected**` stays its
+  route. The helper does not track that manual reply, so it keeps
+  reporting the comment after one is posted: check `pre-merge-readiness`
+  `dispositionEvidence.missingRegularComments` before replying. An
+  `unrecognized-notice-body` entry for a comment the gate does not list
+  (one it already paired through its generic pairing) is expected and
+  harmless.
 - **Idempotent**: per advisory bot, existing trusted
   `isNonReviewNoticeDisposition` comments naming that bot already cover
   that many of its notices, so a re-run posts nothing new.

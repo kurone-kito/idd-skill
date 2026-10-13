@@ -9,6 +9,7 @@ import {
   buildDispositionPlan,
   buildSummaryDispositionBody,
   type DispositionPlan,
+  hasCodexReviewSummaryRowForHeadSha,
   isCodexReviewSummaryCompleteForHeadSha,
   type NoticeComment,
   noticeReason,
@@ -26,6 +27,7 @@ import {
   isCodexNoFindResultDisposition,
   isCodexNoFindResultForHeadSha,
   isDispositionComment,
+  isGateAdvisoryBotLogin,
   isReviewSummaryComment,
   isTerminalAdvisoryNonReviewNotice,
   renderLiveStatusDigest,
@@ -936,7 +938,9 @@ test('buildDispositionPlan keeps Codex sticky and no-find dispositions independe
   );
 });
 
-test('buildDispositionPlan ignores Codex no-find results outside the configured advisory bots', () => {
+test('buildDispositionPlan plans a Codex no-find result when Codex is a known but unconfigured bot (#4122)', () => {
+  // #4122: the readiness gate counts known review bots whether or not they
+  // are configured, so the helper handles them too.
   const plan = buildDispositionPlan(
     {
       headSha: 'abc1234',
@@ -947,7 +951,10 @@ test('buildDispositionPlan ignores Codex no-find results outside the configured 
       trustedMarkerLogins: ['kurone-kito'],
     },
   );
-  assert.deepEqual(plan.planned, []);
+  assert.deepEqual(
+    plan.planned.map((entry) => [entry.noticeId, entry.reason]),
+    [[324, 'Codex no-find result']],
+  );
   assert.deepEqual(plan.skipped, []);
 });
 
@@ -1552,8 +1559,11 @@ test('buildDispositionPlan does not disposition the #1326 false-positive review 
     },
     { trustedMarkerLogins: ['kurone-kito'] },
   );
+  // #4122: never planned; reported as an unrecognized gate-bot comment.
   assert.equal(plan.planned.length, 0);
-  assert.equal(plan.skipped.length, 0);
+  assert.deepEqual(plan.skipped, [
+    { noticeId: 1, botLogin: CODEX, reason: 'unrecognized-notice-body' },
+  ]);
 });
 
 test('buildDispositionPlan is idempotent: a notice already dispositioned for its bot is skipped', () => {
@@ -1717,10 +1727,15 @@ test('buildDispositionPlan is fail-closed: real reviews and non-bot comments are
     { trustedMarkerLogins: ['kurone-kito'] },
   );
   assert.equal(plan.planned.length, 0);
-  assert.equal(plan.skipped.length, 0);
+  // #4122: the two bot comments are reported, never planned; the human
+  // comment is outside the gate's bot set and is not listed at all.
+  assert.deepEqual(plan.skipped, [
+    { noticeId: 1, botLogin: CODEX, reason: 'unrecognized-notice-body' },
+    { noticeId: 2, botLogin: CODERABBIT, reason: 'unrecognized-notice-body' },
+  ]);
 });
 
-test('buildDispositionPlan only considers configured advisory bots', () => {
+test('buildDispositionPlan handles a known review bot that is not configured (#4122)', () => {
   const plan = buildDispositionPlan(
     {
       headSha: 'abc1234',
@@ -1728,8 +1743,27 @@ test('buildDispositionPlan only considers configured advisory bots', () => {
     },
     { advisoryBotLogins: [CODERABBIT], trustedMarkerLogins: ['kurone-kito'] },
   );
-  // Codex is not in the configured advisory-bot set here, so nothing is planned.
-  assert.equal(plan.planned.length, 0);
+  // Codex is not configured here, but the gate counts it as a known review
+  // bot, so its notice is planned.
+  assert.deepEqual(
+    plan.planned.map((entry) => entry.noticeId),
+    [1],
+  );
+});
+
+test('buildDispositionPlan ignores a bot that is neither known nor configured (#4122)', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(1, 'my-custom-bot[bot]', CODEX_NOTICE),
+        notice(2, 'my-custom-bot[bot]', 'An unrelated bot comment.'),
+      ],
+    },
+    { advisoryBotLogins: [CODERABBIT], trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(plan.planned, []);
+  assert.deepEqual(plan.skipped, []);
 });
 
 test('buildDispositionPlan plans both the notice (rejected) and the summary (accepted)', () => {
@@ -1991,6 +2025,238 @@ test('#2695 (Codex review, P1): buildDispositionPlan never auto-accepts a Codex 
   ]);
 });
 
+// --- #4122: plan or skip every bot comment the readiness gate counts -------
+
+const COPILOT = 'copilot-pull-request-reviewer[bot]';
+
+test('#4122: every gate-listed bot comment is planned or skipped exactly once with a Copilot-only advisoryBotLogins', () => {
+  // The kurone-kito/setup.ubuntu PR 204 shape: the adopter configures only
+  // Copilot, so before #4122 the gate listed these comments and the helper
+  // printed `planned: []` and `skipped: []`. The Codex summary's only row is
+  // for `abc1234`, which does not prefix HEAD_SHA.
+  const fixtures = [
+    { id: 4101, login: CODEX, body: CODEX_NOTICE },
+    { id: 4102, login: CODERABBIT, body: CODERABBIT_SUMMARY },
+    { id: 4103, login: CODEX, body: CODEX_SUMMARY_COMPLETED },
+  ];
+  const timestamp = (index: number) => `2026-10-08T00:0${index}:00Z`;
+  const gate = summarizeDispositionEvidenceForGate(
+    {
+      comments: fixtures.map((fixture, index) => ({
+        id: String(fixture.id),
+        author: { login: fixture.login },
+        body: fixture.body,
+        createdAt: timestamp(index),
+        updatedAt: timestamp(index),
+      })),
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['kurone-kito'],
+      trustedMarkerLogins: ['kurone-kito'],
+      advisoryBotLogins: [COPILOT],
+      prHeadSha: HEAD_SHA,
+      markerPrefix: 'idd-skill',
+    },
+  );
+  assert.deepEqual(
+    gate.missingRegularComments.map((entry) => entry.id).sort(),
+    ['4101', '4102', '4103'],
+  );
+
+  const comments = fixtures.map((fixture, index) =>
+    notice(fixture.id, fixture.login, fixture.body, timestamp(index)),
+  );
+  const plan = buildDispositionPlan(
+    { headSha: HEAD_SHA, comments },
+    {
+      advisoryBotLogins: [COPILOT],
+      trustedMarkerLogins: ['kurone-kito'],
+      markerPrefix: 'idd-skill',
+    },
+  );
+  const helperIds = [
+    ...plan.planned.map((entry) => String(entry.noticeId)),
+    ...plan.skipped.map((entry) => String(entry.noticeId)),
+  ];
+  for (const missing of gate.missingRegularComments) {
+    if (!isGateAdvisoryBotLogin(missing.authorLogin, new Set([COPILOT]))) {
+      continue;
+    }
+    assert.equal(
+      helperIds.filter((id) => id === missing.id).length,
+      1,
+      `gate-listed comment ${missing.id} must appear exactly once`,
+    );
+  }
+
+  // The notice and the summary plan exactly as under the default list.
+  const defaultPlan = buildDispositionPlan(
+    { headSha: HEAD_SHA, comments },
+    { trustedMarkerLogins: ['kurone-kito'], markerPrefix: 'idd-skill' },
+  );
+  for (const id of [4101, 4102]) {
+    const entry = plan.planned.find((item) => item.noticeId === id);
+    const expected = defaultPlan.planned.find((item) => item.noticeId === id);
+    assert.ok(entry && expected, `comment ${id} must be planned`);
+    assert.equal(entry.reason, expected.reason);
+    assert.equal(entry.body, expected.body);
+  }
+
+  // The Codex summary with no row for the HEAD is reported, never planned.
+  assert.ok(!plan.planned.some((entry) => entry.noticeId === 4103));
+  assert.deepEqual(
+    plan.skipped.filter((entry) => entry.noticeId === 4103),
+    [{ noticeId: 4103, botLogin: CODEX, reason: 'codex-no-result-for-head' }],
+  );
+
+  const dryRun = { mode: 'dry-run', prNumber: 204, ...plan };
+  assert.equal(validate(dryRun, planSchema).length, 0, 'dry-run output');
+});
+
+test('#4122: a Codex summary whose HEAD row reads Failed stays codex-review-running', () => {
+  const failed = CODEX_SUMMARY_RUNNING.replace(
+    '🔄 **Running**',
+    '❌ **Failed**',
+  );
+  assert.ok(failed.includes('**Failed**'));
+  const plan = buildDispositionPlan(
+    { headSha: 'abc1234', comments: [notice(1, CODEX, failed)] },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 0);
+  assert.deepEqual(plan.skipped, [
+    { noticeId: 1, botLogin: CODEX, reason: 'codex-review-running' },
+  ]);
+});
+
+test('#4122: a Codex summary with no HEAD row, an unparseable table, or no table is codex-no-result-for-head', () => {
+  const unparseable =
+    '<!-- codex-pull-request-review-summary -->\n\n' +
+    '| Review | State | Sha |\n| --- | --- | --- |\n' +
+    '| 📝 **Code Review** | ✅ **Completed** | `0123456` |\n';
+  const noTable =
+    '<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n';
+  // A row for the HEAD whose status cell is empty is malformed, so it is
+  // an unparseable table, not a running review.
+  const emptyStatus =
+    '<!-- codex-pull-request-review-summary -->\n\n' +
+    '| Review | Status | Commit |\n| --- | --- | --- |\n' +
+    '| 📝 **Code Review** |  | `0123456` |\n';
+  const bodies = [CODEX_SUMMARY_COMPLETED, unparseable, noTable, emptyStatus];
+  for (const body of bodies) {
+    assert.equal(isReviewSummaryComment(body), true);
+    assert.equal(isCodexReviewSummaryCompleteForHeadSha(body, HEAD_SHA), false);
+    assert.equal(hasCodexReviewSummaryRowForHeadSha(body, HEAD_SHA), false);
+  }
+  const plan = buildDispositionPlan(
+    {
+      headSha: HEAD_SHA,
+      comments: bodies.map((body, index) => notice(index + 1, CODEX, body)),
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(plan.planned, []);
+  assert.deepEqual(
+    plan.skipped.map((entry) => [entry.noticeId, entry.reason]),
+    [
+      [1, 'codex-no-result-for-head'],
+      [2, 'codex-no-result-for-head'],
+      [3, 'codex-no-result-for-head'],
+      [4, 'codex-no-result-for-head'],
+    ],
+  );
+  // The local row parser copies the shared table parsing, and it decides
+  // `codex-review-running` versus `codex-no-result-for-head` for a table
+  // that is not Completed. Pin it: whatever the status, a table whose only
+  // row is `abc1234` has a row for that HEAD and none for another HEAD.
+  const failedSummary = CODEX_SUMMARY_RUNNING.replace(
+    '🔄 **Running**',
+    '❌ **Failed**',
+  );
+  for (const body of [
+    CODEX_SUMMARY_RUNNING,
+    failedSummary,
+    CODEX_SUMMARY_COMPLETED,
+  ]) {
+    assert.equal(hasCodexReviewSummaryRowForHeadSha(body, 'abc1234'), true);
+    assert.equal(hasCodexReviewSummaryRowForHeadSha(body, HEAD_SHA), false);
+  }
+  // As in the shared parser, the last row for the HEAD wins.
+  const runningRow = '| 📝 **Code Review** | 🔄 **Running** | `abc1234` |\n';
+  const emptyRow = '| 📝 **Code Review** |  | `abc1234` |\n';
+  const tableHead = '| Review | Status | Commit |\n| --- | --- | --- |\n';
+  assert.equal(
+    hasCodexReviewSummaryRowForHeadSha(
+      tableHead + runningRow + emptyRow,
+      'abc1234',
+    ),
+    false,
+  );
+  assert.equal(
+    hasCodexReviewSummaryRowForHeadSha(
+      tableHead + emptyRow + runningRow,
+      'abc1234',
+    ),
+    true,
+  );
+});
+
+test('#4122: a recognized Codex no-find result for an older HEAD is codex-no-result-for-head', () => {
+  assert.equal(
+    isCodexNoFindResultForHeadSha(CODEX_NO_FIND_RESULT, HEAD_SHA),
+    false,
+  );
+  const plan = buildDispositionPlan(
+    { headSha: HEAD_SHA, comments: [notice(1, CODEX, CODEX_NO_FIND_RESULT)] },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(plan.planned, []);
+  assert.deepEqual(plan.skipped, [
+    { noticeId: 1, botLogin: CODEX, reason: 'codex-no-result-for-head' },
+  ]);
+});
+
+test('#4122: a gate-bot comment that is no notice, summary, or no-find result is unrecognized-notice-body', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: HEAD_SHA,
+      comments: [
+        notice(1, CODEX, 'Codex finished a task on this branch.'),
+        notice(2, COPILOT, 'A regular Copilot comment.'),
+      ],
+    },
+    { advisoryBotLogins: [COPILOT], trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(plan.planned, []);
+  assert.deepEqual(plan.skipped, [
+    { noticeId: 1, botLogin: CODEX, reason: 'unrecognized-notice-body' },
+    { noticeId: 2, botLogin: COPILOT, reason: 'unrecognized-notice-body' },
+  ]);
+});
+
+test('#4122: a notice disposition naming a known but unconfigured bot still counts for it', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [
+        notice(1, CODEX, CODEX_NOTICE, '2026-05-12T00:00:00Z'),
+        notice(
+          2,
+          'kurone-kito',
+          buildDispositionBody(CODEX, 'abc1234', noticeReason(CODEX_NOTICE), 1),
+          '2026-05-12T01:00:00Z',
+        ),
+      ],
+    },
+    { advisoryBotLogins: [COPILOT], trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(plan.planned, []);
+  assert.deepEqual(plan.skipped, [
+    { noticeId: 1, botLogin: CODEX, reason: 'already-dispositioned' },
+  ]);
+});
+
 test('#2695: buildDispositionPlan skips a Codex summary already accepted by a strictly-newer disposition (idempotent re-run)', () => {
   const plan = buildDispositionPlan(
     {
@@ -2084,7 +2350,7 @@ test('buildDispositionPlan re-plans the summary when its updatedAt bumps past th
   assert.ok(plan.planned[0].body.startsWith('**Accepted**'));
 });
 
-test('buildDispositionPlan only auto-dispositions summaries from configured advisory bots', () => {
+test('buildDispositionPlan auto-dispositions a summary from a known but unconfigured bot (#4122)', () => {
   const plan = buildDispositionPlan(
     {
       headSha: 'abc1234',
@@ -2092,8 +2358,12 @@ test('buildDispositionPlan only auto-dispositions summaries from configured advi
     },
     { advisoryBotLogins: [CODEX], trustedMarkerLogins: ['kurone-kito'] },
   );
-  // CodeRabbit is not in the configured advisory-bot set here.
-  assert.equal(plan.planned.length, 0);
+  // CodeRabbit is not configured here, but the gate counts it as a known
+  // review bot, so its summary is planned.
+  assert.deepEqual(
+    plan.planned.map((entry) => [entry.noticeId, entry.reason]),
+    [[1, 'summary walkthrough']],
+  );
   assert.equal(plan.skipped.length, 0);
 });
 
@@ -2112,7 +2382,10 @@ test('buildDispositionPlan does not treat a comment that merely quotes the summa
     { trustedMarkerLogins: ['kurone-kito'] },
   );
   assert.equal(plan.planned.length, 0);
-  assert.equal(plan.skipped.length, 0);
+  // #4122: reported as an unrecognized gate-bot comment, never planned.
+  assert.deepEqual(plan.skipped, [
+    { noticeId: 1, botLogin: CODERABBIT, reason: 'unrecognized-notice-body' },
+  ]);
 });
 
 test('buildDispositionPlan does not auto-dispose a "no actionable comments" summary (gate already RESOLVED)', () => {
@@ -2421,7 +2694,11 @@ test('buildDispositionPlan: a copied Codex no-find body still steals a summary a
   );
 });
 
-test('buildDispositionPlan treats an unconfigured Codex no-find body as a review', () => {
+test('buildDispositionPlan treats an unconfigured Codex no-find result as the current-head source (#4122)', () => {
+  // #4122: Codex is a known review bot, so its current-head no-find result
+  // is handled even when only CodeRabbit is configured. It is planned on its
+  // own source-bound path, cannot take the summary acceptance (the gate's
+  // current-head path agrees), and the summary stays covered.
   const plan = buildDispositionPlan(
     {
       headSha: 'abc1234',
@@ -2442,9 +2719,12 @@ test('buildDispositionPlan treats an unconfigured Codex no-find body as a review
     },
   );
   assert.deepEqual(
-    plan.planned.map((entry) => entry.noticeId),
-    [2],
+    plan.planned.map((entry) => [entry.noticeId, entry.reason]),
+    [[1, 'Codex no-find result']],
   );
+  assert.deepEqual(plan.skipped, [
+    { noticeId: 2, botLogin: CODERABBIT, reason: 'already-dispositioned' },
+  ]);
 });
 
 test('gate agreement: the planned **Accepted** clears the summary from missingRegularComments', () => {
