@@ -6702,13 +6702,6 @@ const RECORDED_DEFERRAL_REPLY_PATTERN =
 const REVIEW_REPLY_STAMP_PATTERN = /<!--\s*[\w-]+-review-reply\s*-->/iu;
 
 /**
- * #3942: counts the trusted, unedited disposition replies that settle a
- * Previously missed item naming a file or line. A reply counts when it opens
- * with `**Accepted**` or the recorded-deferral form, carries the review-reply
- * stamp, and was posted strictly after the latest primary-bot review was
- * submitted. A bare `review-ack` never counts for these items.
- */
-/**
  * #3942: the createdAt times of the trusted, unedited disposition replies that
  * settle a Previously missed item naming a file or line, sorted ascending. A
  * reply counts when it opens with `**Accepted**` or the recorded-deferral
@@ -7232,10 +7225,10 @@ export function summarizeAdvisoryWaitMarkers(
  * settled. The union covers all of them, not only the one a single selector
  * picks. Returns `false` when any same-head review has a cited suppressed item
  * (one that names a file or line) without a qualifying disposition, or when a
- * same-head review body the default Copilot shapes cannot read sits next to the
- * rest. An empty body is unreadable like any other, so it blocks until a
- * trusted review-ack for the head follows it, and the shell check holds on it
- * too. Off-head reviews never count here.
+ * same-head review body the default Copilot shapes cannot read has no trusted
+ * review-ack for the head after it, even when that review is the only same-head
+ * review. An empty body is unreadable like any other, so it blocks the same
+ * way, and the shell check holds on it too. Off-head reviews never count here.
  *
  * This is deliberately stricter than the gate in one direction: a later clean
  * same-head review does not clear an earlier uncovered item, which the gate
