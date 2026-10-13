@@ -2651,6 +2651,106 @@ test('effort-candidate-file-limit does not check an L child, a child with no eff
   );
 });
 
+function effortLReadyResult(
+  body: string,
+  options: Partial<Parameters<typeof auditAuthoredIssue>[1]> = {},
+): { result: 'pass' | 'fail'; detail: string } {
+  const finding = auditAuthoredIssue(body, {
+    shape: 'orphan',
+    ...options,
+  }).findings.find((entry) => entry.id === 'effort-l-ready');
+  assert.ok(finding, 'expected an effort-l-ready finding');
+  return { result: finding.result, detail: finding.detail };
+}
+
+const EFFORT_L_REFUSED_DETAIL =
+  'effort L cannot be ready while autopilotSuitability.effortL is refuse; split it into S or M issues, or publish it as needs-decision';
+
+test('effort-l-ready fails an orphan L body under the refuse policy (#4198)', () => {
+  assert.deepEqual(
+    effortLReadyResult(orphanBody({ effort: 'L' }), {
+      effortLPolicy: 'refuse',
+    }),
+    { result: 'fail', detail: EFFORT_L_REFUSED_DETAIL },
+  );
+});
+
+test('effort-l-ready passes the same L body under the allow policy or with the option omitted (#4198)', () => {
+  const body = orphanBody({ effort: 'L' });
+  assert.equal(
+    effortLReadyResult(body, { effortLPolicy: 'allow' }).result,
+    'pass',
+  );
+  assert.equal(effortLReadyResult(body).result, 'pass');
+});
+
+test('effort-l-ready passes an L child routed to a human bucket under the refuse policy (#4198)', () => {
+  const needsDecision = childBody({
+    effort: 'L',
+    extraMarkers: '<!-- idd-skill-authoring-bucket: needs-decision -->',
+  });
+  assert.equal(
+    effortLReadyResult(needsDecision, {
+      shape: 'child',
+      effortLPolicy: 'refuse',
+    }).result,
+    'pass',
+  );
+  const suitabilityOne = childBody({ effort: 'L', score: 1 });
+  assert.equal(
+    effortLReadyResult(suitabilityOne, {
+      shape: 'child',
+      effortLPolicy: 'refuse',
+    }).result,
+    'pass',
+  );
+});
+
+test('effort-l-ready fails an L child with suitability 4 and no bucket marker under the refuse policy (#4198)', () => {
+  assert.equal(
+    effortLReadyResult(childBody({ effort: 'L', score: 4 }), {
+      shape: 'child',
+      effortLPolicy: 'refuse',
+    }).result,
+    'fail',
+  );
+});
+
+test('effort-l-ready is not applicable to a roadmap, a bucket audit, or a body without a coherent L marker (#4198)', () => {
+  const roadmap = effortLReadyResult(
+    [roadmapBody(), effortFooter('L')].join('\n\n'),
+    { shape: 'roadmap', effortLPolicy: 'refuse' },
+  );
+  assert.equal(roadmap.result, 'pass');
+  assert.match(roadmap.detail, /not applicable/);
+
+  const bucketAudit = effortLReadyResult(orphanBody({ effort: 'L' }), {
+    effortLPolicy: 'refuse',
+    expectedAuthoringBucket: 'needs-decision',
+  });
+  assert.equal(bucketAudit.result, 'pass');
+  assert.match(bucketAudit.detail, /not applicable/);
+
+  assert.equal(
+    effortLReadyResult(orphanBody({ includeEffort: false }), {
+      effortLPolicy: 'refuse',
+    }).result,
+    'pass',
+  );
+});
+
+test('effort-l-ready passes orphan S and M bodies under the refuse policy (#4198)', () => {
+  for (const effort of ['S', 'M']) {
+    assert.equal(
+      effortLReadyResult(orphanBody({ effort }), {
+        effortLPolicy: 'refuse',
+      }).result,
+      'pass',
+      `effort ${effort}`,
+    );
+  }
+});
+
 test('effort-candidate-file-limit values match the contract threshold table (single source)', () => {
   const contract = readFileSync(
     join(REPO_ROOT, 'skills/issue-authoring/references/contract.md'),
@@ -5414,6 +5514,38 @@ test("the compiled CLI's --title flag makes a title-less body pass triage-title-
       (entry) => entry.id === 'triage-title-missing',
     );
     assert.equal(withoutTitleFinding?.result, 'fail');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('the compiled CLI reads autopilotSuitability.effortL from --config to gate effort-l-ready (#4198)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-effort-l-ready-'));
+  try {
+    const bodyPath = join(tempRoot, 'draft.md');
+    writeFileSync(bodyPath, orphanBody({ effort: 'L' }));
+    const refusePath = join(tempRoot, 'refuse.json');
+    writeFileSync(
+      refusePath,
+      JSON.stringify({ autopilotSuitability: { effortL: 'refuse' } }),
+    );
+    const omittedPath = join(tempRoot, 'omitted.json');
+    writeFileSync(omittedPath, JSON.stringify({}));
+
+    const findingWith = (configPath: string) =>
+      runCli([
+        '--shape',
+        'orphan',
+        '--body-file',
+        bodyPath,
+        '--marker-prefix',
+        'idd-skill',
+        '--config',
+        configPath,
+      ]).findings.find((entry) => entry.id === 'effort-l-ready');
+
+    assert.equal(findingWith(refusePath)?.result, 'fail');
+    assert.equal(findingWith(omittedPath)?.result, 'pass');
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
