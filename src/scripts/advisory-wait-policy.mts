@@ -681,14 +681,14 @@ function computeQuietWindowElapsed({
  * (#4123). That value stays fresh while a genuinely unresolved item exists (an
  * unresolved thread's raw activity always feeds it, protocol-helpers.mts's
  * `threadEffective`) and stabilizes once every item is either
- * resolved-with-disposition or was never opened. A watermark and a courtesy
- * advisory-bot ack leave it unchanged (the watermark is filtered out before
- * classification runs, and a top-level ack after a disposition is excluded as
- * ack-only). A disposition reply inside a review thread legitimately anchors
- * it, because thread replies still feed the ceiling; an unedited top-level
- * disposition by a trusted author does not, so the agent's own top-level reply
- * never restarts the window. "Elapsed since that anchor" therefore equals
- * "elapsed since the
+ * resolved-with-disposition or was never opened. A watermark leaves it
+ * unchanged (it is filtered out before classification runs). A top-level
+ * advisory-bot comment posted after an unedited IDD-agent disposition is
+ * ack-only whatever its body says, so it leaves the anchor unchanged too.
+ * A disposition reply inside a review thread legitimately anchors it, because
+ * thread replies still feed the ceiling; an unedited top-level disposition by
+ * a trusted author does not, so the agent's own top-level reply never restarts
+ * the window. "Elapsed since that anchor" therefore equals "elapsed since the
  * review settled" without a second, independently-drifting timestamp to
  * persist.
  *

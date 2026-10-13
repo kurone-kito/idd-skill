@@ -465,14 +465,17 @@ before `pre-merge-readiness` treats the review as settled -- covering a
 slower secondary bot that lands a finding after a snapshot already looked
 converged. It anchors on the same non-ack-only activity ceiling the review-
 currency gate already computes (`ackOnlyPostDisposition`), except that the
-own timestamp of an unedited top-level disposition by a trusted author is
-left out, so the agent's own issue-comment reply never restarts the window
-(observed 2026-10-12 on a kurone-kito/dotfiles pull request; issue `#4123`).
-It needs no extra persisted state: an unresolved item keeps the anchor fresh,
-and a watermark or a top-level advisory-bot acknowledgement posted after
-an unedited IDD-agent disposition never reopens it. A disposition reply
-inside a review thread, and a bot reply on an unresolved thread, still
-reopen it, because thread activity feeds the ceiling. Distinct from
+own timestamp of an unedited top-level disposition by a trusted author
+(advisory bots excepted) is left out, so the agent's own issue-comment
+reply never restarts the window (observed 2026-10-12 on a
+kurone-kito/dotfiles pull request; issue `#4123`). It needs no extra
+persisted state: an unresolved item keeps the anchor fresh, and a watermark
+never reopens it. A top-level advisory-bot comment posted after an unedited
+IDD-agent disposition is ack-only whatever its body says, so it does not
+move the anchor either; a substantive one in that position is covered too,
+a limit this change leaves in place. A disposition reply inside a review
+thread, and a bot reply on an unresolved thread, still reopen it, because
+thread activity feeds the ceiling. Distinct from
 `advisoryWait.settledWindow`, which bounds the PRIMARY bot's own pending
 state, not a late secondary-bot arrival. **#2544**:
 once a secondary bot has already posted a genuine review for the current
