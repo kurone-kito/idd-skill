@@ -9497,8 +9497,9 @@ export const MISSING_WATERMARK_HINT =
  * recorded. On `kurone-kito/setup.ubuntu` PR #204 (2026-10-08) that blocker
  * gave no next step. The text routes the operator through E1 Step 3, E2, and
  * E3 before the readiness re-run, because a watermark alone leaves the new
- * items untriaged. Single-sourced like `MISSING_WATERMARK_HINT`. Diagnostic
- * only: `detail` is left unchanged and the hint never feeds the gate decision.
+ * items without triage. Single-sourced like `MISSING_WATERMARK_HINT`.
+ * Diagnostic only: `detail` is left unchanged and the hint never feeds the
+ * gate decision.
  */
 export const SAME_TIMESTAMP_COUNT_GROWTH_HINT =
   'More review items exist now than the last review watermark counted, with ' +
