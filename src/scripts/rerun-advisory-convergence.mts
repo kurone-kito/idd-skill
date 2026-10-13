@@ -396,7 +396,10 @@ export interface RerunPlanFinalizedInstance
    * instance itself. A superseded `pass` instance keeps its `pass` bucket; a
    * superseded non-pass instance is counted in
    * {@link RerunAdvisoryConvergencePlan.counts.superseded}. Reporting only:
-   * this field changes no classification and no plan or recovery plan.
+   * this field changes no classification. A superseded row is not queued by
+   * the ordinary, live-coverage recovery (#4150), or passed-sibling rerun
+   * plans. A row that is not proven superseded, such as a current-attempt
+   * duplicate, is not affected by this field.
    */
   supersededBy: string | null;
 }
