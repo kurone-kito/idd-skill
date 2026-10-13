@@ -387,6 +387,10 @@ finding(s) have already been read and handled, a reroll is
 unnecessary — post a trusted `review-ack:` marker instead; see
 `idd-review-triage.instructions.md`'s `review-ack:` paragraph (E6).
 
+**Declined head (`#4142`)**: a `decline-no-reviewable-files` review on HEAD is a
+terminal decline, not a review: `COPILOT_UNAVAILABLE` applies at once, with no
+recovery marker or window wait; a trusted `review-ack:` is still required.
+
 ## Terminal Copilot stall-recovery contract (state, policy, markers, clock)
 
 `#1572` defines the state/policy/marker contract for a terminal

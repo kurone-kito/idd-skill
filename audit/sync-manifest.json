@@ -456,7 +456,7 @@
         ".github/instructions/idd-merge.instructions.md",
         ".github/instructions/idd-pre-merge.instructions.md"
       ],
-      "limitBytes": 115500
+      "limitBytes": 124800
     },
     {
       "id": "bundle-onboarding-front-door",
@@ -517,6 +517,12 @@
         "limitBytes": 59300,
         "issue": 4195,
         "reason": "Maintainer-approved in the roadmap hearing of 2026-10-13, sized by the docs convention (roughly 10% headroom over measured need, not an exact fit): the E5 triage-record rule adds about 800 bytes to review-triage, which had 0 bytes of headroom. Measured 53,214 bytes before the change, about 54,010 after; raised to 59,300, the value approved in the hearing, about 10% above that."
+      },
+      {
+        "bundle": "bundle-merge-phase",
+        "limitBytes": 124800,
+        "issue": 4142,
+        "reason": "maintainer-approved raise (kurone-kito, 2026-10-14) for issue #4142: the decline-shape decision path adds about 230 bytes, and the bundle was at 98% after the #4168 and #4098 merges; sized at about 10% headroom over the measured need"
       }
     ]
   },
