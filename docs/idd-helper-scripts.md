@@ -778,6 +778,14 @@ in this preamble, since the fallback differs per helper.
   (referenced in
   [kurone-kito/idd-skill#2243](https://github.com/kurone-kito/idd-skill/issues/2243);
   see its `--help` for the fetch-scope and staleness details)
+  Default-on (not opt-in): excludes the `providerOutage.declarationTarget`
+  issue, bucketed under `filtered.provider_outage_target`, and the
+  `issueAuthoring.journalIssue` issue when that reference names this
+  repository, bucketed under `filtered.authoring_journal_target` (issue
+  `#4115`). The journal is excluded by number, and its scan covers open
+  issues only, so a closed journal is reported only by the per-issue mode of
+  `discover-readiness-check.mjs`. A reference to another repository is
+  ignored.
   Default-on (not opt-in): excludes a defer-source follow-up, a body with an
   `<!-- {prefix}-authoring-defer-source: ... -->` marker, while its single
   `Refs` origin issue is open, bucketed under
@@ -1763,6 +1771,13 @@ node scripts/discover-readiness-check.mjs --swarm-floor <N>
   or out-of-range `N` is a **hard error**, not a silent coercion to the
   default floor — otherwise a typo (e.g. `--swarm-floor 50`) would quietly
   answer at floor 3 and be misread as "floor-50 work exists."
+- **Durable-record exclusion** (issue `#4115`, default-on): the
+  `providerOutage.declarationTarget` issue and the `issueAuthoring.journalIssue`
+  issue (when it names this repository) are never `ready`. Each is excluded by
+  number before any GitHub read and listed in `filteredOut` with the reason
+  `provider_outage_target` or `authoring_journal_target`. The per-issue mode
+  reports a named durable record the same way, and the `--swarm-floor`
+  `eligible` set never contains one.
 - **Boundary**: read-only and advisory — selecting the next issue still runs
   the A3/A4/A4.5/A5 gates. Optional flags: `--owner` / `--repo` / `--policy`
   / `--now`.

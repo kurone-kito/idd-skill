@@ -1453,6 +1453,47 @@ function normalizeIssueAuthoringPolicy(config) {
   };
 }
 /**
+ * `issueAuthoring.journalIssue` grammar (#4115): `owner/repo#N`, the shape
+ * `schemas/policy.schema.json` pins. The capture groups exist only for
+ * parsing. tests/policy-helpers.test.mts compares this grammar to the schema,
+ * so the two cannot drift apart silently.
+ */
+export const AUTHORING_JOURNAL_REFERENCE_PATTERN =
+  /^([\w.-]+)\/([\w.-]+)#([1-9][0-9]*)$/;
+/**
+ * Resolve the configured durable records that Discover must never offer as
+ * work (#4115). Inputs are raw config values, so a non-string or malformed
+ * journal reference, a journal in another repository, or an unknown current
+ * repository all yield `null` rather than throwing. The outage target (#2800)
+ * passes through only as a positive integer.
+ */
+export function resolveDurableRecordTargets(input) {
+  const outage = input.providerOutageTarget;
+  const providerOutageTarget =
+    typeof outage === 'number' && Number.isInteger(outage) && outage >= 1
+      ? outage
+      : null;
+  let authoringJournalTarget = null;
+  const reference = input.journalReference;
+  const current = input.currentRepo?.split('/') ?? [];
+  if (typeof reference === 'string' && current.length === 2) {
+    const match = AUTHORING_JOURNAL_REFERENCE_PATTERN.exec(reference);
+    const owner = match?.[1];
+    const name = match?.[2];
+    const number = match?.[3];
+    if (
+      owner !== undefined &&
+      name !== undefined &&
+      number !== undefined &&
+      owner.toLowerCase() === (current[0] ?? '').toLowerCase() &&
+      name.toLowerCase() === (current[1] ?? '').toLowerCase()
+    ) {
+      authoringJournalTarget = Number(number);
+    }
+  }
+  return { providerOutageTarget, authoringJournalTarget };
+}
+/**
  * Inspect `issueAuthoring.adversarialReview.delegate` without collapsing a
  * malformed value into "absent". Unknown keys on `adversarialReview` fail
  * closed so a typo cannot inherit a user-global command. Does not read

@@ -27,7 +27,11 @@ import {
 import { loadPolicyConfig } from './idd-config.mts';
 import { maskMarkdownForScan } from './markdown-code.mts';
 import { escapeRegex } from './marker-regex.mts';
-import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
+import {
+  normalizePolicyConfig,
+  POLICY_DEFAULTS,
+  resolveDurableRecordTargets,
+} from './policy-helpers.mts';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
 import {
   createGithubProviderAdapter,
@@ -178,6 +182,13 @@ interface EvaluateDiscoverReadinessOptions {
   loadIssue?: (issueNumber: number) => unknown;
   findRoadmapsByMarker?: (markerId: string) => unknown;
   loadIssueLabelEvents?: (issueNumber: number) => unknown;
+  /** #4115: configured `providerOutage.declarationTarget`, or null/absent. */
+  providerOutageTarget?: number | null;
+  /**
+   * #4115: configured `issueAuthoring.journalIssue` resolved to this
+   * repository, or null/absent (see `resolveDurableRecordTargets`).
+   */
+  authoringJournalTarget?: number | null;
   authoringLabelName?: string;
   authoringStaleAgeMs?: number;
   markerPrefix?: string;
@@ -316,7 +327,16 @@ async function main(): Promise<HelperCliResult> {
   const policyConfig = loadPolicy(args.policy);
   const authoringPolicy = resolveAuthoringGuardPolicy(policyConfig);
   const markerPrefix = resolveMarkerPrefix(policyConfig);
-  const labelsPolicy = normalizePolicyConfig(policyConfig).labels;
+  const normalizedPolicy = normalizePolicyConfig(policyConfig);
+  const labelsPolicy = normalizedPolicy.labels;
+  // #4115: the durable records Discover must never offer as work.
+  const durableTargets = resolveDurableRecordTargets({
+    journalReference:
+      (policyConfig as { issueAuthoring?: { journalIssue?: unknown } } | null)
+        ?.issueAuthoring?.journalIssue ?? null,
+    providerOutageTarget: normalizedPolicy.providerOutage.declarationTarget,
+    currentRepo: owner && repo ? `${owner}/${repo}` : undefined,
+  });
 
   // `--swarm-floor` sweeps every open issue (orphans included); otherwise
   // evaluate exactly the issues the caller named.
@@ -336,6 +356,8 @@ async function main(): Promise<HelperCliResult> {
 
   const summary = await evaluateDiscoverReadiness(issueNumbers, {
     includeUnresolvable: args.includeUnresolvable,
+    providerOutageTarget: durableTargets.providerOutageTarget,
+    authoringJournalTarget: durableTargets.authoringJournalTarget,
     currentRepo: owner && repo ? `${owner}/${repo}` : undefined,
     loadIssue: buildIssueLoader(owner, repo),
     fetchCommentsByIssueNumber: buildIssueCommentsLoader(owner, repo),
@@ -402,6 +424,8 @@ export async function evaluateDiscoverReadiness(
     fetchTimelineByIssueNumber,
     fetchUserContentEditsByIssueNumber,
     trustedMarkerLogins,
+    providerOutageTarget,
+    authoringJournalTarget,
   } = options ?? {};
   const triageVerdictCheckEnabled =
     typeof fetchCommentsByIssueNumber === 'function' &&
@@ -468,6 +492,26 @@ export async function evaluateDiscoverReadiness(
   const markerCache = new Map<string, NormalizedIssue[]>();
 
   for (const issueNumber of normalizeIssueNumbers(issueNumbers)) {
+    // #4115: a configured durable record is excluded by number before any
+    // GitHub read, matching discover-orphan-filter's number-first check. The
+    // outage target keeps precedence when both numbers are equal.
+    const durableReason =
+      issueNumber === providerOutageTarget
+        ? 'provider_outage_target'
+        : issueNumber === authoringJournalTarget
+          ? 'authoring_journal_target'
+          : null;
+    if (durableReason !== null) {
+      filteredOut.push({
+        number: issueNumber,
+        title: '',
+        reasons: [durableReason],
+        // No body is loaded for a durable record, so no score is read.
+        ...suitabilitySignal(''),
+        isRoadmap: false,
+      });
+      continue;
+    }
     const issue = await getIssue(issueNumber, issueCache, loadIssue);
     if (!issue || isInaccessibleIssue(issue)) {
       const issueReason = isInaccessibleIssue(issue)
@@ -1195,6 +1239,14 @@ function printHelp() {
   -- a title edit is a timeline "renamed" event, and a body edit is a
   GraphQL "userContentEdits.editedAt" value (#2762); a failed GraphQL read
   degrades the anchor to unknown rather than falling back to created_at.
+
+  #4115 durable-record exclusion (default-on): the configured
+  providerOutage.declarationTarget (reason: provider_outage_target) and the
+  issueAuthoring.journalIssue, when it names this repository (reason:
+  authoring_journal_target), are never ready. Each is excluded by number
+  before any GitHub read, so a closed or inaccessible durable record reports
+  its reason rather than issue_not_open. The outage target takes precedence
+  when both numbers are equal.
 
 Output schema (JSON mode):
   {

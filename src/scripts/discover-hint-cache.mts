@@ -32,8 +32,12 @@ import {
 } from './github-api-read-cache.mts';
 import type { WindowsAclReader } from './windows-acl.mts';
 
-/** Bumped when a helper's cached output shape changes incompatibly. */
-const HINT_FORMAT_VERSION = 2;
+/**
+ * Bumped when a helper's cached output shape changes incompatibly. 3 (#4115):
+ * the orphan output gained a `filtered.authoring_journal_target` bucket, so a
+ * hint written before the bump must not be served.
+ */
+const HINT_FORMAT_VERSION = 3;
 
 /** Cache-namespace names; each yields a distinct entry identity. */
 const HINT_UNIT = 'discover-hint';
