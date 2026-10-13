@@ -99,7 +99,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    Use `PR_HEAD_SHA_F3` as `PR_HEAD_SHA`. Run **AW1**
    (`idd-advisory-wait.instructions.md`):
    - If any same-head review is not a v2 overview, has suppressed
-     items, or holds a cited item (#4070): hold (AW4).
+     items, or holds a cited item: hold (AW4).
    - If **SATISFIED** (`LAST_COPILOT_COMMIT == PR_HEAD_SHA_F3`) → proceed
      with the merge.
    - If `COPILOT_PENDING` is `"false"` and neither bullet above held:
@@ -114,7 +114,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
        same F3 pass that creates a recovery marker.
      - **CAP_EXHAUSTED** → post the cap-exhausted hold comment from
        **AW4** and stop.
-     - **DISPOSITION_NEEDED** (#4070) → do not merge; return to E14.
+     - **DISPOSITION_NEEDED** → do not merge; return to E14.
      - **REQUEST_NEEDED** → return to E14 to refresh/request Copilot
        review and post a request marker; do not merge.
      - **WAIT** → do NOT execute the merge; return to the **F2 advisory

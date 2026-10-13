@@ -161,8 +161,8 @@ AW3 inputs:
   items, or holds a cited item: hold (AW4).
 - `COPILOT_PENDING` — `true` if Copilot is in `requested_reviewers`.
   Observed once: `false` can lag a re-request or empty on submit —
-  not idle proof. `LAST_COPILOT_COMMIT == PR_HEAD_SHA` is **SATISFIED**.
-  A same-head `false` uses the
+  not idle proof. `LAST_COPILOT_COMMIT == PR_HEAD_SHA` is **SATISFIED**
+  unless AW1 holds. A same-head `false` uses the
   shorter settled window.
 - `COPILOT_PENDING_COVERS_HEAD` — `true` if the latest Copilot
   `review_requested` event follows current HEAD's `committed` event.

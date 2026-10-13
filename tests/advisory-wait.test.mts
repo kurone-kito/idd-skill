@@ -1140,7 +1140,7 @@ test('#4070: the F3 shortcut and the AW1 hold check every same-head review, not 
   );
   assert.ok(
     merge.includes(
-      '- If any same-head review is not a v2 overview, has suppressed items, or holds a cited item (#4070): hold (AW4).',
+      '- If any same-head review is not a v2 overview, has suppressed items, or holds a cited item: hold (AW4).',
     ),
   );
   assert.equal(
@@ -1153,6 +1153,19 @@ test('#4070: the F3 shortcut and the AW1 hold check every same-head review, not 
     advisory.includes(
       'unless any same-head review is not a v2 overview, has suppressed items, or holds a cited item: hold (AW4).',
     ),
+  );
+  // The COPILOT_PENDING bullet must not read SATISFIED unconditionally: a
+  // same-head hold in AW1 still applies to it.
+  assert.ok(
+    advisory.includes(
+      '`LAST_COPILOT_COMMIT == PR_HEAD_SHA` is **SATISFIED** unless AW1 holds.',
+    ),
+  );
+  assert.equal(
+    advisory.includes(
+      '`LAST_COPILOT_COMMIT == PR_HEAD_SHA` is **SATISFIED**. A same-head',
+    ),
+    false,
   );
   assert.ok(
     advisory.includes(
