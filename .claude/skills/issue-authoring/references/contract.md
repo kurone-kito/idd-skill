@@ -1807,6 +1807,8 @@ only approval boundary.
   takes `--review-result <path>`: a JSON object with `"completed": true`,
   whose optional `findings` entries must each be `fixed` or `rejected`. It
   is a dry run without `--apply`, and it refuses `--shape child` for now.
+  It never retries, closes, or appends `cleanup` or `abandoned`: any failure
+  after the create stops at a recovery hold with the record at `pending`.
   Before the create, generate the
   opaque `target` id and token for both markers below -- the new issue's
   own number is not yet known. `anchor` in **both** markers depends on
