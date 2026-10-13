@@ -1316,10 +1316,11 @@ identify its old claims, and step 1 treats them as not its own.
    fan-out variant's completed-notice rule names these live-evidence checks, and
    this step applies them to every finished worker, under that worker's own
    listed handle. A worker with live work is treated as running in step 3. A
-   released claim with no matched worker gets no record here: a claim-id is not
-   a trusted worker handle, so step 5 reports it instead. A matched running
-   worker gets no record. A released claim whose only matched worker is still
-   running gets no record and is reported in step 5. Look for the worker's
+   released claim with no matched worker is recorded under the claim-id as its
+   handle, because the listing supplies no handle for it. The store dedupes on
+   claimId, workerHandle, and terminalPhase, so a retry is safe. A matched
+   running worker gets no record. A released claim whose only matched worker is
+   still running gets no record and is reported in step 5. Look for the worker's
    report draft in the scratchpad of the same session, under the issue-number
    prefix that the fan-out variant already requires. If a draft is found, check
    that its `issue`, `claimId`, and `workerHandle` match the matched claim and
@@ -1342,8 +1343,8 @@ identify its old claims, and step 1 treats them as not its own.
    instruction path the recovery followed. If verification or the append fails
    for a matched worker, keep it addressable, mark it `stalled`, and follow the
    worker-specific recovery in the fan-out variant, as section 5 of the
-   orchestrator phase file describes. A claim-id is never used as a worker
-   handle.
+   orchestrator phase file describes. A failed append for a released claim is
+   reported in step 5.
 5. **Report the remainder.** An own claim that reached step 3 and has no
    matching worker is reported to the operator, and so is a matched finished
    worker whose recorded outcome is `held`. A released claim is reported here
