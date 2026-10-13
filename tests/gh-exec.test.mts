@@ -3171,6 +3171,13 @@ test('repositoryFromRemoteUrl: names the host, owner and repository of URL-shape
     repositoryFromRemoteUrl('https://github.com/outer/inner/r.git'),
     null,
   );
+  assert.equal(repositoryFromRemoteUrl('https://github.com//o/r'), null);
+  assert.equal(repositoryFromRemoteUrl('https://github.com/o//r'), null);
+  assert.deepEqual(repositoryFromRemoteUrl('https://github.com/o/r/'), {
+    host: 'github.com',
+    owner: 'o',
+    repo: 'r',
+  });
   assert.equal(repositoryFromRemoteUrl(''), null);
 });
 

@@ -4981,10 +4981,11 @@ export function repositoryFromRemoteUrl(
     host = scp[1] ?? '';
     path = scp[2] ?? '';
   }
-  // Exactly `owner/repo`: a longer path such as `outer/inner/repo` names a
-  // different repository than its last two segments would suggest.
-  const parts = path.split('/').filter((part) => part !== '');
-  if (parts.length !== 2) return null;
+  // Exactly `owner/repo`, with at most one leading and one trailing slash and no
+  // empty segment between: `outer/inner/repo` names a different repository than
+  // its last two segments would suggest, and `o//r` is not a repository path.
+  const parts = path.replace(/^\//u, '').replace(/\/$/u, '').split('/');
+  if (parts.length !== 2 || parts.some((part) => part === '')) return null;
   const owner = parts[0] ?? '';
   const repo = (parts[1] ?? '').replace(/\.git$/u, '');
   return host && owner && repo
