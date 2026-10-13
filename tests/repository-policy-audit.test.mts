@@ -729,6 +729,13 @@ function makeRuleViolation(
         'idd-template/.github/instructions/idd-merge.instructions.md',
         'The main branch is trusted without checks.',
       );
+    case 'lite-main-boundary':
+      return replaceFixtureText(
+        documents,
+        'idd-template/.github/instructions/lite/idd-work-lite.instructions.md',
+        '<branch-name> origin/{development-branch}',
+        '<branch-name> origin/main',
+      );
     case 'fetch-refspecs':
       return replaceFixtureText(
         documents,
@@ -882,6 +889,62 @@ test('b1-main-boundary rejects a work file that never names {default-branch}', (
   ).filter((violation) => violation.ruleId === 'b1-main-boundary');
   assert.equal(violations.length, 1);
   assert.match(violations[0].message, /must name \{default-branch\}/);
+});
+
+test('lite-main-boundary rejects origin/main in the lite claim worktree command', () => {
+  const documents = readPositiveFixture();
+  const path =
+    'idd-template/.github/instructions/lite/idd-work-lite.instructions.md';
+  const contents = documents.get(path);
+  assert.ok(contents);
+  const needle = '<branch-name> origin/{development-branch}';
+  assert.ok(contents.includes(needle));
+  documents.set(path, contents.replace(needle, '<branch-name> origin/main'));
+  const violations = collectRepositoryPolicyViolationsFromDocuments(
+    documents,
+  ).filter((violation) => violation.ruleId === 'lite-main-boundary');
+  assert.deepEqual(
+    violations.map((violation) => violation.path),
+    [path],
+  );
+  assert.match(violations[0].message, /origin\/main/);
+});
+
+test('lite-main-boundary covers both copies of the six lite files', () => {
+  const paths = repositoryPolicyRulePaths['lite-main-boundary'] ?? [];
+  for (const name of [
+    'idd-work-lite',
+    'idd-pr-submit-lite',
+    'idd-review-fix-lite',
+    'idd-claim-lite',
+    'idd-merge-handoff-lite',
+    'idd-resume-lite',
+  ]) {
+    assert.ok(
+      paths.includes(
+        `idd-template/.github/instructions/lite/${name}.instructions.md`,
+      ),
+    );
+    assert.ok(
+      paths.includes(`.github/instructions/lite/${name}.instructions.md`),
+    );
+  }
+  for (const path of paths) {
+    const documents = readPositiveFixture();
+    const contents = documents.get(path);
+    assert.ok(contents, `${path} must be covered by the positive fixture`);
+    documents.set(
+      path,
+      `${contents}\nThe main branch is trusted without checks.\n`,
+    );
+    const violations = collectRepositoryPolicyViolationsFromDocuments(
+      documents,
+    ).filter((violation) => violation.ruleId === 'lite-main-boundary');
+    assert.deepEqual(
+      violations.map((violation) => violation.path),
+      [path],
+    );
+  }
 });
 
 test('load-control dogfood check ignores JSON property order', () => {
