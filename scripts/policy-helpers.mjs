@@ -352,6 +352,7 @@ export const POLICY_DEFAULTS = Object.freeze({
     roadmapLabelName: 'roadmap',
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
+    authoringOnlyLabelName: 'status:authoring-only',
     // Added in #2669: string array default, resolved like the three
     // sibling label-name fields above but via parseNonEmptyStringArray
     // (fail-closed to [] on a non-array, an empty array, or any entry
@@ -907,6 +908,10 @@ export function normalizePolicyConfig(config) {
       needsDecisionLabelName: parseNonEmptyString(
         c?.labels?.needsDecisionLabelName,
         POLICY_DEFAULTS.labels.needsDecisionLabelName,
+      ),
+      authoringOnlyLabelName: parseNonEmptyString(
+        c?.labels?.authoringOnlyLabelName,
+        POLICY_DEFAULTS.labels.authoringOnlyLabelName,
       ),
       // #2669 PR review (Codex): this resolves to [] (trust everyone) on
       // any malformed entry, including a mix of valid + invalid logins --

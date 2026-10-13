@@ -969,6 +969,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       roadmapLabelName: 'roadmap',
       blockedByHumanLabelName: 'status:blocked-by-human',
       needsDecisionLabelName: 'status:needs-decision',
+      authoringOnlyLabelName: 'status:authoring-only',
       untrustedLabelerLogins: [],
     },
     mergeGate: {
@@ -1194,6 +1195,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         roadmapLabelName: 'epic',
         blockedByHumanLabelName: 'blocked:human',
         needsDecisionLabelName: 'needs:decision',
+        authoringOnlyLabelName: 'status:authoring-only',
         untrustedLabelerLogins: ['triage-bot'],
       },
       mergeGate: {

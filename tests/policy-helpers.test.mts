@@ -121,6 +121,7 @@ test('POLICY_DEFAULTS.labels exposes the three reserved label name defaults plus
     roadmapLabelName: 'roadmap',
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
+    authoringOnlyLabelName: 'status:authoring-only',
     untrustedLabelerLogins: [],
   });
 });
