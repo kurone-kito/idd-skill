@@ -16,9 +16,12 @@ import {
   acquireCloneLock,
   releaseCloneLock,
 } from '../src/scripts/clone-lock.mts';
+import { injectGeneratedFromBanner } from '../src/scripts/consistency-helpers.mts';
 import {
   defaultGitRunner,
+  formatLeastHeadroomLine,
   type GitRunner,
+  measureTouchedBudgets,
   runPrePushTrialBudget,
 } from '../src/scripts/pre-push-trial-budget.mts';
 import { stubExecutable } from './test-utils.mts';
@@ -492,4 +495,322 @@ test('a failed add that keeps its registration fails the check closed (#4095)', 
   assert.equal(result.cleanupFailed, true);
   assert.equal(result.exitCode, 1);
   assert.equal(existsSync(scratch), true, 'the scratch directory is kept');
+});
+
+// The not-behind measurement (#4128). The fixture manifest has the shape of
+// audit/sync-manifest.json, with the real limits and paths the issue names.
+const LITE_PATH =
+  '.github/instructions/lite/idd-pr-submit-lite.instructions.md';
+const PR_SUBMIT_PATH = '.github/instructions/idd-pr-submit.instructions.md';
+const UNTOUCHED_PATH = 'docs/untouched.md';
+const BUDGET_MANIFEST = {
+  bundleBudgets: [
+    { id: 'bundle-pr-submit-lite', files: [LITE_PATH], limitBytes: 26000 },
+    { id: 'bundle-untouched', files: [UNTOUCHED_PATH], limitBytes: 10 },
+  ],
+  instructionSizeBudgets: [
+    {
+      id: 'instruction-size-budgets-dogfood',
+      glob: '.github/instructions/idd-*.instructions.md',
+      alwaysLoadedPattern: 'applyTo:\\s*"\\*\\*"',
+      alwaysLoadedLimitBytes: 20000,
+      phaseLimitBytes: 36000,
+    },
+  ],
+  contextCeiling: {
+    id: 'context-ceiling-200k',
+    maxBundleLimitBytes: 196000,
+    maxUtilizationPct: 98,
+    noticeUtilizationPct: 95,
+    exemptBundles: [],
+  },
+};
+
+/** Text of exactly `bytes` bytes, in short lines. */
+function sized(bytes: number): string {
+  const line = `${'a'.repeat(79)}\n`;
+  const full = line.repeat(Math.floor(bytes / line.length));
+  return full + 'b'.repeat(bytes - full.length);
+}
+
+/** `body` behind the generated-from banner, as sync-docs writes a copy. */
+function withBanner(body: string): string {
+  return injectGeneratedFromBanner(
+    body,
+    'idd-template/.github/instructions/idd-pr-submit.instructions.md',
+  );
+}
+
+/**
+ * A work clone on `feature` that contains `main`, so it is not behind. The
+ * base has the lite file at 25,473 bytes (7 under its 98% line of 25,480),
+ * the PR-submit file at 35,981 bytes without its banner (19 under 36,000),
+ * and an untouched bundle that is already over its limit.
+ */
+function notBehindFixture(): { root: string; work: string } {
+  const root = mkdtempSync(join(tmpdir(), 'idd-trial-budget-test-'));
+  const origin = join(root, 'origin.git');
+  const seed = join(root, 'seed');
+  const work = join(root, 'work');
+  execFileSync('git', ['init', '--bare', '--quiet', '-b', 'main', origin]);
+  execFileSync('git', ['init', '--quiet', '-b', 'main', seed]);
+  mkdirSync(join(seed, 'audit'));
+  mkdirSync(join(seed, '.github', 'instructions', 'lite'), { recursive: true });
+  mkdirSync(join(seed, 'docs'));
+  writeFileSync(
+    join(seed, 'audit', 'sync-manifest.json'),
+    `${JSON.stringify(BUDGET_MANIFEST, null, 2)}\n`,
+  );
+  writeFileSync(join(seed, LITE_PATH), sized(25473));
+  writeFileSync(join(seed, PR_SUBMIT_PATH), withBanner(sized(35981)));
+  writeFileSync(join(seed, UNTOUCHED_PATH), sized(50));
+  git(seed, ['add', '-A']);
+  git(seed, [
+    '-c',
+    'user.name=t',
+    '-c',
+    'user.email=t@invalid',
+    'commit',
+    '-q',
+    '-m',
+    'seed budgets',
+  ]);
+  git(seed, ['remote', 'add', 'origin', origin]);
+  git(seed, ['push', '--quiet', 'origin', 'main']);
+  execFileSync('git', ['clone', '--quiet', origin, work]);
+  git(work, ['checkout', '-q', '-b', 'feature']);
+  return { root, work };
+}
+
+test('a not-behind branch at 7 bytes under the 98% line passes (#4128)', (t) => {
+  const f = notBehindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  // A touch that keeps the size: the bundle is touched and reported.
+  commitFile(f.work, LITE_PATH, sized(25473).replace(/b$/, 'c'), 'touch');
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'not-behind');
+  assert.equal(result.behind, false);
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(result.budgets?.bundles, [
+    {
+      id: 'bundle-pr-submit-lite',
+      bytes: 25473,
+      limitBytes: 26000,
+      lineBytes: 25480,
+      headroom: 7,
+    },
+  ]);
+  assert.match(result.summary, /least headroom is bundle-pr-submit-lite: 7 /);
+});
+
+test('a not-behind branch that adds 8 bytes to bundle-pr-submit-lite fails (#4128)', (t) => {
+  const f = notBehindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  commitFile(f.work, LITE_PATH, sized(25473 + 8), 'grow the lite file');
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'budget-fail');
+  assert.equal(result.behind, false);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.auditFailures.length, 1);
+  assert.match(
+    result.auditFailures[0] ?? '',
+    /bundle-pr-submit-lite utilization 98\.00% exceeds 98% \(25481\/26000 bytes\)/,
+  );
+  assert.equal(result.budgets?.bundles[0]?.headroom, -1);
+  // The untouched bundle is over its limit, but this branch did not touch it.
+  assert.equal(
+    result.budgets?.bundles.some((row) => row.id === 'bundle-untouched'),
+    false,
+  );
+});
+
+test('a not-behind branch at 35,981 bytes without the banner passes (#4128)', (t) => {
+  const f = notBehindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  commitFile(
+    f.work,
+    PR_SUBMIT_PATH,
+    withBanner(sized(35981).replace(/b$/, 'c')),
+    'touch',
+  );
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'not-behind');
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(result.budgets?.files, [
+    {
+      path: PR_SUBMIT_PATH,
+      bytes: 35981,
+      limitBytes: 36000,
+      limitField: 'phaseLimitBytes',
+      headroom: 19,
+    },
+  ]);
+});
+
+test('a not-behind branch that adds 20 bytes to idd-pr-submit fails (#4128)', (t) => {
+  const f = notBehindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  commitFile(f.work, PR_SUBMIT_PATH, withBanner(sized(35981 + 20)), 'grow');
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'budget-fail');
+  assert.equal(result.exitCode, 1);
+  assert.deepEqual(result.auditFailures, [
+    `instruction-size-budgets-dogfood: ${PR_SUBMIT_PATH} is 36001 bytes (limit 36000; phase)`,
+  ]);
+  assert.match(result.summary, /least headroom is .*idd-pr-submit.*: -1 /);
+});
+
+test('a not-behind branch that touches no budget reports none (#4128)', (t) => {
+  const f = notBehindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  commitFile(f.work, 'notes.txt', 'unrelated\n', 'unrelated');
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'not-behind');
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(result.budgets, { bundles: [], files: [] });
+  assert.equal(
+    result.summary,
+    'pre-push-trial-budget: no budget entry was touched',
+  );
+});
+
+test('a not-behind branch that deletes a bundle member does not crash (#4128)', (t) => {
+  const f = notBehindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  git(f.work, ['rm', '-q', LITE_PATH]);
+  git(f.work, [
+    '-c',
+    'user.name=t',
+    '-c',
+    'user.email=t@invalid',
+    'commit',
+    '-q',
+    '-m',
+    'delete the lite file',
+  ]);
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'not-behind');
+  assert.equal(result.exitCode, 0);
+});
+
+test('a manifest without budget keys still gives not-behind (#4128)', (t) => {
+  const f = behindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'not-behind');
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(result.budgets, { bundles: [], files: [] });
+});
+
+test('a behind breach is listed once, from audit-docs only (#4128)', (t) => {
+  const f = behindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  advanceMain(f, 'budget.txt', '20\n');
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'fail');
+  assert.deepEqual(result.auditFailures, [BREACH_MESSAGE.slice(2)]);
+  assert.equal(result.summary.includes('base pin hides'), false);
+});
+
+test('a behind branch that raises a bundle limit gets the take-in-the-base hint (#4128)', (t) => {
+  const f = behindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  const manifestWith = (limitBytes: number) =>
+    `${JSON.stringify({ limit: 10, bundleBudgets: [{ id: 'b', files: [], limitBytes }] })}\n`;
+  // main adds the bundle, and the branch takes that in before raising it.
+  advanceMain(f, 'audit/sync-manifest.json', manifestWith(100));
+  git(f.work, [
+    '-c',
+    'user.name=t',
+    '-c',
+    'user.email=t@invalid',
+    'merge',
+    '-q',
+    '--no-edit',
+    'origin/main',
+  ]);
+  commitFile(
+    f.work,
+    'audit/sync-manifest.json',
+    manifestWith(200),
+    'branch raises the bundle limit',
+  );
+  advanceMain(f, 'budget.txt', '20\n');
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'fail');
+  assert.match(result.summary, /base pin hides; take in the base first/);
+});
+
+test('measureTouchedBudgets uses the line for a bundle and skips untouched ones (#4128)', () => {
+  const files: Record<string, string> = {
+    [LITE_PATH]: sized(25481),
+    [UNTOUCHED_PATH]: sized(50),
+  };
+  const measured = measureTouchedBudgets({
+    manifest: BUDGET_MANIFEST,
+    changedFiles: [LITE_PATH],
+    readFile: (path) => files[path] ?? null,
+  });
+  assert.deepEqual(
+    measured.bundles.map((row) => [row.id, row.lineBytes, row.headroom]),
+    [['bundle-pr-submit-lite', 25480, -1]],
+  );
+  assert.equal(measured.failures.length, 1);
+});
+
+test('measureTouchedBudgets measures an exempt bundle against its limit only (#4128)', () => {
+  const manifest = {
+    ...BUDGET_MANIFEST,
+    contextCeiling: {
+      ...BUDGET_MANIFEST.contextCeiling,
+      exemptBundles: ['bundle-pr-submit-lite', 'bundle-untouched'],
+    },
+  };
+  const measured = measureTouchedBudgets({
+    manifest,
+    changedFiles: [LITE_PATH],
+    readFile: () => sized(25481),
+  });
+  assert.equal(measured.bundles[0]?.lineBytes, 26000);
+  // The exemption for the untouched bundle is not reported as unknown.
+  assert.deepEqual(measured.failures, []);
+});
+
+test('measureTouchedBudgets fails closed on a malformed manifest (#4128)', () => {
+  const measured = measureTouchedBudgets({
+    manifest: { bundleBudgets: {}, instructionSizeBudgets: {} },
+    changedFiles: [LITE_PATH],
+    readFile: () => '',
+  });
+  assert.deepEqual(measured.failures, [
+    'bundleBudgets: must be an array',
+    'instructionSizeBudgets: must be an array',
+  ]);
+});
+
+test('formatLeastHeadroomLine breaks a tie by name (#4128)', () => {
+  const line = formatLeastHeadroomLine({
+    bundles: [
+      { id: 'b-bundle', bytes: 5, limitBytes: 10, lineBytes: 9, headroom: 4 },
+    ],
+    files: [
+      {
+        path: 'a-file',
+        bytes: 6,
+        limitBytes: 10,
+        limitField: 'phaseLimitBytes',
+        headroom: 4,
+      },
+    ],
+  });
+  assert.match(line, /least headroom is a-file: 4 bytes/);
 });

@@ -12,13 +12,34 @@
 // of HEAD and runs the base tip's audit-docs script there, so a breach that only
 // appears after the merge fails the push. The base tip's script is used so the
 // branch cannot relax its own budget. The check never pushes and never moves a
-// branch or a remote ref. A branch that is not behind is a no-op.
+// branch or a remote ref.
+//
+// A branch that is not behind is measured too (#4128): every bundleBudgets
+// entry and instruction file the branch touches is checked against the same
+// rules audit-docs applies, read from the HEAD commit. HEAD's own manifest is
+// used there, unlike the base pin above, so a limit raise the remedy order
+// allows can pass. The near-ceiling ratchet in audit-docs, which runs earlier
+// in the same pre-push chain, still refuses a raise at a base at or above 95%.
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 import { acquireCloneLock, releaseCloneLock } from './clone-lock.mjs';
+import {
+  collectContextCeilingViolations,
+  collectInstructionSizeBudgetViolations,
+  globFiles,
+  normalizeNonNegativeNumber,
+  resolveInstructionSizeBudgetConfig,
+  stripGeneratedFromBanner,
+} from './consistency-helpers.mjs';
 import {
   addScratchWorktree,
   DEFAULT_KEEP_LIST,
@@ -30,6 +51,218 @@ export const PRE_PUSH_TRIAL_BUDGET_FLAG_SPEC = {
   '--base': { type: 'string' },
   '--help': { type: 'boolean' },
 };
+const UNKNOWN_EXEMPT_PATTERN = /: exemptBundles names unknown bundle id "/;
+function measuredBytes(text) {
+  return Buffer.byteLength(
+    stripGeneratedFromBanner(text.replace(/\r\n?/g, '\n')),
+    'utf8',
+  );
+}
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+/**
+ * Measure the `bundleBudgets` entries and instruction files that `changedFiles`
+ * touches. A bundle is touched when one of its member files changed. Pass or
+ * fail comes from the rules audit-docs applies: a bundle above `limitBytes`,
+ * the `contextCeiling` checks, and the `instructionSizeBudgets` per-file caps.
+ * `readFile` returns null for a file that does not exist, which counts as 0
+ * bytes. Pure: the caller supplies the parsed manifest and the reader.
+ */
+export function measureTouchedBudgets(options) {
+  const result = { bundles: [], files: [], failures: [] };
+  if (!isPlainObject(options.manifest)) {
+    result.failures.push('audit/sync-manifest.json: must be a JSON object');
+    return result;
+  }
+  const manifest = options.manifest;
+  const changed = new Set(options.changedFiles);
+  const texts = new Map();
+  const read = (path) => {
+    if (!texts.has(path)) texts.set(path, options.readFile(path));
+    return texts.get(path) ?? null;
+  };
+  const rawBundles = manifest.bundleBudgets;
+  if (rawBundles != null && !Array.isArray(rawBundles)) {
+    result.failures.push('bundleBudgets: must be an array');
+  }
+  const ceiling = isPlainObject(manifest.contextCeiling)
+    ? manifest.contextCeiling
+    : null;
+  const maxPct = normalizeNonNegativeNumber(ceiling?.maxUtilizationPct);
+  const exempt = new Set(
+    Array.isArray(ceiling?.exemptBundles) ? ceiling.exemptBundles : [],
+  );
+  const stats = [];
+  for (const entry of Array.isArray(rawBundles) ? rawBundles : []) {
+    if (!isPlainObject(entry)) continue;
+    const id = typeof entry.id === 'string' ? entry.id : 'bundle-budget';
+    const files = Array.isArray(entry.files)
+      ? entry.files.filter((file) => typeof file === 'string')
+      : [];
+    if (!files.some((file) => changed.has(file))) continue;
+    const limitBytes = Number(entry.limitBytes);
+    if (!Number.isFinite(limitBytes) || limitBytes < 0) {
+      result.failures.push(`${id}: limitBytes must be a non-negative number`);
+      continue;
+    }
+    let bytes = 0;
+    for (const file of files) bytes += measuredBytes(read(file) ?? '');
+    if (bytes > limitBytes) {
+      result.failures.push(
+        `${id}: bundle total is ${bytes} bytes (limit ${limitBytes}); files: ${files.join(', ')}`,
+      );
+    }
+    const lineBytes =
+      maxPct !== null && !exempt.has(id)
+        ? Math.min(limitBytes, Math.floor((limitBytes * maxPct) / 100))
+        : limitBytes;
+    stats.push({ id, limitBytes, totalBytes: bytes, files });
+    result.bundles.push({
+      id,
+      bytes,
+      limitBytes,
+      lineBytes,
+      headroom: lineBytes - bytes,
+    });
+  }
+  if (ceiling !== null && stats.length > 0) {
+    // Only touched bundles are passed, so an exemption for an untouched bundle
+    // reads as unknown here. audit-docs checks those ids against every bundle.
+    const ceilingResult = collectContextCeilingViolations(ceiling, stats);
+    result.failures.push(
+      ...ceilingResult.errors.filter(
+        (line) => !UNKNOWN_EXEMPT_PATTERN.test(line),
+      ),
+    );
+  }
+  const rawSizeBudgets = manifest.instructionSizeBudgets;
+  if (rawSizeBudgets != null && !Array.isArray(rawSizeBudgets)) {
+    result.failures.push('instructionSizeBudgets: must be an array');
+  }
+  const changedList = [...changed];
+  const seenFiles = new Set();
+  for (const entry of Array.isArray(rawSizeBudgets) ? rawSizeBudgets : []) {
+    if (!isPlainObject(entry)) {
+      result.failures.push(
+        `instructionSizeBudgets: each entry must be an object, got ${JSON.stringify(entry)}`,
+      );
+      continue;
+    }
+    const config = entry;
+    const resolved = resolveInstructionSizeBudgetConfig(config);
+    if ('error' in resolved) {
+      result.failures.push(resolved.error);
+      continue;
+    }
+    const governed = globFiles(resolved.glob, changedList).filter(
+      (path) => read(path) !== null,
+    );
+    const sizeResult = collectInstructionSizeBudgetViolations(
+      config,
+      changed,
+      () => governed,
+      (path) => (read(path) ?? '').replace(/\r\n?/g, '\n'),
+    );
+    result.failures.push(...sizeResult.errors);
+    for (const path of governed) {
+      if (seenFiles.has(path)) continue;
+      seenFiles.add(path);
+      const text = (read(path) ?? '').replace(/\r\n?/g, '\n');
+      const alwaysLoaded = resolved.alwaysLoadedRegex.test(text);
+      const limitBytes = alwaysLoaded
+        ? resolved.alwaysLoadedLimitBytes
+        : resolved.phaseLimitBytes;
+      const bytes = measuredBytes(text);
+      result.files.push({
+        path,
+        bytes,
+        limitBytes,
+        limitField: alwaysLoaded ? 'alwaysLoadedLimitBytes' : 'phaseLimitBytes',
+        headroom: limitBytes - bytes,
+      });
+    }
+  }
+  return result;
+}
+/**
+ * The stderr summary: the touched entry with the least headroom (ties broken
+ * by name), or why there is none. `hint` is appended when given.
+ */
+export function formatLeastHeadroomLine(budgets, hint) {
+  const prefix = 'pre-push-trial-budget:';
+  let line;
+  if (budgets === null) {
+    line = `${prefix} no budget was measured`;
+  } else {
+    const rows = [
+      ...budgets.bundles.map((row) => ({
+        name: row.id,
+        headroom: row.headroom,
+        detail: `${row.bytes}/${row.lineBytes} bytes, limitBytes ${row.limitBytes}`,
+      })),
+      ...budgets.files.map((row) => ({
+        name: row.path,
+        headroom: row.headroom,
+        detail: `${row.bytes}/${row.limitBytes} bytes, ${row.limitField}`,
+      })),
+    ].sort(
+      (a, b) =>
+        a.headroom - b.headroom ||
+        (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+    );
+    const [least] = rows;
+    line =
+      least === undefined
+        ? `${prefix} no budget entry was touched`
+        : `${prefix} least headroom is ${least.name}: ${least.headroom} bytes (${least.detail})`;
+  }
+  return hint === undefined ? line : `${line}; ${hint}`;
+}
+const MANIFEST_PATH = 'audit/sync-manifest.json';
+const RAISE_HINT =
+  'HEAD raises a bundle limit that the base pin hides; take in the base first (rebase before publication, or merge it into a pushed branch), then this check measures the raise';
+function parseManifest(text) {
+  if (text === null) return { ok: true, manifest: null };
+  try {
+    return { ok: true, manifest: JSON.parse(text) };
+  } catch {
+    return { ok: false };
+  }
+}
+function bundleLimits(manifest) {
+  const limits = new Map();
+  if (!isPlainObject(manifest) || !Array.isArray(manifest.bundleBudgets)) {
+    return limits;
+  }
+  for (const entry of manifest.bundleBudgets) {
+    if (isPlainObject(entry) && typeof entry.id === 'string') {
+      limits.set(entry.id, Number(entry.limitBytes));
+    }
+  }
+  return limits;
+}
+/** True when HEAD's manifest gives some bundle a higher limit than the base. */
+function headRaisesALimit(headManifest, baseManifest) {
+  const base = bundleLimits(baseManifest);
+  for (const [id, limit] of bundleLimits(headManifest)) {
+    const prior = base.get(id);
+    if (prior !== undefined && limit > prior) return true;
+  }
+  return false;
+}
+function changedFilesBetween(runGit, cwd, from, to) {
+  const result = runGit(cwd, [
+    'diff',
+    '-z',
+    '--name-only',
+    '--diff-filter=d',
+    from,
+    to,
+  ]);
+  if (result.status !== 0) return null;
+  return result.stdout.split('\0').filter((path) => path.length > 0);
+}
 const DEFAULT_BASE = 'origin/main';
 const LEDGER_RULE_PREFIX = 'repository-inventory-audit';
 const GIT_IDENTITY = [
@@ -98,6 +331,7 @@ export function runPrePushTrialBudget(options) {
   const baseSha = resolveCommit(runGit, repo, base);
   const finish = (outcome, behind, extra = {}, cleanupFailed = false) => {
     const passed = outcome === 'not-behind' || outcome === 'pass';
+    const budgets = extra.budgets ?? null;
     return {
       outcome,
       behind,
@@ -106,16 +340,52 @@ export function runPrePushTrialBudget(options) {
       auditFailures: extra.auditFailures ?? [],
       ignoredTooling: extra.ignoredTooling ?? [],
       cleanupFailed,
+      budgets,
+      summary: formatLeastHeadroomLine(budgets, extra.hint),
       exitCode: passed && !cleanupFailed ? 0 : 1,
     };
   };
   if (headSha === null || baseSha === null) {
     return finish('unresolved-ref', false);
   }
+  // Reads one file from a commit; null when it does not exist there.
+  const showAt = (commit, path) => {
+    const shown = runGit(repo, ['show', `${commit}:${path}`]);
+    return shown.status === 0 ? shown.stdout : null;
+  };
   if (
     runGit(repo, ['merge-base', '--is-ancestor', baseSha, headSha]).status === 0
   ) {
-    return finish('not-behind', false);
+    // Not behind: measure the touched budgets on the HEAD commit, with HEAD's
+    // own manifest, so a raise this branch commits is what is measured.
+    const changedFiles = changedFilesBetween(runGit, repo, baseSha, headSha);
+    const parsed = parseManifest(showAt(headSha, MANIFEST_PATH));
+    if (changedFiles === null || !parsed.ok) {
+      return finish('budget-fail', false, {
+        auditFailures: [
+          changedFiles === null
+            ? `could not list the files changed between ${baseSha} and HEAD`
+            : `${MANIFEST_PATH}: not valid JSON at HEAD`,
+        ],
+      });
+    }
+    if (parsed.manifest === null) {
+      return finish('not-behind', false, {
+        budgets: { bundles: [], files: [] },
+      });
+    }
+    const measured = measureTouchedBudgets({
+      manifest: parsed.manifest,
+      changedFiles,
+      readFile: (path) => showAt(headSha, path),
+    });
+    const budgets = { bundles: measured.bundles, files: measured.files };
+    return measured.failures.length > 0
+      ? finish('budget-fail', false, {
+          auditFailures: measured.failures,
+          budgets,
+        })
+      : finish('not-behind', false, { budgets });
   }
   const scratch = mkdtempSync(join(tmpdir(), 'idd-pre-push-trial-'));
   const trialTree = join(scratch, 'trial');
@@ -195,13 +465,14 @@ export function runPrePushTrialBudget(options) {
     ) {
       return { outcome: 'policy-pin-failed' };
     }
+    const budgets = measureTrialTree();
     const audit = spawnSync(
       'node',
       [join(baseTooling, 'scripts', 'audit-docs.mjs'), '--check'],
       { cwd: trialTree, encoding: 'utf8', env: sanitizedEnv() },
     );
     if (audit.status === 0) {
-      return { outcome: 'pass' };
+      return { outcome: 'pass', budgets };
     }
     const lines = auditFailureLines(
       `${audit.stdout ?? ''}${audit.stderr ?? ''}`,
@@ -214,13 +485,44 @@ export function runPrePushTrialBudget(options) {
       return {
         outcome: 'fail',
         auditFailures: ['audit-docs exited non-zero with no parsable failure'],
+        budgets,
       };
     }
     if (auditFailures.length > 0) {
-      return { outcome: 'fail', auditFailures, ignoredTooling };
+      return { outcome: 'fail', auditFailures, ignoredTooling, budgets };
     }
-    return { outcome: 'pass', ignoredTooling };
+    return { outcome: 'pass', ignoredTooling, budgets };
   };
+  // The report for a behind branch: the files the branch itself changed,
+  // measured on the merged trial tree under the pinned base policy. It never
+  // adds a failure, because audit-docs already measured the same tree.
+  function measureTrialTree() {
+    const readTrial = (path) => {
+      try {
+        return readFileSync(join(trialTree, path), 'utf8');
+      } catch {
+        return null;
+      }
+    };
+    const mergeBase = runGit(repo, [
+      'merge-base',
+      baseSha ?? '',
+      headSha ?? '',
+    ]);
+    const changedFiles =
+      mergeBase.status === 0 && headSha !== null
+        ? changedFilesBetween(runGit, repo, mergeBase.stdout.trim(), headSha)
+        : null;
+    const parsed = parseManifest(readTrial(MANIFEST_PATH));
+    if (changedFiles === null || !parsed.ok) return null;
+    if (parsed.manifest === null) return { bundles: [], files: [] };
+    const measured = measureTouchedBudgets({
+      manifest: parsed.manifest,
+      changedFiles,
+      readFile: readTrial,
+    });
+    return { bundles: measured.bundles, files: measured.files };
+  }
   let verdict = { outcome: 'worktree-failed' };
   try {
     verdict = trial();
@@ -269,14 +571,37 @@ export function runPrePushTrialBudget(options) {
       rmSync(scratch, { recursive: true, force: true });
     }
   }
+  // A raise this branch commits is hidden by the base pin, so a failing trial
+  // says how to get the raise measured.
+  let hint;
+  if (verdict.outcome === 'fail') {
+    const head = parseManifest(showAt(headSha, MANIFEST_PATH));
+    const baseManifest = parseManifest(showAt(baseSha, MANIFEST_PATH));
+    if (
+      head.ok &&
+      baseManifest.ok &&
+      headRaisesALimit(head.manifest, baseManifest.manifest)
+    ) {
+      hint = RAISE_HINT;
+    }
+  }
   // Reaching the trial means HEAD is behind the base.
-  return finish(verdict.outcome, true, verdict, cleanupFailures.length > 0);
+  return finish(
+    verdict.outcome,
+    true,
+    { ...verdict, hint },
+    cleanupFailures.length > 0,
+  );
 }
 const USAGE = `usage: node scripts/pre-push-trial-budget.mjs [--cwd <repo>] [--base <ref>] [--help]
 
-Budget check on a trial merge of the base tip into HEAD, run only when the
-branch is behind the base. Prints one JSON result and exits 0 for not-behind
-or pass, 1 otherwise. It never pushes and never moves a branch or remote ref.
+Pre-push budget check. When the branch is behind the base, it runs the base
+tip's audit-docs on a trial merge of the base tip into HEAD. When it is not
+behind, it measures every bundleBudgets entry and instruction file the branch
+touches at HEAD, with the same failure rules as audit-docs. Prints one JSON
+result (with each touched entry's bytes, limit and headroom), prints one stderr
+line naming the entry with the least headroom, and exits 0 for not-behind or
+pass, 1 otherwise. It never pushes and never moves a branch or remote ref.
 Tooling-ledger failures (repository-inventory-audit) are listed as
 ignoredTooling and are not counted.
 
@@ -295,6 +620,7 @@ function run(argv) {
     base: typeof values.base === 'string' ? values.base : undefined,
   });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  process.stderr.write(`${result.summary}\n`);
   return result.exitCode;
 }
 function main(argv) {
