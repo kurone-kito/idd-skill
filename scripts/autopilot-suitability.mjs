@@ -150,8 +150,7 @@ export function rankAndRouteBySuitability(items, options = {}) {
     typeof options.getScore === 'function' ? options.getScore : () => null;
   // Effort-L routing (#4199) needs both options; effort is a separate axis
   // from the score, so it applies before the kill-switch below.
-  const routeEffortL =
-    options.routeEffortL === true && typeof options.getEffort === 'function';
+  const routeEffortL = options.routeEffortL === true;
   const isEffortLRouted = (item) =>
     routeEffortL && options.getEffort?.(item) === 'L';
   if (options.enabled === false) {
@@ -228,7 +227,6 @@ export function isAutopilotSuitabilityScore(value) {
  * `null`, or any other value resolves to `'allow'` (the distributed
  * default), so repositories that never set the key keep today's behavior.
  */
-// audit:ignore-dead-export: read by audit-authored-issue and discover-orphan-filter in later roadmap issues
 export function resolveEffortLPolicy(config) {
   if (typeof config !== 'object' || config === null) {
     return 'allow';
