@@ -45,7 +45,7 @@ import {
 } from '../src/scripts/github-api-observation.mts';
 import { classifyHelperError } from '../src/scripts/helper-cli-runner.mts';
 import {
-  ownerRepoFromRemoteUrl,
+  repositoryFromRemoteUrl,
   resolveCurrentGithubRepository,
 } from '../src/scripts/provider-adapter-github.mts';
 import { pinLoadControlOff, stubExecutable } from './test-utils.mts';
@@ -2832,11 +2832,17 @@ function withRepositoryVariables<T>(
   values: {
     GITHUB_ACTIONS?: string;
     GITHUB_REPOSITORY?: string;
+    GITHUB_SERVER_URL?: string;
     GH_REPO?: string;
   },
   run: () => T,
 ): T {
-  const names = ['GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GH_REPO'] as const;
+  const names = [
+    'GITHUB_ACTIONS',
+    'GITHUB_REPOSITORY',
+    'GITHUB_SERVER_URL',
+    'GH_REPO',
+  ] as const;
   const saved: Record<string, string | undefined> = {};
   for (const name of names) saved[name] = process.env[name];
   for (const name of names) delete process.env[name];
@@ -2930,6 +2936,51 @@ test('resolveCurrentGithubRepository: inside Actions a checkout of another repos
   );
 });
 
+test('resolveCurrentGithubRepository: inside Actions an origin on another host takes the gh lookup (#4110)', () => {
+  // The same owner/repo on a different host is a different repository.
+  withRepositoryVariables(
+    { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'o/r' },
+    () => {
+      withGitCheckout('https://other.example/o/r.git', () => {
+        withRepoViewStub(
+          { stdout: repoViewBody('other', 'host') },
+          (spawned) => {
+            assert.deepEqual(resolveCurrentGithubRepository(), {
+              owner: 'other',
+              repo: 'host',
+            });
+            assert.deepEqual(spawned(), [REPO_VIEW_ARGV]);
+          },
+        );
+      });
+    },
+  );
+});
+
+test('resolveCurrentGithubRepository: inside Actions a GHES origin on the server host is used with no gh process (#4110)', () => {
+  withRepositoryVariables(
+    {
+      GITHUB_ACTIONS: 'true',
+      GITHUB_REPOSITORY: 'o/r',
+      GITHUB_SERVER_URL: 'https://ghes.example.com',
+    },
+    () => {
+      withGitCheckout('https://ghes.example.com/o/r.git', () => {
+        withRepoViewStub(
+          { exit: 1, stderr: 'gh: repo view failed' },
+          (spawned) => {
+            assert.deepEqual(resolveCurrentGithubRepository(), {
+              owner: 'o',
+              repo: 'r',
+            });
+            assert.deepEqual(spawned(), []);
+          },
+        );
+      });
+    },
+  );
+});
+
 test('resolveCurrentGithubRepository: inside Actions a checkout with no origin takes the gh lookup (#4110)', () => {
   withRepositoryVariables(
     { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'o/r' },
@@ -2970,27 +3021,39 @@ test('resolveCurrentGithubRepository: inside Actions an unreadable origin takes 
   );
 });
 
-test('ownerRepoFromRemoteUrl: names the owner and repository of URL-shaped remotes only (#4110)', () => {
-  assert.deepEqual(ownerRepoFromRemoteUrl('https://github.com/o/r.git'), {
+test('repositoryFromRemoteUrl: names the host, owner and repository of URL-shaped remotes only (#4110)', () => {
+  assert.deepEqual(repositoryFromRemoteUrl('https://github.com/o/r.git'), {
+    host: 'github.com',
     owner: 'o',
     repo: 'r',
   });
-  assert.deepEqual(ownerRepoFromRemoteUrl('https://github.com/o/r\n'), {
+  assert.deepEqual(repositoryFromRemoteUrl('https://github.com/o/r\n'), {
+    host: 'github.com',
     owner: 'o',
     repo: 'r',
   });
-  assert.deepEqual(ownerRepoFromRemoteUrl('git@github.com:o/r.git'), {
+  assert.deepEqual(repositoryFromRemoteUrl('git@github.com:o/r.git'), {
+    host: 'github.com',
     owner: 'o',
     repo: 'r',
   });
-  assert.deepEqual(ownerRepoFromRemoteUrl('ssh://git@github.com/o/r'), {
+  assert.deepEqual(repositoryFromRemoteUrl('ssh://git@GitHub.com/o/r'), {
+    host: 'github.com',
     owner: 'o',
     repo: 'r',
   });
-  assert.equal(ownerRepoFromRemoteUrl('/srv/git/o/r.git'), null);
-  assert.equal(ownerRepoFromRemoteUrl('file:///srv/git/o/r.git'), null);
-  assert.equal(ownerRepoFromRemoteUrl('https://github.com/o'), null);
-  assert.equal(ownerRepoFromRemoteUrl(''), null);
+  assert.deepEqual(
+    repositoryFromRemoteUrl('https://other.example:8443/o/r.git'),
+    {
+      host: 'other.example:8443',
+      owner: 'o',
+      repo: 'r',
+    },
+  );
+  assert.equal(repositoryFromRemoteUrl('/srv/git/o/r.git'), null);
+  assert.equal(repositoryFromRemoteUrl('file:///srv/git/o/r.git'), null);
+  assert.equal(repositoryFromRemoteUrl('https://github.com/o'), null);
+  assert.equal(repositoryFromRemoteUrl(''), null);
 });
 
 test('resolveCurrentGithubRepository: outside GitHub Actions the variable is ignored, even when origin matches (#4110)', () => {

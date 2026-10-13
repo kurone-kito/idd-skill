@@ -3970,11 +3970,13 @@ function formatTraversalGraphqlErrors(errors) {
  * or `..`, so both halves are safe to put in a REST path unencoded. */
 const GITHUB_REPOSITORY_VALUE =
   /^([A-Za-z0-9_-]+)\/(?!\.{1,2}$)([A-Za-z0-9._-]+)$/;
-/** The `owner/repo` a git remote URL names, or `null`. Accepts only URL forms
- * (`https`, `http`, `ssh`, `git`, `git+ssh`, or scp-like `[user@]host:path`):
- * a filesystem path or `file:` URL names no repository identity here. */
-export function ownerRepoFromRemoteUrl(remote) {
+/** The host and `owner/repo` a git remote URL names, or `null`. Accepts only URL
+ * forms (`https`, `http`, `ssh`, `git`, `git+ssh`, or scp-like `[user@]host:path`):
+ * a filesystem path or `file:` URL names no repository identity here. The host
+ * is lowercased and includes a port when the URL has one. */
+export function repositoryFromRemoteUrl(remote) {
   const text = remote.trim();
+  let host;
   let path;
   if (text.includes('://')) {
     let url;
@@ -3985,22 +3987,35 @@ export function ownerRepoFromRemoteUrl(remote) {
     }
     const schemes = ['https:', 'http:', 'ssh:', 'git:', 'git+ssh:'];
     if (!schemes.includes(url.protocol)) return null;
+    host = url.host;
     path = url.pathname;
   } else {
-    const scp = /^(?:[^@/\s]+@)?[^:/\s]+:(.+)$/.exec(text);
+    const scp = /^(?:[^@/\s]+@)?([^:/\s]+):(.+)$/.exec(text);
     if (!scp) return null;
-    path = scp[1] ?? '';
+    host = scp[1] ?? '';
+    path = scp[2] ?? '';
   }
   const parts = path.split('/').filter((part) => part !== '');
   if (parts.length < 2) return null;
   const owner = parts[parts.length - 2] ?? '';
   const repo = (parts[parts.length - 1] ?? '').replace(/\.git$/u, '');
-  return owner && repo ? { owner, repo } : null;
+  return host && owner && repo
+    ? { host: host.toLowerCase(), owner, repo }
+    : null;
 }
-/** True when the checkout's `origin` remote names `owner/repo`, compared case-
- * insensitively. An unreadable origin, a missing remote, or a remote that is not
- * a repository URL is false: the caller then uses `gh` (fail closed). */
+/** True when the checkout's `origin` remote names `owner/repo` on the Actions
+ * server host (`GITHUB_SERVER_URL`, `https://github.com` when unset),
+ * compared case-insensitively. An unreadable origin, a missing remote, a remote
+ * that is not a repository URL, or an unparseable server URL is false: the
+ * caller then uses `gh` (fail closed). */
 function originNamesRepository(owner, repo) {
+  let serverHost;
+  try {
+    serverHost = new URL(process.env.GITHUB_SERVER_URL ?? 'https://github.com')
+      .host;
+  } catch {
+    return false;
+  }
   let remote;
   try {
     remote = execFileSync('git', ['remote', 'get-url', 'origin'], {
@@ -4011,7 +4026,8 @@ function originNamesRepository(owner, repo) {
   } catch {
     return false;
   }
-  const origin = ownerRepoFromRemoteUrl(remote);
+  const origin = repositoryFromRemoteUrl(remote);
+  if (origin !== null && origin.host !== serverHost.toLowerCase()) return false;
   return (
     origin !== null &&
     origin.owner.toLowerCase() === owner.toLowerCase() &&
