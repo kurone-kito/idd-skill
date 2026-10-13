@@ -109,9 +109,6 @@ for these stale checks (distributed default: `24 h`).
 - Any other active claim whose latest valid `claimed-by` comment has
   GitHub `created_at` ≥ 24 h → stale, proceed with takeover.
 
-Only the GitHub `created_at` of the latest **valid** `claimed-by`
-comment in the active claim counts toward the stale calculation.
-
 If the issue has no trusted new-format `claimed-by` comments but has
 legacy claim comments from trusted marker actors, apply the **Legacy
 claim migration** rules near the end of this file instead of the
@@ -204,7 +201,7 @@ issue (different slug variants).
    occupied/unreadable (#3154 review).
 
 2. **Remote branch scan** (scoped Refs API, not repo-wide):
-   Query only the issue-number prefix (scoped Refs API):
+   Query only the issue-number prefix:
 
    ```sh
    gh api "repos/{owner}/{repo}/git/matching-refs/heads/issue/<number>-" \
@@ -270,9 +267,7 @@ Route directly to already-claimed/Discover fallback (A0-T stops), never A5(c).
 
 Fresh-claim order, worktree first. Fresh branches only; for an inheritable
 branch, follow [Re-claim an inheritable branch](../../docs/idd-resume-detail.md#re-claim-an-inheritable-branch).
-`--record-tokens` and `--acquire` take `--agent-id {agent-id}
---claim-id {claim-id}`; `--assert` takes `--claim-id {claim-id}
---nonce {nonce}`. Resolve the commands as A5(a) does.
+Resolve the commands as A5(a) does.
 
 1. Create the worktree and branch: `git worktree add --no-track <path> -b
    <branch-name> origin/{development-branch}` (fresh-claim row of
@@ -442,8 +437,7 @@ pre-recorded `new-agent-id` / `new-claim-id` pair (Claim-state parsing
 rule 7). Adopt **both fields verbatim** as your own `{agent-id}` /
 `{claim-id}` for the rest of the run — including `--agent-id` and
 `--claim-id` at F2/F3's `pre-merge-readiness` — instead of minting a
-fresh claim-id, keeping your own native agent-id, or reusing the displaced
-`{claim-id}`; no separate
+fresh claim-id or keeping your own native agent-id; no separate
 `claimed-by supersedes: none` post is required for the transfer itself.
 
 **Adopt-verbatim is still an activation**: immediately before this nonce,
@@ -461,8 +455,10 @@ pair still owns claim and nonce (or none competes), post/verify
 activation); else leave the successor claim; then take the
 already-claimed/Discover fallback (A0-T stops).
 
-Cite trusted forced-handoff evidence in the issue digest or resume report's
-`Authoritative by` field.
+Always use the assigned pair verbatim: never invent `claimed-by` or reuse the
+displaced `{claim-id}`. A native agent-id that is not the assigned value fails
+later heartbeat or F2/F3 checks. Cite trusted forced-handoff evidence in the
+issue digest or resume report's `Authoritative by` field.
 
 **The successor claim is sticky**, not a one-shot unlock: forced-handoff
 re-derives the adopted pair as the active claim on every resolution
@@ -479,20 +475,14 @@ supersedes: none` with a self-chosen pair).
 
 A different case from the sticky-successor escape above:
 **this session's own** live, non-stale claim recorded the wrong
-`branch`. Neither existing mechanism fixes it: **supersede**
-([Claim-state parsing](#claim-state-parsing) rule 4) only activates
-when the current claim is already stale, so a live claim's supersede
-post is silently invalid; **heartbeat** (rule 3.5) treats a
-different-`{branch}` re-post as anomalous and never updates the
-branch.
-
-Use **release-then-fresh** instead: post `unclaimed-by` for your own
-pair (safe — you provably hold it, [Claim verification](#claim-verification)),
-then a fresh `claimed-by supersedes: none` with a new `{claim-id}` and
-the corrected `branch`, then a fresh
-[activation-nonce](#activation-nonce-format), verified the same way.
-Propagate the new `{claim-id}` into every later call (disposition
-replies, watermarks, F2/F3, cleanup) — the old one is dead once
+`branch`. Neither **supersede** ([Claim-state parsing](#claim-state-parsing)
+rule 4) nor **heartbeat** (rule 3.5) corrects it, so use
+**release-then-fresh**: post `unclaimed-by` for your own pair (safe — you
+provably hold it, [Claim verification](#claim-verification)), then a fresh
+`claimed-by supersedes: none` with a new `{claim-id}` and the corrected
+`branch`, then a fresh [activation-nonce](#activation-nonce-format), verified
+the same way. Propagate the new `{claim-id}` into every later call
+(disposition replies, watermarks, F2/F3, cleanup) — the old one is dead once
 released. On an open issue, re-verify no competing claim landed in the
 release-to-fresh gap before posting. If one exists, stop and wait;
 do not post the fresh claim or continue. This is not a risk on a
