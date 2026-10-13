@@ -1214,10 +1214,12 @@ identify its old claims, and step 1 treats them as not its own.
    several files. A claim is own only when its `agentId` equals this session's
    session-suffixed agent-id. If the session cannot determine that id, every
    claim is not own. Claims that are not own are not dispatched again, and they
-   are reported to the operator. A worktree whose token record is missing or
-   malformed is reported to the operator too, not skipped, because the claim
-   contract treats that state as fail-closed. F4 removes the linked worktree,
-   with its admin directory and this token file, before it posts the final
+   are reported to the operator. A worktree that has claim evidence, such as a
+   claim lock or an `issue/<number>-<slug>` branch, but no readable token record
+   is reported to the operator rather than skipped, because the claim contract
+   treats that state as fail-closed. A worktree with no claim evidence, such as
+   the primary checkout, is not reported. F4 removes the linked worktree, with
+   its admin directory and this token file, before it posts the final
    `unclaimed-by` marker. So a claim whose F4 removed its linked worktree has no
    token file there. A record in the primary worktree's directory can survive
    F4. Keep at most one record per claim-id: prefer the linked worktree's
