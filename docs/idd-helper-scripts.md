@@ -2944,7 +2944,7 @@ The adopted helper boundaries are intentionally narrow:
   row for the current HEAD; the manual E4 `**Rejected**` stays its
   route. The helper does not track that manual reply, so it keeps
   reporting the comment after one is posted: check `pre-merge-readiness`
-  `missingRegularComments` before replying. An
+  `dispositionEvidence.missingRegularComments` before replying. An
   `unrecognized-notice-body` entry for a comment the gate does not list
   (one it already paired through its generic pairing) is expected and
   harmless.

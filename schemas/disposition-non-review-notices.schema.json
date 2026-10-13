@@ -110,7 +110,7 @@
           },
           "reason": {
             "type": "string",
-            "description": "Reason the bot comment was not selected for disposition: `already-dispositioned`, `coderabbit-review-in-progress`, `summary-resolved-no-actionable-comments`, `codex-review-running` (a Codex status row for the current HEAD that is not Completed), `codex-no-result-for-head` (a Codex status table with no row for the current HEAD, an unparseable table or no table, or a Codex no-find result for an older HEAD; reported, never dispositioned, and still reported after a manual reply, which the helper does not track), or `unrecognized-notice-body` (any other comment from a bot the readiness gate counts)."
+            "description": "Reason the bot comment was not selected for disposition: `already-dispositioned`, `coderabbit-review-in-progress`, `summary-resolved-no-actionable-comments`, `codex-review-running` (a Codex status row for the current HEAD that is not Completed), `codex-no-result-for-head` (a Codex status table with no row for the current HEAD, an unparseable table or no table, or a Codex no-find result for an older HEAD; reported, never dispositioned, and still reported after a manual reply, which the helper does not track; check `dispositionEvidence.missingRegularComments` in the readiness output), or `unrecognized-notice-body` (any other comment from a bot the readiness gate counts)."
           }
         }
       }
