@@ -9,6 +9,7 @@
 // this issue migrates -- see the issue's B2 plan for the research this is
 // built from. `gh` invocation is an implementation detail of this module;
 // domain helpers never see it.
+import { execFileSync } from 'node:child_process';
 import {
   GH_TEXT_LOOP_OPTIONS,
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
@@ -3969,25 +3970,80 @@ function formatTraversalGraphqlErrors(errors) {
  * or `..`, so both halves are safe to put in a REST path unencoded. */
 const GITHUB_REPOSITORY_VALUE =
   /^([A-Za-z0-9_-]+)\/(?!\.{1,2}$)([A-Za-z0-9._-]+)$/;
+/** The `owner/repo` a git remote URL names, or `null`. Accepts only URL forms
+ * (`https`, `http`, `ssh`, `git`, `git+ssh`, or scp-like `[user@]host:path`):
+ * a filesystem path or `file:` URL names no repository identity here. */
+export function ownerRepoFromRemoteUrl(remote) {
+  const text = remote.trim();
+  let path;
+  if (text.includes('://')) {
+    let url;
+    try {
+      url = new URL(text);
+    } catch {
+      return null;
+    }
+    const schemes = ['https:', 'http:', 'ssh:', 'git:', 'git+ssh:'];
+    if (!schemes.includes(url.protocol)) return null;
+    path = url.pathname;
+  } else {
+    const scp = /^(?:[^@/\s]+@)?[^:/\s]+:(.+)$/.exec(text);
+    if (!scp) return null;
+    path = scp[1] ?? '';
+  }
+  const parts = path.split('/').filter((part) => part !== '');
+  if (parts.length < 2) return null;
+  const owner = parts[parts.length - 2] ?? '';
+  const repo = (parts[parts.length - 1] ?? '').replace(/\.git$/u, '');
+  return owner && repo ? { owner, repo } : null;
+}
+/** True when the checkout's `origin` remote names `owner/repo`, compared case-
+ * insensitively. An unreadable origin, a missing remote, or a remote that is not
+ * a repository URL is false: the caller then uses `gh` (fail closed). */
+function originNamesRepository(owner, repo) {
+  let remote;
+  try {
+    remote = execFileSync('git', ['remote', 'get-url', 'origin'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 10_000,
+    });
+  } catch {
+    return false;
+  }
+  const origin = ownerRepoFromRemoteUrl(remote);
+  return (
+    origin !== null &&
+    origin.owner.toLowerCase() === owner.toLowerCase() &&
+    origin.repo.toLowerCase() === repo.toLowerCase()
+  );
+}
 /** Resolve the current repository's owner/name, the shared resolver every
  * migrated helper reaches through the adapter instead of spelling the lookup
  * itself (#3715).
  *
- * #4110: inside GitHub Actions (`GITHUB_ACTIONS=true`) a valid
- * `GITHUB_REPOSITORY` is used with no `gh` process. Actions sets it in every
- * job, and an uncaught `gh repo view` timeout failed the advisory job on
- * setup.ubuntu#204 (observed 2026-10-08). Outside Actions the variable is
- * ignored, so a local run keeps the `gh repo view` lookup even when a shell
- * exports it: the write helpers (`post-idd-marker` and others) must not follow
- * an exported variable into another repository. A non-empty `GH_REPO` also
- * keeps the lookup unchanged, because an operator who sets it on purpose must
- * not be overridden; an empty `GH_REPO` counts as unset. Any other value falls
- * back to that lookup. */
+ * #4110: the shortcut applies only inside GitHub Actions (`GITHUB_ACTIONS` is
+ * `true`), and only when the checkout's `origin` remote names the same
+ * owner/repo as a valid `GITHUB_REPOSITORY` (case-insensitively). Actions sets
+ * the variable in every job, and an uncaught `gh repo view` timeout failed the
+ * advisory job on setup.ubuntu#204 (observed 2026-10-08). The origin check
+ * keeps a checkout of another repository resolving to its own remote. In every
+ * other case, including an unreadable origin, the `gh repo view` lookup runs.
+ * A local run therefore keeps that lookup even when a shell exports the
+ * variable, so the write helpers (`post-idd-marker` and others) cannot follow
+ * an exported value into another repository. A non-empty `GH_REPO` also keeps
+ * the lookup, because an operator who sets it on purpose must not be
+ * overridden; an empty `GH_REPO` counts as unset. */
 export function resolveCurrentGithubRepository() {
   const match = GITHUB_REPOSITORY_VALUE.exec(
     process.env.GITHUB_REPOSITORY ?? '',
   );
-  if (process.env.GITHUB_ACTIONS === 'true' && !process.env.GH_REPO && match) {
+  if (
+    process.env.GITHUB_ACTIONS === 'true' &&
+    !process.env.GH_REPO &&
+    match &&
+    originNamesRepository(match[1] ?? '', match[2] ?? '')
+  ) {
     return { owner: match[1] ?? '', repo: match[2] ?? '' };
   }
   return resolveGhOwnerRepo({}, GH_TEXT_LOOP_OPTIONS);

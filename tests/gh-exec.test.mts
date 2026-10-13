@@ -44,7 +44,10 @@ import {
   setGithubApiTelemetryPolicyForTests,
 } from '../src/scripts/github-api-observation.mts';
 import { classifyHelperError } from '../src/scripts/helper-cli-runner.mts';
-import { resolveCurrentGithubRepository } from '../src/scripts/provider-adapter-github.mts';
+import {
+  ownerRepoFromRemoteUrl,
+  resolveCurrentGithubRepository,
+} from '../src/scripts/provider-adapter-github.mts';
 import { pinLoadControlOff, stubExecutable } from './test-utils.mts';
 
 // This source repository's own config enables load control (#3702), and the
@@ -2851,36 +2854,158 @@ function withRepositoryVariables<T>(
   }
 }
 
-test('resolveCurrentGithubRepository: a valid GITHUB_REPOSITORY is used with no gh process inside Actions (#4110)', () => {
+// #4110: the resolver's origin check runs `git remote get-url origin` in the
+// working directory. Each case runs in a throwaway checkout whose origin is
+// exactly the remote the case names; `null` leaves the checkout without one.
+function withGitCheckout<T>(remote: string | null, run: () => T): T {
+  const checkout = mkdtempSync(join(tmpdir(), 'idd-gh-exec-checkout-'));
+  const previous = process.cwd();
+  try {
+    execFileSync('git', ['init', '-q', checkout], { stdio: 'ignore' });
+    if (remote !== null) {
+      execFileSync('git', ['-C', checkout, 'remote', 'add', 'origin', remote], {
+        stdio: 'ignore',
+      });
+    }
+    process.chdir(checkout);
+    return run();
+  } finally {
+    process.chdir(previous);
+    rmSync(checkout, { recursive: true, force: true });
+  }
+}
+
+// A directory that is not a git repository at all: its origin cannot be read.
+function withPlainDirectory<T>(run: () => T): T {
+  const directory = mkdtempSync(join(tmpdir(), 'idd-gh-exec-plain-'));
+  const previous = process.cwd();
+  try {
+    process.chdir(directory);
+    return run();
+  } finally {
+    process.chdir(previous);
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+test('resolveCurrentGithubRepository: inside Actions a GITHUB_REPOSITORY that matches origin is used with no gh process (#4110)', () => {
   withRepositoryVariables(
     { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'o/r' },
     () => {
-      // A stub that fails: a spawn here would throw, so the variable must win
-      // before any gh process starts.
-      withRepoViewStub(
-        { exit: 1, stderr: 'gh: repo view failed' },
-        (spawned) => {
-          assert.deepEqual(resolveCurrentGithubRepository(), {
-            owner: 'o',
-            repo: 'r',
-          });
-          assert.deepEqual(spawned(), []);
-        },
-      );
+      // The origin matches case-insensitively. A stub that fails would throw,
+      // so the variable must win before any gh process starts.
+      withGitCheckout('https://github.com/O/R.git', () => {
+        withRepoViewStub(
+          { exit: 1, stderr: 'gh: repo view failed' },
+          (spawned) => {
+            assert.deepEqual(resolveCurrentGithubRepository(), {
+              owner: 'o',
+              repo: 'r',
+            });
+            assert.deepEqual(spawned(), []);
+          },
+        );
+      });
     },
   );
 });
 
-test('resolveCurrentGithubRepository: outside GitHub Actions the variable is ignored and gh answers (#4110)', () => {
-  // GITHUB_ACTIONS unset: a local run. An exported variable must not retarget
-  // the write helpers, so the gh stub answers.
-  withRepositoryVariables({ GITHUB_REPOSITORY: 'env/variable' }, () => {
-    withRepoViewStub({ stdout: repoViewBody('from', 'gh') }, (spawned) => {
-      assert.deepEqual(resolveCurrentGithubRepository(), {
-        owner: 'from',
-        repo: 'gh',
+test('resolveCurrentGithubRepository: inside Actions a checkout of another repository takes the gh lookup (#4110)', () => {
+  withRepositoryVariables(
+    { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'o/r' },
+    () => {
+      withGitCheckout('https://github.com/other/repo.git', () => {
+        withRepoViewStub(
+          { stdout: repoViewBody('checked', 'out') },
+          (spawned) => {
+            assert.deepEqual(resolveCurrentGithubRepository(), {
+              owner: 'checked',
+              repo: 'out',
+            });
+            assert.deepEqual(spawned(), [REPO_VIEW_ARGV]);
+          },
+        );
       });
-      assert.deepEqual(spawned(), [REPO_VIEW_ARGV]);
+    },
+  );
+});
+
+test('resolveCurrentGithubRepository: inside Actions a checkout with no origin takes the gh lookup (#4110)', () => {
+  withRepositoryVariables(
+    { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'o/r' },
+    () => {
+      withGitCheckout(null, () => {
+        withRepoViewStub(
+          { stdout: repoViewBody('no', 'origin') },
+          (spawned) => {
+            assert.deepEqual(resolveCurrentGithubRepository(), {
+              owner: 'no',
+              repo: 'origin',
+            });
+            assert.deepEqual(spawned(), [REPO_VIEW_ARGV]);
+          },
+        );
+      });
+    },
+  );
+});
+
+test('resolveCurrentGithubRepository: inside Actions an unreadable origin takes the gh lookup, fail closed (#4110)', () => {
+  withRepositoryVariables(
+    { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'o/r' },
+    () => {
+      withPlainDirectory(() => {
+        withRepoViewStub(
+          { stdout: repoViewBody('not', 'a-repo') },
+          (spawned) => {
+            assert.deepEqual(resolveCurrentGithubRepository(), {
+              owner: 'not',
+              repo: 'a-repo',
+            });
+            assert.deepEqual(spawned(), [REPO_VIEW_ARGV]);
+          },
+        );
+      });
+    },
+  );
+});
+
+test('ownerRepoFromRemoteUrl: names the owner and repository of URL-shaped remotes only (#4110)', () => {
+  assert.deepEqual(ownerRepoFromRemoteUrl('https://github.com/o/r.git'), {
+    owner: 'o',
+    repo: 'r',
+  });
+  assert.deepEqual(ownerRepoFromRemoteUrl('https://github.com/o/r\n'), {
+    owner: 'o',
+    repo: 'r',
+  });
+  assert.deepEqual(ownerRepoFromRemoteUrl('git@github.com:o/r.git'), {
+    owner: 'o',
+    repo: 'r',
+  });
+  assert.deepEqual(ownerRepoFromRemoteUrl('ssh://git@github.com/o/r'), {
+    owner: 'o',
+    repo: 'r',
+  });
+  assert.equal(ownerRepoFromRemoteUrl('/srv/git/o/r.git'), null);
+  assert.equal(ownerRepoFromRemoteUrl('file:///srv/git/o/r.git'), null);
+  assert.equal(ownerRepoFromRemoteUrl('https://github.com/o'), null);
+  assert.equal(ownerRepoFromRemoteUrl(''), null);
+});
+
+test('resolveCurrentGithubRepository: outside GitHub Actions the variable is ignored, even when origin matches (#4110)', () => {
+  // GITHUB_ACTIONS unset: a local run. The origin matches on purpose, so only
+  // the missing GITHUB_ACTIONS gate can send this case to gh. An exported
+  // variable must not retarget the write helpers, so the gh stub answers.
+  withRepositoryVariables({ GITHUB_REPOSITORY: 'env/variable' }, () => {
+    withGitCheckout('https://github.com/env/variable.git', () => {
+      withRepoViewStub({ stdout: repoViewBody('from', 'gh') }, (spawned) => {
+        assert.deepEqual(resolveCurrentGithubRepository(), {
+          owner: 'from',
+          repo: 'gh',
+        });
+        assert.deepEqual(spawned(), [REPO_VIEW_ARGV]);
+      });
     });
   });
 });
@@ -2889,16 +3014,18 @@ test('resolveCurrentGithubRepository: an Enterprise Managed User owner with an u
   withRepositoryVariables(
     { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'my_company/r' },
     () => {
-      withRepoViewStub(
-        { exit: 1, stderr: 'gh: repo view failed' },
-        (spawned) => {
-          assert.deepEqual(resolveCurrentGithubRepository(), {
-            owner: 'my_company',
-            repo: 'r',
-          });
-          assert.deepEqual(spawned(), []);
-        },
-      );
+      withGitCheckout('https://github.com/my_company/r.git', () => {
+        withRepoViewStub(
+          { exit: 1, stderr: 'gh: repo view failed' },
+          (spawned) => {
+            assert.deepEqual(resolveCurrentGithubRepository(), {
+              owner: 'my_company',
+              repo: 'r',
+            });
+            assert.deepEqual(spawned(), []);
+          },
+        );
+      });
     },
   );
 });
@@ -2963,16 +3090,18 @@ test('resolveCurrentGithubRepository: an empty GH_REPO counts as unset, so the v
   withRepositoryVariables(
     { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'env/variable', GH_REPO: '' },
     () => {
-      withRepoViewStub(
-        { exit: 1, stderr: 'gh: repo view failed' },
-        (spawned) => {
-          assert.deepEqual(resolveCurrentGithubRepository(), {
-            owner: 'env',
-            repo: 'variable',
-          });
-          assert.deepEqual(spawned(), []);
-        },
-      );
+      withGitCheckout('https://github.com/env/variable.git', () => {
+        withRepoViewStub(
+          { exit: 1, stderr: 'gh: repo view failed' },
+          (spawned) => {
+            assert.deepEqual(resolveCurrentGithubRepository(), {
+              owner: 'env',
+              repo: 'variable',
+            });
+            assert.deepEqual(spawned(), []);
+          },
+        );
+      });
     },
   );
 });

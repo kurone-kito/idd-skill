@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -218,8 +219,21 @@ test('collectFromGitHub without deps takes the repository from the shared resolv
     const realPort = createFakeProviderAdapter(baseFixture());
     const created: string[] = [];
     // The production wiring inside Actions: no deps, so the default resolver
-    // answers from GITHUB_REPOSITORY with no gh process. The outer values are
-    // restored.
+    // answers from GITHUB_REPOSITORY with no gh process, because this checkout's
+    // origin names the same repository. The outer values are restored.
+    execFileSync('git', ['init', '-q', process.cwd()], { stdio: 'ignore' });
+    execFileSync(
+      'git',
+      [
+        '-C',
+        process.cwd(),
+        'remote',
+        'add',
+        'origin',
+        'https://github.com/env/variable.git',
+      ],
+      { stdio: 'ignore' },
+    );
     const saved = {
       GITHUB_ACTIONS: process.env.GITHUB_ACTIONS,
       GITHUB_REPOSITORY: process.env.GITHUB_REPOSITORY,
