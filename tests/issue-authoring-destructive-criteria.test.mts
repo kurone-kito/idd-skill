@@ -6,9 +6,10 @@ import { fileURLToPath } from 'node:url';
 
 // Guards the "Destructive operations" rule for drafted issues: the contract
 // section, the completed-draft critique checklist item, the drafting-pattern
-// example, and the skill's output checklist bullet. The generated `.claude`
-// mirror is compared byte-for-byte by consistency.test.mts, so this file reads
-// only the canonical bundle.
+// example, the skill's output checklist bullet, and the repo-root maintenance
+// copy's section and checklist item. The generated `.claude`
+// mirror is compared byte-for-byte by consistency.test.mts; this file reads the
+// canonical bundle and the repo-root maintenance copy.
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BUNDLE = join(REPO_ROOT, 'skills/issue-authoring');
@@ -125,5 +126,26 @@ test('skill output checklist has a bullet pointing to the Destructive operations
   assert.match(
     flat(checklist),
     /- For a draft that deletes, overwrites, recursively removes, records file ownership, or writes through a possible link, .*\(references\/contract\.md#destructive-operations\)/u,
+  );
+});
+
+test('repo-root maintenance copy names the Destructive operations section, its six cases, and its checklist item', () => {
+  const maintenance = readFileSync(
+    join(REPO_ROOT, 'docs/issue-authoring-skill.md'),
+    'utf8',
+  );
+  const section = sectionUnder(maintenance, '## Destructive operations');
+  const items = [...section.matchAll(/^(\d+)\. \*\*([^*]+)\.\*\*/gmu)];
+  assert.deepEqual(
+    items.map((match) => Number(match[1])),
+    [1, 2, 3, 4, 5, 6],
+  );
+  assert.deepEqual(
+    items.map((match) => match[2]),
+    CASE_LABELS,
+  );
+  assert.match(
+    flat(maintenance),
+    /- a draft that deletes, overwrites, recursively removes, records ownership of a file, or writes to a path that could be a link gives each such operation an acceptance criterion for each of the six cases under \[Destructive operations\]\(#destructive-operations\)/u,
   );
 });
