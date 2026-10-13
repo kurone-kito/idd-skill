@@ -1800,7 +1800,14 @@ only approval boundary.
   capability-checked create-with-label operation that creates the issue with
   the authoring label atomically and carries an exact hidden publication token
   for target, anchor, set, and session. If the target runtime cannot provide
-  that operation, stop before creation. Before the create, generate the
+  that operation, stop before creation. For a standalone orphan, the
+  publication capability is `idd-publish-authoring-hold` (`node
+  scripts/publish-authoring-hold.mjs` in this source repository). It runs
+  the steps below in order, from the journal check to `state=member`. It
+  takes `--review-result <path>`: a JSON object with `"completed": true`,
+  whose optional `findings` entries must each be `fixed` or `rejected`. It
+  is a dry run without `--apply`, and it refuses `--shape child` for now.
+  Before the create, generate the
   opaque `target` id and token for both markers below -- the new issue's
   own number is not yet known. `anchor` in **both** markers depends on
   the new issue's role in the set, not on a blanket "not yet known"
