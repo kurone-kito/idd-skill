@@ -1345,28 +1345,30 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    the time of the append, then append it. If no draft is found, verify the
    terminal outcome from live GitHub state, build the record as the
    [worker final report store](idd-helper-scripts.md#worker-final-report-store)
-   describes, and append it the same way, unless its outcome is `held` or it has
-   no terminal phase from live state: a held claim, or a claim released without
-   a merge or handoff, has no live source for a terminal phase, so nothing is
-   appended and step 5 reports it. Before any append, validate the record
-   against `schemas/worker-report.schema.json` first, then append it with the
-   profile-selected `idd-worker-report append --file <path>` command. After a
-   successful append for a matched worker, dispose of the worker as the table's
-   row says and mark its roster entry `disposed`, as section 5 of the
-   orchestrator phase file describes. Map `outcome` as the store describes:
-   `merged` for a merged pull request, `abandoned` for a closed unmerged one,
-   `held` for a claim still held with no handoff summary on the issue,
-   `handed-off` when a handoff summary carrying this claim id was posted,
-   whether or not the claim has since been released, and `failed` otherwise. Set
-   `terminalPhase` to `F4` for a claim released after a merge, and to `F2.5`
-   when a handoff summary carrying this claim id is posted on the issue, because
-   the release happens only at those phases. Record the recovery in `frictions`,
-   with its `phase` (F4 or F2.5), a non-empty `summary`, and
-   `docs/idd-workflow.md` in `file`, because that is the instruction path the
-   recovery followed. If verification or the append fails for a matched worker,
-   keep it addressable, mark it `stalled`, and follow the worker-specific
-   recovery in the fan-out variant, as section 5 of the orchestrator phase file
-   describes. A failed append for a released claim is reported in step 5.
+   describes, with `harness` set to the slug the store lists for this session's
+   own harness, or `other` when none matches, and append it the same way, unless
+   its outcome is `held` or it has no terminal phase from live state: a held
+   claim, or a claim released without a merge or handoff, has no live source for
+   a terminal phase, so nothing is appended and step 5 reports it. Before any
+   append, validate the record against `schemas/worker-report.schema.json`
+   first, then append it with the profile-selected `idd-worker-report append
+   --file <path>` command. After a successful append for a matched worker,
+   dispose of the worker as the table's row says and mark its roster entry
+   `disposed`, as section 5 of the orchestrator phase file describes. Map
+   `outcome` as the store describes: `merged` for a merged pull request,
+   `abandoned` for a closed unmerged one, `held` for a claim still held with no
+   handoff summary on the issue, `handed-off` when a handoff summary carrying
+   this claim id was posted, whether or not the claim has since been released,
+   and `failed` otherwise. Set `terminalPhase` to `F4` for a claim released
+   after a merge, and to `F2.5` when a handoff summary carrying this claim id is
+   posted on the issue, because the release happens only at those phases. Record
+   the recovery in `frictions`, with its `phase` (F4 or F2.5), a non-empty
+   `summary`, and `docs/idd-workflow.md` in `file`, because that is the
+   instruction path the recovery followed. If verification or the append fails
+   for a matched worker, keep it addressable, mark it `stalled`, and follow the
+   worker-specific recovery in the fan-out variant, as section 5 of the
+   orchestrator phase file describes. A failed append for a released claim is
+   reported in step 5.
 5. **Report the remainder.** An own claim that reached step 3, other than a
    released claim, and has no matching worker is reported to the operator, and
    so is a matched finished worker that step 4 did not append because its
