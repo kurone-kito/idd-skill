@@ -2942,9 +2942,12 @@ The adopted helper boundaries are intentionally narrow:
   or a regular Copilot or Codex comment). A `codex-no-result-for-head`
   comment is reported, not dispositioned, because Codex can still add a
   row for the current HEAD; the manual E4 `**Rejected**` stays its
-  route. An `unrecognized-notice-body` entry for a comment the gate
-  does not list (one it already paired through its generic pairing) is
-  expected and harmless.
+  route. The helper does not track that manual reply, so it keeps
+  reporting the comment after one is posted: check `pre-merge-readiness`
+  `missingRegularComments` before replying. An
+  `unrecognized-notice-body` entry for a comment the gate does not list
+  (one it already paired through its generic pairing) is expected and
+  harmless.
 - **Idempotent**: per advisory bot, existing trusted
   `isNonReviewNoticeDisposition` comments naming that bot already cover
   that many of its notices, so a re-run posts nothing new.
