@@ -1315,9 +1315,10 @@ identify its old claims, and step 1 treats them as not its own.
    prefix that the fan-out variant already requires. If a draft is found, check
    that its `issue` and `claimId` match the claim, and that its `workerHandle`
    matches the listed handle when the claim has a matched worker. A draft that
-   matches the claim but has no listed worker is appended under its own
-   `workerHandle`. Do not append a draft that does not match. Then verify its
-   outcome, `pullRequest`, and `terminalPhase` against live GitHub state, set
+   matches the claim but has no listed worker is appended with its
+   `workerHandle` replaced by the claim id, because the listing supplies no
+   handle. Do not append a draft that does not match. Then verify its outcome,
+   `pullRequest`, and `terminalPhase` against live GitHub state, set
    `verifiedAt` to that check and `recordedAt` to the time of the append, then
    append it. If no draft is found, verify the terminal outcome from live GitHub
    state, build the record as the
