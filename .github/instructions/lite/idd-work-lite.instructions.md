@@ -196,8 +196,8 @@ If the issue is a decision-transcription issue (it records or restates a prior
 human decision whose rationale asserts a checkable fact about shipped behavior),
 verify that fact against the prior change's actual code or docs before drafting
 the plan. If the prior change or the fact cannot be verified, stop and hold,
-with the evidence (file, line, or excerpt, or why it was inconclusive) in the
-hold comment, until a maintainer addendum resolves it.
+with the primary-source evidence (file, line, or excerpt, or why it was
+inconclusive) in the hold comment, until a maintainer addendum resolves it.
 
 ## B2.2 — Example field-name verification
 
