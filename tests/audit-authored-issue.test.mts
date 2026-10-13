@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   auditAuthoredIssue,
+  EFFORT_CANDIDATE_FILE_LIMITS,
   readCleanupEvidenceFile,
 } from '../src/scripts/audit-authored-issue.mts';
 import {
@@ -422,10 +423,12 @@ function childBody({
   score = 5,
   extraMarkers = '',
   candidateFiles = ['`src/scripts/example.mts`'],
+  effort = null,
 }: {
   score?: number;
   extraMarkers?: string;
   candidateFiles?: readonly string[] | null;
+  effort?: string | null;
 } = {}): string {
   return [
     '# Add a sample child feature',
@@ -453,6 +456,7 @@ function childBody({
     extraMarkers,
     '',
     suitabilityFooter(score),
+    ...(effort === null ? [] : ['', effortFooter(effort)]),
   ].join('\n');
 }
 
@@ -2498,6 +2502,151 @@ test('candidate-files-not-empty is not applicable under --expect-bucket (bucket-
     expectedAuthoringBucket: 'needs-decision',
   });
   assert.equal(findingResult(report, 'candidate-files-not-empty'), 'pass');
+});
+
+// --- effort-candidate-file-limit (#4130) ---
+
+function candidatePaths(count: number): string[] {
+  return Array.from(
+    { length: count },
+    (_, index) => `\`src/scripts/example-${index + 1}.mts\``,
+  );
+}
+
+function effortLimitResult(
+  body: string,
+  options: Partial<Parameters<typeof auditAuthoredIssue>[1]> = {},
+): 'pass' | 'fail' {
+  return findingResult(
+    auditAuthoredIssue(body, { shape: 'child', ...options }),
+    'effort-candidate-file-limit',
+  );
+}
+
+test('effort-candidate-file-limit passes an S child with 3 candidate files and fails it with 4', () => {
+  const within = childBody({ effort: 'S', candidateFiles: candidatePaths(3) });
+  const over = childBody({ effort: 'S', candidateFiles: candidatePaths(4) });
+  assert.equal(effortLimitResult(within), 'pass');
+  assert.equal(effortLimitResult(over), 'fail');
+  // The fixture's own effort footer stays coherent, so only the new rule fails.
+  assert.equal(
+    findingResult(
+      auditAuthoredIssue(over, { shape: 'child' }),
+      'effort-visible-line-agreement',
+    ),
+    'pass',
+  );
+});
+
+test('effort-candidate-file-limit passes an M child with 8 candidate files and fails it with 9', () => {
+  assert.equal(
+    effortLimitResult(
+      childBody({ effort: 'M', candidateFiles: candidatePaths(8) }),
+    ),
+    'pass',
+  );
+  const report = auditAuthoredIssue(
+    childBody({ effort: 'M', candidateFiles: candidatePaths(9) }),
+    { shape: 'child' },
+  );
+  const finding = report.findings.find(
+    (entry) => entry.id === 'effort-candidate-file-limit',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(
+    finding?.detail ?? '',
+    /9 candidate files exceeds the limit of 8/,
+  );
+  assert.equal(report.passed, false);
+});
+
+test('effort-candidate-file-limit passes an over-limit M child that carries a Split out of line', () => {
+  for (const line of [
+    'Split out of #12.',
+    '- Split out of kurone-kito/idd-skill#12',
+    '_Split out of #12_',
+  ]) {
+    const body = childBody({
+      effort: 'M',
+      candidateFiles: candidatePaths(9),
+      extraMarkers: line,
+    });
+    assert.equal(effortLimitResult(body), 'pass', line);
+  }
+});
+
+test('effort-candidate-file-limit ignores a Split out of mention in code, an HTML comment, or mid-sentence', () => {
+  for (const line of [
+    '```text\nSplit out of #12\n```',
+    '`Split out of #12`',
+    '<!-- Split out of #12 -->',
+    'This draft was Split out of #12 earlier.',
+  ]) {
+    const body = childBody({
+      effort: 'M',
+      candidateFiles: candidatePaths(9),
+      extraMarkers: line,
+    });
+    assert.equal(effortLimitResult(body), 'fail', line);
+  }
+});
+
+test('effort-candidate-file-limit does not check an L child, a child with no effort footer, the orphan shape, or a bucket audit', () => {
+  assert.equal(
+    effortLimitResult(
+      childBody({ effort: 'L', candidateFiles: candidatePaths(12) }),
+    ),
+    'pass',
+  );
+  assert.equal(
+    effortLimitResult(childBody({ candidateFiles: candidatePaths(12) })),
+    'pass',
+  );
+  assert.equal(
+    effortLimitResult(
+      childBody({ effort: 'S', candidateFiles: candidatePaths(12) }),
+      { shape: 'orphan' },
+    ),
+    'pass',
+  );
+  assert.equal(
+    effortLimitResult(
+      childBody({ effort: 'S', candidateFiles: candidatePaths(12) }),
+      { expectedAuthoringBucket: 'needs-decision' },
+    ),
+    'pass',
+  );
+});
+
+test('effort-candidate-file-limit values match the contract threshold table (single source)', () => {
+  const contract = readFileSync(
+    join(REPO_ROOT, 'skills/issue-authoring/references/contract.md'),
+    'utf8',
+  );
+  const anchor = contract.indexOf('**Over-scope split threshold.**');
+  assert.ok(anchor >= 0, 'contract.md is missing the threshold paragraph');
+  const lines = contract.slice(anchor).split('\n');
+  const tableStart = lines.findIndex((line) =>
+    line.trimStart().startsWith('|'),
+  );
+  assert.ok(tableStart >= 0, 'contract.md is missing the threshold table');
+  const rows: Record<string, string> = {};
+  for (const line of lines.slice(tableStart + 2)) {
+    if (!line.trimStart().startsWith('|')) {
+      break;
+    }
+    const cells = line
+      .split('|')
+      .slice(1, -1)
+      .map((cell) => cell.replace(/[`*]/g, '').trim());
+    rows[cells[0]] = cells[1];
+  }
+  assert.deepEqual(Object.keys(rows).sort(), ['L', 'M', 'S']);
+  assert.equal(rows.L, 'not checked');
+  assert.deepEqual(
+    { S: Number(rows.S), M: Number(rows.M) },
+    { ...EFFORT_CANDIDATE_FILE_LIMITS },
+  );
 });
 
 // --- suitability-visible-line-agreement ---

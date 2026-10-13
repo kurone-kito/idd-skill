@@ -831,7 +831,10 @@ the section parsing to zero paths -- heading missing or present but
 empty -- disqualifies it from `ready`, unless it also carries an
 `authoring-bucket: needs-decision`/`blocked-by-human` marker or a
 suitability score of `1` (`audit-authored-issue`'s
-`candidate-files-not-empty` check).
+`candidate-files-not-empty` check). A child with an `S` or `M` effort
+hint must also stay within the
+[over-scope split threshold](#effort-hint)
+(`effort-candidate-file-limit`).
 
 - List each candidate file path inside backticks, one path (or one
   bullet) per line — for example `` - `src/scripts/idd-onboard.mts` ``.
@@ -1337,8 +1340,11 @@ still passes), the equivalent one-directional check for
 `authoring-bucket: needs-decision` and the configured
 `needsDecisionLabelName` label, markerPrefix consistency across every
 authoring marker, the declared shape's required section headings, the
-roadmap-id/blocked-by dependency-marker rules, and visible/hidden line
-agreement for the suitability and effort footers — so a weak model does
+roadmap-id/blocked-by dependency-marker rules, visible/hidden line
+agreement for the suitability and effort footers, and a child's
+candidate-file count against the
+[over-scope split threshold](#effort-hint) for its `S`/`M` effort hint
+(`effort-candidate-file-limit`) — so a weak model does
 not have to hold every rule in its head at once while drafting.
 It also checks every live defer-source comment against the shared
 defined-value set and requires its single `Refs` origin. For
@@ -1627,6 +1633,25 @@ likely bundles multiple intents. Return to
 [Decompose and Draft](#2-decompose-and-draft) and split at intent level
 instead of publishing one oversized issue labeled `L`.
 
+**Over-scope split threshold.** A child draft whose effort hint is `S`
+or `M` must not list more candidate files than its row below allows.
+Split an over-threshold draft into a held roadmap with children before
+publication, so no loop session claims an oversized issue. The count is
+the number of distinct paths the `## Candidate files` parser extracts
+(see [Candidate files format](#candidate-files-format)), so keep notes
+out of backticks. A body that is already the product of a split is
+exempt when it carries a plain-text `Split out of #<n>` line (not inside
+backticks or an HTML comment). The rule checks only the child shape, and
+only when a coherent effort marker is present. `audit-authored-issue`'s
+`effort-candidate-file-limit` check enforces this table, which is the
+single source of the values.
+
+| Effort | Maximum candidate files |
+| ------ | ----------------------- |
+| `S`    | 3                       |
+| `M`    | 8                       |
+| `L`    | not checked             |
+
 The hint is recorded as a **footer at the end of the issue body** — a
 visible line paired with a hidden, prefix-aware machine marker, beside
 the autopilot-suitability footer:
@@ -1654,7 +1679,9 @@ Binding rules:
   optional desync rules and **before** the lowest-issue-number tie-break.
   It never skips, gates, crosses a score band, or bypasses the A4.5/A5
   gates, and a large (`L`) issue stays fully claimable when it is the only
-  ready work.
+  ready work. This applies to Discover selection; the one publish-time
+  exception is the
+  [over-scope split threshold](#effort-hint) lint for `S`/`M` children.
 - **Fail-safe on absence.** A missing, non-`S|M|L`, or conflicting
   marker means "no effort hint": it sorts as the neutral middle, as-if
   `M`, per `idd-discover.instructions.md` A4 Step 2. Pre-existing issues
