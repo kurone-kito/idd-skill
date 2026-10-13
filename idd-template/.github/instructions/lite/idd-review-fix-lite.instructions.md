@@ -1,5 +1,8 @@
 # IDD — Review Fix Phase (Lite) (E9–E15)
 
+`{default-branch}`: the GitHub default branch. `{development-branch}`: the base
+branch (`developmentBranch`, or the default branch when absent).
+
 Lite helper profile; claimed open PRs only. `instructions-only` uses the
 standard file.
 
@@ -42,7 +45,7 @@ severity or decides Accept/Reject.
 - E11 merge conflicts cannot be resolved cleanly, or the PR has
   unresolved review threads, unreplied comments, or a
   `CHANGES_REQUESTED` reviewer and no explicit operator confirmation
-  exists to merge `main` into the feature branch anyway.
+  exists to merge `{development-branch}` into the feature branch anyway.
 - A CI failure is neither clearly code-caused nor recognized
   infra-flaky/pre-existing, **except** the sole-failing
   `idd-advisory-convergence` check with `pending: false` and outstanding
@@ -203,7 +206,7 @@ self-critique and record risk.
     round count in a hold comment and stop for a maintainer decision
     (`#2865`).
 
-## E11 — Resolve conflicts with main
+## E11 — Resolve conflicts with {development-branch}
 
 1. Check state with the profile-selected branch-conflict-state helper:
    `node scripts/branch-conflict-state.mjs --pr {pr-number}`, or the
@@ -220,9 +223,9 @@ self-critique and record risk.
    unreplied comments, or reviewer state `CHANGES_REQUESTED`: get
    explicit operator confirmation first — the merge commit will appear
    in the PR history.
-4. Run `git fetch origin main && git merge origin/main`. On
-   non-interactive-hostile primary signing (GPG pinentry or
-   hardware-touch) with a fallback wrapper, run the whole merge
+4. Run `git fetch origin {development-branch} && git merge
+   origin/{development-branch}`. On non-interactive-hostile primary signing (GPG
+   pinentry or hardware-touch) with a fallback wrapper, run the whole merge
    (including `--continue`) through that wrapper instead — see
    `docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure`
    for the command form and the commitlint `-m` requirement.
@@ -286,13 +289,12 @@ self-critique and record risk.
 1. For each Accepted PATH A item whose source is reviewer feedback
    (review thread, review body, or regular comment), reply describing
    which commits fixed it and how.
-2. Start every reply with:
-   `**Accepted** — fixed in {commit-sha or comma-separated list}: {brief explanation}`,
-   followed by the reply-identity stamp
-   `<!-- {markerPrefix}-review-reply -->`
-   (`idd-review-triage.instructions.md` E6). Citing a commit that did
-   not fix this item in the current round requires it to have already
-   passed the file-path-touch check (E9 item 7, or
+2. Start every reply with: `**Accepted** — fixed in {commit-sha or
+   comma-separated list}: {brief explanation}`,
+   followed by the reply-identity stamp `<!-- {markerPrefix}-review-reply -->`
+   (`idd-review-triage.instructions.md` E6). Citing a commit that did not fix
+   this item in the current round requires it to have already passed the
+   file-path-touch check (E9 item 7, or
    `idd-review-snapshot-lite.instructions.md`'s Cold-start edge case 1).
 3. For a review thread, post the reply and resolve it in one call with
    the profile-selected `resolve-review-thread` helper (`--pr`,
@@ -354,17 +356,15 @@ self-critique and record risk.
      `advisory-wait-recovery: {agent-id} {PR_HEAD_SHA}
      {ISO8601-recovery-time}` as plain text. Do not request another
      review. Then go to the polling loop below.
-   - `REQUEST_NEEDED`, `copilotPending` `false`: try add-reviewer and
-     REST. Post
-     `advisory-wait: {agent-id} {PR_HEAD_SHA} {ISO8601-requested-at}`
-     as plain text only after current-attempt evidence: a newer event
-     after HEAD or a fresh node absent from the pre-request snapshot;
-     exit status is not evidence (issue `#3500`). If absent, see
-     [AW3-S fallback](../../../docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request);
-     use its account-typed fallback; never hard-code ids. Still absent:
-     stop and ask; poll only after success. Status `3` means claim/HEAD
-     guard failure: stop and return to E1. Status `1`/`2` means primary
-     registration is unproven/unreadable: stop/ask, not poll.
+   - `REQUEST_NEEDED`, `copilotPending` `false`: try add-reviewer and REST. Post
+     `advisory-wait: {agent-id} {PR_HEAD_SHA} {ISO8601-requested-at}` as plain
+     text only after current-attempt evidence: a newer event after HEAD or a
+     fresh node absent from the pre-request snapshot; exit status is not
+     evidence (issue `#3500`). If absent, see [AW3-S fallback](../../../docs/idd-advisory-wait-shell-fallback.md#registration-proven-review-request);
+     use its account-typed fallback; never hard-code ids. Still absent: stop and
+     ask; poll only after success. Status `3` means claim/HEAD guard failure:
+     stop and return to E1. Status `1`/`2` means primary registration is
+     unproven/unreadable: stop/ask, not poll.
    - `REQUEST_NEEDED`, `copilotPending` `true` (a request is already
      pending but unproven for current HEAD, no same-head marker to
      anchor polling): lite does not track the claim-id/agent-id the
@@ -453,10 +453,10 @@ self-critique and record risk.
 5. On failure that is code-caused: fix it, run `fix-validate`, commit
    atomically, then return to E11.
 6. On failure that is infra-flaky or pre-existing (also failing on
-   `main`, unrelated to this branch): apply `ciWait.rerunPolicy`. If it
-   authorizes a rerun, rerun once and resume polling. If the failure
-   persists after that rerun, or the policy is `hold`, post a hold
-   comment documenting the pre-existing failure and stop for a
+   `{development-branch}`, unrelated to this branch): apply
+   `ciWait.rerunPolicy`. If it authorizes a rerun, rerun once and resume
+   polling. If the failure persists after that rerun, or the policy is `hold`,
+   post a hold comment documenting the pre-existing failure and stop for a
    maintainer.
 7. On cancelled or timed-out that is code-caused: fix it, run
    `fix-validate`, commit, return to E11.

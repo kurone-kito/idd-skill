@@ -17,7 +17,7 @@ test('both fresh-claim worktree commands use --no-track', () => {
   ]) {
     assert.match(
       readTemplate(relativePath),
-      /git worktree add --no-track <path> -b <branch-name> origin\//,
+      /git worktree add --no-track <path> -b\s+<branch-name>\s+origin\//,
       relativePath,
     );
   }
@@ -107,7 +107,7 @@ test('the lite claim keeps the worktree-first order and the stop sentence', () =
   );
   const steps = [
     'on a fresh claim with no inheritable branch',
-    'git worktree add --no-track <path> -b <branch-name> origin/main',
+    'git worktree add --no-track <path> -b <branch-name> origin/{development-branch}',
     '`--worktree <path> --agent-id <id> --claim-id <id>`',
     '4. Post via helper',
     '(same `<path>`) first:',
