@@ -7528,8 +7528,9 @@ same as `AW4`/`AW5`.
     merge step. Not-ready pull requests are left out (run
     `pre-merge-readiness` on one to see its blockers), and so is one whose
     merge state would not pass F1: only `CLEAN`, or `BEHIND` when the base
-    does not require an up-to-date head, is listed, so a conflicting,
-    blocked, unstable, still-computing, or draft head is not.
+    does not require an up-to-date head, with `mergeable` resolved to
+    `MERGEABLE`, is listed, so a conflicting, blocked, unstable,
+    still-computing, or draft head is not.
     A pull request that closes no issue is checked with `--claimless`;
     otherwise each same-repository closing issue is tried as
     `--claim-issue`, with no `--claim-id`. Readiness still requires an

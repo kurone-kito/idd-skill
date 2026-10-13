@@ -1738,6 +1738,7 @@ function fakeReadiness(readyPrs: number[], draftPrs: number[] = []) {
       ready: readyPrs.includes(pr) || draftPrs.includes(pr),
       branchCurrency: {
         mergeStateStatus: draftPrs.includes(pr) ? 'DRAFT' : 'CLEAN',
+        mergeable: 'MERGEABLE',
       },
     };
   };
@@ -1835,7 +1836,10 @@ test('#4162: a readiness failure and unusable closing references are listed as u
       if (argv.includes('11')) {
         throw new Error('readiness exploded');
       }
-      return { ready: true, branchCurrency: { mergeStateStatus: 'CLEAN' } };
+      return {
+        ready: true,
+        branchCurrency: { mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE' },
+      };
     },
   });
   assert.deepEqual(
@@ -1957,7 +1961,7 @@ test('#4162: several closing issues are tried in turn and the first ready result
       tried.push(claimIssue);
       return {
         ready: claimIssue === '101',
-        branchCurrency: { mergeStateStatus: 'CLEAN' },
+        branchCurrency: { mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE' },
       };
     },
   });
@@ -2072,7 +2076,10 @@ test('#4162: a failure on one claim issue does not hide a ready result on anothe
       if (argv[argv.indexOf('--claim-issue') + 1] === '100') {
         throw new Error('first candidate failed');
       }
-      return { ready: true, branchCurrency: { mergeStateStatus: 'CLEAN' } };
+      return {
+        ready: true,
+        branchCurrency: { mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE' },
+      };
     },
   });
   assert.deepEqual(report.openReadyPrs, [
@@ -2182,12 +2189,52 @@ test('#4162: a ready report is listed only when its merge state passes F1', () =
       ready: true,
       branchCurrency: {
         mergeStateStatus: states[Number(argv[argv.indexOf('--pr') + 1]) - 20],
+        mergeable: 'MERGEABLE',
       },
     }),
   });
   assert.deepEqual(
     report.openReadyPrs?.map((pr) => pr.number),
     [20, 21],
+  );
+  assertNoMergeOrWrite(fixture, calls);
+});
+
+test('#4162: a CLEAN or BEHIND report is listed only once mergeable resolves to MERGEABLE', () => {
+  const cases: [string, string | undefined][] = [
+    ['CLEAN', 'MERGEABLE'],
+    ['CLEAN', 'UNKNOWN'],
+    ['CLEAN', undefined],
+    ['BEHIND', 'MERGEABLE'],
+    ['BEHIND', 'CONFLICTING'],
+  ];
+  const fixture: FakeProviderFixture = {
+    mergedChangeRequests: [],
+    openChangeRequests: cases.map((_, index) => ({
+      number: 40 + index,
+      title: `pr ${40 + index}`,
+      body: '',
+      url: `https://x/pull/${40 + index}`,
+    })),
+    changeRequestConvergenceViews: Object.fromEntries(
+      cases.map((_, index) => [40 + index, convergenceView([])]),
+    ),
+  };
+  const { port, calls } = recordingPort(fixture);
+  const report = runMergedPrFeedbackSweep(parseArgs(['--days', '7']), {
+    port,
+    owner: 'o',
+    repo: 'r',
+    nowMs: OPEN_NOW_MS,
+    readiness: (argv) => {
+      const [mergeStateStatus, mergeable] =
+        cases[Number(argv[argv.indexOf('--pr') + 1]) - 40];
+      return { ready: true, branchCurrency: { mergeStateStatus, mergeable } };
+    },
+  });
+  assert.deepEqual(
+    report.openReadyPrs?.map((pr) => pr.number),
+    [40, 43],
   );
   assertNoMergeOrWrite(fixture, calls);
 });

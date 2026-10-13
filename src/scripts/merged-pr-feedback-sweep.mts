@@ -871,7 +871,9 @@ export type OpenPrReadinessCheck = (argv: string[]) => unknown;
 // unstable, still-computing, or draft head. List a PR only when its merge
 // state also passes F1 (`resolveCallSiteRouting` in
 // branch-conflict-state.mts): CLEAN, or BEHIND, which readiness itself
-// already blocks when the base requires an up-to-date head.
+// already blocks when the base requires an up-to-date head. GitHub computes
+// `mergeable` asynchronously, and F1 classifies anything short of a
+// resolved MERGEABLE as still computing, so require that too.
 const F1_PASSING_MERGE_STATES = new Set(['CLEAN', 'BEHIND']);
 
 function isReadyReport(report: unknown): boolean {
@@ -879,14 +881,22 @@ function isReadyReport(report: unknown): boolean {
     report !== null && typeof report === 'object'
       ? (report as {
           ready?: unknown;
-          branchCurrency?: { mergeStateStatus?: unknown } | null;
+          branchCurrency?: {
+            mergeStateStatus?: unknown;
+            mergeable?: unknown;
+          } | null;
         })
       : null;
   const mergeStateStatus = String(
     record?.branchCurrency?.mergeStateStatus ?? '',
   ).toUpperCase();
+  const mergeable = String(
+    record?.branchCurrency?.mergeable ?? '',
+  ).toUpperCase();
   return (
-    record?.ready === true && F1_PASSING_MERGE_STATES.has(mergeStateStatus)
+    record?.ready === true &&
+    F1_PASSING_MERGE_STATES.has(mergeStateStatus) &&
+    mergeable === 'MERGEABLE'
   );
 }
 
