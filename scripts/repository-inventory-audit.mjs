@@ -64,6 +64,7 @@ export const COVERED_HELPERS = [
   'resume-route-selection',
   'review-activity-snapshot',
   'review-comment-origin',
+  'review-defer-bundle',
   'review-disposition-verify',
   'select-desynced-index',
   'snapshot-issue-body-corpus',

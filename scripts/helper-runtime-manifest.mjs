@@ -615,6 +615,16 @@ const HELPER_COMMANDS = [
       'Classify review-thread comments as IDD-originated or ordinary human chatter.',
   },
   {
+    id: 'review-defer-bundle',
+    scriptName: 'idd:review-defer-bundle',
+    binName: 'idd-review-defer-bundle',
+    entryPath: 'scripts/review-defer-bundle.mjs',
+    vendoredCommand: 'node scripts/review-defer-bundle.mjs',
+    description:
+      "Render and lint the follow-up issue body for one review pass's deferred findings; network-free, it never creates an issue.",
+    contractPaths: [],
+  },
+  {
     id: 'review-disposition-verify',
     scriptName: 'idd:review-disposition-verify',
     binName: 'idd-review-disposition-verify',

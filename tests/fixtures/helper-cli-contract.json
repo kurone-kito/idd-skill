@@ -649,6 +649,18 @@
         }
       }
     },
+    "idd-review-defer-bundle.mjs": {
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
     "idd-review-disposition-verify.mjs": {
       "runs": {
         "unknownFlag": {
