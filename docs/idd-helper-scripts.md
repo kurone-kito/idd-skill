@@ -2400,6 +2400,43 @@ node scripts/idd-effective-config.mjs [--key <dotted.path>] [--no-user-global]
 - **`--policy`**: an omitted `--policy` reads the layered policy. An explicit
   path, even the default string, reads only that file.
 
+## E10 same-family recurrence (kurone-kito/idd-skill#4129)
+
+`scripts/e10-recurrence.mjs` counts the E10 no-progress hold
+(`idd-review-fix.instructions.md`) from finding fingerprints instead of
+judgement. It is read-only and never writes, claims, or posts.
+
+```sh
+node scripts/e10-recurrence.mjs --passes <file.json> [--hold-after <n>]
+```
+
+- **Input**: `{"passes": [[record, ...], ...]}`, oldest pass first. Each
+  record is `{file, rule, construct, severity, disposition}`.
+  `disposition` is `Accepted` or `Rejected`; only Accepted records count,
+  and only they must carry a non-empty `file` and `construct`, a
+  `severity` of `low`, `medium`, or `high` in any letter case, and a
+  `rule` from the closed
+  list in `idd-review-triage.instructions.md` E5 (`correctness`,
+  `safety`, `tests`, `docs`, `consistency`, `style`). A record outside
+  that contract, or a file with no pass at all, exits `1` (`usage`) with
+  an `errors` array on stdout.
+- **Count**: the fingerprint is `file`, `rule`, and `construct`, with
+  `file` and `construct` trimmed. The
+  chain ends at the latest pass, counts its first pass, and extends
+  backward while each pass's non-empty Accepted set is a subset (proper
+  or equal) of the prior pass's set.
+- **Verdict**: an empty latest set gives `e11`. A chain shorter than
+  `--hold-after` (default: the effective
+  `critiqueLoop.e10NoProgressHoldAfter`) gives `continue`. Otherwise
+  each fingerprint of the latest pass is a recurring family with the
+  highest severity seen in the chain: Low takes `defer` and Medium or
+  High takes `stop`. Any `stop` makes the verdict `hold`; otherwise it is
+  `defer`.
+- **Output**: `verdict`, `passCount`, `chainLength`, `holdAfter`,
+  `recurring` (each family with its `severity` and `disposition`), and
+  `holdText`, a line naming every recurring family for the hold comment
+  or the defer follow-up.
+
 ## Helper Runtime Profiles
 
 When a repository imports the IDD template, helper support should be
@@ -2938,6 +2975,31 @@ The adopted helper boundaries are intentionally narrow:
   so repeat notices from the same bot at the same HEAD stay
   byte-distinguishable (#1482); it is a human-readable disambiguator only
   and plays no part in gate recognition or pairing.
+- **Which bot comments it handles (#4122)**: the readiness gate's set
+  (`isGateAdvisoryBotLogin`): the known review bots (CodeRabbit, Codex,
+  Copilot) plus every configured `advisoryBotLogins` entry, so a known
+  bot left out of a custom list is still handled. Every comment of that
+  set that the helper does not plan is listed in `skipped` with a
+  reason; none is dropped silently, as happened on
+  kurone-kito/setup.ubuntu PR 204, where the gate listed two bot
+  comments and the helper printed empty lists.
+- **Skip reasons**: `already-dispositioned`,
+  `coderabbit-review-in-progress`,
+  `summary-resolved-no-actionable-comments`, `codex-review-running` (a
+  Codex status row for the current HEAD that is not Completed, Failed
+  included), `codex-no-result-for-head` (a Codex status table with no
+  row for the current HEAD, an unparseable table or no table, or a Codex
+  no-find result for an older HEAD), and `unrecognized-notice-body`
+  (any other handled comment, for example a CodeRabbit acknowledgement
+  or a regular Copilot or Codex comment). A `codex-no-result-for-head`
+  comment is reported, not dispositioned, because Codex can still add a
+  row for the current HEAD; the manual E4 `**Rejected**` stays its
+  route. The helper does not track that manual reply, so it keeps
+  reporting the comment after one is posted: check `pre-merge-readiness`
+  `dispositionEvidence.missingRegularComments` before replying. An
+  `unrecognized-notice-body` entry for a comment the gate does not list
+  (one it already paired through its generic pairing) is expected and
+  harmless.
 - **Idempotent**: per advisory bot, existing trusted
   `isNonReviewNoticeDisposition` comments naming that bot already cover
   that many of its notices, so a re-run posts nothing new.
@@ -5635,6 +5697,24 @@ to post it is the consuming track's job.
   passes, live-coverage cases already handled by #2549, and all other
   non-qualifying holds remain withheld. Each promotion records its
   `originalHoldReason`.
+- Reports superseded rows (kurone-kito/idd-skill#4113). Each instance carries
+  `supersededBy`: the check-run id of the same workflow run's latest row,
+  when that row proves the instance belongs to an earlier attempt of the run
+  and the latest row passes; otherwise `null`. The latest row is always a
+  `pass` classification of the same run, never the instance itself. A
+  superseded non-pass instance is counted in `counts.superseded` instead of
+  its classification bucket, so `counts.rerunEligible` covers only rows a
+  plan can still act on and the buckets still sum to `counts.total`. A
+  superseded `pass` instance stays in `counts.pass`. Superseded instances are
+  counted in neither `counts.rerunEligible` nor `counts.rerunBudgetHeld`. This
+  is reporting only: no classification, plan, or recovery plan changes. A
+  superseded row in the `awaiting-fresh-review`,
+  `bot-gated-skip`, or `unresolved` classification no longer produces its
+  outstanding-state note, because it moves to the `superseded` bucket. The
+  stderr summary adds one line for the superseded non-pass rows, in the form
+  `N instance(s) superseded by a later attempt of the same run (check run X)`;
+  a superseded pass prints nothing, and stdout still carries only the JSON
+  plan.
 - Without `--apply`, it never calls `gh run rerun` (or any other mutating
   command) itself. Pass `--apply` (#1766) to execute the printed plan:
   it reruns each rerun-eligible instance in order (recovery-refresh
@@ -7968,6 +8048,26 @@ retrying further.
 Observed hanging with no output for an extended, unbounded period on
 2026-09-10 (issue #2844 / PR #2870, commit `7be8acc9`, later confirmed
 unsigned).
+
+### Scripted-rebase hazards
+
+`idd-pr-submit.instructions.md`'s D3.5 step 7 rewords a stray
+commit-message close with a scripted reword or rebase. Two settings can
+break that script. `rebase.abbreviateCommands=true` can make a
+non-interactive todo list use `p`/`r` instead of `pick`/`reword`; check
+`git config --get rebase.abbreviateCommands` or match both forms.
+Disable `rebase.updateRefs` process-wide so an inner rebase launched by
+a signing wrapper cannot move a safety backup or sibling branch:
+
+```sh
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=rebase.updateRefs \
+GIT_CONFIG_VALUE_0=false GIT_SEQUENCE_EDITOR='...' git rebase -i ...
+```
+
+An outer `-c rebase.updateRefs=false` may not reach that subprocess.
+These hazards were observed while recovering
+[PR #3431](https://github.com/kurone-kito/idd-skill/pull/3431) for
+issue #3285; the field report is tracked in issue #3552.
 
 ## Dead-export audit (kurone-kito/idd-skill#3478)
 

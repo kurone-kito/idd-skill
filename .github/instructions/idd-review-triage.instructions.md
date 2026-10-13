@@ -86,6 +86,9 @@ Record a path-specific disposition for every item:
   an explicit maintainer confirmation reply; Medium/Low require an
   explicit Accept or Reject decision, except a scope-fenced finding
   (E4), which is Reject forced regardless of severity.
+- **Fingerprint** (each Accepted PATH A item, E10's too): `file`,
+  `construct` (flagged symbol or phrase), and one `rule`:
+  `correctness`, `safety`, `tests`, `docs`, `consistency`, `style`.
 - **PATH B** (a _completed_ review of the current HEAD): `Accepted`
   means the advisory confirms the implementation or captures useful
   context; `Rejected` means noted, no action required. An advisory
@@ -157,9 +160,9 @@ resolved thread's claim.
 **Defer (`critiqueLoop.deferAfterRounds` / `critiqueLoop.deferByUrgency`).**
 Two triggers dispose any human or automated reviewer's PATH A item
 **Reject (defer)** instead of normal judgment — never PATH B, a
-scope-fenced item, an Accepted item mid-fix
-(`e10NoProgressHoldAfter`), or a CODEOWNER/required-reviewer item
-(E6 AMD). Reply
+scope-fenced item, an Accepted item mid-fix (except E10's cap and
+recurrence defers), or a CODEOWNER/required-reviewer item (E6 AMD).
+Reply
 `**Rejected** — deferred to follow-up issue #<n> ({clause}): {reason}`.
 
 - **Round-count** (`deferAfterRounds`, default `12`, Low-only). Once

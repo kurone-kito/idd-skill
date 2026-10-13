@@ -16,7 +16,9 @@
 // by`/`Depends on` mention and a cross-repository token on an otherwise
 // well-formed dependency line (see checkDependencyLineGrammar, #3285),
 // visible/hidden line agreement for the suitability and effort
-// footers, an advisory warning-severity check that flags an issue/PR
+// footers, a child's candidate-file count against its S/M effort
+// threshold (see checkEffortCandidateFileLimit, #4130), an advisory
+// warning-severity check that flags an issue/PR
 // reference used near coordination language (e.g. "before", "once",
 // "requires") with no corresponding Blocked-by/Depends-on/task-list
 // dependency encoding (see checkProseOnlyDependency), and (given
@@ -125,6 +127,27 @@ export { normalizeMarkerPrefix, parseAuthoringBucketMarker };
 // not-applicable.
 const NOT_APPLICABLE_BUCKET_AUDIT_DETAIL =
   'not applicable: auditing a needs-decision/blocked-by-human bucket publish (--expect-bucket), not a ready-shape body';
+/**
+ * Maximum `## Candidate files` count per effort hint before a child draft
+ * counts as over-scope and must be split at authoring time (#4130). The
+ * single source is the "Over-scope split threshold" table in
+ * skills/issue-authoring/references/contract.md's `## Effort hint`
+ * section; tests/audit-authored-issue.test.mts asserts these values match
+ * that table. `L` is deliberately absent: the rule does not check it.
+ */
+export const EFFORT_CANDIDATE_FILE_LIMITS = Object.freeze({ S: 3, M: 8 });
+// A `Split out of #<n>` (or `owner/repo#<n>`) provenance line, as the
+// contract's reuse-first rule records it. Line-anchored, with an optional
+// blockquote marker, an optional bullet or ordered-list marker, and an
+// optional `_`/`*` emphasis opener, so a mid-sentence mention never counts
+// as the provenance line. The issue number must end at a real token
+// boundary (whitespace or end of line, after optional closing emphasis
+// and sentence punctuation in either order), so `#12_foo`, `#12-foo`, or `#12/3` never
+// exempts a child. The number itself must be a positive canonical issue
+// number (`[1-9][0-9]*`, as REAL_ISSUE_REFERENCE_PATTERN requires), so
+// `#0` or a leading-zero form never exempts a child either.
+const SPLIT_OUT_OF_LINE_PATTERN =
+  /^[ \t]*(?:>[ \t]*)?(?:(?:[-*+]|\d+[.)])[ \t]+)?[_*]{0,2}Split out of (?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#[1-9][0-9]*(?=[_*.,;:!?)]*(?:[ \t]|$))/m;
 // Shared "not applicable" detail for every triage-a4-*/triage-a45-*/
 // triage-title-missing finding (#3289) when `shape === 'roadmap'`: Discover
 // never routes a roadmap node through A4 (evaluateA4Viability) or A4.5
@@ -713,6 +736,7 @@ export function auditAuthoredIssue(body, options) {
       authoringBucket,
       suitability,
     ),
+    checkEffortCandidateFileLimit(rawText, shape, isBucketAudit, markerPrefix),
     checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability),
     checkEffortVisibleLineAgreement(text, rawText, markerPrefix),
     checkProseOnlyDependency(
@@ -2091,6 +2115,78 @@ function checkCandidateFilesNotEmpty(
     id,
     name,
     `## Candidate files parses to ${candidateFiles.length} path(s)`,
+  );
+}
+/**
+ * Child shape only (#4130): an `S` or `M` effort hint whose
+ * `## Candidate files` section parses to more distinct paths than
+ * {@link EFFORT_CANDIDATE_FILE_LIMITS} allows is over-scope and must be
+ * split before publication, unless the body carries a plain-text
+ * `Split out of #<n>` provenance line (it is already the product of a
+ * split). Not applicable to a bucket audit, a non-child shape, an `L`
+ * hint, or a missing/malformed hidden effort marker. Only the hidden
+ * marker is read. A malformed or duplicated marker already fails
+ * `effort-visible-line-agreement`; a body with no effort footer at all
+ * is out of scope, since the rule targets drafts whose author estimated
+ * S or M.
+ */
+function checkEffortCandidateFileLimit(
+  rawText,
+  shape,
+  isBucketAudit,
+  markerPrefix,
+) {
+  const id = 'effort-candidate-file-limit';
+  const name =
+    'Child candidate-file count stays within its effort hint threshold';
+  if (isBucketAudit) {
+    return pass(id, name, NOT_APPLICABLE_BUCKET_AUDIT_DETAIL);
+  }
+  if (shape !== 'child') {
+    return pass(
+      id,
+      name,
+      'not applicable: only the child shape is checked against the effort threshold',
+    );
+  }
+  // parseEffortMarker masks its own input, so it takes rawText.
+  const effort = parseEffortMarker(rawText, markerPrefix);
+  if (!effort.present || effort.malformed || effort.value === null) {
+    return pass(id, name, 'not applicable: no coherent effort marker');
+  }
+  if (effort.value !== 'S' && effort.value !== 'M') {
+    return pass(
+      id,
+      name,
+      `not applicable: effort ${effort.value} is not checked by this rule`,
+    );
+  }
+  const limit = EFFORT_CANDIDATE_FILE_LIMITS[effort.value];
+  const count = parseCandidateFiles(rawText).length;
+  if (count <= limit) {
+    return pass(
+      id,
+      name,
+      `effort ${effort.value} with ${count} candidate file(s) is within the limit of ${limit}`,
+    );
+  }
+  // Mask code regions and HTML comments/blocks so a quoted example or a
+  // hidden comment never satisfies the exemption.
+  const provenanceScan = maskMarkdownForScan(rawText, {
+    htmlComments: 'mask',
+    htmlBlocks: 'mask',
+  });
+  if (SPLIT_OUT_OF_LINE_PATTERN.test(provenanceScan)) {
+    return pass(
+      id,
+      name,
+      `effort ${effort.value} with ${count} candidate files exceeds the limit of ${limit}, but a Split out of #<n> provenance line exempts it`,
+    );
+  }
+  return fail(
+    id,
+    name,
+    `effort ${effort.value} with ${count} candidate files exceeds the limit of ${limit}; split the draft into a roadmap with children before publication (or record a Split out of #<n> line if it is already a split child)`,
   );
 }
 function checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability) {
@@ -4175,7 +4271,9 @@ contract.md): the autopilot-suitability marker, its cross-field
 status:blocked-by-human agreement, markerPrefix consistency, required
 section headings for the declared shape, the roadmap-id/blocked-by
 dependency-marker rules, visible/hidden suitability+effort line
-agreement, the defer-source-marker check for defined values, a sole
+agreement, a child's candidate-file count against its S/M effort
+threshold (effort-candidate-file-limit), the defer-source-marker check
+for defined values, a sole
 Refs origin, and the review-needs-decision label/bucket/origin contract,
 and an advisory (warning-severity only) check that flags an issue/PR
 reference used near coordination language with no corresponding
