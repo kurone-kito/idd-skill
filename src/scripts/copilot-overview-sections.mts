@@ -12,6 +12,8 @@
 // `classifyCopilotReviewBody`, which strips code first, and the wave audit uses
 // a plain marker `includes` test.
 
+import { stripMarkdownCodeRegions } from './markdown-code.mts';
+
 /** Copilot's severity label, as the `alt="<Level> severity"` text carries it. */
 export type Severity = 'high' | 'medium' | 'low';
 
@@ -121,12 +123,16 @@ function findSections(body: string): RawSection[] {
  * severity-labelled finding is not, by itself, a reason.
  */
 export function parseOverviewSections(body: string): ParsedOverviewSections {
+  // Fenced and inline code is an example, not a finding. Mask it first, as
+  // `classifyCopilotReviewBody` does, so a quoted section header, count line or
+  // item cannot be read as a real one.
+  const text = stripMarkdownCodeRegions(body);
   const open: ParsedOpenFinding[] = [];
   const previouslyMissed = emptySeverityCounts();
   const unparsedReasons: string[] = [];
   let sawOpenHeader = false;
 
-  for (const { header, content } of findSections(body)) {
+  for (const { header, content } of findSections(text)) {
     const openMatch = OPEN_HEADER_RE.exec(header);
     if (openMatch) {
       sawOpenHeader = true;
@@ -190,7 +196,7 @@ export function parseOverviewSections(body: string): ParsedOverviewSections {
   // reason rather than silently undercounting. The October 2026 format (issue
   // #4184) has no such line; the bold `**<n> open findings**` line below plays the
   // same role there.
-  const findingsHeaderMatch = FINDINGS_HEADER_RE.exec(body);
+  const findingsHeaderMatch = FINDINGS_HEADER_RE.exec(text);
   if (findingsHeaderMatch && !sawOpenHeader) {
     const declared = findingsHeaderMatch[1].toLowerCase();
     const declaredCount =
@@ -202,7 +208,7 @@ export function parseOverviewSections(body: string): ParsedOverviewSections {
     }
   }
 
-  const openFindingsLineMatch = OPEN_FINDINGS_LINE_RE.exec(body);
+  const openFindingsLineMatch = OPEN_FINDINGS_LINE_RE.exec(text);
   if (openFindingsLineMatch && !sawOpenHeader) {
     const declaredCount = Number.parseInt(openFindingsLineMatch[1], 10);
     if (declaredCount > 0) {

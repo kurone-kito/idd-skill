@@ -618,6 +618,40 @@ Body text.
   assert.deepEqual(parsed.previouslyMissed, { high: 0, medium: 0, low: 1 });
 });
 
+const FENCE = '```';
+
+test('parseOverviewBody: a fenced example of an Open header and item is not an open finding', () => {
+  const body = `<!-- ccr-overview-v2 -->
+
+Example markup, not a finding:
+
+${FENCE}html
+<details>
+<summary><strong>Open (1)</strong></summary>
+
+- <picture><img alt="High severity" src="h.svg"></picture> [Example](#discussion_r909)
+</details>
+${FENCE}
+
+**0 open findings**
+`;
+  const parsed = parseOverviewBody(body);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, []);
+});
+
+test('parseOverviewBody: a fenced copy of the bold open-count line is not an unparsed reason', () => {
+  const body = `<!-- ccr-overview-v2 -->
+
+${FENCE}
+**2 open findings**
+${FENCE}
+`;
+  const parsed = parseOverviewBody(body);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, []);
+});
+
 // ---------------------------------------------------------------------------
 // classifyDispositionReply
 // ---------------------------------------------------------------------------
