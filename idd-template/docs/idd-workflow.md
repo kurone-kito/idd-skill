@@ -1256,8 +1256,9 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    Continue to step 3 only when the command exits 0, which means the state is
    `already_owned` with action `keep`. A claim that a worker released with its
    `unclaimed-by` marker, as F4 does as its last mutation before returning the
-   final report, is the one exception: when `evidence.released_claim.claim_id`
-   equals this claim-id and either the state is `unclaimed`, or the state is
+   final report, is the one exception. Its `--assert` run exits 1 by design, so
+   read its verdict from stdout: when `evidence.released_claim.claim_id` equals
+   this claim-id and either the state is `unclaimed`, or the state is
    `local_worktree_occupied` with the reason
    `released-claim-local-worktree-occupied`, the claim goes to step 3 for worker
    matching only, where its running worker, if any, is counted and sent no
