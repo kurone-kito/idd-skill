@@ -152,10 +152,11 @@ export const EFFORT_CANDIDATE_FILE_LIMITS: Readonly<Record<'S' | 'M', number>> =
 
 // A `Split out of #<n>` (or `owner/repo#<n>`) provenance line, as the
 // contract's reuse-first rule records it. Line-anchored, with an optional
-// list bullet and an optional `_`/`*` emphasis opener, so a mid-sentence
-// mention never counts as the provenance line.
+// blockquote marker, an optional bullet or ordered-list marker, and an
+// optional `_`/`*` emphasis opener, so a mid-sentence mention never counts
+// as the provenance line.
 const SPLIT_OUT_OF_LINE_PATTERN =
-  /^[ \t]*(?:[-*+][ \t]+)?[_*]{0,2}Split out of (?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#\d+(?!\d)/m;
+  /^[ \t]*(?:>[ \t]*)?(?:(?:[-*+]|\d+[.)])[ \t]+)?[_*]{0,2}Split out of (?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#\d+(?![0-9A-Za-z])/m;
 
 // Shared "not applicable" detail for every triage-a4-*/triage-a45-*/
 // triage-title-missing finding (#3289) when `shape === 'roadmap'`: Discover
@@ -4954,7 +4955,8 @@ status:blocked-by-human agreement, markerPrefix consistency, required
 section headings for the declared shape, the roadmap-id/blocked-by
 dependency-marker rules, visible/hidden suitability+effort line
 agreement, a child's candidate-file count against its S/M effort
-threshold (effort-candidate-file-limit), the defer-source-marker check for defined values, a sole
+threshold (effort-candidate-file-limit), the defer-source-marker check
+for defined values, a sole
 Refs origin, and the review-needs-decision label/bucket/origin contract,
 and an advisory (warning-severity only) check that flags an issue/PR
 reference used near coordination language with no corresponding

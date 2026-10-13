@@ -2565,6 +2565,9 @@ test('effort-candidate-file-limit passes an over-limit M child that carries a Sp
     'Split out of #12.',
     '- Split out of kurone-kito/idd-skill#12',
     '_Split out of #12_',
+    '**Split out of #12**',
+    '1. Split out of #12',
+    '> Split out of #12',
   ]) {
     const body = childBody({
       effort: 'M',
@@ -2575,12 +2578,14 @@ test('effort-candidate-file-limit passes an over-limit M child that carries a Sp
   }
 });
 
-test('effort-candidate-file-limit ignores a Split out of mention in code, an HTML comment, or mid-sentence', () => {
+test('effort-candidate-file-limit ignores a Split out of mention in code, an HTML comment, mid-sentence, or without a real number', () => {
   for (const line of [
     '```text\nSplit out of #12\n```',
     '`Split out of #12`',
     '<!-- Split out of #12 -->',
     'This draft was Split out of #12 earlier.',
+    'Split out of #<n>',
+    'Split out of #12a',
   ]) {
     const body = childBody({
       effort: 'M',

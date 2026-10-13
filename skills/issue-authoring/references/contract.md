@@ -1641,8 +1641,11 @@ the number of distinct paths the `## Candidate files` parser extracts
 (see [Candidate files format](#candidate-files-format)), so keep notes
 out of backticks. A body that is already the product of a split is
 exempt when it carries a plain-text `Split out of #<n>` line (not inside
-backticks or an HTML comment). The rule checks only the child shape, and
-only when a coherent effort marker is present. `audit-authored-issue`'s
+backticks or an HTML comment). The exemption is self-asserted, so a
+reviewer confirms the referenced issue is the real parent. The rule
+checks only the child shape, and only when a coherent effort marker is
+present; it also checks a human-bucket child audited without
+`--expect-bucket`. `audit-authored-issue`'s
 `effort-candidate-file-limit` check enforces this table, which is the
 single source of the values.
 
