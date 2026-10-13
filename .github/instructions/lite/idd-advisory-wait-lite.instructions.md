@@ -42,8 +42,9 @@ but `advisoryWait.primaryBotLogin`.
 
 ## Stop-and-ask conditions
 
-- A required field is missing, the helper exits non-zero, returns
-  invalid JSON, or its evidence disagrees with live state.
+- A required field or `staleRequestRecovery` is missing, the helper
+  exits non-zero, returns invalid JSON, or its evidence disagrees with
+  live state.
 - `outcome` is `CAP_EXHAUSTED` with the `hold` route (`HOLD`'s only
   route — see Helper-first canonical path below).
 - `earliestSameHeadAt` empties during active polling (marker
