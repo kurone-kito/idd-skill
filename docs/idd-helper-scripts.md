@@ -7984,6 +7984,26 @@ Observed hanging with no output for an extended, unbounded period on
 2026-09-10 (issue #2844 / PR #2870, commit `7be8acc9`, later confirmed
 unsigned).
 
+### Scripted-rebase hazards
+
+`idd-pr-submit.instructions.md`'s D3.5 step 7 rewords a stray
+commit-message close with a scripted reword or rebase. Two settings can
+break that script. `rebase.abbreviateCommands=true` can make a
+non-interactive todo list use `p`/`r` instead of `pick`/`reword`; check
+`git config --get rebase.abbreviateCommands` or match both forms.
+Disable `rebase.updateRefs` process-wide so an inner rebase launched by
+a signing wrapper cannot move a safety backup or sibling branch:
+
+```sh
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=rebase.updateRefs \
+GIT_CONFIG_VALUE_0=false GIT_SEQUENCE_EDITOR='...' git rebase -i ...
+```
+
+An outer `-c rebase.updateRefs=false` may not reach that subprocess.
+These hazards were observed while recovering
+[PR #3431](https://github.com/kurone-kito/idd-skill/pull/3431) for
+issue #3285; the field report is tracked in issue #3552.
+
 ## Dead-export audit (kurone-kito/idd-skill#3478)
 
 `node scripts/audit-dead-exports.mjs --check` (source repository /
