@@ -1289,7 +1289,10 @@ identify its old claims, and step 1 treats them as not its own.
    session-suffixed agent-id, or to the session-local token that Discover
    generated at its entry when the session has no suffix, whenever
    `discover.selectionDesync` is `session-offset`. Otherwise skip it: the helper
-   rejects an empty candidate list and a zero batch.
+   rejects an empty candidate list and a zero batch. Each selected candidate
+   then goes through section 3, steps 4 to 6 (A4.5, the fresh-claim order
+   through claim verification, and the worker start), and its started worker is
+   recorded as a running roster entry before section 4 resumes.
 4. **Recover reports.** Run this step for each matched finished worker, once its
    worktree, claim, and child processes show no live background work. The
    fan-out variant's completed-notice rule names these live-evidence checks, and
