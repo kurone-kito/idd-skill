@@ -3509,6 +3509,125 @@ function checkWorkshopExampleRepoBackLink(root, options, report) {
     );
   }
 }
+/**
+ * Advisory-convergence workflows whose trusted `actions/checkout` `ref:`
+ * literal must name the repository's default branch (issue `#4081`).
+ * Adopters hand-edit these literals, and `idd-onboard --import` does not
+ * rewrite them.
+ */
+const ADVISORY_CHECKOUT_WORKFLOW_FILES = [
+  '.github/workflows/idd-advisory-convergence.yml',
+  '.github/workflows/idd-advisory-convergence-comment.yml',
+];
+const ADVISORY_CHECKOUT_USES_PATTERN =
+  /^\s*-?\s*uses:\s*["']?actions\/checkout@/;
+const ADVISORY_WITH_LINE_PATTERN = /^\s*with:\s*$/;
+const ADVISORY_STEP_START_PATTERN = /^\s*-\s/;
+const ADVISORY_REF_KEY_PATTERN = /^\s*["']?ref["']?\s*:\s*(.*)$/;
+function leadingWhitespaceWidth(line) {
+  return line.length - line.trimStart().length;
+}
+/** YAML scalars that a `ref:` value resolves to null (the event default). */
+const ADVISORY_REF_YAML_NULL_SCALARS = new Set([
+  '',
+  '~',
+  'null',
+  'Null',
+  'NULL',
+]);
+/**
+ * Normalizes a raw `ref:` value. A `#` at the start of the value or after
+ * whitespace begins a comment and is dropped first. The result is trimmed,
+ * then one matching pair of quotes is stripped. An unquoted YAML null
+ * scalar, or an empty value, is returned as the empty string.
+ */
+function normalizeAdvisoryRefValue(raw) {
+  const value = raw.replace(/(^|\s)#.*$/, '').trim();
+  const quoted = /^(["'])(.*)\1$/.exec(value);
+  if (quoted) {
+    return quoted[2];
+  }
+  return ADVISORY_REF_YAML_NULL_SCALARS.has(value) ? '' : value;
+}
+/**
+ * Returns the `ref:` key of every `actions/checkout` step's own `with:`
+ * block. Comment lines never end a block. A later step starting before a
+ * `with:` line means the step has no block. Known limits: a flow-style
+ * `with: { ref: ... }`, a `with:` line with a trailing comment, and a `ref:`
+ * key listed before `uses:` in the same step are not recognized, so they
+ * are skipped rather than reported.
+ */
+function findAdvisoryCheckoutRefs(lines) {
+  const refs = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!ADVISORY_CHECKOUT_USES_PATTERN.test(lines[i])) continue;
+    let withIndex = -1;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (ADVISORY_WITH_LINE_PATTERN.test(lines[j])) {
+        withIndex = j;
+        break;
+      }
+      if (
+        ADVISORY_STEP_START_PATTERN.test(lines[j]) ||
+        lines[j].includes('uses:')
+      ) {
+        break;
+      }
+    }
+    if (withIndex === -1) continue;
+    const withIndent = leadingWhitespaceWidth(lines[withIndex]);
+    for (let k = withIndex + 1; k < lines.length; k++) {
+      const line = lines[k];
+      const trimmed = line.trim();
+      if (trimmed === '' || trimmed.startsWith('#')) continue;
+      if (leadingWhitespaceWidth(line) <= withIndent) break;
+      const match = ADVISORY_REF_KEY_PATTERN.exec(line);
+      if (match) {
+        refs.push({ line: k + 1, value: normalizeAdvisoryRefValue(match[1]) });
+        break;
+      }
+    }
+  }
+  return refs;
+}
+/**
+ * Warns when an advisory-convergence workflow checks out a literal `ref:`
+ * that is not the default branch. A value containing an expression, or an
+ * empty or YAML-null value, is reported as not evaluated, never as a
+ * mismatch: an empty ref checks out the event default (the base branch under
+ * `pull_request_target`), which this check cannot resolve.
+ */
+function checkAdvisoryWorkflowCheckoutRefs(root, branch, report) {
+  for (const relPath of ADVISORY_CHECKOUT_WORKFLOW_FILES) {
+    const absolutePath = join(root, relPath);
+    if (!existsSync(absolutePath)) continue;
+    let text;
+    try {
+      text = readFileSync(absolutePath, 'utf8');
+    } catch {
+      report.warnings.push(
+        `advisory workflow file ${relPath} could not be read, so its checkout refs are not checked.`,
+      );
+      continue;
+    }
+    const lines = text.split(/\r?\n/);
+    for (const { line, value } of findAdvisoryCheckoutRefs(lines)) {
+      if (value === '' || value.includes('${{')) {
+        report.warnings.push(
+          value === ''
+            ? `advisory workflow checkout at ${relPath}:${line} has an empty ref, which checks out the event default and is not evaluated by this check; confirm it resolves to the default branch "${branch}".`
+            : `advisory workflow checkout at ${relPath}:${line} uses ref "${value}", which is not evaluated by this check; confirm it resolves to the default branch "${branch}".`,
+        );
+        continue;
+      }
+      if (value !== branch) {
+        report.warnings.push(
+          `advisory workflow checkout at ${relPath}:${line} pins ref "${value}", but the default branch is "${branch}". The trusted checkout fails if that ref does not exist and runs a stale copy if it does; set the ref to "${branch}".`,
+        );
+      }
+    }
+  }
+}
 function checkGithubReadiness(root, requireGithub, strict, report) {
   const repoView = runCommand(
     'gh',
@@ -3551,6 +3670,7 @@ function checkGithubReadiness(root, requireGithub, strict, report) {
     }
     return;
   }
+  checkAdvisoryWorkflowCheckoutRefs(root, branch, report);
   const trustEmptyProtectionReads = readTrustEmptyProtectionReads(root);
   const encodedBranch = encodeURIComponent(branch);
   let branchRulesRead;
