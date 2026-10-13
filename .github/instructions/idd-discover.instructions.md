@@ -535,6 +535,9 @@ criteria. Fail any one → discard the issue.
 completion (never Clear verification) may demote to `warn` per
 `idd-suitability.instructions.md`'s matching edge case.
 
+With `autopilotSuitability.effortL: refuse`, autopilot runs also discard
+an `L`-effort candidate (report `effort L`), routing it to humans.
+
 If **no issue** survives the gate:
 
 - if the approval-needed fallback bucket from A3.5 is non-empty, apply
@@ -666,12 +669,10 @@ deterministic **lowest issue number** pick.
 matches, after desync and before effort — see
 [rationale](../../docs/idd-design-rationale.md#a4-step-2--rationale-milestone-scope-preference).
 
-**Author-recorded effort hint (soft tie-breaker).** When tied after
-score/desync/milestone, prefer **lower-effort**, then lowest issue number.
-Read the `<!-- idd-skill-effort: S|M|L -->` footer (or
-`discover-roadmap-graph`'s `effort`): `S` < `M` < `L`; missing/invalid
-is **neutral** (`M`). **Soft**: reorders only within one score tie
-band; `discover-roadmap-graph` already emits this order.
+**Effort hint.** When tied after score/desync/milestone, prefer lower
+effort (`S` < `M` < `L`; missing or invalid counts as `M`), then the
+lowest issue number, per the `idd-skill-effort` marker or
+`discover-roadmap-graph`'s `effort` (already in this order).
 
 **High-contention shared-file overlap (advisory).** Concurrent sessions
 tend to edit the same F-phase bundle files and `audit/sync-manifest.json`.

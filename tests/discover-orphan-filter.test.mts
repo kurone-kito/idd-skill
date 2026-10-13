@@ -3028,3 +3028,201 @@ test('loadPolicy carries the raw journal reference, or null when absent (#4115)'
   const absent = loadPolicyFromConfig({});
   assert.equal(absent.authoringJournalReference, null);
 });
+
+test('filterOrphanIssues routes effort L orphans only under autopilot with effortLPolicy refuse (#4199)', async () => {
+  const score5 = '<!-- idd-skill-autopilot-suitability: 5 -->';
+  const issues = [
+    {
+      number: 1,
+      title: 'large',
+      state: 'OPEN',
+      body: `task\n${score5}\n<!-- idd-skill-effort: L -->`,
+    },
+    {
+      number: 2,
+      title: 'small',
+      state: 'OPEN',
+      body: `task\n${score5}\n<!-- idd-skill-effort: S -->`,
+    },
+    // Unscored: effort L still routes, because effort is a separate axis.
+    {
+      number: 3,
+      title: 'unscored large',
+      state: 'OPEN',
+      body: 'task\n<!-- idd-skill-effort: L -->',
+    },
+  ];
+  const base = {
+    issueStateByNumber: new Map<number, string>(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    autopilotSuitabilityFloor: 3,
+  };
+
+  const refused = await filterOrphanIssues(issues, {
+    ...base,
+    autopilot: true,
+    effortLPolicy: 'refuse',
+  });
+  assert.deepEqual(
+    refused.routed_to_human.map((o) => o.number),
+    [1, 3],
+  );
+  assert.deepEqual(
+    refused.orphans.map((o) => o.number),
+    [2],
+  );
+  assert.equal(refused.counts.routed_to_human, 2);
+
+  // The score kill-switch does not switch off effort L routing.
+  const scoreDisabled = await filterOrphanIssues(issues, {
+    ...base,
+    autopilot: true,
+    autopilotSuitabilityEnabled: false,
+    effortLPolicy: 'refuse',
+  });
+  assert.deepEqual(
+    scoreDisabled.routed_to_human.map((o) => o.number),
+    [1, 3],
+  );
+  assert.deepEqual(
+    scoreDisabled.orphans.map((o) => o.number),
+    [2],
+  );
+
+  const attended = await filterOrphanIssues(issues, {
+    ...base,
+    autopilot: false,
+    effortLPolicy: 'refuse',
+  });
+  assert.deepEqual(attended.routed_to_human, []);
+  assert.deepEqual(attended.orphans.map((o) => o.number).sort(), [1, 2, 3]);
+
+  const allowed = await filterOrphanIssues(issues, {
+    ...base,
+    autopilot: true,
+    effortLPolicy: 'allow',
+  });
+  assert.deepEqual(allowed.routed_to_human, []);
+  assert.deepEqual(allowed.orphans.map((o) => o.number).sort(), [1, 2, 3]);
+});
+
+test('loadPolicy sets effortLPolicy refuse only for autopilotSuitability.effortL refuse (#4199)', () => {
+  assert.equal(
+    loadPolicyFromConfig({ autopilotSuitability: { effortL: 'refuse' } })
+      .effortLPolicy,
+    'refuse',
+  );
+  assert.equal(
+    loadPolicyFromConfig({ autopilotSuitability: { effortL: 'allow' } })
+      .effortLPolicy,
+    'allow',
+  );
+  assert.equal(loadPolicyFromConfig({}).effortLPolicy, 'allow');
+});
+
+test('CLI: effortLPolicy refuse routes effort L orphans through produceOutput under --autopilot (#4199)', () => {
+  // The unit tests above call filterOrphanIssues directly, so the
+  // produceOutput wiring is only reached through the real CLI. The gh stub
+  // serves the open-issue list and answers the per-issue reads with no data;
+  // any other gh call fails loudly.
+  const issues = [
+    {
+      number: 1,
+      title: 'large',
+      state: 'open',
+      body: 'task\n<!-- idd-skill-autopilot-suitability: 5 -->\n<!-- idd-skill-effort: L -->',
+      labels: [],
+      html_url: 'https://github.com/kurone-kito/idd-skill/issues/1',
+      user: { login: 'kurone-kito' },
+      created_at: '2026-01-01T00:00:00Z',
+      milestone: null,
+    },
+    {
+      number: 2,
+      title: 'small',
+      state: 'open',
+      body: 'task\n<!-- idd-skill-autopilot-suitability: 5 -->\n<!-- idd-skill-effort: S -->',
+      labels: [],
+      html_url: 'https://github.com/kurone-kito/idd-skill/issues/2',
+      user: { login: 'kurone-kito' },
+      created_at: '2026-01-01T00:00:00Z',
+      milestone: null,
+    },
+  ];
+  const script = `const ISSUES = ${JSON.stringify(issues)};
+const args = process.argv.slice(2);
+if (args[0] === "api") {
+  const path = args[1] || "";
+  if (path.startsWith("repos/kurone-kito/idd-skill/issues?state=open")) {
+    process.stdout.write(JSON.stringify(ISSUES) + "\\n");
+    process.exit(0);
+  }
+  if (/^repos\\/kurone-kito\\/idd-skill\\/issues\\/\\d+\\/(comments|timeline|events)/.test(path)) {
+    process.stdout.write("[]\\n");
+    process.exit(0);
+  }
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`;
+  const dir = mkdtempSync(join(tmpdir(), 'idd-orphan-effort-l-'));
+  const restore = stubExecutable('gh', script);
+  try {
+    const refusePolicy = join(dir, 'refuse.json');
+    writeFileSync(
+      refusePolicy,
+      JSON.stringify({ autopilotSuitability: { effortL: 'refuse' } }),
+    );
+    const refused = spawnHelperBinWithEnvelope(
+      'idd-discover-orphan-filter.mjs',
+      [
+        '--owner',
+        'kurone-kito',
+        '--repo',
+        'idd-skill',
+        '--policy',
+        refusePolicy,
+        '--autopilot',
+        '--no-cache',
+      ],
+    );
+    assert.equal(refused.status, 0, JSON.stringify(refused));
+    const refusedOutput = JSON.parse(refused.stdout);
+    assert.deepEqual(
+      refusedOutput.routed_to_human.map((o: { number: number }) => o.number),
+      [1],
+    );
+    assert.deepEqual(
+      refusedOutput.orphans.map((o: { number: number }) => o.number),
+      [2],
+    );
+
+    // Without the opt-in key, the same run keeps both orphans, ranked by
+    // score and then effort (S before L).
+    const defaultPolicy = join(dir, 'default.json');
+    writeFileSync(defaultPolicy, '{}');
+    const defaulted = spawnHelperBinWithEnvelope(
+      'idd-discover-orphan-filter.mjs',
+      [
+        '--owner',
+        'kurone-kito',
+        '--repo',
+        'idd-skill',
+        '--policy',
+        defaultPolicy,
+        '--autopilot',
+        '--no-cache',
+      ],
+    );
+    assert.equal(defaulted.status, 0, JSON.stringify(defaulted));
+    const defaultOutput = JSON.parse(defaulted.stdout);
+    assert.deepEqual(defaultOutput.routed_to_human, []);
+    assert.deepEqual(
+      defaultOutput.orphans.map((o: { number: number }) => o.number),
+      [2, 1],
+    );
+  } finally {
+    restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
