@@ -1341,9 +1341,10 @@ identify its old claims, and step 1 treats them as not its own.
 5. **Report the remainder.** An own claim that reached step 3, other than a
    released claim, and has no matching worker is reported to the operator, and
    so is a matched finished worker whose recorded outcome is `held`. A released
-   claim is reported here when step 4 left it with a running worker or a failed
-   verification or append. Otherwise step 4 handles it. Its worktree is not
-   removed.
+   claim is reported here when step 4 left it with a running worker, when its
+   verification or append failed, or when the harness offers no agent listing,
+   so step 4 did not run for it. Otherwise step 4 handles it. Its worktree is
+   not removed.
 
 ### Discover re-run cadence
 
