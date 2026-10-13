@@ -1281,10 +1281,10 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    it, apply the existing worker-death rules by reference, under the bullet
    titled "Resume-specific recovery when a worker dies mid-turn" in the
    [fan-out variant](#orchestrator-fan-out-variant); if it cannot be messaged,
-   replace it with a fresh subagent only when step 2 verified its claim, the
-   worktree and clone-scoped lock pass the checks in that bullet, and none of
-   its child processes is still running. If one is, wait for it by PID instead
-   of replacing the worker. A worker that matches no own claim is neither
+   it is treated as live and is never replaced while the listing still shows it
+   running, because its agent may still be executing when no child process is
+   visible. Wait for any running child process by PID, then report the worker to
+   the operator in step 5. A worker that matches no own claim is neither
    messaged nor replaced. A running worker of a released claim is counted and
    sent no message. If the harness offers no agent listing, no worker is
    matched, every own claim that reached this step goes to step 5, and the rest
@@ -1360,11 +1360,11 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    released claim, and has no matching worker is reported to the operator, and
    so is a matched finished worker that step 4 did not append because its
    outcome is `held`. A listed live worker that matches no own claim is reported
-   to the operator too, because it still holds a harness slot. A released claim
-   is reported here when step 4 left it with a running worker, when its
-   verification or append failed, or when the harness offers no agent listing,
-   so step 4 did not run for it. Otherwise step 4 handles it. Its worktree is
-   not removed.
+   to the operator too, because it still holds a harness slot. A matched running
+   worker that cannot be messaged is reported too. A released claim is reported
+   here when step 4 left it with a running worker, when its verification or
+   append failed, or when the harness offers no agent listing, so step 4 did not
+   run for it. Otherwise step 4 handles it. Its worktree is not removed.
 
 ### Discover re-run cadence
 
