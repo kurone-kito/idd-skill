@@ -234,12 +234,18 @@ test('collectFromGitHub without deps takes the repository from the shared resolv
       ],
       { stdio: 'ignore' },
     );
+    // The host variables are isolated too, so a runner's own GH_HOST or GHES
+    // server URL cannot change which host the origin is compared with.
     const saved = {
       GITHUB_ACTIONS: process.env.GITHUB_ACTIONS,
       GITHUB_REPOSITORY: process.env.GITHUB_REPOSITORY,
+      GITHUB_SERVER_URL: process.env.GITHUB_SERVER_URL,
+      GH_HOST: process.env.GH_HOST,
       GH_REPO: process.env.GH_REPO,
     };
     delete process.env.GH_REPO;
+    delete process.env.GH_HOST;
+    delete process.env.GITHUB_SERVER_URL;
     process.env.GITHUB_ACTIONS = 'true';
     process.env.GITHUB_REPOSITORY = 'env/variable';
     try {
