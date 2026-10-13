@@ -8550,6 +8550,38 @@ test('computeAdvisoryConvergenceVerdict: not-ready nextActions match stderr (#21
   );
 });
 
+test('request-re-review (#4111): a stale head names advisory-wait-state and the caller mapping', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.found, true);
+  assert.equal(verdict.review.matchesHead, false);
+  const item = collectAssertNextActions(verdict).find(
+    (candidate) =>
+      candidate.token ===
+      ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN.REQUEST_RE_REVIEW,
+  );
+  assert.ok(item, 'a stale head yields a request-re-review item');
+  const { summary } = item;
+  assert.doesNotMatch(summary, /\n/, 'the summary stays one line');
+  assert.doesNotMatch(summary, /Request a re-review of the current HEAD/);
+  for (const phrase of [
+    'node scripts/advisory-wait-state.mjs --pr 1234',
+    '"Caller mapping" table of idd-advisory-wait.instructions.md',
+    'RECOVERY_NEEDED never means a new request',
+    'E14: post the AW3-R recovery marker and poll',
+    'D4: exit CI-wait to E1',
+    'D4: SATISFIED with lastCopilotCommit equal to the head means rerun idd-advisory-convergence',
+    'node scripts/rerun-advisory-convergence.mjs --pr 1234 --apply',
+    'node scripts/rerun-advisory-convergence.mjs --pr 1234 --refresh-latest --apply',
+    'An elapsed-window SATISFIED follows the caller mapping',
+  ]) {
+    assert.ok(summary.includes(phrase), `summary must include: ${phrase}`);
+  }
+});
+
 test('writeAdvisoryConvergenceCliOutput writes guidance before JSON (#2142)', () => {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs(),
