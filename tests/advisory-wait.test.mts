@@ -2695,3 +2695,45 @@ test('decline (#4142): a decline on an earlier head, or a later non-decline revi
     '',
   );
 });
+
+test('decline (#4142): an on-HEAD decline is an unreadable same-head review, so the outcome goes to disposition until a trusted review-ack, not to a recovery marker', () => {
+  const reviews = [
+    {
+      author: { login: 'copilot-pull-request-reviewer' },
+      submittedAt: '2026-10-13T01:35:38Z',
+      commitId: DECLINE_HEAD,
+      body: NO_REVIEWABLE_FILES_BODY,
+    },
+  ];
+  const input = {
+    prHeadSha: DECLINE_HEAD,
+    reviews,
+    requestedReviewers: [],
+    timelineEvents: [],
+    comments: [],
+  };
+  const withoutAck = buildAdvisoryWaitSummary(input, {
+    now: '2026-10-13T02:00:00Z',
+  });
+  // RECOVERY_NEEDED would make E14 post an advisory-wait-recovery marker,
+  // the very clock this decline route removes.
+  assert.equal(withoutAck.outcome, 'DISPOSITION_NEEDED');
+  assert.equal(withoutAck.f3Outcome, 'DISPOSITION_NEEDED');
+
+  const withAck = buildAdvisoryWaitSummary(
+    {
+      ...input,
+      comments: [
+        {
+          author: { login: 'kurone-kito' },
+          body: `review-ack: claude-978b6358 ${DECLINE_HEAD} 2026-10-13T02:10:00Z`,
+          createdAt: '2026-10-13T02:10:00Z',
+          lastEditedAt: null,
+        },
+      ],
+    },
+    { now: '2026-10-13T02:20:00Z', trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.notEqual(withAck.outcome, 'DISPOSITION_NEEDED');
+  assert.notEqual(withAck.outcome, 'SATISFIED');
+});
