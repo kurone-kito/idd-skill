@@ -5660,6 +5660,24 @@ to post it is the consuming track's job.
   passes, live-coverage cases already handled by #2549, and all other
   non-qualifying holds remain withheld. Each promotion records its
   `originalHoldReason`.
+- Reports superseded rows (kurone-kito/idd-skill#4113). Each instance carries
+  `supersededBy`: the check-run id of the same workflow run's latest row,
+  when that row proves the instance belongs to an earlier attempt of the run
+  and the latest row passes; otherwise `null`. The latest row is always a
+  `pass` classification of the same run, never the instance itself. A
+  superseded non-pass instance is counted in `counts.superseded` instead of
+  its classification bucket, so `counts.rerunEligible` covers only rows a
+  plan can still act on and the buckets still sum to `counts.total`. A
+  superseded `pass` instance stays in `counts.pass`. Superseded instances are
+  counted in neither `counts.rerunEligible` nor `counts.rerunBudgetHeld`. This
+  is reporting only: no classification, plan, or recovery plan changes. A
+  superseded row in the `awaiting-fresh-review`,
+  `bot-gated-skip`, or `unresolved` classification no longer produces its
+  outstanding-state note, because it moves to the `superseded` bucket. The
+  stderr summary adds one line for the superseded non-pass rows, in the form
+  `N instance(s) superseded by a later attempt of the same run (check run X)`;
+  a superseded pass prints nothing, and stdout still carries only the JSON
+  plan.
 - Without `--apply`, it never calls `gh run rerun` (or any other mutating
   command) itself. Pass `--apply` (#1766) to execute the printed plan:
   it reruns each rerun-eligible instance in order (recovery-refresh
