@@ -28,6 +28,7 @@ for when this applies).
 1. Ensure the local `{default-branch}` branch is up to date and has no local
    commits.
    `{default-branch}` resolves to `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`.
+   Validate it per Worktree creation Step 2 (fail closed).
    Run this from the primary worktree while on `{default-branch}`:
 
    ```sh
@@ -43,11 +44,11 @@ for when this applies).
    git merge --ff-only origin/{default-branch}
    ```
 
-   After this `{default-branch}` fast-forward, do **not** change the primary
-   worktree's HEAD off `{default-branch}` for any reason during B1 — see
-   Anti-patterns below for the forbidden commands; only read-only
-   inspection and the HEAD-preserving commands of Steps 2-3 and
-   Worktree creation are allowed.
+   After this fast-forward, do **not** change the primary
+   worktree's HEAD off `{default-branch}` during B1 — see Anti-patterns
+   below for the forbidden commands; read-only inspection and the
+   HEAD-preserving commands of Steps 2-3 and Worktree creation stay
+   allowed.
 
 2. Run `git worktree list` — if a worktree for the branch already
    exists, inspect and acquire its
@@ -124,7 +125,7 @@ defaultBranchRef --jq .defaultBranchRef.name`; validate the result
 ([defaults](../../docs/policy-constants.md#branch-synchronization-defaults)),
 fail closed if invalid/absent on `origin`, never fall back. Then
 `git fetch origin` (may be missing/stale otherwise). Use **WorkTrunk**
-if available, except on a fresh claim (see the note under the table) (create verb:
+if available, except on a fresh claim (see the note under the table; create verb:
 `wt switch --create`; `wt new` was removed):
 
 - macOS/Linux: `wt switch --create -b <base-branch> <branch-name>`
