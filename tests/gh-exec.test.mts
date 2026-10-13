@@ -3032,6 +3032,69 @@ test('resolveCurrentGithubRepository: an origin on the explicit GH_HOST is used 
   );
 });
 
+test('resolveCurrentGithubRepository: inside Actions an origin with extra path segments takes the gh lookup (#4110)', () => {
+  // `outer/inner/r` names no repository `inner/r`; the last two segments must
+  // not be enough to match.
+  withRepositoryVariables(
+    { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'inner/r' },
+    () => {
+      withGitCheckout('https://github.com/outer/inner/r.git', () => {
+        withRepoViewStub({ stdout: repoViewBody('via', 'gh') }, (spawned) => {
+          assert.deepEqual(resolveCurrentGithubRepository(), {
+            owner: 'via',
+            repo: 'gh',
+          });
+          assert.deepEqual(spawned(), [REPO_VIEW_ARGV]);
+        });
+      });
+    },
+  );
+});
+
+test('resolveCurrentGithubRepository: an inherited GIT_DIR cannot redirect the origin read (#4110)', () => {
+  // The checkout's origin names o/r. A GIT_DIR pointing at another repository
+  // whose origin names other/x must not be read: the shortcut still applies.
+  withRepositoryVariables(
+    { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'o/r' },
+    () => {
+      withGitCheckout('https://github.com/o/r.git', () => {
+        const elsewhere = mkdtempSync(join(tmpdir(), 'idd-gh-exec-elsewhere-'));
+        const savedGitDir = process.env.GIT_DIR;
+        try {
+          execFileSync('git', ['init', '-q', elsewhere], { stdio: 'ignore' });
+          execFileSync(
+            'git',
+            [
+              '-C',
+              elsewhere,
+              'remote',
+              'add',
+              'origin',
+              'https://github.com/other/x.git',
+            ],
+            { stdio: 'ignore' },
+          );
+          process.env.GIT_DIR = join(elsewhere, '.git');
+          withRepoViewStub(
+            { exit: 1, stderr: 'gh: repo view failed' },
+            (spawned) => {
+              assert.deepEqual(resolveCurrentGithubRepository(), {
+                owner: 'o',
+                repo: 'r',
+              });
+              assert.deepEqual(spawned(), []);
+            },
+          );
+        } finally {
+          if (savedGitDir === undefined) delete process.env.GIT_DIR;
+          else process.env.GIT_DIR = savedGitDir;
+          rmSync(elsewhere, { recursive: true, force: true });
+        }
+      });
+    },
+  );
+});
+
 test('resolveCurrentGithubRepository: inside Actions a checkout with no origin takes the gh lookup (#4110)', () => {
   withRepositoryVariables(
     { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'o/r' },
@@ -3104,6 +3167,10 @@ test('repositoryFromRemoteUrl: names the host, owner and repository of URL-shape
   assert.equal(repositoryFromRemoteUrl('/srv/git/o/r.git'), null);
   assert.equal(repositoryFromRemoteUrl('file:///srv/git/o/r.git'), null);
   assert.equal(repositoryFromRemoteUrl('https://github.com/o'), null);
+  assert.equal(
+    repositoryFromRemoteUrl('https://github.com/outer/inner/r.git'),
+    null,
+  );
   assert.equal(repositoryFromRemoteUrl(''), null);
 });
 

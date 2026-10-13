@@ -3995,10 +3995,12 @@ export function repositoryFromRemoteUrl(remote) {
     host = scp[1] ?? '';
     path = scp[2] ?? '';
   }
+  // Exactly `owner/repo`: a longer path such as `outer/inner/repo` names a
+  // different repository than its last two segments would suggest.
   const parts = path.split('/').filter((part) => part !== '');
-  if (parts.length < 2) return null;
-  const owner = parts[parts.length - 2] ?? '';
-  const repo = (parts[parts.length - 1] ?? '').replace(/\.git$/u, '');
+  if (parts.length !== 2) return null;
+  const owner = parts[0] ?? '';
+  const repo = (parts[1] ?? '').replace(/\.git$/u, '');
   return host && owner && repo
     ? { host: host.toLowerCase(), owner, repo }
     : null;
@@ -4031,6 +4033,13 @@ function originNamesRepository(owner, repo) {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 10_000,
+      // An inherited GIT_DIR, GIT_WORK_TREE, or GIT_CONFIG_* would point this
+      // read at another repository, so the git subprocess gets no GIT_* names.
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(
+          ([name]) => !name.startsWith('GIT_'),
+        ),
+      ),
     });
   } catch {
     return false;
