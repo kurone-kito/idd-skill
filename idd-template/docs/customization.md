@@ -1054,10 +1054,12 @@ belong to the repository.
 
 Issues IDD parks on purpose carry the label fields
 `labels.roadmapLabelName`, `labels.blockedByHumanLabelName`,
-`labels.needsDecisionLabelName` and `issueAuthoring.authoringLabelName`
-(defaults `roadmap`, `status:blocked-by-human`, `status:needs-decision`
-and `status:authoring`). An automatic close of a roadmap's tracked child
-is indistinguishable from completed work to the A1.5 roadmap audit. So
+`labels.needsDecisionLabelName`, `labels.authoringOnlyLabelName`, and
+`issueAuthoring.authoringLabelName` (defaults `roadmap`,
+`status:blocked-by-human`, `status:needs-decision`,
+`status:authoring-only`, and `status:authoring`). An automatic close of
+a roadmap's tracked child is indistinguishable from completed work to the
+A1.5 roadmap audit. So
 the workflow either sets `days-before-close: -1`, which marks issues
 stale but never closes them (the source repository's choice since
 kurone-kito/idd-skill#831), or exempts the configured values of all four
@@ -1144,7 +1146,8 @@ hand-copying a placeholder recipe:
 
    It reads the target repository's own configured (or defaulted)
    `labels.roadmapLabelName` / `labels.blockedByHumanLabelName` /
-   `labels.needsDecisionLabelName` and the declared logins, then writes
+   `labels.needsDecisionLabelName` / `labels.authoringOnlyLabelName` and
+   the declared logins, then writes
    `.github/workflows/strip-untrusted-labels.yml` with the same trust
    model documented below (least-privilege `permissions:`, no
    checkout, `pull_request_target` for the PR branch,
@@ -1189,12 +1192,14 @@ the recipe by hand. Save it as
 `<...>` placeholder before use:
 
 - `<roadmap-label-name>`, `<blocked-by-human-label-name>`,
-  `<needs-decision-label-name>`: this repository's actual **configured**
-  `labels.roadmapLabelName`, `labels.blockedByHumanLabelName`, and
-  `labels.needsDecisionLabelName` values from `.github/idd/config.json`
-  (the distributed defaults `roadmap`, `status:blocked-by-human`, and
-  `status:needs-decision` if unconfigured) — never the distributed
-  defaults unconditionally, since a repository that renamed these
+  `<needs-decision-label-name>`, `<authoring-only-label-name>`: this
+  repository's actual **configured** `labels.roadmapLabelName`,
+  `labels.blockedByHumanLabelName`, `labels.needsDecisionLabelName`, and
+  `labels.authoringOnlyLabelName` values from `.github/idd/config.json`
+  (the distributed defaults `roadmap`, `status:blocked-by-human`,
+  `status:needs-decision`, and `status:authoring-only` if unconfigured) —
+  never the distributed defaults unconditionally, since a repository that
+  renamed these
   labels must guard the names it actually uses.
 - `<labeler-bot-login-1>`, `<labeler-bot-login-2>`, ...: the login(s) of
   whichever semantic issue auto-labeler(s) this repository actually
@@ -1340,9 +1345,10 @@ jobs:
 both variable conditions above are per-adopter values the template
 cannot know in advance. The reserved label set depends on whether the
 adopter customized `labels.roadmapLabelName` /
-`labels.blockedByHumanLabelName` / `labels.needsDecisionLabelName` away
-from the distributed defaults, and the untrusted-actor login depends on
-which semantic issue auto-labeler, if any, the adopter's repository
+`labels.blockedByHumanLabelName` / `labels.needsDecisionLabelName` /
+`labels.authoringOnlyLabelName` away from the distributed defaults, and
+the untrusted-actor login depends on which semantic issue auto-labeler, if
+any, the adopter's repository
 actually runs. A shipped file carrying this source repository's own
 values would silently protect the wrong labels or actors for any
 adopter who configured `labels.*` or runs a different labeler — worse
