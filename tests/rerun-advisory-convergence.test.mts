@@ -5020,3 +5020,397 @@ test('#3859: --refresh-latest output carries no workflow-definition note', () =>
   );
   assert.ok(!JSON.stringify(refresh).includes(WORKFLOW_DEFINITION_TEXT));
 });
+
+// --- #4113: report which attempt superseded a row ----------------------
+
+function noSupersessionFixture() {
+  return computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: '1001',
+          runId: '5001',
+          conclusion: 'failure',
+        }),
+        baseInstance({
+          checkRunId: '1002',
+          runId: '5002',
+          conclusion: 'success',
+          htmlUrl:
+            'https://github.com/kurone-kito/idd-skill/actions/runs/5002/job/9002',
+        }),
+        baseInstance({
+          checkRunId: '1003',
+          runId: '5003',
+          status: 'in_progress',
+          conclusion: null,
+          completedAt: null,
+          htmlUrl:
+            'https://github.com/kurone-kito/idd-skill/actions/runs/5003/job/9003',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+}
+
+// Output of noSupersessionFixture() captured before #4113 changed the code:
+// instances had no supersededBy field and counts had no superseded field.
+const PRE_4113_NO_SUPERSESSION_PLAN = {
+  protocolVersion: '1',
+  prNumber: 1431,
+  prHeadSha: '1111111111111111111111111111111111111111',
+  checkName: 'idd-advisory-convergence',
+  now: '2026-07-16T12:00:00Z',
+  instances: [
+    {
+      checkRunId: '1001',
+      status: 'completed',
+      conclusion: 'failure',
+      htmlUrl:
+        'https://github.com/kurone-kito/idd-skill/actions/runs/5001/job/9001',
+      startedAt: '2026-07-16T10:00:00Z',
+      completedAt: '2026-07-16T10:05:00Z',
+      runId: '5001',
+      runLookupFailed: false,
+      runEvent: 'pull_request',
+      actorLogin: 'kurone-kito',
+      actorType: 'User',
+      triggeringActorLogin: 'kurone-kito',
+      triggeringActorType: 'User',
+      runAttempt: 1,
+      classification: 'rerun-eligible',
+      reason:
+        'conclusion "failure" is non-passing and resolved (event "pull_request"); safe to rerun',
+      rerunBudgetHeld: false,
+    },
+    {
+      checkRunId: '1002',
+      status: 'completed',
+      conclusion: 'success',
+      htmlUrl:
+        'https://github.com/kurone-kito/idd-skill/actions/runs/5002/job/9002',
+      startedAt: '2026-07-16T10:00:00Z',
+      completedAt: '2026-07-16T10:05:00Z',
+      runId: '5002',
+      runLookupFailed: false,
+      runEvent: 'pull_request',
+      actorLogin: 'kurone-kito',
+      actorType: 'User',
+      triggeringActorLogin: 'kurone-kito',
+      triggeringActorType: 'User',
+      runAttempt: 1,
+      classification: 'pass',
+      reason: 'conclusion "success" is pass-equivalent',
+      rerunBudgetHeld: false,
+    },
+    {
+      checkRunId: '1003',
+      status: 'in_progress',
+      conclusion: null,
+      htmlUrl:
+        'https://github.com/kurone-kito/idd-skill/actions/runs/5003/job/9003',
+      startedAt: '2026-07-16T10:00:00Z',
+      completedAt: null,
+      runId: '5003',
+      runLookupFailed: false,
+      runEvent: 'pull_request',
+      actorLogin: 'kurone-kito',
+      actorType: 'User',
+      triggeringActorLogin: 'kurone-kito',
+      triggeringActorType: 'User',
+      runAttempt: 1,
+      classification: 'pending',
+      reason:
+        'status "in_progress" has not concluded yet; rerunning a live run would cancel it instead of recovering it',
+      rerunBudgetHeld: false,
+    },
+  ],
+  counts: {
+    pass: 1,
+    pending: 1,
+    botGatedSkip: 0,
+    unresolved: 0,
+    awaitingFreshReview: 0,
+    rerunEligible: 1,
+    rerunBudgetHeld: 0,
+    total: 3,
+  },
+  plan: [
+    {
+      runId: '5001',
+      command: 'gh run rerun 5001',
+      checkRunIds: ['1001'],
+      startedAt: '2026-07-16T10:00:00Z',
+    },
+  ],
+  planCaveat:
+    'Rerun the rerun-eligible instances ONE AT A TIME, in the order listed below, waiting for each `gh run rerun` to finish before starting the next -- rerunning several concurrently makes them cancel each other via the shared concurrency group.',
+  workflowDefinitionNote: '',
+  recoveryRefreshPlan: [],
+  recoveryRefreshCaveat: '',
+  liveCoverageRecoveryPlan: [],
+  liveCoverageRecoveryCaveat: '',
+  passedSiblingRecoveryPlan: [],
+  passedSiblingRecoveryCaveat: '',
+  rerunPolicy: 'rerun-once',
+  rerunPolicyHoldNotice: '',
+};
+
+function withoutKey(record: object, key: string): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(record).filter(([name]) => name !== key),
+  );
+}
+
+function supersededFailureFixture() {
+  return computeRerunPlan(
+    baseInput({
+      instances: [
+        // Run metadata is per run, so both rows carry the run's latest
+        // attempt number; the superseded row is then a rerun-budget hold.
+        baseInstance({
+          checkRunId: 'attempt-1',
+          runId: '9101',
+          conclusion: 'failure',
+          runAttempt: 2,
+          runStartedAt: '2026-07-16T09:55:00Z',
+          completedAt: '2026-07-16T10:00:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'attempt-2',
+          runId: '9101',
+          conclusion: 'success',
+          runAttempt: 2,
+          runStartedAt: '2026-07-16T10:30:00Z',
+          completedAt: '2026-07-16T10:40:00Z',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+}
+
+test('#4113: a superseded failure names the later passing attempt and is not rerun-eligible', () => {
+  const plan = supersededFailureFixture();
+  assert.equal(
+    plan.instances.find((instance) => instance.checkRunId === 'attempt-1')
+      ?.supersededBy,
+    'attempt-2',
+  );
+  assert.equal(
+    plan.instances.find((instance) => instance.checkRunId === 'attempt-2')
+      ?.supersededBy,
+    null,
+  );
+  assert.equal(plan.counts.rerunEligible, 0);
+  assert.equal(plan.counts.superseded, 1);
+  assert.equal(plan.counts.pass, 1);
+  assert.equal(plan.counts.total, 2);
+  assert.equal(plan.plan.length, 0);
+  // The superseded row is not a live budget hold, so no hold notice appears.
+  assert.equal(plan.counts.rerunBudgetHeld, 0);
+  assert.equal(plan.rerunPolicyHoldNotice, '');
+  // Buckets still add up to total, with rerunBudgetHeld counted separately.
+  const { rerunBudgetHeld, total, ...bucketCounts } = plan.counts;
+  assert.equal(
+    Object.values(bucketCounts).reduce((sum, value) => sum + value, 0),
+    total,
+  );
+  assert.equal(rerunBudgetHeld, 0);
+});
+
+test('#4113: a superseded pass keeps its pass bucket and reports the later attempt', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'attempt-1',
+          runId: '9102',
+          runAttempt: 2,
+          runStartedAt: '2026-07-16T09:55:00Z',
+          completedAt: '2026-07-16T10:00:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'attempt-2',
+          runId: '9102',
+          runAttempt: 2,
+          runStartedAt: '2026-07-16T10:30:00Z',
+          completedAt: '2026-07-16T10:40:00Z',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(
+    plan.instances.find((instance) => instance.checkRunId === 'attempt-1')
+      ?.supersededBy,
+    'attempt-2',
+  );
+  assert.equal(plan.counts.pass, 2);
+  assert.equal(plan.counts.superseded, 0);
+  assert.equal(plan.counts.rerunEligible, 0);
+});
+
+test('#4113: a fixture without supersession keeps the pre-change output', () => {
+  const plan = noSupersessionFixture();
+  assert.ok(plan.instances.every((instance) => instance.supersededBy === null));
+  assert.equal(plan.counts.superseded, 0);
+  const actual = JSON.parse(
+    JSON.stringify({
+      ...plan,
+      instances: plan.instances.map((instance) =>
+        withoutKey(instance, 'supersededBy'),
+      ),
+      counts: withoutKey(plan.counts, 'superseded'),
+    }),
+  );
+  assert.deepEqual(actual, PRE_4113_NO_SUPERSESSION_PLAN);
+});
+
+test('#4113: the stderr summary names the superseding check run only when a non-pass row is superseded', () => {
+  const sections = buildRerunPlanTextSections(supersededFailureFixture());
+  const supersessionLines = sections.filter((section) =>
+    /superseded by a later attempt of the same run/.test(section),
+  );
+  assert.equal(supersessionLines.length, 1);
+  assert.match(
+    supersessionLines[0] ?? '',
+    /^1 instance\(s\) superseded by a later attempt of the same run \(check run attempt-2\)/,
+  );
+
+  const noSupersession = buildRerunPlanTextSections(noSupersessionFixture());
+  assert.equal(
+    noSupersession.some((section) =>
+      /superseded by a later attempt/.test(section),
+    ),
+    false,
+  );
+
+  const supersededPass = buildRerunPlanTextSections(
+    computeRerunPlan(
+      baseInput({
+        instances: [
+          baseInstance({
+            checkRunId: 'attempt-1',
+            runId: '9102',
+            runAttempt: 1,
+            runStartedAt: '2026-07-16T09:55:00Z',
+            completedAt: '2026-07-16T10:00:00Z',
+          }),
+          baseInstance({
+            checkRunId: 'attempt-2',
+            runId: '9102',
+            runAttempt: 2,
+            runStartedAt: '2026-07-16T10:30:00Z',
+            completedAt: '2026-07-16T10:40:00Z',
+          }),
+        ],
+      }),
+      baseOptions(),
+    ),
+  );
+  assert.equal(
+    supersededPass.some((section) =>
+      /superseded by a later attempt/.test(section),
+    ),
+    false,
+  );
+});
+
+test('#4113: superseded rows from two runs name both superseding check runs', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'run-a-attempt-1',
+          runId: '9201',
+          conclusion: 'failure',
+          runAttempt: 2,
+          runStartedAt: '2026-07-16T09:55:00Z',
+          completedAt: '2026-07-16T10:00:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'run-a-attempt-2',
+          runId: '9201',
+          conclusion: 'success',
+          runAttempt: 2,
+          runStartedAt: '2026-07-16T10:30:00Z',
+          completedAt: '2026-07-16T10:40:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'run-b-attempt-1',
+          runId: '9202',
+          conclusion: 'failure',
+          runAttempt: 2,
+          runStartedAt: '2026-07-16T09:56:00Z',
+          completedAt: '2026-07-16T10:01:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'run-b-attempt-2',
+          runId: '9202',
+          conclusion: 'success',
+          runAttempt: 2,
+          runStartedAt: '2026-07-16T10:31:00Z',
+          completedAt: '2026-07-16T10:41:00Z',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.counts.superseded, 2);
+  assert.equal(plan.counts.rerunEligible, 0);
+  const supersessionLine = buildRerunPlanTextSections(plan).find((section) =>
+    /superseded by a later attempt/.test(section),
+  );
+  assert.match(
+    supersessionLine ?? '',
+    /^2 instance\(s\) superseded by a later attempt of the same run \(check runs run-a-attempt-2, run-b-attempt-2\)/,
+  );
+});
+
+test('#4113: a superseded pass beside a superseded failure counts only the failure', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        baseInstance({
+          checkRunId: 'failed-job',
+          runId: '9301',
+          conclusion: 'failure',
+          runAttempt: 2,
+          runStartedAt: '2026-07-16T10:30:00Z',
+          completedAt: '2026-07-16T10:00:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'passed-job',
+          runId: '9301',
+          conclusion: 'success',
+          runAttempt: 2,
+          runStartedAt: '2026-07-16T10:30:00Z',
+          completedAt: '2026-07-16T10:01:00Z',
+        }),
+        baseInstance({
+          checkRunId: 'attempt-2',
+          runId: '9301',
+          conclusion: 'success',
+          runAttempt: 2,
+          runStartedAt: '2026-07-16T10:30:00Z',
+          completedAt: '2026-07-16T10:40:00Z',
+        }),
+      ],
+    }),
+    baseOptions(),
+  );
+  assert.equal(plan.counts.superseded, 1);
+  assert.equal(plan.counts.pass, 2);
+  assert.equal(
+    plan.instances.find((instance) => instance.checkRunId === 'passed-job')
+      ?.supersededBy,
+    'attempt-2',
+  );
+  const supersessionLines = buildRerunPlanTextSections(plan).filter((section) =>
+    /superseded by a later attempt/.test(section),
+  );
+  assert.equal(supersessionLines.length, 1);
+  assert.match(supersessionLines[0] ?? '', /^1 instance\(s\) superseded/);
+});
