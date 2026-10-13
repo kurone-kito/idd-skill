@@ -1284,9 +1284,10 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    result above applies to it as written, and so does `already_owned` with
    action `keep`, which the helper reports when F4 has removed the worktree but
    the worker has not yet posted `unclaimed-by`, so its running worker, if any,
-   still holds a slot. Any other result, including an unreadable worktree, is
-   reported to the operator with its state, and no further action is taken on
-   that issue.
+   still holds a slot. A `stale` result goes to the takeover path in
+   `idd-resume.instructions.md`, as it does for a claim with a worktree. Any
+   other result, including an unreadable worktree, is reported to the operator
+   with its state, and no further action is taken on that issue.
 3. **Re-attach workers.** Read the live worker list from the harness's agent
    listing, and match each entry, by the issue number and claim id in the
    worker's brief, to an own claim. Count every matched own worker not yet
