@@ -5414,3 +5414,78 @@ test('#4113: a superseded pass beside a superseded failure counts only the failu
   assert.equal(supersessionLines.length, 1);
   assert.match(supersessionLines[0] ?? '', /^1 instance\(s\) superseded/);
 });
+
+// --- #4150: skip superseded rows in the live-coverage plan ------------------
+
+test('#4150: a held live-coverage row superseded by a later passing attempt is not planned', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        // Attempt 2 of run 7100 spent its rerun budget, failed, and completed
+        // before attempt 3 started.
+        baseInstance({
+          checkRunId: 'stale-row',
+          runId: '7100',
+          conclusion: 'failure',
+          runAttempt: 2,
+          startedAt: '2026-07-16T10:00:00Z',
+          completedAt: '2026-07-16T10:05:00Z',
+          runStartedAt: '2026-07-16T10:00:00Z',
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+        // Attempt 3 of run 7100 is the latest attempt, and it passed.
+        baseInstance({
+          checkRunId: 'latest-pass',
+          runId: '7100',
+          conclusion: 'success',
+          runAttempt: 3,
+          startedAt: '2026-07-16T11:00:00Z',
+          completedAt: '2026-07-16T11:05:00Z',
+          runStartedAt: '2026-07-16T11:00:00Z',
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  const liveCoverageQueued = plan.liveCoverageRecoveryPlan.flatMap(
+    (entry) => entry.checkRunIds,
+  );
+  const ordinaryQueued = plan.plan.flatMap((entry) => entry.checkRunIds);
+  assert.equal(liveCoverageQueued.includes('stale-row'), false);
+  assert.equal(ordinaryQueued.includes('stale-row'), false);
+});
+
+test('#4150: a held live-coverage duplicate that completed after the latest attempt started is still planned', () => {
+  const plan = computeRerunPlan(
+    baseInput({
+      instances: [
+        // Attempt 2 of run 7100 completed after attempt 3 started, so the
+        // workflow API does not prove it was superseded.
+        baseInstance({
+          checkRunId: 'dup-row',
+          runId: '7100',
+          conclusion: 'failure',
+          runAttempt: 2,
+          startedAt: '2026-07-16T10:00:00Z',
+          completedAt: '2026-07-16T11:02:00Z',
+          runStartedAt: '2026-07-16T10:00:00Z',
+          verdictReasons: [UNCOVERED_HEAD_HISTORICAL_REASON],
+        }),
+        baseInstance({
+          checkRunId: 'latest-pass',
+          runId: '7100',
+          conclusion: 'success',
+          runAttempt: 3,
+          startedAt: '2026-07-16T11:00:00Z',
+          completedAt: '2026-07-16T11:05:00Z',
+          runStartedAt: '2026-07-16T11:00:00Z',
+        }),
+      ],
+    }),
+    baseOptions({ headCoverageSatisfied: true }),
+  );
+  const queued = [...plan.liveCoverageRecoveryPlan, ...plan.plan].flatMap(
+    (entry) => entry.checkRunIds,
+  );
+  assert.equal(queued.includes('dup-row'), true);
+});
