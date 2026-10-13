@@ -1122,6 +1122,12 @@ instructions.
   earlier step has changed state, the observable outcome and the next action; a
   draft that cannot state that outcome is revised before the mechanical gate,
   and if it still cannot after revision, it goes to needs-decision.
+- a finding whose claim is identical to a `previously rejected:` string's
+  claim (wording may differ), in the same `draftSection`, is reported as a
+  repeat candidate that quotes that string, not as a new finding; the reviewer
+  does not decide that the rejection still holds, and the author applies the repeat
+  test (see
+  [Carry-forward of rejected findings](#carry-forward-of-rejected-findings))
 
 ### Resolver
 
@@ -1208,6 +1214,8 @@ itself may be empty, and no other field is allowed at either level. The packet
 stays the bounded set defined above: it never carries the whole conversation
 or unbounded work instructions. The shape is published as the
 [issue-authoring review input schema][issue-authoring-review-input-schema].
+The `evidence` array may also carry `previously rejected:` strings, which
+the [carry-forward rule](#carry-forward-of-rejected-findings) adds.
 
 **Output.** The command writes free-form findings to stdout, read the same way
 a subagent's critique response is read; no machine-readable output schema is
@@ -1228,6 +1236,77 @@ candidate files, dependency edges, roadmap task-list or relationship
 wiring, scope or the proposed change, or the readiness bucket.
 Wording-only edits do not start another review. The body that enters
 the linter is the reviewed body plus those wording-only edits.
+
+A disposition for a repeat of a rejected finding follows the
+[carry-forward rule](#carry-forward-of-rejected-findings): it cites the
+ledger entry and re-reads that entry's evidence against the repository as it
+stands now.
+
+### Carry-forward of rejected findings
+
+Each round gives a fresh reviewer only the packet, so the reviewer cannot
+see how an earlier round dispositioned a finding. Without a record, a claim
+that an earlier round rejected is raised again in a later round, often with
+different wording. Observed 2026-10-13 in one drafting session (recorded in
+issue `#4101`): the pin list for the policy audit was flagged in two rounds,
+and the recovery path for an empty handle in three rounds, each time with
+different wording, at about 100,000 reviewer tokens per round.
+
+**Ledger.** During a drafting session, keep a findings ledger in the session
+scratchpad, one JSON file per draft, named for that draft: its issue number
+once one exists, or, before then, a token that no other draft uses, such as a
+freshly generated UUID. When the draft gets its issue number, rename the file
+to that number and keep every entry. No two drafts or concurrent workers share
+a ledger file. The ledger is never written to the repository or to a marker.
+Each entry has these members: `claim` (one sentence), `draftSection` (the
+heading the finding concerns), `round`, `draftVersion` (the draft revision the
+finding was raised against, counted from 1; recorded for audit only),
+`disposition` (`fixed`, `rejected`, or `deferred`), `evidence` (required for
+`rejected`: a file and line, or a read-only command and its output), and
+`decidedAt`. If the scratchpad is lost, for example after a restart, the
+ledger is empty and the review runs as it does without one. Record an entry
+for every finding as soon as its disposition is decided, before the next
+review round. A later disposition of the same finding updates that entry.
+
+**Packet.** For each `rejected` entry that has evidence, add one string to the
+packet's existing `evidence` array, in every review mode:
+`previously rejected: <claim> (draftSection: <heading>; evidence: <evidence>)`.
+Keep each string to one line, shortening longer evidence to the line that
+decides it. Do not add a field. The packet keeps its five fields, so the
+input schema does not change. Only these strings are added to the packet
+from the ledger.
+
+**Reviewer.** The checklist item above applies. A reviewer reports a finding
+whose claim is identical to a `previously rejected:` string's claim, in the
+same `draftSection`, as a repeat candidate that quotes that string. The
+reviewer does not decide that the rejection still holds, and does not judge
+whether the finding brings new information: the author applies the repeat test
+to each reported repeat candidate.
+
+**Repeat test.** A finding is a repeat only when its claim is identical to the
+entry's claim, meaning the same substantive claim with wording ignored, and it
+is in the same `draftSection`. A finding with a different claim, or only a
+related topic in that section, is new. A finding that brings information the
+earlier rejection did not address is new, even when its claim is identical to
+an entry's claim. The author applies this test to each reported repeat
+candidate.
+
+**Author.** For each reported repeat candidate, first apply the repeat test.
+Only a finding that passes it is a repeat. Then re-read the entry's evidence
+against the repository as it stands now: the file and line, or the cited
+read-only command re-run. If the evidence still holds, confirm that the
+finding brings nothing the earlier rejection did not address, then record a
+fresh disposition that cites the entry. The earlier disposition alone is not
+proof. If the evidence changed, or the finding brings new information, the
+finding reopens as a new finding.
+
+**Carry-forward limits.**
+
+- A rejected entry without evidence is not carried forward.
+- A fixed entry is never carried forward; the revised draft is checked
+  against its claim again.
+- A deferred entry stays open until the author decides, and a draft with an
+  open deferred entry is not published.
 
 ## Mechanical pre-publish gate
 
