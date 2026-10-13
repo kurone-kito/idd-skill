@@ -6622,6 +6622,66 @@ export function findLastCopilotReviewCommit(
   return latest?.commitId ?? '';
 }
 
+/**
+ * `true` when `author` is a verified Copilot (or the configured primary
+ * bot login)-authored review/comment -- reuses `isCopilotReviewerLogin`
+ * (protocol-helpers.mts) for the login match itself (the exact,
+ * lookalike-resistant comparison #1686 hardened), plus (when the payload
+ * carries it) a `__typename === 'Bot'` check so a same-named `User`
+ * account cannot masquerade as the trusted bot even if it somehow matched
+ * the login. A payload that omits `__typename` is treated as "unknown",
+ * never as a rejection, since not every GraphQL query in this codebase
+ * selects that field.
+ */
+export function isVerifiedCopilotAuthor(
+  author: CopilotAuthorLike | null | undefined,
+  primaryBotLogin: string,
+): boolean {
+  const typename = author?.__typename;
+  if (!isCopilotReviewerLogin(author?.login ?? '', primaryBotLogin, typename)) {
+    return false;
+  }
+  return typename === undefined || typename === null || typename === 'Bot';
+}
+
+/** Structural author shape the Copilot selector reads. Matches
+ * `GhAuthorPayload` in review-clause.mts; declared here so this module does
+ * not import review-clause.mts (which imports this module). */
+export interface CopilotAuthorLike {
+  login?: string | null;
+  __typename?: string | null;
+}
+
+/** Structural review shape the Copilot selector reads. `ReviewPayload` in
+ * review-clause.mts satisfies it. */
+export interface CopilotSelectableReviewLike {
+  author?: CopilotAuthorLike | null;
+  body?: string | null;
+  replyOnly?: boolean | null;
+}
+
+/** Return the absolute-latest eligible primary review's provider-order index.
+ * Keep this selector shared with {@link resolveLatestCopilotReviewClause} so
+ * callers that need to compare an older finding against the selected review
+ * cannot accidentally choose the latest on-head review instead. */
+export function findLatestCopilotReviewIndex(
+  reviews: readonly CopilotSelectableReviewLike[],
+  primaryBotLogin: string,
+): number {
+  let latestIndex = -1;
+  for (let index = 0; index < reviews.length; index += 1) {
+    const review = reviews[index];
+    if (
+      isVerifiedCopilotAuthor(review.author, primaryBotLogin) &&
+      !isCopilotErrorReviewBody(review.body) &&
+      review.replyOnly !== true
+    ) {
+      latestIndex = index;
+    }
+  }
+  return latestIndex;
+}
+
 export function isCopilotPending(
   requestedReviewers: RequestedReviewerLike[],
   primaryBotLogin: string = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,

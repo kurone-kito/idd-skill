@@ -40,11 +40,16 @@ import {
   compareIsoTimestamps,
   DISPOSITION_ACCEPTED_PREFIX_RE,
   DISPOSITION_REJECTED_PREFIX_RE,
+  findLatestCopilotReviewIndex,
   hasTrustedReviewAckAfter,
-  isCopilotErrorReviewBody,
-  isCopilotReviewerLogin,
   normalizeTrustedMarkerLogins,
 } from './protocol-helpers.mjs';
+
+export {
+  findLatestCopilotReviewIndex,
+  isVerifiedCopilotAuthor,
+} from './protocol-helpers.mjs';
+
 import { createGithubProviderAdapter } from './provider-adapter-github.mjs';
 
 // Re-exported (#3258) so an existing importer of the review-body shape
@@ -76,42 +81,6 @@ export { classifyCopilotReviewBody } from './copilot-review-body.mjs';
 // audit:ignore-dead-export: no caller found anywhere by #3478's first repo-wide run, not even a test; left for follow-up triage rather than an unreviewed removal in this PR
 export function parseSuppressedCommentCount(body) {
   return classifyCopilotReviewBody(body).suppressedCount;
-}
-/**
- * `true` when `author` is a verified Copilot (or the configured primary
- * bot login)-authored review/comment -- reuses `isCopilotReviewerLogin`
- * (protocol-helpers.mts) for the login match itself (the exact,
- * lookalike-resistant comparison #1686 hardened), plus (when the payload
- * carries it) a `__typename === 'Bot'` check so a same-named `User`
- * account cannot masquerade as the trusted bot even if it somehow matched
- * the login. A payload that omits `__typename` is treated as "unknown",
- * never as a rejection, since not every GraphQL query in this codebase
- * selects that field.
- */
-export function isVerifiedCopilotAuthor(author, primaryBotLogin) {
-  const typename = author?.__typename;
-  if (!isCopilotReviewerLogin(author?.login ?? '', primaryBotLogin, typename)) {
-    return false;
-  }
-  return typename === undefined || typename === null || typename === 'Bot';
-}
-/** Return the absolute-latest eligible primary review's provider-order index.
- * Keep this selector shared with {@link resolveLatestCopilotReviewClause} so
- * callers that need to compare an older finding against the selected review
- * cannot accidentally choose the latest on-head review instead. */
-export function findLatestCopilotReviewIndex(reviews, primaryBotLogin) {
-  let latestIndex = -1;
-  for (let index = 0; index < reviews.length; index += 1) {
-    const review = reviews[index];
-    if (
-      isVerifiedCopilotAuthor(review.author, primaryBotLogin) &&
-      !isCopilotErrorReviewBody(review.body) &&
-      review.replyOnly !== true
-    ) {
-      latestIndex = index;
-    }
-  }
-  return latestIndex;
 }
 /** Evaluate Clause 1 against the single, absolute-latest Copilot review --
  * per the issue's literal wording ("the latest Copilot review's commit_id
