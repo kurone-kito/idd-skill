@@ -65,7 +65,7 @@
           },
           "hint": {
             "type": "string",
-            "description": "Optional next-step text, present only when the blocking gate can name one (currently review-currency with a missing watermark). Diagnostic only; detail is unchanged and no routing decision reads it."
+            "description": "Optional next-step text, present only when the blocking gate can name one (currently review-currency with a missing watermark, and ci when ci.status is missing on a head whose branchCurrency.mergeStateStatus is DIRTY). Diagnostic only; detail is unchanged and no routing decision reads it."
           }
         },
         "additionalProperties": false
