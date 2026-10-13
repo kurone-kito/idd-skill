@@ -387,7 +387,7 @@ below.
 
 From A2, keep only issues that satisfy **all** of the following:
 
-- No configured blocked-by-human or needs-decision label
+- No configured blocked-by-human, needs-decision, or authoring-only label
 - No configured authoring label
 - No open dependent issues (parent epics / aggregate issues that are
   still open are acceptable)

@@ -198,6 +198,12 @@ interface EvaluateDiscoverReadinessOptions {
   blockedByHumanLabelName?: string;
   /** Configured `labels.needsDecisionLabelName` (#1273). */
   needsDecisionLabelName?: string;
+  /**
+   * Configured `labels.authoringOnlyLabelName` (default
+   * `status:authoring-only`). An issue whose deliverable is other issues,
+   * with no commit or pull request, carries it and is excluded from Discover.
+   */
+  authoringOnlyLabelName?: string;
   autopilotSuitabilityFloor?: number;
   autopilotSuitabilityEnabled?: boolean;
   /** #3284: the current repository as `"owner/repo"`, fed from the CLI's
@@ -383,6 +389,7 @@ async function main(): Promise<HelperCliResult> {
     roadmapLabelName: labelsPolicy.roadmapLabelName,
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+    authoringOnlyLabelName: labelsPolicy.authoringOnlyLabelName,
     autopilotSuitabilityFloor:
       args.swarmFloor ?? resolveSuitabilityFloor(policyConfig),
     autopilotSuitabilityEnabled: resolveSuitabilityEnabled(policyConfig),
@@ -416,6 +423,7 @@ export async function evaluateDiscoverReadiness(
     roadmapLabelName: rawRoadmapLabelName,
     blockedByHumanLabelName: rawBlockedByHumanLabelName,
     needsDecisionLabelName: rawNeedsDecisionLabelName,
+    authoringOnlyLabelName: rawAuthoringOnlyLabelName,
     autopilotSuitabilityFloor,
     autopilotSuitabilityEnabled,
     currentRepo,
@@ -431,19 +439,24 @@ export async function evaluateDiscoverReadiness(
     typeof fetchCommentsByIssueNumber === 'function' &&
     Array.isArray(trustedMarkerLogins) &&
     trustedMarkerLogins.length > 0;
-  // Route the three label-name options through normalizePolicyConfig rather
+  // Route the four label-name options through normalizePolicyConfig rather
   // than a bare destructure default (which only applies on `undefined`), so
   // an invalid or empty-string input also falls back to POLICY_DEFAULTS
   // instead of silently disabling the blocked-label / roadmap-label checks
   // below (consistent with the other five helpers in #1273).
-  const { roadmapLabelName, blockedByHumanLabelName, needsDecisionLabelName } =
-    normalizePolicyConfig({
-      labels: {
-        roadmapLabelName: rawRoadmapLabelName,
-        blockedByHumanLabelName: rawBlockedByHumanLabelName,
-        needsDecisionLabelName: rawNeedsDecisionLabelName,
-      },
-    }).labels;
+  const {
+    roadmapLabelName,
+    blockedByHumanLabelName,
+    needsDecisionLabelName,
+    authoringOnlyLabelName,
+  } = normalizePolicyConfig({
+    labels: {
+      roadmapLabelName: rawRoadmapLabelName,
+      blockedByHumanLabelName: rawBlockedByHumanLabelName,
+      needsDecisionLabelName: rawNeedsDecisionLabelName,
+      authoringOnlyLabelName: rawAuthoringOnlyLabelName,
+    },
+  }).labels;
   if (typeof loadIssue !== 'function') {
     throw new Error(
       'evaluateDiscoverReadiness requires loadIssue(issueNumber)',
@@ -553,6 +566,9 @@ export async function evaluateDiscoverReadiness(
     }
     if (labels.has(needsDecisionLabelName)) {
       reasons.add(`label:${needsDecisionLabelName}`);
+    }
+    if (labels.has(authoringOnlyLabelName)) {
+      reasons.add(`label:${authoringOnlyLabelName}`);
     }
     if (labels.has(authoringLabelName)) {
       reasons.add(`label:${authoringLabelName}`);

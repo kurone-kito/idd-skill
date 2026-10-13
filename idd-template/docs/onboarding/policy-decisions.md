@@ -285,7 +285,7 @@ changes per resolved commit.
 
 ### IDD label names
 
-Confirm whether the repository keeps the three distributed IDD label
+Confirm whether the repository keeps the four distributed IDD label
 names or maps them onto an existing local label taxonomy:
 
 - `labels.roadmapLabelName` (distributed default `roadmap`)
@@ -293,12 +293,14 @@ names or maps them onto an existing local label taxonomy:
   `status:blocked-by-human`)
 - `labels.needsDecisionLabelName` (distributed default
   `status:needs-decision`)
+- `labels.authoringOnlyLabelName` (distributed default
+  `status:authoring-only`)
 
 **Auto-labeler risk.** If the repository runs a semantic issue
 auto-labeler — a bot such as CodeRabbit's issue enrichment that infers
 labels from issue content instead of applying only labels a human or
 workflow explicitly requests — that labeler can apply any of these
-three configured label names to an ordinary issue on its own judgment,
+four configured label names to an ordinary issue on its own judgment,
 regardless of which label names the repository chose. The failure is
 silent: nothing errors, and the issue stops being an execution
 candidate (a spurious `labels.roadmapLabelName` match) or gets parked
@@ -317,7 +319,7 @@ restriction.** A semantic labeler's own configuration (for example, a
 `labeling_instructions` list scoped to content labels) supplies
 per-label guidance for the labels the product is told about — it does
 not narrow which labels the product's own auto-labeling heuristic may
-apply on its own. Leaving the three IDD label names out of that
+apply on its own. Leaving the four IDD label names out of that
 configuration does not stop the labeler from applying them; do not
 recommend or rely on that omission as a mitigation.
 

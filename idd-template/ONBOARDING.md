@@ -512,13 +512,14 @@ require explicit operator confirmation:
     evidence-based helper profile recommendation that still requires
     explicit operator confirmation)
 12. IDD label names (`labels.roadmapLabelName`,
-    `labels.blockedByHumanLabelName`, and
-    `labels.needsDecisionLabelName` — distributed defaults `roadmap`,
-    `status:blocked-by-human`, and `status:needs-decision`, or an
-    existing local label taxonomy). A semantic issue auto-labeler (for
-    example, CodeRabbit's issue enrichment) can auto-apply any of these
-    three configured label names to an ordinary issue with no error,
-    dropping it from execution candidates or parking it behind a hold;
+    `labels.blockedByHumanLabelName`, `labels.needsDecisionLabelName`,
+    `labels.authoringOnlyLabelName`; defaults `roadmap`,
+    `status:blocked-by-human`, `status:needs-decision`,
+    `status:authoring-only`, or a local taxonomy). A semantic issue
+    auto-labeler (for example, CodeRabbit's issue enrichment) can
+    auto-apply any of these four configured label names to an ordinary
+    issue with no error, dropping it from execution candidates or
+    parking it behind a hold;
     omitting a label from the labeler's own instruction list does not
     restrict which labels it may apply. When that risk applies, also
     confirm `labels.untrustedLabelerLogins`: declaring it lets a helper

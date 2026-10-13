@@ -291,6 +291,7 @@ interface ClassifyIssueOptions {
   authoringLabelName?: unknown;
   blockedByHumanLabelName?: unknown;
   needsDecisionLabelName?: unknown;
+  authoringOnlyLabelName?: unknown;
   roadmapLabelName?: unknown;
   /**
    * The configured `providerOutage.declarationTarget` issue number
@@ -337,6 +338,7 @@ interface FilterOrphanIssuesOptions {
   authoringLabelName?: unknown;
   blockedByHumanLabelName?: unknown;
   needsDecisionLabelName?: unknown;
+  authoringOnlyLabelName?: unknown;
   roadmapLabelName?: unknown;
   /** See {@link ClassifyIssueOptions.providerOutageDeclarationTarget}. */
   providerOutageDeclarationTarget?: number | null;
@@ -802,6 +804,9 @@ export function classifyIssue(
   const needsDecisionLabelName = normalizeNeedsDecisionLabelName(
     options.needsDecisionLabelName,
   );
+  const authoringOnlyLabelName = normalizeAuthoringOnlyLabelName(
+    options.authoringOnlyLabelName,
+  );
   // #4065 review fix (Codex P2): the same comparison the readiness check uses
   // for needs_decision_label_conflicts_with_authoring_label.
   const labelsCollide =
@@ -828,6 +833,7 @@ export function classifyIssue(
   const blockedLabels = new Set([
     blockedByHumanLabelName,
     needsDecisionLabelName,
+    authoringOnlyLabelName,
   ]);
   const blockedLabel = [...labels].find((label) => blockedLabels.has(label));
   if (blockedLabel) {
@@ -1180,6 +1186,7 @@ export async function filterOrphanIssues(
       authoringLabelName: options.authoringLabelName,
       blockedByHumanLabelName: options.blockedByHumanLabelName,
       needsDecisionLabelName: options.needsDecisionLabelName,
+      authoringOnlyLabelName: options.authoringOnlyLabelName,
       roadmapLabelName: options.roadmapLabelName,
       providerOutageDeclarationTarget: options.providerOutageDeclarationTarget,
       authoringJournalTarget: options.authoringJournalTarget,
@@ -1690,6 +1697,7 @@ async function produceOutput(
     authoringStaleAgeMs: policy.authoringStaleAgeMs,
     blockedByHumanLabelName: policy.blockedByHumanLabelName,
     needsDecisionLabelName: policy.needsDecisionLabelName,
+    authoringOnlyLabelName: policy.authoringOnlyLabelName,
     roadmapLabelName: policy.roadmapLabelName,
     providerOutageDeclarationTarget: durableTargets.providerOutageTarget,
     authoringJournalTarget: durableTargets.authoringJournalTarget,
@@ -2015,6 +2023,7 @@ export function loadPolicy(policyPath: string) {
     authoringStaleAgeMs: authoringPolicy.staleAgeMs,
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+    authoringOnlyLabelName: labelsPolicy.authoringOnlyLabelName,
     roadmapLabelName: labelsPolicy.roadmapLabelName,
     // #2800: own-property-omitted when unconfigured or invalid, matching
     // normalizePolicyConfig's own absence semantics -- resolved to
@@ -2211,6 +2220,13 @@ function normalizeNeedsDecisionLabelName(labelName: unknown): string {
   return typeof labelName === 'string' && labelName.length > 0
     ? labelName
     : POLICY_DEFAULTS.labels.needsDecisionLabelName;
+}
+
+/** Resolve the configured `labels.authoringOnlyLabelName`. */
+function normalizeAuthoringOnlyLabelName(labelName: unknown): string {
+  return typeof labelName === 'string' && labelName.length > 0
+    ? labelName
+    : POLICY_DEFAULTS.labels.authoringOnlyLabelName;
 }
 
 /**

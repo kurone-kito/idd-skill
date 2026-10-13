@@ -103,6 +103,7 @@
     "roadmapLabelName": "roadmap",
     "blockedByHumanLabelName": "status:blocked-by-human",
     "needsDecisionLabelName": "status:needs-decision",
+    "authoringOnlyLabelName": "status:authoring-only",
     "untrustedLabelerLogins": ["triage-bot"]
   },
   "mergeGate": {

@@ -478,7 +478,7 @@
         "idd-template/docs/onboarding/project-tuning.md",
         "idd-template/docs/onboarding/template-distribution.md"
       ],
-      "limitBytes": 175000
+      "limitBytes": 175150
     }
   ],
   "contextCeiling": {
@@ -505,6 +505,12 @@
         "limitBytes": 46800,
         "issue": 3943,
         "reason": "Maintainer-approved option 1 on issue #3943, sized by the docs convention (roughly 10% headroom over measured need, not an exact fit): the lite E10 cap wording adds about 370 bytes to review-fix-lite, which sat at 97.92% of its limit before. Measured 43,387 bytes on the current tree; raised to 46,800, about 10% above measured and rounded up to the nearest 100. Stays under the 95% notice band at 92.7%."
+      },
+      {
+        "bundle": "bundle-onboarding-companions",
+        "limitBytes": 175150,
+        "issue": 4109,
+        "reason": "Operator-approved option A on issue #4109 (PR #4147). The companions bundle sat at 97.99% of its 175,000-byte limit with 24 bytes of headroom. Naming the fourth reserved label, labels.authoringOnlyLabelName, in project-tuning.md and issue-mediated-bootstrap.md adds about 60 bytes, so the limit rises by 150 bytes to 175,150 to keep the bundle under its 98% ceiling. The hearing catalog is JSON and sits outside this bundle."
       },
       {
         "bundle": "bundle-review-triage-phase",

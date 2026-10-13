@@ -552,6 +552,7 @@ interface RawConfig {
     roadmapLabelName?: unknown;
     blockedByHumanLabelName?: unknown;
     needsDecisionLabelName?: unknown;
+    authoringOnlyLabelName?: unknown;
     untrustedLabelerLogins?: unknown;
   };
   mergeGate?: { soloCodeownerAdminFallback?: unknown };
@@ -800,7 +801,8 @@ export const POLICY_DEFAULTS = Object.freeze({
     roadmapLabelName: 'roadmap',
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
-    // Added in #2669: string array default, resolved like the three
+    authoringOnlyLabelName: 'status:authoring-only',
+    // Added in #2669: string array default, resolved like the four
     // sibling label-name fields above but via parseNonEmptyStringArray
     // (fail-closed to [] on a non-array, an empty array, or any entry
     // that isn't a non-empty string) instead of parseNonEmptyString.
@@ -1383,16 +1385,21 @@ export function normalizePolicyConfig(config: unknown) {
         c?.labels?.needsDecisionLabelName,
         POLICY_DEFAULTS.labels.needsDecisionLabelName,
       ),
+      authoringOnlyLabelName: parseNonEmptyString(
+        c?.labels?.authoringOnlyLabelName,
+        POLICY_DEFAULTS.labels.authoringOnlyLabelName,
+      ),
       // #2669 PR review (Codex): this resolves to [] (trust everyone) on
       // any malformed entry, including a mix of valid + invalid logins --
       // fail-open for this denylist field, unlike an allowlist field's
       // fail-to-[] (fail-closed). Kept matching the sibling label-name
-      // fields' resolution pattern per #2669's own acceptance criteria;
-      // no consumer reads this list yet (see the schema description), so
-      // there is no live enforcement gap today. Reconsider the fail
-      // direction -- and whether schema validation alone is a sufficient
-      // guarantee for the consumer -- when #2671 designs the actual
-      // enforcement this list feeds.
+      // fields' resolution pattern per #2669's own acceptance criteria.
+      // idd-onboard --substitute now reads this list to generate the
+      // reserved-label guard workflow (#2671). A malformed entry resolves
+      // to [], which generates no guard, so the fail-open direction is a
+      // live enforcement gap. Reconsider it -- and whether schema validation
+      // alone is a sufficient guarantee for that consumer -- when the guard's
+      // own validation is designed.
       untrustedLabelerLogins: parseNonEmptyStringArray(
         c?.labels?.untrustedLabelerLogins,
         POLICY_DEFAULTS.labels.untrustedLabelerLogins,

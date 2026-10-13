@@ -3366,6 +3366,29 @@ test('policy schema rejects labels needsDecisionLabelName empty string', () => {
   );
 });
 
+test('policy schema accepts labels.authoringOnlyLabelName (#4109)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.labels = { authoringOnlyLabelName: 'status:authoring-only' };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema rejects labels authoringOnlyLabelName empty string (#4109)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.labels = { authoringOnlyLabelName: '' };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((e) => e.includes('labels.authoringOnlyLabelName')),
+    errors.join('\n'),
+  );
+});
+
 test('policy schema rejects labels unexpected extra keys', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

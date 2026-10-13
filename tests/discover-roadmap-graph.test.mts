@@ -4711,6 +4711,7 @@ function readinessResolution() {
     roadmapLabelName: 'roadmap',
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
+    authoringOnlyLabelName: 'status:authoring-only',
     nowIso: '2026-06-26T00:00:00Z',
   };
 }
@@ -4749,6 +4750,77 @@ test('--with-readiness annotates open union leaves with a combined startable sig
   // The summary aggregates the same signal: only 921 is ready and startable.
   assert.equal(report.summary.readyCount, 1);
   assert.equal(report.summary.startableCount, 1);
+});
+
+// #4109: the authoring-only label reaches the roadmap readiness path through
+// evaluateDiscoverReadiness, so a leaf carrying it is not ready or startable.
+test('--with-readiness reports the authoring-only label reason on a roadmap leaf (#4109)', async () => {
+  const issues = new Map([
+    [
+      930,
+      roadmapIssue(930, '- [ ] #931\n- [ ] #932', 'authoring-only-roadmap'),
+    ],
+    [
+      931,
+      {
+        number: 931,
+        title: 'issue 931',
+        state: 'open',
+        body: 'authoring-only leaf 931',
+        labels: [{ name: 'status:authoring-only' }],
+      },
+    ],
+    [932, executionIssue(932, 'ready leaf 932')],
+  ]);
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [930],
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    readiness: readinessResolution(),
+  });
+
+  const byNumber = new Map(report.leaves.map((leaf) => [leaf.number, leaf]));
+  const r931 = byNumber.get(931)?.readiness;
+  assert.equal(r931?.ready, false);
+  assert.equal(r931?.startable, false);
+  assert.deepEqual(r931?.reasons, ['label:status:authoring-only']);
+  assert.equal(byNumber.get(932)?.readiness?.ready, true);
+});
+
+// #4109: a configured authoring-only label name reaches the roadmap readiness
+// path too. A dropped forwarding site would fall back to the default name, so
+// the override label would stop excluding its leaf.
+test('--with-readiness resolves a configured authoring-only label on a roadmap leaf (#4109)', async () => {
+  const issues = new Map([
+    [
+      930,
+      roadmapIssue(930, '- [ ] #931\n- [ ] #932', 'authoring-only-roadmap'),
+    ],
+    [
+      931,
+      {
+        number: 931,
+        title: 'issue 931',
+        state: 'open',
+        body: 'authoring-only leaf 931',
+        labels: [{ name: 'triage:authoring-only' }],
+      },
+    ],
+    [932, executionIssue(932, 'ready leaf 932')],
+  ]);
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [930],
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    readiness: {
+      ...readinessResolution(),
+      authoringOnlyLabelName: 'triage:authoring-only',
+    },
+  });
+
+  const byNumber = new Map(report.leaves.map((leaf) => [leaf.number, leaf]));
+  const r931 = byNumber.get(931)?.readiness;
+  assert.equal(r931?.ready, false);
+  assert.deepEqual(r931?.reasons, ['label:triage:authoring-only']);
+  assert.equal(byNumber.get(932)?.readiness?.ready, true);
 });
 
 test('--with-readiness is byte-stable when the flag is absent', async () => {
