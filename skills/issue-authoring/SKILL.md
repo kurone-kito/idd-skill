@@ -363,6 +363,11 @@ needs-decision, blocked-by-human, and out-of-scope.
 
 - Preserve low-readiness work in stable buckets instead of dropping it.
 - Keep acceptance criteria explicitly verifiable.
+- For a draft that deletes, overwrites, recursively removes, records file
+  ownership, or writes through a possible link, give each such operation a
+  criterion for each case in
+  [Destructive operations](references/contract.md#destructive-operations), or
+  name the guard that makes the case impossible.
 - Keep human-dependent setup, review, and approval work isolated from
   ready execution issues whenever possible.
 - Link every active child issue from its roadmap body.
