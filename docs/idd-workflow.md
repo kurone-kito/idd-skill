@@ -1294,10 +1294,13 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    disposed in `--running`, a running worker or a finished one still awaiting
    step 4, including the running worker of a released claim, and pass each
    counted worker's issue as an `--in-flight` value below when its brief gives
-   one. A matched finished worker goes to step 4 once the checks in step 4 pass.
-   A matched running worker of an own claim that step 2 verified as
-   `already_owned` is handled as follows: if the runtime can still message it,
-   apply the existing worker-death rules by reference, under the bullet titled
+   one. A matched finished worker goes to step 4 once the checks in step 4 pass,
+   unless its claim is still held with no handoff summary on the issue. Such a
+   worker stopped before its terminal phase, so it takes the same worker-death
+   recovery as a running worker, under the bullet named above. A matched running
+   worker of an own claim that step 2 verified as `already_owned` is handled as
+   follows: if the runtime can still message it, apply the existing worker-death
+   rules by reference, under the bullet titled
    "Resume-specific recovery when a worker dies mid-turn" in the
    [fan-out variant](#orchestrator-fan-out-variant); if it cannot be messaged,
    it is treated as live and is never replaced while the listing still shows it
