@@ -39,7 +39,6 @@ import {
   classifyCommentEditState,
   classifyIddPrComment,
   DEFAULT_ADVISORY_BOT_LOGINS,
-  extractSameRepoClosingIssueNumbers,
   hasFreshDisposition,
   isAdvisoryNonReviewNotice,
   isCopilotReviewerLogin,
@@ -49,6 +48,7 @@ import {
   matchTrustedAdvisoryStickyDispositions,
   normalizeTrustedMarkerLogins,
   resolveAdvisoryBotLogins,
+  resolveClosingIssueNumbersForClassifier,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mts';
 import {
@@ -896,9 +896,12 @@ function isReadyReport(report: unknown): boolean {
  * `--claimless`. A PR that closes issues in this repository is checked with
  * each of them as `--claim-issue` in turn (the claim may live on any one),
  * and `--closing-issues` names the whole set when there is more than one.
- * References that are unreadable or name only other repositories give
- * `null`: `--claimless` would refuse them, and guessing a claim issue would
- * be wrong.
+ * References that are unreadable, or that include any entry that is not a
+ * same-repository issue (another repository's issue or a malformed entry,
+ * even next to a readable one), give `null`: `--claimless` would refuse
+ * them, and checking only the readable part would test an incomplete
+ * closing set. This is the `resolveClosingIssueNumbersForClassifier`
+ * contract that pre-merge-readiness itself applies.
  */
 export function openPrReadinessArgvCandidates(
   number: number,
@@ -907,20 +910,18 @@ export function openPrReadinessArgvCandidates(
   closingIssuesReferences: unknown,
 ): string[][] | null {
   const base = ['--pr', String(number), '--owner', owner, '--repo', repo];
-  if (
-    Array.isArray(closingIssuesReferences) &&
-    closingIssuesReferences.length === 0
-  ) {
-    return [[...base, '--claimless']];
-  }
-  const issues = [
-    ...new Set(
-      extractSameRepoClosingIssueNumbers(closingIssuesReferences, owner, repo),
-    ),
-  ];
-  if (issues.length === 0) {
+  const resolved = resolveClosingIssueNumbersForClassifier(
+    closingIssuesReferences,
+    owner,
+    repo,
+  );
+  if (resolved === null) {
     return null;
   }
+  if (resolved.length === 0) {
+    return [[...base, '--claimless']];
+  }
+  const issues = [...new Set(resolved)];
   if (issues.length === 1) {
     return [[...base, '--claim-issue', String(issues[0])]];
   }
@@ -968,7 +969,7 @@ export function collectOpenReadyPrs(
         unchecked.push({
           number: pr.number,
           reason:
-            'closing issue references are unreadable or name no issue in this repository',
+            'closing issue references are unreadable or include an entry that is not an issue in this repository',
         });
         continue;
       }

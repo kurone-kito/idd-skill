@@ -7537,11 +7537,13 @@ same as `AW4`/`AW5`.
     reads as not ready and is not listed. A pull request that closes an
     issue but merges out of loop under a valid out-of-loop marker is not
     tried with `--claimless`, so it is not listed either. A pull request
-    whose readiness check fails, or whose closing references name no issue
-    in this repository, is listed in `openReadyUncheckedPrs` with a
-    `reason`; a non-zero `summary.openReadyUncheckedCount` means the
-    section is incomplete. An explicit `--pr`/`--prs` run skips this section and
-    reports it as `null`. The exported `renderOpenReadySection` renders the
+    whose readiness check fails, or whose closing references include any
+    entry that is not an issue in this repository (unreadable, foreign, or
+    malformed, even next to a readable one), is listed in
+    `openReadyUncheckedPrs` with a `reason`; a non-zero
+    `summary.openReadyUncheckedCount` means the section is incomplete. An
+    explicit `--pr`/`--prs` run skips this section and reports it as
+    `null`. The exported `renderOpenReadySection` renders the
     section as Markdown for the weekly summary body: a heading, then one
     bullet per ready pull request with its age, or a single line when none
     is ready. The CLI itself prints JSON only.

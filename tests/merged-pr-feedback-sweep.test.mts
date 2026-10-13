@@ -1847,7 +1847,7 @@ test('#4162: a readiness failure and unusable closing references are listed as u
     {
       number: 12,
       reason:
-        'closing issue references are unreadable or name no issue in this repository',
+        'closing issue references are unreadable or include an entry that is not an issue in this repository',
     },
   ]);
   assert.equal(report.summary.openReadyUncheckedCount, 2);
@@ -1892,6 +1892,49 @@ test('#4162: readiness argv covers no, one, several, and unreadable closing issu
     ],
   );
   assert.equal(openPrReadinessArgvCandidates(7, 'o', 'r', null), null);
+  // A readable same-repository issue next to a foreign or malformed entry
+  // is an incomplete closing set, so the PR is not checked at all.
+  assert.equal(
+    openPrReadinessArgvCandidates(7, 'o', 'r', [
+      { number: 3 },
+      { number: 5, repository: { name: 'other', owner: { login: 'o' } } },
+    ]),
+    null,
+  );
+  assert.equal(
+    openPrReadinessArgvCandidates(7, 'o', 'r', [{ number: 3 }, 'bad']),
+    null,
+  );
+});
+
+test('#4162: a PR with a mixed closing-reference list is listed as unchecked', () => {
+  const fixture = openPrFixture();
+  fixture.changeRequestConvergenceViews = {
+    ...fixture.changeRequestConvergenceViews,
+    10: convergenceView([
+      { number: 100 },
+      { number: 5, repository: { name: 'other', owner: { login: 'o' } } },
+    ]),
+  };
+  const { port, calls } = recordingPort(fixture);
+  const readiness = fakeReadiness([10, 11]);
+  const report = runMergedPrFeedbackSweep(parseArgs(['--days', '7']), {
+    port,
+    owner: 'o',
+    repo: 'r',
+    nowMs: OPEN_NOW_MS,
+    readiness: readiness.check,
+  });
+  assert.deepEqual(
+    report.openReadyPrs?.map((pr) => pr.number),
+    [11],
+  );
+  assert.deepEqual(
+    report.openReadyUncheckedPrs?.map((pr) => pr.number),
+    [10],
+  );
+  assert.ok(readiness.seenArgv.every((argv) => !argv.includes('10')));
+  assertNoMergeOrWrite(fixture, calls);
 });
 
 test('#4162: several closing issues are tried in turn and the first ready result lists the PR', () => {
