@@ -152,7 +152,7 @@ moved HEAD is the caller's job (E14 in `idd-review-fix-lite`).
 
 ## Secondary advisory bot(s) (non-gating, optional)
 
-`secondaryBotLogin` accepts one login or a list. When
+`advisoryWait.secondaryBotLogin` accepts one login or a list. When
 `secondaryRequestNeeded` is `true`, request **every** login in
 `secondaryRequestLogins` once each (never only the first), using the
 same mechanics above. Post no `advisory-wait:` marker for any — none

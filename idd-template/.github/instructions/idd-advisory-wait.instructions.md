@@ -110,7 +110,7 @@ outage (e.g. via status page or an org admin surface) before retrying.
 Orthogonal to the table above: changes no `outcome`/`f3Outcome` or
 route, never satisfies the primary gate, posts no `advisory-wait`
 marker. A bot check alone never confirms review of current HEAD.
-`secondaryBotLogin` accepts one login or a list; request every
+`advisoryWait.secondaryBotLogin` accepts one login or a list; request every
 `secondaryRequestLogins` entry, not only the first, never polling any.
 Trigger condition and per-login procedure:
 `idd-review-fix.instructions.md`'s E14 step 5.
