@@ -891,7 +891,9 @@ and the recovery path for an empty handle in three rounds, each time with
 different wording, at about 100,000 reviewer tokens per round.
 
 **Ledger.** During a drafting session, keep a findings ledger in the session
-scratchpad, one JSON file per draft. The ledger is never written to the
+scratchpad, one JSON file per draft, named for that draft: its issue number,
+or a draft-specific slug before an issue number exists. No two drafts or
+concurrent workers share a ledger file. The ledger is never written to the
 repository or to a marker. Each entry has these members: `claim` (one
 sentence), `draftSection` (the heading the finding concerns), `round`,
 `draftVersion` (the draft revision the finding was raised against, counted
