@@ -1,0 +1,16 @@
+name: Review policy audit
+# Bootstrap (idd-pr-submit D2 "Adding a new CI job"): this file only
+# registers the workflow_dispatch trigger on the default branch, so the
+# pull request that adds the real weekly audit job can dispatch it from
+# its own branch. The job below is deliberately inert.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - name: Bootstrap placeholder
+        run: echo "Inert bootstrap; the audit job lands in a later pull request."
