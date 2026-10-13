@@ -1808,7 +1808,9 @@ only approval boundary.
   whose optional `findings` entries must each be `fixed` or `rejected`. It
   is a dry run without `--apply`, and it refuses `--shape child` for now.
   It never retries, closes, or appends `cleanup` or `abandoned`: any failure
-  after the create stops at a recovery hold with the record at `pending`.
+  after the create stops at a recovery hold with the record at `pending`, or
+  reported as uncertain (replay the journal) when a record may have been
+  posted but could not be verified.
   Before the create, generate the
   opaque `target` id and token for both markers below -- the new issue's
   own number is not yet known. `anchor` in **both** markers depends on
