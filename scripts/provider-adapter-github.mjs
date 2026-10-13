@@ -1620,9 +1620,12 @@ function deriveRetryAfterMs(error, nowMs) {
 /**
  * #2460 / #3275: POST a work-item (issue/PR) comment with a bounded retry
  * against transient `gh` failures. A failure is classified first via
- * {@link deriveGhHttpStatus}: `401`/`404`/`422` cannot succeed on retry and
- * fail immediately with the original error, no re-read, no further
- * attempt. Every other failure (a `5xx`, a `403` secondary rate limit, or
+ * {@link deriveGhHttpStatus}: `401`/`404`/`422` cannot succeed on retry. On
+ * the first attempt they fail immediately with the original error (nothing
+ * was sent), with no re-read and no further attempt; on a later attempt an
+ * earlier one may have landed, so they stop the retries and go through the
+ * final duplicate check, and the error thrown is the earlier failure, never
+ * the 401/404/422 (#4171). Every other failure (a `5xx`, a `403` secondary rate limit, or
  * no derivable status at all, e.g. a timeout/transport error) may have
  * landed server-side, so the next attempt only proceeds after
  * {@link findRecentExactBodyMatch} proves no duplicate exists -- a
@@ -1734,7 +1737,14 @@ function postWorkItemCommentWithRetry(deps, repoPath, number, body) {
         status !== null &&
         POST_WORK_ITEM_COMMENT_NON_RETRYABLE_STATUSES.has(status)
       ) {
-        throw error;
+        // #4171: only a first attempt's 401/404/422 proves that nothing
+        // landed. After an earlier failure that may have landed, stop
+        // posting and confirm that attempt through the final duplicate
+        // check below, as a later refusal does; `lastError` stays the
+        // earlier failure, so the error finally thrown never carries a
+        // status that reads as "nothing was sent".
+        if (attempt === 1) throw error;
+        break;
       }
       lastError = error;
     }
