@@ -1060,7 +1060,8 @@ and `status:authoring`). An automatic close of a roadmap's tracked child
 is indistinguishable from completed work to the A1.5 roadmap audit. So
 the workflow either sets `days-before-close: -1`, which marks issues
 stale but never closes them (the source repository's choice since
-kurone-kito/idd-skill#831), or exempts all four labels. Exempting the
+kurone-kito/idd-skill#831), or exempts the configured values of all four
+fields, not the defaults when a field is customized. Exempting the
 labels protects parked issues only: a tracked child that is ready for
 work carries none of them, so only the mark-only setting covers it.
 
@@ -1071,10 +1072,12 @@ workflow either sets `days-before-close: -1` or exempts the target
 through a label of the repository's own: put the label on the issue and
 list it in `exempt-issue-labels`. kurone-kito/setup.ubuntu#213
 (2026-10-12) added such a label after projecting that its workflow would
-close both durable records; no close had happened yet. A repository that
-keeps its journal open does the same for the journal. Closing the
-journal is the other working option: neither state is required, and
-Discover enumerates open issues only.
+close both durable records; no close had happened yet. A journal kept
+open needs the same protection, set in the repository that owns the
+journal issue: `issueAuthoring.journalIssue` is an `owner/repo#number`
+and can name another repository, whose own workflow is the one that
+could close it. Closing the journal is the other working option:
+neither state is required, and Discover enumerates open issues only.
 
 ## Reserved-label guard recipe
 
