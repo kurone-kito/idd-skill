@@ -1,5 +1,8 @@
 import { strict as assert } from 'node:assert';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   advisoryMarkerComment,
@@ -894,4 +897,100 @@ test('bin/idd-advisory-wait-state.mjs: a malformed --now classifies as a usage e
   assert.ok(result.envelope, JSON.stringify(result));
   assert.equal(result.envelope?.kind, 'usage');
   assert.equal(result.envelope?.exitCode, 1);
+});
+
+// --- #4116: the required-field lists must name every schema `required` entry.
+
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const STANDARD_ADVISORY_WAIT_DOC =
+  'idd-template/.github/instructions/idd-advisory-wait.instructions.md';
+const LITE_ADVISORY_WAIT_DOC =
+  'idd-template/.github/instructions/lite/idd-advisory-wait-lite.instructions.md';
+const HELPER_REFERENCE_DOC = 'idd-template/docs/idd-helper-scripts.md';
+const REGEX_METACHARACTERS = /[.*+?^${}()|[\]\\]/g;
+const WHITESPACE_RUN = /\s+/;
+const EVIDENCE_HEADING = /^### Advisory-wait evidence$/gm;
+const NEXT_HEADING = /^#{2,4} /m;
+// One bare field name in backticks: letters and digits only.
+const FIELD_NAME = '`[A-Za-z][A-Za-z0-9]*`';
+const FIELD_NAMES = new RegExp(FIELD_NAME, 'g');
+// A run of bare names that ends with the sentence period (the standard and
+// lite lists), or that runs to the end of its line (the helper bullet). Any
+// other token, such as a dotted name or a trailing name after "and", breaks
+// the match, so the list falls short or does not parse, and the test fails.
+const LIST_WITH_PERIOD = new RegExp(
+  `^((?:${FIELD_NAME},\\s*)*${FIELD_NAME}\\.)`,
+);
+const LIST_TO_LINE_END = new RegExp(
+  `^((?:${FIELD_NAME},\\s*)*${FIELD_NAME})(?=[ \\t]*(?:\\r?\\n|$))`,
+);
+
+// A line-anchored label, matched whatever whitespace separates its words.
+const labelPattern = (label: string): string =>
+  `^${label
+    .split(WHITESPACE_RUN)
+    .map((word) => word.replace(REGEX_METACHARACTERS, '\\$&'))
+    .join('\\s+')}`;
+
+// The text after `label`; exactly one line may start with the label.
+function textAfterLabel(text: string, label: string): string {
+  const matches = [...text.matchAll(new RegExp(labelPattern(label), 'gm'))];
+  assert.equal(matches.length, 1, `expected one line starting with: ${label}`);
+  const [match] = matches;
+  return text.slice((match.index ?? 0) + match[0].length);
+}
+
+const fieldNames = (fragment: string): string[] =>
+  [...fragment.matchAll(FIELD_NAMES)].map((match) => match[0].slice(1, -1));
+
+// The names in the list that follows `label`, up to the sentence period.
+function listNamesAfterLabel(text: string, label: string): string[] {
+  const list = LIST_WITH_PERIOD.exec(textAfterLabel(text, label).trimStart());
+  assert.ok(list, `no field-name list ending with a period after: ${label}`);
+  return fieldNames(list[1]);
+}
+
+// The names in the "Schema-required fields" bullet of the
+// "### Advisory-wait evidence" section, which must be the only such heading.
+function helperEvidenceBulletNames(doc: string): string[] {
+  const headings = [...doc.matchAll(EVIDENCE_HEADING)];
+  assert.equal(headings.length, 1, 'expected one "### Advisory-wait evidence"');
+  const [heading] = headings;
+  const afterHeading = doc.slice((heading.index ?? 0) + heading[0].length);
+  const next = NEXT_HEADING.exec(afterHeading);
+  const section = next ? afterHeading.slice(0, next.index) : afterHeading;
+  const list = LIST_TO_LINE_END.exec(
+    textAfterLabel(section, '- Schema-required fields:').trimStart(),
+  );
+  assert.ok(list, 'no field-name list after: - Schema-required fields:');
+  return fieldNames(list[1]);
+}
+
+test("the required-field lists match the schema's `required` array", () => {
+  const required = (advisoryWaitStateSchema as { required: string[] }).required;
+  assert.ok(required.length > 0, 'the schema has no required array');
+  const lists: Record<string, string[]> = {
+    'standard advisory-wait ("Required helper fields")': listNamesAfterLabel(
+      readFileSync(join(REPO_ROOT, STANDARD_ADVISORY_WAIT_DOC), 'utf8'),
+      'Required helper fields:',
+    ),
+    'lite advisory-wait ("Required fields")': listNamesAfterLabel(
+      readFileSync(join(REPO_ROOT, LITE_ADVISORY_WAIT_DOC), 'utf8'),
+      'Required fields (stop and ask if any are missing):',
+    ),
+    'helper reference ("Schema-required fields")': helperEvidenceBulletNames(
+      readFileSync(join(REPO_ROOT, HELPER_REFERENCE_DOC), 'utf8'),
+    ),
+  };
+  for (const [name, names] of Object.entries(lists)) {
+    assert.deepEqual(
+      {
+        missing: required.filter((field) => !names.includes(field)),
+        extra: names.filter((field) => !required.includes(field)),
+        duplicates: names.filter((field, i) => names.indexOf(field) !== i),
+      },
+      { missing: [], extra: [], duplicates: [] },
+      `${name} differs from the schema's required array`,
+    );
+  }
 });
