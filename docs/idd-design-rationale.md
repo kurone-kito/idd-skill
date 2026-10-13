@@ -2019,7 +2019,8 @@ acceptance criteria are the lever for making such a gap adopt-now.
 
 1. Cohort: the 100 most recently merged pull requests, #3936 to #4158,
    merged 2026-10-09 to 2026-10-13. Relax steps use `[4, 7]`.
-2. Deferral replies: 1 in 100 pull requests (pull request #4043, deferred
+2. Deferral replies in the cohort of item 1, in the policy's reply format:
+   1 in 100 pull requests (pull request #4043, deferred
    to issue #4059). None at steps 1 or 2. The 20 pull requests at step 2
    have 358 Accepted replies and none deferred. In a 45-pull-request sample
    (20 pull requests at step 2 and 25 at step 0) that does not include pull
@@ -2032,7 +2033,8 @@ acceptance criteria are the lever for making such a gap adopt-now.
    reviewer with the triage rubric: safety 8, correctness 21,
    maintainability 5, tests 1, naming 9, wording 1. This is a sample
    estimate, not a measurement.
-5. Pull request size, comparing a sample of 20 pull requests that ended
+5. Pull request size in the cohort of item 1, comparing a sample of 20 pull
+   requests that ended
    within 3 Copilot reviews with the 20 that reached 7 or more: median
    changed lines at the first Copilot review were 106 and 541, and the
    second group then added a median 724 lines of fixes. Spearman correlation
@@ -2042,13 +2044,14 @@ acceptance criteria are the lever for making such a gap adopt-now.
    in the same file, and 46 in files the previous fix did not touch.
 7. Authored effort and loop length in the cohort of item 1: `L` 8 pull
    requests, 6 reached 7 or more reviews, median 10; `M` 35, 5, median 2;
-   `S` 33, 2, median 2.
+   `S` 33, 2, median 2. The three groups cover 76 of the 100 pull
+   requests.
 8. Copilot changed the overview format between 2026-10-05T05:47Z and
    2026-10-07T18:17Z (both reviews on pull request #3782): the Open header
-   became `N open finding(s)` and item links became absolute.
-   `copilot-overview-sections.mts` still expects `Open (N)`, so
-   `copilot-review-wave-audit` reported 0 open findings in all 435 reviews
-   of the cohort.
+   became `N open finding(s)`. Item links became absolute by 2026-10-13
+   (pull request #4157). `copilot-overview-sections.mts` still expects
+   `Open (N)`, so `copilot-review-wave-audit` reported 0 open findings in
+   all 435 reviews of the cohort in item 1.
 
 Roadmap kurone-kito/idd-skill#4182 responds to this audit.
 
