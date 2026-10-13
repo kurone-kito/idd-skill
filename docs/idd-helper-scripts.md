@@ -5850,6 +5850,15 @@ reflexively as any other CLI option.
   success output, when the watermark it is about to post already covers
   comments/threads that were never actually dispositioned, and stays
   silent for the courtesy-ack flag case above
+- Readiness hints (kurone-kito/idd-skill#4098): `pre-merge-readiness`
+  adds a `hint` to a `disposition-evidence` blocker only while no review
+  watermark exists for the claim, because without one the disposition
+  results have no snapshot boundary and a resolved thread can block that
+  a watermark would clear. The `review-currency` blocker gets a `hint`
+  when its comparison reason is `newer-activity`, since that activity may
+  be the operator's own comment. Both hints name the fresh-watermark step
+  (E1 Step 1, then E1 Step 2 for the current head). They are diagnostic
+  only: `detail`, counts, and routes do not change.
 - Embedded CodeRabbit findings (kurone-kito/idd-skill#3341): the
   snapshot also emits `embeddedFindings`, one object per
   `COMMENTED` review whose author login is `coderabbitai` or
