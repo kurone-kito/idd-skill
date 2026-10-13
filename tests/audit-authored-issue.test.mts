@@ -2568,6 +2568,8 @@ test('effort-candidate-file-limit passes an over-limit M child that carries a Sp
     '**Split out of #12**',
     '1. Split out of #12',
     '> Split out of #12',
+    '**Split out of #12.**',
+    '_Split out of #12._',
   ]) {
     const body = childBody({
       effort: 'M',
@@ -2609,6 +2611,9 @@ test('effort-candidate-file-limit ignores a Split out of mention in code, an HTM
     'Split out of #12-foo',
     'Split out of #12/3',
     'Split out of #12.5',
+    'Split out of #0',
+    'Split out of #012',
+    'Split out of owner/repo#0',
   ]) {
     const body = childBody({
       effort: 'M',

@@ -156,10 +156,12 @@ export const EFFORT_CANDIDATE_FILE_LIMITS: Readonly<Record<'S' | 'M', number>> =
 // optional `_`/`*` emphasis opener, so a mid-sentence mention never counts
 // as the provenance line. The issue number must end at a real token
 // boundary (whitespace or end of line, after optional closing emphasis
-// and sentence punctuation), so `#12_foo`, `#12-foo`, or `#12/3` never
-// exempts a child.
+// and sentence punctuation in either order), so `#12_foo`, `#12-foo`, or `#12/3` never
+// exempts a child. The number itself must be a positive canonical issue
+// number (`[1-9][0-9]*`, as REAL_ISSUE_REFERENCE_PATTERN requires), so
+// `#0` or a leading-zero form never exempts a child either.
 const SPLIT_OUT_OF_LINE_PATTERN =
-  /^[ \t]*(?:>[ \t]*)?(?:(?:[-*+]|\d+[.)])[ \t]+)?[_*]{0,2}Split out of (?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#\d+(?=[_*]{0,2}[.,;:!?)]*(?:[ \t]|$))/m;
+  /^[ \t]*(?:>[ \t]*)?(?:(?:[-*+]|\d+[.)])[ \t]+)?[_*]{0,2}Split out of (?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#[1-9][0-9]*(?=[_*.,;:!?)]*(?:[ \t]|$))/m;
 
 // Shared "not applicable" detail for every triage-a4-*/triage-a45-*/
 // triage-title-missing finding (#3289) when `shape === 'roadmap'`: Discover
