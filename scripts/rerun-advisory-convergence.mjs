@@ -345,61 +345,6 @@ export function computeRerunPlan(input, options) {
     (instance) =>
       eligibleDecisions.get(instance.checkRunId)?.action === 'rerun',
   );
-  // #2549: narrow, separately-bounded exception to rule 1 below --
-  // documented in full on {@link RerunAdvisoryConvergencePlan.liveCoverageRecoveryPlan}.
-  // ALL four conditions gate this promotion; failing any one leaves the
-  // instance held exactly as before #2549 (rule 1 still applies to it):
-  //   1. `rerunPolicy === 'rerun-once'` -- a `"hold"` policy withholds this
-  //      exception too, like every other rerun.
-  //   2. `instance.isLiveCoverageRecovery === true` -- the EXACT #1806
-  //      reclassification (classifyInstance step 7's second return), never
-  //      any other rerun-budget-held cause (e.g. the waiver-rebind case).
-  //   3. `decision.reason === 'rerun-budget-exhausted'` -- a CONFIRMED spent
-  //      budget. `'run-attempt-unknown'` (an unconfirmed one) does not
-  //      qualify: this exception only cleans up a proven-redundant sibling,
-  //      never guesses one is safe.
-  //   4. A sibling instance (same check, i.e. elsewhere in `instances`) is
-  //      already `classification === 'pass'` -- proof the rollup is
-  //      otherwise already resolved, so THIS instance's own outcome no
-  //      longer decides it. Any triggering actor counts (including a bot):
-  //      rollup-resolution does not care who triggered the passing sibling
-  //      -- unlike `selectRecoveryRefreshCandidates`, which excludes a
-  //      bot-triggered passing instance for a DIFFERENT reason (that
-  //      mechanism specifically needs a fresh NON-bot-triggered
-  //      evaluation; this one only needs proof the rollup is settled).
-  const liveCoverageRecoveryHeldInstances =
-    rerunPolicy === 'rerun-once'
-      ? eligibleInstances.filter((instance) => {
-          if (instance.isLiveCoverageRecovery !== true) return false;
-          const decision = eligibleDecisions.get(instance.checkRunId);
-          if (
-            decision?.action !== 'hold' ||
-            decision.reason !== 'rerun-budget-exhausted'
-          ) {
-            return false;
-          }
-          return instances.some(
-            (other) =>
-              other.checkRunId !== instance.checkRunId &&
-              other.classification === 'pass',
-          );
-        })
-      : [];
-  const liveCoverageRecoveryPlan = buildOrderedPlan(
-    liveCoverageRecoveryHeldInstances,
-    owner,
-    repo,
-  ).map((command) => ({
-    ...command,
-    originalHoldReason: command.checkRunIds
-      .map((checkRunId) => {
-        const source = liveCoverageRecoveryHeldInstances.find(
-          (instance) => instance.checkRunId === checkRunId,
-        );
-        return `check-run ${checkRunId} was withheld as rerun-budget-exhausted; ${source?.reason ?? 'live-coverage recovery (#1806)'}`;
-      })
-      .join('; '),
-  }));
   // #3539: promote an unambiguous budget-held latest row when a different workflow run
   // for this check and HEAD has a strictly later, verified passing latest
   // row. The check-runs API is fetched with `filter=all`, so several rows can
@@ -441,6 +386,68 @@ export function computeRerunPlan(input, options) {
   };
   const isSupersededHistoricalCheckRun = (checkRunId) =>
     findSupersedingLatest(checkRunId) !== null;
+  // #2549: narrow, separately-bounded exception to rule 1 below --
+  // documented in full on {@link RerunAdvisoryConvergencePlan.liveCoverageRecoveryPlan}.
+  // ALL five conditions gate this promotion; failing any one leaves the
+  // instance held exactly as before #2549 (rule 1 still applies to it):
+  //   1. `rerunPolicy === 'rerun-once'` -- a `"hold"` policy withholds this
+  //      exception too, like every other rerun.
+  //   2. `instance.isLiveCoverageRecovery === true` -- the EXACT #1806
+  //      reclassification (classifyInstance step 7's second return), never
+  //      any other rerun-budget-held cause (e.g. the waiver-rebind case).
+  //   3. `decision.reason === 'rerun-budget-exhausted'` -- a CONFIRMED spent
+  //      budget. `'run-attempt-unknown'` (an unconfirmed one) does not
+  //      qualify: this exception only cleans up a proven-redundant sibling,
+  //      never guesses one is safe.
+  //   4. A sibling instance (same check, i.e. elsewhere in `instances`) is
+  //      already `classification === 'pass'` -- proof the rollup is
+  //      otherwise already resolved, so THIS instance's own outcome no
+  //      longer decides it. Any triggering actor counts (including a bot):
+  //      rollup-resolution does not care who triggered the passing sibling
+  //      -- unlike `selectRecoveryRefreshCandidates`, which excludes a
+  //      bot-triggered passing instance for a DIFFERENT reason (that
+  //      mechanism specifically needs a fresh NON-bot-triggered
+  //      evaluation; this one only needs proof the rollup is settled).
+  //   5. The row is not superseded (#4150): it is not proven to belong to an
+  //      earlier attempt of its own run whose latest attempt already passes.
+  //      The workflow API proves such a row completed before that latest
+  //      attempt started, so its own rerun would only repeat a superseded
+  //      attempt. Duplicates completed after the latest attempt started
+  //      stay eligible here.
+  const liveCoverageRecoveryHeldInstances =
+    rerunPolicy === 'rerun-once'
+      ? eligibleInstances.filter((instance) => {
+          if (instance.isLiveCoverageRecovery !== true) return false;
+          const decision = eligibleDecisions.get(instance.checkRunId);
+          if (
+            decision?.action !== 'hold' ||
+            decision.reason !== 'rerun-budget-exhausted'
+          ) {
+            return false;
+          }
+          if (isSupersededHistoricalCheckRun(instance.checkRunId)) return false;
+          return instances.some(
+            (other) =>
+              other.checkRunId !== instance.checkRunId &&
+              other.classification === 'pass',
+          );
+        })
+      : [];
+  const liveCoverageRecoveryPlan = buildOrderedPlan(
+    liveCoverageRecoveryHeldInstances,
+    owner,
+    repo,
+  ).map((command) => ({
+    ...command,
+    originalHoldReason: command.checkRunIds
+      .map((checkRunId) => {
+        const source = liveCoverageRecoveryHeldInstances.find(
+          (instance) => instance.checkRunId === checkRunId,
+        );
+        return `check-run ${checkRunId} was withheld as rerun-budget-exhausted; ${source?.reason ?? 'live-coverage recovery (#1806)'}`;
+      })
+      .join('; '),
+  }));
   const hasRemainingNonPassRow = (runId) =>
     instances.some(
       (candidate) =>
