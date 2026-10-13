@@ -1239,13 +1239,14 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    worker's brief in the agent listing, or from the issue-number prefix of its
    report draft in the session scratchpad, and never from a `main` branch. Then
    read that issue's trusted `claimed-by` and `unclaimed-by` markers for the
-   agent-id and claim-id, and apply the same agent-id test. Also enumerate the
-   candidates for worktree-less claims from the report drafts in the session
-   scratchpad, the finished entries in the agent listing, and the running
-   entries whose worktree is gone, and read each such issue the same way. An
-   issue whose trusted markers name another agent-id, or no claim, is not own.
-   If neither source gives an issue number, report the claim to the operator and
-   take no further action on it.
+   agent-id and claim-id, and apply the same test, so that both the agent id and
+   the claim id must match the marker. Also enumerate the candidates for
+   worktree-less claims from the report drafts in the session scratchpad, the
+   finished entries in the agent listing, and the running entries whose worktree
+   is gone, and read each such issue the same way. An issue whose trusted
+   markers name another agent-id, or no claim, is not own. If neither source
+   gives an issue number, report the claim to the operator and take no further
+   action on it.
 2. **Verify each own claim.** For a claim with a linked worktree, take `--issue`
    from its branch, `issue/<number>-<slug>`, and confirm it against the trusted
    `claimed-by` marker that carries the same claim-id, because the token record
