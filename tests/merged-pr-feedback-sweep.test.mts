@@ -7,9 +7,12 @@ import {
   buildOpenReadySection,
   createOpenPrReadiness,
   type MergedPrInput,
+  OPEN_READY_SECTION_EMPTY_LINE,
+  OPEN_READY_SECTION_HEADING,
   openPrReadinessArgvCandidates,
   parseArgs,
   renderMergedPrSweepOutput,
+  renderOpenReadySection,
   runMergedPrFeedbackSweep,
   type SweepReviewInput,
 } from '../src/scripts/merged-pr-feedback-sweep.mts';
@@ -2037,4 +2040,64 @@ test('#4162: a failure on one claim issue does not hide a ready result on anothe
   ]);
   assert.deepEqual(report.openReadyUncheckedPrs, []);
   assertNoMergeOrWrite(fixture, calls);
+});
+
+test('#4162: the summary-body section lists only the ready PR, with its age', () => {
+  const fixture = openPrFixture();
+  const { port, calls } = recordingPort(fixture);
+  const report = runMergedPrFeedbackSweep(parseArgs(['--days', '7']), {
+    port,
+    owner: 'o',
+    repo: 'r',
+    nowMs: OPEN_NOW_MS,
+    readiness: fakeReadiness([10]).check,
+  });
+  assert.equal(
+    renderOpenReadySection(
+      report.openReadyPrs ?? [],
+      report.openReadyUncheckedPrs ?? [],
+    ),
+    [
+      OPEN_READY_SECTION_HEADING,
+      '',
+      '- [#10](https://x/pull/10) ready one (open 50 h)',
+      '',
+    ].join('\n'),
+  );
+  assertNoMergeOrWrite(fixture, calls);
+});
+
+test('#4162: the summary-body section with no ready PR is one line under its heading', () => {
+  const section = renderOpenReadySection([]);
+  const body = section
+    .split('\n')
+    .slice(1)
+    .filter((line) => line !== '');
+  assert.deepEqual(body, [OPEN_READY_SECTION_EMPTY_LINE]);
+  assert.ok(section.startsWith(`${OPEN_READY_SECTION_HEADING}\n`));
+});
+
+test('#4162: the summary-body section escapes titles, shows an unknown age, and flags unchecked PRs', () => {
+  assert.equal(
+    renderOpenReadySection(
+      [
+        {
+          number: 3,
+          title: 'fix *bold* [link]\nnext',
+          url: '',
+          openedAt: null,
+          ageHours: null,
+        },
+      ],
+      [{ number: 4, reason: 'boom' }],
+    ),
+    [
+      OPEN_READY_SECTION_HEADING,
+      '',
+      '- #3 fix \\*bold\\* \\[link\\] next (open for an unknown time)',
+      '',
+      'Readiness could not be checked for #4, so this section may be incomplete.',
+      '',
+    ].join('\n'),
+  );
 });

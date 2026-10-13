@@ -816,6 +816,52 @@ export function buildOpenReadySection(
     });
 }
 
+export const OPEN_READY_SECTION_HEADING = '## Open and ready, not merged';
+export const OPEN_READY_SECTION_EMPTY_LINE =
+  'No open pull request is ready and unmerged.';
+
+// Keeps a pull request title from opening Markdown emphasis, a link, a code
+// span, or an HTML tag inside the summary body.
+function escapeMarkdownInline(text: string): string {
+  return text.replace(/\s+/g, ' ').replace(/[\\`*_[\]<>|]/g, '\\$&');
+}
+
+/**
+ * The open-and-ready section of the weekly summary body, as Markdown: the
+ * heading, then one bullet per ready pull request with its age, or exactly
+ * one line when none is ready. A non-zero unchecked count adds one trailing
+ * line, since the section is then incomplete. Composing this into the
+ * weekly issue body belongs to the summary-body renderer (issue #4161); the
+ * CLI prints JSON only.
+ */
+// audit:ignore-dead-export: the weekly summary-body renderer (issue #4161) composes this section and is not on main yet; tests lock its output
+export function renderOpenReadySection(
+  openReadyPrs: OpenReadyPrFinding[],
+  openReadyUncheckedPrs: OpenPrUnchecked[] = [],
+): string {
+  const lines = [OPEN_READY_SECTION_HEADING, ''];
+  if (openReadyPrs.length === 0) {
+    lines.push(OPEN_READY_SECTION_EMPTY_LINE);
+  } else {
+    for (const pr of openReadyPrs) {
+      const age =
+        pr.ageHours === null
+          ? 'open for an unknown time'
+          : `open ${pr.ageHours} h`;
+      const label = pr.url ? `[#${pr.number}](${pr.url})` : `#${pr.number}`;
+      lines.push(`- ${label} ${escapeMarkdownInline(pr.title)} (${age})`);
+    }
+  }
+  if (openReadyUncheckedPrs.length > 0) {
+    const numbers = openReadyUncheckedPrs.map((pr) => `#${pr.number}`);
+    lines.push(
+      '',
+      `Readiness could not be checked for ${numbers.join(', ')}, so this section may be incomplete.`,
+    );
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 /** Runs the read-only readiness check for one argv and returns its
  * report. Only `ready` and `branchCurrency.mergeStateStatus` are read. */
 export type OpenPrReadinessCheck = (argv: string[]) => unknown;

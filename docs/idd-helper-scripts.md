@@ -7538,7 +7538,10 @@ same as `AW4`/`AW5`.
     in this repository, is listed in `openReadyUncheckedPrs` with a
     `reason`; a non-zero `summary.openReadyUncheckedCount` means the
     section is incomplete. An explicit `--pr`/`--prs` run skips this section and
-    reports it as `null`.
+    reports it as `null`. The exported `renderOpenReadySection` renders the
+    section as Markdown for the weekly summary body: a heading, then one
+    bullet per ready pull request with its age, or a single line when none
+    is ready. The CLI itself prints JSON only.
 - JSON output keys: `sweepWindow`, `trustedMarkerActors`,
   `advisoryBotLogins`, `iddAgentLogins`, `primaryBotLogin`, `prs` (each
   entry has `number`, `mergedAt`, `mergeCommit`, `unresolvedThreads`, and
