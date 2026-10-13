@@ -210,6 +210,9 @@ async function main() {
       new Error('missing required --issue <number> (or pass --all-roadmaps)'),
     );
   }
+  if (!args.allRoadmaps && args.a15Audited.length > 0) {
+    throw markCliUsageError(new Error('--a15-audited requires --all-roadmaps'));
+  }
   if (args.noCache && args.refreshCache) {
     throw markCliUsageError(
       new Error('--no-cache cannot be combined with --refresh-cache'),
@@ -241,6 +244,8 @@ async function main() {
       withClaimState: args.withClaimState,
       withReadiness: args.withReadiness,
       currentClaimId: args.currentClaimId,
+      // Sorted so the same set always yields the same cache key.
+      a15Audited: [...args.a15Audited].sort((left, right) => left - right),
     },
     policy,
     noCache: args.noCache,
@@ -382,6 +387,7 @@ function buildUnionOptions(args, policy) {
     claimState,
     readiness,
     concurrency: args.concurrency,
+    a15Audited: args.a15Audited,
   };
 }
 /**
@@ -413,6 +419,9 @@ function buildRerunArguments(args) {
   }
   if (args.concurrency > 0) {
     argv.push('--concurrency', String(args.concurrency));
+  }
+  for (const audited of args.a15Audited) {
+    argv.push('--a15-audited', String(audited));
   }
   argv.push('--with-progress');
   if (args.noCache) {
@@ -1167,6 +1176,8 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
       ? coalesceIssueLoader(options.loadSubIssues)
       : options.loadSubIssues;
   const roots = [];
+  // Roots the caller reports as already audited in this pass (--a15-audited).
+  const a15Audited = new Set(options.a15Audited ?? []);
   const leafRecords = new Map();
   // Diagnostics accumulate across every per-root enumeration, deduped on
   // the same identity keys the single-root report uses so a reference
@@ -1218,11 +1229,17 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
       progress.advance();
       continue;
     }
+    // executionCandidates holds only OPEN execution nodes from this root's
+    // own traversal, so its length is the root's open-leaf count.
+    const openLeafCount = graph.executionCandidates.length;
     roots.push({
       number: graph.root.number,
       title: graph.root.title,
       state: graph.root.state,
       roadmapMarkerId: graph.root.roadmapMarkerId,
+      openLeafCount,
+      a15AuditRequired:
+        openLeafCount === 0 && !a15Audited.has(graph.root.number),
     });
     const executionSet = new Set(graph.executionCandidates);
     for (const node of graph.nodes) {
@@ -2919,6 +2936,7 @@ function parseArgs(rawArgv) {
     withProgress: false,
     currentClaimId: '',
     concurrency: 0,
+    a15Audited: [],
     noCache: false,
     refreshCache: false,
     purgeCache: false,
@@ -2989,6 +3007,27 @@ function parseArgs(rawArgv) {
       }
       continue;
     }
+    if (token === '--a15-audited') {
+      // Repeatable. A missing, flag-shaped, or non-positive-integer value is a
+      // usage error, never a silent skip: a dropped mark would leave a root
+      // flagged after its audit already ran.
+      if (value === undefined || value.startsWith('--')) {
+        throw markCliUsageError(
+          new Error('--a15-audited requires a root issue number'),
+        );
+      }
+      const audited = Number(value);
+      if (!Number.isInteger(audited) || audited < 1) {
+        throw markCliUsageError(
+          new Error(
+            `--a15-audited requires a positive issue number, got ${value}`,
+          ),
+        );
+      }
+      parsed.a15Audited.push(audited);
+      index += 1;
+      continue;
+    }
     if (token === '--current-claim-id') {
       // Only consume the next token as the id when it exists and is not itself
       // a flag, so `--current-claim-id --with-claim-state` does not swallow the
@@ -3011,7 +3050,7 @@ function parseArgs(rawArgv) {
 function printHelp() {
   process.stdout.write(`Usage:
   node scripts/discover-roadmap-graph.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--with-readiness] [--current-claim-id <id>] [--concurrency <n>] [--no-cache | --refresh-cache]
-  node scripts/discover-roadmap-graph.mjs --all-roadmaps [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--with-readiness] [--with-progress] [--current-claim-id <id>] [--concurrency <n>] [--no-cache | --refresh-cache]
+  node scripts/discover-roadmap-graph.mjs --all-roadmaps [--owner <owner>] [--repo <repo>] [--policy <path>] [--with-claim-state] [--with-readiness] [--with-progress] [--current-claim-id <id>] [--concurrency <n>] [--a15-audited <n>]... [--no-cache | --refresh-cache]
   node scripts/discover-roadmap-graph.mjs --purge-cache
 
   --issue and --all-roadmaps are mutually exclusive; exactly one is required.
@@ -3022,6 +3061,10 @@ function printHelp() {
   --all-roadmaps enumerates open execution leaves across every open roadmap
   root (the union), each tagged with its sourceRoots and ranked by
   autopilotSuitability (descending, tie-broken by ascending issue number).
+  --a15-audited <n> (repeatable, --all-roadmaps only) names a root whose A1.5
+  audit already ran in this pass. Such a root reports a15AuditRequired: false
+  even with zero open leaves; openLeafCount is unchanged. The helper never
+  observes audit completion itself.
 
   Hint cache (opt-in via githubApi.readCache.enabled; off by default): the
   whole report is cached as a short-lived HINT and an unchanged repeat inside
@@ -3131,7 +3174,7 @@ Output schema (JSON mode) — --all-roadmaps union report (a different
 top-level shape from the single-root report above):
   {
     "mode": "all-roadmaps",
-    "roots": [{ "number": 638, "title": "...", "state": "OPEN", "roadmapMarkerId": "..." }],
+    "roots": [{ "number": 638, "title": "...", "state": "OPEN", "roadmapMarkerId": "...", "openLeafCount": 1, "a15AuditRequired": false }],
     "leaves": [{ "number": 640, "title": "...", "state": "OPEN", "labels": ["..."], "classification": "execution", "roadmapMarkerId": "", "autopilotSuitability": null, "sourceRoots": [638] }],
     "diagnostics": {
       "duplicateReferences": [],

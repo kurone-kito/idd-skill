@@ -614,14 +614,13 @@ confirmed condition above. Delegate polling mechanics to
   maintainer has since posted a valid external-check waiver for this
   HEAD** — that case still needs the rerun, to make the check reflect
   the waiver (see `idd-pre-merge.instructions.md`'s External-check
-  waivers for the F2/F3 handling). A
+  waivers). A
   waiver is effective only once `deadline.passed` is true or
   `terminal.state` reaches `COPILOT_UNAVAILABLE` (check both fields in
   the same run's output); posted earlier, it is valid but inert —
   mechanically the same as no waiver until then. Absent a waiver, or
   with one still inert, exit CI-wait and proceed directly to
-  `idd-review-snapshot.instructions.md` (E1) instead, matching the phase
-  routing table's "PR open, CI running, reviews exist" row. This does
+  `idd-review-snapshot.instructions.md` (E1) instead. This does
   not relax the merge gate — the check stays required, and F2
   re-verifies it independently before merge.
 - **`idd-advisory-convergence` is the sole non-pass required check, and
@@ -654,7 +653,8 @@ confirmed condition above. Delegate polling mechanics to
   still inside its settle window) means request nothing — wait for
   Copilot's review to land for the current HEAD SHA, then rerun via
   `rerun-advisory-convergence.mjs` (see `idd-ci.instructions.md` §Rerun
-  mechanics) and resume D4. `SATISFIED` splits on `lastCopilotCommit`:
+  mechanics) and resume D4. `DISPOSITION_NEEDED` (#4070) takes no rerun:
+  exit CI-wait and proceed to E1. `SATISFIED` splits on `lastCopilotCommit`:
   when it already matches this HEAD SHA, Copilot's review already
   covers it — request nothing and take the same rerun-and-resume-D4
   action as `WAIT` above (this proven-coverage sub-case is unchanged;

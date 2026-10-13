@@ -778,6 +778,14 @@ in this preamble, since the fallback differs per helper.
   (referenced in
   [kurone-kito/idd-skill#2243](https://github.com/kurone-kito/idd-skill/issues/2243);
   see its `--help` for the fetch-scope and staleness details)
+  Default-on (not opt-in): excludes the `providerOutage.declarationTarget`
+  issue, bucketed under `filtered.provider_outage_target`, and the
+  `issueAuthoring.journalIssue` issue when that reference names this
+  repository, bucketed under `filtered.authoring_journal_target` (issue
+  `#4115`). The journal is excluded by number, and its scan covers open
+  issues only, so a closed journal is reported only by the per-issue mode of
+  `discover-readiness-check.mjs`. A reference to another repository is
+  ignored.
   Default-on (not opt-in): excludes a defer-source follow-up, a body with an
   `<!-- {prefix}-authoring-defer-source: ... -->` marker, while its single
   `Refs` origin issue is open, bucketed under
@@ -1505,7 +1513,14 @@ default below is unchanged.
   shape differs from single-root mode:
   - `mode`: `"all-roadmaps"`
   - `roots`: `[{ number: number, title: string, state: string,`
-    `roadmapMarkerId: string }]` — every open roadmap root enumerated
+    `roadmapMarkerId: string, openLeafCount: number,`
+    `a15AuditRequired: boolean }]` — every open roadmap root enumerated.
+    `openLeafCount` counts that root's own open execution leaves, with no
+    label, claim, or readiness filter, and is per root (a shared leaf counts
+    under each root). `a15AuditRequired` is `true` when `openLeafCount` is 0
+    and the root is not named by `--a15-audited <n>` (repeatable, valid only
+    with `--all-roadmaps`). Naming a root there records that its A1.5 audit
+    already ran in this pass; the helper never observes audit completion.
   - `leaves`: `[{ number: number, title: string, state: string,`
     `labels: string[], classification: "execution",`
     `roadmapMarkerId: string, autopilotSuitability: number | null,`
@@ -1756,6 +1771,13 @@ node scripts/discover-readiness-check.mjs --swarm-floor <N>
   or out-of-range `N` is a **hard error**, not a silent coercion to the
   default floor — otherwise a typo (e.g. `--swarm-floor 50`) would quietly
   answer at floor 3 and be misread as "floor-50 work exists."
+- **Durable-record exclusion** (issue `#4115`, default-on): the
+  `providerOutage.declarationTarget` issue and the `issueAuthoring.journalIssue`
+  issue (when it names this repository) are never `ready`. Each is excluded by
+  number before any GitHub read and listed in `filteredOut` with the reason
+  `provider_outage_target` or `authoring_journal_target`. The per-issue mode
+  reports a named durable record the same way, and the `--swarm-floor`
+  `eligible` set never contains one.
 - **Boundary**: read-only and advisory — selecting the next issue still runs
   the A3/A4/A4.5/A5 gates. Optional flags: `--owner` / `--repo` / `--policy`
   / `--now`.
@@ -2916,6 +2938,31 @@ The adopted helper boundaries are intentionally narrow:
   so repeat notices from the same bot at the same HEAD stay
   byte-distinguishable (#1482); it is a human-readable disambiguator only
   and plays no part in gate recognition or pairing.
+- **Which bot comments it handles (#4122)**: the readiness gate's set
+  (`isGateAdvisoryBotLogin`): the known review bots (CodeRabbit, Codex,
+  Copilot) plus every configured `advisoryBotLogins` entry, so a known
+  bot left out of a custom list is still handled. Every comment of that
+  set that the helper does not plan is listed in `skipped` with a
+  reason; none is dropped silently, as happened on
+  kurone-kito/setup.ubuntu PR 204, where the gate listed two bot
+  comments and the helper printed empty lists.
+- **Skip reasons**: `already-dispositioned`,
+  `coderabbit-review-in-progress`,
+  `summary-resolved-no-actionable-comments`, `codex-review-running` (a
+  Codex status row for the current HEAD that is not Completed, Failed
+  included), `codex-no-result-for-head` (a Codex status table with no
+  row for the current HEAD, an unparseable table or no table, or a Codex
+  no-find result for an older HEAD), and `unrecognized-notice-body`
+  (any other handled comment, for example a CodeRabbit acknowledgement
+  or a regular Copilot or Codex comment). A `codex-no-result-for-head`
+  comment is reported, not dispositioned, because Codex can still add a
+  row for the current HEAD; the manual E4 `**Rejected**` stays its
+  route. The helper does not track that manual reply, so it keeps
+  reporting the comment after one is posted: check `pre-merge-readiness`
+  `dispositionEvidence.missingRegularComments` before replying. An
+  `unrecognized-notice-body` entry for a comment the gate does not list
+  (one it already paired through its generic pairing) is expected and
+  harmless.
 - **Idempotent**: per advisory bot, existing trusted
   `isNonReviewNoticeDisposition` comments naming that bot already cover
   that many of its notices, so a re-run posts nothing new.
@@ -4416,8 +4463,9 @@ still fails closed:
   generating `{agent-id}`/`{claim-id}`, before posting the `claimed-by`
   marker (the B1 worktree does not exist yet, so `<path>` is then the
   _primary_ worktree); on the worktree-first fresh path (no inheritable
-  branch), `idd-claim` step 2 creates the linked worktree before the claim,
-  so `<path>` is that linked worktree and the B1 write below does not apply;
+  branch), the fresh-branch worktree-creation step creates the linked
+  worktree before the claim, so `<path>` is that linked worktree and the B1
+  write below does not apply;
   again with `--nonce` right before posting the activation-nonce marker; a
   third time at B1 once the sibling worktree exists, again with `--nonce`
   carried over from the A5 write --
@@ -6083,6 +6131,18 @@ reflexively as any other CLI option.
   pinned/identity-unresolved/non-target-event cause's own detail text
   silently replace it. `"unknown"` when no required checks are configured,
   mirroring `ci.status`'s own initial default in that case.
+- `ci` blocker hint (kurone-kito/idd-skill#4097): when `ci.status` is
+  `missing` (a required check has no run for the head) and
+  `branchCurrency.mergeStateStatus` is `DIRTY` (the head conflicts with its
+  base), the `ci` entry in `blockers[]` carries an optional `hint` naming the
+  default post-push sync: merge `origin/main` (or the development branch when
+  it is not `main`) into the PR branch, push, and re-run readiness once CI
+  and review settle on the new head. The hint is diagnostic only; `gate`,
+  `detail`, and the verdict are unchanged. It is absent for a `DIRTY` head
+  whose checks are present, and for a `missing` check on a head that is not
+  `DIRTY`. Observed on PR `#4077` (issue `#4071`, head `58688f7fc`): the head
+  was `DIRTY`, no `lint`, `idd-doctor`, or `pnpm-boundary` run was created,
+  and the readiness blocker gave no cause.
 - Authoritative phase role: the live `pre-merge-readiness` run on the
   current HEAD is the **authoritative source for the final-merge CI and
   activity fields** at F2/F3. The `review-activity-snapshot` helper builds
@@ -6983,8 +7043,8 @@ same as `AW4`/`AW5`.
   2. Only if `branchState` is `behind-no-conflict`, derive
      `requiresUpToDateHead`. Other states route without it, so they make no
      policy reads.
-     1. Read the base branch's rules (`rules/branches/{base-branch-url-encoded}`)
-        and its protection (`branches/{base-branch-url-encoded}/protection`)
+     1. Read the base branch's rules (`rules/branches/{development-branch-url-encoded}`)
+        and its protection (`branches/{development-branch-url-encoded}/protection`)
         under `repos/{owner}/{repo}`, with `gh api`. A 404 is unreadable
         unless the `.github/idd/config.json` at the base ref sets
         `ciGate.trustEmptyProtectionReads` to `true`. Read that file from the
@@ -6992,10 +7052,10 @@ same as `AW4`/`AW5`.
 
         ```sh
         gh api -H 'Accept: application/vnd.github.raw' \
-          'repos/{owner}/{repo}/contents/.github/idd/config.json?ref={base-branch-url-encoded}'
+          'repos/{owner}/{repo}/contents/.github/idd/config.json?ref={development-branch-url-encoded}'
         ```
 
-        Encode `{base-branch}` as a URL path segment in all three paths (for
+        Encode `{development-branch}` as a URL path segment in all three paths (for
         example `release%2F1`), as the helper adapter does. An unencoded name
         addresses another route and reads as a 404. A missing file falls back
         to the user-global policy layers, as `loadTrustedIddConfig` does, and
@@ -7371,9 +7431,10 @@ same as `AW4`/`AW5`.
 - Read-only boundary: the helper performs no minimization, no posting, and no
   issue creation. **Handoff**: the JSON is the input an operator hands to the
   issue-authoring skill, which re-verifies each candidate against current
-  `main` (reuse-first / not-already-fixed) and drafts follow-up issues
-  bucketed by readiness. The helper does deterministic detection; the
-  judgment-heavy re-verification, drafting, and publish stay operator-gated.
+  `{development-branch}` (reuse-first / not-already-fixed) and drafts
+  follow-up issues bucketed by readiness. The helper does deterministic
+  detection; the judgment-heavy re-verification, drafting, and publish stay
+  operator-gated.
 - **Operator runbook**: this helper is a **manual spot-check audit**, not a
   phase step — its absence from the executable phase instruction files is
   by design, not an oversight.
@@ -7692,12 +7753,12 @@ a destructive re-run.
 ## Signed-Commit Merge Wrapper (Shared Git Procedure)
 
 `idd-review-triage.instructions.md`'s E-phase sync path and
-`idd-review-fix.instructions.md`'s E11 both merge `main` into the feature
-branch:
+`idd-review-fix.instructions.md`'s E11 both merge `{development-branch}`
+into the feature branch:
 
 ```sh
-git fetch origin +refs/heads/main:refs/remotes/origin/main \
-  && git merge origin/main
+git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch} \
+  && git merge origin/{development-branch}
 ```
 
 On a repo whose primary commit signing is non-interactive-hostile (GPG
@@ -7707,7 +7768,7 @@ arbitrary git subcommands, run the **merge** step — including a
 plain command (`git fetch` creates no commit and needs no signing):
 
 ```sh
-git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge -m "chore: merge origin/main into the claimed branch" origin/main
+git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge -m "chore: merge origin/{development-branch} into the claimed branch" origin/{development-branch}
 # resolve conflicts if any, then:
 git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge --continue
 ```

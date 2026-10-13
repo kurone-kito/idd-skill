@@ -93,6 +93,10 @@ needs-decision, blocked-by-human, and out-of-scope.
    `issueAuthoring.adversarialReview.waitCeiling`
    (default `PT20M`) using the caller's own wait and cleanup, and do
    not wrap the command in a timeout utility. Dispose of every finding.
+   Keep a findings ledger in the session scratchpad, never in the
+   repository, and send each `rejected` finding that has evidence as a
+   `previously rejected:` string in the packet's `evidence` array
+   ([carry-forward rule](references/contract.md#carry-forward-of-rejected-findings)).
    Review the revised draft again before the linter whenever that
    revision changes more than wording, including acceptance criteria,
    candidate files, dependency edges, roadmap task-list or relationship

@@ -32,7 +32,7 @@ Otherwise read the state directly:
 
 ```sh
 gh pr view {pr-number} --json mergeable,mergeStateStatus,headRefOid,baseRefName
-git fetch --no-tags origin {base-branch}
+git fetch --no-tags origin {development-branch}
 git merge-base {pr-head-sha} FETCH_HEAD
 # vs: git rev-parse FETCH_HEAD; mismatch/unresolvable = baseAdvancedSinceMergeBase: true below (best-effort)
 ```
@@ -245,6 +245,7 @@ never clears by polling: follow its `detail`.
        unchanged and continues to the CI check.
      - **SATISFIED** (otherwise) → this check is **satisfied**;
        continue to the CI check.
+     - **DISPOSITION_NEEDED** → do not merge; return to E14.
      - **HOLD** → post the hold comment from **AW4** and stop.
      - **RECOVERY_NEEDED** → post the recovery marker from **AW3-R**
        without requesting another Copilot review, then enter the normal

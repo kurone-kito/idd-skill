@@ -18,9 +18,8 @@ advisory-wait instructions instead.
 - Helper-enabled profiles: use the named helper commands below. If the
   advisory-wait-state evidence/decision helper is missing, fails,
   returns invalid JSON, or disagrees with live state, stop and ask —
-  never a manual per-field fetch or hand-derived decision. This
-  doesn't restrict marker _posting_ — the manual JSON `POST` under
-  Markers stays that step's canonical fallback.
+  never a manual per-field fetch or hand-derived decision. Marker
+  posting is not restricted (see Markers).
 - `instructions-only`: do not use this lite file.
 - Any mismatch between this file and
   `idd-advisory-wait.instructions.md` is a bug in this file.
@@ -59,8 +58,9 @@ any bot but `advisoryWait.primaryBotLogin`.
 ## Fast path — common case
 
 Run the Helper-first canonical path below. Once `lastCopilotCommit`
-equals `prHeadSha`, the gate is **SATISFIED** — take the caller's
-`SATISFIED` action. For off-head `SATISFIED`, apply the header's
+equals `prHeadSha` and `outcome` is `SATISFIED`, take the caller's
+`SATISFIED` action (`DISPOSITION_NEEDED`, #4070, goes to the E14 table).
+For off-head `SATISFIED`, apply the header's
 `staleRequestRecovery`; lite hands off `attempt` for AW3-S.
 
 ## Helper-first canonical path
@@ -86,15 +86,13 @@ include `staleRequestRecovery`; reject unbound output.
 
 The helper computes `outcome` directly from live evidence — never by
 hand from raw timestamps. Allowed values: `SATISFIED`,
-`REQUEST_NEEDED`, `RECOVERY_NEEDED`, `CAP_EXHAUSTED`, `WAIT`. `HOLD` is
+`REQUEST_NEEDED`, `RECOVERY_NEEDED`, `CAP_EXHAUSTED`, `WAIT`,
+`DISPOSITION_NEEDED` (#4070). `HOLD` is
 caller-derived, never emitted.
 
-The helper already resolves `advisoryWait.*` from
-`.github/idd/config.json`, emitting final values in `requestCap`,
-`pendingWindowMinutes`, `settledWindowMinutes`, `pollIntervalMinutes`,
-and `capExhaustedRoute` — never read that config yourself. A missing
-field here isn't "config absent" — it's a malformed helper response
-(see Required fields above); stop and ask.
+The helper resolves `advisoryWait.*` from `.github/idd/config.json`
+(`requestCap` through `capExhaustedRoute`); never read that config
+yourself. A missing field is a malformed helper response: stop and ask.
 
 ## E14 outcome → action
 
@@ -106,6 +104,7 @@ field here isn't "config absent" — it's a malformed helper response
 | `RECOVERY_NEEDED` | post the recovery marker (do not request another review), then poll |
 | `CAP_EXHAUSTED` | `phase-specific` (default): proceed to CI wait. `hold`: stop and ask (`HOLD`'s only route; see above) |
 | `WAIT` | keep polling |
+| `DISPOSITION_NEEDED` (#4070) | stop and ask a full session to answer the cited items (E6); for an unreadable same-head review, post a trusted review-ack, then rerun the helper |
 <!-- dprint-ignore-end -->
 
 `capExhaustedRoute: phase-specific` lets E14 continue past
@@ -134,10 +133,8 @@ clock — never commit author/committer timestamps.
 
 ## Polling guidance (protocol-level only)
 
-This section covers only what the AW3 protocol itself defines. Aborting
-this wait early on a moved HEAD or new review activity is the caller's
-own job (owned by `idd-review-fix-lite.instructions.md`'s E14; not
-duplicated here).
+This section covers only what the AW3 protocol defines. Early abort on a
+moved HEAD is the caller's job (E14 in `idd-review-fix-lite`).
 
 1. Reuse the existing same-head marker (`earliestSameHeadAt`) instead
    of posting a new one, unless none exists yet.
@@ -146,11 +143,11 @@ duplicated here).
 3. If `earliestSameHeadAt` is now empty, stop and ask (see
    Stop-and-ask conditions).
 4. If `outcome` is now `SATISFIED`, exit this wait and continue. The
-   helper already folds `pendingWindowMinutes`/`settledWindowMinutes`
-   into `outcome` on every call, including the stalled/rate-limited
-   case — never re-derive that decision by hand from raw window
-   values.
-5. Otherwise (`outcome` is `WAIT`, or any other non-terminal value),
+   helper folds the window values into `outcome` on every call; never
+   re-derive that by hand.
+5. If `outcome` is `DISPOSITION_NEEDED` (#4070), exit this wait and
+   answer the cited items per the E14 table; never keep polling.
+   Otherwise (`outcome` is `WAIT`, or any other non-terminal value),
    keep polling.
 
 ## Secondary advisory bot(s) (non-gating, optional)

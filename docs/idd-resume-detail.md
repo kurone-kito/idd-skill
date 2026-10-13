@@ -582,8 +582,8 @@ run **pre-push-validate**, push, then wait for CI
 
 ## §W5 — PR exists (1 match), clean, unpushed
 
-Sync main (D1 rebase) + **pre-push-validate** + push (D2), then go to
-Step 3.
+Sync `{development-branch}` (D1 rebase) + **pre-push-validate** + push
+(D2), then go to Step 3.
 
 ## §W6 — PR exists (multiple matches)
 
@@ -599,7 +599,7 @@ claim ownership:
 
 ## §W7 — No PR, remote branch exists
 
-From the primary worktree (HEAD stays on `main`):
+From the primary worktree (HEAD stays on `{default-branch}`):
 
 1. Fetch the remote tip with a fully-qualified destination refspec --
    unlike a bare `git fetch origin {branch}`, this does not depend on
@@ -1094,3 +1094,139 @@ or log — never as an issue/PR comment on a non-owned claim:
   claim-id appears. Either observation only means re-enter Resume
   Step 0 (step 5); a fresh heartbeat lands on the active non-stale
   claim stop there, never on a takeover.
+
+## Re-claim an inheritable branch
+
+Use this sequence when a fresh claim must reuse an existing PR branch, an
+inheritable branch whose commits beyond the base must be kept. The
+fresh-branch order in `idd-claim.instructions.md` creates a new branch from
+its base ref and does not apply. The full claim file's fresh-branch order
+starts from `origin/{development-branch}`, and the lite file's starts from
+`origin/main`. This sequence attaches the existing branch instead and chooses
+no new base ref: the branch keeps its own history, which may be based on
+`origin/main` or another ref. Observed 2026-10-12,
+`kurone-kito/idd-skill#3708` (PR `#4030`): the claimant attached the existing
+PR branch as a sibling worktree before the claim, and the lite order
+succeeded. Run all five pre-checks in `idd-claim.instructions.md` before
+step 1. This sequence does not repeat them.
+
+1. Fresh-claim gate with no worktree:
+   `node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate`
+   returns `claimable`.
+2. Before the claim POST, validate the branch name and record the tokens on
+   the primary worktree. Assign the recovered branch to `BRANCH` once, as a
+   single-quoted value with any embedded single quote written as `'\''`. Never
+   write the value itself inside double quotes, because `$(...)` would run
+   there. Then validate. A failure holds here, before any POST:
+
+   ```sh
+   BRANCH='<branch>'
+   git check-ref-format "refs/heads/$BRANCH" && [ "${BRANCH#-}" = "$BRANCH" ]
+   ```
+
+   The leading-hyphen test is needed because `git check-ref-format` accepts a
+   name such as `-x`, but `git branch` refuses it.
+
+   Then record the tokens:
+   `node scripts/claim-lock.mjs --record-tokens --worktree <primary>
+   --agent-id <id> --claim-id <id>`. Immediately before the claim POST in
+   step 3, re-fetch the labels and the owner and claim logs, as the claim
+   pre-checks require. An authoring hold, or a competing claim that appeared
+   since step 1, aborts here before any POST.
+3. Claim POST, with the branch of the existing PR:
+   `node scripts/post-idd-marker.mjs --target issue <N> --type claim
+   --agent-id <id> --claim-id <id> --timestamp <ISO8601> --branch "$BRANCH"
+   --apply`.
+4. Activation-nonce POST. Generate a fresh opaque nonce for this claim id,
+   and never reuse one from an earlier attempt, as the lite claim sequence
+   requires. Record it on the primary worktree first:
+   `node scripts/claim-lock.mjs --record-tokens --worktree <primary>
+   --agent-id <id> --claim-id <id> --nonce <nonce>`, then:
+   `node scripts/post-idd-marker.mjs --target issue <N> --type
+   activation-nonce --agent-id <id> --claim-id <id> --nonce <nonce>
+   --timestamp <ISO8601> --apply`.
+5. Provision the branch and attach its worktree as one locked command. Run it
+   under the
+   [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock), as B1
+   requires for every fetch and worktree add against a shared clone. The
+   script fetches the remote tip, creates the local branch when none exists,
+   and attaches it with no `-b`, so the existing history is kept. It never
+   moves the primary HEAD.
+
+   The branch and the path are the two trailing arguments. Single-quote each
+   one at the call site, writing an embedded single quote as `'\''`, so the
+   outer shell passes it through unchanged. Never paste them into the script
+   text. When a local `<branch>` already exists, the script attaches it only
+   if it equals `origin/<branch>`. A local ref that differs exits 1 and is
+   never overwritten:
+
+   ```sh
+   node scripts/clone-lock.mjs --exec --agent-id <id> -- sh -c '
+     git fetch origin "+refs/heads/$1:refs/remotes/origin/$1" &&
+     if git show-ref --verify --quiet "refs/heads/$1"; then
+       [ "$(git rev-parse "refs/heads/$1")" = \
+         "$(git rev-parse "refs/remotes/origin/$1")" ] ||
+         { echo "local $1 differs from origin/$1: hold" >&2; exit 1; }
+     else
+       git branch -- "$1" "origin/$1"
+     fi &&
+     if git worktree list --porcelain | grep -Fqx "branch refs/heads/$1"; then
+       echo "branch $1 is checked out in another worktree: hold" >&2
+       exit 1
+     fi &&
+     git worktree add -- "$2" "$1"
+   ' sh '<branch>' '<path>'
+   ```
+
+6. Carry the nonce forward on the linked worktree:
+   `node scripts/claim-lock.mjs --record-tokens --worktree <linked>
+   --agent-id <id> --claim-id <id> --nonce <nonce>`.
+7. Acquire on the linked worktree:
+   `node scripts/claim-lock.mjs --acquire --worktree <linked> --agent-id <id>
+   --claim-id <id>`. A collision with another claim id means the claim is
+   contested, not yours. Stop, as the failure rules below require.
+8. After the settle delay (`claim.verifySettleDelay`, default `PT5S`), assert:
+   `node scripts/resume-claim-routing.mjs --issue <N> --assert --claim-id <id>
+   --nonce <nonce> --worktree <linked>`. Only `already_owned` with action
+   `keep` continues. Any other result stops the sequence. Do not assert before
+   the delay: the nonce and the claim comments are eventually consistent, so an
+   early assert can report a false failure while the markers are still
+   propagating.
+
+A failure after the POSTs may leave a live claim, so never answer it by
+repeating a POST blind. Re-read the issue comments first, paginated, and apply
+the claim verification rules in `idd-claim.instructions.md`.
+
+- Step 3 exited nonzero. A `claimed-by` marker with your `{claim-id}` means
+  the claim POST landed, even when the command failed after GitHub accepted
+  it. The claim is then live, so go to step 4. With no such marker, nothing
+  was posted: restart from step 1.
+- Step 4 exited nonzero. The claim is live, so do not restart from step 1 and
+  do not release it yet. An activation-nonce marker with your `{claim-id}` and
+  nonce means the POST landed: continue at step 5. With none, confirm the
+  active claim is still yours, then repeat step 4 with a fresh nonce. If the
+  active claim is no longer yours, stop and report without posting a release.
+- Steps 5 to 8 failed. Before any release or retry, confirm that the active
+  claim is your `{claim-id}` and that the activation nonce is yours. If that
+  proof does not hold, stop and report without posting a release.
+- Step 5 failed, and the proof holds. No linked worktree was attached, so
+  release your own pair, then restart from step 1:
+
+  ```sh
+  node scripts/post-idd-marker.mjs --target issue <N> --type unclaim \
+    --agent-id <id> --claim-id <id> --timestamp <ISO8601> --apply
+  ```
+
+  A local branch that the script already created is attached again on the
+  restart, because the script attaches a local branch that equals
+  `origin/<branch>`. A local ref that differs fails the same check on every
+  restart, so resolve that ref first. The same holds for a branch that is
+  already checked out in another worktree.
+- Step 6 failed with an infrastructure error, and the proof holds. The linked
+  worktree exists, so do not release or restart from step 1, because the
+  worktree blocks the no-worktree gate. Repeat step 6.
+- Step 7 or 8 returned a contested verdict. Stop and report, as steps 7 and 8
+  require.
+
+The claim comes before the attach because #4071's decided sequence orders them
+that way.

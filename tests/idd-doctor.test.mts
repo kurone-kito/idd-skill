@@ -4305,6 +4305,342 @@ test('checkThreadResolutionPolicy CLI: idd-doctor.mjs reports the warning for a 
   }
 });
 
+const ADVISORY_WORKFLOW_RELPATH =
+  '.github/workflows/idd-advisory-convergence.yml';
+const ADVISORY_COMMENT_WORKFLOW_RELPATH =
+  '.github/workflows/idd-advisory-convergence-comment.yml';
+const ADVISORY_CHECKOUT_USES =
+  '      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1';
+
+function advisoryCheckoutRefWorkflow(ref: string, eol = '\n'): string {
+  return [
+    'jobs:',
+    '  verdict:',
+    '    steps:',
+    ADVISORY_CHECKOUT_USES,
+    '        with:',
+    `          ref: ${ref}`,
+    '          fetch-depth: 1',
+    '',
+  ].join(eol);
+}
+
+function stubGhRepoView(defaultBranch: string | undefined): string {
+  const repo: Record<string, unknown> = {
+    owner: { login: 'owner' },
+    name: 'repo',
+    url: 'https://github.com/owner/repo',
+  };
+  if (defaultBranch !== undefined) {
+    repo.defaultBranchRef = { name: defaultBranch };
+  }
+  return `if (process.argv[2] === 'repo' && process.argv[3] === 'view') {
+  process.stdout.write(${JSON.stringify(JSON.stringify(repo))});
+} else {
+  process.stderr.write('stubbed gh: not implemented for this test\\n');
+  process.exitCode = 1;
+}
+`;
+}
+
+/**
+ * Runs `idd-doctor.mjs --json` with a stubbed `gh repo view` and returns the
+ * warnings. Writes `files` into a fresh temporary root unless `repoRoot` is
+ * given. A `null` value creates a directory at that path instead of a file.
+ * Reads stdout from the thrown error when the report has errors.
+ */
+function runAdvisoryRefDoctor(options: {
+  defaultBranch: string | undefined;
+  files?: Record<string, string | null>;
+  repoRoot?: string;
+  timeout?: number;
+}): string[] {
+  const root =
+    options.repoRoot ?? mkdtempSync(join(tmpdir(), 'idd-doctor-advisory-ref-'));
+  const restore = stubExecutable('gh', stubGhRepoView(options.defaultBranch));
+  try {
+    if (options.files) {
+      mkdirSync(join(root, '.github/workflows'), { recursive: true });
+      for (const [relPath, text] of Object.entries(options.files)) {
+        if (text === null) {
+          mkdirSync(join(root, relPath));
+        } else {
+          writeFileSync(join(root, relPath), text);
+        }
+      }
+    }
+    const argv = [IDD_DOCTOR_SCRIPT, '--json', '--repo-root', root];
+    const execOptions = {
+      encoding: 'utf8' as const,
+      env: { ...process.env },
+      timeout: options.timeout ?? 60_000,
+    };
+    let report: { warnings: string[] };
+    try {
+      report = JSON.parse(execFileSync(process.execPath, argv, execOptions));
+    } catch (error) {
+      const stdout = (error as { stdout?: string } | null)?.stdout;
+      if (typeof stdout !== 'string' || stdout.length === 0) {
+        throw error;
+      }
+      report = JSON.parse(stdout);
+    }
+    return report.warnings;
+  } finally {
+    restore();
+    if (!options.repoRoot) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+}
+
+const advisoryWarningsFor = (warnings: string[], relPath: string) =>
+  warnings.filter((w) => w.includes(relPath));
+
+test('checkAdvisoryWorkflowCheckoutRefs CLI: warns once when the advisory checkout ref is main and the default branch is master (#4081)', () => {
+  const warnings = runAdvisoryRefDoctor({
+    defaultBranch: 'master',
+    files: {
+      [ADVISORY_WORKFLOW_RELPATH]: advisoryCheckoutRefWorkflow('main'),
+    },
+  });
+  const matches = advisoryWarningsFor(warnings, ADVISORY_WORKFLOW_RELPATH);
+  assert.equal(matches.length, 1, JSON.stringify(warnings));
+  assert.ok(matches[0].includes('main') && matches[0].includes('master'));
+});
+
+test('checkAdvisoryWorkflowCheckoutRefs CLI: no warning when the advisory checkout ref matches the default branch (#4081)', () => {
+  const warnings = runAdvisoryRefDoctor({
+    defaultBranch: 'master',
+    files: {
+      [ADVISORY_WORKFLOW_RELPATH]: advisoryCheckoutRefWorkflow('master'),
+    },
+  });
+  assert.equal(
+    advisoryWarningsFor(warnings, ADVISORY_WORKFLOW_RELPATH).length,
+    0,
+    JSON.stringify(warnings),
+  );
+});
+
+test('checkAdvisoryWorkflowCheckoutRefs CLI: no advisory warning when the workflow file is absent (#4081)', () => {
+  const warnings = runAdvisoryRefDoctor({ defaultBranch: 'master' });
+  assert.equal(
+    warnings.filter((w) => w.includes('idd-advisory-convergence')).length,
+    0,
+    JSON.stringify(warnings),
+  );
+});
+
+test('checkAdvisoryWorkflowCheckoutRefs CLI: an expression ref is reported as not evaluated (#4081)', () => {
+  const warnings = runAdvisoryRefDoctor({
+    defaultBranch: 'master',
+    files: {
+      [ADVISORY_WORKFLOW_RELPATH]:
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+        advisoryCheckoutRefWorkflow('${{ github.sha }}'),
+    },
+  });
+  const matches = advisoryWarningsFor(warnings, ADVISORY_WORKFLOW_RELPATH);
+  assert.equal(matches.length, 1, JSON.stringify(warnings));
+  assert.ok(matches[0].includes('not evaluated'));
+});
+
+test('checkAdvisoryWorkflowCheckoutRefs CLI: a checkout without a with block does not read a later step ref (#4081)', () => {
+  const workflow = [
+    'jobs:',
+    '  verdict:',
+    '    steps:',
+    ADVISORY_CHECKOUT_USES,
+    '      - uses: actions/cache@v4',
+    '        with:',
+    '          ref: main',
+    '',
+  ].join('\n');
+  const warnings = runAdvisoryRefDoctor({
+    defaultBranch: 'master',
+    files: { [ADVISORY_WORKFLOW_RELPATH]: workflow },
+  });
+  assert.equal(
+    advisoryWarningsFor(warnings, ADVISORY_WORKFLOW_RELPATH).length,
+    0,
+    JSON.stringify(warnings),
+  );
+});
+
+for (const [label, ref] of [
+  ['an empty ref value', ''],
+  ['a ref value that is only a comment', '# comment'],
+  ['a YAML null ref value', 'null'],
+] as const) {
+  test(`checkAdvisoryWorkflowCheckoutRefs CLI: ${label} is reported as not evaluated (#4081)`, () => {
+    const warnings = runAdvisoryRefDoctor({
+      defaultBranch: 'master',
+      files: {
+        [ADVISORY_WORKFLOW_RELPATH]: advisoryCheckoutRefWorkflow(ref),
+      },
+    });
+    const matches = advisoryWarningsFor(warnings, ADVISORY_WORKFLOW_RELPATH);
+    assert.equal(matches.length, 1, JSON.stringify(warnings));
+    assert.ok(matches[0].includes('not evaluated'));
+  });
+}
+
+test('checkAdvisoryWorkflowCheckoutRefs CLI: a quoted ref with a trailing comment is compared after normalization (#4081)', () => {
+  const warnings = runAdvisoryRefDoctor({
+    defaultBranch: 'master',
+    files: {
+      [ADVISORY_WORKFLOW_RELPATH]: advisoryCheckoutRefWorkflow(
+        "'master' # trusted default",
+      ),
+    },
+  });
+  assert.equal(
+    advisoryWarningsFor(warnings, ADVISORY_WORKFLOW_RELPATH).length,
+    0,
+    JSON.stringify(warnings),
+  );
+});
+
+test('checkAdvisoryWorkflowCheckoutRefs CLI: an unreadable workflow file warns instead of aborting the report (#4081)', () => {
+  const warnings = runAdvisoryRefDoctor({
+    defaultBranch: 'master',
+    files: { [ADVISORY_WORKFLOW_RELPATH]: null },
+  });
+  const matches = advisoryWarningsFor(warnings, ADVISORY_WORKFLOW_RELPATH);
+  assert.equal(matches.length, 1, JSON.stringify(warnings));
+  assert.ok(matches[0].includes('could not be read'));
+});
+
+test('checkAdvisoryWorkflowCheckoutRefs CLI: a commented ref and a github.ref key are never read (#4081)', () => {
+  const workflow = [
+    'jobs:',
+    '  verdict:',
+    '    steps:',
+    ADVISORY_CHECKOUT_USES,
+    '        with:',
+    '          # ref: main',
+    '          github.ref: pull_request_target',
+    '          fetch-depth: 1',
+    '',
+  ].join('\n');
+  const warnings = runAdvisoryRefDoctor({
+    defaultBranch: 'master',
+    files: { [ADVISORY_WORKFLOW_RELPATH]: workflow },
+  });
+  assert.equal(
+    advisoryWarningsFor(warnings, ADVISORY_WORKFLOW_RELPATH).length,
+    0,
+    JSON.stringify(warnings),
+  );
+});
+
+test('checkAdvisoryWorkflowCheckoutRefs CLI: a comment at the key indentation does not end the with block (#4081)', () => {
+  const workflow = [
+    'jobs:',
+    '  verdict:',
+    '    steps:',
+    ADVISORY_CHECKOUT_USES,
+    '        with:',
+    '        # note',
+    '          ref: main',
+    '',
+  ].join('\n');
+  const warnings = runAdvisoryRefDoctor({
+    defaultBranch: 'master',
+    files: { [ADVISORY_WORKFLOW_RELPATH]: workflow },
+  });
+  assert.equal(
+    advisoryWarningsFor(warnings, ADVISORY_WORKFLOW_RELPATH).length,
+    1,
+    JSON.stringify(warnings),
+  );
+});
+
+test('checkAdvisoryWorkflowCheckoutRefs CLI: reads the comment workflow file too (#4081)', () => {
+  const warnings = runAdvisoryRefDoctor({
+    defaultBranch: 'master',
+    files: {
+      [ADVISORY_COMMENT_WORKFLOW_RELPATH]: advisoryCheckoutRefWorkflow('main'),
+    },
+  });
+  const matches = advisoryWarningsFor(
+    warnings,
+    ADVISORY_COMMENT_WORKFLOW_RELPATH,
+  );
+  assert.equal(matches.length, 1, JSON.stringify(warnings));
+  assert.ok(matches[0].includes('main') && matches[0].includes('master'));
+});
+
+test('checkAdvisoryWorkflowCheckoutRefs CLI: a CRLF workflow file is parsed (#4081)', () => {
+  const warnings = runAdvisoryRefDoctor({
+    defaultBranch: 'master',
+    files: {
+      [ADVISORY_WORKFLOW_RELPATH]: advisoryCheckoutRefWorkflow('main', '\r\n'),
+    },
+  });
+  assert.equal(
+    advisoryWarningsFor(warnings, ADVISORY_WORKFLOW_RELPATH).length,
+    1,
+    JSON.stringify(warnings),
+  );
+});
+
+test('checkAdvisoryWorkflowCheckoutRefs CLI: warns once for two checkouts when only one ref differs (#4081)', () => {
+  const workflow = [
+    'jobs:',
+    '  verdict:',
+    '    steps:',
+    ADVISORY_CHECKOUT_USES,
+    '        with:',
+    '          ref: main',
+    ADVISORY_CHECKOUT_USES,
+    '        with:',
+    '          ref: master',
+    '',
+  ].join('\n');
+  const warnings = runAdvisoryRefDoctor({
+    defaultBranch: 'master',
+    files: { [ADVISORY_WORKFLOW_RELPATH]: workflow },
+  });
+  assert.equal(
+    advisoryWarningsFor(warnings, ADVISORY_WORKFLOW_RELPATH).length,
+    1,
+    JSON.stringify(warnings),
+  );
+});
+
+test('checkAdvisoryWorkflowCheckoutRefs CLI: skips the check when repo view has no default branch (#4081)', () => {
+  const warnings = runAdvisoryRefDoctor({
+    defaultBranch: undefined,
+    files: {
+      [ADVISORY_WORKFLOW_RELPATH]: advisoryCheckoutRefWorkflow('main'),
+    },
+  });
+  assert.ok(
+    warnings.some((w) => w.includes('github checks skipped')),
+    JSON.stringify(warnings),
+  );
+  assert.equal(
+    warnings.filter((w) => w.includes('idd-advisory-convergence')).length,
+    0,
+    JSON.stringify(warnings),
+  );
+});
+
+test('checkAdvisoryWorkflowCheckoutRefs CLI: this repository reports no advisory ref warning (#4081)', () => {
+  const warnings = runAdvisoryRefDoctor({
+    defaultBranch: 'main',
+    repoRoot: REPO_ROOT,
+    timeout: 240_000,
+  });
+  assert.equal(
+    warnings.filter((w) => w.includes('idd-advisory-convergence')).length,
+    0,
+    JSON.stringify(warnings),
+  );
+});
+
 test('checkPolicySignals recognizes the hyphenated copilot-advisory literal (#1827)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'idd-policy-signals-'));
   try {

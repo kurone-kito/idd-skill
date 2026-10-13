@@ -29,7 +29,9 @@
           "number",
           "title",
           "state",
-          "roadmapMarkerId"
+          "roadmapMarkerId",
+          "openLeafCount",
+          "a15AuditRequired"
         ],
         "additionalProperties": false,
         "properties": {
@@ -49,6 +51,15 @@
           "roadmapMarkerId": {
             "type": "string",
             "description": "This root's own embedded roadmap-id marker value, or empty when the root issue carries no such marker (e.g. found as a configured legacy root)."
+          },
+          "openLeafCount": {
+            "type": "integer",
+            "description": "Count of open execution leaves reached from this root's own traversal, regardless of label, claim state, or readiness. Per root and not deduplicated: a leaf shared by sibling roots counts under each of them, so these counts can sum to more than the union leaf count. Zero when every child of the root has closed.",
+            "minimum": 0
+          },
+          "a15AuditRequired": {
+            "type": "boolean",
+            "description": "True when openLeafCount is 0 and the root is not named by the caller's --a15-audited list. Such a root has no leaf to rank, so its A1.5 completion audit is the only step that can close it. The helper never observes audit completion; the caller records it by naming the root in --a15-audited on the next run."
           }
         }
       }

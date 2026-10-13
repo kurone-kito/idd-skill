@@ -19,6 +19,7 @@ import {
   normalizeMarkerPrefix,
   parseIssueTargetToken,
   runAuthoringMarkerSweep,
+  SWEEP_DRY_RUN_NOTE,
   type SweepGraphqlComment,
 } from '../src/scripts/sweep-authoring-markers.mts';
 import { stubExecutable } from './test-utils.mts';
@@ -881,6 +882,81 @@ test('an invalid --classifier is rejected before any network call', () => {
   ]);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /--classifier must be one of/);
+});
+
+// Serves one issue's comment list (a superseded acquire marker plus its
+// newer heartbeat, both by `trusted-bot`) for the comment fetch, then
+// falls through to GH_MINIMIZE_STUB's probe/minimize answers. The fetch
+// query is matched first because both payload shapes carry `nodes`.
+const GH_SWEEP_CLI_STUB = `
+const sweepArgv = process.argv.slice(2);
+const sweepQuery = sweepArgv.find((a) => a.startsWith('query=')) || '';
+if (sweepQuery.includes('issue(number:')) {
+  process.stdout.write(JSON.stringify({
+    data: { repository: { issue: { comments: {
+      nodes: [
+        { id: 'IC_cli0', url: 'https://example.invalid/IC_cli0', body: ${JSON.stringify(ownerMarker('acquire', 'owner-1'))}, isMinimized: false, createdAt: '2026-10-01T00:00:00Z', author: { login: 'trusted-bot' } },
+        { id: 'IC_cli1', url: 'https://example.invalid/IC_cli1', body: ${JSON.stringify(ownerMarker('heartbeat', 'owner-1'))}, isMinimized: false, createdAt: '2026-10-01T00:01:00Z', author: { login: 'trusted-bot' } }
+      ],
+      pageInfo: { hasNextPage: false, endCursor: null },
+    } } } },
+  }));
+  process.exit(0);
+}
+${GH_MINIMIZE_STUB}
+`;
+
+const SWEEP_CLI_ARGS = [
+  '--issue',
+  '100',
+  '--owner',
+  'kurone-kito',
+  '--repo',
+  'idd-skill',
+  '--marker-prefix',
+  MARKER_PREFIX,
+  '--trusted-marker-logins',
+  'trusted-bot',
+];
+
+test('a successful dry run notes on stderr that nothing was minimized and keeps stdout one JSON report (#4107)', () => {
+  const restore = stubExecutable('gh', GH_SWEEP_CLI_STUB);
+  try {
+    const result = runCli([...SWEEP_CLI_ARGS, '--format', 'json']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr.trim(), SWEEP_DRY_RUN_NOTE);
+    assert.match(result.stderr, /dry-run/);
+    assert.match(result.stderr, /--apply/);
+    assert.equal(result.stdout.includes(SWEEP_DRY_RUN_NOTE), false);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.mode, 'dry-run');
+    assert.equal(report.families['authoring-owner'].eligible, 1);
+    assert.equal(report.items[0].status, 'would-apply');
+
+    const table = runCli([...SWEEP_CLI_ARGS, '--format', 'table']);
+    assert.equal(table.status, 0, table.stderr);
+    assert.match(table.stdout, /^mode: dry-run/);
+    assert.equal(table.stderr.trim(), SWEEP_DRY_RUN_NOTE);
+    assert.equal(table.stdout.includes(SWEEP_DRY_RUN_NOTE), false);
+  } finally {
+    restore();
+  }
+});
+
+test('an --apply run prints no dry-run note and still exits 0 with no failed candidate (#4107)', () => {
+  const restore = stubExecutable('gh', GH_SWEEP_CLI_STUB);
+  try {
+    const result = runCli([...SWEEP_CLI_ARGS, '--format', 'json', '--apply']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr.includes(SWEEP_DRY_RUN_NOTE), false);
+    assert.doesNotMatch(result.stderr, /dry-run mode/);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.mode, 'apply');
+    assert.equal(report.families['authoring-owner'].failed, 0);
+    assert.equal(report.items[0].status, 'applied');
+  } finally {
+    restore();
+  }
 });
 
 test('runAuthoringMarkerSweep fetches each canonical target once and emits cleanup evidence only when asked (#3593)', () => {

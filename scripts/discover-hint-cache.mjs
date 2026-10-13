@@ -26,8 +26,12 @@ import {
   readThroughGithubApiCacheAsync,
 } from './github-api-read-cache.mjs';
 
-/** Bumped when a helper's cached output shape changes incompatibly. */
-const HINT_FORMAT_VERSION = 1;
+/**
+ * Bumped when a helper's cached output shape changes incompatibly. 3 (#4115):
+ * the orphan output gained a `filtered.authoring_journal_target` bucket, so a
+ * hint written before the bump must not be served.
+ */
+const HINT_FORMAT_VERSION = 3;
 /** Cache-namespace names; each yields a distinct entry identity. */
 const HINT_UNIT = 'discover-hint';
 const GENERATION_UNIT = 'discover-hint-generation';
