@@ -440,7 +440,7 @@ no-op.
 kurone-kito/idd-skill#815 named the risk directly: parallel worktrees
 let a `git switch` move a checkout out from under another run, so a
 commit lands on the wrong branch — typically the primary worktree's
-`main`, or another issue's branch. The Claim revalidation gate in
+`{default-branch}`, or another issue's branch. The Claim revalidation gate in
 `idd-overview-core.instructions.md` keeps the mechanical steps to a
 one-line pointer to stay inside its byte budget
 (kurone-kito/idd-skill#1525); this page owns the full procedure.
@@ -450,7 +450,7 @@ issue branch (in its own sibling worktree), then restoring the
 contaminated branch:
 
 - **Unpushed** contaminated branch (typically the primary worktree's
-  `main`): `git reset --hard` it back to its upstream.
+  `{default-branch}`): `git reset --hard` it back to its upstream.
 - **Already pushed or shared**: do **not** `git reset --hard` then
   force-push to erase the misplaced commit — that is the forbidden
   force-push. Instead `git revert` the misplaced change, or let the
@@ -678,7 +678,7 @@ amendments below.
   instead of inheriting the path. No helper releases the lock, and a release
   would need a new helper mode.
 - Plain `git branch -d` is not used, because it refuses against a lagging
-  local `main`.
+  local `{default-branch}`.
 - Placeholders are filled as single-quoted shell words, because a valid branch
   name can contain shell metacharacters such as `$` and `;`.
 - On `instructions-only`, the worktree-local claim lock uses its helper-free
@@ -738,10 +738,10 @@ rather than assuming it still matches the last-known worktree.
 
 A Grok Build session's file-read and file-edit tools resolve relative
 paths against the session's launch workspace — the primary clone,
-whose HEAD B1 keeps on `main` — not the shell's current directory, so
-a `cd` into the sibling worktree does not rebind them. Reproduced by
-creating a sibling worktree, writing a unique marker only into that
-worktree's uncommitted `README.md`, then running Grok's
+whose HEAD B1 keeps on `{default-branch}` — not the shell's current
+directory, so a `cd` into the sibling worktree does not rebind them.
+Reproduced by creating a sibling worktree, writing a unique marker
+only into that worktree's uncommitted `README.md`, then running Grok's
 workspace-default grep for the marker: it found nothing, while the
 same grep given the sibling's absolute path found it immediately. A
 shell `cd` into the sibling and a `pwd` reporting the sibling path
@@ -888,8 +888,9 @@ target and the set anchor (kurone-kito/idd-skill#2231).
 
 A `typecheck`/`lint` failure in a file the current diff never touched
 can look like a bug in the diff itself, when it is really dependency
-drift or a broken `main` baseline — the #1164/#1193 incident cost real
-debugging time this way before the guidance below existed.
+drift or a broken `{development-branch}` baseline — the #1164/#1193
+incident cost real debugging time this way before the guidance below
+existed.
 
 ### B3 — Local test flakiness under concurrent load: hosted CI is authoritative
 
@@ -1110,15 +1111,16 @@ content) so that a later rewording cannot drop one silently.
 
 ### Merge-main livelock under fast-moving `main`
 
-Under heavy concurrent-session load, `main` can advance before one
-{sync path → E1 → F1/F2} cycle finishes, re-triggering
+Under heavy concurrent-session load, `{development-branch}` can advance
+before one {sync path → E1 → F1/F2} cycle finishes, re-triggering
 `behind-no-conflict`; naive repetition livelocks, never reaching F3
-while `main` keeps moving (observed 2026-07-22, PR #1612). The fix is
-procedural, not structural: post the `review-watermark` as the last
-action before F3's `idd-merge-execute.mjs --apply` on every pass, so
-anything that happens after — a CI rerun settling, a new disposition
-reply, another `main` advance — stales it and fails `--apply` closed
-on `review-currency` rather than merging on data the retry has since
+while `{development-branch}` keeps moving (observed 2026-07-22,
+PR #1612). The fix is procedural, not structural: post the
+`review-watermark` as the last action before F3's
+`idd-merge-execute.mjs --apply` on every pass, so anything that happens
+after — a CI rerun settling, a new disposition reply, another
+`{development-branch}` advance — stales it and fails `--apply` closed on
+`review-currency` rather than merging on data the retry has since
 invalidated.
 
 ### Bot-comment wording matchers need a real-sample evidence bar
