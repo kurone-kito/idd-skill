@@ -424,6 +424,97 @@ export function buildMergedPrFeedbackSweep(
   };
 }
 
+// Title of the one open issue that the weekly summary workflow creates or
+// updates (issue #4161). The workflow's job env sets the same value, and its
+// test asserts that the two match.
+// audit:ignore-dead-export: the workflow's job env and its contract test share this title; the script itself never reads it
+export const WEEKLY_SWEEP_ISSUE_TITLE = 'Merged-PR feedback sweep (weekly)';
+
+export interface WeeklySweepBodyOptions {
+  /** The merged-since date the scan enumerated from, or null for an explicit PR list. */
+  sinceDate: string | null;
+  /** The enumeration cap (--limit) the scan ran with, or null when no cap applies. */
+  scanLimit: number | null;
+  /** How many pull requests the enumeration returned, before merged-state filtering. */
+  enumeratedCount: number;
+  /** The UTC date of the run (YYYY-MM-DD). Passed in, so the renderer stays pure. */
+  generatedOn: string;
+}
+
+/**
+ * Build the renderer's options from the sweep's own inputs. An explicit PR
+ * list has no enumeration cap, so the cap is null there.
+ */
+export function buildWeeklyBodyOptions(input: {
+  usingExplicitPrs: boolean;
+  limit: number;
+  sinceDate: string | null;
+  enumeratedCount: number;
+  generatedOn: string;
+}): WeeklySweepBodyOptions {
+  return {
+    sinceDate: input.sinceDate,
+    scanLimit: input.usingExplicitPrs ? null : input.limit,
+    enumeratedCount: input.enumeratedCount,
+    generatedOn: input.generatedOn,
+  };
+}
+
+function pluralize(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * Render the body of the weekly summary issue from a sweep result. The
+ * function is pure (no network, no clock). The body carries only numbers,
+ * dates, and counts, never comment text, so no user-written content reaches
+ * the issue. Pull requests are written as "PR 1234", never "#1234", so the
+ * body adds no cross-reference event to them.
+ */
+export function renderWeeklySweepIssueBody(
+  result: MergedPrSweepResult,
+  options: WeeklySweepBodyOptions,
+): string {
+  const scope = options.sinceDate
+    ? `merged since ${options.sinceDate}`
+    : 'in the scanned set';
+  const asOf = `as of ${options.generatedOn} (UTC)`;
+  const { prCount, flaggedPrCount } = result.summary;
+  const lines: string[] = [];
+  if (result.prs.length === 0) {
+    lines.push(
+      prCount === 0
+        ? `None are open ${asOf}: the scan found no pull request ${scope}.`
+        : `None are open ${asOf}: none of the ${pluralize(prCount, 'pull request')} ${scope} has unresolved review threads or unaddressed comments.`,
+    );
+  } else {
+    lines.push(
+      `Open feedback ${asOf}: ${flaggedPrCount} of ${pluralize(prCount, 'pull request')} ${scope} with unresolved review threads or unaddressed comments.`,
+    );
+  }
+  if (
+    options.scanLimit !== null &&
+    options.enumeratedCount >= options.scanLimit
+  ) {
+    lines.push(
+      `The scan reached its limit of ${options.scanLimit} pull requests, so some merges in the window may not have been checked.`,
+    );
+  }
+  if (result.prs.length > 0) {
+    lines.push('');
+    for (const pr of result.prs) {
+      const merged =
+        pr.mergedAt && /^\d{4}-\d{2}-\d{2}/.test(pr.mergedAt)
+          ? ` (merged ${pr.mergedAt.slice(0, 10)})`
+          : '';
+      lines.push(
+        `- PR ${pr.number}${merged}: ${pluralize(pr.unresolvedThreads.length, 'unresolved review thread')}, ${pluralize(pr.unaddressedComments.length, 'unaddressed comment')}.`,
+      );
+    }
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 function collectUnresolvedThreads(
   threads: SweepThreadInput[],
   isIdd: (login: string) => boolean,
@@ -830,11 +921,11 @@ function escapeMarkdownInline(text: string): string {
  * The open-and-ready section of the weekly summary body, as Markdown: the
  * heading, then one bullet per ready pull request with its age, or exactly
  * one line when none is ready. A non-zero unchecked count adds one trailing
- * line, since the section is then incomplete. Composing this into the
- * weekly issue body belongs to the summary-body renderer (issue #4161); the
- * CLI prints JSON only.
+ * line, since the section is then incomplete. The weekly summary body that
+ * `--issue-body` prints (`renderWeeklySweepIssueBody`, issue #4161) does not
+ * include it yet; the JSON output carries the same data as `openReadyPrs`.
  */
-// audit:ignore-dead-export: the weekly summary-body renderer (issue #4161) composes this section and is not on main yet; tests lock its output
+// audit:ignore-dead-export: no caller composes this section into the weekly summary body yet (renderWeeklySweepIssueBody, issue #4161); tests lock its output
 export function renderOpenReadySection(
   openReadyPrs: OpenReadyPrFinding[],
   openReadyUncheckedPrs: OpenPrUnchecked[] = [],
@@ -1094,6 +1185,7 @@ export interface SweepArgs {
   trustedMarkerLogins: string;
   advisoryBotLogins: string;
   iddAgentLogins: string;
+  issueBody: boolean;
   help: boolean;
 }
 
@@ -1115,6 +1207,7 @@ const MERGED_PR_FEEDBACK_SWEEP_FLAG_SPEC = {
   '--trusted-marker-logins': { type: 'string', default: '' },
   '--advisory-bot-logins': { type: 'string', default: '' },
   '--idd-agent-logins': { type: 'string', default: '' },
+  '--issue-body': { type: 'boolean' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
@@ -1205,21 +1298,24 @@ export function parseArgs(argv: string[]): SweepArgs {
     trustedMarkerLogins: values['trusted-marker-logins'] as string,
     advisoryBotLogins: values['advisory-bot-logins'] as string,
     iddAgentLogins: values['idd-agent-logins'] as string,
+    issueBody: Boolean(values['issue-body']),
     help,
   };
 }
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/merged-pr-feedback-sweep.mjs [--since <ISO8601-date>] [--days <n>] [--pr <number> ...] [--prs <n1,n2,...>] [--limit <n>] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--help]
+  node scripts/merged-pr-feedback-sweep.mjs [--since <ISO8601-date>] [--days <n>] [--pr <number> ...] [--prs <n1,n2,...>] [--limit <n>] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--issue-body] [--help]
 
 Read-only: scans merged PRs for unresolved/unaddressed advisory feedback and
-prints JSON. No minimization, no posting, no issue creation.
+prints JSON, or with --issue-body the weekly summary issue body as Markdown.
+No minimization, no posting, no issue creation.
 
-A date-window run (--since/--days, or neither --pr nor --prs) also lists open
-PRs whose read-only pre-merge readiness check reports ready: true
+A date-window JSON run (--since/--days, or neither --pr nor --prs) also lists
+open PRs whose read-only pre-merge readiness check reports ready: true
 (openReadyPrs, with each PR's age). It never merges, claims, or posts. An
-explicit --pr/--prs run skips that section (null).
+explicit --pr/--prs run skips that section (null), and --issue-body does not
+include it.
 `);
 }
 
@@ -1331,11 +1427,10 @@ export interface SweepRunDeps {
 }
 
 /**
- * Run the whole sweep against a provider port and return the JSON report
- * `main()` prints. Reads only: it never merges, claims, or posts.
+ * The merged-PR scan that both outputs share: the JSON report and the
+ * `--issue-body` weekly summary body (issue #4161). Reads only.
  */
-export function runMergedPrFeedbackSweep(args: SweepArgs, deps: SweepRunDeps) {
-  const { port, owner, repo } = deps;
+export function collectMergedPrSweep(args: SweepArgs, port: ProviderPort) {
   const iddConfig = loadIddConfig();
 
   const { actors: trustedMarkerActors } = resolveTrustedMarkerActors({
@@ -1391,6 +1486,34 @@ export function runMergedPrFeedbackSweep(args: SweepArgs, deps: SweepRunDeps) {
     iddAgentLogins,
     primaryBotLogin,
   });
+
+  return {
+    result,
+    trustedMarkerActors,
+    advisoryBotLogins,
+    iddAgentLogins,
+    primaryBotLogin,
+    usingExplicitPrs,
+    sinceDate,
+    enumeratedCount: targets.length,
+  };
+}
+
+/**
+ * Run the whole sweep against a provider port and return the JSON report
+ * `main()` prints. Reads only: it never merges, claims, or posts.
+ */
+export function runMergedPrFeedbackSweep(args: SweepArgs, deps: SweepRunDeps) {
+  const { port, owner, repo } = deps;
+  const {
+    result,
+    trustedMarkerActors,
+    advisoryBotLogins,
+    iddAgentLogins,
+    primaryBotLogin,
+    usingExplicitPrs,
+    sinceDate,
+  } = collectMergedPrSweep(args, port);
 
   // #4162: the open-and-ready section belongs to the periodic date-window
   // summary. An explicit --pr/--prs run is a targeted merged-PR recheck, so
@@ -1452,6 +1575,27 @@ function main(): HelperCliResult {
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
   const port = createGithubProviderAdapter(owner, repo);
+
+  // #4161: --issue-body prints the weekly summary issue body and nothing
+  // else. It runs only the merged-PR scan, so the summary publish path makes
+  // no open-PR readiness reads.
+  if (args.issueBody) {
+    const scan = collectMergedPrSweep(args, port);
+    process.stdout.write(
+      renderWeeklySweepIssueBody(
+        scan.result,
+        buildWeeklyBodyOptions({
+          usingExplicitPrs: scan.usingExplicitPrs,
+          limit: args.limit,
+          sinceDate: scan.sinceDate,
+          enumeratedCount: scan.enumeratedCount,
+          generatedOn: new Date().toISOString().slice(0, 10),
+        }),
+      ),
+    );
+    return 0;
+  }
+
   process.stdout.write(
     renderMergedPrSweepOutput(
       runMergedPrFeedbackSweep(args, {

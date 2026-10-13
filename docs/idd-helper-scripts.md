@@ -7431,8 +7431,9 @@ same as `AW4`/`AW5`.
   helper; not distributed via the package-manager / ephemeral-npx
   profiles (it is a maintainer-run sweep, never an adopter-facing
   step in the phase instructions).
-- A **manually-invoked**, read-only detector (no schedule, no mutation). It
-  scans MERGED PRs and surfaces feedback that was left unattended at merge:
+- A **manually-invoked**, read-only detector (no schedule, no mutation by the
+  helper itself). It scans MERGED PRs and surfaces feedback that was left
+  unattended at merge:
   - **Window selector**: `--since <ISO8601>` and/or `--days <N>`, or
     `--pr <n>` (repeatable) / `--prs <n1,n2,...>`; `--limit <N>` caps the
     `--since`/`--days` enumeration. When both `--since` and `--days` are
@@ -7549,7 +7550,8 @@ same as `AW4`/`AW5`.
     `null`. The exported `renderOpenReadySection` renders the
     section as Markdown for the weekly summary body: a heading, then one
     bullet per ready pull request with its age, or a single line when none
-    is ready. The CLI itself prints JSON only.
+    is ready. Nothing calls it yet: the `--issue-body` weekly summary body
+    below does not include this section.
 - JSON output keys: `sweepWindow`, `trustedMarkerActors`,
   `advisoryBotLogins`, `iddAgentLogins`, `primaryBotLogin`, `prs` (each
   entry has `number`, `mergedAt`, `mergeCommit`, `unresolvedThreads`, and
@@ -7566,6 +7568,21 @@ same as `AW4`/`AW5`.
   (reuse-first / not-already-fixed) and drafts follow-up issues bucketed by
   readiness. The helper does deterministic detection; the judgment-heavy
   re-verification, drafting, and publish stay operator-gated.
+- **Weekly summary body** (issue `#4161`): `--issue-body` prints the summary
+  issue body as Markdown instead of the JSON, rendered from the same scan by
+  `renderWeeklySweepIssueBody`. The body carries only numbers, dates, and
+  counts, never comment text. It names each flagged pull request as `PR <n>`,
+  so it adds no cross-reference event. It states the run date (UTC) and, when
+  nothing is open, how many pull requests were checked. It notes when the
+  enumeration reached its `--limit` cap. The manual workflow
+  `.github/workflows/merged-pr-feedback-sweep.yml` (`workflow_dispatch` only)
+  runs this helper with `--days 7 --limit 500 --issue-body` and creates or
+  edits the one open issue titled `Merged-PR feedback sweep (weekly)`. It
+  refuses to write when the open-issue listing is full or when more than one
+  open issue carries that title. That workflow is the only writer, and it
+  writes only that issue.
+  The weekly body does not include the open-and-ready section; that
+  section is in the JSON output only.
 - **Operator runbook**: this helper is a **manual spot-check audit**, not a
   phase step — its absence from the executable phase instruction files is
   by design, not an oversight.
