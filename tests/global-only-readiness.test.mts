@@ -16,6 +16,16 @@ import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.
 import type { ProviderPort } from '../src/scripts/provider-port.mts';
 
 const WORKFLOW = '.github/workflows/idd-advisory-convergence.yml';
+
+/** The readiness fields the decline regression test reads. */
+interface ReadinessReport {
+  advisoryWait: {
+    lastCopilotCommit: string;
+    copilotUnavailable: boolean;
+    copilotUnavailableWaived: boolean;
+  };
+  blockers: Array<{ gate: string }>;
+}
 const ADVISORY = 'idd-advisory-convergence';
 
 const GLOBAL_ONLY: ActivationResult = {
@@ -693,7 +703,7 @@ test('decline (#4142): collectPreMergeReadiness reports copilot-terminal-unavail
       ),
     () => null,
     () => null,
-  );
+  ) as unknown as ReadinessReport;
   // With no marker and no elapsed window, only the decline wiring can make
   // Copilot terminal here. Dropping `copilotDeclinedHead` would leave both
   // of these false.
