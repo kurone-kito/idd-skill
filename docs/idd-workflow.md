@@ -1309,20 +1309,24 @@ identify its old claims, and step 1 treats them as not its own.
    [worker final report store](idd-helper-scripts.md#worker-final-report-store)
    describes, and append it the same way. In both cases, validate the record
    against `schemas/worker-report.schema.json` first, then append it with the
-   profile-selected `idd-worker-report append --file <path>` command. Map
-   `outcome` as the store describes: `merged` for a merged pull request,
-   `abandoned` for a closed unmerged one, `held` for a claim still held,
-   `handed-off` when a handoff summary was posted before the release, and
-   `failed` otherwise. Record the recovery in `frictions`, naming
-   `docs/idd-workflow.md` in `file`, because that is the instruction path the
-   recovery followed. If verification or the append fails, keep the worker
-   addressable, mark it `stalled`, and follow the worker-specific recovery in
-   the fan-out variant, as section 5 of the orchestrator phase file describes.
+   profile-selected `idd-worker-report append --file <path>` command. After a
+   successful append for a matched worker, dispose of the worker as the table's
+   row says and mark its roster entry `disposed`, as section 5 of the
+   orchestrator phase file describes. Map `outcome` as the store describes:
+   `merged` for a merged pull request, `abandoned` for a closed unmerged one,
+   `held` for a claim still held, `handed-off` when a handoff summary was posted
+   before the release, and `failed` otherwise. Record the recovery in
+   `frictions`, naming `docs/idd-workflow.md` in `file`, because that is the
+   instruction path the recovery followed. If verification or the append fails
+   for a matched worker, keep it addressable, mark it `stalled`, and follow the
+   worker-specific recovery in the fan-out variant, as section 5 of the
+   orchestrator phase file describes. For a claim-id handle there is no worker,
+   so report that claim to the operator in step 5 instead.
 5. **Report the remainder.** An own claim that reached step 3 and has no
    matching worker is reported to the operator, and so is a matched finished
    worker whose recorded outcome is `held`. A released claim is reported here
-   only when step 4 left it with a running worker. Otherwise step 4 handles it.
-   Its worktree is not removed.
+   when step 4 left it with a running worker or a failed verification or append.
+   Otherwise step 4 handles it. Its worktree is not removed.
 
 ### Discover re-run cadence
 
