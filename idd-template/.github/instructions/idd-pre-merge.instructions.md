@@ -113,6 +113,16 @@ shape with not-ready-yet (kurone-kito/idd-skill#2707) turns a real
 failure into a silent stall. A `deferred-followup-unreconciled` blocker
 never clears by polling: follow its `detail`.
 
+**Watermark before hold** (observed on pull request kurone-kito/idd-skill#4077,
+issue kurone-kito/idd-skill#4071): a readiness result computed
+before any review watermark exists can block on resolved threads that a
+watermark would clear, and a hold posted from that result can be wrong.
+The order is fixed: record a fresh review watermark for the current head
+first (E1 Step 1, then E1 Step 2), then re-run readiness, and post a hold
+only if the blocker still stands. A `disposition-evidence` or
+`review-currency` blocker that carries a `hint` names this step. The hint
+is diagnostic and never changes the verdict.
+
 - **Review currency** (live re-fetch required, freshness gate): read the
   most recent `<!-- review-watermark: {agent-id} {claim-id} … -->`
   comment whose embedded `{claim-id}` matches the current active claim
