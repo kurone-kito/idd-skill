@@ -1,10 +1,11 @@
 # Bundled Issue Authoring Contract
 
 This file keeps the `issue-authoring` bundle usable when it is installed
-or copied outside this repository root. It mirrors the canonical
-contract in `docs/issue-authoring-skill.md`. That canonical document
-exists only inside this bundle's source repository — an installed copy
-of this bundle should not expect it to be present.
+or copied outside this repository root. In the source repository this
+bundle is the canonical copy of the contract: edit
+`skills/issue-authoring/references/contract.md`, never a generated copy.
+An installed copy should not expect any file outside the bundle to be
+present.
 
 ## Target marker prefix
 
@@ -1116,6 +1117,11 @@ instructions.
 - a change that loosens a fail-closed check names its region classifier and
   its must-keep shapes under `Loosening a fail-closed check`, and the reviewer
   checks both before the draft is published
+- a draft that orders state-changing steps (claims, locks, POSTs, branch or
+  worktree mutations, releases) states, for each step that can fail after an
+  earlier step has changed state, the observable outcome and the next action; a
+  draft that cannot state that outcome is revised before the mechanical gate,
+  and if it still cannot after revision, it goes to needs-decision.
 
 ### Resolver
 
