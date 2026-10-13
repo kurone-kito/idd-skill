@@ -685,9 +685,10 @@ function computeQuietWindowElapsed({
  * advisory-bot ack leave it unchanged (the watermark is filtered out before
  * classification runs, and a top-level ack after a disposition is excluded as
  * ack-only). A disposition reply inside a review thread legitimately anchors
- * it, because thread replies still feed the ceiling; an issue-comment
- * disposition does not, so the agent's own top-level reply never restarts the
- * window. "Elapsed since that anchor" therefore equals "elapsed since the
+ * it, because thread replies still feed the ceiling; an unedited top-level
+ * disposition by a trusted author does not, so the agent's own top-level reply
+ * never restarts the window. "Elapsed since that anchor" therefore equals
+ * "elapsed since the
  * review settled" without a second, independently-drifting timestamp to
  * persist.
  *
