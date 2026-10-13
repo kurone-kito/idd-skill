@@ -470,11 +470,12 @@ own timestamp of an unedited top-level disposition by a trusted author
 reply never restarts the window (observed 2026-10-12 on a
 kurone-kito/dotfiles pull request; issue `#4123`). It needs no extra
 persisted state: an unresolved item keeps the anchor fresh, and a watermark
-never reopens it. A top-level advisory-bot comment posted after an unedited
-IDD-agent disposition is ack-only whatever its body says, so it does not
-move the anchor either; a substantive one in that position is covered too,
-a limit this change leaves in place. A disposition reply inside a review
-thread, and a bot reply on an unresolved thread, still reopen it, because
+never reopens it. A top-level advisory-bot comment that is not itself a
+disposition, posted after an unedited IDD-agent disposition, is ack-only
+whatever its body says, so it does not move the anchor either; a substantive
+one in that position is covered too, a limit this change leaves in place. A
+disposition reply inside a review thread, and a bot reply on an unresolved
+thread, still reopen it, because
 thread activity feeds the ceiling. Distinct from
 `advisoryWait.settledWindow`, which bounds the PRIMARY bot's own pending
 state, not a late secondary-bot arrival. **#2544**:

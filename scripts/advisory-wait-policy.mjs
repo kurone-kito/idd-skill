@@ -583,8 +583,9 @@ function computeQuietWindowElapsed({
  * `threadEffective`) and stabilizes once every item is either
  * resolved-with-disposition or was never opened. A watermark leaves it
  * unchanged (it is filtered out before classification runs). A top-level
- * advisory-bot comment posted after an unedited IDD-agent disposition is
- * ack-only whatever its body says, so it leaves the anchor unchanged too.
+ * advisory-bot comment that is not itself a disposition, posted after an
+ * unedited IDD-agent disposition, is ack-only whatever its body says, so it
+ * leaves the anchor unchanged too.
  * A disposition reply inside a review thread legitimately anchors it, because
  * thread replies still feed the ceiling; an unedited top-level disposition by
  * a trusted author does not, so the agent's own top-level reply never restarts
