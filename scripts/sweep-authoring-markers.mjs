@@ -90,6 +90,14 @@ const AUTHORING_MARKER_FAMILIES = [
   'authoring-owner',
   'authoring-publication-intent',
 ];
+/** The one stderr line every CLI run without `--apply` that reaches its
+ * report prints after it, whatever the exit code (#4107): a release script that drops `--apply` would
+ * otherwise exit 0 with nothing minimized and no visible sign apart from
+ * the report's `mode`. Declared above the `import.meta.main` trigger
+ * because `main()` runs during module evaluation, where a later `const`
+ * would still be in its temporal dead zone. */
+export const SWEEP_DRY_RUN_NOTE =
+  'note: sweep-authoring-markers ran in dry-run mode; no comment was minimized (minimized counts what --apply would minimize). Re-run with --apply to minimize them.';
 /** Matches the explicit cross-repository `owner/repo#number` shorthand for
  * one `--issue` token. A token that contains `/` or `#` but does not
  * match this shape is a likely typo, not a bare issue number -- callers
@@ -883,6 +891,11 @@ function main() {
     printTable(report);
   } else {
     console.log(JSON.stringify(report, null, 2));
+  }
+  // stderr, never stdout: a dry run's JSON report is a documented
+  // `> sweep.json` input that must stay one parseable document.
+  if (!args.apply) {
+    console.error(SWEEP_DRY_RUN_NOTE);
   }
   return computeSweepExitCode(report);
 }
