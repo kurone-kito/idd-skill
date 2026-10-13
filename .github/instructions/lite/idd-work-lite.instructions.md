@@ -86,15 +86,15 @@ worktree removal) behind the
    standalone `git branch <branch-name>` followed by in-place commits there.
 6. Reuse the existing branch name verbatim for takeover.
 7. Run `git worktree list` (and `git worktree list --porcelain` for prunable
-   entries). If a sibling worktree exists, inspect and acquire its worktree-local
-   claim lock with the profile-selected `claim-lock` helper before reuse or
-   removal. A
-   `collision` is fail-closed: do not reuse or remove the path; resolve it via
-   the Claim-state rule in `idd-claim.instructions.md`, and remove the path only
-   once the current claim is authorized to take it over. On a fresh claim whose
-   worktree the claim phase created, adopt it: skip steps 8-26,
-   run step 27 (install dependencies there), and
-   continue at step 28. Never delete or recreate that branch.
+   entries). If a sibling worktree exists, inspect and acquire its
+   worktree-local claim lock with the profile-selected `claim-lock` helper
+   before reuse or removal. A `collision` is fail-closed: do not reuse or
+   remove the path; resolve it via the Claim-state rule in
+   `idd-claim.instructions.md`, and remove the path only once the current claim
+   is authorized to take it over. On a fresh claim whose worktree the claim
+   phase created, adopt it: skip steps 8-26,
+   run step 27 (install dependencies), and continue at step 28. Never delete or
+   recreate that branch.
 8. If `git worktree list --porcelain` marks the entry `prunable` and its path
    is already absent, remove that stale entry with
    `git worktree remove --force <path-from-list>` and continue.
@@ -195,9 +195,9 @@ worktree removal) behind the
 If the issue is a decision-transcription issue (it records or restates a prior
 human decision whose rationale asserts a checkable fact about shipped behavior),
 verify that fact against the prior change's actual code or docs before drafting
-the plan. If the prior change or the fact cannot be verified, stop and hold, with the
-evidence (file, line, or excerpt, or why it was inconclusive) in the hold
-comment, until a maintainer addendum resolves it.
+the plan. If the prior change or the fact cannot be verified, stop and hold,
+with the evidence (file, line, or excerpt, or why it was inconclusive) in the
+hold comment, until a maintainer addendum resolves it.
 
 ## B2.2 — Example field-name verification
 
@@ -242,18 +242,18 @@ the citation if it does not exist; stop and hold if unclear (`#2806`).
     and stop.
 
 **Unplanned follow-up work**: If B–C reveals a separate follow-up, never call
-`gh issue create` or the REST issues API ([B–C design
-rationale](../../../docs/idd-design-rationale.md#work-and-self-review)). If the
-optional `issue-authoring` companion is installed, invoke its Stage 1
+`gh issue create` or the REST issues API ([B–C design rationale](../../../docs/idd-design-rationale.md#work-and-self-review)).
+If the optional `issue-authoring` companion is installed, invoke its Stage 1
 hold/contract. Its reuse-first check must reject targets under another hold. A
 target with the configured authoring label outside this session's set stays
 unavailable unless this pass explicitly resumes that interrupted set; verify its
 set identity from the companion's durable owner markers, then add its published
 issues to the working set first. Unrelated holds stay unavailable. If the
 companion builds an optional discarded validation probe, run it in a separate
-temporary worktree, never the current issue worktree; otherwise skip it. Before every edit, require per-target
-atomic or append-only owner-marker acquisition and a fresh body/label re-read; on
-conflict, keep the label, stop, and use another target or a separate comment.
+temporary worktree, never the current issue worktree; otherwise skip it.
+Before every edit, require per-target atomic or append-only owner-marker
+acquisition and a fresh body/label re-read; on conflict, keep the label, stop,
+and use another target or a separate comment.
 
 After Stage 1 publishes and acquires a valid parent roadmap shell as the set
 anchor (or the designated lead when no parent roadmap exists), then publishes or
@@ -270,6 +270,20 @@ never release a follow-up or start a second loop. If the companion is
 unavailable, record the proposal in a separate comment and PR follow-ups; never
 create it ad hoc or improvise worker-side authoring.
 
+**Scope overrun** (helper runtime only): when the profile-selected
+`audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
+fails `effort-candidate-file-limit` on the issue body or with
+`## Candidate files` set to the diff's canonical paths, stop coding without
+pushing. Comment the estimate, candidate files, changed files, and a split
+proposal. Then revalidate ownership: only if the active claim still uses your
+current `{claim-id}`, update the digest (`Phase: aborted/released`, the release
+in `Next action`, the claim and reason in `Authoritative by`) and post
+`unclaimed-by` for that same `{claim-id}`; otherwise post no release. Then run
+`lost-claim-cleanup`. With the companion, hand it that proposal as a held split
+draft: it holds this issue, publishes a held roadmap whose children record
+`Split out of #<n>`, and comments its link; if refused, the comment stands.
+Never add needs-decision or ask a human.
+
 ## C — Self-review
 
 ### C1 — Critique pass
@@ -280,9 +294,9 @@ Per-agent pass: resolve `critiqueLoop.subagentWaitCeiling` (`PT20M` default)
 with a harness timeout, not a wrapper (#3449). Shell-delegate rules are
 unchanged. Background waits need cleanup and late-output suppression. `mode`
 only decides whether the per-agent pass starts from the delegate's outcome (see
-step 5). Once started, a timeout, cancel, interruption, or error without findings
-routes to structured self-critique and records no delegated return. If the
-harness cannot bound or clean up, skip the per-agent pass, use structured
+step 5). Once started, a timeout, cancel, interruption, or error without
+findings routes to structured self-critique and records no delegated return. If
+the harness cannot bound or clean up, skip the per-agent pass, use structured
 self-critique, and record residual risk.
 
 A critique pass asks whether the implementation is correct, whether the issue's
@@ -347,7 +361,8 @@ pass asks, never a separate pass to run on top of the one that ran.
    whose delegate failed at C1 step 4 without emitting one — that verdict is
    vacuous, not clean. Post a hold and stop; do not treat it as zero issues.
    A delegate that succeeded with a readable list (even an empty one), or one
-   that failed but still emitted a list, is a genuine result: continue to step 3.
+   that failed but still emitted a list, is a genuine result, so continue to
+   step 3.
 3. Otherwise, if the critique pass reports zero issues, invoke
    `critiqueLoop.telemetryHook` (C1) with zero findings/accepted/rejected
    counts — fire-and-forget — then check the `fix-validate` floor. A round

@@ -231,3 +231,49 @@ for (const relativePath of WORK_PHASE_PATHS) {
     }
   });
 }
+
+// The lite work file is self-contained and has no Abort rule to cite, so its
+// route restates the release itself. It must still run the same steps, in the
+// same order, and end with the same prohibition as the standard file.
+const LITE_WORK_PATHS = [
+  'idd-template/.github/instructions/lite/idd-work-lite.instructions.md',
+  '.github/instructions/lite/idd-work-lite.instructions.md',
+] as const;
+
+const LITE_ORDERED_STEPS = [
+  '`audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`',
+  'fails `effort-candidate-file-limit` on the issue body',
+  'stop coding without pushing',
+  'Comment the estimate, candidate files, changed files, and a split proposal',
+  'revalidate ownership',
+  'still uses your current `{claim-id}`',
+  'update the digest',
+  'post `unclaimed-by` for that same `{claim-id}`',
+  'run `lost-claim-cleanup`',
+  'With the companion, hand it that proposal as a held split draft',
+  PROHIBITION,
+] as const;
+
+for (const relativePath of LITE_WORK_PATHS) {
+  test(`${relativePath}: the lite overrun route runs each step in order and never asks a human`, () => {
+    const route = scopeOverrunRoute(relativePath);
+    assert.equal(
+      route.includes('Abort rule'),
+      false,
+      'lite cites no Abort rule',
+    );
+    const positions = LITE_ORDERED_STEPS.map((step) => route.indexOf(step));
+    for (const [index, position] of positions.entries()) {
+      assert.notEqual(position, -1, LITE_ORDERED_STEPS[index]);
+    }
+    assert.deepEqual(
+      [...positions].sort((left, right) => left - right),
+      positions,
+      'the route steps must appear in the documented order',
+    );
+    const withoutProhibition = route.replace(PROHIBITION, '');
+    for (const pattern of QUESTION_PATTERNS) {
+      assert.doesNotMatch(withoutProhibition, pattern);
+    }
+  });
+}
