@@ -1009,6 +1009,45 @@ test('#4181: a rate-limit summary that embeds a review finding stays counted des
   assert.equal(result.prs[0].unaddressedComments.length, 1);
 });
 
+test('#4181: an unedited rate-limit summary that embeds a finding stays counted even through the sticky matcher', () => {
+  // Copilot review on PR #4205: with lastEditedAt null the sticky matcher's
+  // own path credits the notice, so the embedded-findings guard must also
+  // apply to that path. updatedAt is restamped after the rejection, as F4
+  // minimization does, so the later-disposition fallback does not apply and
+  // only the sticky path is exercised.
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 4170,
+        comments: [
+          {
+            id: 6139874139,
+            body: `${LIVE_RATE_LIMIT_SUMMARY}${EMBEDDED_FINDING_SUFFIX}`,
+            createdAt: '2026-10-13T06:41:13Z',
+            updatedAt: '2026-10-13T09:00:00Z',
+            lastEditedAt: null,
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: LIVE_RATE_LIMIT_REJECTION,
+            createdAt: '2026-10-13T06:58:49Z',
+            updatedAt: '2026-10-13T06:58:49Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(
+    result.prs[0].unaddressedComments[0].author,
+    'coderabbitai[bot]',
+  );
+});
+
 test('#4181: a human comment that quotes a rate-limit summary is not credited by a rejection', () => {
   const result = buildMergedPrFeedbackSweep(
     [

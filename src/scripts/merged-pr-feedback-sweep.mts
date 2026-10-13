@@ -626,6 +626,19 @@ function collectUnaddressedComments(
       matchedDispositionIndexes,
     },
   );
+  // #4181: the sticky matcher above credits an unedited notice without
+  // looking at its body. A notice that embeds review findings is feedback
+  // that a rejection does not address, so drop it from the credited set here
+  // as well (Copilot review on PR #4205).
+  for (const stickyIndex of dispositionedStickyIndexes) {
+    const body = normalizedComments[stickyIndex]?.body ?? '';
+    if (
+      isAdvisoryNonReviewNotice(body) &&
+      extractCodeRabbitEmbeddedFindings(body).length > 0
+    ) {
+      dispositionedStickyIndexes.delete(stickyIndex);
+    }
+  }
 
   // #4181: a trusted rejection that names a notice by its comment id still
   // addresses that notice. The sticky matcher above only credits an unedited
