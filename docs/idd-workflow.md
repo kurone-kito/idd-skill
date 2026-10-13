@@ -1351,7 +1351,9 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    append it. If no draft is found, verify the terminal outcome from live GitHub
    state, build the record as the
    [worker final report store](idd-helper-scripts.md#worker-final-report-store)
-   describes, and append it the same way. In both cases, validate the record
+   describes, and append it the same way, unless its outcome is `held`: a held
+   claim with no draft has no live source for a terminal phase, so nothing is
+   appended and step 5 reports it. Before any append, validate the record
    against `schemas/worker-report.schema.json` first, then append it with the
    profile-selected `idd-worker-report append --file <path>` command. After a
    successful append for a matched worker, dispose of the worker as the table's
@@ -1371,12 +1373,13 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    reported in step 5.
 5. **Report the remainder.** An own claim that reached step 3, other than a
    released claim, and has no matching worker is reported to the operator, and
-   so is a matched finished worker whose recorded outcome is `held`. A listed
-   live worker that matches no own claim is reported to the operator too,
-   because it still holds a harness slot. A released claim is reported here when
-   step 4 left it with a running worker, when its verification or append failed,
-   or when the harness offers no agent listing, so step 4 did not run for it.
-   Otherwise step 4 handles it. Its worktree is not removed.
+   so is a matched finished worker that step 4 did not append because its
+   outcome is `held`. A listed live worker that matches no own claim is reported
+   to the operator too, because it still holds a harness slot. A released claim
+   is reported here when step 4 left it with a running worker, when its
+   verification or append failed, or when the harness offers no agent listing,
+   so step 4 did not run for it. Otherwise step 4 handles it. Its worktree is
+   not removed.
 
 ### Discover re-run cadence
 
