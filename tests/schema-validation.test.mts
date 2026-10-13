@@ -1690,6 +1690,60 @@ test('policy schema rejects unknown keys inside autopilotSuitability', () => {
   );
 });
 
+test('policy schema accepts autopilotSuitability.effortL allow and refuse (#4192)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const effortL of ['allow', 'refuse']) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.autopilotSuitability = { effortL };
+    assert.deepEqual(
+      validate(instance, schema),
+      [],
+      `expected effortL ${effortL} to validate`,
+    );
+  }
+});
+
+test('policy schema rejects an autopilotSuitability.effortL value outside the enum (#4192)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.autopilotSuitability = { effortL: 'deny' };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((error) => error.includes('$.autopilotSuitability.effortL')),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema defines autopilotSuitability.effortL as a two-value string enum with its default in words (#4192)', () => {
+  const schema = loadJson('schemas/policy.schema.json') as {
+    properties: {
+      autopilotSuitability: {
+        properties: {
+          effortL: {
+            type?: string;
+            enum?: unknown[];
+            description: string;
+          };
+        };
+      };
+    };
+  };
+  const property = schema.properties.autopilotSuitability.properties.effortL;
+  assert.equal(property.type, 'string');
+  assert.deepEqual(property.enum, ['allow', 'refuse']);
+  assert.ok(
+    property.description.includes('defaults to "allow"'),
+    'expected the description to state the default in words',
+  );
+  // validate-schemas rejects the `default` keyword, so the default lives
+  // in the description only.
+  assert.equal('default' in property, false);
+});
+
 test('policy schema accepts githubApi telemetry and rejects a bad record bound', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const accepted = JSON.parse(
