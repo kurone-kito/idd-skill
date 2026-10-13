@@ -5,13 +5,14 @@ pre-merge conditions. It decides whether the current session can proceed
 to merge execution or must stop and hand off.
 
 Before any mutating action in this phase, apply the claim revalidation
-gate. If an active claim exists, it must still use your current
-`{claim-id}`. If no active claim exists, continue only for the
-designated `separate_merge_agent` actor path or the
-`fully_autonomous_merge` policy path (see Step 1); all other paths must
-stop and report.
+gate.
 
 ## F2.5 — Resolve merge policy route
+
+A decision-rule touch (`waiver.decisionRuleFilesTouched: true`) is not a
+stop by itself, on any path that reaches F3. Route on `ready` in the F2
+verdict for `{f2-head-SHA}`: `true` proceeds without asking a human;
+`false` does not proceed (F2's rule applies).
 
 1. Confirm claim ownership context:
    - If an **active claim** exists, it must still use your current
