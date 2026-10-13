@@ -2,9 +2,10 @@
 
 This file keeps the `issue-authoring` bundle usable when it is installed
 or copied outside this repository root. In the source repository this
-bundle is the canonical copy of the contract: edit it here, never a
-generated copy. An installed copy should not expect any file outside the
-bundle to be present.
+bundle is the canonical copy of the contract: edit
+`skills/issue-authoring/references/contract.md`, never a generated copy.
+An installed copy should not expect any file outside the bundle to be
+present.
 
 ## Target marker prefix
 

@@ -907,7 +907,7 @@
       "target": "skills/issue-authoring/references/contract.md",
       "mode": "contains",
       "requiredText": [
-        "the canonical copy of the contract",
+        "bundle is the canonical copy of the contract",
         "## Target marker prefix",
         "## Publication boundary",
         "**Previously declined check.**"
