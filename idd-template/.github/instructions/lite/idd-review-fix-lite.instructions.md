@@ -141,16 +141,22 @@ self-critique and record risk.
 4. If it reports additional issues, first check the step 8 cap. If it
    applies, take its close-out route instead of fixing. Otherwise fix them,
    run `fix-validate`, commit atomically, and run E10 again.
-5. Count "meaningful progress" as removing at least one Accepted
-   finding, narrowing a remaining finding's root cause or scope, or
-   producing a materially new fix direction. A reworded duplicate
-   finding does not count. A pass whose Accepted findings are all Low does
+5. Count "meaningful progress" as a pass whose Accepted findings are
+   not all among the prior pass's (compared by the E5 fingerprint
+   `file`, `rule`, `construct`), or a narrowed root cause or scope that
+   changes a finding's `construct`. Removing some findings while the
+   rest recur is not progress, and a reworded duplicate finding does not
+   count. A pass whose Accepted findings are all Low does
    not count as progress through the narrowing prong alone.
 6. If the same Accepted findings recur for
    `critiqueLoop.e10NoProgressHoldAfter` (default 3) consecutive E10
    passes without meaningful progress, stop the loop, post a hold
    comment summarizing the repeated findings and attempted fixes, and
-   wait for a maintainer decision.
+   wait for a maintainer decision. Count this with the `e10-recurrence`
+   helper as `idd-review-fix.instructions.md` E10 describes: `hold`
+   (a recurring Medium or High family) is this hold; `defer` (only Low
+   families recur) takes the step 8 close-out route for those families
+   with `e10NoProgressHoldAfter` as the clause; `e11` goes to E11.
 7. Do not use step 6 to bypass a serious issue: unresolved High or
    Medium findings stay blockers until fixed or explicitly redirected
    by a maintainer.

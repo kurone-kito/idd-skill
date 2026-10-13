@@ -86,6 +86,9 @@ Record a path-specific disposition for every item:
   an explicit maintainer confirmation reply; Medium/Low require an
   explicit Accept or Reject decision, except a scope-fenced finding
   (E4), which is Reject forced regardless of severity.
+- **Fingerprint** (each Accepted PATH A item, E10's too): `file`,
+  `construct` (the flagged symbol or phrase), and one `rule`:
+  `correctness`, `safety`, `tests`, `docs`, `consistency`, `style`.
 - **PATH B** (a _completed_ review of the current HEAD): `Accepted`
   means the advisory confirms the implementation or captures useful
   context; `Rejected` means noted, no action required. An advisory

@@ -1,18 +1,25 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   computeE10Recurrence,
+  E10_FINGERPRINT_RULES,
   validateDispositionRecord,
   validatePasses,
 } from '../src/scripts/e10-recurrence.mts';
 
 const SCRIPT = fileURLToPath(
   new URL('../scripts/e10-recurrence.mjs', import.meta.url),
+);
+const TRIAGE = fileURLToPath(
+  new URL(
+    '../idd-template/.github/instructions/idd-review-triage.instructions.md',
+    import.meta.url,
+  ),
 );
 
 function accepted(
@@ -146,6 +153,16 @@ test('a disposition record whose rule is outside the closed list is rejected', (
   assert.deepEqual(validatePasses([{}]), [
     'passes[0]: must be an array of records',
   ]);
+});
+
+test('the triage instruction carries the same closed rule list', () => {
+  const text = readFileSync(TRIAGE, 'utf8').replace(/\s+/g, ' ');
+  const match = text.match(/one `rule`: ((?:`[a-z-]+`, )*`[a-z-]+`)\./);
+  assert.ok(match, 'triage E5 fingerprint rule list not found');
+  const listed = [...(match[1] ?? '').matchAll(/`([a-z-]+)`/g)].map(
+    (entry) => entry[1],
+  );
+  assert.deepEqual(listed, [...E10_FINGERPRINT_RULES]);
 });
 
 function runCli(document: unknown, args: string[] = []) {

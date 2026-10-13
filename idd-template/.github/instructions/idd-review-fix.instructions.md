@@ -80,17 +80,34 @@ while the findings are converging.
 
 Convergence guardrails:
 
-- "Meaningful progress" means a pass removes at least one Accepted
-  finding, narrows a remaining finding's root cause/scope, or yields a
-  materially new fix direction. Reworded duplicates do not count. A pass
-  whose Accepted findings are all Low does not count as progress through
-  the narrowing prong alone.
+- "Meaningful progress" means a pass's Accepted findings are not all
+  among the prior pass's (compared by the E5 fingerprint), or it narrows
+  a remaining finding's root cause/scope so far that its `construct`
+  changes. Removing some findings while the rest recur is not progress,
+  and reworded duplicates do not count. A pass whose Accepted findings
+  are all Low does not count as progress through the narrowing prong
+  alone.
 - If the same Accepted findings recur for
   `critiqueLoop.e10NoProgressHoldAfter` consecutive E10 passes (default
   `3`) without progress, stop the auto-loop: post a hold comment
   summarizing the repeated findings and attempted fixes, and wait for a
   maintainer decision. This hold stands unless the
   [needs-decision route] applies.
+- **Count it, do not judge it.** When the per-issue cap below does not
+  apply, append each pass's E5 records (`file`, `rule`, `construct`,
+  `severity`, `disposition`) to a passes file in the session scratch
+  directory and run the `e10-recurrence` helper
+  ([reference](../../docs/idd-helper-scripts.md#e10-same-family-recurrence-kurone-kitoidd-skill4129)).
+  The chain counts its first pass, and each later pass whose non-empty
+  fingerprint set is a subset of the prior one's extends it. `e11` →
+  E11; `continue` → fix and rerun; `hold` (a recurring Medium or High
+  family) → the hold above, posting its `holdText`; `defer` (only Low
+  families recur) → the per-issue cap's close-out route below for those
+  families, with `e10NoProgressHoldAfter` as the clause, also an
+  explicit exception to the Defer rule's exclusion of an Accepted item
+  mid-fix. A rejected record exits non-zero; fix it and rerun. If the
+  passes file is lost or the helper cannot run, judge by the bullets
+  above.
 - Do not use this stop condition to bypass serious issues: unresolved
   High/Medium findings remain blockers until fixed or explicitly
   redirected by a maintainer or deferred under the needs-decision route.
