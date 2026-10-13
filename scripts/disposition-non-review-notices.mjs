@@ -796,6 +796,12 @@ comments were generated") is skipped with reason
 \`summary-resolved-no-actionable-comments\` and receives no reply. The written
 E6 rule stays authoritative for every other summary.
 
+It handles the bot comments the readiness gate counts: the known review bots
+(CodeRabbit, Codex, Copilot) plus the --advisory-bot-logins list. Every such
+comment it does not plan is listed in \`skipped\` with a reason, for example
+\`codex-no-result-for-head\` (reported, never dispositioned) or
+\`unrecognized-notice-body\`.
+
   --pr <number>                  PR number (required)
   --owner <owner>                repo owner (default: gh repo view)
   --repo <repo>                  repo name (default: gh repo view)
