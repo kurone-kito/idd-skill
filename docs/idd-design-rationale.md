@@ -929,6 +929,96 @@ canonical source, for the same root cause. Checking
 `audit/sync-manifest.json`'s `syncPairs` for a matching `target` entry
 closes that gap and catches this before any work is lost.
 
+### B3 — Scope overrun returns to authoring
+
+A work session that found the issue's real scope larger than its effort
+estimate used to stop and ask a human what to do. The work phase said
+what to do with a follow-up, but not with an overrun of the claimed
+issue itself, so the overrun ended in a chat question. Observed on
+kurone-kito/idd-skill#4064 (2026-10-12 10:39 and 23:55 UTC, and
+2026-10-13 00:38 UTC) and kurone-kito/idd-skill#3824 (2026-10-10 13:36
+UTC). Each answer took the recommended option: hold the issue or split
+it by hand. The hand split of #4064 then produced a duplicate child
+(#4093, closed as not planned). kurone-kito/idd-skill#4130 added the
+authoring-time check, the over-scope split threshold that
+`audit-authored-issue`'s `effort-candidate-file-limit` check enforces.
+This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
+
+- **Stop, do not push.** An over-threshold diff is what the authoring
+  check would have split before publication, so finishing it only
+  produces an oversized pull request. The trigger is the distributed
+  `audit-authored-issue` helper's own check (the profile-selected
+  command, with the body on `--stdin` and the target's resolved
+  `--marker-prefix`, so a target with another prefix or without a
+  local config still reads its effort marker), run on the issue body and
+  again on a copy whose `## Candidate files` section is replaced by
+  the diff's canonical paths: every path the branch changed, whether
+  committed, staged, unstaged, or untracked, that is the union of
+  `git diff --name-only origin/{development-branch}` (the working tree
+  against the base) and `git ls-files --others --exclude-standard`,
+  minus generated mirrors: a file whose `idd-generated-from` banner
+  names a different path, or a sync manifest target. A canonical
+  `src/**/*.mts` source carries a banner that names itself, so it
+  stays in the list. Each path goes on its own bullet in the contract's
+  Candidate files format. Review of PR 4160 pointed out that a
+  three-dot `git diff` would see committed paths only, while the route
+  runs before anything is pushed. Reusing the check keeps its counting rule
+  and its applicability: only a coherent `S` or `M` effort marker is
+  checked, and a body that carries a `Split out of #<n>` line is
+  exempt, since returning a split child would only split it again.
+  The route passes `--shape child` for every issue, because the check
+  reports any other shape as not applicable, and #4064, the
+  motivating overrun, was an orphan issue. The route applies only
+  with a helper runtime. An `instructions-only` installation has no
+  helper to measure with, and a manual count would copy the threshold
+  values out of their single source, so a session there continues as
+  it did before this route existed.
+- **Evidence first.** The comment records the estimate, the candidate
+  files, the changed files, and the split proposal, so the next author
+  sees the overrun without redoing the work. The proposal goes into the
+  comment whether or not the companion is installed, so a handoff that
+  fails later loses nothing.
+- **Release, not hold.** The next action belongs to authoring, and no
+  human decision is pending, so the worker releases instead of keeping
+  a hold, and does not apply the needs-decision label, which would turn
+  the overrun back into a question. The release follows the shared
+  Abort rule: revalidate ownership, update the digest to show the
+  release, then post `unclaimed-by` for the same `{claim-id}`, so the
+  digest never keeps a stale work-phase state. After the
+  release it runs the claim phase's `lost-claim-cleanup` from the
+  primary checkout, the one procedure built to run after a claim is
+  gone (its active-claim gate requires the release). The route names
+  no destructive git command of its own: the distributed Claude Code
+  baseline denies `git reset --hard`, `git clean -f`, and
+  `git branch -D` (`docs/permissions.md`), as review of PR 4160
+  pointed out after an earlier draft added a reset and a clean. So
+  `lost-claim-cleanup`'s own gates decide. A worktree that still holds
+  commits, changes, or ignored files such as installed dependencies
+  fails them and stays, and that procedure's leftover rule applies:
+  the claim phase's orphan hold covers the next claimant, the same as
+  for any other claim lost after dependencies were installed.
+- **The companion owns the hold.** The authoring label is the
+  companion's owner-marked lock, and the companion refuses a target
+  with an active claim. So the worker releases first, and the
+  companion, run from the primary checkout once cleanup is done, then
+  holds the issue under its own owner markers and publishes the held
+  split. Between the release and that hold, Discover's authoring guard
+  does not protect the issue, so another session can claim it first.
+  Review of PR 4160 raised that window. The route does not add a lock
+  for it: the companion's own conflict rule refuses the claimed target,
+  and the evidence comment already carries the split proposal, so the
+  refused handoff degrades to the no-companion path. Whether the
+  original issue becomes the roadmap anchor or is closed as superseded
+  is the companion's decision. Without the companion, the split
+  proposal stays in the overrun comment for the next triage. In both
+  cases the worker still never creates authoring ad hoc. The
+  "Unplanned follow-up work" rule to keep the Stage 1 B–C hold does not
+  apply here, because the claimed issue itself is being returned rather
+  than continued.
+- **Known gap.** Without the companion, nothing marks the released
+  issue, so Discover can select it again before the next triage reads
+  the overrun comment, and the next session can overrun again.
+
 ### C1 — Search sibling code for the same defect shape before closing
 
 A bug fix scoped to the single reported call site can leave the
