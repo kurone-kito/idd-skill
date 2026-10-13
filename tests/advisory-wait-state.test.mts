@@ -915,15 +915,13 @@ const NEXT_HEADING = /^#{2,4} /m;
 const FIELD_NAME = '`[A-Za-z][A-Za-z0-9]*`';
 const FIELD_NAMES = new RegExp(FIELD_NAME, 'g');
 // A run of bare names that ends with the sentence period (the standard and
-// lite lists), or that runs to the end of its line (the helper bullet). Any
-// other token, such as a dotted name or a trailing name after "and", breaks
-// the match, so the list falls short or does not parse, and the test fails.
+// lite lists). Any other token, such as a dotted name, breaks the match, so the
+// list does not parse and the test fails.
 const LIST_WITH_PERIOD = new RegExp(
   `^((?:${FIELD_NAME},\\s*)*${FIELD_NAME}\\.)`,
 );
-const LIST_TO_LINE_END = new RegExp(
-  `^((?:${FIELD_NAME},\\s*)*${FIELD_NAME})(?=[ \\t]*(?:\\r?\\n|$))`,
-);
+const BULLET_END = /\n(?=- |\n)/;
+const SEPARATORS = /[,\s]/g;
 
 // A line-anchored label, matched whatever whitespace separates its words.
 const labelPattern = (label: string): string =>
@@ -959,11 +957,17 @@ function helperEvidenceBulletNames(doc: string): string[] {
   const afterHeading = doc.slice((heading.index ?? 0) + heading[0].length);
   const next = NEXT_HEADING.exec(afterHeading);
   const section = next ? afterHeading.slice(0, next.index) : afterHeading;
-  const list = LIST_TO_LINE_END.exec(
-    textAfterLabel(section, '- Schema-required fields:').trimStart(),
+  const rest = textAfterLabel(section, '- Schema-required fields:');
+  const bulletEnd = BULLET_END.exec(rest);
+  const bullet = bulletEnd ? rest.slice(0, bulletEnd.index) : rest;
+  // The bullet must hold only bare names, commas, and line breaks, so wrapped
+  // prose after the last name (for example "and `x`") fails rather than passes.
+  assert.equal(
+    bullet.replace(FIELD_NAMES, '').replace(SEPARATORS, ''),
+    '',
+    'the helper bullet holds text other than bare field names',
   );
-  assert.ok(list, 'no field-name list after: - Schema-required fields:');
-  return fieldNames(list[1]);
+  return fieldNames(bullet);
 }
 
 test("the required-field lists match the schema's `required` array", () => {
