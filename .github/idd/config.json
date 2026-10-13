@@ -38,7 +38,7 @@
     "convergenceScope": "idd-claimed",
     "convergenceDeadline": "PT9H",
     "secondaryBotLogin": "coderabbitai[bot]",
-    "secondaryQuietWindow": "PT1H"
+    "secondaryQuietWindow": "PT5M"
   },
   "discover": {
     "selectionDesync": "session-offset"

@@ -10,7 +10,9 @@ import { fileURLToPath } from 'node:url';
 // direct import there.
 import { ADVISORY_CONVERGENCE_WORKFLOW_PATH } from '../src/scripts/advisory-convergence.mts';
 import {
+  buildSecondaryQuietWindowStatus,
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  resolveAdvisorySecondaryQuietWindowMinutes,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from '../src/scripts/advisory-wait-policy.mts';
 import {
@@ -13720,6 +13722,88 @@ test('#2335: the same window elapsing with nothing new clears the blocker', () =
     ),
   );
   assert.deepEqual(cleared.blockers, computePreMergeReadinessBlockers(cleared));
+});
+
+// #4167: the dogfood value `advisoryWait.secondaryQuietWindow: "PT5M"` in
+// .github/idd/config.json. It must resolve to five minutes, gate the readiness
+// verdict until five minutes after the last substantive activity, use the
+// min(5, configured) settled buffer on the settled path, and still clear at
+// once on a decline.
+test('#4167: a PT5M secondaryQuietWindow resolves to five minutes and gates the readiness verdict until five minutes have passed', () => {
+  const minutes = resolveAdvisorySecondaryQuietWindowMinutes({
+    advisoryWait: { secondaryQuietWindow: 'PT5M' },
+  });
+  assert.equal(minutes, 5);
+
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const options = {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    secondaryQuietWindowMinutes: minutes,
+  };
+  // The clean fixture's activity anchor is 23:56:00Z, so 00:00:00Z is four
+  // minutes in and 00:01:00Z is exactly five.
+  const blocked = buildPreMergeReadinessSummary(fixture.input, options);
+  assert.equal(secondaryQuietWindowOf(blocked).elapsedMinutes, 4);
+  assert.equal(secondaryQuietWindowOf(blocked).elapsed, false);
+  assert.ok(
+    (blocked.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'secondary-quiet-window',
+    ),
+  );
+
+  const cleared = buildPreMergeReadinessSummary(fixture.input, {
+    ...options,
+    now: '2026-05-12T00:01:00Z',
+  });
+  assert.equal(secondaryQuietWindowOf(cleared).minutes, 5);
+  assert.equal(secondaryQuietWindowOf(cleared).elapsedMinutes, 5);
+  assert.equal(secondaryQuietWindowOf(cleared).elapsed, true);
+  assert.ok(
+    !(cleared.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'secondary-quiet-window',
+    ),
+  );
+});
+
+test('#4167: the PT5M window clears the settled path on min(5, configured) and a decline at once', () => {
+  const minutes = resolveAdvisorySecondaryQuietWindowMinutes({
+    advisoryWait: { secondaryQuietWindow: 'PT5M' },
+  });
+  const anchorAt = '2026-05-11T23:56:00Z';
+
+  // Settled path: anchored on the settlement time, not the older activity
+  // anchor, and capped at the five-minute buffer.
+  const settledBeforeBuffer = buildSecondaryQuietWindowStatus({
+    minutes,
+    effectiveMaxActivityUpdatedAt: '2026-05-11T20:00:00Z',
+    secondaryBotSettledAt: anchorAt,
+    now: '2026-05-12T00:00:59Z',
+  });
+  assert.equal(settledBeforeBuffer.anchorAt, anchorAt);
+  assert.equal(settledBeforeBuffer.minutes, 5);
+  assert.equal(settledBeforeBuffer.configuredMinutes, 5);
+  assert.equal(settledBeforeBuffer.elapsed, false);
+
+  const settledAtBuffer = buildSecondaryQuietWindowStatus({
+    minutes,
+    effectiveMaxActivityUpdatedAt: '2026-05-11T20:00:00Z',
+    secondaryBotSettledAt: anchorAt,
+    now: '2026-05-12T00:01:00Z',
+  });
+  assert.equal(settledAtBuffer.elapsedMinutes, 5);
+  assert.equal(settledAtBuffer.elapsed, true);
+
+  // Declined: the wait is skipped at once, with no delay.
+  const declined = buildSecondaryQuietWindowStatus({
+    minutes,
+    effectiveMaxActivityUpdatedAt: anchorAt,
+    secondaryBotDeclined: true,
+    now: anchorAt,
+  });
+  assert.equal(declined.declined, true);
+  assert.equal(declined.elapsed, true);
+  assert.equal(declined.anchorAt, 'declined');
 });
 
 test('#2335: a genuinely unresolved thread keeps the anchor fresh, so the window never elapses while real work is pending', () => {
