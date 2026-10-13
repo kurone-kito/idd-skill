@@ -313,6 +313,18 @@
         }
       }
     },
+    "idd-e10-recurrence.mjs": {
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
     "idd-effective-config.mjs": {
       "runs": {
         "unknownFlag": {
