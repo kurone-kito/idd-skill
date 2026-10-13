@@ -947,8 +947,10 @@ This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
   committed, staged, unstaged, or untracked, that is the union of
   `git diff --name-only origin/{development-branch}` (the working tree
   against the base) and `git ls-files --others --exclude-standard`,
-  minus generated mirrors (a file with an `idd-generated-from` banner
-  or a sync manifest target), one per bullet in the contract's
+  minus generated mirrors: a file whose `idd-generated-from` banner
+  names a different path, or a sync manifest target. A canonical
+  `src/**/*.mts` source carries a banner that names itself, so it
+  stays in the list. Each path goes on its own bullet in the contract's
   Candidate files format. Review of PR 4160 pointed out that a
   three-dot `git diff` would see committed paths only, while the route
   runs before anything is pushed. Reusing the check keeps its counting rule
