@@ -22,6 +22,11 @@ import { join } from 'node:path';
 import { fetchProvenanceCommentsGraphql } from './authoring-owner-provenance.mjs';
 import { resolveBundleRoot } from './bundle-root.mjs';
 import { parseCliArgs } from './cli-args.mjs';
+import {
+  isAuthorizedForcedHandoffActor,
+  readForcedHandoffAuthorityPolicy,
+  readForcedHandoffMode,
+} from './collaborator-permission.mjs';
 import { ghApiJson, ghText, resolveViewerLogin } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
@@ -42,7 +47,8 @@ import {
   parseIsoDurationToMs,
 } from './policy-helpers.mjs';
 import {
-  resolveActiveClaim,
+  readClaimStaleAgeMs,
+  resolveActiveClaimForWriteGate,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mjs';
 import {
@@ -364,14 +370,18 @@ function labelExists(owner, repo, name) {
     throw error;
   }
 }
-/** True when the comments carry an active claim from a trusted login,
- * resolved with the shared claim parser: a released claim does not count, and
- * a claim marker whose edit state is unknown throws (fail closed). The caller
- * has already refused to run with no trusted login configured. */
-function hasActiveClaim(comments, trusted) {
-  const trustedSet = new Set(trusted.map((login) => login.toLowerCase()));
+/** True when the comments carry an active claim, resolved with the same
+ * write-gate resolver the review helpers use: a released claim does not
+ * count, a forced-handoff successor does when the repository enables forced
+ * handoffs, and a claim marker whose edit state is unknown throws (fail
+ * closed). The caller has already refused to run with no trusted login. */
+function hasActiveClaim(comments, gate) {
+  const trustedSet = new Set(gate.trusted.map((login) => login.toLowerCase()));
+  const policyPath = gate.policyPath || undefined;
+  const authorityPolicy = readForcedHandoffAuthorityPolicy(policyPath);
+  const permissionCache = new Map();
   return (
-    resolveActiveClaim(
+    resolveActiveClaimForWriteGate(
       comments.map((comment) => ({
         id: comment.id,
         body: comment.body,
@@ -379,7 +389,23 @@ function hasActiveClaim(comments, trusted) {
         createdAt: comment.createdAt,
         lastEditedAt: comment.lastEditedAt,
       })),
-      (login) => trustedSet.has(login.toLowerCase()),
+      {
+        isTrustedAuthor: (login) => trustedSet.has(login.trim().toLowerCase()),
+        forcedHandoffEnabled:
+          readForcedHandoffMode(policyPath) === 'human-gated',
+        // Issue-scoped: the created issue has no pull request of its own.
+        expectedLinkedPrs: null,
+        isAuthorizedForcedHandoff: (forcedBy) =>
+          isAuthorizedForcedHandoffActor(
+            gate.owner,
+            gate.repo,
+            forcedBy,
+            authorityPolicy,
+            permissionCache,
+          ),
+        requireAuthorMatchesForcedBy: true,
+        staleAgeMs: readClaimStaleAgeMs(gate.config),
+      },
     ) !== null
   );
 }
@@ -612,6 +638,13 @@ function publish(input) {
   const { args, bucket, journal, owner, repo, markerPrefix, ids } = input;
   const repoRef = `${owner}/${repo}`;
   const steps = [];
+  const claimGate = {
+    owner,
+    repo,
+    trusted: input.trusted,
+    policyPath: args.policy,
+    config: input.config,
+  };
   const base = {
     repository: { owner, repo },
     journal: journal.ref,
@@ -882,7 +915,7 @@ function publish(input) {
       if (hasForeignOwnerMarker(comments, markerPrefix, input.trusted)) {
         reason +=
           '; another owner marker is present, so the labels were not touched';
-      } else if (hasActiveClaim(comments, input.trusted)) {
+      } else if (hasActiveClaim(comments, claimGate)) {
         reason += '; a claim marker is present, so the labels were not touched';
       } else {
         ghText([
@@ -1020,7 +1053,7 @@ function publish(input) {
       throw new Error('the issue body is not the body this run created');
     }
     const comments = fetchProvenanceCommentsGraphql(owner, repo, number);
-    if (hasActiveClaim(comments, input.trusted)) {
+    if (hasActiveClaim(comments, claimGate)) {
       throw new Error(
         'the issue has an active claim, so execution began during acquisition',
       );
