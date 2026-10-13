@@ -1296,11 +1296,12 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    are unknown. An own claim other than a released one that matches no worker,
    and a listed live worker that matches no own claim, also skip the rest of
    this step, because such a worker may still be running and hold a slot the
-   budget cannot see, and each goes to step 5. A session without a unique
-   session-suffixed agent id also skips the rest of this step, because it cannot
-   tell its workers from another session's. Only when a listing exists, the
-   session has a unique session-suffixed agent id, and no such unmatched claim
-   remains, recount the roster. After a restart, run a fresh Discover pass
+   budget cannot see, an own claim goes to step 4 for report recovery and then
+   to step 5, and a listed live worker goes to step 5. A session without a
+   unique session-suffixed agent id also skips the rest of this step, because it
+   cannot tell its workers from another session's. Only when a listing exists,
+   the session has a unique session-suffixed agent id, and no such unmatched
+   claim remains, recount the roster. After a restart, run a fresh Discover pass
    first, as section 3 of the orchestrator phase file describes, and count its
    candidates (0 when none); the cached graph is discarded and cannot supply
    that count. Then run the profile-selected `idd-worker-budget` command with
@@ -1320,12 +1321,12 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    before section 4 resumes.
 4. **Recover reports.** Run this step for each matched finished worker, once its
    worktree, claim, and child processes show no live background work, and for
-   each unmatched own claim whose handoff or merge live state shows it finished
-   and whose draft matches the claim. The fan-out variant's completed-notice
-   rule names these live-evidence checks, and this step applies them to every
-   finished worker, under that worker's own listed handle. A worker with live
-   work is treated as running in step 3. With a listing, a released claim with
-   no matched worker is recorded under the claim-id as its handle, because the
+   each unmatched own claim whose handoff or merge live state shows it finished,
+   with or without a draft. The fan-out variant's completed-notice rule names
+   these live-evidence checks, and this step applies them to every finished
+   worker, under that worker's own listed handle. A worker with live work is
+   treated as running in step 3. With a listing, a released claim with no
+   matched worker is recorded under the claim-id as its handle, because the
    listing supplies no handle for it. The store dedupes on claimId,
    workerHandle, and terminalPhase, so a retry is safe. A matched running worker
    gets no record. A released claim whose only matched worker is still running
