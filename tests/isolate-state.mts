@@ -28,6 +28,16 @@
  *   non-empty, change nothing and register nothing, so a child that receives
  *   the same preload, or that a test gives its own state variables, keeps
  *   them.
+ * - When the marker is unset or empty, the preload also deletes
+ *   `GITHUB_REPOSITORY` and `GH_REPO` before any child starts, so a spawned
+ *   helper reaches its own `gh repo view` stub rather than the outer
+ *   repository. GitHub Actions sets the first in every job, and `gh` honors
+ *   the second. Preventive; no observed incident yet: once the resolver prefers
+ *   the variable (issue `#4110`), a test file that stubs `gh repo view` would
+ *   otherwise skip its stub in CI. The resolver change itself was motivated by
+ *   a `gh repo view` timeout observed on `kurone-kito/setup.ubuntu#204`. When
+ *   the marker is already set, both are kept, so a test that sets one
+ *   explicitly for its child keeps it.
  * - The listener scans for every non-directory entry at or below a top-level
  *   entry whose name starts with `idd-` (`idd-skill`, and `idd-critique`,
  *   which an external collector writes under the state root). Anything else
@@ -276,10 +286,18 @@ function installTempRoot(): () => void {
 }
 
 absolutizeRelativeImports(process.execArgv);
+// Read once, before installStateRoot() sets the marker: a check made after
+// that call would always see the marker and never clear the repository
+// variables below.
+const ownsStateRoot = !process.env[ROOT_MARKER];
+if (ownsStateRoot) {
+  delete process.env.GITHUB_REPOSITORY;
+  delete process.env.GH_REPO;
+}
 // The temporary directory comes first, so the state root and the GitHub CLI
 // guard root below are both created directly inside it.
-const cleanTempRoot = process.env[ROOT_MARKER] ? null : installTempRoot();
-const cleanStateRoot = process.env[ROOT_MARKER] ? null : installStateRoot();
+const cleanTempRoot = ownsStateRoot ? installTempRoot() : null;
+const cleanStateRoot = ownsStateRoot ? installStateRoot() : null;
 
 async function installGhGuard(): Promise<void> {
   let guardRoot = process.env.IDD_TEST_GH_GUARD_ROOT;

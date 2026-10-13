@@ -581,3 +581,45 @@ fs.symlinkSync(${JSON.stringify(missing)}, path.join(directory, 'dangling'));
   assert.equal(result.status, 1, result.stderr);
   assert.deepEqual(reportedPaths(result.stderr), ['state/idd-skill/dangling']);
 });
+
+test('a child that loads the preload with the marker unset sees neither GITHUB_REPOSITORY nor GH_REPO (#4110)', () => {
+  // Both are set explicitly in the child's environment, the way an outer
+  // GitHub Actions job presents them; the preload must clear both.
+  const result = runWithPreload(
+    `process.stdout.write(JSON.stringify({
+  repository: process.env.GITHUB_REPOSITORY ?? null,
+  ghRepo: process.env.GH_REPO ?? null,
+}));`,
+    {
+      env: {
+        ...cleanEnvironment(),
+        GITHUB_REPOSITORY: 'other/repo',
+        GH_REPO: 'elsewhere/repo',
+      },
+    },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    repository: null,
+    ghRepo: null,
+  });
+});
+
+test('a child that loads the preload with the marker inherited keeps an explicit GITHUB_REPOSITORY (#4110)', () => {
+  // The marker names a root this child did not create, so the preload makes
+  // no root and clears nothing: the explicit value must reach the child.
+  const givenRoot = join(scratch, 'given-repository-root');
+  mkdirSync(givenRoot, { recursive: true });
+  const result = runWithPreload(
+    `process.stdout.write(process.env.GITHUB_REPOSITORY ?? 'none');`,
+    {
+      env: {
+        ...cleanEnvironment(),
+        IDD_TEST_STATE_ROOT: givenRoot,
+        GITHUB_REPOSITORY: 'keep/me',
+      },
+    },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'keep/me');
+});
