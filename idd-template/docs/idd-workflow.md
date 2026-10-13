@@ -1361,17 +1361,18 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    carrying this claim id was posted, whether or not the claim has since been
    released, and `failed` otherwise. A handoff summary is trusted only when a
    trusted marker actor posted it, because the claim id alone is a public token.
-   Set `terminalPhase` to `F4` for a claim released after a merge, or whose
-   merged pull request still shows an active claim (the F4 window before
-   `unclaimed-by`), and to `F2.5` when a handoff summary carrying this claim id
-   is posted on the issue, because the release happens only at those phases.
-   Record the recovery in `frictions`, with its `phase` (F4 or F2.5), a
-   non-empty `summary`, and `docs/idd-workflow.md` in `file`, because that is
-   the instruction path the recovery followed. If verification or the append
-   fails for a matched worker, keep it addressable, mark it `stalled`, and
-   follow the worker-specific recovery in the fan-out variant, as section 5 of
-   the orchestrator phase file describes. A failed append for a released claim
-   is reported in step 5.
+   Set `terminalPhase` to `F4` only for a claim released after a merge under
+   `fully_autonomous_merge`, since F4 is complete only after its final
+   `unclaimed-by`, and to `F2.5` when a trusted handoff summary carrying this
+   claim id is posted on the issue, under either merge policy. A merged pull
+   request that still shows an active claim has no terminal phase, so step 5
+   reports it. Record the recovery in `frictions`, with its `phase` (F4 or
+   F2.5), a non-empty `summary`, and `docs/idd-workflow.md` in `file`, because
+   that is the instruction path the recovery followed. If verification or the
+   append fails for a matched worker, keep it addressable, mark it `stalled`,
+   and follow the worker-specific recovery in the fan-out variant, as section 5
+   of the orchestrator phase file describes. A failed append for a released
+   claim is reported in step 5.
 5. **Report the remainder.** An own claim that reached step 3, other than a
    released claim, and has no matching worker is reported to the operator, and
    so is a matched finished worker that step 4 did not append because its
