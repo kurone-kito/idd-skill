@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
   buildMergedPrFeedbackSweep,
+  buildWeeklyBodyOptions,
   type MergedPrInput,
+  type MergedPrSweepResult,
   parseArgs,
+  renderWeeklySweepIssueBody,
   type SweepReviewInput,
+  WEEKLY_SWEEP_ISSUE_TITLE,
 } from '../src/scripts/merged-pr-feedback-sweep.mts';
 import { CODERABBIT_SUMMARY_MARKER } from '../src/scripts/protocol-helpers.mts';
 import { buildCommentThread } from './test-utils.mts';
@@ -1625,4 +1630,236 @@ test('summary aggregates across PRs and skips clean PRs', () => {
   assert.equal(result.summary.flaggedPrCount, 1);
   assert.equal(result.summary.unresolvedThreadCount, 1);
   assert.equal(result.summary.unaddressedCommentCount, 1);
+});
+
+// --- #4161: the weekly summary issue body -------------------------------
+
+const NO_FLAGGED_SUMMARY = {
+  flaggedPrCount: 0,
+  unresolvedThreadCount: 0,
+  unaddressedCommentCount: 0,
+};
+
+const RUN_DATE = '2026-10-13';
+
+test('parseArgs: --issue-body is a boolean that defaults to false', () => {
+  assert.equal(parseArgs(['--issue-body']).issueBody, true);
+  assert.equal(parseArgs([]).issueBody, false);
+});
+
+test('renderWeeklySweepIssueBody: the title constant is the agreed summary title', () => {
+  assert.equal(WEEKLY_SWEEP_ISSUE_TITLE, 'Merged-PR feedback sweep (weekly)');
+});
+
+test('renderWeeklySweepIssueBody: nothing open, with the count checked, says so in one line', () => {
+  const body = renderWeeklySweepIssueBody(
+    { prs: [], summary: { prCount: 3, ...NO_FLAGGED_SUMMARY } },
+    {
+      sinceDate: '2026-10-06',
+      scanLimit: 500,
+      enumeratedCount: 3,
+      generatedOn: RUN_DATE,
+    },
+  );
+  assert.equal(
+    body,
+    'None are open as of 2026-10-13 (UTC): none of the 3 pull requests merged since 2026-10-06 has unresolved review threads or unaddressed comments.\n',
+  );
+});
+
+test('renderWeeklySweepIssueBody: a window with no merges says the scan found none', () => {
+  const body = renderWeeklySweepIssueBody(
+    { prs: [], summary: { prCount: 0, ...NO_FLAGGED_SUMMARY } },
+    {
+      sinceDate: '2026-10-06',
+      scanLimit: 500,
+      enumeratedCount: 0,
+      generatedOn: RUN_DATE,
+    },
+  );
+  assert.equal(
+    body,
+    'None are open as of 2026-10-13 (UTC): the scan found no pull request merged since 2026-10-06.\n',
+  );
+});
+
+test('renderWeeklySweepIssueBody: an explicit PR list with no date names the scanned set and no cap', () => {
+  const body = renderWeeklySweepIssueBody(
+    { prs: [], summary: { prCount: 2, ...NO_FLAGGED_SUMMARY } },
+    {
+      sinceDate: null,
+      scanLimit: null,
+      enumeratedCount: 2,
+      generatedOn: RUN_DATE,
+    },
+  );
+  assert.equal(
+    body,
+    'None are open as of 2026-10-13 (UTC): none of the 2 pull requests in the scanned set has unresolved review threads or unaddressed comments.\n',
+  );
+});
+
+test('renderWeeklySweepIssueBody: an enumeration that reached the cap says so, even when nothing is open', () => {
+  const body = renderWeeklySweepIssueBody(
+    { prs: [], summary: { prCount: 500, ...NO_FLAGGED_SUMMARY } },
+    {
+      sinceDate: '2026-10-06',
+      scanLimit: 500,
+      enumeratedCount: 500,
+      generatedOn: RUN_DATE,
+    },
+  );
+  assert.match(
+    body,
+    /^None are open as of 2026-10-13 \(UTC\): none of the 500 pull requests /,
+  );
+  assert.match(
+    body,
+    /The scan reached its limit of 500 pull requests, so some merges in the window may not have been checked\./,
+  );
+  assert.equal(body.split('\n').length, 3);
+});
+
+test('renderWeeklySweepIssueBody: the cap is named only when the enumeration reached it', () => {
+  const body = renderWeeklySweepIssueBody(
+    { prs: [], summary: { prCount: 3, ...NO_FLAGGED_SUMMARY } },
+    {
+      sinceDate: '2026-10-06',
+      scanLimit: 500,
+      enumeratedCount: 3,
+      generatedOn: RUN_DATE,
+    },
+  );
+  assert.doesNotMatch(body, /limit/);
+});
+
+test('buildWeeklyBodyOptions: an explicit PR list carries no cap, and a window carries its limit', () => {
+  const explicit = buildWeeklyBodyOptions({
+    usingExplicitPrs: true,
+    limit: 500,
+    sinceDate: null,
+    enumeratedCount: 2,
+    generatedOn: RUN_DATE,
+  });
+  assert.equal(explicit.scanLimit, null);
+  const windowed = buildWeeklyBodyOptions({
+    usingExplicitPrs: false,
+    limit: 500,
+    sinceDate: '2026-10-06',
+    enumeratedCount: 500,
+    generatedOn: RUN_DATE,
+  });
+  assert.equal(windowed.scanLimit, 500);
+  assert.equal(windowed.enumeratedCount, 500);
+  assert.equal(windowed.generatedOn, RUN_DATE);
+});
+
+test('renderWeeklySweepIssueBody: a non-empty result lists each flagged PR with counts and no comment text', () => {
+  const result: MergedPrSweepResult = {
+    prs: [
+      {
+        number: 1234,
+        mergedAt: '2026-10-09T12:00:00Z',
+        mergeCommit: null,
+        unresolvedThreads: [
+          {
+            url: 'https://example.invalid/thread-1',
+            author: 'coderabbitai[bot]',
+            advisoryBot: true,
+            path: 'a.ts',
+            bodyExcerpt: 'please rename this helper',
+            dispositioned: false,
+          },
+        ],
+        unaddressedComments: [
+          {
+            url: 'https://example.invalid/comment-1',
+            author: 'someone',
+            advisoryBot: false,
+            kind: 'comment',
+            bodyExcerpt: 'nit: spacing',
+          },
+          {
+            url: 'https://example.invalid/review-1',
+            author: 'someone',
+            advisoryBot: false,
+            kind: 'review',
+            bodyExcerpt: 'second note',
+          },
+        ],
+      },
+      {
+        number: 1240,
+        mergedAt: null,
+        mergeCommit: null,
+        unresolvedThreads: [],
+        unaddressedComments: [
+          {
+            url: 'https://example.invalid/comment-2',
+            author: 'someone',
+            advisoryBot: false,
+            kind: 'comment',
+            bodyExcerpt: 'one more',
+          },
+        ],
+      },
+    ],
+    summary: {
+      prCount: 7,
+      flaggedPrCount: 2,
+      unresolvedThreadCount: 1,
+      unaddressedCommentCount: 3,
+    },
+  };
+  const body = renderWeeklySweepIssueBody(result, {
+    sinceDate: '2026-10-06',
+    scanLimit: 500,
+    enumeratedCount: 7,
+    generatedOn: RUN_DATE,
+  });
+  assert.equal(
+    body,
+    [
+      'Open feedback as of 2026-10-13 (UTC): 2 of 7 pull requests merged since 2026-10-06 with unresolved review threads or unaddressed comments.',
+      '',
+      '- PR 1234 (merged 2026-10-09): 1 unresolved review thread, 2 unaddressed comments.',
+      '- PR 1240: 0 unresolved review threads, 1 unaddressed comment.',
+      '',
+    ].join('\n'),
+  );
+  // Plain "PR n" only: a "#n" in the body would cross-reference the pull request.
+  assert.doesNotMatch(body, /#\d/);
+  // Only numbers, dates, and counts are rendered, never comment text.
+  for (const excerpt of [
+    'please rename',
+    'nit: spacing',
+    'second note',
+    'one more',
+  ]) {
+    assert.equal(body.includes(excerpt), false, `leaked: ${excerpt}`);
+  }
+});
+
+test('the cap follows the enumeration, not the pull requests that survived filtering', () => {
+  const body = renderWeeklySweepIssueBody(
+    { prs: [], summary: { prCount: 2, ...NO_FLAGGED_SUMMARY } },
+    {
+      sinceDate: '2026-10-06',
+      scanLimit: 500,
+      enumeratedCount: 500,
+      generatedOn: RUN_DATE,
+    },
+  );
+  assert.match(
+    body,
+    /The scan reached its limit of 500 pull requests, so some merges in the window may not have been checked\./,
+  );
+});
+
+test('main passes the enumerated count, not the merged count, to the summary body', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/merged-pr-feedback-sweep.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /enumeratedCount: targets\.length,/);
 });
