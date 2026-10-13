@@ -683,15 +683,17 @@ function computeQuietWindowElapsed({
  * `threadEffective`) and stabilizes once every item is either
  * resolved-with-disposition or was never opened. A watermark leaves it
  * unchanged (it is filtered out before classification runs). A top-level
- * advisory-bot comment that is not itself a disposition, posted after an
- * unedited IDD-agent disposition, is ack-only whatever its body says, so it
- * leaves the anchor unchanged too.
- * A disposition reply inside a review thread legitimately anchors it, because
- * thread replies still feed the ceiling; an unedited top-level disposition by
- * a trusted author does not, so the agent's own top-level reply never restarts
- * the window. "Elapsed since that anchor" therefore equals "elapsed since the
- * review settled" without a second, independently-drifting timestamp to
- * persist.
+ * advisory-bot comment that is not itself a disposition is ack-only whatever
+ * its body says when its last activity is after the latest unedited
+ * IDD-agent disposition, so it leaves the anchor unchanged too; advisory bots
+ * are never excluded by the trust rule, and a substantive comment in that
+ * position is ignored too, a limit this change leaves in place. A disposition
+ * reply inside a review thread legitimately anchors it, because thread replies
+ * still feed the ceiling; an unedited top-level disposition by a trusted
+ * author does not, so the agent's own unedited top-level reply never restarts
+ * the window, while an edit does. "Elapsed since that anchor" therefore equals
+ * "elapsed since the review settled" without a second, independently-drifting
+ * timestamp to persist.
  *
  * #2544: `secondaryBotSettledAt` -- when it is a valid ISO timestamp --
  * switches the gate to the shorter settled buffer above, anchored on that

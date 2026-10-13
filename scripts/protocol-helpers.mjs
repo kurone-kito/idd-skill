@@ -5968,11 +5968,11 @@ export function buildActivitySnapshotSummary(
   // top-level disposition by a trusted author, so the agent's own
   // issue-comment reply does not restart the window. Trusted is the union of
   // `trustedMarkerLogins` and the disposition authors, with advisory bots
-  // removed. A disposition by a disposition author still counts for
-  // `latestDispositionAt` and for the ack-only classification above; an author
-  // trusted only through `trustedMarkerLogins` is left out of the anchor but
-  // does not open the ack window. Thread replies still anchor, and `effective`
-  // (which review-currency reads) is unchanged.
+  // removed. Only an unedited disposition by a disposition author counts for
+  // `latestDispositionAt` and the ack-only classification above. An author
+  // trusted only through `trustedMarkerLogins` is left out of the anchor for
+  // that one disposition, but does not open the ack window. Thread replies
+  // still anchor, and `effective` (which review-currency reads) is unchanged.
   const isQuietAnchorTrustedAuthor = (login) => {
     const normalized = String(login ?? '')
       .trim()
