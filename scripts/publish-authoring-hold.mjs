@@ -5,30 +5,21 @@
 // .mts source named above by `pnpm run build`. Edit the .mts source, never
 // the generated .mjs. See docs/typescript-sources.md.
 //
-// Capability-checked Stage 1 publication of one held orphan issue
-// (kurone-kito/idd-skill#4127). The issue-authoring skill allows a new issue
-// only through a create-with-label command and stops when none exists. This
-// helper runs the contract's "New-issue ownership" sequence in order: journal
-// check, publication line, lint, labels, pending intent, create, identity
-// attach, owner marker, provenance, member. It spawns the sibling helpers
-// (audit-authored-issue, post-idd-marker, authoring-owner-provenance) rather
-// than reimplementing their checks. It never runs a review, a Stage 2
-// release, or a close.
+// Read-only planning and validation for the Stage 1 publication of one held
+// orphan issue (kurone-kito/idd-skill#4127): review-result check, journal
+// check, publication line, lint of the exact body, label lookup, and the
+// rendered pending publication-intent record. It spawns the sibling helpers
+// (audit-authored-issue, post-idd-marker's dry run) rather than reimplementing
+// their checks. It writes nothing: --apply is refused until the publication
+// path (journal records, create, owner marker, member) lands as a follow-up.
 import { spawnSync } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fetchProvenanceCommentsGraphql } from './authoring-owner-provenance.mjs';
 import { resolveBundleRoot } from './bundle-root.mjs';
 import { parseCliArgs } from './cli-args.mjs';
-import {
-  collaboratorPermission,
-  isAuthorizedForcedHandoffActor,
-  readForcedHandoffAuthorityPolicy,
-  readForcedHandoffMode,
-} from './collaborator-permission.mjs';
-import { ghApiJson, ghText, resolveViewerLogin } from './gh-exec.mjs';
+import { ghApiJson, resolveViewerLogin } from './gh-exec.mjs';
 import { deriveGhHttpStatus } from './gh-http-status.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -36,26 +27,15 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mjs';
 import { loadPolicyConfig, readRepositoryPolicyFile } from './idd-config.mjs';
-import { resolveOpenLinkedPrIssues } from './idd-roadmap-audit-execute.mjs';
 import {
   normalizeMarkerPrefix,
-  parseAuthoringOwnerComment,
   parseAuthoringPublicationComment,
 } from './marker-helpers.mjs';
 import {
   AUTHORING_JOURNAL_REFERENCE_PATTERN,
   normalizePolicyConfig,
-  parseIsoDurationToMs,
 } from './policy-helpers.mjs';
-import {
-  readClaimStaleAgeMs,
-  resolveActiveClaimForWriteGate,
-  resolveTrustedMarkerActors,
-} from './protocol-helpers.mjs';
-import {
-  createGithubProviderAdapter,
-  resolveCurrentGithubRepository,
-} from './provider-adapter-github.mjs';
+import { resolveCurrentGithubRepository } from './provider-adapter-github.mjs';
 export const PUBLISH_BUCKETS = ['ready', 'needs-decision', 'blocked-by-human'];
 const PUBLISH_AUTHORING_HOLD_FLAG_SPEC = {
   '--title': { type: 'string' },
@@ -67,14 +47,10 @@ const PUBLISH_AUTHORING_HOLD_FLAG_SPEC = {
   '--owner': { type: 'string' },
   '--repo': { type: 'string' },
   '--policy': { type: 'string' },
-  '--trusted-marker-logins': { type: 'string', default: '' },
   '--marker-prefix': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 };
 const REPO_TOKEN_PATTERN = /^[A-Za-z0-9_.-]+$/;
-/** A record whose POST landed but whose read-back failed: replay the journal
- * to learn its state. */
-const JOURNAL_STATE_UNCERTAIN = 'uncertain: replay the journal';
 if (import.meta.main) {
   if (isHelperErrorEnvelopeEnabled()) {
     runHelperCli('publish-authoring-hold', runCli);
@@ -236,10 +212,12 @@ export function requestsChildShape(argv) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> --review-result <path> [--shape orphan] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--trusted-marker-logins <csv>] [--marker-prefix <prefix>] [--apply]
+  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> --review-result <path> [--shape orphan] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>]
 
-Publishes one drafted orphan issue under the issue-authoring hold, running
-contract.md's "New-issue ownership" steps in order:
+Plans and validates the Stage 1 publication of one drafted orphan issue
+under the issue-authoring hold. It writes nothing: --apply is refused with
+exit 2 until the publication path lands as a follow-up of #4127. The
+checks follow contract.md's "New-issue ownership" order:
 
   1. refuse --shape child (exit 2, nothing else runs), then check the review
      result file;
@@ -253,14 +231,9 @@ contract.md's "New-issue ownership" steps in order:
      configured label);
   5. resolve the authoring label (issueAuthoring.authoringLabelName) and,
      for a non-ready bucket, labels.needsDecisionLabelName or
-     labels.blockedByHumanLabelName; create a missing label;
-  6. append the pending publication-intent record (issue=none) to the
-     journal through post-idd-marker and read it back;
-  7. create the issue with every label in one gh issue create call;
-  8. attach the returned identity to the pending record, append the
-     mode=acquire owner marker, wait claim.verifySettleDelay, run
-     authoring-owner-provenance, re-read labels, body and claim state,
-     and only then append state=member.
+     labels.blockedByHumanLabelName, and report which ones are missing;
+  6. render the pending publication-intent record through post-idd-marker's
+     dry run, and list the remaining publication steps as planned.
 
 The marker prefix comes from the local policy only when the issue and the
 journal are both in this checkout's repository. Otherwise pass
@@ -271,17 +244,7 @@ optional "findings" array holds findings-ledger entries, and each needs a
 disposition of fixed or rejected. The file is not tied to the body; the
 caller keeps it for the reviewed draft.
 
-Without --apply this is a dry run: it makes the read-only checks, the lint
-and the label lookups, prints the planned steps, and writes nothing.
-
-A failure after the create prints a recovery-hold JSON object with the
-created issue, the failed step and the last journal state, and exits 1.
-That state is pending, or "uncertain: replay the journal" when a record
-may have been posted but could not be verified. The issue keeps its
-labels and is never closed. The Stage 2 release stays a separate,
-explicit request.
-
-Exit codes: 0 published (or planned), 1 refused or failed, 2 usage error,
+Exit codes: 0 planned, 1 refused, 2 usage error (including --apply),
 --shape child, or the blocked-by-human journal stop.
 `);
 }
@@ -298,7 +261,6 @@ function parseArgs(argv) {
     owner: text('owner'),
     repo: text('repo'),
     policy: values.policy ?? '',
-    trustedMarkerLogins: values['trusted-marker-logins'] ?? '',
     markerPrefix: text('marker-prefix'),
     help,
   };
@@ -313,12 +275,6 @@ function refuse(message, report = {}) {
   );
   process.stderr.write(`publish-authoring-hold: ${message}\n`);
   return { exitCode: 1, kind: 'gate', message };
-}
-/** Synchronous wait for the settle delay. */
-function sleepMs(ms) {
-  if (ms > 0) {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-  }
 }
 function runSiblingHelper(script, args) {
   const root = resolveBundleRoot(import.meta.dirname);
@@ -363,9 +319,6 @@ function readIssue(owner, repo, number) {
     pullRequest: raw.pull_request != null,
   };
 }
-function hasLabel(labels, name) {
-  return labels.some((label) => label.toLowerCase() === name.toLowerCase());
-}
 function labelExists(owner, repo, name) {
   try {
     ghApiJson(`repos/${owner}/${repo}/labels/${encodeURIComponent(name)}`);
@@ -376,126 +329,6 @@ function labelExists(owner, repo, name) {
     }
     throw error;
   }
-}
-/** Write, Maintain or Admin on the repository; an unreadable permission is
- * false (fail closed). */
-function hasWritePermission(owner, repo, login, cache) {
-  const { permission, roleName } = collaboratorPermission(
-    owner,
-    repo,
-    login,
-    cache,
-  );
-  return (
-    ['admin', 'maintain', 'write'].includes(roleName) ||
-    permission === 'admin' ||
-    permission === 'write'
-  );
-}
-/** True when the comments carry an active claim, resolved with the same
- * write-gate resolver the review helpers use: a released claim does not
- * count, a forced-handoff successor does when the repository enables forced
- * handoffs, and a claim marker whose edit state is unknown throws (fail
- * closed). The caller has already refused to run with no trusted login. */
-function hasActiveClaim(comments, gate) {
-  const trustedSet = new Set(gate.trusted.map((login) => login.toLowerCase()));
-  const policyPath = gate.policyPath || undefined;
-  const authorityPolicy = readForcedHandoffAuthorityPolicy(policyPath);
-  const permissionCache = new Map();
-  return (
-    resolveActiveClaimForWriteGate(
-      comments.map((comment) => ({
-        id: comment.id,
-        body: comment.body,
-        author: { login: comment.authorLogin },
-        createdAt: comment.createdAt,
-        lastEditedAt: comment.lastEditedAt,
-      })),
-      {
-        isTrustedAuthor: (login) => trustedSet.has(login.trim().toLowerCase()),
-        forcedHandoffEnabled:
-          readForcedHandoffMode(policyPath) === 'human-gated',
-        // Issue-scoped: the created issue has no pull request of its own.
-        expectedLinkedPrs: null,
-        isAuthorizedForcedHandoff: (forcedBy) =>
-          isAuthorizedForcedHandoffActor(
-            gate.owner,
-            gate.repo,
-            forcedBy,
-            authorityPolicy,
-            permissionCache,
-          ),
-        requireAuthorMatchesForcedBy: true,
-        staleAgeMs: readClaimStaleAgeMs(gate.config),
-      },
-    ) !== null
-  );
-}
-/** True when a trusted login wrote an authoring-owner marker on the issue,
- * edited or not (fail closed). */
-function hasForeignOwnerMarker(comments, markerPrefix, trusted) {
-  const trustedSet = new Set(trusted.map((login) => login.toLowerCase()));
-  const token = `${markerPrefix.toLowerCase()}-authoring-owner:`;
-  return comments.some(
-    (comment) =>
-      trustedSet.has(comment.authorLogin.trim().toLowerCase()) &&
-      comment.body.toLowerCase().includes(token),
-  );
-}
-/**
- * Replay the owner-marker log right before `member`: every trusted
- * authoring-owner marker on the issue must be unedited and carry this run's
- * owner, set and session. Returns a refusal reason, or null.
- */
-export function checkOwnerLogStillOurs(input) {
-  const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
-  const token = `${input.markerPrefix.toLowerCase()}-authoring-owner:`;
-  let ours = 0;
-  for (const comment of input.comments) {
-    if (!trustedSet.has(comment.authorLogin.trim().toLowerCase())) {
-      continue;
-    }
-    if (!comment.body.toLowerCase().includes(token)) {
-      continue;
-    }
-    if (comment.lastEditedAt !== null) {
-      return `owner marker ${comment.id} was edited`;
-    }
-    const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
-    if (
-      parsed === null ||
-      parsed.owner !== input.ids.owner ||
-      parsed.set !== input.ids.set ||
-      parsed.session !== input.ids.session
-    ) {
-      return `owner marker ${comment.id} is not this run's marker`;
-    }
-    ours += 1;
-  }
-  return ours > 0 ? null : "this run's owner marker is not on the issue";
-}
-/** True when the issue carries a comment with exactly this body by `actor`.
- * Throws when the comments cannot be read. */
-function hasExactComment(where, body, actor) {
-  const comments = ghApiJson(
-    `repos/${where.owner}/${where.repo}/issues/${where.number}/comments`,
-    { paginate: true },
-  );
-  if (!Array.isArray(comments)) {
-    throw new Error('the comments are not readable');
-  }
-  return comments.some((comment) => {
-    const row = comment;
-    return (
-      row.body === body &&
-      String(row.user?.login ?? '').toLowerCase() === actor.toLowerCase()
-    );
-  });
-}
-/** Compare bodies the way GitHub may store them (CRLF and trailing space). */
-function sameBody(left, right) {
-  const normalize = (text) => text.replace(/\r\n/g, '\n').trimEnd();
-  return normalize(left) === normalize(right);
 }
 function runCli() {
   const argv = process.argv.slice(2);
@@ -516,6 +349,13 @@ function runCli() {
   if (args.help) {
     printHelp();
     return 0;
+  }
+  if (args.apply) {
+    // The write path (journal records, create, owner marker, member) is not
+    // shipped yet; it is tracked as a follow-up of #4127.
+    return usage(
+      '--apply is not yet supported: this command plans and validates only, and the publication itself is tracked as a follow-up',
+    );
   }
   if (args.shape !== 'orphan') {
     return usage(`--shape must be orphan (got ${JSON.stringify(args.shape)})`);
@@ -609,11 +449,6 @@ function runCli() {
   }
   const policy = loadPolicyConfig(args.policy || undefined);
   const config = policy.config;
-  const { actors: trusted } = resolveTrustedMarkerActors({
-    flagValue: args.trustedMarkerLogins,
-    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-    config,
-  });
   const currentRepo =
     args.owner && args.repo
       ? { owner: args.owner, repo: args.repo }
@@ -668,14 +503,8 @@ function runCli() {
       owner,
       repo,
       markerPrefix,
-      trusted,
-      settleMs:
-        parseIsoDurationToMs(
-          normalizePolicyConfig(config).claim.verifySettleDelay,
-        ) ?? 0,
       config,
       ids,
-      injected,
       bodyPath,
     });
   } finally {
@@ -686,13 +515,6 @@ function publish(input) {
   const { args, bucket, journal, owner, repo, markerPrefix, ids } = input;
   const repoRef = `${owner}/${repo}`;
   const steps = [];
-  const claimGate = {
-    owner,
-    repo,
-    trusted: input.trusted,
-    policyPath: args.policy,
-    config: input.config,
-  };
   const base = {
     repository: { owner, repo },
     journal: journal.ref,
@@ -726,40 +548,7 @@ function publish(input) {
   } catch (error) {
     return refuse(`cannot read the labels: ${error.message}`, base);
   }
-  // A record from a login replay cannot trust is not valid evidence, so with
-  // no trusted marker actor configured nothing is written at all.
   const actor = resolveViewerLogin();
-  if (input.trusted.length === 0) {
-    return refuse(
-      'no trusted marker actor is configured (trustedMarkerActors, IDD_TRUSTED_MARKER_ACTORS or --trusted-marker-logins), so the journal records could not be verified on replay',
-      base,
-    );
-  }
-  if (
-    !input.trusted.some((login) => login.toLowerCase() === actor.toLowerCase())
-  ) {
-    return refuse(
-      `the authenticated login ${actor} is not a trusted marker actor, so its journal records would not be valid evidence`,
-      base,
-    );
-  }
-  // The contract also needs Write, Maintain or Admin on every repository
-  // that receives a marker, unless the actor is a configured bot or app.
-  if (!actor.toLowerCase().endsWith('[bot]')) {
-    const cache = new Map();
-    const targets = [
-      { owner, repo },
-      { owner: journal.owner, repo: journal.repo },
-    ];
-    for (const target of targets) {
-      if (!hasWritePermission(target.owner, target.repo, actor, cache)) {
-        return refuse(
-          `${actor} does not have Write, Maintain or Admin permission on ${target.owner}/${target.repo}, or it could not be read, so its markers would not be trusted`,
-          base,
-        );
-      }
-    }
-  }
   const intentArgs = (state, issue) => [
     '--type',
     'authoring-publication-intent',
@@ -799,377 +588,35 @@ function publish(input) {
     }
     return body;
   };
-  if (!args.apply) {
-    let pendingRecord;
-    try {
-      pendingRecord = renderMarker(intentArgs('pending', 'none'));
-    } catch (error) {
-      return refuse(error.message, base);
-    }
-    steps.push(
-      {
-        step: 'labels',
-        status: 'planned',
-        detail: { labels, create: missing },
-      },
-      {
-        step: 'journal-pending',
-        status: 'planned',
-        detail: { record: pendingRecord },
-      },
-      {
-        step: 'create',
-        status: 'planned',
-        detail: { title: args.title, labels },
-      },
-      { step: 'identity-attach', status: 'planned' },
-      { step: 'owner-marker', status: 'planned' },
-      { step: 'provenance', status: 'planned' },
-      { step: 'member', status: 'planned' },
-    );
-    process.stdout.write(
-      `${JSON.stringify({ mode: 'dry-run', outcome: 'planned', ...base, labels, steps }, null, 2)}\n`,
-    );
-    return 0;
-  }
-  for (const name of missing) {
-    try {
-      ghText(['label', 'create', name, '--repo', repoRef]);
-    } catch (error) {
-      return refuse(
-        `cannot create the label ${name}, so the create could not apply it: ${error.message}`,
-        base,
-      );
-    }
-  }
-  steps.push({
-    step: 'labels',
-    status: 'done',
-    detail: { labels, created: missing },
-  });
-  /** Post a marker, then read it back by id and compare body and author. */
-  const postVerified = (markerArgs, where) => {
-    const expected = renderMarker(markerArgs);
-    const run = runSiblingHelper('post-idd-marker.mjs', [
-      ...markerArgs,
-      '--apply',
-    ]);
-    // A comment that exists, or may exist, leaves the record's state unknown
-    // rather than unchanged.
-    const landed = (message) =>
-      Object.assign(new Error(message), { posted: true });
-    const commentId = Number(parseJsonOutput(run)?.commentId);
-    if (run.status !== 0 || !Number.isInteger(commentId) || commentId <= 0) {
-      // post-idd-marker may fail after its POST reached GitHub, so look for
-      // the exact body before reporting that nothing was posted.
-      const failure = helperFailure('post-idd-marker', run);
-      let found;
-      try {
-        found = hasExactComment(where, expected, actor);
-      } catch {
-        found = null;
-      }
-      if (found === false) {
-        throw new Error(failure);
-      }
-      throw landed(
-        `${failure}; ${found ? 'the record is on the issue anyway' : 'the record may have been posted, and the comments could not be read'}`,
-      );
-    }
-    let stored;
-    try {
-      stored = ghApiJson(
-        `repos/${where.owner}/${where.repo}/issues/comments/${commentId}`,
-      );
-    } catch (error) {
-      throw landed(
-        `comment ${commentId} could not be read back: ${error.message}`,
-      );
-    }
-    if (stored?.body !== expected) {
-      throw landed(`comment ${commentId} does not carry the posted marker`);
-    }
-    if (
-      String(stored.user?.login ?? '').toLowerCase() !== actor.toLowerCase()
-    ) {
-      throw landed(`comment ${commentId} was not written by ${actor}`);
-    }
-    return commentId;
-  };
-  const journalWhere = {
-    owner: journal.owner,
-    repo: journal.repo,
-    number: journal.number,
-  };
-  // Step 6: the pending record must be verified before the create.
+  let pendingRecord;
   try {
-    const commentId = postVerified(intentArgs('pending', 'none'), journalWhere);
-    steps.push({
+    pendingRecord = renderMarker(intentArgs('pending', 'none'));
+  } catch (error) {
+    return refuse(error.message, base);
+  }
+  steps.push(
+    {
+      step: 'labels',
+      status: 'planned',
+      detail: { labels, create: missing },
+    },
+    {
       step: 'journal-pending',
-      status: 'done',
-      detail: { commentId },
-    });
-  } catch (error) {
-    return refuse(
-      `the pending publication-intent record could not be verified, so nothing was created: ${error.message}`,
-      {
-        ...base,
-        steps,
-        ...(isPosted(error) ? { journalState: JOURNAL_STATE_UNCERTAIN } : {}),
-      },
-    );
-  }
-  // Step 7: one create call with every label.
-  const createArgs = [
-    'issue',
-    'create',
-    '--repo',
-    repoRef,
-    '--title',
-    args.title,
-    '--body-file',
-    input.bodyPath,
-  ];
-  for (const label of labels) {
-    createArgs.push('--label', label);
-  }
-  let number;
-  let url;
-  try {
-    const out = ghText(createArgs).trim();
-    url = out.split('\n').pop()?.trim() ?? '';
-    const match = /\/issues\/([1-9][0-9]*)$/.exec(url);
-    if (!match) {
-      throw new Error(`gh issue create printed no issue URL: ${out}`);
-    }
-    number = Number(match[1]);
-  } catch (error) {
-    return recoveryHold({
-      ...base,
-      issue: null,
-      failedStep: 'create',
-      reason: `${error.message}; check the repository for an issue carrying token ${ids.token} before retrying`,
-      steps,
-    });
-  }
-  const issueRef = `${repoRef}#${number}`;
-  steps.push({
-    step: 'create',
-    status: 'done',
-    detail: { issue: issueRef, url },
-  });
-  const held = { ...base, issue: issueRef, number, url, steps };
-  // Step 8: the label must be on the issue; restore it as a safe hold if not.
-  let created;
-  try {
-    created = readIssue(owner, repo, number);
-  } catch (error) {
-    return recoveryHold({
-      ...held,
-      failedStep: 'create-verify',
-      reason: error.message,
-    });
-  }
-  const authoringLabel = labels[0] ?? '';
-  if (!labels.every((name) => hasLabel(created.labels, name))) {
-    let reason = `the created issue lacks a required label (has ${JSON.stringify(created.labels)})`;
-    try {
-      // This run has not posted its owner marker yet, so any trusted owner
-      // marker here belongs to another session or set.
-      const comments = fetchProvenanceCommentsGraphql(owner, repo, number);
-      if (hasForeignOwnerMarker(comments, markerPrefix, input.trusted)) {
-        reason +=
-          '; another owner marker is present, so the labels were not touched';
-      } else if (hasActiveClaim(comments, claimGate)) {
-        reason += '; a claim marker is present, so the labels were not touched';
-      } else {
-        ghText([
-          'issue',
-          'edit',
-          String(number),
-          '--repo',
-          repoRef,
-          ...labels.flatMap((name) => ['--add-label', name]),
-        ]);
-        const after = readIssue(owner, repo, number);
-        reason += labels.every((name) => hasLabel(after.labels, name))
-          ? '; the labels were added as a safe hold'
-          : hasLabel(after.labels, authoringLabel)
-            ? '; the authoring label was added as a safe hold, but another label could not be verified'
-            : '; adding the labels could not be verified';
-      }
-    } catch (error) {
-      reason += `; the safe-hold recovery failed: ${error.message}`;
-    }
-    return recoveryHold({ ...held, failedStep: 'create-verify', reason });
-  }
-  try {
-    const attachId = postVerified(
-      intentArgs('pending', issueRef),
-      journalWhere,
-    );
-    steps.push({
-      step: 'identity-attach',
-      status: 'done',
-      detail: { commentId: attachId },
-    });
-    const ownerArgs = [
-      '--type',
-      'authoring-owner',
-      '--target',
-      'issue',
-      String(number),
-      '--owner',
-      owner,
-      '--repo',
-      repo,
-      '--marker-target',
-      issueRef,
-      '--anchor',
-      issueRef,
-      '--mode',
-      'acquire',
-      '--marker-owner',
-      ids.owner,
-      '--set',
-      ids.set,
-      '--session',
-      ids.session,
-      '--snapshot-sha256',
-      'none',
-      '--supersedes',
-      'none',
-      '--marker-prefix',
-      markerPrefix,
-    ];
-    const ownerId = postVerified(ownerArgs, { owner, repo, number });
-    steps.push({
-      step: 'owner-marker',
-      status: 'done',
-      detail: { commentId: ownerId },
-    });
-  } catch (error) {
-    const attached = steps.some((s) => s.step === 'identity-attach');
-    return recoveryHold({
-      ...held,
-      failedStep: attached ? 'owner-marker' : 'identity-attach',
-      reason: error.message,
-      ...(!attached && isPosted(error)
-        ? { journalState: JOURNAL_STATE_UNCERTAIN }
-        : {}),
-    });
-  }
-  sleepMs(input.settleMs);
-  const provenanceArgs = [
-    '--issue',
-    String(number),
-    '--owner',
-    owner,
-    '--repo',
-    repo,
-    '--marker-prefix',
-    markerPrefix,
-  ];
-  if (args.policy) {
-    provenanceArgs.push('--policy', args.policy);
-  }
-  if (input.trusted.length > 0) {
-    provenanceArgs.push('--trusted-marker-logins', input.trusted.join(','));
-  }
-  const provenance = runSiblingHelper(
-    'authoring-owner-provenance.mjs',
-    provenanceArgs,
+      status: 'planned',
+      detail: { record: pendingRecord },
+    },
+    {
+      step: 'create',
+      status: 'planned',
+      detail: { title: args.title, labels },
+    },
+    { step: 'identity-attach', status: 'planned' },
+    { step: 'owner-marker', status: 'planned' },
+    { step: 'provenance', status: 'planned' },
+    { step: 'member', status: 'planned' },
   );
-  const verdict = parseJsonOutput(provenance);
-  const marker = verdict?.marker;
-  if (
-    verdict?.verdict !== 'pass' ||
-    marker?.owner !== ids.owner ||
-    marker?.set !== ids.set ||
-    marker?.session !== ids.session
-  ) {
-    return recoveryHold({
-      ...held,
-      failedStep: 'provenance',
-      reason:
-        verdict?.verdict === 'pass'
-          ? 'the winning acquire marker is not the one this run posted'
-          : helperFailure('authoring-owner-provenance', provenance),
-      provenance: verdict ?? provenance.stdout,
-    });
-  }
-  steps.push({
-    step: 'provenance',
-    status: 'done',
-    detail: { verdict: 'pass' },
-  });
-  try {
-    const reread = readIssue(owner, repo, number);
-    if (!labels.every((name) => hasLabel(reread.labels, name))) {
-      throw new Error('a required label is no longer on the issue');
-    }
-    const digest = createHash('sha256')
-      .update(reread.body, 'utf8')
-      .digest('hex');
-    if (digest !== marker.bodySha256) {
-      throw new Error('the issue body changed after the owner marker');
-    }
-    if (!sameBody(reread.body, input.injected)) {
-      throw new Error('the issue body is not the body this run created');
-    }
-    const comments = fetchProvenanceCommentsGraphql(owner, repo, number);
-    if (hasActiveClaim(comments, claimGate)) {
-      throw new Error(
-        'the issue has an active claim, so execution began during acquisition',
-      );
-    }
-    if (
-      resolveOpenLinkedPrIssues(createGithubProviderAdapter(owner, repo), [
-        number,
-      ]).length > 0
-    ) {
-      throw new Error(
-        'the issue has an open linked pull request, or its pull-request state cannot be read',
-      );
-    }
-    const ownerLog = checkOwnerLogStillOurs({
-      comments,
-      markerPrefix,
-      trusted: input.trusted,
-      ids,
-    });
-    if (ownerLog !== null) {
-      throw new Error(`the owner-marker replay failed: ${ownerLog}`);
-    }
-    const memberId = postVerified(intentArgs('member', issueRef), journalWhere);
-    steps.push({
-      step: 'member',
-      status: 'done',
-      detail: { commentId: memberId },
-    });
-  } catch (error) {
-    return recoveryHold({
-      ...held,
-      failedStep: 'member',
-      reason: error.message,
-      ...(isPosted(error) ? { journalState: JOURNAL_STATE_UNCERTAIN } : {}),
-    });
-  }
   process.stdout.write(
-    `${JSON.stringify({ mode: 'apply', outcome: 'published', ...held, journalState: 'member' }, null, 2)}\n`,
+    `${JSON.stringify({ mode: 'dry-run', outcome: 'planned', ...base, labels, steps }, null, 2)}\n`,
   );
   return 0;
-}
-function isPosted(error) {
-  return error?.posted === true;
-}
-function recoveryHold(report) {
-  const message = `recovery hold at step ${String(report.failedStep)}: ${String(report.reason)}`;
-  process.stdout.write(
-    `${JSON.stringify({ mode: 'apply', outcome: 'recovery-hold', journalState: 'pending', ...report }, null, 2)}\n`,
-  );
-  process.stderr.write(
-    `publish-authoring-hold: ${message}${report.issue ? ` (issue ${String(report.issue)} stays held)` : ''}\n`,
-  );
-  return { exitCode: 1, kind: 'gate', message };
 }

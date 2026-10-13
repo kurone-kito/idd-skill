@@ -96,7 +96,6 @@ const FLAG_CONCEPTS: readonly FlagConcept[] = [
       'forced-handoff-marker.mjs',
       'minimize-superseded-markers.mjs',
       'pre-merge-readiness.mjs',
-      'publish-authoring-hold.mjs',
       'resume-claim-routing.mjs',
       'review-activity-snapshot.mjs',
     ],
