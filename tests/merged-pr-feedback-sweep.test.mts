@@ -1988,7 +1988,7 @@ test('#4162: an explicit --pr run skips the open-and-ready section', () => {
   assertNoMergeOrWrite(fixture, calls);
 });
 
-test('#4162: the real readiness collector over the fake port makes no merge call', () => {
+test('#4162: the real readiness collector over the fake port makes no merge call on its failure path', () => {
   const fixture = openPrFixture();
   const { port, calls } = recordingPort(fixture);
   const report = runMergedPrFeedbackSweep(parseArgs(['--days', '7']), {
