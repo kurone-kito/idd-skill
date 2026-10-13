@@ -798,7 +798,7 @@ export const POLICY_DEFAULTS = Object.freeze({
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
     authoringOnlyLabelName: 'status:authoring-only',
-    // Added in #2669: string array default, resolved like the three
+    // Added in #2669: string array default, resolved like the four
     // sibling label-name fields above but via parseNonEmptyStringArray
     // (fail-closed to [] on a non-array, an empty array, or any entry
     // that isn't a non-empty string) instead of parseNonEmptyString.
