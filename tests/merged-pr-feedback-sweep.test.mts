@@ -2655,6 +2655,7 @@ test('#4162: a CLEAN or BEHIND report is listed only once mergeable resolves to 
     ['CLEAN', undefined],
     ['BEHIND', 'MERGEABLE'],
     ['BEHIND', 'CONFLICTING'],
+    ['BEHIND', 'UNKNOWN'],
   ];
   const fixture: FakeProviderFixture = {
     mergedChangeRequests: [],

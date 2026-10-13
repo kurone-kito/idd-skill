@@ -794,8 +794,12 @@ export function renderOpenReadySection(
 // state also passes F1 (`resolveCallSiteRouting` in
 // branch-conflict-state.mts): CLEAN, or BEHIND, which readiness itself
 // already blocks when the base requires an up-to-date head. GitHub computes
-// `mergeable` asynchronously, and F1 classifies anything short of a
-// resolved MERGEABLE as still computing, so require that too.
+// `mergeable` asynchronously, and the two states differ. For CLEAN, F1 waits
+// for an UNKNOWN or missing `mergeable` to resolve. For BEHIND, F1 ignores
+// `mergeable` and decides with a `git merge-tree` probe; it rejects
+// CONFLICTING before either. The sweep cannot run that probe, so it requires
+// MERGEABLE for BEHIND too, on purpose: a BEHIND head whose `mergeable` is
+// still UNKNOWN is not listed.
 const F1_PASSING_MERGE_STATES = new Set(['CLEAN', 'BEHIND']);
 function isReadyReport(report) {
   const record = report !== null && typeof report === 'object' ? report : null;
