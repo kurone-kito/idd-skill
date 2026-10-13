@@ -1286,12 +1286,14 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    listing, and match each entry, by the issue number in the worker's brief, to
    an own claim. Count every matched own worker not yet disposed in `--running`,
    a running worker or a finished one still awaiting step 4, including the
-   running worker of a released claim, and pass each counted worker's issue as
-   an `--in-flight` value below. A matched finished worker goes to step 4 once
-   the checks in step 4 pass. A matched running worker of an own claim that step
-   2 verified as `already_owned` is handled as follows: if the runtime can still
-   message it, apply the existing worker-death rules by reference, under the
-   bullet titled "Resume-specific recovery when a worker dies mid-turn" in the
+   running worker of a released claim, and count every other listed live worker
+   too, because it still holds a harness slot that the budget cannot otherwise
+   see. Pass each counted worker's issue as an `--in-flight` value below when
+   its brief gives one. A matched finished worker goes to step 4 once the checks
+   in step 4 pass. A matched running worker of an own claim that step 2 verified
+   as `already_owned` is handled as follows: if the runtime can still message
+   it, apply the existing worker-death rules by reference, under the bullet
+   titled "Resume-specific recovery when a worker dies mid-turn" in the
    [fan-out variant](#orchestrator-fan-out-variant); if it cannot be messaged,
    replace it with a fresh subagent only when step 2 verified its claim, the
    worktree and clone-scoped lock pass the checks in that bullet, and none of
@@ -1365,11 +1367,12 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    reported in step 5.
 5. **Report the remainder.** An own claim that reached step 3, other than a
    released claim, and has no matching worker is reported to the operator, and
-   so is a matched finished worker whose recorded outcome is `held`. A released
-   claim is reported here when step 4 left it with a running worker, when its
-   verification or append failed, or when the harness offers no agent listing,
-   so step 4 did not run for it. Otherwise step 4 handles it. Its worktree is
-   not removed.
+   so is a matched finished worker whose recorded outcome is `held`. A listed
+   live worker that matches no own claim is reported to the operator too,
+   because it still holds a harness slot. A released claim is reported here when
+   step 4 left it with a running worker, when its verification or append failed,
+   or when the harness offers no agent listing, so step 4 did not run for it.
+   Otherwise step 4 handles it. Its worktree is not removed.
 
 ### Discover re-run cadence
 
