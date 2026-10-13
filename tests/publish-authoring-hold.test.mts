@@ -89,6 +89,9 @@ if (args[0] === 'issue' && args[1] === 'create') {
   const labels = [];
   args.forEach((arg, index) => { if (arg === '--label') labels.push(args[index + 1]); });
   state.issues[${NEW_ISSUE}] = { body, labels: state.dropLabels ? [] : labels };
+  if (state.claimOnCreate) {
+    state.comments.push({ id: 6999, issue: ${NEW_ISSUE}, body: '<!-- claimed-by: other 1 supersedes: none 2026-10-13T00:00:00Z branch: issue/${NEW_ISSUE}-x -->', user, createdAt: '2026-10-13T00:00:00Z' });
+  }
   save();
   out('https://github.com/o/r/issues/${NEW_ISSUE}\n');
 }
@@ -120,6 +123,11 @@ let match;
 if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
   const number = Number(match[1]);
   if (args.includes('POST')) {
+    if (number === 2674) {
+      state.journalPosts = (state.journalPosts || 0) + 1;
+      save();
+      if (state.journalPosts === state.failJournalPostAt) fail('gh: Validation Failed (HTTP 422)');
+    }
     const body = JSON.parse(stdin).body;
     const id = 7000 + state.comments.length;
     state.comments.push({ id, issue: number, body, user, createdAt: new Date(Date.UTC(2026, 9, 13, 0, 0, state.comments.length)).toISOString() });
@@ -171,6 +179,9 @@ function setup(
     failLabelCreate?: boolean;
     editedComments?: boolean;
     dropLabels?: boolean;
+    failJournalPostAt?: number;
+    claimOnCreate?: boolean;
+    trusted?: string[];
   } = {},
 ): Fixture {
   const dir = mkdtempSync(join(tmpdir(), 'idd-publish-authoring-hold-test-'));
@@ -178,7 +189,7 @@ function setup(
   mkdirSync(join(work, '.github/idd'), { recursive: true });
   const config: Record<string, unknown> = {
     markerPrefix: 'idd-skill',
-    trustedMarkerActors: ['kurone-kito'],
+    trustedMarkerActors: options.trusted ?? ['kurone-kito'],
     claim: { verifySettleDelay: 'PT0S' },
   };
   if (options.journal !== null) {
@@ -195,6 +206,8 @@ function setup(
       failLabelCreate: options.failLabelCreate === true,
       editedComments: options.editedComments === true,
       dropLabels: options.dropLabels === true,
+      failJournalPostAt: options.failJournalPostAt ?? 0,
+      claimOnCreate: options.claimOnCreate === true,
       issues: {},
       comments: [],
     }),
@@ -268,10 +281,10 @@ function writes(log: { args: string[] }[]): string[] {
   return log
     .filter(
       (entry) =>
-        entry.args.includes('POST') ||
-        (entry.args[0] === 'label' && entry.args[1] === 'create') ||
-        (entry.args[0] === 'issue' &&
-          ['create', 'edit'].includes(entry.args[1] ?? '')),
+        entry.args.includes('--method') ||
+        entry.args.includes('-X') ||
+        (['label', 'issue'].includes(entry.args[0] ?? '') &&
+          !['view', 'list'].includes(entry.args[1] ?? '')),
     )
     .map((entry) => entry.args.slice(0, 4).join(' '));
 }
@@ -568,6 +581,63 @@ test('CLI: an issue created without its label gets the label back as a safe hold
     assert.ok(
       !fixture.state().comments.some((comment) => comment.issue === NEW_ISSUE),
     );
+  } finally {
+    fixture.restore();
+  }
+});
+
+/** The journal records the stub stored, in order. */
+function journalRecords(fixture: Fixture): string[] {
+  return fixture
+    .state()
+    .comments.filter((comment) => comment.issue === 2674)
+    .map((comment) => comment.body);
+}
+
+test('CLI: a failed identity attach stops before the owner marker and keeps the record pending', () => {
+  const fixture = setup({ failJournalPostAt: 2 });
+  try {
+    const result = fixture.run([...files(fixture), '--apply']);
+    assert.equal(result.status, 1);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.failedStep, 'identity-attach');
+    assert.equal(report.number, NEW_ISSUE);
+    const records = journalRecords(fixture);
+    assert.equal(records.length, 1);
+    assert.match(
+      records[0] ?? '',
+      /issue=none; actor=kurone-kito; state=pending/,
+    );
+    assert.ok(
+      !fixture.state().comments.some((comment) => comment.issue === NEW_ISSUE),
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a claim that appears during acquisition stops before member', () => {
+  const fixture = setup({ claimOnCreate: true });
+  try {
+    const result = fixture.run([...files(fixture), '--apply']);
+    assert.equal(result.status, 1);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.failedStep, 'member');
+    const records = journalRecords(fixture);
+    assert.equal(records.length, 2);
+    assert.ok(records.every((body) => body.includes('state=pending')));
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: with no trusted marker actor configured, --apply writes nothing', () => {
+  const fixture = setup({ trusted: [] });
+  try {
+    const result = fixture.run([...files(fixture), '--apply']);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /no trusted marker actor/);
+    assert.deepEqual(writes(fixture.log()), []);
   } finally {
     fixture.restore();
   }

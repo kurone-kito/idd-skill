@@ -351,8 +351,8 @@ function labelExists(owner, repo, name) {
     throw error;
   }
 }
-/** True when a trusted `claimed-by` marker is on the issue (fail closed when
- * no trusted login is configured: any claim marker counts). */
+/** True when a `claimed-by` marker from a trusted login is on the issue. The
+ * caller has already refused to run with no trusted login configured. */
 function hasTrustedClaim(owner, repo, number, trusted) {
   const comments = ghApiJson(
     `repos/${owner}/${repo}/issues/${number}/comments`,
@@ -369,11 +369,11 @@ function hasTrustedClaim(owner, repo, number, trusted) {
   return comments.some((comment) => {
     const row = comment;
     const body = typeof row.body === 'string' ? row.body : '';
-    if (!/^<!--\s*claimed-by:/.test(body)) {
+    if (!/^<!--\s*claimed-by:/i.test(body)) {
       return false;
     }
     const login = String(row.user?.login ?? '').toLowerCase();
-    return trustedSet.size === 0 || trustedSet.has(login);
+    return trustedSet.has(login);
   });
 }
 function runCli() {
@@ -443,13 +443,14 @@ function runCli() {
   }
   // Step 2: the journal must be set and verifiable before any target exists.
   let journalSetting;
+  let policyError = '';
   try {
     const repositoryPolicy = readRepositoryPolicyFile(
       args.policy || undefined,
     ).config;
     journalSetting = repositoryPolicy?.issueAuthoring?.journalIssue;
-  } catch {
-    journalSetting = undefined;
+  } catch (error) {
+    policyError = error.message;
   }
   const blockedByHuman = (reason) => {
     process.stdout.write(
@@ -461,6 +462,11 @@ function runCli() {
     return { exitCode: 2, kind: 'gate', message: reason };
   };
   const journal = parseJournalReference(journalSetting);
+  if (policyError !== '') {
+    return blockedByHuman(
+      `the repository policy file cannot be read, so issueAuthoring.journalIssue cannot be verified: ${policyError}`,
+    );
+  }
   if (journal === null) {
     return blockedByHuman(
       journalSetting === undefined
@@ -566,9 +572,16 @@ function publish(input) {
   } catch (error) {
     return refuse(`cannot read the labels: ${error.message}`, base);
   }
+  // A record from a login replay cannot trust is not valid evidence, so with
+  // no trusted marker actor configured nothing is written at all.
   const actor = resolveViewerLogin();
+  if (input.trusted.length === 0) {
+    return refuse(
+      'no trusted marker actor is configured (trustedMarkerActors, IDD_TRUSTED_MARKER_ACTORS or --trusted-marker-logins), so the journal records could not be verified on replay',
+      base,
+    );
+  }
   if (
-    input.trusted.length > 0 &&
     !input.trusted.some((login) => login.toLowerCase() === actor.toLowerCase())
   ) {
     return refuse(
