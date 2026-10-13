@@ -464,15 +464,15 @@ proposal in a comment/PR follow-ups; never create it ad hoc or improvise
 worker-side authoring.
 
 **Scope overrun**: when `audit-authored-issue --shape child` fails
-`effort-candidate-file-limit` on the issue, or on a copy listing the
-canonical changed files as candidates, stop coding without pushing: a
-release, not a hold. Comment the estimate, candidate files, changed
-files, and, without the companion, the split proposal; release with
-`unclaimed-by` and the current `{claim-id}`; reset to base,
-`git clean -fdx`, run `lost-claim-cleanup`. With the companion, hand
-it a held split draft: it holds this issue, publishes a held roadmap
-whose children record `Split out of #<n>`, and comments its link.
-Never add needs-decision or ask a human
+`effort-candidate-file-limit` on the issue, or with its
+`## Candidate files` set to the diff's canonical paths, stop coding
+without pushing: a release, not a hold. Comment the estimate, candidate
+files, changed files, and, without the companion, the split proposal;
+reset to base, `git clean -fdx`; release with `unclaimed-by` and the
+current `{claim-id}`; run `lost-claim-cleanup`. With the companion,
+hand it a held split draft: it holds this issue, publishes a held
+roadmap whose children record `Split out of #<n>`, and comments its
+link. Never add needs-decision or ask a human
 ([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
 
 ---
