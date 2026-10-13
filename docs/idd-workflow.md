@@ -1345,12 +1345,14 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    draft is found, check that its `issue` and `claimId` match the claim, and
    that its `workerHandle` matches the listed handle when the claim has a
    matched worker. A draft that matches the claim but has no listed worker is
-   appended with its `workerHandle` replaced by the claim id, because the
-   listing supplies no handle. Do not append a draft that does not match. Then
-   verify its outcome, `pullRequest`, and `terminalPhase` against live GitHub
-   state, set `verifiedAt` to that check and `recordedAt` to the time of the
-   append, then append it. If no draft is found, verify the terminal outcome
-   from live GitHub state, build the record as the
+   appended under its own `workerHandle`, because the store dedupes on that
+   handle with the claim id and terminal phase, so a record already appended
+   under it is not counted twice. The listing matches workers only and never
+   names a draft handle. Do not append a draft that does not match. Then verify
+   its outcome, `pullRequest`, and `terminalPhase` against live GitHub state,
+   set `verifiedAt` to that check and `recordedAt` to the time of the append,
+   then append it. If no draft is found, verify the terminal outcome from live
+   GitHub state, build the record as the
    [worker final report store](idd-helper-scripts.md#worker-final-report-store)
    describes, and append it the same way, unless its outcome is `held`: a held
    claim with no draft has no live source for a terminal phase, so nothing is
