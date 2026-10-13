@@ -1046,7 +1046,7 @@ test('buildPreMergeReadinessSummary: a missing-watermark summary built from the 
 // step in `hint`. The literal is compared verbatim, and `gate`, `detail`, and
 // the review-currency fields keep the values the comparison produced.
 const SAME_TIMESTAMP_COUNT_GROWTH_HINT_TEXT =
-  'More review items exist now than the last review watermark counted, with no newer non-ack-only activity. Take a fresh snapshot (E1 Step 1), record a fresh watermark for the current head (E1 Step 2), then re-run readiness.';
+  'More review items exist now than the last review watermark counted, with no newer non-ack-only activity. Take a fresh snapshot (E1 Step 1), record a fresh watermark for the current head (E1 Step 2), continue through E1 Step 3, the E2 critique pass, and E3 (follow its route), then re-run readiness.';
 
 test('computePreMergeReadinessBlockers: same-timestamp-count-growth review-currency blocker carries the next-step hint (#4124)', () => {
   const report = {

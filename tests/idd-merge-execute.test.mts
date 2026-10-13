@@ -184,7 +184,7 @@ test('evaluateMergeGates adds the E1 hint for a missing watermark and for same-t
   assert.ok(sameBlocker, 'expected a review-currency blocker');
   assert.equal(
     sameBlocker.hint,
-    'More review items exist now than the last review watermark counted, with no newer non-ack-only activity. Take a fresh snapshot (E1 Step 1), record a fresh watermark for the current head (E1 Step 2), then re-run readiness.',
+    'More review items exist now than the last review watermark counted, with no newer non-ack-only activity. Take a fresh snapshot (E1 Step 1), record a fresh watermark for the current head (E1 Step 2), continue through E1 Step 3, the E2 critique pass, and E3 (follow its route), then re-run readiness.',
   );
 });
 

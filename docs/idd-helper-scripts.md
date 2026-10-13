@@ -6123,10 +6123,11 @@ reflexively as any other CLI option.
   is higher than the watermark's count, and no newer non-ack-only activity
   is recorded), the `review-currency` entry in `blockers[]` carries an
   optional `hint` naming the next step: take a fresh snapshot (E1 Step 1),
-  record a fresh watermark for the current head (E1 Step 2), then re-run
-  readiness. The hint is diagnostic only; `gate`, `detail`, the route, and
-  the reason are unchanged. Observed on `kurone-kito/setup.ubuntu` PR `#204`
-  (2026-10-08), where the blocker gave no next step.
+  record a fresh watermark for the current head (E1 Step 2), continue
+  through E1 Step 3, the E2 critique pass, and E3 (follow its route), then
+  re-run readiness. The hint is diagnostic only; `gate`, `detail`, the
+  route, and the reason are unchanged. Observed on `kurone-kito/setup.ubuntu`
+  PR `#204` (2026-10-08), where the blocker gave no next step.
 - Authoritative phase role: the live `pre-merge-readiness` run on the
   current HEAD is the **authoritative source for the final-merge CI and
   activity fields** at F2/F3. The `review-activity-snapshot` helper builds

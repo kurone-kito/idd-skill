@@ -11746,13 +11746,17 @@ export const MISSING_WATERMARK_HINT =
  * `comparisonReason` is `same-timestamp-count-growth`: the live item count is
  * higher than the watermark's count while no newer non-ack-only activity is
  * recorded. On `kurone-kito/setup.ubuntu` PR #204 (2026-10-08) that blocker
- * gave no next step. Single-sourced like `MISSING_WATERMARK_HINT`. Diagnostic
+ * gave no next step. The text routes the operator through E1 Step 3, E2, and
+ * E3 before the readiness re-run, because a watermark alone leaves the new
+ * items untriaged. Single-sourced like `MISSING_WATERMARK_HINT`. Diagnostic
  * only: `detail` is left unchanged and the hint never feeds the gate decision.
  */
 export const SAME_TIMESTAMP_COUNT_GROWTH_HINT =
   'More review items exist now than the last review watermark counted, with ' +
   'no newer non-ack-only activity. Take a fresh snapshot (E1 Step 1), record ' +
-  'a fresh watermark for the current head (E1 Step 2), then re-run readiness.';
+  'a fresh watermark for the current head (E1 Step 2), continue through E1 ' +
+  'Step 3, the E2 critique pass, and E3 (follow its route), then re-run ' +
+  'readiness.';
 
 /**
  * #4097: fixed next-step text for a `ci` blocker whose required checks are
