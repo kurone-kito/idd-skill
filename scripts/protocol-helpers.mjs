@@ -5992,12 +5992,16 @@ export function buildActivitySnapshotSummary(
     )
     .map((comment) => comment.updatedAt ?? comment.createdAt)
     .filter(isValidIsoTimestamp);
+  // When the trusted disposition is the only activity left, nothing else
+  // remains to anchor on, so fall back to the ceiling as on main (fail
+  // closed) instead of reporting an absent anchor, which the gate treats as
+  // already elapsed.
   const quietWindowMaxActivityUpdatedAt =
     maxIsoTimestamp([
       ...quietWindowCommentActivities,
       ...reviewActivities,
       ...effectiveThreadActivities,
-    ]) ?? 'none';
+    ]) ?? effectiveMaxActivityUpdatedAt;
   const describeAckItem = (kind, comment, activityAt) => ({
     kind,
     id: String(comment.id ?? ''),

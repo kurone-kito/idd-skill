@@ -13250,7 +13250,7 @@ test('#2335: a disposition reply, a watermark, and an ack-only bot comment never
   // of the ceiling (protocol-helpers.mts's ackOnlyPostDisposition
   // classification). #4123 also leaves the trusted disposition at 23:55:30
   // out of the quiet-window anchor, so the anchor is the unresolved thread's
-  // reply at 23:56:00; that is already 3min before options.now, so the
+  // reply at 23:56:00; that is already 4min before options.now, so the
   // window has elapsed, exactly as the review-currency gate proceeds here.
   assert.equal(
     secondaryQuietWindowOf(withWindow).anchorAt,
@@ -13314,10 +13314,12 @@ function quietAnchorSummary({
   comments = [],
   reviews = [],
   threads = [],
+  trustedMarkerLogins,
 }: {
   comments?: unknown[];
   reviews?: unknown[];
   threads?: unknown[];
+  trustedMarkerLogins?: string[];
 }) {
   const fixture = readJson(
     'fixtures/pre-merge-readiness/disposition-reply-latest.json',
@@ -13326,6 +13328,7 @@ function quietAnchorSummary({
     { ...fixture.input, comments, reviews, threads },
     {
       ...fixture.options,
+      ...(trustedMarkerLogins ? { trustedMarkerLogins } : {}),
       iddAgentLogins: ['idd-agent'],
       includeDispositionEvidence: true,
       secondaryQuietWindowMinutes: 60,
@@ -13491,11 +13494,14 @@ test('#4123: an advisory-bot disposition-shaped top-level comment still anchors 
       ),
     ],
     reviews: [copilotReviewAt(QUIET_T0)],
+    // The bot is trusted as a marker actor here, so only the advisory-bot
+    // guard keeps its disposition-shaped comment out of the exclusion.
+    trustedMarkerLogins: ['kurone-kito', 'coderabbitai[bot]'],
   });
   assert.equal(secondaryQuietWindowOf(summary).anchorAt, QUIET_T4);
 });
 
-test('#4123: an edited trusted disposition keeps its edit time in the quiet anchor, as it does for the ack window', () => {
+test('#4123: an edited trusted disposition keeps its edit time in the quiet anchor (only unedited dispositions are left out)', () => {
   const editedAt = '2026-05-11T23:47:00Z';
   const summary = quietAnchorSummary({
     comments: [
@@ -13532,6 +13538,20 @@ test('#4123: a disposition by a trusted marker actor outside iddAgentLogins also
     liveReviewCurrencyOf(summary).effective.maxActivityUpdatedAt,
     QUIET_T4,
   );
+});
+
+test('#4123: a trusted disposition that is the only activity keeps the window anchored on it, as on main', () => {
+  const summary = quietAnchorSummary({
+    comments: [
+      quietComment(
+        'lone-disposition',
+        'idd-agent',
+        QUIET_T4,
+        '**Accepted** — no action required.',
+      ),
+    ],
+  });
+  assert.equal(secondaryQuietWindowOf(summary).anchorAt, QUIET_T4);
 });
 
 test('#2335: computePreMergeReadinessBlockers never blocks on an entirely absent secondaryQuietWindow evidence field (backward compatible with a hand-built or unmigrated report)', () => {
