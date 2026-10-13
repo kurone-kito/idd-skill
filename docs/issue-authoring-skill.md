@@ -902,7 +902,9 @@ finding was raised against, counted from 1; recorded for audit only),
 `disposition` (`fixed`, `rejected`, or `deferred`), `evidence` (required for
 `rejected`: a file and line, or a read-only command and its output), and
 `decidedAt`. If the scratchpad is lost, for example after a restart, the
-ledger is empty and the review runs as it does without one.
+ledger is empty and the review runs as it does without one. Record an entry
+for every finding as soon as its disposition is decided, before the next
+review round. A later disposition of the same finding updates that entry.
 
 **Packet.** For each `rejected` entry that has evidence, add one string to the
 packet's existing `evidence` array, in every review mode:
