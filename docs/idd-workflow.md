@@ -1230,19 +1230,21 @@ identify its old claims, and step 1 treats them as not its own.
    several files. A claim is own only when its `agentId` equals this session's
    session-suffixed agent-id. If the session cannot determine that id, every
    claim is not own. Claims that are not own are not dispatched again, and they
-   are reported to the operator. F4 removes the linked worktree, with its admin
-   directory and this token file, before it posts the final `unclaimed-by`
-   marker. So a claim whose F4 removed its linked worktree has no token file
-   there. A record in the primary worktree's directory can survive F4. Keep at
-   most one record per claim-id: prefer the linked worktree's record, and when
-   only a primary-directory record exists, treat the claim as worktree-less and
-   route it as step 2 describes. For a worktree-less claim, take the issue
-   number from the worker's brief in the agent listing, or from the issue-number
-   prefix of its report draft in the session scratchpad, and never from a `main`
-   branch. Then read that issue's trusted `claimed-by` and `unclaimed-by`
-   markers for the agent-id and claim-id, and apply the same agent-id test. If
-   neither source gives an issue number, report the claim to the operator and
-   take no further action on it.
+   are reported to the operator. A worktree whose token record is missing or
+   malformed is reported to the operator too, not skipped, because the claim
+   contract treats that state as fail-closed. F4 removes the linked worktree,
+   with its admin directory and this token file, before it posts the final
+   `unclaimed-by` marker. So a claim whose F4 removed its linked worktree has no
+   token file there. A record in the primary worktree's directory can survive
+   F4. Keep at most one record per claim-id: prefer the linked worktree's
+   record, and when only a primary-directory record exists, treat the claim as
+   worktree-less and route it as step 2 describes. For a worktree-less claim,
+   take the issue number from the worker's brief in the agent listing, or from
+   the issue-number prefix of its report draft in the session scratchpad, and
+   never from a `main` branch. Then read that issue's trusted `claimed-by` and
+   `unclaimed-by` markers for the agent-id and claim-id, and apply the same
+   agent-id test. If neither source gives an issue number, report the claim to
+   the operator and take no further action on it.
 2. **Verify each own claim.** For a claim with a linked worktree, take `--issue`
    from its branch, `issue/<number>-<slug>`, and confirm it against the trusted
    `claimed-by` marker that carries the same claim-id, because the token record
@@ -1255,28 +1257,31 @@ identify its old claims, and step 1 treats them as not its own.
    final report, is the one exception: when `evidence.released_claim.claim_id`
    equals this claim-id and either the state is `unclaimed`, or the state is
    `local_worktree_occupied` with the reason
-   `released-claim-local-worktree-occupied`, the claim goes to step 4. `stale`
-   goes to the takeover path in `idd-resume.instructions.md`. A claim with no
-   worktree needs no `--worktree`: run the command without `--assert` and read
-   its `state`, which gives the same released-claim result. Any other result,
-   including an unreadable worktree, is reported to the operator with its state,
-   and no further action is taken on that issue.
+   `released-claim-local-worktree-occupied`, the claim goes to step 3 for worker
+   matching only, where its running worker, if any, is counted and sent no
+   message, and then to step 4. `stale` goes to the takeover path in
+   `idd-resume.instructions.md`. A claim with no worktree needs no `--worktree`:
+   run the command without `--assert` and read its `state`, which gives the same
+   released-claim result. Any other result, including an unreadable worktree, is
+   reported to the operator with its state, and no further action is taken on
+   that issue.
 3. **Re-attach workers.** Read the live worker list from the harness's agent
    listing, and match each entry, by the issue number in the worker's brief, to
    an own claim. Count every matched own worker not yet disposed in `--running`,
    a running worker or a finished one still awaiting step 4, including the
    running worker of a released claim, and pass each counted worker's issue as
    an `--in-flight` value below. A matched finished worker goes to step 4 once
-   the checks in step 4 pass. A matched running worker of a claim that step 2
-   sent to step 3 is handled as follows: if the runtime can still message it,
-   apply the existing worker-death rules by reference, under the bullet titled
-   "Resume-specific recovery when a worker dies mid-turn" in the
+   the checks in step 4 pass. A matched running worker of an own claim that step
+   2 verified as `already_owned` is handled as follows: if the runtime can still
+   message it, apply the existing worker-death rules by reference, under the
+   bullet titled "Resume-specific recovery when a worker dies mid-turn" in the
    [fan-out variant](#orchestrator-fan-out-variant); if it cannot be messaged,
    replace it with a fresh subagent only when step 2 verified its claim, the
    worktree and clone-scoped lock pass the checks in that bullet, and none of
    its child processes is still running. If one is, wait for it by PID instead
    of replacing the worker. A worker that matches no own claim is neither
-   messaged nor replaced. If the harness offers no agent listing, no worker is
+   messaged nor replaced. A running worker of a released claim is counted and
+   sent no message. If the harness offers no agent listing, no worker is
    matched, every own claim that reached this step goes to step 5, and the rest
    of this step is skipped, because the running workers are unknown. With a
    listing, recount the roster. Run the profile-selected `idd-worker-budget`
