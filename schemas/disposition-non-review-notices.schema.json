@@ -31,15 +31,15 @@
         "properties": {
           "noticeId": {
             "type": "integer",
-            "description": "GitHub comment identifier of the notice or summary walkthrough."
+            "description": "GitHub comment identifier of the planned bot comment (a notice, a summary walkthrough, or a Codex no-find result)."
           },
           "botLogin": {
             "type": "string",
-            "description": "Bot login associated with the notice or summary walkthrough."
+            "description": "Bot login that authored the planned bot comment."
           },
           "reason": {
             "type": "string",
-            "description": "Reason the notice or summary walkthrough is eligible for the planned disposition."
+            "description": "Reason the bot comment is eligible for the planned disposition."
           },
           "body": {
             "type": "string",
@@ -64,7 +64,7 @@
         "properties": {
           "noticeId": {
             "type": "integer",
-            "description": "GitHub comment identifier of the successfully handled notice or summary walkthrough."
+            "description": "GitHub comment identifier of the successfully handled bot comment."
           },
           "commentId": {
             "type": "integer",
@@ -83,7 +83,7 @@
         "properties": {
           "noticeId": {
             "type": "integer",
-            "description": "GitHub comment identifier of the notice or summary walkthrough that failed."
+            "description": "GitHub comment identifier of the bot comment whose disposition failed."
           },
           "error": {
             "type": "string",
@@ -94,7 +94,7 @@
     },
     "skipped": {
       "type": "array",
-      "description": "Notices or summary walkthroughs intentionally left unchanged by the disposition route.",
+      "description": "Bot comments the readiness gate counts that the disposition route intentionally left unchanged, each with a reason.",
       "items": {
         "type": "object",
         "required": ["noticeId", "botLogin", "reason"],
@@ -102,15 +102,15 @@
         "properties": {
           "noticeId": {
             "type": "integer",
-            "description": "GitHub comment identifier of the skipped notice or summary walkthrough."
+            "description": "GitHub comment identifier of the skipped bot comment."
           },
           "botLogin": {
             "type": "string",
-            "description": "Bot login associated with the skipped notice or summary walkthrough."
+            "description": "Bot login that authored the skipped bot comment."
           },
           "reason": {
             "type": "string",
-            "description": "Reason the bot comment was not selected for disposition: `already-dispositioned`, `coderabbit-review-in-progress`, `summary-resolved-no-actionable-comments`, `codex-review-running` (a Codex status row for the current HEAD that is not Completed), `codex-no-result-for-head` (a Codex status table with no row for the current HEAD, an unparseable table or no table, or a Codex no-find result for an older HEAD; reported, never dispositioned), or `unrecognized-notice-body` (any other comment from a bot the readiness gate counts)."
+            "description": "Reason the bot comment was not selected for disposition: `already-dispositioned`, `coderabbit-review-in-progress`, `summary-resolved-no-actionable-comments`, `codex-review-running` (a Codex status row for the current HEAD that is not Completed), `codex-no-result-for-head` (a Codex status table with no row for the current HEAD, an unparseable table or no table, or a Codex no-find result for an older HEAD; reported, never dispositioned, and still reported after a manual reply, which the helper does not track), or `unrecognized-notice-body` (any other comment from a bot the readiness gate counts)."
           }
         }
       }
