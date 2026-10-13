@@ -420,9 +420,10 @@ CI check's own workflow _definition_ (e.g. a `.yml` file), any other
 in-flight track whose CI run relies on that check inherits a hidden
 ordering dependency, even though the tracks' own edited files never
 overlap. `gh run rerun` reuses the original event's workflow definition,
-so a fix merged to `main` on a sibling track stays invisible to a rerun
-until a new event (a branch-sync merge of `main`, or reopening the PR)
-picks it up (see `.github/instructions/idd-ci.instructions.md`'s Rerun
+so a fix merged to the base branch on a sibling track stays invisible to
+a rerun until a new event (a branch-sync merge of the base branch, or
+reopening the PR) picks it up (see
+`.github/instructions/idd-ci.instructions.md`'s Rerun
 mechanics). Observed 2026-10-05 in a private adopter and reproduced on
 2026-10-09 (issue `#3859`). Note this dependency in the roadmap's
 parallel note rather than assuming disjoint files always mean safe
@@ -685,9 +686,9 @@ what the agent can verify independently.
 One source of follow-up issue candidates is the read-only
 `merged-pr-feedback-sweep` helper's JSON output — the unresolved review
 threads and undispositioned advisory feedback it detects on merged PRs.
-Treat each entry as a candidate only: re-verify it against current `main`
-with the reuse-first tree below before drafting, because the feedback may
-already be addressed.
+Treat each entry as a candidate only: re-verify it against the current
+base branch with the reuse-first tree below before drafting, because the
+feedback may already be addressed.
 
 Before publishing an issue, apply a reuse-first decision tree:
 

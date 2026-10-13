@@ -582,8 +582,8 @@ run **pre-push-validate**, push, then wait for CI
 
 ## §W5 — PR exists (1 match), clean, unpushed
 
-Sync main (D1 rebase) + **pre-push-validate** + push (D2), then go to
-Step 3.
+Sync `{development-branch}` (D1 rebase) + **pre-push-validate** + push
+(D2), then go to Step 3.
 
 ## §W6 — PR exists (multiple matches)
 
@@ -599,7 +599,7 @@ claim ownership:
 
 ## §W7 — No PR, remote branch exists
 
-From the primary worktree (HEAD stays on `main`):
+From the primary worktree (HEAD stays on `{default-branch}`):
 
 1. Fetch the remote tip with a fully-qualified destination refspec --
    unlike a bare `git fetch origin {branch}`, this does not depend on
