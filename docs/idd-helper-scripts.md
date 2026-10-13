@@ -6935,7 +6935,9 @@ matchesHead
           && every citation-bearing suppressed item has its own stamped
              disposition))
   && (primaryBotLogin is not the Copilot default
-      || bodyShape !== 'unrecognized' || hasValidReviewAck)
+      || ((bodyShape !== 'unrecognized'
+           && bodyShape !== 'decline-no-reviewable-files')
+          || hasValidReviewAck))
 ```
 
 The `itemCount` half is bound to the LATEST review specifically
