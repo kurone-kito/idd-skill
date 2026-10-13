@@ -26,6 +26,8 @@ interface RankOptions<T> {
   enabled?: boolean;
   routeBelowFloor?: boolean;
   getScore?: (item: T) => number | null;
+  getEffort?: (item: T) => 'S' | 'M' | 'L' | null;
+  routeEffortL?: boolean;
 }
 
 /**
@@ -142,8 +144,13 @@ export function normalizeAutopilotSuitabilityFloor(floor: unknown): number {
  * Rank a candidate list by autopilot-suitability score and route
  * below-floor candidates out to a human bucket.
  *
- * - `enabled: false` is a kill-switch: the items are returned
- *   unchanged with an empty routedToHuman bucket.
+ * - `enabled: false` is a kill-switch for score ranking and below-floor
+ *   routing: the items are returned unchanged with an empty routedToHuman
+ *   bucket, apart from the effort-`L` routing described next.
+ * - Effort-`L` routing (#4199) is opt-in via `routeEffortL` together with
+ *   `getEffort`: every item whose effort is `L` moves to `routedToHuman`,
+ *   in input order, even when `enabled` is false, because effort is a
+ *   separate axis from the score. Without both options, nothing changes.
  * - Ranking always runs (when enabled): items are stable-sorted by
  *   effective score descending, where a missing score uses the floor as
  *   a neutral baseline so unscored (e.g. pre-existing) issues are never
@@ -171,8 +178,19 @@ export function rankAndRouteBySuitability<T>(
     typeof options.getScore === 'function'
       ? options.getScore
       : (): number | null => null;
+  // Effort-L routing (#4199) needs both options; effort is a separate axis
+  // from the score, so it applies before the kill-switch below.
+  const routeEffortL =
+    options.routeEffortL === true && typeof options.getEffort === 'function';
+  const isEffortLRouted = (item: T): boolean =>
+    routeEffortL && options.getEffort?.(item) === 'L';
   if (options.enabled === false) {
-    return { ranked: list, routedToHuman: [] };
+    const kept: T[] = [];
+    const routed: T[] = [];
+    for (const item of list) {
+      (isEffortLRouted(item) ? routed : kept).push(item);
+    }
+    return { ranked: kept, routedToHuman: routed };
   }
   const floor = normalizeAutopilotSuitabilityFloor(options.floor);
   const routeBelowFloor = options.routeBelowFloor === true;
@@ -195,7 +213,10 @@ export function rankAndRouteBySuitability<T>(
   const routedToHuman: typeof scored = [];
   const eligible: typeof scored = [];
   for (const entry of scored) {
-    if (routeBelowFloor && entry.score !== null && entry.score < floor) {
+    if (
+      isEffortLRouted(entry.item) ||
+      (routeBelowFloor && entry.score !== null && entry.score < floor)
+    ) {
       routedToHuman.push(entry);
     } else {
       eligible.push(entry);

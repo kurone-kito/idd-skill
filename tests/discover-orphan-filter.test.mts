@@ -3028,3 +3028,71 @@ test('loadPolicy carries the raw journal reference, or null when absent (#4115)'
   const absent = loadPolicyFromConfig({});
   assert.equal(absent.authoringJournalReference, null);
 });
+
+test('filterOrphanIssues routes effort L orphans only under autopilot with effortLPolicy refuse (#4199)', async () => {
+  const score5 = '<!-- idd-skill-autopilot-suitability: 5 -->';
+  const issues = [
+    {
+      number: 1,
+      title: 'large',
+      state: 'OPEN',
+      body: `task\n${score5}\n<!-- idd-skill-effort: L -->`,
+    },
+    {
+      number: 2,
+      title: 'small',
+      state: 'OPEN',
+      body: `task\n${score5}\n<!-- idd-skill-effort: S -->`,
+    },
+  ];
+  const base = {
+    issueStateByNumber: new Map<number, string>(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    autopilotSuitabilityFloor: 3,
+  };
+
+  const refused = await filterOrphanIssues(issues, {
+    ...base,
+    autopilot: true,
+    effortLPolicy: 'refuse',
+  });
+  assert.deepEqual(
+    refused.routed_to_human.map((o) => o.number),
+    [1],
+  );
+  assert.deepEqual(
+    refused.orphans.map((o) => o.number),
+    [2],
+  );
+  assert.equal(refused.counts.routed_to_human, 1);
+
+  const attended = await filterOrphanIssues(issues, {
+    ...base,
+    autopilot: false,
+    effortLPolicy: 'refuse',
+  });
+  assert.deepEqual(attended.routed_to_human, []);
+  assert.deepEqual(attended.orphans.map((o) => o.number).sort(), [1, 2]);
+
+  const allowed = await filterOrphanIssues(issues, {
+    ...base,
+    autopilot: true,
+    effortLPolicy: 'allow',
+  });
+  assert.deepEqual(allowed.routed_to_human, []);
+  assert.deepEqual(allowed.orphans.map((o) => o.number).sort(), [1, 2]);
+});
+
+test('loadPolicy sets effortLPolicy refuse only for autopilotSuitability.effortL refuse (#4199)', () => {
+  assert.equal(
+    loadPolicyFromConfig({ autopilotSuitability: { effortL: 'refuse' } })
+      .effortLPolicy,
+    'refuse',
+  );
+  assert.equal(
+    loadPolicyFromConfig({ autopilotSuitability: { effortL: 'allow' } })
+      .effortLPolicy,
+    'allow',
+  );
+  assert.equal(loadPolicyFromConfig({}).effortLPolicy, 'allow');
+});

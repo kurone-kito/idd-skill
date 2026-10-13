@@ -14,6 +14,7 @@ import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
   rankAndRouteBySuitability,
+  resolveEffortLPolicy,
 } from './autopilot-suitability.mjs';
 import { stripLeadingArgumentSeparator } from './cli-args.mjs';
 import { collaboratorPermission } from './collaborator-permission.mjs';
@@ -1042,7 +1043,7 @@ export async function filterOrphanIssues(issues, options = {}) {
   // Below-floor routing is opt-in (autopilot runs only): in attended
   // discovery the low-score issues stay selectable, just ranked last.
   // Advisory throughout — the A4.5/A5 gates still run on any selected
-  // candidate, and unscored issues are never routed out (fail-safe).
+  // candidate, and unscored issues are never routed out by score (fail-safe).
   const orphansByEffortThenNumber = [...orphans].sort(
     (left, right) =>
       effortOrdinal(left.effort) - effortOrdinal(right.effort) ||
@@ -1057,6 +1058,10 @@ export async function filterOrphanIssues(issues, options = {}) {
       enabled: options.autopilotSuitabilityEnabled !== false,
       routeBelowFloor: options.autopilot === true,
       getScore: (orphan) => orphan.autopilotSuitability,
+      // #4199: effort `L` routing is autopilot-only and opt-in via refuse.
+      routeEffortL:
+        options.autopilot === true && options.effortLPolicy === 'refuse',
+      getEffort: (orphan) => orphan.effort,
     },
   );
   // #2767 (CodeRabbit review, PR #2840): emit the demotion warning only
@@ -1282,6 +1287,7 @@ async function produceOutput(args, policy) {
     authoringJournalTarget: durableTargets.authoringJournalTarget,
     autopilotSuitabilityFloor: policy.autopilotSuitabilityFloor,
     autopilotSuitabilityEnabled: policy.autopilotSuitabilityEnabled,
+    effortLPolicy: policy.effortLPolicy,
     autopilot: args.autopilot,
     now: args.now || new Date(),
     claimState,
@@ -1516,7 +1522,9 @@ first; equal scores tie-break by lowest issue number). With --autopilot
 (autopilot runs), orphans whose score is below autopilotSuitabilityFloor
 (default 3) are moved to routed_to_human; without it (attended runs) they
 stay in orphans, ranked last. A missing or out-of-range score is treated
-as no score: the issue stays in orphans and is never routed out.
+as no score: the issue stays in orphans and is never routed out by score. With
+autopilotSuitability.effortL set to refuse, --autopilot also moves effort L
+orphans to routed_to_human.
 
 "filtered.triage_verdict_rejected" (#2243, default-on, not opt-in) excludes
 a candidate whose most recent trusted "A4.5 suitability gate rejection"
@@ -1605,6 +1613,9 @@ export function loadPolicy(policyPath) {
     authoringJournalReference: config.issueAuthoring?.journalIssue ?? null,
     autopilotSuitabilityFloor: resolveAutopilotSuitabilityFloor(config),
     autopilotSuitabilityEnabled: resolveAutopilotSuitabilityEnabled(config),
+    // #4199: part of the returned policy, so it is also in the hint-cache
+    // key and an allow-to-refuse switch cannot serve a stale cached result.
+    effortLPolicy: resolveEffortLPolicy(config),
     // Passed through verbatim (raw, un-normalized) for
     // buildClaimStateResolution (#1395), which expects this same shape —
     // it is only consumed when --with-claim-state is passed. Undefined
