@@ -63,10 +63,12 @@ const MARKER_PREFIX_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 // defer-source marker. A bare closer cannot open or close anything, so it is
 // allowed as ordinary prose.
 const HTML_COMMENT_OPENER_PATTERN = /<!--/;
-// A line the audit's Refs rule counts: an optional blockquote and list
-// marker, then `Refs` with an optional colon, then `#<n>`.
-const REFS_LINE_PATTERN =
-  /^[ \t]*(?:>[ \t]*)?(?:(?:[-*+]|\d+[.)])[ \t]+)?[_*]{0,2}Refs:?[ \t]+#\d/i;
+// The same line-start rule as the defer-source Refs count in
+// discover-readiness-check.mts (its DEPENDENCY_LINE_PREFIX, matched
+// case-insensitively): leading whitespace, any number of blockquote markers,
+// at most one bullet marker, then `Refs`, an optional colon, and `#<n>`. Keep
+// it in step with that rule, or render and lint will disagree.
+const REFS_LINE_PATTERN = /^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+)?Refs:?[ \t]+#\d/i;
 const LINE_BREAK_PATTERN = /[\r\n]/;
 
 interface ValidatedItem {

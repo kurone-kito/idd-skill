@@ -411,6 +411,65 @@ test('invalid input throws a TypeError whose message starts with the field name'
   }
 });
 
+test('a finding continuation line the audit counts as a Refs line is refused at render', () => {
+  const countedByAudit = [
+    'Refs #7 is the origin.',
+    'refs #7 is the origin.',
+    'REFS: #7 is the origin.',
+    '  Refs #7 is the origin.',
+    '> Refs #7 is the origin.',
+    '> > Refs #7 is the origin.',
+    '- Refs #7 is the origin.',
+    '* Refs #7 is the origin.',
+  ];
+  for (const line of countedByAudit) {
+    assert.throws(
+      () =>
+        renderDeferBundle(
+          bundleInput({ items: [item({ finding: `First line.\n${line}` })] }),
+        ),
+      (error: unknown) =>
+        error instanceof TypeError &&
+        error.message.startsWith('items[0].finding must '),
+      `expected a refusal for ${JSON.stringify(line)}`,
+    );
+  }
+});
+
+test('a finding continuation line the audit does not count is kept, and lint passes', () => {
+  const notCountedByAudit = [
+    '1. Refs #7 is the origin.',
+    '**Refs #7** is the origin.',
+    '_Refs #7_ is the origin.',
+    'See Refs #7 is the origin.',
+  ];
+  for (const line of notCountedByAudit) {
+    const rendered = renderDeferBundle(
+      bundleInput({ items: [item({ finding: `First line.\n${line}` })] }),
+    );
+    assert.ok(
+      rendered.body.includes(`  ${line}`),
+      `${JSON.stringify(line)} should be kept`,
+    );
+    assert.deepEqual(
+      lintDeferBundle(rendered, 'idd-skill'),
+      { passed: true, failures: [] },
+      `lint should pass for ${JSON.stringify(line)}`,
+    );
+  }
+});
+
+test('a Refs reference on the first finding line stays inside its bullet', () => {
+  const rendered = renderDeferBundle(
+    bundleInput({ items: [item({ finding: 'Refs #7 is the origin.' })] }),
+  );
+  assert.ok(rendered.body.includes('- Retry hint: Refs #7 is the origin.'));
+  assert.deepEqual(lintDeferBundle(rendered, 'idd-skill'), {
+    passed: true,
+    failures: [],
+  });
+});
+
 test('a newline in a title or acceptance becomes a space, and finding keeps its newlines', () => {
   const rendered = renderDeferBundle(
     bundleInput({
@@ -456,20 +515,16 @@ test('an HTML comment closer in prose is kept, and a trailing newline in threadU
       '- [ ] the flow A --> B keeps the lock and `node --test tests/claim.test.mts` passes',
     ),
   );
+  assert.deepEqual(lintDeferBundle(rendered, 'idd-skill'), {
+    passed: true,
+    failures: [],
+  });
 });
 
-test('items keep their order in the Background, Proposed change, and Acceptance sections', () => {
+test('items keep their input order in the Background, Proposed change, and Acceptance sections', () => {
   const { body } = renderDeferBundle(
     bundleInput({
       items: [
-        item({
-          title: 'Alpha',
-          threadUrl: 'https://example.test/alpha',
-          finding: 'The alpha finding.',
-          acceptance:
-            'alpha acceptance `node --test tests/alpha.test.mts` passes',
-          path: 'src/alpha.mts',
-        }),
         item({
           title: 'Beta',
           threadUrl: 'https://example.test/beta',
@@ -478,16 +533,24 @@ test('items keep their order in the Background, Proposed change, and Acceptance 
             'beta acceptance `node --test tests/beta.test.mts` passes',
           path: 'src/beta.mts',
         }),
+        item({
+          title: 'Alpha',
+          threadUrl: 'https://example.test/alpha',
+          finding: 'The alpha finding.',
+          acceptance:
+            'alpha acceptance `node --test tests/alpha.test.mts` passes',
+          path: 'src/alpha.mts',
+        }),
       ],
     }),
   );
   const pairs: Array<[string, string]> = [
     [
-      '- Alpha: https://example.test/alpha',
       '- Beta: https://example.test/beta',
+      '- Alpha: https://example.test/alpha',
     ],
-    ['- Alpha: The alpha finding.', '- Beta: The beta finding.'],
-    ['- [ ] alpha acceptance', '- [ ] beta acceptance'],
+    ['- Beta: The beta finding.', '- Alpha: The alpha finding.'],
+    ['- [ ] beta acceptance', '- [ ] alpha acceptance'],
   ];
   for (const [first, second] of pairs) {
     const firstIndex = body.indexOf(first);
