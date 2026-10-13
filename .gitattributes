@@ -131,6 +131,7 @@ scripts/resume-route-selection.mjs linguist-generated=true
 scripts/review-activity-snapshot.mjs linguist-generated=true
 scripts/review-clause.mjs linguist-generated=true
 scripts/review-comment-origin.mjs linguist-generated=true
+scripts/review-defer-bundle.mjs linguist-generated=true
 scripts/review-disposition-verify.mjs linguist-generated=true
 scripts/review-thread-edit-histories.mjs linguist-generated=true
 scripts/select-desynced-index.mjs linguist-generated=true
