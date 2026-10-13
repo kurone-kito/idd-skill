@@ -178,6 +178,10 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)$/.exec(path))) {
   if (!issue) fail('gh: Not Found (HTTP 404)');
   out({ number, title: 'x', state: 'open', body: issue.body, labels: issue.labels.map((name) => ({ name })), html_url: 'https://github.com/o/r/issues/' + number });
 }
+if ((match = /^repos\/o\/r\/collaborators\/([^/]+)\/permission$/.exec(path))) {
+  const level = state.permission || 'admin';
+  out({ permission: level === 'maintain' ? 'write' : level, role_name: level, user: { login: decodeURIComponent(match[1]) } });
+}
 if ((match = /^repos\/o\/r\/labels\/(.+)$/.exec(path))) {
   const name = decodeURIComponent(match[1]);
   if (state.labels.includes(name)) out({ name });
@@ -216,6 +220,7 @@ function setup(
     openPr?: boolean;
     foreignOwnerOnRead?: number;
     trusted?: string[];
+    permission?: string;
   } = {},
 ): Fixture {
   const dir = mkdtempSync(join(tmpdir(), 'idd-publish-authoring-hold-test-'));
@@ -244,6 +249,7 @@ function setup(
       corruptReadbackAt: options.corruptReadbackAt ?? 0,
       mutateBodyAt: options.mutateBodyAt ?? 0,
       ambiguousPostAt: options.ambiguousPostAt ?? 0,
+      permission: options.permission ?? 'admin',
       claimOnCreate: options.claimOnCreate ?? false,
       openPr: options.openPr === true,
       foreignOwnerOnRead: options.foreignOwnerOnRead ?? 0,
@@ -804,6 +810,21 @@ test('CLI: a member post that may have landed without a reply reports an uncerta
     assert.match(report.reason, /may have been posted/);
     assert.equal(report.journalState, 'uncertain: replay the journal');
     assert.match(journalRecords(fixture)[2] ?? '', /state=member/);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a trusted login without write permission writes nothing', () => {
+  const fixture = setup({ permission: 'read' });
+  try {
+    const result = fixture.run([...files(fixture), '--apply']);
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /does not have Write, Maintain or Admin permission/,
+    );
+    assert.deepEqual(writes(fixture.log()), []);
   } finally {
     fixture.restore();
   }

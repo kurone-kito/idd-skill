@@ -23,6 +23,7 @@ import { fetchProvenanceCommentsGraphql } from './authoring-owner-provenance.mjs
 import { resolveBundleRoot } from './bundle-root.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
+  collaboratorPermission,
   isAuthorizedForcedHandoffActor,
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
@@ -370,6 +371,21 @@ function labelExists(owner, repo, name) {
     throw error;
   }
 }
+/** Write, Maintain or Admin on the repository; an unreadable permission is
+ * false (fail closed). */
+function hasWritePermission(owner, repo, login, cache) {
+  const { permission, roleName } = collaboratorPermission(
+    owner,
+    repo,
+    login,
+    cache,
+  );
+  return (
+    ['admin', 'maintain', 'write'].includes(roleName) ||
+    permission === 'admin' ||
+    permission === 'write'
+  );
+}
 /** True when the comments carry an active claim, resolved with the same
  * write-gate resolver the review helpers use: a released claim does not
  * count, a forced-handoff successor does when the repository enables forced
@@ -694,6 +710,23 @@ function publish(input) {
       `the authenticated login ${actor} is not a trusted marker actor, so its journal records would not be valid evidence`,
       base,
     );
+  }
+  // The contract also needs Write, Maintain or Admin on every repository
+  // that receives a marker, unless the actor is a configured bot or app.
+  if (!actor.toLowerCase().endsWith('[bot]')) {
+    const cache = new Map();
+    const targets = [
+      { owner, repo },
+      { owner: journal.owner, repo: journal.repo },
+    ];
+    for (const target of targets) {
+      if (!hasWritePermission(target.owner, target.repo, actor, cache)) {
+        return refuse(
+          `${actor} does not have Write, Maintain or Admin permission on ${target.owner}/${target.repo}, or it could not be read, so its markers would not be trusted`,
+          base,
+        );
+      }
+    }
   }
   const intentArgs = (state, issue) => [
     '--type',
