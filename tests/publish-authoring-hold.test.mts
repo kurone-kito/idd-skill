@@ -389,3 +389,27 @@ test('CLI: an explicit repository outside this checkout needs --marker-prefix', 
     fixture.restore();
   }
 });
+
+test('CLI: a user-global label name does not change the plan', () => {
+  const fixture = setup();
+  try {
+    const globalDir = join(fixture.dir, 'home', '.config', 'idd-skill');
+    mkdirSync(globalDir, { recursive: true });
+    writeFileSync(
+      join(globalDir, 'config.json'),
+      JSON.stringify({
+        labels: { needsDecisionLabelName: 'global:decide' },
+        issueAuthoring: { authoringLabelName: 'global:authoring' },
+      }),
+    );
+    const result = fixture.run(files(fixture, 'needs-decision'));
+    assert.equal(result.status, 0, result.stdout);
+    const report = JSON.parse(result.stdout);
+    assert.deepEqual(report.labels, [
+      'status:authoring',
+      'status:needs-decision',
+    ]);
+  } finally {
+    fixture.restore();
+  }
+});

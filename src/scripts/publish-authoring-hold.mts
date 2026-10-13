@@ -29,7 +29,7 @@ import {
   isHelperErrorEnvelopeEnabled,
   runHelperCli,
 } from './helper-cli-runner.mts';
-import { loadPolicyConfig, readRepositoryPolicyFile } from './idd-config.mts';
+import { readRepositoryPolicyFile } from './idd-config.mts';
 import {
   normalizeMarkerPrefix,
   parseAuthoringPublicationComment,
@@ -289,8 +289,11 @@ checks follow contract.md's "New-issue ownership" order:
   6. render the pending publication-intent record through post-idd-marker's
      dry run, and list the remaining publication steps as planned.
 
-The marker prefix comes from the local policy only when the issue and the
-journal are both in this checkout's repository. Otherwise pass
+Every policy value (the journal, the marker prefix and the label names)
+comes from the repository's own policy file (--policy, or
+.github/idd/config.json), never from a user-global layer, because each
+describes the target repository. The marker prefix comes from that file
+only when the issue and the journal are both in this checkout's repository. Otherwise pass
 --marker-prefix with the prefix the target repository configures.
 
 The review result file is a JSON object with "completed": true. An
@@ -512,11 +515,22 @@ function runCli(): HelperCliResult {
   }
 
   // Step 2: the journal must be set and verifiable before any target exists.
+  // Every policy value this helper reads (journal, marker prefix, label names)
+  // describes the target repository, so it comes from the repository's own
+  // policy file only, never from a user-global layer (contract.md, "Target
+  // marker prefix").
   let journalSetting: unknown;
   let policyError = '';
+  let config: { markerPrefix?: unknown } | null = null;
+  let policyPath = '';
   try {
-    const repositoryPolicy = readRepositoryPolicyFile(args.policy || undefined)
-      .config as { issueAuthoring?: { journalIssue?: unknown } } | null;
+    const loaded = readRepositoryPolicyFile(args.policy || undefined);
+    policyPath = loaded.path;
+    const repositoryPolicy = loaded.config as {
+      markerPrefix?: unknown;
+      issueAuthoring?: { journalIssue?: unknown };
+    } | null;
+    config = repositoryPolicy;
     journalSetting = repositoryPolicy?.issueAuthoring?.journalIssue;
   } catch (error) {
     policyError = (error as Error).message;
@@ -556,11 +570,6 @@ function runCli(): HelperCliResult {
     );
   }
 
-  const policy = loadPolicyConfig(args.policy || undefined);
-  const config = policy.config as {
-    markerPrefix?: unknown;
-    claim?: { verifySettleDelay?: unknown };
-  } | null;
   const currentRepo =
     args.owner && args.repo
       ? { owner: args.owner, repo: args.repo }
@@ -617,6 +626,7 @@ function runCli(): HelperCliResult {
       repo,
       markerPrefix,
       config,
+      policyPath,
       ids,
       bodyPath,
     });
@@ -633,6 +643,7 @@ function publish(input: {
   repo: string;
   markerPrefix: string;
   config: unknown;
+  policyPath: string;
   ids: PublicationIds;
   bodyPath: string;
 }): HelperCliResult {
@@ -655,7 +666,9 @@ function publish(input: {
     currentRepo: repoRef,
     bucket,
     labels,
-    policy: args.policy || undefined,
+    // An explicit --config keeps the linter on the same repository file,
+    // without its own user-global layers.
+    policy: input.policyPath,
   });
   const lint = runSiblingHelper('audit-authored-issue.mjs', lintArgs);
   const lintReport = { args: lintArgs, exitCode: lint.status };

@@ -1168,6 +1168,24 @@ in this preamble, since the fallback differs per helper.
     --cleanup-evidence-file sweep.json
   ```
 
+- `scripts/publish-authoring-hold.mjs` (`idd-publish-authoring-hold`,
+  #4127) plans and validates the Stage 1 publication of one drafted
+  orphan issue and writes nothing. It refuses `--shape child` (exit
+  `2`), requires `--review-result <path>` (a JSON object with
+  `"completed": true`; any `findings` entry must be `fixed` or
+  `rejected`), and stops with the `blocked-by-human` outcome (exit `2`)
+  when `issueAuthoring.journalIssue` is unset or unverifiable. It then
+  puts the `authoring-publication` line first in the body, lints that
+  exact body with `audit-authored-issue.mjs --new-issue`, looks up the
+  authoring and bucket labels, renders the pending publication-intent
+  record through `post-idd-marker.mjs`'s dry run, and prints the plan
+  (exit `0`; a refusal exits `1`). The journal, the marker prefix and
+  the label names come from the repository policy file only, and
+  `--marker-prefix` is required when the issue or the journal is in
+  another repository. `--apply` is refused with exit `2` before any
+  `gh` call until the publication path lands as a follow-up, so the
+  issue-authoring publication capability is still unavailable.
+
 - `scripts/review-disposition-verify.mjs` for read-only E7 disposition
   marker presence verification across PATH A and PATH B items
 - `scripts/disposition-non-review-notices.mjs` for dry-run/apply

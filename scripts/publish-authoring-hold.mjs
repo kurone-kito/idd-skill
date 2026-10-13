@@ -26,7 +26,7 @@ import {
   isHelperErrorEnvelopeEnabled,
   runHelperCli,
 } from './helper-cli-runner.mjs';
-import { loadPolicyConfig, readRepositoryPolicyFile } from './idd-config.mjs';
+import { readRepositoryPolicyFile } from './idd-config.mjs';
 import {
   normalizeMarkerPrefix,
   parseAuthoringPublicationComment,
@@ -235,8 +235,11 @@ checks follow contract.md's "New-issue ownership" order:
   6. render the pending publication-intent record through post-idd-marker's
      dry run, and list the remaining publication steps as planned.
 
-The marker prefix comes from the local policy only when the issue and the
-journal are both in this checkout's repository. Otherwise pass
+Every policy value (the journal, the marker prefix and the label names)
+comes from the repository's own policy file (--policy, or
+.github/idd/config.json), never from a user-global layer, because each
+describes the target repository. The marker prefix comes from that file
+only when the issue and the journal are both in this checkout's repository. Otherwise pass
 --marker-prefix with the prefix the target repository configures.
 
 The review result file is a JSON object with "completed": true. An
@@ -403,12 +406,19 @@ function runCli() {
     return refuse('the body file is empty');
   }
   // Step 2: the journal must be set and verifiable before any target exists.
+  // Every policy value this helper reads (journal, marker prefix, label names)
+  // describes the target repository, so it comes from the repository's own
+  // policy file only, never from a user-global layer (contract.md, "Target
+  // marker prefix").
   let journalSetting;
   let policyError = '';
+  let config = null;
+  let policyPath = '';
   try {
-    const repositoryPolicy = readRepositoryPolicyFile(
-      args.policy || undefined,
-    ).config;
+    const loaded = readRepositoryPolicyFile(args.policy || undefined);
+    policyPath = loaded.path;
+    const repositoryPolicy = loaded.config;
+    config = repositoryPolicy;
     journalSetting = repositoryPolicy?.issueAuthoring?.journalIssue;
   } catch (error) {
     policyError = error.message;
@@ -447,8 +457,6 @@ function runCli() {
       `issueAuthoring.journalIssue ${journal.ref} cannot be verified: ${error.message}`,
     );
   }
-  const policy = loadPolicyConfig(args.policy || undefined);
-  const config = policy.config;
   const currentRepo =
     args.owner && args.repo
       ? { owner: args.owner, repo: args.repo }
@@ -504,6 +512,7 @@ function runCli() {
       repo,
       markerPrefix,
       config,
+      policyPath,
       ids,
       bodyPath,
     });
@@ -530,7 +539,9 @@ function publish(input) {
     currentRepo: repoRef,
     bucket,
     labels,
-    policy: args.policy || undefined,
+    // An explicit --config keeps the linter on the same repository file,
+    // without its own user-global layers.
+    policy: input.policyPath,
   });
   const lint = runSiblingHelper('audit-authored-issue.mjs', lintArgs);
   const lintReport = { args: lintArgs, exitCode: lint.status };
