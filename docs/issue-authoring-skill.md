@@ -773,6 +773,12 @@ instructions.
   does not decide that the rejection still holds, and the author applies the repeat
   test (see
   [Carry-forward of rejected findings](#carry-forward-of-rejected-findings))
+- a draft that deletes, overwrites, recursively removes, records ownership of
+  a file, or writes to a path that could be a link gives each such operation
+  an acceptance criterion for each of the six cases under
+  [Destructive operations](#destructive-operations), or names the guard that
+  makes the case impossible; the reviewer flags a destructive operation whose
+  criteria leave a case unanswered
 
 #### Resolver
 
@@ -2455,6 +2461,68 @@ Observed incidents:
 - Observed 2026-10-10, issue `kurone-kito/idd-skill#3947`: the published
   issue holds a recorded decision whose premise its own reproduction
   contradicts, and the marker the decision names is absent from the source.
+
+## Destructive operations
+
+A drafted change that deletes a file, overwrites an existing file,
+removes a tree recursively, records ownership of a file, or writes to a
+path that could be a link gives each such operation an acceptance
+criterion for each of the six cases below, or names the guard that makes
+the case impossible. The completed-draft critique checklist asks the
+reviewer to check this; `audit-authored-issue` does not.
+
+1. **Ownership.** A file that the tool did not create is never recorded
+   as the tool's own, even when its content matches what the tool would
+   write. Pre-existing content that the tool did not create is left alone.
+2. **User edits.** A file that the user edited, or added beside the
+   managed files, survives the operation. The operation refuses, instead
+   of removing it, and a refusal removes nothing.
+3. **Overwrite.** The operation does not replace an existing file that it
+   does not own. An overwrite the operator wants is named in the body's
+   open questions for operator approval.
+4. **Links.** Each existing component of the target path below the root is checked
+   with a no-follow stat before the first write or removal. A path component that
+   does not exist yet is created only after every existing component above it
+   has been checked. The write itself uses a no-follow open for the final
+   component, so a write to a final-component link is refused, and a removal
+   of a final-component link removes the link without following it. A write to
+   a file with more than one hard link is refused, because a no-follow stat
+   cannot show that another name for the same file lies outside the root;
+   removing one of its names leaves the others in place. If the
+   platform cannot close the window that remains between a check and the act,
+   the body states that window as an open risk for the operator to accept.
+5. **Recursive removal.** A recursive removal finds every path it would remove
+   with no-follow stats before it removes anything, and it does not descend
+   through a symlink. It removes the link itself, and it refuses, removing
+   nothing, when any path it would remove lies outside the root.
+6. **Root containment.** Nothing outside the root is written or removed. The
+   root is the directory the operation is given to work under, such as the
+   data directory an install writes into. This holds even through a link that
+   the tool created itself. A write or removal whose path has a symlinked
+   parent component below the root is refused, not followed: each such
+   component is found with a no-follow stat before the write or removal runs,
+   and a refusal removes nothing. A removal of a final-component link removes
+   the link itself, as item 4 says. This covers a non-recursive removal as
+   well as a recursive one.
+
+In cases 4 to 6, anything that a no-follow check cannot settle is an open risk
+that the body names for the operator to accept. Examples are the resolution of
+the root itself when the root is a link, a link above the root, and the window
+between a check and the act, which item 4 describes. The refusals in items 4
+to 6 take precedence, so the open risk applies only where no item refuses the
+case.
+
+Observed incident:
+
+- Observed 2026-10-12 to 2026-10-13, PR `kurone-kito/idd-skill#4073`, closed
+  without merging, for issue `kurone-kito/idd-skill#3825`: the issue's
+  acceptance criteria said nothing about these cases, and review then found
+  an uninstall that deleted a file the user had added or edited inside the
+  payload (case 2, review thread), a byte-identical file that predated the
+  install and was recorded as installer-owned (case 1, comment 4249375122),
+  and managed data paths that followed a symlink component, so writes
+  resolved outside the data root (cases 4 and 6, comment 4249375009). Cases
+  3 and 5 have no observed incident yet; they are preventive.
 
 ## Draft schemas
 
