@@ -1297,20 +1297,19 @@ identify its old claims, and step 1 treats them as not its own.
    worktree, claim, and child processes show no live background work. The
    fan-out variant's completed-notice rule names these live-evidence checks, and
    this step applies them to every finished worker, under that worker's own
-   listed handle. A worker with live work is treated as running in step 3. For a
-   released claim with no matched worker, run this step under the claim-id as
-   its handle. The append's own duplicate check, which uses the claim-id, the
-   handle, and the terminal phase, decides whether that record already exists. A
-   matched running worker gets no record. A released claim whose only matched
-   worker is still running gets no record and is reported in step 5. Look for
-   the worker's report draft in the scratchpad of the same session, under the
-   issue-number prefix that the fan-out variant already requires. If a draft is
-   found, check that its `issue`, `claimId`, and `workerHandle` match the
-   matched claim and the recovery handle, and do not append a draft that does
-   not match. Then verify its outcome, `pullRequest`, and `terminalPhase`
-   against live GitHub state, set `verifiedAt` to that check and `recordedAt` to
-   the time of the append, then append it. If no draft is found, verify the
-   terminal outcome from live GitHub state, build the record as the
+   listed handle. A worker with live work is treated as running in step 3. A
+   released claim with no matched worker gets no record here: a claim-id is not
+   a trusted worker handle, so step 5 reports it instead. A matched running
+   worker gets no record. A released claim whose only matched worker is still
+   running gets no record and is reported in step 5. Look for the worker's
+   report draft in the scratchpad of the same session, under the issue-number
+   prefix that the fan-out variant already requires. If a draft is found, check
+   that its `issue`, `claimId`, and `workerHandle` match the matched claim and
+   the recovery handle, and do not append a draft that does not match. Then
+   verify its outcome, `pullRequest`, and `terminalPhase` against live GitHub
+   state, set `verifiedAt` to that check and `recordedAt` to the time of the
+   append, then append it. If no draft is found, verify the terminal outcome
+   from live GitHub state, build the record as the
    [worker final report store](idd-helper-scripts.md#worker-final-report-store)
    describes, and append it the same way. In both cases, validate the record
    against `schemas/worker-report.schema.json` first, then append it with the
@@ -1325,8 +1324,8 @@ identify its old claims, and step 1 treats them as not its own.
    instruction path the recovery followed. If verification or the append fails
    for a matched worker, keep it addressable, mark it `stalled`, and follow the
    worker-specific recovery in the fan-out variant, as section 5 of the
-   orchestrator phase file describes. For a claim-id handle there is no worker,
-   so report that claim to the operator in step 5 instead.
+   orchestrator phase file describes. A claim-id is never used as a worker
+   handle.
 5. **Report the remainder.** An own claim that reached step 3 and has no
    matching worker is reported to the operator, and so is a matched finished
    worker whose recorded outcome is `held`. A released claim is reported here
