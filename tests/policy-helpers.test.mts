@@ -2602,6 +2602,8 @@ test('resolveDurableRecordTargets yields no journal for malformed or absent valu
     'kurone-kito/idd-skill#0042',
     'kurone-kito/idd-skill#2674 ',
     'kurone-kito/idd-skill#2674\n',
+    'kurone-kito/idd-skill#9007199254740993',
+    'kurone-kito/idd-skill#99999999999999999999',
     2674,
     {},
   ];

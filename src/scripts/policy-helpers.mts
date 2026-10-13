@@ -2054,7 +2054,10 @@ export function resolveDurableRecordTargets(input: {
       owner.toLowerCase() === (current[0] ?? '').toLowerCase() &&
       name.toLowerCase() === (current[1] ?? '').toLowerCase()
     ) {
-      authoringJournalTarget = Number(number);
+      // A digit run beyond the safe-integer range cannot round-trip to the
+      // issue number it spells, so it fails closed instead of being stored.
+      const parsed = Number(number);
+      authoringJournalTarget = Number.isSafeInteger(parsed) ? parsed : null;
     }
   }
   return { providerOutageTarget, authoringJournalTarget };
