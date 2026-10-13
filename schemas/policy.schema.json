@@ -986,7 +986,7 @@
           "description": "Logins of semantic issue auto-labelers that this repository does not trust to apply IDD's reserved labels. Optional; omit this key for the empty-list case -- `minItems: 1` rejects an explicit `[]`. Schema-supported metadata; no distributed enforcement (CI guard generation) reads this list yet."
         }
       },
-      "description": "Container for the three IDD-role label names (roadmap, blocked-by-human, and needs-decision) plus the untrusted-labeler login list. Optional; omitting any nested key keeps that key's own distributed default."
+      "description": "Container for the four IDD-role label names (roadmap, blocked-by-human, needs-decision, and authoring-only) plus the untrusted-labeler login list. Optional; omitting any nested key keeps that key's own distributed default."
     },
     "mergeGate": {
       "type": "object",
