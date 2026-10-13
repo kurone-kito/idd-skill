@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -121,15 +127,33 @@ test('a family keeps the highest severity seen in the chain', () => {
   assert.equal(report.recurring[0]?.severity, 'medium');
 });
 
-test('severity and disposition are not part of the fingerprint', () => {
-  const report = computeE10Recurrence(
+test('the fingerprint is file, rule, and construct, not severity', () => {
+  const otherFile = computeE10Recurrence(
     [
       [accepted('x', 'low')],
       [accepted('x', 'low', 'consistency', 'docs/b.md')],
     ],
     2,
   );
-  assert.equal(report.chainLength, 1);
+  assert.equal(otherFile.chainLength, 1);
+  const otherRule = computeE10Recurrence(
+    [[accepted('x', 'low')], [accepted('x', 'low', 'style')]],
+    2,
+  );
+  assert.equal(otherRule.chainLength, 1);
+  const otherSeverity = computeE10Recurrence(
+    [[accepted('x', 'high')], [accepted('x', 'low')]],
+    2,
+  );
+  assert.equal(otherSeverity.chainLength, 2);
+  const padded = computeE10Recurrence(
+    [
+      [accepted('x', 'low')],
+      [accepted(' x ', 'low', 'consistency', ' docs/a.md')],
+    ],
+    2,
+  );
+  assert.equal(padded.chainLength, 2);
 });
 
 test('a disposition record whose rule is outside the closed list is rejected', () => {
@@ -149,7 +173,17 @@ test('a disposition record whose rule is outside the closed list is rejected', (
   assert.ok(
     validateDispositionRecord({ ...LOW_A, disposition: 'x' }).length > 0,
   );
+  assert.ok(validateDispositionRecord({ ...LOW_A, construct: ' ' }).length > 0);
+  const { severity: _severity, ...noSeverity } = LOW_A;
+  assert.ok(validateDispositionRecord(noSeverity).length > 0);
+  assert.deepEqual(
+    validateDispositionRecord({ disposition: 'Rejected', rule: 'other' }),
+    [],
+  );
   assert.deepEqual(validatePasses('x'), ['passes: must be an array of passes']);
+  assert.deepEqual(validatePasses([]), [
+    'passes: must contain at least one pass',
+  ]);
   assert.deepEqual(validatePasses([{}]), [
     'passes[0]: must be an array of records',
   ]);
@@ -165,9 +199,16 @@ test('the triage instruction carries the same closed rule list', () => {
   assert.deepEqual(listed, [...E10_FINGERPRINT_RULES]);
 });
 
-function runCli(document: unknown, args: string[] = []) {
+function runCli(document: unknown, args: string[] = [], policy?: unknown) {
   const dir = mkdtempSync(join(tmpdir(), 'idd-e10-recurrence-'));
   try {
+    if (policy !== undefined) {
+      mkdirSync(join(dir, '.github', 'idd'), { recursive: true });
+      writeFileSync(
+        join(dir, '.github', 'idd', 'config.json'),
+        JSON.stringify(policy),
+      );
+    }
     const path = join(dir, 'passes.json');
     writeFileSync(path, JSON.stringify(document));
     return spawnSync(process.execPath, [SCRIPT, '--passes', path, ...args], {
@@ -191,6 +232,16 @@ test('the CLI prints the verdict and uses the policy default threshold', () => {
     '4',
   ]);
   assert.equal(JSON.parse(override.stdout).verdict, 'continue');
+});
+
+test('the CLI reads a configured e10NoProgressHoldAfter', () => {
+  const result = runCli({ passes: [[HIGH_B], [HIGH_B]] }, [], {
+    critiqueLoop: { e10NoProgressHoldAfter: 2 },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.holdAfter, 2);
+  assert.equal(report.verdict, 'hold');
 });
 
 test('the CLI exits 1 on a rule outside the closed list', () => {

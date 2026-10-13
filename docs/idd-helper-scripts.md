@@ -2417,8 +2417,10 @@ node scripts/e10-recurrence.mjs --passes <file.json> [--hold-after <n>]
   `severity` of `low`, `medium`, or `high`, and a `rule` from the closed
   list in `idd-review-triage.instructions.md` E5 (`correctness`,
   `safety`, `tests`, `docs`, `consistency`, `style`). A record outside
-  that contract exits `1` (`usage`) with an `errors` array on stdout.
-- **Count**: the fingerprint is `file`, `rule`, and `construct`. The
+  that contract, or a file with no pass at all, exits `1` (`usage`) with
+  an `errors` array on stdout.
+- **Count**: the fingerprint is `file`, `rule`, and `construct`, with
+  `file` and `construct` trimmed. The
   chain ends at the latest pass, counts its first pass, and extends
   backward while each pass's non-empty Accepted set is a subset (proper
   or equal) of the prior pass's set.

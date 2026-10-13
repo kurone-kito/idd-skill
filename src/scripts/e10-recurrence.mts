@@ -132,6 +132,8 @@ export function validateDispositionRecord(
 /** Validate every record of every pass; returns all error messages. */
 export function validatePasses(passes: unknown): string[] {
   if (!Array.isArray(passes)) return ['passes: must be an array of passes'];
+  // An empty file would otherwise read as a clean pass and route to E11.
+  if (passes.length === 0) return ['passes: must contain at least one pass'];
   const errors: string[] = [];
   passes.forEach((pass, passIndex) => {
     if (!Array.isArray(pass)) {
@@ -154,22 +156,27 @@ function fingerprintKey(finding: AcceptedFinding): string {
   return JSON.stringify([finding.file, finding.rule, finding.construct]);
 }
 
+// A stray space in a hand-written record must not split one family in two.
+function trimmedFinding(finding: AcceptedFinding): AcceptedFinding {
+  return {
+    file: finding.file.trim(),
+    rule: finding.rule,
+    construct: finding.construct.trim(),
+    severity: finding.severity,
+  };
+}
+
 function acceptedFindings(
   pass: readonly unknown[],
 ): Map<string, AcceptedFinding> {
   const findings = new Map<string, AcceptedFinding>();
   for (const record of pass) {
     if (!isPlainObject(record) || record.disposition !== 'Accepted') continue;
-    const finding = record as unknown as AcceptedFinding;
+    const finding = trimmedFinding(record as unknown as AcceptedFinding);
     const key = fingerprintKey(finding);
     const prior = findings.get(key);
     if (prior === undefined || rank(finding.severity) > rank(prior.severity)) {
-      findings.set(key, {
-        file: finding.file,
-        rule: finding.rule,
-        construct: finding.construct,
-        severity: finding.severity,
-      });
+      findings.set(key, finding);
     }
   }
   return findings;
