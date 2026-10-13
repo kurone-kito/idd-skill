@@ -143,9 +143,10 @@ test('evaluateMergeGates returns no blockers for a fully ready report', () => {
   assert.deepEqual(evaluateMergeGates(readyReport()), []);
 });
 
-// #3950: only a missing watermark gets the E1 hint; `detail` is unchanged and
-// other review-currency reasons stay hint-free.
-test('evaluateMergeGates adds the E1 hint only for a missing watermark', () => {
+// #3950 and #4124: a missing watermark and a same-timestamp-count-growth reason
+// get the E1 hint; `detail` is unchanged and other review-currency reasons stay
+// hint-free.
+test('evaluateMergeGates adds the E1 hint for a missing watermark and for same-timestamp growth', () => {
   const missing = readyReport();
   missing.reviewCurrency = {
     comparisonRoute: 'return-to-e1',
@@ -171,6 +172,20 @@ test('evaluateMergeGates adds the E1 hint only for a missing watermark', () => {
   );
   assert.ok(headBlocker, 'expected a review-currency blocker');
   assert.equal(headBlocker.hint, undefined);
+
+  const sameTimestamp = readyReport();
+  sameTimestamp.reviewCurrency = {
+    comparisonRoute: 'return-to-e1',
+    comparisonReason: 'same-timestamp-count-growth',
+  };
+  const sameBlocker = evaluateMergeGates(sameTimestamp).find(
+    (b) => b.gate === 'review-currency',
+  );
+  assert.ok(sameBlocker, 'expected a review-currency blocker');
+  assert.equal(
+    sameBlocker.hint,
+    'More review items exist now than the last review watermark counted, with no newer non-ack-only activity. Take a fresh snapshot (E1 Step 1), record a fresh watermark for the current head (E1 Step 2), continue through E1 Step 3, the E2 critique pass, and E3 (follow its route), then re-run readiness.',
+  );
 });
 
 test('a missing or invalid prHeadSha fails closed as a head-sha blocker', () => {
