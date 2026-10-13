@@ -157,8 +157,9 @@ layered on top of the distributed IDD defaults:
   `advisoryWait.secondaryBotLogin: "coderabbitai[bot]"` and
   `advisoryWait.secondaryQuietWindow: "PT5M"` as a local IDD dogfooding
   opt-in (applies only to `kurone-kito/idd-skill`), waiting up to five
-  minutes after E-phase convergence conditions are first observed before
-  pre-merge readiness treats review as settled. The window was first set
+  minutes, measured from the last substantive activity, after E-phase
+  convergence conditions are first observed before pre-merge readiness
+  treats review as settled. The window was first set
   to one hour (`PT1H`, commit `c0909776c`, 2026-09-02) and was shortened
   to five minutes for the reasons in the 2026-10-13 measurement below
   (issue `#4167`). This repository

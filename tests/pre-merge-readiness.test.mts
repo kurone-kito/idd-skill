@@ -13728,11 +13728,16 @@ test('#2335: the same window elapsing with nothing new clears the blocker', () =
 // .github/idd/config.json. It must resolve to five minutes, gate the readiness
 // verdict until five minutes after the last substantive activity, use the
 // min(5, configured) settled buffer on the settled path, and still clear at
-// once on a decline.
+// once on a decline. The value is read from the committed config, not a
+// literal, so drifting that file back to another duration fails these tests.
+function committedQuietWindowMinutes(): number {
+  return resolveAdvisorySecondaryQuietWindowMinutes(
+    readJson('.github/idd/config.json'),
+  );
+}
+
 test('#4167: a PT5M secondaryQuietWindow resolves to five minutes and gates the readiness verdict until five minutes have passed', () => {
-  const minutes = resolveAdvisorySecondaryQuietWindowMinutes({
-    advisoryWait: { secondaryQuietWindow: 'PT5M' },
-  });
+  const minutes = committedQuietWindowMinutes();
   assert.equal(minutes, 5);
 
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
@@ -13767,9 +13772,7 @@ test('#4167: a PT5M secondaryQuietWindow resolves to five minutes and gates the 
 });
 
 test('#4167: the PT5M window clears the settled path on min(5, configured) and a decline at once', () => {
-  const minutes = resolveAdvisorySecondaryQuietWindowMinutes({
-    advisoryWait: { secondaryQuietWindow: 'PT5M' },
-  });
+  const minutes = committedQuietWindowMinutes();
   const anchorAt = '2026-05-11T23:56:00Z';
 
   // Settled path: anchored on the settlement time, not the older activity
