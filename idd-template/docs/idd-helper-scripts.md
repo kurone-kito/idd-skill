@@ -7518,19 +7518,43 @@ same as `AW4`/`AW5`.
     signal. Each finding carries an `advisoryBot` flag (`isKnownReviewBot` or a
     configured `advisoryBotLogins` author) so the operator can prioritize human
     feedback over capricious advisory-bot noise.
+  - **Open and ready** (kurone-kito/idd-skill#4162): a date-window run
+    (`--since`/`--days`, or neither `--pr` nor `--prs`) also checks every
+    OPEN pull request with the in-process `pre-merge-readiness` collector
+    and lists in `openReadyPrs` the ones that report `ready: true`, each
+    with `openedAt` and `ageHours`, so an idle merge step shows up here. On
+    2026-10-13 kurone-kito/idd-skill#4148 and kurone-kito/idd-skill#4149
+    sat open with `ready: true` and no blockers, and no session ran their
+    merge step. Not-ready pull requests are left out (run
+    `pre-merge-readiness` on one to see its blockers), and so is a draft.
+    A pull request that closes no issue is checked with `--claimless`;
+    otherwise each same-repository closing issue is tried as
+    `--claim-issue`, with no `--claim-id`. Readiness still requires an
+    active claim on that issue, so a pull request whose claim was released
+    reads as not ready and is not listed. A pull request that closes an
+    issue but merges out of loop under a valid out-of-loop marker is not
+    tried with `--claimless`, so it is not listed either. A pull request
+    whose readiness check fails, or whose closing references name no issue
+    in this repository, is listed in `openReadyUncheckedPrs` with a
+    `reason`; a non-zero `summary.openReadyUncheckedCount` means the
+    section is incomplete. An explicit `--pr`/`--prs` run skips this section and
+    reports it as `null`.
 - JSON output keys: `sweepWindow`, `trustedMarkerActors`,
   `advisoryBotLogins`, `iddAgentLogins`, `primaryBotLogin`, `prs` (each
   entry has `number`, `mergedAt`, `mergeCommit`, `unresolvedThreads`, and
-  `unaddressedComments`),
+  `unaddressedComments`), `openReadyPrs` (`number`, `title`, `url`,
+  `openedAt`, `ageHours`), `openReadyUncheckedPrs` (`number`, `reason`),
   and `summary` (`prCount`, `flaggedPrCount`, `unresolvedThreadCount`,
-  `unaddressedCommentCount`).
+  `unaddressedCommentCount`, `openPrCount`, `openReadyPrCount`,
+  `openReadyUncheckedCount`).
 - Read-only boundary: the helper performs no minimization, no posting, and no
-  issue creation. **Handoff**: the JSON is the input an operator hands to the
-  issue-authoring skill, which re-verifies each candidate against current
-  `{development-branch}` (reuse-first / not-already-fixed) and drafts
-  follow-up issues bucketed by readiness. The helper does deterministic
-  detection; the judgment-heavy re-verification, drafting, and publish stay
-  operator-gated.
+  issue creation. The open-and-ready section never merges, claims, or posts:
+  the merge stays with the session that holds the claim. **Handoff**: the
+  JSON is the input an operator hands to the issue-authoring skill, which
+  re-verifies each candidate against current `{development-branch}`
+  (reuse-first / not-already-fixed) and drafts follow-up issues bucketed by
+  readiness. The helper does deterministic detection; the judgment-heavy
+  re-verification, drafting, and publish stay operator-gated.
 - **Operator runbook**: this helper is a **manual spot-check audit**, not a
   phase step — its absence from the executable phase instruction files is
   by design, not an oversight.

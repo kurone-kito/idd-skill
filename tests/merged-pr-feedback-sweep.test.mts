@@ -1,13 +1,25 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
   buildMergedPrFeedbackSweep,
+  buildOpenReadySection,
+  createOpenPrReadiness,
   type MergedPrInput,
+  openPrReadinessArgvCandidates,
   parseArgs,
+  renderMergedPrSweepOutput,
+  runMergedPrFeedbackSweep,
   type SweepReviewInput,
 } from '../src/scripts/merged-pr-feedback-sweep.mts';
+import { parseArgs as parseReadinessArgs } from '../src/scripts/pre-merge-readiness.mts';
 import { CODERABBIT_SUMMARY_MARKER } from '../src/scripts/protocol-helpers.mts';
+import {
+  createFakeProviderAdapter,
+  type FakeProviderFixture,
+} from '../src/scripts/provider-adapter-fake.mts';
+import type { ProviderPort } from '../src/scripts/provider-port.mts';
 import { buildCommentThread } from './test-utils.mts';
 
 const OPTIONS = {
@@ -1625,4 +1637,404 @@ test('summary aggregates across PRs and skips clean PRs', () => {
   assert.equal(result.summary.flaggedPrCount, 1);
   assert.equal(result.summary.unresolvedThreadCount, 1);
   assert.equal(result.summary.unaddressedCommentCount, 1);
+});
+
+// ---------------------------------------------------------------------------
+// #4162: the open-and-ready section
+// ---------------------------------------------------------------------------
+
+const OPEN_NOW_MS = Date.parse('2026-10-13T12:00:00Z');
+
+function convergenceView(closingIssuesReferences: unknown) {
+  return {
+    headSha: 'a'.repeat(40),
+    headRefName: 'issue/branch',
+    authorLogin: 'kurone-kito',
+    url: '',
+    closingIssuesReferences,
+  };
+}
+
+function openPrFixture(): FakeProviderFixture {
+  return {
+    mergedChangeRequests: [],
+    openChangeRequests: [
+      { number: 10, title: 'ready one', body: '', url: 'https://x/pull/10' },
+      { number: 11, title: 'not ready', body: '', url: 'https://x/pull/11' },
+    ],
+    changeRequestConvergenceViews: {
+      10: convergenceView([{ number: 100 }]),
+      11: convergenceView([]),
+    },
+    workItems: {
+      10: {
+        number: 10,
+        title: 'ready one',
+        body: '',
+        state: 'open',
+        createdAt: '2026-10-11T09:30:00Z',
+      },
+      11: {
+        number: 11,
+        title: 'not ready',
+        body: '',
+        state: 'open',
+        createdAt: '2026-10-12T00:00:00Z',
+      },
+    },
+  };
+}
+
+// Any provider method whose name starts like a write. The sweep must call
+// none of them on any path.
+const MUTATING_PORT_METHOD =
+  /^(merge|post|close|reopen|add|remove|delete|update|create|edit|set|minimize|dismiss|request|resolveChangeRequestReviewThread)/i;
+
+function recordingPort(fixture: FakeProviderFixture): {
+  port: ProviderPort;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  const inner = createFakeProviderAdapter(fixture);
+  const port = new Proxy(inner, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== 'function') {
+        return value;
+      }
+      return (...args: unknown[]) => {
+        calls.push(String(property));
+        return value.apply(target, args);
+      };
+    },
+  });
+  return { port, calls };
+}
+
+function assertNoMergeOrWrite(
+  fixture: FakeProviderFixture,
+  calls: string[],
+): void {
+  // Every merge method of the fake adapter (both *AtRepo variants and both
+  // ambient ones, admin or not) appends to this recorder.
+  assert.equal(fixture.mergedChangeRequestCalls, undefined);
+  assert.deepEqual(fixture.postedComments ?? [], []);
+  assert.deepEqual(fixture.closedWorkItems ?? [], []);
+  assert.deepEqual(
+    calls.filter((name) => MUTATING_PORT_METHOD.test(name)),
+    [],
+  );
+}
+
+function fakeReadiness(readyPrs: number[], draftPrs: number[] = []) {
+  const seenArgv: string[][] = [];
+  const check = (argv: string[]) => {
+    seenArgv.push(argv);
+    const pr = Number(argv[argv.indexOf('--pr') + 1]);
+    return {
+      ready: readyPrs.includes(pr) || draftPrs.includes(pr),
+      branchCurrency: {
+        mergeStateStatus: draftPrs.includes(pr) ? 'DRAFT' : 'CLEAN',
+      },
+    };
+  };
+  return { check, seenArgv };
+}
+
+test('#4162: one ready and one not-ready open PR lists only the ready one, with its age', () => {
+  const fixture = openPrFixture();
+  const { port, calls } = recordingPort(fixture);
+  const readiness = fakeReadiness([10]);
+  const report = runMergedPrFeedbackSweep(parseArgs(['--days', '7']), {
+    port,
+    owner: 'o',
+    repo: 'r',
+    nowMs: OPEN_NOW_MS,
+    readiness: readiness.check,
+  });
+  assert.deepEqual(report.openReadyPrs, [
+    {
+      number: 10,
+      title: 'ready one',
+      url: 'https://x/pull/10',
+      openedAt: '2026-10-11T09:30:00Z',
+      ageHours: 50,
+    },
+  ]);
+  assert.deepEqual(report.openReadyUncheckedPrs, []);
+  assert.equal(report.summary.openPrCount, 2);
+  assert.equal(report.summary.openReadyPrCount, 1);
+  assert.equal(report.summary.openReadyUncheckedCount, 0);
+  // The PR closing an issue is checked against that claim issue; the PR
+  // closing nothing is checked claimless.
+  assert.deepEqual(readiness.seenArgv, [
+    ['--pr', '10', '--owner', 'o', '--repo', 'r', '--claim-issue', '100'],
+    ['--pr', '11', '--owner', 'o', '--repo', 'r', '--claimless'],
+  ]);
+  assertNoMergeOrWrite(fixture, calls);
+});
+
+test('#4162: with no ready open PR the section prints empty, in one line', () => {
+  const fixture = openPrFixture();
+  const { port, calls } = recordingPort(fixture);
+  const report = runMergedPrFeedbackSweep(parseArgs(['--days', '7']), {
+    port,
+    owner: 'o',
+    repo: 'r',
+    nowMs: OPEN_NOW_MS,
+    readiness: fakeReadiness([]).check,
+  });
+  assert.deepEqual(report.openReadyPrs, []);
+  const lines = renderMergedPrSweepOutput(report).split('\n');
+  const sectionLines = lines.filter((line) => line.includes('"openReadyPrs"'));
+  assert.deepEqual(sectionLines, ['  "openReadyPrs": [],']);
+  assertNoMergeOrWrite(fixture, calls);
+});
+
+test('#4162: a draft PR that passes every gate is not listed', () => {
+  const fixture = openPrFixture();
+  const { port, calls } = recordingPort(fixture);
+  const report = runMergedPrFeedbackSweep(parseArgs(['--days', '7']), {
+    port,
+    owner: 'o',
+    repo: 'r',
+    nowMs: OPEN_NOW_MS,
+    readiness: fakeReadiness([10], [11]).check,
+  });
+  assert.deepEqual(
+    report.openReadyPrs?.map((pr) => pr.number),
+    [10],
+  );
+  assertNoMergeOrWrite(fixture, calls);
+});
+
+test('#4162: a readiness failure and unusable closing references are listed as unchecked', () => {
+  const fixture = openPrFixture();
+  fixture.openChangeRequests?.push({
+    number: 12,
+    title: 'foreign closing ref',
+    body: '',
+    url: 'https://x/pull/12',
+  });
+  fixture.changeRequestConvergenceViews = {
+    ...fixture.changeRequestConvergenceViews,
+    12: convergenceView([
+      { number: 5, repository: { name: 'other', owner: { login: 'o' } } },
+    ]),
+  };
+  const { port, calls } = recordingPort(fixture);
+  const report = runMergedPrFeedbackSweep(parseArgs(['--days', '7']), {
+    port,
+    owner: 'o',
+    repo: 'r',
+    nowMs: OPEN_NOW_MS,
+    readiness: (argv) => {
+      if (argv.includes('11')) {
+        throw new Error('readiness exploded');
+      }
+      return { ready: true, branchCurrency: { mergeStateStatus: 'CLEAN' } };
+    },
+  });
+  assert.deepEqual(
+    report.openReadyPrs?.map((pr) => pr.number),
+    [10],
+  );
+  assert.deepEqual(report.openReadyUncheckedPrs, [
+    { number: 11, reason: 'readiness exploded' },
+    {
+      number: 12,
+      reason:
+        'closing issue references are unreadable or name no issue in this repository',
+    },
+  ]);
+  assert.equal(report.summary.openReadyUncheckedCount, 2);
+  assertNoMergeOrWrite(fixture, calls);
+});
+
+test('#4162: a missing createdAt leaves the age unknown', () => {
+  assert.deepEqual(
+    buildOpenReadySection(
+      [
+        { number: 1, title: 't', url: 'u', createdAt: null, ready: true },
+        { number: 2, title: 't', url: 'u', createdAt: 'bad', ready: true },
+        { number: 3, title: 't', url: 'u', createdAt: null, ready: false },
+      ],
+      OPEN_NOW_MS,
+    ),
+    [
+      { number: 1, title: 't', url: 'u', openedAt: null, ageHours: null },
+      { number: 2, title: 't', url: 'u', openedAt: 'bad', ageHours: null },
+    ],
+  );
+});
+
+test('#4162: readiness argv covers no, one, several, and unreadable closing issues', () => {
+  const base = ['--pr', '7', '--owner', 'o', '--repo', 'r'];
+  assert.deepEqual(openPrReadinessArgvCandidates(7, 'o', 'r', []), [
+    [...base, '--claimless'],
+  ]);
+  assert.deepEqual(
+    openPrReadinessArgvCandidates(7, 'o', 'r', [{ number: 3 }]),
+    [[...base, '--claim-issue', '3']],
+  );
+  assert.deepEqual(
+    openPrReadinessArgvCandidates(7, 'o', 'r', [
+      { number: 3 },
+      { number: 4 },
+      { number: 3 },
+    ]),
+    [
+      [...base, '--claim-issue', '3', '--closing-issues', '3,4'],
+      [...base, '--claim-issue', '4', '--closing-issues', '3,4'],
+    ],
+  );
+  assert.equal(openPrReadinessArgvCandidates(7, 'o', 'r', null), null);
+});
+
+test('#4162: several closing issues are tried in turn and the first ready result lists the PR', () => {
+  const fixture = openPrFixture();
+  fixture.openChangeRequests = [fixture.openChangeRequests?.[0]].filter(
+    (pr) => pr !== undefined,
+  );
+  fixture.changeRequestConvergenceViews = {
+    10: convergenceView([{ number: 100 }, { number: 101 }]),
+  };
+  const { port, calls } = recordingPort(fixture);
+  const tried: string[] = [];
+  const report = runMergedPrFeedbackSweep(parseArgs(['--days', '7']), {
+    port,
+    owner: 'o',
+    repo: 'r',
+    nowMs: OPEN_NOW_MS,
+    readiness: (argv) => {
+      const claimIssue = argv[argv.indexOf('--claim-issue') + 1];
+      tried.push(claimIssue);
+      return { ready: claimIssue === '101' };
+    },
+  });
+  assert.deepEqual(tried, ['100', '101']);
+  assert.deepEqual(
+    report.openReadyPrs?.map((pr) => pr.number),
+    [10],
+  );
+  assertNoMergeOrWrite(fixture, calls);
+});
+
+test('#4162: an explicit --pr run skips the open-and-ready section', () => {
+  const fixture = openPrFixture();
+  const { port, calls } = recordingPort(fixture);
+  const readiness = fakeReadiness([10]);
+  const report = runMergedPrFeedbackSweep(parseArgs(['--pr', '5']), {
+    port,
+    owner: 'o',
+    repo: 'r',
+    nowMs: OPEN_NOW_MS,
+    readiness: readiness.check,
+  });
+  assert.equal(report.openReadyPrs, null);
+  assert.equal(report.openReadyUncheckedPrs, null);
+  assert.equal(report.summary.openPrCount, null);
+  assert.deepEqual(readiness.seenArgv, []);
+  assert.ok(!calls.includes('listOpenChangeRequests'));
+  assertNoMergeOrWrite(fixture, calls);
+});
+
+test('#4162: the real readiness collector over the fake port makes no merge call', () => {
+  const fixture = openPrFixture();
+  const { port, calls } = recordingPort(fixture);
+  const report = runMergedPrFeedbackSweep(parseArgs(['--days', '7']), {
+    port,
+    owner: 'o',
+    repo: 'r',
+    nowMs: OPEN_NOW_MS,
+    readiness: createOpenPrReadiness(
+      port,
+      () => null,
+      () => null,
+    ),
+  });
+  // The fixture carries no readiness snapshot, so the real collector fails
+  // on each PR after its first reads; both PRs land in unchecked.
+  assert.deepEqual(report.openReadyPrs, []);
+  assert.deepEqual(
+    report.openReadyUncheckedPrs?.map((pr) => pr.number),
+    [10, 11],
+  );
+  assert.ok(calls.includes('getChangeRequestReadinessSnapshot'));
+  assertNoMergeOrWrite(fixture, calls);
+});
+
+test('#4162: the sweep source has no merge call', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/merged-pr-feedback-sweep.mts', import.meta.url),
+    'utf8',
+  );
+  assert.doesNotMatch(source, /\.\s*merge\w*\s*\(/);
+  assert.doesNotMatch(source, /['"`]merge['"`]/);
+});
+
+test('#4162: every readiness argv the sweep builds passes the real readiness parser', () => {
+  for (const references of [
+    [],
+    [{ number: 3 }],
+    [{ number: 3 }, { number: 4 }],
+  ]) {
+    for (const argv of openPrReadinessArgvCandidates(7, 'o', 'r', references) ??
+      []) {
+      const parsed = parseReadinessArgs(argv);
+      assert.equal(parsed.prNumber, 7);
+      assert.equal(parsed.owner, 'o');
+      assert.equal(parsed.repo, 'r');
+    }
+  }
+  const [first, second] =
+    openPrReadinessArgvCandidates(7, 'o', 'r', [
+      { number: 3 },
+      { number: 4 },
+    ]) ?? [];
+  assert.equal(parseReadinessArgs(first).claimIssueNumber, 3);
+  assert.deepEqual(parseReadinessArgs(second).closingIssueNumbers, [3, 4]);
+  assert.equal(
+    parseReadinessArgs(
+      (openPrReadinessArgvCandidates(7, 'o', 'r', []) ?? [])[0],
+    ).claimless,
+    true,
+  );
+});
+
+test('#4162: a failure on one claim issue does not hide a ready result on another, and a failed age read still lists the PR', () => {
+  const fixture = openPrFixture();
+  fixture.openChangeRequests = [fixture.openChangeRequests?.[0]].filter(
+    (pr) => pr !== undefined,
+  );
+  fixture.changeRequestConvergenceViews = {
+    10: convergenceView([{ number: 100 }, { number: 101 }]),
+  };
+  fixture.workItemErrors = {
+    10: { category: 'unavailable', message: 'age read failed' },
+  };
+  const { port, calls } = recordingPort(fixture);
+  const report = runMergedPrFeedbackSweep(parseArgs(['--days', '7']), {
+    port,
+    owner: 'o',
+    repo: 'r',
+    nowMs: OPEN_NOW_MS,
+    readiness: (argv) => {
+      if (argv[argv.indexOf('--claim-issue') + 1] === '100') {
+        throw new Error('first candidate failed');
+      }
+      return { ready: true };
+    },
+  });
+  assert.deepEqual(report.openReadyPrs, [
+    {
+      number: 10,
+      title: 'ready one',
+      url: 'https://x/pull/10',
+      openedAt: null,
+      ageHours: null,
+    },
+  ]);
+  assert.deepEqual(report.openReadyUncheckedPrs, []);
+  assertNoMergeOrWrite(fixture, calls);
 });

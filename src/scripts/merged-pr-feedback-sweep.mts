@@ -14,6 +14,11 @@
 //
 // This is the recurring counterpart of the one-time audit in #910 and the
 // chosen recovery path from #909 (advisory-wait stays Copilot-only).
+//
+// #4162: a date-window run also lists OPEN PRs that pass the read-only
+// pre-merge readiness check but have not been merged, so an idle merge step
+// shows up in the same summary. That section is read-only too: it runs the
+// readiness collector in process and never merges, claims, or posts.
 import {
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   readAdvisoryPrimaryBotLogin,
@@ -26,12 +31,15 @@ import {
   isHelperErrorEnvelopeEnabled,
   runHelperCli,
 } from './helper-cli-runner.mts';
-import { loadIddConfig } from './idd-config.mts';
+import type { ActivationResult } from './idd-activation.mts';
+import { type IddConfig, loadIddConfig } from './idd-config.mts';
+import { collectPreMergeReadiness } from './pre-merge-readiness.mts';
 import {
   advisoryBotIdentityToken,
   classifyCommentEditState,
   classifyIddPrComment,
   DEFAULT_ADVISORY_BOT_LOGINS,
+  extractSameRepoClosingIssueNumbers,
   hasFreshDisposition,
   isAdvisoryNonReviewNotice,
   isCopilotReviewerLogin,
@@ -749,10 +757,241 @@ function collectUnaddressedComments(
 }
 
 // ---------------------------------------------------------------------------
-// CLI / I/O (not unit-tested; the detection lives in the pure builder above)
+// Open-and-ready section (#4162)
 // ---------------------------------------------------------------------------
 
-interface SweepArgs {
+/** One open PR after its readiness check. */
+export interface OpenPrReadinessEntry {
+  number: number;
+  title: string;
+  url: string;
+  /** When the PR was opened; `null` when the provider did not say. */
+  createdAt: string | null;
+  /** Only `true` lists the PR in the open-and-ready section. */
+  ready: boolean;
+}
+
+/** One listed open-and-ready PR. */
+export interface OpenReadyPrFinding {
+  number: number;
+  title: string;
+  url: string;
+  openedAt: string | null;
+  /** Whole hours since `openedAt`; `null` when `openedAt` is unknown. */
+  ageHours: number | null;
+}
+
+/** An open PR whose readiness could not be decided. */
+export interface OpenPrUnchecked {
+  number: number;
+  reason: string;
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * Keep only the open PRs whose readiness check returned `ready: true`, each
+ * with how long it has been open. Not-ready PRs are left out: their blockers
+ * already appear in the readiness output itself.
+ */
+export function buildOpenReadySection(
+  entries: OpenPrReadinessEntry[],
+  nowMs: number,
+): OpenReadyPrFinding[] {
+  return entries
+    .filter((entry) => entry.ready === true)
+    .map((entry) => {
+      const openedMs = entry.createdAt ? Date.parse(entry.createdAt) : NaN;
+      const ageHours =
+        Number.isFinite(openedMs) && Number.isFinite(nowMs)
+          ? Math.max(0, Math.floor((nowMs - openedMs) / HOUR_MS))
+          : null;
+      return {
+        number: entry.number,
+        title: entry.title,
+        url: entry.url,
+        openedAt: entry.createdAt ?? null,
+        ageHours,
+      };
+    });
+}
+
+/** Runs the read-only readiness check for one argv and returns its
+ * report. Only `ready` and `branchCurrency.mergeStateStatus` are read. */
+export type OpenPrReadinessCheck = (argv: string[]) => unknown;
+
+// The readiness gates have no draft gate of their own, so a draft PR with
+// every gate passing would otherwise read as ready to merge.
+function isReadyReport(report: unknown): boolean {
+  const record =
+    report !== null && typeof report === 'object'
+      ? (report as {
+          ready?: unknown;
+          branchCurrency?: { mergeStateStatus?: unknown } | null;
+        })
+      : null;
+  const mergeStateStatus = String(
+    record?.branchCurrency?.mergeStateStatus ?? '',
+  ).toUpperCase();
+  return record?.ready === true && mergeStateStatus !== 'DRAFT';
+}
+
+/**
+ * The readiness argv to try for one open PR, or `null` when its closing
+ * references cannot be used. A PR that closes no issue is checked with
+ * `--claimless`. A PR that closes issues in this repository is checked with
+ * each of them as `--claim-issue` in turn (the claim may live on any one),
+ * and `--closing-issues` names the whole set when there is more than one.
+ * References that are unreadable or name only other repositories give
+ * `null`: `--claimless` would refuse them, and guessing a claim issue would
+ * be wrong.
+ */
+export function openPrReadinessArgvCandidates(
+  number: number,
+  owner: string,
+  repo: string,
+  closingIssuesReferences: unknown,
+): string[][] | null {
+  const base = ['--pr', String(number), '--owner', owner, '--repo', repo];
+  if (
+    Array.isArray(closingIssuesReferences) &&
+    closingIssuesReferences.length === 0
+  ) {
+    return [[...base, '--claimless']];
+  }
+  const issues = [
+    ...new Set(
+      extractSameRepoClosingIssueNumbers(closingIssuesReferences, owner, repo),
+    ),
+  ];
+  if (issues.length === 0) {
+    return null;
+  }
+  if (issues.length === 1) {
+    return [[...base, '--claim-issue', String(issues[0])]];
+  }
+  const closingSet = issues.join(',');
+  return issues.map((issue) => [
+    ...base,
+    '--claim-issue',
+    String(issue),
+    '--closing-issues',
+    closingSet,
+  ]);
+}
+
+/** The open PRs and their readiness verdicts. */
+export interface OpenReadyCollection {
+  openPrCount: number;
+  entries: OpenPrReadinessEntry[];
+  unchecked: OpenPrUnchecked[];
+}
+
+/**
+ * Check every open PR with the read-only readiness collector. A failure on
+ * one PR is recorded in `unchecked` rather than stopping the sweep, so a
+ * stuck PR is never silently dropped. Reads only: no merge, claim, or post.
+ */
+export function collectOpenReadyPrs(
+  port: ProviderPort,
+  owner: string,
+  repo: string,
+  readiness: OpenPrReadinessCheck,
+): OpenReadyCollection {
+  const openPrs = port.listOpenChangeRequests();
+  const entries: OpenPrReadinessEntry[] = [];
+  const unchecked: OpenPrUnchecked[] = [];
+  for (const pr of openPrs) {
+    try {
+      const view = port.getChangeRequestConvergenceView(pr.number);
+      const candidates = openPrReadinessArgvCandidates(
+        pr.number,
+        owner,
+        repo,
+        view.closingIssuesReferences,
+      );
+      if (candidates === null) {
+        unchecked.push({
+          number: pr.number,
+          reason:
+            'closing issue references are unreadable or name no issue in this repository',
+        });
+        continue;
+      }
+      // Each candidate is tried on its own: a failure on one claim issue
+      // must not hide a ready result on another. The PR counts as
+      // unchecked only when no candidate is ready and one of them failed.
+      let ready = false;
+      let firstFailure: unknown = null;
+      for (const argv of candidates) {
+        try {
+          if (isReadyReport(readiness(argv))) {
+            ready = true;
+            break;
+          }
+        } catch (error) {
+          firstFailure ??= error;
+        }
+      }
+      if (!ready && firstFailure !== null) {
+        throw firstFailure;
+      }
+      // Only a listed PR needs its age, so skip the extra read otherwise. A
+      // failed read leaves the age unknown rather than dropping the PR.
+      let createdAt: string | null = null;
+      if (ready) {
+        try {
+          createdAt = port.getWorkItem(pr.number)?.createdAt ?? null;
+        } catch {
+          createdAt = null;
+        }
+      }
+      entries.push({
+        number: pr.number,
+        title: pr.title,
+        url: pr.url,
+        createdAt,
+        ready,
+      });
+    } catch (error) {
+      unchecked.push({
+        number: pr.number,
+        reason: excerpt(error instanceof Error ? error.message : String(error)),
+      });
+    }
+  }
+  return { openPrCount: openPrs.length, entries, unchecked };
+}
+
+/**
+ * The default readiness check: the same in-process collector the
+ * `pre-merge-readiness` CLI runs, sharing this sweep's provider port. The
+ * config and activation loaders are injectable for tests.
+ */
+export function createOpenPrReadiness(
+  port: ProviderPort,
+  loadTrustedConfig?: (
+    owner: string,
+    repo: string,
+    ref: string,
+  ) => IddConfig | null,
+  resolveActivation?: (owner: string, repo: string) => ActivationResult | null,
+): OpenPrReadinessCheck {
+  return (argv) =>
+    collectPreMergeReadiness(
+      argv,
+      () => port,
+      loadTrustedConfig,
+      resolveActivation,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CLI / I/O (driven in tests through runMergedPrFeedbackSweep with a fake
+// provider port; the detection lives in the pure builders above)
+// ---------------------------------------------------------------------------
+
+export interface SweepArgs {
   since: string | null;
   days: number | null;
   prNumbers: number[];
@@ -883,6 +1122,11 @@ function printHelp(): void {
 
 Read-only: scans merged PRs for unresolved/unaddressed advisory feedback and
 prints JSON. No minimization, no posting, no issue creation.
+
+A date-window run (--since/--days, or neither --pr nor --prs) also lists open
+PRs whose read-only pre-merge readiness check reports ready: true
+(openReadyPrs, with each PR's age). It never merges, claims, or posts. An
+explicit --pr/--prs run skips that section (null).
 `);
 }
 
@@ -982,17 +1226,23 @@ function fetchMergedPr(
   };
 }
 
-function main(): HelperCliResult {
-  const args = parseArgs(process.argv.slice(2));
-  if (args.help) {
-    printHelp();
-    process.exit(0);
-  }
-  const currentRepo =
-    args.owner && args.repo ? null : resolveCurrentGithubRepository();
-  const owner = args.owner || currentRepo?.owner || '';
-  const repo = args.repo || currentRepo?.repo || '';
-  const port = createGithubProviderAdapter(owner, repo);
+/** What {@link runMergedPrFeedbackSweep} needs besides the parsed args. */
+export interface SweepRunDeps {
+  port: ProviderPort;
+  owner: string;
+  repo: string;
+  /** The clock for open-PR ages, read once by the caller. */
+  nowMs: number;
+  /** Defaults to {@link createOpenPrReadiness} over `port`. */
+  readiness?: OpenPrReadinessCheck;
+}
+
+/**
+ * Run the whole sweep against a provider port and return the JSON report
+ * `main()` prints. Reads only: it never merges, claims, or posts.
+ */
+export function runMergedPrFeedbackSweep(args: SweepArgs, deps: SweepRunDeps) {
+  const { port, owner, repo } = deps;
   const iddConfig = loadIddConfig();
 
   const { actors: trustedMarkerActors } = resolveTrustedMarkerActors({
@@ -1049,25 +1299,74 @@ function main(): HelperCliResult {
     primaryBotLogin,
   });
 
+  // #4162: the open-and-ready section belongs to the periodic date-window
+  // summary. An explicit --pr/--prs run is a targeted merged-PR recheck, so
+  // it skips the per-open-PR readiness checks and reports the section as
+  // null. The merged-PR listing above runs first, so a transport failure
+  // still surfaces from the same call it always did.
+  const openReady = usingExplicitPrs
+    ? null
+    : collectOpenReadyPrs(
+        port,
+        owner,
+        repo,
+        deps.readiness ?? createOpenPrReadiness(port),
+      );
+  const openReadyPrs = openReady
+    ? buildOpenReadySection(openReady.entries, deps.nowMs)
+    : null;
+
+  return {
+    sweepWindow: {
+      since: sinceDate,
+      days: usingExplicitPrs ? null : args.days,
+      explicitPrs: usingExplicitPrs ? args.prNumbers : null,
+      prCount: result.summary.prCount,
+    },
+    trustedMarkerActors,
+    advisoryBotLogins,
+    iddAgentLogins,
+    primaryBotLogin,
+    prs: result.prs,
+    openReadyPrs,
+    openReadyUncheckedPrs: openReady ? openReady.unchecked : null,
+    summary: {
+      ...result.summary,
+      openPrCount: openReady ? openReady.openPrCount : null,
+      openReadyPrCount: openReadyPrs ? openReadyPrs.length : null,
+      openReadyUncheckedCount: openReady ? openReady.unchecked.length : null,
+    },
+  };
+}
+
+/** The sweep report as printed: two-space JSON, so an empty section is the
+ * single line `"openReadyPrs": []`. */
+export function renderMergedPrSweepOutput(
+  report: ReturnType<typeof runMergedPrFeedbackSweep>,
+): string {
+  return `${JSON.stringify(report, null, 2)}\n`;
+}
+
+function main(): HelperCliResult {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    printHelp();
+    process.exit(0);
+  }
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  const port = createGithubProviderAdapter(owner, repo);
   process.stdout.write(
-    `${JSON.stringify(
-      {
-        sweepWindow: {
-          since: sinceDate,
-          days: usingExplicitPrs ? null : args.days,
-          explicitPrs: usingExplicitPrs ? args.prNumbers : null,
-          prCount: result.summary.prCount,
-        },
-        trustedMarkerActors,
-        advisoryBotLogins,
-        iddAgentLogins,
-        primaryBotLogin,
-        prs: result.prs,
-        summary: result.summary,
-      },
-      null,
-      2,
-    )}\n`,
+    renderMergedPrSweepOutput(
+      runMergedPrFeedbackSweep(args, {
+        port,
+        owner,
+        repo,
+        nowMs: Date.now(),
+      }),
+    ),
   );
   return 0;
 }
