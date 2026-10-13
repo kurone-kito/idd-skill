@@ -130,7 +130,7 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
     }
     const body = JSON.parse(stdin).body;
     const id = 7000 + state.comments.length;
-    state.comments.push({ id, issue: number, body, user, createdAt: new Date(Date.UTC(2026, 9, 13, 0, 0, state.comments.length)).toISOString() });
+    state.comments.push({ id, issue: number, journalIndex: number === 2674 ? state.journalPosts : 0, body, user, createdAt: new Date(Date.UTC(2026, 9, 13, 0, 0, state.comments.length)).toISOString() });
     save();
     out({ id, html_url: 'https://github.com/o/r/issues/' + number + '#issuecomment-' + id, body });
   }
@@ -140,7 +140,8 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
 if ((match = /^repos\/o\/r\/issues\/comments\/(\d+)$/.exec(path))) {
   const comment = state.comments.find((c) => c.id === Number(match[1]));
   if (!comment) fail('gh: Not Found (HTTP 404)');
-  out({ id: comment.id, body: comment.body, user: { login: comment.user } });
+  const corrupt = comment.journalIndex > 0 && comment.journalIndex === state.corruptReadbackAt;
+  out({ id: comment.id, body: corrupt ? comment.body + ' ' : comment.body, user: { login: comment.user } });
 }
 if ((match = /^repos\/o\/r\/issues\/(\d+)$/.exec(path))) {
   const number = Number(match[1]);
@@ -180,6 +181,7 @@ function setup(
     editedComments?: boolean;
     dropLabels?: boolean;
     failJournalPostAt?: number;
+    corruptReadbackAt?: number;
     claimOnCreate?: boolean;
     trusted?: string[];
   } = {},
@@ -207,6 +209,7 @@ function setup(
       editedComments: options.editedComments === true,
       dropLabels: options.dropLabels === true,
       failJournalPostAt: options.failJournalPostAt ?? 0,
+      corruptReadbackAt: options.corruptReadbackAt ?? 0,
       claimOnCreate: options.claimOnCreate === true,
       issues: {},
       comments: [],
@@ -638,6 +641,20 @@ test('CLI: with no trusted marker actor configured, --apply writes nothing', () 
     assert.equal(result.status, 1);
     assert.match(result.stderr, /no trusted marker actor/);
     assert.deepEqual(writes(fixture.log()), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a member record that posts but fails its read-back reports an uncertain journal state', () => {
+  const fixture = setup({ corruptReadbackAt: 3 });
+  try {
+    const result = fixture.run([...files(fixture), '--apply']);
+    assert.equal(result.status, 1, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.failedStep, 'member');
+    assert.equal(report.journalState, 'uncertain: replay the journal');
+    assert.match(journalRecords(fixture)[2] ?? '', /state=member/);
   } finally {
     fixture.restore();
   }

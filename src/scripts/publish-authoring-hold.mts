@@ -44,7 +44,6 @@ import {
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
 import { resolveCurrentGithubRepository } from './provider-adapter-github.mts';
 
-export const PUBLISH_SHAPES = ['orphan', 'child'] as const;
 export const PUBLISH_BUCKETS = [
   'ready',
   'needs-decision',
@@ -67,6 +66,10 @@ const PUBLISH_AUTHORING_HOLD_FLAG_SPEC = {
 } as const;
 
 const REPO_TOKEN_PATTERN = /^[A-Za-z0-9_.-]+$/;
+
+/** A record whose POST landed but whose read-back failed: replay the journal
+ * to learn its state. */
+const JOURNAL_STATE_UNCERTAIN = 'uncertain: replay the journal';
 
 if (import.meta.main) {
   if (isHelperErrorEnvelopeEnabled()) {
@@ -306,8 +309,9 @@ Without --apply this is a dry run: it makes the read-only checks, the lint
 and the label lookups, prints the planned steps, and writes nothing.
 
 A failure after the create prints a recovery-hold JSON object with the
-created issue, the failed step and the last journal state (pending), and
-exits 1. The issue keeps its labels and is never closed. The Stage 2
+created issue, the failed step and the last journal state, and exits 1.
+That state is pending, or "uncertain: replay the journal" when a record
+was posted but its read-back failed. The issue keeps its labels and is never closed. The Stage 2
 release stays a separate, explicit request.
 
 Exit codes: 0 published (or planned), 1 refused or failed, 2 usage error,
@@ -832,16 +836,27 @@ function publish(input: {
     if (run.status !== 0 || !Number.isInteger(commentId) || commentId <= 0) {
       throw new Error(helperFailure('post-idd-marker', run));
     }
-    const stored = ghApiJson(
-      `repos/${where.owner}/${where.repo}/issues/comments/${commentId}`,
-    ) as { body?: unknown; user?: { login?: unknown } } | null;
+    // From here the comment exists, so a failed check leaves the record's
+    // state unknown rather than unchanged.
+    const landed = (message: string): Error =>
+      Object.assign(new Error(message), { posted: true });
+    let stored: { body?: unknown; user?: { login?: unknown } } | null;
+    try {
+      stored = ghApiJson(
+        `repos/${where.owner}/${where.repo}/issues/comments/${commentId}`,
+      ) as { body?: unknown; user?: { login?: unknown } } | null;
+    } catch (error) {
+      throw landed(
+        `comment ${commentId} could not be read back: ${(error as Error).message}`,
+      );
+    }
     if (stored?.body !== expected) {
-      throw new Error(`comment ${commentId} does not carry the posted marker`);
+      throw landed(`comment ${commentId} does not carry the posted marker`);
     }
     if (
       String(stored.user?.login ?? '').toLowerCase() !== actor.toLowerCase()
     ) {
-      throw new Error(`comment ${commentId} was not written by ${actor}`);
+      throw landed(`comment ${commentId} was not written by ${actor}`);
     }
     return commentId;
   };
@@ -930,9 +945,11 @@ function publish(input: {
           ...labels.flatMap((name) => ['--add-label', name]),
         ]);
         const after = readIssue(owner, repo, number);
-        reason += hasLabel(after.labels, authoringLabel)
+        reason += labels.every((name) => hasLabel(after.labels, name))
           ? '; the labels were added as a safe hold'
-          : '; adding the labels could not be verified';
+          : hasLabel(after.labels, authoringLabel)
+            ? '; the authoring label was added as a safe hold, but another label could not be verified'
+            : '; adding the labels could not be verified';
       }
     } catch (error) {
       reason += `; the safe-hold recovery failed: ${(error as Error).message}`;
@@ -987,12 +1004,14 @@ function publish(input: {
       detail: { commentId: ownerId },
     });
   } catch (error) {
+    const attached = steps.some((s) => s.step === 'identity-attach');
     return recoveryHold({
       ...held,
-      failedStep: steps.some((s) => s.step === 'identity-attach')
-        ? 'owner-marker'
-        : 'identity-attach',
+      failedStep: attached ? 'owner-marker' : 'identity-attach',
       reason: (error as Error).message,
+      ...(!attached && isPosted(error)
+        ? { journalState: JOURNAL_STATE_UNCERTAIN }
+        : {}),
     });
   }
 
@@ -1076,6 +1095,7 @@ function publish(input: {
       ...held,
       failedStep: 'member',
       reason: (error as Error).message,
+      ...(isPosted(error) ? { journalState: JOURNAL_STATE_UNCERTAIN } : {}),
     });
   }
 
@@ -1083,6 +1103,10 @@ function publish(input: {
     `${JSON.stringify({ mode: 'apply', outcome: 'published', ...held, journalState: 'member' }, null, 2)}\n`,
   );
   return 0;
+}
+
+function isPosted(error: unknown): boolean {
+  return (error as { posted?: unknown } | null)?.posted === true;
 }
 
 function recoveryHold(report: Record<string, unknown>): HelperCliResult {
