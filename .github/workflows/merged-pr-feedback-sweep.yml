@@ -1,0 +1,27 @@
+concurrency:
+  cancel-in-progress: false
+  group: merged-pr-feedback-sweep
+name: Merged-PR feedback sweep (weekly summary)
+# Bootstrap skeleton for issue #4161 (dispatch-first rollout, D2). This file
+# only registers the workflow and its manual trigger on the default branch,
+# so a `workflow_dispatch` run can validate the real sweep job from a pushed
+# branch before that job's pull request opens. The job below is gated off
+# with `if: false` and does nothing. The sweep job lands in the follow-up
+# pull request. There is deliberately no schedule and no push or
+# pull_request trigger.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+jobs:
+  sweep:
+    # Inert until the sweep job lands (see the header above).
+    if: false
+    # ubuntu-latest, not ubuntu-slim: ubuntu-slim caps a job at 15 minutes,
+    # below the bound set here.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Inert placeholder
+        run: echo "placeholder; the sweep job lands in the follow-up pull request"
