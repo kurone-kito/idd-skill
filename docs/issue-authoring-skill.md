@@ -215,11 +215,18 @@ rules.
 - An estimate that does not fit even `L`'s scope-and-uncertainty
   definition is a mis-scope smell: return to Decompose and Draft and
   split at intent level instead of publishing one oversized issue.
-- The hint only reorders candidates **within** one suitability-score
-  band (after the score and optional desync rules, before the
-  lowest-issue-number tie-break); it never skips, gates, crosses a score
-  band, or bypasses the A4.5/A5 gates, and a large issue stays claimable
-  when it is the only ready work.
+- A child draft with an `S` or `M` hint and more candidate files than
+  the contract's
+  [over-scope split threshold](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#effort-hint)
+  table allows is split into a held roadmap with children before
+  publication, unless it carries a plain-text `Split out of #<n>` line;
+  `audit-authored-issue`'s `effort-candidate-file-limit` check enforces
+  that table.
+- In Discover, the hint only reorders candidates **within** one
+  suitability-score band (after the score and optional desync rules,
+  before the lowest-issue-number tie-break); it never skips, gates,
+  crosses a score band, or bypasses the A4.5/A5 gates, and a large issue
+  stays claimable when it is the only ready work.
 - A missing or invalid hint is **fail-safe**: it sorts as the neutral
   middle, as-if `M`, per `idd-discover.instructions.md` A4 Step 2.
 
