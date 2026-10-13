@@ -96,6 +96,7 @@ const FLAG_CONCEPTS: readonly FlagConcept[] = [
       'forced-handoff-marker.mjs',
       'minimize-superseded-markers.mjs',
       'pre-merge-readiness.mjs',
+      'publish-authoring-hold.mjs',
       'resume-claim-routing.mjs',
       'review-activity-snapshot.mjs',
     ],
@@ -125,7 +126,12 @@ const FLAG_CONCEPTS: readonly FlagConcept[] = [
       'stalled-session-quiet-check.mjs',
       'suitability-triage.mjs',
     ],
-    deprecatedScanExclude: ['select-desynced-index.mjs'],
+    // publish-authoring-hold passes post-idd-marker's own publication
+    // `--token` field (#4127), not a GitHub auth token.
+    deprecatedScanExclude: [
+      'publish-authoring-hold.mjs',
+      'select-desynced-index.mjs',
+    ],
   },
 ];
 

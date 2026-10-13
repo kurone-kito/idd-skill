@@ -543,6 +543,15 @@ const HELPER_COMMANDS = [
     contractPaths: ['schemas/provider-outage-park.schema.json'],
   },
   {
+    id: 'publish-authoring-hold',
+    scriptName: 'idd:publish-authoring-hold',
+    binName: 'idd-publish-authoring-hold',
+    entryPath: 'scripts/publish-authoring-hold.mjs',
+    vendoredCommand: 'node scripts/publish-authoring-hold.mjs',
+    description:
+      'Create one drafted orphan issue under the issue-authoring hold, running the New-issue ownership steps of the authoring contract in order (dry run unless --apply).',
+  },
+  {
     id: 'rerun-advisory-convergence',
     scriptName: 'idd:rerun-advisory-convergence',
     binName: 'idd-rerun-advisory-convergence',

@@ -115,6 +115,7 @@ scripts/provider-health.mjs linguist-generated=true
 scripts/provider-outage-declaration.mjs linguist-generated=true
 scripts/provider-outage-park.mjs linguist-generated=true
 scripts/provider-port.mjs linguist-generated=true
+scripts/publish-authoring-hold.mjs linguist-generated=true
 scripts/readline-prompt.mjs linguist-generated=true
 scripts/repository-instruction-audit.mjs linguist-generated=true
 scripts/repository-inventory-audit.mjs linguist-generated=true

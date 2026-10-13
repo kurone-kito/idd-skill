@@ -56,6 +56,7 @@ export const COVERED_HELPERS = [
   'provider-health',
   'provider-outage-declaration',
   'provider-outage-park',
+  'publish-authoring-hold',
   'rerun-advisory-convergence',
   'resolve-review-thread',
   'resume-claim-routing',
