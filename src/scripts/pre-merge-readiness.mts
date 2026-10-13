@@ -16,6 +16,7 @@ import { resolveAdvisoryConvergenceIdentitySignals } from './advisory-convergenc
 import {
   advisoryWaitSectionIsValid,
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   resolveAdvisoryConvergenceDeadlineMinutes,
   resolveAdvisoryPrimaryBotLogin,
   resolveAdvisoryRecoveryCycleCap,
@@ -1335,6 +1336,7 @@ export function collectPreMergeReadiness(
   // terminal decline, not a completed review, so it reaches the terminal state
   // through this flag rather than through the coverage check.
   const copilotDeclinedHead =
+    primaryBotLogin === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN &&
     latestCopilotReviewClause.bodyShape === 'decline-no-reviewable-files' &&
     latestCopilotReviewClause.matchesHead;
   // #2554: shortens the terminal-unavailability window below to
