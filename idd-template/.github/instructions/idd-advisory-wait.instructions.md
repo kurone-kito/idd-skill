@@ -383,8 +383,9 @@ unnecessary — post a trusted `review-ack:` marker instead; see
 `idd-review-triage.instructions.md`'s `review-ack:` paragraph (E6).
 
 **Declined head (`#4142`)**: a `decline-no-reviewable-files` review on HEAD is a
-terminal decline, not a review: `COPILOT_UNAVAILABLE` applies at once, with no
-recovery marker or window wait; a trusted `review-ack:` is still required.
+terminal decline, not a review: with an active claim, `COPILOT_UNAVAILABLE`
+applies at once, with no recovery marker or window wait; a trusted `review-ack:`
+is still required.
 
 ## Terminal Copilot stall-recovery contract (state, policy, markers, clock)
 
