@@ -48,11 +48,9 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    `{latest-ci-completed-at}` — this final fetch is the live side of
    each comparison, as F2's own live snapshot was.
 
-   The structural ack-only carve-out from F2 applies here verbatim:
-   newer activity/count growth that helper evidence proves is
-   post-disposition advisory-bot acknowledgement only
-   (`ack-only-post-disposition`) does not force the return to E1; all
-   other triggers above are unaffected.
+   The structural ack-only carve-out from F2 applies here verbatim
+   (`ack-only-post-disposition`; see `idd-pre-merge.instructions.md`);
+   all other triggers above are unaffected.
 
    From that same final fetch, compute `F3_UNRESOLVED_ACTIONABLE_COUNT`
    using the exact F2 unresolved-thread rule and exceptions
@@ -116,9 +114,6 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
        bot wait check** in `idd-pre-merge.instructions.md` (go back to
        the first condition in F2), which reuses the existing same-HEAD
        marker — do not post a new one.
-
-   If the optional helper output disagrees with the live fetch above,
-   follow the live fetch and the written gate rules.
 
 4. Merge the PR using a **merge commit**, binding to the validated SHA
    to prevent a race where a new push lands between the F3 freshness
@@ -260,8 +255,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
        true`, and `codeownerEligibilityUnreadable: false` hold. See
        `docs/permissions.md` (kurone-kito/idd-skill#1663) for this
        repository's own dated observation.
-       `idd-merge-execute.mjs --apply` applies this automatically and
-       records the outcome in the verdict's `adminFallbackUsed` field.
+       `idd-merge-execute.mjs --apply` applies it.
 
        ```sh
        gh pr merge {pr-number} --merge --match-head-commit "${PR_HEAD_SHA_F3}" --admin
@@ -579,7 +573,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    Finally, while the claim still matches, post your
    `{agent-id}` / `{claim-id}` `unclaimed-by` (see
    [Unclaim format](idd-overview-core.instructions.md#unclaim-format))
-   to release it (#2220). If ownership is lost, stop all later mutations.
+   to release it (#2220).
 
 ## F5 — Loop
 

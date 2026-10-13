@@ -117,11 +117,9 @@ interpreting `gh pr checks` output.
    `noRequiredChecksConfigured: true` state F2's CI gate already
    interprets (`idd-pre-merge.instructions.md`). Reuse
    `pre-merge-readiness`'s `ci.presentRunConclusion` when available;
-   otherwise derive the equivalent from actual runs at the head SHA:
-   `all-passing` may proceed; `pending` → wait/re-check; `some-failing`
-   or `none` (no runs) → **hold** — never treat an empty required-check
-   set as a vacuous pass, except `ci.allowedByPolicySetting` (the
-   global-only opt-in). Full routing table:
+   otherwise derive the equivalent from actual runs at the head SHA.
+   Hold rather than treat an empty required-check set as a vacuous pass,
+   except `ci.allowedByPolicySetting` (the global-only opt-in); see
    [F2 — Pre-merge condition check](idd-pre-merge.instructions.md#f2--pre-merge-condition-check).
 
 When caller phases already provide a trusted required-check set, reuse
@@ -407,7 +405,7 @@ See [REST](../../docs/idd-helper-scripts.md#rest).
   review state either — see
   `idd-advisory-wait.instructions.md`, whose Scope section covers
   why a non-primary bot's review must not gate a custom wait either. A
-  bare `sleep` may be refused (observed 2026-09-30 in Claude Code, issue
+  bare `sleep` may be refused (observed 2026-09-30, issue
   `#3673`: `sleep 30` refused, `sleep 5` ran); in such a runtime, block a CI wait
   with the `--watch` forms above. A `run_in_background` Bash task or other
   detached/backgrounded mechanism (a background until-loop included) must

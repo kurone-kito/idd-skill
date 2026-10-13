@@ -188,18 +188,15 @@ never clears by polling: follow its `detail`.
   applies — do not return to E1 for that activity alone (still confirm
   the semantic residual; every other trigger/gate is unaffected).
 
-  A current-claim agent's own post-watermark disposition replies are
-  expected convergence activity, not reviewer input, and the watermark
-  refresh on the E-phase branch-sync `clean` / `behind-no-conflict`
-  route already re-covers them. The same holds for any other
-  own-agent-authored procedural or status comment posted after the
-  watermark (for example, a hold comment explaining a blocker) that
-  introduces no reviewer or bot finding of its own — it is expected
-  convergence activity too, though the branch-sync route's own
-  refresh does not independently re-cover it. If a return-to-E1 is
-  triggered solely by disposition replies, other own-agent
-  procedural or status comments of that kind, or both, refresh the
-  watermark directly instead; every other F2 trigger and gate is
+  A current-claim agent's own post-watermark disposition replies are expected
+  convergence activity, not reviewer input, and the E-phase branch-sync
+  `clean` / `behind-no-conflict` route's watermark refresh already re-covers
+  them. Any other own-agent-authored procedural or status comment after the
+  watermark (for example, a hold comment explaining a blocker) that introduces
+  no reviewer or bot finding of its own is also expected convergence activity,
+  but that route's refresh does not re-cover it. If a return-to-E1 is
+  triggered solely by disposition replies, other such comments, or both,
+  refresh the watermark directly instead; every other F2 trigger and gate is
   unaffected.
 
   Third-party advisory bot skip-review carve-out: the same applies to
