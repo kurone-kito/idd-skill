@@ -1008,7 +1008,8 @@ external scheduler.
 
 The operating rules for this variant are in the
 `.github/instructions/idd-orchestrator.instructions.md`,
-which an agent reads only when its activation conditions hold.
+which an agent reads only when its activation conditions hold or a fan-out
+session restarts.
 
 Running this variant safely requires:
 
@@ -1197,6 +1198,210 @@ Running this variant safely requires:
   `gh pr view <n> --json mergeable,mergeStateStatus`) or an orphaned
   claim before dispatching further workers, rather than assuming success
   or failure either way.
+
+### Orchestrator restart
+
+This subsection covers an orchestrating session that restarts with its
+session-suffixed agent id, as the 2026-10-11 session did (issue
+`kurone-kito/idd-skill#4014`). Under the default shared `{agent-id}` with no
+session suffix, the session cannot tell its claims from another session's, so
+recovery is unavailable: it reports its claims to the operator and does not
+refill. The roster is not stored anywhere locally, so the steps below rebuild it
+from the forge, the worktrees, and the harness's agent listing. A session with a
+new id cannot identify its old claims, and step 1 treats them as not its own.
+
+1. **Find own claims.** For each worktree in `git worktree list --porcelain`,
+   list `idd-generated-tokens-*.json` in that worktree's private admin directory
+   (`git -C <worktree> rev-parse --absolute-git-dir`). A `prunable` entry, or
+   one whose path no longer exists, is not read: it is noted, and a claim whose
+   branch or lock it still names is reported to the operator. The scan then goes
+   on with the readable entries. Each file holds `agentId` and `claimId`, and a
+   `nonce` when one was recorded. One worktree can hold several files. A claim
+   is own only when its `agentId` equals this session's session-suffixed
+   agent-id and its `agentId` and `claimId` both match the trusted `claimed-by`
+   marker for the same issue. The agent-id alone never proves ownership, because
+   the claim id is the authoritative token. A session with no unique session
+   identity cannot recover its claims: it reports them to the operator and does
+   not refill. Claims that are not own are not dispatched again, and they are
+   reported to the operator. A worktree that has claim evidence, such as a claim
+   lock or an `issue/<number>-<slug>` branch, but no readable token record is
+   reported to the operator rather than skipped, because the claim contract
+   treats that state as fail-closed. A worktree with no claim evidence, such as
+   the primary checkout, is not reported. F4 removes the linked worktree, with
+   its admin directory and this token file, before it posts the final
+   `unclaimed-by` marker. So a claim whose F4 removed its linked worktree has no
+   token file there. A record in the primary worktree's directory can survive
+   F4. Keep at most one record per claim-id: prefer the linked worktree's
+   record. A primary-directory record makes a claim worktree-less only when no
+   linked worktree carries that claim's branch or lock, and it is a hint only:
+   the trusted claimed-by marker for its issue must also carry this session's
+   unique agent-id and the same claim id. A linked worktree that does carry it,
+   but has no readable token record, is reported to the operator as unreadable
+   and is not treated as worktree-less. A readable linked record stays
+   authoritative. For a worktree-less claim, take the issue number from the
+   worker's brief in the agent listing, or from the issue-number prefix of its
+   report draft in the session scratchpad, and never from a `main` branch. Then
+   read that issue's trusted `claimed-by` and `unclaimed-by` markers for the
+   agent-id and claim-id, and apply the same test, so that both the agent id and
+   the claim id must match the marker. Also enumerate the candidates for
+   worktree-less claims from the report drafts in the session scratchpad, the
+   finished entries in the agent listing, and the running entries whose worktree
+   is gone, and read each such issue the same way. An issue whose trusted
+   markers name another agent-id, or no claim, is not own. If neither source
+   gives an issue number, report the claim to the operator and take no further
+   action on it.
+2. **Verify each own claim.** For a claim with a linked worktree, take `--issue`
+   from its branch, `issue/<number>-<slug>`, and confirm it against the trusted
+   `claimed-by` marker that carries the same claim-id, because the token record
+   holds no issue number. Run the profile-selected `resume-claim-routing`
+   command (see `docs/idd-helper-scripts.md`) with `--assert`, `--issue`,
+   `--claim-id`, `--nonce` (when the file holds one), and `--worktree <path>`.
+   Continue to step 3 only when the command exits 0, which means the state is
+   `already_owned` with action `keep`. A claim that a worker released with its
+   `unclaimed-by` marker, as F4 does as its last mutation before returning the
+   final report, is the one exception. Its `--assert` run exits 1 by design, so
+   read its verdict from stdout: when `evidence.released_claim.claim_id` equals
+   this claim-id and either the state is `unclaimed`, or the state is
+   `local_worktree_occupied` with the reason
+   `released-claim-local-worktree-occupied`, the claim goes to step 3 for worker
+   matching only, where its running worker, if any, is counted and sent no
+   message, and then to step 4. `stale` goes to the takeover path in
+   `idd-resume.instructions.md`. A claim with no worktree needs no `--worktree`:
+   run the command without `--assert` and read its `state`. The released-claim
+   result above applies to it as written, and so does `already_owned` with
+   action `keep`, which the helper reports when F4 has removed the worktree but
+   the worker has not yet posted `unclaimed-by`, so its running worker, if any,
+   still holds a slot. A `stale` result goes to the takeover path in
+   `idd-resume.instructions.md`, as it does for a claim with a worktree. Any
+   other result, including an unreadable worktree, is reported to the operator
+   with its state, and no further action is taken on that issue.
+3. **Re-attach workers.** Read the live worker list from the harness's agent
+   listing, and match each entry, by the issue number and claim id in the
+   worker's brief, to an own claim. Count every matched own worker not yet
+   disposed in `--running`, a running worker or a finished one still awaiting
+   step 4, including the running worker of a released claim, and pass each
+   counted worker's issue as an `--in-flight` value below when its brief gives
+   one. A matched finished worker goes to step 4 before any refill below, once
+   the checks in step 4 pass, and no new worker starts until step 4 has run for
+   every matched finished worker, unless its claim is still held with no handoff
+   summary on the issue. Such a worker stopped before its terminal phase, so it
+   takes the same worker-death recovery as a running worker, under the bullet
+   named above. A matched running worker of an own claim that step 2 verified as
+   `already_owned` is handled as follows: if the runtime can still message it,
+   apply the existing worker-death rules by reference, under the bullet titled
+   "Resume-specific recovery when a worker dies mid-turn" in the
+   [fan-out variant](#orchestrator-fan-out-variant); if it cannot be messaged,
+   it is treated as live and is never replaced while the listing still shows it
+   running, because its agent may still be executing when no child process is
+   visible. Wait for any running child process by PID. Then hold the claim, with
+   no replacement while the listing still shows the worker running, and report
+   the worker to the operator in step 5. A worker that matches no own claim is
+   neither messaged nor replaced. A running worker of a released claim is
+   counted and sent no message. If the harness offers no agent listing, no
+   worker is matched, every own claim that reached this step goes to step 5, and
+   the rest of this step is skipped, including the Discover pass, the budget
+   call, the overlap check, and every worker start, because the running workers
+   are unknown. An own claim that matches no worker, unless it is a released
+   claim with no linked worktree, and a listed live worker that matches no own
+   claim, also skip the rest of this step, because such a worker may still be
+   running and hold a slot the budget cannot see, an own claim goes to step 4
+   for report recovery and then to step 5, and a listed live worker goes to step
+   5. A session without a unique session-suffixed agent id also skips the rest
+   of this step, because it cannot tell its workers from another session's. Only
+   when a listing exists, the session has a unique session-suffixed agent id,
+   and no such unmatched claim or unmatched live worker remains, recount the
+   roster. After a restart, run a fresh Discover pass first, as section 3 of the
+   orchestrator phase file describes, and count its candidates (0 when none);
+   the cached graph is discarded and cannot supply that count. Then run the
+   profile-selected `idd-worker-budget` command with `--running <n> --startable
+   <n>`, where `--running` is the count above and `--startable` is the count
+   just taken. Add `--harness-limit <limit>` when this harness's row in the
+   worker mechanism table gives a numeric limit, and omit it otherwise. When
+   `--startable` is at least 1 and the budget's `slots` is at least 1, run the
+   profile-selected `discover-shared-file-overlap` command with `--issues
+   <n,...>` (the startable candidates), `--batch <k>` (the `slots` value),
+   `--check-overlap`, one `--in-flight <n>` for each counted worker's issue, and
+   `--desync-token` set to this session's session-suffixed agent-id whenever
+   `discover.selectionDesync` is `session-offset`. Otherwise skip it: the helper
+   rejects an empty candidate list and a zero batch. Each selected candidate
+   then goes through section 3, steps 4 to 6 (A4.5, the fresh-claim order
+   through claim verification, and the worker start), and its started worker is
+   recorded as a running roster entry before section 4 resumes.
+4. **Recover reports.** Run this step for each matched finished worker, once its
+   worktree, claim, and child processes show no live background work, and for
+   each unmatched own claim whose handoff or merge live state shows it finished,
+   with or without a draft. The fan-out variant's completed-notice rule names
+   these live-evidence checks, and this step applies them to every finished
+   worker, under that worker's own listed handle. A worker with live work is
+   treated as running in step 3. A claim with no matched worker and no draft is
+   recorded under the claim id as its handle, released or not, because the
+   listing supplies no handle for it. Before that append, read the worker report
+   store file read-only, as the
+   [worker final report store](idd-helper-scripts.md#worker-final-report-store)
+   describes, and, if a line already carries this claim id under another handle,
+   do not append: the store cannot tell whether that record is this worker's or
+   an earlier replacement's, so step 5 reports the claim to the operator. The
+   store dedupes on claimId, workerHandle, and terminalPhase, so a retry is
+   safe. A matched running worker gets no record. A released claim whose only
+   matched worker is still running gets no record and is reported in step 5.
+   Look for the worker's report draft in the scratchpad of the same session,
+   under the issue-number prefix that the fan-out variant already requires. If a
+   draft is found, check that its `issue` and `claimId` match the claim, and
+   that its `workerHandle` matches the listed handle when the claim has a
+   matched worker. A draft that matches the claim but has no listed worker is
+   appended under its own `workerHandle`, because the store dedupes on that
+   handle with the claim id and terminal phase, so a record already appended
+   under it is not counted twice. The listing matches workers only and never
+   names a draft handle. An unmatched claim appended in this step, from a draft
+   or from live state, has no running worker, so once it is appended it no
+   longer blocks refill: the restart then runs step 3 recount and refill gate
+   again, if no other unmatched own claim or unmatched live worker remains. Do
+   not append a draft that does not match. Then verify its outcome,
+   `pullRequest`, and `terminalPhase` against live GitHub state, set
+   `verifiedAt` to that check and `recordedAt` to the time of the append, then
+   append it. If no draft is found, verify the terminal outcome from live GitHub
+   state, build the record as the
+   [worker final report store](idd-helper-scripts.md#worker-final-report-store)
+   describes, with `harness` set to the slug the store lists for this session's
+   own harness, or `other` when none matches, and append it the same way, unless
+   its outcome is `held` or it has no terminal phase from live state: a held
+   claim, or a claim released without a merge or handoff, has no live source for
+   a terminal phase, so nothing is appended and step 5 reports it. Before any
+   append, validate the record against `schemas/worker-report.schema.json`
+   first, then append it with the profile-selected `idd-worker-report append
+   --file <path>` command. After a successful append for a matched worker,
+   dispose of the worker as the table's row says and mark its roster entry
+   `disposed`, as section 5 of the orchestrator phase file describes. Map
+   `outcome` as the store describes: `handed-off` when a trusted handoff summary
+   carrying this claim id was posted, whatever the pull request has since done
+   and whether or not the claim has since been released; otherwise `merged` for
+   a merged pull request, `abandoned` for a closed unmerged one, `held` for a
+   claim still held, and `failed` otherwise. A handoff summary is trusted only
+   when a trusted marker actor posted it, because the claim id alone is a public
+   token. Set `terminalPhase` to `F4` only for a claim released after a merge
+   under `fully_autonomous_merge`, since F4 is complete only after its final
+   `unclaimed-by`, and to `F2.5` when a trusted handoff summary carrying this
+   claim id is posted on the issue, under either merge policy. A merged pull
+   request that still shows an active claim has no terminal phase, so step 5
+   reports it. Record the recovery in `frictions`, with its `phase` (F4 or
+   F2.5), a non-empty `summary`, and `docs/idd-workflow.md` in `file`, because
+   that is the instruction path the recovery followed. If verification or the
+   append fails for a matched worker, keep it addressable, mark it `stalled`,
+   and follow the worker-specific recovery in the fan-out variant, as section 5
+   of the orchestrator phase file describes. A failed append for a released
+   claim is reported in step 5.
+5. **Report the remainder.** An own claim that reached step 3, other than a
+   released claim, and has no matching worker is reported to the operator, and
+   so is a matched finished worker that step 4 did not append because its
+   outcome is `held`. A listed live worker that matches no own claim is reported
+   to the operator too, because it blocks refill until the operator resolves it.
+   A matched running worker that cannot be messaged is reported too. A released
+   claim is reported here when step 4 left it with a running worker, when its
+   verification or append failed, or when the harness offers no agent listing,
+   so step 4 did not run for it, or when step 4 appended nothing for want of a
+   terminal phase, or because the store already holds a record for the claim
+   under another handle. Otherwise step 4 handles it. Its worktree is not
+   removed.
 
 ### Discover re-run cadence
 
