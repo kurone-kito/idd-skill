@@ -318,7 +318,11 @@ interface PolicyConfigFile {
       } | null;
     };
   };
-  autopilotSuitability?: { floor?: 1 | 2 | 3 | 4 | 5; enabled?: boolean };
+  autopilotSuitability?: {
+    floor?: 1 | 2 | 3 | 4 | 5;
+    enabled?: boolean;
+    effortL?: 'allow' | 'refuse';
+  };
   worktreeGuard?: { enabled?: boolean; branchPatterns?: readonly string[] };
   upstreamEscalation?: { enabled?: boolean };
   labels?: {
@@ -1576,7 +1580,7 @@ const policyConfigFixture = {
     heartbeatCoalesceWindow: 'PT2M',
     journalIssue: 'kurone-kito/idd-skill#2674',
   },
-  autopilotSuitability: { floor: 3, enabled: true },
+  autopilotSuitability: { floor: 3, enabled: true, effortL: 'allow' },
   worktreeGuard: {
     enabled: true,
     branchPatterns: ['issue/*', 'roadmap-audit/*'],

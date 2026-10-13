@@ -434,7 +434,7 @@
         ".github/instructions/idd-review-snapshot.instructions.md",
         ".github/instructions/idd-review-triage.instructions.md"
       ],
-      "limitBytes": 54300
+      "limitBytes": 59300
     },
     {
       "id": "bundle-review-fix-phase",
@@ -505,6 +505,12 @@
         "limitBytes": 46800,
         "issue": 3943,
         "reason": "Maintainer-approved option 1 on issue #3943, sized by the docs convention (roughly 10% headroom over measured need, not an exact fit): the lite E10 cap wording adds about 370 bytes to review-fix-lite, which sat at 97.92% of its limit before. Measured 43,387 bytes on the current tree; raised to 46,800, about 10% above measured and rounded up to the nearest 100. Stays under the 95% notice band at 92.7%."
+      },
+      {
+        "bundle": "bundle-review-triage-phase",
+        "limitBytes": 59300,
+        "issue": 4195,
+        "reason": "Maintainer-approved in the roadmap hearing of 2026-10-13, sized by the docs convention (roughly 10% headroom over measured need, not an exact fit): the E5 triage-record rule adds about 800 bytes to review-triage, which had 0 bytes of headroom. Measured 53,214 bytes before the change, about 54,010 after; raised to 59,300, the value approved in the hearing, about 10% above that."
       }
     ]
   },

@@ -122,11 +122,9 @@ interpreting `gh pr checks` output.
    `noRequiredChecksConfigured: true` state F2's CI gate already
    interprets (`idd-pre-merge.instructions.md`). Reuse
    `pre-merge-readiness`'s `ci.presentRunConclusion` when available;
-   otherwise derive the equivalent from actual runs at the head SHA:
-   `all-passing` may proceed; `pending` → wait/re-check; `some-failing`
-   or `none` (no runs) → **hold** — never treat an empty required-check
-   set as a vacuous pass, except `ci.allowedByPolicySetting` (the
-   global-only opt-in). Full routing table:
+   otherwise derive the equivalent from actual runs at the head SHA.
+   Route that result as F2's `ci.presentRunConclusion` routing does,
+   including its `ci.allowedByPolicySetting` exception; see
    [F2 — Pre-merge condition check](idd-pre-merge.instructions.md#f2--pre-merge-condition-check).
 
 When caller phases already provide a trusted required-check set, reuse
@@ -303,8 +301,7 @@ decision-rule file gets none (kurone-kito/idd-skill#4015).
 original event's commit and workflow definition (`pull_request`: that
 event's merge commit; `pull_request_target`: the base branch's copy at
 that time), so a later workflow-file change is invisible to it. Run-time
-fetches, such as the verdict job's checkout of `{default-branch}`, are
-current. If a required check keeps failing the same way after a rerun
+fetches are current. If a required check keeps failing the same way after a rerun
 and its workflow file changed on `{development-branch}` since, the
 recovery is a new event: a branch-sync merge (merge
 `{development-branch}` in, never rebase — see the E-phase
@@ -412,7 +409,7 @@ See [REST](../../docs/idd-helper-scripts.md#rest).
   review state either — see
   `idd-advisory-wait.instructions.md`, whose Scope section covers
   why a non-primary bot's review must not gate a custom wait either. A
-  bare `sleep` may be refused (observed 2026-09-30 in Claude Code, issue
+  bare `sleep` may be refused (observed 2026-09-30, issue
   `#3673`: `sleep 30` refused, `sleep 5` ran); in such a runtime, block a CI wait
   with the `--watch` forms above. A `run_in_background` Bash task or other
   detached/backgrounded mechanism (a background until-loop included) must

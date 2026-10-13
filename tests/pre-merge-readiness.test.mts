@@ -10,7 +10,9 @@ import { fileURLToPath } from 'node:url';
 // direct import there.
 import { ADVISORY_CONVERGENCE_WORKFLOW_PATH } from '../src/scripts/advisory-convergence.mts';
 import {
+  buildSecondaryQuietWindowStatus,
   DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR,
+  resolveAdvisorySecondaryQuietWindowMinutes,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from '../src/scripts/advisory-wait-policy.mts';
 import {
@@ -62,6 +64,7 @@ import {
   isCopilotErrorReviewBody,
   isNonReviewNoticeDisposition,
   isReviewSummaryComment,
+  MISSING_WATERMARK_HINT,
   readClaimStaleAgeMs,
   resolveActiveClaimForWriteGate as resolveActiveClaimForWriteGateImpl,
   resolveCodeownersForFiles,
@@ -1551,6 +1554,171 @@ test('buildPreMergeReadinessSummary: a lowered watermark count gives the same-ti
   assert.ok(blocker, 'expected a review-currency blocker');
   assert.equal(blocker.hint, SAME_TIMESTAMP_COUNT_GROWTH_HINT_TEXT);
   assert.deepEqual(validate(summary, readinessSchema), []);
+});
+
+// #4098: a disposition-evidence blocker computed with no review watermark
+// names the fresh-watermark step, and a summary with a watermark (or with no
+// computed disposition results) carries no hint on that blocker at all.
+const NO_WATERMARK_DISPOSITION_TEXT =
+  'No review watermark exists for this claim yet, so these results are ' +
+  'computed without a snapshot boundary. Take a fresh snapshot (E1 Step 1), ' +
+  'record a watermark for the current head (E1 Step 2), then re-run ' +
+  'readiness before any hold decision.';
+const NEWER_ACTIVITY_TEXT =
+  'Activity landed after the last review watermark, including your own ' +
+  'comments. Record a fresh watermark for the current head, then re-run ' +
+  'readiness.';
+
+function resolvedReviewerThread4098(createdAt: string) {
+  return {
+    id: 'thread-4098-resolved',
+    isResolved: true,
+    updatedAt: '',
+    reviewerReopenedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'reviewer-a' },
+          body: 'Consider renaming this helper.',
+          createdAt,
+          updatedAt: createdAt,
+          lastEditedAt: null,
+        },
+      ],
+    },
+  };
+}
+
+function blockerNamed(summary: unknown, gate: string) {
+  const blockers = (summary as Record<string, unknown>).blockers as Array<
+    Record<string, unknown>
+  >;
+  return blockers.find((b) => b.gate === gate);
+}
+
+test('pre-merge readiness: disposition-evidence with no watermark carries the fresh-watermark hint (#4098)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const comments = (fixture.input.comments as Array<{ body?: string }>).filter(
+    (comment) =>
+      !String(comment.body ?? '').startsWith('<!-- review-watermark:'),
+  );
+  const threads = [
+    ...(fixture.input.threads as unknown[]),
+    resolvedReviewerThread4098('2026-05-11T23:50:00Z'),
+  ];
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, comments, threads },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+
+  const disposition = (summary as Record<string, unknown>)
+    .dispositionEvidence as Record<string, unknown>;
+  assert.equal(disposition.route, 'return-to-e1');
+  assert.equal(disposition.blockingCount, 1);
+  const blocker = blockerNamed(summary, 'disposition-evidence');
+  assert.ok(blocker, 'expected a disposition-evidence blocker');
+  assert.equal(
+    blocker.detail,
+    'dispositionEvidence.route is "return-to-e1" (expected "proceed"), blockingCount=1 (expected 0)',
+  );
+  assert.equal(blocker.hint, NO_WATERMARK_DISPOSITION_TEXT);
+  assert.deepEqual(validate(summary, readinessSchema), []);
+});
+
+test('pre-merge readiness: a disposition-evidence blocker with a watermark carries no hint (#4098)', () => {
+  // The clean watermark's boundary is 2026-05-11T23:56:00Z. Feedback newer
+  // than that boundary keeps the resolved thread blocking, so the blocker
+  // still exists and only its absent hint is under test.
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const threads = [
+    ...(fixture.input.threads as unknown[]),
+    resolvedReviewerThread4098('2026-05-11T23:58:00Z'),
+  ];
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, threads },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+
+  const reviewCurrency = (summary as Record<string, unknown>)
+    .reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.watermarkPresent, true);
+  const blocker = blockerNamed(summary, 'disposition-evidence');
+  assert.ok(blocker, 'expected a disposition-evidence blocker');
+  assert.equal(blocker.gate, 'disposition-evidence');
+  assert.equal(
+    'hint' in blocker,
+    false,
+    'a watermark-backed disposition blocker has no hint property',
+  );
+});
+
+test('pre-merge readiness: a disposition-evidence blocker without computed results carries no hint (#4098)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const comments = (fixture.input.comments as Array<{ body?: string }>).filter(
+    (comment) =>
+      !String(comment.body ?? '').startsWith('<!-- review-watermark:'),
+  );
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, comments },
+    fixture.options,
+  );
+
+  const blocker = blockerNamed(summary, 'disposition-evidence');
+  assert.ok(blocker, 'expected a disposition-evidence blocker');
+  assert.equal(
+    'hint' in blocker,
+    false,
+    'disposition results that were not computed must not carry the hint',
+  );
+});
+
+test('pre-merge readiness: newer-activity review-currency blocker carries the fresh-watermark hint (#4098)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const operatorComment = {
+    id: 'operator-note-4098',
+    author: { login: 'kurone-kito' },
+    body: 'Holding this PR until the rename lands.',
+    createdAt: '2026-05-11T23:59:00Z',
+    updatedAt: '2026-05-11T23:59:00Z',
+    lastEditedAt: null,
+  };
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [...fixture.input.comments, operatorComment],
+    },
+    fixture.options,
+  );
+
+  const reviewCurrency = (summary as Record<string, unknown>)
+    .reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.comparisonRoute, 'return-to-e1');
+  assert.equal(reviewCurrency.comparisonReason, 'newer-activity');
+  const blocker = blockerNamed(summary, 'review-currency');
+  assert.ok(blocker, 'expected a review-currency blocker');
+  assert.equal(
+    blocker.detail,
+    'comparisonRoute is "return-to-e1" (expected "proceed"): newer-activity',
+  );
+  assert.equal(blocker.hint, NEWER_ACTIVITY_TEXT);
+  assert.deepEqual(validate(summary, readinessSchema), []);
+});
+
+test('pre-merge readiness: missing-watermark review-currency hint keeps its exact text (#4098)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const comments = (fixture.input.comments as Array<{ body?: string }>).filter(
+    (comment) =>
+      !String(comment.body ?? '').startsWith('<!-- review-watermark:'),
+  );
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, comments },
+    fixture.options,
+  );
+
+  const blocker = blockerNamed(summary, 'review-currency');
+  assert.ok(blocker, 'expected a review-currency blocker');
+  assert.equal(blocker.hint, MISSING_WATERMARK_HINT);
 });
 
 // #4097: a missing required check on a DIRTY head names the merge-conflict
@@ -13720,6 +13888,91 @@ test('#2335: the same window elapsing with nothing new clears the blocker', () =
     ),
   );
   assert.deepEqual(cleared.blockers, computePreMergeReadinessBlockers(cleared));
+});
+
+// #4167: the dogfood value `advisoryWait.secondaryQuietWindow: "PT5M"` in
+// .github/idd/config.json. It must resolve to five minutes, gate the readiness
+// verdict until five minutes after the last substantive activity, use the
+// min(5, configured) settled buffer on the settled path, and still clear at
+// once on a decline. The value is read from the committed config, not a
+// literal, so drifting that file back to another duration fails these tests.
+function committedQuietWindowMinutes(): number {
+  return resolveAdvisorySecondaryQuietWindowMinutes(
+    readJson('.github/idd/config.json'),
+  );
+}
+
+test('#4167: a PT5M secondaryQuietWindow resolves to five minutes and gates the readiness verdict until five minutes have passed', () => {
+  const minutes = committedQuietWindowMinutes();
+  assert.equal(minutes, 5);
+
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const options = {
+    ...fixture.options,
+    includeDispositionEvidence: true,
+    secondaryQuietWindowMinutes: minutes,
+  };
+  // The clean fixture's activity anchor is 23:56:00Z, so 00:00:00Z is four
+  // minutes in and 00:01:00Z is exactly five.
+  const blocked = buildPreMergeReadinessSummary(fixture.input, options);
+  assert.equal(secondaryQuietWindowOf(blocked).elapsedMinutes, 4);
+  assert.equal(secondaryQuietWindowOf(blocked).elapsed, false);
+  assert.ok(
+    (blocked.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'secondary-quiet-window',
+    ),
+  );
+
+  const cleared = buildPreMergeReadinessSummary(fixture.input, {
+    ...options,
+    now: '2026-05-12T00:01:00Z',
+  });
+  assert.equal(secondaryQuietWindowOf(cleared).minutes, 5);
+  assert.equal(secondaryQuietWindowOf(cleared).elapsedMinutes, 5);
+  assert.equal(secondaryQuietWindowOf(cleared).elapsed, true);
+  assert.ok(
+    !(cleared.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'secondary-quiet-window',
+    ),
+  );
+});
+
+test('#4167: the PT5M window clears the settled path on min(5, configured) and a decline at once', () => {
+  const minutes = committedQuietWindowMinutes();
+  const anchorAt = '2026-05-11T23:56:00Z';
+
+  // Settled path: anchored on the settlement time, not the older activity
+  // anchor, and capped at the five-minute buffer.
+  const settledBeforeBuffer = buildSecondaryQuietWindowStatus({
+    minutes,
+    effectiveMaxActivityUpdatedAt: '2026-05-11T20:00:00Z',
+    secondaryBotSettledAt: anchorAt,
+    now: '2026-05-12T00:00:59Z',
+  });
+  assert.equal(settledBeforeBuffer.anchorAt, anchorAt);
+  assert.equal(settledBeforeBuffer.minutes, 5);
+  assert.equal(settledBeforeBuffer.configuredMinutes, 5);
+  assert.equal(settledBeforeBuffer.elapsed, false);
+
+  const settledAtBuffer = buildSecondaryQuietWindowStatus({
+    minutes,
+    effectiveMaxActivityUpdatedAt: '2026-05-11T20:00:00Z',
+    secondaryBotSettledAt: anchorAt,
+    now: '2026-05-12T00:01:00Z',
+  });
+  assert.equal(settledAtBuffer.elapsedMinutes, 5);
+  assert.equal(settledAtBuffer.elapsed, true);
+
+  // Declined: the wait is skipped at once, with no delay.
+  const declined = buildSecondaryQuietWindowStatus({
+    minutes,
+    effectiveMaxActivityUpdatedAt: anchorAt,
+    secondaryBotDeclined: true,
+    now: anchorAt,
+  });
+  assert.equal(declined.declined, true);
+  assert.equal(declined.elapsed, true);
+  assert.equal(declined.anchorAt, 'declined');
 });
 
 test('#2335: a genuinely unresolved thread keeps the anchor fresh, so the window never elapses while real work is pending', () => {

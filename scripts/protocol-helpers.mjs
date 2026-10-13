@@ -9561,6 +9561,30 @@ export const MERGE_CONFLICT_CI_HINT =
   'default post-push sync, merge origin/main (or the development branch when ' +
   'it is not main) into the PR branch, push, and re-run pre-merge readiness ' +
   'once CI and review settle on the new head.';
+/**
+ * #4098: fixed next-step text for a `disposition-evidence` blocker computed
+ * while no review watermark exists for the claim. Without a watermark the
+ * disposition results have no snapshot boundary, so a resolved thread can
+ * block that a watermark would clear. Single-sourced like
+ * `MISSING_WATERMARK_HINT`. `detail` is left unchanged and the hint never
+ * feeds the gate decision.
+ */
+export const NO_WATERMARK_DISPOSITION_HINT =
+  'No review watermark exists for this claim yet, so these results are ' +
+  'computed without a snapshot boundary. Take a fresh snapshot (E1 Step 1), ' +
+  'record a watermark for the current head (E1 Step 2), then re-run ' +
+  'readiness before any hold decision.';
+/**
+ * #4098: fixed next-step text for a `review-currency` blocker whose
+ * `comparisonReason` is `newer-activity`. The activity may be the operator's
+ * own comment, so the hint names the fresh-watermark step. Single-sourced like
+ * `MISSING_WATERMARK_HINT`. `detail` is left unchanged and the hint never
+ * feeds the gate decision.
+ */
+export const NEWER_ACTIVITY_HINT =
+  'Activity landed after the last review watermark, including your own ' +
+  'comments. Record a fresh watermark for the current head, then re-run ' +
+  'readiness.';
 function preMergeAsRecord(value) {
   return value && typeof value === 'object' ? value : {};
 }
@@ -9697,6 +9721,8 @@ export function computePreMergeReadinessBlockers(report) {
       reviewCurrencyBlocker.hint = MISSING_WATERMARK_HINT;
     } else if (comparisonReason === 'same-timestamp-count-growth') {
       reviewCurrencyBlocker.hint = SAME_TIMESTAMP_COUNT_GROWTH_HINT;
+    } else if (comparisonReason === 'newer-activity') {
+      reviewCurrencyBlocker.hint = NEWER_ACTIVITY_HINT;
     }
     blockers.push(reviewCurrencyBlocker);
   }
@@ -10156,10 +10182,20 @@ export function computePreMergeReadinessBlockers(report) {
     !soleCauseAckOnlyPostDisposition &&
     (dispositionRoute !== 'proceed' || dispositionBlockingCount !== 0)
   ) {
-    blockers.push({
+    const dispositionBlocker = {
       gate: 'disposition-evidence',
       detail: `dispositionEvidence.route is "${dispositionRoute || 'missing'}" (expected "proceed"), blockingCount=${dispositionBlockingCount} (expected 0)`,
-    });
+    };
+    // #4098: the hint applies only when the disposition results were computed
+    // (a summary built without `includeDispositionEvidence` has none) and no
+    // watermark exists. Fail closed: an unknown `watermarkPresent` gets no hint.
+    if (
+      typeof dispositionEvidence.blockingCount === 'number' &&
+      reviewCurrency.watermarkPresent === false
+    ) {
+      dispositionBlocker.hint = NO_WATERMARK_DISPOSITION_HINT;
+    }
+    blockers.push(dispositionBlocker);
   }
   // #1513: fail closed on a missing/garbled `requiresUpToDateHead` -- only
   // an explicit `false` counts as "not required" (matching every gate

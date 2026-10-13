@@ -155,10 +155,14 @@ layered on top of the distributed IDD defaults:
   (Refs #1465, #2076).
 - **Secondary-bot quiet window**: This source repository also records
   `advisoryWait.secondaryBotLogin: "coderabbitai[bot]"` and
-  `advisoryWait.secondaryQuietWindow: "PT1H"` as a local IDD dogfooding
-  opt-in (applies only to `kurone-kito/idd-skill`), waiting up to one
-  hour after E-phase convergence conditions are first observed before
-  pre-merge readiness treats review as settled. This repository
+  `advisoryWait.secondaryQuietWindow: "PT5M"` as a local IDD dogfooding
+  opt-in (applies only to `kurone-kito/idd-skill`), waiting up to five
+  minutes, measured from the last substantive activity, after E-phase
+  convergence conditions are first observed before pre-merge readiness
+  treats review as settled. The window was first set
+  to one hour (`PT1H`, commit `c0909776c`, 2026-09-02) and was shortened
+  to five minutes for the reasons in the 2026-10-13 measurement below
+  (issue `#4167`). This repository
   dogfoods CodeRabbit alongside Copilot and has twice hit CodeRabbit
   rate-limiting during a PR's review cycle, each time working around
   it with an ad hoc one-hour wait before merging; this config turns
@@ -167,7 +171,7 @@ layered on top of the distributed IDD defaults:
   review evidence rather than unconditional: once CodeRabbit has
   already posted a genuine (non-rate-limited) review for the current
   HEAD, only a short fixed confirmation buffer applies instead of the
-  full hour -- a HEAD CodeRabbit has not yet reviewed still waits the
+  full wait -- a HEAD CodeRabbit has not yet reviewed still waits the
   full configured window unchanged, keeping the wait a fallback for
   genuine secondary-bot degradation rather than a tax on every merge.
   As of #2547, a definitive decline verdict for the current HEAD -- a
@@ -177,6 +181,29 @@ layered on top of the distributed IDD defaults:
   once CodeRabbit has conclusively said it will not review this
   commit, #2335's "might still be mid-review" protection has nothing
   left to protect.
+  Measured 2026-10-13 (issue `#4167`): of 9 open pull requests, the
+  window was the only blocker on none, and it was among the blockers on
+  one (pull request `#4154`, 60 minutes remaining after activity at
+  05:49:04Z, plus four other blockers: unresolved threads, missing
+  dispositions, a missing watermark, and failing or pending CI). Of 16
+  merged pull requests that could be read, the time from the head commit
+  to merge had a median of about 27 minutes. CodeRabbit declined (rate
+  limit) on 8, reviewed the head on 2, and was silent on 6; silent pull
+  requests merged after a median of about 21 minutes, with a maximum of
+  43 minutes. A late CodeRabbit wave does happen: on pull request `#4131`,
+  one CodeRabbit event came more than five minutes after its first review
+  on the head. The evidence sets the floor: `docs/policy-constants.md`
+  records that on pull request `#2330`, findings landed 34 seconds and 2
+  minutes after a zero-unresolved snapshot, so a one-minute window would
+  have missed that case. A one-minute value was considered and rejected,
+  because it would clamp both waits to one minute and the measured evidence
+  does not support that. `PT5M` matches the settled buffer
+  (`SECONDARY_QUIET_WINDOW_SETTLED_BUFFER_MINUTES`), so one value sets both
+  waits to five minutes. The weekly merged-pull-request feedback sweep
+  (issue `#4166`, `.github/workflows/merged-pr-feedback-sweep.yml`,
+  scheduled Mondays at 06:00 UTC) is the safety net for late reviews that a
+  shorter window lets through, and it is already on `main` when this value
+  lands.
 - **New-CI-job dispatch-first rollout**: `idd-pr-submit.instructions.md`'s
   D2 "Adding a new CI job" guidance (distributed via `idd-template/`, not
   itself local) requires landing a new CI job `workflow_dispatch`-first.
