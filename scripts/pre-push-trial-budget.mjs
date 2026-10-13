@@ -98,12 +98,16 @@ export function measureTouchedBudgets(options) {
   const exempt = new Set(
     Array.isArray(ceiling?.exemptBundles) ? ceiling.exemptBundles : [],
   );
+  // The ids audit-docs knows: those of entries with a valid limit, the only
+  // ones its measurement keeps.
   const allBundleIds = new Set(
-    (Array.isArray(rawBundles) ? rawBundles : []).flatMap((entry) =>
-      isPlainObject(entry) && typeof entry.id === 'string' ? [entry.id] : [],
-    ),
+    (Array.isArray(rawBundles) ? rawBundles : []).flatMap((entry) => {
+      if (!isPlainObject(entry)) return [];
+      const limit = Number(entry.limitBytes);
+      if (!Number.isFinite(limit) || limit < 0) return [];
+      return [typeof entry.id === 'string' ? entry.id : 'bundle-budget'];
+    }),
   );
-  const baseTotals = baseBundleTotals(options.base);
   const stats = [];
   for (const entry of Array.isArray(rawBundles) ? rawBundles : []) {
     if (!isPlainObject(entry)) continue;
@@ -136,7 +140,7 @@ export function measureTouchedBudgets(options) {
         ? Math.min(limitBytes, Math.floor((limitBytes * maxPct) / 100))
         : limitBytes;
     stats.push({ id, limitBytes, totalBytes: bytes, files });
-    const base = baseTotals.get(id);
+    const base = baseBundleTotal(options.base, id);
     result.bundles.push({
       id,
       bytes,
@@ -145,9 +149,10 @@ export function measureTouchedBudgets(options) {
       headroom: lineBytes - bytes,
       baseBytes: base?.bytes ?? null,
       baseLimitBytes: base?.limitBytes ?? null,
+      // Floored, so a base just under 95% never reads as 95.
       baseUtilizationPct:
-        base !== undefined && base.limitBytes > 0
-          ? Math.round((base.bytes / base.limitBytes) * 10000) / 100
+        base !== null && base.limitBytes > 0
+          ? Math.floor((base.bytes * 10000) / base.limitBytes) / 100
           : null,
     });
   }
@@ -218,25 +223,29 @@ export function measureTouchedBudgets(options) {
   result.files.push(...fileRows.values());
   return result;
 }
-/** Each base-ref bundle's total and limit, by id. Report only: a malformed
- * base entry or a missing base member is skipped or counted as 0 bytes. */
-function baseBundleTotals(base) {
-  const totals = new Map();
-  if (base === undefined || !isPlainObject(base.manifest)) return totals;
+/** The base-ref total and limit of the bundle `id`, or null when the base has
+ * no valid entry for it. Report only: it never adds a failure, so a missing
+ * base member counts as 0 bytes and a read error gives null. */
+function baseBundleTotal(base, id) {
+  if (base === undefined || !isPlainObject(base.manifest)) return null;
   const entries = base.manifest.bundleBudgets;
-  for (const entry of Array.isArray(entries) ? entries : []) {
-    if (!isPlainObject(entry) || typeof entry.id !== 'string') continue;
-    const limitBytes = Number(entry.limitBytes);
-    if (!Number.isFinite(limitBytes) || limitBytes < 0) continue;
-    let bytes = 0;
+  const entry = (Array.isArray(entries) ? entries : []).find(
+    (candidate) => isPlainObject(candidate) && candidate.id === id,
+  );
+  if (!isPlainObject(entry)) return null;
+  const limitBytes = Number(entry.limitBytes);
+  if (!Number.isFinite(limitBytes) || limitBytes < 0) return null;
+  let bytes = 0;
+  try {
     for (const file of Array.isArray(entry.files) ? entry.files : []) {
       if (typeof file === 'string') {
         bytes += measuredBytes(base.readFile(file) ?? '');
       }
     }
-    totals.set(entry.id, { bytes, limitBytes });
+  } catch {
+    return null;
   }
-  return totals;
+  return { bytes, limitBytes };
 }
 /**
  * The stderr summary: the touched entry with the least headroom (ties broken
@@ -275,10 +284,12 @@ export function formatLeastHeadroomLine(budgets, hint) {
 const MANIFEST_PATH = 'audit/sync-manifest.json';
 const RAISE_HINT =
   'HEAD raises a bundle limit that the base pin hides; take in the base first (rebase before publication, or merge it into a pushed branch), then this check measures the raise';
+/** `missing` means the commit or tree has no manifest file, as distinct from
+ * a file whose JSON is `null`. */
 function parseManifest(text) {
-  if (text === null) return { ok: true, manifest: null };
+  if (text === null) return { ok: true, missing: true, manifest: null };
   try {
-    return { ok: true, manifest: JSON.parse(text) };
+    return { ok: true, missing: false, manifest: JSON.parse(text) };
   } catch {
     return { ok: false };
   }
@@ -452,9 +463,16 @@ export function runPrePushTrialBudget(options) {
     let measured = null;
     try {
       parsed = parseManifest(showAt(headSha, MANIFEST_PATH));
-      if (changedFiles !== null && parsed.ok && parsed.manifest !== null) {
+      if (changedFiles !== null && parsed.ok && !parsed.missing) {
         const manifest = parsed.manifest;
-        const baseParsed = parseManifest(showAt(baseSha, MANIFEST_PATH));
+        // The base is read for the report only, so a read error leaves the
+        // base fields empty rather than failing the check.
+        let baseParsed;
+        try {
+          baseParsed = parseManifest(showAt(baseSha, MANIFEST_PATH));
+        } catch {
+          baseParsed = { ok: false };
+        }
         measured = measureTouchedBudgets({
           manifest,
           changedFiles,
@@ -623,7 +641,7 @@ export function runPrePushTrialBudget(options) {
         : null;
     const parsed = parseManifest(readTrial(MANIFEST_PATH));
     if (changedFiles === null || !parsed.ok) return null;
-    if (parsed.manifest === null) return { bundles: [], files: [] };
+    if (parsed.missing) return { bundles: [], files: [] };
     const measured = measureTouchedBudgets({
       manifest: parsed.manifest,
       changedFiles,

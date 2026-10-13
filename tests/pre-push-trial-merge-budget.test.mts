@@ -1047,3 +1047,67 @@ test('measureTouchedBudgets reports the base utilization of a touched bundle (#4
     [[24700, 26000, 95]],
   );
 });
+
+test('a manifest whose JSON is null fails as not an object, not as missing (#4128)', (t) => {
+  const f = notBehindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  commitFile(f.work, 'audit/sync-manifest.json', 'null\n', 'null manifest');
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'budget-fail');
+  assert.deepEqual(result.auditFailures, [
+    'audit/sync-manifest.json: must be a JSON object',
+  ]);
+});
+
+test('a base read error leaves the base fields empty and the check passing (#4128)', (t) => {
+  const f = notBehindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  commitFile(f.work, LITE_PATH, sized(100), 'shrink the lite file');
+  const baseSha = git(f.work, ['rev-parse', 'origin/main']);
+  const failingBaseShow: GitRunner = (cwd, args, env) =>
+    args[0] === 'show' && (args[1] ?? '').startsWith(`${baseSha}:`)
+      ? { status: 128, stdout: '' }
+      : defaultGitRunner(cwd, args, env);
+
+  const result = runPrePushTrialBudget({
+    cwd: f.work,
+    runGit: failingBaseShow,
+  });
+  assert.equal(result.outcome, 'not-behind');
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.budgets?.bundles[0]?.baseBytes, null);
+});
+
+test('measureTouchedBudgets floors the base utilization below 95% (#4128)', () => {
+  const measured = measureTouchedBudgets({
+    manifest: BUDGET_MANIFEST,
+    changedFiles: [LITE_PATH],
+    readFile: () => sized(100),
+    // 24,699 of 26,000 is 94.996%, which rounds to 95 but must read 94.99.
+    base: { manifest: BUDGET_MANIFEST, readFile: () => sized(24699) },
+  });
+  assert.equal(measured.bundles[0]?.baseUtilizationPct, 94.99);
+});
+
+test('measureTouchedBudgets treats an exemption for a bundle with a bad limit as unknown (#4128)', () => {
+  const manifest = {
+    ...BUDGET_MANIFEST,
+    bundleBudgets: [
+      ...BUDGET_MANIFEST.bundleBudgets,
+      { id: 'bundle-bad', files: ['docs/bad.md'], limitBytes: -1 },
+    ],
+    contextCeiling: {
+      ...BUDGET_MANIFEST.contextCeiling,
+      exemptBundles: ['bundle-bad'],
+    },
+  };
+  const measured = measureTouchedBudgets({
+    manifest,
+    changedFiles: [LITE_PATH],
+    readFile: () => sized(100),
+  });
+  assert.deepEqual(measured.failures, [
+    'context-ceiling-200k: exemptBundles names unknown bundle id "bundle-bad"',
+  ]);
+});
