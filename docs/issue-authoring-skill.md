@@ -762,9 +762,9 @@ instructions.
   and if it still cannot after revision, it goes to needs-decision.
 - a finding whose claim is identical to a `previously rejected:` string's
   claim (wording may differ), in the same `draftSection`, is reported as a
-  repeat that quotes that string, not as a new finding, unless it brings
-  information the earlier rejection did not address; the reviewer does not
-  decide that the rejection still holds (see
+  repeat that quotes that string, not as a new finding; the reviewer does not
+  decide that the rejection still holds, and the author applies the repeat
+  test (see
   [Carry-forward of rejected findings](#carry-forward-of-rejected-findings))
 
 #### Resolver
@@ -913,16 +913,17 @@ from the ledger.
 
 **Reviewer.** The checklist item above applies. A reviewer reports a finding
 whose claim is identical to a `previously rejected:` string's claim, in the
-same `draftSection`, as a repeat that quotes that string, unless the finding
-brings information the earlier rejection did not address. Such a finding is
-new. The reviewer does not decide that the rejection still holds.
+same `draftSection`, as a repeat that quotes that string. The reviewer does
+not decide that the rejection still holds, and does not judge whether the
+finding brings new information: the author applies the repeat test to each
+reported repeat.
 
 **Repeat test.** A finding is a repeat only when its claim is identical to the
 entry's claim, meaning the same substantive claim with wording ignored, and it
 is in the same `draftSection`. A finding with a different claim, or only a
 related topic in that section, is new. A finding that brings information the
 earlier rejection did not address is new, even when its claim is identical to
-an entry's claim.
+an entry's claim. The author applies this test to each reported repeat.
 
 **Author.** For each reported repeat, first re-apply the repeat test. Then
 re-read the entry's evidence against the repository as it stands now: the
