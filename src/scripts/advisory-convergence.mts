@@ -5321,13 +5321,13 @@ export function collectAssertNextActions(
       ].join('\n'),
     });
   } else if (!verdict.review.matchesHead) {
-    const pointer = `node scripts/advisory-wait-state.mjs --pr ${pr}`;
+    const pointer = `node scripts/advisory-wait-state.mjs --pr ${pr} --claim-id <claim-id> --agent-id <agent-id> --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`;
     const rerun = `node scripts/rerun-advisory-convergence.mjs --pr ${pr}`;
     items.push({
       token: T.REQUEST_RE_REVIEW,
       summary:
         `Latest ${bot} review covers ${verdict.review.commitId || '<unknown>'}, not HEAD ${sha}. ` +
-        `Run ${pointer} and follow the row for its outcome in the "Caller mapping" table of idd-advisory-wait.instructions.md, for your phase (D4, E14, F2 or F3). ` +
+        `Run ${pointer}, then follow the row for its outcome in the "Caller mapping" table of idd-advisory-wait.instructions.md. D4, E14 and F2 read outcome; F3 reads f3Outcome when helper output is valid. ` +
         'RECOVERY_NEEDED never means a new request (E14: post the AW3-R recovery marker and poll; D4: exit CI-wait to E1). ' +
         'D4: SATISFIED with lastCopilotCommit equal to the head means rerun idd-advisory-convergence. An elapsed-window SATISFIED follows the caller mapping. ' +
         `Once the review of the current HEAD has landed (this item then goes away, so re-read advisory-wait-state) and the check is still red, run ${rerun} --apply, or ${rerun} --refresh-latest --apply when its hold notice names that command, or stop for a maintainer when its hold notice says so.`,

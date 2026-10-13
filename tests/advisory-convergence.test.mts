@@ -8568,8 +8568,10 @@ test('request-re-review (#4111): a stale head names advisory-wait-state and the 
   assert.doesNotMatch(summary, /\n/, 'the summary stays one line');
   assert.doesNotMatch(summary, /Request a re-review of the current HEAD/);
   for (const phrase of [
-    'node scripts/advisory-wait-state.mjs --pr 1234',
+    'node scripts/advisory-wait-state.mjs --pr 1234 --claim-id <claim-id> --agent-id <agent-id>',
     '"Caller mapping" table of idd-advisory-wait.instructions.md',
+    'D4, E14 and F2 read outcome; F3 reads f3Outcome when helper output is valid',
+    '--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"',
     'RECOVERY_NEEDED never means a new request',
     'E14: post the AW3-R recovery marker and poll',
     'D4: exit CI-wait to E1',
