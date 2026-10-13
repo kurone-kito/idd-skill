@@ -6839,7 +6839,7 @@ first (August) form -- every review generated from 2026-09-04 onward
 parsed as `suppressedCount: 0` regardless of its real content.
 `classifyCopilotReviewBody` (a leaf module, `copilot-review-body.mts`,
 importing only `markdown-code.mts`'s code-region stripper)
-recognizes four shapes, reported as the new `review.bodyShape` field
+recognizes five shapes, reported as the new `review.bodyShape` field
 alongside `suppressedCount`:
 
 - `overview-v2`: the body carries the `<!-- ccr-overview-v2 -->` marker
@@ -6867,6 +6867,15 @@ alongside `suppressedCount`:
   `resolveLatestCopilotReviewClause`'s own output in practice, since that
   function already excludes an error-bodied review before selecting the
   absolute-latest one (unchanged, `#3015`).
+- `decline-no-reviewable-files`: Copilot's exact "wasn't able to review
+  any files" notice (`#4142`, observed on `kurone-kito/dotfiles#609`),
+  matched by whole-body equality after the `#3015` normalization. It is a
+  terminal decline for the head it names, not a review.
+  `findLastCopilotReviewCommit` never counts it as coverage, and
+  `findLastCopilotDeclineCommit` reports it separately, so
+  `advisory-wait-state` and the convergence and readiness gates reach
+  `COPILOT_UNAVAILABLE` at once, with no recovery marker and no window
+  wait.
 - `unrecognized`: none of the above, including an absent/empty body.
 
 **Fail-closed on an unrecognized shape (kurone-kito/idd-skill#3258,
@@ -6876,7 +6885,10 @@ override (below) additionally requires `review.bodyShape` to be
 anything other than `unrecognized`, unless a trusted `review-ack`
 already covers the review -- so a review body this gate cannot parse at
 all no longer silently converges. The verdict's `reasons` entry and the
-review-ack next action both name `bodyShape: unrecognized` explicitly.
+review-ack next action both name `bodyShape: unrecognized` explicitly. The
+`decline-no-reviewable-files` shape is held the same way, with its own
+reason and review-ack next action, so it never converges on its own
+(`#4142`).
 A configured non-Copilot `primaryBotLogin` (the `external-bot` review
 policy, `#2137`) has no known body shapes at all -- a reply-only review
 from such a bot can legitimately have an empty body -- so this rule
