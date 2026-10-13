@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -408,6 +409,26 @@ test('an existing path is refused with no git call and is left in place (#4095)'
   });
   assert.equal(calls.length, 0, 'no git call is made');
   assert.equal(existsSync(join(path, 'keep.txt')), true, 'the path is kept');
+});
+
+test('a dangling symlink at the path is refused with no git call (#4095)', {
+  skip: process.platform === 'win32',
+}, (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'trial-scratch-dangling-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const path = join(root, 'trial');
+  symlinkSync(join(root, 'missing-target'), path);
+  const { run, calls } = scripted(() => ({ status: 0, stdout: '' }));
+
+  const result = addScratchWorktree(run, scratchOptions(root, path));
+
+  assert.deepEqual(result, {
+    ok: false,
+    reason: 'worktree-add-failed',
+    registrationRemoved: false,
+  });
+  assert.equal(calls.length, 0, 'no git call is made');
+  assert.equal(lstatSync(path).isSymbolicLink(), true, 'the symlink is kept');
 });
 
 test('a smudge filter that fails the add leaves no registration (#4095)', {

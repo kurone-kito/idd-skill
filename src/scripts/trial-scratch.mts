@@ -12,7 +12,7 @@
 // pre-push-only code, because the helper runtime vendors every file that
 // trial-merge-audit imports.
 
-import { existsSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync, rmSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
 /** The `GIT_*` variables a scratch run keeps: credential helpers only. */
@@ -121,6 +121,19 @@ function realDirectory(dir: string): string {
   }
 }
 
+/**
+ * True for any directory entry at `path`, a dangling symlink included.
+ * `existsSync` follows links, so it would miss one and let git run on it.
+ */
+function pathExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** The paths named by the `worktree <path>` lines of a porcelain listing. */
 function listedWorktreePaths(porcelain: string): string[] {
   return porcelain
@@ -151,7 +164,7 @@ export function addScratchWorktree(
     reason: 'worktree-add-failed',
     registrationRemoved,
   });
-  if (existsSync(options.path)) return failed(false);
+  if (pathExists(options.path)) return failed(false);
   // git records a worktree under its resolved path, so the listing can spell
   // the scratch path through the real parent directory (a symlinked temp dir).
   // Both spellings name the same registration.
