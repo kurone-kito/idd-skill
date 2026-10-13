@@ -85,10 +85,9 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    is an instant state read, not itself a wait. If it escalates to a
    genuine wait, return to the F2 advisory bot wait check (backgrounds
    only if the topology-safety condition holds — confirmed to route
-   completion back to this turn — otherwise waits synchronously): no
-   single `gh` command blocks on Copilot review state, so run the AW
-   poll loop as a foreground wait, never via `run_in_background` absent
-   the confirmed condition — see
+   completion back to this turn — otherwise waits synchronously): run the AW
+   poll loop in the foreground, never via `run_in_background` absent the
+   confirmed condition — see
    [idd-ci.instructions.md's Wake-up
    discipline](idd-ci.instructions.md#wake-up-discipline).
    Re-fetch the HEAD SHA:
@@ -99,10 +98,12 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 
    Use `PR_HEAD_SHA_F3` as `PR_HEAD_SHA`. Run **AW1**
    (`idd-advisory-wait.instructions.md`):
-   - If **SATISFIED** (`LAST_COPILOT_COMMIT == PR_HEAD_SHA_F3`) →
+   - If any same-head review is not a v2 overview, has suppressed
+     items, or holds a cited item: hold (AW4).
+   - If **SATISFIED** (`LAST_COPILOT_COMMIT == PR_HEAD_SHA_F3`) → proceed
+     with the merge.
+   - If `COPILOT_PENDING` is `"false"` and neither bullet above held:
      proceed with the merge.
-   - If `COPILOT_PENDING` is `"false"` (review completed or cancelled) →
-     satisfied; proceed with the merge.
    - Otherwise (`COPILOT_PENDING` is `"true"`, not yet reviewed): run
      **AW2** and apply **AW3** — do not skip even if F2 already ran
      them, since F3 is a self-contained blocking gate:
@@ -113,6 +114,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
        same F3 pass that creates a recovery marker.
      - **CAP_EXHAUSTED** → post the cap-exhausted hold comment from
        **AW4** and stop.
+     - **DISPOSITION_NEEDED** → do not merge; return to E14.
      - **REQUEST_NEEDED** → return to E14 to refresh/request Copilot
        review and post a request marker; do not merge.
      - **WAIT** → do NOT execute the merge; return to the **F2 advisory

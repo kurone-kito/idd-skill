@@ -42,8 +42,10 @@ export { isCopilotErrorReviewBody } from './copilot-review-body.mts';
 export * from './marker-helpers.mts';
 
 import {
+  citationBreakdown,
   classifyCopilotReviewBody,
   isCopilotErrorReviewBody,
+  namesFileOrLine,
 } from './copilot-review-body.mts';
 import { loadIddConfig } from './idd-config.mts';
 import type {
@@ -393,6 +395,15 @@ interface AdvisoryWaitOutcomeInput {
   copilotPending?: boolean;
   copilotPendingCoversHead?: boolean;
   sameHeadMarkerPresent?: boolean;
+  /** #4070: `false` when any same-head review has a cited suppressed item
+   * without a qualifying disposition, or the same-head reviews disagree (see
+   * `sameHeadReviewsSettled`). Only read on the same-head branch; an absent
+   * value keeps the pre-#4070 result. */
+  citedDispositionsSatisfied?: boolean;
+  /** #4070 (rp1kz): `true` when a same-head default-Copilot review body cannot
+   * be read and no trusted review-ack for HEAD follows it. Both evaluators
+   * then report DISPOSITION_NEEDED, so the review-ack route applies. */
+  sameHeadUnreadable?: boolean;
   requestMarkerCount: number;
   elapsedMinutes: number;
   requestCap?: number;
@@ -6590,17 +6601,17 @@ export function findLastCopilotReviewCommit(
   reviews: ReviewLike[],
   primaryBotLogin: string = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
 ): string {
-  const isDefaultCopilotBot =
-    normalizePrimaryBotLogin(primaryBotLogin) ===
-    DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  const isDefaultCopilotBot = isDefaultCopilotPrimary(primaryBotLogin);
   const latest = reviews
     .filter((review) => {
+      const authorType = review.user?.type ?? review.author?.type ?? null;
       if (
         !isCopilotReviewerLogin(
           review.user?.login ?? review.author?.login ?? '',
           primaryBotLogin,
-          review.user?.type ?? review.author?.type ?? null,
-        )
+          authorType,
+        ) ||
+        (isDefaultCopilotBot && !isBotOrUntypedAuthor(authorType))
       ) {
         return false;
       }
@@ -6641,7 +6652,34 @@ export function isVerifiedCopilotAuthor(
   if (!isCopilotReviewerLogin(author?.login ?? '', primaryBotLogin, typename)) {
     return false;
   }
-  return typename === undefined || typename === null || typename === 'Bot';
+  return (
+    !isDefaultCopilotPrimary(primaryBotLogin) || isBotOrUntypedAuthor(typename)
+  );
+}
+
+/**
+ * Author-type gate for the default Copilot login: an absent type passes, and
+ * otherwise only `'Bot'` does. It guards the bare `copilot` login, which
+ * {@link isCopilotReviewerLogin} accepts without consulting the author type,
+ * so a same-named `User` account is not counted as Copilot (#1686). A
+ * configured non-Copilot login skips this gate, because that matcher's
+ * contract is that an exact login match holds regardless of author type.
+ * {@link isVerifiedCopilotAuthor} (GraphQL `__typename`) and
+ * {@link findLastCopilotReviewCommit} (REST `user.type`) apply the same
+ * condition, so the two selectors cannot disagree.
+ */
+function isBotOrUntypedAuthor(authorType: string | null | undefined): boolean {
+  return (
+    authorType === undefined || authorType === null || authorType === 'Bot'
+  );
+}
+
+/** True when `primaryBotLogin` names the default Copilot bot. */
+function isDefaultCopilotPrimary(primaryBotLogin: string): boolean {
+  return (
+    normalizePrimaryBotLogin(primaryBotLogin) ===
+    DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN
+  );
 }
 
 /** Structural author shape the Copilot selector reads. Matches
@@ -6680,6 +6718,74 @@ export function findLatestCopilotReviewIndex(
     }
   }
   return latestIndex;
+}
+
+/** #3942: the recorded-deferral reply, `**Rejected** — deferred to follow-up
+ * issue #<n> ({clause}): {reason}`, as the triage E6 text defines it. */
+const RECORDED_DEFERRAL_REPLY_PATTERN =
+  /^\*\*Rejected\*\* — deferred to follow-up issue #\d+ \([^()]*\): \S/u;
+
+/** #3942: the review-reply identity stamp, `<!-- {prefix}-review-reply -->`. */
+const REVIEW_REPLY_STAMP_PATTERN = /<!--\s*[\w-]+-review-reply\s*-->/iu;
+
+/**
+ * #3942: the createdAt times of the trusted, unedited disposition replies that
+ * settle a Previously missed item naming a file or line, sorted ascending. A
+ * reply counts when it opens with `**Accepted**` or the recorded-deferral
+ * form, carries the review-reply stamp, and, for a `**Rejected**`, names a
+ * file or line. A bare `review-ack` never counts for these items.
+ */
+export function qualifyingCitedDispositionTimes(
+  comments: Parameters<typeof hasTrustedReviewAckAfter>[0],
+  trustedMarkerLogins: string[],
+): string[] {
+  const trusted = new Set(
+    trustedMarkerLogins.map((login) => login.trim().toLowerCase()),
+  );
+  return comments
+    .filter((comment) => {
+      const body = String(comment.body ?? '').trimEnd();
+      const login = String(comment.author?.login ?? comment.user?.login ?? '')
+        .trim()
+        .toLowerCase();
+      const createdAt = String(comment.createdAt ?? comment.created_at ?? '');
+      if (!trusted.has(login) || !isValidIsoTimestamp(createdAt)) {
+        return false;
+      }
+      if (classifyCommentEditState(comment) !== 'unedited') {
+        return false;
+      }
+      return (
+        (DISPOSITION_ACCEPTED_PREFIX_RE.test(body) ||
+          RECORDED_DEFERRAL_REPLY_PATTERN.test(body) ||
+          // #3942 (maintainer decision, 2026-10-11): a Rejected reply counts
+          // when it names a file or line as the evidence, as the PATH A
+          // verification rule allows for a claim the live evidence contradicts.
+          (DISPOSITION_REJECTED_PREFIX_RE.test(body) &&
+            namesFileOrLine(body))) &&
+        REVIEW_REPLY_STAMP_PATTERN.test(body)
+      );
+    })
+    .map((comment) => String(comment.createdAt ?? comment.created_at ?? ''))
+    .sort(compareIsoTimestamps);
+}
+
+/**
+ * #3942: counts the qualifying disposition replies posted strictly after
+ * `reviewSubmittedAt`. A reply in the review's own second is not provably
+ * later, the same ordering hasTrustedReviewAckAfter uses.
+ */
+export function countCitedItemDispositions(
+  comments: Parameters<typeof hasTrustedReviewAckAfter>[0],
+  trustedMarkerLogins: string[],
+  reviewSubmittedAt: string,
+): number {
+  if (!isValidIsoTimestamp(reviewSubmittedAt)) {
+    return 0;
+  }
+  return qualifyingCitedDispositionTimes(comments, trustedMarkerLogins).filter(
+    (createdAt) => compareIsoTimestamps(createdAt, reviewSubmittedAt) > 0,
+  ).length;
 }
 
 export function isCopilotPending(
@@ -7141,14 +7247,185 @@ export function summarizeAdvisoryWaitMarkers(
   };
 }
 
+/**
+ * #4070 (option B, fail closed): whether every same-head primary-bot review is
+ * settled. The union covers all of them, not only the one a single selector
+ * picks. Returns `false` when any same-head review has a cited suppressed item
+ * (one that names a file or line) without a qualifying disposition, or when a
+ * same-head review body the default Copilot shapes cannot read has no trusted
+ * review-ack for the head after it, even when that review is the only same-head
+ * review. An empty body is unreadable like any other, so it blocks the same
+ * way, and the shell check holds on it too. Off-head reviews never count here.
+ *
+ * This is deliberately stricter than the gate in one direction: a later clean
+ * same-head review does not clear an earlier uncovered item, which the gate
+ * (latest review only) would accept. REST input has no GraphQL `replyOnly`
+ * flag, so the union is the fail-closed substitute for that signal.
+ */
+function sameHeadReviewsSettled({
+  reviews,
+  prHeadSha,
+  primaryBotLogin,
+  comments,
+  trustedMarkerLogins,
+}: {
+  reviews: ReviewLike[];
+  prHeadSha: string;
+  primaryBotLogin: string;
+  comments: CommentLike[];
+  trustedMarkerLogins: string[];
+}): boolean {
+  const isDefaultCopilotBot =
+    primaryBotLogin === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  const cited: { submittedAt: string; count: number }[] = [];
+  for (const review of reviews) {
+    const author = {
+      login: review.user?.login ?? review.author?.login ?? '',
+      __typename: review.user?.type ?? review.author?.type ?? null,
+    };
+    const body = review.body ?? null;
+    const commitId = String(
+      review.commit_id ?? review.commitId ?? '',
+    ).toLowerCase();
+    if (
+      commitId !== prHeadSha ||
+      !isVerifiedCopilotAuthor(author, primaryBotLogin) ||
+      isCopilotErrorReviewBody(body)
+    ) {
+      continue;
+    }
+    const submittedAt = String(review.submitted_at ?? review.submittedAt ?? '');
+    const { shape, suppressedCount } = classifyCopilotReviewBody(body);
+    if (shape !== 'overview-v2' && shape !== 'overview-legacy') {
+      // Fail closed for the default bot: any body this helper cannot read,
+      // an empty one included, blocks until a trusted review-ack for this head
+      // follows it. A configured non-Copilot bot has no known shapes and is not
+      // judged here. The gate applies the same clearing rule to an unrecognized
+      // body.
+      if (
+        isDefaultCopilotBot &&
+        !hasTrustedReviewAckAfter(
+          comments,
+          trustedMarkerLogins,
+          submittedAt,
+          prHeadSha,
+        )
+      ) {
+        return false;
+      }
+      continue;
+    }
+    if (suppressedCount === 0) {
+      continue;
+    }
+    const citation = citationBreakdown(body, suppressedCount);
+    if (citation.citedCount > 0) {
+      cited.push({ submittedAt, count: citation.citedCount });
+    }
+  }
+  if (cited.length === 0) {
+    return true;
+  }
+  // Allocate in submission order: each cited review takes the earliest unused
+  // disposition posted after it. One reply answers one item, so a later review
+  // never inherits a reply that predates it.
+  const times = qualifyingCitedDispositionTimes(comments, trustedMarkerLogins);
+  const used = times.map(() => false);
+  cited.sort((left, right) =>
+    compareIsoTimestamps(left.submittedAt, right.submittedAt),
+  );
+  for (const { submittedAt, count } of cited) {
+    if (!isValidIsoTimestamp(submittedAt)) {
+      return false;
+    }
+    let remaining = count;
+    for (let index = 0; index < times.length && remaining > 0; index += 1) {
+      if (!used[index] && compareIsoTimestamps(times[index], submittedAt) > 0) {
+        used[index] = true;
+        remaining -= 1;
+      }
+    }
+    if (remaining > 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * #4070 (rp1kz): true when a same-head default-Copilot review body cannot be
+ * read and no trusted review-ack for HEAD follows it. This is the same filter
+ * as sameHeadReviewsSettled, so the evaluator reports DISPOSITION_NEEDED for an
+ * unreadable review even when no recognized review is left to select.
+ */
+function hasUnreadableSameHeadReview({
+  reviews,
+  prHeadSha,
+  primaryBotLogin,
+  comments,
+  trustedMarkerLogins,
+}: {
+  reviews: ReviewLike[];
+  prHeadSha: string;
+  primaryBotLogin: string;
+  comments: CommentLike[];
+  trustedMarkerLogins: string[];
+}): boolean {
+  if (primaryBotLogin !== DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN) {
+    return false;
+  }
+  for (const review of reviews) {
+    const author = {
+      login: review.user?.login ?? review.author?.login ?? '',
+      __typename: review.user?.type ?? review.author?.type ?? null,
+    };
+    const body = review.body ?? null;
+    const commitId = String(
+      review.commit_id ?? review.commitId ?? '',
+    ).toLowerCase();
+    if (
+      commitId !== prHeadSha ||
+      !isVerifiedCopilotAuthor(author, primaryBotLogin) ||
+      isCopilotErrorReviewBody(body)
+    ) {
+      continue;
+    }
+    const { shape } = classifyCopilotReviewBody(body);
+    if (shape === 'overview-v2' || shape === 'overview-legacy') {
+      continue;
+    }
+    const submittedAt = String(review.submitted_at ?? review.submittedAt ?? '');
+    if (
+      !hasTrustedReviewAckAfter(
+        comments,
+        trustedMarkerLogins,
+        submittedAt,
+        prHeadSha,
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function evaluateAdvisoryWaitOutcome(
   input: AdvisoryWaitOutcomeInput,
 ): string {
   const { requestCap, pendingWindowMinutes, settledWindowMinutes } =
     normalizeAdvisoryWaitRuntimeOptions(input);
+  // #4070 (rp1kz): an unreadable same-head review routes to the disposition
+  // step, not REQUEST_NEEDED or WAIT, whichever branch would follow.
+  if (input.sameHeadUnreadable === true) {
+    return 'DISPOSITION_NEEDED';
+  }
 
   if (input.lastCopilotCommit === input.prHeadSha) {
-    return 'SATISFIED';
+    // #4070: a same-head review whose cited items lack a disposition is not
+    // settled, so route to the disposition step instead of reporting SATISFIED.
+    return input.citedDispositionsSatisfied === false
+      ? 'DISPOSITION_NEEDED'
+      : 'SATISFIED';
   }
 
   if (input.copilotPending) {
@@ -7180,7 +7457,18 @@ export function evaluateAdvisoryWaitOutcome(
 export function evaluateAdvisoryWaitF3Outcome(
   input: AdvisoryWaitOutcomeInput,
 ): string {
-  if (input.lastCopilotCommit === input.prHeadSha || !input.copilotPending) {
+  // #4070 (rp1kz): an unreadable same-head review never merges.
+  if (input.sameHeadUnreadable === true) {
+    return 'DISPOSITION_NEEDED';
+  }
+  // #4070: the same-head rule matches evaluateAdvisoryWaitOutcome, so F3 does
+  // not merge over uncovered cited items either.
+  if (input.lastCopilotCommit === input.prHeadSha) {
+    return input.citedDispositionsSatisfied === false
+      ? 'DISPOSITION_NEEDED'
+      : 'SATISFIED';
+  }
+  if (!input.copilotPending) {
     return 'SATISFIED';
   }
   return evaluateAdvisoryWaitOutcome(input);
@@ -7282,6 +7570,20 @@ export function buildAdvisoryWaitSummary(
     copilotPending,
     copilotPendingCoversHead,
     sameHeadMarkerPresent: markerSummary.sameHeadMarkerPresent,
+    sameHeadUnreadable: hasUnreadableSameHeadReview({
+      reviews,
+      prHeadSha,
+      primaryBotLogin,
+      comments,
+      trustedMarkerLogins,
+    }),
+    citedDispositionsSatisfied: sameHeadReviewsSettled({
+      reviews,
+      prHeadSha,
+      primaryBotLogin,
+      comments,
+      trustedMarkerLogins,
+    }),
     requestMarkerCount: markerSummary.requestMarkerCount,
     elapsedMinutes,
     requestCap,
