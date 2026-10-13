@@ -531,7 +531,7 @@ const SECONDARY_QUIET_WINDOW_SETTLED_BUFFER_MINUTES = 5;
 /**
  * Shared elapsed/remaining-minutes arithmetic for a quiet-window anchor.
  * Extracted so `buildSecondaryQuietWindowStatus`'s unsettled path (anchored
- * on `effectiveMaxActivityUpdatedAt`) and its #2544 settled-buffer path
+ * on the quiet-window anchor it receives) and its #2544 settled-buffer path
  * (anchored on `secondaryBotSettledAt`) compute identically and cannot
  * drift apart.
  */
@@ -573,23 +573,27 @@ function computeQuietWindowElapsed({
  * before treating the review as settled.
  *
  * Stateless by design: rather than persisting "when convergence was first
- * observed," this anchors on `effectiveMaxActivityUpdatedAt` --
- * `buildActivitySnapshotSummary`'s already-computed
- * `effective.maxActivityUpdatedAt` (protocol-helpers.mts), the same
- * non-ack-only activity ceiling `ackOnlyPostDisposition` already uses. That
- * value stays fresh while a genuinely unresolved item exists (an unresolved
- * thread's raw activity always feeds it, protocol-helpers.mts's
+ * observed," this anchors on the quiet-window anchor the caller passes as
+ * `effectiveMaxActivityUpdatedAt`: `buildActivitySnapshotSummary`'s
+ * `quietWindowMaxActivityUpdatedAt` (protocol-helpers.mts), the non-ack-only
+ * activity ceiling that `effective.maxActivityUpdatedAt` also computes, minus
+ * the own timestamp of an unedited top-level disposition by a trusted author
+ * (#4123). That value stays fresh while a genuinely unresolved item exists (an
+ * unresolved thread's raw activity always feeds it, protocol-helpers.mts's
  * `threadEffective`) and stabilizes once every item is either
- * resolved-with-disposition or was never opened -- a disposition reply, a
- * watermark, and a courtesy advisory-bot ack all leave it unchanged too (the
- * first legitimately anchors it, the watermark is filtered out before
- * classification runs, and the ack is excluded as ack-only) -- so "elapsed
- * since that anchor" already equals "elapsed since convergence was reached"
- * without a second, independently-drifting timestamp to persist.
+ * resolved-with-disposition or was never opened. A watermark and a courtesy
+ * advisory-bot ack leave it unchanged (the watermark is filtered out before
+ * classification runs, and a top-level ack after a disposition is excluded as
+ * ack-only). A disposition reply inside a review thread legitimately anchors
+ * it, because thread replies still feed the ceiling; an issue-comment
+ * disposition does not, so the agent's own top-level reply never restarts the
+ * window. "Elapsed since that anchor" therefore equals "elapsed since the
+ * review settled" without a second, independently-drifting timestamp to
+ * persist.
  *
  * #2544: `secondaryBotSettledAt` -- when it is a valid ISO timestamp --
  * switches the gate to the shorter settled buffer above, anchored on that
- * timestamp instead of `effectiveMaxActivityUpdatedAt`. The buffer never
+ * timestamp instead of the quiet-window anchor. The buffer never
  * exceeds the operator's own configured `minutes` (via `Math.min`), so a
  * repository that configures a window shorter than the buffer is never
  * kept waiting longer than what it explicitly asked for. `minutes` on
