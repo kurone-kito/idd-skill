@@ -1228,41 +1228,44 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
 
 1. **Find own claims.** For each worktree in `git worktree list --porcelain`,
    list `idd-generated-tokens-*.json` in that worktree's private admin directory
-   (`git -C <worktree> rev-parse --absolute-git-dir`). Each file holds `agentId`
-   and `claimId`, and a `nonce` when one was recorded. One worktree can hold
-   several files. A claim is own only when its `agentId` equals this session's
-   session-suffixed agent-id and its `agentId` and `claimId` both match the
-   trusted `claimed-by` marker for the same issue. The agent-id alone never
-   proves ownership, because the claim id is the authoritative token. A session
-   with no unique session identity cannot recover its claims: it reports them to
-   the operator and does not refill. Claims that are not own are not dispatched
-   again, and they are reported to the operator. A worktree that has claim
-   evidence, such as a claim lock or an `issue/<number>-<slug>` branch, but no
-   readable token record is reported to the operator rather than skipped,
-   because the claim contract treats that state as fail-closed. A worktree with
-   no claim evidence, such as the primary checkout, is not reported. F4 removes
-   the linked worktree, with its admin directory and this token file, before it
-   posts the final `unclaimed-by` marker. So a claim whose F4 removed its linked
-   worktree has no token file there. A record in the primary worktree's
-   directory can survive F4. Keep at most one record per claim-id: prefer the
-   linked worktree's record. A primary-directory record makes a claim
-   worktree-less only when no linked worktree carries that claim's branch or
-   lock, and it is a hint only: the trusted claimed-by marker for its issue must
-   also carry this session's unique agent-id and the same claim id. A linked
-   worktree that does carry it, but has no readable token record, is reported to
-   the operator as unreadable and is not treated as worktree-less. A readable
-   linked record stays authoritative. For a worktree-less claim, take the issue
-   number from the worker's brief in the agent listing, or from the issue-number
-   prefix of its report draft in the session scratchpad, and never from a `main`
-   branch. Then read that issue's trusted `claimed-by` and `unclaimed-by`
-   markers for the agent-id and claim-id, and apply the same test, so that both
-   the agent id and the claim id must match the marker. Also enumerate the
-   candidates for worktree-less claims from the report drafts in the session
-   scratchpad, the finished entries in the agent listing, and the running
-   entries whose worktree is gone, and read each such issue the same way. An
-   issue whose trusted markers name another agent-id, or no claim, is not own.
-   If neither source gives an issue number, report the claim to the operator and
-   take no further action on it.
+   (`git -C <worktree> rev-parse --absolute-git-dir`). A `prunable` entry, or
+   one whose path no longer exists, is not read: it is noted, and a claim whose
+   branch or lock it still names is reported to the operator. The scan then goes
+   on with the readable entries. Each file holds `agentId` and `claimId`, and a
+   `nonce` when one was recorded. One worktree can hold several files. A claim
+   is own only when its `agentId` equals this session's session-suffixed
+   agent-id and its `agentId` and `claimId` both match the trusted `claimed-by`
+   marker for the same issue. The agent-id alone never proves ownership, because
+   the claim id is the authoritative token. A session with no unique session
+   identity cannot recover its claims: it reports them to the operator and does
+   not refill. Claims that are not own are not dispatched again, and they are
+   reported to the operator. A worktree that has claim evidence, such as a claim
+   lock or an `issue/<number>-<slug>` branch, but no readable token record is
+   reported to the operator rather than skipped, because the claim contract
+   treats that state as fail-closed. A worktree with no claim evidence, such as
+   the primary checkout, is not reported. F4 removes the linked worktree, with
+   its admin directory and this token file, before it posts the final
+   `unclaimed-by` marker. So a claim whose F4 removed its linked worktree has no
+   token file there. A record in the primary worktree's directory can survive
+   F4. Keep at most one record per claim-id: prefer the linked worktree's
+   record. A primary-directory record makes a claim worktree-less only when no
+   linked worktree carries that claim's branch or lock, and it is a hint only:
+   the trusted claimed-by marker for its issue must also carry this session's
+   unique agent-id and the same claim id. A linked worktree that does carry it,
+   but has no readable token record, is reported to the operator as unreadable
+   and is not treated as worktree-less. A readable linked record stays
+   authoritative. For a worktree-less claim, take the issue number from the
+   worker's brief in the agent listing, or from the issue-number prefix of its
+   report draft in the session scratchpad, and never from a `main` branch. Then
+   read that issue's trusted `claimed-by` and `unclaimed-by` markers for the
+   agent-id and claim-id, and apply the same test, so that both the agent id and
+   the claim id must match the marker. Also enumerate the candidates for
+   worktree-less claims from the report drafts in the session scratchpad, the
+   finished entries in the agent listing, and the running entries whose worktree
+   is gone, and read each such issue the same way. An issue whose trusted
+   markers name another agent-id, or no claim, is not own. If neither source
+   gives an issue number, report the claim to the operator and take no further
+   action on it.
 2. **Verify each own claim.** For a claim with a linked worktree, take `--issue`
    from its branch, `issue/<number>-<slug>`, and confirm it against the trusted
    `claimed-by` marker that carries the same claim-id, because the token record
