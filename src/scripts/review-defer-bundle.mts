@@ -15,6 +15,7 @@ import {
   auditAuthoredIssue,
   EFFORT_CANDIDATE_FILE_LIMITS,
 } from './audit-authored-issue.mts';
+import { extractDeferSourceRefsIssueNumbers } from './discover-readiness-check.mts';
 
 /** One deferred review finding, rendered as one bullet per section. */
 export interface DeferItem {
@@ -22,7 +23,7 @@ export interface DeferItem {
   title: string;
   /** Link to the review thread. */
   threadUrl: string;
-  /** What the reviewer found, one paragraph; its newlines are kept. */
+  /** What the reviewer found; its line breaks are kept. */
   finding: string;
   /** One acceptance criterion for the fix. */
   acceptance: string;
@@ -63,12 +64,6 @@ const MARKER_PREFIX_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 // defer-source marker. A bare closer cannot open or close anything, so it is
 // allowed as ordinary prose.
 const HTML_COMMENT_OPENER_PATTERN = /<!--/;
-// The same line-start rule as the defer-source Refs count in
-// discover-readiness-check.mts (its DEPENDENCY_LINE_PREFIX, matched
-// case-insensitively): leading whitespace, any number of blockquote markers,
-// at most one bullet marker, then `Refs`, an optional colon, and `#<n>`. Keep
-// it in step with that rule, or render and lint will disagree.
-const REFS_LINE_PATTERN = /^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+)?Refs:?[ \t]+#\d/i;
 const LINE_BREAK_PATTERN = /[\r\n]/;
 
 interface ValidatedItem {
@@ -109,12 +104,6 @@ function rejectHtmlCommentOpener(value: string, field: string): void {
   }
 }
 
-function rejectRefsLine(line: string, field: string): void {
-  if (REFS_LINE_PATTERN.test(line)) {
-    throw new TypeError(`${field} must not begin a line with a Refs reference`);
-  }
-}
-
 function validateItem(raw: unknown, index: number): ValidatedItem {
   if (typeof raw !== 'object' || raw === null) {
     throw new TypeError(`items[${index}] must be an object`);
@@ -124,9 +113,6 @@ function validateItem(raw: unknown, index: number): ValidatedItem {
 
   const title = requireText(item.title, at('title'));
   rejectHtmlCommentOpener(title, at('title'));
-  // The title sits after a list marker, so a title that starts with a Refs
-  // reference would be counted as a second Refs line.
-  rejectRefsLine(oneLine(title), at('title'));
 
   const threadUrl = requireText(item.threadUrl, at('threadUrl')).trim();
   if (LINE_BREAK_PATTERN.test(threadUrl)) {
@@ -136,11 +122,6 @@ function validateItem(raw: unknown, index: number): ValidatedItem {
 
   const finding = requireText(item.finding, at('finding'));
   rejectHtmlCommentOpener(finding, at('finding'));
-  // The first line sits inside the bullet, so only continuation lines can
-  // begin a line of their own in the body.
-  for (const line of multiline(finding).split('\n').slice(1)) {
-    rejectRefsLine(line, at('finding'));
-  }
 
   const acceptance = requireText(item.acceptance, at('acceptance'));
   rejectHtmlCommentOpener(acceptance, at('acceptance'));
@@ -186,12 +167,13 @@ function indentContinuation(text: string): string {
 /**
  * Render the title and Markdown body of one follow-up issue that bundles a
  * review pass's deferred findings. Throws a TypeError naming the offending
- * field for any invalid input. Beyond the spec's own list, it also refuses:
- * a markerPrefix outside [A-Za-z0-9._-] (it is written into HTML comments); a
- * path with a backtick or a line break (it sits in a code span); a line break
- * in threadUrl; an HTML comment opener in any body text; and a title or
- * finding continuation line that would begin with a Refs reference, which
- * would add a second Refs line to the body.
+ * field for any invalid input. Beyond the conditions listed in issue #4191,
+ * it also refuses: a markerPrefix that does not start with a letter or digit
+ * or that holds anything else than letters, digits, dots, underscores, and
+ * hyphens (the prefix is written into HTML comments); a path with a backtick
+ * or a line break (it sits in a code span); a line break in threadUrl; an
+ * HTML comment opener in any body text; and item text that would give the
+ * body a second Refs line by the same count the defer-source check uses.
  */
 // audit:ignore-dead-export: wired by the idd-review-defer-bundle command in a later roadmap issue
 export function renderDeferBundle(input: DeferBundleInput): DeferBundle {
@@ -206,8 +188,12 @@ export function renderDeferBundle(input: DeferBundleInput): DeferBundle {
     throw new TypeError('items must be a non-empty array');
   }
 
-  const items = input.items.map((raw, index) => validateItem(raw, index));
-  const paths = [...new Set(items.map((item) => item.path.trim()))].sort();
+  // Array.from visits holes, so a sparse array fails item validation instead
+  // of silently dropping its entries.
+  const items = Array.from(input.items, (raw, index) =>
+    validateItem(raw, index),
+  );
+  const paths = [...new Set(items.map((item) => item.path))].sort();
   if (paths.length > EFFORT_CANDIDATE_FILE_LIMITS.M) {
     throw new TypeError(
       `items name ${paths.length} distinct paths, more than the ${EFFORT_CANDIDATE_FILE_LIMITS.M} one bundle may name; split the review pass into smaller bundles`,
@@ -220,9 +206,7 @@ export function renderDeferBundle(input: DeferBundleInput): DeferBundle {
     '',
     `Deferred from PR #${pr} under the review defer policy; see the threads below.`,
     '',
-    ...items.map(
-      (item) => `- ${oneLine(item.title)}: ${item.threadUrl.trim()}`,
-    ),
+    ...items.map((item) => `- ${oneLine(item.title)}: ${item.threadUrl}`),
   ].join('\n');
 
   const proposedChange = [
@@ -268,6 +252,15 @@ export function renderDeferBundle(input: DeferBundleInput): DeferBundle {
     `<!-- ${markerPrefix}-effort: ${effort} -->`,
     `<!-- ${markerPrefix}-authoring-defer-source: ${DEFER_SOURCE_VALUE} -->`,
   ].join('\n\n');
+
+  // Ask the same count the defer-source check uses, so render refuses exactly
+  // when lint would find a second Refs line. Only the origin's line may stay.
+  const refs = extractDeferSourceRefsIssueNumbers(body);
+  if (refs.ambiguous || refs.numbers.length !== 1) {
+    throw new TypeError(
+      'items must not add a second Refs line: a title or finding line reads as a Refs reference to the defer-source check',
+    );
+  }
 
   return { title, body };
 }

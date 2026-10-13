@@ -210,6 +210,17 @@ test('non-array items throw a TypeError naming items', () => {
   );
 });
 
+test('a sparse items array is validated, not silently dropped', () => {
+  assert.throws(
+    () =>
+      renderDeferBundle(
+        bundleInput({ items: new Array(1) as unknown as DeferItem[] }),
+      ),
+    (error: unknown) =>
+      error instanceof TypeError && error.message.startsWith('items[0] must '),
+  );
+});
+
 test('a visible effort line that disagrees with its marker fails effort-visible-line-agreement', () => {
   const rendered = renderDeferBundle(
     bundleInput({
@@ -292,6 +303,14 @@ test('invalid input throws a TypeError whose message starts with the field name'
       'markerPrefix',
       () => renderDeferBundle(bundleInput({ markerPrefix: 'a b' })),
     ],
+    [
+      'markerPrefix',
+      () => renderDeferBundle(bundleInput({ markerPrefix: '-acme' })),
+    ],
+    [
+      'markerPrefix',
+      () => renderDeferBundle(bundleInput({ markerPrefix: '.acme' })),
+    ],
     ['input', () => renderDeferBundle(null as unknown as DeferBundleInput)],
     [
       'items[0]',
@@ -305,13 +324,6 @@ test('invalid input throws a TypeError whose message starts with the field name'
       () =>
         renderDeferBundle(
           bundleInput({ items: [item({ title: '<!-- note' })] }),
-        ),
-    ],
-    [
-      'items[0].title',
-      () =>
-        renderDeferBundle(
-          bundleInput({ items: [item({ title: 'Refs #5 handling' })] }),
         ),
     ],
     [
@@ -351,15 +363,6 @@ test('invalid input throws a TypeError whose message starts with the field name'
       () =>
         renderDeferBundle(
           bundleInput({ items: [item({ finding: 42 as unknown as string })] }),
-        ),
-    ],
-    [
-      'items[0].finding',
-      () =>
-        renderDeferBundle(
-          bundleInput({
-            items: [item({ finding: 'First line.\nRefs #7 is the origin.' })],
-          }),
         ),
     ],
     [
@@ -411,39 +414,81 @@ test('invalid input throws a TypeError whose message starts with the field name'
   }
 });
 
-test('a finding continuation line the audit counts as a Refs line is refused at render', () => {
-  const countedByAudit = [
-    'Refs #7 is the origin.',
-    'refs #7 is the origin.',
-    'REFS: #7 is the origin.',
-    '  Refs #7 is the origin.',
-    '> Refs #7 is the origin.',
-    '> > Refs #7 is the origin.',
-    '- Refs #7 is the origin.',
-    '* Refs #7 is the origin.',
-  ];
-  for (const line of countedByAudit) {
+// Lines the defer-source check counts as a Refs line. Render must refuse
+// each one as a title or as a finding continuation line; the lint injection
+// test below asks the audit itself whether it counts each form.
+const COUNTED_BY_AUDIT = [
+  'Refs #7 is the origin.',
+  'refs #7 is the origin.',
+  'REFS: #7 is the origin.',
+  '  Refs #7 is the origin.',
+  '> Refs #7 is the origin.',
+  '> > Refs #7 is the origin.',
+  '- Refs #7 is the origin.',
+  '* Refs #7 is the origin.',
+  '+ Refs #7 is the origin.',
+  '`x` Refs #7 is the origin.',
+];
+
+// Lines the defer-source check does not count. Render keeps them, and lint
+// passes the resulting body.
+const NOT_COUNTED_BY_AUDIT = [
+  '1. Refs #7 is the origin.',
+  '**Refs #7** is the origin.',
+  '_Refs #7_ is the origin.',
+  'See Refs #7 is the origin.',
+];
+
+test('a finding continuation line the defer-source check counts is refused at render', () => {
+  for (const line of COUNTED_BY_AUDIT) {
     assert.throws(
       () =>
         renderDeferBundle(
           bundleInput({ items: [item({ finding: `First line.\n${line}` })] }),
         ),
       (error: unknown) =>
-        error instanceof TypeError &&
-        error.message.startsWith('items[0].finding must '),
+        error instanceof TypeError && error.message.startsWith('items must '),
       `expected a refusal for ${JSON.stringify(line)}`,
     );
   }
 });
 
-test('a finding continuation line the audit does not count is kept, and lint passes', () => {
-  const notCountedByAudit = [
-    '1. Refs #7 is the origin.',
-    '**Refs #7** is the origin.',
-    '_Refs #7_ is the origin.',
-    'See Refs #7 is the origin.',
-  ];
-  for (const line of notCountedByAudit) {
+test('a title the defer-source check counts is refused at render', () => {
+  for (const title of ['Refs #5 handling', '`foo` Refs #5 handling']) {
+    assert.throws(
+      () => renderDeferBundle(bundleInput({ items: [item({ title })] })),
+      (error: unknown) =>
+        error instanceof TypeError && error.message.startsWith('items must '),
+      `expected a refusal for ${JSON.stringify(title)}`,
+    );
+  }
+});
+
+test('the lint counts every refused form and ignores every kept form', () => {
+  const base = renderDeferBundle(bundleInput());
+  const inject = (line: string): string =>
+    base.body.replace('\n\nRefs #4100\n\n', `\n\n${line}\n\nRefs #4100\n\n`);
+
+  for (const line of COUNTED_BY_AUDIT) {
+    const lint = lintDeferBundle({ ...base, body: inject(line) }, 'idd-skill');
+    assert.ok(
+      lint.failures.some((failure) =>
+        failure.startsWith('defer-source-marker: '),
+      ),
+      `the audit should count ${JSON.stringify(line)} as a Refs line`,
+    );
+  }
+  for (const line of NOT_COUNTED_BY_AUDIT) {
+    assert.deepEqual(
+      lintDeferBundle({ ...base, body: inject(line) }, 'idd-skill'),
+      { passed: true, failures: [] },
+      `the audit should not count ${JSON.stringify(line)}`,
+    );
+  }
+});
+
+test('a finding continuation line the defer-source check does not count is kept, and lint passes', () => {
+  for (const line of NOT_COUNTED_BY_AUDIT) {
     const rendered = renderDeferBundle(
       bundleInput({ items: [item({ finding: `First line.\n${line}` })] }),
     );
