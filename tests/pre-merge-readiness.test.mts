@@ -524,6 +524,119 @@ test('the disposition hint needs every command input and a trusted IDD-agent log
   );
 });
 
+// #4163: the collector wiring. The hint is attached inside
+// collectPreMergeReadiness, so these run the real collector against the fake
+// provider rather than the pure helper alone.
+function hintCollectorPort(comments: ProviderComment[]): ProviderPort {
+  return createFakeProviderAdapter({
+    viewerLogin: HINT_VIEWER,
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: HINT_HEAD,
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [{ number: 7 }],
+      },
+    },
+    comments: { 1: comments },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 1: [] },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-10-13T10:00:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+  });
+}
+
+function hintCollectorComment(
+  id: number,
+  authorLogin: string,
+  body: string,
+  createdAt: string,
+): ProviderComment {
+  return {
+    id,
+    body,
+    createdAt,
+    updatedAt: createdAt,
+    authorLogin,
+    lastEditedAt: null,
+  };
+}
+
+test('collectPreMergeReadiness attaches the disposition hint only when the blocker is bot summaries alone (#4163)', () => {
+  const collect = (comments: ProviderComment[]) =>
+    collectPreMergeReadiness(
+      [
+        '--pr',
+        '1',
+        '--claim-issue',
+        '7',
+        '--claim-id',
+        HINT_CLAIM_ID,
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-10-13T11:00:00Z',
+      ],
+      () => hintCollectorPort(comments),
+      () => ({}),
+    );
+  const summaries = [
+    hintCollectorComment(
+      101,
+      HINT_CODERABBIT,
+      HINT_CODERABBIT_SUMMARY,
+      '2026-10-13T10:00:00Z',
+    ),
+    hintCollectorComment(
+      102,
+      HINT_CODEX,
+      HINT_CODEX_COMPLETED,
+      '2026-10-13T10:05:00Z',
+    ),
+  ];
+
+  const eligible = collect(summaries);
+  const evidence = eligible.dispositionEvidence;
+  assert.ok(evidence);
+  assert.equal(evidence.route, 'return-to-e1');
+  assert.equal(evidence.reason, 'missing-disposition-evidence');
+  assert.equal(evidence.blockingCount, 2);
+  assert.deepEqual(
+    evidence.missingRegularComments.map((entry) => entry.id),
+    ['101', '102'],
+  );
+  assert.match(
+    evidence.hint ?? '',
+    /^E6 PATH B helper-first: node scripts\/disposition-non-review-notices\.mjs --pr 1 --apply --owner o --repo r --claim-issue 7 --claim-id 555cc2e9-9f25-45bb-ba7d-736e5e0d85bd /,
+  );
+  assert.deepEqual(validate(eligible, readinessSchema), []);
+
+  // A human comment joins the blocking set: the same verdict, and no hint.
+  const mixed = collect([
+    ...summaries,
+    hintCollectorComment(
+      103,
+      'reviewer-a',
+      'please fix the typo in the readme',
+      '2026-10-13T10:10:00Z',
+    ),
+  ]);
+  assert.equal(mixed.dispositionEvidence?.route, 'return-to-e1');
+  assert.equal(mixed.dispositionEvidence?.blockingCount, 3);
+  assert.equal(mixed.dispositionEvidence?.hint, undefined);
+  assert.deepEqual(validate(mixed, readinessSchema), []);
+});
+
 test('pre-merge readiness always carries waiverEvidence and the schema requires it', () => {
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
   const summary = buildPreMergeReadinessSummary(fixture.input, {
