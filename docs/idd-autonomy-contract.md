@@ -53,7 +53,10 @@ repeated per row.
 
 ### Discovery & suitability (A0-A4.5)
 
-No claim exists yet in this group; every row here runs before A5.
+Every row in this section runs before A5. Claims made before A5 are
+coordination claims: the A1.5 `roadmap-audit/*` claim (Roadmap audit
+(A1.5) below) and the A4.5 `suitability-close/*` claim (Suitability
+coordination close (A4.5) below).
 
 | Mutation                                                                                        | Reversible / Irreversible | Undo path / Governing gate         | Source                                   |
 | ----------------------------------------------------------------------------------------------- | ------------------------- | ---------------------------------- | ---------------------------------------- |
@@ -88,6 +91,23 @@ claim, scoped to the roadmap issue only.
 | Update roadmap task list with a follow-up link                                | Reversible                | Edit the roadmap body again                                                                                                                                              | `idd-roadmap-audit.instructions.md` "Autonomous gaps found"                                                                                             |
 | Apply needs-decision / blocked-by-human label (non-autonomous gap)            | Reversible                | Remove the label once the gap is resolved                                                                                                                                | `idd-roadmap-audit.instructions.md` "Non-autonomous gaps found"                                                                                         |
 | Release roadmap-audit claim                                                   | Reversible                | Re-claim if audit resumes                                                                                                                                                | `idd-roadmap-audit.instructions.md`                                                                                                                     |
+
+### Suitability coordination close (A4.5)
+
+These rows exist only on helper-enabled profiles: with
+`instructions-only`, the session reports the evidence and drops the
+candidate, and does not claim, close or release. The close applies
+only to a discovery-path candidate (A2/A3 roadmap traversal or A0-O
+orphan-first), never to an A0-T explicit target, which reports and
+stops instead. All rows below run under a
+`suitability-close/<number>-<slug>` coordination claim, scoped to the
+candidate issue only.
+
+| Mutation                                                                                        | Reversible / Irreversible | Undo path / Governing gate                                                                                                                    | Source                                                                 |
+| ----------------------------------------------------------------------------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `suitability-close/<number>-<slug>` coordination claim                                          | Reversible                | Same as Claim & ownership above                                                                                                               | `idd-suitability.instructions.md` "High-confidence coordination-close" |
+| Post the evidence-bound closing comment + close the issue (`suitability-close-execute --apply`) | Irreversible              | Gate: a Check 4 `tier: 'high-confidence'` hit, the re-validated claim, and `suitability-close-execute --apply`; a wrong close can be reopened | `idd-suitability.instructions.md` "High-confidence coordination-close" |
+| Release `suitability-close/*` coordination claim                                                | Reversible                | Re-claim fresh later                                                                                                                          | `idd-suitability.instructions.md` "High-confidence coordination-close" |
 
 ### Work, branch, worktree & follow-up authoring
 
