@@ -303,8 +303,7 @@ workflow explicitly requests — that labeler can apply any of these
 four configured label names to an ordinary issue on its own judgment,
 regardless of which label names the repository chose. The failure is
 silent: nothing errors, and the issue stops being an execution
-candidate (a spurious `labels.roadmapLabelName` or
-`labels.authoringOnlyLabelName` match) or gets parked
+candidate (a spurious `labels.roadmapLabelName` match) or gets parked
 behind a hold (a spurious `labels.blockedByHumanLabelName` or
 `labels.needsDecisionLabelName` match — both are Discover's
 roadmap-level blocker gates) with no visible cause. This has been
