@@ -11388,9 +11388,9 @@ export const MISSING_WATERMARK_HINT =
 export const MERGE_CONFLICT_CI_HINT =
   'the PR head conflicts with its base branch (mergeStateStatus DIRTY), which ' +
   'can keep GitHub from starting the required checks for this head. As the ' +
-  'default post-push sync, merge origin/main (the development branch) into ' +
-  'the PR branch, push, and re-run pre-merge readiness once CI reports on the ' +
-  'new head.';
+  'default post-push sync, merge origin/main (or the development branch when ' +
+  'it is not main) into the PR branch, push, and re-run pre-merge readiness ' +
+  'once CI and review settle on the new head.';
 
 /** One unmet pre-merge gate: the gate id plus a human-readable detail. */
 export interface PreMergeBlocker {
@@ -11398,7 +11398,8 @@ export interface PreMergeBlocker {
   detail: string;
   /**
    * #3950: optional next-step text, present only when a gate can name one
-   * (currently `review-currency` / `missing-watermark`). Diagnostic only.
+   * (currently `review-currency` / `missing-watermark`, and `ci` on a
+   * `missing` check set for a `DIRTY` head, #4097). Diagnostic only.
    */
   hint?: string;
 }
@@ -11942,9 +11943,9 @@ export function computePreMergeReadinessBlockers(
       }
     }
     const ciBlocker: PreMergeBlocker = { gate: 'ci', detail };
-    // #4097: diagnostic only. A missing required check on a DIRTY head is
-    // usually the head conflicting with its base, which GitHub may not run
-    // checks for; name the route. `gate` and `detail` are unchanged.
+    // #4097: diagnostic only. On a DIRTY head, a missing required check is a
+    // likely cause of the conflict with the base, not a proven one; name the
+    // route. `gate` and `detail` are unchanged.
     if (ci.status === 'missing' && mergeStateStatus === 'DIRTY') {
       ciBlocker.hint = MERGE_CONFLICT_CI_HINT;
     }

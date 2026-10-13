@@ -498,6 +498,59 @@ test('idd-merge-execute: a missing-watermark blocker with a hint validates again
   assertRoundtrip(verdict, loadJson('schemas/idd-merge-execute.schema.json'));
 });
 
+// #4097: a blocked verdict whose ci blocker carries the merge-conflict hint
+// (a missing required check on a DIRTY head) must still validate.
+test('idd-merge-execute: a missing-check ci blocker on a DIRTY head with a hint validates against schema (#4097)', () => {
+  const HEAD = '1111111111111111111111111111111111111111';
+  const report: Record<string, unknown> = {
+    prHeadSha: HEAD,
+    reviewCurrency: { comparisonRoute: 'proceed', comparisonReason: 'match' },
+    threads: { actionableCount: 0 },
+    advisoryWait: { f3Outcome: 'SATISFIED' },
+    ci: {
+      status: 'missing',
+      requiredChecksPassing: false,
+      noRequiredChecksConfigured: false,
+      presentRunConclusion: 'none',
+      discardedNonPassingRequiredChecks: [],
+    },
+    reviewerStates: {
+      requiredApprovalsSatisfied: true,
+      codeownerApprovalSatisfied: true,
+      codeownerSelfApproval: { status: 'not_applicable' },
+    },
+    claim: { matchesExpectedClaim: true, reason: 'match' },
+    dispositionEvidence: { route: 'proceed', blockingCount: 0 },
+    branchCurrency: {
+      mergeStateStatus: 'DIRTY',
+      mergeable: 'CONFLICTING',
+      requiresUpToDateHead: false,
+      requiresUpToDateHeadSource: 'none',
+    },
+  };
+  const deps: MergeExecuteDeps = {
+    collect: () => report,
+    fetchHeadSha: () => HEAD,
+    fetchMergeState: () => ({
+      mergeable: 'CONFLICTING',
+      mergeStateStatus: 'DIRTY',
+    }),
+    mergePr: () => 'Merged PR.',
+    mergePrAdmin: () => 'Merged PR (admin).',
+    resolveSoloCodeownerAdminFallbackMode: () => 'auto-admin-retry',
+    getLocalHeadState: () => ({ branch: null, headSha: null }),
+    fetchHeadRefName: () => '',
+  };
+  const { verdict } = runMergeExecute(
+    ['--pr', '994', '--claim-issue', '309', '--claim-id', 'c-1'],
+    deps,
+  );
+  const ciBlocker = verdict.blockers.find((b) => b.gate === 'ci');
+  assert.ok(ciBlocker, 'expected a ci blocker');
+  assert.match(String(ciBlocker.hint), /merge origin\/main/);
+  assertRoundtrip(verdict, loadJson('schemas/idd-merge-execute.schema.json'));
+});
+
 test('idd-merge-execute: a non-null localHeadDrift verdict validates against schema (#2453)', () => {
   const HEAD = '1111111111111111111111111111111111111111';
   const DRIFTED = '2222222222222222222222222222222222222222';

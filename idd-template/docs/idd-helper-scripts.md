@@ -6088,11 +6088,14 @@ reflexively as any other CLI option.
   `missing` (a required check has no run for the head) and
   `branchCurrency.mergeStateStatus` is `DIRTY` (the head conflicts with its
   base), the `ci` entry in `blockers[]` carries an optional `hint` naming the
-  default post-push sync: merge `origin/main` (the development branch) into
-  the PR branch, push, and re-run readiness. The hint is diagnostic only;
-  `gate`, `detail`, and the verdict are unchanged. It is absent for a `DIRTY`
-  head whose checks are present, and for a `missing` check on a head that is
-  not `DIRTY`.
+  default post-push sync: merge `origin/main` (or the development branch when
+  it is not `main`) into the PR branch, push, and re-run readiness once CI
+  and review settle on the new head. The hint is diagnostic only; `gate`,
+  `detail`, and the verdict are unchanged. It is absent for a `DIRTY` head
+  whose checks are present, and for a `missing` check on a head that is not
+  `DIRTY`. Observed on PR `#4077` (issue `#4071`, head `58688f7fc`): the head
+  was `DIRTY`, no `lint`, `idd-doctor`, or `pnpm-boundary` run was created,
+  and the readiness blocker gave no cause.
 - Authoritative phase role: the live `pre-merge-readiness` run on the
   current HEAD is the **authoritative source for the final-merge CI and
   activity fields** at F2/F3. The `review-activity-snapshot` helper builds
