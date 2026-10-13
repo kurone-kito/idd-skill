@@ -5987,6 +5987,18 @@ reflexively as any other CLI option.
   the courtesy-ack convergence rule, not a re-posted reply) and on
   `incomplete-thread-comments`, and it never changes `route`, `reason`, or any
   count. It mirrors `missingRegularComments[].hint`
+- Disposition-evidence `hint` on the `dispositionEvidence` object
+  (kurone-kito/idd-skill#4163; observed 2026-10-13 on
+  kurone-kito/idd-skill#4153, kurone-kito/idd-skill#4151, and
+  kurone-kito/idd-skill#4154): present only when the missing regular comments
+  form the same set as the bot summaries or non-review notices that the
+  `disposition-non-review-notices` helper would record, with no missing thread
+  or human comment. It names that helper run with `--apply`, the same claim,
+  owner, repo, and trusted-login inputs the readiness run used, the advisory
+  login inputs it used (the two default review bots when none is configured),
+  and then a re-run of readiness. It is omitted when the claim, owner, repo, or
+  trusted-login input is missing or an IDD-agent login is not trusted, and it
+  never changes `route`, `reason`, or any count.
 - **Secondary-bot settlement is fail-closed** (#3261). When
   `advisoryWait.secondaryQuietWindow`/`secondaryBotLogin(s)` are
   configured, `secondaryQuietWindow` only shortens to the short settled

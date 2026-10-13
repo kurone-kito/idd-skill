@@ -28,6 +28,7 @@ import {
 import {
   collectPreMergeReadiness,
   computeDeferFollowUps,
+  dispositionNoticeCommandHint,
   fetchBranchRulesets,
   fetchGovernanceJson,
   mentionsIssue,
@@ -253,6 +254,421 @@ test('the readiness schema accepts the optional missingThreads hint and still re
   const unknownKey = JSON.parse(JSON.stringify(summary));
   unknownKey.dispositionEvidence.missingThreads[0].nextStep = 'post a reply';
   assert.ok(validate(unknownKey, readinessSchema).length > 0);
+});
+
+// #4163: the E6 PATH B hint on dispositionEvidence. The bot bodies mirror the
+// disposition helper's own fixtures in tests/disposition-non-review-notices.test.mts.
+const HINT_VIEWER = 'kurone-kito';
+const HINT_CODERABBIT = 'coderabbitai[bot]';
+const HINT_CODEX = 'chatgpt-codex-connector[bot]';
+const HINT_HEAD = '0123456789abcdef0123456789abcdef01234567';
+const HINT_CLAIM_ID = '555cc2e9-9f25-45bb-ba7d-736e5e0d85bd';
+const HINT_CODERABBIT_SUMMARY =
+  '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n## Walkthrough\nSome walkthrough text.';
+const HINT_CODERABBIT_NOTICE =
+  '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n> ## Review limit reached';
+const HINT_CODEX_COMPLETED =
+  '<!-- codex-pull-request-review-summary -->\n\n' +
+  '## Codex Review Summary\n\n' +
+  '| Review | Status | Commit | Review trigger |\n' +
+  '| --- | --- | --- | --- |\n' +
+  '| 📝 **Code Review** | ✅ **Completed** <relative-time datetime="2026-05-12T00:00:00Z">' +
+  '2026-05-12T00:00:00Z</relative-time> | `0123456789ab` | PR opened |\n';
+const HINT_CODEX_RUNNING = HINT_CODEX_COMPLETED.replace(
+  '✅ **Completed**',
+  '🔄 **Running**',
+);
+const HINT_EXPECTED =
+  "E6 PATH B helper-first: node scripts/disposition-non-review-notices.mjs --pr 4153 --apply --owner kurone-kito --repo idd-skill --claim-issue 4163 --claim-id 555cc2e9-9f25-45bb-ba7d-736e5e0d85bd --trusted-marker-logins 'kurone-kito' --advisory-bot-logins 'coderabbitai[bot],chatgpt-codex-connector[bot]' records these dispositions; then re-run pre-merge-readiness (drop --apply for a dry run)";
+
+function hintComment(
+  id: number,
+  login: string,
+  body: string,
+  createdAt: string,
+) {
+  return {
+    id: String(id),
+    author: { login },
+    body,
+    createdAt,
+    updatedAt: createdAt,
+    lastEditedAt: null,
+  };
+}
+
+function hintEvidence(
+  comments: ReturnType<typeof hintComment>[],
+  threads: Parameters<
+    typeof summarizeDispositionEvidenceForGate
+  >[0]['threads'] = [],
+) {
+  return summarizeDispositionEvidenceForGate(
+    { comments, threads },
+    {
+      iddAgentLogins: [HINT_VIEWER],
+      advisoryBotLogins: [HINT_CODERABBIT, HINT_CODEX],
+      trustedMarkerLogins: [HINT_VIEWER],
+      prHeadSha: HINT_HEAD,
+      prAuthorLogin: HINT_VIEWER,
+    },
+  );
+}
+
+function hintFor(
+  comments: ReturnType<typeof hintComment>[],
+  evidence: ReturnType<typeof hintEvidence>,
+  overrides: Partial<Parameters<typeof dispositionNoticeCommandHint>[0]> = {},
+): string | null {
+  return dispositionNoticeCommandHint({
+    dispositionEvidence: evidence,
+    comments,
+    prHeadSha: HINT_HEAD,
+    prNumber: 4153,
+    owner: 'kurone-kito',
+    repo: 'idd-skill',
+    claimIssueNumber: 4163,
+    claimId: HINT_CLAIM_ID,
+    trustedMarkerLogins: [HINT_VIEWER],
+    advisoryBotLogins: [HINT_CODERABBIT, HINT_CODEX],
+    iddAgentLogins: [HINT_VIEWER],
+    ...overrides,
+  });
+}
+
+test('the disposition hint names the E6 helper run when only bot summaries are missing (#4163)', () => {
+  const comments = [
+    hintComment(
+      101,
+      HINT_CODERABBIT,
+      HINT_CODERABBIT_SUMMARY,
+      '2026-10-13T10:00:00Z',
+    ),
+    hintComment(102, HINT_CODEX, HINT_CODEX_COMPLETED, '2026-10-13T10:05:00Z'),
+  ];
+  const evidence = hintEvidence(comments);
+  assert.equal(evidence.route, 'return-to-e1');
+  assert.equal(evidence.blockingCount, 2);
+  assert.deepEqual(
+    evidence.missingRegularComments.map((entry) => entry.id),
+    ['101', '102'],
+  );
+
+  const before = JSON.stringify(evidence);
+  const hint = hintFor(comments, evidence);
+  assert.equal(hint, HINT_EXPECTED);
+  // The hint is derived from the evidence and never changes it.
+  assert.equal(JSON.stringify(evidence), before);
+
+  // The hinted output validates against the readiness schema, and the verdict
+  // fields the gate reports are the same with the hint attached.
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = JSON.parse(
+    JSON.stringify(
+      buildPreMergeReadinessSummary(fixture.input, {
+        ...fixture.options,
+        includeDispositionEvidence: true,
+      }),
+    ),
+  );
+  summary.dispositionEvidence = JSON.parse(
+    JSON.stringify({ ...evidence, hint }),
+  );
+  assert.deepEqual(validate(summary, readinessSchema), []);
+  assert.equal(summary.dispositionEvidence.route, evidence.route);
+  assert.equal(summary.dispositionEvidence.reason, evidence.reason);
+  assert.equal(
+    summary.dispositionEvidence.blockingCount,
+    evidence.blockingCount,
+  );
+
+  // The hint is a string, and an unknown key on the object still fails.
+  const badType = JSON.parse(JSON.stringify(summary));
+  badType.dispositionEvidence.hint = 42;
+  assert.ok(validate(badType, readinessSchema).length > 0);
+  const unknownKey = JSON.parse(JSON.stringify(summary));
+  unknownKey.dispositionEvidence.nextStep = 'run the helper';
+  assert.ok(validate(unknownKey, readinessSchema).length > 0);
+});
+
+test('the disposition hint is absent when a human comment is also missing (#4163)', () => {
+  const comments = [
+    hintComment(
+      101,
+      HINT_CODERABBIT,
+      HINT_CODERABBIT_SUMMARY,
+      '2026-10-13T10:00:00Z',
+    ),
+    hintComment(102, HINT_CODEX, HINT_CODEX_COMPLETED, '2026-10-13T10:05:00Z'),
+    hintComment(
+      103,
+      'reviewer-a',
+      'please fix the typo in the readme',
+      '2026-10-13T10:10:00Z',
+    ),
+  ];
+  const evidence = hintEvidence(comments);
+  assert.equal(evidence.missingRegularComments.length, 3);
+  assert.equal(hintFor(comments, evidence), null);
+});
+
+test('the disposition hint is absent when an unresolved thread is also missing (#4163)', () => {
+  const comments = [
+    hintComment(
+      101,
+      HINT_CODERABBIT,
+      HINT_CODERABBIT_SUMMARY,
+      '2026-10-13T10:00:00Z',
+    ),
+    hintComment(102, HINT_CODEX, HINT_CODEX_COMPLETED, '2026-10-13T10:05:00Z'),
+  ];
+  const evidence = hintEvidence(comments, [
+    {
+      id: 'thread-1',
+      isResolved: false,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          {
+            author: { login: 'reviewer-a' },
+            createdAt: '2026-10-13T10:12:00Z',
+            body: 'need change',
+          },
+        ],
+      },
+    },
+  ]);
+  assert.equal(evidence.missingThreads.length, 1);
+  assert.equal(evidence.missingRegularComments.length, 2);
+  assert.equal(hintFor(comments, evidence), null);
+});
+
+test('the disposition hint is absent when the planner skips a summary the gate still lists (#4163)', () => {
+  const running = [
+    hintComment(
+      101,
+      HINT_CODERABBIT,
+      HINT_CODERABBIT_SUMMARY,
+      '2026-10-13T10:00:00Z',
+    ),
+    hintComment(102, HINT_CODEX, HINT_CODEX_RUNNING, '2026-10-13T10:05:00Z'),
+  ];
+  const runningEvidence = hintEvidence(running);
+  assert.deepEqual(
+    runningEvidence.missingRegularComments.map((entry) => entry.id),
+    ['101', '102'],
+  );
+  assert.equal(hintFor(running, runningEvidence), null);
+
+  const inProgress = [
+    hintComment(
+      201,
+      HINT_CODERABBIT,
+      '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
+        `${CODERABBIT_REVIEW_IN_PROGRESS_MARKER}\n\n` +
+        '> [!NOTE]\n' +
+        '> Currently processing new changes in this PR. This may take a few minutes, please wait...\n\n' +
+        '<!-- end of auto-generated comment: review in progress by coderabbit.ai -->',
+      '2026-10-13T11:00:00Z',
+    ),
+    hintComment(202, HINT_CODEX, HINT_CODEX_COMPLETED, '2026-10-13T11:05:00Z'),
+  ];
+  const inProgressEvidence = hintEvidence(inProgress);
+  assert.ok(
+    inProgressEvidence.missingRegularComments.some(
+      (entry) => entry.id === '201',
+    ),
+  );
+  assert.equal(hintFor(inProgress, inProgressEvidence), null);
+});
+
+test('the disposition hint covers a rate-limit notice alongside a completed Codex summary (#4163)', () => {
+  const comments = [
+    hintComment(
+      201,
+      HINT_CODERABBIT,
+      HINT_CODERABBIT_NOTICE,
+      '2026-10-13T11:00:00Z',
+    ),
+    hintComment(202, HINT_CODEX, HINT_CODEX_COMPLETED, '2026-10-13T11:05:00Z'),
+  ];
+  const evidence = hintEvidence(comments);
+  assert.equal(hintFor(comments, evidence), HINT_EXPECTED);
+});
+
+test('the disposition hint needs every command input and a trusted IDD-agent login (#4163)', () => {
+  const comments = [
+    hintComment(
+      101,
+      HINT_CODERABBIT,
+      HINT_CODERABBIT_SUMMARY,
+      '2026-10-13T10:00:00Z',
+    ),
+    hintComment(102, HINT_CODEX, HINT_CODEX_COMPLETED, '2026-10-13T10:05:00Z'),
+  ];
+  const evidence = hintEvidence(comments);
+  assert.equal(typeof hintFor(comments, evidence), 'string');
+  assert.equal(hintFor(comments, evidence, { prNumber: null }), null);
+  assert.equal(hintFor(comments, evidence, { owner: '' }), null);
+  assert.equal(hintFor(comments, evidence, { claimIssueNumber: null }), null);
+  assert.equal(hintFor(comments, evidence, { claimId: 'not a token' }), null);
+  assert.equal(hintFor(comments, evidence, { trustedMarkerLogins: [] }), null);
+  assert.equal(
+    hintFor(comments, evidence, { advisoryBotLogins: ['bad login!'] }),
+    null,
+  );
+  // An unset advisory list names the helper's default pair, so the hint is the
+  // same string as with that pair given explicitly.
+  assert.equal(
+    hintFor(comments, evidence, { advisoryBotLogins: [] }),
+    HINT_EXPECTED,
+  );
+  // An IDD-agent login the helper would not credit as trusted: no hint.
+  assert.equal(
+    hintFor(comments, evidence, { iddAgentLogins: [HINT_VIEWER, 'idd-bot'] }),
+    null,
+  );
+});
+
+// #4163: the collector wiring. The hint is attached inside
+// collectPreMergeReadiness, so these run the real collector against the fake
+// provider rather than the pure helper alone.
+function hintCollectorPort(comments: ProviderComment[]): ProviderPort {
+  return createFakeProviderAdapter({
+    viewerLogin: HINT_VIEWER,
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: HINT_HEAD,
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [{ number: 7 }],
+      },
+    },
+    comments: { 1: comments },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 1: [] },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-10-13T10:00:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+  });
+}
+
+function hintCollectorComment(
+  id: number,
+  authorLogin: string,
+  body: string,
+  createdAt: string,
+): ProviderComment {
+  return {
+    id,
+    body,
+    createdAt,
+    updatedAt: createdAt,
+    authorLogin,
+    lastEditedAt: null,
+  };
+}
+
+// The collector also reads its trusted and advisory lists from the environment,
+// so the collector hint test clears those values while it runs.
+function withHintEnvCleared<T>(run: () => T): T {
+  const names = [
+    'IDD_ADVISORY_BOT_LOGINS',
+    'IDD_TRUSTED_MARKER_ACTORS',
+  ] as const;
+  const saved = names.map((name) => process.env[name]);
+  for (const name of names) {
+    delete process.env[name];
+  }
+  try {
+    return run();
+  } finally {
+    names.forEach((name, index) => {
+      const value = saved[index];
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    });
+  }
+}
+
+test('collectPreMergeReadiness attaches the disposition hint only when the blocker is bot summaries alone (#4163)', () => {
+  const collect = (comments: ProviderComment[]) =>
+    withHintEnvCleared(() =>
+      collectPreMergeReadiness(
+        [
+          '--pr',
+          '1',
+          '--claim-issue',
+          '7',
+          '--claim-id',
+          HINT_CLAIM_ID,
+          '--owner',
+          'o',
+          '--repo',
+          'r',
+          '--now',
+          '2026-10-13T11:00:00Z',
+        ],
+        () => hintCollectorPort(comments),
+        () => ({}),
+      ),
+    );
+  const summaries = [
+    hintCollectorComment(
+      101,
+      HINT_CODERABBIT,
+      HINT_CODERABBIT_SUMMARY,
+      '2026-10-13T10:00:00Z',
+    ),
+    hintCollectorComment(
+      102,
+      HINT_CODEX,
+      HINT_CODEX_COMPLETED,
+      '2026-10-13T10:05:00Z',
+    ),
+  ];
+
+  const eligible = collect(summaries);
+  const evidence = eligible.dispositionEvidence;
+  assert.ok(evidence);
+  assert.equal(evidence.route, 'return-to-e1');
+  assert.equal(evidence.reason, 'missing-disposition-evidence');
+  assert.equal(evidence.blockingCount, 2);
+  assert.deepEqual(
+    evidence.missingRegularComments.map((entry) => entry.id),
+    ['101', '102'],
+  );
+  // The trusted list is the viewer, and the advisory list is the default pair.
+  assert.equal(
+    evidence.hint,
+    "E6 PATH B helper-first: node scripts/disposition-non-review-notices.mjs --pr 1 --apply --owner o --repo r --claim-issue 7 --claim-id 555cc2e9-9f25-45bb-ba7d-736e5e0d85bd --trusted-marker-logins 'kurone-kito' --advisory-bot-logins 'coderabbitai[bot],chatgpt-codex-connector[bot]' records these dispositions; then re-run pre-merge-readiness (drop --apply for a dry run)",
+  );
+  assert.deepEqual(validate(eligible, readinessSchema), []);
+
+  // A human comment joins the blocking set: the same verdict, and no hint.
+  const mixed = collect([
+    ...summaries,
+    hintCollectorComment(
+      103,
+      'reviewer-a',
+      'please fix the typo in the readme',
+      '2026-10-13T10:10:00Z',
+    ),
+  ]);
+  assert.equal(mixed.dispositionEvidence?.route, 'return-to-e1');
+  assert.equal(mixed.dispositionEvidence?.blockingCount, 3);
+  assert.equal(mixed.dispositionEvidence?.hint, undefined);
+  assert.deepEqual(validate(mixed, readinessSchema), []);
 });
 
 test('pre-merge readiness always carries waiverEvidence and the schema requires it', () => {
