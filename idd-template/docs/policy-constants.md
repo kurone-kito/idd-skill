@@ -732,6 +732,49 @@ own per-file `phaseLimitBytes` and `alwaysLoadedLimitBytes` (issue
 protection matched by an unchanged `glob` instead of an unchanged file
 set.
 
+#### Restatement check before a trim
+
+Topic similarity is not proof of restatement. Before deleting any sentence
+because another sentence already states it, apply all four checks. They govern
+how to trim once trimming is the chosen remedy; they do not change the
+raise-versus-trim guidance above.
+
+- **(a) Same rule, not same topic.** Quote the candidate sentence and the
+  canonical sentence, giving each one's file, line number, and enclosing
+  heading. The canonical sentence must state the same obligation, condition,
+  and outcome. If it shares only the topic, keep the candidate.
+- **(b) Pinned phrases.** For each phrase the trim removes, search `tests/`
+  and `src/` with `git grep -n -F` twice: once for the literal phrase, and
+  once for its regex source. A regex source spells a gap that can fall on a
+  wrapped line as `\s+` and may keep other gaps as plain spaces, so also
+  search shorter fragments such as `digest\s+head`. In the source
+  repository, for example, `tests/consistency.test.mts` pins
+  `never\s+use digest\s+head\s+as proof` in the F4 test of
+  kurone-kito/idd-skill#3739. Keep any phrase that a test pins, whether
+  pinned literally or as a regex. Change a test in the same commit only when
+  the rule text itself moves.
+- **(c) Tokens are not trimmed.** Never remove a command token, marker,
+  label, or threshold, even where the same token also appears elsewhere.
+- **(d) Measure before and after.** In the source repository, run
+  `node scripts/audit-docs.mjs --check --report` before the edit and again
+  after it, and report the bundle `bytes` and `headroom` lines from both
+  runs.
+
+These checks name two failure modes, both observed on 2026-10-13 in the
+bundle trim for issue
+[kurone-kito/idd-skill#4168](https://github.com/kurone-kito/idd-skill/issues/4168),
+where review, CI, or the pre-push hook caught each only after the edit.
+First, a sentence was deleted on a topic match when it was the only
+statement of its rule: the lost-ownership stop for the final unclaim in
+`idd-merge.instructions.md` F4 step 7. The earlier sentence in that step
+covers confirmation and later F4 mutations, but not the final unclaim, where
+a lost claim falls through to F5, so the match was on topic, not on the rule.
+Commit
+[`477adb6be`](https://github.com/kurone-kito/idd-skill/commit/477adb6be5573b32fdde42b82b6cffed6e3ef34f)
+restored the sentence verbatim. Second, a removed phrase that a test pins
+failed pre-push, and a literal `git grep` did not find the pin, because the
+test source spells its wrappable gaps as `\s+`.
+
 ### High-contention shared files
 
 A small set of files concentrates concurrent autopilot edits and therefore
