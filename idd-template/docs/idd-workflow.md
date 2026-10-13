@@ -1224,14 +1224,15 @@ identify its old claims, and step 1 treats them as not its own.
    token file there. A record in the primary worktree's directory can survive
    F4. Keep at most one record per claim-id: prefer the linked worktree's
    record. A primary-directory record makes a claim worktree-less only when no
-   linked worktree carries that claim's branch or lock. When one does, that
-   linked worktree is unreadable and is reported to the operator, not treated as
-   worktree-less. For a worktree-less claim, take the issue number from the
-   worker's brief in the agent listing, or from the issue-number prefix of its
-   report draft in the session scratchpad, and never from a `main` branch. Then
-   read that issue's trusted `claimed-by` and `unclaimed-by` markers for the
-   agent-id and claim-id, and apply the same agent-id test. Also enumerate the
-   candidates for worktree-less claims from the report drafts in the session
+   linked worktree carries that claim's branch or lock. A linked worktree that
+   does carry it, but has no readable token record, is reported to the operator
+   as unreadable and is not treated as worktree-less. A readable linked record
+   stays authoritative. For a worktree-less claim, take the issue number from
+   the worker's brief in the agent listing, or from the issue-number prefix of
+   its report draft in the session scratchpad, and never from a `main` branch.
+   Then read that issue's trusted `claimed-by` and `unclaimed-by` markers for
+   the agent-id and claim-id, and apply the same agent-id test. Also enumerate
+   the candidates for worktree-less claims from the report drafts in the session
    scratchpad, the finished entries in the agent listing, and the running
    entries whose worktree is gone, and read each such issue the same way. An
    issue whose trusted markers name another agent-id, or no claim, is not own.
@@ -1329,11 +1330,12 @@ identify its old claims, and step 1 treats them as not its own.
    worker-specific recovery in the fan-out variant, as section 5 of the
    orchestrator phase file describes. A failed append for a released claim is
    reported in step 5.
-5. **Report the remainder.** An own claim that reached step 3 and has no
-   matching worker is reported to the operator, and so is a matched finished
-   worker whose recorded outcome is `held`. A released claim is reported here
-   when step 4 left it with a running worker or a failed verification or append.
-   Otherwise step 4 handles it. Its worktree is not removed.
+5. **Report the remainder.** An own claim that reached step 3, other than a
+   released claim, and has no matching worker is reported to the operator, and
+   so is a matched finished worker whose recorded outcome is `held`. A released
+   claim is reported here when step 4 left it with a running worker or a failed
+   verification or append. Otherwise step 4 handles it. Its worktree is not
+   removed.
 
 ### Discover re-run cadence
 
