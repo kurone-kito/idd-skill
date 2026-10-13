@@ -119,6 +119,7 @@ const PROHIBITION = 'Never add needs-decision or ask a human';
  * fallback proposal), the claim release, then the companion handoff.
  */
 const ORDERED_STEPS = [
+  '(helper runtime only)',
   'profile-selected',
   '`audit-authored-issue --shape child --stdin` fails',
   '`effort-candidate-file-limit` on the issue body',
@@ -131,7 +132,7 @@ const ORDERED_STEPS = [
   'With the companion, hand it that proposal as a held split draft',
   'held roadmap whose children record `Split out of #<n>`',
   'comments its link',
-  'if it refuses, the comment stands',
+  'if refused, the comment stands',
   PROHIBITION,
 ] as const;
 

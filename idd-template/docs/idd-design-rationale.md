@@ -941,17 +941,25 @@ This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
   `audit-authored-issue` helper's own check (the profile-selected
   command, with the body on `--stdin`), run on the issue body and
   again on a copy whose `## Candidate files` section is replaced by
-  the diff's canonical paths: the paths that
-  `git diff --name-only origin/{development-branch}...HEAD` lists,
+  the diff's canonical paths: every path the branch changed, whether
+  committed, staged, unstaged, or untracked, that is the union of
+  `git diff --name-only origin/{development-branch}` (the working tree
+  against the base) and `git ls-files --others --exclude-standard`,
   minus generated mirrors (a file with an `idd-generated-from` banner
   or a sync manifest target), one per bullet in the contract's
-  Candidate files format. Reusing the check keeps its counting rule
+  Candidate files format. Review of PR 4160 pointed out that a
+  three-dot `git diff` would see committed paths only, while the route
+  runs before anything is pushed. Reusing the check keeps its counting rule
   and its applicability: only a coherent `S` or `M` effort marker is
   checked, and a body that carries a `Split out of #<n>` line is
   exempt, since returning a split child would only split it again.
   The route passes `--shape child` for every issue, because the check
   reports any other shape as not applicable, and #4064, the
-  motivating overrun, was an orphan issue.
+  motivating overrun, was an orphan issue. The route applies only
+  with a helper runtime. An `instructions-only` installation has no
+  helper to measure with, and a manual count would copy the threshold
+  values out of their single source, so a session there continues as
+  it did before this route existed.
 - **Evidence first.** The comment records the estimate, the candidate
   files, the changed files, and the split proposal, so the next author
   sees the overrun without redoing the work. The proposal goes into the
