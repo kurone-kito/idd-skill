@@ -2182,6 +2182,24 @@ test('#4122: a Codex summary with no HEAD row, an unparseable table, or no table
     assert.equal(hasCodexReviewSummaryRowForHeadSha(body, 'abc1234'), true);
     assert.equal(hasCodexReviewSummaryRowForHeadSha(body, HEAD_SHA), false);
   }
+  // As in the shared parser, the last row for the HEAD wins.
+  const runningRow = '| 📝 **Code Review** | 🔄 **Running** | `abc1234` |\n';
+  const emptyRow = '| 📝 **Code Review** |  | `abc1234` |\n';
+  const tableHead = '| Review | Status | Commit |\n| --- | --- | --- |\n';
+  assert.equal(
+    hasCodexReviewSummaryRowForHeadSha(
+      tableHead + runningRow + emptyRow,
+      'abc1234',
+    ),
+    false,
+  );
+  assert.equal(
+    hasCodexReviewSummaryRowForHeadSha(
+      tableHead + emptyRow + runningRow,
+      'abc1234',
+    ),
+    true,
+  );
 });
 
 test('#4122: a recognized Codex no-find result for an older HEAD is codex-no-result-for-head', () => {
