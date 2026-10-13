@@ -2686,6 +2686,96 @@ test('single-root --issue output is unchanged by the all-roadmaps addition', asy
   assert.deepEqual(graph.executionCandidates, [101, 102]);
 });
 
+// Root 700 has only closed children (zero open leaves). Root 800 has one open
+// leaf. Closed nodes are still traversed, but only OPEN execution nodes count.
+const ZERO_LEAF_ROOT_ISSUES = new Map<number, unknown>([
+  [700, roadmapIssue(700, '- [x] #701\n- [x] #702', 'epic-drained')],
+  [701, executionIssue(701, 'done task', 'closed')],
+  [702, executionIssue(702, 'done task', 'closed')],
+  [800, roadmapIssue(800, '- [ ] #801', 'epic-active')],
+  [801, scoredExecutionIssue(801, 4)],
+]);
+
+test('all-roadmaps flags only the zero-leaf root for its A1.5 audit', async () => {
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [700, 800],
+    loadIssue: async (issueNumber) =>
+      ZERO_LEAF_ROOT_ISSUES.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(
+    report.roots.map((root) => root.number),
+    [700, 800],
+  );
+  const [drained, active] = report.roots;
+  assert.equal(drained?.openLeafCount, 0);
+  assert.equal(drained?.a15AuditRequired, true);
+  assert.equal(active?.openLeafCount, 1);
+  assert.equal(active?.a15AuditRequired, false);
+  // The drained root contributes no leaves to the union.
+  assert.deepEqual(
+    report.leaves.map((leaf) => leaf.number),
+    [801],
+  );
+});
+
+test('all-roadmaps clears the flag for a zero-leaf root named by a15Audited', async () => {
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [700, 800],
+    loadIssue: async (issueNumber) =>
+      ZERO_LEAF_ROOT_ISSUES.get(issueNumber) ?? null,
+    a15Audited: [700],
+  });
+
+  const [drained, active] = report.roots;
+  // The audited mark clears the flag but leaves the computed count alone.
+  assert.equal(drained?.openLeafCount, 0);
+  assert.equal(drained?.a15AuditRequired, false);
+  assert.equal(active?.openLeafCount, 1);
+  assert.equal(active?.a15AuditRequired, false);
+});
+
+test('CLI rejects a malformed --a15-audited value and the flag without --all-roadmaps', () => {
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+if (args[0] === "repo" && args[1] === "view") {
+  process.stdout.write(JSON.stringify({ owner: { login: "kurone-kito" }, name: "idd-skill" }) + "\\n");
+  process.exit(0);
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`,
+  );
+  const runCli = (argv: string[]) =>
+    execFileSync(
+      process.execPath,
+      [join(REPO_ROOT, 'scripts/discover-roadmap-graph.mjs'), ...argv],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        env: { ...process.env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+  try {
+    assert.throws(
+      () => runCli(['--issue', '700', '--a15-audited', '700']),
+      /--a15-audited requires --all-roadmaps/,
+    );
+    assert.throws(
+      () => runCli(['--all-roadmaps', '--a15-audited', '0']),
+      /--a15-audited requires a positive issue number, got 0/,
+    );
+    assert.throws(
+      () => runCli(['--all-roadmaps', '--a15-audited', '--no-cache']),
+      /--a15-audited requires a root issue number/,
+    );
+  } finally {
+    restore();
+  }
+});
+
 test('all-roadmaps requires the open-roadmap-roots loader', async () => {
   await assert.rejects(
     () =>
