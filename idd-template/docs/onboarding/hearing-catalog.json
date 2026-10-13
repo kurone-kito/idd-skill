@@ -283,8 +283,8 @@
       "id": "idd-label-names",
       "step": "1B",
       "kind": "policy",
-      "prompt": "Keep the three distributed IDD label names, or map them onto a local taxonomy?",
-      "explanation": "Distributed defaults are roadmap, status:blocked-by-human, and status:needs-decision. If a semantic auto-labeler can infer those names, adopt the reserved-label guard recipe before relying on unattended discovery. The auto-labeler follow-up is nested under this item, not a separate catalog id.",
+      "prompt": "Keep the four distributed IDD label names, or map them onto a local taxonomy?",
+      "explanation": "Distributed defaults are roadmap, status:blocked-by-human, status:needs-decision, and status:authoring-only. If a semantic auto-labeler can infer those names, adopt the reserved-label guard recipe before relying on unattended discovery. The auto-labeler follow-up is nested under this item, not a separate catalog id.",
       "options": [
         {
           "value": "distributed-defaults",

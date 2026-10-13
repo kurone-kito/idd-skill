@@ -253,7 +253,7 @@ for the same gap on the direct-import path). When either answer is not
 block alongside the embedded transcript, using that same reference's
 field names (`claimTiming.staleAge` / `claimTiming.heartbeatInterval`,
 or `labels.roadmapLabelName` / `labels.blockedByHumanLabelName` /
-`labels.needsDecisionLabelName`).
+`labels.needsDecisionLabelName` / `labels.authoringOnlyLabelName`).
 
 Use these operator-confirmed values, already collected during the
 hearing (Steps 1A-1C), instead of re-deriving them:

@@ -84,9 +84,9 @@ the real values to `.github/idd/config.json` by hand after
   and `claimTiming.heartbeatInterval` (both required together) as
   ISO-8601 durations.
 - **IDD label names** (`custom-taxonomy`): set
-  `labels.roadmapLabelName`, `labels.blockedByHumanLabelName`, and
-  `labels.needsDecisionLabelName` to the repository's real label
-  strings.
+  `labels.roadmapLabelName`, `labels.blockedByHumanLabelName`,
+  `labels.needsDecisionLabelName`, and `labels.authoringOnlyLabelName`
+  to the repository's real label strings.
 
 ## Reserved-label guard
 
