@@ -1384,12 +1384,13 @@ export function normalizePolicyConfig(config: unknown) {
       // any malformed entry, including a mix of valid + invalid logins --
       // fail-open for this denylist field, unlike an allowlist field's
       // fail-to-[] (fail-closed). Kept matching the sibling label-name
-      // fields' resolution pattern per #2669's own acceptance criteria;
-      // no consumer reads this list yet (see the schema description), so
-      // there is no live enforcement gap today. Reconsider the fail
-      // direction -- and whether schema validation alone is a sufficient
-      // guarantee for the consumer -- when #2671 designs the actual
-      // enforcement this list feeds.
+      // fields' resolution pattern per #2669's own acceptance criteria.
+      // idd-onboard --substitute now reads this list to generate the
+      // reserved-label guard workflow (#2671). A malformed entry resolves
+      // to [], which generates no guard, so the fail-open direction is a
+      // live enforcement gap. Reconsider it -- and whether schema validation
+      // alone is a sufficient guarantee for that consumer -- when the guard's
+      // own validation is designed.
       untrustedLabelerLogins: parseNonEmptyStringArray(
         c?.labels?.untrustedLabelerLogins,
         POLICY_DEFAULTS.labels.untrustedLabelerLogins,
