@@ -10,9 +10,9 @@ gate.
 ## F2.5 — Resolve merge policy route
 
 A decision-rule touch (`waiver.decisionRuleFilesTouched: true`) is not a
-stop by itself, on any path that reaches F3. Route on `ready` in the F2
-verdict for `{f2-head-SHA}`: `true` proceeds without asking a human;
-`false` does not proceed (F2's rule applies).
+stop by itself. For the F2 verdict at `{f2-head-SHA}`, `ready: true` clears
+only the advisory gate. The merge-policy routing below still decides
+whether to merge; `ready: false` holds.
 
 1. Confirm claim ownership context:
    - If an **active claim** exists, it must still use your current
