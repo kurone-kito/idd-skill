@@ -1807,7 +1807,6 @@ function normalizeRelaxStep(value) {
  * it. With `[4, 7]`, counts 0 to 3 give 0 or 1, counts 4 to 6 give 1 or 2,
  * and counts 7 or more give 2 either way.
  */
-// audit:ignore-dead-export: E4/E5 applies the step from instruction text; tests lock every boundary and there is no helper caller
 export function relaxStepForReviewCount(
   reviewCount,
   thresholds,
@@ -1850,6 +1849,131 @@ export function relaxStepClauseParts(result, prHeadSha) {
     parts.push(`converged ${prHeadSha.slice(0, 7)}`);
   }
   return parts;
+}
+const TRIAGE_TIER_VALUES = ['low', 'medium', 'high'];
+const TRIAGE_VERDICT_VALUES = ['defer', 'keep'];
+const TRIAGE_LINE_PATTERN =
+  /^Triage: tier (low|medium|high); urgency (very-low|low|medium|high); step ([012])(.*)$/u;
+const TRIAGE_OVERRIDE_SEPARATOR = '; override: ';
+/**
+ * Format the `Triage:` line (#4186). The layout is fixed: `step` is always
+ * present, and each optional part appears only when it is set, in the order
+ * below. `override` comes last, so its reason may contain `; `. A `blocked`
+ * reason must not contain `; `, and no reason may contain a line break, so
+ * the line stays parseable. Throws on such input.
+ */
+export function formatTriageLine(record) {
+  const { blocked, override } = record;
+  if (blocked !== null && (blocked.includes('; ') || /[\r\n]/u.test(blocked))) {
+    throw new Error(
+      'triage blocked reason must not contain "; " or a line break',
+    );
+  }
+  if (override !== null && /[\r\n]/u.test(override)) {
+    throw new Error('triage override reason must not contain a line break');
+  }
+  const parts = [
+    `tier ${record.tier}`,
+    `urgency ${record.urgency}`,
+    `step ${record.step}`,
+  ];
+  if (record.convergedHead !== null) {
+    parts.push(`converged ${record.convergedHead}`);
+  }
+  if (record.copilotLabel !== null) {
+    parts.push(`Copilot ${record.copilotLabel}`);
+  }
+  if (record.safety) {
+    parts.push('safety');
+  }
+  if (record.verdict !== null) {
+    parts.push(`verdict ${record.verdict}`);
+  }
+  if (blocked !== null) {
+    parts.push(`blocked ${blocked}`);
+  }
+  const line = `Triage: ${parts.join('; ')}`;
+  return override === null
+    ? line
+    : `${line}${TRIAGE_OVERRIDE_SEPARATOR}${override}`;
+}
+/**
+ * Read the first `Triage:` line in `text` (#4186), or return `null` when no
+ * line matches or the line has a malformed part. The inverse of
+ * `formatTriageLine`.
+ */
+// audit:ignore-dead-export: parsed by the wave audit in a later roadmap issue
+export function parseTriageLine(text) {
+  for (const line of text.split(/\r?\n/u)) {
+    const match = TRIAGE_LINE_PATTERN.exec(line);
+    if (match !== null) {
+      return parseTriageRest(
+        match[1],
+        match[2],
+        Number(match[3]),
+        match[4] ?? '',
+      );
+    }
+  }
+  return null;
+}
+function parseTriageRest(tier, urgency, step, rest) {
+  const overrideAt = rest.indexOf(TRIAGE_OVERRIDE_SEPARATOR);
+  const parts = overrideAt === -1 ? rest : rest.slice(0, overrideAt);
+  const record = {
+    tier,
+    urgency,
+    step,
+    convergedHead: null,
+    copilotLabel: null,
+    safety: false,
+    verdict: null,
+    blocked: null,
+    override:
+      overrideAt === -1
+        ? null
+        : rest.slice(overrideAt + TRIAGE_OVERRIDE_SEPARATOR.length),
+  };
+  if (parts === '') {
+    return record;
+  }
+  if (!parts.startsWith('; ')) {
+    return null;
+  }
+  for (const part of parts.slice(2).split('; ')) {
+    if (part.startsWith('converged ')) {
+      const sha = part.slice('converged '.length);
+      if (!/^[0-9a-f]{7}$/u.test(sha) || record.convergedHead !== null) {
+        return null;
+      }
+      record.convergedHead = sha;
+    } else if (part.startsWith('Copilot ')) {
+      const label = part.slice('Copilot '.length);
+      if (!TRIAGE_TIER_VALUES.includes(label) || record.copilotLabel !== null) {
+        return null;
+      }
+      record.copilotLabel = label;
+    } else if (part === 'safety') {
+      if (record.safety) {
+        return null;
+      }
+      record.safety = true;
+    } else if (part.startsWith('verdict ')) {
+      const verdict = part.slice('verdict '.length);
+      if (!TRIAGE_VERDICT_VALUES.includes(verdict) || record.verdict !== null) {
+        return null;
+      }
+      record.verdict = verdict;
+    } else if (part.startsWith('blocked ')) {
+      if (record.blocked !== null) {
+        return null;
+      }
+      record.blocked = part.slice('blocked '.length);
+    } else {
+      return null;
+    }
+  }
+  return record;
 }
 function severityTieredDefers(eligibility, urgency, step) {
   return (

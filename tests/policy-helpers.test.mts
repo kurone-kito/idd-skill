@@ -8,6 +8,7 @@ import {
   clone,
   DEFAULT_PROVIDER,
   decideUrgencyDefer,
+  formatTriageLine,
   inspectCritiqueLoopDelegateLayer,
   inspectCritiqueLoopTelemetryHookLayer,
   inspectDevelopmentBranch,
@@ -16,6 +17,7 @@ import {
   normalizePolicyConfig,
   POLICY_DEFAULTS,
   parseIsoDurationToMs,
+  parseTriageLine,
   relaxStepClauseParts,
   relaxStepForReviewCount,
   resolveDurableRecordTargets,
@@ -26,6 +28,7 @@ import {
   resolveEffectiveProvider,
   resolveIssueAuthoringAdversarialWaitCeiling,
   selectDesyncedIndex,
+  type TriageRecord,
 } from '../src/scripts/policy-helpers.mts';
 
 test('issueScope defaults to roadmap-first and accepts all values', () => {
@@ -330,6 +333,113 @@ test('critiqueLoop.deferByUrgency defaults to off and accepts low / low-and-medi
     normalizePolicyConfig({ critiqueLoop: { deferByUrgency: 42 } }).critiqueLoop
       .deferByUrgency,
     'off',
+  );
+});
+
+const TRIAGE_BARE: TriageRecord = {
+  tier: 'high',
+  urgency: 'high',
+  step: 0,
+  convergedHead: null,
+  copilotLabel: null,
+  safety: false,
+  verdict: null,
+  blocked: null,
+  override: null,
+};
+
+const TRIAGE_FULL: TriageRecord = {
+  tier: 'high',
+  urgency: 'medium',
+  step: 2,
+  convergedHead: 'abc1234',
+  copilotLabel: 'low',
+  safety: true,
+  verdict: 'defer',
+  blocked: 'waits on sibling PR',
+  override: 'maintainer agrees; keep open',
+};
+
+test('formatTriageLine keeps step 0 and omits every unset optional part (#4186)', () => {
+  assert.equal(
+    formatTriageLine(TRIAGE_BARE),
+    'Triage: tier high; urgency high; step 0',
+  );
+});
+
+test('formatTriageLine writes the Copilot label and safety class in order (#4186)', () => {
+  assert.equal(
+    formatTriageLine({
+      ...TRIAGE_BARE,
+      tier: 'medium',
+      urgency: 'low',
+      step: 1,
+      copilotLabel: 'low',
+      safety: true,
+    }),
+    'Triage: tier medium; urgency low; step 1; Copilot low; safety',
+  );
+});
+
+test('formatTriageLine writes every optional part in the fixed order (#4186)', () => {
+  assert.equal(
+    formatTriageLine(TRIAGE_FULL),
+    'Triage: tier high; urgency medium; step 2; converged abc1234; Copilot low; safety; verdict defer; blocked waits on sibling PR; override: maintainer agrees; keep open',
+  );
+});
+
+test('formatTriageLine refuses a blocked reason with "; " or a line break (#4186)', () => {
+  assert.throws(
+    () => formatTriageLine({ ...TRIAGE_BARE, blocked: 'a; b' }),
+    /blocked reason/u,
+  );
+  assert.throws(
+    () => formatTriageLine({ ...TRIAGE_BARE, blocked: 'a\nb' }),
+    /blocked reason/u,
+  );
+});
+
+test('parseTriageLine round-trips a record with every optional field set (#4186)', () => {
+  assert.deepEqual(parseTriageLine(formatTriageLine(TRIAGE_FULL)), TRIAGE_FULL);
+});
+
+test('parseTriageLine round-trips a record with no optional field set (#4186)', () => {
+  assert.deepEqual(parseTriageLine(formatTriageLine(TRIAGE_BARE)), TRIAGE_BARE);
+});
+
+test('parseTriageLine reads the first matching line of a body and returns null without one (#4186)', () => {
+  const body =
+    'Fixed in abc1234.\n\nTriage: tier low; urgency very-low; step 0\n\n<!-- idd-skill-review-reply -->';
+  assert.deepEqual(parseTriageLine(body), {
+    tier: 'low',
+    urgency: 'very-low',
+    step: 0,
+    convergedHead: null,
+    copilotLabel: null,
+    safety: false,
+    verdict: null,
+    blocked: null,
+    override: null,
+  });
+  assert.equal(parseTriageLine('**Accepted** — fixed in abc1234'), null);
+});
+
+test('parseTriageLine returns null for an unknown enum value or part (#4186)', () => {
+  assert.equal(
+    parseTriageLine('Triage: tier urgent; urgency low; step 0'),
+    null,
+  );
+  assert.equal(
+    parseTriageLine('Triage: tier low; urgency low; step 0; Copilot urgent'),
+    null,
+  );
+  assert.equal(
+    parseTriageLine('Triage: tier low; urgency low; step 0; converged ABCDEFG'),
+    null,
+  );
+  assert.equal(
+    parseTriageLine('Triage: tier low; urgency low; step 0; surprise'),
+    null,
   );
 });
 
