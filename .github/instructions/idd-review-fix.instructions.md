@@ -278,7 +278,7 @@ fresh round per arrival, but only when **all** hold:
   in `scripts/protocol-helpers.mjs`) or an `advisoryBotLogins` login,
   **regardless of PATH A/B** (Copilot's inline thread comments are
   PATH A under E4; an overlap with any configured
-  `secondaryBotLogin` login still qualifies).
+  `advisoryWait.secondaryBotLogin` login still qualifies).
 - Each comment is a small, confirmable fix whose claim was checked
   against live evidence (linter run, actual file/runtime behavior)
   before folding it in — the same **verify-before-accept discipline** E5
@@ -457,8 +457,8 @@ login).
      **AW3-S** marker posts: enter the active polling loop below.
 5. **Secondary advisory bot(s) (optional, non-gating), called from
    every `apply step 5` reference in this file.**
-   `secondaryBotLogin` accepts one login or a list; request **every**
-   login the helper's `secondaryRequestLogins` reports (shell
+   `advisoryWait.secondaryBotLogin` accepts one login or a list; request
+   **every** login the helper's `secondaryRequestLogins` reports (shell
    fallback: every configured login not yet requested this HEAD). Use the
    guarded procedure per login, replacing primary placeholders and
    `BOT_REST_LOGIN`/bare form, with REST type selecting `botIds`/`userIds`;

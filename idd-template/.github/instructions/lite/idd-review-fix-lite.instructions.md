@@ -245,8 +245,8 @@ self-critique and record risk.
    default, any login equal to `copilot` or starting with
    `copilot-pull-request-reviewer` counts, matching
    `isCopilotReviewerLogin` — or an `advisoryBotLogins` login,
-   regardless of PATH A/B. A configured `secondaryBotLogin` login
-   still qualifies as bot-sourced.
+   regardless of PATH A/B. A configured `advisoryWait.secondaryBotLogin`
+   login still qualifies as bot-sourced.
 5. Each such comment is a small, confirmable fix whose claim you
    checked against live evidence (a linter run, actual file content,
    actual runtime behavior) before folding it in. Never fold in a
@@ -421,7 +421,7 @@ self-critique and record risk.
     recent step-3/step-8 helper output's `secondaryRequestNeeded` and
     `secondaryRequestLogins` fields directly — do not re-derive the
     request/already-requested condition manually.
-    `secondaryBotLogin` accepts one login or a list. When
+    `advisoryWait.secondaryBotLogin` accepts one login or a list. When
     `secondaryRequestNeeded` is `true`, request **every** login in
     `secondaryRequestLogins` once each (never only the first), using
     the guarded procedure, replacing primary placeholders and

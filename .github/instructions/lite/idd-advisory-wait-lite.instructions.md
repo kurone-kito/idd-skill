@@ -10,8 +10,6 @@ Lite profile for helper-enabled weak/local models. Same semantics as
 precondition. E1 Step 2 accepts a matching `lastCopilotCommit` directly;
 off-head `SATISFIED` requires active-claim `staleRequestRecovery` to be
 `not-applicable` or its AW3-S/cap route complete. `hold` is ineligible.
-If the repository is `instructions-only`, use the full-size
-advisory-wait instructions instead.
 
 ## Helper runtime contract
 
@@ -20,7 +18,8 @@ advisory-wait instructions instead.
   returns invalid JSON, or disagrees with live state, stop and ask —
   never a manual per-field fetch or hand-derived decision. Marker
   posting is not restricted (see Markers).
-- `instructions-only`: do not use this lite file.
+- `instructions-only`: do not use this lite file; use the full-size
+  advisory-wait instructions instead.
 - Any mismatch between this file and
   `idd-advisory-wait.instructions.md` is a bug in this file.
 
@@ -37,15 +36,15 @@ A lite session excludes A0-A4.5/E4-E8 and F3-F5; it uses only E1 Step
 2, E14, lite F1-F2 read-only helpers, and F2.5 handoff-stop. If it
 reaches an excluded call site, stop and ask a stronger session/human.
 
-**Do not build a substitute wait for a non-primary bot** — same
-prohibition as the full-size file's Scope section: rely on the
-standard E1/review-watermark/F2/F3 safety net, never a custom poll on
-any bot but `advisoryWait.primaryBotLogin`.
+**Do not build a substitute wait for a non-primary bot** (full-size Scope
+section): rely on the standard E1 safety net, never a custom poll on any bot
+but `advisoryWait.primaryBotLogin`.
 
 ## Stop-and-ask conditions
 
-- A required field is missing, the helper exits non-zero, returns
-  invalid JSON, or its evidence disagrees with live state.
+- A required field or `staleRequestRecovery` is missing, the helper
+  exits non-zero, returns invalid JSON, or its evidence disagrees with
+  live state.
 - `outcome` is `CAP_EXHAUSTED` with the `hold` route (`HOLD`'s only
   route — see Helper-first canonical path below).
 - `earliestSameHeadAt` empties during active polling (marker
@@ -74,15 +73,17 @@ node scripts/advisory-wait-state.mjs --pr <pr-number> --claim-id <claim-id> \
   --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
 ```
 
-Required fields (stop and ask if any are missing): `prHeadSha`,
-`lastCopilotCommit`, `copilotPending`,
+Required fields (stop and ask if any are missing): `protocolVersion`,
+`prHeadSha`, `lastCopilotCommit`, `copilotPending`,
 `copilotPendingCoversHead`, `outcome`, `f3Outcome`, `secondaryBotLogin`,
 `secondaryBotLogins`, `secondaryRequestLogins`, `secondaryRequestNeeded`,
-`earliestSameHeadAt`, `requestMarkerCount`, `requestCap`,
-`pendingWindowMinutes`, `settledWindowMinutes`, `pollIntervalMinutes`,
-`capExhaustedRoute`, `trustedMarkerSummary`. Every field is always
-present, even empty/false/`[]` — validate presence, not truthiness;
-include `staleRequestRecovery`; reject unbound output.
+`now`, `earliestSameHeadAt`, `elapsedMinutes`, `sameHeadMarkerPresent`,
+`sameHeadRequestMarkerPresent`, `sameHeadMarkerCount`,
+`requestMarkerCount`, `requestCap`, `pendingWindowMinutes`,
+`settledWindowMinutes`, `pollIntervalMinutes`, `capExhaustedRoute`,
+`trustedMarkerSummary`. Every field is always present, even
+empty/false/`[]` — validate presence, not truthiness; include
+`staleRequestRecovery`; reject unbound output.
 
 The helper computes `outcome` directly from live evidence — never by
 hand from raw timestamps. Allowed values: `SATISFIED`,
@@ -92,7 +93,7 @@ caller-derived, never emitted.
 
 The helper resolves `advisoryWait.*` from `.github/idd/config.json`
 (`requestCap` through `capExhaustedRoute`); never read that config
-yourself. A missing field is a malformed helper response: stop and ask.
+yourself.
 
 ## E14 outcome → action
 
@@ -152,7 +153,7 @@ moved HEAD is the caller's job (E14 in `idd-review-fix-lite`).
 
 ## Secondary advisory bot(s) (non-gating, optional)
 
-`secondaryBotLogin` accepts one login or a list. When
+`advisoryWait.secondaryBotLogin` accepts one login or a list. When
 `secondaryRequestNeeded` is `true`, request **every** login in
 `secondaryRequestLogins` once each (never only the first), using the
 same mechanics above. Post no `advisory-wait:` marker for any — none
