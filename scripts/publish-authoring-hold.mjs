@@ -68,7 +68,6 @@ const PUBLISH_AUTHORING_HOLD_FLAG_SPEC = {
   '--owner': { type: 'string' },
   '--repo': { type: 'string' },
   '--policy': { type: 'string' },
-  '--trusted-marker-logins': { type: 'string', default: '' },
   '--marker-prefix': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 };
@@ -240,7 +239,7 @@ export function requestsChildShape(argv) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> --review-result <path> [--shape orphan] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--trusted-marker-logins <csv>] [--marker-prefix <prefix>] [--apply]
+  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> --review-result <path> [--shape orphan] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--apply]
 
 Publishes one drafted orphan issue under the issue-authoring hold, running
 contract.md's "New-issue ownership" steps in order:
@@ -274,10 +273,12 @@ The marker prefix comes from that file only when the issue and the journal
 are both in this checkout's repository. Otherwise pass --marker-prefix
 with the prefix the target repository configures.
 
-Before any write, the authenticated login must be a trusted marker actor
-(--trusted-marker-logins, IDD_TRUSTED_MARKER_ACTORS, or trustedMarkerActors)
-and, unless it is a bot, hold Write, Maintain or Admin permission on the
-issue's and the journal's repositories.
+With --apply, before any write, the authenticated login must be listed in
+the repository policy file's trustedMarkerActors (no flag or environment
+variable can replace that list, because the records this command writes
+are trusted by it later) and, unless it is a bot, hold Write, Maintain or
+Admin permission on the issue's and the journal's repositories. A dry run
+makes neither check.
 
 The review result file is a JSON object with "completed": true. An
 optional "findings" array holds findings-ledger entries, and each needs a
@@ -322,7 +323,6 @@ function parseArgs(argv) {
     owner: text('owner'),
     repo: text('repo'),
     policy: values.policy ?? '',
-    trustedMarkerLogins: values['trusted-marker-logins'] ?? '',
     markerPrefix: text('marker-prefix'),
     help,
   };
@@ -681,9 +681,10 @@ function runCli() {
       `issueAuthoring.journalIssue ${journal.ref} cannot be verified: ${error.message}`,
     );
   }
+  // The records this command writes are trusted later through the
+  // repository's own trustedMarkerActors, so no flag or environment value may
+  // replace that list here.
   const { actors: trusted } = resolveTrustedMarkerActors({
-    flagValue: args.trustedMarkerLogins,
-    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
     config,
   });
   const currentRepo =
@@ -801,40 +802,7 @@ function publish(input) {
   } catch (error) {
     return refuse(`cannot read the labels: ${error.message}`, base);
   }
-  // A record from a login replay cannot trust is not valid evidence, so with
-  // no trusted marker actor configured nothing is written at all.
   const actor = resolveViewerLogin();
-  if (input.trusted.length === 0) {
-    return refuse(
-      'no trusted marker actor is configured (trustedMarkerActors, IDD_TRUSTED_MARKER_ACTORS or --trusted-marker-logins), so the journal records could not be verified on replay',
-      base,
-    );
-  }
-  if (
-    !input.trusted.some((login) => login.toLowerCase() === actor.toLowerCase())
-  ) {
-    return refuse(
-      `the authenticated login ${actor} is not a trusted marker actor, so its journal records would not be valid evidence`,
-      base,
-    );
-  }
-  // The contract also needs Write, Maintain or Admin on every repository
-  // that receives a marker, unless the actor is a configured bot or app.
-  if (!actor.toLowerCase().endsWith('[bot]')) {
-    const cache = new Map();
-    const targets = [
-      { owner, repo },
-      { owner: journal.owner, repo: journal.repo },
-    ];
-    for (const target of targets) {
-      if (!hasWritePermission(target.owner, target.repo, actor, cache)) {
-        return refuse(
-          `${actor} does not have Write, Maintain or Admin permission on ${target.owner}/${target.repo}, or it could not be read, so its markers would not be trusted`,
-          base,
-        );
-      }
-    }
-  }
   const intentArgs = (state, issue) => [
     '--type',
     'authoring-publication-intent',
@@ -906,6 +874,41 @@ function publish(input) {
       `${JSON.stringify({ mode: 'dry-run', outcome: 'planned', ...base, labels, steps }, null, 2)}\n`,
     );
     return 0;
+  }
+  // Admission runs on --apply only, before the first write; a dry run
+  // writes nothing and needs neither trust nor permission.
+  // A record from a login replay cannot trust is not valid evidence, so with
+  // no trusted marker actor configured nothing is written at all.
+  if (input.trusted.length === 0) {
+    return refuse(
+      'no trusted marker actor is configured in the repository policy file (trustedMarkerActors), so the journal records could not be verified on replay',
+      base,
+    );
+  }
+  if (
+    !input.trusted.some((login) => login.toLowerCase() === actor.toLowerCase())
+  ) {
+    return refuse(
+      `the authenticated login ${actor} is not a trusted marker actor, so its journal records would not be valid evidence`,
+      base,
+    );
+  }
+  // The contract also needs Write, Maintain or Admin on every repository
+  // that receives a marker, unless the actor is a configured bot or app.
+  if (!actor.toLowerCase().endsWith('[bot]')) {
+    const cache = new Map();
+    const targets = [
+      { owner, repo },
+      { owner: journal.owner, repo: journal.repo },
+    ];
+    for (const target of targets) {
+      if (!hasWritePermission(target.owner, target.repo, actor, cache)) {
+        return refuse(
+          `${actor} does not have Write, Maintain or Admin permission on ${target.owner}/${target.repo}, or it could not be read, so its markers would not be trusted`,
+          base,
+        );
+      }
+    }
   }
   for (const name of missing) {
     try {

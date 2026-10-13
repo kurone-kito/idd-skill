@@ -220,7 +220,10 @@ fail('unexpected gh api call: ' + args.join(' '));
 
 interface Fixture {
   dir: string;
-  run: (args: string[]) => {
+  run: (
+    args: string[],
+    env?: Record<string, string>,
+  ) => {
     status: number | null;
     stdout: string;
     stderr: string;
@@ -307,7 +310,7 @@ function setup(
   mkdirSync(home);
   return {
     dir,
-    run: (args) => {
+    run: (args, env = {}) => {
       const result = spawnSync(process.execPath, [SCRIPT, ...args], {
         cwd: work,
         encoding: 'utf8',
@@ -324,6 +327,7 @@ function setup(
           GH_HOST: 'github.com',
           GH_TOKEN: 'credential-publish-test',
           GITHUB_TOKEN: '',
+          ...env,
         },
       });
       return {
@@ -1102,6 +1106,49 @@ test('CLI: an owner marker that may have landed reports its own uncertain state'
     assert.equal(report.nothingSent, false);
     assert.equal(report.journalState, 'pending');
     assert.equal(report.retry, undefined);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a dry run needs neither a trusted marker actor nor write permission', () => {
+  for (const options of [{ trusted: [] }, { permission: 'read' }]) {
+    const fixture = setup(options);
+    try {
+      const result = fixture.run(files(fixture));
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.equal(JSON.parse(result.stdout).outcome, 'planned');
+      assert.ok(
+        !fixture
+          .log()
+          .some((entry) =>
+            entry.args.some((arg) => arg.includes('/collaborators/')),
+          ),
+        'a dry run reads no permission',
+      );
+      assert.deepEqual(writes(fixture.log()), []);
+    } finally {
+      fixture.restore();
+    }
+  }
+});
+
+test('CLI: neither IDD_TRUSTED_MARKER_ACTORS nor a flag replaces the repository trusted actors', () => {
+  const fixture = setup({ trusted: [] });
+  try {
+    const viaEnv = fixture.run([...files(fixture), '--apply'], {
+      IDD_TRUSTED_MARKER_ACTORS: 'kurone-kito',
+    });
+    assert.equal(viaEnv.status, 1);
+    assert.match(viaEnv.stderr, /no trusted marker actor/);
+    const viaFlag = fixture.run([
+      ...files(fixture),
+      '--trusted-marker-logins',
+      'kurone-kito',
+      '--apply',
+    ]);
+    assert.equal(viaFlag.status, 2, 'the flag is no longer accepted');
+    assert.deepEqual(writes(fixture.log()), []);
   } finally {
     fixture.restore();
   }

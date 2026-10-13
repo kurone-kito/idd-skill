@@ -1180,8 +1180,10 @@ in this preamble, since the fallback differs per helper.
   exact body with `audit-authored-issue.mjs --new-issue` and looks up
   the authoring and bucket labels. Without `--apply` it renders the
   pending publication-intent record through `post-idd-marker.mjs`'s dry
-  run and prints the plan (exit `0`). With `--apply`, and only when the
-  authenticated login is a trusted marker actor with Write, Maintain or
+  run and prints the plan (exit `0`), with no trust or permission
+  check. With `--apply`, and only when the authenticated login is listed
+  in the repository policy file's `trustedMarkerActors` (no flag or
+  environment variable replaces that list) and has Write, Maintain or
   Admin permission (a `[bot]` login skips the permission read), it
   creates a missing label, posts the pending record, creates the issue
   with its labels, attaches the issue to the record, posts the owner
