@@ -1,10 +1,10 @@
 # Bundled Issue Authoring Contract
 
 This file keeps the `issue-authoring` bundle usable when it is installed
-or copied outside this repository root. It mirrors the canonical
-contract in `docs/issue-authoring-skill.md`. That canonical document
-exists only inside this bundle's source repository — an installed copy
-of this bundle should not expect it to be present.
+or copied outside this repository root. In the source repository this
+bundle is the canonical copy of the contract: edit it here, never a
+generated copy. An installed copy should not expect any file outside the
+bundle to be present.
 
 ## Target marker prefix
 
