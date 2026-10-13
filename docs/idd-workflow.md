@@ -1356,10 +1356,13 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    listed worker is appended under its own `workerHandle`, because the store
    dedupes on that handle with the claim id and terminal phase, so a record
    already appended under it is not counted twice. The listing matches workers
-   only and never names a draft handle. Do not append a draft that does not
-   match. Then verify its outcome, `pullRequest`, and `terminalPhase` against
-   live GitHub state, set `verifiedAt` to that check and `recordedAt` to the
-   time of the append, then append it. If no draft is found for a matched
+   only and never names a draft handle. An unmatched claim appended this way has
+   no running worker, so once it is appended it no longer blocks refill: the
+   restart then runs step 3 recount and refill gate again, if no other unmatched
+   own claim or unmatched live worker remains. Do not append a draft that does
+   not match. Then verify its outcome, `pullRequest`, and `terminalPhase`
+   against live GitHub state, set `verifiedAt` to that check and `recordedAt` to
+   the time of the append, then append it. If no draft is found for a matched
    worker, verify the terminal outcome from live GitHub state, build the record
    as the
    [worker final report store](idd-helper-scripts.md#worker-final-report-store)
