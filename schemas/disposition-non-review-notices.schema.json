@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://kurone-kito.github.io/idd-skill/schemas/disposition-non-review-notices.schema.json",
   "title": "Non-Review-Notice Disposition Plan",
-  "description": "Dry-run plan or apply result for auto-dispositioning advisory non-review notices and the CodeRabbit summary walkthrough on a PR (E6 PATH B).",
+  "description": "Dry-run plan or apply result for auto-dispositioning the bot comments the readiness gate counts on a PR (E6 PATH B): advisory non-review notices, review summary walkthroughs, and current-HEAD Codex no-find results, with every other such comment reported as skipped.",
   "type": "object",
   "required": ["mode", "prNumber", "headSha", "skipped"],
   "properties": {
@@ -14,7 +14,7 @@
     "prNumber": {
       "type": "integer",
       "minimum": 1,
-      "description": "Pull request whose non-review notices were classified."
+      "description": "Pull request whose bot comments were classified."
     },
     "headSha": {
       "type": "string",
@@ -23,7 +23,7 @@
     },
     "planned": {
       "type": "array",
-      "description": "Notices or CodeRabbit summary walkthroughs selected for disposition and the response planned for each one.",
+      "description": "Bot comments selected for disposition (notices, summary walkthroughs, or current-HEAD Codex no-find results) and the response planned for each one.",
       "items": {
         "type": "object",
         "required": ["noticeId", "botLogin", "reason", "body"],
@@ -56,7 +56,7 @@
     },
     "applied": {
       "type": "array",
-      "description": "Notices or summary walkthroughs whose disposition was posted successfully in apply mode.",
+      "description": "Planned bot comments whose disposition was posted successfully in apply mode.",
       "items": {
         "type": "object",
         "required": ["noticeId", "commentId"],
@@ -75,7 +75,7 @@
     },
     "failed": {
       "type": "array",
-      "description": "Notices or summary walkthroughs whose disposition could not be applied, with the reported error.",
+      "description": "Planned bot comments whose disposition could not be applied, with the reported error.",
       "items": {
         "type": "object",
         "required": ["noticeId", "error"],
