@@ -5223,15 +5223,18 @@ test('#4015: a decision-rule diff passes with a trusted approval of the current 
   assert.deepEqual(verdict.reasons, []);
 });
 
-test('#4015: a decision-rule diff still passes through a converged review', () => {
-  const verdict = decisionRuleVerdict(
-    ['src/scripts/advisory-convergence.mts'],
-    [copilotReview()],
-  );
-  assertValidVerdict(verdict);
-  assert.equal(verdict.waiver.autoWaiverValid, false);
-  assert.equal(verdict.converged, true);
-  assert.equal(verdict.ready, true);
+test('#4015 and #4132: a decision-rule diff passes through a converged review with no decision-rule reason', () => {
+  for (const path of SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES) {
+    const verdict = decisionRuleVerdict([path], [copilotReview()]);
+    assertValidVerdict(verdict);
+    assert.equal(verdict.waiver.decisionRuleFilesTouched, true);
+    assert.equal(verdict.waiver.autoWaiverValid, false);
+    // Ready comes from convergence alone: no approval is needed (#4132).
+    assert.equal(verdict.waiver.decisionRuleApprovalValid, false);
+    assert.equal(verdict.converged, true);
+    assert.equal(verdict.ready, true);
+    assert.deepEqual(verdict.reasons, []);
+  }
 });
 
 test('#4015: an approval of an older commit does not count', () => {
@@ -8548,6 +8551,41 @@ test('computeAdvisoryConvergenceVerdict: not-ready nextActions match stderr (#21
     JSON.stringify(verdict.reasons),
     /request-review|nextActions/,
   );
+});
+
+test('request-re-review (#4111): a stale head names advisory-wait-state and the caller mapping', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview({ commitId: OTHER_SHA })] }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.found, true);
+  assert.equal(verdict.review.matchesHead, false);
+  const item = collectAssertNextActions(verdict).find(
+    (candidate) =>
+      candidate.token ===
+      ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN.REQUEST_RE_REVIEW,
+  );
+  assert.ok(item, 'a stale head yields a request-re-review item');
+  const { summary } = item;
+  assert.doesNotMatch(summary, /\n/, 'the summary stays one line');
+  assert.doesNotMatch(summary, /Request a re-review of the current HEAD/);
+  for (const phrase of [
+    'node scripts/advisory-wait-state.mjs --pr 1234 --claim-id <claim-id> --agent-id <agent-id>',
+    '"Caller mapping" table of idd-advisory-wait.instructions.md',
+    'D4, E14 and F2 read outcome; F3 reads f3Outcome when helper output is valid',
+    '--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"',
+    'RECOVERY_NEEDED never means a new request',
+    'E14: post the AW3-R recovery marker and poll',
+    'D4: exit CI-wait to E1',
+    'D4: SATISFIED with lastCopilotCommit equal to the head means rerun idd-advisory-convergence',
+    'node scripts/rerun-advisory-convergence.mjs --pr 1234 --apply',
+    'node scripts/rerun-advisory-convergence.mjs --pr 1234 --refresh-latest --apply',
+    'For D4, E14 and F2, an elapsed-window SATISFIED first consults staleRequestRecovery (AW3-S)',
+    'cap-exhausted routes as CAP_EXHAUSTED',
+  ]) {
+    assert.ok(summary.includes(phrase), `summary must include: ${phrase}`);
+  }
 });
 
 test('writeAdvisoryConvergenceCliOutput writes guidance before JSON (#2142)', () => {

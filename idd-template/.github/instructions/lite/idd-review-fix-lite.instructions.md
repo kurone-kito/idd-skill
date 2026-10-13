@@ -35,7 +35,8 @@ severity or decides Accept/Reject.
 - A required helper is missing, fails, or disagrees with live state.
 - E10's critique loop repeats the same Accepted findings for
   `critiqueLoop.e10NoProgressHoldAfter` (default 3) passes without
-  meaningful progress.
+  meaningful progress, and a recurring family is Medium or High or the
+  helper could not run (step 6).
 - E10's `critiqueLoop.delegate` under `on-success` or `never` left no
   readable findings list (vacuous verdict, not a clean zero-issue round).
 - E11 merge conflicts cannot be resolved cleanly, or the PR has
@@ -141,16 +142,28 @@ self-critique and record risk.
 4. If it reports additional issues, first check the step 8 cap. If it
    applies, take its close-out route instead of fixing. Otherwise fix them,
    run `fix-validate`, commit atomically, and run E10 again.
-5. Count "meaningful progress" as removing at least one Accepted
-   finding, narrowing a remaining finding's root cause or scope, or
-   producing a materially new fix direction. A reworded duplicate
-   finding does not count. A pass whose Accepted findings are all Low does
+5. Count "meaningful progress" as a pass whose Accepted findings are
+   not all among the prior pass's (compared by the E5 fingerprint
+   `file`, `rule`, `construct`), or a narrowed root cause or scope that
+   changes a finding's `construct`. Removing some findings while the
+   rest recur is not progress, and a reworded duplicate finding does not
+   count. A pass whose Accepted findings are all Low does
    not count as progress through the narrowing prong alone.
 6. If the same Accepted findings recur for
    `critiqueLoop.e10NoProgressHoldAfter` (default 3) consecutive E10
    passes without meaningful progress, stop the loop, post a hold
    comment summarizing the repeated findings and attempted fixes, and
-   wait for a maintainer decision.
+   wait for a maintainer decision. Count this with the `e10-recurrence`
+   helper over a scratch passes file of each pass's E5 records, as
+   `idd-review-fix.instructions.md` E10 describes: `hold` (a recurring
+   Medium or High family) is this hold; `defer` (only Low families
+   recur) takes the step 8 close-out route for those families once no
+   High or Medium Accepted finding is open and `fix-validate` has passed
+   on the current HEAD (until then, fix the open ones and rerun), with
+   `e10NoProgressHoldAfter` as the clause, also an explicit exception to
+   the Defer rule's exclusion of an Accepted item mid-fix; `continue`
+   fixes and reruns; `e11` goes to E11. If the passes file is lost or
+   the helper cannot run, judge by step 5 and hold on any recurrence.
 7. Do not use step 6 to bypass a serious issue: unresolved High or
    Medium findings stay blockers until fixed or explicitly redirected
    by a maintainer.
