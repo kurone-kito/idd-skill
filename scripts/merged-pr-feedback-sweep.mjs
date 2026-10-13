@@ -553,7 +553,8 @@ function collectUnaddressedComments(
       )
     : null;
   // A "wasn't able to review any files" decline is neither a review nor an
-  // approval, so like `unrecognized` it cannot supersede earlier findings.
+  // approval, so it cannot supersede earlier findings. It is not itself a
+  // finding either, so it is not surfaced as feedback.
   const canSupersedeHistoricalPrimaryFindings =
     latestPrimaryClause?.satisfied === true &&
     latestPrimaryClause.bodyShape !== null &&
@@ -663,8 +664,7 @@ function collectUnaddressedComments(
       bodyClassification !== null &&
       (bodyClassification.suppressedCount > 0 ||
         (primaryBotLogin === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN &&
-          (bodyClassification.shape === 'unrecognized' ||
-            bodyClassification.shape === 'decline-no-reviewable-files')));
+          bodyClassification.shape === 'unrecognized'));
     if (!isChangesRequested && !hasOutsideDiffRange && !isPrimaryBotFinding) {
       continue;
     }
