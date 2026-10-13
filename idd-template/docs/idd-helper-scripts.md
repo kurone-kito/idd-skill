@@ -5403,12 +5403,13 @@ still fails closed:
 - Command: `node scripts/advisory-wait-state.mjs --pr <pr-number>`
 - Stable contract:
   [`advisory-wait-state.schema.json`][advisory-wait-state-schema]
-- Stable fields consumed by the instructions: `prHeadSha`,
-  `lastCopilotCommit`, `copilotPending`,
-  `copilotPendingCoversHead`, `outcome`, `f3Outcome`,
-  `earliestSameHeadAt`, `requestMarkerCount`, `requestCap`,
-  `pendingWindowMinutes`, `settledWindowMinutes`,
-  `pollIntervalMinutes`, `capExhaustedRoute`, and
+- Schema-required fields: `protocolVersion`, `prHeadSha`, `lastCopilotCommit`,
+  `copilotPending`, `copilotPendingCoversHead`, `outcome`, `f3Outcome`,
+  `secondaryBotLogin`, `secondaryBotLogins`, `secondaryRequestLogins`,
+  `secondaryRequestNeeded`, `now`, `requestCap`, `pendingWindowMinutes`,
+  `settledWindowMinutes`, `pollIntervalMinutes`, `capExhaustedRoute`,
+  `elapsedMinutes`, `sameHeadMarkerPresent`, `sameHeadRequestMarkerPresent`,
+  `earliestSameHeadAt`, `sameHeadMarkerCount`, `requestMarkerCount`,
   `trustedMarkerSummary`
 - Optional `--claim-id <id> --agent-id <id>` (kurone-kito/idd-skill#1572):
   when both are supplied, binds two independent, claim/HEAD-scoped

@@ -56,17 +56,20 @@ node scripts/advisory-wait-state.mjs \
 Contract: `docs/idd-helper-scripts.md#stable-helper-evidence-outputs`
 and `schemas/advisory-wait-state.schema.json`.
 
-Required helper fields: `prHeadSha`, `lastCopilotCommit`,
-`copilotPending`, `copilotPendingCoversHead`, `outcome`, `f3Outcome`,
-`earliestSameHeadAt`, `requestMarkerCount`, `requestCap`,
+Required helper fields: `protocolVersion`, `prHeadSha`,
+`lastCopilotCommit`, `copilotPending`, `copilotPendingCoversHead`,
+`outcome`, `f3Outcome`, `secondaryBotLogin`, `secondaryBotLogins`,
+`secondaryRequestLogins`, `secondaryRequestNeeded`, `now`, `requestCap`,
 `pendingWindowMinutes`, `settledWindowMinutes`, `pollIntervalMinutes`,
-`capExhaustedRoute`, `trustedMarkerSummary`.
+`capExhaustedRoute`, `elapsedMinutes`, `sameHeadMarkerPresent`,
+`sameHeadRequestMarkerPresent`, `earliestSameHeadAt`,
+`sameHeadMarkerCount`, `requestMarkerCount`, `trustedMarkerSummary`.
 
-Optional non-gating secondary-bot fields (not in the `outcome`/
-`f3Outcome` enums; see **Secondary advisory bot supplement** below):
-`secondaryBotLogin` (single login only), `secondaryBotLogins` (full
-list), `secondaryRequestLogins` (still-unrequested subset), and
-`secondaryRequestNeeded` (true iff non-empty).
+The four secondary fields are always emitted (empty, `false` or `[]` when no
+secondary bot is configured), sit outside the `outcome`/`f3Outcome` enums, and
+never gate (see **Secondary advisory bot supplement**): `secondaryBotLogin`
+(single login only), `secondaryBotLogins` (full list), `secondaryRequestLogins`
+(still-unrequested subset), `secondaryRequestNeeded` (true iff non-empty).
 
 Allowed `outcome`/`f3Outcome` values: `SATISFIED`, `REQUEST_NEEDED`,
 `RECOVERY_NEEDED`, `CAP_EXHAUSTED`, `WAIT`, `DISPOSITION_NEEDED`

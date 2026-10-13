@@ -67,15 +67,17 @@ node scripts/advisory-wait-state.mjs --pr <pr-number> --claim-id <claim-id> \
   --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
 ```
 
-Required fields (stop and ask if any are missing): `prHeadSha`,
-`lastCopilotCommit`, `copilotPending`,
+Required fields (stop and ask if any are missing): `protocolVersion`,
+`prHeadSha`, `lastCopilotCommit`, `copilotPending`,
 `copilotPendingCoversHead`, `outcome`, `f3Outcome`, `secondaryBotLogin`,
 `secondaryBotLogins`, `secondaryRequestLogins`, `secondaryRequestNeeded`,
-`earliestSameHeadAt`, `requestMarkerCount`, `requestCap`,
-`pendingWindowMinutes`, `settledWindowMinutes`, `pollIntervalMinutes`,
-`capExhaustedRoute`, `trustedMarkerSummary`. Every field is always
-present, even empty/false/`[]` — validate presence, not truthiness;
-include `staleRequestRecovery`; reject unbound output.
+`now`, `earliestSameHeadAt`, `elapsedMinutes`, `sameHeadMarkerPresent`,
+`sameHeadRequestMarkerPresent`, `sameHeadMarkerCount`,
+`requestMarkerCount`, `requestCap`, `pendingWindowMinutes`,
+`settledWindowMinutes`, `pollIntervalMinutes`, `capExhaustedRoute`,
+`trustedMarkerSummary`. Every field is always present, even
+empty/false/`[]` — validate presence, not truthiness; include
+`staleRequestRecovery`; reject unbound output.
 
 The helper computes `outcome` directly from live evidence — never by
 hand from raw timestamps. Allowed values: `SATISFIED`,
