@@ -5223,15 +5223,18 @@ test('#4015: a decision-rule diff passes with a trusted approval of the current 
   assert.deepEqual(verdict.reasons, []);
 });
 
-test('#4015: a decision-rule diff still passes through a converged review', () => {
-  const verdict = decisionRuleVerdict(
-    ['src/scripts/advisory-convergence.mts'],
-    [copilotReview()],
-  );
-  assertValidVerdict(verdict);
-  assert.equal(verdict.waiver.autoWaiverValid, false);
-  assert.equal(verdict.converged, true);
-  assert.equal(verdict.ready, true);
+test('#4015 and #4132: a decision-rule diff passes through a converged review with no decision-rule reason', () => {
+  for (const path of SELF_REFERENTIAL_WAIVER_DECISION_RULE_FILES) {
+    const verdict = decisionRuleVerdict([path], [copilotReview()]);
+    assertValidVerdict(verdict);
+    assert.equal(verdict.waiver.decisionRuleFilesTouched, true);
+    assert.equal(verdict.waiver.autoWaiverValid, false);
+    // Ready comes from convergence alone: no approval is needed (#4132).
+    assert.equal(verdict.waiver.decisionRuleApprovalValid, false);
+    assert.equal(verdict.converged, true);
+    assert.equal(verdict.ready, true);
+    assert.deepEqual(verdict.reasons, []);
+  }
 });
 
 test('#4015: an approval of an older commit does not count', () => {
