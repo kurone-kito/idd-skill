@@ -31,7 +31,8 @@ import { stubExecutable } from './test-utils.mts';
 // the working directory, as the real audit reads its policy. Each failure is one
 // `- <rule>: <message>` line. `ledger-stale.txt` stands in for a helper the base
 // ledger does not list, and `required-missing.txt` for a missing required input.
-// `bundle-breach.txt` stands in for a breach of the bundle `bundle-b`.
+// `bundle-breach.txt` and `ceiling-breach.txt` stand in for a limit breach and a
+// utilization breach of the bundle `bundle-b`.
 const AUDIT_STUB = `import { existsSync, readFileSync } from 'node:fs';
 const limit = JSON.parse(readFileSync('audit/sync-manifest.json', 'utf8')).limit;
 const size = Number(readFileSync('budget.txt', 'utf8').trim());
@@ -47,6 +48,9 @@ if (existsSync('required-missing.txt')) {
 }
 if (existsSync('bundle-breach.txt')) {
   failures.push('- bundle-b: bundle total is 2 bytes (limit 1); files: x');
+}
+if (existsSync('ceiling-breach.txt')) {
+  failures.push('- context-ceiling: bundle-b utilization 98.50% exceeds 98% (197/200 bytes)');
 }
 if (failures.length > 0) {
   console.log('documentation audit failed:');
@@ -706,6 +710,57 @@ test('a not-behind branch that deletes a bundle member fails, as audit-docs does
   ]);
 });
 
+test('a not-behind branch that moves a bundle member fails, as audit-docs does (#4128)', (t) => {
+  const f = notBehindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  git(f.work, ['mv', LITE_PATH, `${LITE_PATH}.moved`]);
+  git(f.work, [
+    '-c',
+    'user.name=t',
+    '-c',
+    'user.email=t@invalid',
+    'commit',
+    '-q',
+    '-m',
+    'move the lite file',
+  ]);
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'budget-fail');
+  assert.deepEqual(result.auditFailures, [
+    `${LITE_PATH}: could not read file (ENOENT)`,
+  ]);
+});
+
+test('a file the commit lists but git cannot read fails closed (#4128)', (t) => {
+  const f = notBehindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  commitFile(f.work, LITE_PATH, sized(100), 'shrink the lite file');
+  const failingShow: GitRunner = (cwd, args, env) =>
+    args[0] === 'show' && (args[1] ?? '').endsWith(`:${LITE_PATH}`)
+      ? { status: 128, stdout: '' }
+      : defaultGitRunner(cwd, args, env);
+
+  const result = runPrePushTrialBudget({ cwd: f.work, runGit: failingShow });
+  assert.equal(result.outcome, 'budget-fail');
+  assert.equal(result.exitCode, 1);
+  assert.match(result.auditFailures[0] ?? '', /could not read .* at /);
+});
+
+test('a commit whose tree cannot be listed fails closed (#4128)', (t) => {
+  const f = notBehindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  commitFile(f.work, LITE_PATH, sized(100), 'shrink the lite file');
+  const failingTree: GitRunner = (cwd, args, env) =>
+    args[0] === 'ls-tree'
+      ? { status: 128, stdout: '' }
+      : defaultGitRunner(cwd, args, env);
+
+  const result = runPrePushTrialBudget({ cwd: f.work, runGit: failingTree });
+  assert.equal(result.outcome, 'budget-fail');
+  assert.match(result.auditFailures[0] ?? '', /could not list the files of /);
+});
+
 test('a manifest without budget keys still gives not-behind (#4128)', (t) => {
   const f = behindFixture();
   t.after(() => rmSync(f.root, { recursive: true, force: true }));
@@ -766,6 +821,17 @@ test('a behind breach of a bundle whose limit HEAD raises gets the hint (#4128)'
   const result = runPrePushTrialBudget({ cwd: f.work });
   assert.equal(result.outcome, 'fail');
   assert.match(result.summary, /base pin hides; take in the base first/);
+});
+
+test('a behind utilization breach of a raised bundle gets the hint (#4128)', (t) => {
+  const f = raisedLimitFixture('bundle-b');
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  commitFile(f.work, 'ceiling-breach.txt', 'x\n', 'branch grows bundle-b');
+  advanceMain(f, 'unrelated.txt', 'main work\n');
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'fail');
+  assert.match(result.summary, /base pin hides/);
 });
 
 test('a behind failure that names no raised bundle gets no hint (#4128)', (t) => {

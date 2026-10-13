@@ -384,7 +384,16 @@ function changedFilesBetween(
   from: string,
   to: string,
 ): string[] | null {
-  const result = runGit(cwd, ['diff', '-z', '--name-only', from, to]);
+  // A moved file lists its old path too (--no-renames), so a moved bundle
+  // member is touched and reported as missing, as a deleted one is.
+  const result = runGit(cwd, [
+    'diff',
+    '-z',
+    '--name-only',
+    '--no-renames',
+    from,
+    to,
+  ]);
   if (result.status !== 0) return null;
   return result.stdout.split('\0').filter((path) => path.length > 0);
 }
