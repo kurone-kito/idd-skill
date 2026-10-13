@@ -1353,11 +1353,12 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    row says and mark its roster entry `disposed`, as section 5 of the
    orchestrator phase file describes. Map `outcome` as the store describes:
    `merged` for a merged pull request, `abandoned` for a closed unmerged one,
-   `held` for a claim still held, `handed-off` when a handoff summary was posted
-   before the release, and `failed` otherwise. Set `terminalPhase` to `F4` for a
-   claim released after a merge, and to `F2.5` when a handoff summary is posted
-   on the issue, because the release happens only at those phases. Record the
-   recovery in `frictions`, with its `phase` (F4 or F2.5), a non-empty
+   `held` for a claim still held with no handoff summary on the issue,
+   `handed-off` when a handoff summary was posted, whether or not the claim has
+   since been released, and `failed` otherwise. Set `terminalPhase` to `F4` for
+   a claim released after a merge, and to `F2.5` when a handoff summary is
+   posted on the issue, because the release happens only at those phases. Record
+   the recovery in `frictions`, with its `phase` (F4 or F2.5), a non-empty
    `summary`, and `docs/idd-workflow.md` in `file`, because that is the
    instruction path the recovery followed. If verification or the append fails
    for a matched worker, keep it addressable, mark it `stalled`, and follow the
