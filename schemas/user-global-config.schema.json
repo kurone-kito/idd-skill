@@ -459,6 +459,9 @@
         "deferByUrgency": {
           "$ref": "policy.schema.json#/properties/critiqueLoop/properties/deferByUrgency"
         },
+        "triageRecord": {
+          "$ref": "policy.schema.json#/properties/critiqueLoop/properties/triageRecord"
+        },
         "deferRelaxAtRounds": {
           "$ref": "policy.schema.json#/properties/critiqueLoop/properties/deferRelaxAtRounds"
         },
