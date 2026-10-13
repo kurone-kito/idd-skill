@@ -1261,6 +1261,10 @@
               }
             }
           }
+        },
+        "hint": {
+          "type": "string",
+          "description": "E6 PATH B helper-first next step on the dispositionEvidence object, present only when the missing regular comments are exactly the bot summaries or non-review notices that disposition-non-review-notices would record, no review thread or human comment is missing, and the claim, owner, repo, trusted-login and advisory-login inputs the command needs are all present. Names that helper run with --apply, then a re-run of pre-merge-readiness. Never changes route, reason, or any count in dispositionEvidence (#4163)."
         }
       }
     },
