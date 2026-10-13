@@ -47,7 +47,11 @@ function bundleInput(
 }
 
 function candidateLines(body: string): string[] {
-  return body.split('\n').filter((line) => line.startsWith('- `'));
+  const start = Math.max(body.indexOf('## Candidate files'), 0);
+  return body
+    .slice(start)
+    .split('\n')
+    .filter((line) => line.startsWith('- `'));
 }
 
 test('renders the eight parts in order with one candidate bullet for a shared path', () => {
@@ -464,7 +468,7 @@ test('a title the defer-source check counts is refused at render', () => {
   }
 });
 
-test('the lint counts every refused form and ignores every kept form', () => {
+test('the audit counts each Refs form that render refuses and ignores each form it keeps', () => {
   const base = renderDeferBundle(bundleInput());
   const inject = (line: string): string =>
     base.body.replace('\n\nRefs #4100\n\n', `\n\n${line}\n\nRefs #4100\n\n`);
@@ -640,6 +644,17 @@ test('a Refs reference mid-line in a title does not count as a Refs line for lin
   );
   assert.ok(rendered.body.includes('- Fix the Refs #5 link: '));
   assert.deepEqual(lintDeferBundle(rendered, 'idd-skill'), {
+    passed: true,
+    failures: [],
+  });
+});
+
+test('a markerPrefix with capitals, digits, dots, and underscores is accepted and lints clean', () => {
+  const rendered = renderDeferBundle(
+    bundleInput({ markerPrefix: '2Acme.v1_x' }),
+  );
+  assert.ok(rendered.body.includes('<!-- 2Acme.v1_x-effort: S -->'));
+  assert.deepEqual(lintDeferBundle(rendered, '2Acme.v1_x'), {
     passed: true,
     failures: [],
   });

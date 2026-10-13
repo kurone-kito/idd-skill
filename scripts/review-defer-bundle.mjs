@@ -110,6 +110,8 @@ function indentContinuation(text) {
  * or a line break (it sits in a code span); a line break in threadUrl; an
  * HTML comment opener in any body text; and item text that would give the
  * body a second Refs line by the same count the defer-source check uses.
+ * Only that Refs invariant is guaranteed here. Every other lint finding, such
+ * as a mid-line Depends on reference in prose, is left to lintDeferBundle.
  */
 // audit:ignore-dead-export: wired by the idd-review-defer-bundle command in a later roadmap issue
 export function renderDeferBundle(input) {
