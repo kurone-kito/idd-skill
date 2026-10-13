@@ -43,19 +43,19 @@ for (const path of REVIEW_FIX_COPIES) {
       '1. Move the detail this change added into `docs/idd-helper-scripts.md`',
       'Skip this step for lite files',
       'Do not trim shared, terminology-sensitive text.',
-      '2. If the bundle is still above 98%:',
+      '2. If the bundle is still above 98%, read its base utilization',
       'If its base utilization was below 95%, raise the limit to about 10% above the new total',
       'PR-description callout. No question is asked.',
       'If its base utilization was at or above 95%, stop and ask once',
       'the bundle name, its utilization at the base ref, its bytes after step 1, and the proposed limit with about 10% headroom.',
       'Never commit the raise.',
       'For a per-file cap, apply step 1.',
-      '`phaseLimitBytes`, stop and ask once.',
+      '(`phaseLimitBytes`, or `alwaysLoadedLimitBytes` for an always-loaded file), stop and ask once.',
       'Never raise a per-file cap.',
     ]);
     // The 95% split sits inside step 2, not after the per-file rule.
     const stepTwo = block.slice(
-      block.indexOf('2. If the bundle is still above 98%:'),
+      block.indexOf('2. If the bundle is still above 98%'),
       block.indexOf('For a per-file cap'),
     );
     assert.match(stepTwo, /below 95%/);

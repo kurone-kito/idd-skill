@@ -224,7 +224,8 @@ asked:
 1. Move the detail this change added into `docs/idd-helper-scripts.md`,
    the adopter path. Skip this step for lite files, which are
    self-contained. Do not trim shared, terminology-sensitive text.
-2. If the bundle is still above 98%:
+2. If the bundle is still above 98%, read its base utilization (its
+   total over `limitBytes` at the base ref):
    - If its base utilization was below 95%, raise the limit to about
      10% above the new total and add the PR-description callout. No
      question is asked.
@@ -233,8 +234,9 @@ asked:
      utilization at the base ref, its bytes after step 1, and the
      proposed limit with about 10% headroom. Never commit the raise.
 
-For a per-file cap, apply step 1. If the file is still above its
-`phaseLimitBytes`, stop and ask once. Never raise a per-file cap.
+For a per-file cap, apply step 1. If the file is still above its cap
+(`phaseLimitBytes`, or `alwaysLoadedLimitBytes` for an always-loaded
+file), stop and ask once. Never raise a per-file cap.
 
 Then push the feature branch normally (E11 uses merge commits, not
 rebase, so no force push is required).
