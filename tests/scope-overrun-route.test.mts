@@ -241,8 +241,11 @@ const LITE_WORK_PATHS = [
 ] as const;
 
 const LITE_ORDERED_STEPS = [
+  '(helper runtime only)',
+  'profile-selected',
   '`audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`',
   'fails `effort-candidate-file-limit` on the issue body',
+  "`## Candidate files` set to the diff's canonical paths",
   'stop coding without pushing',
   'Comment the estimate, candidate files, changed files, and a split proposal',
   'revalidate ownership',
