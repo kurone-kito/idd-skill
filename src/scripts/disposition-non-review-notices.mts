@@ -33,6 +33,13 @@
 // fail-closed: only classifier-recognized notices, summaries, and that
 // no-find result are dispositioned; real reviews and review threads are never
 // touched.
+//
+// #4122: the helper handles the same bot comments the readiness gate counts
+// (`isGateAdvisoryBotLogin`: the known review bots plus the configured
+// advisory bots), and every such comment it does not plan is listed in
+// `skipped` with a reason, so a gate-listed bot comment is never dropped
+// silently (observed on kurone-kito/setup.ubuntu PR 204, where the gate
+// listed two bot comments and the helper printed empty lists).
 
 import { writeSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mts';
@@ -72,8 +79,10 @@ import {
   isAdvisoryNonReviewNotice,
   isCodeRabbitAlreadyReviewedAcknowledgement,
   isCodeRabbitReviewInProgressSummary,
+  isCodexNoFindResult,
   isCodexNoFindResultForHeadSha,
   isCodexReviewSummaryCompleteForHeadSha,
+  isGateAdvisoryBotLogin,
   isNonReviewNoticeDisposition,
   isReviewSummaryComment,
   isReviewSummaryDisposition,
@@ -254,6 +263,54 @@ export function buildCodexNoFindDispositionBody(
 export { isCodexReviewSummaryCompleteForHeadSha } from './protocol-helpers.mts';
 
 /**
+ * #4122: true when a Codex review-status table has a row for the current
+ * HEAD, whatever its status. `isCodexReviewSummaryCompleteForHeadSha` still
+ * decides Completed; this only separates "a row for the HEAD that is not
+ * Completed" (Running, Failed: `codex-review-running`) from "no row for the
+ * HEAD, an unparseable table, or no table" (`codex-no-result-for-head`).
+ * It reads the table the same way: header cells naming `status` and
+ * `commit`, backticks stripped from the commit cell, and a commit cell that
+ * prefixes the full HEAD SHA.
+ */
+export function hasCodexReviewSummaryRowForHeadSha(
+  body: string,
+  headSha: string,
+): boolean {
+  const fullHeadSha = String(headSha ?? '')
+    .trim()
+    .toLowerCase();
+  if (!fullHeadSha) {
+    return false;
+  }
+  const rows = String(body ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('|') && line.endsWith('|'))
+    .map((line) =>
+      line
+        .slice(1, -1)
+        .split('|')
+        .map((cell) => cell.trim()),
+    );
+  if (rows.length === 0) {
+    return false;
+  }
+  const header = rows[0].map((cell) => cell.toLowerCase());
+  const statusColumn = header.findIndex((cell) => cell.includes('status'));
+  const commitColumn = header.findIndex((cell) => cell.includes('commit'));
+  if (statusColumn === -1 || commitColumn === -1) {
+    return false;
+  }
+  return rows.slice(1).some((row) => {
+    const commitCell = (row[commitColumn] ?? '')
+      .replace(/`/g, '')
+      .trim()
+      .toLowerCase();
+    return commitCell !== '' && fullHeadSha.startsWith(commitCell);
+  });
+}
+
+/**
  * Plan the dispositions for a PR's regular comments. Pure: takes the fetched
  * comments and returns which advisory non-review notices need a disposition and
  * which already have one. Per advisory bot, the count of trusted IDD non-review
@@ -271,6 +328,14 @@ export { isCodexReviewSummaryCompleteForHeadSha } from './protocol-helpers.mts';
  * generated", which the gate classifies RESOLVED). The two paths are disjoint:
  * notices are `**Rejected**`, summaries are `**Accepted**`, and neither
  * disposition predicate matches the other.
+ *
+ * #4122: the bot comments it handles are the readiness gate's set
+ * (`isGateAdvisoryBotLogin` over the configured advisory bots, which also
+ * matches the known review bots), not the configured list alone. Every
+ * comment of that set that it does not plan is in `skipped`: Codex results
+ * with no row (or no no-find result) for the current HEAD get
+ * `codex-no-result-for-head`, and any other unplanned comment gets
+ * `unrecognized-notice-body`.
  */
 export function buildDispositionPlan(
   input: { headSha: string; comments: NoticeComment[] },
@@ -289,6 +354,13 @@ export function buildDispositionPlan(
       options.advisoryBotLogins ?? DEFAULT_ADVISORY_BOT_LOGINS,
     ).map(advisoryBotIdentityToken),
   );
+  // #4122: the one predicate every path below uses to pick the bot comments
+  // it handles -- the same one `summarizeDispositionEvidenceForGate` uses to
+  // decide which bot comments need a disposition, so a known review bot that
+  // is not configured (e.g. Codex when only Copilot is configured) is still
+  // handled.
+  const isHandledBot = (login: string): boolean =>
+    isGateAdvisoryBotLogin(login, advisoryBotIdentities);
   const trustedMarkerLogins = new Set(
     normalizeTrustedMarkerLogins(options.trustedMarkerLogins ?? []),
   );
@@ -328,6 +400,20 @@ export function buildDispositionPlan(
   // Trusted IDD non-review-notice dispositions, grouped per advisory bot
   // identity they name (so each bot's existing dispositions only cover its own
   // notices).
+  // #4122: the bots a disposition can be credited to are the configured ones
+  // (in their configured order, as before) followed by the author of every
+  // handled bot comment on the PR, oldest first, so a disposition naming a
+  // known but unconfigured bot is still counted for it.
+  const creditableBotIdentities = [...advisoryBotIdentities];
+  for (const comment of comments) {
+    const identity = advisoryBotIdentityToken(comment.login);
+    if (
+      isHandledBot(comment.login) &&
+      !creditableBotIdentities.includes(identity)
+    ) {
+      creditableBotIdentities.push(identity);
+    }
+  }
   const dispositionCountByBot = new Map<string, number>();
   for (const comment of comments) {
     if (
@@ -338,10 +424,10 @@ export function buildDispositionPlan(
       continue;
     }
     // Count a disposition toward at most ONE bot it names. The F2/F3 gate
-    // consumes a notice disposition at most once, so a combined marker naming
-    // several bots must not be credited as covering one notice per bot (that
-    // would let the helper skip notices the gate still blocks on).
-    for (const identity of advisoryBotIdentities) {
+    // credits a combined marker once per bot it names (#2475), so this never
+    // credits more than the gate does: it can only plan an extra
+    // disposition, never skip a notice the gate still blocks on.
+    for (const identity of creditableBotIdentities) {
       if (dispositionNamesAdvisoryBot(comment.body, identity)) {
         dispositionCountByBot.set(
           identity,
@@ -365,7 +451,7 @@ export function buildDispositionPlan(
   for (const comment of comments) {
     const identity = advisoryBotIdentityToken(comment.login);
     if (
-      !advisoryBotIdentities.has(identity) ||
+      !isHandledBot(comment.login) ||
       !isAdvisoryNonReviewNotice(comment.body)
     ) {
       continue;
@@ -425,7 +511,7 @@ export function buildDispositionPlan(
     const sourceIdentity = advisoryBotIdentityToken(source.login);
     if (
       sourceIdentity !== 'chatgpt-codex-connector' ||
-      !advisoryBotIdentities.has(sourceIdentity)
+      !isHandledBot(source.login)
     ) {
       return false;
     }
@@ -454,7 +540,7 @@ export function buildDispositionPlan(
     const identity = advisoryBotIdentityToken(comment.login);
     return (
       identity === 'chatgpt-codex-connector' &&
-      advisoryBotIdentities.has(identity) &&
+      isHandledBot(comment.login) &&
       isCodexNoFindResultForHeadSha(comment.body, headSha)
     );
   };
@@ -500,7 +586,7 @@ export function buildDispositionPlan(
   for (const comment of comments) {
     const identity = advisoryBotIdentityToken(comment.login);
     if (
-      !advisoryBotIdentities.has(identity) ||
+      !isHandledBot(comment.login) ||
       !isReviewSummaryComment(comment.body) ||
       // A notice (rate-limit / usage-limit) that also carries the summary marker
       // is dispositioned `**Rejected**` by the notice path above; never also
@@ -541,6 +627,12 @@ export function buildDispositionPlan(
     // #2695: never auto-accept a Codex review-status comment while its own
     // table still shows the current HEAD as Running -- see
     // isCodexReviewSummaryCompleteForHeadSha's doc comment for the hazard.
+    // #4122: a row for the HEAD that is not Completed (Running, Failed) is
+    // `codex-review-running`; a table with no row for the HEAD, an
+    // unparseable table, or no table is `codex-no-result-for-head` -- Codex
+    // has not reviewed this HEAD, and it can still add a row later, so it is
+    // reported, never dispositioned (the manual E4 `**Rejected**` stays the
+    // route).
     if (
       identity === 'chatgpt-codex-connector' &&
       !isCodexReviewSummaryCompleteForHeadSha(comment.body, headSha)
@@ -548,7 +640,9 @@ export function buildDispositionPlan(
       skipped.push({
         noticeId: comment.id,
         botLogin: comment.login,
-        reason: 'codex-review-running',
+        reason: hasCodexReviewSummaryRowForHeadSha(comment.body, headSha)
+          ? 'codex-review-running'
+          : 'codex-no-result-for-head',
       });
       continue;
     }
@@ -602,9 +696,20 @@ export function buildDispositionPlan(
   for (const comment of comments) {
     if (
       advisoryBotIdentityToken(comment.login) !== 'chatgpt-codex-connector' ||
-      !advisoryBotIdentities.has(advisoryBotIdentityToken(comment.login)) ||
-      !isCodexNoFindResultForHeadSha(comment.body, headSha)
+      !isHandledBot(comment.login) ||
+      !isCodexNoFindResult(comment.body)
     ) {
+      continue;
+    }
+    // #4122: a recognized no-find result for an older HEAD is not a result
+    // for this one. The gate keeps it outstanding even after a source-bound
+    // disposition, so report it and never plan one.
+    if (!isCodexNoFindResultForHeadSha(comment.body, headSha)) {
+      skipped.push({
+        noticeId: comment.id,
+        botLogin: comment.login,
+        reason: 'codex-no-result-for-head',
+      });
       continue;
     }
     const coveringDisposition = codexNoFindDispositions
@@ -666,6 +771,27 @@ export function buildDispositionPlan(
         comment.id,
         options.markerPrefix,
       ),
+    });
+  }
+
+  // #4122: every handled bot comment that none of the paths above planned or
+  // skipped is reported, oldest first, instead of being dropped silently.
+  // The gate may not list some of these (for example one it already paired
+  // through its generic `**Accepted**` pairing, which this helper does not
+  // model); such an entry is expected and harmless.
+  const recordedIds = new Set<number>([
+    ...planned.map((entry) => entry.noticeId),
+    ...skipped.map((entry) => entry.noticeId),
+  ]);
+  for (const comment of comments) {
+    if (!isHandledBot(comment.login) || recordedIds.has(comment.id)) {
+      continue;
+    }
+    recordedIds.add(comment.id);
+    skipped.push({
+      noticeId: comment.id,
+      botLogin: comment.login,
+      reason: 'unrecognized-notice-body',
     });
   }
 
@@ -1360,8 +1486,10 @@ function main(): HelperCliResult {
       ? args.trustedMarkerLogins
       : [viewerLogin];
   // Resolve advisory bot logins from flag > env > config (the same sources the
-  // sibling helpers use), falling back to the CodeRabbit/Codex defaults so a
-  // repo that configures custom advisory bots is not silently omitted.
+  // sibling helpers use), falling back to the CodeRabbit/Codex defaults when
+  // none resolve. `buildDispositionPlan` adds the known review bots on top
+  // (#4122), as the readiness gate does, so a known bot left out of a custom
+  // list is still handled.
   const resolvedAdvisoryBotLogins = resolveAdvisoryBotLogins({
     flagValue: args.advisoryBotLogins,
     envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
