@@ -135,6 +135,24 @@ const ACK_ROWS = [
 ];
 
 test('copilotReviewAckNeeded pins the gate Clause 1 ack term', () => {
+  // #4142: the decline is held the same way as an unrecognized body, so the
+  // snapshot evidence and the gate agree that a trusted review-ack is needed.
+  assert.equal(
+    copilotReviewAckNeeded({
+      suppressedCount: 0,
+      bodyShape: 'decline-no-reviewable-files',
+      primaryBotLogin: 'copilot',
+    }),
+    true,
+  );
+  assert.equal(
+    copilotReviewAckNeeded({
+      suppressedCount: 0,
+      bodyShape: 'decline-no-reviewable-files',
+      primaryBotLogin: 'acme-review',
+    }),
+    false,
+  );
   assert.equal(
     copilotReviewAckNeeded({
       suppressedCount: 1,
