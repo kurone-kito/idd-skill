@@ -1,19 +1,19 @@
 # IDD — Orchestrator Phase (fan-out)
 
 Read this file only when the activation conditions below hold or a fan-out
-session restarts. Everything else in the IDD loop, including Discover, Claim,
-and the per-issue gates, is unchanged. The fan-out requirements themselves live
-in
+session restarts. Everything else in the IDD loop is unchanged. The fan-out
+requirements themselves live in
 [Orchestrator fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)
 and in
 [Orchestrator delegation](idd-claim.instructions.md#orchestrator-delegation).
 
 ## 1. Activation
 
-A fan-out session that restarts with its session id intact skips this section
-and goes to section 2.
+A restarted session with a unique session-suffixed agent id skips this section
+and goes to section 2. Any other restart neither activates fan-out nor refills:
+it follows [recovery](../../docs/idd-workflow.md#orchestrator-restart).
 
-Activate fan-out only when every condition holds:
+Activate fan-out only when all conditions hold:
 
 - the harness's row in the
   [worker mechanism table](../../docs/idd-workflow.md#worker-delegation) has
@@ -29,7 +29,7 @@ Activate fan-out only when every condition holds:
 - `GITHUB_ACTIONS` is not `true`.
 
 Otherwise, continue with [idd-discover.instructions.md](idd-discover.instructions.md)
-unchanged. The cap is per orchestrator session, not per host.
+unchanged. The cap is per orchestrator, not per host.
 
 ## 2. Roster
 
@@ -52,8 +52,7 @@ Lost on restart: see [recovery](../../docs/idd-workflow.md#orchestrator-restart)
    `--running <count of entries not disposed>` and
    `--startable <candidate count>`. Add `--harness-limit <limit>` from the
    worker mechanism table's row for this harness when that row gives a
-   numeric limit, and omit it otherwise. Its `slots` field is the number of
-   workers to start now.
+   numeric limit, and omit it otherwise. Its `slots` is the number to start now.
 3. If `slots` is `0`, go to section 4. Otherwise pick that many candidates with
    `discover-shared-file-overlap`, passing the survivors with `--issues`,
    `--batch <slots>`, one `--in-flight` per roster entry not `disposed`, and
@@ -71,8 +70,8 @@ Lost on restart: see [recovery](../../docs/idd-workflow.md#orchestrator-restart)
    before any refill. A failure after the marker is posted is contested: follow
    idd-claim.instructions.md, keep its claim and worktree, and remove it from
    `--issues`. No worker started, so no roster entry is made.
-6. Every dispatched issue also leaves `--issues`, so a refill from the cached
-   graph cannot claim it again. Only a later full Discover run reconsiders a
+6. Every dispatched issue also leaves `--issues`, so a refill cannot claim it
+   again. Only a later full Discover run reconsiders a
    failed pick.
 
 ## 4. Waiting and refill
@@ -103,7 +102,7 @@ Lost on restart: see [recovery](../../docs/idd-workflow.md#orchestrator-restart)
   the draft as the worker final report store describes, appends it with the
   profile-selected `idd-worker-report append --file <path>`, then disposes of
   the worker as the table's row says and marks its roster entry `disposed`.
-- If verification or the append fails, the orchestrator keeps it
+- If verification or the append fails, it keeps it
   addressable, marks it `stalled`, and follows the worker-specific recovery in
   the [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant).
 
