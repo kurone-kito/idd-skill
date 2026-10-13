@@ -17,7 +17,9 @@
 // well-formed dependency line (see checkDependencyLineGrammar, #3285),
 // visible/hidden line agreement for the suitability and effort
 // footers, a child's candidate-file count against its S/M effort
-// threshold (see checkEffortCandidateFileLimit, #4130), an advisory
+// threshold (see checkEffortCandidateFileLimit, #4130), an L-effort
+// draft refused as ready while the opt-in autopilotSuitability.effortL
+// policy is `refuse` (see checkEffortLReady, #4198), an advisory
 // warning-severity check that flags an issue/PR
 // reference used near coordination language (e.g. "before", "once",
 // "requires") with no corresponding Blocked-by/Depends-on/task-list
@@ -45,7 +47,10 @@
 // the drafted body from a file or stdin rather than fetching a live issue.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { parseAutopilotSuitabilityMarker } from './autopilot-suitability.mjs';
+import {
+  parseAutopilotSuitabilityMarker,
+  resolveEffortLPolicy,
+} from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   hasDependencyReferenceListStart,
@@ -737,6 +742,15 @@ export function auditAuthoredIssue(body, options) {
       suitability,
     ),
     checkEffortCandidateFileLimit(rawText, shape, isBucketAudit, markerPrefix),
+    checkEffortLReady(
+      rawText,
+      shape,
+      isBucketAudit,
+      markerPrefix,
+      suitability,
+      authoringBucket,
+      options.effortLPolicy,
+    ),
     checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability),
     checkEffortVisibleLineAgreement(text, rawText, markerPrefix),
     checkProseOnlyDependency(
@@ -2187,6 +2201,72 @@ function checkEffortCandidateFileLimit(
     id,
     name,
     `effort ${effort.value} with ${count} candidate files exceeds the limit of ${limit}; split the draft into a roadmap with children before publication (or record a Split out of #<n> line if it is already a split child)`,
+  );
+}
+/**
+ * Orphan and child shapes (#4198): with the opt-in
+ * `autopilotSuitability.effortL: "refuse"` policy, an `L` effort hint is
+ * not published as `ready`. An `L` draft must be split into `S` or `M`
+ * issues, or published as a human-bucket `needs-decision` body. The
+ * human-bucket exemptions match {@link checkCandidateFilesNotEmpty}: a
+ * body already routed to `needs-decision` or `blocked-by-human`, or
+ * scored `1`, is not an autopilot-ready child.
+ *
+ * Not applicable to a bucket audit, a roadmap (its tracks are its own
+ * children), a policy that is absent or `'allow'` (the default, so an
+ * unconfigured repository sees no change), or an effort marker that is
+ * absent, malformed, or not `L`. Only the hidden marker is read, as in
+ * {@link checkEffortCandidateFileLimit}.
+ */
+function checkEffortLReady(
+  rawText,
+  shape,
+  isBucketAudit,
+  markerPrefix,
+  suitability,
+  authoringBucket,
+  effortLPolicy,
+) {
+  const id = 'effort-l-ready';
+  const name =
+    'Effort L is not published as ready while the repository refuses it';
+  if (isBucketAudit) {
+    return pass(id, name, NOT_APPLICABLE_BUCKET_AUDIT_DETAIL);
+  }
+  if (shape === 'roadmap') {
+    return pass(
+      id,
+      name,
+      'not applicable: a roadmap is not checked against the effort L policy',
+    );
+  }
+  if (effortLPolicy !== 'refuse') {
+    return pass(
+      id,
+      name,
+      'not applicable: autopilotSuitability.effortL does not refuse effort L',
+    );
+  }
+  // parseEffortMarker masks its own input, so it takes rawText.
+  const effort = parseEffortMarker(rawText, markerPrefix);
+  if (!effort.present || effort.malformed || effort.value !== 'L') {
+    return pass(id, name, 'not applicable: no coherent effort L marker');
+  }
+  const routedToHumanBucket =
+    authoringBucket.value === 'needs-decision' ||
+    authoringBucket.value === 'blocked-by-human' ||
+    suitability.value === 1;
+  if (routedToHumanBucket) {
+    return pass(
+      id,
+      name,
+      'not applicable: issue is routed to a human bucket (authoring-bucket marker or suitability score of 1)',
+    );
+  }
+  return fail(
+    id,
+    name,
+    'effort L cannot be ready while autopilotSuitability.effortL is refuse; split it into S or M issues, or publish it as needs-decision',
   );
 }
 function checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability) {
@@ -4123,6 +4203,7 @@ function main() {
       : undefined,
     newIssue: args.newIssue,
     upstreamEscalationEnabled: policy.upstreamEscalationEnabled,
+    effortLPolicy: policy.effortLPolicy,
     // An empty resolution (no flag/env/config trusted actors found) is
     // "trust unknown," not "no one is trusted" -- pass `undefined` so
     // authoring-marker-minimization-backlog's trust filter stays
@@ -4188,6 +4269,7 @@ function loadPolicy(configPath) {
       needsDecisionLabelName: POLICY_DEFAULTS.labels.needsDecisionLabelName,
       authoringLabelName: POLICY_DEFAULTS.issueAuthoring.authoringLabelName,
       upstreamEscalationEnabled: false,
+      effortLPolicy: 'allow',
       rawConfig: null,
     };
   }
@@ -4200,6 +4282,7 @@ function loadPolicy(configPath) {
     authoringLabelName:
       normalizePolicyConfig(config).issueAuthoring.authoringLabelName,
     upstreamEscalationEnabled: isUpstreamEscalationEnabled(config),
+    effortLPolicy: resolveEffortLPolicy(config),
     rawConfig: config,
   };
 }
@@ -4272,7 +4355,9 @@ status:blocked-by-human agreement, markerPrefix consistency, required
 section headings for the declared shape, the roadmap-id/blocked-by
 dependency-marker rules, visible/hidden suitability+effort line
 agreement, a child's candidate-file count against its S/M effort
-threshold (effort-candidate-file-limit), the defer-source-marker check
+threshold (effort-candidate-file-limit), an L effort hint against the
+opt-in autopilotSuitability.effortL policy (effort-l-ready), the
+defer-source-marker check
 for defined values, a sole
 Refs origin, and the review-needs-decision label/bucket/origin contract,
 and an advisory (warning-severity only) check that flags an issue/PR
@@ -4311,7 +4396,9 @@ Options:
                                     also resolves upstreamEscalation.enabled, which
                                     gates both upstream-candidate checks (the
                                     marker/label pairing check and the
-                                    upstream-candidate branch of the prefix scan)
+                                    upstream-candidate branch of the prefix scan),
+                                    and autopilotSuitability.effortL, which gates
+                                    effort-l-ready
   --label <name>                   a label currently applied/proposed on the issue
                                     (repeatable; used for the suitability=1 /
                                     authoring-bucket cross-field checks, the
