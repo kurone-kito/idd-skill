@@ -5725,9 +5725,10 @@ to post it is the consuming track's job.
   its classification bucket, so `counts.rerunEligible` covers only rows a
   plan can still act on and the buckets still sum to `counts.total`. A
   superseded `pass` instance stays in `counts.pass`. Superseded instances are
-  counted in neither `counts.rerunEligible` nor `counts.rerunBudgetHeld`. This
-  is reporting only: no classification, plan, or recovery plan changes. A
-  superseded row in the `awaiting-fresh-review`,
+  counted in neither `counts.rerunEligible` nor `counts.rerunBudgetHeld`. The
+  counts are reporting only and change no classification. A superseded row is
+  excluded from the live-coverage recovery plan (kurone-kito/idd-skill#4150).
+  A superseded row in the `awaiting-fresh-review`,
   `bot-gated-skip`, or `unresolved` classification no longer produces its
   outstanding-state note, because it moves to the `superseded` bucket. The
   stderr summary adds one line for the superseded non-pass rows, in the form
