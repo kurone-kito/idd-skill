@@ -1912,7 +1912,10 @@ test('#4162: several closing issues are tried in turn and the first ready result
     readiness: (argv) => {
       const claimIssue = argv[argv.indexOf('--claim-issue') + 1];
       tried.push(claimIssue);
-      return { ready: claimIssue === '101' };
+      return {
+        ready: claimIssue === '101',
+        branchCurrency: { mergeStateStatus: 'CLEAN' },
+      };
     },
   });
   assert.deepEqual(tried, ['100', '101']);
@@ -2026,7 +2029,7 @@ test('#4162: a failure on one claim issue does not hide a ready result on anothe
       if (argv[argv.indexOf('--claim-issue') + 1] === '100') {
         throw new Error('first candidate failed');
       }
-      return { ready: true };
+      return { ready: true, branchCurrency: { mergeStateStatus: 'CLEAN' } };
     },
   });
   assert.deepEqual(report.openReadyPrs, [
@@ -2100,4 +2103,48 @@ test('#4162: the summary-body section escapes titles, shows an unknown age, and 
       '',
     ].join('\n'),
   );
+});
+
+test('#4162: a ready report is listed only when its merge state passes F1', () => {
+  const states = [
+    'CLEAN',
+    'BEHIND',
+    'DIRTY',
+    'BLOCKED',
+    'UNSTABLE',
+    'UNKNOWN',
+    'HAS_HOOKS',
+    'DRAFT',
+    '',
+  ];
+  const fixture: FakeProviderFixture = {
+    mergedChangeRequests: [],
+    openChangeRequests: states.map((_, index) => ({
+      number: 20 + index,
+      title: `pr ${20 + index}`,
+      body: '',
+      url: `https://x/pull/${20 + index}`,
+    })),
+    changeRequestConvergenceViews: Object.fromEntries(
+      states.map((_, index) => [20 + index, convergenceView([])]),
+    ),
+  };
+  const { port, calls } = recordingPort(fixture);
+  const report = runMergedPrFeedbackSweep(parseArgs(['--days', '7']), {
+    port,
+    owner: 'o',
+    repo: 'r',
+    nowMs: OPEN_NOW_MS,
+    readiness: (argv) => ({
+      ready: true,
+      branchCurrency: {
+        mergeStateStatus: states[Number(argv[argv.indexOf('--pr') + 1]) - 20],
+      },
+    }),
+  });
+  assert.deepEqual(
+    report.openReadyPrs?.map((pr) => pr.number),
+    [20, 21],
+  );
+  assertNoMergeOrWrite(fixture, calls);
 });

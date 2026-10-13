@@ -644,14 +644,21 @@ export function renderOpenReadySection(
   }
   return `${lines.join('\n')}\n`;
 }
-// The readiness gates have no draft gate of their own, so a draft PR with
-// every gate passing would otherwise read as ready to merge.
+// The F2 readiness gates do not check the branch state that F1 checks
+// first: `ready: true` can still come with a conflicting (DIRTY), blocked,
+// unstable, still-computing, or draft head. List a PR only when its merge
+// state also passes F1 (`resolveCallSiteRouting` in
+// branch-conflict-state.mts): CLEAN, or BEHIND, which readiness itself
+// already blocks when the base requires an up-to-date head.
+const F1_PASSING_MERGE_STATES = new Set(['CLEAN', 'BEHIND']);
 function isReadyReport(report) {
   const record = report !== null && typeof report === 'object' ? report : null;
   const mergeStateStatus = String(
     record?.branchCurrency?.mergeStateStatus ?? '',
   ).toUpperCase();
-  return record?.ready === true && mergeStateStatus !== 'DRAFT';
+  return (
+    record?.ready === true && F1_PASSING_MERGE_STATES.has(mergeStateStatus)
+  );
 }
 /**
  * The readiness argv to try for one open PR, or `null` when its closing
