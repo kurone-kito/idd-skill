@@ -1094,6 +1094,34 @@ test('#4070: a bare copilot login typed User is rejected by both Copilot selecto
   );
 });
 
+test('#4070: a configured non-default bot reported as type User keeps matching both selectors', () => {
+  const headSha = 'e'.repeat(40);
+  // The type gate is for the default Copilot login only. A configured
+  // non-Copilot login matches regardless of author type (the
+  // isCopilotReviewerLogin contract), so both selectors must still count it.
+  assert.equal(
+    findLastCopilotReviewCommit(
+      [
+        {
+          user: { login: 'coderabbitai', type: 'User' },
+          submitted_at: '2026-10-13T00:00:00Z',
+          commit_id: headSha,
+          body: 'Looks good.',
+        },
+      ],
+      'coderabbitai',
+    ),
+    headSha,
+  );
+  assert.equal(
+    isVerifiedCopilotAuthor(
+      { login: 'coderabbitai', __typename: 'User' },
+      'coderabbitai',
+    ),
+    true,
+  );
+});
+
 test('#3262: findLastCopilotReviewCommit matches a configured external bot across REST login spellings via user.type', () => {
   const commitId = 'c'.repeat(40);
   const restShapedReview = (login: string) => ({

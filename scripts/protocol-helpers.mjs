@@ -5049,9 +5049,7 @@ export function findLastCopilotReviewCommit(
   reviews,
   primaryBotLogin = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
 ) {
-  const isDefaultCopilotBot =
-    normalizePrimaryBotLogin(primaryBotLogin) ===
-    DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  const isDefaultCopilotBot = isDefaultCopilotPrimary(primaryBotLogin);
   const latest = reviews
     .filter((review) => {
       const authorType = review.user?.type ?? review.author?.type ?? null;
@@ -5061,7 +5059,7 @@ export function findLastCopilotReviewCommit(
           primaryBotLogin,
           authorType,
         ) ||
-        !isBotOrUntypedAuthor(authorType)
+        (isDefaultCopilotBot && !isBotOrUntypedAuthor(authorType))
       ) {
         return false;
       }
@@ -5097,19 +5095,31 @@ export function isVerifiedCopilotAuthor(author, primaryBotLogin) {
   if (!isCopilotReviewerLogin(author?.login ?? '', primaryBotLogin, typename)) {
     return false;
   }
-  return isBotOrUntypedAuthor(typename);
+  return (
+    !isDefaultCopilotPrimary(primaryBotLogin) || isBotOrUntypedAuthor(typename)
+  );
 }
 /**
- * Shared author-type gate for the Copilot selectors: an absent type passes,
- * and otherwise only `'Bot'` does. {@link isVerifiedCopilotAuthor} feeds it
- * the GraphQL `__typename`, and {@link findLastCopilotReviewCommit} feeds it
- * the REST `user.type`, so the two selectors cannot disagree. The gate is
- * needed because {@link isCopilotReviewerLogin} accepts the default bot's
- * bare `copilot` login without consulting the author type.
+ * Author-type gate for the default Copilot login: an absent type passes, and
+ * otherwise only `'Bot'` does. It guards the bare `copilot` login, which
+ * {@link isCopilotReviewerLogin} accepts without consulting the author type,
+ * so a same-named `User` account is not counted as Copilot (#1686). A
+ * configured non-Copilot login skips this gate, because that matcher's
+ * contract is that an exact login match holds regardless of author type.
+ * {@link isVerifiedCopilotAuthor} (GraphQL `__typename`) and
+ * {@link findLastCopilotReviewCommit} (REST `user.type`) apply the same
+ * condition, so the two selectors cannot disagree.
  */
 function isBotOrUntypedAuthor(authorType) {
   return (
     authorType === undefined || authorType === null || authorType === 'Bot'
+  );
+}
+/** True when `primaryBotLogin` names the default Copilot bot. */
+function isDefaultCopilotPrimary(primaryBotLogin) {
+  return (
+    normalizePrimaryBotLogin(primaryBotLogin) ===
+    DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN
   );
 }
 /** Return the absolute-latest eligible primary review's provider-order index.
