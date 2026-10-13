@@ -1363,14 +1363,14 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    --file <path>` command. After a successful append for a matched worker,
    dispose of the worker as the table's row says and mark its roster entry
    `disposed`, as section 5 of the orchestrator phase file describes. Map
-   `outcome` as the store describes: `merged` for a merged pull request,
-   `abandoned` for a closed unmerged one, `held` for a claim still held with no
-   handoff summary on the issue, `handed-off` when a trusted handoff summary
-   carrying this claim id was posted, whether or not the claim has since been
-   released, and `failed` otherwise. A handoff summary is trusted only when a
-   trusted marker actor posted it, because the claim id alone is a public token.
-   Set `terminalPhase` to `F4` only for a claim released after a merge under
-   `fully_autonomous_merge`, since F4 is complete only after its final
+   `outcome` as the store describes: `handed-off` when a trusted handoff summary
+   carrying this claim id was posted, whatever the pull request has since done
+   and whether or not the claim has since been released; otherwise `merged` for
+   a merged pull request, `abandoned` for a closed unmerged one, `held` for a
+   claim still held, and `failed` otherwise. A handoff summary is trusted only
+   when a trusted marker actor posted it, because the claim id alone is a public
+   token. Set `terminalPhase` to `F4` only for a claim released after a merge
+   under `fully_autonomous_merge`, since F4 is complete only after its final
    `unclaimed-by`, and to `F2.5` when a trusted handoff summary carrying this
    claim id is posted on the issue, under either merge policy. A merged pull
    request that still shows an active claim has no terminal phase, so step 5
