@@ -1283,16 +1283,17 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    [fan-out variant](#orchestrator-fan-out-variant); if it cannot be messaged,
    it is treated as live and is never replaced while the listing still shows it
    running, because its agent may still be executing when no child process is
-   visible. Wait for any running child process by PID, then report the worker to
-   the operator in step 5. A worker that matches no own claim is neither
-   messaged nor replaced. A running worker of a released claim is counted and
-   sent no message. If the harness offers no agent listing, no worker is
-   matched, every own claim that reached this step goes to step 5, and the rest
-   of this step is skipped, including the Discover pass, the budget call, the
-   overlap check, and every worker start, because the running workers are
-   unknown. An own claim other than a released one that matches no worker also
-   skips the rest of this step, because a worker the match missed may still be
-   running, and that claim goes to step 5. A session without a unique
+   visible. Wait for any running child process by PID. Then hold the claim, with
+   no replacement while the listing still shows the worker running, and report
+   the worker to the operator in step 5. A worker that matches no own claim is
+   neither messaged nor replaced. A running worker of a released claim is
+   counted and sent no message. If the harness offers no agent listing, no
+   worker is matched, every own claim that reached this step goes to step 5, and
+   the rest of this step is skipped, including the Discover pass, the budget
+   call, the overlap check, and every worker start, because the running workers
+   are unknown. An own claim other than a released one that matches no worker
+   also skips the rest of this step, because a worker the match missed may still
+   be running, and that claim goes to step 5. A session without a unique
    session-suffixed agent id also skips the rest of this step, because it cannot
    tell its workers from another session's. Only when a listing exists, the
    session has a unique session-suffixed agent id, and no such unmatched claim
