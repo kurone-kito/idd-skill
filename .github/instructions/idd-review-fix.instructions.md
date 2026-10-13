@@ -100,15 +100,17 @@ Convergence guardrails:
   [needs-decision route] applies.
 - **Count it, do not judge it.** When the per-issue cap below does not
   apply, append each pass's E5 records (`file`, `rule`, `construct`,
-  `severity`, `disposition`) to a passes file in the session scratch
-  directory and run the `e10-recurrence` helper
+  the E4 tier as `severity`, `disposition`) to a passes file in the
+  session scratch directory and run the `e10-recurrence` helper
   ([reference](../../docs/idd-helper-scripts.md#e10-same-family-recurrence-kurone-kitoidd-skill4129)).
   The chain counts its first pass, and each later pass whose non-empty
   fingerprint set is a subset of the prior one's extends it. `e11` →
   E11; `continue` → fix and rerun; `hold` (a recurring Medium or High
   family) → the hold above, posting its `holdText`; `defer` (only Low
-  families recur) → the per-issue cap's close-out route below for those
-  families, with `e10NoProgressHoldAfter` as the clause, also an
+  families recur) → once no High or Medium Accepted finding is open and
+  **fix-validate** has passed on the current HEAD, the per-issue cap's
+  close-out route below for those families (until then, fix the open
+  ones and rerun), with `e10NoProgressHoldAfter` as the clause, also an
   explicit exception to the Defer rule's exclusion of an Accepted item
   mid-fix. A rejected record exits non-zero; fix it and rerun. If the
   passes file is lost or the helper cannot run, judge by the bullets

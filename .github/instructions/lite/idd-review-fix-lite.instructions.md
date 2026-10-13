@@ -40,7 +40,7 @@ severity or decides Accept/Reject.
 - A required helper is missing, fails, or disagrees with live state.
 - E10's critique loop repeats the same Accepted findings for
   `critiqueLoop.e10NoProgressHoldAfter` (default 3) passes without
-  meaningful progress.
+  meaningful progress, and a recurring family is Medium or High (step 6).
 - E10's `critiqueLoop.delegate` under `on-success` or `never` left no
   readable findings list (vacuous verdict, not a clean zero-issue round).
 - E11 merge conflicts cannot be resolved cleanly, or the PR has
@@ -158,10 +158,15 @@ self-critique and record risk.
    passes without meaningful progress, stop the loop, post a hold
    comment summarizing the repeated findings and attempted fixes, and
    wait for a maintainer decision. Count this with the `e10-recurrence`
-   helper as `idd-review-fix.instructions.md` E10 describes: `hold`
-   (a recurring Medium or High family) is this hold; `defer` (only Low
-   families recur) takes the step 8 close-out route for those families
-   with `e10NoProgressHoldAfter` as the clause; `e11` goes to E11.
+   helper over a scratch passes file of each pass's E5 records, as
+   `idd-review-fix.instructions.md` E10 describes: `hold` (a recurring
+   Medium or High family) is this hold; `defer` (only Low families
+   recur) takes the step 8 close-out route for those families, under
+   step 8's own conditions, with `e10NoProgressHoldAfter` as the clause,
+   also an explicit exception to the Defer rule's exclusion of an
+   Accepted item mid-fix; `continue` fixes and reruns; `e11` goes to
+   E11. If the passes file is lost or the helper cannot run, judge by
+   step 5.
 7. Do not use step 6 to bypass a serious issue: unresolved High or
    Medium findings stay blockers until fixed or explicitly redirected
    by a maintainer.
