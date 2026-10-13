@@ -189,11 +189,10 @@ needs-decision, blocked-by-human, and out-of-scope.
      that applies the authoring label atomically and carries an exact hidden
      publication token for target, anchor, set, and session; if that operation
      is unavailable, stop before creating the issue — never intentionally
-     create an unlabeled issue. `idd-publish-authoring-hold` (`node
-     scripts/publish-authoring-hold.mjs` in this source repository) plans
-     and validates only; `--apply` is refused until the follow-up lands, so
-     it is not that command yet (see the contract's "New-issue ownership"
-     section)
+     create an unlabeled issue. For a standalone orphan, that command is
+     `idd-publish-authoring-hold` (`node scripts/publish-authoring-hold.mjs`
+     in this source repository); see its `--help` and the contract's
+     "New-issue ownership" section
    - the hidden publication token is this exact HTML-first body line.
      `anchor` reuses the opaque `target` value only when this new issue
      is itself the set anchor (self-reference); for a non-anchor child,

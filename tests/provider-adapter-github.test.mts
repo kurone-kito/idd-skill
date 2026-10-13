@@ -5370,6 +5370,67 @@ for (const status of [401, 404, 422]) {
   });
 }
 
+for (const status of [401, 404, 422]) {
+  test(`postWorkItemComment never reports a later-attempt HTTP ${status} as the failure (#4171)`, () => {
+    let ghTextCalls = 0;
+    let reads = 0;
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({
+        ghText: () => {
+          ghTextCalls += 1;
+          // The first POST may have landed; the second is rejected.
+          throw new Error(
+            ghTextCalls === 1 ? 'gh: HTTP 502' : `gh: HTTP ${status}`,
+          );
+        },
+        ghApiJson: () => {
+          reads += 1;
+          return [];
+        },
+      }),
+    );
+    assert.throws(
+      () => port.postWorkItemComment(9, 'marker body'),
+      (error: Error) => {
+        assert.match(error.message, /HTTP 502/);
+        assert.doesNotMatch(error.message, new RegExp(`HTTP ${status}`));
+        return true;
+      },
+    );
+    assert.equal(ghTextCalls, 2, 'no third POST after the rejection');
+    assert.equal(reads, 2, 'the retry check and the final check both ran');
+  });
+}
+
+test('postWorkItemComment returns a comment the final check finds after a later-attempt 422 (#4171)', () => {
+  let ghTextCalls = 0;
+  let reads = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        ghTextCalls += 1;
+        throw new Error(ghTextCalls === 1 ? 'gh: HTTP 502' : 'gh: HTTP 422');
+      },
+      ghApiJson: () => {
+        reads += 1;
+        // The first attempt shows up only on the final read.
+        return reads === 1
+          ? []
+          : [{ id: 77, body: 'marker body', html_url: 'https://example/77' }];
+      },
+    }),
+  );
+  assert.deepEqual(port.postWorkItemComment(9, 'marker body'), {
+    id: 77,
+    htmlUrl: 'https://example/77',
+  });
+  assert.equal(ghTextCalls, 2);
+});
+
 test('postWorkItemComment throws "not verified" instead of retrying when a possibly-landed failure\'s duplicate-check re-read itself fails', () => {
   let ghTextCalls = 0;
   const port = createGithubProviderAdapter(
