@@ -3,36 +3,39 @@ concurrency:
   group: merged-pr-feedback-sweep
 name: Merged-PR feedback sweep (weekly summary)
 # Manual only (issue #4161). The sweep is read-only. This workflow is its one
-# writer, and it writes only the single open summary issue titled below: a run
-# renders the sweep of the last seven days, then creates that issue, or edits
-# it in place when it already exists. It refuses to write when the open-issue
-# listing is full or when more than one open issue carries the title. There is
-# deliberately no schedule and no push or pull_request trigger; the schedule is
-# a follow-up after the first successful dispatch run.
+# writer, and it writes only the single open summary issue titled below. The
+# render job runs the sweep and holds only read scopes. The write job holds the
+# one issues write scope, checks out nothing, and runs no repository code, so
+# no branch code can use the write token. The write job refuses to write when
+# the open-issue listing is full, when the listing does not yield a count, or
+# when more than one open issue carries the title. There is deliberately no
+# schedule and no push or pull_request trigger; the schedule is a follow-up
+# after the first successful dispatch run.
 #
-# The checkout uses the dispatched ref. A dispatch of a pushed branch runs that
-# branch's code and writes the live summary issue, so it validates the job
-# before its pull request opens (D2). A dispatch on the default branch
-# exercises the merged code.
+# The render job checks out the dispatched ref. A dispatch of a pushed branch
+# renders that branch's code and then writes the live summary issue, so it
+# validates the job before its pull request opens (D2). A dispatch on the
+# default branch exercises the merged code.
 on:
   workflow_dispatch:
-# Permissions are read-only except for the one issue write. pull-requests read
-# is needed because the sweep lists and reads pull requests under this token.
-# Without it the listing comes back empty and the summary says so falsely; the
-# first dispatch run (38396980939) showed exactly that.
-permissions:
-  contents: read
-  issues: write
-  pull-requests: read
+# Least privilege at the workflow level; each job declares its own scopes below.
+permissions: {}
 jobs:
-  sweep:
+  render:
     env:
       GH_TOKEN: ${{ github.token }}
-      SWEEP_ISSUE_TITLE: Merged-PR feedback sweep (weekly)
+    # Read-only. pull-requests read lets the sweep list and read pull requests.
+    # Without it the listing comes back empty and the summary says so falsely;
+    # the first dispatch run (38396980939) showed exactly that.
+    permissions:
+      contents: read
+      pull-requests: read
     # ubuntu-latest, not ubuntu-slim: ubuntu-slim caps a job at 15 minutes,
     # below the bound set here.
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      body_b64: ${{ steps.render.outputs.body_b64 }}
     steps:
       - name: Check out the dispatched ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,6 +46,7 @@ jobs:
         with:
           node-version: 24.x
       - name: Render the summary issue body
+        id: render
         run: |
           set -euo pipefail
           # --limit 500 covers the expected weekly volume. A scan that still
@@ -54,9 +58,25 @@ jobs:
             --repo "${GITHUB_REPOSITORY#*/}" \
             --issue-body > "$RUNNER_TEMP/sweep-body.md"
           test -s "$RUNNER_TEMP/sweep-body.md"
+          # Base64 keeps the multi-line body safe as one step output.
+          echo "body_b64=$(base64 -w0 "$RUNNER_TEMP/sweep-body.md")" >> "$GITHUB_OUTPUT"
+  write:
+    needs: render
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SWEEP_ISSUE_TITLE: Merged-PR feedback sweep (weekly)
+      BODY_B64: ${{ needs.render.outputs.body_b64 }}
+    # Write-only. The job checks out nothing, so it runs no repository code.
+    permissions:
+      issues: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
       - name: Create or update the summary issue
         run: |
           set -euo pipefail
+          printf '%s' "$BODY_B64" | base64 -d > "$RUNNER_TEMP/sweep-body.md"
+          test -s "$RUNNER_TEMP/sweep-body.md"
           # The open issues are read as one listing, not searched, so an issue
           # created moments earlier is seen at once. A full listing could hide
           # the summary issue, so the step stops instead of creating a copy.

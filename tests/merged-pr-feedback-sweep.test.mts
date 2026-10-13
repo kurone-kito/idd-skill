@@ -1870,23 +1870,42 @@ interface SweepWorkflowStep {
   with?: Record<string, string>;
 }
 
-function sweepSteps(): SweepWorkflowStep[] {
-  const job = (readSweepWorkflow().jobs as Record<string, unknown>).sweep as {
-    steps: SweepWorkflowStep[];
-  };
-  return job.steps;
+interface SweepWorkflowJob {
+  if?: string;
+  needs?: string;
+  env?: Record<string, string>;
+  permissions?: Record<string, string>;
+  outputs?: Record<string, string>;
+  'runs-on'?: string;
+  'timeout-minutes'?: string;
+  steps: SweepWorkflowStep[];
 }
 
-function stepNamed(
-  steps: SweepWorkflowStep[],
-  name: string,
-): SweepWorkflowStep {
-  const found = steps.find((step) => step.name === name);
+function sweepJob(name: string): SweepWorkflowJob {
+  const jobs = readSweepWorkflow().jobs as Record<string, SweepWorkflowJob>;
+  const job = jobs[name];
+  assert.ok(job, `missing job: ${name}`);
+  return job;
+}
+
+function stepNamed(job: SweepWorkflowJob, name: string): SweepWorkflowStep {
+  const found = job.steps.find((step) => step.name === name);
   assert.ok(found, `missing step: ${name}`);
   return found;
 }
 
-test('the summary workflow is dispatch-only, with the agreed permissions and concurrency', () => {
+/** Assert that each expected line appears, trimmed, in the given order. */
+function assertLinesInOrder(script: string, expected: readonly string[]): void {
+  const lines = script.split('\n').map((line) => line.trim());
+  let from = 0;
+  for (const want of expected) {
+    const at = lines.indexOf(want, from);
+    assert.notEqual(at, -1, `missing, or out of order: ${want}`);
+    from = at + 1;
+  }
+}
+
+test('the summary workflow is manual only, with least-privilege defaults and no other triggers', () => {
   const workflow = readSweepWorkflow();
   assert.deepEqual(Object.keys(workflow).sort(), [
     'concurrency',
@@ -1896,62 +1915,90 @@ test('the summary workflow is dispatch-only, with the agreed permissions and con
     'permissions',
   ]);
   assert.deepEqual(workflow.on, { workflow_dispatch: null });
-  // Read-only except for the one issue write; pull-requests read lets the
-  // listing return real pull requests (the first dispatch run showed it empty).
-  assert.deepEqual(workflow.permissions, {
-    contents: 'read',
-    issues: 'write',
-    'pull-requests': 'read',
-  });
+  assert.deepEqual(plain(workflow.permissions), {});
   assert.deepEqual(workflow.concurrency, {
     group: 'merged-pr-feedback-sweep',
     'cancel-in-progress': 'false',
   });
+  assert.deepEqual(Object.keys(plain(workflow.jobs) as object), [
+    'render',
+    'write',
+  ]);
 });
 
-test('the summary job is active, bounded, and shares the summary title with the script', () => {
-  const jobs = readSweepWorkflow().jobs as Record<string, unknown>;
-  assert.deepEqual(Object.keys(jobs), ['sweep']);
-  const job = jobs.sweep as Record<string, unknown>;
-  assert.equal('if' in job, false, 'the job must not be gated off');
+test('the render job is read-only and holds the pull-request read the listing needs', () => {
+  const job = sweepJob('render');
+  assert.equal('if' in job, false, 'the render job must not be gated off');
+  assert.deepEqual(job.permissions, {
+    contents: 'read',
+    'pull-requests': 'read',
+  });
   assert.equal(job['runs-on'], 'ubuntu-latest');
   assert.equal(job['timeout-minutes'], '20');
-  const env = job.env as Record<string, string>;
-  assert.match(env.GH_TOKEN, /^\$\{\{ github\.token \}\}$/);
-  assert.equal(env.SWEEP_ISSUE_TITLE, WEEKLY_SWEEP_ISSUE_TITLE);
+  assert.match(String(job.env?.GH_TOKEN), /^\$\{\{ github\.token \}\}$/);
+  assert.match(
+    String(job.outputs?.body_b64),
+    /^\$\{\{ steps\.render\.outputs\.body_b64 \}\}$/,
+  );
 });
 
-test('the summary job has exactly four named steps, with pinned actions and no other uses', () => {
-  const steps = sweepSteps();
+test('the write job holds only the issue write, checks out nothing, waits for the render job, and shares the title', () => {
+  const job = sweepJob('write');
+  assert.equal('if' in job, false, 'the write job must not be gated off');
+  assert.equal(job.needs, 'render');
+  assert.deepEqual(job.permissions, { issues: 'write' });
+  assert.equal(job['runs-on'], 'ubuntu-latest');
+  assert.equal(job['timeout-minutes'], '10');
+  assert.equal(job.env?.SWEEP_ISSUE_TITLE, WEEKLY_SWEEP_ISSUE_TITLE);
+  assert.match(
+    String(job.env?.BODY_B64),
+    /^\$\{\{ needs\.render\.outputs\.body_b64 \}\}$/,
+  );
   assert.deepEqual(
-    steps.map((step) => step.name),
+    job.steps.map((step) => step.name),
+    ['Create or update the summary issue'],
+  );
+  assert.deepEqual(
+    job.steps.map((step) => step.uses ?? null),
+    [null],
+    'the write job must not check out or use any action',
+  );
+  assert.doesNotMatch(String(job.steps[0].run), /\bnode\b/);
+});
+
+test('the render job has three named steps, with pinned actions and a checkout without persisted credentials', () => {
+  const job = sweepJob('render');
+  assert.deepEqual(
+    job.steps.map((step) => step.name),
     [
       'Check out the dispatched ref',
       'Set up Node.js',
       'Render the summary issue body',
-      'Create or update the summary issue',
     ],
   );
   assert.deepEqual(
-    steps.map((step) => step.uses ?? null),
+    job.steps.map((step) => step.uses ?? null),
     [
       'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
       'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020',
       null,
-      null,
     ],
   );
-  assert.deepEqual(stepNamed(steps, 'Check out the dispatched ref').with, {
+  assert.deepEqual(stepNamed(job, 'Check out the dispatched ref').with, {
     'persist-credentials': 'false',
   });
-  assert.deepEqual(stepNamed(steps, 'Set up Node.js').with, {
+  assert.deepEqual(stepNamed(job, 'Set up Node.js').with, {
     'node-version': '24.x',
   });
 });
 
-test('every gh call in the summary job is one issue list, one issue create, and one issue edit, and nothing else writes', () => {
-  const scripts = sweepSteps()
-    .map((step) => (typeof step.run === 'string' ? step.run : ''))
+test('every gh call in the summary workflow is one issue list, one issue create, and one issue edit, and nothing else writes', () => {
+  const scripts = ['render', 'write']
+    .flatMap((name) =>
+      sweepJob(name).steps.map((step) =>
+        typeof step.run === 'string' ? step.run : '',
+      ),
+    )
     .join('\n');
   const calls = [...scripts.matchAll(/\bgh\s+([a-z-]+)(?:\s+([a-z-]+))?/g)].map(
     (match) => `${match[1]} ${match[2] ?? ''}`.trim(),
@@ -1969,9 +2016,9 @@ test('every gh call in the summary job is one issue list, one issue create, and 
   }
 });
 
-test('the render step runs a seven-day, 500-cap, issue-body sweep into a non-empty body file', () => {
+test('the render step runs a seven-day, 500-cap, issue-body sweep and hands its body on as one step output', () => {
   const run = String(
-    stepNamed(sweepSteps(), 'Render the summary issue body').run,
+    stepNamed(sweepJob('render'), 'Render the summary issue body').run,
   );
   assert.match(run, /node scripts\/merged-pr-feedback-sweep\.mjs/);
   assert.match(run, /--days 7 \\/);
@@ -1980,24 +2027,19 @@ test('the render step runs a seven-day, 500-cap, issue-body sweep into a non-emp
   assert.match(run, /--owner "\$\{GITHUB_REPOSITORY%%\/\*\}"/);
   assert.match(run, /--repo "\$\{GITHUB_REPOSITORY#\*\/\}"/);
   assert.match(run, /test -s "\$RUNNER_TEMP\/sweep-body\.md"/);
+  assert.match(
+    run,
+    /echo "body_b64=\$\(base64 -w0 "\$RUNNER_TEMP\/sweep-body\.md"\)" >> "\$GITHUB_OUTPUT"/,
+  );
 });
 
-/** Assert that each expected line appears, trimmed, in the given order. */
-function assertLinesInOrder(script: string, expected: readonly string[]): void {
-  const lines = script.split('\n').map((line) => line.trim());
-  let from = 0;
-  for (const want of expected) {
-    const at = lines.indexOf(want, from);
-    assert.notEqual(at, -1, `missing, or out of order: ${want}`);
-    from = at + 1;
-  }
-}
-
-test('the write step refuses a full, malformed, or duplicated listing, edits the one match, and creates only when none exists', () => {
+test('the write step decodes the body, refuses a full, malformed, or duplicated listing, edits the one match, and creates only when none exists', () => {
   const run = String(
-    stepNamed(sweepSteps(), 'Create or update the summary issue').run,
+    stepNamed(sweepJob('write'), 'Create or update the summary issue').run,
   );
   assertLinesInOrder(run, [
+    String.raw`printf '%s' "$BODY_B64" | base64 -d > "$RUNNER_TEMP/sweep-body.md"`,
+    String.raw`test -s "$RUNNER_TEMP/sweep-body.md"`,
     String.raw`listing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json number,title)"`,
     String.raw`length="$(printf '%s' "$listing" | jq 'length')"`,
     'case "$length" in',
