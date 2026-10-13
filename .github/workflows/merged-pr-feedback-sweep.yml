@@ -18,6 +18,8 @@ name: Merged-PR feedback sweep (weekly summary)
 # dispatch never writes the shared summary issue, and only merged code can
 # publish to it.
 on:
+  schedule:
+    - cron: '0 6 * * 1'
   workflow_dispatch:
 # Least privilege at the workflow level; each job declares its own scopes below.
 permissions: {}

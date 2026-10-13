@@ -2580,7 +2580,7 @@ function assertLinesInOrder(script: string, expected: readonly string[]): void {
   }
 }
 
-test('the summary workflow is manual only, with least-privilege defaults and no other triggers', () => {
+test('the summary workflow runs on a weekly schedule and on manual dispatch, with least-privilege defaults and no other triggers', () => {
   const workflow = readSweepWorkflow();
   assert.deepEqual(Object.keys(workflow).sort(), [
     'concurrency',
@@ -2589,7 +2589,10 @@ test('the summary workflow is manual only, with least-privilege defaults and no 
     'on',
     'permissions',
   ]);
-  assert.deepEqual(workflow.on, { workflow_dispatch: null });
+  assert.deepEqual(workflow.on, {
+    schedule: [{ cron: '0 6 * * 1' }],
+    workflow_dispatch: null,
+  });
   assert.deepEqual(plain(workflow.permissions), {});
   assert.deepEqual(workflow.concurrency, {
     group: 'merged-pr-feedback-sweep',
