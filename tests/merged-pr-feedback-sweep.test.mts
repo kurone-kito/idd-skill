@@ -10,6 +10,7 @@ import {
   OPEN_READY_SECTION_EMPTY_LINE,
   OPEN_READY_SECTION_HEADING,
   openPrReadinessArgvCandidates,
+  openPrReadinessIdentityArgv,
   parseArgs,
   renderMergedPrSweepOutput,
   renderOpenReadySection,
@@ -2235,6 +2236,69 @@ test('#4162: a CLEAN or BEHIND report is listed only once mergeable resolves to 
   assert.deepEqual(
     report.openReadyPrs?.map((pr) => pr.number),
     [40, 43],
+  );
+  assertNoMergeOrWrite(fixture, calls);
+});
+
+test('#4162: identity override flags reach every readiness check', () => {
+  const fixture = openPrFixture();
+  const { port, calls } = recordingPort(fixture);
+  const readiness = fakeReadiness([10]);
+  runMergedPrFeedbackSweep(
+    parseArgs([
+      '--days',
+      '7',
+      '--trusted-marker-logins',
+      'alice,bob',
+      '--advisory-bot-logins',
+      'bot-a[bot]',
+      '--idd-agent-logins',
+      'agent-x',
+    ]),
+    {
+      port,
+      owner: 'o',
+      repo: 'r',
+      nowMs: OPEN_NOW_MS,
+      readiness: readiness.check,
+    },
+  );
+  const identity = [
+    '--trusted-marker-logins',
+    'alice,bob',
+    '--advisory-bot-logins',
+    'bot-a[bot]',
+    '--idd-agent-logins',
+    'agent-x',
+  ];
+  assert.deepEqual(readiness.seenArgv, [
+    [
+      '--pr',
+      '10',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--claim-issue',
+      '100',
+      ...identity,
+    ],
+    ['--pr', '11', '--owner', 'o', '--repo', 'r', '--claimless', ...identity],
+  ]);
+  // The forwarded argv still passes the real readiness parser.
+  for (const argv of readiness.seenArgv) {
+    const parsed = parseReadinessArgs(argv);
+    assert.equal(parsed.trustedMarkerLogins, 'alice,bob');
+    assert.equal(parsed.advisoryBotLogins, 'bot-a[bot]');
+    assert.equal(parsed.iddAgentLogins, 'agent-x');
+  }
+  assert.deepEqual(
+    openPrReadinessIdentityArgv({
+      trustedMarkerLogins: '',
+      advisoryBotLogins: ' ',
+      iddAgentLogins: '',
+    }),
+    [],
   );
   assertNoMergeOrWrite(fixture, calls);
 });

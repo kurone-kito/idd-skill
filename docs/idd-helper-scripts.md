@@ -7533,14 +7533,16 @@ same as `AW4`/`AW5`.
     still-computing, or draft head is not.
     A pull request that closes no issue is checked with `--claimless`;
     otherwise each same-repository closing issue is tried as
-    `--claim-issue`, with no `--claim-id`. Readiness still requires an
-    active claim on that issue, so a pull request whose claim was released
-    reads as not ready and is not listed. A pull request that closes an
-    issue but merges out of loop under a valid out-of-loop marker is not
-    tried with `--claimless`, so it is not listed either. A pull request
-    whose readiness check fails, or whose closing references include any
-    entry that is not an issue in this repository (unreadable, foreign, or
-    malformed, even next to a readable one), is listed in
+    `--claim-issue`, with no `--claim-id`. Each check also receives this
+    run's `--trusted-marker-logins`, `--advisory-bot-logins`, and
+    `--idd-agent-logins` values when they are given. Readiness still
+    requires an active claim on that issue, so a pull request whose claim
+    was released reads as not ready and is not listed. A pull request that
+    closes an issue but merges out of loop under a valid out-of-loop marker
+    is not tried with `--claimless`, so it is not listed either. A pull
+    request whose readiness check fails, or whose closing references
+    include any entry that is not an issue in this repository (unreadable,
+    foreign, or malformed, even next to a readable one), is listed in
     `openReadyUncheckedPrs` with a `reason`; a non-zero
     `summary.openReadyUncheckedCount` means the section is incomplete. An
     explicit `--pr`/`--prs` run skips this section and reports it as

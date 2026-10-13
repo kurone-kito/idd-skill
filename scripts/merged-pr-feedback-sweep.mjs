@@ -712,11 +712,38 @@ export function openPrReadinessArgvCandidates(
   ]);
 }
 /**
+ * The identity overrides given to this sweep, forwarded to every readiness
+ * check so it recognizes the same trusted marker actors, advisory bots, and
+ * IDD agent accounts as the merged-PR scan. Readiness reads the matching
+ * environment variables and config itself, so only an explicit flag needs
+ * forwarding; an empty flag is left out so readiness keeps its own default.
+ */
+export function openPrReadinessIdentityArgv(args) {
+  const argv = [];
+  const pairs = [
+    ['--trusted-marker-logins', args.trustedMarkerLogins],
+    ['--advisory-bot-logins', args.advisoryBotLogins],
+    ['--idd-agent-logins', args.iddAgentLogins],
+  ];
+  for (const [flag, value] of pairs) {
+    if (value.trim()) {
+      argv.push(flag, value);
+    }
+  }
+  return argv;
+}
+/**
  * Check every open PR with the read-only readiness collector. A failure on
  * one PR is recorded in `unchecked` rather than stopping the sweep, so a
  * stuck PR is never silently dropped. Reads only: no merge, claim, or post.
  */
-export function collectOpenReadyPrs(port, owner, repo, readiness) {
+export function collectOpenReadyPrs(
+  port,
+  owner,
+  repo,
+  readiness,
+  identityArgv = [],
+) {
   const openPrs = port.listOpenChangeRequests();
   const entries = [];
   const unchecked = [];
@@ -744,7 +771,7 @@ export function collectOpenReadyPrs(port, owner, repo, readiness) {
       let firstFailure = null;
       for (const argv of candidates) {
         try {
-          if (isReadyReport(readiness(argv))) {
+          if (isReadyReport(readiness([...argv, ...identityArgv]))) {
             ready = true;
             break;
           }
@@ -1065,6 +1092,7 @@ export function runMergedPrFeedbackSweep(args, deps) {
         owner,
         repo,
         deps.readiness ?? createOpenPrReadiness(port),
+        openPrReadinessIdentityArgv(args),
       );
   const openReadyPrs = openReady
     ? buildOpenReadySection(openReady.entries, deps.nowMs)

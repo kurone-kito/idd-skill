@@ -945,6 +945,33 @@ export function openPrReadinessArgvCandidates(
   ]);
 }
 
+/**
+ * The identity overrides given to this sweep, forwarded to every readiness
+ * check so it recognizes the same trusted marker actors, advisory bots, and
+ * IDD agent accounts as the merged-PR scan. Readiness reads the matching
+ * environment variables and config itself, so only an explicit flag needs
+ * forwarding; an empty flag is left out so readiness keeps its own default.
+ */
+export function openPrReadinessIdentityArgv(
+  args: Pick<
+    SweepArgs,
+    'trustedMarkerLogins' | 'advisoryBotLogins' | 'iddAgentLogins'
+  >,
+): string[] {
+  const argv: string[] = [];
+  const pairs: [string, string][] = [
+    ['--trusted-marker-logins', args.trustedMarkerLogins],
+    ['--advisory-bot-logins', args.advisoryBotLogins],
+    ['--idd-agent-logins', args.iddAgentLogins],
+  ];
+  for (const [flag, value] of pairs) {
+    if (value.trim()) {
+      argv.push(flag, value);
+    }
+  }
+  return argv;
+}
+
 /** The open PRs and their readiness verdicts. */
 export interface OpenReadyCollection {
   openPrCount: number;
@@ -962,6 +989,7 @@ export function collectOpenReadyPrs(
   owner: string,
   repo: string,
   readiness: OpenPrReadinessCheck,
+  identityArgv: string[] = [],
 ): OpenReadyCollection {
   const openPrs = port.listOpenChangeRequests();
   const entries: OpenPrReadinessEntry[] = [];
@@ -990,7 +1018,7 @@ export function collectOpenReadyPrs(
       let firstFailure: unknown = null;
       for (const argv of candidates) {
         try {
-          if (isReadyReport(readiness(argv))) {
+          if (isReadyReport(readiness([...argv, ...identityArgv]))) {
             ready = true;
             break;
           }
@@ -1376,6 +1404,7 @@ export function runMergedPrFeedbackSweep(args: SweepArgs, deps: SweepRunDeps) {
         owner,
         repo,
         deps.readiness ?? createOpenPrReadiness(port),
+        openPrReadinessIdentityArgv(args),
       );
   const openReadyPrs = openReady
     ? buildOpenReadySection(openReady.entries, deps.nowMs)
