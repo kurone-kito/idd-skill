@@ -44,6 +44,13 @@ export const E10_FINGERPRINT_RULES = [
   'style',
 ];
 const SEVERITIES = ['low', 'medium', 'high'];
+// The instructions write E4 tiers capitalized (High, Medium, Low), so the
+// helper accepts any letter case and compares the lowercase form.
+function normalizeSeverity(value) {
+  if (typeof value !== 'string') return null;
+  const lower = value.toLowerCase();
+  return SEVERITIES.includes(lower) ? lower : null;
+}
 const DISPOSITIONS = ['Accepted', 'Rejected'];
 if (import.meta.main) {
   if (isHelperErrorEnvelopeEnabled()) {
@@ -83,8 +90,10 @@ export function validateDispositionRecord(record, where = 'record') {
       `${where}: rule ${JSON.stringify(record.rule)} is not in the closed list (${E10_FINGERPRINT_RULES.join(', ')})`,
     );
   }
-  if (!SEVERITIES.includes(record.severity)) {
-    errors.push(`${where}: severity must be one of ${SEVERITIES.join(', ')}`);
+  if (normalizeSeverity(record.severity) === null) {
+    errors.push(
+      `${where}: severity must be one of ${SEVERITIES.join(', ')} (any letter case)`,
+    );
   }
   return errors;
 }
@@ -119,7 +128,7 @@ function trimmedFinding(finding) {
     file: finding.file.trim(),
     rule: finding.rule,
     construct: finding.construct.trim(),
-    severity: finding.severity,
+    severity: normalizeSeverity(finding.severity) ?? finding.severity,
   };
 }
 function acceptedFindings(pass) {

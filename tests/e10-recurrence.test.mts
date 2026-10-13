@@ -118,6 +118,29 @@ test('mixed Low and Medium families hold with per-family dispositions', () => {
   );
 });
 
+test('severity accepts the capitalized E4 tier (#4157 review)', () => {
+  assert.deepEqual(
+    validateDispositionRecord({ ...LOW_A, severity: 'Low' }),
+    [],
+  );
+  const report = computeE10Recurrence(
+    [
+      [accepted('x', 'low'), { ...accepted('y', 'low'), severity: 'High' }],
+      [accepted('x', 'low'), { ...accepted('y', 'low'), severity: 'High' }],
+      [{ ...accepted('x', 'low'), severity: 'Low' }, accepted('y', 'high')],
+    ],
+    3,
+  );
+  assert.equal(report.verdict, 'hold');
+  assert.deepEqual(
+    report.recurring.map((family) => [family.construct, family.severity]),
+    [
+      ['x', 'low'],
+      ['y', 'high'],
+    ],
+  );
+});
+
 test('a family keeps the highest severity seen in the chain', () => {
   const report = computeE10Recurrence(
     [[accepted('shell fallback', 'medium')], [LOW_A], [LOW_A]],
@@ -242,6 +265,17 @@ test('the CLI reads a configured e10NoProgressHoldAfter', () => {
   const report = JSON.parse(result.stdout);
   assert.equal(report.holdAfter, 2);
   assert.equal(report.verdict, 'hold');
+});
+
+test('the CLI rejects a bad --hold-after and a document without passes', () => {
+  const zero = runCli({ passes: [[LOW_A]] }, ['--hold-after', '0']);
+  assert.equal(zero.status, 1);
+  const missing = runCli({ pass: [[LOW_A]] });
+  assert.equal(missing.status, 1);
+  assert.match(
+    JSON.parse(missing.stdout).errors[0],
+    /passes: must be an array/,
+  );
 });
 
 test('the CLI exits 1 on a rule outside the closed list', () => {

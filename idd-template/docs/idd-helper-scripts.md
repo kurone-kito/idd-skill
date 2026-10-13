@@ -2414,7 +2414,8 @@ node scripts/e10-recurrence.mjs --passes <file.json> [--hold-after <n>]
   record is `{file, rule, construct, severity, disposition}`.
   `disposition` is `Accepted` or `Rejected`; only Accepted records count,
   and only they must carry a non-empty `file` and `construct`, a
-  `severity` of `low`, `medium`, or `high`, and a `rule` from the closed
+  `severity` of `low`, `medium`, or `high` in any letter case, and a
+  `rule` from the closed
   list in `idd-review-triage.instructions.md` E5 (`correctness`,
   `safety`, `tests`, `docs`, `consistency`, `style`). A record outside
   that contract, or a file with no pass at all, exits `1` (`usage`) with
