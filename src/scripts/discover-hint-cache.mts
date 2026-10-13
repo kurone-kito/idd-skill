@@ -33,7 +33,7 @@ import {
 import type { WindowsAclReader } from './windows-acl.mts';
 
 /** Bumped when a helper's cached output shape changes incompatibly. */
-const HINT_FORMAT_VERSION = 1;
+const HINT_FORMAT_VERSION = 2;
 
 /** Cache-namespace names; each yields a distinct entry identity. */
 const HINT_UNIT = 'discover-hint';

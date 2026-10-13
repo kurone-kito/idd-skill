@@ -1505,7 +1505,14 @@ default below is unchanged.
   shape differs from single-root mode:
   - `mode`: `"all-roadmaps"`
   - `roots`: `[{ number: number, title: string, state: string,`
-    `roadmapMarkerId: string }]` — every open roadmap root enumerated
+    `roadmapMarkerId: string, openLeafCount: number,`
+    `a15AuditRequired: boolean }]` — every open roadmap root enumerated.
+    `openLeafCount` counts that root's own open execution leaves, with no
+    label, claim, or readiness filter, and is per root (a shared leaf counts
+    under each root). `a15AuditRequired` is `true` when `openLeafCount` is 0
+    and the root is not named by `--a15-audited <n>` (repeatable, valid only
+    with `--all-roadmaps`). Naming a root there records that its A1.5 audit
+    already ran in this pass; the helper never observes audit completion.
   - `leaves`: `[{ number: number, title: string, state: string,`
     `labels: string[], classification: "execution",`
     `roadmapMarkerId: string, autopilotSuitability: number | null,`

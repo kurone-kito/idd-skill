@@ -1207,12 +1207,16 @@ const discoverRoadmapUnionFixture = {
       title: 'roadmap 100',
       state: 'OPEN',
       roadmapMarkerId: 'epic-alpha',
+      openLeafCount: 2,
+      a15AuditRequired: false,
     },
     {
       number: 200,
       title: 'roadmap 200',
       state: 'OPEN',
       roadmapMarkerId: 'epic-beta',
+      openLeafCount: 1,
+      a15AuditRequired: false,
     },
   ],
   leaves: [
