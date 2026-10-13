@@ -1201,11 +1201,14 @@ Running this variant safely requires:
 
 ### Orchestrator restart
 
-This subsection covers an orchestrating session that restarts and keeps its
-session id, as the 2026-10-11 session did (issue `kurone-kito/idd-skill#4014`).
-The roster is not stored anywhere locally, so the steps below rebuild it from
-the forge, the worktrees, and the harness's agent listing. A session with a new
-id cannot identify its old claims, and step 1 treats them as not its own.
+This subsection covers an orchestrating session that restarts with its
+session-suffixed agent id, as the 2026-10-11 session did (issue
+`kurone-kito/idd-skill#4014`). Under the default shared `{agent-id}` with no
+session suffix, the session cannot tell its claims from another session's, so
+recovery is unavailable: it reports its claims to the operator and does not
+refill. The roster is not stored anywhere locally, so the steps below rebuild it
+from the forge, the worktrees, and the harness's agent listing. A session with a
+new id cannot identify its old claims, and step 1 treats them as not its own.
 
 1. **Find own claims.** For each worktree in `git worktree list --porcelain`,
    list `idd-generated-tokens-*.json` in that worktree's private admin directory
