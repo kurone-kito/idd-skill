@@ -14,9 +14,9 @@ repository is `instructions-only`, use the standard work instructions instead.
 
 ## Helper runtime contract
 
-- Helper-enabled profiles: when a step names a helper or command set, use it.
-  If a required helper is missing, fails, or disagrees with live state, stop
-  and ask. Do not fall back silently to prose.
+- When a step names a helper or command set, use it. If a required helper is
+  missing, fails, or disagrees with live state, stop and ask; never fall back
+  silently to prose.
 - `instructions-only`: do not use this lite file; use
   `idd-work.instructions.md` instead.
 - Any mismatch between this file and the standard work phase is a bug in this
@@ -24,9 +24,8 @@ repository is `instructions-only`, use the standard work instructions instead.
 
 ## Stop-and-ask conditions
 
-B1's setup steps run on the primary worktree by design; the
-sibling-worktree and current-branch bullets below apply from B2
-onward, once B1 step 30's cwd check passes.
+B1 setup runs on the primary worktree by design. The sibling-worktree and
+current-branch bullets apply from B2, once B1 step 30 passes.
 
 - The active claim is ambiguous, disputed, or lost.
 - The current directory is not the sibling worktree for the claimed branch.
@@ -44,33 +43,28 @@ Before any commit, push, rebase, claim heartbeat, reply, resolve, reviewer
 request, or other GitHub side effect, confirm all of the following.
 
 Every B1 step — including the step 10 and step 31 hold-comment posts — runs with
-checks 1-2 only. Checks 3-5 start at B2, once B1 step 30's cwd check passes. A
-step 28 or 29 failure that routes to step 31's hold stays on checks 1-2. Never
-relax checks 1-2 anywhere. The deferral never covers B1's own explicit lock
-steps: step 7's takeover lock/collision check, and steps 19 and 26's lock
-acquisition and immediate token-recording after creation, all of which stay
-mandatory.
+checks 1-2 only; checks 3-5 start at B2, once B1 step 30 passes. A step 28 or 29
+failure that routes to step 31's hold also stays on checks 1-2. Never relax
+checks 1-2. B1's lock steps stay mandatory: step 7's takeover lock and collision
+check, and steps 19 and 26's lock acquisition and token recording.
 
 1. The active claim still uses this session's claim id.
 2. If this session posted an activation nonce for the current claim,
    confirm it still wins (no later trusted marker for this claim id
    won the tie-break instead).
-3. The current directory is the sibling worktree for the claimed branch.
-   For a harness whose file-read/edit tools stay bound to the launch
-   workspace (Grok Build observed), use the sibling's absolute path for
-   those tools rather than a shell `cd`/`pwd`.
+3. The current directory is the sibling worktree for the claimed branch. A
+   harness whose file tools stay bound to the launch workspace (Grok Build
+   observed) uses the sibling's absolute path for them, not `cd`/`pwd`.
 4. `git branch --show-current` equals the claimed branch.
 5. Acquire the worktree-local claim lock with the profile-selected
    `claim-lock` helper (`node scripts/claim-lock.mjs --acquire
-   --worktree <this-worktree-path> --agent-id <id> --claim-id <id>`, or
-   the package-manager-profile `idd:claim-lock` command with the same
-   arguments, or the profile-selected equivalent — resolve the exact
-   command from `docs/idd-helper-scripts.md` if unsure). A `collision` result is
-   fail-closed: stop rather than proceed. Then, separately, run
-   `--read-tokens --worktree <this-worktree-path> --claim-id <id>`
-   and require `present: true` with no `malformed`; otherwise recover
-   per `docs/idd-helper-scripts.md` (gated: each step succeeds,
-   `reacquired: true` both ends), else stop.
+   --worktree <this-worktree-path> --agent-id <id> --claim-id <id>`; the
+   package-manager profile's `idd:claim-lock` takes the same arguments; resolve
+   any other form from `docs/idd-helper-scripts.md`). A `collision` is
+   fail-closed: stop. Then, separately, run `--read-tokens --worktree
+   <this-worktree-path> --claim-id <id>` and require `present: true` with no
+   `malformed`; otherwise recover per `docs/idd-helper-scripts.md` (gated: each
+   step succeeds, `reacquired: true` both ends), else stop.
 6. If any check fails, stop.
 
 ## B1 — Create worktree
@@ -87,20 +81,19 @@ worktree removal) behind the
    unpushed commits. Do not force-reset `{default-branch}`.
 4. Fast-forward local `{default-branch}` with `git merge --ff-only
    origin/{default-branch}`.
-5. Keep the primary worktree on `{default-branch}` throughout B1. Do not use
+5. Keep the primary worktree on `{default-branch}` throughout B1. Never use
    `git switch -c <branch-name>`, `git checkout -b <branch-name>`, or a
-   standalone `git branch <branch-name>` followed by in-place commits in the
-   primary worktree — each of these violates this rule.
+   standalone `git branch <branch-name>` followed by in-place commits there.
 6. Reuse the existing branch name verbatim for takeover.
-7. Run `git worktree list` (and `git worktree list --porcelain` when checking
-   prunable entries). If a sibling worktree already exists, inspect and
-   acquire its worktree-local claim lock with the profile-selected
-   `claim-lock` helper before reuse or removal. A `collision` result is
-   fail-closed: do not reuse or remove the path — resolve it via the
-   Claim-state rule in `idd-claim.instructions.md`, and only remove the
-   path once the current claim is authorized to take it over. On a fresh
-   claim whose worktree the claim phase already created, this step adopts
-   it: skip steps 8-26, run step 27 (install dependencies there), and
+7. Run `git worktree list` (and `git worktree list --porcelain` for prunable
+   entries). If a sibling worktree exists, inspect and acquire its worktree-local
+   claim lock with the profile-selected `claim-lock` helper before reuse or
+   removal. A
+   `collision` is fail-closed: do not reuse or remove the path; resolve it via
+   the Claim-state rule in `idd-claim.instructions.md`, and remove the path only
+   once the current claim is authorized to take it over. On a fresh claim whose
+   worktree the claim phase created, adopt it: skip steps 8-26,
+   run step 27 (install dependencies there), and
    continue at step 28. Never delete or recreate that branch.
 8. If `git worktree list --porcelain` marks the entry `prunable` and its path
    is already absent, remove that stale entry with
@@ -123,21 +116,18 @@ worktree removal) behind the
     <branch-name> -x true`, or the same `wt switch` form if `git-wt` is
     unavailable.
 17. If the `[pre-start]` hook's install command is not yet approved,
-    `wt switch --create` hangs non-interactively, even with `-x <noop>`.
-    Before the first one, run `wt config approvals add --yes` once from the
-    primary worktree (issue `#2797`). It is scoped to the git project, so
-    sibling worktrees inherit it, and it is narrower than the global
-    `-y`/`--yes` flag.
+    `wt switch --create` hangs non-interactively, even with `-x <noop>`. Before
+    the first one, run `wt config approvals add --yes` once from the primary
+    worktree (issue `#2797`; project-scoped, so siblings inherit it). Do not
+    use the global `-y`/`--yes`.
 18. Do not use `wt new`.
-19. If WorkTrunk uses a pre-start install hook, its first command must
-    acquire the worktree lock, then — as a separate call — run
-    `--record-tokens --worktree <this-worktree-path> --agent-id <id>
-    --claim-id <id> --nonce <nonce>` (same nonce value as the A5 write;
-    omitting `--nonce` drops it, since the helper overwrites rather than
-    merges) for this worktree's own copy, before it installs anything.
-    After the hook succeeds, `cd` into the new sibling (`-x <noop>` never
-    changes the caller's directory; resolve the path from
-    `git worktree list`) before steps 28-30.
+19. If WorkTrunk's pre-start hook installs, its first command must acquire the
+    worktree lock, then, as a separate call, run `--record-tokens --worktree
+    <this-worktree-path> --agent-id <id> --claim-id <id> --nonce <nonce>` (same
+    nonce as the A5 write; omitting it drops it, since the helper overwrites)
+    for this worktree's copy, before any install. After the hook succeeds, `cd`
+    into the new sibling (`-x <noop>` does not change directory; take the path
+    from `git worktree list`) before steps 28-30.
 20. If the hook cannot acquire the lock or record tokens, create the
     worktree without the hook.
 21. If WorkTrunk is unavailable, use `git worktree add --no-track <path> -b
@@ -152,21 +142,19 @@ worktree removal) behind the
     exists (rare), treat it as a fresh claim while preserving the inherited
     branch name.
 26. For manual `git worktree add` or WorkTrunk without a hook, acquire the
-    worktree lock with the profile-selected `claim-lock` helper, then — as
-    a separate call — run `--record-tokens --worktree <this-worktree-path>
-    --agent-id <id> --claim-id <id> --nonce <nonce>` (same nonce value as
-    the A5 write; omitting `--nonce` drops it, since the helper overwrites
-    rather than merges) for this worktree's own copy, immediately after
-    creation and before any install or other mutation.
+    worktree lock with the profile-selected `claim-lock` helper, then, as a
+    separate call, run `--record-tokens --worktree <this-worktree-path>
+    --agent-id <id> --claim-id <id> --nonce <nonce>` (same nonce as the A5
+    write; omitting it drops it) for this worktree's copy, right after creation
+    and before any install or other mutation.
 27. On the manual/no-hook path, `cd` into the new sibling worktree first,
     then run `install-deps` there — never from the primary worktree,
     whose lifecycle hooks would otherwise mutate the primary checkout.
 28. Verify the primary worktree's HEAD is still on `{default-branch}`.
 29. Verify `git worktree list` shows the new path.
-30. Verify the current directory is the new sibling worktree. For a
-    harness whose file-read/edit tools stay bound to the launch
-    workspace (Grok Build observed), use the sibling's absolute path
-    for those tools rather than a shell `cd`/`pwd`.
+30. Verify the current directory is the new sibling worktree. A harness whose
+    file tools stay bound to the launch workspace (Grok Build observed) uses the
+    sibling's absolute path for them, not `cd`/`pwd`.
 31. If any of steps 28-30 fails, the worktree-creation contract is violated:
     stop, post a hold note naming the failed check, and do not continue to
     B2 from the primary worktree.
@@ -204,13 +192,12 @@ worktree removal) behind the
 
 ## B2.1 — Premise verification
 
-If the issue is a decision-transcription issue — it records or restates a prior
-human decision whose rationale asserts a checkable fact about shipped behavior —
+If the issue is a decision-transcription issue (it records or restates a prior
+human decision whose rationale asserts a checkable fact about shipped behavior),
 verify that fact against the prior change's actual code or docs before drafting
-the plan. If the prior change or the asserted fact cannot be verified, stop and
-hold with the primary-source evidence (file, line, or excerpt, or the reason
-verification was inconclusive) in the hold comment, until a maintainer
-addendum resolves it.
+the plan. If the prior change or the fact cannot be verified, stop and hold, with the
+evidence (file, line, or excerpt, or why it was inconclusive) in the hold
+comment, until a maintainer addendum resolves it.
 
 ## B2.2 — Example field-name verification
 
@@ -254,37 +241,34 @@ the citation if it does not exist; stop and hold if unclear (`#2806`).
 14. If B3 or C must stop for a hold, post the hold reason, update the digest,
     and stop.
 
-**Unplanned follow-up work**: If B–C reveals a separate follow-up, do not call
-`gh issue create` or the REST issues API. This direct-creation anti-pattern is
-documented in the [B–C design rationale](../../../docs/idd-design-rationale.md#work-and-self-review).
-If the optional `issue-authoring` companion is installed, invoke its Stage 1
+**Unplanned follow-up work**: If B–C reveals a separate follow-up, never call
+`gh issue create` or the REST issues API ([B–C design
+rationale](../../../docs/idd-design-rationale.md#work-and-self-review)). If the
+optional `issue-authoring` companion is installed, invoke its Stage 1
 hold/contract. Its reuse-first check must reject targets under another hold. A
-target with the configured authoring label outside this session's set is
+target with the configured authoring label outside this session's set stays
 unavailable unless this pass explicitly resumes that interrupted set; verify its
-set identity from the companion's durable owner markers and add its published
+set identity from the companion's durable owner markers, then add its published
 issues to the working set first. Unrelated holds stay unavailable. If the
-companion builds an optional discarded validation probe (throwaway,
-unpublished), run it in a separate temporary worktree; otherwise skip it. Never
-run or discard that probe in the current issue worktree. Before every edit,
-require per-target atomic or append-only owner-marker acquisition and a fresh
-body/label re-read; on conflict, keep the label, stop, and use another target or
-a separate comment.
+companion builds an optional discarded validation probe, run it in a separate
+temporary worktree, never the current issue worktree; otherwise skip it. Before every edit, require per-target
+atomic or append-only owner-marker acquisition and a fresh body/label re-read; on
+conflict, keep the label, stop, and use another target or a separate comment.
 
 After Stage 1 publishes and acquires a valid parent roadmap shell as the set
-anchor (or the designated lead when no parent roadmap exists), then
-publishes/acquires every ready child under that anchor and wires real numbers
-into the roadmap, leave the authoring label on every published or updated target
-(issues and roadmaps) and resume B–C. If interrupted, leave labels on every
-published or updated target (issues and roadmaps), stop B–C, and resume only
-after a later pass completes the set. After anchor acquisition, persist and
-verify exact `anchor`/`set` identities in the originating issue's durable Stage
-1 hold; resume must recover it, not infer from the label or choose another lead.
-If Stage 1 publishes nothing (including after clarification or a non-ready
-bucket), comment that outcome before resuming and, once a PR exists, list it in
-the PR's recommended follow-ups. Do not release the Stage 1 B–C hold; never
-release a follow-up or start a second loop. If the companion is unavailable,
-record the proposal in a separate comment and PR follow-ups; do not create it ad
-hoc or improvise worker-side authoring.
+anchor (or the designated lead when no parent roadmap exists), then publishes or
+acquires every ready child under that anchor and wires real numbers into the
+roadmap, leave the authoring label on every published or updated target (issues
+and roadmaps), and resume B–C. If interrupted, leave those labels, stop B–C, and
+resume only after a later pass completes the set. After anchor acquisition,
+persist and verify exact `anchor`/`set` identities in the originating issue's
+durable Stage 1 hold; resume must recover them, not infer them from the label or
+choose another lead. If Stage 1 publishes nothing (including after clarification
+or a non-ready bucket), comment that outcome before resuming and, once a PR
+exists, list it in the PR's recommended follow-ups. Keep the Stage 1 B–C hold;
+never release a follow-up or start a second loop. If the companion is
+unavailable, record the proposal in a separate comment and PR follow-ups; never
+create it ad hoc or improvise worker-side authoring.
 
 ## C — Self-review
 
@@ -293,31 +277,28 @@ hoc or improvise worker-side authoring.
 #### Delegated critique wait ceiling
 
 Per-agent pass: resolve `critiqueLoop.subagentWaitCeiling` (`PT20M` default)
-with a harness timeout, not a wrapper (#3449). Only per-agent; shell-delegate
-rules unchanged. Background waits require cleanup and late-output suppression.
-`mode` only decides whether the per-agent pass starts from the configured
-delegate's outcome (see step 5). Once started, timeout/cancel/interruption/error
-without findings routes to structured self-critique and records no delegated
-return. If the harness cannot bound/clean up, skip the per-agent pass, use
-structured self-critique, and record residual risk.
+with a harness timeout, not a wrapper (#3449). Shell-delegate rules are
+unchanged. Background waits need cleanup and late-output suppression. `mode`
+only decides whether the per-agent pass starts from the delegate's outcome (see
+step 5). Once started, a timeout, cancel, interruption, or error without findings
+routes to structured self-critique and records no delegated return. If the
+harness cannot bound or clean up, skip the per-agent pass, use structured
+self-critique, and record residual risk.
 
 A critique pass asks whether the implementation is correct, whether the issue's
 requirements are satisfied, whether coverage is adequate, and whether any other
 problems exist. Every mechanism below answers those questions. They are what a
 pass asks, never a separate pass to run on top of the one that ran.
 
-1. Resolve the delegate verdict with the profile-selected
-   `critique-delegate` helper (`node scripts/idd-critique-delegate.mjs`, or
-   the package-manager-profile `idd:critique-delegate` command — resolve
-   the exact command from `docs/idd-helper-scripts.md` if unsure). Read its
-   `usable` field as the step 2 verdict directly — never re-derive it — and,
-   when `usable` is `true`, its `source`/`command`/`mode` fields as the
-   delegate to run in step 4. This file is helper-enabled only — an
-   `instructions-only` repository never reaches this step, since it uses
-   `idd-work.instructions.md` instead (see Helper runtime contract above,
-   which is where that repository's own prose delegate contract lives): if
-   the helper is missing, fails, or disagrees with live state, stop and ask
-   per that contract instead of falling back to prose.
+1. Resolve the delegate verdict with the profile-selected `critique-delegate`
+   helper (`node scripts/idd-critique-delegate.mjs`, or the package-manager
+   profile's `idd:critique-delegate`; resolve any other form from
+   `docs/idd-helper-scripts.md`). Use its `usable` field as the step 2 verdict
+   as-is; never re-derive it. When `usable` is `true`, use its `source`,
+   `command`, and `mode` fields as the delegate for step 4. An
+   `instructions-only` repository never reaches this step. If the helper is
+   missing, fails, or disagrees with live state, stop and ask per the Helper
+   runtime contract above, not prose.
 2. `usable: false` means no delegate at this layer — go straight to step 3.
    `usable: true` means the helper already applied every configuration
    fail-safe (an unusable repository-local value never runs and blocks
@@ -365,9 +346,8 @@ pass asks, never a separate pass to run on top of the one that ran.
    findings list — a `critiqueLoop.delegate` `mode` of `on-success` or `never`
    whose delegate failed at C1 step 4 without emitting one — that verdict is
    vacuous, not clean. Post a hold and stop; do not treat it as zero issues.
-   Neither a delegate that succeeded and returned a readable list with no issues
-   in it, nor one that failed but still emitted a readable list, is this case:
-   both are genuine results, so continue to step 3.
+   A delegate that succeeded with a readable list (even an empty one), or one
+   that failed but still emitted a list, is a genuine result: continue to step 3.
 3. Otherwise, if the critique pass reports zero issues, invoke
    `critiqueLoop.telemetryHook` (C1) with zero findings/accepted/rejected
    counts — fire-and-forget — then check the `fix-validate` floor. A round
