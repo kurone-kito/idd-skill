@@ -7961,6 +7961,46 @@ export function buildActivitySnapshotSummary(
       ...effectiveThreadActivities,
     ]) ?? 'none';
 
+  // #4123: the secondary quiet-window anchor (buildPreMergeReadinessSummary's
+  // `secondaryQuietWindow`) leaves out the own timestamp of an unedited
+  // top-level disposition by a trusted author, so the agent's own unedited
+  // disposition reply does not restart the window. Trusted is the union of
+  // `trustedMarkerLogins` and the disposition authors, with advisory bots
+  // removed. Only an unedited disposition by a disposition author counts for
+  // `latestDispositionAt`, the reference time the ack-only check compares
+  // against. An author trusted only through `trustedMarkerLogins` is left out
+  // of the anchor for its own unedited disposition, but does not open the ack
+  // window. Thread replies still feed the anchor, less ack-only bot replies on
+  // resolved threads, and `effective` (which review-currency reads) is
+  // unchanged.
+  const isQuietAnchorTrustedAuthor = (login: unknown) => {
+    const normalized = String(login ?? '')
+      .trim()
+      .toLowerCase();
+    return (
+      !isAdvisoryBot(normalized) &&
+      (trustedMarkerLogins.has(normalized) || isDispositionAuthor(normalized))
+    );
+  };
+  const quietWindowCommentActivities = filteredComments
+    .filter(
+      (comment) =>
+        !ackOnlyCommentSet.has(comment) &&
+        !(
+          isQuietAnchorTrustedAuthor(comment.author?.login) &&
+          classifyCommentEditState(comment) === 'unedited' &&
+          isDispositionComment(comment)
+        ),
+    )
+    .map((comment) => comment.updatedAt ?? comment.createdAt)
+    .filter(isValidIsoTimestamp);
+  const quietWindowMaxActivityUpdatedAt =
+    maxIsoTimestamp([
+      ...quietWindowCommentActivities,
+      ...reviewActivities,
+      ...effectiveThreadActivities,
+    ]) ?? 'none';
+
   const describeAckItem = (
     kind: string,
     comment: CommentLike | ThreadCommentLike,
@@ -7978,6 +8018,9 @@ export function buildActivitySnapshotSummary(
   return {
     totalItemCount: filteredComments.length + reviews.length + threads.length,
     maxActivityUpdatedAt,
+    // #4123: the secondary quiet-window anchor (see above). It stays out of
+    // `effective`, the block review-currency reads.
+    quietWindowMaxActivityUpdatedAt,
     latestCiCompletedAt,
     latestPassingCiCompletedAt,
     counts: {
@@ -13104,11 +13147,14 @@ export function buildPreMergeReadinessSummary(
       headSha: prHeadSha,
     },
   );
-  // #2335: stateless secondary-quiet-window gate, anchored on the same
-  // non-ack-only activity ceiling `liveSnapshot.effective` already computes
-  // for the review-currency ack-only carve-out below -- see
-  // `buildSecondaryQuietWindowStatus`'s own doc comment for why this anchor
-  // needs no separate persisted "convergence first observed" timestamp.
+  // #2335: stateless secondary-quiet-window gate, anchored on the non-ack-only
+  // activity ceiling -- see `buildSecondaryQuietWindowStatus`'s own doc
+  // comment for why this anchor needs no separate persisted "convergence
+  // first observed" timestamp. #4123: the anchor is
+  // `liveSnapshot.quietWindowMaxActivityUpdatedAt`, which equals
+  // `liveSnapshot.effective.maxActivityUpdatedAt` (the review-currency
+  // ceiling) except that an unedited trusted issue-comment disposition's own
+  // timestamp is left out, so the agent's own reply never restarts the window.
   // #2544: `secondaryBotSettledAt` shortens the required wait to a settled
   // buffer once that evidence exists. #2547: `secondaryBotDeclined` skips
   // the wait entirely once the bot has definitively declined this exact
@@ -13116,7 +13162,7 @@ export function buildPreMergeReadinessSummary(
   // both are derived.
   const secondaryQuietWindow = buildSecondaryQuietWindowStatus({
     minutes: options.secondaryQuietWindowMinutes,
-    effectiveMaxActivityUpdatedAt: liveSnapshot.effective?.maxActivityUpdatedAt,
+    effectiveMaxActivityUpdatedAt: liveSnapshot.quietWindowMaxActivityUpdatedAt,
     secondaryBotSettledAt: secondaryReviewSettlement.settledAt,
     secondaryBotDeclined: secondaryReviewSettlement.declined,
     now,
