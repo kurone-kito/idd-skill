@@ -1169,22 +1169,31 @@ in this preamble, since the fallback differs per helper.
   ```
 
 - `scripts/publish-authoring-hold.mjs` (`idd-publish-authoring-hold`,
-  #4127) plans and validates the Stage 1 publication of one drafted
-  orphan issue and writes nothing. It refuses `--shape child` (exit
-  `2`), requires `--review-result <path>` (a JSON object with
+  issues #4127 and #4171) publishes one drafted orphan issue under the
+  issue-authoring hold, running the authoring contract's New-issue
+  ownership steps in order. It refuses `--shape child` (exit `2`),
+  requires `--review-result <path>` (a JSON object with
   `"completed": true`; any `findings` entry must be `fixed` or
   `rejected`), and stops with the `blocked-by-human` outcome (exit `2`)
   when `issueAuthoring.journalIssue` is unset or unverifiable. It then
   puts the `authoring-publication` line first in the body, lints that
-  exact body with `audit-authored-issue.mjs --new-issue`, looks up the
-  authoring and bucket labels, renders the pending publication-intent
-  record through `post-idd-marker.mjs`'s dry run, and prints the plan
-  (exit `0`; a refusal exits `1`). The journal, the marker prefix and
-  the label names come from the repository policy file only, and
-  `--marker-prefix` is required when the issue or the journal is in
-  another repository. `--apply` is refused with exit `2` before any
-  `gh` call until the publication path lands as a follow-up, so the
-  issue-authoring publication capability is still unavailable.
+  exact body with `audit-authored-issue.mjs --new-issue` and looks up
+  the authoring and bucket labels. Without `--apply` it renders the
+  pending publication-intent record through `post-idd-marker.mjs`'s dry
+  run and prints the plan (exit `0`). With `--apply`, and only when the
+  authenticated login is a trusted marker actor with Write, Maintain or
+  Admin permission, it creates a missing label, posts the pending
+  record, creates the issue with its labels, attaches the issue to the
+  record, posts the owner marker, checks provenance, and posts
+  `state=member` (exit `0`). A refusal before the create exits `1`; a
+  failure after it prints a recovery hold and exits `1`. A failed marker
+  post counts as unsent (`"nothingSent": true`, retry permitted) only
+  when `post-idd-marker.mjs`'s error envelope reports `notDispatched` or
+  HTTP status 401, 404 or 422; any other failure reports the journal as
+  `uncertain: replay the journal`, and an uncertain pending record stops
+  before the create. Every policy value comes from the repository
+  policy file only, and `--marker-prefix` is required when the issue or
+  the journal is in another repository.
 
 - `scripts/review-disposition-verify.mjs` for read-only E7 disposition
   marker presence verification across PATH A and PATH B items
@@ -2321,6 +2330,11 @@ properties: `notDispatched: true` and `loadControl` (`outcome`
 duplicate re-read or retry. After an earlier ambiguous failure it stops
 posting and runs only its existing final duplicate check, and the error it
 then throws is the earlier failure, never a claim that nothing was sent.
+A 401, 404 or 422 is handled the same way (#4171): on the first attempt
+it is rethrown with its status (nothing landed), and on a later attempt
+it stops the retries and goes through that final duplicate check, so the
+error's status never reads as "nothing was sent" after a post that may
+have landed.
 The disposition apply loop and the live-status digest repair writes skip
 their reconciliation for a refusal, and the traversal and comment reads
 rethrow it instead of rebuilding a retryable error. No new automatic
