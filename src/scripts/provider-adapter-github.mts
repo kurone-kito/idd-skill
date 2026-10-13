@@ -4974,7 +4974,12 @@ export function repositoryFromRemoteUrl(
     const schemes = ['https:', 'http:', 'ssh:', 'git:', 'git+ssh:'];
     if (!schemes.includes(url.protocol)) return null;
     host = url.host;
-    path = url.pathname;
+    // The raw path text, not `url.pathname`: URL() resolves dot segments, so
+    // `o/x/../r` would otherwise read as `o/r`. The host above is normalized
+    // on purpose (case and default port).
+    const afterScheme = text.slice(text.indexOf('://') + 3);
+    const slash = afterScheme.indexOf('/');
+    path = slash === -1 ? '' : afterScheme.slice(slash);
   } else {
     const scp = /^(?:[^@/\s]+@)?([^:/\s]+):(.+)$/.exec(text);
     if (!scp) return null;
@@ -4984,8 +4989,16 @@ export function repositoryFromRemoteUrl(
   // Exactly `owner/repo`, with at most one leading and one trailing slash and no
   // empty segment between: `outer/inner/repo` names a different repository than
   // its last two segments would suggest, and `o//r` is not a repository path.
+  // A query, a fragment, or a percent-encoded byte (such as `%2F`, which would
+  // hide a slash) is not a plain path. A dot segment is rejected below.
+  if (/[?#%]/u.test(path)) return null;
   const parts = path.replace(/^\//u, '').replace(/\/$/u, '').split('/');
-  if (parts.length !== 2 || parts.some((part) => part === '')) return null;
+  if (
+    parts.length !== 2 ||
+    parts.some((part) => part === '' || part === '.' || part === '..')
+  ) {
+    return null;
+  }
   const owner = parts[0] ?? '';
   const repo = (parts[1] ?? '').replace(/\.git$/u, '');
   return host && owner && repo

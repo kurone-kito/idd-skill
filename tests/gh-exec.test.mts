@@ -3032,6 +3032,25 @@ test('resolveCurrentGithubRepository: an origin on the explicit GH_HOST is used 
   );
 });
 
+test('resolveCurrentGithubRepository: inside Actions a dot-segment origin takes the gh lookup (#4110)', () => {
+  // `new URL` would normalize `o/x/../r.git` to `o/r.git`; the raw path has
+  // three segments, so it must not match `o/r`.
+  withRepositoryVariables(
+    { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'o/r' },
+    () => {
+      withGitCheckout('https://github.com/o/x/../r.git', () => {
+        withRepoViewStub({ stdout: repoViewBody('via', 'gh') }, (spawned) => {
+          assert.deepEqual(resolveCurrentGithubRepository(), {
+            owner: 'via',
+            repo: 'gh',
+          });
+          assert.deepEqual(spawned(), [REPO_VIEW_ARGV]);
+        });
+      });
+    },
+  );
+});
+
 test('resolveCurrentGithubRepository: inside Actions an origin with extra path segments takes the gh lookup (#4110)', () => {
   // `outer/inner/r` names no repository `inner/r`; the last two segments must
   // not be enough to match.
@@ -3173,6 +3192,14 @@ test('repositoryFromRemoteUrl: names the host, owner and repository of URL-shape
   );
   assert.equal(repositoryFromRemoteUrl('https://github.com//o/r'), null);
   assert.equal(repositoryFromRemoteUrl('https://github.com/o//r'), null);
+  // Dot segments are read before URL normalization, so `o/x/../r` is not `o/r`.
+  assert.equal(
+    repositoryFromRemoteUrl('https://github.com/o/x/../r.git'),
+    null,
+  );
+  assert.equal(repositoryFromRemoteUrl('https://github.com/o/./r'), null);
+  assert.equal(repositoryFromRemoteUrl('git@github.com:o/..'), null);
+  assert.equal(repositoryFromRemoteUrl('https://github.com/o/%2Fx'), null);
   assert.deepEqual(repositoryFromRemoteUrl('https://github.com/o/r/'), {
     host: 'github.com',
     owner: 'o',
