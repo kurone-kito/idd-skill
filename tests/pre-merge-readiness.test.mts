@@ -62,6 +62,7 @@ import {
   isCopilotErrorReviewBody,
   isNonReviewNoticeDisposition,
   isReviewSummaryComment,
+  MISSING_WATERMARK_HINT,
   readClaimStaleAgeMs,
   resolveActiveClaimForWriteGate as resolveActiveClaimForWriteGateImpl,
   resolveCodeownersForFiles,
@@ -1551,6 +1552,171 @@ test('buildPreMergeReadinessSummary: a lowered watermark count gives the same-ti
   assert.ok(blocker, 'expected a review-currency blocker');
   assert.equal(blocker.hint, SAME_TIMESTAMP_COUNT_GROWTH_HINT_TEXT);
   assert.deepEqual(validate(summary, readinessSchema), []);
+});
+
+// #4098: a disposition-evidence blocker computed with no review watermark
+// names the fresh-watermark step, and a summary with a watermark (or with no
+// computed disposition results) carries no hint on that blocker at all.
+const NO_WATERMARK_DISPOSITION_TEXT =
+  'No review watermark exists for this claim yet, so these results are ' +
+  'computed without a snapshot boundary. Take a fresh snapshot (E1 Step 1), ' +
+  'record a watermark for the current head (E1 Step 2), then re-run ' +
+  'readiness before any hold decision.';
+const NEWER_ACTIVITY_TEXT =
+  'Activity landed after the last review watermark, including your own ' +
+  'comments. Record a fresh watermark for the current head, then re-run ' +
+  'readiness.';
+
+function resolvedReviewerThread4098(createdAt: string) {
+  return {
+    id: 'thread-4098-resolved',
+    isResolved: true,
+    updatedAt: '',
+    reviewerReopenedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'reviewer-a' },
+          body: 'Consider renaming this helper.',
+          createdAt,
+          updatedAt: createdAt,
+          lastEditedAt: null,
+        },
+      ],
+    },
+  };
+}
+
+function blockerNamed(summary: unknown, gate: string) {
+  const blockers = (summary as Record<string, unknown>).blockers as Array<
+    Record<string, unknown>
+  >;
+  return blockers.find((b) => b.gate === gate);
+}
+
+test('pre-merge readiness: disposition-evidence with no watermark carries the fresh-watermark hint (#4098)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const comments = (fixture.input.comments as Array<{ body?: string }>).filter(
+    (comment) =>
+      !String(comment.body ?? '').startsWith('<!-- review-watermark:'),
+  );
+  const threads = [
+    ...(fixture.input.threads as unknown[]),
+    resolvedReviewerThread4098('2026-05-11T23:50:00Z'),
+  ];
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, comments, threads },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+
+  const disposition = (summary as Record<string, unknown>)
+    .dispositionEvidence as Record<string, unknown>;
+  assert.equal(disposition.route, 'return-to-e1');
+  assert.equal(disposition.blockingCount, 1);
+  const blocker = blockerNamed(summary, 'disposition-evidence');
+  assert.ok(blocker, 'expected a disposition-evidence blocker');
+  assert.equal(
+    blocker.detail,
+    'dispositionEvidence.route is "return-to-e1" (expected "proceed"), blockingCount=1 (expected 0)',
+  );
+  assert.equal(blocker.hint, NO_WATERMARK_DISPOSITION_TEXT);
+  assert.deepEqual(validate(summary, readinessSchema), []);
+});
+
+test('pre-merge readiness: a disposition-evidence blocker with a watermark carries no hint (#4098)', () => {
+  // The clean watermark's boundary is 2026-05-11T23:56:00Z. Feedback newer
+  // than that boundary keeps the resolved thread blocking, so the blocker
+  // still exists and only its absent hint is under test.
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const threads = [
+    ...(fixture.input.threads as unknown[]),
+    resolvedReviewerThread4098('2026-05-11T23:58:00Z'),
+  ];
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, threads },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+
+  const reviewCurrency = (summary as Record<string, unknown>)
+    .reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.watermarkPresent, true);
+  const blocker = blockerNamed(summary, 'disposition-evidence');
+  assert.ok(blocker, 'expected a disposition-evidence blocker');
+  assert.equal(blocker.gate, 'disposition-evidence');
+  assert.equal(
+    'hint' in blocker,
+    false,
+    'a watermark-backed disposition blocker has no hint property',
+  );
+});
+
+test('pre-merge readiness: a disposition-evidence blocker without computed results carries no hint (#4098)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const comments = (fixture.input.comments as Array<{ body?: string }>).filter(
+    (comment) =>
+      !String(comment.body ?? '').startsWith('<!-- review-watermark:'),
+  );
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, comments },
+    fixture.options,
+  );
+
+  const blocker = blockerNamed(summary, 'disposition-evidence');
+  assert.ok(blocker, 'expected a disposition-evidence blocker');
+  assert.equal(
+    'hint' in blocker,
+    false,
+    'disposition results that were not computed must not carry the hint',
+  );
+});
+
+test('pre-merge readiness: newer-activity review-currency blocker carries the fresh-watermark hint (#4098)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const operatorComment = {
+    id: 'operator-note-4098',
+    author: { login: 'kurone-kito' },
+    body: 'Holding this PR until the rename lands.',
+    createdAt: '2026-05-11T23:59:00Z',
+    updatedAt: '2026-05-11T23:59:00Z',
+    lastEditedAt: null,
+  };
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [...fixture.input.comments, operatorComment],
+    },
+    fixture.options,
+  );
+
+  const reviewCurrency = (summary as Record<string, unknown>)
+    .reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.comparisonRoute, 'return-to-e1');
+  assert.equal(reviewCurrency.comparisonReason, 'newer-activity');
+  const blocker = blockerNamed(summary, 'review-currency');
+  assert.ok(blocker, 'expected a review-currency blocker');
+  assert.equal(
+    blocker.detail,
+    'comparisonRoute is "return-to-e1" (expected "proceed"): newer-activity',
+  );
+  assert.equal(blocker.hint, NEWER_ACTIVITY_TEXT);
+  assert.deepEqual(validate(summary, readinessSchema), []);
+});
+
+test('pre-merge readiness: missing-watermark review-currency hint keeps its exact text (#4098)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const comments = (fixture.input.comments as Array<{ body?: string }>).filter(
+    (comment) =>
+      !String(comment.body ?? '').startsWith('<!-- review-watermark:'),
+  );
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, comments },
+    fixture.options,
+  );
+
+  const blocker = blockerNamed(summary, 'review-currency');
+  assert.ok(blocker, 'expected a review-currency blocker');
+  assert.equal(blocker.hint, MISSING_WATERMARK_HINT);
 });
 
 // #4097: a missing required check on a DIRTY head names the merge-conflict

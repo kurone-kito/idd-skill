@@ -375,7 +375,8 @@
     "blockers": [
       {
         "gate": "review-currency",
-        "detail": "comparisonRoute is \"return-to-e1\" (expected \"proceed\"): newer-activity"
+        "detail": "comparisonRoute is \"return-to-e1\" (expected \"proceed\"): newer-activity",
+        "hint": "Activity landed after the last review watermark, including your own comments. Record a fresh watermark for the current head, then re-run readiness."
       },
       {
         "gate": "disposition-evidence",

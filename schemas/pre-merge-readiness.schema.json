@@ -1988,7 +1988,7 @@
           },
           "hint": {
             "type": "string",
-            "description": "Optional next-step text, present only when the gate can name one (currently review-currency with comparisonReason missing-watermark or same-timestamp-count-growth, and ci when ci.status is missing on a head whose branchCurrency.mergeStateStatus is DIRTY). Diagnostic only; detail is unchanged and no routing decision reads it."
+            "description": "Optional next-step text, present only when the gate can name one (currently review-currency with comparisonReason missing-watermark, same-timestamp-count-growth, or newer-activity, disposition-evidence while no review watermark exists (#4098), and ci when ci.status is missing on a head whose branchCurrency.mergeStateStatus is DIRTY). Diagnostic only; detail is unchanged and no routing decision reads it."
           }
         }
       }
