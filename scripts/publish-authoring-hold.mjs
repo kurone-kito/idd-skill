@@ -19,6 +19,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fetchProvenanceCommentsGraphql } from './authoring-owner-provenance.mjs';
 import { resolveBundleRoot } from './bundle-root.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { ghApiJson, ghText, resolveViewerLogin } from './gh-exec.mjs';
@@ -29,8 +30,10 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mjs';
 import { loadPolicyConfig, readRepositoryPolicyFile } from './idd-config.mjs';
+import { resolveOpenLinkedPrIssues } from './idd-roadmap-audit-execute.mjs';
 import {
   normalizeMarkerPrefix,
+  parseAuthoringOwnerComment,
   parseAuthoringPublicationComment,
 } from './marker-helpers.mjs';
 import {
@@ -38,8 +41,14 @@ import {
   normalizePolicyConfig,
   parseIsoDurationToMs,
 } from './policy-helpers.mjs';
-import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
-import { resolveCurrentGithubRepository } from './provider-adapter-github.mjs';
+import {
+  resolveActiveClaim,
+  resolveTrustedMarkerActors,
+} from './protocol-helpers.mjs';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mjs';
 export const PUBLISH_BUCKETS = ['ready', 'needs-decision', 'blocked-by-human'];
 const PUBLISH_AUTHORING_HOLD_FLAG_SPEC = {
   '--title': { type: 'string' },
@@ -354,30 +363,61 @@ function labelExists(owner, repo, name) {
     throw error;
   }
 }
-/** True when a `claimed-by` marker from a trusted login is on the issue. The
- * caller has already refused to run with no trusted login configured. */
-function hasTrustedClaim(owner, repo, number, trusted) {
-  const comments = ghApiJson(
-    `repos/${owner}/${repo}/issues/${number}/comments`,
-    {
-      paginate: true,
-    },
-  );
-  if (!Array.isArray(comments)) {
-    throw new Error(
-      `the comments of ${owner}/${repo}#${number} are not readable`,
-    );
-  }
+/** True when the comments carry an active claim from a trusted login,
+ * resolved with the shared claim parser: a released claim does not count, and
+ * a claim marker whose edit state is unknown throws (fail closed). The caller
+ * has already refused to run with no trusted login configured. */
+function hasActiveClaim(comments, trusted) {
   const trustedSet = new Set(trusted.map((login) => login.toLowerCase()));
-  return comments.some((comment) => {
-    const row = comment;
-    const body = typeof row.body === 'string' ? row.body : '';
-    if (!/^<!--\s*claimed-by:/i.test(body)) {
-      return false;
+  return (
+    resolveActiveClaim(
+      comments.map((comment) => ({
+        id: comment.id,
+        body: comment.body,
+        author: { login: comment.authorLogin },
+        createdAt: comment.createdAt,
+        lastEditedAt: comment.lastEditedAt,
+      })),
+      (login) => trustedSet.has(login.toLowerCase()),
+    ) !== null
+  );
+}
+/**
+ * Replay the owner-marker log right before `member`: every trusted
+ * authoring-owner marker on the issue must be unedited and carry this run's
+ * owner, set and session. Returns a refusal reason, or null.
+ */
+export function checkOwnerLogStillOurs(input) {
+  const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
+  const token = `${input.markerPrefix.toLowerCase()}-authoring-owner:`;
+  let ours = 0;
+  for (const comment of input.comments) {
+    if (!trustedSet.has(comment.authorLogin.trim().toLowerCase())) {
+      continue;
     }
-    const login = String(row.user?.login ?? '').toLowerCase();
-    return trustedSet.has(login);
-  });
+    if (!comment.body.toLowerCase().includes(token)) {
+      continue;
+    }
+    if (comment.lastEditedAt !== null) {
+      return `owner marker ${comment.id} was edited`;
+    }
+    const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
+    if (
+      parsed === null ||
+      parsed.owner !== input.ids.owner ||
+      parsed.set !== input.ids.set ||
+      parsed.session !== input.ids.session
+    ) {
+      return `owner marker ${comment.id} is not this run's marker`;
+    }
+    ours += 1;
+  }
+  return ours > 0 ? null : "this run's owner marker is not on the issue";
+}
+/** Compare bodies the way GitHub may store them (CRLF and trailing space). */
+function sameBody(left, right) {
+  const normalize = (text) => text.replace(/\r\n/g, '\n').trimEnd();
+  return normalize(left) === normalize(right);
 }
 function runCli() {
   const argv = process.argv.slice(2);
@@ -726,7 +766,11 @@ function publish(input) {
   } catch (error) {
     return refuse(
       `the pending publication-intent record could not be verified, so nothing was created: ${error.message}`,
-      { ...base, steps },
+      {
+        ...base,
+        steps,
+        ...(isPosted(error) ? { journalState: JOURNAL_STATE_UNCERTAIN } : {}),
+      },
     );
   }
   // Step 7: one create call with every label.
@@ -784,7 +828,12 @@ function publish(input) {
   if (!labels.every((name) => hasLabel(created.labels, name))) {
     let reason = `the created issue lacks a required label (has ${JSON.stringify(created.labels)})`;
     try {
-      if (hasTrustedClaim(owner, repo, number, input.trusted)) {
+      if (
+        hasActiveClaim(
+          fetchProvenanceCommentsGraphql(owner, repo, number),
+          input.trusted,
+        )
+      ) {
         reason += '; a claim marker is present, so the labels were not touched';
       } else {
         ghText([
@@ -918,10 +967,32 @@ function publish(input) {
     if (digest !== marker.bodySha256) {
       throw new Error('the issue body changed after the owner marker');
     }
-    if (hasTrustedClaim(owner, repo, number, input.trusted)) {
+    if (!sameBody(reread.body, input.injected)) {
+      throw new Error('the issue body is not the body this run created');
+    }
+    const comments = fetchProvenanceCommentsGraphql(owner, repo, number);
+    if (hasActiveClaim(comments, input.trusted)) {
       throw new Error(
-        'a claim marker is on the issue, so execution began during acquisition',
+        'the issue has an active claim, so execution began during acquisition',
       );
+    }
+    if (
+      resolveOpenLinkedPrIssues(createGithubProviderAdapter(owner, repo), [
+        number,
+      ]).length > 0
+    ) {
+      throw new Error(
+        'the issue has an open linked pull request, or its pull-request state cannot be read',
+      );
+    }
+    const ownerLog = checkOwnerLogStillOurs({
+      comments,
+      markerPrefix,
+      trusted: input.trusted,
+      ids,
+    });
+    if (ownerLog !== null) {
+      throw new Error(`the owner-marker replay failed: ${ownerLog}`);
     }
     const memberId = postVerified(intentArgs('member', issueRef), journalWhere);
     steps.push({

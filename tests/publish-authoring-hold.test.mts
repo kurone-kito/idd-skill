@@ -90,7 +90,10 @@ if (args[0] === 'issue' && args[1] === 'create') {
   args.forEach((arg, index) => { if (arg === '--label') labels.push(args[index + 1]); });
   state.issues[${NEW_ISSUE}] = { body, labels: state.dropLabels ? [] : labels };
   if (state.claimOnCreate) {
-    state.comments.push({ id: 6999, issue: ${NEW_ISSUE}, body: '<!-- claimed-by: other 1 supersedes: none 2026-10-13T00:00:00Z branch: issue/${NEW_ISSUE}-x -->', user, createdAt: '2026-10-13T00:00:00Z' });
+    state.comments.push({ id: 6990, issue: ${NEW_ISSUE}, body: '<!-- claimed-by: claude-other 0f2c9a4e-1b7d-4c3a-9e8f-2d6b5a4c3e21 supersedes: none 2026-10-13T00:00:00Z branch: issue/${NEW_ISSUE}-x -->', user, createdAt: '2026-10-13T00:00:00Z' });
+    if (state.claimOnCreate === 'released') {
+      state.comments.push({ id: 6991, issue: ${NEW_ISSUE}, body: '<!-- unclaimed-by: claude-other 0f2c9a4e-1b7d-4c3a-9e8f-2d6b5a4c3e21 2026-10-13T00:01:00Z -->', user, createdAt: '2026-10-13T00:01:00Z' });
+    }
   }
   save();
   out('https://github.com/o/r/issues/${NEW_ISSUE}\n');
@@ -105,6 +108,17 @@ if (args[0] !== 'api') fail('unexpected gh call: ' + args.join(' '));
 if (args.includes('graphql')) {
   const numberArg = args.find((arg) => arg.startsWith('number='));
   const number = Number(numberArg.slice('number='.length));
+  const queryArg = args.find((arg) => arg.startsWith('query=')) || '';
+  const page = (key, nodes) => out({ data: { repository: { issue: { [key]: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } } } });
+  if (queryArg.includes('closedByPullRequestsReferences')) {
+    page('closedByPullRequestsReferences', state.openPr ? [{ state: 'OPEN', number: 9, repository: { nameWithOwner: 'o/r' } }] : []);
+  }
+  if (queryArg.includes('timelineItems')) page('timelineItems', []);
+  state.commentReads = (state.commentReads || 0) + 1;
+  if (state.foreignOwnerOnRead && state.commentReads === state.foreignOwnerOnRead) {
+    state.comments.push({ id: 6998, issue: number, body: '<!-- idd-skill-authoring-owner: target=o/r#' + number + '; anchor=o/r#' + number + '; mode=acquire; owner=owner-other; set=set-other; session=session-other; body-sha256=none; snapshot-sha256=none; supersedes=none -->', user, createdAt: '2026-10-13T00:10:00Z' });
+  }
+  save();
   const nodes = state.comments.filter((c) => c.issue === number).map((c) => ({
     databaseId: c.id,
     lastEditedAt: state.editedComments ? '2026-10-13T00:00:01Z' : null,
@@ -134,7 +148,7 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
     save();
     out({ id, html_url: 'https://github.com/o/r/issues/' + number + '#issuecomment-' + id, body });
   }
-  const rows = state.comments.filter((c) => c.issue === number).map((c) => JSON.stringify({ id: c.id, body: c.body, user: { login: c.user } }));
+  const rows = state.comments.filter((c) => c.issue === number).map((c) => JSON.stringify({ id: c.id, body: c.body, user: { login: c.user }, created_at: c.createdAt }));
   out(rows.join('\n') + (rows.length ? '\n' : ''));
 }
 if ((match = /^repos\/o\/r\/issues\/comments\/(\d+)$/.exec(path))) {
@@ -182,7 +196,9 @@ function setup(
     dropLabels?: boolean;
     failJournalPostAt?: number;
     corruptReadbackAt?: number;
-    claimOnCreate?: boolean;
+    claimOnCreate?: boolean | 'released';
+    openPr?: boolean;
+    foreignOwnerOnRead?: number;
     trusted?: string[];
   } = {},
 ): Fixture {
@@ -210,7 +226,9 @@ function setup(
       dropLabels: options.dropLabels === true,
       failJournalPostAt: options.failJournalPostAt ?? 0,
       corruptReadbackAt: options.corruptReadbackAt ?? 0,
-      claimOnCreate: options.claimOnCreate === true,
+      claimOnCreate: options.claimOnCreate ?? false,
+      openPr: options.openPr === true,
+      foreignOwnerOnRead: options.foreignOwnerOnRead ?? 0,
       issues: {},
       comments: [],
     }),
@@ -626,6 +644,7 @@ test('CLI: a claim that appears during acquisition stops before member', () => {
     assert.equal(result.status, 1);
     const report = JSON.parse(result.stdout);
     assert.equal(report.failedStep, 'member');
+    assert.match(report.reason, /active claim/);
     const records = journalRecords(fixture);
     assert.equal(records.length, 2);
     assert.ok(records.every((body) => body.includes('state=pending')));
@@ -655,6 +674,51 @@ test('CLI: a member record that posts but fails its read-back reports an uncerta
     assert.equal(report.failedStep, 'member');
     assert.equal(report.journalState, 'uncertain: replay the journal');
     assert.match(journalRecords(fixture)[2] ?? '', /state=member/);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a released claim does not block member', () => {
+  const fixture = setup({ claimOnCreate: 'released' });
+  try {
+    const result = fixture.run([...files(fixture), '--apply']);
+    assert.equal(result.status, 0, result.stdout);
+    assert.equal(JSON.parse(result.stdout).outcome, 'published');
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: an open linked pull request stops before member', () => {
+  const fixture = setup({ openPr: true });
+  try {
+    const result = fixture.run([...files(fixture), '--apply']);
+    assert.equal(result.status, 1);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.failedStep, 'member');
+    assert.match(report.reason, /open linked pull request/);
+    assert.ok(
+      journalRecords(fixture).every((body) => body.includes('state=pending')),
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a foreign owner marker that lands after provenance stops before member', () => {
+  // The first GraphQL comment read is the provenance run; the second is the
+  // final owner-log replay.
+  const fixture = setup({ foreignOwnerOnRead: 2 });
+  try {
+    const result = fixture.run([...files(fixture), '--apply']);
+    assert.equal(result.status, 1);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.failedStep, 'member');
+    assert.match(report.reason, /owner-marker replay/);
+    assert.ok(
+      journalRecords(fixture).every((body) => body.includes('state=pending')),
+    );
   } finally {
     fixture.restore();
   }
