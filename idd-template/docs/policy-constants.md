@@ -558,7 +558,10 @@ pull-request-only bypass actor that can satisfy GitHub at F3.
 
 ## Runtime Instruction Size and Bundle Budgets
 
-CI enforces two layers of instruction file size limits via `audit/sync-manifest.json`.
+In the `kurone-kito/idd-skill` source repository, CI enforces two layers of
+instruction file size limits via `audit/sync-manifest.json`. That manifest and
+the audit that reads it are source-repo gates: they are not shipped with this
+import, so an adopter repository has no such check unless it adds its own.
 
 A separate `audit-docs` guard (`docBudgetGuard` in
 `audit/sync-manifest.json`) cross-checks the hardcoded budget values in the
