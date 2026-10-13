@@ -160,8 +160,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * touches. A bundle is touched when one of its member files changed. Pass or
  * fail comes from the rules audit-docs applies: a bundle above `limitBytes`,
  * the `contextCeiling` checks, and the `instructionSizeBudgets` per-file caps.
- * `readFile` returns null for a file that does not exist, which counts as 0
- * bytes. Pure: the caller supplies the parsed manifest and the reader.
+ * `readFile` returns null for a file that does not exist: a missing bundle
+ * member fails, as audit-docs fails to read it, and a missing instruction file
+ * is not governed. Pure: the caller supplies the parsed manifest and the
+ * reader.
  */
 export function measureTouchedBudgets(options: {
   manifest: unknown;
@@ -206,7 +208,14 @@ export function measureTouchedBudgets(options: {
       continue;
     }
     let bytes = 0;
-    for (const file of files) bytes += measuredBytes(read(file) ?? '');
+    for (const file of files) {
+      const text = read(file);
+      // A missing member fails, as audit-docs fails to read it.
+      if (text === null) {
+        result.failures.push(`${file}: could not read file (ENOENT)`);
+      }
+      bytes += measuredBytes(text ?? '');
+    }
     if (bytes > limitBytes) {
       result.failures.push(
         `${id}: bundle total is ${bytes} bytes (limit ${limitBytes}); files: ${files.join(', ')}`,
@@ -352,14 +361,21 @@ function bundleLimits(manifest: unknown): Map<string, number> {
   return limits;
 }
 
-/** True when HEAD's manifest gives some bundle a higher limit than the base. */
-function headRaisesALimit(headManifest: unknown, baseManifest: unknown) {
+/** The bundle ids whose limit HEAD's manifest raises above the base's. */
+function raisedBundleIds(headManifest: unknown, baseManifest: unknown) {
   const base = bundleLimits(baseManifest);
+  const raised: string[] = [];
   for (const [id, limit] of bundleLimits(headManifest)) {
     const prior = base.get(id);
-    if (prior !== undefined && limit > prior) return true;
+    if (prior !== undefined && limit > prior) raised.push(id);
   }
-  return false;
+  return raised;
+}
+
+/** True when an audit-docs failure line names the bundle `id`, in the
+ * `<id>: bundle total is` or `<ceiling>: <id> utilization` shape. */
+function failureNamesBundle(line: string, id: string): boolean {
+  return line.startsWith(`${id}: `) || line.includes(`: ${id} utilization `);
 }
 
 function changedFilesBetween(
@@ -368,14 +384,7 @@ function changedFilesBetween(
   from: string,
   to: string,
 ): string[] | null {
-  const result = runGit(cwd, [
-    'diff',
-    '-z',
-    '--name-only',
-    '--diff-filter=d',
-    from,
-    to,
-  ]);
+  const result = runGit(cwd, ['diff', '-z', '--name-only', from, to]);
   if (result.status !== 0) return null;
   return result.stdout.split('\0').filter((path) => path.length > 0);
 }
@@ -504,10 +513,32 @@ export function runPrePushTrialBudget(options: {
   if (headSha === null || baseSha === null) {
     return finish('unresolved-ref', false);
   }
-  // Reads one file from a commit; null when it does not exist there.
+  // Reads one file from a commit: null when the commit has no such file, and
+  // an error when a listed file cannot be read, so a read failure is never
+  // mistaken for a missing file.
+  const trees = new Map<string, Set<string>>();
   const showAt = (commit: string, path: string): string | null => {
+    let tree = trees.get(commit);
+    if (tree === undefined) {
+      const listed = runGit(repo, [
+        'ls-tree',
+        '-r',
+        '-z',
+        '--name-only',
+        commit,
+      ]);
+      if (listed.status !== 0) {
+        throw new Error(`could not list the files of ${commit}`);
+      }
+      tree = new Set(listed.stdout.split('\0').filter((name) => name !== ''));
+      trees.set(commit, tree);
+    }
+    if (!tree.has(path)) return null;
     const shown = runGit(repo, ['show', `${commit}:${path}`]);
-    return shown.status === 0 ? shown.stdout : null;
+    if (shown.status !== 0) {
+      throw new Error(`could not read ${path} at ${commit}`);
+    }
+    return shown.stdout;
   };
   if (
     runGit(repo, ['merge-base', '--is-ancestor', baseSha, headSha]).status === 0
@@ -515,7 +546,23 @@ export function runPrePushTrialBudget(options: {
     // Not behind: measure the touched budgets on the HEAD commit, with HEAD's
     // own manifest, so a raise this branch commits is what is measured.
     const changedFiles = changedFilesBetween(runGit, repo, baseSha, headSha);
-    const parsed = parseManifest(showAt(headSha, MANIFEST_PATH));
+    let parsed: ReturnType<typeof parseManifest>;
+    let measured: TouchedBudgets | null = null;
+    try {
+      parsed = parseManifest(showAt(headSha, MANIFEST_PATH));
+      if (changedFiles !== null && parsed.ok && parsed.manifest !== null) {
+        const manifest = parsed.manifest;
+        measured = measureTouchedBudgets({
+          manifest,
+          changedFiles,
+          readFile: (path) => showAt(headSha, path),
+        });
+      }
+    } catch (error) {
+      return finish('budget-fail', false, {
+        auditFailures: [(error as Error).message],
+      });
+    }
     if (changedFiles === null || !parsed.ok) {
       return finish('budget-fail', false, {
         auditFailures: [
@@ -525,16 +572,11 @@ export function runPrePushTrialBudget(options: {
         ],
       });
     }
-    if (parsed.manifest === null) {
+    if (measured === null) {
       return finish('not-behind', false, {
         budgets: { bundles: [], files: [] },
       });
     }
-    const measured = measureTouchedBudgets({
-      manifest: parsed.manifest,
-      changedFiles,
-      readFile: (path) => showAt(headSha, path),
-    });
     const budgets = { bundles: measured.bundles, files: measured.files };
     return measured.failures.length > 0
       ? finish('budget-fail', false, {
@@ -743,14 +785,23 @@ export function runPrePushTrialBudget(options: {
   // says how to get the raise measured.
   let hint: string | undefined;
   if (verdict.outcome === 'fail') {
-    const head = parseManifest(showAt(headSha, MANIFEST_PATH));
-    const baseManifest = parseManifest(showAt(baseSha, MANIFEST_PATH));
-    if (
-      head.ok &&
-      baseManifest.ok &&
-      headRaisesALimit(head.manifest, baseManifest.manifest)
-    ) {
-      hint = RAISE_HINT;
+    try {
+      const head = parseManifest(showAt(headSha, MANIFEST_PATH));
+      const baseManifest = parseManifest(showAt(baseSha, MANIFEST_PATH));
+      const raised =
+        head.ok && baseManifest.ok
+          ? raisedBundleIds(head.manifest, baseManifest.manifest)
+          : [];
+      const failures = verdict.auditFailures ?? [];
+      if (
+        raised.some((id) =>
+          failures.some((line) => failureNamesBundle(line, id)),
+        )
+      ) {
+        hint = RAISE_HINT;
+      }
+    } catch {
+      // The hint is advice only; a read failure leaves it out.
     }
   }
   // Reaching the trial means HEAD is behind the base.

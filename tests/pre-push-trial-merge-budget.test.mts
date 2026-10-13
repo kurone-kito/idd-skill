@@ -31,6 +31,7 @@ import { stubExecutable } from './test-utils.mts';
 // the working directory, as the real audit reads its policy. Each failure is one
 // `- <rule>: <message>` line. `ledger-stale.txt` stands in for a helper the base
 // ledger does not list, and `required-missing.txt` for a missing required input.
+// `bundle-breach.txt` stands in for a breach of the bundle `bundle-b`.
 const AUDIT_STUB = `import { existsSync, readFileSync } from 'node:fs';
 const limit = JSON.parse(readFileSync('audit/sync-manifest.json', 'utf8')).limit;
 const size = Number(readFileSync('budget.txt', 'utf8').trim());
@@ -43,6 +44,9 @@ if (existsSync('ledger-stale.txt')) {
 }
 if (existsSync('required-missing.txt')) {
   failures.push('- repository-inventory-audit-required-file: scripts/x.mjs is missing');
+}
+if (existsSync('bundle-breach.txt')) {
+  failures.push('- bundle-b: bundle total is 2 bytes (limit 1); files: x');
 }
 if (failures.length > 0) {
   console.log('documentation audit failed:');
@@ -679,7 +683,7 @@ test('a not-behind branch that touches no budget reports none (#4128)', (t) => {
   );
 });
 
-test('a not-behind branch that deletes a bundle member does not crash (#4128)', (t) => {
+test('a not-behind branch that deletes a bundle member fails, as audit-docs does (#4128)', (t) => {
   const f = notBehindFixture();
   t.after(() => rmSync(f.root, { recursive: true, force: true }));
   git(f.work, ['rm', '-q', LITE_PATH]);
@@ -695,8 +699,11 @@ test('a not-behind branch that deletes a bundle member does not crash (#4128)', 
   ]);
 
   const result = runPrePushTrialBudget({ cwd: f.work });
-  assert.equal(result.outcome, 'not-behind');
-  assert.equal(result.exitCode, 0);
+  assert.equal(result.outcome, 'budget-fail');
+  assert.equal(result.exitCode, 1);
+  assert.deepEqual(result.auditFailures, [
+    `${LITE_PATH}: could not read file (ENOENT)`,
+  ]);
 });
 
 test('a manifest without budget keys still gives not-behind (#4128)', (t) => {
@@ -718,14 +725,18 @@ test('a behind breach is listed once, from audit-docs only (#4128)', (t) => {
   assert.equal(result.outcome, 'fail');
   assert.deepEqual(result.auditFailures, [BREACH_MESSAGE.slice(2)]);
   assert.equal(result.summary.includes('base pin hides'), false);
+  // The trial tree is still measured for the report.
+  assert.deepEqual(result.budgets, { bundles: [], files: [] });
 });
 
-test('a behind branch that raises a bundle limit gets the take-in-the-base hint (#4128)', (t) => {
+/**
+ * A behind branch whose HEAD raises the limit of `raisedId` above the base. The
+ * base gains the bundle first, and the branch takes that in before the raise.
+ */
+function raisedLimitFixture(raisedId: string) {
   const f = behindFixture();
-  t.after(() => rmSync(f.root, { recursive: true, force: true }));
   const manifestWith = (limitBytes: number) =>
-    `${JSON.stringify({ limit: 10, bundleBudgets: [{ id: 'b', files: [], limitBytes }] })}\n`;
-  // main adds the bundle, and the branch takes that in before raising it.
+    `${JSON.stringify({ limit: 10, bundleBudgets: [{ id: raisedId, files: [], limitBytes }] })}\n`;
   advanceMain(f, 'audit/sync-manifest.json', manifestWith(100));
   git(f.work, [
     '-c',
@@ -743,11 +754,50 @@ test('a behind branch that raises a bundle limit gets the take-in-the-base hint 
     manifestWith(200),
     'branch raises the bundle limit',
   );
-  advanceMain(f, 'budget.txt', '20\n');
+  return f;
+}
+
+test('a behind breach of a bundle whose limit HEAD raises gets the hint (#4128)', (t) => {
+  const f = raisedLimitFixture('bundle-b');
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  commitFile(f.work, 'bundle-breach.txt', 'x\n', 'branch grows bundle-b');
+  advanceMain(f, 'unrelated.txt', 'main work\n');
 
   const result = runPrePushTrialBudget({ cwd: f.work });
   assert.equal(result.outcome, 'fail');
   assert.match(result.summary, /base pin hides; take in the base first/);
+});
+
+test('a behind failure that names no raised bundle gets no hint (#4128)', (t) => {
+  const f = raisedLimitFixture('bundle-other');
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  advanceMain(f, 'budget.txt', '20\n');
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'fail');
+  assert.equal(result.summary.includes('base pin hides'), false);
+});
+
+test('the CLI prints the least-headroom line on stderr (#4128)', (t) => {
+  const f = notBehindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  commitFile(f.work, LITE_PATH, sized(25473 + 8), 'grow the lite file');
+
+  const cli = spawnSync(
+    'node',
+    [
+      join(import.meta.dirname, '..', 'scripts', 'pre-push-trial-budget.mjs'),
+      '--cwd',
+      f.work,
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(cli.status, 1);
+  assert.equal(JSON.parse(cli.stdout).outcome, 'budget-fail');
+  assert.match(
+    cli.stderr,
+    /^pre-push-trial-budget: least headroom is bundle-pr-submit-lite: -1 bytes/m,
+  );
 });
 
 test('measureTouchedBudgets uses the line for a bundle and skips untouched ones (#4128)', () => {
