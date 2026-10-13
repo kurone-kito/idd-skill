@@ -1308,6 +1308,58 @@ test('copilotOverviewLabels: an Open item with no label is unparsed, keeps the p
   });
 });
 
+// Real review body: PR #4159 review 5500197614 (kurone-kito/idd-skill), the same
+// body as NEW_FORMAT_FIXTURE in copilot-review-wave-audit.test.mts. This file
+// keeps its own copy: one test file must not import another.
+const NEW_FORMAT_FIXTURE = `<!-- ccr-overview-v2 -->
+
+### 🟡 Changes recommended
+
+Unresolved validation, marker-prefix, ownership revalidation, duplicate-marker parsing, and contract documentation issues remain.
+
+<details open>
+<summary><strong>1 open finding</strong></summary>
+
+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Validate journal issue is durable and comment-only](https://github.com/kurone-kito/idd-skill/pull/4159#discussion_r4255899147) · New
+</details>
+
+<details>
+<summary><strong>1 resolved since last review</strong></summary>
+
+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Enforce actor permissions or bot trust before authoring writes](https://github.com/kurone-kito/idd-skill/pull/4159#discussion_r4255818014)
+</details>
+
+<details>
+<summary><strong>Previously missed (1)</strong></summary>
+
+In code that hasn't changed since last review
+
+<details>
+<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> Resolve marker prefix for overridden target repositories</summary>
+
+\`src/\u200Bscripts/\u200Bpublish-authoring-hold.mts:765\`
+
+When \`--owner/--repo\` targets a repository whose configured marker prefix differs from the caller's local policy, this always derives the prefix from the local \`config\` and the command exposes no \`--marker-prefix\` override or target-policy lookup. It will then create/post markers under the wrong family, so the target repository cannot recognize the publication or owner records and the run can stop at provenance. Resolve the target repository's prefix (or require an explicit prefix for an overridden destination) and pass that value through all sibling helpers.
+</details>
+</details>
+
+🧠 **Review effort:** Lite
+`;
+
+test('copilotOverviewLabels reads the "N open finding" format with absolute links (#4184)', () => {
+  assert.deepEqual(
+    buildCopilotOverviewLabels([copilotReview(NEW_FORMAT_FIXTURE)]),
+    {
+      reviewId: 'PRR_labels',
+      commitId: 'a'.repeat(40),
+      kind: 'v2',
+      items: [{ discussionId: 4255899147, severity: 'high', isNew: true }],
+      previouslyMissed: { high: 0, medium: 1, low: 0 },
+      reason: null,
+    },
+  );
+});
+
 test('copilotOverviewLabels returns the last listed review, even when an earlier one was submitted later', () => {
   const row = buildCopilotOverviewLabels([
     copilotReview(corpusBody('copilot-v2-clean-3245'), {

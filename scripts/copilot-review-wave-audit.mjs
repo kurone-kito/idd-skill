@@ -21,17 +21,20 @@
 // Copilot's severity label is only machine-readable from a review body
 // carrying the `<!-- ccr-overview-v2 -->` marker (a body without it is
 // `legacy`). Findings are grouped under `<details><summary><strong>...`
-// sections: `Open (<n>)`, `Resolved since last review (<n>)`, and
-// `Previously missed (<n>)` (each nested finding under "Previously missed"
-// carries a severity but no `#discussion_r<id>` link, so it has no thread to
-// key by -- excluded from every thread-keyed metric below). A `What changed
-// in this PR` section may also appear. Every nested finding's own
-// `<summary>` never wraps its severity badge in `<strong>`, which is what
-// lets `findSections` (copilot-overview-sections.mts) tell a top-level
-// section header apart from a nested one with a single discriminator. The
-// header line's own `**Findings:** N <picture ... alt="... severity">` also
-// carries an `alt=` attribute -- section-scoped extraction (below) never
-// widens the "Open" item scan to include that header line, avoiding a
+// sections: the Open section, as `Open (<n>)` (the original format) or
+// `<n> open findings` (the October 2026 format, issue #4184); `Resolved since last
+// review (<n>)` or `<n> resolved since last review`; and `Previously missed
+// (<n>)` (each nested finding under "Previously missed" carries a severity but
+// no `#discussion_r<id>` link, so it has no thread to key by -- excluded from
+// every thread-keyed metric below). A `What changed in this PR` section may
+// also appear. Every nested finding's own `<summary>` never wraps its severity
+// badge in `<strong>`, which is what lets `findSections`
+// (copilot-overview-sections.mts) tell a top-level section header apart from a
+// nested one with a single discriminator. In the original format the header
+// line's own `**Findings:** N <picture ... alt="... severity">` also carries an
+// `alt=` attribute; the October 2026 format (issue #4184) has a bold `**<n> open
+// findings**` line with no `alt=` at all. Section-scoped extraction (below)
+// never widens the "Open" item scan to include either line, avoiding a
 // double-count.
 import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mjs';
 import {

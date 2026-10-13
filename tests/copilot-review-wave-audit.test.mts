@@ -151,6 +151,102 @@ Docs-only change.
 </details>
 `;
 
+// Real review body: PR #4159 review 5500197614 (kurone-kito/idd-skill), in
+// the October 2026 format (issue #4184): a `1 open finding` header whose item carries
+// an absolute `#discussion_r` link and `· New`, a `1 resolved since last review`
+// section, and `Previously missed (1)`. Backticks are escaped, and the two
+// zero-width spaces in the citation path are written as \u200B.
+const NEW_FORMAT_FIXTURE = `<!-- ccr-overview-v2 -->
+
+### 🟡 Changes recommended
+
+Unresolved validation, marker-prefix, ownership revalidation, duplicate-marker parsing, and contract documentation issues remain.
+
+<details open>
+<summary><strong>1 open finding</strong></summary>
+
+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Validate journal issue is durable and comment-only](https://github.com/kurone-kito/idd-skill/pull/4159#discussion_r4255899147) · New
+</details>
+
+<details>
+<summary><strong>1 resolved since last review</strong></summary>
+
+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Enforce actor permissions or bot trust before authoring writes](https://github.com/kurone-kito/idd-skill/pull/4159#discussion_r4255818014)
+</details>
+
+<details>
+<summary><strong>Previously missed (1)</strong></summary>
+
+In code that hasn't changed since last review
+
+<details>
+<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> Resolve marker prefix for overridden target repositories</summary>
+
+\`src/\u200Bscripts/\u200Bpublish-authoring-hold.mts:765\`
+
+When \`--owner/--repo\` targets a repository whose configured marker prefix differs from the caller's local policy, this always derives the prefix from the local \`config\` and the command exposes no \`--marker-prefix\` override or target-policy lookup. It will then create/post markers under the wrong family, so the target repository cannot recognize the publication or owner records and the run can stop at provenance. Resolve the target repository's prefix (or require an explicit prefix for an overridden destination) and pass that value through all sibling helpers.
+</details>
+</details>
+
+🧠 **Review effort:** Lite
+`;
+
+// Real review body: PR #4205 review 5505880022 (kurone-kito/idd-skill), the
+// zero-open shape of the October 2026 format (issue #4184): a `**0 open findings**` line with no
+// Open section, and one resolved item with an absolute link.
+const ZERO_OPEN_FIXTURE = `<!-- ccr-overview-v2 -->
+
+### 🟢 Approval recommended
+
+The scoped change has targeted positive and negative regression coverage, with no unresolved review findings.
+
+**0 open findings**
+
+<details>
+<summary><strong>1 resolved since last review</strong></summary>
+
+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Prevent embedded findings from being treated as sticky notices](https://github.com/kurone-kito/idd-skill/pull/4205#discussion_r4260353015)
+</details>
+
+🧠 **Review effort:** Lite`;
+
+// Real review body: PR #4205 review 5505683343 (kurone-kito/idd-skill), the
+// October 2026 format with a CRLF-terminated "What changed" section and one
+// medium open finding. Its CRs are written as \r escapes.
+const REAL_CRLF_FIXTURE = `<!-- ccr-overview-v2 -->
+
+### 🟡 Changes recommended
+
+The existing sticky-match path can still hide an embedded finding in an unedited notice.
+
+<details open>
+<summary><strong>1 open finding</strong></summary>
+
+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Prevent embedded findings from being treated as sticky notices](https://github.com/kurone-kito/idd-skill/pull/4205#discussion_r4260353015) · New
+</details>
+
+<details>
+<summary><strong>What changed in this PR</strong></summary>
+
+This PR updates the merged-PR feedback sweep to recognize trusted rejections of edited bot non-review notices while continuing to report unresolved threads.
+
+**Changes:**
+- Credits terminal notices named by an unedited, trusted rejection, provided the notice has no embedded findings.
+- Adds regression tests and updates the generated JavaScript helper.
+
+| File | Description |\r
+| ---- | ----------- |\r
+| tests/​merged-pr-feedback-sweep.test.mts | Tests credited notices and cases that must remain flagged. |\r
+| src/​scripts/​merged-pr-feedback-sweep.mts | Adds notice and rejection matching to the sweep. |\r
+| scripts/​merged-pr-feedback-sweep.mjs | Mirrors the TypeScript helper change. |
+</details>
+
+🧠 **Review effort:** Lite
+
+---
+
+💡 <a href="/kurone-kito/idd-skill/new/main?filename=.github/skills/code-review/SKILL.md" class="Link--inTextBlock" target="_blank" rel="noopener noreferrer">Add a \`code-review\` agent skill</a> or configure MCP servers for context-aware, tailored reviews. <a href="https://docs.github.com/copilot/how-tos/use-copilot-agents/request-a-code-review/use-code-review?tool=webui#mcp-servers-and-agent-skills" class="Link--inTextBlock" target="_blank" rel="noopener noreferrer">Learn more in the docs.</a>`;
+
 function review(
   id: number,
   submittedAt: string,
@@ -311,6 +407,247 @@ test('parseOverviewBody: a positive Findings header with no recognized Open sect
 
 test('parseOverviewBody: a "Findings: None" header with no Open section stays a genuine v2 zero-findings review', () => {
   const parsed = parseOverviewBody(NO_FINDINGS_FIXTURE);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, []);
+});
+
+test('parseOverviewBody: real new-format fixture reads the "N open finding" header and absolute links', () => {
+  const parsed = parseOverviewBody(NEW_FORMAT_FIXTURE);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, [
+    { severity: 'high', id: 4255899147, isNew: true },
+  ]);
+  assert.deepEqual(parsed.previouslyMissed, { high: 0, medium: 1, low: 0 });
+});
+
+test('parseOverviewBody: a "2 open findings" header with absolute-link items gives both items', () => {
+  const body = `<!-- ccr-overview-v2 -->
+
+<details open>
+<summary><strong>2 open findings</strong></summary>
+
+- ${pictureBadge('High')} [First](https://github.com/kurone-kito/idd-skill/pull/1#discussion_r101) · New
+- ${pictureBadge('Low')} [Second](https://github.com/kurone-kito/idd-skill/pull/1#discussion_r102)
+</details>
+`;
+  const parsed = parseOverviewBody(body);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, [
+    { severity: 'high', id: 101, isNew: true },
+    { severity: 'low', id: 102, isNew: false },
+  ]);
+});
+
+test('parseOverviewBody: the real zero-open body is v2 with an empty Open', () => {
+  const parsed = parseOverviewBody(ZERO_OPEN_FIXTURE);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, []);
+  assert.deepEqual(parsed.previouslyMissed, { high: 0, medium: 0, low: 0 });
+});
+
+test('parseOverviewBody: a **0 open findings** line with a resolved section of severity items is v2 with an empty Open', () => {
+  const body = `<!-- ccr-overview-v2 -->
+
+**0 open findings**
+
+<details>
+<summary><strong>2 resolved since last review</strong></summary>
+
+${openLine('High', 201)}
+${openLine('Low', 202)}
+</details>
+`;
+  const parsed = parseOverviewBody(body);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, []);
+});
+
+test('parseOverviewBody: a **2 open findings** line with no Open section is unparsed', () => {
+  const body = `<!-- ccr-overview-v2 -->
+
+**2 open findings**
+`;
+  const parsed = parseOverviewBody(body);
+  assert.equal(parsed.kind, 'unparsed');
+  assert.match(
+    parsed.unparsedReason ?? '',
+    /Open findings line declared 2 but no Open section was found/,
+  );
+});
+
+test('parseOverviewBody: severity-labelled findings under an unrecognized header are unparsed', () => {
+  const body = `<!-- ccr-overview-v2 -->
+
+<details>
+<summary><strong>Brand New Section</strong></summary>
+
+${openLine('High', 301)}
+</details>
+`;
+  const parsed = parseOverviewBody(body);
+  assert.equal(parsed.kind, 'unparsed');
+  assert.match(
+    parsed.unparsedReason ?? '',
+    /section "Brand New Section" lists severity-labelled findings/,
+  );
+});
+
+test('parseOverviewBody: a "2 open findings" header with one item is unparsed (count mismatch)', () => {
+  const body = `<!-- ccr-overview-v2 -->
+
+<details open>
+<summary><strong>2 open findings</strong></summary>
+
+${openLine('High', 401)}
+</details>
+`;
+  const parsed = parseOverviewBody(body);
+  assert.equal(parsed.kind, 'unparsed');
+  assert.match(
+    parsed.unparsedReason ?? '',
+    /Open header declared 2 but 1 were parsed/,
+  );
+});
+
+const crlf = (text: string): string => text.replace(/\n/g, '\r\n');
+
+test('parseOverviewBody: CRLF line endings keep a **0 open findings** body v2', () => {
+  const parsed = parseOverviewBody(
+    crlf(`<!-- ccr-overview-v2 -->
+
+**0 open findings**
+
+<details>
+<summary><strong>1 resolved since last review</strong></summary>
+
+${openLine('Low', 501)}
+</details>
+`),
+  );
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, []);
+});
+
+test('parseOverviewBody: a CRLF **2 open findings** line with no Open section is unparsed', () => {
+  const parsed = parseOverviewBody(
+    crlf(`<!-- ccr-overview-v2 -->
+
+**2 open findings**
+`),
+  );
+  assert.equal(parsed.kind, 'unparsed');
+  assert.match(
+    parsed.unparsedReason ?? '',
+    /Open findings line declared 2 but no Open section was found/,
+  );
+});
+
+test('parseOverviewBody: a **1 open finding** line beside a recognized Open section is not a reason', () => {
+  const body = `<!-- ccr-overview-v2 -->
+
+**1 open finding**
+
+<details open>
+<summary><strong>1 open finding</strong></summary>
+
+${openLine('Medium', 601, true)}
+</details>
+`;
+  const parsed = parseOverviewBody(body);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, [{ severity: 'medium', id: 601, isNew: true }]);
+});
+
+test('parseOverviewBody: a severity item under "What changed in this PR" is ignored, not unparsed', () => {
+  const body = `<!-- ccr-overview-v2 -->
+
+<details>
+<summary><strong>What changed in this PR</strong></summary>
+
+${openLine('Low', 701)}
+</details>
+`;
+  const parsed = parseOverviewBody(body);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, []);
+});
+
+test('parseOverviewBody: an "Open findings (2)" header is not a recognized Open form, so its items are unparsed', () => {
+  const body = `<!-- ccr-overview-v2 -->
+
+<details open>
+<summary><strong>Open findings (2)</strong></summary>
+
+${openLine('High', 801)}
+${openLine('Low', 802)}
+</details>
+`;
+  const parsed = parseOverviewBody(body);
+  assert.equal(parsed.kind, 'unparsed');
+  assert.ok(
+    (parsed.unparsedReason ?? '').includes(
+      'section "Open findings (2)" lists severity-labelled findings',
+    ),
+  );
+});
+
+test('parseOverviewBody: a real CRLF body with a "What changed" section reads its medium open finding', () => {
+  const parsed = parseOverviewBody(REAL_CRLF_FIXTURE);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, [
+    { severity: 'medium', id: 4260353015, isNew: true },
+  ]);
+});
+
+test('parseOverviewBody: a discussion link inside a Previously missed item is not a drift reason', () => {
+  const body = `<!-- ccr-overview-v2 -->
+
+<details>
+<summary><strong>Previously missed (1)</strong></summary>
+
+<details>
+<summary>${pictureBadge('Low')} Nested finding that cites [a thread](#discussion_r901)</summary>
+
+Body text.
+</details>
+</details>
+`;
+  const parsed = parseOverviewBody(body);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, []);
+  assert.deepEqual(parsed.previouslyMissed, { high: 0, medium: 0, low: 1 });
+});
+
+const FENCE = '```';
+
+test('parseOverviewBody: a fenced example of an Open header and item is not an open finding', () => {
+  const body = `<!-- ccr-overview-v2 -->
+
+Example markup, not a finding:
+
+${FENCE}html
+<details>
+<summary><strong>Open (1)</strong></summary>
+
+- <picture><img alt="High severity" src="h.svg"></picture> [Example](#discussion_r909)
+</details>
+${FENCE}
+
+**0 open findings**
+`;
+  const parsed = parseOverviewBody(body);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, []);
+});
+
+test('parseOverviewBody: a fenced copy of the bold open-count line is not an unparsed reason', () => {
+  const body = `<!-- ccr-overview-v2 -->
+
+${FENCE}
+**2 open findings**
+${FENCE}
+`;
+  const parsed = parseOverviewBody(body);
   assert.equal(parsed.kind, 'v2');
   assert.deepEqual(parsed.open, []);
 });
