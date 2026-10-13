@@ -376,6 +376,15 @@ const HELPER_COMMANDS = [
       'Run IDD onboarding drift checks against the local repository.',
   },
   {
+    id: 'e10-recurrence',
+    scriptName: 'idd:e10-recurrence',
+    binName: 'idd-e10-recurrence',
+    entryPath: 'scripts/e10-recurrence.mjs',
+    vendoredCommand: 'node scripts/e10-recurrence.mjs',
+    description:
+      'Count E10 same-family recurrence from finding fingerprints and print the e11, continue, defer, or hold verdict. Read-only.',
+  },
+  {
     id: 'effective-config',
     scriptName: 'idd:effective-config',
     binName: 'idd-effective-config',

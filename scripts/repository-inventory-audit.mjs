@@ -31,6 +31,7 @@ export const COVERED_HELPERS = [
   'discover-viability-gate',
   'delete-remote-branch',
   'disposition-non-review-notices',
+  'e10-recurrence',
   'external-check-waiver',
   'force-handoff',
   'forced-handoff-marker',

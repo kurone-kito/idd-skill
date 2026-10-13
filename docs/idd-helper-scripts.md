@@ -2418,6 +2418,43 @@ node scripts/idd-effective-config.mjs [--key <dotted.path>] [--no-user-global]
 - **`--policy`**: an omitted `--policy` reads the layered policy. An explicit
   path, even the default string, reads only that file.
 
+## E10 same-family recurrence (kurone-kito/idd-skill#4129)
+
+`scripts/e10-recurrence.mjs` counts the E10 no-progress hold
+(`idd-review-fix.instructions.md`) from finding fingerprints instead of
+judgement. It is read-only and never writes, claims, or posts.
+
+```sh
+node scripts/e10-recurrence.mjs --passes <file.json> [--hold-after <n>]
+```
+
+- **Input**: `{"passes": [[record, ...], ...]}`, oldest pass first. Each
+  record is `{file, rule, construct, severity, disposition}`.
+  `disposition` is `Accepted` or `Rejected`; only Accepted records count,
+  and only they must carry a non-empty `file` and `construct`, a
+  `severity` of `low`, `medium`, or `high` in any letter case, and a
+  `rule` from the closed
+  list in `idd-review-triage.instructions.md` E5 (`correctness`,
+  `safety`, `tests`, `docs`, `consistency`, `style`). A record outside
+  that contract, or a file with no pass at all, exits `1` (`usage`) with
+  an `errors` array on stdout.
+- **Count**: the fingerprint is `file`, `rule`, and `construct`, with
+  `file` and `construct` trimmed. The
+  chain ends at the latest pass, counts its first pass, and extends
+  backward while each pass's non-empty Accepted set is a subset (proper
+  or equal) of the prior pass's set.
+- **Verdict**: an empty latest set gives `e11`. A chain shorter than
+  `--hold-after` (default: the effective
+  `critiqueLoop.e10NoProgressHoldAfter`) gives `continue`. Otherwise
+  each fingerprint of the latest pass is a recurring family with the
+  highest severity seen in the chain: Low takes `defer` and Medium or
+  High takes `stop`. Any `stop` makes the verdict `hold`; otherwise it is
+  `defer`.
+- **Output**: `verdict`, `passCount`, `chainLength`, `holdAfter`,
+  `recurring` (each family with its `severity` and `disposition`), and
+  `holdText`, a line naming every recurring family for the hold comment
+  or the defer follow-up.
+
 ## Helper Runtime Profiles
 
 When a repository imports the IDD template, helper support should be
@@ -5678,6 +5715,24 @@ to post it is the consuming track's job.
   passes, live-coverage cases already handled by #2549, and all other
   non-qualifying holds remain withheld. Each promotion records its
   `originalHoldReason`.
+- Reports superseded rows (kurone-kito/idd-skill#4113). Each instance carries
+  `supersededBy`: the check-run id of the same workflow run's latest row,
+  when that row proves the instance belongs to an earlier attempt of the run
+  and the latest row passes; otherwise `null`. The latest row is always a
+  `pass` classification of the same run, never the instance itself. A
+  superseded non-pass instance is counted in `counts.superseded` instead of
+  its classification bucket, so `counts.rerunEligible` covers only rows a
+  plan can still act on and the buckets still sum to `counts.total`. A
+  superseded `pass` instance stays in `counts.pass`. Superseded instances are
+  counted in neither `counts.rerunEligible` nor `counts.rerunBudgetHeld`. This
+  is reporting only: no classification, plan, or recovery plan changes. A
+  superseded row in the `awaiting-fresh-review`,
+  `bot-gated-skip`, or `unresolved` classification no longer produces its
+  outstanding-state note, because it moves to the `superseded` bucket. The
+  stderr summary adds one line for the superseded non-pass rows, in the form
+  `N instance(s) superseded by a later attempt of the same run (check run X)`;
+  a superseded pass prints nothing, and stdout still carries only the JSON
+  plan.
 - Without `--apply`, it never calls `gh run rerun` (or any other mutating
   command) itself. Pass `--apply` (#1766) to execute the printed plan:
   it reruns each rerun-eligible instance in order (recovery-refresh
