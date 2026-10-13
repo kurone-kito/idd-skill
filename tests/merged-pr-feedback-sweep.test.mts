@@ -41,6 +41,27 @@ const RATE_LIMIT_NOTICE = `${CODERABBIT_SUMMARY_MARKER}\n\n> ## Review limit rea
 const RATE_LIMIT_DISPOSITION =
   '**Rejected** — coderabbitai[bot] did not review HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (review limit reached / rate limited); this is not a completed review (source: #issuecomment-100)\n\n<!-- idd-skill-review-reply -->';
 
+// #4181: an excerpt of the live body of CodeRabbit comment 6139874139 on
+// kurone-kito/idd-skill (fetched 2026-10-13). CodeRabbit edits this summary in
+// place, so its lastEditedAt is set after the trusted rejection that names it.
+const LIVE_RATE_LIMIT_SUMMARY = `<!-- This is an auto-generated comment: summarize by coderabbit.ai -->
+<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->
+
+> [!WARNING]
+> ## Review limit reached
+>
+> Your organization has reached its usage spending cap. Adjust your spending cap in the [billing tab](https://app.coderabbit.ai/settings/billing?tab=usage&orgId=ORG_ID).
+>
+> **Next included review available in 21 minutes.**
+>
+> [Check out review usage here](https://app.coderabbit.ai/dashboard/review-capacity?orgId=ORG_ID).
+>
+> [Learn how review limits work](https://docs.coderabbit.ai/management/plans#rate-limits).
+
+<!-- end of auto-generated comment: rate limited by coderabbit.ai -->`;
+const LIVE_RATE_LIMIT_REJECTION =
+  '**Rejected** — coderabbitai[bot] did not review HEAD e977d0d6e1de2a03df5f92d00f69b1afff445d7c (review limit reached / rate limited); this is not a completed review (source: #issuecomment-6139874139)\n\n<!-- idd-skill-review-reply -->';
+
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
 
 test('parseArgs: parses --pr (repeatable), --days, and --limit', () => {
@@ -703,6 +724,385 @@ test('a CodeRabbit comment carrying both the summary marker and a rate-limit not
   );
 });
 
+test('#4181: a rate-limit summary that a trusted rejection names is not counted, even after the bot edited it', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 4160,
+        comments: [
+          {
+            id: 6139874139,
+            body: LIVE_RATE_LIMIT_SUMMARY,
+            createdAt: '2026-10-13T06:41:13Z',
+            updatedAt: '2026-10-13T08:49:20Z',
+            lastEditedAt: '2026-10-13T08:31:07Z',
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: LIVE_RATE_LIMIT_REJECTION,
+            createdAt: '2026-10-13T06:58:49Z',
+            updatedAt: '2026-10-13T06:58:49Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.deepEqual(result.prs, []);
+});
+
+test('#4181: the same rate-limit summary is still flagged for an unresolved thread on that PR', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 4161,
+        threads: [
+          buildCommentThread(false, [
+            {
+              login: 'coderabbitai[bot]',
+              body: 'This loop can deadlock.',
+              createdAt: '2026-10-13T06:00:00Z',
+            },
+          ]),
+        ],
+        comments: [
+          {
+            id: 6139874139,
+            body: LIVE_RATE_LIMIT_SUMMARY,
+            createdAt: '2026-10-13T06:41:13Z',
+            updatedAt: '2026-10-13T08:49:20Z',
+            lastEditedAt: '2026-10-13T08:31:07Z',
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: LIVE_RATE_LIMIT_REJECTION,
+            createdAt: '2026-10-13T06:58:49Z',
+            updatedAt: '2026-10-13T06:58:49Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unresolvedThreads.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 0);
+});
+
+test('#4181: a rejection from an untrusted author does not clear the rate-limit summary', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 4162,
+        comments: [
+          {
+            id: 6139874139,
+            body: LIVE_RATE_LIMIT_SUMMARY,
+            createdAt: '2026-10-13T06:41:13Z',
+            updatedAt: '2026-10-13T08:49:20Z',
+            lastEditedAt: '2026-10-13T08:31:07Z',
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: LIVE_RATE_LIMIT_REJECTION,
+            createdAt: '2026-10-13T06:58:49Z',
+            updatedAt: '2026-10-13T06:58:49Z',
+            lastEditedAt: null,
+            author: { login: 'a-human' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs.length, 1);
+  // The summary stays counted; the untrusted rejection is itself a plain
+  // human comment with no later disposition, so it is surfaced too.
+  assert.deepEqual(
+    result.prs[0].unaddressedComments.map((comment) => comment.author),
+    ['coderabbitai[bot]', 'a-human'],
+  );
+});
+
+test('#4181: the live rate-limit summary with no rejection stays counted', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 4163,
+        comments: [
+          {
+            id: 6139874139,
+            body: LIVE_RATE_LIMIT_SUMMARY,
+            createdAt: '2026-10-13T06:41:13Z',
+            updatedAt: '2026-10-13T08:49:20Z',
+            lastEditedAt: '2026-10-13T08:31:07Z',
+            author: { login: 'coderabbitai[bot]' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+// #4181: the live Codex usage-limit notice (comment 6134597929 on PR 4069) and
+// a rejection that names it. Codex edits its status comment in place too.
+const CODEX_OPTIONS = {
+  ...OPTIONS,
+  advisoryBotLogins: ['coderabbitai[bot]', 'chatgpt-codex-connector[bot]'],
+};
+const CODEX_USAGE_LIMIT_NOTICE = `You have reached your Codex usage limits for code reviews. You can see your limits in the [Codex usage dashboard](https://chatgpt.com/codex/cloud/settings/usage).
+To continue using code reviews, you can upgrade your account or add credits to your account and enable them for code reviews in your [settings](https://chatgpt.com/codex/cloud/settings/code-review).`;
+const CODEX_NOTICE_REJECTION =
+  '**Rejected** — chatgpt-codex-connector[bot] did not review HEAD e7897fea4c6d4a8fb23d043ab276261e77c89d4c (Codex usage limits for code reviews reached); this is not a completed review (source: #issuecomment-6134597929)\n\n<!-- idd-skill-review-reply -->';
+// #4181: a Nitpick section that carries one embedded finding, appended to a
+// rate-limit summary. A notice that embeds findings must stay counted.
+const EMBEDDED_FINDING_SUFFIX = [
+  '',
+  '<details>',
+  '<summary>🧹 Nitpick comments (1)</summary><blockquote>',
+  '',
+  '<details>',
+  '<summary>src/x.mts (1)</summary><blockquote>',
+  '',
+  '`12-15`: _⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_',
+  '',
+  '**Guard the empty list before indexing.**',
+  '',
+  '</blockquote></details>',
+  '',
+  '</blockquote></details>',
+  '',
+  '<details>',
+  '<summary>🤖 Prompt for all review comments with AI agents</summary>',
+  '',
+  'Verify each finding against the current code.',
+  '',
+  '</details>',
+].join('\n');
+
+test('#4181: a Codex usage-limit notice that a trusted rejection names is not counted', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 4069,
+        comments: [
+          {
+            id: 6134597929,
+            body: CODEX_USAGE_LIMIT_NOTICE,
+            createdAt: '2026-10-13T06:00:00Z',
+            updatedAt: '2026-10-13T07:00:00Z',
+            lastEditedAt: '2026-10-13T07:00:00Z',
+            author: { login: 'chatgpt-codex-connector' },
+          },
+          {
+            body: CODEX_NOTICE_REJECTION,
+            createdAt: '2026-10-13T06:30:00Z',
+            updatedAt: '2026-10-13T06:30:00Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    CODEX_OPTIONS,
+  );
+  assert.deepEqual(result.prs, []);
+});
+
+test('#4181: a trusted non-IDD rejection that names a rate-limit summary does not surface as feedback', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 4164,
+        comments: [
+          {
+            id: 6139874139,
+            body: LIVE_RATE_LIMIT_SUMMARY,
+            createdAt: '2026-10-13T06:41:13Z',
+            updatedAt: '2026-10-13T08:49:20Z',
+            lastEditedAt: '2026-10-13T08:31:07Z',
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: LIVE_RATE_LIMIT_REJECTION,
+            createdAt: '2026-10-13T06:58:49Z',
+            updatedAt: '2026-10-13T06:58:49Z',
+            lastEditedAt: null,
+            author: { login: 'second-session' },
+          },
+        ],
+      },
+    ],
+    { ...OPTIONS, trustedMarkerActors: ['kurone-kito', 'second-session'] },
+  );
+  assert.deepEqual(result.prs, []);
+});
+
+test('#4181: a rejection that names a different bot does not clear the rate-limit summary', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 4165,
+        comments: [
+          {
+            id: 6139874139,
+            body: LIVE_RATE_LIMIT_SUMMARY,
+            createdAt: '2026-10-13T06:41:13Z',
+            updatedAt: '2026-10-13T08:49:20Z',
+            lastEditedAt: '2026-10-13T08:31:07Z',
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: '**Rejected** — chatgpt-codex-connector[bot] did not review HEAD e977d0d6e1de2a03df5f92d00f69b1afff445d7c (review limit reached / rate limited); this is not a completed review (source: #issuecomment-6139874139)\n\n<!-- idd-skill-review-reply -->',
+            createdAt: '2026-10-13T06:58:49Z',
+            updatedAt: '2026-10-13T06:58:49Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(
+    result.prs[0].unaddressedComments[0].author,
+    'coderabbitai[bot]',
+  );
+});
+
+test('#4181: a rate-limit summary that embeds a review finding stays counted despite a trusted rejection', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 4166,
+        comments: [
+          {
+            id: 6139874139,
+            body: `${LIVE_RATE_LIMIT_SUMMARY}${EMBEDDED_FINDING_SUFFIX}`,
+            createdAt: '2026-10-13T06:41:13Z',
+            updatedAt: '2026-10-13T08:49:20Z',
+            lastEditedAt: '2026-10-13T08:31:07Z',
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: LIVE_RATE_LIMIT_REJECTION,
+            createdAt: '2026-10-13T06:58:49Z',
+            updatedAt: '2026-10-13T06:58:49Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+});
+
+test('#4181: a human comment that quotes a rate-limit summary is not credited by a rejection', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 4167,
+        comments: [
+          {
+            id: 6139874139,
+            body: LIVE_RATE_LIMIT_SUMMARY,
+            createdAt: '2026-10-13T06:41:13Z',
+            updatedAt: '2026-10-13T08:49:20Z',
+            lastEditedAt: '2026-10-13T08:31:07Z',
+            author: { login: 'a-human' },
+          },
+          {
+            body: LIVE_RATE_LIMIT_REJECTION,
+            createdAt: '2026-10-13T06:58:49Z',
+            updatedAt: '2026-10-13T06:58:49Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(result.prs[0].unaddressedComments[0].author, 'a-human');
+});
+
+test('#4181: an edited rejection does not clear an edited rate-limit summary', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 4168,
+        comments: [
+          {
+            id: 6139874139,
+            body: LIVE_RATE_LIMIT_SUMMARY,
+            createdAt: '2026-10-13T06:41:13Z',
+            updatedAt: '2026-10-13T08:49:20Z',
+            lastEditedAt: '2026-10-13T08:31:07Z',
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: LIVE_RATE_LIMIT_REJECTION,
+            createdAt: '2026-10-13T06:58:49Z',
+            updatedAt: '2026-10-13T07:10:00Z',
+            lastEditedAt: '2026-10-13T07:10:00Z',
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    OPTIONS,
+  );
+  assert.equal(result.prs.length, 1);
+  assert.equal(result.prs[0].unaddressedComments.length, 1);
+  assert.equal(
+    result.prs[0].unaddressedComments[0].author,
+    'coderabbitai[bot]',
+  );
+});
+
+test('#4181: an IDD-agent rejection credits a rate-limit summary even without a trusted-actor list', () => {
+  const result = buildMergedPrFeedbackSweep(
+    [
+      {
+        number: 4169,
+        comments: [
+          {
+            id: 6139874139,
+            body: LIVE_RATE_LIMIT_SUMMARY,
+            createdAt: '2026-10-13T06:41:13Z',
+            updatedAt: '2026-10-13T08:49:20Z',
+            lastEditedAt: '2026-10-13T08:31:07Z',
+            author: { login: 'coderabbitai[bot]' },
+          },
+          {
+            body: LIVE_RATE_LIMIT_REJECTION,
+            createdAt: '2026-10-13T06:58:49Z',
+            updatedAt: '2026-10-13T06:58:49Z',
+            lastEditedAt: null,
+            author: { login: 'kurone-kito' },
+          },
+        ],
+      },
+    ],
+    { ...OPTIONS, trustedMarkerActors: [] },
+  );
+  assert.deepEqual(result.prs, []);
+});
+
 test('#3572 carries a trusted notice rejection across a restamped updatedAt', () => {
   const result = buildMergedPrFeedbackSweep(
     [
@@ -876,14 +1276,17 @@ test('#3572 keeps a notice visible when its rejection was edited', () => {
   assert.equal(result.prs[0].unaddressedComments.length, 1);
 });
 
-test('#3572 keeps a changed notice visible even when its old rejection is intact', () => {
+test('#3572 keeps a notice visible once it is edited into non-notice content, even with an intact rejection', () => {
+  // #4181 narrowed this case: an edit that keeps the terminal rate-limit notice
+  // is now credited by its intact rejection, but an edit into content that is
+  // no longer a notice still needs its own disposition.
   const result = buildMergedPrFeedbackSweep(
     [
       {
         number: 3572,
         comments: [
           {
-            body: `${RATE_LIMIT_NOTICE}\n\nA changed notice body`,
+            body: 'A changed comment body with no notice marker.',
             createdAt: '2026-09-27T06:45:28Z',
             updatedAt: '2026-09-27T08:02:07Z',
             lastEditedAt: '2026-09-27T08:02:00Z',

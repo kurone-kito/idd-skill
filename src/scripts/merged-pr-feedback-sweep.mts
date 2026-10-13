@@ -39,14 +39,18 @@ import {
   classifyCommentEditState,
   classifyIddPrComment,
   DEFAULT_ADVISORY_BOT_LOGINS,
+  dispositionNamesAdvisoryBot,
+  extractCodeRabbitEmbeddedFindings,
   hasFreshDisposition,
   isAdvisoryNonReviewNotice,
   isCopilotReviewerLogin,
   isDispositionComment,
   isKnownReviewBot,
   isReviewSummaryComment,
+  isTerminalAdvisoryNonReviewNotice,
   matchTrustedAdvisoryStickyDispositions,
   normalizeTrustedMarkerLogins,
+  parseNonReviewNoticeDisposition,
   resolveAdvisoryBotLogins,
   resolveClosingIssueNumbersForClassifier,
   resolveTrustedMarkerActors,
@@ -623,6 +627,65 @@ function collectUnaddressedComments(
     },
   );
 
+  // #4181: a trusted rejection that names a notice by its comment id still
+  // addresses that notice. The sticky matcher above only credits an unedited
+  // notice, but CodeRabbit edits its rate-limit summary in place, so a notice
+  // that was rejected and then edited stayed counted although the rejection
+  // names it. Index every unedited trusted or IDD-agent non-review rejection
+  // by the comment id it names as its source.
+  const rejectionsBySourceId = new Map<string, number[]>();
+  const trustedAckLogins = new Set(trustedMarkerLoginsForAck);
+  const iddAckLogins = new Set(iddAgentLoginsForBookkeeping);
+  for (const [commentIndex, comment] of normalizedComments.entries()) {
+    if (
+      (trustedAckLogins.has(comment.authorLogin) ||
+        iddAckLogins.has(comment.authorLogin)) &&
+      classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
+        'unedited'
+    ) {
+      const source = parseNonReviewNoticeDisposition(comment.body);
+      if (source) {
+        const list = rejectionsBySourceId.get(source.sourceCommentId) ?? [];
+        list.push(commentIndex);
+        rejectionsBySourceId.set(source.sourceCommentId, list);
+      }
+    }
+  }
+  // A notice is credited only when a rejection names it and that rejection
+  // names the notice's own advisory bot, and only while the notice body is
+  // still a terminal advisory non-review notice. A notice whose body embeds
+  // review findings (the Nitpick and Outside-diff sections of
+  // extractCodeRabbitEmbeddedFindings) is never credited, so those findings
+  // stay counted. Inline findings land as review threads, which the sweep
+  // reports separately. The crediting rejections are marked consumed, so a
+  // trusted non-IDD rejection is not surfaced on its own.
+  const creditedNoticeIndexes = new Set<number>();
+  const creditedRejectionIndexes = new Set<number>();
+  for (const [commentIndex, comment] of comments.entries()) {
+    const rejections =
+      rejectionsBySourceId.get(normalizedComments[commentIndex].id) ?? [];
+    if (
+      rejections.length === 0 ||
+      !isConfiguredAdvisoryBotIdentity(authorLogin(comment)) ||
+      !isTerminalAdvisoryNonReviewNotice(comment.body) ||
+      extractCodeRabbitEmbeddedFindings(comment.body).length > 0
+    ) {
+      continue;
+    }
+    const named = rejections.filter((rejectionIndex) =>
+      dispositionNamesAdvisoryBot(
+        normalizedComments[rejectionIndex].body,
+        authorLogin(comment),
+      ),
+    );
+    if (named.length > 0) {
+      creditedNoticeIndexes.add(commentIndex);
+      for (const rejectionIndex of named) {
+        creditedRejectionIndexes.add(rejectionIndex);
+      }
+    }
+  }
+
   // A non-IDD item counts as addressed only when a later IDD-agent
   // *disposition* (Accepted / Rejected / Awaiting maintainer decision)
   // exists — markers and plain replies do not address feedback. IDD
@@ -737,7 +800,9 @@ function collectUnaddressedComments(
     }
     if (
       dispositionedStickyIndexes.has(commentIndex) ||
-      matchedDispositionIndexes.has(commentIndex)
+      matchedDispositionIndexes.has(commentIndex) ||
+      creditedRejectionIndexes.has(commentIndex) ||
+      creditedNoticeIndexes.has(commentIndex)
     ) {
       continue;
     }
