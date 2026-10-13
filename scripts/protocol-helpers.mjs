@@ -5965,14 +5965,16 @@ export function buildActivitySnapshotSummary(
     ]) ?? 'none';
   // #4123: the secondary quiet-window anchor (buildPreMergeReadinessSummary's
   // `secondaryQuietWindow`) leaves out the own timestamp of an unedited
-  // top-level disposition by a trusted author, so the agent's own
-  // issue-comment reply does not restart the window. Trusted is the union of
+  // top-level disposition by a trusted author, so the agent's own unedited
+  // disposition reply does not restart the window. Trusted is the union of
   // `trustedMarkerLogins` and the disposition authors, with advisory bots
   // removed. Only an unedited disposition by a disposition author counts for
-  // `latestDispositionAt` and the ack-only classification above. An author
-  // trusted only through `trustedMarkerLogins` is left out of the anchor for
-  // that one disposition, but does not open the ack window. Thread replies
-  // still anchor, and `effective` (which review-currency reads) is unchanged.
+  // `latestDispositionAt`, the reference time the ack-only check compares
+  // against. An author trusted only through `trustedMarkerLogins` is left out
+  // of the anchor for its own unedited disposition, but does not open the ack
+  // window. Thread replies still feed the anchor, less ack-only bot replies on
+  // resolved threads, and `effective` (which review-currency reads) is
+  // unchanged.
   const isQuietAnchorTrustedAuthor = (login) => {
     const normalized = String(login ?? '')
       .trim()

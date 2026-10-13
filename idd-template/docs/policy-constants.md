@@ -283,16 +283,16 @@ zero-unresolved judgement). It anchors on the same
 `ackOnlyPostDisposition`-aware activity ceiling the currency gate already
 computes, except that the own timestamp of an unedited top-level disposition
 by a trusted author (advisory bots excepted) is left out, so the agent's own
-issue-comment reply never restarts the window (observed 2026-10-12 on a
-kurone-kito/dotfiles pull request; issue `#4123`). An edit to that disposition
-does restart it. It needs no separately persisted timestamp: a genuinely
-unresolved item keeps the anchor fresh, and a watermark never reopens it. A
-top-level advisory-bot comment that is not itself a disposition, and whose
-last activity is after the latest unedited IDD-agent disposition, is ack-only
-whatever its body says, so it does not move the anchor either; a substantive
-one in that position is ignored too, a limit this change leaves in place. A
-disposition reply inside a review thread, and a bot reply on an unresolved
-thread, still reopen it. Distinct from
+unedited disposition reply never restarts the window (observed 2026-10-12 on
+a kurone-kito/dotfiles pull request; issue `#4123`). An edit to that
+disposition, or an unresolved edit state, does restart it. It needs no
+separately persisted timestamp: a genuinely unresolved item keeps the anchor
+fresh, and a watermark never reopens it. A top-level advisory-bot comment that
+is not itself a disposition, and whose last activity is after the latest
+unedited IDD-agent disposition, is ack-only whatever its body says, so it
+does not move the anchor either; a substantive one in that position is
+ignored too, a known limit. A disposition reply inside a review thread, and a
+bot reply on an unresolved thread, still reopen it. Distinct from
 `settledWindow`, which bounds the PRIMARY bot's own pending state, not a
 late secondary-bot arrival. This F2 duration is separate from the
 Copilot-only advisory-wait window, which does not wait on any login

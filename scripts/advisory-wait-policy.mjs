@@ -585,13 +585,14 @@ function computeQuietWindowElapsed({
  * unchanged (it is filtered out before classification runs). A top-level
  * advisory-bot comment that is not itself a disposition is ack-only whatever
  * its body says when its last activity is after the latest unedited
- * IDD-agent disposition, so it leaves the anchor unchanged too; advisory bots
- * are never excluded by the trust rule, and a substantive comment in that
- * position is ignored too, a limit this change leaves in place. A disposition
- * reply inside a review thread legitimately anchors it, because thread replies
- * still feed the ceiling; an unedited top-level disposition by a trusted
- * author does not, so the agent's own unedited top-level reply never restarts
- * the window, while an edit does. "Elapsed since that anchor" therefore equals
+ * IDD-agent disposition, so it leaves the anchor unchanged too. The trust rule
+ * never drops an advisory bot's comment, so a disposition-shaped one still
+ * anchors; a substantive non-disposition comment in that position is ignored
+ * too, a known limit. A disposition reply inside a review thread legitimately
+ * anchors it, because thread replies still feed the ceiling; an unedited
+ * top-level disposition by a trusted author does not, so the agent's own
+ * unedited disposition reply never restarts the window, while an edit, or an
+ * unresolved edit state, does. "Elapsed since that anchor" therefore equals
  * "elapsed since the review settled" without a second, independently-drifting
  * timestamp to persist.
  *
