@@ -138,8 +138,17 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
   const number = Number(match[1]);
   if (args.includes('POST')) {
     if (number === 2674) {
+      if (state.journalListFails) fail('gh: HTTP 502');
       state.journalPosts = (state.journalPosts || 0) + 1;
       save();
+      if (state.journalPosts === state.ambiguousPostAt) {
+        // The POST lands, but the reply is lost and every later read fails.
+        const body = JSON.parse(stdin).body;
+        state.comments.push({ id: 7000 + state.comments.length, issue: 2674, journalIndex: state.journalPosts, body, user, createdAt: '2026-10-13T00:20:00Z' });
+        state.journalListFails = true;
+        save();
+        fail('gh: HTTP 502');
+      }
       if (state.journalPosts === state.failJournalPostAt) fail('gh: Validation Failed (HTTP 422)');
       if (state.journalPosts === state.mutateBodyAt) {
         state.issues[${NEW_ISSUE}].body += '\nedited by someone else';
@@ -152,6 +161,7 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
     save();
     out({ id, html_url: 'https://github.com/o/r/issues/' + number + '#issuecomment-' + id, body });
   }
+  if (number === 2674 && state.journalListFails) fail('gh: HTTP 502');
   const rows = state.comments.filter((c) => c.issue === number).map((c) => JSON.stringify({ id: c.id, body: c.body, user: { login: c.user }, created_at: c.createdAt }));
   out(rows.join('\n') + (rows.length ? '\n' : ''));
 }
@@ -201,6 +211,7 @@ function setup(
     failJournalPostAt?: number;
     corruptReadbackAt?: number;
     mutateBodyAt?: number;
+    ambiguousPostAt?: number;
     claimOnCreate?: boolean | 'released';
     openPr?: boolean;
     foreignOwnerOnRead?: number;
@@ -232,6 +243,7 @@ function setup(
       failJournalPostAt: options.failJournalPostAt ?? 0,
       corruptReadbackAt: options.corruptReadbackAt ?? 0,
       mutateBodyAt: options.mutateBodyAt ?? 0,
+      ambiguousPostAt: options.ambiguousPostAt ?? 0,
       claimOnCreate: options.claimOnCreate ?? false,
       openPr: options.openPr === true,
       foreignOwnerOnRead: options.foreignOwnerOnRead ?? 0,
@@ -777,6 +789,21 @@ test('CLI: an unlabeled issue that already carries another owner marker is left 
         .log()
         .some((entry) => entry.args[0] === 'issue' && entry.args[1] === 'edit'),
     );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a member post that may have landed without a reply reports an uncertain journal state', () => {
+  const fixture = setup({ ambiguousPostAt: 3 });
+  try {
+    const result = fixture.run([...files(fixture), '--apply']);
+    assert.equal(result.status, 1);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.failedStep, 'member');
+    assert.match(report.reason, /may have been posted/);
+    assert.equal(report.journalState, 'uncertain: replay the journal');
+    assert.match(journalRecords(fixture)[2] ?? '', /state=member/);
   } finally {
     fixture.restore();
   }

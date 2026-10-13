@@ -265,8 +265,9 @@ and the label lookups, prints the planned steps, and writes nothing.
 A failure after the create prints a recovery-hold JSON object with the
 created issue, the failed step and the last journal state, and exits 1.
 That state is pending, or "uncertain: replay the journal" when a record
-was posted but its read-back failed. The issue keeps its labels and is never closed. The Stage 2
-release stays a separate, explicit request.
+may have been posted but could not be verified. The issue keeps its
+labels and is never closed. The Stage 2 release stays a separate,
+explicit request.
 
 Exit codes: 0 published (or planned), 1 refused or failed, 2 usage error,
 --shape child, or the blocked-by-human journal stop.
@@ -424,6 +425,24 @@ export function checkOwnerLogStillOurs(input) {
     ours += 1;
   }
   return ours > 0 ? null : "this run's owner marker is not on the issue";
+}
+/** True when the issue carries a comment with exactly this body by `actor`.
+ * Throws when the comments cannot be read. */
+function hasExactComment(where, body, actor) {
+  const comments = ghApiJson(
+    `repos/${where.owner}/${where.repo}/issues/${where.number}/comments`,
+    { paginate: true },
+  );
+  if (!Array.isArray(comments)) {
+    throw new Error('the comments are not readable');
+  }
+  return comments.some((comment) => {
+    const row = comment;
+    return (
+      row.body === body &&
+      String(row.user?.login ?? '').toLowerCase() === actor.toLowerCase()
+    );
+  });
 }
 /** Compare bodies the way GitHub may store them (CRLF and trailing space). */
 function sameBody(left, right) {
@@ -737,14 +756,28 @@ function publish(input) {
       ...markerArgs,
       '--apply',
     ]);
-    const commentId = Number(parseJsonOutput(run)?.commentId);
-    if (run.status !== 0 || !Number.isInteger(commentId) || commentId <= 0) {
-      throw new Error(helperFailure('post-idd-marker', run));
-    }
-    // From here the comment exists, so a failed check leaves the record's
-    // state unknown rather than unchanged.
+    // A comment that exists, or may exist, leaves the record's state unknown
+    // rather than unchanged.
     const landed = (message) =>
       Object.assign(new Error(message), { posted: true });
+    const commentId = Number(parseJsonOutput(run)?.commentId);
+    if (run.status !== 0 || !Number.isInteger(commentId) || commentId <= 0) {
+      // post-idd-marker may fail after its POST reached GitHub, so look for
+      // the exact body before reporting that nothing was posted.
+      const failure = helperFailure('post-idd-marker', run);
+      let found;
+      try {
+        found = hasExactComment(where, expected, actor);
+      } catch {
+        found = null;
+      }
+      if (found === false) {
+        throw new Error(failure);
+      }
+      throw landed(
+        `${failure}; ${found ? 'the record is on the issue anyway' : 'the record may have been posted, and the comments could not be read'}`,
+      );
+    }
     let stored;
     try {
       stored = ghApiJson(
@@ -765,7 +798,11 @@ function publish(input) {
     }
     return commentId;
   };
-  const journalWhere = { owner: journal.owner, repo: journal.repo };
+  const journalWhere = {
+    owner: journal.owner,
+    repo: journal.repo,
+    number: journal.number,
+  };
   // Step 6: the pending record must be verified before the create.
   try {
     const commentId = postVerified(intentArgs('pending', 'none'), journalWhere);
@@ -907,7 +944,7 @@ function publish(input) {
       '--marker-prefix',
       markerPrefix,
     ];
-    const ownerId = postVerified(ownerArgs, { owner, repo });
+    const ownerId = postVerified(ownerArgs, { owner, repo, number });
     steps.push({
       step: 'owner-marker',
       status: 'done',
