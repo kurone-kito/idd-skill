@@ -762,8 +762,8 @@ instructions.
   and if it still cannot after revision, it goes to needs-decision.
 - a finding whose claim is identical to a `previously rejected:` string's
   claim (wording may differ), in the same `draftSection`, is reported as a
-  repeat that quotes that string, not as a new finding; the reviewer does not
-  decide that the rejection still holds, and the author applies the repeat
+  repeat candidate that quotes that string, not as a new finding; the reviewer
+  does not decide that the rejection still holds, and the author applies the repeat
   test (see
   [Carry-forward of rejected findings](#carry-forward-of-rejected-findings))
 
@@ -913,25 +913,27 @@ from the ledger.
 
 **Reviewer.** The checklist item above applies. A reviewer reports a finding
 whose claim is identical to a `previously rejected:` string's claim, in the
-same `draftSection`, as a repeat that quotes that string. The reviewer does
-not decide that the rejection still holds, and does not judge whether the
-finding brings new information: the author applies the repeat test to each
-reported repeat.
+same `draftSection`, as a repeat candidate that quotes that string. The
+reviewer does not decide that the rejection still holds, and does not judge
+whether the finding brings new information: the author applies the repeat test
+to each reported repeat candidate.
 
 **Repeat test.** A finding is a repeat only when its claim is identical to the
 entry's claim, meaning the same substantive claim with wording ignored, and it
 is in the same `draftSection`. A finding with a different claim, or only a
 related topic in that section, is new. A finding that brings information the
 earlier rejection did not address is new, even when its claim is identical to
-an entry's claim. The author applies this test to each reported repeat.
+an entry's claim. The author applies this test to each reported repeat
+candidate.
 
-**Author.** For each reported repeat, first re-apply the repeat test. Then
-re-read the entry's evidence against the repository as it stands now: the
-file and line, or the cited read-only command re-run. If the evidence still
-holds, confirm that the finding brings nothing the earlier rejection did not
-address, then record a fresh disposition that cites the entry. The earlier
-disposition alone is not proof. If the evidence changed, or the finding brings
-new information, the finding reopens as a new finding.
+**Author.** For each reported repeat candidate, first apply the repeat test.
+Only a finding that passes it is a repeat. Then re-read the entry's evidence
+against the repository as it stands now: the file and line, or the cited
+read-only command re-run. If the evidence still holds, confirm that the
+finding brings nothing the earlier rejection did not address, then record a
+fresh disposition that cites the entry. The earlier disposition alone is not
+proof. If the evidence changed, or the finding brings new information, the
+finding reopens as a new finding.
 
 **Carry-forward limits.**
 
