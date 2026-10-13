@@ -141,6 +141,10 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
       state.journalPosts = (state.journalPosts || 0) + 1;
       save();
       if (state.journalPosts === state.failJournalPostAt) fail('gh: Validation Failed (HTTP 422)');
+      if (state.journalPosts === state.mutateBodyAt) {
+        state.issues[${NEW_ISSUE}].body += '\nedited by someone else';
+        save();
+      }
     }
     const body = JSON.parse(stdin).body;
     const id = 7000 + state.comments.length;
@@ -196,6 +200,7 @@ function setup(
     dropLabels?: boolean;
     failJournalPostAt?: number;
     corruptReadbackAt?: number;
+    mutateBodyAt?: number;
     claimOnCreate?: boolean | 'released';
     openPr?: boolean;
     foreignOwnerOnRead?: number;
@@ -226,6 +231,7 @@ function setup(
       dropLabels: options.dropLabels === true,
       failJournalPostAt: options.failJournalPostAt ?? 0,
       corruptReadbackAt: options.corruptReadbackAt ?? 0,
+      mutateBodyAt: options.mutateBodyAt ?? 0,
       claimOnCreate: options.claimOnCreate ?? false,
       openPr: options.openPr === true,
       foreignOwnerOnRead: options.foreignOwnerOnRead ?? 0,
@@ -719,6 +725,35 @@ test('CLI: a foreign owner marker that lands after provenance stops before membe
     assert.ok(
       journalRecords(fixture).every((body) => body.includes('state=pending')),
     );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a pending record that posts but fails its read-back refuses with an uncertain journal state', () => {
+  const fixture = setup({ corruptReadbackAt: 1 });
+  try {
+    const result = fixture.run([...files(fixture), '--apply']);
+    assert.equal(result.status, 1);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, 'refused');
+    assert.equal(report.journalState, 'uncertain: replay the journal');
+    assert.deepEqual(fixture.state().issues, {});
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a body edited before the owner marker stops before member', () => {
+  // The edit lands with the identity-attach record, so the owner marker
+  // hashes the edited body and only the created-body comparison catches it.
+  const fixture = setup({ mutateBodyAt: 2 });
+  try {
+    const result = fixture.run([...files(fixture), '--apply']);
+    assert.equal(result.status, 1);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.failedStep, 'member');
+    assert.match(report.reason, /not the body this run created/);
   } finally {
     fixture.restore();
   }
