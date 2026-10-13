@@ -517,6 +517,12 @@
         "limitBytes": 59300,
         "issue": 4195,
         "reason": "Maintainer-approved in the roadmap hearing of 2026-10-13, sized by the docs convention (roughly 10% headroom over measured need, not an exact fit): the E5 triage-record rule adds about 800 bytes to review-triage, which had 0 bytes of headroom. Measured 53,214 bytes before the change, about 54,010 after; raised to 59,300, the value approved in the hearing, about 10% above that."
+      },
+      {
+        "bundle": "bundle-onboarding-companions",
+        "limitBytes": 175150,
+        "issue": 4109,
+        "reason": "Maintainer decision (2026-10-14, operator instruction to proceed with the recommended option): keep the 175150 limit after PR #4147 added about 150 bytes to bundle-onboarding-companions while it was at 97.94% of its 175000 limit. The remedy order in issue #4128 (move adopter-path detail first, then ask with about 10% headroom) was not run before this raise, and the headroom left is about 2%. The CI ratchet did not flag this case; #4232 tracks why."
       }
     ]
   },
