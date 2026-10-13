@@ -2,7 +2,7 @@
 
 Read this file only when the activation conditions below hold or a fan-out
 session restarts. Everything else in the IDD loop is unchanged. The fan-out
-requirements themselves live in
+requirements live in
 [Orchestrator fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)
 and in
 [Orchestrator delegation](idd-claim.instructions.md#orchestrator-delegation).
@@ -29,7 +29,7 @@ Activate fan-out only when all conditions hold:
 - `GITHUB_ACTIONS` is not `true`.
 
 Otherwise, continue with [idd-discover.instructions.md](idd-discover.instructions.md)
-unchanged. The cap is per orchestrator, not per host.
+unchanged. The cap is per orchestrator session, not per host.
 
 ## 2. Roster
 
