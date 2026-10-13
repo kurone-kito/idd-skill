@@ -2823,6 +2823,160 @@ test('resolveCurrentGithubRepository: spawns exactly one `repo view --json owner
   });
 });
 
+// #4110: each case sets its own repository variables and restores the outer
+// values afterwards, so no case depends on the environment it runs in.
+function withRepositoryVariables<T>(
+  values: {
+    GITHUB_ACTIONS?: string;
+    GITHUB_REPOSITORY?: string;
+    GH_REPO?: string;
+  },
+  run: () => T,
+): T {
+  const names = ['GITHUB_ACTIONS', 'GITHUB_REPOSITORY', 'GH_REPO'] as const;
+  const saved: Record<string, string | undefined> = {};
+  for (const name of names) saved[name] = process.env[name];
+  for (const name of names) delete process.env[name];
+  for (const name of names) {
+    const value = values[name];
+    if (value !== undefined) process.env[name] = value;
+  }
+  try {
+    return run();
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
+test('resolveCurrentGithubRepository: a valid GITHUB_REPOSITORY is used with no gh process inside Actions (#4110)', () => {
+  withRepositoryVariables(
+    { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'o/r' },
+    () => {
+      // A stub that fails: a spawn here would throw, so the variable must win
+      // before any gh process starts.
+      withRepoViewStub(
+        { exit: 1, stderr: 'gh: repo view failed' },
+        (spawned) => {
+          assert.deepEqual(resolveCurrentGithubRepository(), {
+            owner: 'o',
+            repo: 'r',
+          });
+          assert.deepEqual(spawned(), []);
+        },
+      );
+    },
+  );
+});
+
+test('resolveCurrentGithubRepository: outside GitHub Actions the variable is ignored and gh answers (#4110)', () => {
+  // GITHUB_ACTIONS unset: a local run. An exported variable must not retarget
+  // the write helpers, so the gh stub answers.
+  withRepositoryVariables({ GITHUB_REPOSITORY: 'env/variable' }, () => {
+    withRepoViewStub({ stdout: repoViewBody('from', 'gh') }, (spawned) => {
+      assert.deepEqual(resolveCurrentGithubRepository(), {
+        owner: 'from',
+        repo: 'gh',
+      });
+      assert.deepEqual(spawned(), [REPO_VIEW_ARGV]);
+    });
+  });
+});
+
+test('resolveCurrentGithubRepository: an Enterprise Managed User owner with an underscore is valid (#4110)', () => {
+  withRepositoryVariables(
+    { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'my_company/r' },
+    () => {
+      withRepoViewStub(
+        { exit: 1, stderr: 'gh: repo view failed' },
+        (spawned) => {
+          assert.deepEqual(resolveCurrentGithubRepository(), {
+            owner: 'my_company',
+            repo: 'r',
+          });
+          assert.deepEqual(spawned(), []);
+        },
+      );
+    },
+  );
+});
+
+test('resolveCurrentGithubRepository: a GH_REPO override keeps the gh lookup over GITHUB_REPOSITORY (#4110)', () => {
+  withRepositoryVariables(
+    {
+      GITHUB_ACTIONS: 'true',
+      GITHUB_REPOSITORY: 'env/variable',
+      GH_REPO: 'operator/choice',
+    },
+    () => {
+      withRepoViewStub({ stdout: repoViewBody('from', 'gh') }, (spawned) => {
+        assert.deepEqual(resolveCurrentGithubRepository(), {
+          owner: 'from',
+          repo: 'gh',
+        });
+        assert.deepEqual(spawned(), [REPO_VIEW_ARGV]);
+      });
+    },
+  );
+});
+
+test('resolveCurrentGithubRepository: an invalid GITHUB_REPOSITORY falls back to the gh lookup (#4110)', () => {
+  // An empty value, no slash, an empty half, two slashes, whitespace, a
+  // bare-dot or traversal-shaped repository name, and a query or encoded
+  // character.
+  for (const value of [
+    '',
+    'o',
+    'o/',
+    '/r',
+    'o/r/x',
+    'o r/x',
+    'o/r ',
+    'o\tr/x',
+    'o/.',
+    'o/..',
+    'o/r?x=1',
+    'o/%2e',
+  ]) {
+    withRepositoryVariables(
+      { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: value },
+      () => {
+        withRepoViewStub(
+          { stdout: repoViewBody('lookup', 'repo') },
+          (spawned) => {
+            assert.deepEqual(
+              resolveCurrentGithubRepository(),
+              { owner: 'lookup', repo: 'repo' },
+              `GITHUB_REPOSITORY=${JSON.stringify(value)}`,
+            );
+            assert.deepEqual(spawned(), [REPO_VIEW_ARGV], value);
+          },
+        );
+      },
+    );
+  }
+});
+
+test('resolveCurrentGithubRepository: an empty GH_REPO counts as unset, so the variable still wins (#4110)', () => {
+  withRepositoryVariables(
+    { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'env/variable', GH_REPO: '' },
+    () => {
+      withRepoViewStub(
+        { exit: 1, stderr: 'gh: repo view failed' },
+        (spawned) => {
+          assert.deepEqual(resolveCurrentGithubRepository(), {
+            owner: 'env',
+            repo: 'variable',
+          });
+          assert.deepEqual(spawned(), []);
+        },
+      );
+    },
+  );
+});
+
 const READ_CACHE_ENTRY = /^[0-9a-f]{64}\.json$/;
 
 function readCacheFixture(): {

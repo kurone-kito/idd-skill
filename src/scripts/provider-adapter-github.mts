@@ -4946,12 +4946,36 @@ function formatTraversalGraphqlErrors(errors: unknown[]): string {
     .join('; ');
 }
 
-/** Resolve the current repository's owner/name with one `gh repo view` call
- * (#3715), the shared resolver every migrated helper reaches through the
- * adapter instead of spelling the lookup itself. */
+/** One `owner/name` value. The owner is a GitHub login (letters, digits and
+ * hyphens), or an Enterprise Managed User login, which also has an underscore.
+ * The repository name is letters, digits, `.`, `_` and `-`, and is never `.`
+ * or `..`, so both halves are safe to put in a REST path unencoded. */
+const GITHUB_REPOSITORY_VALUE =
+  /^([A-Za-z0-9_-]+)\/(?!\.{1,2}$)([A-Za-z0-9._-]+)$/;
+
+/** Resolve the current repository's owner/name, the shared resolver every
+ * migrated helper reaches through the adapter instead of spelling the lookup
+ * itself (#3715).
+ *
+ * #4110: inside GitHub Actions (`GITHUB_ACTIONS=true`) a valid
+ * `GITHUB_REPOSITORY` is used with no `gh` process. Actions sets it in every
+ * job, and an uncaught `gh repo view` timeout failed the advisory job on
+ * setup.ubuntu#204 (observed 2026-10-08). Outside Actions the variable is
+ * ignored, so a local run keeps the `gh repo view` lookup even when a shell
+ * exports it: the write helpers (`post-idd-marker` and others) must not follow
+ * an exported variable into another repository. A non-empty `GH_REPO` also
+ * keeps the lookup unchanged, because an operator who sets it on purpose must
+ * not be overridden; an empty `GH_REPO` counts as unset. Any other value falls
+ * back to that lookup. */
 export function resolveCurrentGithubRepository(): {
   owner: string;
   repo: string;
 } {
+  const match = GITHUB_REPOSITORY_VALUE.exec(
+    process.env.GITHUB_REPOSITORY ?? '',
+  );
+  if (process.env.GITHUB_ACTIONS === 'true' && !process.env.GH_REPO && match) {
+    return { owner: match[1] ?? '', repo: match[2] ?? '' };
+  }
   return resolveGhOwnerRepo({}, GH_TEXT_LOOP_OPTIONS);
 }
