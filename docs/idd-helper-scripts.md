@@ -6084,6 +6084,15 @@ reflexively as any other CLI option.
   pinned/identity-unresolved/non-target-event cause's own detail text
   silently replace it. `"unknown"` when no required checks are configured,
   mirroring `ci.status`'s own initial default in that case.
+- `ci` blocker hint (kurone-kito/idd-skill#4097): when `ci.status` is
+  `missing` (a required check has no run for the head) and
+  `branchCurrency.mergeStateStatus` is `DIRTY` (the head conflicts with its
+  base), the `ci` entry in `blockers[]` carries an optional `hint` naming the
+  default post-push sync: merge `origin/main` (the development branch) into
+  the PR branch, push, and re-run readiness. The hint is diagnostic only;
+  `gate`, `detail`, and the verdict are unchanged. It is absent for a `DIRTY`
+  head whose checks are present, and for a `missing` check on a head that is
+  not `DIRTY`.
 - Authoritative phase role: the live `pre-merge-readiness` run on the
   current HEAD is the **authoritative source for the final-merge CI and
   activity fields** at F2/F3. The `review-activity-snapshot` helper builds

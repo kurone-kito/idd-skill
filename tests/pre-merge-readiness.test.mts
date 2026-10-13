@@ -1042,6 +1042,107 @@ test('buildPreMergeReadinessSummary: a missing-watermark summary built from the 
   assert.deepEqual(validate(summary, readinessSchema), []);
 });
 
+// #4097: a missing required check on a DIRTY head names the merge-conflict
+// route in the `ci` blocker's `hint`. The fixture is shaped like a ready
+// report, with only `ci` and `branchCurrency` varying per case.
+function ciBlockerFor(mergeStateStatus: string, ciStatus: string) {
+  const report = {
+    prHeadSha: '9999999999999999999999999999999999999999',
+    reviewCurrency: { comparisonRoute: 'proceed', comparisonReason: 'match' },
+    threads: { actionableCount: 0 },
+    advisoryWait: { f3Outcome: 'SATISFIED' },
+    ci: {
+      status: ciStatus,
+      requiredChecksPassing: ciStatus === 'success',
+      noRequiredChecksConfigured: false,
+      presentRunConclusion: 'none',
+      discardedNonPassingRequiredChecks: [],
+    },
+    reviewerStates: {
+      requiredApprovalsSatisfied: true,
+      codeownerApprovalSatisfied: true,
+      codeownerSelfApproval: { status: 'not_applicable' },
+    },
+    claim: { matchesExpectedClaim: true, reason: 'match' },
+    dispositionEvidence: { route: 'proceed', blockingCount: 0 },
+    branchCurrency: {
+      mergeStateStatus,
+      mergeable: 'MERGEABLE',
+      requiresUpToDateHead: false,
+      requiresUpToDateHeadSource: 'none',
+    },
+  };
+  return computePreMergeReadinessBlockers(report).find(
+    (blocker) => blocker.gate === 'ci',
+  );
+}
+
+test('computePreMergeReadinessBlockers: missing ci on a DIRTY head carries the merge-conflict hint (#4097)', () => {
+  const dirty = ciBlockerFor('DIRTY', 'missing');
+  const clean = ciBlockerFor('CLEAN', 'missing');
+  assert.ok(dirty, 'expected a ci blocker on a DIRTY head');
+  assert.ok(clean, 'expected a ci blocker on a CLEAN head');
+  // `gate` and `detail` are unchanged by the hint.
+  assert.equal(dirty.gate, 'ci');
+  assert.equal(dirty.detail, clean.detail);
+  assert.equal(clean.hint, undefined);
+  const hint = String(dirty.hint);
+  assert.ok(
+    hint.includes('merge origin/main'),
+    'hint should name the merge route',
+  );
+  assert.ok(hint.includes('DIRTY'), 'hint should name the DIRTY cause');
+  // The blocker item must accept `hint` on its own, too.
+  const blockerItemSchema = (
+    readinessSchema as { properties: { blockers: { items: unknown } } }
+  ).properties.blockers.items;
+  assert.deepEqual(validate(dirty, blockerItemSchema), []);
+});
+
+test('computePreMergeReadinessBlockers: a DIRTY head with checks present gets no ci hint (#4097)', () => {
+  const pending = ciBlockerFor('DIRTY', 'pending');
+  assert.ok(pending, 'expected a ci blocker for a pending required check');
+  assert.equal(pending.hint, undefined);
+  assert.equal(ciBlockerFor('DIRTY', 'success'), undefined);
+});
+
+// #4097: the full summary, not only the blocker item, validates when a
+// required check has no run on a DIRTY head. The clean fixture requires only
+// `lint`; requiring `idd-doctor` as well leaves that check missing.
+test('buildPreMergeReadinessSummary: a DIRTY head with a missing required check validates against the full schema (#4097)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const branchRules = (
+    fixture.input.branchRules as Array<Record<string, unknown>>
+  ).map((rule) =>
+    rule.type === 'required_status_checks'
+      ? {
+          ...rule,
+          parameters: {
+            required_status_checks: [
+              { context: 'lint' },
+              { context: 'idd-doctor' },
+            ],
+          },
+        }
+      : rule,
+  );
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      branchRules,
+      mergeStateStatus: 'DIRTY',
+      mergeable: 'CONFLICTING',
+    },
+    fixture.options,
+  );
+
+  const blockers = summary.blockers as Array<Record<string, unknown>>;
+  const ciBlocker = blockers.find((b) => b.gate === 'ci');
+  assert.ok(ciBlocker, 'expected a ci blocker');
+  assert.match(String(ciBlocker.hint), /merge origin\/main/);
+  assert.deepEqual(validate(summary, readinessSchema), []);
+});
+
 // #3950 regression guard: a malformed watermark keeps its own reason and
 // gets no hint, because the E1 next step is written for the missing case only.
 test('buildPreMergeReadinessSummary: malformed-watermark review-currency blocker has no hint', () => {

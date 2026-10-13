@@ -11379,6 +11379,19 @@ export const MISSING_WATERMARK_HINT =
   'readiness check. See the E1 section of ' +
   '.github/instructions/idd-review-snapshot.instructions.md.';
 
+/**
+ * #4097: fixed next-step text for a `ci` blocker whose required checks are
+ * `missing` while the head is `DIRTY` (it conflicts with its base). Single-
+ * sourced like `MISSING_WATERMARK_HINT`. `detail` is left unchanged and the
+ * hint never feeds the gate decision.
+ */
+export const MERGE_CONFLICT_CI_HINT =
+  'the PR head conflicts with its base branch (mergeStateStatus DIRTY), which ' +
+  'can keep GitHub from starting the required checks for this head. As the ' +
+  'default post-push sync, merge origin/main (the development branch) into ' +
+  'the PR branch, push, and re-run pre-merge readiness once CI reports on the ' +
+  'new head.';
+
 /** One unmet pre-merge gate: the gate id plus a human-readable detail. */
 export interface PreMergeBlocker {
   gate: string;
@@ -11625,6 +11638,13 @@ export function computePreMergeReadinessBlockers(
     });
   }
 
+  // #4097: the CI blocker's merge-conflict hint reads the head's merge state,
+  // so these reads load before the CI blocker below. The BEHIND gate further
+  // down reads the same values.
+  const branchCurrency = preMergeAsRecord(report.branchCurrency);
+  const mergeStateStatus = String(
+    branchCurrency.mergeStateStatus ?? '',
+  ).toUpperCase();
   const ci = preMergeAsRecord(report.ci);
   if (!isPreMergeCiAllPassing(ci)) {
     // #1689: name the source-pinned cause explicitly when a required check
@@ -11921,7 +11941,14 @@ export function computePreMergeReadinessBlockers(
           `not yet covering "${advisoryConvergenceCheckSelector}": ${reasons.join('; ')})`;
       }
     }
-    blockers.push({ gate: 'ci', detail });
+    const ciBlocker: PreMergeBlocker = { gate: 'ci', detail };
+    // #4097: diagnostic only. A missing required check on a DIRTY head is
+    // usually the head conflicting with its base, which GitHub may not run
+    // checks for; name the route. `gate` and `detail` are unchanged.
+    if (ci.status === 'missing' && mergeStateStatus === 'DIRTY') {
+      ciBlocker.hint = MERGE_CONFLICT_CI_HINT;
+    }
+    blockers.push(ciBlocker);
   }
 
   // kurone-kito/idd-skill#2911: the OPPOSITE direction from the block
@@ -12058,11 +12085,7 @@ export function computePreMergeReadinessBlockers(
   // already re-poll as transient, not terminal -- out of this gate's scope.
   // Every other non-BEHIND `gh pr merge` rejection is caught by
   // `idd-merge-execute.mts`'s `deps.mergePr` try/catch instead.
-  const branchCurrency = preMergeAsRecord(report.branchCurrency);
   const requiresUpToDateHead = branchCurrency.requiresUpToDateHead !== false;
-  const mergeStateStatus = String(
-    branchCurrency.mergeStateStatus ?? '',
-  ).toUpperCase();
   if (requiresUpToDateHead && mergeStateStatus === 'BEHIND') {
     blockers.push({
       gate: 'branch-currency',
