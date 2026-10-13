@@ -13,6 +13,7 @@ import {
   WEEKLY_SWEEP_ISSUE_TITLE,
 } from '../src/scripts/merged-pr-feedback-sweep.mts';
 import { CODERABBIT_SUMMARY_MARKER } from '../src/scripts/protocol-helpers.mts';
+import { parseWorkflowYamlSubset } from '../src/scripts/workflow-yaml-subset.mts';
 import { buildCommentThread } from './test-utils.mts';
 
 const OPTIONS = {
@@ -1838,6 +1839,175 @@ test('renderWeeklySweepIssueBody: a non-empty result lists each flagged PR with 
   ]) {
     assert.equal(body.includes(excerpt), false, `leaked: ${excerpt}`);
   }
+});
+
+// --- #4161: the summary workflow file, read through the YAML subset reader ---
+
+const SWEEP_WORKFLOW = new URL(
+  '../.github/workflows/merged-pr-feedback-sweep.yml',
+  import.meta.url,
+);
+
+/** A plain copy of a parsed mapping, so assertions compare values, not prototypes. */
+function plain(value: unknown): unknown {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function readSweepWorkflow(): Record<string, unknown> {
+  const parsed = parseWorkflowYamlSubset(readFileSync(SWEEP_WORKFLOW, 'utf8'));
+  assert.equal(
+    parsed.ok,
+    true,
+    parsed.ok ? '' : `refused: ${parsed.violation.construct}`,
+  );
+  return plain(parsed.value) as Record<string, unknown>;
+}
+
+interface SweepWorkflowStep {
+  name?: string;
+  uses?: string;
+  run?: string;
+  with?: Record<string, string>;
+}
+
+function sweepSteps(): SweepWorkflowStep[] {
+  const job = (readSweepWorkflow().jobs as Record<string, unknown>).sweep as {
+    steps: SweepWorkflowStep[];
+  };
+  return job.steps;
+}
+
+function stepNamed(
+  steps: SweepWorkflowStep[],
+  name: string,
+): SweepWorkflowStep {
+  const found = steps.find((step) => step.name === name);
+  assert.ok(found, `missing step: ${name}`);
+  return found;
+}
+
+test('the summary workflow is dispatch-only, with the agreed permissions and concurrency', () => {
+  const workflow = readSweepWorkflow();
+  assert.deepEqual(Object.keys(workflow).sort(), [
+    'concurrency',
+    'jobs',
+    'name',
+    'on',
+    'permissions',
+  ]);
+  assert.deepEqual(workflow.on, { workflow_dispatch: null });
+  assert.deepEqual(workflow.permissions, {
+    contents: 'read',
+    issues: 'write',
+  });
+  assert.deepEqual(workflow.concurrency, {
+    group: 'merged-pr-feedback-sweep',
+    'cancel-in-progress': 'false',
+  });
+});
+
+test('the summary job is active, bounded, and shares the summary title with the script', () => {
+  const jobs = readSweepWorkflow().jobs as Record<string, unknown>;
+  assert.deepEqual(Object.keys(jobs), ['sweep']);
+  const job = jobs.sweep as Record<string, unknown>;
+  assert.equal('if' in job, false, 'the job must not be gated off');
+  assert.equal(job['runs-on'], 'ubuntu-latest');
+  assert.equal(job['timeout-minutes'], '20');
+  const env = job.env as Record<string, string>;
+  assert.match(env.GH_TOKEN, /^\$\{\{ github\.token \}\}$/);
+  assert.equal(env.SWEEP_ISSUE_TITLE, WEEKLY_SWEEP_ISSUE_TITLE);
+});
+
+test('the summary job has exactly four named steps, with pinned actions and no other uses', () => {
+  const steps = sweepSteps();
+  assert.deepEqual(
+    steps.map((step) => step.name),
+    [
+      'Check out the dispatched ref',
+      'Set up Node.js',
+      'Render the summary issue body',
+      'Create or update the summary issue',
+    ],
+  );
+  assert.deepEqual(
+    steps.map((step) => step.uses ?? null),
+    [
+      'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+      'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020',
+      null,
+      null,
+    ],
+  );
+  assert.deepEqual(stepNamed(steps, 'Check out the dispatched ref').with, {
+    'persist-credentials': 'false',
+  });
+  assert.deepEqual(stepNamed(steps, 'Set up Node.js').with, {
+    'node-version': '24.x',
+  });
+});
+
+test('every gh call in the summary job is one issue list, one issue create, and one issue edit, and nothing else writes', () => {
+  const scripts = sweepSteps()
+    .map((step) => (typeof step.run === 'string' ? step.run : ''))
+    .join('\n');
+  const calls = [...scripts.matchAll(/\bgh\s+([a-z-]+)(?:\s+([a-z-]+))?/g)].map(
+    (match) => `${match[1]} ${match[2] ?? ''}`.trim(),
+  );
+  // Counted, not deduplicated: a second create or edit must fail this check.
+  assert.deepEqual(calls.sort(), ['issue create', 'issue edit', 'issue list']);
+  for (const forbidden of [
+    /\bgit\s+(push|commit|tag|branch|checkout|switch|merge|rebase|reset|fetch|clean|stash|worktree|config)\b/,
+    /\bcurl\b/,
+    /\bwget\b/,
+    /\bsecrets\./,
+    /\bgh\s+api\b/,
+  ]) {
+    assert.doesNotMatch(scripts, forbidden);
+  }
+});
+
+test('the render step runs a seven-day, 500-cap, issue-body sweep into a non-empty body file', () => {
+  const run = String(
+    stepNamed(sweepSteps(), 'Render the summary issue body').run,
+  );
+  assert.match(run, /node scripts\/merged-pr-feedback-sweep\.mjs/);
+  assert.match(run, /--days 7 \\/);
+  assert.match(run, /--limit 500 \\/);
+  assert.match(run, /--issue-body > "\$RUNNER_TEMP\/sweep-body\.md"/);
+  assert.match(run, /--owner "\$\{GITHUB_REPOSITORY%%\/\*\}"/);
+  assert.match(run, /--repo "\$\{GITHUB_REPOSITORY#\*\/\}"/);
+  assert.match(run, /test -s "\$RUNNER_TEMP\/sweep-body\.md"/);
+});
+
+/** Assert that each expected line appears, trimmed, in the given order. */
+function assertLinesInOrder(script: string, expected: readonly string[]): void {
+  const lines = script.split('\n').map((line) => line.trim());
+  let from = 0;
+  for (const want of expected) {
+    const at = lines.indexOf(want, from);
+    assert.notEqual(at, -1, `missing, or out of order: ${want}`);
+    from = at + 1;
+  }
+}
+
+test('the write step refuses a full, malformed, or duplicated listing, edits the one match, and creates only when none exists', () => {
+  const run = String(
+    stepNamed(sweepSteps(), 'Create or update the summary issue').run,
+  );
+  assertLinesInOrder(run, [
+    String.raw`listing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json number,title)"`,
+    String.raw`length="$(printf '%s' "$listing" | jq 'length')"`,
+    'case "$length" in',
+    "''|*[!0-9]*)",
+    String.raw`if [ "$length" -ge 1000 ]; then`,
+    String.raw`found="$(printf '%s' "$listing" | jq -r --arg t "$SWEEP_ISSUE_TITLE" '[.[] | select(.title == $t) | .number] | sort | .[]')"`,
+    String.raw`count="$(printf '%s' "$found" | grep -c . || true)"`,
+    String.raw`if [ "$count" -gt 1 ]; then`,
+    String.raw`elif [ "$count" -eq 1 ]; then`,
+    String.raw`gh issue edit "$found" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/sweep-body.md"`,
+    String.raw`elif [ "$count" -eq 0 ]; then`,
+    String.raw`gh issue create --repo "$GITHUB_REPOSITORY" --title "$SWEEP_ISSUE_TITLE" --body-file "$RUNNER_TEMP/sweep-body.md"`,
+  ]);
 });
 
 test('the cap follows the enumeration, not the pull requests that survived filtering', () => {

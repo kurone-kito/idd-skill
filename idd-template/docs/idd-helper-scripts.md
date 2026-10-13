@@ -7538,7 +7538,13 @@ same as `AW4`/`AW5`.
   counts, never comment text. It names each flagged pull request as `PR <n>`,
   so it adds no cross-reference event. It states the run date (UTC) and, when
   nothing is open, how many pull requests were checked. It notes when the
-  enumeration reached its `--limit` cap.
+  enumeration reached its `--limit` cap. The manual workflow
+  `.github/workflows/merged-pr-feedback-sweep.yml` (`workflow_dispatch` only)
+  runs this helper with `--days 7 --limit 500 --issue-body` and creates or
+  edits the one open issue titled `Merged-PR feedback sweep (weekly)`. It
+  refuses to write when the open-issue listing is full or when more than one
+  open issue carries that title. That workflow is the only writer, and it
+  writes only that issue.
 - **Operator runbook**: this helper is a **manual spot-check audit**, not a
   phase step — its absence from the executable phase instruction files is
   by design, not an oversight.
