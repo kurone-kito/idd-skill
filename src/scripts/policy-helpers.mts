@@ -2571,6 +2571,7 @@ const TRIAGE_VERDICT_VALUES: readonly string[] = ['defer', 'keep'];
 const TRIAGE_LINE_PATTERN =
   /^Triage: tier (low|medium|high); urgency (very-low|low|medium|high); step ([012])(.*)$/u;
 const TRIAGE_OVERRIDE_SEPARATOR = '; override: ';
+const TRIAGE_LINE_BREAK_PATTERN = /[\r\n\u2028\u2029]/u;
 
 /**
  * Format the `Triage:` line (#4186). The layout is fixed: `step` is always
@@ -2581,12 +2582,25 @@ const TRIAGE_OVERRIDE_SEPARATOR = '; override: ';
  */
 export function formatTriageLine(record: TriageRecord): string {
   const { blocked, override } = record;
-  if (blocked !== null && (blocked.includes('; ') || /[\r\n]/u.test(blocked))) {
+  // JavaScript's `.` does not match U+2028 or U+2029, so a reason containing
+  // either one would not parse back.
+  if (
+    blocked !== null &&
+    (blocked.includes('; ') || TRIAGE_LINE_BREAK_PATTERN.test(blocked))
+  ) {
     throw new Error(
       'triage blocked reason must not contain "; " or a line break',
     );
   }
-  if (override !== null && /[\r\n]/u.test(override)) {
+  if (
+    record.convergedHead !== null &&
+    !/^[0-9a-f]{7}$/u.test(record.convergedHead)
+  ) {
+    throw new Error(
+      'triage converged head must be seven lowercase hexadecimal characters',
+    );
+  }
+  if (override !== null && TRIAGE_LINE_BREAK_PATTERN.test(override)) {
     throw new Error('triage override reason must not contain a line break');
   }
   const parts = [

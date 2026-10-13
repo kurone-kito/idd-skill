@@ -309,18 +309,22 @@ export function validateTriageFlags(input) {
       `--urgency must be one of ${TRIAGE_URGENCY_VALUES.join(', ')}`,
     );
   }
-  if ((flags.tier === '') !== (flags.urgency === '')) {
-    throw new TriageUsageError('--tier and --urgency must be given together');
-  }
   const scoringFlags =
     flags.copilotLabel !== '' ||
     flags.safetyClass ||
     flags.lite ||
     flags.advisoryConverged !== '';
-  if (flags.pathB && (flags.tier !== '' || scoringFlags)) {
+  // Checked before the pair, so `--path-b` with a lone score names `--path-b`.
+  if (
+    flags.pathB &&
+    (flags.tier !== '' || flags.urgency !== '' || scoringFlags)
+  ) {
     throw new TriageUsageError(
       '--path-b cannot be combined with --tier, --urgency, --copilot-label, --safety-class, --lite, or --advisory-converged',
     );
+  }
+  if ((flags.tier === '') !== (flags.urgency === '')) {
+    throw new TriageUsageError('--tier and --urgency must be given together');
   }
   // The same prefix test the apply gate uses, so a body that gate admits (for
   // example `**Accepted:**`) cannot skip the requirement. A `**Rejection
@@ -1023,9 +1027,12 @@ function main() {
       exitClassified(1, 'usage', error.message);
     }
     const classified = classifyHelperError(error);
+    writeStderrSync(`reply not posted: ${classified.message}\n`);
+    // The issue's contract is kind `transport` for a read that fails, so a
+    // 404 on the review list or the head is reported as transport here too.
     exitClassified(
       1,
-      classified.kind,
+      classified.kind === 'not-found' ? 'transport' : classified.kind,
       classified.message,
       classified.httpStatus,
     );

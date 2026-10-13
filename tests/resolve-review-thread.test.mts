@@ -1019,7 +1019,19 @@ fail('unexpected gh invocation: ' + joined);
   // this operator-authorized reply. HOME and XDG_CONFIG_HOME point at the
   // same scratch directory so no user-global policy layer applies either.
   let scratch = '';
+  let decoy = '';
+  const savedXdg = process.env.XDG_CONFIG_HOME;
   try {
+    // A user-global triage mode in the parent environment. The child's own
+    // HOME and XDG_CONFIG_HOME must hide it, so removing those overrides
+    // would make the child read it and fail this test.
+    decoy = mkdtempSync(join(tmpdir(), 'idd-operator-decoy-'));
+    mkdirSync(join(decoy, 'idd-skill'), { recursive: true });
+    writeFileSync(
+      join(decoy, 'idd-skill', 'config.json'),
+      `${JSON.stringify({ critiqueLoop: { triageRecord: 'record' } })}\n`,
+    );
+    process.env.XDG_CONFIG_HOME = decoy;
     scratch = mkdtempSync(join(tmpdir(), 'idd-operator-apply-'));
     mkdirSync(join(scratch, '.github', 'idd'), { recursive: true });
     writeFileSync(join(scratch, '.github', 'idd', 'config.json'), '{}\n');
@@ -1043,7 +1055,14 @@ fail('unexpected gh invocation: ' + joined);
       {
         cwd: scratch,
         encoding: 'utf8',
-        env: { ...process.env, HOME: scratch, XDG_CONFIG_HOME: scratch },
+        env: {
+          ...process.env,
+          // Inherited on a GitHub runner, where it would skip the user-global
+          // layer the decoy relies on.
+          GITHUB_ACTIONS: '',
+          HOME: scratch,
+          XDG_CONFIG_HOME: scratch,
+        },
       },
     );
     const report = JSON.parse(output) as ResolveReviewThreadReport;
@@ -1051,9 +1070,20 @@ fail('unexpected gh invocation: ' + joined);
     assert.equal(report.replyId, 4242);
     assert.equal(report.threadId, 'THREAD1');
   } finally {
-    restore();
-    if (scratch) {
-      rmSync(scratch, { recursive: true, force: true });
+    try {
+      restore();
+    } finally {
+      if (savedXdg === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = savedXdg;
+      }
+      if (decoy) {
+        rmSync(decoy, { recursive: true, force: true });
+      }
+      if (scratch) {
+        rmSync(scratch, { recursive: true, force: true });
+      }
     }
   }
 });
@@ -1893,6 +1923,7 @@ test('an optional triage flag with no line is a no-op, not an error (#4186)', ()
     { lite: true },
     { safetyClass: true },
     { copilotLabel: 'low' },
+    { advisoryConverged: TRIAGE_HEAD },
   ]) {
     assert.doesNotThrow(() =>
       validateTriageFlags({
@@ -1900,7 +1931,7 @@ test('an optional triage flag with no line is a no-op, not an error (#4186)', ()
         apply: false,
         body: '',
         triageRecord: 'off',
-        reviewPolicy: undefined,
+        reviewPolicy: 'human-required',
       }),
     );
     const { body, record } = buildTriage(
@@ -2169,7 +2200,11 @@ function triageReviewRows(count: number): unknown[] {
  * view, the review list, the head SHA, the thread lookup and resolve, and the
  * work-item duplicate read, and it appends each POST body to the ledger.
  */
-function triageGhStub(reviews: unknown[]): string {
+function triageGhStub(reviews: unknown[] | null): string {
+  const reviewsRoute =
+    reviews === null
+      ? "fail('gh: HTTP 500 for pulls/42/reviews');"
+      : `out(JSON.stringify(${JSON.stringify(reviews)}));`;
   return `const fs = require('node:fs');
 const args = process.argv.slice(2);
 const joined = args.join(' ');
@@ -2180,7 +2215,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
   out(JSON.stringify({ headRefOid: '${TRIAGE_HEAD}', headRefName: 'main', author: { login: 'someone' }, url: 'https://example.invalid/pr/42', closingIssuesReferences: [] }));
 }
 if (args[0] === 'api' && joined.includes('/pulls/42/reviews')) {
-  out(JSON.stringify(${JSON.stringify(reviews)}));
+  ${reviewsRoute}
 }
 if (args[0] === 'api' && joined.includes('/issues/42/comments') && !args.includes('POST')) {
   out('[]\\n');
@@ -2210,7 +2245,7 @@ fail('unexpected gh invocation: ' + joined);
 function runTriageApply(
   cliArgs: string[],
   config: Record<string, unknown>,
-  reviews: unknown[],
+  reviews: unknown[] | null,
 ): { status: number; stderr: string; posted: string[] } {
   let scratch = '';
   let restore: (() => void) | undefined;
@@ -2302,6 +2337,81 @@ test('the compiled CLI posts the Triage line before the stamp on a record-mode t
   assert.deepEqual(run.posted, [
     `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0\n\n${TRIAGE_STAMP}`,
   ]);
+});
+
+test('validateTriageFlags names --path-b when a lone urgency is given with it (#4186)', () => {
+  assert.throws(
+    () =>
+      validateTriageFlags({
+        flags: triageFlags({ pathB: true, urgency: 'low' }),
+        apply: false,
+        body: '',
+        triageRecord: 'off',
+        reviewPolicy: undefined,
+      }),
+    /--path-b/u,
+  );
+});
+
+test('the compiled CLI writes a converged step 2 when --advisory-converged names the head (#4186)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--advisory-converged',
+      TRIAGE_HEAD,
+      '--body',
+      '**Accepted** — fixed in abc',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(4),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.posted, [
+    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 2; converged deadbee\n\n${TRIAGE_STAMP}`,
+  ]);
+});
+
+test('the compiled CLI writes step 1 for four Copilot reviews on a record-mode thread reply (#4186)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--body',
+      '**Accepted** — fixed in abc',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(4),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.posted, [
+    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 1\n\n${TRIAGE_STAMP}`,
+  ]);
+});
+
+test('the compiled CLI exits 1 with a message and posts nothing when the review read fails (#4186)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--body',
+      '**Accepted** — fixed in abc',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    null,
+  );
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /reply not posted: .*gh: HTTP 500/u);
+  assert.deepEqual(run.posted, []);
 });
 
 test('the compiled CLI posts the reply body unchanged with no triage flag (#4186)', () => {

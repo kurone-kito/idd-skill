@@ -458,6 +458,31 @@ test('formatTriageLine refuses an override reason with a line break (#4186)', ()
   );
 });
 
+test('parseTriageLine rejects an unknown urgency (#4186)', () => {
+  assert.equal(
+    parseTriageLine('Triage: tier low; urgency urgent; step 0'),
+    null,
+  );
+});
+
+test('formatTriageLine refuses a reason with a Unicode line separator (#4186)', () => {
+  assert.throws(
+    () => formatTriageLine({ ...TRIAGE_BARE, blocked: 'a\u2028b' }),
+    /blocked reason/u,
+  );
+  assert.throws(
+    () => formatTriageLine({ ...TRIAGE_BARE, override: 'a\u2029b' }),
+    /override reason/u,
+  );
+});
+
+test('formatTriageLine refuses a converged head that is not seven lowercase hex (#4186)', () => {
+  assert.throws(
+    () => formatTriageLine({ ...TRIAGE_BARE, convergedHead: 'ABC' }),
+    /converged head/u,
+  );
+});
+
 test('critiqueLoop.triageRecord defaults to off and accepts record / enforce (#4185)', () => {
   assert.equal(POLICY_DEFAULTS.critiqueLoop.triageRecord, 'off');
   assert.equal(normalizePolicyConfig({}).critiqueLoop.triageRecord, 'off');
