@@ -416,9 +416,9 @@ alone never proves `COPILOT_UNAVAILABLE` (see **State**).
 - **State**: `COPILOT_UNAVAILABLE` only when all three hold, from
   trusted evidence — cap exhausted (`completedCycleCount >= cap`),
   terminal window elapsed since the anchor, and no current-HEAD
-  Copilot review (`lastCopilotCommit != PR_HEAD_SHA`). Any missing or
-  ambiguous evidence fails closed to `NOT_TERMINAL` with a
-  machine-readable reason.
+  Copilot review (`lastCopilotCommit != PR_HEAD_SHA`), or the declined
+  head below (`#4142`). Any missing or ambiguous evidence fails closed
+  to `NOT_TERMINAL` with a machine-readable reason.
 - **Non-bypass by construction**: `COPILOT_UNAVAILABLE` is structurally
   independent of every advisory-satisfied field (`outcome`, `f3Outcome`,
   future rollups) — neither derives from the other. Consumers may treat
