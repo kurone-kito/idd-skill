@@ -16,12 +16,14 @@ name: Merged-PR feedback sweep (weekly summary)
 # exercises the merged code.
 on:
   workflow_dispatch:
-# contents read and issues write only. The sweep reads pull requests under this
-# token, and the first dispatch run confirms that the reads succeed on this
-# public repository.
+# Permissions are read-only except for the one issue write. pull-requests read
+# is needed because the sweep lists and reads pull requests under this token.
+# Without it the listing comes back empty and the summary says so falsely; the
+# first dispatch run (38396980939) showed exactly that.
 permissions:
   contents: read
   issues: write
+  pull-requests: read
 jobs:
   sweep:
     env:

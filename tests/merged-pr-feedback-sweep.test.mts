@@ -1896,9 +1896,12 @@ test('the summary workflow is dispatch-only, with the agreed permissions and con
     'permissions',
   ]);
   assert.deepEqual(workflow.on, { workflow_dispatch: null });
+  // Read-only except for the one issue write; pull-requests read lets the
+  // listing return real pull requests (the first dispatch run showed it empty).
   assert.deepEqual(workflow.permissions, {
     contents: 'read',
     issues: 'write',
+    'pull-requests': 'read',
   });
   assert.deepEqual(workflow.concurrency, {
     group: 'merged-pr-feedback-sweep',
