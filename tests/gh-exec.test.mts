@@ -3235,6 +3235,10 @@ test('repositoryFromRemoteUrl: names the host, owner and repository of URL-shape
   assert.equal(repositoryFromRemoteUrl('https://github.com/o/./r'), null);
   assert.equal(repositoryFromRemoteUrl('git@github.com:o/..'), null);
   assert.equal(repositoryFromRemoteUrl('https://github.com/o/%2Fx'), null);
+  // A slash in the query or fragment is not the start of the path.
+  assert.equal(repositoryFromRemoteUrl('https://github.com?x/o/r'), null);
+  assert.equal(repositoryFromRemoteUrl('https://github.com#x/o/r'), null);
+  assert.equal(repositoryFromRemoteUrl('https://github.com?/o/r'), null);
   // A port equal to the scheme's default names the same host as no port.
   assert.deepEqual(repositoryFromRemoteUrl('ssh://git@github.com:22/o/r'), {
     host: 'github.com',

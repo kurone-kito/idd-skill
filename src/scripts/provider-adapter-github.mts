@@ -4986,9 +4986,12 @@ export function repositoryFromRemoteUrl(
     // The raw path text, not `url.pathname`: URL() resolves dot segments, so
     // `o/x/../r` would otherwise read as `o/r`. The host above is normalized
     // on purpose (case and default port).
+    // The authority ends at the first `/`, `?`, or `#`; a slash inside a query
+    // or fragment is not the start of the path, so the path keeps its `?` or
+    // `#` and the check below rejects it.
     const afterScheme = text.slice(text.indexOf('://') + 3);
-    const slash = afterScheme.indexOf('/');
-    path = slash === -1 ? '' : afterScheme.slice(slash);
+    const authorityEnd = afterScheme.search(/[/?#]/u);
+    path = authorityEnd === -1 ? '' : afterScheme.slice(authorityEnd);
   } else {
     const scp = /^(?:[^@/\s]+@)?([^:/\s]+):(.+)$/.exec(text);
     if (!scp) return null;
