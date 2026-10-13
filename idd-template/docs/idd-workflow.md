@@ -1224,7 +1224,9 @@ identify its old claims, and step 1 treats them as not its own.
    number from the worker's brief in the agent listing, or from the issue-number
    prefix of its report draft in the session scratchpad, and never from a `main`
    branch. Then read that issue's trusted `claimed-by` and `unclaimed-by`
-   markers for the agent-id and claim-id, and apply the same agent-id test.
+   markers for the agent-id and claim-id, and apply the same agent-id test. If
+   neither source gives an issue number, report the claim to the operator and
+   take no further action on it.
 2. **Verify each own claim.** For a claim with a linked worktree, take `--issue`
    from its branch, `issue/<number>-<slug>`, and confirm it against the trusted
    `claimed-by` marker that carries the same claim-id, because the token record
@@ -1244,10 +1246,11 @@ identify its old claims, and step 1 treats them as not its own.
    including an unreadable worktree, is reported to the operator with its state,
    and no further action is taken on that issue.
 3. **Re-attach workers.** Read the live worker list from the harness's agent
-   listing, and match each entry, by the issue number in the worker's brief,
-   to an own claim. Count every running matched worker in `--running`,
-   including the running worker of a released claim, and pass its issue as an
-   `--in-flight` value below. A matched finished worker goes to step 4. A
+   listing, and match each entry, by the issue number in the worker's brief, to
+   an own claim. Count every matched own worker not yet disposed in `--running`,
+   a running worker or a finished one still awaiting step 4, including the
+   running worker of a released claim, and pass each counted worker's issue as
+   an `--in-flight` value below. A matched finished worker goes to step 4. A
    matched running worker of a claim that step 2 sent to step 3 is handled as
    follows: if the runtime can still message it, apply the existing worker-death
    rules by reference, under the bullet titled
@@ -1258,37 +1261,35 @@ identify its old claims, and step 1 treats them as not its own.
    harness offers no agent listing, no worker is matched, every own claim that
    reached this step goes to step 5, and the rest of this step is skipped,
    because the running workers are unknown. With a listing, recount the roster.
-   Run the
-   profile-selected `idd-worker-budget` command with
-   `--running <n> --startable <n>`, where `--running` is the count above and
-   `--startable` is the number of startable candidates still in the
-   orchestrator's cached graph, which a restart discards. After a restart, run
-   a fresh Discover pass first, as section 3 of the orchestrator phase file
-   describes, and count its candidates (0 when none). Add
-   `--harness-limit <limit>` when this harness's row in the worker mechanism
-   table gives a numeric limit, and omit it otherwise. When `--startable` is at
-   least 1 and the budget's `slots` is at least 1, run the profile-selected
-   `discover-shared-file-overlap` command with
+   Run the profile-selected `idd-worker-budget` command with `--running <n>
+   --startable <n>`, where `--running` is the count above and `--startable` is
+   the number of startable candidates still in the orchestrator's cached graph,
+   which a restart discards. After a restart, run a fresh Discover pass first,
+   as section 3 of the orchestrator phase file describes, and count its
+   candidates (0 when none). Add `--harness-limit <limit>` when this harness's
+   row in the worker mechanism table gives a numeric limit, and omit it
+   otherwise. When `--startable` is at least 1 and the budget's `slots` is at
+   least 1, run the profile-selected `discover-shared-file-overlap` command with
    `--issues <n,...>` (the startable candidates), `--batch <k>` (the `slots`
-   value), `--check-overlap`, one `--in-flight <n>` for each counted running
-   worker's issue, and `--desync-token` set to this session's session-suffixed
-   agent-id, or to the session-local token that Discover generated at its entry
-   when the session has no suffix, whenever `discover.selectionDesync` is
+   value), `--check-overlap`, one `--in-flight <n>` for each counted worker's
+   issue, and `--desync-token` set to this session's session-suffixed agent-id,
+   or to the session-local token that Discover generated at its entry when the
+   session has no suffix, whenever `discover.selectionDesync` is
    `session-offset`. Otherwise skip it: the helper rejects an empty candidate
    list and a zero batch.
 4. **Recover reports.** Run this step for each matched finished worker, under
-   that worker's own listed handle. For a released claim with no matched
-   worker, run this step under the claim-id as its handle. The append's own
-   duplicate check, which uses the claim-id, the handle, and the terminal phase,
-   decides whether that record already exists. A
-   matched running worker gets no record. A released claim whose only matched
-   worker is still running gets no record and is reported in step 5. Look for
-   the worker's report draft in the scratchpad of the same session, under the
-   issue-number prefix that the fan-out variant already requires. If a draft is
-   found, verify its outcome, `pullRequest`, and `terminalPhase` against live
-   GitHub state, set `verifiedAt` to that check and `recordedAt` to the time of
-   the append, then append it. If no draft is found, verify the terminal outcome
-   from live GitHub state, build the record as the
+   that worker's own listed handle. For a released claim with no matched worker,
+   run this step under the claim-id as its handle. The append's own duplicate
+   check, which uses the claim-id, the handle, and the terminal phase, decides
+   whether that record already exists. A matched running worker gets no record.
+   A released claim whose only matched worker is still running gets no record
+   and is reported in step 5. Look for the worker's report draft in the
+   scratchpad of the same session, under the issue-number prefix that the
+   fan-out variant already requires. If a draft is found, verify its outcome,
+   `pullRequest`, and `terminalPhase` against live GitHub state, set
+   `verifiedAt` to that check and `recordedAt` to the time of the append, then
+   append it. If no draft is found, verify the terminal outcome from live GitHub
+   state, build the record as the
    [worker final report store](idd-helper-scripts.md#worker-final-report-store)
    describes, and append it the same way. In both cases, validate the record
    against `schemas/worker-report.schema.json` first, then append it with the
@@ -1298,7 +1299,9 @@ identify its old claims, and step 1 treats them as not its own.
    `handed-off` when a handoff summary was posted before the release, and
    `failed` otherwise. Record the recovery in `frictions`, naming
    `docs/idd-workflow.md` in `file`, because that is the instruction path the
-   recovery followed.
+   recovery followed. If verification or the append fails, keep the worker
+   addressable, mark it `stalled`, and follow the worker-specific recovery in
+   the fan-out variant, as section 5 of the orchestrator phase file describes.
 5. **Report the remainder.** An own claim that reached step 3 and has no
    matching worker is reported to the operator, and so is a matched finished
    worker whose recorded outcome is `held`. A released claim is reported here
