@@ -573,7 +573,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    Finally, while the claim still matches, post your
    `{agent-id}` / `{claim-id}` `unclaimed-by` (see
    [Unclaim format](idd-overview-core.instructions.md#unclaim-format))
-   to release it (#2220).
+   to release it (#2220). If ownership is lost, stop all later mutations.
 
 ## F5 — Loop
 

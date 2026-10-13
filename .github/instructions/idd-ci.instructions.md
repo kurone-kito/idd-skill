@@ -123,8 +123,8 @@ interpreting `gh pr checks` output.
    interprets (`idd-pre-merge.instructions.md`). Reuse
    `pre-merge-readiness`'s `ci.presentRunConclusion` when available;
    otherwise derive the equivalent from actual runs at the head SHA.
-   Hold rather than treat an empty required-check set as a vacuous pass,
-   except `ci.allowedByPolicySetting` (the global-only opt-in); see
+   Route that result as F2's `ci.presentRunConclusion` routing does,
+   including its `ci.allowedByPolicySetting` exception; see
    [F2 — Pre-merge condition check](idd-pre-merge.instructions.md#f2--pre-merge-condition-check).
 
 When caller phases already provide a trusted required-check set, reuse
@@ -301,8 +301,7 @@ decision-rule file gets none (kurone-kito/idd-skill#4015).
 original event's commit and workflow definition (`pull_request`: that
 event's merge commit; `pull_request_target`: the base branch's copy at
 that time), so a later workflow-file change is invisible to it. Run-time
-fetches, such as the verdict job's checkout of `{default-branch}`, are
-current. If a required check keeps failing the same way after a rerun
+fetches are current. If a required check keeps failing the same way after a rerun
 and its workflow file changed on `{development-branch}` since, the
 recovery is a new event: a branch-sync merge (merge
 `{development-branch}` in, never rebase — see the E-phase
