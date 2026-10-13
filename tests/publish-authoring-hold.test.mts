@@ -175,7 +175,8 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
     }
     if (number === ${NEW_ISSUE} && state.ambiguousOwnerPost) {
       // The owner marker lands, but the reply is lost and every later read
-      // of the issue's comments fails.
+      // of the issue's comments fails. The failed read is what stops the
+      // retry layer from posting the marker a second time.
       state.comments.push({ id: 7000 + state.comments.length, issue: number, journalIndex: 0, body: JSON.parse(stdin).body, user, createdAt: '2026-10-13T00:30:00Z' });
       state.ownerListFails = true;
       save();

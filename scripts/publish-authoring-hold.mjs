@@ -289,11 +289,14 @@ and the label lookups, prints the planned steps, and writes nothing.
 
 A failed post-idd-marker --apply sent nothing only when its iddHelperError
 envelope reports notDispatched, or HTTP status 401, 404 or 422. Then the
-report carries "nothingSent": true and "retry": "permitted". Any other
-failure is uncertain: "nothingSent": false and the journal state "uncertain:
-replay the journal", and a retry must replay the journal first. An
+report carries "nothingSent": true. Any other failure is uncertain:
+"nothingSent": false, and a journal record's state is "uncertain: replay
+the journal" (an owner marker's is "ownerMarker": "uncertain"). Before the
+create, the report adds "retry": "permitted" after a nothing-sent failure,
+or "retry": "replay the journal first" after an uncertain one; an
 uncertain pending record stops before the create, so no second
-publication-intent record and no issue are written.
+publication-intent record and no issue are written. After the create,
+never rerun the command: it would create a second issue.
 
 A failure after the create prints a recovery-hold JSON object with the
 created issue, the failed step and the last journal state, and exits 1.

@@ -1188,10 +1188,12 @@ in this preamble, since the fallback differs per helper.
   marker, checks provenance, and posts `state=member` (exit `0`). A
   refusal before the create exits `1`; a failure after it prints a
   recovery hold and exits `1`. A failed marker post counts as unsent
-  (`"nothingSent": true`, retry permitted) only when
+  (`"nothingSent": true`; a retry is permitted only before the create)
+  only when
   `post-idd-marker.mjs`'s error envelope reports `notDispatched` or HTTP
   status 401, 404 or 422; any other failure reports the journal as
-  `uncertain: replay the journal`, and an uncertain pending record stops
+  `uncertain: replay the journal` (an owner marker reports
+  `"ownerMarker": "uncertain"`), and an uncertain pending record stops
   before the create. Every policy value comes from the repository policy
   file only, and `--marker-prefix` is required when the issue or the
   journal is in another repository.
