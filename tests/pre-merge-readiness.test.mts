@@ -1042,6 +1042,101 @@ test('buildPreMergeReadinessSummary: a missing-watermark summary built from the 
   assert.deepEqual(validate(summary, readinessSchema), []);
 });
 
+// #4124: a same-timestamp-count-growth review-currency blocker names the next
+// step in `hint`. The literal is compared verbatim, and `gate`, `detail`, and
+// the review-currency fields keep the values the comparison produced.
+const SAME_TIMESTAMP_COUNT_GROWTH_HINT_TEXT =
+  'More review items exist now than the last review watermark counted, with no newer non-ack-only activity. Take a fresh snapshot (E1 Step 1), record a fresh watermark for the current head (E1 Step 2), then re-run readiness.';
+
+test('computePreMergeReadinessBlockers: same-timestamp-count-growth review-currency blocker carries the next-step hint (#4124)', () => {
+  const report = {
+    prHeadSha: '9999999999999999999999999999999999999999',
+    reviewCurrency: {
+      comparisonRoute: 'return-to-e1',
+      comparisonReason: 'same-timestamp-count-growth',
+    },
+    threads: { actionableCount: 0 },
+    advisoryWait: { f3Outcome: 'SATISFIED' },
+    ci: {
+      status: 'success',
+      requiredChecksPassing: true,
+      noRequiredChecksConfigured: false,
+      presentRunConclusion: 'none',
+      discardedNonPassingRequiredChecks: [],
+    },
+    reviewerStates: {
+      requiredApprovalsSatisfied: true,
+      codeownerApprovalSatisfied: true,
+      codeownerSelfApproval: { status: 'not_applicable' },
+    },
+    claim: { matchesExpectedClaim: true, reason: 'match' },
+    dispositionEvidence: { route: 'proceed', blockingCount: 0 },
+    branchCurrency: {
+      mergeStateStatus: 'CLEAN',
+      mergeable: 'MERGEABLE',
+      requiresUpToDateHead: false,
+      requiresUpToDateHeadSource: 'none',
+    },
+  };
+  const reviewCurrencyBefore = structuredClone(report.reviewCurrency);
+  const blocker = computePreMergeReadinessBlockers(report).find(
+    (b) => b.gate === 'review-currency',
+  );
+  assert.ok(blocker, 'expected a review-currency blocker');
+  assert.equal(blocker.gate, 'review-currency');
+  assert.equal(
+    blocker.detail,
+    'comparisonRoute is "return-to-e1" (expected "proceed"): same-timestamp-count-growth',
+  );
+  assert.equal(blocker.hint, SAME_TIMESTAMP_COUNT_GROWTH_HINT_TEXT);
+  assert.deepEqual(report.reviewCurrency, reviewCurrencyBefore);
+  // The blocker item must accept `hint` on its own, too.
+  const blockerItemSchema = (
+    readinessSchema as { properties: { blockers: { items: unknown } } }
+  ).properties.blockers.items;
+  assert.deepEqual(validate(blocker, blockerItemSchema), []);
+});
+
+// #4124: a watermark whose total-item-count is below the live count, with no
+// newer activity, yields same-timestamp-count-growth and the same next step.
+// Only the copy used here is lowered; the fixture file itself is not edited.
+test('buildPreMergeReadinessSummary: a lowered watermark count gives the same-timestamp-count-growth hint (#4124)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const watermarkFields = '2026-05-11T23:56:00Z 3 2026-05-11T23:57:00Z';
+  const comments = (fixture.input.comments as Array<{ body?: string }>).map(
+    (comment) => {
+      const body = String(comment.body ?? '');
+      if (!body.startsWith('<!-- review-watermark:')) {
+        return comment;
+      }
+      assert.ok(
+        body.includes(watermarkFields),
+        'expected the fixture watermark fields',
+      );
+      return {
+        ...comment,
+        body: body.replace(
+          watermarkFields,
+          '2026-05-11T23:56:00Z 2 2026-05-11T23:57:00Z',
+        ),
+      };
+    },
+  );
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, comments },
+    fixture.options,
+  );
+
+  const reviewCurrency = summary.reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.comparisonRoute, 'return-to-e1');
+  assert.equal(reviewCurrency.comparisonReason, 'same-timestamp-count-growth');
+  const blockers = summary.blockers as Array<Record<string, unknown>>;
+  const blocker = blockers.find((b) => b.gate === 'review-currency');
+  assert.ok(blocker, 'expected a review-currency blocker');
+  assert.equal(blocker.hint, SAME_TIMESTAMP_COUNT_GROWTH_HINT_TEXT);
+  assert.deepEqual(validate(summary, readinessSchema), []);
+});
+
 // #4097: a missing required check on a DIRTY head names the merge-conflict
 // route in the `ci` blocker's `hint`. The fixture is shaped like a ready
 // report, with only `ci` and `branchCurrency` varying per case.
@@ -1144,7 +1239,8 @@ test('buildPreMergeReadinessSummary: a DIRTY head with a missing required check 
 });
 
 // #3950 regression guard: a malformed watermark keeps its own reason and
-// gets no hint, because the E1 next step is written for the missing case only.
+// gets no hint, because the E1 next step covers only the missing and
+// same-timestamp-count-growth reasons (#4124).
 test('buildPreMergeReadinessSummary: malformed-watermark review-currency blocker has no hint', () => {
   const prHeadSha = '7777777777777777777777777777777777777777';
   const summary = buildPreMergeReadinessSummary(

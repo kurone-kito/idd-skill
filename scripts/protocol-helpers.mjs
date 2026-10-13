@@ -9491,6 +9491,18 @@ export const MISSING_WATERMARK_HINT =
   'readiness check. See the E1 section of ' +
   '.github/instructions/idd-review-snapshot.instructions.md.';
 /**
+ * #4124: fixed next-step text for a `review-currency` blocker whose
+ * `comparisonReason` is `same-timestamp-count-growth`: the live item count is
+ * higher than the watermark's count while no newer non-ack-only activity is
+ * recorded. On `kurone-kito/setup.ubuntu` PR #204 (2026-10-08) that blocker
+ * gave no next step. Single-sourced like `MISSING_WATERMARK_HINT`. Diagnostic
+ * only: `detail` is left unchanged and the hint never feeds the gate decision.
+ */
+export const SAME_TIMESTAMP_COUNT_GROWTH_HINT =
+  'More review items exist now than the last review watermark counted, with ' +
+  'no newer non-ack-only activity. Take a fresh snapshot (E1 Step 1), record ' +
+  'a fresh watermark for the current head (E1 Step 2), then re-run readiness.';
+/**
  * #4097: fixed next-step text for a `ci` blocker whose required checks are
  * `missing` while the head is `DIRTY` (it conflicts with its base). Single-
  * sourced like `MISSING_WATERMARK_HINT`. `detail` is left unchanged and the
@@ -9636,6 +9648,8 @@ export function computePreMergeReadinessBlockers(report) {
     };
     if (comparisonReason === 'missing-watermark') {
       reviewCurrencyBlocker.hint = MISSING_WATERMARK_HINT;
+    } else if (comparisonReason === 'same-timestamp-count-growth') {
+      reviewCurrencyBlocker.hint = SAME_TIMESTAMP_COUNT_GROWTH_HINT;
     }
     blockers.push(reviewCurrencyBlocker);
   }

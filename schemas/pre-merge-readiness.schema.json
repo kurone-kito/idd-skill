@@ -1984,7 +1984,7 @@
           },
           "hint": {
             "type": "string",
-            "description": "Optional next-step text, present only when the gate can name one (currently review-currency with comparisonReason missing-watermark, and ci when ci.status is missing on a head whose branchCurrency.mergeStateStatus is DIRTY). Diagnostic only; detail is unchanged and no routing decision reads it."
+            "description": "Optional next-step text, present only when the gate can name one (currently review-currency with comparisonReason missing-watermark or same-timestamp-count-growth, and ci when ci.status is missing on a head whose branchCurrency.mergeStateStatus is DIRTY). Diagnostic only; detail is unchanged and no routing decision reads it."
           }
         }
       }
