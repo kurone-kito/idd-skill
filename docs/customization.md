@@ -1072,7 +1072,7 @@ a roadmap's tracked child is indistinguishable from completed work to the
 A1.5 roadmap audit. So
 the workflow either sets `days-before-close: -1`, which marks issues
 stale but never closes them (the source repository's choice since
-kurone-kito/idd-skill#831), or exempts the configured values of all four
+kurone-kito/idd-skill#831), or exempts the configured values of all five
 fields, not the defaults when a field is customized. Exempting the
 labels protects parked issues only: a tracked child that is ready for
 work carries none of them, so only the mark-only setting covers it.
