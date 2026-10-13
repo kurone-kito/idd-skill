@@ -21,6 +21,7 @@ import {
   type GitRunner,
   runPrePushTrialBudget,
 } from '../src/scripts/pre-push-trial-budget.mts';
+import { stubExecutable } from './test-utils.mts';
 
 // A stub audit-docs in the printed shape of the real one. Its budget is the
 // size in budget.txt against the limit in audit/sync-manifest.json, read from
@@ -381,4 +382,114 @@ test('a held clone lock fails the check closed before any worktree is created (#
   assert.equal(result.outcome, 'clone-lock-unavailable');
   assert.equal(result.exitCode, 1);
   assert.equal(git(f.work, ['worktree', 'list', '--porcelain']), before);
+});
+
+test('git runs with the scrubbed environment, and GIT_DIR does not reach it (#4095)', {
+  skip: process.platform === 'win32',
+}, (t) => {
+  const f = behindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  advanceMain(f, 'unrelated.txt', 'main work\n');
+  // Resolve the real git before the stub goes on PATH.
+  const realGit = spawnSync('sh', ['-c', 'command -v git'], {
+    encoding: 'utf8',
+  }).stdout.trim();
+  const record = join(f.root, 'git-env.jsonl');
+  // The stub records the GIT_* variables of each call, then runs the real git.
+  const restoreStub = stubExecutable(
+    'git',
+    `const { appendFileSync } = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const args = process.argv.slice(2);
+const env = {};
+for (const [key, value] of Object.entries(process.env)) {
+  if (key.startsWith('GIT_') || key === 'GCM_INTERACTIVE') env[key] = value;
+}
+appendFileSync(${JSON.stringify(record)}, JSON.stringify({ args, env }) + '\\n');
+const result = spawnSync(${JSON.stringify(realGit)}, args, { stdio: 'inherit', env: process.env });
+process.exitCode = result.status ?? 1;
+`,
+  );
+  t.after(restoreStub);
+  // Seed the variables after the fixture, so the fixture's own git is unaffected.
+  const seeded = {
+    GIT_DIR: join(f.root, 'not-a-repository'),
+    GIT_ASKPASS: 'askpass-sentinel',
+    GIT_SSH: 'ssh-sentinel',
+    GIT_SSH_COMMAND: 'ssh-command-sentinel',
+    GIT_SSH_VARIANT: 'ssh-variant-sentinel',
+  };
+  const saved = Object.fromEntries(
+    Object.keys(seeded).map((key) => [key, process.env[key]]),
+  );
+  t.after(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+  Object.assign(process.env, seeded);
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+
+  const recorded = readFileSync(record, 'utf8')
+    .trim()
+    .split('\n')
+    .map(
+      (line) =>
+        JSON.parse(line) as { args: string[]; env: Record<string, string> },
+    );
+  // The clone lock's own `--git-common-dir` probe is not a pre-push git call
+  // and does not go through the default runner, so it is not asserted here.
+  const calls = recorded.filter(
+    (call) => !call.args.includes('--git-common-dir'),
+  );
+  assert.equal(result.outcome, 'pass');
+  assert.ok(calls.length > 0, 'git ran through the stub');
+  for (const call of calls) {
+    assert.equal(call.env.GIT_DIR, undefined, 'GIT_DIR is removed');
+    assert.equal(call.env.GIT_ASKPASS, 'askpass-sentinel');
+    assert.equal(call.env.GIT_SSH, 'ssh-sentinel');
+    assert.equal(call.env.GIT_SSH_COMMAND, 'ssh-command-sentinel');
+    assert.equal(call.env.GIT_SSH_VARIANT, 'ssh-variant-sentinel');
+    assert.equal(call.env.GIT_TERMINAL_PROMPT, '0');
+    assert.equal(call.env.GCM_INTERACTIVE, 'never');
+  }
+});
+
+test('a failed add that keeps its registration fails the check closed (#4095)', (t) => {
+  const f = behindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  advanceMain(f, 'unrelated.txt', 'main work\n');
+  const addedPaths: string[] = [];
+  // The add fails, the listing still shows the path, and the removal is refused.
+  const refusing: GitRunner = (cwd, args, env) => {
+    const at = args.indexOf('worktree');
+    if (at < 0) return defaultGitRunner(cwd, args, env);
+    const verb = args[at + 1];
+    if (verb === 'add') {
+      addedPaths.push(args[at + 3] ?? '');
+      return { status: 128, stdout: '' };
+    }
+    if (verb === 'list') {
+      const listed = addedPaths.map((path) => `worktree ${path}\n`).join('');
+      return { status: 0, stdout: `${listed}\n` };
+    }
+    if (verb === 'remove') return { status: 1, stdout: '' };
+    return defaultGitRunner(cwd, args, env);
+  };
+
+  const result = runPrePushTrialBudget({ cwd: f.work, runGit: refusing });
+
+  const [addedPath] = addedPaths;
+  if (addedPath === undefined || addedPath === '') {
+    assert.fail('the scratch add was attempted');
+  }
+  // The scratch directory is the parent of the added path. It is kept.
+  const scratch = join(addedPath, '..');
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  assert.equal(result.outcome, 'worktree-failed');
+  assert.equal(result.cleanupFailed, true);
+  assert.equal(result.exitCode, 1);
+  assert.equal(existsSync(scratch), true, 'the scratch directory is kept');
 });

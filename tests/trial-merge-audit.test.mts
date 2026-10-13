@@ -469,6 +469,38 @@ test('worktree-remove-failed: a removal that cannot take the clone lock keeps th
   }
 });
 
+test('worktree-add-failed: a smudge filter that fails the trial checkout leaves no registration (#4095)', {
+  skip: process.platform === 'win32',
+}, () => {
+  // The filter is configured after the fixture commits, so the fixture is unaffected.
+  const fixture = makeFixture({
+    featureChanges: { 'blocked.txt': 'blocked\n' },
+  });
+  mkdirSync(join(fixture.work, '.git', 'info'), { recursive: true });
+  writeFileSync(
+    join(fixture.work, '.git', 'info', 'attributes'),
+    'blocked.txt filter=trial-block\n',
+  );
+  git(fixture.work, ['config', 'filter.trial-block.smudge', 'false']);
+  git(fixture.work, ['config', 'filter.trial-block.required', 'true']);
+
+  const result = runTrialMergeAudit(fixture.work, '1', 'o', 'r', {
+    readPr: stubPr(fixture),
+    runInstall: () => ({ exitCode: 0 }),
+    runCommand: () => ({ exitCode: 0 }),
+  });
+
+  assert.equal(result.verdict, 'not-run');
+  assert.deepEqual(result.reasons, ['worktree-add-failed']);
+  assert.equal(result.worktreeRemoved, true);
+  const records = git(fixture.work, ['worktree', 'list', '--porcelain']);
+  assert.equal(
+    records.split('\n').filter((line) => line.startsWith('worktree ')).length,
+    1,
+    'only the primary worktree remains registered',
+  );
+});
+
 test('shallow clone: a merge base beyond the shallow boundary is deepened, and no ref moves', () => {
   const fixture = makeFixture();
   // A depth-1 clone of main: the merge base of the PR is outside its history.

@@ -19,6 +19,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 import { acquireCloneLock, releaseCloneLock } from './clone-lock.mjs';
+import {
+  addScratchWorktree,
+  DEFAULT_KEEP_LIST,
+  scrubbedGitEnv,
+} from './trial-scratch.mjs';
 /** Flag spec for `parseCliArgs`. */
 export const PRE_PUSH_TRIAL_BUDGET_FLAG_SPEC = {
   '--cwd': { type: 'string' },
@@ -43,11 +48,14 @@ export function sanitizedEnv(env = process.env) {
     Object.entries(env).filter(([key]) => !key.startsWith('GIT_')),
   );
 }
-/** The default runner, a plain `git -C <cwd>` spawn with a sanitized env. */
-export const defaultGitRunner = (cwd, args) => {
+/**
+ * The default runner, a plain `git -C <cwd>` spawn. It uses the environment
+ * the caller passes, or the scrubbed environment of trial-scratch.mts.
+ */
+export const defaultGitRunner = (cwd, args, env) => {
   const result = spawnSync('git', ['-C', cwd, ...args], {
     encoding: 'utf8',
-    env: sanitizedEnv(),
+    env: env ?? scrubbedGitEnv(process.env, DEFAULT_KEEP_LIST),
   });
   return { status: result.status ?? 1, stdout: result.stdout ?? '' };
 };
@@ -125,6 +133,24 @@ export function runPrePushTrialBudget(options) {
   const gitScratch = (cwd, args) => runGit(cwd, [...scratchConfig, ...args]);
   const created = [];
   const cleanupFailures = [];
+  // Paths whose failed add left a registration that the shared step could not
+  // confirm removed. A retry that also fails is a cleanup failure even when the
+  // path is already gone, so the scratch directory is kept for the operator.
+  const retained = new Set();
+  // The worktree add runs through the shared steps. The commit.gpgSign setting
+  // is pre-push's own, so it is added here, not in the shared module.
+  const runScratchGit = (args, cwd, env) =>
+    runGit(cwd, ['-c', 'commit.gpgSign=false', ...args], env);
+  const addWorktree = (path, commit) => {
+    const result = addScratchWorktree(runScratchGit, {
+      cwd: repo,
+      hooksDir: hooksOff,
+      path,
+      commit,
+    });
+    if (!result.ok && !result.registrationRemoved) retained.add(path);
+    return result;
+  };
   // The trial: resolves to an outcome and the audit lines, and never cleans up.
   const trial = () => {
     // The shared worktree records are changed only under the clone lock, as
@@ -139,17 +165,11 @@ export function runPrePushTrialBudget(options) {
       // Each worktree is recorded before its status is checked, so a worktree
       // a failed add still created is removed by the cleanup below.
       created.push(trialTree);
-      if (
-        gitScratch(repo, ['worktree', 'add', '--detach', trialTree, headSha])
-          .status !== 0
-      ) {
+      if (!addWorktree(trialTree, headSha).ok) {
         return { outcome: 'worktree-failed' };
       }
       created.push(baseTooling);
-      if (
-        gitScratch(repo, ['worktree', 'add', '--detach', baseTooling, baseSha])
-          .status !== 0
-      ) {
+      if (!addWorktree(baseTooling, baseSha).ok) {
         return { outcome: 'worktree-failed' };
       }
     } finally {
@@ -206,8 +226,10 @@ export function runPrePushTrialBudget(options) {
     verdict = trial();
   } finally {
     // Unregistering a worktree also changes shared records, so it is done under
-    // the clone lock again. A lock that cannot be taken leaves every created
-    // worktree for the operator and counts as a cleanup failure.
+    // the clone lock again. A lock that cannot be taken counts as a cleanup
+    // failure for each created path that is still present or whose registration
+    // was retained. The scratch directory is kept only when one of those paths
+    // is left.
     let cleanupLock = null;
     if (created.length > 0) {
       try {
@@ -217,7 +239,9 @@ export function runPrePushTrialBudget(options) {
       }
     }
     if (created.length > 0 && cleanupLock === null) {
-      cleanupFailures.push(...created.filter((path) => existsSync(path)));
+      cleanupFailures.push(
+        ...created.filter((path) => existsSync(path) || retained.has(path)),
+      );
     }
     try {
       for (const path of created.reverse()) {
@@ -230,8 +254,9 @@ export function runPrePushTrialBudget(options) {
           '--force',
           path,
         ]);
-        // A path that a failed add never created is not a cleanup failure.
-        if (removed.status !== 0 && existsSync(path)) {
+        // A path that a failed add never created is not a cleanup failure, but
+        // a path whose registration the add could not remove is one.
+        if (removed.status !== 0 && (existsSync(path) || retained.has(path))) {
           cleanupFailures.push(path);
         }
       }
