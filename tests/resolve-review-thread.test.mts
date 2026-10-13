@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -999,7 +1005,15 @@ if (args[0] === 'api' && joined.includes('.head.ref')) {
 fail('unexpected gh invocation: ' + joined);
 `,
   );
+  // Run from a scratch cwd whose fixture config has no critiqueLoop, so a
+  // later repository opt-in (for example a triageRecord mode) cannot change
+  // this operator-authorized reply. HOME and XDG_CONFIG_HOME point at the
+  // same scratch directory so no user-global policy layer applies either.
+  let scratch = '';
   try {
+    scratch = mkdtempSync(join(tmpdir(), 'idd-operator-apply-'));
+    mkdirSync(join(scratch, '.github', 'idd'), { recursive: true });
+    writeFileSync(join(scratch, '.github', 'idd', 'config.json'), '{}\n');
     const output = execFileSync(
       process.execPath,
       [
@@ -1017,7 +1031,11 @@ fail('unexpected gh invocation: ' + joined);
         '--body',
         '**Accepted** — operator-authorized, no linked issue',
       ],
-      { cwd: REPO_ROOT, encoding: 'utf8' },
+      {
+        cwd: scratch,
+        encoding: 'utf8',
+        env: { ...process.env, HOME: scratch, XDG_CONFIG_HOME: scratch },
+      },
     );
     const report = JSON.parse(output) as ResolveReviewThreadReport;
     assert.equal(report.status, 'applied');
@@ -1025,6 +1043,9 @@ fail('unexpected gh invocation: ' + joined);
     assert.equal(report.threadId, 'THREAD1');
   } finally {
     restore();
+    if (scratch) {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   }
 });
 
