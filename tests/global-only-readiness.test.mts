@@ -60,8 +60,11 @@ function readinessPort(
   content: Record<string, unknown>,
   requiredContexts: string[] = [ADVISORY],
   rollup: unknown[] = [],
+  reviews: unknown[] = [],
+  comments: Record<number, unknown[]> = {},
 ): ProviderPort {
   return createFakeProviderAdapter({
+    comments: comments as never,
     changeRequestReadinessSnapshots: {
       42: {
         headSha: 'a'.repeat(40),
@@ -90,7 +93,10 @@ function readinessPort(
     branchProtection: { 'o/r/main': {} },
     reviewThreadsWithComments: { 42: [] },
     reviewsWithHeadCommitDate: {
-      42: { reviews: [], headCommittedAt: '2026-07-31T23:00:00Z' },
+      42: {
+        reviews: reviews as never,
+        headCommittedAt: '2026-07-31T23:00:00Z',
+      },
     },
     repositoryDefaultBranch: 'main',
     repositoryContentAtRef: content,
@@ -632,5 +638,72 @@ test('a stray policy marker alone never passes a held CI summary', () => {
       allowedByPolicySetting: NO_REQUIRED_CHECKS_POLICY_SETTING,
     }),
     true,
+  );
+});
+
+// --- #4142: the readiness wiring reads the exact decline on HEAD ------------
+// Reviewing the decline helper, a regression could drop `copilotDeclinedHead`
+// in collectPreMergeReadiness while the convergence and wait-state tests still
+// pass. This drives the real readiness collector with the notice on HEAD.
+
+const NO_REVIEWABLE_FILES_NOTICE =
+  "Copilot wasn't able to review any files in this pull request. Check if the **Files changed** in this pull request are included in [default exclusions](https://docs.github.com/en/copilot/reference/review-excluded-files).\n\n\n\n";
+
+test('decline (#4142): collectPreMergeReadiness reports copilot-terminal-unavailable at once for the notice on HEAD, with no window wait', () => {
+  const claimComment = {
+    body: '<!-- claimed-by: claude-978b6358 claim-4142 supersedes: none 2026-07-31T22:00:00Z branch: issue/4142-fix -->\n\n_claude-978b6358: issue claim - IDD automation marker. Do not edit._',
+    createdAt: '2026-07-31T22:00:00Z',
+    author: { login: 'kurone-kito' },
+    lastEditedAt: null,
+  };
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '42',
+      '--claim-issue',
+      '7',
+      '--claim-id',
+      'claim-4142',
+      '--agent-id',
+      'claude-978b6358',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+    ],
+    () =>
+      readinessPort(
+        {},
+        [ADVISORY],
+        [],
+        [
+          {
+            id: 'PRR_decline_4142',
+            authorLogin: 'copilot-pull-request-reviewer',
+            authorTypename: 'Bot',
+            submittedAt: '2026-07-31T23:30:00Z',
+            commitId: 'a'.repeat(40),
+            commentCount: 0,
+            body: NO_REVIEWABLE_FILES_NOTICE,
+            replyOnly: false,
+            state: 'COMMENTED',
+          },
+        ],
+        { 7: [claimComment] },
+      ),
+    () => null,
+    () => null,
+  );
+  // With no marker and no elapsed window, only the decline wiring can make
+  // Copilot terminal here. Dropping `copilotDeclinedHead` would leave both
+  // of these false.
+  assert.equal(report.advisoryWait.copilotUnavailable, true);
+  assert.equal(report.advisoryWait.lastCopilotCommit, '');
+  assert.equal(report.advisoryWait.copilotUnavailableWaived, false);
+  assert.ok(
+    report.blockers.some(
+      (blocker: { gate: string }) =>
+        blocker.gate === 'copilot-terminal-unavailable',
+    ),
   );
 });
