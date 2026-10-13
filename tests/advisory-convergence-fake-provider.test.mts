@@ -177,6 +177,76 @@ test('collectFromGitHub retries one transient getChangeRequestConvergenceView fa
   });
 });
 
+test('collectFromGitHub retries one transient repository-lookup failure with an injected resolver and sleep (#4110)', () => {
+  withHermeticCwd(() => {
+    const realPort = createFakeProviderAdapter(baseFixture());
+    const lookups: string[] = [];
+    const sleeps: number[] = [];
+    const created: string[] = [];
+    // No --owner or --repo, so collection must take the repository from the
+    // injected resolver, which fails once with no HTTP status (the transient
+    // class the retry helper retries) and then succeeds.
+    const resolveRepository = () => {
+      lookups.push('lookup');
+      if (lookups.length === 1) {
+        throw new Error('spawnSync gh ETIMEDOUT');
+      }
+      return { owner: 'o', repo: 'r' };
+    };
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER)]),
+      (owner, repo) => {
+        created.push(`${owner}/${repo}`);
+        return realPort;
+      },
+      { resolveRepository, sleep: (ms) => sleeps.push(ms) },
+    );
+
+    // Two lookups: the failed one and the retry. The injected sleep ran once
+    // in place of the real blocking sleep, and the port was built for the
+    // resolved pair.
+    assert.equal(lookups.length, 2);
+    assert.equal(sleeps.length, 1);
+    assert.deepEqual(created, ['o/r']);
+    assert.equal(inputs.prHeadSha, 'a'.repeat(40));
+  });
+});
+
+test('collectFromGitHub without deps takes the repository from the shared resolver (#4110)', () => {
+  withHermeticCwd(() => {
+    const realPort = createFakeProviderAdapter(baseFixture());
+    const created: string[] = [];
+    // The production wiring inside Actions: no deps, so the default resolver
+    // answers from GITHUB_REPOSITORY with no gh process. The outer values are
+    // restored.
+    const saved = {
+      GITHUB_ACTIONS: process.env.GITHUB_ACTIONS,
+      GITHUB_REPOSITORY: process.env.GITHUB_REPOSITORY,
+      GH_REPO: process.env.GH_REPO,
+    };
+    delete process.env.GH_REPO;
+    process.env.GITHUB_ACTIONS = 'true';
+    process.env.GITHUB_REPOSITORY = 'env/variable';
+    try {
+      const { inputs } = collectFromGitHub(
+        parseArgs(['--pr', String(PR_NUMBER)]),
+        (owner, repo) => {
+          created.push(`${owner}/${repo}`);
+          return realPort;
+        },
+      );
+      assert.deepEqual(created, ['env/variable']);
+      assert.equal(inputs.prHeadSha, 'a'.repeat(40));
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+});
+
 test('collectFromGitHub does not retry a definitive 404 from getChangeRequestConvergenceView (#2459)', () => {
   withHermeticCwd(() => {
     const realPort = createFakeProviderAdapter(baseFixture());
