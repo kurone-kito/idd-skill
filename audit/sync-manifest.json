@@ -1248,7 +1248,7 @@
       "standard": {
         "file": "idd-template/.github/instructions/idd-overview-core.instructions.md",
         "heading": "Claim revalidation gate",
-        "contains": "B1 setup commands on the primary worktree's `main`"
+        "contains": "B1 setup commands on the primary worktree's `{default-branch}`"
       },
       "lite": {
         "file": "idd-template/.github/instructions/lite/idd-work-lite.instructions.md",

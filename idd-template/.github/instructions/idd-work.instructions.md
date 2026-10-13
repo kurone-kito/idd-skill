@@ -25,28 +25,30 @@ cleanup's own worktree removal -- behind the
 (see the [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)
 for when this applies).
 
-1. Ensure the local `main` branch is up to date and has no local
-   commits. Run this from the primary worktree while on `main`:
+1. Ensure the local `{default-branch}` branch is up to date and has no local
+   commits.
+   `{default-branch}` resolves to `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`.
+   Validate it per Worktree creation Step 2 (fail closed).
+   Run this from the primary worktree while on `{default-branch}`:
 
    ```sh
    git fetch origin
-   git log origin/main..main --oneline
+   git log origin/{default-branch}..{default-branch} --oneline
    ```
 
-   If the second command outputs any lines, local `main` has unpushed
-   commits — stop and report, do not force-reset `main`. Otherwise,
+   If the second command outputs any lines, local `{default-branch}` has unpushed
+   commits — stop and report, do not force-reset `{default-branch}`. Otherwise,
    fast-forward to origin:
 
    ```sh
-   git merge --ff-only origin/main
+   git merge --ff-only origin/{default-branch}
    ```
 
-   After this `main` fast-forward, do **not** change the primary
-   worktree's HEAD off `main` for any reason during B1 — see
-   Anti-patterns below for the forbidden commands and the allowed
-   HEAD-preserving exceptions (read-only inspection, and the
-   HEAD-preserving branch/worktree commands used by Steps 2-3 below and
-   by Worktree creation).
+   After this fast-forward, do **not** change the primary
+   worktree's HEAD off `{default-branch}` during B1 — see Anti-patterns
+   below for the forbidden commands; read-only inspection and the
+   HEAD-preserving commands of Steps 2-3 and Worktree creation stay
+   allowed.
 
 2. Run `git worktree list` — if a worktree for the branch already
    exists, inspect and acquire its
@@ -79,19 +81,16 @@ name from the existing claim comment instead of generating a new one.
 
 ### Anti-patterns
 
-The following commands MUST NOT be used to create the implementation
-branch in the primary worktree:
+Never create the implementation branch in the primary worktree with:
 
-- `git switch -c <branch-name>` — switches the primary worktree to
-  the issue branch and skips worktree creation entirely.
-- `git checkout -b <branch-name>` — equivalent failure mode.
-- A standalone `git branch <branch-name>` then in-place commits in the
-  primary worktree — defeats the sibling-worktree invariant even though
-  `git branch` alone does not move HEAD.
+- `git switch -c <branch-name>` or `git checkout -b <branch-name>` —
+  both move primary HEAD and skip worktree creation.
+- `git branch <branch-name>` then in-place primary-worktree commits —
+  breaks the sibling-worktree invariant though HEAD does not move.
 
-The primary worktree's HEAD MUST remain on `main` throughout B1; if it
-ever leaves `main`, stop immediately and follow the B1 self-check
-repair path below.
+The primary worktree's HEAD MUST remain on `{default-branch}` throughout
+B1; if it ever leaves `{default-branch}`, stop immediately and follow the
+B1 self-check repair path below.
 
 ### Worktree creation
 
@@ -126,7 +125,7 @@ defaultBranchRef --jq .defaultBranchRef.name`; validate the result
 ([defaults](../../docs/policy-constants.md#branch-synchronization-defaults)),
 fail closed if invalid/absent on `origin`, never fall back. Then
 `git fetch origin` (may be missing/stale otherwise). Use **WorkTrunk**
-if available, except on a fresh claim (see the note under the table) (create verb:
+if available, except on a fresh claim (see the note under the table; create verb:
 `wt switch --create`; `wt new` was removed):
 
 - macOS/Linux: `wt switch --create -b <base-branch> <branch-name>`
@@ -220,7 +219,7 @@ retry the install exactly once before failing loudly — see the
 Before continuing to B2, verify all of the following:
 
 - `git -C <primary-worktree-root> rev-parse --abbrev-ref HEAD` returns
-  `main`.
+  `{default-branch}`.
 - `git worktree list` includes the new sibling worktree path.
 - The agent's current working directory is the new sibling worktree
   path, not the primary worktree; a launch-workspace-bound file-tool
@@ -380,12 +379,10 @@ instead.
 
 **Verify a commit actually landed before trusting a subsequent push.**
 A `commit-msg` hook (e.g. commitlint's body-max-line-length) can
-silently reject a long single-line body, so no commit is created but
-the next `git push` reports "Everything up-to-date" — a misleading
-no-op. Prefer `git commit -F <file>` with a pre-wrapped body over a
-long `-m` message, and confirm the commit landed (compare `git
-rev-parse HEAD` before/after, or check the reported commit hash)
-before trusting the push.
+silently reject a long single-line body, so no commit is created and the
+next `git push` reports "Everything up-to-date". Prefer `git commit -F
+<file>` with a pre-wrapped body over a long `-m` message, and compare
+`git rev-parse HEAD` before/after or check the reported commit hash.
 
 **De-duplication refactors**: when consolidating a wrapper function used
 at multiple call sites, check whether any call site's old delegate path
@@ -396,7 +393,7 @@ function bodies look equivalent. See
 
 **Unexpected validation failures**: a `typecheck`/`lint` failure in a
 file this diff did not touch may signal dependency drift or a broken
-`main` baseline — verify with a fresh-vs-stale `node_modules` comparison
+`{development-branch}` baseline — verify with a fresh-vs-stale `node_modules` comparison
 or a clean **install-deps** rerun before assuming the failure traces to
 this diff. See
 [rationale](../../docs/idd-design-rationale.md#b3--dependency-drift-vs-own-diff-a-typechecklint-diagnostic).

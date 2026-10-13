@@ -32,7 +32,7 @@ Otherwise read the state directly:
 
 ```sh
 gh pr view {pr-number} --json mergeable,mergeStateStatus,headRefOid,baseRefName
-git fetch --no-tags origin {base-branch}
+git fetch --no-tags origin {development-branch}
 git merge-base {pr-head-sha} FETCH_HEAD
 # vs: git rev-parse FETCH_HEAD; mismatch/unresolvable = baseAdvancedSinceMergeBase: true below (best-effort)
 ```

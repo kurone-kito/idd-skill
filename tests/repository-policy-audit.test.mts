@@ -45,6 +45,7 @@ const POSITIVE_FIXTURE = new URL(
   import.meta.url,
 );
 const CLI_SOURCE = join(REPOSITORY_ROOT, 'scripts/repository-policy-audit.mjs');
+const WORK_PATH = 'idd-template/.github/instructions/idd-work.instructions.md';
 
 interface RuleViolationMutation {
   path: string;
@@ -707,8 +708,8 @@ function makeRuleViolation(
       return replaceFixtureText(
         documents,
         'idd-template/.github/instructions/idd-work.instructions.md',
-        "The primary worktree's HEAD MUST remain on `main` throughout B1; if it",
-        "The primary worktree's HEAD MUST remain on `main` throughout B1; if it. The main branch is trusted without checks",
+        "The primary worktree's HEAD MUST remain on `{default-branch}` throughout",
+        "The primary worktree's HEAD MUST remain on `{default-branch}` throughout. The main branch is trusted without checks",
       );
     case 'pr-submit-main-boundary':
       return appendFixtureText(
@@ -732,8 +733,8 @@ function makeRuleViolation(
       return replaceFixtureText(
         documents,
         'idd-template/.github/instructions/idd-work.instructions.md',
-        'git fetch origin\n   git log origin/main..main',
-        'git fetch origin main\n   git log origin/main..main',
+        'git fetch origin\n   git log origin/{default-branch}..{default-branch}',
+        'git fetch origin main\n   git log origin/{default-branch}..{default-branch}',
       );
     case 'd4-pending-recovery-actions':
       return replaceFixtureText(
@@ -836,6 +837,51 @@ test('repository policy rules accept an independent positive document snapshot',
     collectRepositoryPolicyViolationsFromDocuments(documents),
     [],
   );
+});
+
+test('b1-main-boundary accepts a work file with no bare main', () => {
+  const documents = readPositiveFixture();
+  const contents = documents.get(WORK_PATH);
+  assert.ok(contents);
+  assert.doesNotMatch(contents, /\bmain\b/);
+  assert.deepEqual(
+    collectRepositoryPolicyViolationsFromDocuments(documents).filter(
+      (violation) => violation.ruleId === 'b1-main-boundary',
+    ),
+    [],
+  );
+});
+
+test('b1-main-boundary rejects a reintroduced git log origin/main..main', () => {
+  const documents = readPositiveFixture();
+  const contents = documents.get(WORK_PATH);
+  assert.ok(contents);
+  const needle = 'git log origin/{default-branch}..{default-branch} --oneline';
+  assert.ok(contents.includes(needle));
+  documents.set(
+    WORK_PATH,
+    contents.replace(needle, 'git log origin/main..main --oneline'),
+  );
+  const violations = collectRepositoryPolicyViolationsFromDocuments(
+    documents,
+  ).filter((violation) => violation.ruleId === 'b1-main-boundary');
+  assert.equal(violations.length, 1);
+  assert.match(violations[0].message, /git log origin\/main\.\.main/);
+});
+
+test('b1-main-boundary rejects a work file that never names {default-branch}', () => {
+  const documents = readPositiveFixture();
+  const contents = documents.get(WORK_PATH);
+  assert.ok(contents);
+  documents.set(
+    WORK_PATH,
+    contents.replaceAll('{default-branch}', '{development-branch}'),
+  );
+  const violations = collectRepositoryPolicyViolationsFromDocuments(
+    documents,
+  ).filter((violation) => violation.ruleId === 'b1-main-boundary');
+  assert.equal(violations.length, 1);
+  assert.match(violations[0].message, /must name \{default-branch\}/);
 });
 
 test('load-control dogfood check ignores JSON property order', () => {

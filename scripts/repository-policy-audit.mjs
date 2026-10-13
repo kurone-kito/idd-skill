@@ -82,20 +82,6 @@ const NO_MAIN_MENTIONS_ALLOWED = new Set();
 const REVIEW_TRIAGE_ALLOWED_MAIN_LINES = new Set([
   '[design rationale](../../docs/idd-design-rationale.md#merge-main-livelock-under-fast-moving-main)).',
 ]);
-const B1_TRUSTED_CHECKOUT_MAIN_LINES = new Set([
-  '1. Ensure the local `main` branch is up to date and has no local',
-  'commits. Run this from the primary worktree while on `main`:',
-  'git log origin/main..main --oneline',
-  'If the second command outputs any lines, local `main` has unpushed',
-  'commits — stop and report, do not force-reset `main`. Otherwise,',
-  'git merge --ff-only origin/main',
-  'After this `main` fast-forward, do **not** change the primary',
-  "worktree's HEAD off `main` for any reason during B1 — see",
-  "The primary worktree's HEAD MUST remain on `main` throughout B1; if it",
-  'ever leaves `main`, stop immediately and follow the B1 self-check',
-  '`main`.',
-  '`main` baseline — verify with a fresh-vs-stale `node_modules` comparison',
-]);
 function fail(path, message) {
   throw new RuleFailure(path, message);
 }
@@ -1643,16 +1629,13 @@ const RULES = [
     paths: [WORK],
     check({ text }) {
       const contents = text(WORK);
-      if (findBareMainLines(contents).length === 0)
-        fail(WORK, 'B1 trusted-checkout guidance is missing');
-      const violations = findUnallowedMainLines(
-        contents,
-        B1_TRUSTED_CHECKOUT_MAIN_LINES,
-      );
+      if (!contents.includes('{default-branch}'))
+        fail(WORK, 'B1 trusted-checkout guidance must name {default-branch}');
+      const violations = findBareMainLines(contents);
       if (violations.length > 0)
         fail(
           WORK,
-          `main appears outside the B1 allowlist: ${violations.join(' | ')}`,
+          `bare main must not appear in the work file: ${violations.join(' | ')}`,
         );
     },
   },
@@ -1715,8 +1698,15 @@ const RULES = [
     ],
     check({ text }) {
       const workText = text(WORK);
-      if (!workText.includes('git fetch origin\n   git log origin/main..main'))
-        fail(WORK, 'B1 must fetch origin before reading origin/main');
+      if (
+        !workText.includes(
+          'git fetch origin\n   git log origin/{default-branch}..{default-branch}',
+        )
+      )
+        fail(
+          WORK,
+          'B1 must fetch origin before reading origin/{default-branch}',
+        );
       if (
         !workText.includes(
           'never fall back. Then\n`git fetch origin` (may be missing/stale',
@@ -1770,12 +1760,12 @@ const RULES = [
         );
       if (
         !text(TEMPLATE_HELPER_DOC).includes(
-          'git fetch origin +refs/heads/main:refs/remotes/origin/main',
+          'git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch}',
         )
       )
         fail(
           TEMPLATE_HELPER_DOC,
-          'signed merge wrapper must fetch main with destination refspec',
+          'signed merge wrapper must fetch {development-branch} with destination refspec',
         );
     },
   },
