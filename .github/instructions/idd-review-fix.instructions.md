@@ -234,9 +234,9 @@ asked:
      10% above the new total and add the PR-description callout. No
      question is asked.
    - If its base utilization was at or above 95%, stop and ask once
-     (shared Hold rules). Give the bundle name, its utilization at the
-     base ref, its bytes after step 1, and the proposed limit with
-     about 10% headroom. Never commit the raise.
+     (shared Hold / suspend rules). Give the bundle name, its
+     utilization at the base ref, its bytes after step 1, and the
+     proposed limit with about 10% headroom. Never commit the raise.
 
 For a per-file cap, apply step 1. If the file is still above its
 `phaseLimitBytes`, stop and ask once. Never raise a per-file cap.
