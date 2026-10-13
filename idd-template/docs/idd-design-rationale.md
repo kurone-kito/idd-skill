@@ -957,19 +957,19 @@ This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
 - **Release, not hold.** The next action belongs to authoring, and no
   human decision is pending, so the worker releases with `unclaimed-by`
   instead of keeping a hold, and does not apply the needs-decision
-  label, which would turn the overrun back into a question. Before the
-  release, while the claim still covers its local mutations, it resets
-  the branch to `origin/{development-branch}`, which discards the
-  local work on purpose (the evidence comment keeps the file lists),
-  and removes untracked and ignored files with `git clean -fdx`,
-  because the cleanup procedure's clean-tree gate also checks ignored
-  files such as installed dependencies. After the release it runs the
-  claim phase's `lost-claim-cleanup` from the primary checkout, the one
-  procedure built to run after a claim is gone (its active-claim gate
-  requires the release). A released claim whose branch still holds
-  commits would block a later fresh claim on the same branch name, and
-  any gate the procedure fails leaves the worktree for the claim
-  phase's orphan hold.
+  label, which would turn the overrun back into a question. After the
+  release it runs the claim phase's `lost-claim-cleanup` from the
+  primary checkout, the one procedure built to run after a claim is
+  gone (its active-claim gate requires the release). The route names
+  no destructive git command of its own: the distributed Claude Code
+  baseline denies `git reset --hard`, `git clean -f`, and
+  `git branch -D` (`docs/permissions.md`), as review of PR 4160
+  pointed out after an earlier draft added a reset and a clean. So
+  `lost-claim-cleanup`'s own gates decide. A worktree that still holds
+  commits, changes, or ignored files such as installed dependencies
+  fails them and stays, and that procedure's leftover rule applies:
+  the claim phase's orphan hold covers the next claimant, the same as
+  for any other claim lost after dependencies were installed.
 - **The companion owns the hold.** The authoring label is the
   companion's owner-marked lock, and the companion refuses a target
   with an active claim. So the worker releases first, and the

@@ -126,7 +126,6 @@ const ORDERED_STEPS = [
   'a release, not a hold',
   'Comment the estimate, candidate files, changed files',
   'without the companion, the split proposal',
-  'reset to base, `git clean -fdx`',
   'release with `unclaimed-by` and the current `{claim-id}`',
   'run `lost-claim-cleanup`',
   'With the companion, hand it a held split draft',

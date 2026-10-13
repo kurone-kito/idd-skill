@@ -468,11 +468,11 @@ worker-side authoring.
 `## Candidate files` set to the diff's canonical paths, stop coding
 without pushing: a release, not a hold. Comment the estimate, candidate
 files, changed files, and, without the companion, the split proposal;
-reset to base, `git clean -fdx`; release with `unclaimed-by` and the
-current `{claim-id}`; run `lost-claim-cleanup`. With the companion,
-hand it a held split draft: it holds this issue, publishes a held
-roadmap whose children record `Split out of #<n>`, and comments its
-link. Never add needs-decision or ask a human
+release with `unclaimed-by` and the current `{claim-id}`; run
+`lost-claim-cleanup`. With the companion, hand it a held split draft:
+it holds this issue, publishes a held roadmap whose children record
+`Split out of #<n>`, and comments its link. Never add needs-decision or
+ask a human
 ([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
 
 ---
