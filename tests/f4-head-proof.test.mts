@@ -150,7 +150,9 @@ const INVALID_CASES: InvalidCase[] = [
   {
     label: 'a branch with whitespace',
     field: 'branch',
-    value: 'issue/\tfixture',
+    // A space, not a tab: a tab is also a control character, so it would
+    // pass this case even without the whitespace rule.
+    value: 'issue/ fixture',
     errorName: 'RangeError',
   },
   {
