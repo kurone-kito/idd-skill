@@ -1338,33 +1338,31 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    recorded as a running roster entry before section 4 resumes.
 4. **Recover reports.** Run this step for each matched finished worker, once its
    worktree, claim, and child processes show no live background work, and for
-   each unmatched own claim whose handoff or merge live state shows it finished
-   and whose draft matches the claim. The fan-out variant's completed-notice
-   rule names these live-evidence checks, and this step applies them to every
-   finished worker, under that worker's own listed handle. A worker with live
-   work is treated as running in step 3. A claim with no matched worker and no
-   draft is not appended, because its `workerHandle` would have to be the claim
-   id, which is not the harness's identifier and which the listing does not
-   supply, so step 5 reports it. The store dedupes on claimId, workerHandle, and
-   terminalPhase, so a retry is safe. A matched running worker gets no record. A
-   released claim whose only matched worker is still running gets no record and
-   is reported in step 5. Look for the worker's report draft in the scratchpad
-   of the same session, under the issue-number prefix that the fan-out variant
-   already requires. If a draft is found, check that its `issue` and `claimId`
-   match the claim, and that its `workerHandle` matches the listed handle when
-   the claim has a matched worker. A draft that matches the claim but has no
-   listed worker is appended under its own `workerHandle`, because the store
-   dedupes on that handle with the claim id and terminal phase, so a record
-   already appended under it is not counted twice. The listing matches workers
-   only and never names a draft handle. An unmatched claim appended this way has
-   no running worker, so once it is appended it no longer blocks refill: the
-   restart then runs step 3 recount and refill gate again, if no other unmatched
-   own claim or unmatched live worker remains. Do not append a draft that does
-   not match. Then verify its outcome, `pullRequest`, and `terminalPhase`
-   against live GitHub state, set `verifiedAt` to that check and `recordedAt` to
-   the time of the append, then append it. If no draft is found for a matched
-   worker, verify the terminal outcome from live GitHub state, build the record
-   as the
+   each unmatched own claim whose handoff or merge live state shows it finished,
+   with or without a draft. The fan-out variant's completed-notice rule names
+   these live-evidence checks, and this step applies them to every finished
+   worker, under that worker's own listed handle. A worker with live work is
+   treated as running in step 3. A claim with no matched worker and no draft is
+   recorded under the claim id as its handle, released or not, because the
+   listing supplies no handle for it. The store dedupes on claimId,
+   workerHandle, and terminalPhase, so a retry is safe. A matched running worker
+   gets no record. A released claim whose only matched worker is still running
+   gets no record and is reported in step 5. Look for the worker's report draft
+   in the scratchpad of the same session, under the issue-number prefix that the
+   fan-out variant already requires. If a draft is found, check that its `issue`
+   and `claimId` match the claim, and that its `workerHandle` matches the listed
+   handle when the claim has a matched worker. A draft that matches the claim
+   but has no listed worker is appended under its own `workerHandle`, because
+   the store dedupes on that handle with the claim id and terminal phase, so a
+   record already appended under it is not counted twice. The listing matches
+   workers only and never names a draft handle. An unmatched claim appended this
+   way has no running worker, so once it is appended it no longer blocks refill:
+   the restart then runs step 3 recount and refill gate again, if no other
+   unmatched own claim or unmatched live worker remains. Do not append a draft
+   that does not match. Then verify its outcome, `pullRequest`, and
+   `terminalPhase` against live GitHub state, set `verifiedAt` to that check and
+   `recordedAt` to the time of the append, then append it. If no draft is found,
+   verify the terminal outcome from live GitHub state, build the record as the
    [worker final report store](idd-helper-scripts.md#worker-final-report-store)
    describes, with `harness` set to the slug the store lists for this session's
    own harness, or `other` when none matches, and append it the same way, unless
@@ -1402,9 +1400,8 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    A matched running worker that cannot be messaged is reported too. A released
    claim is reported here when step 4 left it with a running worker, when its
    verification or append failed, or when the harness offers no agent listing,
-   so step 4 did not run for it, or when step 4 appended nothing, because the
-   claim has no draft or no terminal phase from live state. Otherwise step 4
-   handles it. Its worktree is not removed.
+   so step 4 did not run for it, or when step 4 appended nothing for want of a
+   terminal phase. Otherwise step 4 handles it. Its worktree is not removed.
 
 ### Discover re-run cadence
 
