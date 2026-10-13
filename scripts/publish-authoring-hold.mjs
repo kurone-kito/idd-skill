@@ -1148,8 +1148,12 @@ function publish(input) {
       reason: error.message,
       ...(attached
         ? // The owner marker is on the issue, not in the journal, so the
-          // journal stays at the attached pending record.
-          { nothingSent: outcome.nothingSent }
+          // journal stays at the attached pending record and the marker's
+          // own state is reported instead.
+          {
+            nothingSent: outcome.nothingSent,
+            ...(isPosted(error) ? { ownerMarker: 'uncertain' } : {}),
+          }
         : outcome),
     });
   }

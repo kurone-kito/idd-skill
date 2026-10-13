@@ -173,6 +173,14 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
         save();
       }
     }
+    if (number === ${NEW_ISSUE} && state.ambiguousOwnerPost) {
+      // The owner marker lands, but the reply is lost and every later read
+      // of the issue's comments fails.
+      state.comments.push({ id: 7000 + state.comments.length, issue: number, journalIndex: 0, body: JSON.parse(stdin).body, user, createdAt: '2026-10-13T00:30:00Z' });
+      state.ownerListFails = true;
+      save();
+      fail('gh: HTTP 502');
+    }
     const body = JSON.parse(stdin).body;
     const id = 7000 + state.comments.length;
     state.comments.push({ id, issue: number, journalIndex: number === 2674 ? state.journalPosts : 0, body, user, createdAt: new Date(Date.UTC(2026, 9, 13, 0, 0, state.comments.length)).toISOString() });
@@ -180,6 +188,7 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
     out({ id, html_url: 'https://github.com/o/r/issues/' + number + '#issuecomment-' + id, body });
   }
   if (number === 2674 && state.journalListFails) fail('gh: HTTP 502');
+  if (number === ${NEW_ISSUE} && state.ownerListFails) fail('gh: HTTP 502');
   const rows = state.comments.filter((c) => c.issue === number).map((c) => JSON.stringify({ id: c.id, body: c.body, user: { login: c.user }, created_at: c.createdAt }));
   out(rows.join('\n') + (rows.length ? '\n' : ''));
 }
@@ -242,6 +251,7 @@ function setup(
     failJournalPostsFrom?: number;
     failJournalPostMessage?: string;
     throttleOnUserCall?: number;
+    ambiguousOwnerPost?: boolean;
   } = {},
 ): Fixture {
   const dir = mkdtempSync(join(tmpdir(), 'idd-publish-authoring-hold-test-'));
@@ -282,6 +292,7 @@ function setup(
       failJournalPostsFrom: options.failJournalPostsFrom ?? 0,
       failJournalPostMessage: options.failJournalPostMessage ?? 'gh: HTTP 500',
       throttleOnUserCall: options.throttleOnUserCall ?? 0,
+      ambiguousOwnerPost: options.ambiguousOwnerPost === true,
       loadControlModule: pathToFileURL(
         join(REPO_ROOT, 'scripts/github-api-load-control.mjs'),
       ).href,
@@ -1065,7 +1076,31 @@ test('CLI: a pending post refused by load control reports nothing sent and permi
       !fixture.log().some((entry) => entry.args.includes('POST')),
       'the refused POST never reached gh',
     );
+    // The throttle was recorded on the last gh call of the run, so the
+    // refused request is the one after it: post-idd-marker's POST.
+    const userCalls = fixture
+      .log()
+      .filter((entry) => entry.args.includes('user'));
+    assert.equal(userCalls.length, 2);
+    assert.deepEqual(fixture.log().at(-1)?.args, userCalls[1]?.args);
     assert.deepEqual(journalRecords(fixture), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: an owner marker that may have landed reports its own uncertain state', () => {
+  const fixture = setup({ ambiguousOwnerPost: true });
+  try {
+    const result = fixture.run([...files(fixture), '--apply']);
+    assert.equal(result.status, 1);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, 'recovery-hold');
+    assert.equal(report.failedStep, 'owner-marker');
+    assert.equal(report.ownerMarker, 'uncertain');
+    assert.equal(report.nothingSent, false);
+    assert.equal(report.journalState, 'pending');
+    assert.equal(report.retry, undefined);
   } finally {
     fixture.restore();
   }
