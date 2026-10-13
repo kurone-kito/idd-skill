@@ -941,7 +941,8 @@ finding reopens as a new finding.
 - A rejected entry without evidence is not carried forward.
 - A fixed entry is never carried forward; the revised draft is checked
   against its claim again.
-- A deferred entry stays open until the author decides.
+- A deferred entry stays open until the author decides, and a draft with an
+  open deferred entry is not published.
 
 ### Mechanical pre-publish gate
 
