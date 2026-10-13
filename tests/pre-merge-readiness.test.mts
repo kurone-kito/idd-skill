@@ -13512,6 +13512,28 @@ test('#4123: an edited trusted disposition keeps its edit time in the quiet anch
   assert.equal(secondaryQuietWindowOf(summary).anchorAt, editedAt);
 });
 
+test('#4123: a disposition by a trusted marker actor outside iddAgentLogins also leaves the quiet anchor on the review', () => {
+  // kurone-kito is trusted only through the fixture's trustedMarkerLogins.
+  // quietAnchorSummary replaces the fixture's iddAgentLogins with idd-agent,
+  // so this author is not a disposition author (protocol-helpers.mts).
+  const summary = quietAnchorSummary({
+    comments: [
+      quietComment(
+        'maintainer-disposition',
+        'kurone-kito',
+        QUIET_T4,
+        '**Accepted** — no action required.',
+      ),
+    ],
+    reviews: [copilotReviewAt(QUIET_T0)],
+  });
+  assert.equal(secondaryQuietWindowOf(summary).anchorAt, QUIET_T0);
+  assert.equal(
+    liveReviewCurrencyOf(summary).effective.maxActivityUpdatedAt,
+    QUIET_T4,
+  );
+});
+
 test('#2335: computePreMergeReadinessBlockers never blocks on an entirely absent secondaryQuietWindow evidence field (backward compatible with a hand-built or unmigrated report)', () => {
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
   const ready = buildPreMergeReadinessSummary(fixture.input, {
