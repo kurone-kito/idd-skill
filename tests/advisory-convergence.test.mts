@@ -8578,7 +8578,8 @@ test('request-re-review (#4111): a stale head names advisory-wait-state and the 
     'D4: SATISFIED with lastCopilotCommit equal to the head means rerun idd-advisory-convergence',
     'node scripts/rerun-advisory-convergence.mjs --pr 1234 --apply',
     'node scripts/rerun-advisory-convergence.mjs --pr 1234 --refresh-latest --apply',
-    'An elapsed-window SATISFIED follows the caller mapping',
+    'For D4, E14 and F2, an elapsed-window SATISFIED first consults staleRequestRecovery (AW3-S)',
+    'cap-exhausted routes as CAP_EXHAUSTED',
   ]) {
     assert.ok(summary.includes(phrase), `summary must include: ${phrase}`);
   }
