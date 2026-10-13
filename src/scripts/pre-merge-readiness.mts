@@ -76,6 +76,7 @@ import {
   buildPreMergeReadinessSummary,
   classifyIddPrComment,
   classifyPrLoopMembership,
+  DEFAULT_ADVISORY_BOT_LOGINS,
   deriveIddAgentLogins,
   extractSameRepoClosingIssueNumbers,
   NOW_FLAG_USAGE_MESSAGE,
@@ -1796,7 +1797,14 @@ export function dispositionNoticeCommandHint(
   }
   const { prNumber, claimIssueNumber, owner, repo, claimId } = input;
   const trusted = input.trustedMarkerLogins;
-  const advisory = input.advisoryBotLogins;
+  // An empty readiness list means no flag, env or config value was set. The
+  // helper then falls back to this same default (the known review bots). The
+  // gate's regular-comment check already treats those bots as handled with an
+  // empty list, so naming the default is equivalent for these comments.
+  const advisory =
+    input.advisoryBotLogins.length > 0
+      ? input.advisoryBotLogins
+      : DEFAULT_ADVISORY_BOT_LOGINS;
   if (
     prNumber === null ||
     !HINT_POSITIVE_INTEGER_PATTERN.test(String(prNumber)) ||
@@ -1806,7 +1814,6 @@ export function dispositionNoticeCommandHint(
     !HINT_TOKEN_PATTERN.test(repo) ||
     !HINT_TOKEN_PATTERN.test(claimId) ||
     trusted.length === 0 ||
-    advisory.length === 0 ||
     ![...trusted, ...advisory].every((login) => HINT_LOGIN_PATTERN.test(login))
   ) {
     return null;
