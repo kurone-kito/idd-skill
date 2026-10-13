@@ -33,6 +33,7 @@ import {
   computeSecondaryRequestedForHead,
   findLastCopilotReviewCommit,
   isCopilotReviewerLogin,
+  isVerifiedCopilotAuthor,
   operationalMarkerPrefix,
   resolveCopilotPending,
   unsafeTextReason,
@@ -1049,6 +1050,48 @@ test('#1686: isCopilotReviewerLogin matches only the exact Copilot login set and
     false,
   );
   assert.equal(isCopilotReviewerLogin('copilot-impersonator'), false);
+});
+
+test('#4070: a bare copilot login typed User is rejected by both Copilot selectors', () => {
+  const headSha = 'd'.repeat(40);
+  const restReview = (login: string, type?: string) => ({
+    user: type === undefined ? { login } : { login, type },
+    submitted_at: '2026-10-13T00:00:00Z',
+    commit_id: headSha,
+    body: MINIMAL_V2_REVIEW_BODY,
+  });
+
+  // The default bot's bare `copilot` login passes the login matcher without
+  // consulting the author type, so only the type gate keeps a same-named
+  // User account out. The union's selector and this one must agree.
+  assert.equal(
+    findLastCopilotReviewCommit([restReview('copilot', 'User')]),
+    '',
+  );
+  assert.equal(
+    isVerifiedCopilotAuthor(
+      { login: 'copilot', __typename: 'User' },
+      DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+    ),
+    false,
+  );
+
+  // The genuine REST payload (Bot-typed) still counts, and so does a review
+  // whose author type is absent, as before.
+  assert.equal(
+    findLastCopilotReviewCommit([
+      restReview('copilot-pull-request-reviewer[bot]', 'Bot'),
+    ]),
+    headSha,
+  );
+  assert.equal(findLastCopilotReviewCommit([restReview('copilot')]), headSha);
+  assert.equal(
+    isVerifiedCopilotAuthor(
+      { login: 'copilot-pull-request-reviewer[bot]', __typename: 'Bot' },
+      DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+    ),
+    true,
+  );
 });
 
 test('#3262: findLastCopilotReviewCommit matches a configured external bot across REST login spellings via user.type', () => {

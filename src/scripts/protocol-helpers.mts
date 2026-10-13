@@ -6606,12 +6606,14 @@ export function findLastCopilotReviewCommit(
     DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
   const latest = reviews
     .filter((review) => {
+      const authorType = review.user?.type ?? review.author?.type ?? null;
       if (
         !isCopilotReviewerLogin(
           review.user?.login ?? review.author?.login ?? '',
           primaryBotLogin,
-          review.user?.type ?? review.author?.type ?? null,
-        )
+          authorType,
+        ) ||
+        !isBotOrUntypedAuthor(authorType)
       ) {
         return false;
       }
@@ -6652,7 +6654,21 @@ export function isVerifiedCopilotAuthor(
   if (!isCopilotReviewerLogin(author?.login ?? '', primaryBotLogin, typename)) {
     return false;
   }
-  return typename === undefined || typename === null || typename === 'Bot';
+  return isBotOrUntypedAuthor(typename);
+}
+
+/**
+ * Shared author-type gate for the Copilot selectors: an absent type passes,
+ * and otherwise only `'Bot'` does. {@link isVerifiedCopilotAuthor} feeds it
+ * the GraphQL `__typename`, and {@link findLastCopilotReviewCommit} feeds it
+ * the REST `user.type`, so the two selectors cannot disagree. The gate is
+ * needed because {@link isCopilotReviewerLogin} accepts the default bot's
+ * bare `copilot` login without consulting the author type.
+ */
+function isBotOrUntypedAuthor(authorType: string | null | undefined): boolean {
+  return (
+    authorType === undefined || authorType === null || authorType === 'Bot'
+  );
 }
 
 /** Structural author shape the Copilot selector reads. Matches
