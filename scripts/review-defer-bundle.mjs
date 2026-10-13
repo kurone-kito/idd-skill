@@ -252,8 +252,11 @@ function printHelp() {
       '  --pr <n>             required: the pull request the findings came from',
       '  --title <text>       required: the follow-up issue title',
       '  --items-file <path>  required: JSON array of { title, threadUrl, finding, acceptance, path }',
-      '  --policy <path>      optional: policy file read for markerPrefix; without it,',
-      '                       .github/idd/config.json, then idd-skill',
+      '  --policy <path>      optional: repository policy file read for markerPrefix.',
+      '                       Without it, .github/idd/config.json is read from the',
+      '                       current directory (run from the repository root), then',
+      '                       idd-skill. A missing explicit path, a malformed file, or',
+      '                       an empty or non-string markerPrefix is a usage error.',
       '  -h, --help           print this help and exit 0',
       '',
       'Exit codes: 0 when the lint passes; 1 for a usage error, or for a body',
@@ -336,12 +339,14 @@ function runCli() {
   // The reader returns only a plain object or null, so this narrowing is safe.
   const repositoryPolicy = policy.config;
   const configured = repositoryPolicy?.markerPrefix;
-  if (configured !== undefined && typeof configured !== 'string') {
-    return usage(`markerPrefix in ${policy.path} must be a string`);
+  if (
+    configured !== undefined &&
+    (typeof configured !== 'string' || configured.trim() === '')
+  ) {
+    return usage(`markerPrefix in ${policy.path} must be a non-empty string`);
   }
   const markerPrefix = configured ?? DEFAULT_MARKER_PREFIX;
   let bundle;
-  let lint;
   try {
     // renderDeferBundle validates every parsed field at run time, so the
     // untyped JSON is only narrowed to the item shape here.
@@ -352,13 +357,16 @@ function runCli() {
       items: items,
       markerPrefix,
     });
-    lint = lintDeferBundle(bundle, markerPrefix);
   } catch (error) {
     if (error instanceof TypeError) {
       return usage(error.message);
     }
     throw error;
   }
+  // Render has already validated markerPrefix, so the lint cannot raise the
+  // input TypeError that the usage mapping above covers. A failure here is a
+  // bug and propagates.
+  const lint = lintDeferBundle(bundle, markerPrefix);
   const report = {
     title: bundle.title,
     body: bundle.body,

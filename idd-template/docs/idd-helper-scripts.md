@@ -7097,9 +7097,13 @@ same as `AW4`/`AW5`.
   `title`, `threadUrl`, `finding`, `acceptance`, and `path`.
 - Policy: `--policy` names the repository policy file whose
   `markerPrefix` labels the footer and defer-source markers. Without it,
-  `.github/idd/config.json` is read, and an absent file or a missing
-  field falls back to `idd-skill`. An explicit `--policy` path that is
-  missing or malformed is a usage error, never a silent fallback.
+  `.github/idd/config.json` is read from the current directory, so run
+  the helper from the repository root. An absent file or a missing field
+  falls back to `idd-skill`. An explicit `--policy` path that is missing
+  or malformed is a usage error, never a silent fallback. So are a
+  malformed default file, an empty `--policy` value, and a
+  `markerPrefix` that is empty or not a string. (Unlike
+  `publish-authoring-hold`, an empty `--policy` is not treated as absent.)
 - Output: one JSON object on stdout:
 
   ```json
