@@ -3914,6 +3914,14 @@ export function retryTransientGhFailure<T>(
   }
 }
 
+/** Test seams for {@link collectFromGitHub} (#4110). */
+export interface CollectFromGitHubDeps {
+  /** Repository lookup, used unless both `--owner` and `--repo` are given. */
+  resolveRepository?: () => { owner: string; repo: string };
+  /** Sleep between transient-failure retries; the real sleep when omitted. */
+  sleep?: (ms: number) => void;
+}
+
 /**
  * `createPort` is injectable (defaults to the real GitHub adapter) so a test
  * can drive this collection entry end to end against
@@ -3923,6 +3931,20 @@ export function retryTransientGhFailure<T>(
  * `advisory-convergence-fake-provider.test.mts`). `defaultDeps.collect`
  * (this file's own production wiring for `runAdvisoryConvergence`) never
  * passes a second argument, so it keeps using the real adapter unchanged.
+ *
+ * #4110: `deps` injects the repository lookup and the sleep between transient
+ * retries, so a test can fail the lookup once and assert the retry without a
+ * `gh` process or a real delay. The lookup and the six reads that already went
+ * through `retryTransientGhFailure` go through `retryGhRead`, so the injected
+ * sleep governs them. Two helpers this function calls keep their own retry
+ * with the real sleep: the collaborator-permission read in
+ * `resolveTrustedCollaboratorMarkerLogins` and `fetchPrAuthor`. The other port
+ * reads are single-shot. A failure with no HTTP status is retried even when it
+ * is permanent (for example, a missing `gh`), before it fails. Two failures
+ * are never retried: a load-control refusal (#3586) and a paginated
+ * response-limit failure (#3597). Without `deps`
+ * the lookup is {@link resolveCurrentGithubRepository} and the sleep is the
+ * real blocking sleep, which keeps the production call unchanged.
  */
 export function collectFromGitHub(
   args: AdvisoryConvergenceArgs,
@@ -3930,12 +3952,19 @@ export function collectFromGitHub(
     owner: string,
     repo: string,
   ) => ProviderPort = createGithubProviderAdapter,
+  deps: CollectFromGitHubDeps = {},
 ): {
   inputs: AdvisoryConvergenceInputs;
   options: AdvisoryConvergenceOptions;
 } {
+  const { resolveRepository = resolveCurrentGithubRepository, sleep } = deps;
+  function retryGhRead<T>(task: () => T): T {
+    return retryTransientGhFailure(task, { sleep });
+  }
+  // #4110: the lookup is a `gh` read like the others, so a transient failure
+  // of its `gh repo view` fallback is retried instead of ending the verdict.
   const currentRepo =
-    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+    args.owner && args.repo ? null : retryGhRead(resolveRepository);
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
   const port = createPort(owner, repo);
@@ -3959,7 +3988,7 @@ export function collectFromGitHub(
     envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
     config: rawConfig,
   });
-  const view = retryTransientGhFailure(() =>
+  const view = retryGhRead(() =>
     port.getChangeRequestConvergenceView(Number(args.prNumber)),
   );
   const prHeadSha = view.headSha.toLowerCase();
@@ -3979,7 +4008,7 @@ export function collectFromGitHub(
   // marker. `claimCandidates`' own comments (fetched separately below)
   // deliberately do NOT opt in: the claim-marker family's own edit-state
   // consumer is a separate, sibling issue.
-  const comments = retryTransientGhFailure(() =>
+  const comments = retryGhRead(() =>
     port.listWorkItemComments(Number(args.prNumber), {
       includeEditState: true,
     }),
@@ -4192,7 +4221,7 @@ export function collectFromGitHub(
       // reject a body-edited declaration marker. Safe inside this
       // function's existing fail-closed try/catch below: a GraphQL failure
       // here degrades `outageDeclarationActive` to `false`, never a crash.
-      const declarationComments = retryTransientGhFailure(() =>
+      const declarationComments = retryGhRead(() =>
         port.listWorkItemComments(outageDeclarationTargetIssue, {
           includeEditState: true,
         }),
@@ -4283,7 +4312,7 @@ export function collectFromGitHub(
   let prFirstCommitAt: string | null = null;
   if (forcedHandoffEnabled) {
     try {
-      const prCommits = retryTransientGhFailure(() =>
+      const prCommits = retryGhRead(() =>
         port.listChangeRequestCommits(Number(args.prNumber)),
       ) as PrCommitPayload[];
       prFirstCommitAt = hasIssueOnlyForcedHandoff
@@ -4694,10 +4723,10 @@ export function collectFromGitHub(
   const changedFilePaths =
     autoWaiverRunIds.size > 0 || needsDecisionRuleEvidence
       ? [
-          ...retryTransientGhFailure(() =>
+          ...retryGhRead(() =>
             port.listChangeRequestChangedFiles(Number(args.prNumber)),
           ),
-          ...retryTransientGhFailure(() =>
+          ...retryGhRead(() =>
             port.listChangeRequestRenamedFromPaths(Number(args.prNumber)),
           ),
         ]

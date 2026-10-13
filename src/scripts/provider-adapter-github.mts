@@ -10,6 +10,7 @@
 // built from. `gh` invocation is an implementation detail of this module;
 // domain helpers never see it.
 
+import { execFileSync } from 'node:child_process';
 import type { GhTextOptions } from './gh-exec.mts';
 import {
   GH_TEXT_LOOP_OPTIONS,
@@ -4946,12 +4947,165 @@ function formatTraversalGraphqlErrors(errors: unknown[]): string {
     .join('; ');
 }
 
-/** Resolve the current repository's owner/name with one `gh repo view` call
- * (#3715), the shared resolver every migrated helper reaches through the
- * adapter instead of spelling the lookup itself. */
+/** One `owner/name` value. The owner is a GitHub login (letters, digits and
+ * hyphens), or an Enterprise Managed User login, which also has an underscore.
+ * The repository name is letters, digits, `.`, `_` and `-`, and is never `.`
+ * or `..`, so both halves are safe to put in a REST path unencoded. */
+const GITHUB_REPOSITORY_VALUE =
+  /^([A-Za-z0-9_-]+)\/(?!\.{1,2}$)([A-Za-z0-9._-]+)$/;
+
+/** The host and `owner/repo` a git remote URL names, or `null`. Accepts only URL
+ * forms (`https`, `http`, `ssh`, `git`, `git+ssh`, or scp-like `[user@]host:path`):
+ * a filesystem path or `file:` URL names no repository identity here. The host
+ * is lowercased and includes a port when the URL has one. */
+export function repositoryFromRemoteUrl(
+  remote: string,
+): { host: string; owner: string; repo: string } | null {
+  const text = remote.trim();
+  let host: string;
+  let path: string;
+  if (text.includes('://')) {
+    let url: URL;
+    try {
+      url = new URL(text);
+    } catch {
+      return null;
+    }
+    const schemes = ['https:', 'http:', 'ssh:', 'git:', 'git+ssh:'];
+    if (!schemes.includes(url.protocol)) return null;
+    // A port equal to the scheme's default names the same host as no port
+    // (URL() already drops the https and http defaults, not ssh or git).
+    const defaultPorts: Record<string, string> = {
+      'https:': '443',
+      'http:': '80',
+      'ssh:': '22',
+      'git:': '9418',
+      'git+ssh:': '22',
+    };
+    host = url.port === defaultPorts[url.protocol] ? url.hostname : url.host;
+    // The raw path text, not `url.pathname`: URL() resolves dot segments, so
+    // `o/x/../r` would otherwise read as `o/r`. The host above is normalized
+    // on purpose (case and default port).
+    // The authority ends at the first `/`, `?`, or `#`; a slash inside a query
+    // or fragment is not the start of the path, so the path keeps its `?` or
+    // `#` and the check below rejects it.
+    const afterScheme = text.slice(text.indexOf('://') + 3);
+    const authorityEnd = afterScheme.search(/[/?#]/u);
+    path = authorityEnd === -1 ? '' : afterScheme.slice(authorityEnd);
+  } else {
+    const scp = /^(?:[^@/\s]+@)?([^:/\s]+):(.+)$/.exec(text);
+    if (!scp) return null;
+    host = scp[1] ?? '';
+    path = scp[2] ?? '';
+  }
+  // Exactly `owner/repo`, with at most one leading and one trailing slash and no
+  // empty segment between: `outer/inner/repo` names a different repository than
+  // its last two segments would suggest, and `o//r` is not a repository path.
+  // A query, a fragment, or a percent-encoded byte (such as `%2F`, which would
+  // hide a slash) is not a plain path. A dot segment is rejected below.
+  if (/[?#%]/u.test(path)) return null;
+  const parts = path.replace(/^\//u, '').replace(/\/$/u, '').split('/');
+  if (
+    parts.length !== 2 ||
+    parts.some((part) => part === '' || part === '.' || part === '..')
+  ) {
+    return null;
+  }
+  const owner = parts[0] ?? '';
+  const repo = (parts[1] ?? '').replace(/\.git$/u, '');
+  return host && owner && repo
+    ? { host: host.toLowerCase(), owner, repo }
+    : null;
+}
+
+/** The host `gh` and the API calls after it target: `GH_HOST` when it is set (an
+ * explicit host takes precedence, as in `gh`), else the Actions server
+ * (`GITHUB_SERVER_URL`, `https://github.com` when unset). `null` when that host
+ * cannot be parsed. */
+function activeGithubHost(): string | null {
+  try {
+    const explicit = process.env.GH_HOST?.trim();
+    if (explicit) return new URL(`https://${explicit}`).host.toLowerCase();
+    return new URL(
+      process.env.GITHUB_SERVER_URL ?? 'https://github.com',
+    ).host.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/** The environment for a `git` child: every variable except those whose name
+ * starts with `GIT_` in any case. Windows environment names are
+ * case-insensitive, so `git_dir` reaches git just as `GIT_DIR` does. */
+export function gitChildEnvironment(
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(source).filter(
+      ([name]) => !name.toUpperCase().startsWith('GIT_'),
+    ),
+  );
+}
+
+/** True when the checkout's `origin` remote names `owner/repo` on the active
+ * GitHub host (`activeGithubHost`), compared case-insensitively. An unreadable
+ * origin, a missing remote, a remote that is not a repository URL, or an
+ * unparseable host is false: the caller then uses `gh` (fail closed). */
+function originNamesRepository(owner: string, repo: string): boolean {
+  const serverHost = activeGithubHost();
+  if (serverHost === null) return false;
+  let remote: string;
+  try {
+    remote = execFileSync('git', ['remote', 'get-url', 'origin'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 10_000,
+      // An inherited GIT_DIR, GIT_WORK_TREE, or GIT_CONFIG_* would point this
+      // read at another repository, so the git subprocess gets no GIT_* names.
+      env: gitChildEnvironment(),
+    });
+  } catch {
+    return false;
+  }
+  const origin = repositoryFromRemoteUrl(remote);
+  if (origin !== null && origin.host !== serverHost.toLowerCase()) return false;
+  return (
+    origin !== null &&
+    origin.owner.toLowerCase() === owner.toLowerCase() &&
+    origin.repo.toLowerCase() === repo.toLowerCase()
+  );
+}
+
+/** Resolve the current repository's owner/name, the shared resolver every
+ * migrated helper reaches through the adapter instead of spelling the lookup
+ * itself (#3715).
+ *
+ * #4110: the shortcut applies only inside GitHub Actions (`GITHUB_ACTIONS` is
+ * `true`), and only when the checkout's `origin` remote names the same
+ * owner/repo as a valid `GITHUB_REPOSITORY` (case-insensitively). Actions sets
+ * the variable in every job, and an uncaught `gh repo view` timeout failed the
+ * advisory job on setup.ubuntu#204 (observed 2026-10-08). The origin check
+ * keeps a checkout of another repository resolving to its own remote. In every
+ * other case, including an unreadable origin, the `gh repo view` lookup runs.
+ * A local run therefore keeps that lookup even when a shell exports the
+ * variable, so the write helpers (`post-idd-marker` and others) cannot follow
+ * an exported value into another repository. A non-empty `GH_REPO` also keeps
+ * the lookup, because an operator who sets it on purpose must not be
+ * overridden; an empty `GH_REPO` counts as unset. */
 export function resolveCurrentGithubRepository(): {
   owner: string;
   repo: string;
 } {
+  const match = GITHUB_REPOSITORY_VALUE.exec(
+    process.env.GITHUB_REPOSITORY ?? '',
+  );
+  if (
+    process.env.GITHUB_ACTIONS === 'true' &&
+    !process.env.GH_REPO &&
+    match &&
+    originNamesRepository(match[1] ?? '', match[2] ?? '')
+  ) {
+    return { owner: match[1] ?? '', repo: match[2] ?? '' };
+  }
   return resolveGhOwnerRepo({}, GH_TEXT_LOOP_OPTIONS);
 }
