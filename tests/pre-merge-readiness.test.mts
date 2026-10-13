@@ -13540,7 +13540,7 @@ test('#4123: a disposition by a trusted marker actor outside iddAgentLogins also
   );
 });
 
-test('#4123: a trusted disposition that is the only activity keeps the window anchored on it, as on main', () => {
+test('#4123: a trusted disposition that is the only activity leaves the quiet anchor absent, so the gate reports the window elapsed', () => {
   const summary = quietAnchorSummary({
     comments: [
       quietComment(
@@ -13551,7 +13551,8 @@ test('#4123: a trusted disposition that is the only activity keeps the window an
       ),
     ],
   });
-  assert.equal(secondaryQuietWindowOf(summary).anchorAt, QUIET_T4);
+  assert.equal(secondaryQuietWindowOf(summary).anchorAt, 'none');
+  assert.equal(secondaryQuietWindowOf(summary).elapsed, true);
 });
 
 test('#2335: computePreMergeReadinessBlockers never blocks on an entirely absent secondaryQuietWindow evidence field (backward compatible with a hand-built or unmigrated report)', () => {
