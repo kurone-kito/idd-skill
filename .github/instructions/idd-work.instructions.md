@@ -415,8 +415,8 @@ failure and fix it. See
 [rationale](../../docs/idd-design-rationale.md#b3--local-test-flakiness-under-concurrent-load-hosted-ci-is-authoritative).
 
 **Editing a docs/instructions file**: before editing, check if it is a
-generated mirror. A `.github/instructions/**.instructions.md` mirror
-carries an `idd-generated-from` banner naming its canonical source and
+generated mirror. An `.instructions.md` mirror carries an
+`idd-generated-from` banner naming its canonical source and
 resync command; a `docs/**.md` mirror may not, so check your sync
 manifest (e.g. `audit/sync-manifest.json`) for its target entry. For an
 `exact`/`concreted` entry, edit only that source: the next resync
@@ -463,16 +463,17 @@ a follow-up or start a second loop. If the companion is unavailable, record the
 proposal in a comment/PR follow-ups; never create it ad hoc or improvise
 worker-side authoring.
 
-**Scope overrun**: when `audit-authored-issue --shape child` fails
-`effort-candidate-file-limit` on the issue, or with its
+**Scope overrun**: when profile-selected
+`audit-authored-issue --shape child --stdin` fails
+`effort-candidate-file-limit` on the issue body, or with
 `## Candidate files` set to the diff's canonical paths, stop coding
 without pushing: a release, not a hold. Comment the estimate, candidate
-files, changed files, and, without the companion, the split proposal;
-release with `unclaimed-by` and the current `{claim-id}`; run
-`lost-claim-cleanup`. With the companion, hand it a held split draft:
-it holds this issue, publishes a held roadmap whose children record
-`Split out of #<n>`, and comments its link. Never add needs-decision or
-ask a human
+files, changed files, and a split proposal; release with `unclaimed-by`
+and the current `{claim-id}`; run `lost-claim-cleanup`. With the
+companion, hand it that proposal as a held split draft: it holds this
+issue, publishes a held roadmap whose children record
+`Split out of #<n>`, and comments its link; if it refuses, the comment
+stands. Never add needs-decision or ask a human
 ([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
 
 ---

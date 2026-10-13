@@ -119,18 +119,19 @@ const PROHIBITION = 'Never add needs-decision or ask a human';
  * fallback proposal), the claim release, then the companion handoff.
  */
 const ORDERED_STEPS = [
-  '`audit-authored-issue --shape child` fails',
-  '`effort-candidate-file-limit` on the issue',
+  'profile-selected',
+  '`audit-authored-issue --shape child --stdin` fails',
+  '`effort-candidate-file-limit` on the issue body',
   "`## Candidate files` set to the diff's canonical paths",
   'stop coding without pushing',
   'a release, not a hold',
-  'Comment the estimate, candidate files, changed files',
-  'without the companion, the split proposal',
+  'Comment the estimate, candidate files, changed files, and a split proposal',
   'release with `unclaimed-by` and the current `{claim-id}`',
   'run `lost-claim-cleanup`',
-  'With the companion, hand it a held split draft',
+  'With the companion, hand it that proposal as a held split draft',
   'held roadmap whose children record `Split out of #<n>`',
   'comments its link',
+  'if it refuses, the comment stands',
   PROHIBITION,
 ] as const;
 
@@ -207,7 +208,7 @@ for (const relativePath of WORK_PHASE_PATHS) {
     // The fallback proposal rides on the same evidence comment, before
     // the release that both branches share.
     assert.ok(
-      route.indexOf('without the companion, the split proposal') <
+      route.indexOf('and a split proposal') <
         route.indexOf('release with `unclaimed-by`'),
     );
     assert.ok(route.includes(PROHIBITION));

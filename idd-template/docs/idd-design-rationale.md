@@ -938,7 +938,8 @@ This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
 - **Stop, do not push.** An over-threshold diff is what the authoring
   check would have split before publication, so finishing it only
   produces an oversized pull request. The trigger is the distributed
-  `audit-authored-issue` helper's own check, run on the issue body and
+  `audit-authored-issue` helper's own check (the profile-selected
+  command, with the body on `--stdin`), run on the issue body and
   again on a copy whose `## Candidate files` section is replaced by
   the diff's canonical paths: the paths that
   `git diff --name-only origin/{development-branch}...HEAD` lists,
@@ -952,8 +953,10 @@ This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
   reports any other shape as not applicable, and #4064, the
   motivating overrun, was an orphan issue.
 - **Evidence first.** The comment records the estimate, the candidate
-  files, and the changed files, so the next author sees the overrun
-  without redoing the work.
+  files, the changed files, and the split proposal, so the next author
+  sees the overrun without redoing the work. The proposal goes into the
+  comment whether or not the companion is installed, so a handoff that
+  fails later loses nothing.
 - **Release, not hold.** The next action belongs to authoring, and no
   human decision is pending, so the worker releases with `unclaimed-by`
   instead of keeping a hold, and does not apply the needs-decision
@@ -975,13 +978,19 @@ This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
   with an active claim. So the worker releases first, and the
   companion, run from the primary checkout once cleanup is done, then
   holds the issue under its own owner markers and publishes the held
-  split. Whether the original issue becomes the
-  roadmap anchor or is closed as superseded is the companion's
-  decision. Without the companion, the split proposal stays in the
-  overrun comment for the next triage. In both cases the worker still
-  never creates authoring ad hoc. The "Unplanned follow-up work" rule
-  to keep the Stage 1 B–C hold does not apply here, because the claimed
-  issue itself is being returned rather than continued.
+  split. Between the release and that hold, Discover's authoring guard
+  does not protect the issue, so another session can claim it first.
+  Review of PR 4160 raised that window. The route does not add a lock
+  for it: the companion's own conflict rule refuses the claimed target,
+  and the evidence comment already carries the split proposal, so the
+  refused handoff degrades to the no-companion path. Whether the
+  original issue becomes the roadmap anchor or is closed as superseded
+  is the companion's decision. Without the companion, the split
+  proposal stays in the overrun comment for the next triage. In both
+  cases the worker still never creates authoring ad hoc. The
+  "Unplanned follow-up work" rule to keep the Stage 1 B–C hold does not
+  apply here, because the claimed issue itself is being returned rather
+  than continued.
 - **Known gap.** Without the companion, nothing marks the released
   issue, so Discover can select it again before the next triage reads
   the overrun comment, and the next session can overrun again.
