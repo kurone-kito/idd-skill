@@ -1878,7 +1878,8 @@ only approval boundary.
   It never retries, closes, or appends `cleanup` or `abandoned`: any failure
   after the create stops at a recovery hold with the record at `pending`, or
   reported as uncertain (replay the journal) when a record may have been
-  posted but could not be verified. A failed marker post counts as unsent
+  posted but could not be verified. Its `retry` report field is advice to
+  the operator only. A failed marker post counts as unsent
   only when `post-idd-marker`'s error envelope reports `notDispatched` or
   HTTP status 401, 404 or 422; every other failure is uncertain, and an
   uncertain pending record stops before the create.

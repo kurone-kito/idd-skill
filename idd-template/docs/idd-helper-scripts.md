@@ -1182,18 +1182,19 @@ in this preamble, since the fallback differs per helper.
   pending publication-intent record through `post-idd-marker.mjs`'s dry
   run and prints the plan (exit `0`). With `--apply`, and only when the
   authenticated login is a trusted marker actor with Write, Maintain or
-  Admin permission, it creates a missing label, posts the pending
-  record, creates the issue with its labels, attaches the issue to the
-  record, posts the owner marker, checks provenance, and posts
-  `state=member` (exit `0`). A refusal before the create exits `1`; a
-  failure after it prints a recovery hold and exits `1`. A failed marker
-  post counts as unsent (`"nothingSent": true`, retry permitted) only
-  when `post-idd-marker.mjs`'s error envelope reports `notDispatched` or
-  HTTP status 401, 404 or 422; any other failure reports the journal as
+  Admin permission (a `[bot]` login skips the permission read), it
+  creates a missing label, posts the pending record, creates the issue
+  with its labels, attaches the issue to the record, posts the owner
+  marker, checks provenance, and posts `state=member` (exit `0`). A
+  refusal before the create exits `1`; a failure after it prints a
+  recovery hold and exits `1`. A failed marker post counts as unsent
+  (`"nothingSent": true`, retry permitted) only when
+  `post-idd-marker.mjs`'s error envelope reports `notDispatched` or HTTP
+  status 401, 404 or 422; any other failure reports the journal as
   `uncertain: replay the journal`, and an uncertain pending record stops
-  before the create. Every policy value comes from the repository
-  policy file only, and `--marker-prefix` is required when the issue or
-  the journal is in another repository.
+  before the create. Every policy value comes from the repository policy
+  file only, and `--marker-prefix` is required when the issue or the
+  journal is in another repository.
 
 - `scripts/review-disposition-verify.mjs` for read-only E7 disposition
   marker presence verification across PATH A and PATH B items
