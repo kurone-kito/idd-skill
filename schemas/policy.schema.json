@@ -909,9 +909,14 @@
         "enabled": {
           "type": "boolean",
           "description": "When false, discovery ignores the score entirely and evaluates every candidate the legacy way (default true)."
+        },
+        "effortL": {
+          "type": "string",
+          "enum": ["allow", "refuse"],
+          "description": "Effort `L` policy. `allow` keeps an issue whose effort footer is `L` eligible for `ready` authoring and autopilot Discover. `refuse` stops such an issue from being authored as `ready`, and autopilot Discover routes it to humans. Optional; defaults to \"allow\"."
         }
       },
-      "description": "Container for the discovery autopilot-suitability score floor and its enable switch. Optional; omitting it keeps the distributed defaults for both nested keys."
+      "description": "Container for the discovery autopilot-suitability score floor, its enable switch, and the effort `L` policy. Optional; omitting it keeps the distributed defaults for every nested key."
     },
     "worktreeGuard": {
       "type": "object",

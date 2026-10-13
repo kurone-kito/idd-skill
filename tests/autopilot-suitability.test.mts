@@ -8,6 +8,7 @@ import {
   parseAutopilotSuitability,
   parseAutopilotSuitabilityMarker,
   rankAndRouteBySuitability,
+  resolveEffortLPolicy,
 } from '../src/scripts/autopilot-suitability.mts';
 
 test('isAutopilotSuitabilityScore accepts only integers 1-5', () => {
@@ -366,4 +367,30 @@ test('rankAndRouteBySuitability is stable for equal effective scores', () => {
     ranked.map((item) => item.id),
     ['first', 'second', 'third'],
   );
+});
+
+test('resolveEffortLPolicy returns refuse only for an exact refuse value', () => {
+  assert.equal(
+    resolveEffortLPolicy({ autopilotSuitability: { effortL: 'refuse' } }),
+    'refuse',
+  );
+});
+
+test('resolveEffortLPolicy defaults to allow when the field or section is absent (opt-in)', () => {
+  assert.equal(resolveEffortLPolicy({}), 'allow');
+  assert.equal(resolveEffortLPolicy({ autopilotSuitability: {} }), 'allow');
+  assert.equal(
+    resolveEffortLPolicy({ autopilotSuitability: { effortL: 'allow' } }),
+    'allow',
+  );
+});
+
+test('resolveEffortLPolicy fails safe to allow for any non-exact or malformed input', () => {
+  assert.equal(
+    resolveEffortLPolicy({ autopilotSuitability: { effortL: 'REFUSE' } }),
+    'allow',
+  );
+  assert.equal(resolveEffortLPolicy(null), 'allow');
+  assert.equal(resolveEffortLPolicy('refuse'), 'allow');
+  assert.equal(resolveEffortLPolicy(undefined), 'allow');
 });
