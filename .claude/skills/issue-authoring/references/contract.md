@@ -1255,15 +1255,16 @@ different wording, at about 100,000 reviewer tokens per round.
 **Ledger.** During a drafting session, keep a findings ledger in the session
 scratchpad, one JSON file per draft, named for that draft: its issue number
 once one exists, or, before then, a token that no other draft uses, such as a
-freshly generated UUID. No two drafts or concurrent workers share a ledger
-file. The ledger is never written to the repository or to a marker. Each entry
-has these members: `claim` (one sentence), `draftSection` (the heading the
-finding concerns), `round`, `draftVersion` (the draft revision the finding was
-raised against, counted from 1; recorded for audit only), `disposition`
-(`fixed`, `rejected`, or `deferred`), `evidence` (required for `rejected`: a
-file and line, or a read-only command and its output), and `decidedAt`. If the
-scratchpad is lost, for example after a restart, the ledger is empty and the
-review runs as it does without one.
+freshly generated UUID. When the draft gets its issue number, rename the file
+to that number and keep every entry. No two drafts or concurrent workers share
+a ledger file. The ledger is never written to the repository or to a marker.
+Each entry has these members: `claim` (one sentence), `draftSection` (the
+heading the finding concerns), `round`, `draftVersion` (the draft revision the
+finding was raised against, counted from 1; recorded for audit only),
+`disposition` (`fixed`, `rejected`, or `deferred`), `evidence` (required for
+`rejected`: a file and line, or a read-only command and its output), and
+`decidedAt`. If the scratchpad is lost, for example after a restart, the
+ledger is empty and the review runs as it does without one.
 
 **Packet.** For each `rejected` entry that has evidence, add one string to the
 packet's existing `evidence` array, in every review mode:
