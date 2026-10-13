@@ -286,8 +286,8 @@ by a trusted author is left out, so the agent's own issue-comment reply never
 restarts the window (observed 2026-10-12 on a kurone-kito/dotfiles pull
 request; issue `#4123`). It needs no separately persisted timestamp: a
 genuinely unresolved item keeps the anchor fresh, and a watermark or a
-top-level advisory-bot ack posted after an IDD-agent disposition never
-reopens it. A
+top-level advisory-bot ack posted after an unedited IDD-agent
+disposition never reopens it. A
 disposition reply inside a review thread, and a bot reply on an unresolved
 thread, still reopen it. Distinct from
 `settledWindow`, which bounds the PRIMARY bot's own pending state, not a
