@@ -558,7 +558,7 @@ const HELPER_COMMANDS = [
     entryPath: 'scripts/publish-authoring-hold.mjs',
     vendoredCommand: 'node scripts/publish-authoring-hold.mjs',
     description:
-      'Plan and validate the Stage 1 publication of one drafted orphan issue under the issue-authoring hold (read-only; --apply is refused until the publication path lands).',
+      'Create one drafted orphan issue under the issue-authoring hold, running the New-issue ownership steps of the authoring contract in order (dry run unless --apply).',
   },
   {
     id: 'rerun-advisory-convergence',

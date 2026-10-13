@@ -5,23 +5,37 @@
 // .mts source named above by `pnpm run build`. Edit the .mts source, never
 // the generated .mjs. See docs/typescript-sources.md.
 //
-// Read-only planning and validation for the Stage 1 publication of one held
-// orphan issue (kurone-kito/idd-skill#4127): review-result check, journal
-// check, publication line, lint of the exact body, label lookup, and the
-// rendered pending publication-intent record. It spawns the sibling helpers
-// (audit-authored-issue, post-idd-marker's dry run) rather than reimplementing
-// their checks. It writes nothing: --apply is refused until the publication
-// path (journal records, create, owner marker, member) lands as a follow-up.
+// Capability-checked Stage 1 publication of one held orphan issue
+// (kurone-kito/idd-skill#4127). The issue-authoring skill allows a new issue
+// only through a create-with-label command and stops when none exists. This
+// helper runs the contract's "New-issue ownership" sequence in order: journal
+// check, publication line, lint, labels, pending intent, create, identity
+// attach, owner marker, provenance, member. It spawns the sibling helpers
+// (audit-authored-issue, post-idd-marker, authoring-owner-provenance) rather
+// than reimplementing their checks. It never runs a review, a Stage 2
+// release, or a close. A failed marker post is uncertain unless the
+// child's error envelope proves that nothing was sent (#4171).
 
 import { spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import {
+  type AuthoringOwnerProvenanceComment,
+  fetchProvenanceCommentsGraphql,
+} from './authoring-owner-provenance.mts';
 import { resolveBundleRoot } from './bundle-root.mts';
 import { parseCliArgs } from './cli-args.mts';
-import { ghApiJson, resolveViewerLogin } from './gh-exec.mts';
+import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
+import {
+  collaboratorPermission,
+  isAuthorizedForcedHandoffActor,
+  readForcedHandoffAuthorityPolicy,
+  readForcedHandoffMode,
+} from './collaborator-permission.mts';
+import { ghApiJson, ghText, resolveViewerLogin } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
@@ -30,15 +44,26 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mts';
 import { readRepositoryPolicyFile } from './idd-config.mts';
+import { resolveOpenLinkedPrIssues } from './idd-roadmap-audit-execute.mts';
 import {
   normalizeMarkerPrefix,
+  parseAuthoringOwnerComment,
   parseAuthoringPublicationComment,
 } from './marker-helpers.mts';
 import {
   AUTHORING_JOURNAL_REFERENCE_PATTERN,
   normalizePolicyConfig,
+  parseIsoDurationToMs,
 } from './policy-helpers.mts';
-import { resolveCurrentGithubRepository } from './provider-adapter-github.mts';
+import {
+  readClaimStaleAgeMs,
+  resolveActiveClaimForWriteGate,
+  resolveTrustedMarkerActors,
+} from './protocol-helpers.mts';
+import {
+  createGithubProviderAdapter,
+  resolveCurrentGithubRepository,
+} from './provider-adapter-github.mts';
 
 export const PUBLISH_BUCKETS = [
   'ready',
@@ -57,11 +82,20 @@ const PUBLISH_AUTHORING_HOLD_FLAG_SPEC = {
   '--owner': { type: 'string' },
   '--repo': { type: 'string' },
   '--policy': { type: 'string' },
+  '--trusted-marker-logins': { type: 'string', default: '' },
   '--marker-prefix': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
 const REPO_TOKEN_PATTERN = /^[A-Za-z0-9_.-]+$/;
+
+/** A record that may have been posted but could not be verified: replay the
+ * journal to learn its state. */
+const JOURNAL_STATE_UNCERTAIN = 'uncertain: replay the journal';
+
+/** HTTP statuses that, on the post's first attempt, prove nothing landed
+ * (the retry layer never reports them after a later attempt, #4171). */
+const NOTHING_SENT_HTTP_STATUSES = new Set([401, 404, 422]);
 
 if (import.meta.main) {
   if (isHelperErrorEnvelopeEnabled()) {
@@ -266,12 +300,10 @@ export function requestsChildShape(argv: readonly string[]): boolean {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> --review-result <path> [--shape orphan] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>]
+  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> --review-result <path> [--shape orphan] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--trusted-marker-logins <csv>] [--marker-prefix <prefix>] [--apply]
 
-Plans and validates the Stage 1 publication of one drafted orphan issue
-under the issue-authoring hold. It writes nothing: --apply is refused with
-exit 2 until the publication path lands as a follow-up of #4127. The
-checks follow contract.md's "New-issue ownership" order:
+Publishes one drafted orphan issue under the issue-authoring hold, running
+contract.md's "New-issue ownership" steps in order:
 
   1. refuse --shape child (exit 2, nothing else runs), then check the review
      result file;
@@ -285,23 +317,52 @@ checks follow contract.md's "New-issue ownership" order:
      configured label);
   5. resolve the authoring label (issueAuthoring.authoringLabelName) and,
      for a non-ready bucket, labels.needsDecisionLabelName or
-     labels.blockedByHumanLabelName, and report which ones are missing;
-  6. render the pending publication-intent record through post-idd-marker's
-     dry run, and list the remaining publication steps as planned.
+     labels.blockedByHumanLabelName; create a missing label;
+  6. append the pending publication-intent record (issue=none) to the
+     journal through post-idd-marker and read it back;
+  7. create the issue with every label in one gh issue create call;
+  8. attach the returned identity to the pending record, append the
+     mode=acquire owner marker, wait claim.verifySettleDelay, run
+     authoring-owner-provenance, re-read labels, body and claim state,
+     and only then append state=member.
 
-Every policy value (the journal, the marker prefix and the label names)
-comes from the repository's own policy file (--policy, or
-.github/idd/config.json), never from a user-global layer, because each
-describes the target repository. The marker prefix comes from that file
-only when the issue and the journal are both in this checkout's repository. Otherwise pass
---marker-prefix with the prefix the target repository configures.
+Every policy value (the journal, the marker prefix, the label names, the
+trusted marker actors and claim.verifySettleDelay) comes from the
+repository's own policy file (--policy, or .github/idd/config.json), never
+from a user-global layer, because each describes the target repository.
+The marker prefix comes from that file only when the issue and the journal
+are both in this checkout's repository. Otherwise pass --marker-prefix
+with the prefix the target repository configures.
+
+Before any write, the authenticated login must be a trusted marker actor
+(--trusted-marker-logins, IDD_TRUSTED_MARKER_ACTORS, or trustedMarkerActors)
+and, unless it is a bot, hold Write, Maintain or Admin permission on the
+issue's and the journal's repositories.
 
 The review result file is a JSON object with "completed": true. An
 optional "findings" array holds findings-ledger entries, and each needs a
 disposition of fixed or rejected. The file is not tied to the body; the
 caller keeps it for the reviewed draft.
 
-Exit codes: 0 planned, 1 refused, 2 usage error (including --apply),
+Without --apply this is a dry run: it makes the read-only checks, the lint
+and the label lookups, prints the planned steps, and writes nothing.
+
+A failed post-idd-marker --apply sent nothing only when its iddHelperError
+envelope reports notDispatched, or HTTP status 401, 404 or 422. Then the
+report carries "nothingSent": true and "retry": "permitted". Any other
+failure is uncertain: "nothingSent": false and the journal state "uncertain:
+replay the journal", and a retry must replay the journal first. An
+uncertain pending record stops before the create, so no second
+publication-intent record and no issue are written.
+
+A failure after the create prints a recovery-hold JSON object with the
+created issue, the failed step and the last journal state, and exits 1.
+That state is pending, or "uncertain: replay the journal" when a record
+may have been posted but could not be verified. The issue keeps its
+labels and is never closed. The Stage 2 release stays a separate,
+explicit request.
+
+Exit codes: 0 published (or planned), 1 refused or failed, 2 usage error,
 --shape child, or the blocked-by-human journal stop.
 `);
 }
@@ -316,6 +377,7 @@ interface ParsedArgs {
   owner: string;
   repo: string;
   policy: string;
+  trustedMarkerLogins: string;
   markerPrefix: string;
   help: boolean;
 }
@@ -334,6 +396,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     owner: text('owner'),
     repo: text('repo'),
     policy: (values.policy as string | undefined) ?? '',
+    trustedMarkerLogins:
+      (values['trusted-marker-logins'] as string | undefined) ?? '',
     markerPrefix: text('marker-prefix'),
     help,
   };
@@ -355,18 +419,29 @@ function refuse(
   return { exitCode: 1, kind: 'gate', message };
 }
 
+/** Synchronous wait for the settle delay. */
+function sleepMs(ms: number): void {
+  if (ms > 0) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  }
+}
+
 interface HelperRun {
   status: number | null;
   stdout: string;
   stderr: string;
 }
 
-function runSiblingHelper(script: string, args: string[]): HelperRun {
+function runSiblingHelper(
+  script: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): HelperRun {
   const root = resolveBundleRoot(import.meta.dirname);
   const result = spawnSync(
     process.execPath,
     [join(root, 'scripts', script), ...args],
-    { encoding: 'utf8', env: process.env, maxBuffer: 16 * 1024 * 1024 },
+    { encoding: 'utf8', env, maxBuffer: 16 * 1024 * 1024 },
   );
   return {
     status: result.status,
@@ -386,8 +461,57 @@ function parseJsonOutput(run: HelperRun): Record<string, unknown> | null {
   }
 }
 
+/**
+ * True only when a failed `post-idd-marker --apply` run reports that nothing
+ * was sent: the last stderr line is its `iddHelperError` envelope, and it
+ * carries `notDispatched: true` (load control refused the request before any
+ * `gh` process started) or `httpStatus` 401, 404 or 422 (rejected; the retry
+ * layer reports these only for a first attempt, #4171). Every other failure,
+ * including a missing or unparseable envelope, may have landed (option 1 of
+ * #4171), so the caller treats it as uncertain.
+ */
+export function markerPostSentNothing(stderr: string): boolean {
+  const last = stderr.trimEnd().split('\n').pop() ?? '';
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(last);
+  } catch {
+    return false;
+  }
+  const envelope = (parsed as { iddHelperError?: unknown } | null)
+    ?.iddHelperError as
+    | { helper?: unknown; notDispatched?: unknown; httpStatus?: unknown }
+    | undefined;
+  if (
+    envelope === undefined ||
+    envelope === null ||
+    typeof envelope !== 'object' ||
+    envelope.helper !== 'post-idd-marker'
+  ) {
+    return false;
+  }
+  return (
+    envelope.notDispatched === true ||
+    (typeof envelope.httpStatus === 'number' &&
+      NOTHING_SENT_HTTP_STATUSES.has(envelope.httpStatus))
+  );
+}
+
 function helperFailure(name: string, run: HelperRun): string {
-  const detail = (run.stderr.trim() || run.stdout.trim()).split('\n').pop();
+  const lines = (run.stderr.trim() || run.stdout.trim()).split('\n');
+  let detail = lines.pop();
+  // A requested envelope is the last line; its message names the error,
+  // where the line before it may be a stack frame.
+  try {
+    const message = (
+      JSON.parse(detail ?? '') as { iddHelperError?: { message?: unknown } }
+    ).iddHelperError?.message;
+    if (typeof message === 'string' && message !== '') {
+      detail = message;
+    }
+  } catch {
+    // Not an envelope: keep the line as it is.
+  }
   return `${name} exited ${run.status ?? 'without a status'}${detail ? `: ${detail}` : ''}`;
 }
 
@@ -422,6 +546,10 @@ function readIssue(owner: string, repo: string, number: number): IssueSnapshot {
   };
 }
 
+function hasLabel(labels: readonly string[], name: string): boolean {
+  return labels.some((label) => label.toLowerCase() === name.toLowerCase());
+}
+
 function labelExists(owner: string, repo: string, name: string): boolean {
   try {
     ghApiJson(`repos/${owner}/${repo}/labels/${encodeURIComponent(name)}`);
@@ -432,6 +560,163 @@ function labelExists(owner: string, repo: string, name: string): boolean {
     }
     throw error;
   }
+}
+
+/** Write, Maintain or Admin on the repository; an unreadable permission is
+ * false (fail closed). */
+function hasWritePermission(
+  owner: string,
+  repo: string,
+  login: string,
+  cache: CollaboratorPermissionCache,
+): boolean {
+  const { permission, roleName } = collaboratorPermission(
+    owner,
+    repo,
+    login,
+    cache,
+  );
+  return (
+    ['admin', 'maintain', 'write'].includes(roleName) ||
+    permission === 'admin' ||
+    permission === 'write'
+  );
+}
+
+/** Inputs of the write-gate claim resolver for the created issue. */
+interface ClaimGate {
+  owner: string;
+  repo: string;
+  trusted: readonly string[];
+  policyPath: string;
+  config: unknown;
+}
+
+/** True when the comments carry an active claim, resolved with the same
+ * write-gate resolver the review helpers use: a released claim does not
+ * count, a forced-handoff successor does when the repository enables forced
+ * handoffs, and a claim marker whose edit state is unknown throws (fail
+ * closed). The caller has already refused to run with no trusted login. */
+function hasActiveClaim(
+  comments: readonly AuthoringOwnerProvenanceComment[],
+  gate: ClaimGate,
+): boolean {
+  const trustedSet = new Set(gate.trusted.map((login) => login.toLowerCase()));
+  const policyPath = gate.policyPath || undefined;
+  const authorityPolicy = readForcedHandoffAuthorityPolicy(policyPath);
+  const permissionCache: CollaboratorPermissionCache = new Map();
+  return (
+    resolveActiveClaimForWriteGate(
+      comments.map((comment) => ({
+        id: comment.id,
+        body: comment.body,
+        author: { login: comment.authorLogin },
+        createdAt: comment.createdAt,
+        lastEditedAt: comment.lastEditedAt,
+      })),
+      {
+        isTrustedAuthor: (login) => trustedSet.has(login.trim().toLowerCase()),
+        forcedHandoffEnabled:
+          readForcedHandoffMode(policyPath) === 'human-gated',
+        // Issue-scoped: the created issue has no pull request of its own.
+        expectedLinkedPrs: null,
+        isAuthorizedForcedHandoff: (forcedBy) =>
+          isAuthorizedForcedHandoffActor(
+            gate.owner,
+            gate.repo,
+            forcedBy,
+            authorityPolicy,
+            permissionCache,
+          ),
+        requireAuthorMatchesForcedBy: true,
+        staleAgeMs: readClaimStaleAgeMs(gate.config),
+      },
+    ) !== null
+  );
+}
+
+/** True when a trusted login wrote an authoring-owner marker on the issue,
+ * edited or not (fail closed). */
+function hasForeignOwnerMarker(
+  comments: readonly AuthoringOwnerProvenanceComment[],
+  markerPrefix: string,
+  trusted: readonly string[],
+): boolean {
+  const trustedSet = new Set(trusted.map((login) => login.toLowerCase()));
+  const token = `${markerPrefix.toLowerCase()}-authoring-owner:`;
+  return comments.some(
+    (comment) =>
+      trustedSet.has(comment.authorLogin.trim().toLowerCase()) &&
+      comment.body.toLowerCase().includes(token),
+  );
+}
+
+/**
+ * Replay the owner-marker log right before `member`: every trusted
+ * authoring-owner marker on the issue must be unedited and carry this run's
+ * owner, set and session. Returns a refusal reason, or null.
+ */
+export function checkOwnerLogStillOurs(input: {
+  comments: readonly AuthoringOwnerProvenanceComment[];
+  markerPrefix: string;
+  trusted: readonly string[];
+  ids: Pick<PublicationIds, 'owner' | 'set' | 'session'>;
+}): string | null {
+  const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
+  const token = `${input.markerPrefix.toLowerCase()}-authoring-owner:`;
+  let ours = 0;
+  for (const comment of input.comments) {
+    if (!trustedSet.has(comment.authorLogin.trim().toLowerCase())) {
+      continue;
+    }
+    if (!comment.body.toLowerCase().includes(token)) {
+      continue;
+    }
+    if (comment.lastEditedAt !== null) {
+      return `owner marker ${comment.id} was edited`;
+    }
+    const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
+    if (
+      parsed === null ||
+      parsed.owner !== input.ids.owner ||
+      parsed.set !== input.ids.set ||
+      parsed.session !== input.ids.session
+    ) {
+      return `owner marker ${comment.id} is not this run's marker`;
+    }
+    ours += 1;
+  }
+  return ours > 0 ? null : "this run's owner marker is not on the issue";
+}
+
+/** True when the issue carries a comment with exactly this body by `actor`.
+ * Throws when the comments cannot be read. */
+function hasExactComment(
+  where: { owner: string; repo: string; number: number },
+  body: string,
+  actor: string,
+): boolean {
+  const comments = ghApiJson(
+    `repos/${where.owner}/${where.repo}/issues/${where.number}/comments`,
+    { paginate: true },
+  );
+  if (!Array.isArray(comments)) {
+    throw new Error('the comments are not readable');
+  }
+  return comments.some((comment) => {
+    const row = comment as { body?: unknown; user?: { login?: unknown } };
+    return (
+      row.body === body &&
+      String(row.user?.login ?? '').toLowerCase() === actor.toLowerCase()
+    );
+  });
+}
+
+/** Compare bodies the way GitHub may store them (CRLF and trailing space). */
+function sameBody(left: string, right: string): boolean {
+  const normalize = (text: string): string =>
+    text.replace(/\r\n/g, '\n').trimEnd();
+  return normalize(left) === normalize(right);
 }
 
 interface Step {
@@ -459,13 +744,6 @@ function runCli(): HelperCliResult {
   if (args.help) {
     printHelp();
     return 0;
-  }
-  if (args.apply) {
-    // The write path (journal records, create, owner marker, member) is not
-    // shipped yet; it is tracked as a follow-up of #4127.
-    return usage(
-      '--apply is not yet supported: this command plans and validates only, and the publication itself is tracked as a follow-up',
-    );
   }
   if (args.shape !== 'orphan') {
     return usage(`--shape must be orphan (got ${JSON.stringify(args.shape)})`);
@@ -515,19 +793,25 @@ function runCli(): HelperCliResult {
   }
 
   // Step 2: the journal must be set and verifiable before any target exists.
-  // Every policy value this helper reads (journal, marker prefix, label names)
-  // describes the target repository, so it comes from the repository's own
-  // policy file only, never from a user-global layer (contract.md, "Target
-  // marker prefix").
+  // Every policy value this helper reads (journal, marker prefix, label names,
+  // trusted actors, settle delay) describes the target repository, so it
+  // comes from the repository's own policy file only, never from a
+  // user-global layer (contract.md, "Target marker prefix").
   let journalSetting: unknown;
   let policyError = '';
-  let config: { markerPrefix?: unknown } | null = null;
+  let config: {
+    markerPrefix?: unknown;
+    trustedMarkerActors?: unknown;
+    claim?: { verifySettleDelay?: unknown };
+  } | null = null;
   let policyPath = '';
   try {
     const loaded = readRepositoryPolicyFile(args.policy || undefined);
     policyPath = loaded.path;
     const repositoryPolicy = loaded.config as {
       markerPrefix?: unknown;
+      trustedMarkerActors?: unknown;
+      claim?: { verifySettleDelay?: unknown };
       issueAuthoring?: { journalIssue?: unknown };
     } | null;
     config = repositoryPolicy;
@@ -570,6 +854,11 @@ function runCli(): HelperCliResult {
     );
   }
 
+  const { actors: trusted } = resolveTrustedMarkerActors({
+    flagValue: args.trustedMarkerLogins,
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+    config,
+  });
   const currentRepo =
     args.owner && args.repo
       ? { owner: args.owner, repo: args.repo }
@@ -625,9 +914,15 @@ function runCli(): HelperCliResult {
       owner,
       repo,
       markerPrefix,
+      trusted,
+      settleMs:
+        parseIsoDurationToMs(
+          normalizePolicyConfig(config).claim.verifySettleDelay,
+        ) ?? 0,
       config,
       policyPath,
       ids,
+      injected,
       bodyPath,
     });
   } finally {
@@ -642,14 +937,24 @@ function publish(input: {
   owner: string;
   repo: string;
   markerPrefix: string;
+  trusted: readonly string[];
+  settleMs: number;
   config: unknown;
   policyPath: string;
   ids: PublicationIds;
+  injected: string;
   bodyPath: string;
 }): HelperCliResult {
   const { args, bucket, journal, owner, repo, markerPrefix, ids } = input;
   const repoRef = `${owner}/${repo}`;
   const steps: Step[] = [];
+  const claimGate: ClaimGate = {
+    owner,
+    repo,
+    trusted: input.trusted,
+    policyPath: input.policyPath,
+    config: input.config,
+  };
   const base = {
     repository: { owner, repo },
     journal: journal.ref,
@@ -687,7 +992,40 @@ function publish(input: {
   } catch (error) {
     return refuse(`cannot read the labels: ${(error as Error).message}`, base);
   }
+  // A record from a login replay cannot trust is not valid evidence, so with
+  // no trusted marker actor configured nothing is written at all.
   const actor = resolveViewerLogin();
+  if (input.trusted.length === 0) {
+    return refuse(
+      'no trusted marker actor is configured (trustedMarkerActors, IDD_TRUSTED_MARKER_ACTORS or --trusted-marker-logins), so the journal records could not be verified on replay',
+      base,
+    );
+  }
+  if (
+    !input.trusted.some((login) => login.toLowerCase() === actor.toLowerCase())
+  ) {
+    return refuse(
+      `the authenticated login ${actor} is not a trusted marker actor, so its journal records would not be valid evidence`,
+      base,
+    );
+  }
+  // The contract also needs Write, Maintain or Admin on every repository
+  // that receives a marker, unless the actor is a configured bot or app.
+  if (!actor.toLowerCase().endsWith('[bot]')) {
+    const cache: CollaboratorPermissionCache = new Map();
+    const targets = [
+      { owner, repo },
+      { owner: journal.owner, repo: journal.repo },
+    ];
+    for (const target of targets) {
+      if (!hasWritePermission(target.owner, target.repo, actor, cache)) {
+        return refuse(
+          `${actor} does not have Write, Maintain or Admin permission on ${target.owner}/${target.repo}, or it could not be read, so its markers would not be trusted`,
+          base,
+        );
+      }
+    }
+  }
   const intentArgs = (state: string, issue: string): string[] => [
     '--type',
     'authoring-publication-intent',
@@ -728,35 +1066,441 @@ function publish(input: {
     return body;
   };
 
-  let pendingRecord: string;
-  try {
-    pendingRecord = renderMarker(intentArgs('pending', 'none'));
-  } catch (error) {
-    return refuse((error as Error).message, base);
+  if (!args.apply) {
+    let pendingRecord: string;
+    try {
+      pendingRecord = renderMarker(intentArgs('pending', 'none'));
+    } catch (error) {
+      return refuse((error as Error).message, base);
+    }
+    steps.push(
+      {
+        step: 'labels',
+        status: 'planned',
+        detail: { labels, create: missing },
+      },
+      {
+        step: 'journal-pending',
+        status: 'planned',
+        detail: { record: pendingRecord },
+      },
+      {
+        step: 'create',
+        status: 'planned',
+        detail: { title: args.title, labels },
+      },
+      { step: 'identity-attach', status: 'planned' },
+      { step: 'owner-marker', status: 'planned' },
+      { step: 'provenance', status: 'planned' },
+      { step: 'member', status: 'planned' },
+    );
+    process.stdout.write(
+      `${JSON.stringify({ mode: 'dry-run', outcome: 'planned', ...base, labels, steps }, null, 2)}\n`,
+    );
+    return 0;
   }
-  steps.push(
-    {
-      step: 'labels',
-      status: 'planned',
-      detail: { labels, create: missing },
-    },
-    {
+
+  for (const name of missing) {
+    try {
+      ghText(['label', 'create', name, '--repo', repoRef]);
+    } catch (error) {
+      return refuse(
+        `cannot create the label ${name}, so the create could not apply it: ${(error as Error).message}`,
+        base,
+      );
+    }
+  }
+  steps.push({
+    step: 'labels',
+    status: 'done',
+    detail: { labels, created: missing },
+  });
+
+  /** Post a marker, then read it back by id and compare body and author. */
+  const postVerified = (
+    markerArgs: string[],
+    where: { owner: string; repo: string; number: number },
+  ): number => {
+    const expected = renderMarker(markerArgs);
+    // The envelope is what tells a write that sent nothing from one that may
+    // have landed, so it is requested whatever the caller's own setting.
+    const run = runSiblingHelper(
+      'post-idd-marker.mjs',
+      [...markerArgs, '--apply'],
+      { ...process.env, IDD_HELPER_ERROR_ENVELOPE: '1' },
+    );
+    // A comment that exists, or may exist, leaves the record's state unknown
+    // rather than unchanged.
+    const landed = (message: string): Error =>
+      Object.assign(new Error(message), { posted: true });
+    const commentId = Number(parseJsonOutput(run)?.commentId);
+    if (run.status !== 0 || !Number.isInteger(commentId) || commentId <= 0) {
+      const failure = helperFailure('post-idd-marker', run);
+      if (run.status !== 0 && markerPostSentNothing(run.stderr)) {
+        throw Object.assign(new Error(`${failure}; nothing was sent`), {
+          nothingSent: true,
+        });
+      }
+      // Any other failure may have landed (#4171, option 1). A lagging read
+      // can miss a record that did land, so the exact-body search only adds
+      // detail: not finding the body never proves that nothing was written.
+      let found: boolean | null;
+      try {
+        found = hasExactComment(where, expected, actor);
+      } catch {
+        found = null;
+      }
+      throw landed(
+        `${failure}; ${
+          found === true
+            ? 'the record is on the issue anyway'
+            : found === false
+              ? 'the record may have been posted, and the comments do not show it yet'
+              : 'the record may have been posted, and the comments could not be read'
+        }`,
+      );
+    }
+    let stored: { body?: unknown; user?: { login?: unknown } } | null;
+    try {
+      stored = ghApiJson(
+        `repos/${where.owner}/${where.repo}/issues/comments/${commentId}`,
+      ) as { body?: unknown; user?: { login?: unknown } } | null;
+    } catch (error) {
+      throw landed(
+        `comment ${commentId} could not be read back: ${(error as Error).message}`,
+      );
+    }
+    if (stored?.body !== expected) {
+      throw landed(`comment ${commentId} does not carry the posted marker`);
+    }
+    if (
+      String(stored.user?.login ?? '').toLowerCase() !== actor.toLowerCase()
+    ) {
+      throw landed(`comment ${commentId} was not written by ${actor}`);
+    }
+    return commentId;
+  };
+  const journalWhere = {
+    owner: journal.owner,
+    repo: journal.repo,
+    number: journal.number,
+  };
+
+  // Step 6: the pending record must be verified before the create.
+  try {
+    const commentId = postVerified(intentArgs('pending', 'none'), journalWhere);
+    steps.push({
       step: 'journal-pending',
-      status: 'planned',
-      detail: { record: pendingRecord },
-    },
-    {
-      step: 'create',
-      status: 'planned',
-      detail: { title: args.title, labels },
-    },
-    { step: 'identity-attach', status: 'planned' },
-    { step: 'owner-marker', status: 'planned' },
-    { step: 'provenance', status: 'planned' },
-    { step: 'member', status: 'planned' },
+      status: 'done',
+      detail: { commentId },
+    });
+  } catch (error) {
+    return refuse(
+      `the pending publication-intent record could not be verified, so nothing was created: ${(error as Error).message}`,
+      {
+        ...base,
+        steps,
+        ...postOutcome(error),
+        // Nothing was created, so a retry is safe once nothing was sent;
+        // after an uncertain post it must replay the journal first.
+        ...(postOutcome(error).nothingSent === true
+          ? { retry: 'permitted' }
+          : isPosted(error)
+            ? { retry: 'replay the journal first' }
+            : {}),
+      },
+    );
+  }
+
+  // Step 7: one create call with every label.
+  const createArgs = [
+    'issue',
+    'create',
+    '--repo',
+    repoRef,
+    '--title',
+    args.title,
+    '--body-file',
+    input.bodyPath,
+  ];
+  for (const label of labels) {
+    createArgs.push('--label', label);
+  }
+  let number: number;
+  let url: string;
+  try {
+    const out = ghText(createArgs).trim();
+    url = out.split('\n').pop()?.trim() ?? '';
+    const match = /\/issues\/([1-9][0-9]*)$/.exec(url);
+    if (!match) {
+      throw new Error(`gh issue create printed no issue URL: ${out}`);
+    }
+    number = Number(match[1]);
+  } catch (error) {
+    return recoveryHold({
+      ...base,
+      issue: null,
+      failedStep: 'create',
+      reason: `${(error as Error).message}; check the repository for an issue carrying token ${ids.token} before retrying`,
+      steps,
+    });
+  }
+  const issueRef = `${repoRef}#${number}`;
+  steps.push({
+    step: 'create',
+    status: 'done',
+    detail: { issue: issueRef, url },
+  });
+  const held = { ...base, issue: issueRef, number, url, steps };
+
+  // Step 8: the label must be on the issue; restore it as a safe hold if not.
+  let created: IssueSnapshot;
+  try {
+    created = readIssue(owner, repo, number);
+  } catch (error) {
+    return recoveryHold({
+      ...held,
+      failedStep: 'create-verify',
+      reason: (error as Error).message,
+    });
+  }
+  const authoringLabel = labels[0] ?? '';
+  if (!labels.every((name) => hasLabel(created.labels, name))) {
+    let reason = `the created issue lacks a required label (has ${JSON.stringify(created.labels)})`;
+    try {
+      // This run has not posted its owner marker yet, so any trusted owner
+      // marker here belongs to another session or set.
+      const comments = fetchProvenanceCommentsGraphql(owner, repo, number);
+      if (hasForeignOwnerMarker(comments, markerPrefix, input.trusted)) {
+        reason +=
+          '; another owner marker is present, so the labels were not touched';
+      } else if (hasActiveClaim(comments, claimGate)) {
+        reason += '; a claim marker is present, so the labels were not touched';
+      } else {
+        ghText([
+          'issue',
+          'edit',
+          String(number),
+          '--repo',
+          repoRef,
+          ...labels.flatMap((name) => ['--add-label', name]),
+        ]);
+        const after = readIssue(owner, repo, number);
+        reason += labels.every((name) => hasLabel(after.labels, name))
+          ? '; the labels were added as a safe hold'
+          : hasLabel(after.labels, authoringLabel)
+            ? '; the authoring label was added as a safe hold, but another label could not be verified'
+            : '; adding the labels could not be verified';
+      }
+    } catch (error) {
+      reason += `; the safe-hold recovery failed: ${(error as Error).message}`;
+    }
+    return recoveryHold({ ...held, failedStep: 'create-verify', reason });
+  }
+
+  try {
+    const attachId = postVerified(
+      intentArgs('pending', issueRef),
+      journalWhere,
+    );
+    steps.push({
+      step: 'identity-attach',
+      status: 'done',
+      detail: { commentId: attachId },
+    });
+
+    const ownerArgs = [
+      '--type',
+      'authoring-owner',
+      '--target',
+      'issue',
+      String(number),
+      '--owner',
+      owner,
+      '--repo',
+      repo,
+      '--marker-target',
+      issueRef,
+      '--anchor',
+      issueRef,
+      '--mode',
+      'acquire',
+      '--marker-owner',
+      ids.owner,
+      '--set',
+      ids.set,
+      '--session',
+      ids.session,
+      '--snapshot-sha256',
+      'none',
+      '--supersedes',
+      'none',
+      '--marker-prefix',
+      markerPrefix,
+    ];
+    const ownerId = postVerified(ownerArgs, { owner, repo, number });
+    steps.push({
+      step: 'owner-marker',
+      status: 'done',
+      detail: { commentId: ownerId },
+    });
+  } catch (error) {
+    const attached = steps.some((s) => s.step === 'identity-attach');
+    const outcome = postOutcome(error);
+    return recoveryHold({
+      ...held,
+      failedStep: attached ? 'owner-marker' : 'identity-attach',
+      reason: (error as Error).message,
+      ...(attached
+        ? // The owner marker is on the issue, not in the journal, so the
+          // journal stays at the attached pending record.
+          { nothingSent: outcome.nothingSent }
+        : outcome),
+    });
+  }
+
+  sleepMs(input.settleMs);
+  const provenanceArgs = [
+    '--issue',
+    String(number),
+    '--owner',
+    owner,
+    '--repo',
+    repo,
+    '--marker-prefix',
+    markerPrefix,
+  ];
+  if (input.policyPath) {
+    provenanceArgs.push('--policy', input.policyPath);
+  }
+  if (input.trusted.length > 0) {
+    provenanceArgs.push('--trusted-marker-logins', input.trusted.join(','));
+  }
+  const provenance = runSiblingHelper(
+    'authoring-owner-provenance.mjs',
+    provenanceArgs,
   );
+  const verdict = parseJsonOutput(provenance);
+  const marker = verdict?.marker as
+    | {
+        owner?: unknown;
+        set?: unknown;
+        session?: unknown;
+        bodySha256?: unknown;
+      }
+    | null
+    | undefined;
+  if (
+    verdict?.verdict !== 'pass' ||
+    marker?.owner !== ids.owner ||
+    marker?.set !== ids.set ||
+    marker?.session !== ids.session
+  ) {
+    return recoveryHold({
+      ...held,
+      failedStep: 'provenance',
+      reason:
+        verdict?.verdict === 'pass'
+          ? 'the winning acquire marker is not the one this run posted'
+          : helperFailure('authoring-owner-provenance', provenance),
+      provenance: verdict ?? provenance.stdout,
+    });
+  }
+  steps.push({
+    step: 'provenance',
+    status: 'done',
+    detail: { verdict: 'pass' },
+  });
+
+  try {
+    const reread = readIssue(owner, repo, number);
+    if (!labels.every((name) => hasLabel(reread.labels, name))) {
+      throw new Error('a required label is no longer on the issue');
+    }
+    const digest = createHash('sha256')
+      .update(reread.body, 'utf8')
+      .digest('hex');
+    if (digest !== marker.bodySha256) {
+      throw new Error('the issue body changed after the owner marker');
+    }
+    if (!sameBody(reread.body, input.injected)) {
+      throw new Error('the issue body is not the body this run created');
+    }
+    const comments = fetchProvenanceCommentsGraphql(owner, repo, number);
+    if (hasActiveClaim(comments, claimGate)) {
+      throw new Error(
+        'the issue has an active claim, so execution began during acquisition',
+      );
+    }
+    if (
+      resolveOpenLinkedPrIssues(createGithubProviderAdapter(owner, repo), [
+        number,
+      ]).length > 0
+    ) {
+      throw new Error(
+        'the issue has an open linked pull request, or its pull-request state cannot be read',
+      );
+    }
+    const ownerLog = checkOwnerLogStillOurs({
+      comments,
+      markerPrefix,
+      trusted: input.trusted,
+      ids,
+    });
+    if (ownerLog !== null) {
+      throw new Error(`the owner-marker replay failed: ${ownerLog}`);
+    }
+    const memberId = postVerified(intentArgs('member', issueRef), journalWhere);
+    steps.push({
+      step: 'member',
+      status: 'done',
+      detail: { commentId: memberId },
+    });
+  } catch (error) {
+    return recoveryHold({
+      ...held,
+      failedStep: 'member',
+      reason: (error as Error).message,
+      ...postOutcome(error),
+    });
+  }
+
   process.stdout.write(
-    `${JSON.stringify({ mode: 'dry-run', outcome: 'planned', ...base, labels, steps }, null, 2)}\n`,
+    `${JSON.stringify({ mode: 'apply', outcome: 'published', ...held, journalState: 'member' }, null, 2)}\n`,
   );
   return 0;
+}
+
+function isPosted(error: unknown): boolean {
+  return (error as { posted?: unknown } | null)?.posted === true;
+}
+
+/**
+ * The report fields of a failed step: `nothingSent: true` when the envelope
+ * proves the post unsent, or `nothingSent: false` with the uncertain journal
+ * state when it may have landed. A failure that made no post at all (a check
+ * before it) reports neither.
+ */
+function postOutcome(error: unknown): {
+  nothingSent?: boolean;
+  journalState?: string;
+} {
+  if ((error as { nothingSent?: unknown } | null)?.nothingSent === true) {
+    return { nothingSent: true };
+  }
+  if (isPosted(error)) {
+    return { nothingSent: false, journalState: JOURNAL_STATE_UNCERTAIN };
+  }
+  return {};
+}
+
+function recoveryHold(report: Record<string, unknown>): HelperCliResult {
+  const message = `recovery hold at step ${String(report.failedStep)}: ${String(report.reason)}`;
+  process.stdout.write(
+    `${JSON.stringify({ mode: 'apply', outcome: 'recovery-hold', journalState: 'pending', ...report }, null, 2)}\n`,
+  );
+  process.stderr.write(
+    `publish-authoring-hold: ${message}${report.issue ? ` (issue ${String(report.issue)} stays held)` : ''}\n`,
+  );
+  return { exitCode: 1, kind: 'gate', message };
 }
