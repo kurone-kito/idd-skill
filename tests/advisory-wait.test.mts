@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -1119,6 +1119,45 @@ test('#4070: a configured non-default bot reported as type User keeps matching b
       'coderabbitai',
     ),
     true,
+  );
+});
+
+test('#4070: the F3 shortcut and the AW1 hold check every same-head review, not only LAST_COPILOT_COMMIT', () => {
+  // An earlier cited same-head review followed by a clean later review leaves
+  // LAST_COPILOT_COMMIT on the head. A check that reads only that review would
+  // then proceed, so each hold rule must name every same-head review. The
+  // helper's union already does; these instruction texts are its manual form.
+  const read = (path: string): string =>
+    readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replace(
+      /\s+/g,
+      ' ',
+    );
+  const merge = read(
+    'idd-template/.github/instructions/idd-merge.instructions.md',
+  );
+  const advisory = read(
+    'idd-template/.github/instructions/idd-advisory-wait.instructions.md',
+  );
+  assert.ok(
+    merge.includes(
+      '- If any same-head review is not a v2 overview, has suppressed items, or holds a cited item (#4070): hold (AW4).',
+    ),
+  );
+  assert.equal(
+    merge.includes(
+      '- If `LAST_COPILOT_COMMIT == PR_HEAD_SHA_F3` and it has suppressed',
+    ),
+    false,
+  );
+  assert.ok(
+    advisory.includes(
+      'unless any same-head review is not a v2 overview, has suppressed items, or holds a cited item: hold (AW4).',
+    ),
+  );
+  assert.ok(
+    advisory.includes(
+      '| `== PR_HEAD_SHA` | any | any | any same-head review holds (AW1, #4070) | any | `HOLD` (AW4) |',
+    ),
   );
 });
 

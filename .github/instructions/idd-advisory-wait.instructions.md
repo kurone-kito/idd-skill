@@ -157,12 +157,12 @@ AW3 inputs:
 
 - `LAST_COPILOT_COMMIT` — `commit_id` of the latest Copilot review
   (empty if none); equals `PR_HEAD_SHA` short-circuits to **SATISFIED**
-  unless its body is not a v2 overview or has suppressed items:
-  hold (AW4).
+  unless any same-head review is not a v2 overview, has suppressed
+  items, or holds a cited item: hold (AW4).
 - `COPILOT_PENDING` — `true` if Copilot is in `requested_reviewers`.
   Observed once: `false` can lag a re-request or empty on submit —
-  not idle proof. `LAST_COPILOT_COMMIT == PR_HEAD_SHA` is **SATISFIED**
-  unless a cited item holds. A same-head `false` uses the
+  not idle proof. `LAST_COPILOT_COMMIT == PR_HEAD_SHA` is **SATISFIED**.
+  A same-head `false` uses the
   shorter settled window.
 - `COPILOT_PENDING_COVERS_HEAD` — `true` if the latest Copilot
   `review_requested` event follows current HEAD's `committed` event.
@@ -204,7 +204,7 @@ Evaluate top-to-bottom; first match wins.
 <!-- dprint-ignore-start -->
 | `LAST_COPILOT_COMMIT` | `COPILOT_PENDING` | Marker state | Head proof / cap | Elapsed | Outcome |
 | --- | --- | --- | --- | --- | --- |
-| `== PR_HEAD_SHA` | any | any | suppressed items or empty body (#4070) | any | `HOLD` (AW4) |
+| `== PR_HEAD_SHA` | any | any | any same-head review holds (AW1, #4070) | any | `HOLD` (AW4) |
 | `== PR_HEAD_SHA` | any | any | any | any | `SATISFIED` |
 | `!= PR_HEAD_SHA` | `"true"` | no same-head marker | `COPILOT_PENDING_COVERS_HEAD=true` | — | `RECOVERY_NEEDED` |
 | `!= PR_HEAD_SHA` | `"true"` | no same-head marker | not proven; `REQUEST_MARKER_COUNT` < `REQUEST_CAP` | — | `REQUEST_NEEDED` |

@@ -93,8 +93,8 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 
    Use `PR_HEAD_SHA_F3` as `PR_HEAD_SHA`. Run **AW1**
    (`idd-advisory-wait.instructions.md`):
-   - If `LAST_COPILOT_COMMIT == PR_HEAD_SHA_F3` and it has suppressed
-     items or is not a v2 overview (#4070): hold (AW4).
+   - If any same-head review is not a v2 overview, has suppressed
+     items, or holds a cited item (#4070): hold (AW4).
    - If **SATISFIED** (`LAST_COPILOT_COMMIT == PR_HEAD_SHA_F3`) → proceed
      with the merge.
    - If `COPILOT_PENDING` is `"false"` and neither bullet above held:
