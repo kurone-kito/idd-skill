@@ -419,6 +419,7 @@ export function buildMergedPrFeedbackSweep(
 // Title of the one open issue that the weekly summary workflow creates or
 // updates (issue #4161). The workflow's job env sets the same value, and its
 // test asserts that the two match.
+// audit:ignore-dead-export: the workflow's job env and its contract test share this title; the script itself never reads it
 export const WEEKLY_SWEEP_ISSUE_TITLE = 'Merged-PR feedback sweep (weekly)';
 
 export interface WeeklySweepBodyOptions {
