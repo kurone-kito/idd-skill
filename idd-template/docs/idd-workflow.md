@@ -1343,8 +1343,9 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    the time of the append, then append it. If no draft is found, verify the
    terminal outcome from live GitHub state, build the record as the
    [worker final report store](idd-helper-scripts.md#worker-final-report-store)
-   describes, and append it the same way, unless its outcome is `held`: a held
-   claim with no draft has no live source for a terminal phase, so nothing is
+   describes, and append it the same way, unless its outcome is `held` or it has
+   no terminal phase from live state: a held claim, or a claim released without
+   a merge or handoff, has no live source for a terminal phase, so nothing is
    appended and step 5 reports it. Before any append, validate the record
    against `schemas/worker-report.schema.json` first, then append it with the
    profile-selected `idd-worker-report append --file <path>` command. After a
@@ -1371,8 +1372,8 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    A matched running worker that cannot be messaged is reported too. A released
    claim is reported here when step 4 left it with a running worker, when its
    verification or append failed, or when the harness offers no agent listing,
-   so step 4 did not run for it. Otherwise step 4 handles it. Its worktree is
-   not removed.
+   so step 4 did not run for it, or when step 4 appended nothing for want of a
+   terminal phase. Otherwise step 4 handles it. Its worktree is not removed.
 
 ### Discover re-run cadence
 
