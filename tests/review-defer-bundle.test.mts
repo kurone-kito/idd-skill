@@ -1013,6 +1013,7 @@ test('a markerPrefix that is empty or not a string exits 1 with kind usage', () 
     const cases: [unknown, string][] = [
       [7, 'a number'],
       ['', 'an empty string'],
+      ['   ', 'a whitespace-only string'],
     ];
     for (const [value, label] of cases) {
       const policy = writeFixture(
@@ -1023,7 +1024,14 @@ test('a markerPrefix that is empty or not a string exits 1 with kind usage', () 
       const run = runCli([...requiredArgs(items), '--policy', policy], dir);
       assert.equal(run.status, 1, label);
       assert.equal(envelopeKind(run.stderr), 'usage', label);
-      assert.match(run.stderr, /must be a non-empty string/, label);
+      // The CLI's own message names the policy file; the renderer's message
+      // does not, so this distinguishes the two.
+      assert.ok(
+        run.stderr.includes(
+          `markerPrefix in ${policy} must be a non-empty string`,
+        ),
+        label,
+      );
     }
   });
 });
@@ -1034,6 +1042,7 @@ test('an empty --policy value exits 1 with kind usage', () => {
     const run = runCli([...requiredArgs(items), '--policy', ''], dir);
     assert.equal(run.status, 1);
     assert.equal(envelopeKind(run.stderr), 'usage');
+    assert.match(run.stderr, /--policy must not be empty/);
   });
 });
 
