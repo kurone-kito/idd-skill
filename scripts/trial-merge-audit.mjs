@@ -34,6 +34,11 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
+import {
+  addScratchWorktree,
+  DEFAULT_KEEP_LIST,
+  scrubbedGitEnv,
+} from './trial-scratch.mjs';
 
 /** Directories whose content install and the fixed commands read as tooling. */
 const TOOLING_DIRS = [
@@ -104,32 +109,6 @@ export const FIXED_COMMANDS = [
     script: 'package.json#scripts.typecheck',
   },
 ];
-/**
- * Run git with an empty hooks directory, so no hook runs in this audit,
- * including the post-checkout hook that `worktree add` fires.
- */
-/**
- * The inherited environment without repository overrides (GIT_DIR,
- * GIT_WORK_TREE and the rest), so a hook or wrapper that exports them cannot
- * point this audit at another repository. Credential prompts are disabled so
- * a stalled fetch fails instead of waiting for input.
- */
-function sanitizedEnv() {
-  const env = { ...process.env };
-  // Credential helpers stay usable; repository routing and config do not.
-  const kept = new Set([
-    'GIT_ASKPASS',
-    'GIT_SSH',
-    'GIT_SSH_COMMAND',
-    'GIT_SSH_VARIANT',
-  ]);
-  for (const key of Object.keys(env)) {
-    if (key.startsWith('GIT_') && !kept.has(key)) delete env[key];
-  }
-  env.GIT_TERMINAL_PROMPT = '0';
-  env.GCM_INTERACTIVE = 'never';
-  return env;
-}
 /** A fetch that stalls is cut off, so it cannot hold the clone lock forever. */
 const FETCH_TIMEOUT_MS = 180_000;
 /**
@@ -143,6 +122,19 @@ const COMMAND_TIMEOUT_MS = 600_000;
  * output buffer, which would make the listing read as empty or fail.
  */
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+/**
+ * The scratch-trial runner for the steps in trial-scratch.mts. It is a plain
+ * spawn: runGitHooksOff adds the hooks-path prefix, so this adds none.
+ */
+const runScratchGit = (args, cwd, env) => {
+  const result = spawnSync('git', [...args], {
+    cwd,
+    encoding: 'utf8',
+    env,
+    maxBuffer: GIT_MAX_BUFFER,
+  });
+  return { status: result.status ?? 1, stdout: result.stdout ?? '' };
+};
 /**
  * One budget for the whole deepen sequence of the merge-base retry. The
  * sequence runs under the clone-wide lock, so it must not multiply the fetch
@@ -172,6 +164,10 @@ function batchPaths(paths, maxCount = 500, maxChars = 8000) {
   if (current.length > 0) batches.push(current);
   return batches;
 }
+/**
+ * Run git with an empty hooks directory, so no hook runs in this audit,
+ * including the post-checkout hook that `worktree add` fires.
+ */
 function git(cwd, hooksDir, args, env, timeout) {
   const result = spawnSync(
     'git',
@@ -179,7 +175,7 @@ function git(cwd, hooksDir, args, env, timeout) {
     {
       cwd,
       encoding: 'utf8',
-      env: env ?? sanitizedEnv(),
+      env: env ?? scrubbedGitEnv(process.env, DEFAULT_KEEP_LIST),
       timeout,
       maxBuffer: GIT_MAX_BUFFER,
     },
@@ -224,7 +220,7 @@ function defaultReadPr(owner, repo, pr) {
  * and the global config point at an empty file in the scratch root, which
  * works on every platform, where the null device does not. Command-line
  * config outranks the repository's own config. The fetch keeps its
- * credentials, because it runs through sanitizedEnv() on its own.
+ * credentials, because it runs through scrubbedGitEnv() on its own.
  */
 function pinnedGitEnv(scratchRoot) {
   const emptyConfig = join(scratchRoot, 'empty-gitconfig');
@@ -244,7 +240,10 @@ function defaultRun(argv, cwd, extraEnv = {}, timeoutMs = COMMAND_TIMEOUT_MS) {
   const result = spawnSync(command, args, {
     cwd,
     stdio: 'ignore',
-    env: { ...sanitizedEnv(), ...extraEnv },
+    env: {
+      ...scrubbedGitEnv(process.env, DEFAULT_KEEP_LIST),
+      ...extraEnv,
+    },
     shell: process.platform === 'win32',
     timeout: timeoutMs,
   });
@@ -276,11 +275,17 @@ export function runTrialMergeAudit(repo, pr, owner, repoName, deps = {}) {
   const lockTimeoutMs = deps.lockTimeoutMs ?? 60_000;
   const hooksDir = mkdtempSync(join(tmpdir(), 'idd-trial-hooks-'));
   const tmp = join(mkdtempSync(join(tmpdir(), 'idd-trial-merge-')), 'worktree');
-  const ctx = { worktreeCreated: false };
-  const origin = resolveFetchOrigin(sanitizedEnv(), {
-    readOriginUrl: () =>
-      git(repo, hooksDir, ['remote', 'get-url', 'origin']).stdout.trim(),
-  });
+  const ctx = {
+    worktreeCreated: false,
+    registrationRemoved: true,
+  };
+  const origin = resolveFetchOrigin(
+    scrubbedGitEnv(process.env, DEFAULT_KEEP_LIST),
+    {
+      readOriginUrl: () =>
+        git(repo, hooksDir, ['remote', 'get-url', 'origin']).stdout.trim(),
+    },
+  );
   const fetchUrl =
     deps.fetchUrl ??
     `${origin.scheme}://${origin.host}/${owner}/${repoName}.git`;
@@ -323,6 +328,9 @@ export function runTrialMergeAudit(repo, pr, owner, repoName, deps = {}) {
         worktreeRemoved = false;
       }
     }
+    // A failed add that kept its registration leaves the worktree for the
+    // operator, so its parent directory is kept as well.
+    if (!ctx.registrationRemoved) worktreeRemoved = false;
     rmSync(hooksDir, { recursive: true, force: true });
     if (worktreeRemoved)
       rmSync(join(tmp, '..'), { recursive: true, force: true });
@@ -480,7 +488,7 @@ function audit(args) {
       hooksDir,
       ['commit-tree', tree, '-p', headSha, '-p', baseSha, '-m', 'trial merge'],
       {
-        ...sanitizedEnv(),
+        ...scrubbedGitEnv(process.env, DEFAULT_KEEP_LIST),
         GIT_AUTHOR_NAME: 'trial-merge-audit',
         GIT_AUTHOR_EMAIL: 'trial-merge-audit@localhost',
         GIT_COMMITTER_NAME: 'trial-merge-audit',
@@ -494,14 +502,15 @@ function audit(args) {
         baseSha,
       });
     }
-    const added = git(repo, hooksDir, [
-      'worktree',
-      'add',
-      '--detach',
-      tmp,
-      trialCommit,
-    ]);
-    if (added.status !== 0) {
+    const added = addScratchWorktree(runScratchGit, {
+      cwd: repo,
+      hooksDir,
+      path: tmp,
+      commit: trialCommit,
+      env: scrubbedGitEnv(process.env, DEFAULT_KEEP_LIST),
+    });
+    if (!added.ok) {
+      ctx.registrationRemoved = added.registrationRemoved;
       return emptyResult('worktree-add-failed', {
         prHeadSha: headSha,
         baseSha,
@@ -713,7 +722,7 @@ async function main() {
   const top = spawnSync('git', ['rev-parse', '--show-toplevel'], {
     cwd: process.cwd(),
     encoding: 'utf8',
-    env: sanitizedEnv(),
+    env: scrubbedGitEnv(process.env, DEFAULT_KEEP_LIST),
   });
   const repoRoot = (top.stdout ?? '').trim();
   if (top.status !== 0 || repoRoot.length === 0) {
