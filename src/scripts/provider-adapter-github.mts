@@ -4973,7 +4973,16 @@ export function repositoryFromRemoteUrl(
     }
     const schemes = ['https:', 'http:', 'ssh:', 'git:', 'git+ssh:'];
     if (!schemes.includes(url.protocol)) return null;
-    host = url.host;
+    // A port equal to the scheme's default names the same host as no port
+    // (URL() already drops the https and http defaults, not ssh or git).
+    const defaultPorts: Record<string, string> = {
+      'https:': '443',
+      'http:': '80',
+      'ssh:': '22',
+      'git:': '9418',
+      'git+ssh:': '22',
+    };
+    host = url.port === defaultPorts[url.protocol] ? url.hostname : url.host;
     // The raw path text, not `url.pathname`: URL() resolves dot segments, so
     // `o/x/../r` would otherwise read as `o/r`. The host above is normalized
     // on purpose (case and default port).
@@ -5022,6 +5031,19 @@ function activeGithubHost(): string | null {
   }
 }
 
+/** The environment for a `git` child: every variable except those whose name
+ * starts with `GIT_` in any case. Windows environment names are
+ * case-insensitive, so `git_dir` reaches git just as `GIT_DIR` does. */
+export function gitChildEnvironment(
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(source).filter(
+      ([name]) => !name.toUpperCase().startsWith('GIT_'),
+    ),
+  );
+}
+
 /** True when the checkout's `origin` remote names `owner/repo` on the active
  * GitHub host (`activeGithubHost`), compared case-insensitively. An unreadable
  * origin, a missing remote, a remote that is not a repository URL, or an
@@ -5037,11 +5059,7 @@ function originNamesRepository(owner: string, repo: string): boolean {
       timeout: 10_000,
       // An inherited GIT_DIR, GIT_WORK_TREE, or GIT_CONFIG_* would point this
       // read at another repository, so the git subprocess gets no GIT_* names.
-      env: Object.fromEntries(
-        Object.entries(process.env).filter(
-          ([name]) => !name.startsWith('GIT_'),
-        ),
-      ),
+      env: gitChildEnvironment(),
     });
   } catch {
     return false;

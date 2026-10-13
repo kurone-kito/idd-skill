@@ -45,6 +45,7 @@ import {
 } from '../src/scripts/github-api-observation.mts';
 import { classifyHelperError } from '../src/scripts/helper-cli-runner.mts';
 import {
+  gitChildEnvironment,
   repositoryFromRemoteUrl,
   resolveCurrentGithubRepository,
 } from '../src/scripts/provider-adapter-github.mts';
@@ -3032,6 +3033,40 @@ test('resolveCurrentGithubRepository: an origin on the explicit GH_HOST is used 
   );
 });
 
+test('resolveCurrentGithubRepository: inside Actions an origin with the scheme default port is used with no gh process (#4110)', () => {
+  withRepositoryVariables(
+    { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'o/r' },
+    () => {
+      withGitCheckout('ssh://git@github.com:22/o/r', () => {
+        withRepoViewStub(
+          { exit: 1, stderr: 'gh: repo view failed' },
+          (spawned) => {
+            assert.deepEqual(resolveCurrentGithubRepository(), {
+              owner: 'o',
+              repo: 'r',
+            });
+            assert.deepEqual(spawned(), []);
+          },
+        );
+      });
+    },
+  );
+});
+
+test('gitChildEnvironment: removes GIT_ names in any letter case and keeps the rest (#4110)', () => {
+  // Windows environment names are case-insensitive: `git_dir` is GIT_DIR.
+  assert.deepEqual(
+    gitChildEnvironment({
+      Git_Dir: '/elsewhere/.git',
+      GIT_CONFIG_GLOBAL: '/elsewhere/config',
+      git_work_tree: '/elsewhere',
+      PATH: '/bin',
+      HOME: '/home/someone',
+    }),
+    { PATH: '/bin', HOME: '/home/someone' },
+  );
+});
+
 test('resolveCurrentGithubRepository: inside Actions a dot-segment origin takes the gh lookup (#4110)', () => {
   // `new URL` would normalize `o/x/../r.git` to `o/r.git`; the raw path has
   // three segments, so it must not match `o/r`.
@@ -3200,6 +3235,17 @@ test('repositoryFromRemoteUrl: names the host, owner and repository of URL-shape
   assert.equal(repositoryFromRemoteUrl('https://github.com/o/./r'), null);
   assert.equal(repositoryFromRemoteUrl('git@github.com:o/..'), null);
   assert.equal(repositoryFromRemoteUrl('https://github.com/o/%2Fx'), null);
+  // A port equal to the scheme's default names the same host as no port.
+  assert.deepEqual(repositoryFromRemoteUrl('ssh://git@github.com:22/o/r'), {
+    host: 'github.com',
+    owner: 'o',
+    repo: 'r',
+  });
+  assert.deepEqual(repositoryFromRemoteUrl('https://github.com:443/o/r'), {
+    host: 'github.com',
+    owner: 'o',
+    repo: 'r',
+  });
   assert.deepEqual(repositoryFromRemoteUrl('https://github.com/o/r/'), {
     host: 'github.com',
     owner: 'o',
