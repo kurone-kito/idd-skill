@@ -458,6 +458,18 @@ a follow-up or start a second loop. If the companion is unavailable, record the
 proposal in a comment/PR follow-ups; never create it ad hoc or improvise
 worker-side authoring.
 
+**Scope overrun**: when the canonical changed or candidate files exceed
+the issue's `effort-candidate-file-limit` threshold (not `L`, no hint,
+or a split child), stop coding: a release, not a hold. Do not push. Comment
+the estimate, the candidate files, the changed files, and, without the
+companion, the split proposal; release with `unclaimed-by` and the
+current `{claim-id}`; reset to base and run `lost-claim-cleanup`. With the
+companion, hand it a held split draft: it holds this issue, publishes a
+held roadmap whose children each record `Split out of #<n>`, and
+comments the roadmap link. Never add the needs-decision label or ask a
+human
+([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
+
 ---
 
 ## C — Self-Review Loop

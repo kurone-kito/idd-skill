@@ -920,6 +920,58 @@ mistaken for hand-editable prose. Checking the sync tool's own
 manifest for a matching target entry closes that gap for `docs/**.md`
 files, at the cost of one extra lookup.
 
+### B3 — Scope overrun returns to authoring
+
+A work session that found the issue's real scope larger than its effort
+estimate used to stop and ask a human what to do. The work phase said
+what to do with a follow-up, but not with an overrun of the claimed
+issue itself, so the overrun ended in a chat question. Observed on
+kurone-kito/idd-skill#4064 (2026-10-12 10:39 and 23:55 UTC, and
+2026-10-13 00:38 UTC) and kurone-kito/idd-skill#3824 (2026-10-10 13:36
+UTC). Each answer took the recommended option: hold the issue or split
+it by hand. The hand split of #4064 then produced a duplicate child
+(#4093, closed as not planned). kurone-kito/idd-skill#4130 added the
+authoring-time check, the over-scope split threshold that
+`audit-authored-issue`'s `effort-candidate-file-limit` check enforces.
+This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
+
+- **Stop, do not push.** An over-threshold diff is what the authoring
+  check would have split before publication, so finishing it only
+  produces an oversized pull request. The trigger counts canonical
+  files, not generated mirrors, and never fires for `L`, a missing
+  effort hint, or a child that carries a `Split out of #<n>` line,
+  which the threshold exempts too. Returning a split child would only
+  split it again.
+- **Evidence first.** The comment records the estimate, the candidate
+  files, and the changed files, so the next author sees the overrun
+  without redoing the work.
+- **Release, not hold.** The next action belongs to authoring, and no
+  human decision is pending, so the worker releases with `unclaimed-by`
+  instead of keeping a hold, and does not apply the needs-decision
+  label, which would turn the overrun back into a question. It then
+  resets the branch to base, which discards the local work on purpose
+  (the evidence comment keeps the file lists), and runs the claim
+  phase's `lost-claim-cleanup` from the primary checkout: a released
+  claim whose branch still holds commits blocks a later fresh claim on
+  the same branch name. That procedure runs only after `unclaimed-by`,
+  which its active-claim gate requires, and any gate it fails leaves
+  the worktree for the claim phase's orphan hold.
+- **The companion owns the hold.** The authoring label is the
+  companion's owner-marked lock, and the companion refuses a target
+  with an active claim. So the worker releases first, and the
+  companion, run from the primary checkout once cleanup is done, then
+  holds the issue under its own owner markers and publishes the held
+  split. Whether the original issue becomes the
+  roadmap anchor or is closed as superseded is the companion's
+  decision. Without the companion, the split proposal stays in the
+  overrun comment for the next triage. In both cases the worker still
+  never creates authoring ad hoc. The "Unplanned follow-up work" rule
+  to keep the Stage 1 B–C hold does not apply here, because the claimed
+  issue itself is being returned rather than continued.
+- **Known gap.** Without the companion, nothing marks the released
+  issue, so Discover can select it again before the next triage reads
+  the overrun comment, and the next session can overrun again.
+
 ### C1 — Search sibling code for the same defect shape before closing
 
 A bug fix scoped to the single reported call site can leave the
