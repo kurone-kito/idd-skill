@@ -1937,6 +1937,10 @@ test('the render job is read-only and holds the pull-request read the listing ne
   assert.equal(job['timeout-minutes'], '20');
   assert.match(String(job.env?.GH_TOKEN), /^\$\{\{ github\.token \}\}$/);
   assert.match(
+    String(job.env?.GH_ENTERPRISE_TOKEN),
+    /^\$\{\{ github\.token \}\}$/,
+  );
+  assert.match(
     String(job.outputs?.body_b64),
     /^\$\{\{ steps\.render\.outputs\.body_b64 \}\}$/,
   );
@@ -1950,6 +1954,11 @@ test('the write job holds only the issue write, checks out nothing, waits for th
   assert.equal(job['runs-on'], 'ubuntu-latest');
   assert.equal(job['timeout-minutes'], '10');
   assert.equal(job.env?.SWEEP_ISSUE_TITLE, WEEKLY_SWEEP_ISSUE_TITLE);
+  assert.match(String(job.env?.GH_TOKEN), /^\$\{\{ github\.token \}\}$/);
+  assert.match(
+    String(job.env?.GH_ENTERPRISE_TOKEN),
+    /^\$\{\{ github\.token \}\}$/,
+  );
   assert.match(
     String(job.env?.BODY_B64),
     /^\$\{\{ needs\.render\.outputs\.body_b64 \}\}$/,

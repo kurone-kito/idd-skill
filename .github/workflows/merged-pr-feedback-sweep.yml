@@ -24,6 +24,9 @@ jobs:
   render:
     env:
       GH_TOKEN: ${{ github.token }}
+      # Set beside GH_TOKEN in the other gh-calling workflows of this repository,
+      # so gh resolves the token on a GitHub Enterprise host as well.
+      GH_ENTERPRISE_TOKEN: ${{ github.token }}
     # Read-only. pull-requests read lets the sweep list and read pull requests.
     # Without it the listing comes back empty and the summary says so falsely;
     # the first dispatch run (38396980939) showed exactly that.
@@ -64,6 +67,7 @@ jobs:
     needs: render
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_ENTERPRISE_TOKEN: ${{ github.token }}
       SWEEP_ISSUE_TITLE: Merged-PR feedback sweep (weekly)
       BODY_B64: ${{ needs.render.outputs.body_b64 }}
     # Write-only. The job checks out nothing, so it runs no repository code.
