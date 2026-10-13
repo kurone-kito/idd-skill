@@ -82,6 +82,7 @@ const PUBLISH_AUTHORING_HOLD_FLAG_SPEC = {
   '--repo': { type: 'string' },
   '--policy': { type: 'string' },
   '--trusted-marker-logins': { type: 'string', default: '' },
+  '--marker-prefix': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
@@ -294,7 +295,7 @@ export function requestsChildShape(argv: readonly string[]): boolean {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> --review-result <path> [--shape orphan] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--trusted-marker-logins <csv>] [--apply]
+  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> --review-result <path> [--shape orphan] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--trusted-marker-logins <csv>] [--marker-prefix <prefix>] [--apply]
 
 Publishes one drafted orphan issue under the issue-authoring hold, running
 contract.md's "New-issue ownership" steps in order:
@@ -319,6 +320,10 @@ contract.md's "New-issue ownership" steps in order:
      mode=acquire owner marker, wait claim.verifySettleDelay, run
      authoring-owner-provenance, re-read labels, body and claim state,
      and only then append state=member.
+
+The marker prefix comes from the local policy only when the issue and the
+journal are both in this checkout's repository. Otherwise pass
+--marker-prefix with the prefix the target repository configures.
 
 The review result file is a JSON object with "completed": true. An
 optional "findings" array holds findings-ledger entries, and each needs a
@@ -351,6 +356,7 @@ interface ParsedArgs {
   repo: string;
   policy: string;
   trustedMarkerLogins: string;
+  markerPrefix: string;
   help: boolean;
 }
 
@@ -370,6 +376,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     policy: (values.policy as string | undefined) ?? '',
     trustedMarkerLogins:
       (values['trusted-marker-logins'] as string | undefined) ?? '',
+    markerPrefix: text('marker-prefix'),
     help,
   };
 }
@@ -761,7 +768,6 @@ function runCli(): HelperCliResult {
     trustedMarkerActors?: unknown;
     claim?: { verifySettleDelay?: unknown };
   } | null;
-  const markerPrefix = normalizeMarkerPrefix(config?.markerPrefix);
   const { actors: trusted } = resolveTrustedMarkerActors({
     flagValue: args.trustedMarkerLogins,
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
@@ -774,6 +780,33 @@ function runCli(): HelperCliResult {
   const { owner, repo } = currentRepo;
   if (!REPO_TOKEN_PATTERN.test(owner) || !REPO_TOKEN_PATTERN.test(repo)) {
     return refuse('could not resolve a repository owner and name');
+  }
+  // The local policy's prefix is the target's prefix only when the issue and
+  // the journal both live in this checkout's repository (contract.md,
+  // "Target marker prefix"); otherwise the caller must name it.
+  let markerPrefix: string;
+  if (args.markerPrefix !== '') {
+    markerPrefix = normalizeMarkerPrefix(args.markerPrefix);
+  } else {
+    let local: { owner: string; repo: string } | null;
+    try {
+      local =
+        args.owner && args.repo
+          ? resolveCurrentGithubRepository()
+          : currentRepo;
+    } catch {
+      local = null;
+    }
+    const same = (a: { owner: string; repo: string }): boolean =>
+      local !== null &&
+      a.owner.toLowerCase() === local.owner.toLowerCase() &&
+      a.repo.toLowerCase() === local.repo.toLowerCase();
+    if (!same({ owner, repo }) || !same(journal)) {
+      return usage(
+        '--marker-prefix is required when the issue or the journal is not in this checkout repository (or that repository cannot be resolved)',
+      );
+    }
+    markerPrefix = normalizeMarkerPrefix(config?.markerPrefix);
   }
 
   // Step 3: ids and the publication line.

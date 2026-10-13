@@ -317,6 +317,8 @@ function files(
     'o',
     '--repo',
     'r',
+    '--marker-prefix',
+    'idd-skill',
     ...(bucket === 'ready' ? [] : ['--bucket', bucket]),
   ];
 }
@@ -824,6 +826,21 @@ test('CLI: a trusted login without write permission writes nothing', () => {
       result.stderr,
       /does not have Write, Maintain or Admin permission/,
     );
+    assert.deepEqual(writes(fixture.log()), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: an explicit repository outside this checkout needs --marker-prefix', () => {
+  const fixture = setup();
+  try {
+    const args = files(fixture);
+    const index = args.indexOf('--marker-prefix');
+    args.splice(index, 2);
+    const result = fixture.run([...args, '--apply']);
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /--marker-prefix is required/);
     assert.deepEqual(writes(fixture.log()), []);
   } finally {
     fixture.restore();
