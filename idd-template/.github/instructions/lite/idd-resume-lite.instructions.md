@@ -3,8 +3,8 @@
 `{default-branch}`: the GitHub default branch. `{development-branch}`: the base
 branch (`developmentBranch`, or the default branch when absent).
 
-Lite profile. Same semantics as
-`idd-resume.instructions.md`; load it alone to route.
+Lite profile. Same semantics as `idd-resume.instructions.md`; load alone to
+route.
 
 ## Helper runtime contract
 
@@ -31,9 +31,8 @@ node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate
 node scripts/resume-route-selection.mjs --issue <N>
 ```
 
-Pass `--claim-id` once this session recorded and verified one,
-`--nonce` if it recorded one for that claim-id, and
-`--worktree` once the B1 worktree exists.
+Pass `--claim-id` once this session recorded and verified it, `--nonce` if it
+recorded one for that claim-id, and `--worktree` once the B1 worktree exists.
 
 ## Required signals (collect once)
 
@@ -46,7 +45,7 @@ helper-confirmed issue-only before its first commit. Never invent or post
 forced-handoff markers.
 
 Use GitHub **server** timestamps only. Stale age default: **24 h**
-(`claim-stale-age` / `claimTiming.staleAge`).
+(`claim-stale-age`).
 
 ## Step 0 — Route classifier (first match wins)
 
@@ -63,11 +62,11 @@ Quiet-window evidence never bypasses the 24 h stale threshold.
 
 ### Operator-present release
 
-Predicate: claimant-authored comment after latest valid `claimed-by`
-that records a deliberate pause and the same awaited input now
-received here; no later trusted claimant heartbeat, branch/PR
-movement, or comment/review (this path's step-1 comment excepted).
-Else stall-lite. Steps 1-2 are pre-claim (stall windows do not apply).
+Predicate: claimant-authored comment after latest valid `claimed-by` that
+records a deliberate pause and the awaited input now received; no later trusted
+claimant heartbeat, branch/PR movement, or comment/review (its step-1 comment
+excepted). Else stall-lite. Steps 1-2 are pre-claim (stall windows do not
+apply).
 
 1. Post the operator input as a normal comment; ask a human to drop
    any needs-decision/blocked-by-human label (never this session).
@@ -79,8 +78,8 @@ Else stall-lite. Steps 1-2 are pre-claim (stall windows do not apply).
 
 ## Step 1 — Claim state (helper-first)
 
-Run the Claim-state command above (stop and ask on failure; no written-table
-fallback). Map:
+On helper-enabled profiles, run the Claim-state command above (stop and ask on
+failure; no written-table fallback). Map:
 
 | Helper `state` / `action`          | Action                                                         |
 | ---------------------------------- | -------------------------------------------------------------- |
@@ -144,8 +143,8 @@ onto the issue branch.
 
 ## Step 3 — PR / CI / review route (helper-first)
 
-Run `resume-route-selection.mjs --issue <N>` (stop and ask on failure; no
-written-table fallback). Map `route`:
+On helper-enabled profiles, run `resume-route-selection.mjs --issue <N>` (stop
+and ask on failure; no written-table fallback). Map `route`:
 
 - `D1` → `idd-pr-submit-lite.instructions.md`, from D1 (sync/push/open
   PR)
@@ -177,8 +176,8 @@ Written table (`instructions-only` only):
 | Success | clean; branch behind only                  | → F1 then F2 or sync  |
 | Success | content conflict                           | → Esync               |
 
-Forced-handoff recovery on an open PR: final success still → **E1** until
-this claim posts its own review-watermark and baseline.
+Forced-handoff recovery on an open PR: final success still → **E1** until this
+claim posts its review-watermark and baseline.
 
 ## Claim revalidation (inline)
 

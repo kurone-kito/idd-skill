@@ -73,16 +73,16 @@ the same as a commit or push:
 ## F2.5 — Draft and post the handoff comment
 
 1. Read the recorded merge policy before composing the comment below. First run
-   `git fetch origin {default-branch}` (concurrent workers sharing one clone:
-   serialize this behind the clone-scoped lock,
+   `git fetch origin {development-branch}` (concurrent workers sharing one
+   clone: serialize this behind the clone-scoped lock,
    `docs/idd-helper-scripts.md#clone-scoped-lock`, the same as B1's own fetch).
    If the fetch itself fails, do not fall back to a possibly-stale local
-   `origin/{default-branch}` — an already-existing ref must never substitute for
-   a fresh fetch, or a later failure could silently authorize a release against
-   outdated policy. Only after a successful fetch, read the config file from
-   there — `git show origin/{default-branch}:.github/idd/config.json` — never
-   the local worktree's own possibly-edited copy on this PR's branch, so a PR
-   cannot change its own release route (the #2373 trusted-ref reasoning).
+   `origin/{development-branch}` — an already-existing ref must never substitute
+   for a fresh fetch, or a later failure could silently authorize a release
+   against outdated policy. Only after a successful fetch, read the config file
+   from there — `git show origin/{development-branch}:.github/idd/config.json` —
+   never the local worktree's own possibly-edited copy on this PR's branch, so a
+   PR cannot change its own release route (the #2373 trusted-ref reasoning).
    Resolve `mergePolicy`:
    - A successful fetch followed by `git show` failing with the
      expected missing-path error (no `config.json` at that ref): treat

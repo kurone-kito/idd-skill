@@ -132,8 +132,9 @@ This section's rebase only applies **before the branch's first push**.
    `origin/{development-branch}`, the branch already contains every commit on
    `{development-branch}` — skip the rebase and go to D2.
 4. **Before rebasing**: if primary signing is non-interactive-hostile (GPG
-   pinentry or a hardware-touch path) and no fallback wrapper exists, stop and
-   ask first; replaying even one commit re-signs it.
+   pinentry or a hardware-touch path) and no fallback wrapper exists for
+   arbitrary git subcommands, stop and ask first; replaying even one commit
+   re-signs it.
 5. Rebase onto `origin/{development-branch}`. When primary signing is
    non-interactive-hostile and a subcommand wrapper exists, run the rebase
    through it from the start: `git -c gpg.format=ssh -c
