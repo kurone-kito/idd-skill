@@ -1274,20 +1274,20 @@ identify its old claims, and step 1 treats them as not its own.
    sent no message. If the harness offers no agent listing, no worker is
    matched, every own claim that reached this step goes to step 5, and the rest
    of this step is skipped, because the running workers are unknown. With a
-   listing, recount the roster. Run the profile-selected `idd-worker-budget`
-   command with `--running <n> --startable <n>`, where `--running` is the count
-   above and `--startable` is the number of startable candidates still in the
-   orchestrator's cached graph, which a restart discards. After a restart, run a
-   fresh Discover pass first, as section 3 of the orchestrator phase file
-   describes, and count its candidates (0 when none). Add `--harness-limit
-   <limit>` when this harness's row in the worker mechanism table gives a
-   numeric limit, and omit it otherwise. When `--startable` is at least 1 and
-   the budget's `slots` is at least 1, run the profile-selected
-   `discover-shared-file-overlap` command with `--issues <n,...>` (the startable
-   candidates), `--batch <k>` (the `slots` value), `--check-overlap`, one
-   `--in-flight <n>` for each counted worker's issue, and `--desync-token` set
-   to this session's session-suffixed agent-id, or to the session-local token
-   that Discover generated at its entry when the session has no suffix, whenever
+   listing, recount the roster. After a restart, run a fresh Discover pass
+   first, as section 3 of the orchestrator phase file describes, and count its
+   candidates (0 when none); the cached graph is discarded and cannot supply
+   that count. Then run the profile-selected `idd-worker-budget` command with
+   `--running <n> --startable <n>`, where `--running` is the count above and
+   `--startable` is the count just taken. Add `--harness-limit <limit>` when
+   this harness's row in the worker mechanism table gives a numeric limit, and
+   omit it otherwise. When `--startable` is at least 1 and the budget's `slots`
+   is at least 1, run the profile-selected `discover-shared-file-overlap`
+   command with `--issues <n,...>` (the startable candidates), `--batch <k>`
+   (the `slots` value), `--check-overlap`, one `--in-flight <n>` for each
+   counted worker's issue, and `--desync-token` set to this session's
+   session-suffixed agent-id, or to the session-local token that Discover
+   generated at its entry when the session has no suffix, whenever
    `discover.selectionDesync` is `session-offset`. Otherwise skip it: the helper
    rejects an empty candidate list and a zero batch.
 4. **Recover reports.** Run this step for each matched finished worker, once its
