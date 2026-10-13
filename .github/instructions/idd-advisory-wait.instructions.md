@@ -18,47 +18,38 @@ owns behavior; `advisoryWait.exemptBotAuthoredPrs` is convergence-only.
 This protocol's settle/wait window covers **Copilot only**. Other
 `advisoryBotLogins` get **no** wait window in this file. A configured
 `advisoryWait.secondaryQuietWindow` is F2's separate
-`secondary-quiet-window` blocker
-(`idd-pre-merge.instructions.md`): when set, F2 waits until that
-helper reports `elapsed: true` since the last substantive review
-activity. It is the blocker aimed at `secondaryBotLogin`'s login(s),
-not a poll until any reaches HEAD. Unset never adds it. Other
-`advisoryBotLogins` stay on the E1 snapshot and watermark.
+`secondary-quiet-window` blocker (`idd-pre-merge.instructions.md`, which
+holds its elapsed-window rule). It is an elapsed-window check, not a poll
+until any secondary bot reaches HEAD. Unset never adds it.
 
 For non-Copilot bots, late findings still use the **E1 snapshot +
 `review-watermark` delta**, re-checked by F2/F3, which forbids a
 bare CI-green merge without a fresh covering snapshot.
 
 **Do not build a substitute wait for a non-primary bot.** A poll
-that blocks on a bot other than `advisoryWait.primaryBotLogin`
-reaching HEAD is not this protocol: no caps, timeouts, or hold
-routes, and the bot may never review. Use the E1 net above. Do not
-treat the F2 elapsed-window blocker as that substitute.
+on any bot but `advisoryWait.primaryBotLogin` is not this protocol:
+no caps, timeouts, or hold routes, and the bot may never review. Use
+the E1 net above; the F2 elapsed-window blocker is not a substitute.
 
 ## Fast path — common case
 
 The advisory bot usually reviews current HEAD within minutes, reducing
 the gate to one check: poll `LAST_COPILOT_COMMIT`; once it equals
-`PR_HEAD_SHA`, the gate is **SATISFIED** — skip the AW2-AW5 machinery
-and take the caller's `SATISFIED` action (D4 → rerun
-`idd-advisory-convergence` and resume D4, E14 → E15, F2 → CI check, F3
-→ merge; common to both the canonical path and shell-fallback AW3 row
-one). Enter the full protocol below **only** when
-`LAST_COPILOT_COMMIT != PR_HEAD_SHA`.
+`PR_HEAD_SHA`, the gate is **SATISFIED** unless **DISPOSITION_NEEDED**.
+Otherwise, skip the AW2-AW5 machinery and take the caller's `SATISFIED`
+action from the [caller mapping](#caller-mapping) table (common to both the
+canonical path and shell-fallback AW3 row one). Enter the full protocol
+below **only** when `LAST_COPILOT_COMMIT != PR_HEAD_SHA`.
 
 Keep the wait cheap per the
-[wake-up discipline](idd-ci.instructions.md#wake-up-discipline): one
-wake at the expected completion, or background only if the
-topology-safety condition holds;
-otherwise wait synchronously. No `gh` command blocks on Copilot
-review state — run the protocol (helper-first, AW1-AW5 fallback) in
-the foreground, never `run_in_background` without that condition.
-Batch post-wait actions into one turn.
+[wake-up discipline](idd-ci.instructions.md#wake-up-discipline): wait in the
+foreground unless the topology-safety condition holds, and batch post-wait
+actions into one turn.
 
 ## 1. Canonical path (helper-first)
 
-When helper support is installed, use the profile-selected command from
-`docs/idd-helper-scripts.md`; it always takes the four options below.
+Use the profile-selected command from `docs/idd-helper-scripts.md`; it
+always takes the four options below.
 
 ```sh
 node scripts/advisory-wait-state.mjs \
@@ -70,20 +61,24 @@ node scripts/advisory-wait-state.mjs \
 Contract: `docs/idd-helper-scripts.md#stable-helper-evidence-outputs`
 and `schemas/advisory-wait-state.schema.json`.
 
-Required helper fields: `prHeadSha`, `lastCopilotCommit`,
-`copilotPending`, `copilotPendingCoversHead`, `outcome`, `f3Outcome`,
-`earliestSameHeadAt`, `requestMarkerCount`, `requestCap`,
+Required helper fields: `protocolVersion`, `prHeadSha`,
+`lastCopilotCommit`, `copilotPending`, `copilotPendingCoversHead`,
+`outcome`, `f3Outcome`, `secondaryBotLogin`, `secondaryBotLogins`,
+`secondaryRequestLogins`, `secondaryRequestNeeded`, `now`, `requestCap`,
 `pendingWindowMinutes`, `settledWindowMinutes`, `pollIntervalMinutes`,
-`capExhaustedRoute`, `trustedMarkerSummary`.
+`capExhaustedRoute`, `elapsedMinutes`, `sameHeadMarkerPresent`,
+`sameHeadRequestMarkerPresent`, `earliestSameHeadAt`,
+`sameHeadMarkerCount`, `requestMarkerCount`, `trustedMarkerSummary`.
 
-Optional non-gating secondary-bot fields (not in the `outcome`/
-`f3Outcome` enums; see **Secondary advisory bot supplement** below):
-`secondaryBotLogin` (single login only), `secondaryBotLogins` (full
-list), `secondaryRequestLogins` (still-unrequested subset), and
-`secondaryRequestNeeded` (true iff non-empty).
+The four secondary fields are always emitted (empty, `false` or `[]` when no
+secondary bot is configured), sit outside the `outcome`/`f3Outcome` enums, and
+never gate (see **Secondary advisory bot supplement**): `secondaryBotLogin`
+(single login only), `secondaryBotLogins` (full list), `secondaryRequestLogins`
+(still-unrequested subset), `secondaryRequestNeeded` (true iff non-empty).
 
 Allowed `outcome`/`f3Outcome` values: `SATISFIED`, `REQUEST_NEEDED`,
-`RECOVERY_NEEDED`, `CAP_EXHAUSTED`, `WAIT`. `HOLD` is a protocol-level
+`RECOVERY_NEEDED`, `CAP_EXHAUSTED`, `WAIT`, `DISPOSITION_NEEDED`
+(#4070; never `SATISFIED`; also on same-head disagreement). `HOLD` is a protocol-level
 routing state for AW4/AW5 fail-closed stops only — caller-derived, not
 emitted by helper enums.
 
@@ -107,6 +102,7 @@ outage (e.g. via status page or an org admin surface) before retrying.
 | Outcome | D4 | E14 | F2 | F3 |
 | --- | --- | --- | --- | --- |
 | `SATISFIED` | `lastCopilotCommit` matches HEAD: rerun `idd-advisory-convergence`; resume D4. Elapsed-window `SATISFIED`: exit CI-wait; proceed to E1 | proceed to E15 | continue to CI check | proceed with merge |
+| `DISPOSITION_NEEDED` (#4070) | exit CI-wait; proceed to E1 | answer cited items (E6), or review-ack an unreadable review; rerun AW1 | return to E14 | do not merge |
 | `REQUEST_NEEDED` | `copilotPending` false: E14 guarded registration, then marker after evidence; resume D4. `copilotPending` true: exit CI-wait; proceed to E1 | request Copilot + marker + poll | return to E14 | return to E14 |
 | `RECOVERY_NEEDED` | exit CI-wait; proceed to E1 | post recovery marker + poll | post recovery marker + poll | post recovery marker; return to F2 |
 | `CAP_EXHAUSTED` | exit CI-wait; proceed to E1 | use `CAP_EXHAUSTED_ROUTE` | post cap-exhausted hold and stop | post cap-exhausted hold and stop |
@@ -119,7 +115,7 @@ outage (e.g. via status page or an org admin surface) before retrying.
 Orthogonal to the table above: changes no `outcome`/`f3Outcome` or
 route, never satisfies the primary gate, posts no `advisory-wait`
 marker. A bot check alone never confirms review of current HEAD.
-`secondaryBotLogin` accepts one login or a list; request every
+`advisoryWait.secondaryBotLogin` accepts one login or a list; request every
 `secondaryRequestLogins` entry, not only the first, never polling any.
 Trigger condition and per-login procedure:
 `idd-review-fix.instructions.md`'s E14 step 5.
@@ -130,7 +126,8 @@ Trigger condition and per-login procedure:
 exclusively** (the **F3** column reads from it); `Outcome` governs
 **E14**, **F2**, and shell-fallback rows only (no `f3Outcome` there).
 
-- If `copilotPending` is `false`, F3 treats advisory wait as satisfied.
+- If `copilotPending` is `false`, F3 treats advisory wait as satisfied,
+  except `DISPOSITION_NEEDED`: do not merge; return to E14.
 - If `copilotPending` is `true`, F3 must not merge on `WAIT`,
   `REQUEST_NEEDED`, or `RECOVERY_NEEDED`.
 
@@ -155,11 +152,14 @@ Use this path whenever helper-first cannot be trusted.
 AW3 inputs:
 
 - `LAST_COPILOT_COMMIT` — `commit_id` of the latest Copilot review
-  (empty if none); equals `PR_HEAD_SHA` short-circuits to **SATISFIED**.
+  (empty if none); equals `PR_HEAD_SHA` short-circuits to **SATISFIED**
+  unless any same-head review is not a v2 overview, has suppressed
+  items, or holds a cited item: hold (AW4).
 - `COPILOT_PENDING` — `true` if Copilot is in `requested_reviewers`.
   Observed once: `false` can lag a re-request or empty on submit —
-  not idle proof. `LAST_COPILOT_COMMIT == PR_HEAD_SHA` is
-  **SATISFIED**. A same-head `false` uses the shorter settled window.
+  not idle proof. `LAST_COPILOT_COMMIT == PR_HEAD_SHA` is **SATISFIED**
+  unless AW1 holds. A same-head `false` uses the
+  shorter settled window.
 - `COPILOT_PENDING_COVERS_HEAD` — `true` if the latest Copilot
   `review_requested` event follows current HEAD's `committed` event.
 
@@ -200,6 +200,7 @@ Evaluate top-to-bottom; first match wins.
 <!-- dprint-ignore-start -->
 | `LAST_COPILOT_COMMIT` | `COPILOT_PENDING` | Marker state | Head proof / cap | Elapsed | Outcome |
 | --- | --- | --- | --- | --- | --- |
+| `== PR_HEAD_SHA` | any | any | any same-head review holds (AW1, #4070) | any | `HOLD` (AW4) |
 | `== PR_HEAD_SHA` | any | any | any | any | `SATISFIED` |
 | `!= PR_HEAD_SHA` | `"true"` | no same-head marker | `COPILOT_PENDING_COVERS_HEAD=true` | — | `RECOVERY_NEEDED` |
 | `!= PR_HEAD_SHA` | `"true"` | no same-head marker | not proven; `REQUEST_MARKER_COUNT` < `REQUEST_CAP` | — | `REQUEST_NEEDED` |

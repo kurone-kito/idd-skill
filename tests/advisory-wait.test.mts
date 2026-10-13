@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -33,6 +33,7 @@ import {
   computeSecondaryRequestedForHead,
   findLastCopilotReviewCommit,
   isCopilotReviewerLogin,
+  isVerifiedCopilotAuthor,
   operationalMarkerPrefix,
   resolveCopilotPending,
   unsafeTextReason,
@@ -1049,6 +1050,128 @@ test('#1686: isCopilotReviewerLogin matches only the exact Copilot login set and
     false,
   );
   assert.equal(isCopilotReviewerLogin('copilot-impersonator'), false);
+});
+
+test('#4070: a bare copilot login typed User is rejected by both Copilot selectors', () => {
+  const headSha = 'd'.repeat(40);
+  const restReview = (login: string, type?: string) => ({
+    user: type === undefined ? { login } : { login, type },
+    submitted_at: '2026-10-13T00:00:00Z',
+    commit_id: headSha,
+    body: MINIMAL_V2_REVIEW_BODY,
+  });
+
+  // The default bot's bare `copilot` login passes the login matcher without
+  // consulting the author type, so only the type gate keeps a same-named
+  // User account out. The union's selector and this one must agree.
+  assert.equal(
+    findLastCopilotReviewCommit([restReview('copilot', 'User')]),
+    '',
+  );
+  assert.equal(
+    isVerifiedCopilotAuthor(
+      { login: 'copilot', __typename: 'User' },
+      DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+    ),
+    false,
+  );
+
+  // The genuine REST payload (Bot-typed) still counts, and so does a review
+  // whose author type is absent, as before.
+  assert.equal(
+    findLastCopilotReviewCommit([
+      restReview('copilot-pull-request-reviewer[bot]', 'Bot'),
+    ]),
+    headSha,
+  );
+  assert.equal(findLastCopilotReviewCommit([restReview('copilot')]), headSha);
+  assert.equal(
+    isVerifiedCopilotAuthor(
+      { login: 'copilot-pull-request-reviewer[bot]', __typename: 'Bot' },
+      DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+    ),
+    true,
+  );
+});
+
+test('#4070: a configured non-default bot reported as type User keeps matching both selectors', () => {
+  const headSha = 'e'.repeat(40);
+  // The type gate is for the default Copilot login only. A configured
+  // non-Copilot login matches regardless of author type (the
+  // isCopilotReviewerLogin contract), so both selectors must still count it.
+  assert.equal(
+    findLastCopilotReviewCommit(
+      [
+        {
+          user: { login: 'coderabbitai', type: 'User' },
+          submitted_at: '2026-10-13T00:00:00Z',
+          commit_id: headSha,
+          body: 'Looks good.',
+        },
+      ],
+      'coderabbitai',
+    ),
+    headSha,
+  );
+  assert.equal(
+    isVerifiedCopilotAuthor(
+      { login: 'coderabbitai', __typename: 'User' },
+      'coderabbitai',
+    ),
+    true,
+  );
+});
+
+test('#4070: the F3 shortcut and the AW1 hold check every same-head review, not only LAST_COPILOT_COMMIT', () => {
+  // An earlier cited same-head review followed by a clean later review leaves
+  // LAST_COPILOT_COMMIT on the head. A check that reads only that review would
+  // then proceed, so each hold rule must name every same-head review. The
+  // helper's union already does; these instruction texts are its manual form.
+  const read = (path: string): string =>
+    readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replace(
+      /\s+/g,
+      ' ',
+    );
+  const merge = read(
+    'idd-template/.github/instructions/idd-merge.instructions.md',
+  );
+  const advisory = read(
+    'idd-template/.github/instructions/idd-advisory-wait.instructions.md',
+  );
+  assert.ok(
+    merge.includes(
+      '- If any same-head review is not a v2 overview, has suppressed items, or holds a cited item: hold (AW4).',
+    ),
+  );
+  assert.equal(
+    merge.includes(
+      '- If `LAST_COPILOT_COMMIT == PR_HEAD_SHA_F3` and it has suppressed',
+    ),
+    false,
+  );
+  assert.ok(
+    advisory.includes(
+      'unless any same-head review is not a v2 overview, has suppressed items, or holds a cited item: hold (AW4).',
+    ),
+  );
+  // The COPILOT_PENDING bullet must not read SATISFIED unconditionally: a
+  // same-head hold in AW1 still applies to it.
+  assert.ok(
+    advisory.includes(
+      '`LAST_COPILOT_COMMIT == PR_HEAD_SHA` is **SATISFIED** unless AW1 holds.',
+    ),
+  );
+  assert.equal(
+    advisory.includes(
+      '`LAST_COPILOT_COMMIT == PR_HEAD_SHA` is **SATISFIED**. A same-head',
+    ),
+    false,
+  );
+  assert.ok(
+    advisory.includes(
+      '| `== PR_HEAD_SHA` | any | any | any same-head review holds (AW1, #4070) | any | `HOLD` (AW4) |',
+    ),
+  );
 });
 
 test('#3262: findLastCopilotReviewCommit matches a configured external bot across REST login spellings via user.type', () => {

@@ -110,6 +110,7 @@ naming the branch state and stop; do not push.
    is missing, released, or held by a different `{claim-id}` (even under
    the same agent ID), the claim was lost — report this and stop.
 2. Run **pre-push-validate**.
+   A budget breach follows `idd-review-fix.instructions.md`'s E12 order.
 
    (E2E tests are verified by CI; do not run them locally.)
 
@@ -524,25 +525,12 @@ completion.
    remains, post a hold note on the issue citing the PR URL and stop
    before D4.
 
-   **Scripted-rebase hazards**: `rebase.abbreviateCommands=true` can
-   make a non-interactive todo list use `p`/`r` instead of
-   `pick`/`reword`; check `git config --get rebase.abbreviateCommands` or
-   match both forms. Disable `rebase.updateRefs` process-wide so an
-   inner rebase launched by a signing wrapper cannot move a safety
-   backup or sibling branch:
-
-   ```sh
-   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=rebase.updateRefs \
-   GIT_CONFIG_VALUE_0=false GIT_SEQUENCE_EDITOR='...' git rebase -i ...
-   ```
-
-   An outer `-c rebase.updateRefs=false` may not reach that subprocess.
+   **Scripted-rebase hazards**: before a scripted reword or rebase,
+   apply the
+   [abbreviated-command and `rebase.updateRefs` guards](../../docs/idd-helper-scripts.md#scripted-rebase-hazards).
    After any scripted reword or rebase, verify that the target message
    changed and rerun the stray-keyword scan; do not trust only the exit
    status or `Successfully rebased` text.
-
-   These hazards were observed while recovering [PR #3431](https://github.com/kurone-kito/idd-skill/pull/3431)
-   for issue #3285; the field report is tracked in issue #3552.
 
    **Re-run before merge**: this scan only covers commits present at
    D3.5 time. Later branch commits — accepted review fixes
@@ -619,14 +607,13 @@ confirmed condition above. Delegate polling mechanics to
   maintainer has since posted a valid external-check waiver for this
   HEAD** — that case still needs the rerun, to make the check reflect
   the waiver (see `idd-pre-merge.instructions.md`'s External-check
-  waivers for the F2/F3 handling). A
+  waivers). A
   waiver is effective only once `deadline.passed` is true or
   `terminal.state` reaches `COPILOT_UNAVAILABLE` (check both fields in
   the same run's output); posted earlier, it is valid but inert —
   mechanically the same as no waiver until then. Absent a waiver, or
   with one still inert, exit CI-wait and proceed directly to
-  `idd-review-snapshot.instructions.md` (E1) instead, matching the phase
-  routing table's "PR open, CI running, reviews exist" row. This does
+  `idd-review-snapshot.instructions.md` (E1) instead. This does
   not relax the merge gate — the check stays required, and F2
   re-verifies it independently before merge.
 - **`idd-advisory-convergence` is the sole non-pass required check, and
@@ -659,7 +646,8 @@ confirmed condition above. Delegate polling mechanics to
   still inside its settle window) means request nothing — wait for
   Copilot's review to land for the current HEAD SHA, then rerun via
   `rerun-advisory-convergence.mjs` (see `idd-ci.instructions.md` §Rerun
-  mechanics) and resume D4. `SATISFIED` splits on `lastCopilotCommit`:
+  mechanics) and resume D4. `DISPOSITION_NEEDED` (#4070) takes no rerun:
+  exit CI-wait and proceed to E1. `SATISFIED` splits on `lastCopilotCommit`:
   when it already matches this HEAD SHA, Copilot's review already
   covers it — request nothing and take the same rerun-and-resume-D4
   action as `WAIT` above (this proven-coverage sub-case is unchanged;

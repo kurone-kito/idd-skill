@@ -52,9 +52,9 @@
         },
         "state": "APPROVED",
         "commitId": "",
-        "submittedAt": "2026-05-11T23:55:00Z",
-        "createdAt": "2026-05-11T23:55:00Z",
-        "updatedAt": "2026-05-11T23:55:00Z"
+        "submittedAt": "2026-05-11T23:53:00Z",
+        "createdAt": "2026-05-11T23:53:00Z",
+        "updatedAt": "2026-05-11T23:53:00Z"
       }
     ],
     "threads": [],
@@ -177,7 +177,7 @@
     "secondaryQuietWindow": {
       "minutes": 0,
       "configuredMinutes": 0,
-      "anchorAt": "2026-05-11T23:55:00Z",
+      "anchorAt": "2026-05-11T23:54:00Z",
       "elapsedMinutes": null,
       "elapsed": true,
       "remainingMinutes": 0,
@@ -228,7 +228,7 @@
         {
           "login": "owner-reviewer",
           "state": "APPROVED",
-          "submittedAt": "2026-05-11T23:55:00Z",
+          "submittedAt": "2026-05-11T23:53:00Z",
           "isHuman": true,
           "isAdvisoryBot": false,
           "isCodeowner": true,

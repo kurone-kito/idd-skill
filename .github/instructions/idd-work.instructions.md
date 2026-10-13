@@ -414,25 +414,13 @@ pre-push-validate requirements above. Otherwise treat it as a real
 failure and fix it. See
 [rationale](../../docs/idd-design-rationale.md#b3--local-test-flakiness-under-concurrent-load-hosted-ci-is-authoritative).
 
-**Editing a docs/instructions file**: before editing any `docs/**.md`
-or `.github/instructions/**.md` file, check whether it is a generated
-mirror. A `.github/instructions/**.instructions.md` file carries an
-`idd-generated-from` banner at its top when it is one -- the banner
-itself names the canonical source and the resync command, valid only
-for an `exact`/`concreted`-style pair. A `docs/**.md` file may not
-carry that banner even when it is a mirror; check this repository's
-sync manifest (for example `audit/sync-manifest.json` in the
-`idd-skill` source repository, or your own repository's equivalent
-config) for an entry naming this file as a mirror target instead, and
-follow that entry's own mode contract. An `exact`/`concreted`-style
-entry auto-regenerates the mirror from its named canonical source when
-the resync command runs -- edit only that source, never the mirror
-directly, or the edit is silently discarded on the next sync. Any
-other mode (for example one that only requires certain text or
-patterns to be present, with no single canonical source to
-auto-regenerate from) follows its own stated contract instead --
-consult the manifest entry itself rather than assuming auto-regenerate
-applies. See
+**Editing a docs/instructions file**: first check if it is a generated
+mirror. An `.instructions.md` mirror carries an
+`idd-generated-from` banner naming its canonical source and
+resync command; a `docs/**.md` mirror may not, so check your sync
+manifest (e.g. `audit/sync-manifest.json`) for its target entry. For an
+`exact`/`concreted` entry, edit only that source; a resync discards
+mirror edits. Other modes follow their own manifest contract. See
 [rationale](../../docs/idd-design-rationale.md#b3--edit-the-canonical-source-of-a-generated-docsinstructions-file-not-its-mirror).
 
 If B3 or C must stop for a hold, use the shared Hold / suspend rules in
@@ -473,6 +461,18 @@ exists. Keep Stage 1 B–C hold; never release
 a follow-up or start a second loop. If the companion is unavailable, record the
 proposal in a comment/PR follow-ups; never create it ad hoc or improvise
 worker-side authoring.
+
+**Scope overrun** (helper runtime only): when profile-selected
+`audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
+fails `effort-candidate-file-limit` on the issue body or with
+`## Candidate files` set to the diff's canonical paths, stop coding
+without pushing. Comment the estimate, candidate files, changed files,
+and a split proposal; release per the Abort rule (`unclaimed-by`); run
+`lost-claim-cleanup`. With the companion, hand it that proposal as a
+held split draft: it holds this issue, publishes a held roadmap whose
+children record `Split out of #<n>`, and comments its link; if refused,
+the comment stands. Never add needs-decision or ask a human
+([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
 
 ---
 

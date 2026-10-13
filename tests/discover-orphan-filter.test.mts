@@ -2930,3 +2930,101 @@ test('#4065: a colliding authoring and needs-decision label blocks a review-need
   });
   assert.equal(distinct.orphan, true);
 });
+
+test('classifyIssue excludes the configured authoring journal by number (#4115)', () => {
+  const journal = {
+    number: 2674,
+    title: 'Issue-authoring durable journal',
+    state: 'OPEN',
+    labels: [],
+    body: 'No markers, no labels -- a durable journal, not work.',
+  };
+  const excluded = classifyIssue(journal, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    authoringJournalTarget: 2674,
+  });
+  assert.equal(excluded.orphan, false);
+  assert.equal(excluded.reason, 'authoring_journal_target');
+
+  const other = classifyIssue(
+    { ...journal, number: 2675 },
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      authoringJournalTarget: 2674,
+    },
+  );
+  assert.equal(other.orphan, true);
+});
+
+test('filterOrphanIssues buckets the journal apart from the outage target (#4115)', async () => {
+  const issue = (number: number, title: string) => ({
+    number,
+    title,
+    state: 'OPEN',
+    labels: [],
+    body: '',
+    url: `https://example.com/${number}`,
+  });
+  const result = await filterOrphanIssues(
+    [
+      issue(2674, 'authoring journal'),
+      issue(158, 'provider outage target'),
+      issue(51, 'ordinary orphan'),
+    ],
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      providerOutageDeclarationTarget: 158,
+      authoringJournalTarget: 2674,
+    },
+  );
+  assert.deepEqual(
+    result.orphans.map((orphan) => orphan.number),
+    [51],
+  );
+  assert.deepEqual(
+    result.filtered.authoring_journal_target.map((entry) => entry.number),
+    [2674],
+  );
+  assert.deepEqual(
+    result.filtered.provider_outage_target.map((entry) => entry.number),
+    [158],
+  );
+});
+
+test('filterOrphanIssues gives the outage reason precedence on a shared number (#4115)', async () => {
+  const result = await filterOrphanIssues(
+    [
+      {
+        number: 9,
+        title: 'shared',
+        state: 'OPEN',
+        labels: [],
+        body: '',
+        url: 'https://example.com/9',
+      },
+    ],
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      providerOutageDeclarationTarget: 9,
+      authoringJournalTarget: 9,
+    },
+  );
+  assert.equal(result.filtered.provider_outage_target.length, 1);
+  assert.equal(result.filtered.authoring_journal_target.length, 0);
+});
+
+test('loadPolicy carries the raw journal reference, or null when absent (#4115)', () => {
+  const withJournal = loadPolicyFromConfig({
+    issueAuthoring: { journalIssue: 'kurone-kito/idd-skill#2674' },
+  });
+  assert.equal(
+    withJournal.authoringJournalReference,
+    'kurone-kito/idd-skill#2674',
+  );
+  const absent = loadPolicyFromConfig({});
+  assert.equal(absent.authoringJournalReference, null);
+});

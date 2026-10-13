@@ -434,7 +434,7 @@
         ".github/instructions/idd-review-snapshot.instructions.md",
         ".github/instructions/idd-review-triage.instructions.md"
       ],
-      "limitBytes": 54300
+      "limitBytes": 59300
     },
     {
       "id": "bundle-review-fix-phase",
@@ -511,6 +511,12 @@
         "limitBytes": 175150,
         "issue": 4109,
         "reason": "Operator-approved option A on issue #4109 (PR #4147). The companions bundle sat at 97.99% of its 175,000-byte limit with 24 bytes of headroom. Naming the fourth reserved label, labels.authoringOnlyLabelName, in project-tuning.md and issue-mediated-bootstrap.md adds about 60 bytes, so the limit rises by 150 bytes to 175,150 to keep the bundle under its 98% ceiling. The hearing catalog is JSON and sits outside this bundle."
+      },
+      {
+        "bundle": "bundle-review-triage-phase",
+        "limitBytes": 59300,
+        "issue": 4195,
+        "reason": "Maintainer-approved in the roadmap hearing of 2026-10-13, sized by the docs convention (roughly 10% headroom over measured need, not an exact fit): the E5 triage-record rule adds about 800 bytes to review-triage, which had 0 bytes of headroom. Measured 53,214 bytes before the change, about 54,010 after; raised to 59,300, the value approved in the hearing, about 10% above that."
       }
     ]
   },
@@ -1156,7 +1162,7 @@
       "lite": [
         {
           "file": "idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md",
-          "heading": "D1 — Sync main before first push",
+          "heading": "D1 — Sync {development-branch} before first push",
           "contains": "continue at D2 (claim re-read, **pre-push-validate**, then a"
         },
         {

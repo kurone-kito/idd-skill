@@ -728,7 +728,7 @@
         "e10NoProgressHoldAfter": {
           "type": "integer",
           "minimum": 1,
-          "description": "Number of consecutive E10 review-fix critique passes without meaningful progress before the auto-loop stops and posts a hold for a maintainer decision. Optional; defaults to `3`."
+          "description": "Number of consecutive E10 review-fix critique passes without meaningful progress, counted from finding fingerprints by the `e10-recurrence` helper, before the auto-loop leaves the fix loop. A recurring Medium or High family stops it with a hold for a maintainer decision; when only Low families recur, they take the per-issue cap's defer route into a follow-up issue instead, once no High or Medium Accepted finding is open and fix-validate has passed on the current HEAD. Optional; defaults to `3`."
         },
         "e10MaxPasses": {
           "type": "integer",
@@ -909,9 +909,14 @@
         "enabled": {
           "type": "boolean",
           "description": "When false, discovery ignores the score entirely and evaluates every candidate the legacy way (default true)."
+        },
+        "effortL": {
+          "type": "string",
+          "enum": ["allow", "refuse"],
+          "description": "Effort `L` policy. `allow` keeps an issue whose effort footer is `L` eligible for `ready` authoring and autopilot Discover. `refuse` stops such an issue from being authored as `ready`, and autopilot Discover routes it to humans. Optional; defaults to \"allow\"."
         }
       },
-      "description": "Container for the discovery autopilot-suitability score floor and its enable switch. Optional; omitting it keeps the distributed defaults for both nested keys."
+      "description": "Container for the discovery autopilot-suitability score floor, its enable switch, and the effort `L` policy. Optional; omitting it keeps the distributed defaults for every nested key."
     },
     "worktreeGuard": {
       "type": "object",

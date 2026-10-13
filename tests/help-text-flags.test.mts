@@ -27,6 +27,10 @@ const CROSS_REFERENCE_FLAGS: Readonly<Record<string, readonly string[]>> = {
     // A pnpm install flag shown as the value of this helper's own option.
     '--frozen-lockfile',
   ],
+  'publish-authoring-hold': [
+    // audit-authored-issue's flag, cited to say how the body is linted.
+    '--new-issue',
+  ],
   'sweep-authoring-markers': [
     // An option owned by minimize-superseded-markers, cited by contrast.
     '--allow-untrusted',

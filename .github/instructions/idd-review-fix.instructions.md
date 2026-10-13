@@ -85,17 +85,37 @@ while the findings are converging.
 
 Convergence guardrails:
 
-- "Meaningful progress" means a pass removes at least one Accepted
-  finding, narrows a remaining finding's root cause/scope, or yields a
-  materially new fix direction. Reworded duplicates do not count. A pass
-  whose Accepted findings are all Low does not count as progress through
-  the narrowing prong alone.
+- "Meaningful progress" means a pass's Accepted findings are not all
+  among the prior pass's (compared by the E5 fingerprint), or it narrows
+  a remaining finding's root cause/scope so far that its `construct`
+  changes. Removing some findings while the rest recur is not progress,
+  and reworded duplicates do not count. A pass whose Accepted findings
+  are all Low does not count as progress through the narrowing prong
+  alone.
 - If the same Accepted findings recur for
   `critiqueLoop.e10NoProgressHoldAfter` consecutive E10 passes (default
   `3`) without progress, stop the auto-loop: post a hold comment
   summarizing the repeated findings and attempted fixes, and wait for a
   maintainer decision. This hold stands unless the
   [needs-decision route] applies.
+- **Count it, do not judge it.** When the per-issue cap below does not
+  apply, append each pass's E5 records (`file`, `rule`, `construct`,
+  the E4 tier as `severity`, `disposition`) to one passes file per
+  issue, kept across E9 batches in the session scratch directory, and
+  run the `e10-recurrence` helper
+  ([reference](../../docs/idd-helper-scripts.md#e10-same-family-recurrence-kurone-kitoidd-skill4129)).
+  The chain counts its first pass, and each later pass whose non-empty
+  fingerprint set is a subset of the prior one's extends it. `e11` →
+  E11; `continue` → fix and rerun; `hold` (a recurring Medium or High
+  family) → the hold above, posting its `holdText`; `defer` (only Low
+  families recur) → once no High or Medium Accepted finding is open and
+  **fix-validate** has passed on the current HEAD, the per-issue cap's
+  close-out route below for those families (until then, fix the open
+  ones and rerun), with `e10NoProgressHoldAfter` as the clause, also an
+  explicit exception to the Defer rule's exclusion of an Accepted item
+  mid-fix. An invalid record exits non-zero; fix it and rerun. If the
+  passes file is lost or the helper cannot run, judge by the bullets
+  above.
 - Do not use this stop condition to bypass serious issues: unresolved
   High/Medium findings remain blockers until fixed or explicitly
   redirected by a maintainer or deferred under the needs-decision route.
@@ -222,6 +242,27 @@ Run **post-fix-validate**.
 **Validate.** Judge the run by its own exit status — see
 [Project commands](idd-overview-core.instructions.md#project-commands).
 
+**Budget breach.** When a change leaves a `bundleBudgets` entry above
+98% of its `limitBytes`, settle it in this order before anyone is
+asked:
+
+1. Move the detail this change added into `docs/idd-helper-scripts.md`,
+   the adopter path. Skip this step for lite files, which are
+   self-contained. Do not trim shared, terminology-sensitive text.
+2. If the bundle is still above 98%, read its base utilization (its
+   total over `limitBytes` at the base ref):
+   - If its base utilization was below 95%, raise the limit to about
+     10% above the new total and add the PR-description callout. No
+     question is asked.
+   - If its base utilization was at or above 95%, stop and ask once
+     (shared Hold / suspend rules). Give the bundle name, its
+     utilization at the base ref, its bytes after step 1, and the
+     proposed limit with about 10% headroom. Never commit the raise.
+
+For a per-file cap, apply step 1. If the file is still above its cap
+(`phaseLimitBytes`, or `alwaysLoadedLimitBytes` for an always-loaded
+file), stop and ask once. Never raise a per-file cap.
+
 Then push the feature branch normally (E11 uses merge commits, not
 rebase, so no force push is required).
 
@@ -237,7 +278,7 @@ fresh round per arrival, but only when **all** hold:
   in `scripts/protocol-helpers.mjs`) or an `advisoryBotLogins` login,
   **regardless of PATH A/B** (Copilot's inline thread comments are
   PATH A under E4; an overlap with any configured
-  `secondaryBotLogin` login still qualifies).
+  `advisoryWait.secondaryBotLogin` login still qualifies).
 - Each comment is a small, confirmable fix whose claim was checked
   against live evidence (linter run, actual file/runtime behavior)
   before folding it in — the same **verify-before-accept discipline** E5
@@ -364,7 +405,11 @@ login).
 2. Run **AW1** using the profile-selected command from
    `docs/idd-helper-scripts.md` with `--pr`, `--claim-id`, `--agent-id`,
    and `--trusted-marker-logins`. **SATISFIED** → E14 advisory-bot
-   processing is done; proceed to E15.
+   processing is done; proceed to E15. **DISPOSITION_NEEDED** (#4070) →
+   not satisfied: answer each uncovered cited item (E6 of
+   `idd-review-triage.instructions.md`), or for an unreadable same-head
+   review post a trusted review-ack for HEAD; then rerun AW1. Do not
+   request Copilot or go to E15.
 3. Run **AW2** to fetch markers.
 4. Apply the **AW3** decision table:
    - **SATISFIED**, `COPILOT_PENDING` `"false"`, `COPILOT_PENDING_COVERS_HEAD`
@@ -412,8 +457,8 @@ login).
      **AW3-S** marker posts: enter the active polling loop below.
 5. **Secondary advisory bot(s) (optional, non-gating), called from
    every `apply step 5` reference in this file.**
-   `secondaryBotLogin` accepts one login or a list; request **every**
-   login the helper's `secondaryRequestLogins` reports (shell
+   `advisoryWait.secondaryBotLogin` accepts one login or a list; request
+   **every** login the helper's `secondaryRequestLogins` reports (shell
    fallback: every configured login not yet requested this HEAD). Use the
    guarded procedure per login, replacing primary placeholders and
    `BOT_REST_LOGIN`/bare form, with REST type selecting `botIds`/`userIds`;

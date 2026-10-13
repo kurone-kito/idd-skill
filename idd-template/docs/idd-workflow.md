@@ -1548,7 +1548,8 @@ following optional helper scripts:
 - `scripts/merged-pr-feedback-sweep.mjs` (read-only, manually-invoked
   post-merge sweep that scans merged PRs for unresolved review threads
   and undispositioned advisory feedback, handing JSON to the
-  issue-authoring skill)
+  issue-authoring skill; a date-window run also lists open PRs that pass
+  pre-merge readiness but have not been merged)
 
 Shell / `gh` / `jq` snippets in
 `.github/instructions/*.instructions.md` remain the canonical portable

@@ -10,18 +10,16 @@ Lite profile for helper-enabled weak/local models. Same semantics as
 precondition. E1 Step 2 accepts a matching `lastCopilotCommit` directly;
 off-head `SATISFIED` requires active-claim `staleRequestRecovery` to be
 `not-applicable` or its AW3-S/cap route complete. `hold` is ineligible.
-If the repository is `instructions-only`, use the full-size
-advisory-wait instructions instead.
 
 ## Helper runtime contract
 
 - Helper-enabled profiles: use the named helper commands below. If the
   advisory-wait-state evidence/decision helper is missing, fails,
   returns invalid JSON, or disagrees with live state, stop and ask —
-  never a manual per-field fetch or hand-derived decision. This
-  doesn't restrict marker _posting_ — the manual JSON `POST` under
-  Markers stays that step's canonical fallback.
-- `instructions-only`: do not use this lite file.
+  never a manual per-field fetch or hand-derived decision. Marker
+  posting is not restricted (see Markers).
+- `instructions-only`: do not use this lite file; use the full-size
+  advisory-wait instructions instead.
 - Any mismatch between this file and
   `idd-advisory-wait.instructions.md` is a bug in this file.
 
@@ -38,15 +36,15 @@ A lite session excludes A0-A4.5/E4-E8 and F3-F5; it uses only E1 Step
 2, E14, lite F1-F2 read-only helpers, and F2.5 handoff-stop. If it
 reaches an excluded call site, stop and ask a stronger session/human.
 
-**Do not build a substitute wait for a non-primary bot** — same
-prohibition as the full-size file's Scope section: rely on the
-standard E1/review-watermark/F2/F3 safety net, never a custom poll on
-any bot but `advisoryWait.primaryBotLogin`.
+**Do not build a substitute wait for a non-primary bot** (full-size Scope
+section): rely on the standard E1 safety net, never a custom poll on any bot
+but `advisoryWait.primaryBotLogin`.
 
 ## Stop-and-ask conditions
 
-- A required field is missing, the helper exits non-zero, returns
-  invalid JSON, or its evidence disagrees with live state.
+- A required field or `staleRequestRecovery` is missing, the helper
+  exits non-zero, returns invalid JSON, or its evidence disagrees with
+  live state.
 - `outcome` is `CAP_EXHAUSTED` with the `hold` route (`HOLD`'s only
   route — see Helper-first canonical path below).
 - `earliestSameHeadAt` empties during active polling (marker
@@ -59,8 +57,9 @@ any bot but `advisoryWait.primaryBotLogin`.
 ## Fast path — common case
 
 Run the Helper-first canonical path below. Once `lastCopilotCommit`
-equals `prHeadSha`, the gate is **SATISFIED** — take the caller's
-`SATISFIED` action. For off-head `SATISFIED`, apply the header's
+equals `prHeadSha` and `outcome` is `SATISFIED`, take the caller's
+`SATISFIED` action (`DISPOSITION_NEEDED`, #4070, goes to the E14 table).
+For off-head `SATISFIED`, apply the header's
 `staleRequestRecovery`; lite hands off `attempt` for AW3-S.
 
 ## Helper-first canonical path
@@ -74,27 +73,27 @@ node scripts/advisory-wait-state.mjs --pr <pr-number> --claim-id <claim-id> \
   --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
 ```
 
-Required fields (stop and ask if any are missing): `prHeadSha`,
-`lastCopilotCommit`, `copilotPending`,
+Required fields (stop and ask if any are missing): `protocolVersion`,
+`prHeadSha`, `lastCopilotCommit`, `copilotPending`,
 `copilotPendingCoversHead`, `outcome`, `f3Outcome`, `secondaryBotLogin`,
 `secondaryBotLogins`, `secondaryRequestLogins`, `secondaryRequestNeeded`,
-`earliestSameHeadAt`, `requestMarkerCount`, `requestCap`,
-`pendingWindowMinutes`, `settledWindowMinutes`, `pollIntervalMinutes`,
-`capExhaustedRoute`, `trustedMarkerSummary`. Every field is always
-present, even empty/false/`[]` — validate presence, not truthiness;
-include `staleRequestRecovery`; reject unbound output.
+`now`, `earliestSameHeadAt`, `elapsedMinutes`, `sameHeadMarkerPresent`,
+`sameHeadRequestMarkerPresent`, `sameHeadMarkerCount`,
+`requestMarkerCount`, `requestCap`, `pendingWindowMinutes`,
+`settledWindowMinutes`, `pollIntervalMinutes`, `capExhaustedRoute`,
+`trustedMarkerSummary`. Every field is always present, even
+empty/false/`[]` — validate presence, not truthiness; include
+`staleRequestRecovery`; reject unbound output.
 
 The helper computes `outcome` directly from live evidence — never by
 hand from raw timestamps. Allowed values: `SATISFIED`,
-`REQUEST_NEEDED`, `RECOVERY_NEEDED`, `CAP_EXHAUSTED`, `WAIT`. `HOLD` is
+`REQUEST_NEEDED`, `RECOVERY_NEEDED`, `CAP_EXHAUSTED`, `WAIT`,
+`DISPOSITION_NEEDED` (#4070). `HOLD` is
 caller-derived, never emitted.
 
-The helper already resolves `advisoryWait.*` from
-`.github/idd/config.json`, emitting final values in `requestCap`,
-`pendingWindowMinutes`, `settledWindowMinutes`, `pollIntervalMinutes`,
-and `capExhaustedRoute` — never read that config yourself. A missing
-field here isn't "config absent" — it's a malformed helper response
-(see Required fields above); stop and ask.
+The helper resolves `advisoryWait.*` from `.github/idd/config.json`
+(`requestCap` through `capExhaustedRoute`); never read that config
+yourself.
 
 ## E14 outcome → action
 
@@ -106,6 +105,7 @@ field here isn't "config absent" — it's a malformed helper response
 | `RECOVERY_NEEDED` | post the recovery marker (do not request another review), then poll |
 | `CAP_EXHAUSTED` | `phase-specific` (default): proceed to CI wait. `hold`: stop and ask (`HOLD`'s only route; see above) |
 | `WAIT` | keep polling |
+| `DISPOSITION_NEEDED` (#4070) | stop and ask a full session to answer the cited items (E6); for an unreadable same-head review, post a trusted review-ack, then rerun the helper |
 <!-- dprint-ignore-end -->
 
 `capExhaustedRoute: phase-specific` lets E14 continue past
@@ -134,10 +134,8 @@ clock — never commit author/committer timestamps.
 
 ## Polling guidance (protocol-level only)
 
-This section covers only what the AW3 protocol itself defines. Aborting
-this wait early on a moved HEAD or new review activity is the caller's
-own job (owned by `idd-review-fix-lite.instructions.md`'s E14; not
-duplicated here).
+This section covers only what the AW3 protocol defines. Early abort on a
+moved HEAD is the caller's job (E14 in `idd-review-fix-lite`).
 
 1. Reuse the existing same-head marker (`earliestSameHeadAt`) instead
    of posting a new one, unless none exists yet.
@@ -146,16 +144,16 @@ duplicated here).
 3. If `earliestSameHeadAt` is now empty, stop and ask (see
    Stop-and-ask conditions).
 4. If `outcome` is now `SATISFIED`, exit this wait and continue. The
-   helper already folds `pendingWindowMinutes`/`settledWindowMinutes`
-   into `outcome` on every call, including the stalled/rate-limited
-   case — never re-derive that decision by hand from raw window
-   values.
-5. Otherwise (`outcome` is `WAIT`, or any other non-terminal value),
+   helper folds the window values into `outcome` on every call; never
+   re-derive that by hand.
+5. If `outcome` is `DISPOSITION_NEEDED` (#4070), exit this wait and
+   answer the cited items per the E14 table; never keep polling.
+   Otherwise (`outcome` is `WAIT`, or any other non-terminal value),
    keep polling.
 
 ## Secondary advisory bot(s) (non-gating, optional)
 
-`secondaryBotLogin` accepts one login or a list. When
+`advisoryWait.secondaryBotLogin` accepts one login or a list. When
 `secondaryRequestNeeded` is `true`, request **every** login in
 `secondaryRequestLogins` once each (never only the first), using the
 same mechanics above. Post no `advisory-wait:` marker for any — none

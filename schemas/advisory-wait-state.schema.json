@@ -56,24 +56,26 @@
     },
     "outcome": {
       "type": "string",
-      "description": "Shared routing outcome consumed by E14, F2, and the shell-fallback path (AW1-AW5). On REQUEST_NEEDED, F2 returns to E14 while E14 itself requests Copilot and polls; F3 reads f3Outcome instead.",
+      "description": "Shared routing outcome consumed by E14, F2, and the shell-fallback path (AW1-AW5). On REQUEST_NEEDED, F2 returns to E14 while E14 itself requests Copilot and polls; F3 reads f3Outcome instead. DISPOSITION_NEEDED (#4070) is fail closed: it is reported, never SATISFIED, when any of these holds. A same-head default-Copilot review has a cited suppressed item (one naming a file or line) with no qualifying disposition, counted across all same-head reviews. A same-head default-Copilot review body cannot be read (empty or unrecognized) and no trusted review-ack for HEAD follows it, including when that review is the only same-head review. Or the same-head reviews are otherwise unsettled. E14 answers the cited items or posts a trusted review-ack for the unreadable review, then reruns AW1.",
       "enum": [
         "SATISFIED",
         "REQUEST_NEEDED",
         "RECOVERY_NEEDED",
         "CAP_EXHAUSTED",
-        "WAIT"
+        "WAIT",
+        "DISPOSITION_NEEDED"
       ]
     },
     "f3Outcome": {
       "type": "string",
-      "description": "F3-authoritative outcome; treats copilotPending=false as SATISFIED so F3 may merge a settled-but-not-re-reviewed advisory state. F3 uses this field exclusively when helper output is valid, which is why it can diverge from outcome.",
+      "description": "F3-authoritative outcome; treats copilotPending=false as SATISFIED so F3 may merge a settled-but-not-re-reviewed advisory state, except any DISPOSITION_NEEDED (#4070; the same triggers as outcome), which never merges. F3 uses this field exclusively when helper output is valid, which is why it can diverge from outcome.",
       "enum": [
         "SATISFIED",
         "REQUEST_NEEDED",
         "RECOVERY_NEEDED",
         "CAP_EXHAUSTED",
-        "WAIT"
+        "WAIT",
+        "DISPOSITION_NEEDED"
       ]
     },
     "secondaryBotLogin": {

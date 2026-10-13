@@ -118,6 +118,16 @@ shape with not-ready-yet (kurone-kito/idd-skill#2707) turns a real
 failure into a silent stall. A `deferred-followup-unreconciled` blocker
 never clears by polling: follow its `detail`.
 
+**Watermark before hold** (observed on pull request kurone-kito/idd-skill#4077,
+issue kurone-kito/idd-skill#4071): a readiness result computed
+before any review watermark exists can block on resolved threads that a
+watermark would clear, and a hold posted from that result can be wrong.
+The order is fixed: record a fresh review watermark for the current head
+first (E1 Step 1, then E1 Step 2), then re-run readiness, and post a hold
+only if the blocker still stands. A `disposition-evidence` or
+`review-currency` blocker that carries a `hint` names this step. The hint
+is diagnostic and never changes the verdict.
+
 - **Review currency** (live re-fetch required, freshness gate): read the
   most recent `<!-- review-watermark: {agent-id} {claim-id} … -->`
   comment whose embedded `{claim-id}` matches the current active claim
@@ -193,18 +203,15 @@ never clears by polling: follow its `detail`.
   applies — do not return to E1 for that activity alone (still confirm
   the semantic residual; every other trigger/gate is unaffected).
 
-  A current-claim agent's own post-watermark disposition replies are
-  expected convergence activity, not reviewer input, and the watermark
-  refresh on the E-phase branch-sync `clean` / `behind-no-conflict`
-  route already re-covers them. The same holds for any other
-  own-agent-authored procedural or status comment posted after the
-  watermark (for example, a hold comment explaining a blocker) that
-  introduces no reviewer or bot finding of its own — it is expected
-  convergence activity too, though the branch-sync route's own
-  refresh does not independently re-cover it. If a return-to-E1 is
-  triggered solely by disposition replies, other own-agent
-  procedural or status comments of that kind, or both, refresh the
-  watermark directly instead; every other F2 trigger and gate is
+  A current-claim agent's own post-watermark disposition replies are expected
+  convergence activity, not reviewer input, and the E-phase branch-sync
+  `clean` / `behind-no-conflict` route's watermark refresh already re-covers
+  them. Any other own-agent-authored procedural or status comment after the
+  watermark (for example, a hold comment explaining a blocker) that introduces
+  no reviewer or bot finding of its own is also expected convergence activity,
+  but that route's refresh does not re-cover it. If a return-to-E1 is
+  triggered solely by disposition replies, other such comments, or both,
+  refresh the watermark directly instead; every other F2 trigger and gate is
   unaffected.
 
   Third-party advisory bot skip-review carve-out: the same applies to
@@ -250,6 +257,7 @@ never clears by polling: follow its `detail`.
        unchanged and continues to the CI check.
      - **SATISFIED** (otherwise) → this check is **satisfied**;
        continue to the CI check.
+     - **DISPOSITION_NEEDED** → do not merge; return to E14.
      - **HOLD** → post the hold comment from **AW4** and stop.
      - **RECOVERY_NEEDED** → post the recovery marker from **AW3-R**
        without requesting another Copilot review, then enter the normal

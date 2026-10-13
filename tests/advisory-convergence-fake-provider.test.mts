@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -174,6 +175,95 @@ test('collectFromGitHub retries one transient getChangeRequestConvergenceView fa
     // all the way into the returned inputs.
     assert.equal(calls, 2);
     assert.equal(inputs.prHeadSha, 'a'.repeat(40));
+  });
+});
+
+test('collectFromGitHub retries one transient repository-lookup failure with an injected resolver and sleep (#4110)', () => {
+  withHermeticCwd(() => {
+    const realPort = createFakeProviderAdapter(baseFixture());
+    const lookups: string[] = [];
+    const sleeps: number[] = [];
+    const created: string[] = [];
+    // No --owner or --repo, so collection must take the repository from the
+    // injected resolver, which fails once with no HTTP status (the transient
+    // class the retry helper retries) and then succeeds.
+    const resolveRepository = () => {
+      lookups.push('lookup');
+      if (lookups.length === 1) {
+        throw new Error('spawnSync gh ETIMEDOUT');
+      }
+      return { owner: 'o', repo: 'r' };
+    };
+
+    const { inputs } = collectFromGitHub(
+      parseArgs(['--pr', String(PR_NUMBER)]),
+      (owner, repo) => {
+        created.push(`${owner}/${repo}`);
+        return realPort;
+      },
+      { resolveRepository, sleep: (ms) => sleeps.push(ms) },
+    );
+
+    // Two lookups: the failed one and the retry. The injected sleep ran once
+    // in place of the real blocking sleep, and the port was built for the
+    // resolved pair.
+    assert.equal(lookups.length, 2);
+    assert.equal(sleeps.length, 1);
+    assert.deepEqual(created, ['o/r']);
+    assert.equal(inputs.prHeadSha, 'a'.repeat(40));
+  });
+});
+
+test('collectFromGitHub without deps takes the repository from the shared resolver (#4110)', () => {
+  withHermeticCwd(() => {
+    const realPort = createFakeProviderAdapter(baseFixture());
+    const created: string[] = [];
+    // The production wiring inside Actions: no deps, so the default resolver
+    // answers from GITHUB_REPOSITORY with no gh process, because this checkout's
+    // origin names the same repository. The outer values are restored.
+    execFileSync('git', ['init', '-q', process.cwd()], { stdio: 'ignore' });
+    execFileSync(
+      'git',
+      [
+        '-C',
+        process.cwd(),
+        'remote',
+        'add',
+        'origin',
+        'https://github.com/env/variable.git',
+      ],
+      { stdio: 'ignore' },
+    );
+    // The host variables are isolated too, so a runner's own GH_HOST or GHES
+    // server URL cannot change which host the origin is compared with.
+    const saved = {
+      GITHUB_ACTIONS: process.env.GITHUB_ACTIONS,
+      GITHUB_REPOSITORY: process.env.GITHUB_REPOSITORY,
+      GITHUB_SERVER_URL: process.env.GITHUB_SERVER_URL,
+      GH_HOST: process.env.GH_HOST,
+      GH_REPO: process.env.GH_REPO,
+    };
+    delete process.env.GH_REPO;
+    delete process.env.GH_HOST;
+    delete process.env.GITHUB_SERVER_URL;
+    process.env.GITHUB_ACTIONS = 'true';
+    process.env.GITHUB_REPOSITORY = 'env/variable';
+    try {
+      const { inputs } = collectFromGitHub(
+        parseArgs(['--pr', String(PR_NUMBER)]),
+        (owner, repo) => {
+          created.push(`${owner}/${repo}`);
+          return realPort;
+        },
+      );
+      assert.deepEqual(created, ['env/variable']);
+      assert.equal(inputs.prHeadSha, 'a'.repeat(40));
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   });
 });
 

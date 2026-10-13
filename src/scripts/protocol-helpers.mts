@@ -42,8 +42,10 @@ export { isCopilotErrorReviewBody } from './copilot-review-body.mts';
 export * from './marker-helpers.mts';
 
 import {
+  citationBreakdown,
   classifyCopilotReviewBody,
   isCopilotErrorReviewBody,
+  namesFileOrLine,
 } from './copilot-review-body.mts';
 import { loadIddConfig } from './idd-config.mts';
 import type {
@@ -393,6 +395,15 @@ interface AdvisoryWaitOutcomeInput {
   copilotPending?: boolean;
   copilotPendingCoversHead?: boolean;
   sameHeadMarkerPresent?: boolean;
+  /** #4070: `false` when any same-head review has a cited suppressed item
+   * without a qualifying disposition, or the same-head reviews disagree (see
+   * `sameHeadReviewsSettled`). Only read on the same-head branch; an absent
+   * value keeps the pre-#4070 result. */
+  citedDispositionsSatisfied?: boolean;
+  /** #4070 (rp1kz): `true` when a same-head default-Copilot review body cannot
+   * be read and no trusted review-ack for HEAD follows it. Both evaluators
+   * then report DISPOSITION_NEEDED, so the review-ack route applies. */
+  sameHeadUnreadable?: boolean;
   requestMarkerCount: number;
   elapsedMinutes: number;
   requestCap?: number;
@@ -6590,17 +6601,17 @@ export function findLastCopilotReviewCommit(
   reviews: ReviewLike[],
   primaryBotLogin: string = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
 ): string {
-  const isDefaultCopilotBot =
-    normalizePrimaryBotLogin(primaryBotLogin) ===
-    DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  const isDefaultCopilotBot = isDefaultCopilotPrimary(primaryBotLogin);
   const latest = reviews
     .filter((review) => {
+      const authorType = review.user?.type ?? review.author?.type ?? null;
       if (
         !isCopilotReviewerLogin(
           review.user?.login ?? review.author?.login ?? '',
           primaryBotLogin,
-          review.user?.type ?? review.author?.type ?? null,
-        )
+          authorType,
+        ) ||
+        (isDefaultCopilotBot && !isBotOrUntypedAuthor(authorType))
       ) {
         return false;
       }
@@ -6641,7 +6652,34 @@ export function isVerifiedCopilotAuthor(
   if (!isCopilotReviewerLogin(author?.login ?? '', primaryBotLogin, typename)) {
     return false;
   }
-  return typename === undefined || typename === null || typename === 'Bot';
+  return (
+    !isDefaultCopilotPrimary(primaryBotLogin) || isBotOrUntypedAuthor(typename)
+  );
+}
+
+/**
+ * Author-type gate for the default Copilot login: an absent type passes, and
+ * otherwise only `'Bot'` does. It guards the bare `copilot` login, which
+ * {@link isCopilotReviewerLogin} accepts without consulting the author type,
+ * so a same-named `User` account is not counted as Copilot (#1686). A
+ * configured non-Copilot login skips this gate, because that matcher's
+ * contract is that an exact login match holds regardless of author type.
+ * {@link isVerifiedCopilotAuthor} (GraphQL `__typename`) and
+ * {@link findLastCopilotReviewCommit} (REST `user.type`) apply the same
+ * condition, so the two selectors cannot disagree.
+ */
+function isBotOrUntypedAuthor(authorType: string | null | undefined): boolean {
+  return (
+    authorType === undefined || authorType === null || authorType === 'Bot'
+  );
+}
+
+/** True when `primaryBotLogin` names the default Copilot bot. */
+function isDefaultCopilotPrimary(primaryBotLogin: string): boolean {
+  return (
+    normalizePrimaryBotLogin(primaryBotLogin) ===
+    DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN
+  );
 }
 
 /** Structural author shape the Copilot selector reads. Matches
@@ -6680,6 +6718,74 @@ export function findLatestCopilotReviewIndex(
     }
   }
   return latestIndex;
+}
+
+/** #3942: the recorded-deferral reply, `**Rejected** — deferred to follow-up
+ * issue #<n> ({clause}): {reason}`, as the triage E6 text defines it. */
+const RECORDED_DEFERRAL_REPLY_PATTERN =
+  /^\*\*Rejected\*\* — deferred to follow-up issue #\d+ \([^()]*\): \S/u;
+
+/** #3942: the review-reply identity stamp, `<!-- {prefix}-review-reply -->`. */
+const REVIEW_REPLY_STAMP_PATTERN = /<!--\s*[\w-]+-review-reply\s*-->/iu;
+
+/**
+ * #3942: the createdAt times of the trusted, unedited disposition replies that
+ * settle a Previously missed item naming a file or line, sorted ascending. A
+ * reply counts when it opens with `**Accepted**` or the recorded-deferral
+ * form, carries the review-reply stamp, and, for a `**Rejected**`, names a
+ * file or line. A bare `review-ack` never counts for these items.
+ */
+export function qualifyingCitedDispositionTimes(
+  comments: Parameters<typeof hasTrustedReviewAckAfter>[0],
+  trustedMarkerLogins: string[],
+): string[] {
+  const trusted = new Set(
+    trustedMarkerLogins.map((login) => login.trim().toLowerCase()),
+  );
+  return comments
+    .filter((comment) => {
+      const body = String(comment.body ?? '').trimEnd();
+      const login = String(comment.author?.login ?? comment.user?.login ?? '')
+        .trim()
+        .toLowerCase();
+      const createdAt = String(comment.createdAt ?? comment.created_at ?? '');
+      if (!trusted.has(login) || !isValidIsoTimestamp(createdAt)) {
+        return false;
+      }
+      if (classifyCommentEditState(comment) !== 'unedited') {
+        return false;
+      }
+      return (
+        (DISPOSITION_ACCEPTED_PREFIX_RE.test(body) ||
+          RECORDED_DEFERRAL_REPLY_PATTERN.test(body) ||
+          // #3942 (maintainer decision, 2026-10-11): a Rejected reply counts
+          // when it names a file or line as the evidence, as the PATH A
+          // verification rule allows for a claim the live evidence contradicts.
+          (DISPOSITION_REJECTED_PREFIX_RE.test(body) &&
+            namesFileOrLine(body))) &&
+        REVIEW_REPLY_STAMP_PATTERN.test(body)
+      );
+    })
+    .map((comment) => String(comment.createdAt ?? comment.created_at ?? ''))
+    .sort(compareIsoTimestamps);
+}
+
+/**
+ * #3942: counts the qualifying disposition replies posted strictly after
+ * `reviewSubmittedAt`. A reply in the review's own second is not provably
+ * later, the same ordering hasTrustedReviewAckAfter uses.
+ */
+export function countCitedItemDispositions(
+  comments: Parameters<typeof hasTrustedReviewAckAfter>[0],
+  trustedMarkerLogins: string[],
+  reviewSubmittedAt: string,
+): number {
+  if (!isValidIsoTimestamp(reviewSubmittedAt)) {
+    return 0;
+  }
+  return qualifyingCitedDispositionTimes(comments, trustedMarkerLogins).filter(
+    (createdAt) => compareIsoTimestamps(createdAt, reviewSubmittedAt) > 0,
+  ).length;
 }
 
 export function isCopilotPending(
@@ -7141,14 +7247,185 @@ export function summarizeAdvisoryWaitMarkers(
   };
 }
 
+/**
+ * #4070 (option B, fail closed): whether every same-head primary-bot review is
+ * settled. The union covers all of them, not only the one a single selector
+ * picks. Returns `false` when any same-head review has a cited suppressed item
+ * (one that names a file or line) without a qualifying disposition, or when a
+ * same-head review body the default Copilot shapes cannot read has no trusted
+ * review-ack for the head after it, even when that review is the only same-head
+ * review. An empty body is unreadable like any other, so it blocks the same
+ * way, and the shell check holds on it too. Off-head reviews never count here.
+ *
+ * This is deliberately stricter than the gate in one direction: a later clean
+ * same-head review does not clear an earlier uncovered item, which the gate
+ * (latest review only) would accept. REST input has no GraphQL `replyOnly`
+ * flag, so the union is the fail-closed substitute for that signal.
+ */
+function sameHeadReviewsSettled({
+  reviews,
+  prHeadSha,
+  primaryBotLogin,
+  comments,
+  trustedMarkerLogins,
+}: {
+  reviews: ReviewLike[];
+  prHeadSha: string;
+  primaryBotLogin: string;
+  comments: CommentLike[];
+  trustedMarkerLogins: string[];
+}): boolean {
+  const isDefaultCopilotBot =
+    primaryBotLogin === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN;
+  const cited: { submittedAt: string; count: number }[] = [];
+  for (const review of reviews) {
+    const author = {
+      login: review.user?.login ?? review.author?.login ?? '',
+      __typename: review.user?.type ?? review.author?.type ?? null,
+    };
+    const body = review.body ?? null;
+    const commitId = String(
+      review.commit_id ?? review.commitId ?? '',
+    ).toLowerCase();
+    if (
+      commitId !== prHeadSha ||
+      !isVerifiedCopilotAuthor(author, primaryBotLogin) ||
+      isCopilotErrorReviewBody(body)
+    ) {
+      continue;
+    }
+    const submittedAt = String(review.submitted_at ?? review.submittedAt ?? '');
+    const { shape, suppressedCount } = classifyCopilotReviewBody(body);
+    if (shape !== 'overview-v2' && shape !== 'overview-legacy') {
+      // Fail closed for the default bot: any body this helper cannot read,
+      // an empty one included, blocks until a trusted review-ack for this head
+      // follows it. A configured non-Copilot bot has no known shapes and is not
+      // judged here. The gate applies the same clearing rule to an unrecognized
+      // body.
+      if (
+        isDefaultCopilotBot &&
+        !hasTrustedReviewAckAfter(
+          comments,
+          trustedMarkerLogins,
+          submittedAt,
+          prHeadSha,
+        )
+      ) {
+        return false;
+      }
+      continue;
+    }
+    if (suppressedCount === 0) {
+      continue;
+    }
+    const citation = citationBreakdown(body, suppressedCount);
+    if (citation.citedCount > 0) {
+      cited.push({ submittedAt, count: citation.citedCount });
+    }
+  }
+  if (cited.length === 0) {
+    return true;
+  }
+  // Allocate in submission order: each cited review takes the earliest unused
+  // disposition posted after it. One reply answers one item, so a later review
+  // never inherits a reply that predates it.
+  const times = qualifyingCitedDispositionTimes(comments, trustedMarkerLogins);
+  const used = times.map(() => false);
+  cited.sort((left, right) =>
+    compareIsoTimestamps(left.submittedAt, right.submittedAt),
+  );
+  for (const { submittedAt, count } of cited) {
+    if (!isValidIsoTimestamp(submittedAt)) {
+      return false;
+    }
+    let remaining = count;
+    for (let index = 0; index < times.length && remaining > 0; index += 1) {
+      if (!used[index] && compareIsoTimestamps(times[index], submittedAt) > 0) {
+        used[index] = true;
+        remaining -= 1;
+      }
+    }
+    if (remaining > 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * #4070 (rp1kz): true when a same-head default-Copilot review body cannot be
+ * read and no trusted review-ack for HEAD follows it. This is the same filter
+ * as sameHeadReviewsSettled, so the evaluator reports DISPOSITION_NEEDED for an
+ * unreadable review even when no recognized review is left to select.
+ */
+function hasUnreadableSameHeadReview({
+  reviews,
+  prHeadSha,
+  primaryBotLogin,
+  comments,
+  trustedMarkerLogins,
+}: {
+  reviews: ReviewLike[];
+  prHeadSha: string;
+  primaryBotLogin: string;
+  comments: CommentLike[];
+  trustedMarkerLogins: string[];
+}): boolean {
+  if (primaryBotLogin !== DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN) {
+    return false;
+  }
+  for (const review of reviews) {
+    const author = {
+      login: review.user?.login ?? review.author?.login ?? '',
+      __typename: review.user?.type ?? review.author?.type ?? null,
+    };
+    const body = review.body ?? null;
+    const commitId = String(
+      review.commit_id ?? review.commitId ?? '',
+    ).toLowerCase();
+    if (
+      commitId !== prHeadSha ||
+      !isVerifiedCopilotAuthor(author, primaryBotLogin) ||
+      isCopilotErrorReviewBody(body)
+    ) {
+      continue;
+    }
+    const { shape } = classifyCopilotReviewBody(body);
+    if (shape === 'overview-v2' || shape === 'overview-legacy') {
+      continue;
+    }
+    const submittedAt = String(review.submitted_at ?? review.submittedAt ?? '');
+    if (
+      !hasTrustedReviewAckAfter(
+        comments,
+        trustedMarkerLogins,
+        submittedAt,
+        prHeadSha,
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function evaluateAdvisoryWaitOutcome(
   input: AdvisoryWaitOutcomeInput,
 ): string {
   const { requestCap, pendingWindowMinutes, settledWindowMinutes } =
     normalizeAdvisoryWaitRuntimeOptions(input);
+  // #4070 (rp1kz): an unreadable same-head review routes to the disposition
+  // step, not REQUEST_NEEDED or WAIT, whichever branch would follow.
+  if (input.sameHeadUnreadable === true) {
+    return 'DISPOSITION_NEEDED';
+  }
 
   if (input.lastCopilotCommit === input.prHeadSha) {
-    return 'SATISFIED';
+    // #4070: a same-head review whose cited items lack a disposition is not
+    // settled, so route to the disposition step instead of reporting SATISFIED.
+    return input.citedDispositionsSatisfied === false
+      ? 'DISPOSITION_NEEDED'
+      : 'SATISFIED';
   }
 
   if (input.copilotPending) {
@@ -7180,7 +7457,18 @@ export function evaluateAdvisoryWaitOutcome(
 export function evaluateAdvisoryWaitF3Outcome(
   input: AdvisoryWaitOutcomeInput,
 ): string {
-  if (input.lastCopilotCommit === input.prHeadSha || !input.copilotPending) {
+  // #4070 (rp1kz): an unreadable same-head review never merges.
+  if (input.sameHeadUnreadable === true) {
+    return 'DISPOSITION_NEEDED';
+  }
+  // #4070: the same-head rule matches evaluateAdvisoryWaitOutcome, so F3 does
+  // not merge over uncovered cited items either.
+  if (input.lastCopilotCommit === input.prHeadSha) {
+    return input.citedDispositionsSatisfied === false
+      ? 'DISPOSITION_NEEDED'
+      : 'SATISFIED';
+  }
+  if (!input.copilotPending) {
     return 'SATISFIED';
   }
   return evaluateAdvisoryWaitOutcome(input);
@@ -7282,6 +7570,20 @@ export function buildAdvisoryWaitSummary(
     copilotPending,
     copilotPendingCoversHead,
     sameHeadMarkerPresent: markerSummary.sameHeadMarkerPresent,
+    sameHeadUnreadable: hasUnreadableSameHeadReview({
+      reviews,
+      prHeadSha,
+      primaryBotLogin,
+      comments,
+      trustedMarkerLogins,
+    }),
+    citedDispositionsSatisfied: sameHeadReviewsSettled({
+      reviews,
+      prHeadSha,
+      primaryBotLogin,
+      comments,
+      trustedMarkerLogins,
+    }),
     requestMarkerCount: markerSummary.requestMarkerCount,
     elapsedMinutes,
     requestCap,
@@ -7659,6 +7961,46 @@ export function buildActivitySnapshotSummary(
       ...effectiveThreadActivities,
     ]) ?? 'none';
 
+  // #4123: the secondary quiet-window anchor (buildPreMergeReadinessSummary's
+  // `secondaryQuietWindow`) leaves out the own timestamp of an unedited
+  // top-level disposition by a trusted author, so the agent's own unedited
+  // disposition reply does not restart the window. Trusted is the union of
+  // `trustedMarkerLogins` and the disposition authors, with advisory bots
+  // removed. Only an unedited disposition by a disposition author counts for
+  // `latestDispositionAt`, the reference time the ack-only check compares
+  // against. An author trusted only through `trustedMarkerLogins` is left out
+  // of the anchor for its own unedited disposition, but does not open the ack
+  // window. Thread replies still feed the anchor, less ack-only bot replies on
+  // resolved threads, and `effective` (which review-currency reads) is
+  // unchanged.
+  const isQuietAnchorTrustedAuthor = (login: unknown) => {
+    const normalized = String(login ?? '')
+      .trim()
+      .toLowerCase();
+    return (
+      !isAdvisoryBot(normalized) &&
+      (trustedMarkerLogins.has(normalized) || isDispositionAuthor(normalized))
+    );
+  };
+  const quietWindowCommentActivities = filteredComments
+    .filter(
+      (comment) =>
+        !ackOnlyCommentSet.has(comment) &&
+        !(
+          isQuietAnchorTrustedAuthor(comment.author?.login) &&
+          classifyCommentEditState(comment) === 'unedited' &&
+          isDispositionComment(comment)
+        ),
+    )
+    .map((comment) => comment.updatedAt ?? comment.createdAt)
+    .filter(isValidIsoTimestamp);
+  const quietWindowMaxActivityUpdatedAt =
+    maxIsoTimestamp([
+      ...quietWindowCommentActivities,
+      ...reviewActivities,
+      ...effectiveThreadActivities,
+    ]) ?? 'none';
+
   const describeAckItem = (
     kind: string,
     comment: CommentLike | ThreadCommentLike,
@@ -7676,6 +8018,9 @@ export function buildActivitySnapshotSummary(
   return {
     totalItemCount: filteredComments.length + reviews.length + threads.length,
     maxActivityUpdatedAt,
+    // #4123: the secondary quiet-window anchor (see above). It stays out of
+    // `effective`, the block review-currency reads.
+    quietWindowMaxActivityUpdatedAt,
     latestCiCompletedAt,
     latestPassingCiCompletedAt,
     counts: {
@@ -11440,6 +11785,24 @@ export const MISSING_WATERMARK_HINT =
   '.github/instructions/idd-review-snapshot.instructions.md.';
 
 /**
+ * #4124: fixed next-step text for a `review-currency` blocker whose
+ * `comparisonReason` is `same-timestamp-count-growth`: the live item count is
+ * higher than the watermark's count while no newer non-ack-only activity is
+ * recorded. On `kurone-kito/setup.ubuntu` PR #204 (2026-10-08) that blocker
+ * gave no next step. The text routes the operator through E1 Step 3, E2, and
+ * E3 before the readiness re-run, because a watermark alone leaves the new
+ * items without triage. Single-sourced like `MISSING_WATERMARK_HINT`.
+ * Diagnostic only: `detail` is left unchanged and the hint never feeds the
+ * gate decision.
+ */
+export const SAME_TIMESTAMP_COUNT_GROWTH_HINT =
+  'More review items exist now than the last review watermark counted, with ' +
+  'no newer non-ack-only activity. Take a fresh snapshot (E1 Step 1), record ' +
+  'a fresh watermark for the current head (E1 Step 2), continue through E1 ' +
+  'Step 3, the E2 critique pass, and E3 (follow its route), then re-run ' +
+  'readiness.';
+
+/**
  * #4097: fixed next-step text for a `ci` blocker whose required checks are
  * `missing` while the head is `DIRTY` (it conflicts with its base). Single-
  * sourced like `MISSING_WATERMARK_HINT`. `detail` is left unchanged and the
@@ -11452,14 +11815,42 @@ export const MERGE_CONFLICT_CI_HINT =
   'it is not main) into the PR branch, push, and re-run pre-merge readiness ' +
   'once CI and review settle on the new head.';
 
+/**
+ * #4098: fixed next-step text for a `disposition-evidence` blocker computed
+ * while no review watermark exists for the claim. Without a watermark the
+ * disposition results have no snapshot boundary, so a resolved thread can
+ * block that a watermark would clear. Single-sourced like
+ * `MISSING_WATERMARK_HINT`. `detail` is left unchanged and the hint never
+ * feeds the gate decision.
+ */
+export const NO_WATERMARK_DISPOSITION_HINT =
+  'No review watermark exists for this claim yet, so these results are ' +
+  'computed without a snapshot boundary. Take a fresh snapshot (E1 Step 1), ' +
+  'record a watermark for the current head (E1 Step 2), then re-run ' +
+  'readiness before any hold decision.';
+
+/**
+ * #4098: fixed next-step text for a `review-currency` blocker whose
+ * `comparisonReason` is `newer-activity`. The activity may be the operator's
+ * own comment, so the hint names the fresh-watermark step. Single-sourced like
+ * `MISSING_WATERMARK_HINT`. `detail` is left unchanged and the hint never
+ * feeds the gate decision.
+ */
+export const NEWER_ACTIVITY_HINT =
+  'Activity landed after the last review watermark, including your own ' +
+  'comments. Record a fresh watermark for the current head, then re-run ' +
+  'readiness.';
+
 /** One unmet pre-merge gate: the gate id plus a human-readable detail. */
 export interface PreMergeBlocker {
   gate: string;
   detail: string;
   /**
    * #3950: optional next-step text, present only when a gate can name one
-   * (currently `review-currency` / `missing-watermark`, and `ci` on a
-   * `missing` check set for a `DIRTY` head, #4097). Diagnostic only.
+   * (currently `review-currency` with `missing-watermark`,
+   * `same-timestamp-count-growth` (#4124), or `newer-activity`,
+   * `disposition-evidence` while no review watermark exists (#4098), and `ci`
+   * on a `missing` check set for a `DIRTY` head, #4097). Diagnostic only.
    */
   hint?: string;
 }
@@ -11617,6 +12008,10 @@ export function computePreMergeReadinessBlockers(
     };
     if (comparisonReason === 'missing-watermark') {
       reviewCurrencyBlocker.hint = MISSING_WATERMARK_HINT;
+    } else if (comparisonReason === 'same-timestamp-count-growth') {
+      reviewCurrencyBlocker.hint = SAME_TIMESTAMP_COUNT_GROWTH_HINT;
+    } else if (comparisonReason === 'newer-activity') {
+      reviewCurrencyBlocker.hint = NEWER_ACTIVITY_HINT;
     }
     blockers.push(reviewCurrencyBlocker);
   }
@@ -12129,12 +12524,22 @@ export function computePreMergeReadinessBlockers(
     !soleCauseAckOnlyPostDisposition &&
     (dispositionRoute !== 'proceed' || dispositionBlockingCount !== 0)
   ) {
-    blockers.push({
+    const dispositionBlocker: PreMergeBlocker = {
       gate: 'disposition-evidence',
       detail: `dispositionEvidence.route is "${
         dispositionRoute || 'missing'
       }" (expected "proceed"), blockingCount=${dispositionBlockingCount} (expected 0)`,
-    });
+    };
+    // #4098: the hint applies only when the disposition results were computed
+    // (a summary built without `includeDispositionEvidence` has none) and no
+    // watermark exists. Fail closed: an unknown `watermarkPresent` gets no hint.
+    if (
+      typeof dispositionEvidence.blockingCount === 'number' &&
+      reviewCurrency.watermarkPresent === false
+    ) {
+      dispositionBlocker.hint = NO_WATERMARK_DISPOSITION_HINT;
+    }
+    blockers.push(dispositionBlocker);
   }
 
   // #1513: fail closed on a missing/garbled `requiresUpToDateHead` -- only
@@ -12802,11 +13207,14 @@ export function buildPreMergeReadinessSummary(
       headSha: prHeadSha,
     },
   );
-  // #2335: stateless secondary-quiet-window gate, anchored on the same
-  // non-ack-only activity ceiling `liveSnapshot.effective` already computes
-  // for the review-currency ack-only carve-out below -- see
-  // `buildSecondaryQuietWindowStatus`'s own doc comment for why this anchor
-  // needs no separate persisted "convergence first observed" timestamp.
+  // #2335: stateless secondary-quiet-window gate, anchored on the non-ack-only
+  // activity ceiling -- see `buildSecondaryQuietWindowStatus`'s own doc
+  // comment for why this anchor needs no separate persisted "convergence
+  // first observed" timestamp. #4123: the anchor is
+  // `liveSnapshot.quietWindowMaxActivityUpdatedAt`, which equals
+  // `liveSnapshot.effective.maxActivityUpdatedAt` (the review-currency
+  // ceiling) except that an unedited trusted issue-comment disposition's own
+  // timestamp is left out, so the agent's own reply never restarts the window.
   // #2544: `secondaryBotSettledAt` shortens the required wait to a settled
   // buffer once that evidence exists. #2547: `secondaryBotDeclined` skips
   // the wait entirely once the bot has definitively declined this exact
@@ -12814,7 +13222,7 @@ export function buildPreMergeReadinessSummary(
   // both are derived.
   const secondaryQuietWindow = buildSecondaryQuietWindowStatus({
     minutes: options.secondaryQuietWindowMinutes,
-    effectiveMaxActivityUpdatedAt: liveSnapshot.effective?.maxActivityUpdatedAt,
+    effectiveMaxActivityUpdatedAt: liveSnapshot.quietWindowMaxActivityUpdatedAt,
     secondaryBotSettledAt: secondaryReviewSettlement.settledAt,
     secondaryBotDeclined: secondaryReviewSettlement.declined,
     now,

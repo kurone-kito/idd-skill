@@ -2942,13 +2942,34 @@ export function retryTransientGhFailure(task, deps = {}) {
  * `advisory-convergence-fake-provider.test.mts`). `defaultDeps.collect`
  * (this file's own production wiring for `runAdvisoryConvergence`) never
  * passes a second argument, so it keeps using the real adapter unchanged.
+ *
+ * #4110: `deps` injects the repository lookup and the sleep between transient
+ * retries, so a test can fail the lookup once and assert the retry without a
+ * `gh` process or a real delay. The lookup and the six reads that already went
+ * through `retryTransientGhFailure` go through `retryGhRead`, so the injected
+ * sleep governs them. Two helpers this function calls keep their own retry
+ * with the real sleep: the collaborator-permission read in
+ * `resolveTrustedCollaboratorMarkerLogins` and `fetchPrAuthor`. The other port
+ * reads are single-shot. A failure with no HTTP status is retried even when it
+ * is permanent (for example, a missing `gh`), before it fails. Two failures
+ * are never retried: a load-control refusal (#3586) and a paginated
+ * response-limit failure (#3597). Without `deps`
+ * the lookup is {@link resolveCurrentGithubRepository} and the sleep is the
+ * real blocking sleep, which keeps the production call unchanged.
  */
 export function collectFromGitHub(
   args,
   createPort = createGithubProviderAdapter,
+  deps = {},
 ) {
+  const { resolveRepository = resolveCurrentGithubRepository, sleep } = deps;
+  function retryGhRead(task) {
+    return retryTransientGhFailure(task, { sleep });
+  }
+  // #4110: the lookup is a `gh` read like the others, so a transient failure
+  // of its `gh repo view` fallback is retried instead of ending the verdict.
   const currentRepo =
-    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+    args.owner && args.repo ? null : retryGhRead(resolveRepository);
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
   const port = createPort(owner, repo);
@@ -2972,7 +2993,7 @@ export function collectFromGitHub(
     envValue: process.env.IDD_ADVISORY_BOT_LOGINS,
     config: rawConfig,
   });
-  const view = retryTransientGhFailure(() =>
+  const view = retryGhRead(() =>
     port.getChangeRequestConvergenceView(Number(args.prNumber)),
   );
   const prHeadSha = view.headSha.toLowerCase();
@@ -2989,7 +3010,7 @@ export function collectFromGitHub(
   // marker. `claimCandidates`' own comments (fetched separately below)
   // deliberately do NOT opt in: the claim-marker family's own edit-state
   // consumer is a separate, sibling issue.
-  const comments = retryTransientGhFailure(() =>
+  const comments = retryGhRead(() =>
     port.listWorkItemComments(Number(args.prNumber), {
       includeEditState: true,
     }),
@@ -3193,7 +3214,7 @@ export function collectFromGitHub(
       // reject a body-edited declaration marker. Safe inside this
       // function's existing fail-closed try/catch below: a GraphQL failure
       // here degrades `outageDeclarationActive` to `false`, never a crash.
-      const declarationComments = retryTransientGhFailure(() =>
+      const declarationComments = retryGhRead(() =>
         port.listWorkItemComments(outageDeclarationTargetIssue, {
           includeEditState: true,
         }),
@@ -3283,7 +3304,7 @@ export function collectFromGitHub(
   let prFirstCommitAt = null;
   if (forcedHandoffEnabled) {
     try {
-      const prCommits = retryTransientGhFailure(() =>
+      const prCommits = retryGhRead(() =>
         port.listChangeRequestCommits(Number(args.prNumber)),
       );
       prFirstCommitAt = hasIssueOnlyForcedHandoff
@@ -3658,10 +3679,10 @@ export function collectFromGitHub(
   const changedFilePaths =
     autoWaiverRunIds.size > 0 || needsDecisionRuleEvidence
       ? [
-          ...retryTransientGhFailure(() =>
+          ...retryGhRead(() =>
             port.listChangeRequestChangedFiles(Number(args.prNumber)),
           ),
-          ...retryTransientGhFailure(() =>
+          ...retryGhRead(() =>
             port.listChangeRequestRenamedFromPaths(Number(args.prNumber)),
           ),
         ]
@@ -4199,10 +4220,16 @@ export function collectAssertNextActions(verdict) {
       ].join('\n'),
     });
   } else if (!verdict.review.matchesHead) {
-    const pointer = `node scripts/advisory-wait-state.mjs --pr ${pr}`;
+    const pointer = `node scripts/advisory-wait-state.mjs --pr ${pr} --claim-id <claim-id> --agent-id <agent-id> --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`;
+    const rerun = `node scripts/rerun-advisory-convergence.mjs --pr ${pr}`;
     items.push({
       token: T.REQUEST_RE_REVIEW,
-      summary: `Latest ${bot} review covers ${verdict.review.commitId || '<unknown>'}, not HEAD ${sha}. Request a re-review of the current HEAD (E14 / AW3 REQUEST_NEEDED) and wait with: ${pointer}`,
+      summary:
+        `Latest ${bot} review covers ${verdict.review.commitId || '<unknown>'}, not HEAD ${sha}. ` +
+        `Run ${pointer}, then follow the row for its outcome in the "Caller mapping" table of idd-advisory-wait.instructions.md. D4, E14 and F2 read outcome; F3 reads f3Outcome when helper output is valid. ` +
+        'RECOVERY_NEEDED never means a new request (E14: post the AW3-R recovery marker and poll; D4: exit CI-wait to E1). ' +
+        'D4: SATISFIED with lastCopilotCommit equal to the head means rerun idd-advisory-convergence. For D4, E14 and F2, an elapsed-window SATISFIED first consults staleRequestRecovery (AW3-S): not-applicable or a completed attempt then follows the caller mapping, and cap-exhausted routes as CAP_EXHAUSTED. ' +
+        `Once the review of the current HEAD has landed (this item then goes away, so re-read advisory-wait-state) and the check is still red, run ${rerun} --apply, or ${rerun} --refresh-latest --apply when its hold notice names that command, or stop for a maintainer when its hold notice says so.`,
       pointer,
     });
   }

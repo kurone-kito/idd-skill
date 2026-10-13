@@ -14,6 +14,11 @@
 //
 // This is the recurring counterpart of the one-time audit in #910 and the
 // chosen recovery path from #909 (advisory-wait stays Copilot-only).
+//
+// #4162: a date-window run also lists OPEN PRs that pass the read-only
+// pre-merge readiness check but have not been merged, so an idle merge step
+// shows up in the same summary. That section is read-only too: it runs the
+// readiness collector in process and never merges, claims, or posts.
 import {
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   readAdvisoryPrimaryBotLogin,
@@ -26,20 +31,26 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
+import { collectPreMergeReadiness } from './pre-merge-readiness.mjs';
 import {
   advisoryBotIdentityToken,
   classifyCommentEditState,
   classifyIddPrComment,
   DEFAULT_ADVISORY_BOT_LOGINS,
+  dispositionNamesAdvisoryBot,
+  extractCodeRabbitEmbeddedFindings,
   hasFreshDisposition,
   isAdvisoryNonReviewNotice,
   isCopilotReviewerLogin,
   isDispositionComment,
   isKnownReviewBot,
   isReviewSummaryComment,
+  isTerminalAdvisoryNonReviewNotice,
   matchTrustedAdvisoryStickyDispositions,
   normalizeTrustedMarkerLogins,
+  parseNonReviewNoticeDisposition,
   resolveAdvisoryBotLogins,
+  resolveClosingIssueNumbersForClassifier,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mjs';
 import {
@@ -256,6 +267,73 @@ export function buildMergedPrFeedbackSweep(prs, options) {
     },
   };
 }
+// Title of the one open issue that the weekly summary workflow creates or
+// updates (issue #4161). The workflow's job env sets the same value, and its
+// test asserts that the two match.
+// audit:ignore-dead-export: the workflow's job env and its contract test share this title; the script itself never reads it
+export const WEEKLY_SWEEP_ISSUE_TITLE = 'Merged-PR feedback sweep (weekly)';
+/**
+ * Build the renderer's options from the sweep's own inputs. An explicit PR
+ * list has no enumeration cap, so the cap is null there.
+ */
+export function buildWeeklyBodyOptions(input) {
+  return {
+    sinceDate: input.sinceDate,
+    scanLimit: input.usingExplicitPrs ? null : input.limit,
+    enumeratedCount: input.enumeratedCount,
+    generatedOn: input.generatedOn,
+  };
+}
+function pluralize(count, noun) {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+/**
+ * Render the body of the weekly summary issue from a sweep result. The
+ * function is pure (no network, no clock). The body carries only numbers,
+ * dates, and counts, never comment text, so no user-written content reaches
+ * the issue. Pull requests are written as "PR 1234", never "#1234", so the
+ * body adds no cross-reference event to them.
+ */
+export function renderWeeklySweepIssueBody(result, options) {
+  const scope = options.sinceDate
+    ? `merged since ${options.sinceDate}`
+    : 'in the scanned set';
+  const asOf = `as of ${options.generatedOn} (UTC)`;
+  const { prCount, flaggedPrCount } = result.summary;
+  const lines = [];
+  if (result.prs.length === 0) {
+    lines.push(
+      prCount === 0
+        ? `None are open ${asOf}: the scan found no pull request ${scope}.`
+        : `None are open ${asOf}: none of the ${pluralize(prCount, 'pull request')} ${scope} has unresolved review threads or unaddressed comments.`,
+    );
+  } else {
+    lines.push(
+      `Open feedback ${asOf}: ${flaggedPrCount} of ${pluralize(prCount, 'pull request')} ${scope} with unresolved review threads or unaddressed comments.`,
+    );
+  }
+  if (
+    options.scanLimit !== null &&
+    options.enumeratedCount >= options.scanLimit
+  ) {
+    lines.push(
+      `The scan reached its limit of ${options.scanLimit} pull requests, so some merges in the window may not have been checked.`,
+    );
+  }
+  if (result.prs.length > 0) {
+    lines.push('');
+    for (const pr of result.prs) {
+      const merged =
+        pr.mergedAt && /^\d{4}-\d{2}-\d{2}/.test(pr.mergedAt)
+          ? ` (merged ${pr.mergedAt.slice(0, 10)})`
+          : '';
+      lines.push(
+        `- PR ${pr.number}${merged}: ${pluralize(pr.unresolvedThreads.length, 'unresolved review thread')}, ${pluralize(pr.unaddressedComments.length, 'unaddressed comment')}.`,
+      );
+    }
+  }
+  return `${lines.join('\n')}\n`;
+}
 function collectUnresolvedThreads(threads, isIdd, isAdvisoryBot) {
   const out = [];
   for (const thread of threads) {
@@ -352,6 +430,77 @@ function collectUnaddressedComments(
       matchedDispositionIndexes,
     },
   );
+  // #4181: the sticky matcher above credits an unedited notice without
+  // looking at its body. A notice that embeds review findings is feedback
+  // that a rejection does not address, so drop it from the credited set here
+  // as well (Copilot review on PR #4205).
+  for (const stickyIndex of dispositionedStickyIndexes) {
+    const body = normalizedComments[stickyIndex]?.body ?? '';
+    if (
+      isAdvisoryNonReviewNotice(body) &&
+      extractCodeRabbitEmbeddedFindings(body).length > 0
+    ) {
+      dispositionedStickyIndexes.delete(stickyIndex);
+    }
+  }
+  // #4181: a trusted rejection that names a notice by its comment id still
+  // addresses that notice. The sticky matcher above only credits an unedited
+  // notice, but CodeRabbit edits its rate-limit summary in place, so a notice
+  // that was rejected and then edited stayed counted although the rejection
+  // names it. Index every unedited trusted or IDD-agent non-review rejection
+  // by the comment id it names as its source.
+  const rejectionsBySourceId = new Map();
+  const trustedAckLogins = new Set(trustedMarkerLoginsForAck);
+  const iddAckLogins = new Set(iddAgentLoginsForBookkeeping);
+  for (const [commentIndex, comment] of normalizedComments.entries()) {
+    if (
+      (trustedAckLogins.has(comment.authorLogin) ||
+        iddAckLogins.has(comment.authorLogin)) &&
+      classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
+        'unedited'
+    ) {
+      const source = parseNonReviewNoticeDisposition(comment.body);
+      if (source) {
+        const list = rejectionsBySourceId.get(source.sourceCommentId) ?? [];
+        list.push(commentIndex);
+        rejectionsBySourceId.set(source.sourceCommentId, list);
+      }
+    }
+  }
+  // A notice is credited only when a rejection names it and that rejection
+  // names the notice's own advisory bot, and only while the notice body is
+  // still a terminal advisory non-review notice. A notice whose body embeds
+  // review findings (the Nitpick and Outside-diff sections of
+  // extractCodeRabbitEmbeddedFindings) is never credited, so those findings
+  // stay counted. Inline findings land as review threads, which the sweep
+  // reports separately. The crediting rejections are marked consumed, so a
+  // trusted non-IDD rejection is not surfaced on its own.
+  const creditedNoticeIndexes = new Set();
+  const creditedRejectionIndexes = new Set();
+  for (const [commentIndex, comment] of comments.entries()) {
+    const rejections =
+      rejectionsBySourceId.get(normalizedComments[commentIndex].id) ?? [];
+    if (
+      rejections.length === 0 ||
+      !isConfiguredAdvisoryBotIdentity(authorLogin(comment)) ||
+      !isTerminalAdvisoryNonReviewNotice(comment.body) ||
+      extractCodeRabbitEmbeddedFindings(comment.body).length > 0
+    ) {
+      continue;
+    }
+    const named = rejections.filter((rejectionIndex) =>
+      dispositionNamesAdvisoryBot(
+        normalizedComments[rejectionIndex].body,
+        authorLogin(comment),
+      ),
+    );
+    if (named.length > 0) {
+      creditedNoticeIndexes.add(commentIndex);
+      for (const rejectionIndex of named) {
+        creditedRejectionIndexes.add(rejectionIndex);
+      }
+    }
+  }
   // A non-IDD item counts as addressed only when a later IDD-agent
   // *disposition* (Accepted / Rejected / Awaiting maintainer decision)
   // exists — markers and plain replies do not address feedback. IDD
@@ -463,7 +612,9 @@ function collectUnaddressedComments(
     }
     if (
       dispositionedStickyIndexes.has(commentIndex) ||
-      matchedDispositionIndexes.has(commentIndex)
+      matchedDispositionIndexes.has(commentIndex) ||
+      creditedRejectionIndexes.has(commentIndex) ||
+      creditedNoticeIndexes.has(commentIndex)
     ) {
       continue;
     }
@@ -570,6 +721,255 @@ function collectUnaddressedComments(
   }
   return out;
 }
+const HOUR_MS = 60 * 60 * 1000;
+/**
+ * Keep only the open PRs whose readiness check returned `ready: true`, each
+ * with how long it has been open. Not-ready PRs are left out: their blockers
+ * already appear in the readiness output itself.
+ */
+export function buildOpenReadySection(entries, nowMs) {
+  return entries
+    .filter((entry) => entry.ready === true)
+    .map((entry) => {
+      const openedMs = entry.createdAt ? Date.parse(entry.createdAt) : NaN;
+      const ageHours =
+        Number.isFinite(openedMs) && Number.isFinite(nowMs)
+          ? Math.max(0, Math.floor((nowMs - openedMs) / HOUR_MS))
+          : null;
+      return {
+        number: entry.number,
+        title: entry.title,
+        url: entry.url,
+        openedAt: entry.createdAt ?? null,
+        ageHours,
+      };
+    });
+}
+export const OPEN_READY_SECTION_HEADING = '## Open and ready, not merged';
+export const OPEN_READY_SECTION_EMPTY_LINE =
+  'No open pull request is ready and unmerged.';
+// Keeps a pull request title from opening Markdown emphasis, a link, a code
+// span, or an HTML tag inside the summary body.
+function escapeMarkdownInline(text) {
+  return text.replace(/\s+/g, ' ').replace(/[\\`*_[\]<>|]/g, '\\$&');
+}
+/**
+ * The open-and-ready section of the weekly summary body, as Markdown: the
+ * heading, then one bullet per ready pull request with its age, or exactly
+ * one line when none is ready. A non-zero unchecked count adds one trailing
+ * line, since the section is then incomplete. The weekly summary body that
+ * `--issue-body` prints (`renderWeeklySweepIssueBody`, issue #4161) does not
+ * include it yet; the JSON output carries the same data as `openReadyPrs`.
+ */
+// audit:ignore-dead-export: no caller composes this section into the weekly summary body yet (renderWeeklySweepIssueBody, issue #4161); tests lock its output
+export function renderOpenReadySection(
+  openReadyPrs,
+  openReadyUncheckedPrs = [],
+) {
+  const lines = [OPEN_READY_SECTION_HEADING, ''];
+  if (openReadyPrs.length === 0) {
+    lines.push(OPEN_READY_SECTION_EMPTY_LINE);
+  } else {
+    for (const pr of openReadyPrs) {
+      const age =
+        pr.ageHours === null
+          ? 'open for an unknown time'
+          : `open ${pr.ageHours} h`;
+      const label = pr.url ? `[#${pr.number}](${pr.url})` : `#${pr.number}`;
+      lines.push(`- ${label} ${escapeMarkdownInline(pr.title)} (${age})`);
+    }
+  }
+  if (openReadyUncheckedPrs.length > 0) {
+    const numbers = openReadyUncheckedPrs.map((pr) => `#${pr.number}`);
+    lines.push(
+      '',
+      `Readiness could not be checked for ${numbers.join(', ')}, so this section may be incomplete.`,
+    );
+  }
+  return `${lines.join('\n')}\n`;
+}
+// The F2 readiness gates do not check the branch state that F1 checks
+// first: `ready: true` can still come with a conflicting (DIRTY), blocked,
+// unstable, still-computing, or draft head. List a PR only when its merge
+// state also passes F1 (`resolveCallSiteRouting` in
+// branch-conflict-state.mts): CLEAN, or BEHIND, which readiness itself
+// already blocks when the base requires an up-to-date head. GitHub computes
+// `mergeable` asynchronously, and F1 classifies anything short of a
+// resolved MERGEABLE as still computing, so require that too.
+const F1_PASSING_MERGE_STATES = new Set(['CLEAN', 'BEHIND']);
+function isReadyReport(report) {
+  const record = report !== null && typeof report === 'object' ? report : null;
+  const mergeStateStatus = String(
+    record?.branchCurrency?.mergeStateStatus ?? '',
+  ).toUpperCase();
+  const mergeable = String(
+    record?.branchCurrency?.mergeable ?? '',
+  ).toUpperCase();
+  return (
+    record?.ready === true &&
+    F1_PASSING_MERGE_STATES.has(mergeStateStatus) &&
+    mergeable === 'MERGEABLE'
+  );
+}
+/**
+ * The readiness argv to try for one open PR, or `null` when its closing
+ * references cannot be used. A PR that closes no issue is checked with
+ * `--claimless`. A PR that closes issues in this repository is checked with
+ * each of them as `--claim-issue` in turn (the claim may live on any one),
+ * and `--closing-issues` names the whole set when there is more than one.
+ * References that are unreadable, or that include any entry that is not a
+ * same-repository issue (another repository's issue or a malformed entry,
+ * even next to a readable one), give `null`: `--claimless` would refuse
+ * them, and checking only the readable part would test an incomplete
+ * closing set. This is the `resolveClosingIssueNumbersForClassifier`
+ * contract that pre-merge-readiness itself applies.
+ */
+export function openPrReadinessArgvCandidates(
+  number,
+  owner,
+  repo,
+  closingIssuesReferences,
+) {
+  const base = ['--pr', String(number), '--owner', owner, '--repo', repo];
+  const resolved = resolveClosingIssueNumbersForClassifier(
+    closingIssuesReferences,
+    owner,
+    repo,
+  );
+  if (resolved === null) {
+    return null;
+  }
+  if (resolved.length === 0) {
+    return [[...base, '--claimless']];
+  }
+  const issues = [...new Set(resolved)];
+  if (issues.length === 1) {
+    return [[...base, '--claim-issue', String(issues[0])]];
+  }
+  const closingSet = issues.join(',');
+  return issues.map((issue) => [
+    ...base,
+    '--claim-issue',
+    String(issue),
+    '--closing-issues',
+    closingSet,
+  ]);
+}
+/**
+ * The identity overrides given to this sweep, forwarded to every readiness
+ * check so it recognizes the same trusted marker actors, advisory bots, and
+ * IDD agent accounts as the merged-PR scan. Readiness reads the matching
+ * environment variables and config itself, so only an explicit flag needs
+ * forwarding; an empty flag is left out so readiness keeps its own default.
+ */
+export function openPrReadinessIdentityArgv(args) {
+  const argv = [];
+  const pairs = [
+    ['--trusted-marker-logins', args.trustedMarkerLogins],
+    ['--advisory-bot-logins', args.advisoryBotLogins],
+    ['--idd-agent-logins', args.iddAgentLogins],
+  ];
+  for (const [flag, value] of pairs) {
+    if (value.trim()) {
+      argv.push(flag, value);
+    }
+  }
+  return argv;
+}
+/**
+ * Check every open PR with the read-only readiness collector. A failure on
+ * one PR is recorded in `unchecked` rather than stopping the sweep, so a
+ * stuck PR is never silently dropped. Reads only: no merge, claim, or post.
+ */
+export function collectOpenReadyPrs(
+  port,
+  owner,
+  repo,
+  readiness,
+  identityArgv = [],
+) {
+  const openPrs = port.listOpenChangeRequests();
+  const entries = [];
+  const unchecked = [];
+  for (const pr of openPrs) {
+    try {
+      const view = port.getChangeRequestConvergenceView(pr.number);
+      const candidates = openPrReadinessArgvCandidates(
+        pr.number,
+        owner,
+        repo,
+        view.closingIssuesReferences,
+      );
+      if (candidates === null) {
+        unchecked.push({
+          number: pr.number,
+          reason:
+            'closing issue references are unreadable or include an entry that is not an issue in this repository',
+        });
+        continue;
+      }
+      // Each candidate is tried on its own: a failure on one claim issue
+      // must not hide a ready result on another. The PR counts as
+      // unchecked only when no candidate is ready and one of them failed.
+      let ready = false;
+      let firstFailure = null;
+      for (const argv of candidates) {
+        try {
+          if (isReadyReport(readiness([...argv, ...identityArgv]))) {
+            ready = true;
+            break;
+          }
+        } catch (error) {
+          firstFailure ??= error;
+        }
+      }
+      if (!ready && firstFailure !== null) {
+        throw firstFailure;
+      }
+      // Only a listed PR needs its age, so skip the extra read otherwise. A
+      // failed read leaves the age unknown rather than dropping the PR.
+      let createdAt = null;
+      if (ready) {
+        try {
+          createdAt = port.getWorkItem(pr.number)?.createdAt ?? null;
+        } catch {
+          createdAt = null;
+        }
+      }
+      entries.push({
+        number: pr.number,
+        title: pr.title,
+        url: pr.url,
+        createdAt,
+        ready,
+      });
+    } catch (error) {
+      unchecked.push({
+        number: pr.number,
+        reason: excerpt(error instanceof Error ? error.message : String(error)),
+      });
+    }
+  }
+  return { openPrCount: openPrs.length, entries, unchecked };
+}
+/**
+ * The default readiness check: the same in-process collector the
+ * `pre-merge-readiness` CLI runs, sharing this sweep's provider port. The
+ * config and activation loaders are injectable for tests.
+ */
+export function createOpenPrReadiness(
+  port,
+  loadTrustedConfig,
+  resolveActivation,
+) {
+  return (argv) =>
+    collectPreMergeReadiness(
+      argv,
+      () => port,
+      loadTrustedConfig,
+      resolveActivation,
+    );
+}
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `since:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --since spec key
@@ -588,6 +988,7 @@ const MERGED_PR_FEEDBACK_SWEEP_FLAG_SPEC = {
   '--trusted-marker-logins': { type: 'string', default: '' },
   '--advisory-bot-logins': { type: 'string', default: '' },
   '--idd-agent-logins': { type: 'string', default: '' },
+  '--issue-body': { type: 'boolean' },
   '--help': { type: 'boolean', short: 'h' },
 };
 /**
@@ -670,15 +1071,23 @@ export function parseArgs(argv) {
     trustedMarkerLogins: values['trusted-marker-logins'],
     advisoryBotLogins: values['advisory-bot-logins'],
     iddAgentLogins: values['idd-agent-logins'],
+    issueBody: Boolean(values['issue-body']),
     help,
   };
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/merged-pr-feedback-sweep.mjs [--since <ISO8601-date>] [--days <n>] [--pr <number> ...] [--prs <n1,n2,...>] [--limit <n>] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--help]
+  node scripts/merged-pr-feedback-sweep.mjs [--since <ISO8601-date>] [--days <n>] [--pr <number> ...] [--prs <n1,n2,...>] [--limit <n>] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--issue-body] [--help]
 
 Read-only: scans merged PRs for unresolved/unaddressed advisory feedback and
-prints JSON. No minimization, no posting, no issue creation.
+prints JSON, or with --issue-body the weekly summary issue body as Markdown.
+No minimization, no posting, no issue creation.
+
+A date-window JSON run (--since/--days, or neither --pr nor --prs) also lists
+open PRs whose read-only pre-merge readiness check reports ready: true
+(openReadyPrs, with each PR's age). It never merges, claims, or posts. An
+explicit --pr/--prs run skips that section (null), and --issue-body does not
+include it.
 `);
 }
 // Resolve the merged-since cutoff from --since and/or --days. When both are
@@ -762,17 +1171,11 @@ function fetchMergedPr(port, number) {
       })),
   };
 }
-function main() {
-  const args = parseArgs(process.argv.slice(2));
-  if (args.help) {
-    printHelp();
-    process.exit(0);
-  }
-  const currentRepo =
-    args.owner && args.repo ? null : resolveCurrentGithubRepository();
-  const owner = args.owner || currentRepo?.owner || '';
-  const repo = args.repo || currentRepo?.repo || '';
-  const port = createGithubProviderAdapter(owner, repo);
+/**
+ * The merged-PR scan that both outputs share: the JSON report and the
+ * `--issue-body` weekly summary body (issue #4161). Reads only.
+ */
+export function collectMergedPrSweep(args, port) {
   const iddConfig = loadIddConfig();
   const { actors: trustedMarkerActors } = resolveTrustedMarkerActors({
     flagValue: args.trustedMarkerLogins,
@@ -824,25 +1227,115 @@ function main() {
     iddAgentLogins,
     primaryBotLogin,
   });
+  return {
+    result,
+    trustedMarkerActors,
+    advisoryBotLogins,
+    iddAgentLogins,
+    primaryBotLogin,
+    usingExplicitPrs,
+    sinceDate,
+    enumeratedCount: targets.length,
+  };
+}
+/**
+ * Run the whole sweep against a provider port and return the JSON report
+ * `main()` prints. Reads only: it never merges, claims, or posts.
+ */
+export function runMergedPrFeedbackSweep(args, deps) {
+  const { port, owner, repo } = deps;
+  const {
+    result,
+    trustedMarkerActors,
+    advisoryBotLogins,
+    iddAgentLogins,
+    primaryBotLogin,
+    usingExplicitPrs,
+    sinceDate,
+  } = collectMergedPrSweep(args, port);
+  // #4162: the open-and-ready section belongs to the periodic date-window
+  // summary. An explicit --pr/--prs run is a targeted merged-PR recheck, so
+  // it skips the per-open-PR readiness checks and reports the section as
+  // null. The merged-PR listing above runs first, so a transport failure
+  // still surfaces from the same call it always did.
+  const openReady = usingExplicitPrs
+    ? null
+    : collectOpenReadyPrs(
+        port,
+        owner,
+        repo,
+        deps.readiness ?? createOpenPrReadiness(port),
+        openPrReadinessIdentityArgv(args),
+      );
+  const openReadyPrs = openReady
+    ? buildOpenReadySection(openReady.entries, deps.nowMs)
+    : null;
+  return {
+    sweepWindow: {
+      since: sinceDate,
+      days: usingExplicitPrs ? null : args.days,
+      explicitPrs: usingExplicitPrs ? args.prNumbers : null,
+      prCount: result.summary.prCount,
+    },
+    trustedMarkerActors,
+    advisoryBotLogins,
+    iddAgentLogins,
+    primaryBotLogin,
+    prs: result.prs,
+    openReadyPrs,
+    openReadyUncheckedPrs: openReady ? openReady.unchecked : null,
+    summary: {
+      ...result.summary,
+      openPrCount: openReady ? openReady.openPrCount : null,
+      openReadyPrCount: openReadyPrs ? openReadyPrs.length : null,
+      openReadyUncheckedCount: openReady ? openReady.unchecked.length : null,
+    },
+  };
+}
+/** The sweep report as printed: two-space JSON, so an empty section is the
+ * single line `"openReadyPrs": []`. */
+export function renderMergedPrSweepOutput(report) {
+  return `${JSON.stringify(report, null, 2)}\n`;
+}
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    printHelp();
+    process.exit(0);
+  }
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  const port = createGithubProviderAdapter(owner, repo);
+  // #4161: --issue-body prints the weekly summary issue body and nothing
+  // else. It runs only the merged-PR scan, so the summary publish path makes
+  // no open-PR readiness reads.
+  if (args.issueBody) {
+    const scan = collectMergedPrSweep(args, port);
+    process.stdout.write(
+      renderWeeklySweepIssueBody(
+        scan.result,
+        buildWeeklyBodyOptions({
+          usingExplicitPrs: scan.usingExplicitPrs,
+          limit: args.limit,
+          sinceDate: scan.sinceDate,
+          enumeratedCount: scan.enumeratedCount,
+          generatedOn: new Date().toISOString().slice(0, 10),
+        }),
+      ),
+    );
+    return 0;
+  }
   process.stdout.write(
-    `${JSON.stringify(
-      {
-        sweepWindow: {
-          since: sinceDate,
-          days: usingExplicitPrs ? null : args.days,
-          explicitPrs: usingExplicitPrs ? args.prNumbers : null,
-          prCount: result.summary.prCount,
-        },
-        trustedMarkerActors,
-        advisoryBotLogins,
-        iddAgentLogins,
-        primaryBotLogin,
-        prs: result.prs,
-        summary: result.summary,
-      },
-      null,
-      2,
-    )}\n`,
+    renderMergedPrSweepOutput(
+      runMergedPrFeedbackSweep(args, {
+        port,
+        owner,
+        repo,
+        nowMs: Date.now(),
+      }),
+    ),
   );
   return 0;
 }

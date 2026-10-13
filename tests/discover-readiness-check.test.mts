@@ -2476,3 +2476,60 @@ test('a throwing userContentEdits fetcher fails open: the candidate stays ready,
   assert.equal(summary.ready.length, 1);
   assert.equal(summary.filteredOut.length, 0);
 });
+
+test('evaluateDiscoverReadiness keeps both durable records out of the sweep eligible set (#4115)', async () => {
+  const issues = new Map([
+    [
+      158,
+      { number: 158, title: 'outage', state: 'OPEN', body: '', labels: [] },
+    ],
+    [
+      2674,
+      { number: 2674, title: 'journal', state: 'OPEN', body: '', labels: [] },
+    ],
+    [
+      51,
+      { number: 51, title: 'ordinary', state: 'OPEN', body: '', labels: [] },
+    ],
+  ]);
+  const summary = await evaluateDiscoverReadiness([158, 2674, 51], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+    providerOutageTarget: 158,
+    authoringJournalTarget: 2674,
+  });
+  const reasonsOf = (number: number) =>
+    summary.filteredOut.find((entry) => entry.number === number)?.reasons;
+  assert.deepEqual(reasonsOf(158), ['provider_outage_target']);
+  assert.deepEqual(reasonsOf(2674), ['authoring_journal_target']);
+  assert.deepEqual(
+    summarizeSwarmFloorEligibility(summary).eligible.map(
+      (entry) => entry.number,
+    ),
+    [51],
+  );
+});
+
+test('evaluateDiscoverReadiness reports a named closed journal without loading it (#4115)', async () => {
+  let loads = 0;
+  const summary = await evaluateDiscoverReadiness([2674], {
+    loadIssue: async () => {
+      loads += 1;
+      return {
+        number: 2674,
+        title: 'journal',
+        state: 'CLOSED',
+        body: '',
+        labels: [],
+      };
+    },
+    findRoadmapsByMarker: async () => [],
+    authoringJournalTarget: 2674,
+  });
+  assert.equal(summary.ready.length, 0);
+  assert.deepEqual(
+    summary.filteredOut.map((entry) => entry.reasons),
+    [['authoring_journal_target']],
+  );
+  assert.equal(loads, 0);
+});

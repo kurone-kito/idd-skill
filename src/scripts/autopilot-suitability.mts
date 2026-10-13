@@ -236,6 +236,28 @@ export function isAutopilotSuitabilityScore(value: unknown): value is number {
   );
 }
 
+/**
+ * Resolve the opt-in `autopilotSuitability.effortL` policy from a raw
+ * config object. Returns `'refuse'` only when the field is exactly the
+ * string `'refuse'`; a missing field, a non-object config or section,
+ * `null`, or any other value resolves to `'allow'` (the distributed
+ * default), so repositories that never set the key keep today's behavior.
+ */
+// audit:ignore-dead-export: read by audit-authored-issue and discover-orphan-filter in later roadmap issues
+export function resolveEffortLPolicy(config: unknown): 'allow' | 'refuse' {
+  if (typeof config !== 'object' || config === null) {
+    return 'allow';
+  }
+  const section = (config as { autopilotSuitability?: unknown })
+    .autopilotSuitability;
+  if (typeof section !== 'object' || section === null) {
+    return 'allow';
+  }
+  return (section as { effortL?: unknown }).effortL === 'refuse'
+    ? 'refuse'
+    : 'allow';
+}
+
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

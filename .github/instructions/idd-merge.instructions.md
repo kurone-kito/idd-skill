@@ -53,11 +53,9 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    `{latest-ci-completed-at}` — this final fetch is the live side of
    each comparison, as F2's own live snapshot was.
 
-   The structural ack-only carve-out from F2 applies here verbatim:
-   newer activity/count growth that helper evidence proves is
-   post-disposition advisory-bot acknowledgement only
-   (`ack-only-post-disposition`) does not force the return to E1; all
-   other triggers above are unaffected.
+   The structural ack-only carve-out from F2 applies here verbatim
+   (`ack-only-post-disposition`; see `idd-pre-merge.instructions.md`);
+   all other triggers above are unaffected.
 
    From that same final fetch, compute `F3_UNRESOLVED_ACTIONABLE_COUNT`
    using the exact F2 unresolved-thread rule and exceptions
@@ -85,10 +83,9 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    is an instant state read, not itself a wait. If it escalates to a
    genuine wait, return to the F2 advisory bot wait check (backgrounds
    only if the topology-safety condition holds — confirmed to route
-   completion back to this turn — otherwise waits synchronously): no
-   single `gh` command blocks on Copilot review state, so run the AW
-   poll loop as a foreground wait, never via `run_in_background` absent
-   the confirmed condition — see
+   completion back to this turn — otherwise waits synchronously): run the AW
+   poll loop in the foreground, never via `run_in_background` absent the
+   confirmed condition — see
    [idd-ci.instructions.md's Wake-up
    discipline](idd-ci.instructions.md#wake-up-discipline).
    Re-fetch the HEAD SHA:
@@ -99,10 +96,12 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 
    Use `PR_HEAD_SHA_F3` as `PR_HEAD_SHA`. Run **AW1**
    (`idd-advisory-wait.instructions.md`):
-   - If **SATISFIED** (`LAST_COPILOT_COMMIT == PR_HEAD_SHA_F3`) →
+   - If any same-head review is not a v2 overview, has suppressed
+     items, or holds a cited item: hold (AW4).
+   - If **SATISFIED** (`LAST_COPILOT_COMMIT == PR_HEAD_SHA_F3`) → proceed
+     with the merge.
+   - If `COPILOT_PENDING` is `"false"` and neither bullet above held:
      proceed with the merge.
-   - If `COPILOT_PENDING` is `"false"` (review completed or cancelled) →
-     satisfied; proceed with the merge.
    - Otherwise (`COPILOT_PENDING` is `"true"`, not yet reviewed): run
      **AW2** and apply **AW3** — do not skip even if F2 already ran
      them, since F3 is a self-contained blocking gate:
@@ -113,15 +112,13 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
        same F3 pass that creates a recovery marker.
      - **CAP_EXHAUSTED** → post the cap-exhausted hold comment from
        **AW4** and stop.
+     - **DISPOSITION_NEEDED** → do not merge; return to E14.
      - **REQUEST_NEEDED** → return to E14 to refresh/request Copilot
        review and post a request marker; do not merge.
      - **WAIT** → do NOT execute the merge; return to the **F2 advisory
        bot wait check** in `idd-pre-merge.instructions.md` (go back to
        the first condition in F2), which reuses the existing same-HEAD
        marker — do not post a new one.
-
-   If the optional helper output disagrees with the live fetch above,
-   follow the live fetch and the written gate rules.
 
 4. Merge the PR using a **merge commit**, binding to the validated SHA
    to prevent a race where a new push lands between the F3 freshness
@@ -263,8 +260,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
        true`, and `codeownerEligibilityUnreadable: false` hold. See
        `docs/permissions.md` (kurone-kito/idd-skill#1663) for this
        repository's own dated observation.
-       `idd-merge-execute.mjs --apply` applies this automatically and
-       records the outcome in the verdict's `adminFallbackUsed` field.
+       `idd-merge-execute.mjs --apply` applies it.
 
        ```sh
        gh pr merge {pr-number} --merge --match-head-commit "${PR_HEAD_SHA_F3}" --admin

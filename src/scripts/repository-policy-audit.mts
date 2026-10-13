@@ -86,6 +86,22 @@ const STANDARD_REVIEW_SNAPSHOT =
   'idd-template/.github/instructions/idd-review-snapshot.instructions.md';
 const LITE_REVIEW_SNAPSHOT =
   'idd-template/.github/instructions/lite/idd-review-snapshot-lite.instructions.md';
+// The six lite files that issue #4086 moved to role names. Each name yields
+// its idd-template/ source first, then its generated live copy. A rule reports
+// only its first failing path, so when several paths fail, this order decides
+// which one is named.
+const LITE_MAIN_BOUNDARY_FILES = [
+  'idd-work-lite',
+  'idd-pr-submit-lite',
+  'idd-review-fix-lite',
+  'idd-claim-lite',
+  'idd-merge-handoff-lite',
+  'idd-resume-lite',
+] as const;
+const LITE_MAIN_BOUNDARY_PATHS = LITE_MAIN_BOUNDARY_FILES.flatMap((name) => [
+  `idd-template/.github/instructions/lite/${name}.instructions.md`,
+  `.github/instructions/lite/${name}.instructions.md`,
+]);
 const ADVISORY_FALLBACK =
   'idd-template/docs/idd-advisory-wait-shell-fallback.md';
 const POLICY_SCHEMA = 'schemas/policy.schema.json';
@@ -1786,6 +1802,24 @@ const RULES: readonly RuleDefinition[] = [
           MERGE,
           'bare main branch mention is outside the trusted-checkout boundary',
         );
+      }
+    },
+  },
+  {
+    // Case-sensitive like the sibling rules: a capitalized Main is not flagged.
+    id: 'lite-main-boundary',
+    paths: LITE_MAIN_BOUNDARY_PATHS,
+    check({ text }) {
+      for (const path of LITE_MAIN_BOUNDARY_PATHS) {
+        const lines = findUnallowedMainLines(
+          text(path),
+          NO_MAIN_MENTIONS_ALLOWED,
+        );
+        if (lines.length > 0)
+          fail(
+            path,
+            `lite file contains the word main; rephrase without it (a role for a branch, a neutral word for an adjective): ${lines.join(' | ')}`,
+          );
       }
     },
   },

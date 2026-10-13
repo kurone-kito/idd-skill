@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
+  AUTHORING_JOURNAL_REFERENCE_PATTERN,
   clone,
   DEFAULT_PROVIDER,
   decideUrgencyDefer,
@@ -15,6 +18,7 @@ import {
   parseIsoDurationToMs,
   relaxStepClauseParts,
   relaxStepForReviewCount,
+  resolveDurableRecordTargets,
   resolveEffectiveCritiqueLoopDelegate,
   resolveEffectiveCritiqueLoopTelemetryHook,
   resolveEffectiveDevelopmentBranch,
@@ -2551,5 +2555,120 @@ test('githubApi.loadControl opts in only for literal true and validates its boun
       githubApi: { loadControl: { maxWait: 'PT10M' } },
     }).githubApi.loadControl.maxWait,
     'PT10M',
+  );
+});
+
+test('resolveDurableRecordTargets resolves the same-repository journal number (#4115)', () => {
+  assert.deepEqual(
+    resolveDurableRecordTargets({
+      journalReference: 'kurone-kito/idd-skill#2674',
+      providerOutageTarget: 158,
+      currentRepo: 'kurone-kito/idd-skill',
+    }),
+    { providerOutageTarget: 158, authoringJournalTarget: 2674 },
+  );
+});
+
+test('resolveDurableRecordTargets matches owner and repo case-insensitively (#4115)', () => {
+  const targets = resolveDurableRecordTargets({
+    journalReference: 'Kurone-Kito/IDD-Skill#7',
+    providerOutageTarget: null,
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  assert.equal(targets.authoringJournalTarget, 7);
+});
+
+test('resolveDurableRecordTargets ignores a journal in another repository (#4115)', () => {
+  const current = 'kurone-kito/idd-skill';
+  for (const journalReference of [
+    'kurone-kito/setup.ubuntu#163',
+    'other-owner/idd-skill#163',
+  ]) {
+    const targets = resolveDurableRecordTargets({
+      journalReference,
+      providerOutageTarget: null,
+      currentRepo: current,
+    });
+    assert.equal(targets.authoringJournalTarget, null, journalReference);
+  }
+});
+
+test('resolveDurableRecordTargets yields no journal for malformed or absent values (#4115)', () => {
+  const malformed = [
+    undefined,
+    null,
+    '',
+    'not-a-ref',
+    'kurone-kito/idd-skill#0',
+    'kurone-kito/idd-skill#0042',
+    'kurone-kito/idd-skill#2674 ',
+    'kurone-kito/idd-skill#2674\n',
+    'kurone-kito/idd-skill#9007199254740993',
+    'kurone-kito/idd-skill#99999999999999999999',
+    2674,
+    {},
+  ];
+  for (const journalReference of malformed) {
+    const targets = resolveDurableRecordTargets({
+      journalReference,
+      providerOutageTarget: null,
+      currentRepo: 'kurone-kito/idd-skill',
+    });
+    assert.equal(
+      targets.authoringJournalTarget,
+      null,
+      String(journalReference),
+    );
+  }
+});
+
+test('resolveDurableRecordTargets yields no journal without a current repository (#4115)', () => {
+  const targets = resolveDurableRecordTargets({
+    journalReference: 'kurone-kito/idd-skill#2674',
+    providerOutageTarget: null,
+    currentRepo: undefined,
+  });
+  assert.equal(targets.authoringJournalTarget, null);
+});
+
+test('resolveDurableRecordTargets passes only a positive integer outage target (#4115)', () => {
+  for (const providerOutageTarget of [0, -1, 1.5, '158', NaN, undefined]) {
+    const targets = resolveDurableRecordTargets({
+      journalReference: null,
+      providerOutageTarget,
+      currentRepo: 'kurone-kito/idd-skill',
+    });
+    assert.equal(
+      targets.providerOutageTarget,
+      null,
+      String(providerOutageTarget),
+    );
+  }
+  const kept = resolveDurableRecordTargets({
+    journalReference: null,
+    providerOutageTarget: 158,
+    currentRepo: 'kurone-kito/idd-skill',
+  });
+  assert.equal(kept.providerOutageTarget, 158);
+});
+
+test('AUTHORING_JOURNAL_REFERENCE_PATTERN keeps the policy schema grammar (#4115)', () => {
+  const schemaPath = fileURLToPath(
+    new URL('../schemas/policy.schema.json', import.meta.url),
+  );
+  const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as {
+    properties: {
+      issueAuthoring: { properties: { journalIssue: { pattern: string } } };
+    };
+  };
+  // Capture groups exist only for parsing; dropping them and comparing the
+  // rest keeps this pattern pinned to the schema's own grammar.
+  const grammar = AUTHORING_JOURNAL_REFERENCE_PATTERN.source
+    .replaceAll('\\/', '/')
+    .replaceAll('(', '')
+    .replaceAll(')', '');
+  assert.equal(
+    grammar,
+    schema.properties.issueAuthoring.properties.journalIssue.pattern,
   );
 });

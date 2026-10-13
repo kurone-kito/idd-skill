@@ -74,7 +74,8 @@ COPILOT_PENDING=$(gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/requested_rev
   --jq '.users | any((.login // "" | ascii_downcase) as $l | $l == "copilot" or $l == "copilot-pull-request-reviewer" or $l == "copilot-pull-request-reviewer[bot]")')
 # Observed once: requested_reviewers can lag a successful re-request
 # or empty on submit, so false is not idle proof.
-# LAST_COPILOT_COMMIT == PR_HEAD_SHA remains the SATISFIED signal.
+# LAST_COPILOT_COMMIT == PR_HEAD_SHA is necessary for SATISFIED, not
+# sufficient: AW1's hold check must also clear every other same-head review.
 
 COPILOT_PENDING_RAW=$(
   gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/timeline" \

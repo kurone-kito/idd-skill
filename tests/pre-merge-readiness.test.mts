@@ -28,6 +28,7 @@ import {
 import {
   collectPreMergeReadiness,
   computeDeferFollowUps,
+  dispositionNoticeCommandHint,
   fetchBranchRulesets,
   fetchGovernanceJson,
   mentionsIssue,
@@ -61,6 +62,7 @@ import {
   isCopilotErrorReviewBody,
   isNonReviewNoticeDisposition,
   isReviewSummaryComment,
+  MISSING_WATERMARK_HINT,
   readClaimStaleAgeMs,
   resolveActiveClaimForWriteGate as resolveActiveClaimForWriteGateImpl,
   resolveCodeownersForFiles,
@@ -253,6 +255,421 @@ test('the readiness schema accepts the optional missingThreads hint and still re
   const unknownKey = JSON.parse(JSON.stringify(summary));
   unknownKey.dispositionEvidence.missingThreads[0].nextStep = 'post a reply';
   assert.ok(validate(unknownKey, readinessSchema).length > 0);
+});
+
+// #4163: the E6 PATH B hint on dispositionEvidence. The bot bodies mirror the
+// disposition helper's own fixtures in tests/disposition-non-review-notices.test.mts.
+const HINT_VIEWER = 'kurone-kito';
+const HINT_CODERABBIT = 'coderabbitai[bot]';
+const HINT_CODEX = 'chatgpt-codex-connector[bot]';
+const HINT_HEAD = '0123456789abcdef0123456789abcdef01234567';
+const HINT_CLAIM_ID = '555cc2e9-9f25-45bb-ba7d-736e5e0d85bd';
+const HINT_CODERABBIT_SUMMARY =
+  '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n## Walkthrough\nSome walkthrough text.';
+const HINT_CODERABBIT_NOTICE =
+  '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n> ## Review limit reached';
+const HINT_CODEX_COMPLETED =
+  '<!-- codex-pull-request-review-summary -->\n\n' +
+  '## Codex Review Summary\n\n' +
+  '| Review | Status | Commit | Review trigger |\n' +
+  '| --- | --- | --- | --- |\n' +
+  '| 📝 **Code Review** | ✅ **Completed** <relative-time datetime="2026-05-12T00:00:00Z">' +
+  '2026-05-12T00:00:00Z</relative-time> | `0123456789ab` | PR opened |\n';
+const HINT_CODEX_RUNNING = HINT_CODEX_COMPLETED.replace(
+  '✅ **Completed**',
+  '🔄 **Running**',
+);
+const HINT_EXPECTED =
+  "E6 PATH B helper-first: node scripts/disposition-non-review-notices.mjs --pr 4153 --apply --owner kurone-kito --repo idd-skill --claim-issue 4163 --claim-id 555cc2e9-9f25-45bb-ba7d-736e5e0d85bd --trusted-marker-logins 'kurone-kito' --advisory-bot-logins 'coderabbitai[bot],chatgpt-codex-connector[bot]' records these dispositions; then re-run pre-merge-readiness (drop --apply for a dry run)";
+
+function hintComment(
+  id: number,
+  login: string,
+  body: string,
+  createdAt: string,
+) {
+  return {
+    id: String(id),
+    author: { login },
+    body,
+    createdAt,
+    updatedAt: createdAt,
+    lastEditedAt: null,
+  };
+}
+
+function hintEvidence(
+  comments: ReturnType<typeof hintComment>[],
+  threads: Parameters<
+    typeof summarizeDispositionEvidenceForGate
+  >[0]['threads'] = [],
+) {
+  return summarizeDispositionEvidenceForGate(
+    { comments, threads },
+    {
+      iddAgentLogins: [HINT_VIEWER],
+      advisoryBotLogins: [HINT_CODERABBIT, HINT_CODEX],
+      trustedMarkerLogins: [HINT_VIEWER],
+      prHeadSha: HINT_HEAD,
+      prAuthorLogin: HINT_VIEWER,
+    },
+  );
+}
+
+function hintFor(
+  comments: ReturnType<typeof hintComment>[],
+  evidence: ReturnType<typeof hintEvidence>,
+  overrides: Partial<Parameters<typeof dispositionNoticeCommandHint>[0]> = {},
+): string | null {
+  return dispositionNoticeCommandHint({
+    dispositionEvidence: evidence,
+    comments,
+    prHeadSha: HINT_HEAD,
+    prNumber: 4153,
+    owner: 'kurone-kito',
+    repo: 'idd-skill',
+    claimIssueNumber: 4163,
+    claimId: HINT_CLAIM_ID,
+    trustedMarkerLogins: [HINT_VIEWER],
+    advisoryBotLogins: [HINT_CODERABBIT, HINT_CODEX],
+    iddAgentLogins: [HINT_VIEWER],
+    ...overrides,
+  });
+}
+
+test('the disposition hint names the E6 helper run when only bot summaries are missing (#4163)', () => {
+  const comments = [
+    hintComment(
+      101,
+      HINT_CODERABBIT,
+      HINT_CODERABBIT_SUMMARY,
+      '2026-10-13T10:00:00Z',
+    ),
+    hintComment(102, HINT_CODEX, HINT_CODEX_COMPLETED, '2026-10-13T10:05:00Z'),
+  ];
+  const evidence = hintEvidence(comments);
+  assert.equal(evidence.route, 'return-to-e1');
+  assert.equal(evidence.blockingCount, 2);
+  assert.deepEqual(
+    evidence.missingRegularComments.map((entry) => entry.id),
+    ['101', '102'],
+  );
+
+  const before = JSON.stringify(evidence);
+  const hint = hintFor(comments, evidence);
+  assert.equal(hint, HINT_EXPECTED);
+  // The hint is derived from the evidence and never changes it.
+  assert.equal(JSON.stringify(evidence), before);
+
+  // The hinted output validates against the readiness schema, and the verdict
+  // fields the gate reports are the same with the hint attached.
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = JSON.parse(
+    JSON.stringify(
+      buildPreMergeReadinessSummary(fixture.input, {
+        ...fixture.options,
+        includeDispositionEvidence: true,
+      }),
+    ),
+  );
+  summary.dispositionEvidence = JSON.parse(
+    JSON.stringify({ ...evidence, hint }),
+  );
+  assert.deepEqual(validate(summary, readinessSchema), []);
+  assert.equal(summary.dispositionEvidence.route, evidence.route);
+  assert.equal(summary.dispositionEvidence.reason, evidence.reason);
+  assert.equal(
+    summary.dispositionEvidence.blockingCount,
+    evidence.blockingCount,
+  );
+
+  // The hint is a string, and an unknown key on the object still fails.
+  const badType = JSON.parse(JSON.stringify(summary));
+  badType.dispositionEvidence.hint = 42;
+  assert.ok(validate(badType, readinessSchema).length > 0);
+  const unknownKey = JSON.parse(JSON.stringify(summary));
+  unknownKey.dispositionEvidence.nextStep = 'run the helper';
+  assert.ok(validate(unknownKey, readinessSchema).length > 0);
+});
+
+test('the disposition hint is absent when a human comment is also missing (#4163)', () => {
+  const comments = [
+    hintComment(
+      101,
+      HINT_CODERABBIT,
+      HINT_CODERABBIT_SUMMARY,
+      '2026-10-13T10:00:00Z',
+    ),
+    hintComment(102, HINT_CODEX, HINT_CODEX_COMPLETED, '2026-10-13T10:05:00Z'),
+    hintComment(
+      103,
+      'reviewer-a',
+      'please fix the typo in the readme',
+      '2026-10-13T10:10:00Z',
+    ),
+  ];
+  const evidence = hintEvidence(comments);
+  assert.equal(evidence.missingRegularComments.length, 3);
+  assert.equal(hintFor(comments, evidence), null);
+});
+
+test('the disposition hint is absent when an unresolved thread is also missing (#4163)', () => {
+  const comments = [
+    hintComment(
+      101,
+      HINT_CODERABBIT,
+      HINT_CODERABBIT_SUMMARY,
+      '2026-10-13T10:00:00Z',
+    ),
+    hintComment(102, HINT_CODEX, HINT_CODEX_COMPLETED, '2026-10-13T10:05:00Z'),
+  ];
+  const evidence = hintEvidence(comments, [
+    {
+      id: 'thread-1',
+      isResolved: false,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          {
+            author: { login: 'reviewer-a' },
+            createdAt: '2026-10-13T10:12:00Z',
+            body: 'need change',
+          },
+        ],
+      },
+    },
+  ]);
+  assert.equal(evidence.missingThreads.length, 1);
+  assert.equal(evidence.missingRegularComments.length, 2);
+  assert.equal(hintFor(comments, evidence), null);
+});
+
+test('the disposition hint is absent when the planner skips a summary the gate still lists (#4163)', () => {
+  const running = [
+    hintComment(
+      101,
+      HINT_CODERABBIT,
+      HINT_CODERABBIT_SUMMARY,
+      '2026-10-13T10:00:00Z',
+    ),
+    hintComment(102, HINT_CODEX, HINT_CODEX_RUNNING, '2026-10-13T10:05:00Z'),
+  ];
+  const runningEvidence = hintEvidence(running);
+  assert.deepEqual(
+    runningEvidence.missingRegularComments.map((entry) => entry.id),
+    ['101', '102'],
+  );
+  assert.equal(hintFor(running, runningEvidence), null);
+
+  const inProgress = [
+    hintComment(
+      201,
+      HINT_CODERABBIT,
+      '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
+        `${CODERABBIT_REVIEW_IN_PROGRESS_MARKER}\n\n` +
+        '> [!NOTE]\n' +
+        '> Currently processing new changes in this PR. This may take a few minutes, please wait...\n\n' +
+        '<!-- end of auto-generated comment: review in progress by coderabbit.ai -->',
+      '2026-10-13T11:00:00Z',
+    ),
+    hintComment(202, HINT_CODEX, HINT_CODEX_COMPLETED, '2026-10-13T11:05:00Z'),
+  ];
+  const inProgressEvidence = hintEvidence(inProgress);
+  assert.ok(
+    inProgressEvidence.missingRegularComments.some(
+      (entry) => entry.id === '201',
+    ),
+  );
+  assert.equal(hintFor(inProgress, inProgressEvidence), null);
+});
+
+test('the disposition hint covers a rate-limit notice alongside a completed Codex summary (#4163)', () => {
+  const comments = [
+    hintComment(
+      201,
+      HINT_CODERABBIT,
+      HINT_CODERABBIT_NOTICE,
+      '2026-10-13T11:00:00Z',
+    ),
+    hintComment(202, HINT_CODEX, HINT_CODEX_COMPLETED, '2026-10-13T11:05:00Z'),
+  ];
+  const evidence = hintEvidence(comments);
+  assert.equal(hintFor(comments, evidence), HINT_EXPECTED);
+});
+
+test('the disposition hint needs every command input and a trusted IDD-agent login (#4163)', () => {
+  const comments = [
+    hintComment(
+      101,
+      HINT_CODERABBIT,
+      HINT_CODERABBIT_SUMMARY,
+      '2026-10-13T10:00:00Z',
+    ),
+    hintComment(102, HINT_CODEX, HINT_CODEX_COMPLETED, '2026-10-13T10:05:00Z'),
+  ];
+  const evidence = hintEvidence(comments);
+  assert.equal(typeof hintFor(comments, evidence), 'string');
+  assert.equal(hintFor(comments, evidence, { prNumber: null }), null);
+  assert.equal(hintFor(comments, evidence, { owner: '' }), null);
+  assert.equal(hintFor(comments, evidence, { claimIssueNumber: null }), null);
+  assert.equal(hintFor(comments, evidence, { claimId: 'not a token' }), null);
+  assert.equal(hintFor(comments, evidence, { trustedMarkerLogins: [] }), null);
+  assert.equal(
+    hintFor(comments, evidence, { advisoryBotLogins: ['bad login!'] }),
+    null,
+  );
+  // An unset advisory list names the helper's default pair, so the hint is the
+  // same string as with that pair given explicitly.
+  assert.equal(
+    hintFor(comments, evidence, { advisoryBotLogins: [] }),
+    HINT_EXPECTED,
+  );
+  // An IDD-agent login the helper would not credit as trusted: no hint.
+  assert.equal(
+    hintFor(comments, evidence, { iddAgentLogins: [HINT_VIEWER, 'idd-bot'] }),
+    null,
+  );
+});
+
+// #4163: the collector wiring. The hint is attached inside
+// collectPreMergeReadiness, so these run the real collector against the fake
+// provider rather than the pure helper alone.
+function hintCollectorPort(comments: ProviderComment[]): ProviderPort {
+  return createFakeProviderAdapter({
+    viewerLogin: HINT_VIEWER,
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: HINT_HEAD,
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [{ number: 7 }],
+      },
+    },
+    comments: { 1: comments },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 1: [] },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-10-13T10:00:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+  });
+}
+
+function hintCollectorComment(
+  id: number,
+  authorLogin: string,
+  body: string,
+  createdAt: string,
+): ProviderComment {
+  return {
+    id,
+    body,
+    createdAt,
+    updatedAt: createdAt,
+    authorLogin,
+    lastEditedAt: null,
+  };
+}
+
+// The collector also reads its trusted and advisory lists from the environment,
+// so the collector hint test clears those values while it runs.
+function withHintEnvCleared<T>(run: () => T): T {
+  const names = [
+    'IDD_ADVISORY_BOT_LOGINS',
+    'IDD_TRUSTED_MARKER_ACTORS',
+  ] as const;
+  const saved = names.map((name) => process.env[name]);
+  for (const name of names) {
+    delete process.env[name];
+  }
+  try {
+    return run();
+  } finally {
+    names.forEach((name, index) => {
+      const value = saved[index];
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    });
+  }
+}
+
+test('collectPreMergeReadiness attaches the disposition hint only when the blocker is bot summaries alone (#4163)', () => {
+  const collect = (comments: ProviderComment[]) =>
+    withHintEnvCleared(() =>
+      collectPreMergeReadiness(
+        [
+          '--pr',
+          '1',
+          '--claim-issue',
+          '7',
+          '--claim-id',
+          HINT_CLAIM_ID,
+          '--owner',
+          'o',
+          '--repo',
+          'r',
+          '--now',
+          '2026-10-13T11:00:00Z',
+        ],
+        () => hintCollectorPort(comments),
+        () => ({}),
+      ),
+    );
+  const summaries = [
+    hintCollectorComment(
+      101,
+      HINT_CODERABBIT,
+      HINT_CODERABBIT_SUMMARY,
+      '2026-10-13T10:00:00Z',
+    ),
+    hintCollectorComment(
+      102,
+      HINT_CODEX,
+      HINT_CODEX_COMPLETED,
+      '2026-10-13T10:05:00Z',
+    ),
+  ];
+
+  const eligible = collect(summaries);
+  const evidence = eligible.dispositionEvidence;
+  assert.ok(evidence);
+  assert.equal(evidence.route, 'return-to-e1');
+  assert.equal(evidence.reason, 'missing-disposition-evidence');
+  assert.equal(evidence.blockingCount, 2);
+  assert.deepEqual(
+    evidence.missingRegularComments.map((entry) => entry.id),
+    ['101', '102'],
+  );
+  // The trusted list is the viewer, and the advisory list is the default pair.
+  assert.equal(
+    evidence.hint,
+    "E6 PATH B helper-first: node scripts/disposition-non-review-notices.mjs --pr 1 --apply --owner o --repo r --claim-issue 7 --claim-id 555cc2e9-9f25-45bb-ba7d-736e5e0d85bd --trusted-marker-logins 'kurone-kito' --advisory-bot-logins 'coderabbitai[bot],chatgpt-codex-connector[bot]' records these dispositions; then re-run pre-merge-readiness (drop --apply for a dry run)",
+  );
+  assert.deepEqual(validate(eligible, readinessSchema), []);
+
+  // A human comment joins the blocking set: the same verdict, and no hint.
+  const mixed = collect([
+    ...summaries,
+    hintCollectorComment(
+      103,
+      'reviewer-a',
+      'please fix the typo in the readme',
+      '2026-10-13T10:10:00Z',
+    ),
+  ]);
+  assert.equal(mixed.dispositionEvidence?.route, 'return-to-e1');
+  assert.equal(mixed.dispositionEvidence?.blockingCount, 3);
+  assert.equal(mixed.dispositionEvidence?.hint, undefined);
+  assert.deepEqual(validate(mixed, readinessSchema), []);
 });
 
 test('pre-merge readiness always carries waiverEvidence and the schema requires it', () => {
@@ -1042,6 +1459,266 @@ test('buildPreMergeReadinessSummary: a missing-watermark summary built from the 
   assert.deepEqual(validate(summary, readinessSchema), []);
 });
 
+// #4124: a same-timestamp-count-growth review-currency blocker names the next
+// step in `hint`. The literal is compared verbatim, and `gate`, `detail`, and
+// the review-currency fields keep the values the comparison produced.
+const SAME_TIMESTAMP_COUNT_GROWTH_HINT_TEXT =
+  'More review items exist now than the last review watermark counted, with no newer non-ack-only activity. Take a fresh snapshot (E1 Step 1), record a fresh watermark for the current head (E1 Step 2), continue through E1 Step 3, the E2 critique pass, and E3 (follow its route), then re-run readiness.';
+
+test('computePreMergeReadinessBlockers: same-timestamp-count-growth review-currency blocker carries the next-step hint (#4124)', () => {
+  const report = {
+    prHeadSha: '9999999999999999999999999999999999999999',
+    reviewCurrency: {
+      comparisonRoute: 'return-to-e1',
+      comparisonReason: 'same-timestamp-count-growth',
+    },
+    threads: { actionableCount: 0 },
+    advisoryWait: { f3Outcome: 'SATISFIED' },
+    ci: {
+      status: 'success',
+      requiredChecksPassing: true,
+      noRequiredChecksConfigured: false,
+      presentRunConclusion: 'none',
+      discardedNonPassingRequiredChecks: [],
+    },
+    reviewerStates: {
+      requiredApprovalsSatisfied: true,
+      codeownerApprovalSatisfied: true,
+      codeownerSelfApproval: { status: 'not_applicable' },
+    },
+    claim: { matchesExpectedClaim: true, reason: 'match' },
+    dispositionEvidence: { route: 'proceed', blockingCount: 0 },
+    branchCurrency: {
+      mergeStateStatus: 'CLEAN',
+      mergeable: 'MERGEABLE',
+      requiresUpToDateHead: false,
+      requiresUpToDateHeadSource: 'none',
+    },
+  };
+  const reviewCurrencyBefore = structuredClone(report.reviewCurrency);
+  const blocker = computePreMergeReadinessBlockers(report).find(
+    (b) => b.gate === 'review-currency',
+  );
+  assert.ok(blocker, 'expected a review-currency blocker');
+  assert.equal(blocker.gate, 'review-currency');
+  assert.equal(
+    blocker.detail,
+    'comparisonRoute is "return-to-e1" (expected "proceed"): same-timestamp-count-growth',
+  );
+  assert.equal(blocker.hint, SAME_TIMESTAMP_COUNT_GROWTH_HINT_TEXT);
+  assert.deepEqual(report.reviewCurrency, reviewCurrencyBefore);
+  // The blocker item must accept `hint` on its own, too.
+  const blockerItemSchema = (
+    readinessSchema as { properties: { blockers: { items: unknown } } }
+  ).properties.blockers.items;
+  assert.deepEqual(validate(blocker, blockerItemSchema), []);
+});
+
+// #4124: a watermark whose total-item-count is below the live count, with no
+// newer activity, yields same-timestamp-count-growth and the same next step.
+// Only the copy used here is lowered; the fixture file itself is not edited.
+test('buildPreMergeReadinessSummary: a lowered watermark count gives the same-timestamp-count-growth hint (#4124)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const watermarkFields = '2026-05-11T23:56:00Z 3 2026-05-11T23:57:00Z';
+  const comments = (fixture.input.comments as Array<{ body?: string }>).map(
+    (comment) => {
+      const body = String(comment.body ?? '');
+      if (!body.startsWith('<!-- review-watermark:')) {
+        return comment;
+      }
+      assert.ok(
+        body.includes(watermarkFields),
+        'expected the fixture watermark fields',
+      );
+      return {
+        ...comment,
+        body: body.replace(
+          watermarkFields,
+          '2026-05-11T23:56:00Z 2 2026-05-11T23:57:00Z',
+        ),
+      };
+    },
+  );
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, comments },
+    fixture.options,
+  );
+
+  const reviewCurrency = summary.reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.comparisonRoute, 'return-to-e1');
+  assert.equal(reviewCurrency.comparisonReason, 'same-timestamp-count-growth');
+  const blockers = summary.blockers as Array<Record<string, unknown>>;
+  const blocker = blockers.find((b) => b.gate === 'review-currency');
+  assert.ok(blocker, 'expected a review-currency blocker');
+  assert.equal(blocker.hint, SAME_TIMESTAMP_COUNT_GROWTH_HINT_TEXT);
+  assert.deepEqual(validate(summary, readinessSchema), []);
+});
+
+// #4098: a disposition-evidence blocker computed with no review watermark
+// names the fresh-watermark step, and a summary with a watermark (or with no
+// computed disposition results) carries no hint on that blocker at all.
+const NO_WATERMARK_DISPOSITION_TEXT =
+  'No review watermark exists for this claim yet, so these results are ' +
+  'computed without a snapshot boundary. Take a fresh snapshot (E1 Step 1), ' +
+  'record a watermark for the current head (E1 Step 2), then re-run ' +
+  'readiness before any hold decision.';
+const NEWER_ACTIVITY_TEXT =
+  'Activity landed after the last review watermark, including your own ' +
+  'comments. Record a fresh watermark for the current head, then re-run ' +
+  'readiness.';
+
+function resolvedReviewerThread4098(createdAt: string) {
+  return {
+    id: 'thread-4098-resolved',
+    isResolved: true,
+    updatedAt: '',
+    reviewerReopenedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'reviewer-a' },
+          body: 'Consider renaming this helper.',
+          createdAt,
+          updatedAt: createdAt,
+          lastEditedAt: null,
+        },
+      ],
+    },
+  };
+}
+
+function blockerNamed(summary: unknown, gate: string) {
+  const blockers = (summary as Record<string, unknown>).blockers as Array<
+    Record<string, unknown>
+  >;
+  return blockers.find((b) => b.gate === gate);
+}
+
+test('pre-merge readiness: disposition-evidence with no watermark carries the fresh-watermark hint (#4098)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const comments = (fixture.input.comments as Array<{ body?: string }>).filter(
+    (comment) =>
+      !String(comment.body ?? '').startsWith('<!-- review-watermark:'),
+  );
+  const threads = [
+    ...(fixture.input.threads as unknown[]),
+    resolvedReviewerThread4098('2026-05-11T23:50:00Z'),
+  ];
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, comments, threads },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+
+  const disposition = (summary as Record<string, unknown>)
+    .dispositionEvidence as Record<string, unknown>;
+  assert.equal(disposition.route, 'return-to-e1');
+  assert.equal(disposition.blockingCount, 1);
+  const blocker = blockerNamed(summary, 'disposition-evidence');
+  assert.ok(blocker, 'expected a disposition-evidence blocker');
+  assert.equal(
+    blocker.detail,
+    'dispositionEvidence.route is "return-to-e1" (expected "proceed"), blockingCount=1 (expected 0)',
+  );
+  assert.equal(blocker.hint, NO_WATERMARK_DISPOSITION_TEXT);
+  assert.deepEqual(validate(summary, readinessSchema), []);
+});
+
+test('pre-merge readiness: a disposition-evidence blocker with a watermark carries no hint (#4098)', () => {
+  // The clean watermark's boundary is 2026-05-11T23:56:00Z. Feedback newer
+  // than that boundary keeps the resolved thread blocking, so the blocker
+  // still exists and only its absent hint is under test.
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const threads = [
+    ...(fixture.input.threads as unknown[]),
+    resolvedReviewerThread4098('2026-05-11T23:58:00Z'),
+  ];
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, threads },
+    { ...fixture.options, includeDispositionEvidence: true },
+  );
+
+  const reviewCurrency = (summary as Record<string, unknown>)
+    .reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.watermarkPresent, true);
+  const blocker = blockerNamed(summary, 'disposition-evidence');
+  assert.ok(blocker, 'expected a disposition-evidence blocker');
+  assert.equal(blocker.gate, 'disposition-evidence');
+  assert.equal(
+    'hint' in blocker,
+    false,
+    'a watermark-backed disposition blocker has no hint property',
+  );
+});
+
+test('pre-merge readiness: a disposition-evidence blocker without computed results carries no hint (#4098)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const comments = (fixture.input.comments as Array<{ body?: string }>).filter(
+    (comment) =>
+      !String(comment.body ?? '').startsWith('<!-- review-watermark:'),
+  );
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, comments },
+    fixture.options,
+  );
+
+  const blocker = blockerNamed(summary, 'disposition-evidence');
+  assert.ok(blocker, 'expected a disposition-evidence blocker');
+  assert.equal(
+    'hint' in blocker,
+    false,
+    'disposition results that were not computed must not carry the hint',
+  );
+});
+
+test('pre-merge readiness: newer-activity review-currency blocker carries the fresh-watermark hint (#4098)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const operatorComment = {
+    id: 'operator-note-4098',
+    author: { login: 'kurone-kito' },
+    body: 'Holding this PR until the rename lands.',
+    createdAt: '2026-05-11T23:59:00Z',
+    updatedAt: '2026-05-11T23:59:00Z',
+    lastEditedAt: null,
+  };
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [...fixture.input.comments, operatorComment],
+    },
+    fixture.options,
+  );
+
+  const reviewCurrency = (summary as Record<string, unknown>)
+    .reviewCurrency as Record<string, unknown>;
+  assert.equal(reviewCurrency.comparisonRoute, 'return-to-e1');
+  assert.equal(reviewCurrency.comparisonReason, 'newer-activity');
+  const blocker = blockerNamed(summary, 'review-currency');
+  assert.ok(blocker, 'expected a review-currency blocker');
+  assert.equal(
+    blocker.detail,
+    'comparisonRoute is "return-to-e1" (expected "proceed"): newer-activity',
+  );
+  assert.equal(blocker.hint, NEWER_ACTIVITY_TEXT);
+  assert.deepEqual(validate(summary, readinessSchema), []);
+});
+
+test('pre-merge readiness: missing-watermark review-currency hint keeps its exact text (#4098)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const comments = (fixture.input.comments as Array<{ body?: string }>).filter(
+    (comment) =>
+      !String(comment.body ?? '').startsWith('<!-- review-watermark:'),
+  );
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, comments },
+    fixture.options,
+  );
+
+  const blocker = blockerNamed(summary, 'review-currency');
+  assert.ok(blocker, 'expected a review-currency blocker');
+  assert.equal(blocker.hint, MISSING_WATERMARK_HINT);
+});
+
 // #4097: a missing required check on a DIRTY head names the merge-conflict
 // route in the `ci` blocker's `hint`. The fixture is shaped like a ready
 // report, with only `ci` and `branchCurrency` varying per case.
@@ -1144,7 +1821,8 @@ test('buildPreMergeReadinessSummary: a DIRTY head with a missing required check 
 });
 
 // #3950 regression guard: a malformed watermark keeps its own reason and
-// gets no hint, because the E1 next step is written for the missing case only.
+// gets no hint, because the E1 next step covers only the missing and
+// same-timestamp-count-growth reasons (#4124).
 test('buildPreMergeReadinessSummary: malformed-watermark review-currency blocker has no hint', () => {
   const prHeadSha = '7777777777777777777777777777777777777777';
   const summary = buildPreMergeReadinessSummary(
@@ -13246,12 +13924,16 @@ test('#2335: a disposition reply, a watermark, and an ack-only bot comment never
     includeDispositionEvidence: true,
     secondaryQuietWindowMinutes: 2,
   });
-  // ack-only-current's live.effective ceiling already excludes the
-  // post-disposition bot ack (protocol-helpers.mts's ackOnlyPostDisposition
-  // classification, exercised by the review-currency gate in the same
-  // fixture); the window anchors on that same ceiling and therefore already
-  // elapsed at options.now, exactly like the review-currency gate already
-  // proceeds on this fixture.
+  // ack-only-current's post-disposition bot ack is ack-only, so it stays out
+  // of the ceiling (protocol-helpers.mts's ackOnlyPostDisposition
+  // classification). #4123 also leaves the trusted disposition at 23:55:30
+  // out of the quiet-window anchor, so the anchor is the unresolved thread's
+  // reply at 23:56:00; that is already 4min before options.now, so the
+  // window has elapsed, exactly as the review-currency gate proceeds here.
+  assert.equal(
+    secondaryQuietWindowOf(withWindow).anchorAt,
+    '2026-05-11T23:56:00Z',
+  );
   assert.equal(secondaryQuietWindowOf(withWindow).elapsed, true);
   assert.ok(
     !(withWindow.blockers as { gate: string }[]).some(
@@ -13260,7 +13942,7 @@ test('#2335: a disposition reply, a watermark, and an ack-only bot comment never
   );
 });
 
-test('#2335: a disposition reply with nothing after it but an ack legitimately anchors the window (it is the moment convergence was reached, per the same ackOnlyPostDisposition classification the issue names)', () => {
+test('#2335: an issue-comment disposition with nothing after it but an ack does not anchor the window; the latest other activity does (#4123)', () => {
   const fixture = readJson(
     'fixtures/pre-merge-readiness/disposition-reply-latest.json',
   );
@@ -13271,14 +13953,284 @@ test('#2335: a disposition reply with nothing after it but an ack legitimately a
       secondaryQuietWindowMinutes: 2,
     }),
   );
-  // The disposition reply (23:55:00) is the effective activity ceiling --
-  // the trailing bot comment is excluded as ack-only, same classification
-  // as the review-currency gate. now (23:59:00) is 4min past that anchor,
-  // so a 2min window has already elapsed from the disposition itself.
-  assert.equal(status.anchorAt, '2026-05-11T23:55:00Z');
-  assert.equal(status.elapsedMinutes, 4);
+  // The trusted issue-comment disposition (23:55:00) still counts for
+  // latestDispositionAt, so the courtesy bot ack (updated 23:57:00) is
+  // ack-only and stays out of the ceiling. #4123 also leaves the
+  // disposition's own timestamp out of the quiet-window anchor, so the anchor
+  // is the latest remaining activity: Copilot's approval at 23:54:00. The
+  // owner approval is at 23:53:00 in this fixture (it used to share 23:55:00
+  // with the disposition, which hid the rule). now (23:59:00) is 5min past
+  // that anchor, so a 2min window has already elapsed.
+  assert.equal(status.anchorAt, '2026-05-11T23:54:00Z');
+  assert.equal(status.elapsedMinutes, 5);
   assert.equal(status.elapsed, true);
   assert.equal(status.remainingMinutes, 0);
+});
+
+// #4123: the quiet-window anchor leaves out only the own timestamp of an
+// unedited top-level disposition by a trusted author. Each case below reuses
+// the disposition-reply-latest input and overrides its comments, reviews and
+// threads. The agent login sits in iddAgentLogins, which is what opens the ack
+// window for the advisory-bot comments below.
+const QUIET_T0 = '2026-05-11T23:40:00Z';
+const QUIET_T3 = '2026-05-11T23:43:00Z';
+const QUIET_T4 = '2026-05-11T23:44:00Z';
+const QUIET_T5 = '2026-05-11T23:45:00Z';
+const QUIET_T6 = '2026-05-11T23:46:00Z';
+
+type LiveReviewCurrency = {
+  effective: { maxActivityUpdatedAt: string };
+  ackOnly: { items: { kind: string; id: string }[] };
+};
+
+function liveReviewCurrencyOf(summary: unknown): LiveReviewCurrency {
+  return (summary as { reviewCurrency: { live: LiveReviewCurrency } })
+    .reviewCurrency.live;
+}
+
+function quietAnchorSummary({
+  comments = [],
+  reviews = [],
+  threads = [],
+  trustedMarkerLogins,
+}: {
+  comments?: unknown[];
+  reviews?: unknown[];
+  threads?: unknown[];
+  trustedMarkerLogins?: string[];
+}) {
+  const fixture = readJson(
+    'fixtures/pre-merge-readiness/disposition-reply-latest.json',
+  );
+  return buildPreMergeReadinessSummary(
+    { ...fixture.input, comments, reviews, threads },
+    {
+      ...fixture.options,
+      ...(trustedMarkerLogins ? { trustedMarkerLogins } : {}),
+      iddAgentLogins: ['idd-agent'],
+      includeDispositionEvidence: true,
+      secondaryQuietWindowMinutes: 60,
+    },
+  );
+}
+
+function quietComment(
+  id: string,
+  login: string,
+  at: string,
+  body: string,
+  lastEditedAt: string | null = null,
+) {
+  return {
+    id,
+    author: { login },
+    createdAt: at,
+    updatedAt: lastEditedAt ?? at,
+    lastEditedAt,
+    body,
+    replies: [],
+  };
+}
+
+function copilotReviewAt(at: string) {
+  return {
+    author: { login: 'copilot-pull-request-reviewer[bot]' },
+    state: 'APPROVED',
+    commitId: '',
+    submittedAt: at,
+    createdAt: at,
+    updatedAt: at,
+  };
+}
+
+test('#4123: an agent disposition issue comment does not move the quiet anchor off the review it answers, even with a later trusted watermark', () => {
+  const fixture = readJson(
+    'fixtures/pre-merge-readiness/disposition-reply-latest.json',
+  );
+  const watermark = fixture.input.comments.find(
+    (comment: { id: string }) => comment.id === 'watermark-clean',
+  );
+  const summary = quietAnchorSummary({
+    comments: [
+      quietComment(
+        'agent-disposition',
+        'idd-agent',
+        QUIET_T4,
+        '**Accepted** — advisory summary confirmed; no action required.',
+      ),
+      { ...watermark, createdAt: QUIET_T6, updatedAt: QUIET_T6 },
+    ],
+    reviews: [copilotReviewAt(QUIET_T0)],
+  });
+  assert.equal(secondaryQuietWindowOf(summary).anchorAt, QUIET_T0);
+  assert.equal(
+    liveReviewCurrencyOf(summary).effective.maxActivityUpdatedAt,
+    QUIET_T4,
+  );
+});
+
+test('#4123: a courtesy advisory-bot ack after an agent disposition leaves the quiet anchor on the review', () => {
+  const summary = quietAnchorSummary({
+    comments: [
+      quietComment(
+        'agent-disposition',
+        'idd-agent',
+        QUIET_T4,
+        '**Accepted** — no action required.',
+      ),
+      quietComment(
+        'bot-thanks',
+        'coderabbitai[bot]',
+        QUIET_T5,
+        'Thanks for confirming!',
+      ),
+    ],
+    reviews: [copilotReviewAt(QUIET_T0)],
+  });
+  assert.equal(secondaryQuietWindowOf(summary).anchorAt, QUIET_T0);
+  assert.ok(
+    liveReviewCurrencyOf(summary).ackOnly.items.some(
+      (item) => item.kind === 'comment' && item.id === 'bot-thanks',
+    ),
+  );
+});
+
+test('#4123: an unresolved review thread with a comment newer than the review moves the quiet anchor to that comment', () => {
+  const summary = quietAnchorSummary({
+    reviews: [copilotReviewAt(QUIET_T0)],
+    threads: [
+      {
+        id: 'thread-open',
+        isResolved: false,
+        comments: {
+          nodes: [
+            quietComment(
+              'thread-comment',
+              'copilot-pull-request-reviewer[bot]',
+              QUIET_T3,
+              'Consider a guard here.',
+            ),
+          ],
+        },
+      },
+    ],
+  });
+  assert.equal(secondaryQuietWindowOf(summary).anchorAt, QUIET_T3);
+});
+
+test('#4123: a resolved thread whose agent reply is a disposition still anchors the quiet window on that reply', () => {
+  const summary = quietAnchorSummary({
+    threads: [
+      {
+        id: 'thread-resolved',
+        isResolved: true,
+        comments: {
+          nodes: [
+            quietComment(
+              'thread-copilot',
+              'copilot-pull-request-reviewer[bot]',
+              QUIET_T0,
+              'Consider a guard here.',
+            ),
+            quietComment(
+              'thread-agent-reply',
+              'idd-agent',
+              QUIET_T4,
+              '**Accepted** — guard added.',
+            ),
+          ],
+        },
+      },
+    ],
+  });
+  assert.equal(secondaryQuietWindowOf(summary).anchorAt, QUIET_T4);
+});
+
+test('#4123: a top-level disposition by an author outside the trusted set still anchors the quiet window', () => {
+  const summary = quietAnchorSummary({
+    comments: [
+      quietComment(
+        'outsider-disposition',
+        'outside-reviewer',
+        QUIET_T4,
+        '**Accepted** — no action required.',
+      ),
+    ],
+    reviews: [copilotReviewAt(QUIET_T0)],
+  });
+  assert.equal(secondaryQuietWindowOf(summary).anchorAt, QUIET_T4);
+});
+
+test('#4123: an advisory-bot disposition-shaped top-level comment still anchors the quiet window', () => {
+  const summary = quietAnchorSummary({
+    comments: [
+      quietComment(
+        'bot-disposition',
+        'coderabbitai[bot]',
+        QUIET_T4,
+        '**Accepted** — restating the finding.',
+      ),
+    ],
+    reviews: [copilotReviewAt(QUIET_T0)],
+    // The bot is trusted as a marker actor here, so only the advisory-bot
+    // guard keeps its disposition-shaped comment out of the exclusion.
+    trustedMarkerLogins: ['kurone-kito', 'coderabbitai[bot]'],
+  });
+  assert.equal(secondaryQuietWindowOf(summary).anchorAt, QUIET_T4);
+});
+
+test('#4123: an edited trusted disposition keeps its edit time in the quiet anchor (only unedited dispositions are left out)', () => {
+  const editedAt = '2026-05-11T23:47:00Z';
+  const summary = quietAnchorSummary({
+    comments: [
+      quietComment(
+        'edited-disposition',
+        'idd-agent',
+        QUIET_T4,
+        '**Accepted** — reworded after review.',
+        editedAt,
+      ),
+    ],
+    reviews: [copilotReviewAt(QUIET_T0)],
+  });
+  assert.equal(secondaryQuietWindowOf(summary).anchorAt, editedAt);
+});
+
+test('#4123: a disposition by a trusted marker actor outside iddAgentLogins also leaves the quiet anchor on the review', () => {
+  // kurone-kito is trusted only through the fixture's trustedMarkerLogins.
+  // quietAnchorSummary replaces the fixture's iddAgentLogins with idd-agent,
+  // so this author is not a disposition author (protocol-helpers.mts).
+  const summary = quietAnchorSummary({
+    comments: [
+      quietComment(
+        'maintainer-disposition',
+        'kurone-kito',
+        QUIET_T4,
+        '**Accepted** — no action required.',
+      ),
+    ],
+    reviews: [copilotReviewAt(QUIET_T0)],
+  });
+  assert.equal(secondaryQuietWindowOf(summary).anchorAt, QUIET_T0);
+  assert.equal(
+    liveReviewCurrencyOf(summary).effective.maxActivityUpdatedAt,
+    QUIET_T4,
+  );
+});
+
+test('#4123: a trusted disposition that is the only activity leaves the quiet anchor absent, so the gate reports the window elapsed', () => {
+  const summary = quietAnchorSummary({
+    comments: [
+      quietComment(
+        'lone-disposition',
+        'idd-agent',
+        QUIET_T4,
+        '**Accepted** — no action required.',
+      ),
+    ],
+  });
+  assert.equal(secondaryQuietWindowOf(summary).anchorAt, 'none');
+  assert.equal(secondaryQuietWindowOf(summary).elapsed, true);
 });
 
 test('#2335: computePreMergeReadinessBlockers never blocks on an entirely absent secondaryQuietWindow evidence field (backward compatible with a hand-built or unmigrated report)', () => {

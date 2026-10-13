@@ -477,6 +477,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Run IDD onboarding drift checks against the local repository.',
   },
   {
+    id: 'e10-recurrence',
+    scriptName: 'idd:e10-recurrence',
+    binName: 'idd-e10-recurrence',
+    entryPath: 'scripts/e10-recurrence.mjs',
+    vendoredCommand: 'node scripts/e10-recurrence.mjs',
+    description:
+      'Count E10 same-family recurrence from finding fingerprints and print the e11, continue, defer, or hold verdict. Read-only.',
+  },
+  {
     id: 'effective-config',
     scriptName: 'idd:effective-config',
     binName: 'idd-effective-config',
@@ -642,6 +651,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
     description:
       'Read-only list of parked pull requests, or (--park) post a park marker for one blocked solely by an unavailable provider service.',
     contractPaths: ['schemas/provider-outage-park.schema.json'],
+  },
+  {
+    id: 'publish-authoring-hold',
+    scriptName: 'idd:publish-authoring-hold',
+    binName: 'idd-publish-authoring-hold',
+    entryPath: 'scripts/publish-authoring-hold.mjs',
+    vendoredCommand: 'node scripts/publish-authoring-hold.mjs',
+    description:
+      'Plan and validate the Stage 1 publication of one drafted orphan issue under the issue-authoring hold (read-only; --apply is refused until the publication path lands).',
   },
   {
     id: 'rerun-advisory-convergence',
