@@ -1802,9 +1802,11 @@ export function dispositionNoticeCommandHint(
   const { prNumber, claimIssueNumber, owner, repo, claimId } = input;
   const trusted = input.trustedMarkerLogins;
   // An empty readiness list means no flag, env or config value was set. The
-  // helper then falls back to this same default (the known review bots). The
-  // gate's regular-comment check already treats those bots as handled with an
-  // empty list, so naming the default is equivalent for these comments.
+  // helper then falls back to this same default pair. For regular comments the
+  // gate already treats those two review bots as handled with an empty list, so
+  // naming the default is equivalent there. The hint reads regular comments
+  // only, and a missing thread already suppresses it, so thread dating does not
+  // matter here.
   const advisory =
     input.advisoryBotLogins.length > 0
       ? input.advisoryBotLogins

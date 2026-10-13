@@ -517,6 +517,12 @@ test('the disposition hint needs every command input and a trusted IDD-agent log
     hintFor(comments, evidence, { advisoryBotLogins: ['bad login!'] }),
     null,
   );
+  // An unset advisory list names the helper's default pair, so the hint is the
+  // same string as with that pair given explicitly.
+  assert.equal(
+    hintFor(comments, evidence, { advisoryBotLogins: [] }),
+    HINT_EXPECTED,
+  );
   // An IDD-agent login the helper would not credit as trusted: no hint.
   assert.equal(
     hintFor(comments, evidence, { iddAgentLogins: [HINT_VIEWER, 'idd-bot'] }),
@@ -570,25 +576,52 @@ function hintCollectorComment(
   };
 }
 
+// The collector also reads its trusted and advisory lists from the environment,
+// so the collector hint test clears those values while it runs.
+function withHintEnvCleared<T>(run: () => T): T {
+  const names = [
+    'IDD_ADVISORY_BOT_LOGINS',
+    'IDD_TRUSTED_MARKER_ACTORS',
+  ] as const;
+  const saved = names.map((name) => process.env[name]);
+  for (const name of names) {
+    delete process.env[name];
+  }
+  try {
+    return run();
+  } finally {
+    names.forEach((name, index) => {
+      const value = saved[index];
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    });
+  }
+}
+
 test('collectPreMergeReadiness attaches the disposition hint only when the blocker is bot summaries alone (#4163)', () => {
   const collect = (comments: ProviderComment[]) =>
-    collectPreMergeReadiness(
-      [
-        '--pr',
-        '1',
-        '--claim-issue',
-        '7',
-        '--claim-id',
-        HINT_CLAIM_ID,
-        '--owner',
-        'o',
-        '--repo',
-        'r',
-        '--now',
-        '2026-10-13T11:00:00Z',
-      ],
-      () => hintCollectorPort(comments),
-      () => ({}),
+    withHintEnvCleared(() =>
+      collectPreMergeReadiness(
+        [
+          '--pr',
+          '1',
+          '--claim-issue',
+          '7',
+          '--claim-id',
+          HINT_CLAIM_ID,
+          '--owner',
+          'o',
+          '--repo',
+          'r',
+          '--now',
+          '2026-10-13T11:00:00Z',
+        ],
+        () => hintCollectorPort(comments),
+        () => ({}),
+      ),
     );
   const summaries = [
     hintCollectorComment(
@@ -615,9 +648,10 @@ test('collectPreMergeReadiness attaches the disposition hint only when the block
     evidence.missingRegularComments.map((entry) => entry.id),
     ['101', '102'],
   );
-  assert.match(
-    evidence.hint ?? '',
-    /^E6 PATH B helper-first: node scripts\/disposition-non-review-notices\.mjs --pr 1 --apply --owner o --repo r --claim-issue 7 --claim-id 555cc2e9-9f25-45bb-ba7d-736e5e0d85bd /,
+  // The trusted list is the viewer, and the advisory list is the default pair.
+  assert.equal(
+    evidence.hint,
+    "E6 PATH B helper-first: node scripts/disposition-non-review-notices.mjs --pr 1 --apply --owner o --repo r --claim-issue 7 --claim-id 555cc2e9-9f25-45bb-ba7d-736e5e0d85bd --trusted-marker-logins 'kurone-kito' --advisory-bot-logins 'coderabbitai[bot],chatgpt-codex-connector[bot]' records these dispositions; then re-run pre-merge-readiness (drop --apply for a dry run)",
   );
   assert.deepEqual(validate(eligible, readinessSchema), []);
 
