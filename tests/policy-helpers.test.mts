@@ -443,6 +443,21 @@ test('parseTriageLine returns null for an unknown enum value or part (#4186)', (
   );
 });
 
+test('parseTriageLine rejects a step outside 0 to 2 and a part without its separator (#4186)', () => {
+  assert.equal(parseTriageLine('Triage: tier low; urgency low; step 3'), null);
+  assert.equal(
+    parseTriageLine('Triage: tier low; urgency low; step 0safety'),
+    null,
+  );
+});
+
+test('formatTriageLine refuses an override reason with a line break (#4186)', () => {
+  assert.throws(
+    () => formatTriageLine({ ...TRIAGE_BARE, override: 'a\nb' }),
+    /override reason/u,
+  );
+});
+
 test('critiqueLoop.triageRecord defaults to off and accepts record / enforce (#4185)', () => {
   assert.equal(POLICY_DEFAULTS.critiqueLoop.triageRecord, 'off');
   assert.equal(normalizePolicyConfig({}).critiqueLoop.triageRecord, 'off');

@@ -281,14 +281,13 @@ export function runBodyItemDisposition(port, input) {
 export class TriageUsageError extends Error {}
 const TRIAGE_TIER_VALUES = ['low', 'medium', 'high'];
 const TRIAGE_URGENCY_VALUES = ['very-low', 'low', 'medium', 'high'];
-const DISPOSITION_PREFIX_RE = /^\*\*(?:Accepted|Rejected)\*\*/u;
-const REJECTION_CONFIRMED_PREFIX = '**Rejection confirmed by maintainer**';
 /**
  * Refuse a triage flag combination before any network call (#4186): the enum
  * values, the `--tier`/`--urgency` pair, `--path-b` exclusivity, the
  * `record`/`enforce` requirement on an Accepted or Rejected reply, and the
- * `--advisory-converged` reviewPolicy check. A triage flag with no line to
- * carry it is a no-op, not an error.
+ * `--advisory-converged` reviewPolicy check. A valid triage flag with no line
+ * to carry it is a no-op, not an error; an invalid value is always a usage
+ * error.
  */
 export function validateTriageFlags(input) {
   const { flags } = input;
@@ -323,9 +322,11 @@ export function validateTriageFlags(input) {
       '--path-b cannot be combined with --tier, --urgency, --copilot-label, --safety-class, --lite, or --advisory-converged',
     );
   }
-  const dispositionReply =
-    DISPOSITION_PREFIX_RE.test(input.body) &&
-    !input.body.startsWith(REJECTION_CONFIRMED_PREFIX);
+  // The same prefix test the apply gate uses, so a body that gate admits (for
+  // example `**Accepted:**`) cannot skip the requirement. A `**Rejection
+  // confirmed by maintainer**` body does not match it, which keeps that
+  // exemption.
+  const dispositionReply = isDispositionComment({ body: input.body });
   if (
     input.apply &&
     (input.triageRecord === 'record' || input.triageRecord === 'enforce') &&
