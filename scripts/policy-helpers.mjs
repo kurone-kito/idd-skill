@@ -169,6 +169,7 @@ const DEFER_BY_URGENCY_MODES = new Set([
   'low-and-medium',
   'severity-tiered',
 ]);
+const TRIAGE_RECORD_MODES = new Set(['off', 'record', 'enforce']);
 const DEFER_NEEDS_DECISION_MODES = new Set(['on', 'off']);
 const EXTERNAL_CHECK_WAIVER_MODES = new Set([
   'disabled',
@@ -321,6 +322,7 @@ export const POLICY_DEFAULTS = Object.freeze({
     e10MaxPasses: 2,
     deferAfterRounds: 12,
     deferByUrgency: 'off',
+    triageRecord: 'off',
     deferRelaxAtRounds: Object.freeze([]),
     deferNeedsDecision: 'on',
     subagentWaitCeiling: 'PT20M',
@@ -563,6 +565,11 @@ export function normalizePolicyConfig(config) {
       c?.critiqueLoop?.deferByUrgency,
       DEFER_BY_URGENCY_MODES,
       POLICY_DEFAULTS.critiqueLoop.deferByUrgency,
+    ),
+    triageRecord: parseEnum(
+      c?.critiqueLoop?.triageRecord,
+      TRIAGE_RECORD_MODES,
+      POLICY_DEFAULTS.critiqueLoop.triageRecord,
     ),
     deferRelaxAtRounds: parseDeferRelaxAtRounds(
       c?.critiqueLoop?.deferRelaxAtRounds,
