@@ -2159,11 +2159,22 @@ test('#4122: a Codex summary with no HEAD row, an unparseable table, or no table
       [3, 'codex-no-result-for-head'],
     ],
   );
-  // A row for the HEAD exists in the Running fixture.
-  assert.equal(
-    hasCodexReviewSummaryRowForHeadSha(CODEX_SUMMARY_RUNNING, 'abc1234'),
-    true,
+  // The local row parser copies the shared table parsing, and it decides
+  // `codex-review-running` versus `codex-no-result-for-head` for a table
+  // that is not Completed. Pin it: whatever the status, a table whose only
+  // row is `abc1234` has a row for that HEAD and none for another HEAD.
+  const failedSummary = CODEX_SUMMARY_RUNNING.replace(
+    '🔄 **Running**',
+    '❌ **Failed**',
   );
+  for (const body of [
+    CODEX_SUMMARY_RUNNING,
+    failedSummary,
+    CODEX_SUMMARY_COMPLETED,
+  ]) {
+    assert.equal(hasCodexReviewSummaryRowForHeadSha(body, 'abc1234'), true);
+    assert.equal(hasCodexReviewSummaryRowForHeadSha(body, HEAD_SHA), false);
+  }
 });
 
 test('#4122: a recognized Codex no-find result for an older HEAD is codex-no-result-for-head', () => {
