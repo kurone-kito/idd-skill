@@ -254,6 +254,9 @@ const LITE_ORDERED_STEPS = [
   'post `unclaimed-by` for that same `{claim-id}`',
   'run `lost-claim-cleanup`',
   'With the companion, hand it that proposal as a held split draft',
+  'held roadmap whose children record `Split out of #<n>`',
+  'comments its link',
+  'if refused, the comment stands',
   PROHIBITION,
 ] as const;
 
