@@ -2833,6 +2833,7 @@ function withRepositoryVariables<T>(
     GITHUB_ACTIONS?: string;
     GITHUB_REPOSITORY?: string;
     GITHUB_SERVER_URL?: string;
+    GH_HOST?: string;
     GH_REPO?: string;
   },
   run: () => T,
@@ -2841,6 +2842,7 @@ function withRepositoryVariables<T>(
     'GITHUB_ACTIONS',
     'GITHUB_REPOSITORY',
     'GITHUB_SERVER_URL',
+    'GH_HOST',
     'GH_REPO',
   ] as const;
   const saved: Record<string, string | undefined> = {};
@@ -2963,6 +2965,55 @@ test('resolveCurrentGithubRepository: inside Actions a GHES origin on the server
       GITHUB_ACTIONS: 'true',
       GITHUB_REPOSITORY: 'o/r',
       GITHUB_SERVER_URL: 'https://ghes.example.com',
+    },
+    () => {
+      withGitCheckout('https://ghes.example.com/o/r.git', () => {
+        withRepoViewStub(
+          { exit: 1, stderr: 'gh: repo view failed' },
+          (spawned) => {
+            assert.deepEqual(resolveCurrentGithubRepository(), {
+              owner: 'o',
+              repo: 'r',
+            });
+            assert.deepEqual(spawned(), []);
+          },
+        );
+      });
+    },
+  );
+});
+
+test('resolveCurrentGithubRepository: an explicit GH_HOST takes precedence over the server URL for the origin check (#4110)', () => {
+  // gh targets GH_HOST, so an origin on the Actions server host is not the
+  // host the API calls will use: the lookup runs instead of the shortcut.
+  withRepositoryVariables(
+    {
+      GITHUB_ACTIONS: 'true',
+      GITHUB_REPOSITORY: 'o/r',
+      GITHUB_SERVER_URL: 'https://github.com',
+      GH_HOST: 'ghes.example.com',
+    },
+    () => {
+      withGitCheckout('https://github.com/o/r.git', () => {
+        withRepoViewStub({ stdout: repoViewBody('via', 'gh') }, (spawned) => {
+          assert.deepEqual(resolveCurrentGithubRepository(), {
+            owner: 'via',
+            repo: 'gh',
+          });
+          assert.deepEqual(spawned(), [REPO_VIEW_ARGV]);
+        });
+      });
+    },
+  );
+});
+
+test('resolveCurrentGithubRepository: an origin on the explicit GH_HOST is used with no gh process (#4110)', () => {
+  withRepositoryVariables(
+    {
+      GITHUB_ACTIONS: 'true',
+      GITHUB_REPOSITORY: 'o/r',
+      GITHUB_SERVER_URL: 'https://github.com',
+      GH_HOST: 'ghes.example.com',
     },
     () => {
       withGitCheckout('https://ghes.example.com/o/r.git', () => {

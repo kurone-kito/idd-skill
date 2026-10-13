@@ -4990,19 +4990,29 @@ export function repositoryFromRemoteUrl(
     : null;
 }
 
-/** True when the checkout's `origin` remote names `owner/repo` on the Actions
- * server host (`GITHUB_SERVER_URL`, `https://github.com` when unset),
- * compared case-insensitively. An unreadable origin, a missing remote, a remote
- * that is not a repository URL, or an unparseable server URL is false: the
- * caller then uses `gh` (fail closed). */
-function originNamesRepository(owner: string, repo: string): boolean {
-  let serverHost: string;
+/** The host `gh` and the API calls after it target: `GH_HOST` when it is set (an
+ * explicit host takes precedence, as in `gh`), else the Actions server
+ * (`GITHUB_SERVER_URL`, `https://github.com` when unset). `null` when that host
+ * cannot be parsed. */
+function activeGithubHost(): string | null {
   try {
-    serverHost = new URL(process.env.GITHUB_SERVER_URL ?? 'https://github.com')
-      .host;
+    const explicit = process.env.GH_HOST?.trim();
+    if (explicit) return new URL(`https://${explicit}`).host.toLowerCase();
+    return new URL(
+      process.env.GITHUB_SERVER_URL ?? 'https://github.com',
+    ).host.toLowerCase();
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** True when the checkout's `origin` remote names `owner/repo` on the active
+ * GitHub host (`activeGithubHost`), compared case-insensitively. An unreadable
+ * origin, a missing remote, a remote that is not a repository URL, or an
+ * unparseable host is false: the caller then uses `gh` (fail closed). */
+function originNamesRepository(owner: string, repo: string): boolean {
+  const serverHost = activeGithubHost();
+  if (serverHost === null) return false;
   let remote: string;
   try {
     remote = execFileSync('git', ['remote', 'get-url', 'origin'], {
