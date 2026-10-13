@@ -972,7 +972,7 @@
         "authoringOnlyLabelName": {
           "type": "string",
           "minLength": 1,
-          "description": "GitHub label name marking an issue whose deliverable is other issues, with no commit, branch, or pull request, excluding it from Discover's ready-to-start set so it never reaches a claim. Optional; defaults to `status:authoring-only`."
+          "description": "GitHub label name marking an issue whose deliverable is other issues, with no commit, branch, or pull request, excluding it from Discover's ready-to-start set, so Discover's candidate scans never offer it. Optional; defaults to `status:authoring-only`."
         },
         "untrustedLabelerLogins": {
           "type": "array",
