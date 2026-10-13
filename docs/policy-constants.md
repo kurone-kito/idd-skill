@@ -281,9 +281,14 @@ covering the secondary bot landing a finding after a snapshot already looked
 converged (measured on PR #2330: findings landed 34s and 2m after a
 zero-unresolved judgement). It anchors on the same
 `ackOnlyPostDisposition`-aware activity ceiling the currency gate already
-computes, so it needs no separately persisted timestamp: a genuinely
-unresolved item keeps the anchor fresh, and a disposition reply, a
-watermark, or a courtesy bot ack never reopens it. Distinct from
+computes, except that the own timestamp of an unedited top-level disposition
+by a trusted author is left out, so the agent's own issue-comment reply never
+restarts the window (observed 2026-10-12 on a kurone-kito/dotfiles pull
+request; issue `#4123`). It needs no separately persisted timestamp: a
+genuinely unresolved item keeps the anchor fresh, and a watermark or a
+top-level advisory-bot ack posted after a disposition never reopens it. A
+disposition reply inside a review thread, and a bot reply on an unresolved
+thread, still reopen it. Distinct from
 `settledWindow`, which bounds the PRIMARY bot's own pending state, not a
 late secondary-bot arrival. This F2 duration is separate from the
 Copilot-only advisory-wait window, which does not wait on any login
