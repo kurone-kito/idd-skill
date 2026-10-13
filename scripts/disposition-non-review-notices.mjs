@@ -190,13 +190,15 @@ export function buildCodexNoFindDispositionBody(
 export { isCodexReviewSummaryCompleteForHeadSha } from './protocol-helpers.mjs';
 /**
  * #4122: true when a Codex review-status table has a row for the current
- * HEAD, whatever its status. `isCodexReviewSummaryCompleteForHeadSha` still
- * decides Completed; this only separates "a row for the HEAD that is not
- * Completed" (Running, Failed: `codex-review-running`) from "no row for the
- * HEAD, an unparseable table, or no table" (`codex-no-result-for-head`).
- * It reads the table the same way: header cells naming `status` and
- * `commit`, backticks stripped from the commit cell, and a commit cell that
- * prefixes the full HEAD SHA.
+ * HEAD with a status, whatever that status is.
+ * `isCodexReviewSummaryCompleteForHeadSha` still decides Completed; this
+ * only separates "a row for the HEAD that is not Completed" (Running,
+ * Failed: `codex-review-running`) from "no row for the HEAD, an unparseable
+ * table, or no table" (`codex-no-result-for-head`). It reads the table the
+ * same way: header cells naming `status` and `commit`, backticks stripped
+ * from the commit cell, a commit cell that prefixes the full HEAD SHA, and
+ * the last matching row winning. A matching row whose status cell is empty
+ * is malformed, so it counts as an unparseable table, not a running review.
  */
 export function hasCodexReviewSummaryRowForHeadSha(body, headSha) {
   const fullHeadSha = String(headSha ?? '')
@@ -224,13 +226,17 @@ export function hasCodexReviewSummaryRowForHeadSha(body, headSha) {
   if (statusColumn === -1 || commitColumn === -1) {
     return false;
   }
-  return rows.slice(1).some((row) => {
+  let latestStatus = null;
+  for (const row of rows.slice(1)) {
     const commitCell = (row[commitColumn] ?? '')
       .replace(/`/g, '')
       .trim()
       .toLowerCase();
-    return commitCell !== '' && fullHeadSha.startsWith(commitCell);
-  });
+    if (commitCell !== '' && fullHeadSha.startsWith(commitCell)) {
+      latestStatus = row[statusColumn] ?? '';
+    }
+  }
+  return latestStatus !== null && latestStatus.trim() !== '';
 }
 /**
  * Plan the dispositions for a PR's regular comments. Pure: takes the fetched
@@ -541,7 +547,9 @@ export function buildDispositionPlan(input, options = {}) {
     // unparseable table, or no table is `codex-no-result-for-head` -- Codex
     // has not reviewed this HEAD, and it can still add a row later, so it is
     // reported, never dispositioned (the manual E4 `**Rejected**` stays the
-    // route).
+    // route). The helper does not model that manual reply (the gate pairs it
+    // through its generic pool), so it keeps reporting the comment after one
+    // is posted.
     if (
       identity === 'chatgpt-codex-connector' &&
       !isCodexReviewSummaryCompleteForHeadSha(comment.body, headSha)

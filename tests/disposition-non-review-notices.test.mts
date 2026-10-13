@@ -2137,7 +2137,13 @@ test('#4122: a Codex summary with no HEAD row, an unparseable table, or no table
     '| 📝 **Code Review** | ✅ **Completed** | `0123456` |\n';
   const noTable =
     '<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n';
-  const bodies = [CODEX_SUMMARY_COMPLETED, unparseable, noTable];
+  // A row for the HEAD whose status cell is empty is malformed, so it is
+  // an unparseable table, not a running review.
+  const emptyStatus =
+    '<!-- codex-pull-request-review-summary -->\n\n' +
+    '| Review | Status | Commit |\n| --- | --- | --- |\n' +
+    '| 📝 **Code Review** |  | `0123456` |\n';
+  const bodies = [CODEX_SUMMARY_COMPLETED, unparseable, noTable, emptyStatus];
   for (const body of bodies) {
     assert.equal(isReviewSummaryComment(body), true);
     assert.equal(isCodexReviewSummaryCompleteForHeadSha(body, HEAD_SHA), false);
@@ -2157,6 +2163,7 @@ test('#4122: a Codex summary with no HEAD row, an unparseable table, or no table
       [1, 'codex-no-result-for-head'],
       [2, 'codex-no-result-for-head'],
       [3, 'codex-no-result-for-head'],
+      [4, 'codex-no-result-for-head'],
     ],
   );
   // The local row parser copies the shared table parsing, and it decides
