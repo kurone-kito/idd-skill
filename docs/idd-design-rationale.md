@@ -2015,6 +2015,43 @@ it. The needs-decision route uses the same definition. The trade-off is that
 an unlisted gap in a narrowing pull request stays deferrable, so the
 acceptance criteria are the lever for making such a gap adopt-now.
 
+#### Review-loop audit (2026-10-13)
+
+1. Cohort: the 100 most recently merged pull requests, #3936 to #4158,
+   merged 2026-10-09 to 2026-10-13. Relax steps use `[4, 7]`.
+2. Deferral replies: 1 in 100 pull requests (pull request #4043, deferred
+   to issue #4059). None at steps 1 or 2. The 20 pull requests at step 2
+   have 358 Accepted replies and none deferred. In a 45-pull-request sample
+   (20 pull requests at step 2 and 25 at step 0) that does not include pull
+   request #4043, 0 of 519 disposition replies record an urgency.
+3. The decision functions `decideUrgencyDefer`, `relaxStepForReviewCount`,
+   and `relaxStepClauseParts` in `src/scripts/policy-helpers.mts` have no
+   runtime caller.
+4. A stratified sample of 45 accepted Copilot findings at step 1 or later
+   in the cohort of item 1, classified once by an independent read-only
+   reviewer with the triage rubric: safety 8, correctness 21,
+   maintainability 5, tests 1, naming 9, wording 1. This is a sample
+   estimate, not a measurement.
+5. Pull request size, comparing a sample of 20 pull requests that ended
+   within 3 Copilot reviews with the 20 that reached 7 or more: median
+   changed lines at the first Copilot review were 106 and 541, and the
+   second group then added a median 724 lines of fixes. Spearman correlation
+   between changed lines and Copilot review count over all 100: 0.54.
+6. Of 181 later-wave findings in the 12 longest pull requests of the cohort
+   in item 1, 83 (46%) were within 3 lines of the previous fix, 52 elsewhere
+   in the same file, and 46 in files the previous fix did not touch.
+7. Authored effort and loop length in the cohort of item 1: `L` 8 pull
+   requests, 6 reached 7 or more reviews, median 10; `M` 35, 5, median 2;
+   `S` 33, 2, median 2.
+8. Copilot changed the overview format between 2026-10-05T05:47Z and
+   2026-10-07T18:17Z (both reviews on pull request #3782): the Open header
+   became `N open finding(s)` and item links became absolute.
+   `copilot-overview-sections.mts` still expects `Open (N)`, so
+   `copilot-review-wave-audit` reported 0 open findings in all 435 reviews
+   of the cohort.
+
+Roadmap kurone-kito/idd-skill#4182 responds to this audit.
+
 ### Needs-decision deferral of review findings (kurone-kito/idd-skill#3776)
 
 The review loop stops for a person at several points: the
