@@ -5,11 +5,12 @@
 // distributed helper can import it without pulling in the wave audit.
 //
 // It reads only the part of an overview body that is independent of "is this a
-// v2 overview?": the `Open (n)` and `Previously missed (n)` sections and the
-// severity label each item carries. The v2 marker test stays with the caller,
-// because the wave audit and the snapshot decide "v2" differently. The snapshot
-// uses `classifyCopilotReviewBody`, which strips code first, and the wave audit
-// uses a plain marker `includes` test.
+// v2 overview?": the Open section, in either header form (`Open (n)` or
+// `n open findings`), the `Previously missed (n)` section, and the severity
+// label each item carries. The v2 marker test stays with the caller, because
+// the wave audit and the snapshot decide "v2" differently. The snapshot uses
+// `classifyCopilotReviewBody`, which strips code first, and the wave audit uses
+// a plain marker `includes` test.
 export function emptySeverityCounts() {
   return { high: 0, medium: 0, low: 0 };
 }
@@ -20,21 +21,44 @@ export function toSeverity(word) {
 // "Previously missed" finding's own <summary>: only a top-level header wraps
 // its text in <strong>. See copilot-review-wave-audit.mts's header comment.
 const SECTION_HEADER_RE = /<summary><strong>([^<]+)<\/strong><\/summary>/g;
-const OPEN_HEADER_RE = /^Open \((\d+)\)$/;
+// The Open section header, in both forms: `Open (<n>)` (the original format)
+// and `<n> open finding` / `<n> open findings` (the October 2026 format, issue
+// #4184).
+const OPEN_HEADER_RE = /^(?:Open \((\d+)\)|(\d+) open findings?)$/;
 const PREVIOUSLY_MISSED_HEADER_RE = /^Previously missed \((\d+)\)$/;
+// Sections recognized and never read for items: the resolved list in both
+// forms, and "What changed in this PR". Reading "What changed" for items would
+// turn a prose-only section into a drift reason, so it stays ignored, as before
+// this change. A severity-labelled finding placed there would be dropped
+// silently; no real body carries one.
+const IGNORED_SECTION_HEADER_RE =
+  /^(?:Resolved since last review \(\d+\)|\d+ resolved since last review|What changed in this PR)$/;
 const SEVERITY_ALT_RE = /alt="(High|Medium|Low) severity"/g;
 // Lazy `[\s\S]*?` is safe here only because each "Open" list item carries
 // exactly one `alt="..."` (on its <picture>'s single <img>, never its
 // <source> siblings) and exactly one `#discussion_r<id>` link -- confirmed
 // against real bodies (PR #3147 review 5255592914, PR #3210 review
-// 5292079228) -- so the lazy match cannot skip past one item into the next.
-// `· New` is U+00B7 MIDDLE DOT, not an ASCII period.
+// 5292079228, PR #4159 review 5500197614) -- so the lazy match cannot skip past
+// one item into the next. A link-less badge breaks that assumption; the item
+// count check then reports the section as unparsed. The link is relative
+// (`#discussion_r<id>`) in the original format and absolute
+// (`https://github.com/<owner>/<repo>/pull/<n>#discussion_r<id>`) in the October
+// 2026 format (issue #4184); both match. `· New` is U+00B7 MIDDLE DOT, not an ASCII
+// period.
 const OPEN_ITEM_RE =
-  /alt="(High|Medium|Low) severity"[\s\S]*?\]\(#discussion_r(\d+)\)(\s*·\s*New)?/g;
+  /alt="(High|Medium|Low) severity"[\s\S]*?\]\([^)\s]*#discussion_r(\d+)\)(\s*·\s*New)?/g;
 // The review's own `**Findings:** None` / `**Findings:** N <picture ...>`
-// summary line -- corroborating evidence cross-checked against whether an
-// "Open" section was actually found (see parseOverviewSections below).
+// summary line, present in the original format only -- corroborating evidence
+// cross-checked against whether an "Open" section was actually found (see
+// parseOverviewSections below).
 const FINDINGS_HEADER_RE = /\*\*Findings:\*\*\s*(None|\d+)/i;
+// The bold open count of the October 2026 format (issue #4184): a whole line
+// `**0 open findings**` (no Open section) or `**<n> open finding(s)**`. With the
+// `m` flag, `$` also matches before a CR, so CRLF bodies need no extra handling;
+// the `\s*` only tolerates trailing blanks. A fenced copy of the line also
+// matches; that can only mark an otherwise-consistent body unparsed, never add a
+// wrong count.
+const OPEN_FINDINGS_LINE_RE = /^\*\*(\d+) open findings?\*\*\s*$/m;
 function findSections(body) {
   const sections = [];
   const matches = [...body.matchAll(SECTION_HEADER_RE)];
@@ -51,13 +75,17 @@ function findSections(body) {
   return sections;
 }
 /**
- * Extract the `Open` and `Previously missed` sections of one overview body,
- * without deciding whether the body is a v2 overview. A section whose parsed
- * item count disagrees with its own header `(n)` gives a reason, and so does a
- * `**Findings:** N` (N > 0) line with no `Open` section at all: the section
- * markup may have changed, so the caller must not treat the result as complete.
- * "Resolved since last review" and "What changed in this PR" are ignored. An
- * unrecognized future section is not, by itself, a reason.
+ * Extract the Open and Previously missed sections of one overview body, without
+ * deciding whether the body is a v2 overview. The Open header is read in both
+ * forms (`Open (<n>)` and `<n> open findings`), and its items link either
+ * relatively or absolutely. A section whose parsed item count disagrees with its
+ * own header count gives a reason. Three drift signals give one too: a
+ * `**<n> open findings**` line with n > 0 and no Open section, a section whose
+ * header is not recognized but whose content lists severity-labelled findings,
+ * and -- in the original format -- a `**Findings:** N` line (N > 0) with no Open
+ * section. "Resolved since last review" (both forms) and "What changed in this
+ * PR" are recognized and ignored. An unrecognized section with no
+ * severity-labelled finding is not, by itself, a reason.
  */
 export function parseOverviewSections(body) {
   const open = [];
@@ -68,7 +96,7 @@ export function parseOverviewSections(body) {
     const openMatch = OPEN_HEADER_RE.exec(header);
     if (openMatch) {
       sawOpenHeader = true;
-      const expected = Number.parseInt(openMatch[1], 10);
+      const expected = Number.parseInt(openMatch[1] ?? openMatch[2], 10);
       const items = [...content.matchAll(OPEN_ITEM_RE)];
       for (const item of items) {
         open.push({
@@ -96,6 +124,19 @@ export function parseOverviewSections(body) {
           `Previously missed header declared ${expected} but ${alts.length} were parsed`,
         );
       }
+      continue;
+    }
+    if (IGNORED_SECTION_HEADER_RE.test(header)) {
+      continue;
+    }
+    // Drift: a header this parser does not know, whose content lists
+    // severity-labelled findings with a discussion link (the shape OPEN_ITEM_RE
+    // matches). Those findings would otherwise vanish silently. `matchAll`
+    // clones the global regex, so no `lastIndex` state leaks between calls.
+    if ([...content.matchAll(OPEN_ITEM_RE)].length > 0) {
+      unparsedReasons.push(
+        `section "${header}" lists severity-labelled findings but is not a recognized section`,
+      );
     }
   }
   // Copilot review, PR #3245 (#discussion_r4086537940's sibling "Previously
@@ -108,7 +149,9 @@ export function parseOverviewSections(body) {
   // corroborating evidence: cross-check it against whether an "Open" section
   // was ever found at all. A declared positive count with no matching Open
   // section means the section markup itself went unrecognized, so report a
-  // reason rather than silently undercounting.
+  // reason rather than silently undercounting. The October 2026 format (issue
+  // #4184) has no such line; the bold `**<n> open findings**` line below plays the
+  // same role there.
   const findingsHeaderMatch = FINDINGS_HEADER_RE.exec(body);
   if (findingsHeaderMatch && !sawOpenHeader) {
     const declared = findingsHeaderMatch[1].toLowerCase();
@@ -117,6 +160,15 @@ export function parseOverviewSections(body) {
     if (declaredCount > 0) {
       unparsedReasons.push(
         `Findings header declared ${declaredCount} but no Open section was found`,
+      );
+    }
+  }
+  const openFindingsLineMatch = OPEN_FINDINGS_LINE_RE.exec(body);
+  if (openFindingsLineMatch && !sawOpenHeader) {
+    const declaredCount = Number.parseInt(openFindingsLineMatch[1], 10);
+    if (declaredCount > 0) {
+      unparsedReasons.push(
+        `Open findings line declared ${declaredCount} but no Open section was found`,
       );
     }
   }
