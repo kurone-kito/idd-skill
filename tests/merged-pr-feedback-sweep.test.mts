@@ -1946,9 +1946,9 @@ test('the render job is read-only and holds the pull-request read the listing ne
   );
 });
 
-test('the write job holds only the issue write, checks out nothing, waits for the render job, and shares the title', () => {
+test('the write job holds only the issue write, publishes only from the default branch, checks out nothing, and waits for the render job', () => {
   const job = sweepJob('write');
-  assert.equal('if' in job, false, 'the write job must not be gated off');
+  assert.equal(job.if, "github.ref == 'refs/heads/main'");
   assert.equal(job.needs, 'render');
   assert.deepEqual(job.permissions, { issues: 'write' });
   assert.equal(job['runs-on'], 'ubuntu-latest');

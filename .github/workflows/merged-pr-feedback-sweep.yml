@@ -12,10 +12,11 @@ name: Merged-PR feedback sweep (weekly summary)
 # schedule and no push or pull_request trigger; the schedule is a follow-up
 # after the first successful dispatch run.
 #
-# The render job checks out the dispatched ref. A dispatch of a pushed branch
-# renders that branch's code and then writes the live summary issue, so it
-# validates the job before its pull request opens (D2). A dispatch on the
-# default branch exercises the merged code.
+# The render job checks out the dispatched ref, so a dispatch of a pushed branch
+# renders that branch's code and validates the render before its pull request
+# opens (D2). The write job runs only on the default branch, so a branch
+# dispatch never writes the shared summary issue, and only merged code can
+# publish to it.
 on:
   workflow_dispatch:
 # Least privilege at the workflow level; each job declares its own scopes below.
@@ -65,6 +66,9 @@ jobs:
           echo "body_b64=$(base64 -w0 "$RUNNER_TEMP/sweep-body.md")" >> "$GITHUB_OUTPUT"
   write:
     needs: render
+    # Publishes only from the default branch. A branch dispatch still renders, so
+    # its output can be inspected, but it cannot write the shared summary issue.
+    if: github.ref == 'refs/heads/main'
     env:
       GH_TOKEN: ${{ github.token }}
       GH_ENTERPRISE_TOKEN: ${{ github.token }}
