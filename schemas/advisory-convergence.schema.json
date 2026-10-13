@@ -120,7 +120,7 @@
         },
         "bodyShape": {
           "type": ["string", "null"],
-          "enum": ["overview-v2", "overview-legacy", "error", "unrecognized", null],
+          "enum": ["overview-v2", "overview-legacy", "error", "decline-no-reviewable-files", "unrecognized", null],
           "description": "kurone-kito/idd-skill#3258: the recognized Copilot review-body shape used to compute suppressedCount, read only when matchesHead is true; null when !found or off-HEAD. 'error' is reachable only in principle -- resolveLatestCopilotReviewClause already excludes an error-bodied review before it can become the selected latest one. 'unrecognized' (a body matching no known shape) makes satisfied false until a trusted review-ack covers it, scoped to the Copilot default primaryBotLogin only."
         },
         "satisfied": {

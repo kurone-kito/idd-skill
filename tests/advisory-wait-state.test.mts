@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import {
   advisoryMarkerComment,
   buildCopilotRecoverySummary,
+  evaluateStaleRequestRecoveryAction,
   parseArgs,
   resolveNowFlag,
 } from '../src/scripts/advisory-wait-state.mts';
@@ -997,4 +998,67 @@ test("the required-field lists match the schema's `required` array", () => {
       `${name} differs from the schema's required array`,
     );
   }
+});
+
+// --- Copilot "wasn't able to review any files" decline (#4142) -----------
+// A declined head is terminal at once: no recovery marker, no clock anchor,
+// and no cap or window wait. Without a claim binding it still fails closed.
+
+test('decline (#4142): copilotDeclinedHead reaches COPILOT_UNAVAILABLE with no marker, no clock anchor, and no cap or window wait', () => {
+  const result = buildCopilotRecoverySummary(
+    {
+      comments: [],
+      prHeadSha: SHA,
+      lastCopilotCommit: '',
+      copilotDeclinedHead: true,
+    },
+    BASE_OPTIONS,
+  );
+  assert.equal(result.state, 'COPILOT_UNAVAILABLE');
+  assert.equal(result.reason, 'copilot-declined-no-reviewable-files');
+  assert.equal(result.clockAnchor, '');
+  assert.equal(result.completedCycleCount, 0);
+  assert.equal(result.capExhausted, false);
+  assert.equal(result.windowElapsed, false);
+});
+
+test('decline (#4142): without a claim binding the decline still fails closed to NOT_TERMINAL', () => {
+  const result = buildCopilotRecoverySummary(
+    {
+      comments: [],
+      prHeadSha: SHA,
+      lastCopilotCommit: '',
+      copilotDeclinedHead: true,
+    },
+    { ...BASE_OPTIONS, claimId: '', agentId: '' },
+  );
+  assert.equal(result.state, 'NOT_TERMINAL');
+  assert.equal(result.reason, 'active-claim-not-provided');
+});
+
+test('decline (#4142): a declined head never yields a recovery attempt, while the same evidence without the decline still does', () => {
+  const evidence = {
+    copilotPending: true,
+    copilotPendingCoversHead: false,
+    sameHeadMarkerPresent: false,
+    remainingBudget: 2,
+    activeClaimProvided: true,
+  };
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...evidence,
+      copilotDeclinedHead: true,
+    }),
+    {
+      action: 'not-applicable',
+      reason: 'copilot-declined-no-reviewable-files',
+    },
+  );
+  assert.equal(
+    evaluateStaleRequestRecoveryAction({
+      ...evidence,
+      copilotDeclinedHead: false,
+    }).action,
+    'attempt',
+  );
 });

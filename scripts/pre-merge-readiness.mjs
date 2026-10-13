@@ -1053,11 +1053,19 @@ export function collectPreMergeReadiness(
   // separate source to preserve for that second consumer; both already
   // shared this single value before this fix, so unifying the evidence
   // source here fixes both at once).
-  const lastCopilotCommit = resolveLatestCopilotReviewClause(
+  const latestCopilotReviewClause = resolveLatestCopilotReviewClause(
     advisoryConvergenceReviews,
     prHeadSha,
     primaryBotLogin,
-  ).commitId;
+  );
+  const lastCopilotCommit = latestCopilotReviewClause.commitId;
+  // The "wasn't able to review any files" decline (copilot-review-body.mts)
+  // names this head, so `lastCopilotCommit` equals the head for it. It is a
+  // terminal decline, not a completed review, so it reaches the terminal state
+  // through this flag rather than through the coverage check.
+  const copilotDeclinedHead =
+    latestCopilotReviewClause.bodyShape === 'decline-no-reviewable-files' &&
+    latestCopilotReviewClause.matchesHead;
   // #2554: shortens the terminal-unavailability window below to
   // `advisoryWait.providerOutage.terminalWindow` only while an active
   // repository-scoped outage declaration covers the SAME
@@ -1092,7 +1100,12 @@ export function collectPreMergeReadiness(
         })
       : false;
   const copilotRecovery = buildCopilotRecoverySummary(
-    { comments: normalizedComments, prHeadSha, lastCopilotCommit },
+    {
+      comments: normalizedComments,
+      prHeadSha,
+      lastCopilotCommit,
+      copilotDeclinedHead,
+    },
     {
       now,
       trustedMarkerLogins,

@@ -27,10 +27,12 @@ import {
   resolveEffectiveAdvisoryTerminalWindowMinutes,
   resolveProviderOutageTerminalWindowMinutes,
 } from '../src/scripts/advisory-wait-policy.mts';
+import { classifyCopilotReviewBody } from '../src/scripts/copilot-review-body.mts';
 import {
   buildAdvisoryWaitSummary,
   classifyCiChecks,
   computeSecondaryRequestedForHead,
+  findLastCopilotDeclineCommit,
   findLastCopilotReviewCommit,
   isCopilotReviewerLogin,
   isVerifiedCopilotAuthor,
@@ -2597,4 +2599,99 @@ test('importing advisory-wait-state.mts has no import-time side effect', async (
   } finally {
     process.env.PATH = originalPath;
   }
+});
+
+// --- Copilot "wasn't able to review any files" decline (#4142) ------------
+//
+// The notice is a terminal decline for the head it names: every changed file
+// is excluded by default, so later runs on that head cannot change the
+// outcome. It is neither a review nor an approval, so it never counts as
+// coverage (`findLastCopilotReviewCommit`). `findLastCopilotDeclineCommit`
+// reports it separately, so the terminal state can be reached at once.
+
+const NO_REVIEWABLE_FILES_BODY =
+  "Copilot wasn't able to review any files in this pull request. Check if the **Files changed** in this pull request are included in [default exclusions](https://docs.github.com/en/copilot/reference/review-excluded-files).\n\n\n\n";
+const DECLINE_HEAD = 'b'.repeat(40);
+const DECLINE_EARLIER_HEAD = 'c'.repeat(40);
+
+test('classifyCopilotReviewBody: the exact decline notice is decline-no-reviewable-files, and a one-word variant stays unrecognized (#4142)', () => {
+  assert.equal(
+    classifyCopilotReviewBody(NO_REVIEWABLE_FILES_BODY).shape,
+    'decline-no-reviewable-files',
+  );
+  assert.equal(
+    classifyCopilotReviewBody(
+      NO_REVIEWABLE_FILES_BODY.replace("wasn't", 'was not'),
+    ).shape,
+    'unrecognized',
+  );
+  assert.equal(
+    classifyCopilotReviewBody(
+      NO_REVIEWABLE_FILES_BODY.replace('in this pull request', 'in this PR'),
+    ).shape,
+    'unrecognized',
+  );
+});
+
+test('decline (#4142): both helpers agree Copilot did not review the head, and only the decline selector names it', () => {
+  const reviews = [
+    {
+      author: { login: 'copilot-pull-request-reviewer' },
+      submittedAt: '2026-10-13T01:35:38Z',
+      commitId: DECLINE_HEAD,
+      body: NO_REVIEWABLE_FILES_BODY,
+    },
+  ];
+  // Not coverage: the decline never makes the head SATISFIED.
+  assert.equal(findLastCopilotReviewCommit(reviews), '');
+  assert.equal(findLastCopilotDeclineCommit(reviews), DECLINE_HEAD);
+  const summary = buildAdvisoryWaitSummary(
+    {
+      prHeadSha: DECLINE_HEAD,
+      reviews,
+      requestedReviewers: [],
+      timelineEvents: [],
+      comments: [],
+    },
+    { now: '2026-10-13T02:00:00Z' },
+  );
+  assert.equal(summary.lastCopilotCommit, '');
+  assert.notEqual(summary.outcome, 'SATISFIED');
+  assert.notEqual(summary.f3Outcome, 'SATISFIED');
+});
+
+test('decline (#4142): a decline on an earlier head, or a later non-decline review on the current head, does not name the current head', () => {
+  const earlierDecline = {
+    author: { login: 'copilot-pull-request-reviewer' },
+    submittedAt: '2026-10-13T01:35:38Z',
+    commitId: DECLINE_EARLIER_HEAD,
+    body: NO_REVIEWABLE_FILES_BODY,
+  };
+  assert.equal(
+    findLastCopilotDeclineCommit([earlierDecline], 'copilot'),
+    DECLINE_EARLIER_HEAD,
+  );
+  assert.equal(
+    findLastCopilotDeclineCommit(
+      [
+        earlierDecline,
+        {
+          author: { login: 'copilot-pull-request-reviewer' },
+          submittedAt: '2026-10-13T02:00:00Z',
+          commitId: DECLINE_HEAD,
+          body: 'Looks good to me, approving.',
+        },
+      ],
+      'copilot',
+    ),
+    '',
+  );
+  // A configured non-Copilot primary bot never reads the decline.
+  assert.equal(
+    findLastCopilotDeclineCommit(
+      [{ ...earlierDecline, author: { login: 'coderabbitai[bot]' } }],
+      'coderabbitai[bot]',
+    ),
+    '',
+  );
 });

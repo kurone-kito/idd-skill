@@ -552,10 +552,13 @@ function collectUnaddressedComments(
         primaryBotLogin,
       )
     : null;
+  // A "wasn't able to review any files" decline is neither a review nor an
+  // approval, so like `unrecognized` it cannot supersede earlier findings.
   const canSupersedeHistoricalPrimaryFindings =
     latestPrimaryClause?.satisfied === true &&
     latestPrimaryClause.bodyShape !== null &&
-    latestPrimaryClause.bodyShape !== 'unrecognized';
+    latestPrimaryClause.bodyShape !== 'unrecognized' &&
+    latestPrimaryClause.bodyShape !== 'decline-no-reviewable-files';
   for (const [commentIndex, comment] of comments.entries()) {
     const author = authorLogin(comment);
     // Only IDD-agent comments are excluded by author (their dispositions are
@@ -660,7 +663,8 @@ function collectUnaddressedComments(
       bodyClassification !== null &&
       (bodyClassification.suppressedCount > 0 ||
         (primaryBotLogin === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN &&
-          bodyClassification.shape === 'unrecognized'));
+          (bodyClassification.shape === 'unrecognized' ||
+            bodyClassification.shape === 'decline-no-reviewable-files')));
     if (!isChangesRequested && !hasOutsideDiffRange && !isPrimaryBotFinding) {
       continue;
     }

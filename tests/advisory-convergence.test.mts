@@ -9945,3 +9945,86 @@ test('unreadable only (#4070, rp1kz): a trusted review-ack for the head after it
   );
   assert.notEqual(summary.outcome, 'DISPOSITION_NEEDED');
 });
+
+// --- Copilot "wasn't able to review any files" decline (#4142) -----------
+// The decline is a terminal decline for this head, not a review. Clause 1
+// stays fail-closed until a trusted review-ack covers it, and the terminal
+// state is reachable at once, with no window wait.
+
+const NO_REVIEWABLE_FILES_BODY_4142 =
+  "Copilot wasn't able to review any files in this pull request. Check if the **Files changed** in this pull request are included in [default exclusions](https://docs.github.com/en/copilot/reference/review-excluded-files).\n\n\n\n";
+
+test('decline (#4142): an on-HEAD no-reviewable-files notice is a terminal decline, not a review, and reaches COPILOT_UNAVAILABLE at once', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: NO_REVIEWABLE_FILES_BODY_4142 }),
+      ],
+      claimEvents: [claimComment()],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      headObservedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+    }),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'decline-no-reviewable-files');
+  assert.equal(verdict.review.satisfied, false);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+  assert.match(verdict.reasons.join('\n'), /decline-no-reviewable-files/);
+  assert.doesNotMatch(verdict.reasons.join('\n'), /bodyShape: unrecognized/);
+  assert.equal(verdict.terminal.state, 'COPILOT_UNAVAILABLE');
+  assert.equal(verdict.terminal.reason, 'copilot-declined-no-reviewable-files');
+  assert.equal(verdict.terminal.clockAnchor, '');
+  assert.equal(verdict.terminal.completedCycleCount, 0);
+  assert.match(
+    formatAssertNextActions(verdict),
+    /wasn't able to review any files/,
+  );
+});
+
+test('decline (#4142): a trusted review-ack after the body has been read clears Clause 1, and nothing else changes', () => {
+  const ackAfterReview = '2026-07-11T10:30:00Z';
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({ itemCount: 0, body: NO_REVIEWABLE_FILES_BODY_4142 }),
+      ],
+      claimEvents: [claimComment()],
+      comments: [reviewAckComment(ackAfterReview)],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.converged, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('decline (#4142): a decline on an earlier head does not affect a genuine later review on the current head', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [
+        copilotReview({
+          commitId: OTHER_SHA,
+          itemCount: 0,
+          body: NO_REVIEWABLE_FILES_BODY_4142,
+          submittedAt: '2026-07-11T09:00:00Z',
+        }),
+        copilotReview({ itemCount: 0 }),
+      ],
+      claimEvents: [claimComment()],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.equal(verdict.review.bodyShape, 'overview-v2');
+  assert.equal(verdict.review.satisfied, true);
+  assert.notEqual(
+    verdict.terminal.reason,
+    'copilot-declined-no-reviewable-files',
+  );
+});
