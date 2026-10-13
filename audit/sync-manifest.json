@@ -907,7 +907,7 @@
       "target": "skills/issue-authoring/references/contract.md",
       "mode": "contains",
       "requiredText": [
-        "It mirrors the canonical\ncontract in `docs/issue-authoring-skill.md`.",
+        "bundle is the canonical copy of the contract",
         "## Target marker prefix",
         "## Publication boundary",
         "**Previously declined check.**"
@@ -1248,7 +1248,7 @@
       "standard": {
         "file": "idd-template/.github/instructions/idd-overview-core.instructions.md",
         "heading": "Claim revalidation gate",
-        "contains": "B1 setup commands on the primary worktree's `main`"
+        "contains": "B1 setup commands on the primary worktree's `{default-branch}`"
       },
       "lite": {
         "file": "idd-template/.github/instructions/lite/idd-work-lite.instructions.md",

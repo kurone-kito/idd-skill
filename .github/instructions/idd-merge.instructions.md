@@ -496,7 +496,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    - `Not possible to fast-forward, aborting.` → hold as
      `development-branch-diverged`; don't reset/rebase.
 
-   Off-default `{development-branch}`: `git switch <default-branch>`
+   Off-default `{development-branch}`: `git switch {default-branch}`
    once F4 completes/holds, for B1's checkout.
 5. Run from the **primary worktree**, not one being removed.
    Removal discards ignored submodule data. Scope

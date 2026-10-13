@@ -364,15 +364,17 @@ execution leaves from **each** open root (`sourceRoots` provenance).
 `--all-roadmaps` emits only this **raw** ranked union; it does not run
 A1.5. Once per `--all-roadmaps` re-enumeration, audit each root via A1.5
 **before** adding its leaves (re-enumerate with `--refresh-cache` after
-close/link). Drop a root that itself has a blocked-by-human or
+close/link). A root marked `a15AuditRequired: true` (zero open leaves;
+observed 2026-10-11, issue `#4037`) adds no leaves: audit it before any
+A0-O exit under trigger (a) or (b), then re-enumerate with
+`--a15-audited <n>`. Drop a root that itself has a blocked-by-human or
 needs-decision label, or whose A1.5 outcome is a non-autonomous-gap;
 descendant blockers still continue to A2. Omit a leaf whose
 `sourceRoots` are all dropped. Do not invoke A0-O / trigger (d) for a
 dropped root; continue auditing remaining roots. Close only after A1.5's
 written checks, not helper `ready: true`. Any other A1.5 outcome that
-continues to A2 still unions that root.
-Then rank as in A4 Step 2. Score is advisory — A3/A4/A4.5/A5 still run
-on the selected candidate.
+continues to A2 still unions that root. Then rank as in A4 Step 2. Score
+is advisory — A3/A4/A4.5/A5 still run on the selected candidate.
 
 ## A3 — Filter to ready-to-start
 

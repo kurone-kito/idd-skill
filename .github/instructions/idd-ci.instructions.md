@@ -78,7 +78,7 @@ interpreting `gh pr checks` output.
    before calling this endpoint:
 
    ```sh
-   gh api repos/{owner}/{repo}/branches/{url-encoded-base-branch}/protection
+   gh api repos/{owner}/{repo}/branches/{url-encoded-development-branch}/protection
    ```
 
 4. **Distinguish a permission error from a genuine empty result** on
@@ -303,10 +303,11 @@ decision-rule file gets none (kurone-kito/idd-skill#4015).
 original event's commit and workflow definition (`pull_request`: that
 event's merge commit; `pull_request_target`: the base branch's copy at
 that time), so a later workflow-file change is invisible to it. Run-time
-fetches, such as the verdict job's `ref: main` checkout, are current. If
-a required check keeps failing the same way after a rerun and its
-workflow file changed on `main` since, the recovery is a new event: a
-branch-sync merge (merge `main` in, never rebase — see the E-phase
+fetches, such as the verdict job's checkout of `{default-branch}`, are
+current. If a required check keeps failing the same way after a rerun
+and its workflow file changed on `{development-branch}` since, the
+recovery is a new event: a branch-sync merge (merge
+`{development-branch}` in, never rebase — see the E-phase
 branch-sync check in `idd-review-triage.instructions.md`) or reopening
 the PR. Treat this as reachable at D4/pre-review, not only after E8 — the
 ordering dependency a shared check-definition change creates is

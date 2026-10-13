@@ -27,7 +27,7 @@ import {
 } from './github-api-read-cache.mjs';
 
 /** Bumped when a helper's cached output shape changes incompatibly. */
-const HINT_FORMAT_VERSION = 1;
+const HINT_FORMAT_VERSION = 2;
 /** Cache-namespace names; each yields a distinct entry identity. */
 const HINT_UNIT = 'discover-hint';
 const GENERATION_UNIT = 'discover-hint-generation';

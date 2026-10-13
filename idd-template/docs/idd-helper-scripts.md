@@ -1505,7 +1505,14 @@ default below is unchanged.
   shape differs from single-root mode:
   - `mode`: `"all-roadmaps"`
   - `roots`: `[{ number: number, title: string, state: string,`
-    `roadmapMarkerId: string }]` — every open roadmap root enumerated
+    `roadmapMarkerId: string, openLeafCount: number,`
+    `a15AuditRequired: boolean }]` — every open roadmap root enumerated.
+    `openLeafCount` counts that root's own open execution leaves, with no
+    label, claim, or readiness filter, and is per root (a shared leaf counts
+    under each root). `a15AuditRequired` is `true` when `openLeafCount` is 0
+    and the root is not named by `--a15-audited <n>` (repeatable, valid only
+    with `--all-roadmaps`). Naming a root there records that its A1.5 audit
+    already ran in this pass; the helper never observes audit completion.
   - `leaves`: `[{ number: number, title: string, state: string,`
     `labels: string[], classification: "execution",`
     `roadmapMarkerId: string, autopilotSuitability: number | null,`
@@ -6984,8 +6991,8 @@ same as `AW4`/`AW5`.
   2. Only if `branchState` is `behind-no-conflict`, derive
      `requiresUpToDateHead`. Other states route without it, so they make no
      policy reads.
-     1. Read the base branch's rules (`rules/branches/{base-branch-url-encoded}`)
-        and its protection (`branches/{base-branch-url-encoded}/protection`)
+     1. Read the base branch's rules (`rules/branches/{development-branch-url-encoded}`)
+        and its protection (`branches/{development-branch-url-encoded}/protection`)
         under `repos/{owner}/{repo}`, with `gh api`. A 404 is unreadable
         unless the `.github/idd/config.json` at the base ref sets
         `ciGate.trustEmptyProtectionReads` to `true`. Read that file from the
@@ -6993,10 +7000,10 @@ same as `AW4`/`AW5`.
 
         ```sh
         gh api -H 'Accept: application/vnd.github.raw' \
-          'repos/{owner}/{repo}/contents/.github/idd/config.json?ref={base-branch-url-encoded}'
+          'repos/{owner}/{repo}/contents/.github/idd/config.json?ref={development-branch-url-encoded}'
         ```
 
-        Encode `{base-branch}` as a URL path segment in all three paths (for
+        Encode `{development-branch}` as a URL path segment in all three paths (for
         example `release%2F1`), as the helper adapter does. An unencoded name
         addresses another route and reads as a 404. A missing file falls back
         to the user-global policy layers, as `loadTrustedIddConfig` does, and
@@ -7372,9 +7379,10 @@ same as `AW4`/`AW5`.
 - Read-only boundary: the helper performs no minimization, no posting, and no
   issue creation. **Handoff**: the JSON is the input an operator hands to the
   issue-authoring skill, which re-verifies each candidate against current
-  `main` (reuse-first / not-already-fixed) and drafts follow-up issues
-  bucketed by readiness. The helper does deterministic detection; the
-  judgment-heavy re-verification, drafting, and publish stay operator-gated.
+  `{development-branch}` (reuse-first / not-already-fixed) and drafts
+  follow-up issues bucketed by readiness. The helper does deterministic
+  detection; the judgment-heavy re-verification, drafting, and publish stay
+  operator-gated.
 - **Operator runbook**: this helper is a **manual spot-check audit**, not a
   phase step — its absence from the executable phase instruction files is
   by design, not an oversight.
@@ -7693,12 +7701,12 @@ a destructive re-run.
 ## Signed-Commit Merge Wrapper (Shared Git Procedure)
 
 `idd-review-triage.instructions.md`'s E-phase sync path and
-`idd-review-fix.instructions.md`'s E11 both merge `main` into the feature
-branch:
+`idd-review-fix.instructions.md`'s E11 both merge `{development-branch}`
+into the feature branch:
 
 ```sh
-git fetch origin +refs/heads/main:refs/remotes/origin/main \
-  && git merge origin/main
+git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch} \
+  && git merge origin/{development-branch}
 ```
 
 On a repo whose primary commit signing is non-interactive-hostile (GPG
@@ -7708,7 +7716,7 @@ arbitrary git subcommands, run the **merge** step — including a
 plain command (`git fetch` creates no commit and needs no signing):
 
 ```sh
-git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge -m "chore: merge origin/main into the claimed branch" origin/main
+git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge -m "chore: merge origin/{development-branch} into the claimed branch" origin/{development-branch}
 # resolve conflicts if any, then:
 git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge --continue
 ```
