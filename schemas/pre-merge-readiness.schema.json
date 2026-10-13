@@ -717,7 +717,7 @@
       "properties": {
         "outcome": {
           "type": "string",
-          "description": "E14/F2 advisory-wait state machine's current outcome, evaluated from Copilot's pending/reviewed state, same-head markers, and the elapsed/settled windows below.",
+          "description": "E14/F2 advisory-wait state machine's current outcome, evaluated from Copilot's pending/reviewed state, same-head markers, and the elapsed/settled windows below. DISPOSITION_NEEDED (#4070) lists its triggers in the outcome description of advisory-wait-state.schema.json.",
           "enum": [
             "SATISFIED",
             "WAIT",
@@ -729,7 +729,7 @@
         },
         "f3Outcome": {
           "type": "string",
-          "description": "F3-specific advisory-wait outcome, which treats a settled (no-longer-pending) Copilot request as SATISFIED even when outcome above is not.",
+          "description": "F3-specific advisory-wait outcome, which treats a settled (no-longer-pending) Copilot request as SATISFIED even when outcome above is not. DISPOSITION_NEEDED (#4070) never merges; its triggers are listed in the outcome description of advisory-wait-state.schema.json.",
           "enum": [
             "SATISFIED",
             "WAIT",
