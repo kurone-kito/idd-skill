@@ -1324,12 +1324,14 @@ identify its old claims, and step 1 treats them as not its own.
    still running gets no record and is reported in step 5. Look for the worker's
    report draft in the scratchpad of the same session, under the issue-number
    prefix that the fan-out variant already requires. If a draft is found, check
-   that its `issue`, `claimId`, and `workerHandle` match the matched claim and
-   the recovery handle, and do not append a draft that does not match. Then
-   verify its outcome, `pullRequest`, and `terminalPhase` against live GitHub
-   state, set `verifiedAt` to that check and `recordedAt` to the time of the
-   append, then append it. If no draft is found, verify the terminal outcome
-   from live GitHub state, build the record as the
+   that its `issue` and `claimId` match the claim, and that its `workerHandle`
+   matches the listed handle when the claim has a matched worker. A draft that
+   matches the claim but has no listed worker is appended under its own
+   `workerHandle`. Do not append a draft that does not match. Then verify its
+   outcome, `pullRequest`, and `terminalPhase` against live GitHub state, set
+   `verifiedAt` to that check and `recordedAt` to the time of the append, then
+   append it. If no draft is found, verify the terminal outcome from live GitHub
+   state, build the record as the
    [worker final report store](idd-helper-scripts.md#worker-final-report-store)
    describes, and append it the same way. In both cases, validate the record
    against `schemas/worker-report.schema.json` first, then append it with the
