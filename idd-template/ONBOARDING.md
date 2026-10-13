@@ -528,10 +528,11 @@ require explicit operator confirmation:
     for the field evidence and the guard recipe.
 13. up-to-date-head ruleset check
     (`required_status_checks.strict_required_status_checks_policy`,
-    recommended disabled — enabling it can force a `main`-sync merge on
-    every merely-`BEHIND` PR and multiplies advisory-review rounds
-    without review value; a before/after sample measured the sync-merge
-    share fall from ~27% to ~3.7%, kurone-kito/idd-skill#1817)
+    recommended disabled — enabling it can force a
+    `{development-branch}`-sync merge on every merely-`BEHIND` PR and
+    multiplies advisory-review rounds without review value; a before/after
+    sample measured the sync-merge share fall from ~27% to ~3.7%,
+    kurone-kito/idd-skill#1817)
 14. bootstrap execution mode (`direct-import` default, or
     `issue-mediated`)
 15. development branch (`developmentBranch`) that receives IDD feature

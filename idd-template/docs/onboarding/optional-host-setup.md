@@ -431,10 +431,11 @@ the probe has neither.
 
 **Protect the required workflow definition with CODEOWNERS.** A
 `pull_request`-triggered workflow runs its definition from the PR's
-synthetic merge ref before any job step can perform the trusted `main`
-checkout, so that checkout protects the helper and config the job runs
-but not the workflow definition itself changed in the PR (preventive
-guidance; no observed incident is being claimed here).
+synthetic merge ref before any job step can perform the trusted
+`{default-branch}` checkout, so that checkout protects the helper and
+config the job runs but not the workflow definition itself changed in
+the PR (preventive guidance; no observed incident is being claimed
+here).
 
 Add CODEOWNERS coverage for the workflow and for the active CODEOWNERS
 file itself. GitHub searches `.github/`, the repository root, then
@@ -485,15 +486,15 @@ equivalent explicit maintainer validation instead (preventive; no
 observed incident yet).
 
 Beyond the workflow file, also protect every trusted input it checks
-out from `main` — for example `/.github/idd/`,
+out from `{default-branch}` — for example `/.github/idd/`,
 `/scripts/advisory-convergence.mjs`, and their transitive runtime
 inputs (the exact set depends on the adopter's imports; inspect the
 workflow and helper before finalizing) — plus any repository or
 organization variable that selects the runner (`CI_RUNNER_LABEL`)
 together with self-hosted runner administration and integrity. The
 current PR run is unaffected by PR-local copies of these paths, since
-it checks out `main`, but a later run would trust them post-merge
-(preventive; no observed incident yet).
+it checks out `{default-branch}`, but a later run would trust them
+post-merge (preventive; no observed incident yet).
 
 Before enabling the required check, either pin every action this gate
 uses to a verified full commit SHA, or explicitly accept and record the
@@ -537,10 +538,8 @@ script (`scripts/advisory-convergence.mjs`) and its config
 (`.github/idd/config.json`) must run from the trusted branch, not a
 PR's own copy — otherwise a PR could edit the verdict logic itself to
 force `ready: true` and defeat the whole required-check gate. The
-verdict still correctly evaluates the intended PR: `--pr <number>`
-drives every live GitHub API call the script makes (reviews, threads,
-comments), independent of what is checked out locally, so pinning the
-checkout to the trusted branch costs nothing functionally.
+verdict still evaluates the intended PR, because no live GitHub API
+read depends on checkout state, so pinning the checkout costs nothing.
 
 `pull_request_target` is the verdict's only pull-request trigger:
 evaluated against the base branch's copy, so a same-repository PR
@@ -614,7 +613,7 @@ explains (observed 2026-08-11 onboarding a companion repository;
 
 Use the narrower `PATCH .../required_status_checks` endpoint instead,
 with an explicit `checks` array and `app_id: -1` (any producer) rather
-than a plain `contexts` array. Substitute `{base-branch}` below with
+than a plain `contexts` array. Substitute `{development-branch}` below with
 the literal protected branch name (for example `main`) — do not use
 `gh api`'s own `{branch}` magic placeholder, which silently resolves to
 whatever branch is currently checked out locally, not the protected
@@ -624,7 +623,7 @@ adopter incident):
 
 ```sh
 gh api --method PATCH \
-  repos/{owner}/{repo}/branches/{base-branch}/protection/required_status_checks \
+  repos/{owner}/{repo}/branches/{development-branch}/protection/required_status_checks \
   --input - <<'JSON'
 {"checks": [{"context": "idd-advisory-convergence", "app_id": -1}]}
 JSON
@@ -637,7 +636,7 @@ current array:
 
 ```sh
 gh api \
-  repos/{owner}/{repo}/branches/{base-branch}/protection/required_status_checks \
+  repos/{owner}/{repo}/branches/{development-branch}/protection/required_status_checks \
   --jq '.checks'
 ```
 

@@ -376,8 +376,8 @@ An absent `developmentBranch` resolves the live repository default
 branch, preserving backwards compatibility for a repository already
 onboarded without this setting. Release, hotfix, and
 development-to-default promotion flows are outside this decision's
-support boundary, as are arbitrary feature-branch namespaces and Git
-Flow CLI automation — the only supported topology is an
+support boundary, as are arbitrary feature-branch namespaces and
+branch-model CLI automation — the only supported topology is an
 `issue/<number>-<slug>` feature branch merging into the one configured
 development branch.
 
@@ -446,8 +446,9 @@ It should also confirm whether the repository's GitHub ruleset leaves
 disabled:
 
 - Recommended: disabled. Measured evidence shows enabling it can force
-  a `main`-sync merge on every merely-`BEHIND` PR and multiplies Copilot
-  advisory-review rounds without adding review value — a before/after
+  a `{development-branch}`-sync merge on every merely-`BEHIND` PR and
+  multiplies Copilot advisory-review rounds without adding review
+  value — a before/after
   commit sample measured the sync-merge share fall from ~27% to ~3.7%
   once this repository disabled it
   ([kurone-kito/idd-skill#1817](https://github.com/kurone-kito/idd-skill/issues/1817)).
@@ -455,9 +456,9 @@ disabled:
   ruleset — an unreadable ruleset read still fails closed to forcing
   the sync path regardless of the live setting.
 - Trade-off: disabling it means the final pre-merge CI run may not
-  reflect the very latest `main`, which IDD's own conflict-triggered
-  `main`-sync merge (E11) and F1/F2 freshness checks still catch when
-  it matters for correctness.
+  reflect the very latest `{development-branch}`, which IDD's own
+  conflict-triggered `{development-branch}`-sync merge (E11) and F1/F2
+  freshness checks still catch when it matters for correctness.
 
 Record whether the repository keeps this setting disabled before
 unattended workers begin running.

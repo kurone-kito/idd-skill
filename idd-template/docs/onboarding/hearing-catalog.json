@@ -301,7 +301,7 @@
       "step": "1B",
       "kind": "policy",
       "prompt": "Leave GitHub's require-up-to-date-head setting disabled?",
-      "explanation": "Recommended: disabled. Enabling it can force a main-sync merge on every merely-BEHIND PR and multiply Copilot advisory rounds. IDD's conflict-triggered main-sync and F1/F2 freshness checks still catch correctness-critical drift. This is a docs-only GitHub ruleset decision.",
+      "explanation": "Recommended: disabled. Enabling it can force a `{development-branch}`-sync merge on every merely-BEHIND PR and multiply Copilot advisory rounds. IDD's conflict-triggered `{development-branch}`-sync and F1/F2 freshness checks still catch correctness-critical drift. This is a docs-only GitHub ruleset decision.",
       "options": [
         {
           "value": "disabled",
