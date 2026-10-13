@@ -37,8 +37,8 @@ the E1 net above; the F2 elapsed-window blocker is not a substitute.
 
 The advisory bot usually reviews current HEAD within minutes, reducing
 the gate to one check: poll `LAST_COPILOT_COMMIT`; once it equals
-`PR_HEAD_SHA`, the gate is **SATISFIED** unless **DISPOSITION_NEEDED**
-(#4070). For `SATISFIED`, skip the AW2-AW5 machinery and take the
+`PR_HEAD_SHA`, the gate is **SATISFIED** unless **DISPOSITION_NEEDED**.
+Otherwise, skip the AW2-AW5 machinery and take the
 caller's `SATISFIED` action (D4 → rerun
 `idd-advisory-convergence` and resume D4, E14 → E15, F2 → CI check, F3
 → merge; common to both the canonical path and shell-fallback AW3 row
@@ -82,7 +82,7 @@ list), `secondaryRequestLogins` (still-unrequested subset), and
 
 Allowed `outcome`/`f3Outcome` values: `SATISFIED`, `REQUEST_NEEDED`,
 `RECOVERY_NEEDED`, `CAP_EXHAUSTED`, `WAIT`, `DISPOSITION_NEEDED`
-(#4070; never `SATISFIED`; also when same-head reviews disagree). `HOLD` is a protocol-level
+(#4070; never `SATISFIED`; also on same-head disagreement). `HOLD` is a protocol-level
 routing state for AW4/AW5 fail-closed stops only — caller-derived, not
 emitted by helper enums.
 
@@ -106,7 +106,7 @@ outage (e.g. via status page or an org admin surface) before retrying.
 | Outcome | D4 | E14 | F2 | F3 |
 | --- | --- | --- | --- | --- |
 | `SATISFIED` | `lastCopilotCommit` matches HEAD: rerun `idd-advisory-convergence`; resume D4. Elapsed-window `SATISFIED`: exit CI-wait; proceed to E1 | proceed to E15 | continue to CI check | proceed with merge |
-| `DISPOSITION_NEEDED` (#4070) | exit CI-wait; proceed to E1 | answer the cited items (E6), or review-ack an unreadable review; rerun AW1 | return to E14 | do not merge |
+| `DISPOSITION_NEEDED` (#4070) | exit CI-wait; proceed to E1 | answer cited items (E6), or review-ack an unreadable review; rerun AW1 | return to E14 | do not merge |
 | `REQUEST_NEEDED` | `copilotPending` false: E14 guarded registration, then marker after evidence; resume D4. `copilotPending` true: exit CI-wait; proceed to E1 | request Copilot + marker + poll | return to E14 | return to E14 |
 | `RECOVERY_NEEDED` | exit CI-wait; proceed to E1 | post recovery marker + poll | post recovery marker + poll | post recovery marker; return to F2 |
 | `CAP_EXHAUSTED` | exit CI-wait; proceed to E1 | use `CAP_EXHAUSTED_ROUTE` | post cap-exhausted hold and stop | post cap-exhausted hold and stop |
@@ -131,7 +131,7 @@ exclusively** (the **F3** column reads from it); `Outcome` governs
 **E14**, **F2**, and shell-fallback rows only (no `f3Outcome` there).
 
 - If `copilotPending` is `false`, F3 treats advisory wait as satisfied,
-  except `DISPOSITION_NEEDED` (#4070): do not merge; return to E14.
+  except `DISPOSITION_NEEDED`: do not merge; return to E14.
 - If `copilotPending` is `true`, F3 must not merge on `WAIT`,
   `REQUEST_NEEDED`, or `RECOVERY_NEEDED`.
 
@@ -157,12 +157,12 @@ AW3 inputs:
 
 - `LAST_COPILOT_COMMIT` — `commit_id` of the latest Copilot review
   (empty if none); equals `PR_HEAD_SHA` short-circuits to **SATISFIED**
-  unless its body is not a v2 overview or has suppressed items (#4070):
+  unless its body is not a v2 overview or has suppressed items:
   hold (AW4).
 - `COPILOT_PENDING` — `true` if Copilot is in `requested_reviewers`.
   Observed once: `false` can lag a re-request or empty on submit —
   not idle proof. `LAST_COPILOT_COMMIT == PR_HEAD_SHA` is **SATISFIED**
-  unless a cited item holds (#4070). A same-head `false` uses the
+  unless a cited item holds. A same-head `false` uses the
   shorter settled window.
 - `COPILOT_PENDING_COVERS_HEAD` — `true` if the latest Copilot
   `review_requested` event follows current HEAD's `committed` event.
