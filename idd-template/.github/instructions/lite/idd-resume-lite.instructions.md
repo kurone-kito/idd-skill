@@ -39,13 +39,13 @@ recorded one for that claim-id, and `--worktree` once the B1 worktree exists.
 Collect once: active `{claim-id}`/agent/branch from trusted markers (or
 unclaimed); trusted `forced-handoff: human-gated` proof (actor, displaced claim,
 branch, PR, URL); open PR+HEAD or `none`; latest issue/PR activity; PR-HEAD CI;
-and local worktree/branch/ status/HEAD. When an open PR backs the claim, the
+and local worktree/branch/status/HEAD. When an open PR backs the claim, the
 proof must have `contextScope: issue-plus-pr` with `linkedPr` naming it, or be
 helper-confirmed issue-only before its first commit. Never invent or post
 forced-handoff markers.
 
 Use GitHub **server** timestamps only. Stale age default: **24 h**
-(`claim-stale-age`).
+(`claim-stale-age` / `claimTiming.staleAge`).
 
 ## Step 0 — Route classifier (first match wins)
 
@@ -79,7 +79,7 @@ apply).
 ## Step 1 — Claim state (helper-first)
 
 On helper-enabled profiles, run the Claim-state command above (stop and ask on
-failure; no written-table fallback). Map:
+failure; no table fallback). Map:
 
 | Helper `state` / `action`          | Action                                                         |
 | ---------------------------------- | -------------------------------------------------------------- |
@@ -103,7 +103,7 @@ recorded a nonce for `new_claim_id`, post one; wait settle; confirm the nonce
 winner; Step 2.
 
 After any helper map, `roadmap-audit/*` stays A1.5-only (no worktree; children
-are not locked).
+unlocked).
 
 Written table (`instructions-only` only): first matching row.
 
@@ -144,7 +144,7 @@ onto the issue branch.
 ## Step 3 — PR / CI / review route (helper-first)
 
 On helper-enabled profiles, run `resume-route-selection.mjs --issue <N>` (stop
-and ask on failure; no written-table fallback). Map `route`:
+and ask on failure; no table fallback). Map `route`:
 
 - `D1` → `idd-pr-submit-lite.instructions.md`, from D1 (sync/push/open
   PR)

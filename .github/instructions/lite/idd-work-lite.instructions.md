@@ -80,7 +80,7 @@ Concurrent workers sharing one clone: serialize every `fetch`/`merge
 worktree removal) behind the
 [clone-scoped lock](../../../docs/idd-helper-scripts.md#clone-scoped-lock).
 
-1. On the primary worktree, run `git fetch origin {default-branch}`.
+1. On the primary worktree, run `git fetch origin`.
 2. On the primary worktree, run `git log
    origin/{default-branch}..{default-branch} --oneline`.
 3. If step 2 outputs any lines, stop and report: local `{default-branch}` has

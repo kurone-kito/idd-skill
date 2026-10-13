@@ -68,7 +68,7 @@ below.
   `owners-and-maintainers-only`: owners plus Maintain/Admin;
   `all-write-permission-actors` adds Write). Do not reuse the trusted marker
   actor set here, and count automation or the current agent only if repository
-  policy explicitly grants it approval authority.
+  policy grants it approval authority.
 - Startable when **any** holds: the issue author is self-authorized
   under that policy; the configured ready label
   (`approvalSignals.readyLabelName`, default `idd:ready`) is present —
@@ -134,24 +134,25 @@ node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate
 <!-- dprint-ignore-end -->
 
 Written fallback (`instructions-only` profile only): read issue comments
-chronologically. **Trusted marker actor** = this session (after it verifies its
-own marker), a configured trusted bot/App login, or a Write/Maintain/Admin
-collaborator only when repository policy explicitly allows collaborator-authored
-markers; ignore every other author. A `claimed-by` with a **new** `{claim-id}`
-becomes active only when there is no active claim and `supersedes: none`, or its
-`supersedes:` matches the current active claim's `{claim-id}` **and** that claim
-is already stale at the new comment's `created_at`. A `claimed-by` whose
-`{claim-id}` matches the active claim but whose `{agent-id}` **or `branch:`**
-differs from the active claim is ignored as invalid — it is **not** a heartbeat.
-An `unclaimed-by` releases only when both `{agent-id}` and `{claim-id}` match
-the active claim. **Stale** = latest valid `claimed-by`'s GitHub `created_at` is
-≥ 24 h ago (`claim-stale-age`, default `24 h`). No active claim → unclaimed,
-proceed fresh. Active claim whose `{claim-id}` this session itself recorded and
-verified (a token merely read from issue comments never counts) → already
-claimed by this session; continue with it (no new claim; use the heartbeat rules
-below). Any other active claim < 24 h old → **STOP**, even when its `{agent-id}`
-matches yours — same-agent restarts never silently inherit a non-stale claim.
-Any other active claim ≥ 24 h old → stale, proceed with takeover.
+chronologically. **Trusted marker actor** = this session (after it posts and
+verifies its own marker), a configured trusted bot/App login, or a
+Write/Maintain/Admin collaborator only when repository policy explicitly allows
+collaborator-authored markers; ignore every other author. A `claimed-by` with a
+**new** `{claim-id}` becomes active only when there is no active claim and
+`supersedes: none`, or its `supersedes:` matches the current active claim's
+`{claim-id}` **and** that claim is already stale at the new comment's
+`created_at`. A `claimed-by` whose `{claim-id}` matches the active claim but
+whose `{agent-id}` **or `branch:`** differs from the active claim is ignored as
+invalid — it is **not** a heartbeat. An `unclaimed-by` releases only when both
+`{agent-id}` and `{claim-id}` match the active claim. **Stale** = latest valid
+`claimed-by`'s GitHub `created_at` is ≥ 24 h ago (`claim-stale-age`, default `24
+h`). No active claim → unclaimed, proceed fresh. Active claim whose `{claim-id}`
+this session itself recorded and verified (a token merely read from issue
+comments never counts) → already claimed by this session; continue with it (no
+new claim; use the heartbeat rules below). Any other active claim < 24 h old →
+**STOP**, even when its `{agent-id}` matches yours — same-agent restarts never
+silently inherit a non-stale claim. Any other active claim ≥ 24 h old → stale,
+proceed with takeover.
 
 **Legacy claims** (no `{claim-id}`): if the latest trusted legacy
 `claimed-by` is followed by a later trusted legacy `unclaimed-by` from
