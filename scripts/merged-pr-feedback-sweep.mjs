@@ -256,6 +256,73 @@ export function buildMergedPrFeedbackSweep(prs, options) {
     },
   };
 }
+// Title of the one open issue that the weekly summary workflow creates or
+// updates (issue #4161). The workflow's job env sets the same value, and its
+// test asserts that the two match.
+// audit:ignore-dead-export: the workflow's job env and its contract test share this title; the script itself never reads it
+export const WEEKLY_SWEEP_ISSUE_TITLE = 'Merged-PR feedback sweep (weekly)';
+/**
+ * Build the renderer's options from the sweep's own inputs. An explicit PR
+ * list has no enumeration cap, so the cap is null there.
+ */
+export function buildWeeklyBodyOptions(input) {
+  return {
+    sinceDate: input.sinceDate,
+    scanLimit: input.usingExplicitPrs ? null : input.limit,
+    enumeratedCount: input.enumeratedCount,
+    generatedOn: input.generatedOn,
+  };
+}
+function pluralize(count, noun) {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+/**
+ * Render the body of the weekly summary issue from a sweep result. The
+ * function is pure (no network, no clock). The body carries only numbers,
+ * dates, and counts, never comment text, so no user-written content reaches
+ * the issue. Pull requests are written as "PR 1234", never "#1234", so the
+ * body adds no cross-reference event to them.
+ */
+export function renderWeeklySweepIssueBody(result, options) {
+  const scope = options.sinceDate
+    ? `merged since ${options.sinceDate}`
+    : 'in the scanned set';
+  const asOf = `as of ${options.generatedOn} (UTC)`;
+  const { prCount, flaggedPrCount } = result.summary;
+  const lines = [];
+  if (result.prs.length === 0) {
+    lines.push(
+      prCount === 0
+        ? `None are open ${asOf}: the scan found no pull request ${scope}.`
+        : `None are open ${asOf}: none of the ${pluralize(prCount, 'pull request')} ${scope} has unresolved review threads or unaddressed comments.`,
+    );
+  } else {
+    lines.push(
+      `Open feedback ${asOf}: ${flaggedPrCount} of ${pluralize(prCount, 'pull request')} ${scope} with unresolved review threads or unaddressed comments.`,
+    );
+  }
+  if (
+    options.scanLimit !== null &&
+    options.enumeratedCount >= options.scanLimit
+  ) {
+    lines.push(
+      `The scan reached its limit of ${options.scanLimit} pull requests, so some merges in the window may not have been checked.`,
+    );
+  }
+  if (result.prs.length > 0) {
+    lines.push('');
+    for (const pr of result.prs) {
+      const merged =
+        pr.mergedAt && /^\d{4}-\d{2}-\d{2}/.test(pr.mergedAt)
+          ? ` (merged ${pr.mergedAt.slice(0, 10)})`
+          : '';
+      lines.push(
+        `- PR ${pr.number}${merged}: ${pluralize(pr.unresolvedThreads.length, 'unresolved review thread')}, ${pluralize(pr.unaddressedComments.length, 'unaddressed comment')}.`,
+      );
+    }
+  }
+  return `${lines.join('\n')}\n`;
+}
 function collectUnresolvedThreads(threads, isIdd, isAdvisoryBot) {
   const out = [];
   for (const thread of threads) {
@@ -588,6 +655,7 @@ const MERGED_PR_FEEDBACK_SWEEP_FLAG_SPEC = {
   '--trusted-marker-logins': { type: 'string', default: '' },
   '--advisory-bot-logins': { type: 'string', default: '' },
   '--idd-agent-logins': { type: 'string', default: '' },
+  '--issue-body': { type: 'boolean' },
   '--help': { type: 'boolean', short: 'h' },
 };
 /**
@@ -670,15 +738,17 @@ export function parseArgs(argv) {
     trustedMarkerLogins: values['trusted-marker-logins'],
     advisoryBotLogins: values['advisory-bot-logins'],
     iddAgentLogins: values['idd-agent-logins'],
+    issueBody: Boolean(values['issue-body']),
     help,
   };
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/merged-pr-feedback-sweep.mjs [--since <ISO8601-date>] [--days <n>] [--pr <number> ...] [--prs <n1,n2,...>] [--limit <n>] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--help]
+  node scripts/merged-pr-feedback-sweep.mjs [--since <ISO8601-date>] [--days <n>] [--pr <number> ...] [--prs <n1,n2,...>] [--limit <n>] [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--advisory-bot-logins <login1,login2>] [--idd-agent-logins <login1,login2>] [--issue-body] [--help]
 
 Read-only: scans merged PRs for unresolved/unaddressed advisory feedback and
-prints JSON. No minimization, no posting, no issue creation.
+prints JSON, or with --issue-body the weekly summary issue body as Markdown.
+No minimization, no posting, no issue creation.
 `);
 }
 // Resolve the merged-since cutoff from --since and/or --days. When both are
@@ -824,6 +894,21 @@ function main() {
     iddAgentLogins,
     primaryBotLogin,
   });
+  if (args.issueBody) {
+    process.stdout.write(
+      renderWeeklySweepIssueBody(
+        result,
+        buildWeeklyBodyOptions({
+          usingExplicitPrs,
+          limit: args.limit,
+          sinceDate,
+          enumeratedCount: targets.length,
+          generatedOn: new Date().toISOString().slice(0, 10),
+        }),
+      ),
+    );
+    return 0;
+  }
   process.stdout.write(
     `${JSON.stringify(
       {

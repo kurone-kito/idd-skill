@@ -1,13 +1,19 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
   buildMergedPrFeedbackSweep,
+  buildWeeklyBodyOptions,
   type MergedPrInput,
+  type MergedPrSweepResult,
   parseArgs,
+  renderWeeklySweepIssueBody,
   type SweepReviewInput,
+  WEEKLY_SWEEP_ISSUE_TITLE,
 } from '../src/scripts/merged-pr-feedback-sweep.mts';
 import { CODERABBIT_SUMMARY_MARKER } from '../src/scripts/protocol-helpers.mts';
+import { parseWorkflowYamlSubset } from '../src/scripts/workflow-yaml-subset.mts';
 import { buildCommentThread } from './test-utils.mts';
 
 const OPTIONS = {
@@ -1625,4 +1631,459 @@ test('summary aggregates across PRs and skips clean PRs', () => {
   assert.equal(result.summary.flaggedPrCount, 1);
   assert.equal(result.summary.unresolvedThreadCount, 1);
   assert.equal(result.summary.unaddressedCommentCount, 1);
+});
+
+// --- #4161: the weekly summary issue body -------------------------------
+
+const NO_FLAGGED_SUMMARY = {
+  flaggedPrCount: 0,
+  unresolvedThreadCount: 0,
+  unaddressedCommentCount: 0,
+};
+
+const RUN_DATE = '2026-10-13';
+
+test('parseArgs: --issue-body is a boolean that defaults to false', () => {
+  assert.equal(parseArgs(['--issue-body']).issueBody, true);
+  assert.equal(parseArgs([]).issueBody, false);
+});
+
+test('renderWeeklySweepIssueBody: the title constant is the agreed summary title', () => {
+  assert.equal(WEEKLY_SWEEP_ISSUE_TITLE, 'Merged-PR feedback sweep (weekly)');
+});
+
+test('renderWeeklySweepIssueBody: nothing open, with the count checked, says so in one line', () => {
+  const body = renderWeeklySweepIssueBody(
+    { prs: [], summary: { prCount: 3, ...NO_FLAGGED_SUMMARY } },
+    {
+      sinceDate: '2026-10-06',
+      scanLimit: 500,
+      enumeratedCount: 3,
+      generatedOn: RUN_DATE,
+    },
+  );
+  assert.equal(
+    body,
+    'None are open as of 2026-10-13 (UTC): none of the 3 pull requests merged since 2026-10-06 has unresolved review threads or unaddressed comments.\n',
+  );
+});
+
+test('renderWeeklySweepIssueBody: a window with no merges says the scan found none', () => {
+  const body = renderWeeklySweepIssueBody(
+    { prs: [], summary: { prCount: 0, ...NO_FLAGGED_SUMMARY } },
+    {
+      sinceDate: '2026-10-06',
+      scanLimit: 500,
+      enumeratedCount: 0,
+      generatedOn: RUN_DATE,
+    },
+  );
+  assert.equal(
+    body,
+    'None are open as of 2026-10-13 (UTC): the scan found no pull request merged since 2026-10-06.\n',
+  );
+});
+
+test('renderWeeklySweepIssueBody: an explicit PR list with no date names the scanned set and no cap', () => {
+  const body = renderWeeklySweepIssueBody(
+    { prs: [], summary: { prCount: 2, ...NO_FLAGGED_SUMMARY } },
+    {
+      sinceDate: null,
+      scanLimit: null,
+      enumeratedCount: 2,
+      generatedOn: RUN_DATE,
+    },
+  );
+  assert.equal(
+    body,
+    'None are open as of 2026-10-13 (UTC): none of the 2 pull requests in the scanned set has unresolved review threads or unaddressed comments.\n',
+  );
+});
+
+test('renderWeeklySweepIssueBody: an enumeration that reached the cap says so, even when nothing is open', () => {
+  const body = renderWeeklySweepIssueBody(
+    { prs: [], summary: { prCount: 500, ...NO_FLAGGED_SUMMARY } },
+    {
+      sinceDate: '2026-10-06',
+      scanLimit: 500,
+      enumeratedCount: 500,
+      generatedOn: RUN_DATE,
+    },
+  );
+  assert.match(
+    body,
+    /^None are open as of 2026-10-13 \(UTC\): none of the 500 pull requests /,
+  );
+  assert.match(
+    body,
+    /The scan reached its limit of 500 pull requests, so some merges in the window may not have been checked\./,
+  );
+  assert.equal(body.split('\n').length, 3);
+});
+
+test('renderWeeklySweepIssueBody: the cap is named only when the enumeration reached it', () => {
+  const body = renderWeeklySweepIssueBody(
+    { prs: [], summary: { prCount: 3, ...NO_FLAGGED_SUMMARY } },
+    {
+      sinceDate: '2026-10-06',
+      scanLimit: 500,
+      enumeratedCount: 3,
+      generatedOn: RUN_DATE,
+    },
+  );
+  assert.doesNotMatch(body, /limit/);
+});
+
+test('buildWeeklyBodyOptions: an explicit PR list carries no cap, and a window carries its limit', () => {
+  const explicit = buildWeeklyBodyOptions({
+    usingExplicitPrs: true,
+    limit: 500,
+    sinceDate: null,
+    enumeratedCount: 2,
+    generatedOn: RUN_DATE,
+  });
+  assert.equal(explicit.scanLimit, null);
+  const windowed = buildWeeklyBodyOptions({
+    usingExplicitPrs: false,
+    limit: 500,
+    sinceDate: '2026-10-06',
+    enumeratedCount: 500,
+    generatedOn: RUN_DATE,
+  });
+  assert.equal(windowed.scanLimit, 500);
+  assert.equal(windowed.enumeratedCount, 500);
+  assert.equal(windowed.generatedOn, RUN_DATE);
+});
+
+test('renderWeeklySweepIssueBody: a non-empty result lists each flagged PR with counts and no comment text', () => {
+  const result: MergedPrSweepResult = {
+    prs: [
+      {
+        number: 1234,
+        mergedAt: '2026-10-09T12:00:00Z',
+        mergeCommit: null,
+        unresolvedThreads: [
+          {
+            url: 'https://example.invalid/thread-1',
+            author: 'coderabbitai[bot]',
+            advisoryBot: true,
+            path: 'a.ts',
+            bodyExcerpt: 'please rename this helper',
+            dispositioned: false,
+          },
+        ],
+        unaddressedComments: [
+          {
+            url: 'https://example.invalid/comment-1',
+            author: 'someone',
+            advisoryBot: false,
+            kind: 'comment',
+            bodyExcerpt: 'nit: spacing',
+          },
+          {
+            url: 'https://example.invalid/review-1',
+            author: 'someone',
+            advisoryBot: false,
+            kind: 'review',
+            bodyExcerpt: 'second note',
+          },
+        ],
+      },
+      {
+        number: 1240,
+        mergedAt: null,
+        mergeCommit: null,
+        unresolvedThreads: [],
+        unaddressedComments: [
+          {
+            url: 'https://example.invalid/comment-2',
+            author: 'someone',
+            advisoryBot: false,
+            kind: 'comment',
+            bodyExcerpt: 'one more',
+          },
+        ],
+      },
+    ],
+    summary: {
+      prCount: 7,
+      flaggedPrCount: 2,
+      unresolvedThreadCount: 1,
+      unaddressedCommentCount: 3,
+    },
+  };
+  const body = renderWeeklySweepIssueBody(result, {
+    sinceDate: '2026-10-06',
+    scanLimit: 500,
+    enumeratedCount: 7,
+    generatedOn: RUN_DATE,
+  });
+  assert.equal(
+    body,
+    [
+      'Open feedback as of 2026-10-13 (UTC): 2 of 7 pull requests merged since 2026-10-06 with unresolved review threads or unaddressed comments.',
+      '',
+      '- PR 1234 (merged 2026-10-09): 1 unresolved review thread, 2 unaddressed comments.',
+      '- PR 1240: 0 unresolved review threads, 1 unaddressed comment.',
+      '',
+    ].join('\n'),
+  );
+  // Plain "PR n" only: a "#n" in the body would cross-reference the pull request.
+  assert.doesNotMatch(body, /#\d/);
+  // Only numbers, dates, and counts are rendered, never comment text.
+  for (const excerpt of [
+    'please rename',
+    'nit: spacing',
+    'second note',
+    'one more',
+  ]) {
+    assert.equal(body.includes(excerpt), false, `leaked: ${excerpt}`);
+  }
+});
+
+// --- #4161: the summary workflow file, read through the YAML subset reader ---
+
+const SWEEP_WORKFLOW = new URL(
+  '../.github/workflows/merged-pr-feedback-sweep.yml',
+  import.meta.url,
+);
+
+/** A plain copy of a parsed mapping, so assertions compare values, not prototypes. */
+function plain(value: unknown): unknown {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function readSweepWorkflow(): Record<string, unknown> {
+  const parsed = parseWorkflowYamlSubset(readFileSync(SWEEP_WORKFLOW, 'utf8'));
+  assert.equal(
+    parsed.ok,
+    true,
+    parsed.ok ? '' : `refused: ${parsed.violation.construct}`,
+  );
+  return plain(parsed.value) as Record<string, unknown>;
+}
+
+interface SweepWorkflowStep {
+  name?: string;
+  uses?: string;
+  run?: string;
+  with?: Record<string, string>;
+}
+
+interface SweepWorkflowJob {
+  if?: string;
+  needs?: string;
+  env?: Record<string, string>;
+  permissions?: Record<string, string>;
+  outputs?: Record<string, string>;
+  'runs-on'?: string;
+  'timeout-minutes'?: string;
+  steps: SweepWorkflowStep[];
+}
+
+function sweepJob(name: string): SweepWorkflowJob {
+  const jobs = readSweepWorkflow().jobs as Record<string, SweepWorkflowJob>;
+  const job = jobs[name];
+  assert.ok(job, `missing job: ${name}`);
+  return job;
+}
+
+function stepNamed(job: SweepWorkflowJob, name: string): SweepWorkflowStep {
+  const found = job.steps.find((step) => step.name === name);
+  assert.ok(found, `missing step: ${name}`);
+  return found;
+}
+
+/** Assert that each expected line appears, trimmed, in the given order. */
+function assertLinesInOrder(script: string, expected: readonly string[]): void {
+  const lines = script.split('\n').map((line) => line.trim());
+  let from = 0;
+  for (const want of expected) {
+    const at = lines.indexOf(want, from);
+    assert.notEqual(at, -1, `missing, or out of order: ${want}`);
+    from = at + 1;
+  }
+}
+
+test('the summary workflow is manual only, with least-privilege defaults and no other triggers', () => {
+  const workflow = readSweepWorkflow();
+  assert.deepEqual(Object.keys(workflow).sort(), [
+    'concurrency',
+    'jobs',
+    'name',
+    'on',
+    'permissions',
+  ]);
+  assert.deepEqual(workflow.on, { workflow_dispatch: null });
+  assert.deepEqual(plain(workflow.permissions), {});
+  assert.deepEqual(workflow.concurrency, {
+    group: 'merged-pr-feedback-sweep',
+    'cancel-in-progress': 'false',
+  });
+  assert.deepEqual(Object.keys(plain(workflow.jobs) as object), [
+    'render',
+    'write',
+  ]);
+});
+
+test('the render job is read-only and holds the pull-request read the listing needs', () => {
+  const job = sweepJob('render');
+  assert.equal('if' in job, false, 'the render job must not be gated off');
+  assert.deepEqual(job.permissions, {
+    contents: 'read',
+    'pull-requests': 'read',
+  });
+  assert.equal(job['runs-on'], 'ubuntu-latest');
+  assert.equal(job['timeout-minutes'], '20');
+  assert.match(String(job.env?.GH_TOKEN), /^\$\{\{ github\.token \}\}$/);
+  assert.match(
+    String(job.env?.GH_ENTERPRISE_TOKEN),
+    /^\$\{\{ github\.token \}\}$/,
+  );
+  assert.match(
+    String(job.outputs?.body_b64),
+    /^\$\{\{ steps\.render\.outputs\.body_b64 \}\}$/,
+  );
+});
+
+test('the write job holds only the issue write, publishes only from the default branch, checks out nothing, and waits for the render job', () => {
+  const job = sweepJob('write');
+  assert.equal(job.if, "github.ref == 'refs/heads/main'");
+  assert.equal(job.needs, 'render');
+  assert.deepEqual(job.permissions, { issues: 'write' });
+  assert.equal(job['runs-on'], 'ubuntu-latest');
+  assert.equal(job['timeout-minutes'], '10');
+  assert.equal(job.env?.SWEEP_ISSUE_TITLE, WEEKLY_SWEEP_ISSUE_TITLE);
+  assert.match(String(job.env?.GH_TOKEN), /^\$\{\{ github\.token \}\}$/);
+  assert.match(
+    String(job.env?.GH_ENTERPRISE_TOKEN),
+    /^\$\{\{ github\.token \}\}$/,
+  );
+  assert.match(
+    String(job.env?.BODY_B64),
+    /^\$\{\{ needs\.render\.outputs\.body_b64 \}\}$/,
+  );
+  assert.deepEqual(
+    job.steps.map((step) => step.name),
+    ['Create or update the summary issue'],
+  );
+  assert.deepEqual(
+    job.steps.map((step) => step.uses ?? null),
+    [null],
+    'the write job must not check out or use any action',
+  );
+  assert.doesNotMatch(String(job.steps[0].run), /\bnode\b/);
+});
+
+test('the render job has three named steps, with pinned actions and a checkout without persisted credentials', () => {
+  const job = sweepJob('render');
+  assert.deepEqual(
+    job.steps.map((step) => step.name),
+    [
+      'Check out the dispatched ref',
+      'Set up Node.js',
+      'Render the summary issue body',
+    ],
+  );
+  assert.deepEqual(
+    job.steps.map((step) => step.uses ?? null),
+    [
+      'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+      'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020',
+      null,
+    ],
+  );
+  assert.deepEqual(stepNamed(job, 'Check out the dispatched ref').with, {
+    'persist-credentials': 'false',
+  });
+  assert.deepEqual(stepNamed(job, 'Set up Node.js').with, {
+    'node-version': '24.x',
+  });
+});
+
+test('every gh call in the summary workflow is one issue list, one issue create, and one issue edit, and nothing else writes', () => {
+  const scripts = ['render', 'write']
+    .flatMap((name) =>
+      sweepJob(name).steps.map((step) =>
+        typeof step.run === 'string' ? step.run : '',
+      ),
+    )
+    .join('\n');
+  const calls = [...scripts.matchAll(/\bgh\s+([a-z-]+)(?:\s+([a-z-]+))?/g)].map(
+    (match) => `${match[1]} ${match[2] ?? ''}`.trim(),
+  );
+  // Counted, not deduplicated: a second create or edit must fail this check.
+  assert.deepEqual(calls.sort(), ['issue create', 'issue edit', 'issue list']);
+  for (const forbidden of [
+    /\bgit\s+(push|commit|tag|branch|checkout|switch|merge|rebase|reset|fetch|clean|stash|worktree|config)\b/,
+    /\bcurl\b/,
+    /\bwget\b/,
+    /\bsecrets\./,
+    /\bgh\s+api\b/,
+  ]) {
+    assert.doesNotMatch(scripts, forbidden);
+  }
+});
+
+test('the render step runs a seven-day, 500-cap, issue-body sweep and hands its body on as one step output', () => {
+  const run = String(
+    stepNamed(sweepJob('render'), 'Render the summary issue body').run,
+  );
+  assert.match(run, /node scripts\/merged-pr-feedback-sweep\.mjs/);
+  assert.match(run, /--days 7 \\/);
+  assert.match(run, /--limit 500 \\/);
+  assert.match(run, /--issue-body > "\$RUNNER_TEMP\/sweep-body\.md"/);
+  assert.match(run, /--owner "\$\{GITHUB_REPOSITORY%%\/\*\}"/);
+  assert.match(run, /--repo "\$\{GITHUB_REPOSITORY#\*\/\}"/);
+  assert.match(run, /test -s "\$RUNNER_TEMP\/sweep-body\.md"/);
+  assert.match(
+    run,
+    /echo "body_b64=\$\(base64 -w0 "\$RUNNER_TEMP\/sweep-body\.md"\)" >> "\$GITHUB_OUTPUT"/,
+  );
+});
+
+test('the write step decodes the body, refuses a full, malformed, or duplicated listing, edits the one match, and creates only when none exists', () => {
+  const run = String(
+    stepNamed(sweepJob('write'), 'Create or update the summary issue').run,
+  );
+  assertLinesInOrder(run, [
+    String.raw`printf '%s' "$BODY_B64" | base64 -d > "$RUNNER_TEMP/sweep-body.md"`,
+    String.raw`test -s "$RUNNER_TEMP/sweep-body.md"`,
+    String.raw`listing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json number,title)"`,
+    String.raw`length="$(printf '%s' "$listing" | jq 'length')"`,
+    'case "$length" in',
+    "''|*[!0-9]*)",
+    String.raw`if [ "$length" -ge 1000 ]; then`,
+    String.raw`found="$(printf '%s' "$listing" | jq -r --arg t "$SWEEP_ISSUE_TITLE" '[.[] | select(.title == $t) | .number] | sort | .[]')"`,
+    String.raw`count="$(printf '%s' "$found" | grep -c . || true)"`,
+    String.raw`if [ "$count" -gt 1 ]; then`,
+    String.raw`elif [ "$count" -eq 1 ]; then`,
+    String.raw`gh issue edit "$found" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/sweep-body.md"`,
+    String.raw`elif [ "$count" -eq 0 ]; then`,
+    String.raw`gh issue create --repo "$GITHUB_REPOSITORY" --title "$SWEEP_ISSUE_TITLE" --body-file "$RUNNER_TEMP/sweep-body.md"`,
+  ]);
+});
+
+test('the cap follows the enumeration, not the pull requests that survived filtering', () => {
+  const body = renderWeeklySweepIssueBody(
+    { prs: [], summary: { prCount: 2, ...NO_FLAGGED_SUMMARY } },
+    {
+      sinceDate: '2026-10-06',
+      scanLimit: 500,
+      enumeratedCount: 500,
+      generatedOn: RUN_DATE,
+    },
+  );
+  assert.match(
+    body,
+    /The scan reached its limit of 500 pull requests, so some merges in the window may not have been checked\./,
+  );
+});
+
+test('main passes the enumerated count, not the merged count, to the summary body', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/merged-pr-feedback-sweep.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /enumeratedCount: targets\.length,/);
 });
