@@ -523,7 +523,12 @@ export interface RerunAdvisoryConvergencePlan {
    * (proof the rollup is otherwise already resolved, so rerunning this one
    * is cleanup of a redundant stale sibling on an already-covered HEAD --
    * not a general second rerun-budget grant the rest of rule 1 still
-   * forbids). These instances no longer count toward `anyEligibleHeld`
+   * forbids), and the instance is not superseded (#4150): it is not proven
+   * to belong to an earlier attempt of its own run whose latest attempt
+   * passes. Such a row was already settled by that later attempt, so a
+   * rerun would repeat a superseded attempt. A current-attempt duplicate
+   * that completed after the latest attempt started stays eligible. These
+   * instances no longer count toward `anyEligibleHeld`
    * (they are being handled, not held) but a live-coverage-recovery
    * instance that fails the passing-sibling precondition still does,
    * unchanged. Executed by {@link applyRerunPlan} under the same
