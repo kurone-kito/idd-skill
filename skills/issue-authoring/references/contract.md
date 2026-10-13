@@ -1116,6 +1116,11 @@ instructions.
 - a change that loosens a fail-closed check names its region classifier and
   its must-keep shapes under `Loosening a fail-closed check`, and the reviewer
   checks both before the draft is published
+- a draft that orders state-changing steps (claims, locks, POSTs, branch or
+  worktree mutations, releases) states, for each step that can fail after an
+  earlier step has changed state, the observable outcome and the next action; a
+  draft that cannot state that outcome is revised before the mechanical gate,
+  and if it still cannot after revision, it goes to needs-decision.
 
 ### Resolver
 
