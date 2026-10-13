@@ -382,6 +382,17 @@ function hasActiveClaim(comments, trusted) {
     ) !== null
   );
 }
+/** True when a trusted login wrote an authoring-owner marker on the issue,
+ * edited or not (fail closed). */
+function hasForeignOwnerMarker(comments, markerPrefix, trusted) {
+  const trustedSet = new Set(trusted.map((login) => login.toLowerCase()));
+  const token = `${markerPrefix.toLowerCase()}-authoring-owner:`;
+  return comments.some(
+    (comment) =>
+      trustedSet.has(comment.authorLogin.trim().toLowerCase()) &&
+      comment.body.toLowerCase().includes(token),
+  );
+}
 /**
  * Replay the owner-marker log right before `member`: every trusted
  * authoring-owner marker on the issue must be unedited and carry this run's
@@ -828,12 +839,13 @@ function publish(input) {
   if (!labels.every((name) => hasLabel(created.labels, name))) {
     let reason = `the created issue lacks a required label (has ${JSON.stringify(created.labels)})`;
     try {
-      if (
-        hasActiveClaim(
-          fetchProvenanceCommentsGraphql(owner, repo, number),
-          input.trusted,
-        )
-      ) {
+      // This run has not posted its owner marker yet, so any trusted owner
+      // marker here belongs to another session or set.
+      const comments = fetchProvenanceCommentsGraphql(owner, repo, number);
+      if (hasForeignOwnerMarker(comments, markerPrefix, input.trusted)) {
+        reason +=
+          '; another owner marker is present, so the labels were not touched';
+      } else if (hasActiveClaim(comments, input.trusted)) {
         reason += '; a claim marker is present, so the labels were not touched';
       } else {
         ghText([

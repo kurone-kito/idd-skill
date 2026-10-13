@@ -758,3 +758,26 @@ test('CLI: a body edited before the owner marker stops before member', () => {
     fixture.restore();
   }
 });
+
+test('CLI: an unlabeled issue that already carries another owner marker is left untouched', () => {
+  // The recovery read is the first GraphQL comment read of this run.
+  const fixture = setup({ dropLabels: true, foreignOwnerOnRead: 1 });
+  try {
+    const result = fixture.run([...files(fixture), '--apply']);
+    assert.equal(result.status, 1);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.failedStep, 'create-verify');
+    assert.match(report.reason, /another owner marker is present/);
+    const issue = fixture.state().issues[String(NEW_ISSUE)] as {
+      labels: string[];
+    };
+    assert.deepEqual(issue.labels, []);
+    assert.ok(
+      !fixture
+        .log()
+        .some((entry) => entry.args[0] === 'issue' && entry.args[1] === 'edit'),
+    );
+  } finally {
+    fixture.restore();
+  }
+});
