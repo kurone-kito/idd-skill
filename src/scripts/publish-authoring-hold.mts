@@ -995,6 +995,11 @@ function publish(input: {
     return refuse(`cannot read the labels: ${(error as Error).message}`, base);
   }
   const actor = resolveViewerLogin();
+  // A dry run may have no trusted set; --apply refuses one before any post.
+  const trustedFlag =
+    input.trusted.length > 0
+      ? ['--trusted-marker-logins', input.trusted.join(',')]
+      : [];
   const intentArgs = (state: string, issue: string): string[] => [
     '--type',
     'authoring-publication-intent',
@@ -1025,6 +1030,9 @@ function publish(input: {
     state,
     '--marker-prefix',
     markerPrefix,
+    // The child's own trust reads (the authoring-owner identity check and
+    // the hide step) use the repository set, never its environment or cwd.
+    ...trustedFlag,
   ];
   const renderMarker = (markerArgs: string[]): string => {
     const run = runSiblingHelper('post-idd-marker.mjs', markerArgs);
@@ -1341,6 +1349,7 @@ function publish(input: {
       'none',
       '--marker-prefix',
       markerPrefix,
+      ...trustedFlag,
     ];
     const ownerId = postVerified(ownerArgs, { owner, repo, number });
     steps.push({

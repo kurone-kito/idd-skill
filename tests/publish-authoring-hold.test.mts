@@ -1153,3 +1153,16 @@ test('CLI: neither IDD_TRUSTED_MARKER_ACTORS nor a flag replaces the repository 
     fixture.restore();
   }
 });
+
+test('CLI: an environment trusted-actor value does not reach the marker posts', () => {
+  const fixture = setup();
+  try {
+    const result = fixture.run([...files(fixture), '--apply'], {
+      IDD_TRUSTED_MARKER_ACTORS: 'someone-else',
+    });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(JSON.parse(result.stdout).outcome, 'published');
+  } finally {
+    fixture.restore();
+  }
+});
