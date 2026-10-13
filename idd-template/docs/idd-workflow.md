@@ -1269,17 +1269,16 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    reported to the operator with its state, and no further action is taken on
    that issue.
 3. **Re-attach workers.** Read the live worker list from the harness's agent
-   listing, and match each entry, by the issue number in the worker's brief, to
-   an own claim. Count every matched own worker not yet disposed in `--running`,
-   a running worker or a finished one still awaiting step 4, including the
-   running worker of a released claim, and count every other listed live worker
-   too, because it still holds a harness slot that the budget cannot otherwise
-   see. Pass each counted worker's issue as an `--in-flight` value below when
-   its brief gives one. A matched finished worker goes to step 4 once the checks
-   in step 4 pass. A matched running worker of an own claim that step 2 verified
-   as `already_owned` is handled as follows: if the runtime can still message
-   it, apply the existing worker-death rules by reference, under the bullet
-   titled "Resume-specific recovery when a worker dies mid-turn" in the
+   listing, and match each entry, by the issue number and claim id in the
+   worker's brief, to an own claim. Count every matched own worker not yet
+   disposed in `--running`, a running worker or a finished one still awaiting
+   step 4, including the running worker of a released claim, and pass each
+   counted worker's issue as an `--in-flight` value below when its brief gives
+   one. A matched finished worker goes to step 4 once the checks in step 4 pass.
+   A matched running worker of an own claim that step 2 verified as
+   `already_owned` is handled as follows: if the runtime can still message it,
+   apply the existing worker-death rules by reference, under the bullet titled
+   "Resume-specific recovery when a worker dies mid-turn" in the
    [fan-out variant](#orchestrator-fan-out-variant); if it cannot be messaged,
    it is treated as live and is never replaced while the listing still shows it
    running, because its agent may still be executing when no child process is
@@ -1291,9 +1290,10 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    worker is matched, every own claim that reached this step goes to step 5, and
    the rest of this step is skipped, including the Discover pass, the budget
    call, the overlap check, and every worker start, because the running workers
-   are unknown. An own claim other than a released one that matches no worker
-   also skips the rest of this step, because a worker the match missed may still
-   be running, and that claim goes to step 5. A session without a unique
+   are unknown. An own claim other than a released one that matches no worker,
+   and a listed live worker that matches no own claim, also skip the rest of
+   this step, because such a worker may still be running and hold a slot the
+   budget cannot see, and each goes to step 5. A session without a unique
    session-suffixed agent id also skips the rest of this step, because it cannot
    tell its workers from another session's. Only when a listing exists, the
    session has a unique session-suffixed agent id, and no such unmatched claim
@@ -1363,11 +1363,12 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    released claim, and has no matching worker is reported to the operator, and
    so is a matched finished worker that step 4 did not append because its
    outcome is `held`. A listed live worker that matches no own claim is reported
-   to the operator too, because it still holds a harness slot. A matched running
-   worker that cannot be messaged is reported too. A released claim is reported
-   here when step 4 left it with a running worker, when its verification or
-   append failed, or when the harness offers no agent listing, so step 4 did not
-   run for it. Otherwise step 4 handles it. Its worktree is not removed.
+   to the operator too, because it blocks refill until the operator resolves it.
+   A matched running worker that cannot be messaged is reported too. A released
+   claim is reported here when step 4 left it with a running worker, when its
+   verification or append failed, or when the harness offers no agent listing,
+   so step 4 did not run for it. Otherwise step 4 handles it. Its worktree is
+   not removed.
 
 ### Discover re-run cadence
 
