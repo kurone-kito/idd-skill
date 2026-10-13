@@ -445,6 +445,10 @@ const PRE_MERGE_READINESS_FLAG_SPEC = {
 export type PreMergeReadinessReport = ReturnType<
   typeof buildPreMergeReadinessSummary
 > & {
+  // #4163: the optional hint the collector attaches (see
+  // dispositionNoticeCommandHint). Declared here so a caller can read it
+  // without a cast; the shared gate-summary type is unchanged.
+  dispositionEvidence?: DispositionEvidenceWithHint;
   trustedMarkerActors: string[];
   trustedMarkerActorsSource: TrustedMarkerActorResolution['source'];
 };
