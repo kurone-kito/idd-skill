@@ -1264,8 +1264,11 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    matching only, where its running worker, if any, is counted and sent no
    message, and then to step 4. `stale` goes to the takeover path in
    `idd-resume.instructions.md`. A claim with no worktree needs no `--worktree`:
-   run the command without `--assert` and read its `state`, which gives the same
-   released-claim result. Any other result, including an unreadable worktree, is
+   run the command without `--assert` and read its `state`. The released-claim
+   result above applies to it as written, and so does `already_owned` with
+   action `keep`, which the helper reports when F4 has removed the worktree but
+   the worker has not yet posted `unclaimed-by`, so its running worker, if any,
+   still holds a slot. Any other result, including an unreadable worktree, is
    reported to the operator with its state, and no further action is taken on
    that issue.
 3. **Re-attach workers.** Read the live worker list from the harness's agent
