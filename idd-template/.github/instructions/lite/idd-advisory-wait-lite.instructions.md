@@ -5,8 +5,6 @@ Lite profile for helper-enabled weak/local models. Same semantics as
 precondition. E1 Step 2 accepts a matching `lastCopilotCommit` directly;
 off-head `SATISFIED` requires active-claim `staleRequestRecovery` to be
 `not-applicable` or its AW3-S/cap route complete. `hold` is ineligible.
-If the repository is `instructions-only`, use the full-size
-advisory-wait instructions instead.
 
 ## Helper runtime contract
 
@@ -15,7 +13,8 @@ advisory-wait instructions instead.
   returns invalid JSON, or disagrees with live state, stop and ask —
   never a manual per-field fetch or hand-derived decision. Marker
   posting is not restricted (see Markers).
-- `instructions-only`: do not use this lite file.
+- `instructions-only`: do not use this lite file; use the full-size
+  advisory-wait instructions instead.
 - Any mismatch between this file and
   `idd-advisory-wait.instructions.md` is a bug in this file.
 
@@ -32,10 +31,9 @@ A lite session excludes A0-A4.5/E4-E8 and F3-F5; it uses only E1 Step
 2, E14, lite F1-F2 read-only helpers, and F2.5 handoff-stop. If it
 reaches an excluded call site, stop and ask a stronger session/human.
 
-**Do not build a substitute wait for a non-primary bot** — same
-prohibition as the full-size file's Scope section: rely on the
-standard E1/review-watermark/F2/F3 safety net, never a custom poll on
-any bot but `advisoryWait.primaryBotLogin`.
+**Do not build a substitute wait for a non-primary bot** (full-size Scope
+section): rely on the standard E1 safety net, never a custom poll on any bot
+but `advisoryWait.primaryBotLogin`.
 
 ## Stop-and-ask conditions
 
@@ -87,7 +85,7 @@ caller-derived, never emitted.
 
 The helper resolves `advisoryWait.*` from `.github/idd/config.json`
 (`requestCap` through `capExhaustedRoute`); never read that config
-yourself. A missing field is a malformed helper response: stop and ask.
+yourself.
 
 ## E14 outcome → action
 
