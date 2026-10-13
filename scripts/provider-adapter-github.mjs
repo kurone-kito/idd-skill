@@ -1626,8 +1626,8 @@ function deriveRetryAfterMs(error, nowMs) {
  * earlier one may have landed, so they stop the retries and go through the
  * final duplicate check, and the error thrown is the earlier failure, never
  * the 401/404/422 (#4171). Every other failure (a `5xx`, a `403` secondary
- * rate limit, or no derivable status at all, e.g. a timeout/transport error) may have
- * landed server-side, so the next attempt only proceeds after
+ * rate limit, or no derivable status at all, e.g. a timeout/transport
+ * error) may have landed server-side, so the next attempt only proceeds after
  * {@link findRecentExactBodyMatch} proves no duplicate exists -- a
  * duplicate returns it instead of posting again, and a failed re-read
  * throws {@link PostWorkItemCommentNotVerifiedError} instead of guessing.
