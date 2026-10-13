@@ -1325,9 +1325,9 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    with or without a draft. The fan-out variant's completed-notice rule names
    these live-evidence checks, and this step applies them to every finished
    worker, under that worker's own listed handle. A worker with live work is
-   treated as running in step 3. With a listing, a released claim with no
-   matched worker is recorded under the claim-id as its handle, because the
-   listing supplies no handle for it. The store dedupes on claimId,
+   treated as running in step 3. With a listing, a claim with no matched worker
+   and no draft is recorded under the claim-id as its handle, released or not,
+   because the listing supplies no handle for it. The store dedupes on claimId,
    workerHandle, and terminalPhase, so a retry is safe. A matched running worker
    gets no record. A released claim whose only matched worker is still running
    gets no record and is reported in step 5. Look for the worker's report draft
