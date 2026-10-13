@@ -18,11 +18,9 @@ owns behavior; `advisoryWait.exemptBotAuthoredPrs` is convergence-only.
 This protocol's settle/wait window covers **Copilot only**. Other
 `advisoryBotLogins` get **no** wait window in this file. A configured
 `advisoryWait.secondaryQuietWindow` is F2's separate
-`secondary-quiet-window` blocker
-(`idd-pre-merge.instructions.md`): when set, F2 waits until that
-helper reports `elapsed: true` since the last substantive review
-activity. It is not a poll until any reaches HEAD. Unset never adds it. Other
-`advisoryBotLogins` stay on the E1 snapshot and watermark.
+`secondary-quiet-window` blocker (`idd-pre-merge.instructions.md`, which
+holds its elapsed-window rule). It is an elapsed-window check, not a poll
+until any secondary bot reaches HEAD. Unset never adds it.
 
 For non-Copilot bots, late findings still use the **E1 snapshot +
 `review-watermark` delta**, re-checked by F2/F3, which forbids a
@@ -38,20 +36,15 @@ the E1 net above; the F2 elapsed-window blocker is not a substitute.
 The advisory bot usually reviews current HEAD within minutes, reducing
 the gate to one check: poll `LAST_COPILOT_COMMIT`; once it equals
 `PR_HEAD_SHA`, the gate is **SATISFIED** unless **DISPOSITION_NEEDED**.
-Otherwise, skip the AW2-AW5 machinery and take the
-caller's `SATISFIED` action (D4 → rerun
-`idd-advisory-convergence` and resume D4, E14 → E15, F2 → CI check, F3
-→ merge; common to both the canonical path and shell-fallback AW3 row
-one). Enter the full protocol below **only** when
-`LAST_COPILOT_COMMIT != PR_HEAD_SHA`.
+Otherwise, skip the AW2-AW5 machinery and take the caller's `SATISFIED`
+action from the [caller mapping](#caller-mapping) table (common to both the
+canonical path and shell-fallback AW3 row one). Enter the full protocol
+below **only** when `LAST_COPILOT_COMMIT != PR_HEAD_SHA`.
 
 Keep the wait cheap per the
-[wake-up discipline](idd-ci.instructions.md#wake-up-discipline): one
-wake at the expected completion, or background only if the
-topology-safety condition holds;
-otherwise wait synchronously. Run the protocol (helper-first, AW1-AW5
-fallback) in the foreground, never `run_in_background` without that
-condition. Batch post-wait actions into one turn.
+[wake-up discipline](idd-ci.instructions.md#wake-up-discipline): wait in the
+foreground unless the topology-safety condition holds, and batch post-wait
+actions into one turn.
 
 ## 1. Canonical path (helper-first)
 
@@ -68,17 +61,20 @@ node scripts/advisory-wait-state.mjs \
 Contract: `docs/idd-helper-scripts.md#stable-helper-evidence-outputs`
 and `schemas/advisory-wait-state.schema.json`.
 
-Required helper fields: `prHeadSha`, `lastCopilotCommit`,
-`copilotPending`, `copilotPendingCoversHead`, `outcome`, `f3Outcome`,
-`earliestSameHeadAt`, `requestMarkerCount`, `requestCap`,
+Required helper fields: `protocolVersion`, `prHeadSha`,
+`lastCopilotCommit`, `copilotPending`, `copilotPendingCoversHead`,
+`outcome`, `f3Outcome`, `secondaryBotLogin`, `secondaryBotLogins`,
+`secondaryRequestLogins`, `secondaryRequestNeeded`, `now`, `requestCap`,
 `pendingWindowMinutes`, `settledWindowMinutes`, `pollIntervalMinutes`,
-`capExhaustedRoute`, `trustedMarkerSummary`.
+`capExhaustedRoute`, `elapsedMinutes`, `sameHeadMarkerPresent`,
+`sameHeadRequestMarkerPresent`, `earliestSameHeadAt`,
+`sameHeadMarkerCount`, `requestMarkerCount`, `trustedMarkerSummary`.
 
-Optional non-gating secondary-bot fields (not in the `outcome`/
-`f3Outcome` enums; see **Secondary advisory bot supplement** below):
-`secondaryBotLogin` (single login only), `secondaryBotLogins` (full
-list), `secondaryRequestLogins` (still-unrequested subset), and
-`secondaryRequestNeeded` (true iff non-empty).
+The four secondary fields are always emitted (empty, `false` or `[]` when no
+secondary bot is configured), sit outside the `outcome`/`f3Outcome` enums, and
+never gate (see **Secondary advisory bot supplement**): `secondaryBotLogin`
+(single login only), `secondaryBotLogins` (full list), `secondaryRequestLogins`
+(still-unrequested subset), `secondaryRequestNeeded` (true iff non-empty).
 
 Allowed `outcome`/`f3Outcome` values: `SATISFIED`, `REQUEST_NEEDED`,
 `RECOVERY_NEEDED`, `CAP_EXHAUSTED`, `WAIT`, `DISPOSITION_NEEDED`
@@ -119,7 +115,7 @@ outage (e.g. via status page or an org admin surface) before retrying.
 Orthogonal to the table above: changes no `outcome`/`f3Outcome` or
 route, never satisfies the primary gate, posts no `advisory-wait`
 marker. A bot check alone never confirms review of current HEAD.
-`secondaryBotLogin` accepts one login or a list; request every
+`advisoryWait.secondaryBotLogin` accepts one login or a list; request every
 `secondaryRequestLogins` entry, not only the first, never polling any.
 Trigger condition and per-login procedure:
 `idd-review-fix.instructions.md`'s E14 step 5.
