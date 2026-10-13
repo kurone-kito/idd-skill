@@ -184,6 +184,7 @@ async function main() {
     roadmapLabelName: labelsPolicy.roadmapLabelName,
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+    authoringOnlyLabelName: labelsPolicy.authoringOnlyLabelName,
     autopilotSuitabilityFloor:
       args.swarmFloor ?? resolveSuitabilityFloor(policyConfig),
     autopilotSuitabilityEnabled: resolveSuitabilityEnabled(policyConfig),
@@ -212,6 +213,7 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     roadmapLabelName: rawRoadmapLabelName,
     blockedByHumanLabelName: rawBlockedByHumanLabelName,
     needsDecisionLabelName: rawNeedsDecisionLabelName,
+    authoringOnlyLabelName: rawAuthoringOnlyLabelName,
     autopilotSuitabilityFloor,
     autopilotSuitabilityEnabled,
     currentRepo,
@@ -230,14 +232,19 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
   // an invalid or empty-string input also falls back to POLICY_DEFAULTS
   // instead of silently disabling the blocked-label / roadmap-label checks
   // below (consistent with the other five helpers in #1273).
-  const { roadmapLabelName, blockedByHumanLabelName, needsDecisionLabelName } =
-    normalizePolicyConfig({
-      labels: {
-        roadmapLabelName: rawRoadmapLabelName,
-        blockedByHumanLabelName: rawBlockedByHumanLabelName,
-        needsDecisionLabelName: rawNeedsDecisionLabelName,
-      },
-    }).labels;
+  const {
+    roadmapLabelName,
+    blockedByHumanLabelName,
+    needsDecisionLabelName,
+    authoringOnlyLabelName,
+  } = normalizePolicyConfig({
+    labels: {
+      roadmapLabelName: rawRoadmapLabelName,
+      blockedByHumanLabelName: rawBlockedByHumanLabelName,
+      needsDecisionLabelName: rawNeedsDecisionLabelName,
+      authoringOnlyLabelName: rawAuthoringOnlyLabelName,
+    },
+  }).labels;
   if (typeof loadIssue !== 'function') {
     throw new Error(
       'evaluateDiscoverReadiness requires loadIssue(issueNumber)',
@@ -322,6 +329,9 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     }
     if (labels.has(needsDecisionLabelName)) {
       reasons.add(`label:${needsDecisionLabelName}`);
+    }
+    if (labels.has(authoringOnlyLabelName)) {
+      reasons.add(`label:${authoringOnlyLabelName}`);
     }
     if (labels.has(authoringLabelName)) {
       reasons.add(`label:${authoringLabelName}`);

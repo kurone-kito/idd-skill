@@ -674,6 +674,77 @@ test('filterOrphanIssues resolves configured blocked-label names (#1273)', async
   assert.equal(result.orphans[0].number, 31);
 });
 
+// #4109: an open issue carrying the authoring-only label is filtered as
+// blocked_label, the same bucket as needs-decision.
+test('filterOrphanIssues excludes an authoring-only labelled issue as blocked_label (#4109)', async () => {
+  const issues = [
+    {
+      number: 40,
+      title: 'authoring-only deliverable',
+      state: 'OPEN',
+      labels: [{ name: 'status:authoring-only' }],
+      body: '',
+      url: 'https://example.com/40',
+    },
+    {
+      number: 41,
+      title: 'unlabelled orphan stays',
+      state: 'OPEN',
+      labels: [],
+      body: '',
+      url: 'https://example.com/41',
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  });
+
+  assert.equal(result.filtered.blocked_label.length, 1);
+  assert.equal(result.filtered.blocked_label[0].number, 40);
+  assert.deepEqual(
+    result.orphans.map((issue) => issue.number),
+    [41],
+  );
+});
+
+// Non-default override: a dropped forwarding site would fall back to the
+// default name and fail this assertion.
+test('filterOrphanIssues resolves a configured authoring-only label name (#4109)', async () => {
+  const issues = [
+    {
+      number: 42,
+      title: 'custom authoring-only label',
+      state: 'OPEN',
+      labels: [{ name: 'triage:authoring-only' }],
+      body: '',
+      url: 'https://example.com/42',
+    },
+    {
+      number: 43,
+      title: 'stock label no longer blocks',
+      state: 'OPEN',
+      labels: [{ name: 'status:authoring-only' }],
+      body: '',
+      url: 'https://example.com/43',
+    },
+  ];
+
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    authoringOnlyLabelName: 'triage:authoring-only',
+  });
+
+  assert.equal(result.filtered.blocked_label.length, 1);
+  assert.equal(result.filtered.blocked_label[0].number, 42);
+  assert.deepEqual(
+    result.orphans.map((issue) => issue.number),
+    [43],
+  );
+});
+
 test('filterOrphanIssues excludes custom authoring label and warns when stale', async () => {
   const issues = [
     {

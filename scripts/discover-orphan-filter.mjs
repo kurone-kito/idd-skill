@@ -447,6 +447,9 @@ export function classifyIssue(issue, options) {
   const needsDecisionLabelName = normalizeNeedsDecisionLabelName(
     options.needsDecisionLabelName,
   );
+  const authoringOnlyLabelName = normalizeAuthoringOnlyLabelName(
+    options.authoringOnlyLabelName,
+  );
   // #4065 review fix (Codex P2): the same comparison the readiness check uses
   // for needs_decision_label_conflicts_with_authoring_label.
   const labelsCollide =
@@ -470,6 +473,7 @@ export function classifyIssue(issue, options) {
   const blockedLabels = new Set([
     blockedByHumanLabelName,
     needsDecisionLabelName,
+    authoringOnlyLabelName,
   ]);
   const blockedLabel = [...labels].find((label) => blockedLabels.has(label));
   if (blockedLabel) {
@@ -786,6 +790,7 @@ export async function filterOrphanIssues(issues, options = {}) {
       authoringLabelName: options.authoringLabelName,
       blockedByHumanLabelName: options.blockedByHumanLabelName,
       needsDecisionLabelName: options.needsDecisionLabelName,
+      authoringOnlyLabelName: options.authoringOnlyLabelName,
       roadmapLabelName: options.roadmapLabelName,
       providerOutageDeclarationTarget: options.providerOutageDeclarationTarget,
       openIssueDetailsByNumber,
@@ -1248,6 +1253,7 @@ async function produceOutput(args, policy) {
     authoringStaleAgeMs: policy.authoringStaleAgeMs,
     blockedByHumanLabelName: policy.blockedByHumanLabelName,
     needsDecisionLabelName: policy.needsDecisionLabelName,
+    authoringOnlyLabelName: policy.authoringOnlyLabelName,
     roadmapLabelName: policy.roadmapLabelName,
     providerOutageDeclarationTarget: policy.providerOutageDeclarationTarget,
     autopilotSuitabilityFloor: policy.autopilotSuitabilityFloor,
@@ -1550,6 +1556,7 @@ export function loadPolicy(policyPath) {
     authoringStaleAgeMs: authoringPolicy.staleAgeMs,
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+    authoringOnlyLabelName: labelsPolicy.authoringOnlyLabelName,
     roadmapLabelName: labelsPolicy.roadmapLabelName,
     // #2800: own-property-omitted when unconfigured or invalid, matching
     // normalizePolicyConfig's own absence semantics -- resolved to
@@ -1706,6 +1713,12 @@ function normalizeNeedsDecisionLabelName(labelName) {
   return typeof labelName === 'string' && labelName.length > 0
     ? labelName
     : POLICY_DEFAULTS.labels.needsDecisionLabelName;
+}
+/** Resolve the configured `labels.authoringOnlyLabelName`. */
+function normalizeAuthoringOnlyLabelName(labelName) {
+  return typeof labelName === 'string' && labelName.length > 0
+    ? labelName
+    : POLICY_DEFAULTS.labels.authoringOnlyLabelName;
 }
 /**
  * Resolve the configured `labels.roadmapLabelName` for the dependency

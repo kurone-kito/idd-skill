@@ -271,7 +271,8 @@ export interface LeafActiveClaim {
 export interface LeafReadiness {
   /**
    * Passes every A3 readiness filter — no `status:blocked-by-human` /
-   * `status:needs-decision` / authoring-hold label, and every dependency
+   * `status:needs-decision` / `status:authoring-only` / authoring-hold label,
+   * and every dependency
    * resolves to a closed issue: visible `Blocked by #N` / `Depends on #N` /
    * task-list refs and hidden `{prefix}-blocked-by` roadmap markers, exactly
    * as `evaluateDiscoverReadiness` evaluates them.
@@ -673,6 +674,8 @@ interface ReadinessResolution {
   blockedByHumanLabelName: string;
   /** Configured needs-decision label (`labels.needsDecisionLabelName`, #1273). */
   needsDecisionLabelName: string;
+  /** Configured authoring-only label (`labels.authoringOnlyLabelName`). */
+  authoringOnlyLabelName: string;
   /** Resolution "now" (ISO8601); defaults to the wall clock in the CLI. */
   nowIso: string;
 }
@@ -2316,6 +2319,7 @@ async function annotateReadiness(
       roadmapLabelName: readiness.roadmapLabelName,
       blockedByHumanLabelName: readiness.blockedByHumanLabelName,
       needsDecisionLabelName: readiness.needsDecisionLabelName,
+      authoringOnlyLabelName: readiness.authoringOnlyLabelName,
       markerPrefix,
       // #3284 (Copilot review, PR #3415): without this, a `Blocked
       // by`/`Depends on` line naming this same repository
@@ -3080,6 +3084,7 @@ function buildReadinessResolution(
     roadmapLabelName: labelsPolicy.roadmapLabelName,
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+    authoringOnlyLabelName: labelsPolicy.authoringOnlyLabelName,
     nowIso: new Date().toISOString(),
   };
 }
