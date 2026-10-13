@@ -121,13 +121,12 @@ const PROHIBITION = 'Never add needs-decision or ask a human';
 const ORDERED_STEPS = [
   '(helper runtime only)',
   'profile-selected',
-  '`audit-authored-issue --shape child --stdin` fails',
-  '`effort-candidate-file-limit` on the issue body',
+  '`audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`',
+  'fails `effort-candidate-file-limit` on the issue body',
   "`## Candidate files` set to the diff's canonical paths",
   'stop coding without pushing',
-  'a release, not a hold',
   'Comment the estimate, candidate files, changed files, and a split proposal',
-  'release with `unclaimed-by` and the current `{claim-id}`',
+  'release per the Abort rule (`unclaimed-by`)',
   'run `lost-claim-cleanup`',
   'With the companion, hand it that proposal as a held split draft',
   'held roadmap whose children record `Split out of #<n>`',
@@ -200,8 +199,21 @@ for (const relativePath of WORK_PHASE_PATHS) {
     );
   });
 
-  test(`${relativePath}: the overrun is a release, not a hold`, () => {
-    assert.match(scopeOverrunRoute(relativePath), /a release, not a hold/);
+  test(`${relativePath}: the release is the Abort rule's unclaimed-by for the current claim id`, () => {
+    assert.ok(scopeOverrunRoute(relativePath).includes('the Abort rule'));
+    // The Abort rule the route cites revalidates ownership, updates the
+    // digest, and posts unclaimed-by for the same (current) claim id.
+    const appendixPath = relativePath.replace(
+      'idd-work.instructions.md',
+      'idd-overview-appendix.instructions.md',
+    );
+    const appendix = readRepoFile(appendixPath).replace(/\s+/g, ' ');
+    const abort = appendix.slice(appendix.indexOf('## Abort'));
+    assert.match(abort, /^## Abort On abort, re-validate ownership first\./);
+    assert.match(
+      abort,
+      /update the digest before posting `unclaimed-by`.*then post an `unclaimed-by` comment for that same `\{claim-id\}`/,
+    );
   });
 
   test(`${relativePath}: without the companion, the fallback comment is posted, the claim is released, and no question is asked`, () => {
@@ -210,7 +222,7 @@ for (const relativePath of WORK_PHASE_PATHS) {
     // the release that both branches share.
     assert.ok(
       route.indexOf('and a split proposal') <
-        route.indexOf('release with `unclaimed-by`'),
+        route.indexOf('release per the Abort rule'),
     );
     assert.ok(route.includes(PROHIBITION));
     const withoutProhibition = route.replace(PROHIBITION, '');

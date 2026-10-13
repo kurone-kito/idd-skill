@@ -948,7 +948,9 @@ This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
   check would have split before publication, so finishing it only
   produces an oversized pull request. The trigger is the distributed
   `audit-authored-issue` helper's own check (the profile-selected
-  command, with the body on `--stdin`), run on the issue body and
+  command, with the body on `--stdin` and the target's resolved
+  `--marker-prefix`, so a target with another prefix or without a
+  local config still reads its effort marker), run on the issue body and
   again on a copy whose `## Candidate files` section is replaced by
   the diff's canonical paths: every path the branch changed, whether
   committed, staged, unstaged, or untracked, that is the union of
@@ -975,9 +977,12 @@ This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
   comment whether or not the companion is installed, so a handoff that
   fails later loses nothing.
 - **Release, not hold.** The next action belongs to authoring, and no
-  human decision is pending, so the worker releases with `unclaimed-by`
-  instead of keeping a hold, and does not apply the needs-decision
-  label, which would turn the overrun back into a question. After the
+  human decision is pending, so the worker releases instead of keeping
+  a hold, and does not apply the needs-decision label, which would turn
+  the overrun back into a question. The release follows the shared
+  Abort rule: revalidate ownership, update the digest to show the
+  release, then post `unclaimed-by` for the same `{claim-id}`, so the
+  digest never keeps a stale work-phase state. After the
   release it runs the claim phase's `lost-claim-cleanup` from the
   primary checkout, the one procedure built to run after a claim is
   gone (its active-claim gate requires the release). The route names
