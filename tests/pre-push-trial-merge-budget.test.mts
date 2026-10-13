@@ -607,6 +607,9 @@ test('a not-behind branch at 7 bytes under the 98% line passes (#4128)', (t) => 
       limitBytes: 26000,
       lineBytes: 25480,
       headroom: 7,
+      baseBytes: 25473,
+      baseLimitBytes: 26000,
+      baseUtilizationPct: 97.97,
     },
   ]);
   assert.match(result.summary, /least headroom is bundle-pr-submit-lite: 7 /);
@@ -916,7 +919,16 @@ test('measureTouchedBudgets fails closed on a malformed manifest (#4128)', () =>
 test('formatLeastHeadroomLine breaks a tie by name (#4128)', () => {
   const line = formatLeastHeadroomLine({
     bundles: [
-      { id: 'b-bundle', bytes: 5, limitBytes: 10, lineBytes: 9, headroom: 4 },
+      {
+        id: 'b-bundle',
+        bytes: 5,
+        limitBytes: 10,
+        lineBytes: 9,
+        headroom: 4,
+        baseBytes: null,
+        baseLimitBytes: null,
+        baseUtilizationPct: null,
+      },
     ],
     files: [
       {
@@ -929,4 +941,109 @@ test('formatLeastHeadroomLine breaks a tie by name (#4128)', () => {
     ],
   });
   assert.match(line, /least headroom is a-file: 4 bytes/);
+});
+
+test('a not-behind branch with no manifest at HEAD fails closed (#4128)', (t) => {
+  const f = notBehindFixture();
+  t.after(() => rmSync(f.root, { recursive: true, force: true }));
+  git(f.work, ['rm', '-q', 'audit/sync-manifest.json']);
+  git(f.work, [
+    '-c',
+    'user.name=t',
+    '-c',
+    'user.email=t@invalid',
+    'commit',
+    '-q',
+    '-m',
+    'delete the manifest',
+  ]);
+
+  const result = runPrePushTrialBudget({ cwd: f.work });
+  assert.equal(result.outcome, 'budget-fail');
+  assert.deepEqual(result.auditFailures, [
+    'audit/sync-manifest.json: could not read file (ENOENT)',
+  ]);
+  assert.match(result.summary, /first failure: audit\/sync-manifest\.json/);
+});
+
+test('measureTouchedBudgets fails a malformed contextCeiling, as audit-docs does (#4128)', () => {
+  for (const contextCeiling of [[], 'x']) {
+    const measured = measureTouchedBudgets({
+      manifest: { ...BUDGET_MANIFEST, contextCeiling },
+      changedFiles: [],
+      readFile: () => null,
+    });
+    assert.equal(measured.failures.length, 1, JSON.stringify(contextCeiling));
+    assert.match(measured.failures[0] ?? '', /maxBundleLimitBytes/);
+  }
+});
+
+test('measureTouchedBudgets keeps an exemption id that names no bundle at all (#4128)', () => {
+  const measured = measureTouchedBudgets({
+    manifest: {
+      ...BUDGET_MANIFEST,
+      contextCeiling: {
+        ...BUDGET_MANIFEST.contextCeiling,
+        exemptBundles: ['bundle-untouched', 'no-such-bundle'],
+      },
+    },
+    changedFiles: [LITE_PATH],
+    readFile: () => sized(100),
+  });
+  assert.deepEqual(measured.failures, [
+    'context-ceiling-200k: exemptBundles names unknown bundle id "no-such-bundle"',
+  ]);
+});
+
+test('measureTouchedBudgets measures an always-loaded file against its own cap (#4128)', () => {
+  const text = `---\napplyTo: "**"\n---\n\n${sized(20001)}`;
+  const measured = measureTouchedBudgets({
+    manifest: BUDGET_MANIFEST,
+    changedFiles: [PR_SUBMIT_PATH],
+    readFile: () => text,
+  });
+  assert.equal(measured.files[0]?.limitField, 'alwaysLoadedLimitBytes');
+  assert.equal(measured.files[0]?.limitBytes, 20000);
+  assert.equal(measured.failures.length, 1);
+  assert.match(measured.failures[0] ?? '', /limit 20000; always-loaded/);
+});
+
+test('measureTouchedBudgets keeps the stricter row when two entries govern a file (#4128)', () => {
+  const manifest = {
+    ...BUDGET_MANIFEST,
+    instructionSizeBudgets: [
+      ...BUDGET_MANIFEST.instructionSizeBudgets,
+      {
+        id: 'stricter',
+        glob: '.github/instructions/**',
+        phaseLimitBytes: 30000,
+      },
+    ],
+  };
+  const measured = measureTouchedBudgets({
+    manifest,
+    changedFiles: [PR_SUBMIT_PATH],
+    readFile: () => sized(29000),
+  });
+  assert.deepEqual(
+    measured.files.map((row) => [row.path, row.limitBytes, row.headroom]),
+    [[PR_SUBMIT_PATH, 30000, 1000]],
+  );
+});
+
+test('measureTouchedBudgets reports the base utilization of a touched bundle (#4128)', () => {
+  const measured = measureTouchedBudgets({
+    manifest: BUDGET_MANIFEST,
+    changedFiles: [LITE_PATH],
+    readFile: () => sized(25481),
+    base: { manifest: BUDGET_MANIFEST, readFile: () => sized(24700) },
+  });
+  assert.deepEqual(
+    measured.bundles.map((row) => [
+      row.baseBytes,
+      row.baseLimitBytes,
+      row.baseUtilizationPct,
+    ]),
+    [[24700, 26000, 95]],
+  );
 });

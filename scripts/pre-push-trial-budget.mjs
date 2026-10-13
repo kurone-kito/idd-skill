@@ -51,7 +51,8 @@ export const PRE_PUSH_TRIAL_BUDGET_FLAG_SPEC = {
   '--base': { type: 'string' },
   '--help': { type: 'boolean' },
 };
-const UNKNOWN_EXEMPT_PATTERN = /: exemptBundles names unknown bundle id "/;
+const UNKNOWN_EXEMPT_PATTERN =
+  /: exemptBundles names unknown bundle id "(.*)"$/;
 function measuredBytes(text) {
   return Buffer.byteLength(
     stripGeneratedFromBanner(text.replace(/\r\n?/g, '\n')),
@@ -68,8 +69,9 @@ function isPlainObject(value) {
  * the `contextCeiling` checks, and the `instructionSizeBudgets` per-file caps.
  * `readFile` returns null for a file that does not exist: a missing bundle
  * member fails, as audit-docs fails to read it, and a missing instruction file
- * is not governed. Pure: the caller supplies the parsed manifest and the
- * reader.
+ * is not governed. `base`, when given, adds each bundle's base-ref total and
+ * utilization to its row; it never adds a failure. Pure: the caller supplies
+ * the parsed manifests and the readers.
  */
 export function measureTouchedBudgets(options) {
   const result = { bundles: [], files: [], failures: [] };
@@ -88,13 +90,20 @@ export function measureTouchedBudgets(options) {
   if (rawBundles != null && !Array.isArray(rawBundles)) {
     result.failures.push('bundleBudgets: must be an array');
   }
-  const ceiling = isPlainObject(manifest.contextCeiling)
-    ? manifest.contextCeiling
-    : null;
+  // audit-docs passes any present value to the shared ceiling check, so a
+  // malformed one (an array, a string) fails there and must fail here too.
+  const rawCeiling = manifest.contextCeiling ?? null;
+  const ceiling = isPlainObject(rawCeiling) ? rawCeiling : null;
   const maxPct = normalizeNonNegativeNumber(ceiling?.maxUtilizationPct);
   const exempt = new Set(
     Array.isArray(ceiling?.exemptBundles) ? ceiling.exemptBundles : [],
   );
+  const allBundleIds = new Set(
+    (Array.isArray(rawBundles) ? rawBundles : []).flatMap((entry) =>
+      isPlainObject(entry) && typeof entry.id === 'string' ? [entry.id] : [],
+    ),
+  );
+  const baseTotals = baseBundleTotals(options.base);
   const stats = [];
   for (const entry of Array.isArray(rawBundles) ? rawBundles : []) {
     if (!isPlainObject(entry)) continue;
@@ -127,22 +136,32 @@ export function measureTouchedBudgets(options) {
         ? Math.min(limitBytes, Math.floor((limitBytes * maxPct) / 100))
         : limitBytes;
     stats.push({ id, limitBytes, totalBytes: bytes, files });
+    const base = baseTotals.get(id);
     result.bundles.push({
       id,
       bytes,
       limitBytes,
       lineBytes,
       headroom: lineBytes - bytes,
+      baseBytes: base?.bytes ?? null,
+      baseLimitBytes: base?.limitBytes ?? null,
+      baseUtilizationPct:
+        base !== undefined && base.limitBytes > 0
+          ? Math.round((base.bytes / base.limitBytes) * 10000) / 100
+          : null,
     });
   }
-  if (ceiling !== null && stats.length > 0) {
+  if (rawCeiling !== null) {
     // Only touched bundles are passed, so an exemption for an untouched bundle
-    // reads as unknown here. audit-docs checks those ids against every bundle.
-    const ceilingResult = collectContextCeilingViolations(ceiling, stats);
+    // reads as unknown here. Such an error is dropped only when the id names
+    // a bundle elsewhere in the manifest; a genuinely unknown id still fails,
+    // as it does in audit-docs.
+    const ceilingResult = collectContextCeilingViolations(rawCeiling, stats);
     result.failures.push(
-      ...ceilingResult.errors.filter(
-        (line) => !UNKNOWN_EXEMPT_PATTERN.test(line),
-      ),
+      ...ceilingResult.errors.filter((line) => {
+        const unknown = UNKNOWN_EXEMPT_PATTERN.exec(line);
+        return unknown === null || !allBundleIds.has(unknown[1] ?? '');
+      }),
     );
   }
   const rawSizeBudgets = manifest.instructionSizeBudgets;
@@ -150,7 +169,9 @@ export function measureTouchedBudgets(options) {
     result.failures.push('instructionSizeBudgets: must be an array');
   }
   const changedList = [...changed];
-  const seenFiles = new Set();
+  // One row per path: when several entries govern a file, the row with the
+  // least headroom is kept, as that is the cap that fails first.
+  const fileRows = new Map();
   for (const entry of Array.isArray(rawSizeBudgets) ? rawSizeBudgets : []) {
     if (!isPlainObject(entry)) {
       result.failures.push(
@@ -175,24 +196,47 @@ export function measureTouchedBudgets(options) {
     );
     result.failures.push(...sizeResult.errors);
     for (const path of governed) {
-      if (seenFiles.has(path)) continue;
-      seenFiles.add(path);
       const text = (read(path) ?? '').replace(/\r\n?/g, '\n');
       const alwaysLoaded = resolved.alwaysLoadedRegex.test(text);
       const limitBytes = alwaysLoaded
         ? resolved.alwaysLoadedLimitBytes
         : resolved.phaseLimitBytes;
       const bytes = measuredBytes(text);
-      result.files.push({
+      const row = {
         path,
         bytes,
         limitBytes,
         limitField: alwaysLoaded ? 'alwaysLoadedLimitBytes' : 'phaseLimitBytes',
         headroom: limitBytes - bytes,
-      });
+      };
+      const prior = fileRows.get(path);
+      if (prior === undefined || row.headroom < prior.headroom) {
+        fileRows.set(path, row);
+      }
     }
   }
+  result.files.push(...fileRows.values());
   return result;
+}
+/** Each base-ref bundle's total and limit, by id. Report only: a malformed
+ * base entry or a missing base member is skipped or counted as 0 bytes. */
+function baseBundleTotals(base) {
+  const totals = new Map();
+  if (base === undefined || !isPlainObject(base.manifest)) return totals;
+  const entries = base.manifest.bundleBudgets;
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (!isPlainObject(entry) || typeof entry.id !== 'string') continue;
+    const limitBytes = Number(entry.limitBytes);
+    if (!Number.isFinite(limitBytes) || limitBytes < 0) continue;
+    let bytes = 0;
+    for (const file of Array.isArray(entry.files) ? entry.files : []) {
+      if (typeof file === 'string') {
+        bytes += measuredBytes(base.readFile(file) ?? '');
+      }
+    }
+    totals.set(entry.id, { bytes, limitBytes });
+  }
+  return totals;
 }
 /**
  * The stderr summary: the touched entry with the least headroom (ties broken
@@ -358,7 +402,13 @@ export function runPrePushTrialBudget(options) {
       ignoredTooling: extra.ignoredTooling ?? [],
       cleanupFailed,
       budgets,
-      summary: formatLeastHeadroomLine(budgets, extra.hint),
+      summary: formatLeastHeadroomLine(
+        budgets,
+        extra.hint ??
+          (outcome === 'budget-fail' && extra.auditFailures?.[0] !== undefined
+            ? `first failure: ${extra.auditFailures[0]}`
+            : undefined),
+      ),
       exitCode: passed && !cleanupFailed ? 0 : 1,
     };
   };
@@ -404,10 +454,17 @@ export function runPrePushTrialBudget(options) {
       parsed = parseManifest(showAt(headSha, MANIFEST_PATH));
       if (changedFiles !== null && parsed.ok && parsed.manifest !== null) {
         const manifest = parsed.manifest;
+        const baseParsed = parseManifest(showAt(baseSha, MANIFEST_PATH));
         measured = measureTouchedBudgets({
           manifest,
           changedFiles,
           readFile: (path) => showAt(headSha, path),
+          base: baseParsed.ok
+            ? {
+                manifest: baseParsed.manifest,
+                readFile: (path) => showAt(baseSha, path),
+              }
+            : undefined,
         });
       }
     } catch (error) {
@@ -425,8 +482,9 @@ export function runPrePushTrialBudget(options) {
       });
     }
     if (measured === null) {
-      return finish('not-behind', false, {
-        budgets: { bundles: [], files: [] },
+      // The audit cannot run without its manifest, so neither can this check.
+      return finish('budget-fail', false, {
+        auditFailures: [`${MANIFEST_PATH}: could not read file (ENOENT)`],
       });
     }
     const budgets = { bundles: measured.bundles, files: measured.files };
