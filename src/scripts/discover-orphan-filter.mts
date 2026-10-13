@@ -52,7 +52,11 @@ import { loadPolicyConfig } from './idd-config.mts';
 import { maskMarkdownForScan } from './markdown-code.mts';
 import { NOW_FLAG_USAGE_MESSAGE, normalizeNowFlag } from './marker-helpers.mts';
 import { createMarkerRegex } from './marker-regex.mts';
-import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
+import {
+  normalizePolicyConfig,
+  POLICY_DEFAULTS,
+  resolveDurableRecordTargets,
+} from './policy-helpers.mts';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
 import {
   createGithubProviderAdapter,
@@ -190,6 +194,7 @@ const WORD_CHAR_PATTERN = /[A-Za-z0-9]/;
 /** Reasons that keep an issue out of the orphan candidate list. */
 export type OrphanFilteredReason =
   | 'provider_outage_target'
+  | 'authoring_journal_target'
   | 'roadmap_marker'
   | 'blocked_by_marker'
   | 'blocked_label'
@@ -218,6 +223,7 @@ export type OrphanClassification =
       orphan: false;
       reason:
         | 'provider_outage_target'
+        | 'authoring_journal_target'
         | 'roadmap_marker'
         | 'blocked_by_marker'
         | 'runtime_observation_precondition';
@@ -296,6 +302,14 @@ interface ClassifyIssueOptions {
    */
   providerOutageDeclarationTarget?: number | null;
   /**
+   * The configured `issueAuthoring.journalIssue` issue number (#4115), already
+   * resolved to this repository by `resolveDurableRecordTargets`, or
+   * `null`/absent. The journal is durable infrastructure, not work, so it is
+   * excluded by number ahead of the marker/label checks, after the outage
+   * target (which keeps precedence when both numbers are equal).
+   */
+  authoringJournalTarget?: number | null;
+  /**
    * Lookup used **only** to resolve an open `Depends on #NNN` / task-list
    * dependency reference's title/labels for the parent-epic exemption
    * (#1536) — never for `Blocked by` references, which have no exemption,
@@ -326,6 +340,8 @@ interface FilterOrphanIssuesOptions {
   roadmapLabelName?: unknown;
   /** See {@link ClassifyIssueOptions.providerOutageDeclarationTarget}. */
   providerOutageDeclarationTarget?: number | null;
+  /** See {@link ClassifyIssueOptions.authoringJournalTarget}. */
+  authoringJournalTarget?: number | null;
   authoringStaleAgeMs?: number;
   autopilotSuitabilityFloor?: number;
   autopilotSuitabilityEnabled?: boolean;
@@ -764,6 +780,15 @@ export function classifyIssue(
   ) {
     return { orphan: false, reason: 'provider_outage_target' };
   }
+  // #4115: the configured authoring journal is checked in the same
+  // number-first position, for the same reason: it carries no markers or
+  // blocking labels of its own.
+  if (
+    options.authoringJournalTarget != null &&
+    Number(issue.number) === options.authoringJournalTarget
+  ) {
+    return { orphan: false, reason: 'authoring_journal_target' };
+  }
 
   const labels = new Set(normalizeLabels(issue.labels));
   const body = String(issue.body ?? '');
@@ -1087,6 +1112,7 @@ export async function filterOrphanIssues(
       : () => 'UNRESOLVABLE';
   const filtered: Record<OrphanFilteredReason, FilteredIssueEntry[]> = {
     provider_outage_target: [],
+    authoring_journal_target: [],
     roadmap_marker: [],
     blocked_by_marker: [],
     blocked_label: [],
@@ -1156,6 +1182,7 @@ export async function filterOrphanIssues(
       needsDecisionLabelName: options.needsDecisionLabelName,
       roadmapLabelName: options.roadmapLabelName,
       providerOutageDeclarationTarget: options.providerOutageDeclarationTarget,
+      authoringJournalTarget: options.authoringJournalTarget,
       openIssueDetailsByNumber,
       currentRepo: options.currentRepo,
     };
@@ -1619,6 +1646,15 @@ async function produceOutput(
   // repeated editor login across candidates costs one live lookup.
   const collaboratorPermissionCache: CollaboratorPermissionCache = new Map();
 
+  // #4115: resolved here, where owner/repo are known, so a journal in another
+  // repository contributes nothing. The raw journal reference is carried by
+  // loadPolicy, so a config change is a hint-cache miss.
+  const durableTargets = resolveDurableRecordTargets({
+    journalReference: policy.authoringJournalReference,
+    providerOutageTarget: policy.providerOutageDeclarationTarget,
+    currentRepo: owner && repo ? `${owner}/${repo}` : undefined,
+  });
+
   const result = await filterOrphanIssues(openIssues, {
     currentRepo: owner && repo ? `${owner}/${repo}` : undefined,
     issueStateByNumber: openStateByNumber,
@@ -1655,7 +1691,8 @@ async function produceOutput(
     blockedByHumanLabelName: policy.blockedByHumanLabelName,
     needsDecisionLabelName: policy.needsDecisionLabelName,
     roadmapLabelName: policy.roadmapLabelName,
-    providerOutageDeclarationTarget: policy.providerOutageDeclarationTarget,
+    providerOutageDeclarationTarget: durableTargets.providerOutageTarget,
+    authoringJournalTarget: durableTargets.authoringJournalTarget,
     autopilotSuitabilityFloor: policy.autopilotSuitabilityFloor,
     autopilotSuitabilityEnabled: policy.autopilotSuitabilityEnabled,
     autopilot: args.autopilot,
@@ -1818,6 +1855,7 @@ Output schema:
   "routed_to_human": [{"number": 2, "title": "...", "state": "OPEN", "reason": "orphan", "url": "...", "autopilotSuitability": 1, "effort": "S|M|L|null", "milestone": "v0.8.0|null"}],
   "filtered": {
     "provider_outage_target": [...],
+    "authoring_journal_target": [...],
     "roadmap_marker": [...],
     "blocked_by_marker": [...],
     "blocked_label": [...],
@@ -1841,6 +1879,16 @@ never claimed, never closed, and carrying no roadmap/blocked marker or
 blocking label of its own. Checked by issue number alone, ahead of every
 marker/label check above, since none of them would otherwise catch it.
 Absent config leaves this filter a no-op.
+
+"filtered.authoring_journal_target" (#4115) excludes the issue named by the
+configured "issueAuthoring.journalIssue", but only when that reference names
+this repository (owner and repo compared case-insensitively). A journal in
+another repository, a malformed reference, or no reference contributes
+nothing. The journal is durable infrastructure, not work, so it is excluded
+by number ahead of the marker and label checks. Its scan covers open issues
+only, so a closed journal is reported only by the per-issue mode of
+discover-readiness-check. When both numbers are equal, the outage reason
+takes precedence.
 
 "filtered.runtime_observation_precondition" (#2467) excludes an issue whose
 body names a runtime/production-observation precondition in prose --
@@ -1953,6 +2001,7 @@ export function loadPolicy(policyPath: string) {
     markerPrefix?: unknown;
     claimTiming?: { staleAge?: unknown; heartbeatInterval?: unknown };
     trustedMarkerActors?: unknown;
+    issueAuthoring?: { journalIssue?: unknown };
   };
   const authoringPolicy = resolveAuthoringGuardPolicy(config);
   const normalizedPolicy = normalizePolicyConfig(config);
@@ -1973,6 +2022,10 @@ export function loadPolicy(policyPath: string) {
     // field instead of testing for key presence.
     providerOutageDeclarationTarget:
       normalizedPolicy.providerOutage.declarationTarget ?? null,
+    // #4115: the raw `issueAuthoring.journalIssue` value (null when absent).
+    // It is resolved to this repository in produceOutput, where owner/repo
+    // are known, and it stays in the policy so a change misses the hint cache.
+    authoringJournalReference: config.issueAuthoring?.journalIssue ?? null,
     autopilotSuitabilityFloor: resolveAutopilotSuitabilityFloor(config),
     autopilotSuitabilityEnabled: resolveAutopilotSuitabilityEnabled(config),
     // Passed through verbatim (raw, un-normalized) for
