@@ -18,7 +18,14 @@ import {
 const DEFER_SOURCE_VALUE = 'review-fix-loop-cutoff';
 const AUTOPILOT_SUITABILITY_SCORE = 4;
 const MARKER_PREFIX_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const HTML_COMMENT_DELIMITER_PATTERN = /<!--|-->/;
+// An HTML comment opener in body text could hide the footers and the
+// defer-source marker. A bare closer cannot open or close anything, so it is
+// allowed as ordinary prose.
+const HTML_COMMENT_OPENER_PATTERN = /<!--/;
+// A line the audit's Refs rule counts: an optional blockquote and list
+// marker, then `Refs` with an optional colon, then `#<n>`.
+const REFS_LINE_PATTERN =
+  /^[ \t]*(?:>[ \t]*)?(?:(?:[-*+]|\d+[.)])[ \t]+)?[_*]{0,2}Refs:?[ \t]+#\d/i;
 const LINE_BREAK_PATTERN = /[\r\n]/;
 function requireText(value, field) {
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -41,9 +48,14 @@ function requireMarkerPrefix(value) {
   }
   return prefix;
 }
-function rejectHtmlCommentDelimiter(value, field) {
-  if (HTML_COMMENT_DELIMITER_PATTERN.test(value)) {
-    throw new TypeError(`${field} must not contain an HTML comment delimiter`);
+function rejectHtmlCommentOpener(value, field) {
+  if (HTML_COMMENT_OPENER_PATTERN.test(value)) {
+    throw new TypeError(`${field} must not contain an HTML comment opener`);
+  }
+}
+function rejectRefsLine(line, field) {
+  if (REFS_LINE_PATTERN.test(line)) {
+    throw new TypeError(`${field} must not begin a line with a Refs reference`);
   }
 }
 function validateItem(raw, index) {
@@ -53,24 +65,32 @@ function validateItem(raw, index) {
   const item = raw;
   const at = (field) => `items[${index}].${field}`;
   const title = requireText(item.title, at('title'));
-  rejectHtmlCommentDelimiter(title, at('title'));
-  const threadUrl = requireText(item.threadUrl, at('threadUrl'));
+  rejectHtmlCommentOpener(title, at('title'));
+  // The title sits after a list marker, so a title that starts with a Refs
+  // reference would be counted as a second Refs line.
+  rejectRefsLine(oneLine(title), at('title'));
+  const threadUrl = requireText(item.threadUrl, at('threadUrl')).trim();
   if (LINE_BREAK_PATTERN.test(threadUrl)) {
     throw new TypeError(`${at('threadUrl')} must not contain a line break`);
   }
-  rejectHtmlCommentDelimiter(threadUrl, at('threadUrl'));
+  rejectHtmlCommentOpener(threadUrl, at('threadUrl'));
   const finding = requireText(item.finding, at('finding'));
-  rejectHtmlCommentDelimiter(finding, at('finding'));
+  rejectHtmlCommentOpener(finding, at('finding'));
+  // The first line sits inside the bullet, so only continuation lines can
+  // begin a line of their own in the body.
+  for (const line of multiline(finding).split('\n').slice(1)) {
+    rejectRefsLine(line, at('finding'));
+  }
   const acceptance = requireText(item.acceptance, at('acceptance'));
-  rejectHtmlCommentDelimiter(acceptance, at('acceptance'));
-  const path = requireText(item.path, at('path'));
+  rejectHtmlCommentOpener(acceptance, at('acceptance'));
+  const path = requireText(item.path, at('path')).trim();
   if (LINE_BREAK_PATTERN.test(path)) {
     throw new TypeError(`${at('path')} must not contain a line break`);
   }
   if (path.includes('`')) {
     throw new TypeError(`${at('path')} must not contain a backtick`);
   }
-  rejectHtmlCommentDelimiter(path, at('path'));
+  rejectHtmlCommentOpener(path, at('path'));
   return { title, threadUrl, finding, acceptance, path };
 }
 /** Replace each line break with one space, then trim the ends. */
@@ -99,7 +119,12 @@ function indentContinuation(text) {
 /**
  * Render the title and Markdown body of one follow-up issue that bundles a
  * review pass's deferred findings. Throws a TypeError naming the offending
- * field for any invalid input.
+ * field for any invalid input. Beyond the spec's own list, it also refuses:
+ * a markerPrefix outside [A-Za-z0-9._-] (it is written into HTML comments); a
+ * path with a backtick or a line break (it sits in a code span); a line break
+ * in threadUrl; an HTML comment opener in any body text; and a title or
+ * finding continuation line that would begin with a Refs reference, which
+ * would add a second Refs line to the body.
  */
 // audit:ignore-dead-export: wired by the idd-review-defer-bundle command in a later roadmap issue
 export function renderDeferBundle(input) {
@@ -174,7 +199,9 @@ export function renderDeferBundle(input) {
 /**
  * Lint a rendered bundle with the orphan-shape authored-issue audit.
  * `failures` lists `<id>: <detail>` for every failing check. The lint does
- * not apply the effort candidate-file cap; renderDeferBundle enforces it.
+ * not apply the effort candidate-file cap; renderDeferBundle enforces it. A
+ * markerPrefix that fails the same rule as renderDeferBundle throws a
+ * TypeError naming markerPrefix.
  */
 // audit:ignore-dead-export: wired by the idd-review-defer-bundle command in a later roadmap issue
 export function lintDeferBundle(rendered, markerPrefix) {

@@ -137,6 +137,10 @@ test('a markerPrefix of acme puts acme- on both footers and the defer-source mar
     ),
   );
   assert.equal(body.includes('idd-skill-'), false);
+  assert.equal(
+    body.split('\n').at(-1),
+    '<!-- acme-authoring-defer-source: review-fix-loop-cutoff -->',
+  );
 });
 
 test('effort is S for three distinct paths and M for four and eight', () => {
@@ -260,10 +264,17 @@ test('an empty items list throws a TypeError naming items', () => {
   );
 });
 
-test('invalid scalar and item fields throw a TypeError naming the field', () => {
+test('invalid input throws a TypeError whose message starts with the field name', () => {
   const cases: Array<[string, () => unknown]> = [
     ['originIssue', () => renderDeferBundle(bundleInput({ originIssue: 0 }))],
     ['originIssue', () => renderDeferBundle(bundleInput({ originIssue: 1.5 }))],
+    [
+      'originIssue',
+      () =>
+        renderDeferBundle(
+          bundleInput({ originIssue: '4100' as unknown as number }),
+        ),
+    ],
     [
       'pr',
       () => renderDeferBundle(bundleInput({ pr: '4200' as unknown as number })),
@@ -275,49 +286,43 @@ test('invalid scalar and item fields throw a TypeError naming the field', () => 
     ],
     [
       'markerPrefix',
-      () => renderDeferBundle(bundleInput({ markerPrefix: 'a b' })),
+      () => renderDeferBundle(bundleInput({ markerPrefix: '   ' })),
     ],
     [
-      'path',
+      'markerPrefix',
+      () => renderDeferBundle(bundleInput({ markerPrefix: 'a b' })),
+    ],
+    ['input', () => renderDeferBundle(null as unknown as DeferBundleInput)],
+    [
+      'items[0]',
       () =>
         renderDeferBundle(
-          bundleInput({ items: [item({ path: 'src/`x`.mts' })] }),
+          bundleInput({ items: [null as unknown as DeferItem] }),
         ),
     ],
     [
-      'threadUrl',
+      'items[0].title',
+      () =>
+        renderDeferBundle(
+          bundleInput({ items: [item({ title: '<!-- note' })] }),
+        ),
+    ],
+    [
+      'items[0].title',
+      () =>
+        renderDeferBundle(
+          bundleInput({ items: [item({ title: 'Refs #5 handling' })] }),
+        ),
+    ],
+    [
+      'items[0].threadUrl',
       () =>
         renderDeferBundle(
           bundleInput({ items: [item({ threadUrl: `${THREAD_URL}\nmore` })] }),
         ),
     ],
     [
-      'finding',
-      () =>
-        renderDeferBundle(
-          bundleInput({ items: [item({ finding: 'see <!-- note' })] }),
-        ),
-    ],
-    [
-      'acceptance',
-      () =>
-        renderDeferBundle(
-          bundleInput({ items: [item({ acceptance: 'passes -->' })] }),
-        ),
-    ],
-    [
-      'originIssue',
-      () =>
-        renderDeferBundle(
-          bundleInput({ originIssue: '4100' as unknown as number }),
-        ),
-    ],
-    [
-      'markerPrefix',
-      () => renderDeferBundle(bundleInput({ markerPrefix: '   ' })),
-    ],
-    [
-      'threadUrl',
+      'items[0].threadUrl',
       () =>
         renderDeferBundle(
           bundleInput({
@@ -326,14 +331,67 @@ test('invalid scalar and item fields throw a TypeError naming the field', () => 
         ),
     ],
     [
-      'finding',
+      'items[0].threadUrl',
+      () =>
+        renderDeferBundle(
+          bundleInput({
+            items: [item({ threadUrl: 'https://example.test/<!--' })],
+          }),
+        ),
+    ],
+    [
+      'items[0].finding',
+      () =>
+        renderDeferBundle(
+          bundleInput({ items: [item({ finding: 'see <!-- note' })] }),
+        ),
+    ],
+    [
+      'items[0].finding',
       () =>
         renderDeferBundle(
           bundleInput({ items: [item({ finding: 42 as unknown as string })] }),
         ),
     ],
     [
-      'path',
+      'items[0].finding',
+      () =>
+        renderDeferBundle(
+          bundleInput({
+            items: [item({ finding: 'First line.\nRefs #7 is the origin.' })],
+          }),
+        ),
+    ],
+    [
+      'items[0].acceptance',
+      () =>
+        renderDeferBundle(
+          bundleInput({ items: [item({ acceptance: 'passes <!-- note' })] }),
+        ),
+    ],
+    [
+      'items[0].path',
+      () =>
+        renderDeferBundle(
+          bundleInput({ items: [item({ path: 'src/`x`.mts' })] }),
+        ),
+    ],
+    [
+      'items[0].path',
+      () =>
+        renderDeferBundle(
+          bundleInput({ items: [item({ path: 'src/a\nb.mts' })] }),
+        ),
+    ],
+    [
+      'items[0].path',
+      () =>
+        renderDeferBundle(
+          bundleInput({ items: [item({ path: 'src/<!--.mts' })] }),
+        ),
+    ],
+    [
+      'items[0].path',
       () =>
         renderDeferBundle(
           bundleInput({
@@ -346,8 +404,9 @@ test('invalid scalar and item fields throw a TypeError naming the field', () => 
     assert.throws(
       run,
       (error: unknown) =>
-        error instanceof TypeError && error.message.includes(field),
-      `expected a TypeError naming ${field}`,
+        error instanceof TypeError &&
+        error.message.startsWith(`${field} must `),
+      `expected a TypeError starting with "${field} must "`,
     );
   }
 });
@@ -377,22 +436,101 @@ test('a newline in a title or acceptance becomes a space, and finding keeps its 
   );
 });
 
-test('paths are trimmed, deduplicated after trimming, and sorted', () => {
+test('an HTML comment closer in prose is kept, and a trailing newline in threadUrl is trimmed', () => {
+  const rendered = renderDeferBundle(
+    bundleInput({
+      items: [
+        item({
+          threadUrl: `${THREAD_URL}\n`,
+          acceptance:
+            'the flow A --> B keeps the lock and `node --test tests/claim.test.mts` passes',
+        }),
+      ],
+    }),
+  );
+  assert.ok(
+    rendered.body.includes(`- Retry hint: ${THREAD_URL}\n\n## Proposed change`),
+  );
+  assert.ok(
+    rendered.body.includes(
+      '- [ ] the flow A --> B keeps the lock and `node --test tests/claim.test.mts` passes',
+    ),
+  );
+});
+
+test('items keep their order in the Background, Proposed change, and Acceptance sections', () => {
+  const { body } = renderDeferBundle(
+    bundleInput({
+      items: [
+        item({
+          title: 'Alpha',
+          threadUrl: 'https://example.test/alpha',
+          finding: 'The alpha finding.',
+          acceptance:
+            'alpha acceptance `node --test tests/alpha.test.mts` passes',
+          path: 'src/alpha.mts',
+        }),
+        item({
+          title: 'Beta',
+          threadUrl: 'https://example.test/beta',
+          finding: 'The beta finding.',
+          acceptance:
+            'beta acceptance `node --test tests/beta.test.mts` passes',
+          path: 'src/beta.mts',
+        }),
+      ],
+    }),
+  );
+  const pairs: Array<[string, string]> = [
+    [
+      '- Alpha: https://example.test/alpha',
+      '- Beta: https://example.test/beta',
+    ],
+    ['- Alpha: The alpha finding.', '- Beta: The beta finding.'],
+    ['- [ ] alpha acceptance', '- [ ] beta acceptance'],
+  ];
+  for (const [first, second] of pairs) {
+    const firstIndex = body.indexOf(first);
+    assert.notEqual(firstIndex, -1, `${first} is missing`);
+    assert.ok(
+      firstIndex < body.indexOf(second),
+      `${first} should precede ${second}`,
+    );
+  }
+});
+
+test('paths are trimmed, deduplicated after trimming, and sorted by code unit', () => {
   const { body } = renderDeferBundle(
     bundleInput({
       items: [
         item({ title: 'Zed', path: ' src/z.mts ' }),
-        item({ title: 'Alpha', path: 'src/a.mts' }),
+        item({ title: 'Upper', path: 'src/B.mts' }),
         item({ title: 'Again', path: 'src/z.mts' }),
+        item({ title: 'Lower', path: 'src/a.mts' }),
       ],
     }),
   );
-  assert.deepEqual(candidateLines(body), ['- `src/a.mts`', '- `src/z.mts`']);
+  assert.deepEqual(candidateLines(body), [
+    '- `src/B.mts`',
+    '- `src/a.mts`',
+    '- `src/z.mts`',
+  ]);
   assert.ok(body.includes('<!-- idd-skill-effort: S -->'));
 });
 
 test('lint passes a two-item bundle with a conventional title', () => {
   const rendered = renderDeferBundle(bundleInput());
+  assert.deepEqual(lintDeferBundle(rendered, 'idd-skill'), {
+    passed: true,
+    failures: [],
+  });
+});
+
+test('a Refs reference mid-line in a title does not count as a Refs line for lint', () => {
+  const rendered = renderDeferBundle(
+    bundleInput({ items: [item({ title: 'Fix the Refs #5 link' })] }),
+  );
+  assert.ok(rendered.body.includes('- Fix the Refs #5 link: '));
   assert.deepEqual(lintDeferBundle(rendered, 'idd-skill'), {
     passed: true,
     failures: [],
