@@ -552,6 +552,15 @@ const HELPER_COMMANDS = [
     contractPaths: ['schemas/provider-outage-park.schema.json'],
   },
   {
+    id: 'publish-authoring-hold',
+    scriptName: 'idd:publish-authoring-hold',
+    binName: 'idd-publish-authoring-hold',
+    entryPath: 'scripts/publish-authoring-hold.mjs',
+    vendoredCommand: 'node scripts/publish-authoring-hold.mjs',
+    description:
+      'Plan and validate the Stage 1 publication of one drafted orphan issue under the issue-authoring hold (read-only; --apply is refused until the publication path lands).',
+  },
+  {
     id: 'rerun-advisory-convergence',
     scriptName: 'idd:rerun-advisory-convergence',
     binName: 'idd-rerun-advisory-convergence',

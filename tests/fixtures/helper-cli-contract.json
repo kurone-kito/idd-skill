@@ -565,6 +565,18 @@
         }
       }
     },
+    "idd-publish-authoring-hold.mjs": {
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 2,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 2,
+          "kind": "usage"
+        }
+      }
+    },
     "idd-rerun-advisory-convergence.mjs": {
       "runs": {
         "unknownFlag": {
