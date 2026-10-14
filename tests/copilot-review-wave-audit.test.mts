@@ -1376,6 +1376,31 @@ test('computePrAudit triage: a bulleted opener before a valid column-0 line is m
   assert.equal(report.triage.malformed, 1);
 });
 
+test('computePrAudit triage: an underscore-emphasised Triage line is unrecorded, not malformed', () => {
+  // Underscore emphasis is not an opener, so it is not a Triage-like line.
+  const report = computePrAudit(
+    1,
+    [
+      review(
+        1,
+        '2026-01-01T00:00:00Z',
+        openReviewBody([openLine('Medium', 8075)]),
+      ),
+    ],
+    [
+      reply(
+        35,
+        8075,
+        '**Accepted** — fixed\n\n_Triage:_ tier low; urgency medium; step 2; verdict defer',
+        '2026-01-02T00:00:00Z',
+      ),
+    ],
+  );
+  assert.equal(report.triage.recorded, 0);
+  assert.equal(report.triage.unrecorded, 1);
+  assert.equal(report.triage.malformed, 0);
+});
+
 test('computePrAudit triage: a parseable column-0 line wins over a Triage-like stray line', () => {
   const report = computePrAudit(
     1,
@@ -1430,6 +1455,7 @@ test('computePrAudit triage: a Triage-like line off column 0 or without the spac
     '  Triage: tier low; urgency medium; step 2; verdict defer',
     'triage: tier low; urgency medium; step 2; verdict defer',
     '*Triage*: tier low; urgency medium; step 2; verdict defer',
+    'Triage : tier low; urgency medium; step 2; verdict defer',
   ];
   variants.forEach((line, index) => {
     const findingId = 8060 + index;
@@ -1868,8 +1894,11 @@ if (args[0] === 'api' && String(args[1]).includes('/pulls/42/comments')) {
 }
 if (args[0] === 'pr' && args[1] === 'list') {
   // Pin the flags the CLI must send, so the stub cannot pass for wrong ones.
-  const flagAt = (flag) => args[args.indexOf(flag) + 1];
-  const pinned = flagAt('--state') === 'merged' && flagAt('--json') === 'number,mergedAt' && flagAt('--repo') !== undefined;
+  const flagAt = (flag) => {
+    const at = args.indexOf(flag);
+    return at === -1 ? undefined : args[at + 1];
+  };
+  const pinned = flagAt('--state') === 'merged' && flagAt('--json') === 'number,mergedAt' && flagAt('--repo') === 'kurone-kito/idd-skill';
   if (!pinned) {
     process.stderr.write('unexpected gh pr list flags: ' + args.join(' ') + '\\n');
     process.exit(1);

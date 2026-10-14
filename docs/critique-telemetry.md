@@ -188,12 +188,13 @@ review comments (`gh api repos/{owner}/{repo}/pulls/{n}/reviews` and
   accepted, deferred, and rejected threads, the count of replies that
   have a first Triage-like line that parses (`recorded`) versus those that
   do not (`unrecorded`). A reply's first Triage-like line is its opener: the
-  case-insensitive word `Triage`, with an optional space or tab before the
-  colon, after optional indent, a list bullet (`-`, `+`, or `*`), or `*`
-  or `**` emphasis around the word, the colon, or both. So `Triage :`,
-  `- Triage:`, `**Triage:**`, `*Triage*:`, and `*Triage:*` are openers.
-  Underscore emphasis (`_Triage:_`) is not an opener, so a reply whose only
-  Triage line is underscored counts as unrecorded and not malformed.
+  case-insensitive word `Triage` followed by optional spaces or tabs and a
+  colon, at the start of the line after any run of spaces, tabs, list bullets
+  (`-`, `+`), and `*` marks, with an optional `*` or `**` right after the
+  word. The emphasis marks need not pair up. So `Triage :`, `- Triage:`,
+  `**Triage:**`, `*Triage*:`, and `*Triage:*` are openers. Underscore
+  emphasis (`_Triage:_`) is not an opener, so a reply whose only Triage line
+  is underscored counts as unrecorded and not malformed.
   `malformed` counts the unrecorded replies whose opener yields no record,
   even when a later line would parse. `byStep` counts the
   recorded lines by step (`0` to `2`), urgency, and outcome.
