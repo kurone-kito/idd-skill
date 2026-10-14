@@ -101,8 +101,8 @@ when they affect a decision, but do not let them release, extend,
 supersede, restore, or block a claim.
 
 `claim-id` is a public correlation token, not a secret. Ownership proof
-comes from the marker being authored by a trusted actor and the GitHub
-server `created_at` timestamp satisfying the phase rules.
+also needs the session's recorded token (see the `{claim-id}` bullets
+above), a trusted actor's marker, and the GitHub `created_at` timestamp.
 
 Repository-local actor policy and any forced-handoff settings live in
 `docs/customization.md`.
@@ -146,7 +146,7 @@ live in `docs/policy-constants.md`.
   comment every 12 h while holding or when any phase is expected to
   exceed 12 h. The latest **valid** `claimed-by` comment for the same
   `{claim-id}` resets the stale clock. Embedded timestamps are ignored;
-  only the comment's GitHub `created_at` counts. In a hold, a living
+  only GitHub `created_at` counts. In a hold, a living
   orchestrator of the same session may post the 12 h re-post for up to 72 h
   (`idd-orchestrator.instructions.md` section 4); without one, the 24 h stale
   clock applies.
