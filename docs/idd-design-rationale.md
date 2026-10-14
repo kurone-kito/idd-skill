@@ -2021,16 +2021,16 @@ acceptance criteria are the lever for making such a gap adopt-now.
    merged 2026-10-09 to 2026-10-13. Relax steps use `[4, 7]`.
 2. Deferral replies in the cohort of item 1, in the policy's reply format:
    six replies on four pull requests. Pull request #4043 has one
-   review-thread reply, #3966 has two conversation replies, #4044 has two,
-   and #3971 has one. Pull requests #4043, #4044, #3966 and #3971 are at
-   steps 0, 1, 2 and 2 by review count. All six are on Low-severity
-   findings: five state the severity, and the sixth is a round-count
-   deferral, which the policy limits to Low-severity findings. The 20 pull
-   requests at step 2 have 358 Accepted replies. In a 45-pull-request sample
-   (20 pull requests at step 2 and 25 at step 0) that does not include pull
-   request #4043, 0 of 519 review-thread replies record an urgency; the
-   sample's two conversation replies on pull request #3966 do record one and
-   are not in that count.
+   review-thread reply, #3966 has two conversation replies, #4044 has two
+   conversation replies, and #3971 has one conversation reply. Pull
+   requests #4043, #4044, #3966 and #3971 are at steps 0, 1, 2 and 2 by
+   review count. All six are on Low-severity findings: five state the
+   severity, and the sixth is a round-count deferral, which the policy
+   limits to Low-severity findings. The 20 pull requests at step 2 have 358
+   Accepted replies. In a 45-pull-request sample (20 pull requests at step 2
+   and 25 at step 0) that does not include pull request #4043, 0 of 519
+   review-thread replies record an urgency; the sample's two conversation
+   replies on pull request #3966 do record one and are not in that count.
 3. The decision functions `decideUrgencyDefer`, `relaxStepForReviewCount`,
    and `relaxStepClauseParts` in `src/scripts/policy-helpers.mts` have no
    runtime caller.
@@ -2050,16 +2050,16 @@ acceptance criteria are the lever for making such a gap adopt-now.
    in the same file, and 46 in files the previous fix did not touch.
 7. Authored effort and loop length in the cohort of item 1: `L` 8 pull
    requests, 6 reached 7 or more reviews, median 10; `M` 35, 5, median 2;
-   `S` 33, 2, median 2. The three groups cover 76 of the 100 pull
-   requests.
+   `S` 33, 2, median 2. The three groups cover 76 of the 100 pull requests.
 8. Copilot changed the overview format between 2026-10-05T05:47Z and
    2026-10-07T18:17Z (both reviews on pull request #3782): the Open header
    became `N open finding(s)`. Item links became absolute on 2026-10-09:
    pull request #3940 still used relative links in its review at 09:41Z,
-   and the first absolute item link is in the review on pull request #3962
-   at 17:20Z. `copilot-overview-sections.mts` still expects `Open (N)`, so
-   `copilot-review-wave-audit` reported 0 open findings in every review of
-   the cohort (420 to 444 reviews, depending on how the cohort is defined).
+   and the first absolute item link in the cohort is in the review on pull
+   request #3962 at 17:20Z. `copilot-overview-sections.mts` still expects
+   `Open (N)`, so `copilot-review-wave-audit` reported 0 open findings in
+   every review of the cohort (420 to 444 reviews on 2026-10-13, depending
+   on how the cohort is defined).
 
 Roadmap kurone-kito/idd-skill#4182 responds to this audit.
 

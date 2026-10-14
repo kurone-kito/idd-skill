@@ -1762,8 +1762,8 @@ acceptance criteria are the lever for making such a gap adopt-now.
 
 An audit of 100 merged pull requests in kurone-kito/idd-skill (2026-10-13)
 found six deferral-format replies on four pull requests. All six concern
-Low-severity findings, so no Medium or High finding was deferred. The same
-audit found that a Copilot overview format change had emptied the
+Low-severity findings, so none of the six deferred a Medium or High finding.
+The same audit found that a Copilot overview format change had emptied the
 review-wave audit's open-finding counts without any error. Recording the
 urgency on each disposition is what lets the defer matrix run. Roadmap
 kurone-kito/idd-skill#4182 responds to this audit.
