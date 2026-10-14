@@ -2109,9 +2109,12 @@ defined in that item.
    2026-10-12. The `Open (N)` header was last seen on
    2026-10-07T05:04:09Z (pull request #3783), and the `N open findings`
    header was first seen on 2026-10-07T18:17:30Z (pull request #3782).
-   Item links were relative, as `(#discussion_rN)`, until
-   2026-10-09T15:21:12Z (pull request #3851), and absolute from
-   2026-10-09T16:59:13Z (the same pull request).
+   Within the cohort, pull request #3940 still used relative item links, as
+   `(#discussion_rN)`, at 2026-10-09T09:41:37Z, and the first absolute item
+   link is in pull request #3962 at 2026-10-09T17:20:37Z. Across all reviews
+   measured here, relative links last appear in pull request #3851 at
+   2026-10-09T15:21:12Z, and absolute links first appear in that pull
+   request at 2026-10-09T16:59:13Z.
    `copilot-overview-sections.mts` still expects `Open (N)`, so
    `copilot-review-wave-audit` reported no open-finding appearances in
    any of the 431 reviews of the cohort. The headers of those reviews
