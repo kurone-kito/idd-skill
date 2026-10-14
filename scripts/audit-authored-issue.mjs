@@ -820,6 +820,7 @@ export function auditAuthoredIssue(body, options) {
       suitability,
       authoringBucket,
       options.effortLPolicy,
+      options.unreadableConfigPath,
     ),
     checkSuitabilityVisibleLineAgreement(text, markerPrefix, suitability),
     checkEffortVisibleLineAgreement(text, rawText, markerPrefix),
@@ -2836,8 +2837,9 @@ function checkEffortCandidateFileLimit(
  * Not applicable to a bucket audit, a roadmap (its tracks are its own
  * children), a policy that is absent or `'allow'` (the default, so an
  * unconfigured repository sees no change), or an effort marker that is
- * absent, malformed, or not `L`. Only the hidden marker is read, as in
- * {@link checkEffortCandidateFileLimit}.
+ * absent, malformed, or not `L`. An explicit `--config` that could not be
+ * read is not treated as absent: it fails an effort L body instead (#4282).
+ * Only the hidden marker is read, as in {@link checkEffortCandidateFileLimit}.
  */
 function checkEffortLReady(
   rawText,
@@ -2847,6 +2849,7 @@ function checkEffortLReady(
   suitability,
   authoringBucket,
   effortLPolicy,
+  unreadableConfigPath,
 ) {
   const id = 'effort-l-ready';
   const name =
@@ -2861,7 +2864,9 @@ function checkEffortLReady(
       'not applicable: a roadmap is not checked against the effort L policy',
     );
   }
-  if (effortLPolicy !== 'refuse') {
+  // An explicit --config that could not be read may be the file that refuses
+  // effort L, so it is not treated as allow (#4282).
+  if (effortLPolicy !== 'refuse' && unreadableConfigPath === undefined) {
     return pass(
       id,
       name,
@@ -2882,6 +2887,13 @@ function checkEffortLReady(
       id,
       name,
       'not applicable: issue is routed to a human bucket (authoring-bucket marker or suitability score of 1)',
+    );
+  }
+  if (unreadableConfigPath !== undefined) {
+    return fail(
+      id,
+      name,
+      `effort L cannot be verified: --config ${unreadableConfigPath} could not be read or parsed, so autopilotSuitability.effortL is unknown; point --config at a readable policy file, split the issue into S or M issues, or publish it as needs-decision`,
     );
   }
   return fail(
@@ -4839,6 +4851,7 @@ function main() {
     newIssue: args.newIssue,
     upstreamEscalationEnabled: policy.upstreamEscalationEnabled,
     effortLPolicy: policy.effortLPolicy,
+    unreadableConfigPath: policy.unreadableConfigPath,
     // An empty resolution (no flag/env/config trusted actors found) is
     // "trust unknown," not "no one is trusted" -- pass `undefined` so
     // authoring-marker-minimization-backlog's trust filter stays
@@ -4858,16 +4871,22 @@ function isIssueShape(value) {
   );
 }
 /**
- * Deliberate exception (#1721): every sibling `*.mts` `loadPolicy()` throws
- * on an explicit path that cannot be read or parsed (converged through
- * idd-config.mts's `loadPolicyConfig`). This one does not: `main()` may
+ * Explicit `--config` read semantics (#1721, #4282). Every sibling `*.mts`
+ * `loadPolicy()` throws on an explicit path that cannot be read or parsed
+ * (converged through idd-config.mts's `loadPolicyConfig`). This one does not
+ * for the marker prefix, the labels, and `upstreamEscalation`: `main()` may
  * still apply `--marker-prefix` on top of the value this returns, so an
- * unreadable `--config` here does not necessarily mean the invocation is
- * under-specified — hard-failing would reject an invocation that is
- * actually fully specified. This function still calls the same shared
+ * unreadable `--config` does not always mean the invocation is
+ * under-specified. Those fields fall back to the defaults, and the fallback
+ * is reported on stderr. This function still calls the same shared
  * `loadPolicyConfig()` reader every sibling routes through for the
- * read-and-parse step, and catches its throw itself right here to keep
- * this warn-and-continue contract instead of propagating it.
+ * read-and-parse step, and catches its throw itself.
+ *
+ * `autopilotSuitability.effortL` is the exception (#4282). Its fallback is
+ * `allow`, which would silently disable the refuse gate when the unreadable
+ * file is the one that sets `refuse`. The explicit path is therefore
+ * returned as `unreadableConfigPath`, and `effort-l-ready` fails closed on
+ * it instead of inheriting the `allow` fallback.
  */
 function loadPolicy(configPath) {
   // Default path: reuse the shared loadIddConfig() (idd-config.mts) rather
@@ -4878,6 +4897,7 @@ function loadPolicy(configPath) {
   // goes through loadPolicyConfig() below (caught locally, see doc comment
   // above).
   let config;
+  let unreadableConfigPath;
   if (configPath) {
     try {
       config = loadPolicyConfig(configPath).config;
@@ -4893,11 +4913,15 @@ function loadPolicy(configPath) {
       // specific value here (e.g. DEFAULT_MARKER_PREFIX) could mislead
       // when that flag is also present. The report's own markerPrefix
       // field is the authoritative source for the value actually used.
+      //
+      // effort-l-ready does not take this fallback: it fails closed for an
+      // effort L body (#4282), and the stderr line says so.
       const message = error instanceof Error ? error.message : String(error);
       console.error(
-        `warning: could not read or parse --config ${configPath}; falling back to default policy unless overridden by --marker-prefix (see the report's markerPrefix field for the effective value): ${message}`,
+        `warning: could not read or parse --config ${configPath}; falling back to default policy unless overridden by --marker-prefix (see the report's markerPrefix field for the effective value), and effort-l-ready fails closed for an effort L body (#4282): ${message}`,
       );
       config = null;
+      unreadableConfigPath = configPath;
     }
   } else {
     config = loadIddConfig();
@@ -4911,6 +4935,7 @@ function loadPolicy(configPath) {
       authoringOnlyLabelName: POLICY_DEFAULTS.labels.authoringOnlyLabelName,
       upstreamEscalationEnabled: false,
       effortLPolicy: 'allow',
+      unreadableConfigPath,
       rawConfig: null,
     };
   }
@@ -4926,6 +4951,7 @@ function loadPolicy(configPath) {
       normalizePolicyConfig(config).labels.authoringOnlyLabelName,
     upstreamEscalationEnabled: isUpstreamEscalationEnabled(config),
     effortLPolicy: resolveEffortLPolicy(config),
+    unreadableConfigPath: undefined,
     rawConfig: config,
   };
 }
@@ -5043,7 +5069,9 @@ Options:
                                     marker/label pairing check and the
                                     upstream-candidate branch of the prefix scan),
                                     and autopilotSuitability.effortL, which gates
-                                    effort-l-ready
+                                    effort-l-ready; an explicit path that cannot be
+                                    read or parsed fails effort-l-ready for an effort
+                                    L body (#4282)
   --label <name>                   a label currently applied/proposed on the issue
                                     (repeatable; used for the suitability=1 /
                                     authoring-bucket cross-field checks, the
