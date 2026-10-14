@@ -1828,12 +1828,15 @@ function checkNearCeilingRatchet(
     noticeUtilizationPct,
     baseManifest.contextCeiling?.noticeUtilizationPct,
   );
+  const approvedRaises = parseNearCeilingRaiseApprovals(
+    config.nearCeilingRaiseApprovals,
+  );
   errors.push(
     ...collectNearCeilingRatchetViolations(
       effectiveNoticeUtilizationPct,
       currentBundleStats,
       baseBundleStats,
-      parseNearCeilingRaiseApprovals(config.nearCeilingRaiseApprovals),
+      approvedRaises,
     ),
   );
   // Per-file instructionSizeBudgets ratchet (#3028): same base ref and the
@@ -1849,6 +1852,7 @@ function checkNearCeilingRatchet(
       effectiveNoticeUtilizationPct,
       currentInstructionSizeBudgetStats,
       baseInstructionSizeBudgetStats,
+      approvedRaises,
     ),
   );
 }

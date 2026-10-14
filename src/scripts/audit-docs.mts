@@ -2081,12 +2081,15 @@ function checkNearCeilingRatchet(
     noticeUtilizationPct,
     baseManifest.contextCeiling?.noticeUtilizationPct,
   );
+  const approvedRaises = parseNearCeilingRaiseApprovals(
+    config.nearCeilingRaiseApprovals,
+  );
   errors.push(
     ...collectNearCeilingRatchetViolations(
       effectiveNoticeUtilizationPct,
       currentBundleStats,
       baseBundleStats,
-      parseNearCeilingRaiseApprovals(config.nearCeilingRaiseApprovals),
+      approvedRaises,
     ),
   );
 
@@ -2103,6 +2106,7 @@ function checkNearCeilingRatchet(
       effectiveNoticeUtilizationPct,
       currentInstructionSizeBudgetStats,
       baseInstructionSizeBudgetStats,
+      approvedRaises,
     ),
   );
 }

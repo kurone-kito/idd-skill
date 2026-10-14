@@ -578,6 +578,13 @@ export function selectStricterNoticeUtilizationPct(
  * in byte space, inclusive `>=`, matching
  * {@link collectNearCeilingRatchetViolations}'s own convention.
  *
+ * **Maintainer-approved raises**: an entry listed in
+ * `contextCeiling.nearCeilingRaiseApprovals` under its own `id` (the
+ * `bundle` field names that id) has its `phaseLimitBytes` raise accepted up
+ * to the approved limit only, the same rule as the bundle side. The approval
+ * never covers `alwaysLoadedLimitBytes`, so an approved phase limit cannot
+ * widen the always-loaded budget.
+ *
  * **Entry-rename fallback** (#3028 critique finding, mirroring the
  * bundle-side #2697 protection): matching current-to-base entries by `id`
  * alone would let a PR dodge this guard by renaming an already-near-ceiling
@@ -594,6 +601,7 @@ export function collectInstructionSizeBudgetRatchetViolations(
   noticeUtilizationPct,
   currentEntries,
   baseEntries,
+  approvedRaises = new Map(),
 ) {
   const baseById = new Map(baseEntries.map((entry) => [entry.id, entry]));
   // `null` marks an ambiguous glob (shared by 2+ base entries) so it is
@@ -618,6 +626,7 @@ export function collectInstructionSizeBudgetRatchetViolations(
         base.phaseLimitBytes,
         base.files.filter((file) => !file.alwaysLoaded),
         noticeUtilizationPct,
+        approvedRaises.get(current.id),
       ),
     );
     errors.push(
@@ -643,8 +652,13 @@ function instructionSizeBudgetFieldRatchetErrors(
   baseLimit,
   baseFiles,
   noticeUtilizationPct,
+  approvedLimit,
 ) {
   if (currentLimit <= baseLimit || baseLimit <= 0) {
+    return [];
+  }
+  // Only the phaseLimitBytes call passes an approval (see the caller above).
+  if (approvedLimit !== undefined && currentLimit <= approvedLimit) {
     return [];
   }
   const errors = [];
