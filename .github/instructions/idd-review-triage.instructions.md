@@ -214,9 +214,10 @@ Reply
 item run `resolve-review-thread --pr <n>` with `--tier`, `--urgency`,
 and its other [triage flags] (`--lite` on a lite-profile claim), and no
 target, body, or `--apply`; it prints the step and, under
-`severity-tiered`, the verdict. Accepting against `defer` needs
-`--override "<reason>"` (such as `verdict keep at E5` when the step
-moved); `enforce` refuses it without one. Reuse the flags on the reply, minus
+`severity-tiered`, the verdict. Accepting against `defer` under `enforce`
+needs `--override "<reason>"` (such as `verdict keep at E5` when the step
+moved); `enforce` refuses it without one, while `record` posts it with or
+without one. Reuse the flags on the reply, minus
 `--advisory-converged` after a push; a reply posted without the helper
 puts the same `Triage:` line before the stamp ([audit]).
 
