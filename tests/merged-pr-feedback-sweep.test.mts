@@ -3321,9 +3321,63 @@ test('the footer comment in the sweep source names the floor and kill-switch con
     block.unshift((lines[index] ?? '').replace(/^\/\/ ?/, ''));
   }
   const comment = block.join(' ').replace(/\s+/g, ' ');
+  assert.ok(comment.length > 0, 'found the comment block above the constant');
   assert.match(comment, /`autopilotSuitability\.floor` is above 1/);
   assert.match(comment, /`autopilotSuitability\.enabled` is not `false`/);
   assert.match(comment, /blocked-by-human label/);
+});
+
+const AUTONOMY_CONTRACT_DOC = new URL(
+  '../idd-template/docs/idd-autonomy-contract.md',
+  import.meta.url,
+);
+const HELPER_SCRIPTS_DOC = new URL(
+  '../idd-template/docs/idd-helper-scripts.md',
+  import.meta.url,
+);
+
+test('the autonomy contract has one report-issue row that states what the blocked-by-human label means (issue #4308)', () => {
+  const rows = readFileSync(AUTONOMY_CONTRACT_DOC, 'utf8')
+    .split('\n')
+    .filter(
+      (line) => line.startsWith('|') && /recurring report issue/.test(line),
+    );
+  assert.equal(rows.length, 1);
+  const cells = (rows[0] ?? '')
+    .split('|')
+    .slice(1, -1)
+    .map((cell) => cell.replace(/\s+/g, ' ').trim());
+  assert.match(cells[0] ?? '', /blocked-by-human label/);
+  // The row names the label the workflow applies, so a rename fails here.
+  const [label] = sweepWriteLabels();
+  assert.ok(label, 'the write step applies a label');
+  assert.ok(
+    (cells[0] ?? '').includes(`\`${label}\``),
+    `the row names ${label}`,
+  );
+  assert.equal(cells[1], 'Reversible');
+  const meaning = cells[2] ?? '';
+  assert.match(meaning, /no human blocker/i);
+  assert.match(meaning, /nothing to clear/);
+  assert.match(meaning, /every mode/);
+  assert.match(meaning, /`autopilotSuitability\.enabled` is not `false`/);
+  assert.match(meaning, /`autopilotSuitability\.floor` is above 1/);
+});
+
+test('the helper docs describe the weekly footer and the label the write step applies (issue #4308)', () => {
+  const docs = readFileSync(HELPER_SCRIPTS_DOC, 'utf8');
+  const start = docs.indexOf('- **Weekly summary body**');
+  assert.notEqual(start, -1);
+  const end = docs.indexOf('\n- **', start + 1);
+  const bullet = docs
+    .slice(start, end === -1 ? undefined : end)
+    .replace(/\s+/g, ' ');
+  const [label] = sweepWriteLabels();
+  assert.ok(label, 'the write step applies a label');
+  assert.ok(bullet.includes(`\`${label}\``), `the bullet names ${label}`);
+  assert.match(bullet, /ends with the score footer/);
+  assert.match(bullet, /re-adds it on every edit/);
+  assert.match(bullet, /`autopilotSuitability\.floor` is above 1/);
 });
 
 test('the cap follows the enumeration, not the pull requests that survived filtering', () => {
