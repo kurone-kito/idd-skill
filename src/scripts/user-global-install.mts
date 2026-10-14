@@ -22,6 +22,7 @@ import {
   isAbsolute,
   join,
   normalize,
+  relative,
   resolve,
   sep,
 } from 'node:path';
@@ -247,6 +248,55 @@ function rootNamed(ctx: Context, name: string): Root {
   const root = ctx.roots.find((candidate) => candidate.name === name);
   if (root === undefined) throw new Error(`no ${name} root resolved`);
   return root;
+}
+
+/** The path below `base` as segments, or null when it is not below `base`. */
+function segmentsUnder(base: string, path: string): string[] | null {
+  const rel = relative(base, path);
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return null;
+  return rel.split(sep);
+}
+
+/**
+ * Whether a listed path has a shape the installer creates: the data root, a
+ * version directory and what is under it, a skill directory and its files, or
+ * the skill roots themselves. A receipt can be hand-edited, so an entry at any
+ * other path is refused rather than trusted as the installer's.
+ */
+function ownedShape(ctx: Context, entry: ReceiptEntry): boolean {
+  if (entry.kind === 'link') return true;
+  const isDir = entry.kind === 'directory';
+  if (isDir && entry.path === ctx.dataRoot) return true;
+  const data = segmentsUnder(ctx.dataRoot, entry.path);
+  if (
+    data !== null &&
+    VERSION_PATTERN.test(data[0]) &&
+    (isDir || data.length >= 2)
+  ) {
+    return true;
+  }
+  for (const name of SKILL_ROOT_NAMES) {
+    const skill = segmentsUnder(rootNamed(ctx, name).path, entry.path);
+    if (skill === null) continue;
+    if (SKILL_NAMES.includes(skill[0]) && (isDir || skill.length >= 2)) {
+      return true;
+    }
+  }
+  if (
+    isDir &&
+    SKILL_ROOT_NAMES.some((name) => rootNamed(ctx, name).path === entry.path)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function assertOwnedShape(ctx: Context, entry: ReceiptEntry): void {
+  if (!ownedShape(ctx, entry)) {
+    throw new Error(
+      `${entry.path} is not a path the installer creates; the receipt does not own it, so refusing`,
+    );
+  }
 }
 
 function isWithin(root: string, path: string): boolean {
@@ -515,6 +565,7 @@ function buildInstallPlan(
   // even when this run writes nothing there.
   for (const entry of entries.values()) {
     try {
+      assertOwnedShape(ctx, entry);
       inspect(ctx, entry.path);
     } catch (error) {
       refusals.push(describe(error));
@@ -1115,6 +1166,7 @@ function buildUninstallPlan(ctx: Context): UninstallPlan {
   const refusals: string[] = [];
   for (const entry of read.receipt.entries) {
     try {
+      assertOwnedShape(ctx, entry);
       const { root, base, walk } = inspect(ctx, entry.path);
       const decide = (action: Action): void => {
         decisions.push({ path: entry.path, entry, root, base, action });

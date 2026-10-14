@@ -433,8 +433,14 @@ test('a hand-written receipt that lists a path under no root is refused by insta
   );
   const before = snapshot(home);
 
-  assert.throws(() => installPayload(optionsFor(home)), /under no root/);
-  assert.throws(() => uninstallPayload(optionsFor(home)), /under no root/);
+  assert.throws(
+    () => installPayload(optionsFor(home)),
+    /under no root|not a path the installer creates/,
+  );
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /under no root|not a path the installer creates/,
+  );
   assert.deepEqual(snapshot(home), before);
   assert.equal(nodeFs.readFileSync(outsideFile, 'utf8'), 'x\n');
 });
@@ -928,6 +934,35 @@ test('a receipt that lists a user symbolic link as a link entry is corrupt for i
   assert.throws(() => uninstallPayload(optionsFor(home)), /corrupt/);
   assert.deepEqual(snapshot(home), before);
   assert.equal(nodeFs.readlinkSync(userLink), '/elsewhere/user-owned');
+});
+
+test('a receipt that lists a path the installer never creates is refused by install and uninstall', () => {
+  const home = makeHome();
+  const userFile = join(home, '.claude', 'CLAUDE.md');
+  nodeFs.writeFileSync(userFile, 'mine\n');
+  nodeFs.mkdirSync(dataRootOf(home), { recursive: true });
+  nodeFs.writeFileSync(
+    receiptOf(home),
+    JSON.stringify({
+      version: 1,
+      entries: [
+        { kind: 'directory', path: join(home, '.claude') },
+        { kind: 'file', path: userFile, sha256: sha256('mine\n') },
+      ],
+    }),
+  );
+  const before = snapshot(home);
+
+  assert.throws(
+    () => installPayload(optionsFor(home)),
+    /not a path the installer creates/,
+  );
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /not a path the installer creates/,
+  );
+  assert.deepEqual(snapshot(home), before);
+  assert.equal(nodeFs.readFileSync(userFile, 'utf8'), 'mine\n');
 });
 
 test('every placeholder in the installed payload has a mapping', () => {
