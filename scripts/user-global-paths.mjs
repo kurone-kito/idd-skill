@@ -270,7 +270,6 @@ function assertRepointable(current, root, stat, fs) {
  * final component's kind and the directories a write would create. Creates
  * nothing and refuses a symbolic link on any component above the final one.
  */
-// audit:ignore-dead-export: consumed by issue #4243
 export function checkContainment(root, target, fs = DEFAULT_FS) {
   requirePlatformFlags(fs);
   const walk = walkTo(root, target, fs);
@@ -281,7 +280,6 @@ export function checkContainment(root, target, fs = DEFAULT_FS) {
  * first. Refuses any existing final component, a link included. If the
  * content write fails after the create, the created file is removed.
  */
-// audit:ignore-dead-export: consumed by issue #4243
 export function writeNewFile(root, target, content, fs = DEFAULT_FS) {
   const flags = requirePlatformFlags(fs);
   const walk = walkTo(root, target, fs);
@@ -318,7 +316,6 @@ export function writeNewFile(root, target, content, fs = DEFAULT_FS) {
  * temporary file is `<target>.tmp-<pid>`, created exclusively, and any
  * existing `<target>.tmp-<digits>` refuses the replacement.
  */
-// audit:ignore-dead-export: consumed by issue #4243
 export function replaceFileByRename(
   root,
   target,
@@ -382,7 +379,6 @@ export function replaceFileByRename(
  * recursive; a non-empty directory and a file with a second hard link are
  * refused.
  */
-// audit:ignore-dead-export: consumed by issue #4243
 export function removeSingleEntry(root, target, expected, fs = DEFAULT_FS) {
   const flags = requirePlatformFlags(fs);
   const walk = walkTo(root, target, fs);
@@ -406,7 +402,6 @@ export function removeSingleEntry(root, target, expected, fs = DEFAULT_FS) {
  * version directory directly under the data root. Any existing
  * `current.tmp-<digits>` refuses the repoint.
  */
-// audit:ignore-dead-export: consumed by issue #4243
 export function repointCurrent(dataRoot, version, fs = DEFAULT_FS) {
   requirePlatformFlags(fs);
   if (!isAbsolute(dataRoot)) {
