@@ -798,11 +798,15 @@ in this preamble, since the fallback differs per helper.
   carriers, which are the open issues that carry the authoring-only label and
   the carrier marker outside code (issue `#4257`). Each carrier is `held` (it
   also carries the authoring label, with `heldSince` (null when no labeled
-  event was read, which in A0-O output also covers a failed timeline read)
-  and a `stale` flag),
+  event was read, which in A0-O output also covers a failed timeline read,
+  and then `stale` is false) and a `stale` flag; a held carrier's blockers are
+  not read),
   `ready` (no open or unresolvable `Blocked by` reference), or `waiting` (with
   `blockers`, each a `reference` and a `reason`: `open`,
-  `issue-not-found-or-inaccessible`, or `cross_repository_reference`). A
+  `issue-not-found-or-inaccessible`, or `cross_repository_reference`). Only
+  `Blocked by` lines decide `ready` or `waiting`: a roadmap-id or blocked-by
+  marker does not change a carrier's bucket, and
+  `audit-authored-issue --shape carrier` rejects such a carrier. A
   carrier stays in `filtered.blocked_label`, whichever markers it names or
   configured target number it carries, and its blockers never enter the
   top-level `unresolvable` array. This listing exists
