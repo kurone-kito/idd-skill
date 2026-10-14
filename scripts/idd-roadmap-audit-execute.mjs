@@ -77,7 +77,7 @@ const NON_CHILD_RELATIONSHIP_KINDS = new Set(['non-blocking-reference']);
 // before --apply, exactly as the merge gate trusts that review actually
 // happened.
 const MECHANICAL_GATE_NOTE =
-  'Mechanical preconditions only: every descendant is closed/complete with no open / unresolved / inaccessible / linked-PR / nested-roadmap / childless / cycle / human-gate blocker. Separately verify the roadmap’s free-form success criteria and autonomy-gap items before --apply (this helper does not, just as the merge gate trusts that review happened).';
+  'Mechanical preconditions only: the roadmap is open (a roadmap that is not open is not ready and reports the roadmap-closed blocker), and every descendant is closed/complete with no open / unresolved / inaccessible / linked-PR / nested-roadmap / childless / cycle / human-gate blocker. Separately verify the roadmap’s free-form success criteria and autonomy-gap items before --apply (this helper does not, just as the merge gate trusts that review happened).';
 /** Branch field that scopes a roadmap-audit coordination claim to one roadmap. */
 function roadmapAuditBranchPattern(roadmapNumber) {
   return new RegExp(`^roadmap-audit/${roadmapNumber}-`);
@@ -115,6 +115,17 @@ export function evaluateRoadmapAuditGates(report, options = {}) {
       POLICY_DEFAULTS.labels.needsDecisionLabelName,
     ),
   ]);
+  // A root that is not OPEN is never ready: an audit must not comment on or
+  // close an already-closed roadmap again (#4275). Checked first, so it leads
+  // the blocker list; any state other than OPEN, including '', fails closed.
+  if (report.root.state !== 'OPEN') {
+    blockers.push({
+      kind: 'roadmap-closed',
+      target: rootNumber,
+      provenance: [rootNumber],
+      detail: `roadmap #${rootNumber} is not open (state ${JSON.stringify(report.root.state)})`,
+    });
+  }
   // Root carrying a human-gate label is never auto-closed.
   const rootNode = report.nodes.find((node) => node.number === rootNumber);
   const rootBlockedLabel = (rootNode?.labels ?? []).find((label) =>
@@ -1125,7 +1136,12 @@ export async function runRoadmapAuditExecute(argv, deps) {
     verdict.result = MECHANICAL_GATE_NOTE;
     return { verdict, exitCode: ready ? 0 : 1 };
   }
-  if (!ready) {
+  // A first read whose only blocker is roadmap-closed still runs the checks
+  // below, so the #1299 already-complete retry keeps working (#4275). Any other
+  // blocker stays not-ready at once, before any claim check.
+  const closedOnly =
+    blockers.length === 1 && blockers[0]?.kind === 'roadmap-closed';
+  if (!ready && !closedOnly) {
     // Apply but not ready: fail closed, do not mutate.
     verdict.result =
       'not-ready: completion blockers present; no comment, close, or claim release attempted';
@@ -1186,6 +1202,13 @@ export async function runRoadmapAuditExecute(argv, deps) {
     verdict.result = `claim not owned on re-validation (reason="${earlyClaim.reason}": ${explainRoadmapClaimReason(earlyClaim.reason)}); no mutation${viewerLoginUnavailableCaveat(resolvedDeps.viewerLoginUnavailable)}`;
     return { verdict, exitCode: 1 };
   }
+  if (closedOnly) {
+    // Owned claim on a roadmap that is not open (#4275): nothing is commented
+    // on, closed or released here. The claim stays held until its owner posts
+    // the unclaimed-by marker, so the next action is that release, not a rerun.
+    verdict.result = `not-ready: roadmap #${roadmapNumber} is not open (state ${JSON.stringify(report.root.state)}); the roadmap-audit claim is still held by agent ${earlyClaim.activeClaim.agentId} (claim ${earlyClaim.activeClaim.claimId}); no comment, close or release was sent; next action: post this claim's unclaimed-by marker with the post-idd-marker helper, using a release timestamp; do not run --apply again.`;
+    return { verdict, exitCode: 1 };
+  }
   // Local worktree/branch safety (#2225): a released/stale claim record
   // proves nothing about what is actually checked out locally. Re-checked
   // again below, after the graph re-fetch and immediately before the close
@@ -1216,8 +1239,11 @@ export async function runRoadmapAuditExecute(argv, deps) {
     verdict.blockers = revalidatedBlockers;
     verdict.ready = false;
     verdict.evidenceBody = '';
-    verdict.result =
-      're-validation found new completion blockers immediately before close; no mutation';
+    verdict.result = revalidatedBlockers.some(
+      (blocker) => blocker.kind === 'roadmap-closed',
+    )
+      ? `not-ready: roadmap #${roadmapNumber} is not open immediately before close (state ${JSON.stringify(revalidated.root.state)}); the roadmap-audit claim is still held by agent ${earlyClaim.activeClaim.agentId} (claim ${earlyClaim.activeClaim.claimId}); no comment, close or release was sent; next action: post this claim's unclaimed-by marker with the post-idd-marker helper, using a release timestamp; do not run --apply again.`
+      : 're-validation found new completion blockers immediately before close; no mutation';
     return { verdict, exitCode: 1 };
   }
   // The graph re-fetch can span many API calls during which another session
@@ -1753,9 +1779,11 @@ function printHelp() {
   failed lookup is never silently indistinguishable from a real not-owned
   claim. Absent (never explicitly false) whenever the lookup succeeded.
 
-  SCOPE: this helper gates only the MECHANICAL completion preconditions (all
-  descendants closed/complete; no open / unresolved / inaccessible / linked-PR
-  / nested-roadmap / childless / cycle / human-gate blocker). It does NOT verify
+  SCOPE: this helper gates only the MECHANICAL completion preconditions (the
+  roadmap is open, so a roadmap that is not open is not ready and reports the
+  roadmap-closed blocker; all descendants closed/complete; no open / unresolved
+  / inaccessible / linked-PR / nested-roadmap / childless / cycle / human-gate
+  blocker). It does NOT verify
   the roadmap's free-form success criteria or autonomy-gap items — the caller
   must confirm those separately before --apply, exactly as the merge gate
   trusts that review actually happened.
