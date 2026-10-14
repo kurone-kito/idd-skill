@@ -1797,7 +1797,7 @@ single source of the values.
 When the target repository sets `autopilotSuitability.effortL` to
 `refuse` (the default is `allow`), an `L` child or orphan cannot be
 published as `ready`: split the work into `S` or `M` issues (a roadmap
-whose children are each `S` or `M` is also fine, since the effort L rule
+whose children are each `S` or `M` is also fine, since `effort-l-ready`
 does not check a roadmap), or publish it in the `needs-decision` bucket.
 `audit-authored-issue`'s `effort-l-ready` check enforces this. Under
 `refuse`, autopilot Discover routes an `L` orphan candidate to humans;
@@ -1830,11 +1830,12 @@ Binding rules:
   exception below). Effort only reorders candidates **within** a single
   suitability-score band, after the score and optional desync rules and
   **before** the lowest-issue-number tie-break. It never crosses a score
-  band or bypasses the A4.5/A5 gates. Effort never skips or gates,
-  and a large (`L`) issue stays fully claimable when it is the only ready
-  work, except an `L` orphan candidate in an autopilot run under
-  `autopilotSuitability.effortL: refuse`, which is routed to humans instead of
-  being selected. At publish time, two lints refuse a body that fails them:
+  band or bypasses the A4.5/A5 gates. Effort never skips or gates, and a
+  large (`L`) issue stays fully claimable when it is the only ready work. The
+  one exception, which overrides the claims above, is an `L` orphan candidate
+  in an autopilot run under `autopilotSuitability.effortL: refuse`, which is
+  routed to humans instead of being selected, whatever its score. At publish
+  time, two lints refuse a body that fails them:
   the [over-scope split threshold](#effort-hint) for `S`/`M` children, and
   `effort-l-ready` for `L` under `refuse`. Both run in attended and
   autopilot sessions alike; neither is Discover selection.
