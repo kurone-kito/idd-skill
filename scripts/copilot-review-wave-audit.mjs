@@ -190,10 +190,10 @@ const TRIAGE_OUTCOMES = ['accepted', 'deferred', 'rejected'];
 // it is indented, bulleted, emphasised, lower-case, or lacks the space after
 // the colon, so a malformed line cannot pass as unrecorded (Copilot reviews of
 // #4268). The prefix class is spaces, tabs, `-`, `+`, and `*`, and it never
-// spans a newline. A reply is recorded when `parseTriageLine` reads its first
-// column-0 Triage line. A reply whose first column-0 line is unreadable is
-// malformed, even when a later line would parse: that fails closed.
-const TRIAGE_LINE_PREFIX_RE = /^[ \t*+-]*(?:\*\*)?triage(?:\*\*)?[ \t]*:/imu;
+// spans a newline. A reply is recorded when its first Triage-like line parses
+// with `parseTriageLine`. A reply whose first Triage-like line does not parse
+// is malformed, even when a later line would parse: that fails closed.
+const TRIAGE_OPENER_LINE_RE = /^[ \t*+-]*(?:\*\*)?triage(?:\*\*)?[ \t]*:/iu;
 function isTriageOutcome(disposition) {
   return TRIAGE_OUTCOMES.includes(disposition);
 }
@@ -249,10 +249,16 @@ function computeTriageAudit(threads, comments) {
     }
     const outcome = thread.disposition;
     const { body } = resolveThreadDispositionReply(thread.id, comments);
-    const record = body === null ? null : parseTriageLine(body);
-    if (body === null || record === null) {
+    // The first Triage-like line decides, so a malformed first line is not
+    // rescued by a later readable one (Copilot review of #4268).
+    const opener =
+      body === null
+        ? undefined
+        : body.split(/\r?\n/u).find((line) => TRIAGE_OPENER_LINE_RE.test(line));
+    const record = opener === undefined ? null : parseTriageLine(opener);
+    if (record === null) {
       audit.unrecorded += 1;
-      if (body !== null && TRIAGE_LINE_PREFIX_RE.test(body)) {
+      if (opener !== undefined) {
         audit.malformed += 1;
       }
       continue;

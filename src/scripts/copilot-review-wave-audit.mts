@@ -187,10 +187,10 @@ export interface TriageStepCounts {
 /**
  * Recorded `Triage:` lines on finding threads whose disposition is accepted,
  * deferred, or rejected (issue #4189). `recorded` and `unrecorded` partition
- * those threads; `malformed` is the subset of `unrecorded` whose reply has a
+ * those threads; `malformed` is the subset of `unrecorded` whose reply's first
  * line that reads as a Triage record (a case-insensitive `Triage:` opener after
- * optional indent, bullet, or emphasis) yet yields no record, so parser drift
- * shows up as a count instead of silently lowering the recorded share.
+ * optional indent, bullet, or emphasis) yields no record, so parser drift shows
+ * up as a count instead of silently lowering the recorded share.
  */
 export interface TriageAudit {
   recorded: number;
@@ -399,10 +399,10 @@ const TRIAGE_OUTCOMES: readonly TriageOutcome[] = [
 // it is indented, bulleted, emphasised, lower-case, or lacks the space after
 // the colon, so a malformed line cannot pass as unrecorded (Copilot reviews of
 // #4268). The prefix class is spaces, tabs, `-`, `+`, and `*`, and it never
-// spans a newline. A reply is recorded when `parseTriageLine` reads its first
-// column-0 Triage line. A reply whose first column-0 line is unreadable is
-// malformed, even when a later line would parse: that fails closed.
-const TRIAGE_LINE_PREFIX_RE = /^[ \t*+-]*(?:\*\*)?triage(?:\*\*)?[ \t]*:/imu;
+// spans a newline. A reply is recorded when its first Triage-like line parses
+// with `parseTriageLine`. A reply whose first Triage-like line does not parse
+// is malformed, even when a later line would parse: that fails closed.
+const TRIAGE_OPENER_LINE_RE = /^[ \t*+-]*(?:\*\*)?triage(?:\*\*)?[ \t]*:/iu;
 
 function isTriageOutcome(
   disposition: Disposition,
@@ -468,10 +468,16 @@ function computeTriageAudit(
     }
     const outcome = thread.disposition;
     const { body } = resolveThreadDispositionReply(thread.id, comments);
-    const record = body === null ? null : parseTriageLine(body);
-    if (body === null || record === null) {
+    // The first Triage-like line decides, so a malformed first line is not
+    // rescued by a later readable one (Copilot review of #4268).
+    const opener =
+      body === null
+        ? undefined
+        : body.split(/\r?\n/u).find((line) => TRIAGE_OPENER_LINE_RE.test(line));
+    const record = opener === undefined ? null : parseTriageLine(opener);
+    if (record === null) {
       audit.unrecorded += 1;
-      if (body !== null && TRIAGE_LINE_PREFIX_RE.test(body)) {
+      if (opener !== undefined) {
         audit.malformed += 1;
       }
       continue;

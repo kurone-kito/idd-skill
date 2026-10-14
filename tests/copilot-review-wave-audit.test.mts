@@ -1323,6 +1323,33 @@ test('computePrAudit triage: a Triage line with no space after the colon is malf
   );
 });
 
+test('computePrAudit triage: a malformed first Triage-like line is not rescued by a later readable one', () => {
+  // Copilot review of #4268 (Previously missed item): the first Triage-like
+  // line decides, so a no-space malformed opener before a valid line is malformed.
+  const report = computePrAudit(
+    1,
+    [
+      review(
+        1,
+        '2026-01-01T00:00:00Z',
+        openReviewBody([openLine('Medium', 8073)]),
+      ),
+    ],
+    [
+      reply(
+        33,
+        8073,
+        '**Accepted** — fixed\n\nTriage:tier low; urgency medium; step 2; verdict defer\nTriage: tier low; urgency medium; step 2; verdict defer',
+        '2026-01-02T00:00:00Z',
+      ),
+    ],
+  );
+  assert.equal(report.triage.recorded, 0);
+  assert.equal(report.triage.unrecorded, 1);
+  assert.equal(report.triage.malformed, 1);
+  assert.equal(report.triage.contradictions, 0);
+});
+
 test('computePrAudit triage: a readable column-0 line wins over a Triage-like stray line', () => {
   const report = computePrAudit(
     1,

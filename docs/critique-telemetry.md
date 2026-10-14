@@ -187,9 +187,9 @@ review comments (`gh api repos/{owner}/{repo}/pulls/{n}/reviews` and
 - **Recorded triage** (`triage` in the JSON output): over the PR's
   accepted, deferred, and rejected threads, the count of replies that
   carry a readable `Triage:` line (`recorded`) versus those that do not
-  (`unrecorded`). `malformed` counts the unrecorded replies that carry a
+  (`unrecorded`). `malformed` counts the unrecorded replies whose first
   Triage-like line (case-insensitive `Triage:` after optional indent, a
-  bullet, or emphasis) that yields no record. `byStep`
+  bullet, or emphasis) yields no record, even when a later line would parse. `byStep`
   counts the recorded lines by step (`0` to `2`), urgency, and outcome.
   `overrides` counts lines with an `override:` part. `contradictions`
   counts the recorded lines without an override where an accepted reply
