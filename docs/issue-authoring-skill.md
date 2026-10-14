@@ -965,7 +965,10 @@ Before publishing a drafted `ready` **orphan, roadmap, or sub-issue**
 body (the linter's `orphan|roadmap|child` shapes), run the
 `audit-authored-issue` linter
 (`scripts/audit-authored-issue.mjs` / `bin/idd-audit-authored-issue.mjs`)
-against it when a helper runtime is available. Before newly publishing
+against it when a helper runtime is available. Before publishing a draft
+carrier (the `carrier` shape, described below), also run it with
+`--shape carrier`; a carrier is never published without that check.
+Before newly publishing
 a body into the `needs-decision` or `blocked-by-human` bucket instead,
 also run it, adding `--expect-bucket <needs-decision|blocked-by-human>`
 (choose the one matching value) — without it, the marker/label checks
