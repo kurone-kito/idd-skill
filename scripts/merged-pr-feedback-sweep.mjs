@@ -272,6 +272,11 @@ export function buildMergedPrFeedbackSweep(prs, options) {
 // test asserts that the two match.
 // audit:ignore-dead-export: the workflow's job env and its contract test share this title; the script itself never reads it
 export const WEEKLY_SWEEP_ISSUE_TITLE = 'Merged-PR feedback sweep (weekly)';
+// Not-work footer of the weekly summary issue (issue #4283). The report is a
+// status summary, not a work item. Its autopilot-suitability score of 1 sits
+// below the configured floor, so autopilot runs skip it instead of claiming it.
+const WEEKLY_SWEEP_NOT_WORK_FOOTER =
+  '<!-- idd-skill-autopilot-suitability: 1 -->';
 /**
  * Build the renderer's options from the sweep's own inputs. An explicit PR
  * list has no enumeration cap, so the cap is null there.
@@ -292,7 +297,8 @@ function pluralize(count, noun) {
  * function is pure (no network, no clock). The body carries only numbers,
  * dates, and counts, never comment text, so no user-written content reaches
  * the issue. Pull requests are written as "PR 1234", never "#1234", so the
- * body adds no cross-reference event to them.
+ * body adds no cross-reference event to them. The body ends with the
+ * not-work footer (issue #4283), so autopilot never claims the report.
  */
 export function renderWeeklySweepIssueBody(result, options) {
   const scope = options.sinceDate
@@ -332,7 +338,7 @@ export function renderWeeklySweepIssueBody(result, options) {
       );
     }
   }
-  return `${lines.join('\n')}\n`;
+  return `${lines.join('\n')}\n\n${WEEKLY_SWEEP_NOT_WORK_FOOTER}\n`;
 }
 function collectUnresolvedThreads(threads, isIdd, isAdvisoryBot) {
   const out = [];
