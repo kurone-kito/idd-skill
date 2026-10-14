@@ -547,7 +547,7 @@ test('idd-merge-execute: a missing-check ci blocker on a DIRTY head with a hint 
   );
   const ciBlocker = verdict.blockers.find((b) => b.gate === 'ci');
   assert.ok(ciBlocker, 'expected a ci blocker');
-  assert.match(String(ciBlocker.hint), /merge origin\/main/);
+  assert.match(String(ciBlocker.hint), /merge the PR base branch/);
   assertRoundtrip(verdict, loadJson('schemas/idd-merge-execute.schema.json'));
 });
 

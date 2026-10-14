@@ -9608,9 +9608,10 @@ export const SAME_TIMESTAMP_COUNT_GROWTH_HINT =
 export const MERGE_CONFLICT_CI_HINT =
   'the PR head conflicts with its base branch (mergeStateStatus DIRTY), which ' +
   'can keep GitHub from starting the required checks for this head. As the ' +
-  'default post-push sync, merge origin/main (or the development branch when ' +
-  'it is not main) into the PR branch, push, and re-run pre-merge readiness ' +
-  'once CI and review settle on the new head.';
+  'default post-push sync, merge the PR base branch (the configured ' +
+  '`developmentBranch`, or the repository default branch when it is unset) ' +
+  'into the PR branch, push, and re-run pre-merge readiness once CI and ' +
+  'review settle on the new head.';
 /**
  * #4098: fixed next-step text for a `disposition-evidence` blocker computed
  * while no review watermark exists for the claim. Without a watermark the
