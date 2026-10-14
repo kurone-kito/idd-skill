@@ -803,9 +803,9 @@ in this preamble, since the fallback differs per helper.
   `ready` (no open or unresolvable `Blocked by` reference), or `waiting` (with
   `blockers`, each a `reference` and a `reason`: `open`,
   `issue-not-found-or-inaccessible`, or `cross_repository_reference`). A
-  carrier stays in `filtered.blocked_label`, whichever roadmap or blocked-by
-  markers it names, and its blockers never enter the top-level `unresolvable`
-  array. This listing exists
+  carrier stays in `filtered.blocked_label`, whichever markers it names or
+  configured target number it carries, and its blockers never enter the
+  top-level `unresolvable` array. This listing exists
   because on 2026-10-13 a reviewed follow-up for roadmap issue `#4079` was never
   published, and the roadmap closed without it; it was reopened on 2026-10-14.
   The `--draft-carriers` mode prints only this listing, from one label-filtered
