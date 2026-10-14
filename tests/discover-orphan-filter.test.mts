@@ -1365,6 +1365,7 @@ process.exit(1);
       { cwd: workspace },
     );
     assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /gh search issues returned no JSON array/);
     assert.equal(result.stdout.includes('draftCarriers'), false);
   } finally {
     restore();
