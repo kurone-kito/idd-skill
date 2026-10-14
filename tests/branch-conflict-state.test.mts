@@ -1376,6 +1376,10 @@ test('parseHeadRollup: judges only the latest instance of each check name', () =
     conclusion,
     completedAt,
     isRequired: false,
+    checkSuite: {
+      app: { databaseId: 15368, slug: 'github-actions' },
+      workflowRun: { workflow: { databaseId: 1, name: 'CI' } },
+    },
   });
   const nodes = [
     run('refresh', 'COMPLETED', 'FAILURE', '2026-10-14T08:00:00Z'),
@@ -1438,25 +1442,22 @@ test('parseHeadRollup: keeps same-named check runs from different producers apar
   );
 });
 
-// A status context re-posted under one name keeps only the newest state, by
-// `createdAt`, since GraphQL exposes no completion time for it.
-test('parseHeadRollup: orders a re-posted status context by createdAt', () => {
+// A re-posted status context has no producer identity in GraphQL, so the
+// older state is kept beside the newer one and judged on its own. A stale
+// failure then holds, which fails closed.
+test('parseHeadRollup: keeps every re-posted status context', () => {
   const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
   const nodes = [
     {
       __typename: 'StatusContext',
       context: 'legacy',
       state: 'FAILURE',
-      createdAt: '2026-10-14T08:00:00Z',
-      creator: { login: 'bot-a' },
       isRequired: false,
     },
     {
       __typename: 'StatusContext',
       context: 'legacy',
       state: 'PENDING',
-      createdAt: '2026-10-14T09:00:00Z',
-      creator: { login: 'bot-a' },
       isRequired: false,
     },
   ];
@@ -1468,7 +1469,47 @@ test('parseHeadRollup: orders a re-posted status context by createdAt', () => {
       },
       sha,
     ).runs,
-    [{ name: 'legacy', state: 'pending', required: false }],
+    [
+      { name: 'legacy', state: 'failure', required: false },
+      { name: 'legacy', state: 'pending', required: false },
+    ],
+  );
+});
+
+// A check run with no App or workflow identity cannot be attributed to a
+// producer, so same-named runs without one are never merged.
+test('parseHeadRollup: keeps same-named check runs without a producer apart', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const nodes = [
+    {
+      __typename: 'CheckRun',
+      name: 'shared',
+      status: 'COMPLETED',
+      conclusion: 'FAILURE',
+      completedAt: '2026-10-14T08:00:00Z',
+      isRequired: false,
+    },
+    {
+      __typename: 'CheckRun',
+      name: 'shared',
+      status: 'COMPLETED',
+      conclusion: 'ACTION_REQUIRED',
+      completedAt: '2026-10-14T09:00:00Z',
+      isRequired: false,
+    },
+  ];
+  assert.deepEqual(
+    parseHeadRollup(
+      {
+        oid: sha,
+        statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } },
+      },
+      sha,
+    ).runs,
+    [
+      { name: 'shared', state: 'failure', required: false },
+      { name: 'shared', state: 'action_required', required: false },
+    ],
   );
 });
 
@@ -1558,6 +1599,10 @@ test('parseHeadRollup: keeps every instance when a completed rerun has no valid 
       conclusion: 'FAILURE',
       completedAt: '2026-10-14T08:00:00Z',
       isRequired: false,
+      checkSuite: {
+        app: { databaseId: 15368, slug: 'github-actions' },
+        workflowRun: { workflow: { databaseId: 1, name: 'CI' } },
+      },
     },
     {
       __typename: 'CheckRun',
@@ -1566,6 +1611,10 @@ test('parseHeadRollup: keeps every instance when a completed rerun has no valid 
       conclusion: 'SUCCESS',
       completedAt: 'not-a-time',
       isRequired: false,
+      checkSuite: {
+        app: { databaseId: 15368, slug: 'github-actions' },
+        workflowRun: { workflow: { databaseId: 1, name: 'CI' } },
+      },
     },
   ];
   assert.deepEqual(

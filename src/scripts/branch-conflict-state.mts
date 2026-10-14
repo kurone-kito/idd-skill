@@ -327,15 +327,19 @@ function checkRunProducerKey(entry: Record<string, unknown>): string {
 }
 
 /**
- * Keep only the latest instance of each check name and producer. A rerun can
- * leave an earlier instance in the rollup beside the current one, and the
- * required-check gate governs by the latest instance, so a stale failure must
- * not hold a current waiting run. A check run and a status context that share
- * a display name stay separate. Unnamed entries each keep their own slot, so
- * they never collapse together. A status context is keyed by its creator, so
- * the same name from two producers stays apart, and a status context with no
- * creator keeps its own slot. The tie-break is the shared
- * `selectLatestCheckInstance`, the same reducer the required-check gate uses.
+ * Keep only the latest instance of each check run, per name and producer. A
+ * rerun can leave an earlier instance in the rollup beside the current one,
+ * and the required-check gate governs by the latest instance, so a stale
+ * failure must not hold a current waiting run.
+ *
+ * Only a check run whose producer is identified (its App or its workflow) is
+ * ever merged with a same-named run. GraphQL gives a status context no
+ * producer identity, and a check run without one cannot be attributed, so
+ * each of those is kept and judged on its own. A stale entry from either
+ * then holds, which fails closed. Within a merged group, an entry whose order
+ * cannot be proven keeps every instance of that group. The tie-break is the
+ * shared `selectLatestCheckInstance`, the same reducer the required-check gate
+ * uses.
  */
 function latestInstancePerName(nodes: readonly unknown[]): unknown[] {
   const groups = new Map<
@@ -350,35 +354,20 @@ function latestInstancePerName(nodes: readonly unknown[]): unknown[] {
   nodes.forEach((node, index) => {
     const entry = (node ?? {}) as Record<string, unknown>;
     const isCheckRun = entry.__typename === 'CheckRun';
-    const name = String(
-      entry.__typename === 'StatusContext' ? entry.context : entry.name,
-    );
-    // A status context's producer is its creator. With no creator, the same
-    // name cannot be attributed to one producer, so the entry keeps its own
-    // slot (fail closed) rather than collapsing into another producer's entry.
-    const creator = String(
-      (entry.creator as { login?: unknown } | null | undefined)?.login ?? '',
-    );
-    let key = `unnamed:${index}`;
-    if (name && isCheckRun) {
-      key = `CheckRun:${name}:${checkRunProducerKey(entry)}`;
-    } else if (name && creator) {
-      key = `StatusContext:${name}:${creator}`;
-    }
+    const name = String(isCheckRun ? entry.name : '');
+    const producer = isCheckRun ? checkRunProducerKey(entry) : '|';
+    const mergeable = name !== '' && producer !== '|';
+    const key = mergeable
+      ? `CheckRun:${name}:${producer}`
+      : `unmerged:${index}`;
     const completed = String(entry.status ?? '').toUpperCase() === 'COMPLETED';
     const state = isCheckRun
       ? completed
         ? String(entry.conclusion ?? '').toUpperCase()
         : String(entry.status ?? '').toUpperCase()
       : String(entry.state ?? '').toUpperCase();
-    // A status context has no completion time, so its `createdAt` is the only
-    // ordering signal the query exposes.
-    let completedAt: string | null = null;
-    if (isCheckRun) {
-      completedAt = completed ? String(entry.completedAt ?? '') || null : null;
-    } else {
-      completedAt = String(entry.createdAt ?? '') || null;
-    }
+    const completedAt =
+      isCheckRun && completed ? String(entry.completedAt ?? '') || null : null;
     // A live check run that has not completed is the newest instance by
     // definition. Every other entry needs a valid timestamp to be ordered.
     const orderable =
@@ -399,7 +388,6 @@ function latestInstancePerName(nodes: readonly unknown[]): unknown[] {
   }
   return latest;
 }
-
 const HEAD_ROLLUP_QUERY = `query($owner: String!, $repo: String!, $oid: GitObjectID!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     object(oid: $oid) {
@@ -416,7 +404,7 @@ const HEAD_ROLLUP_QUERY = `query($owner: String!, $repo: String!, $oid: GitObjec
                 isRequired(pullRequestNumber: $number)
                 checkSuite { app { databaseId slug } workflowRun { workflow { databaseId name } } }
               }
-              ... on StatusContext { context state createdAt creator { login } isRequired(pullRequestNumber: $number) }
+              ... on StatusContext { context state isRequired(pullRequestNumber: $number) }
             }
           }
         }
