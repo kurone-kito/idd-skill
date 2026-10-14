@@ -421,14 +421,18 @@ export function replaceFileByRename(
     );
   }
   const temp = `${target}.tmp-${process.pid}`;
+  const mode = walk.finalStat.mode & 0o777;
   const fd = fs.openSync(
     temp,
     O_WRONLY | O_CREAT | O_EXCL | flags.noFollow,
-    walk.finalStat.mode & 0o777,
+    mode,
   );
   let closed = false;
   try {
     writeAll(fd, content, fs);
+    // openSync applies the process umask to `mode`, which can drop bits the
+    // original file had, so set them explicitly on the open descriptor.
+    fs.fchmodSync(fd, mode);
     fs.closeSync(fd);
     closed = true;
     fs.renameSync(temp, target);

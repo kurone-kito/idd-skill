@@ -901,6 +901,26 @@ posixTest(
   },
 );
 
+posixTest(
+  'replaceFileByRename keeps the original permission bits under a restrictive umask',
+  () => {
+    withBox((box) => {
+      makeRoot(box);
+      const file = join(box.dataRoot, 'f.txt');
+      writeFile(file, 'old');
+      nodeFs.chmodSync(file, 0o664);
+      const previous = process.umask(0o077);
+      try {
+        replaceFileByRename(box.dataRoot, file, sha('old'), 'new');
+      } finally {
+        process.umask(previous);
+      }
+      assert.equal(nodeFs.readFileSync(file, 'utf8'), 'new');
+      assert.equal(nodeFs.statSync(file).mode & 0o777, 0o664);
+    });
+  },
+);
+
 // --- Root creation -----------------------------------------------------------
 
 posixTest(
