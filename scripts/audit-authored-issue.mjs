@@ -682,7 +682,7 @@ export function auditAuthoredIssue(body, options) {
   // new, reads the same body. Other shapes keep their text unchanged.
   const rawText =
     options.shape === 'carrier'
-      ? blankEscapedCommentOpeners(sourceText)
+      ? neutralizeCommentCode(blankEscapedCommentOpeners(sourceText))
       : sourceText;
   // Mask Markdown code regions (fenced blocks, indented blocks, and
   // inline spans) once, up front, and run every check (marker counting,
@@ -1028,26 +1028,22 @@ function blankEscapedCommentOpeners(text) {
   );
 }
 /**
- * The structural view a draft carrier's section, fence, and dependency-line
- * checks read (#4250 review, Copilot): the raw body with every HTML comment
- * blanked, then code-masked. Discover's grammar masks comments the same way
- * (checkDependencyLineGrammar's `discoverMaskedLines`), so a heading, Review
- * or Shape line, fence, or dependency line hidden in a comment never counts
- * as carrier structure. Markers stay on the code-masked text that keeps
- * comments, so a hidden marker is still detected.
+ * The HTML comment ranges and raw HTML block ranges of a normalized body
+ * (#4250 review, Copilot). Code can exclude a comment opener only when it is
+ * real code: a code range that overlaps an HTML block is text inside that
+ * block (and an indented run in it is blank-run noise), so it is dropped
+ * from the exclusions. Inline code spans are excluded too, so a `<!--` in a
+ * code span is not a comment; a line-start opener inside a multiline span is
+ * the exception, since GitHub renders it as a block-level comment (checked
+ * with the GitHub markdown API).
  */
-function carrierStructureView(rawText) {
-  const rawNormalized = rawText.replace(/\r\n/g, '\n');
+function carrierCommentRanges(rawNormalized) {
   const fencedRanges = findFencedCodeRanges(rawNormalized);
   const indentedRanges = findIndentedCodeRanges(rawNormalized, fencedRanges);
   const htmlBlockRanges = findHtmlBlockRanges(rawNormalized, fencedRanges);
-  // Inline code spans are excluded from the comment-opener scan too, so a
-  // `<!--` inside a code span is not a comment. findMarkdownCodeRanges misses
-  // a span that crosses a line break, so multiline spans come from
-  // findInlineCodeSpans. An opener at a line start is the exception: GitHub
-  // renders it as a block-level comment that interrupts the paragraph and
-  // swallows what follows, whatever span it sits in (checked with the
-  // GitHub markdown API), so each such opener is carved out of its span.
+  // findMarkdownCodeRanges misses a span that crosses a line break, so
+  // multiline spans come from findInlineCodeSpans, with each line-start
+  // comment opener carved out of its span.
   const multilineInlineRanges = findInlineCodeSpans(rawNormalized).flatMap(
     (span) => {
       const ranges = [];
@@ -1065,17 +1061,57 @@ function carrierStructureView(rawText) {
       return ranges;
     },
   );
+  const exclusions = [
+    ...findMarkdownCodeRanges(rawNormalized),
+    ...multilineInlineRanges,
+    ...fencedRanges,
+    ...indentedRanges,
+  ].filter(
+    (range) =>
+      !htmlBlockRanges.some(
+        (block) => range.start < block.end && block.start < range.end,
+      ),
+  );
   const commentRanges = findHtmlCommentRanges(
     commentOpenerParityProbe(rawNormalized),
-    [
-      ...findMarkdownCodeRanges(rawNormalized),
-      ...multilineInlineRanges,
-      ...fencedRanges,
-      ...indentedRanges,
-    ],
+    exclusions,
     fencedRanges,
     htmlBlockRanges,
   );
+  return { commentRanges, htmlBlockRanges };
+}
+/**
+ * Replaces each backtick and tilde inside an HTML comment with a middle dot
+ * (#4250 review, Copilot). GitHub hides a comment's content, so a fence-looking
+ * line in one is not a fence and must not mask the live markers after it. The
+ * marker text itself is kept, and offsets are unchanged.
+ */
+function neutralizeCommentCode(rawText) {
+  const rawNormalized = rawText.replace(/\r\n/g, '\n');
+  const { commentRanges } = carrierCommentRanges(rawNormalized);
+  const chars = rawNormalized.split('');
+  for (const range of commentRanges) {
+    for (let index = range.start; index < range.end; index += 1) {
+      if (chars[index] === '`' || chars[index] === '~') {
+        chars[index] = '·';
+      }
+    }
+  }
+  return chars.join('');
+}
+/**
+ * The structural view a draft carrier's section, fence, and dependency-line
+ * checks read (#4250 review, Copilot): the raw body with every HTML comment
+ * blanked, then code-masked. Discover's grammar masks comments the same way
+ * (checkDependencyLineGrammar's `discoverMaskedLines`), so a heading, Review
+ * or Shape line, fence, or dependency line hidden in a comment never counts
+ * as carrier structure. Markers stay on the code-masked text that keeps
+ * comments, so a hidden marker is still detected.
+ */
+function carrierStructureView(rawText) {
+  const rawNormalized = rawText.replace(/\r\n/g, '\n');
+  const { commentRanges, htmlBlockRanges } =
+    carrierCommentRanges(rawNormalized);
   // Index by UTF-16 code unit, as the range helpers do, and keep every
   // newline so line indexes stay aligned with the masked text.
   // Raw HTML blocks are not Markdown structure either: GitHub renders their

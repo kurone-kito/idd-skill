@@ -6408,6 +6408,41 @@ test('a fence-looking line inside a raw HTML block does not mask the dependency 
   );
 });
 
+test('a comment indented inside a raw HTML block hides its text from the carrier checks (#4250)', () => {
+  const footer = carrierBody({
+    intro: 'Holds drafts.\n\n<div>\n    <!--\n_Effort: M -- x\n-->\n</div>',
+  });
+  assert.equal(
+    carrierFinding(footer, 'carrier-forbidden-markers')?.result,
+    'pass',
+  );
+  const dependency = carrierBody({
+    intro: 'Holds drafts.\n\n<div>\n    <!-- Depends on #5 -->\n</div>',
+  });
+  assert.equal(
+    carrierFinding(dependency, 'carrier-release-condition')?.result,
+    'pass',
+  );
+});
+
+test('a fence-looking line inside a comment does not mask a live marker after it (#4250)', () => {
+  const effort = carrierBody({
+    intro: 'Holds drafts.\n\n<!--\n```\n-->\n\n<!-- idd-skill-effort: M -->',
+  });
+  assert.equal(
+    carrierFinding(effort, 'carrier-forbidden-markers')?.result,
+    'fail',
+  );
+  const wrongPrefix = carrierBody({
+    intro:
+      'Holds drafts.\n\n<!--\n```\n-->\n\n<!-- other-draft-carrier: v1 -->',
+  });
+  assert.equal(
+    carrierFinding(wrongPrefix, 'marker-prefix-consistency')?.result,
+    'fail',
+  );
+});
+
 test('a second ## Drafts or ## Release condition heading fails rather than hiding unchecked drafts (#4250)', () => {
   const secondDrafts = `${carrierBody()}\n## Drafts\n\n### Follow-up C\n\nReview: reviewed\nShape: child\n`;
   assert.equal(carrierFinding(secondDrafts, 'carrier-drafts')?.result, 'fail');
