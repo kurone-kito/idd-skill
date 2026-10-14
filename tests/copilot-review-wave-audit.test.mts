@@ -1345,6 +1345,8 @@ test('computePrAudit triage: every urgency-deferral prefix form counts as a cont
     '**Rejected.** deferred to follow-up issue #12 (urgency low; severity Low): later',
     '**Rejected** — Deferred to follow-up issue #12 (urgency low; severity Low): later',
     '**Rejected** — deferred to follow-up issue (urgency low; severity Low): later',
+    '**Rejected** deferred to follow-up issue #12 (urgency low; severity Low): later',
+    '**Rejected!** — deferred to follow-up issue #12 (urgency low; severity Low): later',
   ];
   forms.forEach((prefix, index) => {
     const findingId = 8050 + index;
@@ -1369,6 +1371,78 @@ test('computePrAudit triage: every urgency-deferral prefix form counts as a cont
     assert.equal(report.triage.recorded, 1, prefix);
     assert.equal(report.triage.contradictions, 1, prefix);
   });
+});
+
+test('computePrAudit triage: a quoted deferral before the governing clause is not a contradiction', () => {
+  // The governing clause is `(round 2/12)`, at the canonical position. The
+  // quote of an urgency deferral sits in the lead-in, so it must not count.
+  const report = computePrAudit(
+    1,
+    [
+      review(
+        1,
+        '2026-01-01T00:00:00Z',
+        openReviewBody([openLine('Low', 8070)]),
+      ),
+    ],
+    [
+      reply(
+        30,
+        8070,
+        '**Rejected** — the earlier reply deferred to follow-up issue #3 (urgency low; severity Low), so deferred to follow-up issue #12 (round 2/12): reason\n\nTriage: tier low; urgency low; step 0; verdict keep',
+        '2026-01-02T00:00:00Z',
+      ),
+    ],
+  );
+  assert.equal(report.triage.recorded, 1);
+  assert.equal(report.triage.contradictions, 0);
+});
+
+test('computePrAudit triage: a readable column-0 line wins over a Triage-like stray line', () => {
+  const report = computePrAudit(
+    1,
+    [
+      review(
+        1,
+        '2026-01-01T00:00:00Z',
+        openReviewBody([openLine('Medium', 8071)]),
+      ),
+    ],
+    [
+      reply(
+        31,
+        8071,
+        '**Accepted** — fixed\n\nTriage: tier medium; urgency medium; step 1\n- Triage: stray',
+        '2026-01-02T00:00:00Z',
+      ),
+    ],
+  );
+  assert.equal(report.triage.recorded, 1);
+  assert.equal(report.triage.malformed, 0);
+});
+
+test('computePrAudit triage: a first column-0 Triage line that does not parse is malformed even if a later one parses', () => {
+  const report = computePrAudit(
+    1,
+    [
+      review(
+        1,
+        '2026-01-01T00:00:00Z',
+        openReviewBody([openLine('Medium', 8072)]),
+      ),
+    ],
+    [
+      reply(
+        32,
+        8072,
+        '**Accepted** — fixed\n\nTriage: tier low; urgency medium; step 2; verdict bogus\nTriage: tier low; urgency medium; step 2; verdict defer',
+        '2026-01-02T00:00:00Z',
+      ),
+    ],
+  );
+  assert.equal(report.triage.recorded, 0);
+  assert.equal(report.triage.unrecorded, 1);
+  assert.equal(report.triage.malformed, 1);
 });
 
 test('computePrAudit triage: a Triage-like line off column 0 or without the space is malformed', () => {

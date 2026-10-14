@@ -187,20 +187,23 @@ const TRIAGE_URGENCIES = ['very-low', 'low', 'medium', 'high'];
 const TRIAGE_STEPS = ['0', '1', '2'];
 const TRIAGE_OUTCOMES = ['accepted', 'deferred', 'rejected'];
 // A line that reads as a Triage record counts as an attempted one, even when
-// it is not at column 0 or lacks the space after the colon, so a malformed
-// line cannot pass as unrecorded (Copilot review of #4268). The optional bullet,
-// bold, and indent, and the case-insensitive word, widen only what counts as
-// an attempt. A line that parses still counts as recorded.
-const TRIAGE_LINE_PREFIX_RE = /^[\s>*+-]*(?:\*\*)?triage(?:\*\*)?\s*:/imu;
-// The governing deferral clause of the reply itself. It opens with the same
-// rejected prefix the classifier uses (`classifyDispositionReply`), then the
-// deferral's own text, and only an urgency-matrix clause starts with `(urgency `
-// right after it. The `[^(\n]*?` gap refuses to cross a `(`, so a later quote
-// of another deferral inside the reason does not count (Copilot review of
-// #4268). Other clauses (`(round …)`, `(needs-decision; …)`, the E10 cap
-// routes) are not governed by the urgency matrix.
+// it is indented, bulleted, emphasised, lower-case, or lacks the space after
+// the colon, so a malformed line cannot pass as unrecorded (Copilot reviews of
+// #4268). The prefix class is spaces, tabs, `-`, `+`, and `*`, and it never
+// spans a newline. A reply is recorded when `parseTriageLine` reads its first
+// column-0 Triage line. A reply whose first column-0 line is unreadable is
+// malformed, even when a later line would parse: that fails closed.
+const TRIAGE_LINE_PREFIX_RE = /^[ \t*+-]*(?:\*\*)?triage(?:\*\*)?[ \t]*:/imu;
+// The governing deferral clause sits at the canonical position of the reply:
+// the rejected prefix the classifier uses (`classifyDispositionReply`), an
+// optional dash, colon, or period separator, then `deferred to follow-up issue`
+// and the urgency-matrix clause `(urgency `. Text before the deferral is off
+// template, so it never governs. A quoted deferral in the lead-in or in the
+// reason cannot be mistaken for the reply's own clause (Copilot review of
+// #4268, round 2). Other clauses (`(round …)`, `(needs-decision; …)`, the E10
+// cap routes) are not governed by the urgency matrix.
 const URGENCY_DEFERRAL_CLAUSE_RE =
-  /^\*\*Rejected[.!:]?\*\*[^(\n]*?deferred to follow-up issue(?: #\d+)? \(urgency /iu;
+  /^\*\*Rejected[.!:]?\*\*[ \t]*(?:[—:.!-][ \t]*)?deferred to follow-up issue(?: #\d+)? \(urgency /iu;
 function isTriageOutcome(disposition) {
   return TRIAGE_OUTCOMES.includes(disposition);
 }
@@ -851,7 +854,7 @@ TSV output.
 
 Each PR's "triage" object counts the \`Triage:\` lines of its accepted,
 deferred, or rejected threads: recorded versus unrecorded (plus malformed,
-a line that does not parse), per step and urgency, overrides, and
+a Triage-like line that yields no record), per step and urgency, overrides, and
 contradictions with the urgency-matrix verdict. JSON output only.
 `);
 }
