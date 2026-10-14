@@ -7251,6 +7251,7 @@ same as `AW4`/`AW5`.
   | `branchState`                                                  | `requiresUpToDateHead` | `eBranchSync`   | `e11`                      | `f1`                            |
   | -------------------------------------------------------------- | ---------------------- | --------------- | -------------------------- | ------------------------------- |
   | `clean` with `mergeStateStatus` `CLEAN`                        | either                 | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
+  | `clean` with `UNSTABLE` and only waiting non-required runs     | either                 | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
   | `clean` with any other `mergeStateStatus`                      | either                 | `hold`          | `skip-merge`               | `hold`                          |
   | `behind-no-conflict`                                           | `false`                | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
   | `behind-no-conflict`                                           | `true`                 | `sync-path`     | `skip-merge`               | `return-to-e-phase-branch-sync` |
@@ -7258,11 +7259,14 @@ same as `AW4`/`AW5`.
   | `computing`                                                    | either                 | `retry`         | `skip-merge`               | `retry`                         |
   | `dirty`, `unknown`, `force-push-exception`, or any other state | either                 | `hold`          | `skip-merge`               | `hold`                          |
 
-  `clean` proceeds only with `mergeStateStatus` `CLEAN`, which is the phase
-  files' own definition. The helper's `clean` alone also covers `BLOCKED` and
-  `UNSTABLE`. A `retry` result is re-polled a small fixed number of times
-  (distributed default: three attempts, a few seconds apart), then routed by
-  the first settled result.
+  `clean` proceeds with `mergeStateStatus` `CLEAN`, which is the phase files'
+  own definition. An `UNSTABLE` `clean` branch proceeds only when every
+  non-passing head run is non-required and `action_required` or `pending`
+  (issue `#4209`), so the helper reads the head's check rollup live for that
+  state alone; an empty list holds. The helper's `clean` alone also covers
+  `BLOCKED`, which holds. A `retry` result is re-polled a small fixed number
+  of times (distributed default: three attempts, a few seconds apart), then
+  routed by the first settled result.
 - `branchState` values: `clean`, `behind-no-conflict`, `content-conflict`,
   `dirty`, `force-push-exception`, `computing`, `unknown` (`computing` is the
   transient still-computing mergeability that callers re-poll; `unknown` stays
