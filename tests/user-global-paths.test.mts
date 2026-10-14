@@ -845,6 +845,62 @@ posixTest(
   },
 );
 
+posixTest(
+  'a failed close is retried once and the created file is removed',
+  () => {
+    withBox((box) => {
+      makeRoot(box);
+      const target = join(box.dataRoot, 'new.txt');
+      let closeCalls = 0;
+      const fs = fsWith({
+        closeSync: (fd: number) => {
+          closeCalls += 1;
+          if (closeCalls === 1) throw new Error('injected close failure');
+          return nodeFs.closeSync(fd);
+        },
+      });
+      assertThrowsMatching(
+        () => writeNewFile(box.dataRoot, target, 'x', fs),
+        /write to .* failed: injected close failure/,
+      );
+      assert.equal(closeCalls, 2);
+      assert.equal(nodeFs.existsSync(target), false);
+    });
+  },
+);
+
+posixTest(
+  'a failed close during replacement is retried once and leaves the file unchanged',
+  () => {
+    withBox((box) => {
+      makeRoot(box);
+      const file = join(box.dataRoot, 'f.txt');
+      writeFile(file, 'old');
+      // Close call 1 is the hash read; call 2 closes the temporary file.
+      let closeCalls = 0;
+      const fs = fsWith({
+        closeSync: (fd: number) => {
+          closeCalls += 1;
+          if (closeCalls === 2) throw new Error('injected close failure');
+          return nodeFs.closeSync(fd);
+        },
+      });
+      assertThrowsMatching(
+        () => replaceFileByRename(box.dataRoot, file, sha('old'), 'new', fs),
+        /replacement of .* failed: injected close failure/,
+      );
+      assert.equal(closeCalls, 3);
+      assert.equal(nodeFs.readFileSync(file, 'utf8'), 'old');
+      assert.deepEqual(
+        nodeFs
+          .readdirSync(box.dataRoot)
+          .filter((name) => name.includes('.tmp-')),
+        [],
+      );
+    });
+  },
+);
+
 // --- Root creation -----------------------------------------------------------
 
 posixTest(

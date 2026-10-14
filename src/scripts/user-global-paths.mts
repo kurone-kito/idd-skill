@@ -369,8 +369,8 @@ export function writeNewFile(
   let closed = false;
   try {
     writeAll(fd, content, fs);
-    closed = true;
     fs.closeSync(fd);
+    closed = true;
   } catch (error) {
     if (!closed) {
       try {
@@ -429,8 +429,8 @@ export function replaceFileByRename(
   let closed = false;
   try {
     writeAll(fd, content, fs);
-    closed = true;
     fs.closeSync(fd);
+    closed = true;
     fs.renameSync(temp, target);
   } catch (error) {
     if (!closed) {
