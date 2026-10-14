@@ -8,6 +8,13 @@ name: Review policy audit
 #
 # Source-repository only: this workflow is never distributed to idd-template/.
 on:
+  schedule:
+    # Mondays 06:41 UTC. The minute is offset from the top of the hour and the
+    # half hour, where GitHub documents scheduled runs being delayed under
+    # load. The slot avoids stale.yml (Monday 00:00 UTC), codeql.yml (Monday
+    # 03:30 UTC), merged-pr-feedback-sweep.yml (Monday 06:00 UTC), and
+    # scheduled-typecheck.yml (daily 05:17 UTC).
+    - cron: '41 6 * * 1'
   workflow_dispatch:
 permissions:
   contents: read
