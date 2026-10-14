@@ -2803,16 +2803,6 @@ test('effort-l-ready keeps its unreadable-config exemptions for S, M, human-buck
   );
 });
 
-test('effort-l-ready leaves a draft carrier out of the unreadable-config failure (#4282)', () => {
-  const carrier = [carrierBody(), effortFooter('L')].join('\n\n');
-  const result = effortLReadyResult(carrier, {
-    shape: 'carrier',
-    unreadableConfigPath: '/repo/config/missing.json',
-  });
-  assert.equal(result.result, 'pass');
-  assert.match(result.detail, /draft carrier/);
-});
-
 test('effort-l-ready is unchanged when no --config path was unreadable (#4282)', () => {
   assert.equal(
     effortLReadyResult(orphanBody({ effort: 'L' }), {
@@ -6012,6 +6002,19 @@ const CARRIER_SCAN_SKIP = markdownItAvailable()
 function carrierTest(name: string, fn: () => void): void {
   test(name, { skip: CARRIER_SCAN_SKIP }, fn);
 }
+
+carrierTest(
+  'effort-l-ready leaves a draft carrier out of the unreadable-config failure (#4282)',
+  () => {
+    const carrier = [carrierBody(), effortFooter('L')].join('\n\n');
+    const result = effortLReadyResult(carrier, {
+      shape: 'carrier',
+      unreadableConfigPath: '/repo/config/missing.json',
+    });
+    assert.equal(result.result, 'pass');
+    assert.match(result.detail, /draft carrier/);
+  },
+);
 
 // --- Draft-carrier shape (#4250) -------------------------------------------
 
