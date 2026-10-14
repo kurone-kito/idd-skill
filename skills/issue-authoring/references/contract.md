@@ -1496,10 +1496,14 @@ blocked-by, or authoring-bucket marker or footer outside code),
 only `Blocked by` declarations, and is empty when the drafts can be
 re-authored now), `carrier-drafts` (each `###` subsection under
 `## Drafts` has exactly one `Review:` line, one `Shape:` line, and one
-fenced draft), and `carrier-label` (when `--label` values are given, one
+top-level fenced draft, not indented into a list item or quoted in a
+blockquote), and `carrier-label` (when `--label` values are given, one
 of them is the configured authoring-only label). The carrier also needs
-the `## Review ledger` heading. `--shape carrier` cannot be combined
-with `--expect-bucket`, because a carrier has no readiness bucket.
+the `## Review ledger` heading, and its `## Drafts` and `## Release
+condition` headings each appear once. Content inside an HTML comment
+is not structure: a heading, draft, or line hidden in a comment does
+not count. `--shape carrier` cannot be combined with `--expect-bucket`,
+because a carrier has no readiness bucket.
 
 The linter also emits one **advisory, warning-severity-only** finding
 (`prose-dependency`): it flags an issue/PR reference (`#<digits>` or a
