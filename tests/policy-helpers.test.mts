@@ -489,6 +489,9 @@ test('parseTriageLine rejects optional parts out of the fixed order, repeated, o
   assert.equal(parseTriageLine(line('; safety; safety')), null);
   assert.equal(parseTriageLine(line('; verdict keep; safety')), null);
   assert.equal(parseTriageLine(line('; surprise')), null);
+  // Each part is valid on its own; only the order is wrong.
+  assert.equal(parseTriageLine(line('; Copilot low; converged abc1234')), null);
+  assert.equal(parseTriageLine(line('; blocked x; verdict keep')), null);
   assert.deepEqual(
     parseTriageLine(line('; Copilot low; safety; verdict keep')),
     {
