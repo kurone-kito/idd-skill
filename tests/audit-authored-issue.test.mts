@@ -5895,3 +5895,423 @@ test('cleanup evidence CLI rejects unrecognized, malformed, and conflicting form
     rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+// --- Draft-carrier shape (#4250) -------------------------------------------
+
+const CARRIER_MARKER = '<!-- idd-skill-draft-carrier: v1 -->';
+
+// A draft whose body carries every marker, footer, and dependency line the
+// carrier checks must ignore, plus a nested fence. The outer fence has four
+// backticks so the three-backtick fence stays inside the draft.
+const CARRIER_DRAFT_BODY = [
+  '# Follow-up A',
+  '',
+  'Background text.',
+  '',
+  '<!-- idd-skill-autopilot-suitability: 4 -->',
+  '_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable._',
+  '',
+  'Blocked by #99',
+  '',
+  '<!-- idd-skill-authoring-bucket: needs-decision -->',
+  '',
+  '```text',
+  'nested fence inside the draft',
+  '```',
+].join('\n');
+
+const CARRIER_DRAFTS = [
+  '### Follow-up A',
+  '',
+  'Review: reviewed',
+  'Shape: child',
+  '',
+  '````md',
+  CARRIER_DRAFT_BODY,
+  '````',
+  '',
+  '### Follow-up B',
+  '',
+  'Review: not reviewed',
+  'Shape: orphan',
+  '',
+  '```md',
+  '# Follow-up B',
+  '```',
+].join('\n');
+
+function carrierBody({
+  marker = CARRIER_MARKER,
+  release = [],
+  drafts = CARRIER_DRAFTS,
+  ledger = true,
+  intro = 'Holds drafts that cannot yet be published as their final issues.',
+}: {
+  marker?: string;
+  release?: readonly string[];
+  drafts?: string;
+  ledger?: boolean;
+  intro?: string;
+} = {}): string {
+  return [
+    '# Draft carrier for the follow-ups',
+    '',
+    marker,
+    '',
+    intro,
+    '',
+    '## Release condition',
+    '',
+    ...release,
+    '',
+    '## Drafts',
+    '',
+    drafts,
+    '',
+    ...(ledger ? ['## Review ledger', '', '- Follow-up A: reviewed.'] : []),
+  ].join('\n');
+}
+
+function carrierAudit(
+  body: string,
+  options: { labels?: readonly string[]; authoringOnlyLabelName?: string } = {},
+) {
+  return auditAuthoredIssue(body, {
+    shape: 'carrier',
+    markerPrefix: 'idd-skill',
+    labels: ['status:authoring-only'],
+    ...options,
+  });
+}
+
+function carrierFinding(
+  body: string,
+  id: string,
+  options: { labels?: readonly string[]; authoringOnlyLabelName?: string } = {},
+) {
+  return carrierAudit(body, options).findings.find(
+    (finding) => finding.id === id,
+  );
+}
+
+test('a well-formed draft carrier passes every check, with an empty or a one-line release condition (#4250)', () => {
+  for (const release of [[], ['Blocked by #12']]) {
+    const audit = carrierAudit(carrierBody({ release }));
+    assert.equal(
+      audit.passed,
+      true,
+      JSON.stringify(audit.findings.filter((f) => f.result === 'fail')),
+    );
+  }
+  assert.match(
+    carrierFinding(carrierBody(), 'carrier-release-condition')?.detail ?? '',
+    /empty/u,
+  );
+  assert.equal(
+    carrierAudit(carrierBody({ release: ['Blocked by #12'] })).passed,
+    true,
+  );
+  // The same body under CRLF line endings: fence offsets must still map to
+  // the right lines.
+  assert.equal(
+    carrierAudit(
+      carrierBody({ release: ['Blocked by #12'] }).replace(/\n/g, '\r\n'),
+    ).passed,
+    true,
+  );
+  // The carrier findings never appear for another shape.
+  const child = auditAuthoredIssue(childBody(), { shape: 'child' });
+  assert.equal(
+    child.findings.some((finding) => finding.id.startsWith('carrier-')),
+    false,
+  );
+});
+
+test('carrier-marker fails without the marker, with two markers, or with a value other than v1 (#4250)', () => {
+  const cases: [string, string][] = [
+    ['no marker', carrierBody({ marker: '' })],
+    [
+      'two markers',
+      carrierBody({ marker: `${CARRIER_MARKER}\n\n${CARRIER_MARKER}` }),
+    ],
+    [
+      'value v2',
+      carrierBody({ marker: '<!-- idd-skill-draft-carrier: v2 -->' }),
+    ],
+  ];
+  for (const [label, body] of cases) {
+    assert.equal(
+      carrierFinding(body, 'carrier-marker')?.result,
+      'fail',
+      `carrier-marker: ${label}`,
+    );
+  }
+  assert.equal(carrierFinding(carrierBody(), 'carrier-marker')?.result, 'pass');
+});
+
+test('marker-prefix-consistency fails a draft-carrier marker with the wrong prefix (#4250)', () => {
+  const body = carrierBody({
+    marker: '<!-- other-draft-carrier: v1 -->',
+  });
+  assert.equal(
+    carrierFinding(body, 'marker-prefix-consistency')?.result,
+    'fail',
+  );
+});
+
+test('required-headings requires the Release condition, Drafts, and Review ledger headings (#4250)', () => {
+  const body = carrierBody();
+  for (const heading of [
+    '## Release condition',
+    '## Drafts',
+    '## Review ledger',
+  ]) {
+    const renamed = body.replace(heading, '## Renamed section');
+    assert.equal(
+      carrierFinding(renamed, 'required-headings')?.result,
+      'fail',
+      heading,
+    );
+  }
+});
+
+test('carrier-release-condition accepts Blocked by declarations and lists only the parsed references (#4250)', () => {
+  // The #99 reference sits inside the fenced draft and never counts.
+  const finding = carrierFinding(
+    carrierBody({ release: ['Blocked by #12', '#13'] }),
+    'carrier-release-condition',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.equal(finding?.detail, 'release condition references #12, #13');
+});
+
+test('carrier-release-condition rejects a non-dependency line, a Depends on line, or a stray Blocked by or Depends on line (#4250)', () => {
+  const cases: [string, string][] = [
+    [
+      'prose in the section',
+      carrierBody({ release: ['We wait for the rollout.'] }),
+    ],
+    [
+      'a Depends on line in the section',
+      carrierBody({ release: ['Depends on #12'] }),
+    ],
+    [
+      'prose after a declaration',
+      carrierBody({ release: ['Blocked by #12', 'after the rollout'] }),
+    ],
+    [
+      'a Blocked by line outside the section',
+      carrierBody({ intro: 'Blocked by #5\n\nHolds drafts.' }),
+    ],
+    [
+      'a Depends on line outside code',
+      carrierBody({ intro: 'Depends on #5\n\nHolds drafts.' }),
+    ],
+  ];
+  for (const [label, body] of cases) {
+    assert.equal(
+      carrierFinding(body, 'carrier-release-condition')?.result,
+      'fail',
+      label,
+    );
+  }
+});
+
+test('carrier-drafts requires one Review line, one Shape line, and one fenced draft per subsection (#4250)', () => {
+  const cases: [string, string][] = [
+    ['no Review line', CARRIER_DRAFTS.replace('Review: reviewed\n', '')],
+    [
+      'another Review value',
+      CARRIER_DRAFTS.replace('Review: reviewed', 'Review: maybe'),
+    ],
+    [
+      'another Shape value',
+      CARRIER_DRAFTS.replace('Shape: child', 'Shape: epic'),
+    ],
+    [
+      'no fenced draft',
+      CARRIER_DRAFTS.replace(
+        '```md\n# Follow-up B\n```',
+        'Follow-up B has no draft yet.',
+      ),
+    ],
+  ];
+  for (const [label, drafts] of cases) {
+    assert.equal(
+      carrierFinding(carrierBody({ drafts }), 'carrier-drafts')?.result,
+      'fail',
+      label,
+    );
+  }
+  assert.equal(carrierFinding(carrierBody(), 'carrier-drafts')?.result, 'pass');
+});
+
+test('carrier-forbidden-markers fails each suitability, effort, roadmap-id, blocked-by, or bucket marker or footer outside code (#4250)', () => {
+  const forbidden = [
+    '<!-- idd-skill-autopilot-suitability: 4 -->',
+    '_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable._',
+    '<!-- idd-skill-effort: M -->',
+    '_Effort: M -- author-estimated size._',
+    '<!-- idd-skill-roadmap-id: example -->',
+    '<!-- idd-skill-blocked-by: example -->',
+    '<!-- idd-skill-authoring-bucket: needs-decision -->',
+  ];
+  for (const snippet of forbidden) {
+    const body = carrierBody({ intro: `Holds drafts.\n\n${snippet}` });
+    assert.equal(
+      carrierFinding(body, 'carrier-forbidden-markers')?.result,
+      'fail',
+      snippet,
+    );
+  }
+  // The same markers inside the fenced draft never count.
+  assert.equal(
+    carrierFinding(carrierBody(), 'carrier-forbidden-markers')?.result,
+    'pass',
+  );
+});
+
+test('suitability-marker and dependency-marker-rule reject a carrier that carries those markers (#4250)', () => {
+  const withSuitability = carrierBody({
+    intro: 'Holds drafts.\n\n<!-- idd-skill-autopilot-suitability: 4 -->',
+  });
+  assert.equal(
+    carrierFinding(withSuitability, 'suitability-marker')?.result,
+    'fail',
+  );
+  assert.equal(
+    carrierFinding(carrierBody(), 'suitability-marker')?.result,
+    'pass',
+  );
+
+  const withBlockedBy = carrierBody({
+    intro: 'Holds drafts.\n\n<!-- idd-skill-blocked-by: example -->',
+  });
+  assert.equal(
+    carrierFinding(withBlockedBy, 'dependency-marker-rule')?.result,
+    'fail',
+  );
+});
+
+test('carrier-label requires the configured authoring-only label when labels are supplied (#4250)', () => {
+  const body = carrierBody();
+  assert.equal(
+    carrierFinding(body, 'carrier-label', { labels: ['status:authoring'] })
+      ?.result,
+    'fail',
+  );
+  assert.equal(
+    carrierFinding(body, 'carrier-label', { labels: ['status:authoring-only'] })
+      ?.result,
+    'pass',
+  );
+  assert.equal(
+    carrierFinding(body, 'carrier-label', { labels: [] })?.result,
+    'pass',
+  );
+  assert.equal(
+    carrierFinding(body, 'carrier-label', {
+      labels: ['status:carrier'],
+      authoringOnlyLabelName: 'status:carrier',
+    })?.result,
+    'pass',
+  );
+  assert.equal(
+    carrierFinding(body, 'carrier-label', {
+      labels: ['status:authoring-only'],
+      authoringOnlyLabelName: 'status:carrier',
+    })?.result,
+    'fail',
+  );
+});
+
+test('every triage finding reports not applicable for a draft carrier, even with no title (#4250)', () => {
+  const body = carrierBody().replace(
+    '# Draft carrier for the follow-ups\n\n',
+    '',
+  );
+  const triage = carrierAudit(body).findings.filter((finding) =>
+    finding.id.startsWith('triage-'),
+  );
+  assert.ok(triage.length > 0);
+  for (const finding of triage) {
+    assert.equal(finding.result, 'pass', finding.id);
+    assert.match(
+      finding.detail,
+      /not applicable: a draft carrier/u,
+      finding.id,
+    );
+  }
+});
+
+test('the compiled CLI rejects --shape carrier with --expect-bucket and an unknown shape (#4250)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-audit-carrier-cli-'));
+  try {
+    const bodyPath = join(tempRoot, 'carrier.md');
+    writeFileSync(bodyPath, carrierBody());
+    assert.equal(
+      runCliRaw([
+        '--shape',
+        'carrier',
+        '--body-file',
+        bodyPath,
+        '--expect-bucket',
+        'needs-decision',
+      ]).status,
+      2,
+    );
+    assert.equal(
+      runCliRaw(['--shape', 'epic', '--body-file', bodyPath]).status,
+      2,
+    );
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('the compiled CLI honors a configured labels.authoringOnlyLabelName for a CRLF carrier (#4250)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-audit-carrier-label-'));
+  try {
+    const bodyPath = join(tempRoot, 'carrier.md');
+    writeFileSync(
+      bodyPath,
+      carrierBody({ release: ['Blocked by #12'] }).replace(/\n/g, '\r\n'),
+    );
+    const configPath = join(tempRoot, 'config.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        labels: { authoringOnlyLabelName: 'status:carrier-only' },
+      }),
+    );
+    const labelFinding = (label: string) =>
+      runCli([
+        '--shape',
+        'carrier',
+        '--body-file',
+        bodyPath,
+        '--marker-prefix',
+        'idd-skill',
+        '--config',
+        configPath,
+        '--label',
+        label,
+      ]).findings.find((entry) => entry.id === 'carrier-label');
+
+    assert.equal(labelFinding('status:carrier-only')?.result, 'pass');
+    assert.equal(labelFinding('status:authoring-only')?.result, 'fail');
+    const drafts = runCli([
+      '--shape',
+      'carrier',
+      '--body-file',
+      bodyPath,
+      '--marker-prefix',
+      'idd-skill',
+      '--config',
+      configPath,
+    ]).findings.find((entry) => entry.id === 'carrier-drafts');
+    assert.equal(drafts?.result, 'pass');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});

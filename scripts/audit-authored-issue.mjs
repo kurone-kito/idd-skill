@@ -53,6 +53,7 @@ import {
 } from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
+  consumeDependencyReferenceList,
   hasDependencyReferenceListStart,
   matchDependencyKeywordLine,
 } from './dependency-grammar.mjs';
@@ -161,6 +162,10 @@ const SPLIT_OUT_OF_LINE_PATTERN =
 // a triage verdict Discover itself never computes.
 const TRIAGE_NOT_APPLICABLE_ROADMAP_DETAIL =
   'not applicable: Discover never routes a roadmap node through A4 or A4.5 triage';
+// Same idea for `shape === 'carrier'` (#4250): a draft carrier is never an
+// execution candidate, so no triage verdict applies to it at all.
+const TRIAGE_NOT_APPLICABLE_CARRIER_DETAIL =
+  'not applicable: a draft carrier is never an execution candidate and never enters A4 or A4.5 triage';
 // The authoring-marker suffixes this file checks for prefix consistency.
 // Most are defined in the contract (skills/issue-authoring/references/
 // contract.md); `upstream-candidate` is defined by roadmap #2700 and
@@ -174,6 +179,17 @@ const AUTHORING_MARKER_SUFFIXES = [
   'effort',
   'authoring-bucket',
   'upstream-candidate',
+  'draft-carrier',
+];
+// Marker suffixes a draft carrier must not carry outside code (#4250). Kept
+// above the module's entry-point block: that block runs `main()` in the
+// middle of the module, so any const declared later is still uninitialized.
+const CARRIER_FORBIDDEN_MARKER_SUFFIXES = [
+  'autopilot-suitability',
+  'effort',
+  'roadmap-id',
+  'blocked-by',
+  'authoring-bucket',
 ];
 /**
  * The fixed GitHub label paired with the
@@ -200,6 +216,11 @@ const SHAPE_HEADING_REQUIREMENTS = {
     { anyOf: ['Background'] },
     { anyOf: ['Proposed change'] },
     { anyOf: ['Acceptance criteria'] },
+  ],
+  carrier: [
+    { anyOf: ['Release condition'] },
+    { anyOf: ['Drafts'] },
+    { anyOf: ['Review ledger'] },
   ],
 };
 // Coordination-language keywords that, alongside an unencoded issue/PR
@@ -673,6 +694,14 @@ export function auditAuthoredIssue(body, options) {
   )
     .trim()
     .toLowerCase();
+  const authoringOnlyLabelName = (
+    typeof options.authoringOnlyLabelName === 'string' &&
+    options.authoringOnlyLabelName.trim().length > 0
+      ? options.authoringOnlyLabelName
+      : POLICY_DEFAULTS.labels.authoringOnlyLabelName
+  )
+    .trim()
+    .toLowerCase();
   // #3281 review (CodeRabbit): parseAutopilotSuitabilityMarker masks its
   // own input (maskMarkdownForScan), so passing the already-masked
   // `text` here would mask it a SECOND time -- a masked inline code
@@ -690,7 +719,7 @@ export function auditAuthoredIssue(body, options) {
   const authoringBucket = parseAuthoringBucketMarker(text, markerPrefix);
   const isBucketAudit = options.expectedAuthoringBucket !== undefined;
   const findings = [
-    checkSuitabilityMarker(suitabilityCount, suitability, isBucketAudit),
+    checkSuitabilityMarker(suitabilityCount, suitability, isBucketAudit, shape),
     checkSuitabilityBlockedByHuman(
       suitability,
       authoringBucket,
@@ -769,6 +798,14 @@ export function auditAuthoredIssue(body, options) {
       labels,
       options.upstreamEscalationEnabled === true,
     ),
+    ...buildCarrierFindings(
+      text,
+      rawText,
+      markerPrefix,
+      shape,
+      labels,
+      authoringOnlyLabelName,
+    ),
     ...buildTriageFindings(
       rawText,
       shape,
@@ -812,6 +849,13 @@ function buildTriageFindings(
   markerPrefix,
 ) {
   const isRoadmap = shape === 'roadmap';
+  // Every triage finding below reports this detail instead of evaluating,
+  // for the shapes Discover never routes through A4/A4.5 (#4250).
+  const notApplicableDetail = isRoadmap
+    ? TRIAGE_NOT_APPLICABLE_ROADMAP_DETAIL
+    : shape === 'carrier'
+      ? TRIAGE_NOT_APPLICABLE_CARRIER_DETAIL
+      : undefined;
   const { title: autoTitle, body: autoBody } =
     splitLocalDraftTitleAndBody(rawText);
   const trimmedExplicitTitle =
@@ -834,8 +878,8 @@ function buildTriageFindings(
     const id = 'triage-title-missing';
     const name =
       'A title is resolvable (--title, or a leading "# <title>" body line)';
-    if (isRoadmap) {
-      return pass(id, name, TRIAGE_NOT_APPLICABLE_ROADMAP_DETAIL);
+    if (notApplicableDetail !== undefined) {
+      return pass(id, name, notApplicableDetail);
     }
     // Unlike the A4/A4.5 findings below, a bucket body's own distinct
     // Background/Required action/Ready signal shape carries no title
@@ -871,8 +915,8 @@ function buildTriageFindings(
   const a4Findings = a4Result.criteria.map((criterion) => {
     const id = `triage-a4-${criterion.id}`;
     const name = `A4 viability: ${criterion.name}`;
-    if (isRoadmap) {
-      return pass(id, name, TRIAGE_NOT_APPLICABLE_ROADMAP_DETAIL);
+    if (notApplicableDetail !== undefined) {
+      return pass(id, name, notApplicableDetail);
     }
     if (criterion.result !== 'fail') {
       return pass(id, name, criterion.evidence);
@@ -898,8 +942,8 @@ function buildTriageFindings(
   const a45Findings = suitability.checks.map((check) => {
     const id = `triage-a45-${check.id}`;
     const name = `A4.5 suitability: ${check.name}`;
-    if (isRoadmap) {
-      return pass(id, name, TRIAGE_NOT_APPLICABLE_ROADMAP_DETAIL);
+    if (notApplicableDetail !== undefined) {
+      return pass(id, name, notApplicableDetail);
     }
     // Check 4 (duplicate_or_superseded) fundamentally needs a live GitHub
     // search index -- reported as "not applicable" here the same way this
@@ -926,11 +970,268 @@ function buildTriageFindings(
   });
   return [titleFinding, ...a4Findings, ...a45Findings];
 }
-function checkSuitabilityMarker(count, suitability, isBucketAudit) {
+// Draft-carrier shape (#4250). A carrier holds drafts that cannot yet be
+// published as their final issues, labelled with the authoring-only label.
+// Its findings exist only for `shape === 'carrier'`, so every other shape's
+// report is unchanged. Section and marker checks read the code-masked text,
+// so a fenced draft never counts. Fence offsets come from the CRLF-normalized
+// raw body and map to line indexes: masking preserves the line structure.
+function buildCarrierFindings(
+  text,
+  rawText,
+  markerPrefix,
+  shape,
+  labels,
+  authoringOnlyLabelName,
+) {
+  if (shape !== 'carrier') {
+    return [];
+  }
+  const lines = text.split('\n');
+  const rawNormalized = rawText.replace(/\r\n/g, '\n');
+  return [
+    checkCarrierMarker(text, markerPrefix),
+    checkCarrierForbiddenMarkers(text, markerPrefix),
+    checkCarrierReleaseCondition(lines),
+    checkCarrierDrafts(lines, rawNormalized),
+    checkCarrierLabel(labels, authoringOnlyLabelName),
+  ];
+}
+function checkCarrierMarker(text, markerPrefix) {
+  const id = 'carrier-marker';
+  const name = 'Exactly one draft-carrier marker, with value v1';
+  const pattern = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-draft-carrier\\b([\\s\\S]*?)-->`,
+    'gi',
+  );
+  const bodies = [...text.matchAll(pattern)].map((match) =>
+    (match[1] ?? '').trim(),
+  );
+  if (bodies.length !== 1) {
+    return fail(
+      id,
+      name,
+      bodies.length === 0
+        ? `missing the <!-- ${markerPrefix}-draft-carrier: v1 --> marker`
+        : `expected exactly one draft-carrier marker, found ${bodies.length}`,
+    );
+  }
+  const value = (bodies[0] ?? '').match(/^:\s*(\S+)$/u)?.[1];
+  if (value !== 'v1') {
+    return fail(id, name, 'the draft-carrier marker value must be v1');
+  }
+  return pass(id, name, 'exactly one draft-carrier marker with value v1');
+}
+function checkCarrierForbiddenMarkers(text, markerPrefix) {
+  const id = 'carrier-forbidden-markers';
+  const name =
+    'A draft carrier carries no suitability, effort, roadmap-id, blocked-by, or authoring-bucket marker or footer';
+  const found = [];
+  for (const suffix of CARRIER_FORBIDDEN_MARKER_SUFFIXES) {
+    const count = countMarkerOccurrences(text, markerPrefix, suffix);
+    if (count > 0) {
+      found.push(`${markerPrefix}-${suffix} x${count}`);
+    }
+  }
+  // The visible footer lines that accompany the suitability and effort
+  // markers are footers too, even when their hidden marker is absent.
+  if (/^[ \t]*_Autopilot suitability:/imu.test(text)) {
+    found.push('autopilot-suitability footer line');
+  }
+  if (/^[ \t]*_Effort:/imu.test(text)) {
+    found.push('effort footer line');
+  }
+  return found.length === 0
+    ? pass(id, name, 'no forbidden marker or footer outside code')
+    : fail(id, name, `forbidden outside code: ${found.join(', ')}`);
+}
+/**
+ * The `## Release condition` section: every non-blank line must be a
+ * `Blocked by` declaration (a wrapped continuation line joins its
+ * declaration), `Depends on` fails anywhere outside code, and `Blocked by`
+ * fails outside the section. An empty section means the drafts can be
+ * re-authored now.
+ */
+function checkCarrierReleaseCondition(lines) {
+  const id = 'carrier-release-condition';
+  const name = 'The release condition holds only Blocked by declarations';
+  const section = locateLevel2Section(lines, 'Release condition');
+  if (!section) {
+    return pass(
+      id,
+      name,
+      'not applicable: the Release condition heading is missing (see required-headings)',
+    );
+  }
+  const problems = [];
+  const references = [];
+  const covered = new Set();
+  for (let index = section.start; index < section.end; index += 1) {
+    if (covered.has(index) || lines[index].trim() === '') {
+      continue;
+    }
+    const declaration = matchDependencyKeywordLine(lines, index, 'Blocked by');
+    if (!declaration) {
+      const kind = matchDependencyKeywordLine(lines, index, 'Depends on')
+        ? 'a Depends on line'
+        : 'a non-dependency line';
+      problems.push(
+        `${kind} in the release condition: "${lines[index].trim()}"`,
+      );
+      continue;
+    }
+    references.push(
+      ...declaration.numbers.map((number) => `#${number}`),
+      ...declaration.unresolvable.map((entry) => entry.token),
+    );
+    // The continuation sweep is line-based and stops at the first line that
+    // does not fully parse to references, mirroring consumeDependencyContinuationRefLines.
+    if (declaration.remaining.trim() === '') {
+      for (let next = index + 1; next < section.end; next += 1) {
+        const trimmed = lines[next].trim();
+        if (trimmed === '') {
+          break;
+        }
+        const parsed = consumeDependencyReferenceList(trimmed);
+        if (
+          parsed.remaining.trim() !== '' ||
+          parsed.numbers.length + parsed.unresolvable.length === 0
+        ) {
+          break;
+        }
+        covered.add(next);
+      }
+    }
+  }
+  lines.forEach((line, index) => {
+    if (index >= section.start && index < section.end) {
+      return;
+    }
+    if (line.trim() === '') {
+      return;
+    }
+    if (matchDependencyKeywordLine(lines, index, 'Depends on')) {
+      problems.push(`Depends on line outside code: "${line.trim()}"`);
+    } else if (matchDependencyKeywordLine(lines, index, 'Blocked by')) {
+      problems.push(
+        `Blocked by line outside the Release condition section: "${line.trim()}"`,
+      );
+    }
+  });
+  if (problems.length > 0) {
+    return fail(id, name, problems.join('; '));
+  }
+  return pass(
+    id,
+    name,
+    references.length === 0
+      ? 'release condition is empty: the drafts can be re-authored now'
+      : `release condition references ${references.join(', ')}`,
+  );
+}
+/**
+ * The `## Drafts` section: one or more `###` subsections, each with exactly
+ * one `Review:` line and exactly one `Shape:` line (both read from the
+ * code-masked text) and exactly one top-level fenced draft (found on the raw
+ * body, so a nested fence stays inside the draft).
+ */
+function checkCarrierDrafts(lines, rawNormalized) {
+  const id = 'carrier-drafts';
+  const name =
+    'Each draft subsection has one Review line, one Shape line, and one fenced draft';
+  const section = locateLevel2Section(lines, 'Drafts');
+  if (!section) {
+    return pass(
+      id,
+      name,
+      'not applicable: the Drafts heading is missing (see required-headings)',
+    );
+  }
+  const subsectionHeadingRe = /^ {0,3}###\s+(.+?)\s*$/u;
+  const subsectionStarts = [];
+  for (let index = section.start; index < section.end; index += 1) {
+    if (subsectionHeadingRe.test(lines[index])) {
+      subsectionStarts.push(index);
+    }
+  }
+  if (subsectionStarts.length === 0) {
+    return fail(id, name, 'the Drafts section has no ### draft subsection');
+  }
+  const fenceLines = findFencedCodeRanges(rawNormalized).map(
+    (range) => rawNormalized.slice(0, range.start).split('\n').length - 1,
+  );
+  const reviewLine = /^Review: (?:reviewed|not reviewed)(?: .*)?$/u;
+  const shapeLine = /^Shape: (?:orphan|roadmap|child)$/u;
+  const problems = [];
+  subsectionStarts.forEach((headingIndex, position) => {
+    const end =
+      position + 1 < subsectionStarts.length
+        ? (subsectionStarts[position + 1] ?? section.end)
+        : section.end;
+    const title = (lines[headingIndex] ?? '')
+      .replace(/^ {0,3}###\s+/u, '')
+      .trim();
+    const body = lines.slice(headingIndex + 1, end).map((line) => line.trim());
+    const reviews = body.filter((line) => line.startsWith('Review:'));
+    if (reviews.length !== 1 || !reviewLine.test(reviews[0] ?? '')) {
+      problems.push(
+        `"${title}" needs exactly one "Review: reviewed" or "Review: not reviewed" line`,
+      );
+    }
+    const shapes = body.filter((line) => line.startsWith('Shape:'));
+    if (shapes.length !== 1 || !shapeLine.test(shapes[0] ?? '')) {
+      problems.push(
+        `"${title}" needs exactly one "Shape: orphan", "Shape: roadmap", or "Shape: child" line`,
+      );
+    }
+    const fences = fenceLines.filter(
+      (line) => line > headingIndex && line < end,
+    ).length;
+    if (fences !== 1) {
+      problems.push(
+        `"${title}" needs exactly one top-level fenced draft, found ${fences}`,
+      );
+    }
+  });
+  return problems.length > 0
+    ? fail(id, name, problems.join('; '))
+    : pass(
+        id,
+        name,
+        `${subsectionStarts.length} draft subsection(s) each have one Review line, one Shape line, and one fenced draft`,
+      );
+}
+function checkCarrierLabel(labels, authoringOnlyLabelName) {
+  const id = 'carrier-label';
+  const name = 'A draft carrier carries the configured authoring-only label';
+  if (labels.length === 0) {
+    return pass(id, name, 'not applicable: no --label was supplied');
+  }
+  if (labels.includes(authoringOnlyLabelName)) {
+    return pass(id, name, `label "${authoringOnlyLabelName}" is present`);
+  }
+  return fail(
+    id,
+    name,
+    `expected the authoring-only label "${authoringOnlyLabelName}" among the supplied labels`,
+  );
+}
+function checkSuitabilityMarker(count, suitability, isBucketAudit, shape) {
   const id = 'suitability-marker';
   const name = 'Exactly one coherent autopilot-suitability marker (1-5)';
   if (isBucketAudit) {
     return pass(id, name, NOT_APPLICABLE_BUCKET_AUDIT_DETAIL);
+  }
+  // A draft carrier (#4250) is never an execution candidate, so it carries
+  // no suitability footer at all: the check inverts, passing only at zero.
+  if (shape === 'carrier') {
+    return count === 0
+      ? pass(id, name, 'no autopilot-suitability footer on this carrier')
+      : fail(
+          id,
+          name,
+          `a draft carrier must not carry an autopilot-suitability marker, found ${count}`,
+        );
   }
   if (count === 0) {
     return fail(id, name, 'missing autopilot-suitability marker');
@@ -1262,25 +1563,28 @@ function checkRequiredHeadings(text, shape, isBucketAudit) {
   return pass(id, name, 'all required headings are present');
 }
 /**
- * Slices the `## Tracks` section's own lines out of `text` (already
- * code-masked by the caller): from the line after the `## Tracks` heading
- * up to (but excluding) the next `##` heading, or the end of the text
- * when none follows. Empty when no `## Tracks` heading is present.
+ * Slices the lines under the level-2 `## <heading>` section out of `text`
+ * (already code-masked by the caller): from the line after that heading up
+ * to (but excluding) the next `##` heading, or the end of the text when
+ * none follows. Empty when no such heading is present. Shared by the
+ * roadmap `Tracks` check and the draft-carrier sections (#4250).
  */
-function extractTracksSectionLines(text) {
-  const lines = text.split(/\r?\n/u);
+/**
+ * Line-index bounds (`start` inclusive, `end` exclusive) of the body under
+ * the first level-2 `## <heading>` line, or `undefined` when that heading
+ * is absent. `lines` must already be code-masked, so a heading quoted in a
+ * fenced draft never counts.
+ */
+function locateLevel2Section(lines, heading) {
   const headingRe = /^ {0,3}##\s+(.+?)\s*$/u;
-  let start = -1;
-  for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index].match(headingRe);
-    if (match && match[1].trim() === 'Tracks') {
-      start = index + 1;
-      break;
-    }
+  const headingIndex = lines.findIndex((line) => {
+    const match = line.match(headingRe);
+    return match !== null && match[1].trim() === heading;
+  });
+  if (headingIndex === -1) {
+    return undefined;
   }
-  if (start === -1) {
-    return [];
-  }
+  const start = headingIndex + 1;
   let end = lines.length;
   for (let index = start; index < lines.length; index += 1) {
     if (headingRe.test(lines[index])) {
@@ -1288,7 +1592,12 @@ function extractTracksSectionLines(text) {
       break;
     }
   }
-  return lines.slice(start, end);
+  return { start, end };
+}
+function extractLevel2SectionLines(text, heading) {
+  const lines = text.split(/\r?\n/u);
+  const bounds = locateLevel2Section(lines, heading);
+  return bounds ? lines.slice(bounds.start, bounds.end) : [];
 }
 /**
  * Roadmap-shape only (idd-skill#2765): fails when the `## Tracks` section
@@ -1321,7 +1630,7 @@ function checkRoadmapTracksParse(text, shape, isBucketAudit, currentRepo) {
       'not applicable: only the roadmap shape has a ## Tracks section',
     );
   }
-  const sectionLines = extractTracksSectionLines(text);
+  const sectionLines = extractLevel2SectionLines(text, 'Tracks');
   const checkboxLineIndexes = sectionLines
     .map((line, index) => (isTaskListCheckboxLine(line) ? index : -1))
     .filter((index) => index >= 0);
@@ -1586,6 +1895,15 @@ function checkDependencyMarkerRule(text, rawText, markerPrefix, shape) {
       id,
       name,
       `orphan issues must not carry a blocked-by marker, found ${blockedByCount}`,
+    );
+  }
+  // A draft carrier's release condition is a `Blocked by` line (#4250),
+  // never a blocked-by marker, so any such marker is a misuse here.
+  if (shape === 'carrier' && blockedByCount > 0) {
+    return fail(
+      id,
+      name,
+      `carrier issues must not carry a blocked-by marker, found ${blockedByCount}`,
     );
   }
   if (
@@ -4082,7 +4400,13 @@ function main() {
     process.exit(0);
   }
   if (!args.shape || !isIssueShape(args.shape)) {
-    fail_(`--shape is required and must be one of orphan|roadmap|child`);
+    fail_(
+      `--shape is required and must be one of orphan|roadmap|child|carrier`,
+    );
+  }
+  // A draft carrier has no readiness bucket (#4250), so the two cannot combine.
+  if (args.shape === 'carrier' && args.expectBucket !== undefined) {
+    fail_('--shape carrier cannot be combined with --expect-bucket');
   }
   if (!args.bodyFile && !args.stdin) {
     fail_('either --body-file <path> or --stdin is required');
@@ -4184,6 +4508,7 @@ function main() {
     needsDecisionLabelName: policy.needsDecisionLabelName,
     expectedAuthoringBucket: args.expectBucket,
     authoringLabelName: policy.authoringLabelName,
+    authoringOnlyLabelName: policy.authoringOnlyLabelName,
     currentRepo,
     issueNumber:
       args.issue !== undefined ? Number.parseInt(args.issue, 10) : undefined,
@@ -4215,7 +4540,12 @@ function main() {
   return report.passed ? 0 : 1;
 }
 function isIssueShape(value) {
-  return value === 'orphan' || value === 'roadmap' || value === 'child';
+  return (
+    value === 'orphan' ||
+    value === 'roadmap' ||
+    value === 'child' ||
+    value === 'carrier'
+  );
 }
 /**
  * Deliberate exception (#1721): every sibling `*.mts` `loadPolicy()` throws
@@ -4268,6 +4598,7 @@ function loadPolicy(configPath) {
       blockedByHumanLabelName: POLICY_DEFAULTS.labels.blockedByHumanLabelName,
       needsDecisionLabelName: POLICY_DEFAULTS.labels.needsDecisionLabelName,
       authoringLabelName: POLICY_DEFAULTS.issueAuthoring.authoringLabelName,
+      authoringOnlyLabelName: POLICY_DEFAULTS.labels.authoringOnlyLabelName,
       upstreamEscalationEnabled: false,
       effortLPolicy: 'allow',
       rawConfig: null,
@@ -4281,6 +4612,8 @@ function loadPolicy(configPath) {
       normalizePolicyConfig(config).labels.needsDecisionLabelName,
     authoringLabelName:
       normalizePolicyConfig(config).issueAuthoring.authoringLabelName,
+    authoringOnlyLabelName:
+      normalizePolicyConfig(config).labels.authoringOnlyLabelName,
     upstreamEscalationEnabled: isUpstreamEscalationEnabled(config),
     effortLPolicy: resolveEffortLPolicy(config),
     rawConfig: config,
@@ -4346,7 +4679,7 @@ function parseArgs(argv) {
   };
 }
 function printUsage() {
-  console.log(`usage: node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> (--body-file <path> | --stdin) [options]
+  console.log(`usage: node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child|carrier> (--body-file <path> | --stdin) [options]
 
 Mechanically audits a drafted GitHub issue body against the issue-authoring
 contract's structural expectations (skills/issue-authoring/references/
@@ -4382,7 +4715,9 @@ check fails, 2 on a usage error; the advisory check and
 authoring-marker-minimization-backlog never affect the exit code.
 
 Options:
-  --shape <orphan|roadmap|child>   declared issue shape (required)
+  --shape <orphan|roadmap|child|carrier>
+                                    declared issue shape (required); carrier is
+                                    a draft carrier, which takes no --expect-bucket
   --title <text>                   the drafted issue's title, for the A4/A4.5
                                     triage checks (orphan/child shapes only);
                                     without it, a leading "# <title>" line of
