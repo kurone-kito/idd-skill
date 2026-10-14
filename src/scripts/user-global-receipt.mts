@@ -10,7 +10,7 @@
 // the last valid receipt in place.
 
 import * as nodeFs from 'node:fs';
-import { basename, dirname, isAbsolute, join, sep } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {
   checkContainment,
   type FsOps,
@@ -190,14 +190,12 @@ function parseEntry(
     };
   }
   if (value.kind === 'json-instruction') {
-    // The installer only ever records the entry text path under a data root.
-    // Any other string could name a user's own instruction, so it is corrupt.
+    // The receipt sits in its data root, so the only instruction it may name
+    // is that root's entry text. Any other string could be a user's own
+    // instruction, or another installation's, so it makes the receipt corrupt.
     if (
       typeof value.value !== 'string' ||
-      !isAbsolute(value.value) ||
-      !value.value.endsWith(
-        `${sep}${join('current', 'user-global', 'entry.md')}`,
-      )
+      value.value !== join(dataRoot, 'current', 'user-global', 'entry.md')
     ) {
       corrupt(
         path,

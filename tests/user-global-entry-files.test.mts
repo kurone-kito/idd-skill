@@ -706,3 +706,22 @@ test('a receipt that names an instruction other than the entry text is corrupt',
   );
   assert.equal(textOf(opencode), before);
 });
+
+test('a receipt that names the entry text of another data root is corrupt', () => {
+  const home = freshHome();
+  nodeFs.mkdirSync(join(home, '.config', 'opencode'));
+  const opencode = filesOf(home).opencode;
+  nodeFs.writeFileSync(opencode, '{}\n');
+  installPayload(optionsFor(home));
+  const receipt = receiptOf(home) as ReceiptJson;
+  const recorded = receipt.entries.find((entry) => entry.path === opencode);
+  assert.ok(recorded);
+  recorded.value = '/other/root/current/user-global/entry.md';
+  writeReceipt(home, receipt);
+  const before = textOf(opencode);
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /does not name the installer's entry text/,
+  );
+  assert.equal(textOf(opencode), before);
+});
