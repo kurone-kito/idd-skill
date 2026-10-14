@@ -70,7 +70,12 @@ export function resolveCallSiteRouting(
 /** Non-required waiting states an UNSTABLE clean branch may proceed past. */
 const UNSTABLE_PROCEED_STATES = new Set(['action_required', 'pending']);
 /** Conclusions and states that count as passing, so they are not listed. */
-const PASSING_CHECK_CONCLUSIONS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
+const PASSING_CHECK_CONCLUSIONS = new Set([
+  'SUCCESS',
+  'NEUTRAL',
+  'SKIPPED',
+  'NOT_APPLICABLE',
+]);
 /**
  * #4209: every non-passing head run must be non-required and waiting. An
  * empty list never proceeds, so an UNSTABLE branch with no visible reason
@@ -150,8 +155,19 @@ export function parseHeadRollup(object, headSha) {
   if (!contexts || !Array.isArray(contexts.nodes)) {
     return failClosed('no status check rollup');
   }
-  if (Number(contexts.totalCount) > contexts.nodes.length) {
+  // The count must be a real integer that equals the page read. A missing,
+  // NaN, or smaller count is inconsistent evidence; a larger one means the
+  // rollup spans more than the single page this reads.
+  const total = contexts.totalCount;
+  const pageLength = contexts.nodes.length;
+  if (typeof total !== 'number' || !Number.isInteger(total)) {
+    return failClosed('rollup count is missing');
+  }
+  if (total > pageLength) {
     return failClosed('rollup has more contexts than one page');
+  }
+  if (total !== pageLength) {
+    return failClosed('rollup count does not match its page');
   }
   return { runs: parseNonPassingRuns(contexts.nodes), notes: [] };
 }

@@ -1285,6 +1285,13 @@ test('parseNonPassingRuns: keeps only non-passing runs and fails closed', () => 
       conclusion: 'FAILURE',
       isRequired: false,
     },
+    {
+      __typename: 'CheckRun',
+      name: 'not-applicable-run',
+      status: 'COMPLETED',
+      conclusion: 'NOT_APPLICABLE',
+      isRequired: false,
+    },
     { __typename: 'Mystery' },
   ]);
   assert.deepEqual(runs, [
@@ -1325,6 +1332,13 @@ test('parseHeadRollup: fails closed unless the pinned head and full rollup match
   );
   assert.deepEqual(hold({ oid: sha, statusCheckRollup: null }), []);
   assert.deepEqual(hold(contexts(101, [waiting])), []);
+  // A zero, NaN, or missing count is inconsistent with the page, so it holds.
+  assert.deepEqual(hold(contexts(0, [waiting])), []);
+  assert.deepEqual(hold(contexts(Number.NaN, [waiting])), []);
+  assert.deepEqual(
+    hold({ oid: sha, statusCheckRollup: { contexts: { nodes: [waiting] } } }),
+    [],
+  );
   assert.match(
     parseHeadRollup(null, sha).notes[0] ?? '',
     /UNSTABLE non-passing run list unavailable/,
