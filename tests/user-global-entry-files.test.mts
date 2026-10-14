@@ -725,3 +725,51 @@ test('a receipt that names the entry text of another data root is corrupt', () =
   );
   assert.equal(textOf(opencode), before);
 });
+
+test('a failed receipt write after an entry rewrite restores the entry file', () => {
+  const home = freshHome();
+  nodeFs.mkdirSync(join(home, '.config', 'opencode'));
+  const opencode = filesOf(home).opencode;
+  nodeFs.writeFileSync(opencode, '{}\n');
+  installPayload(optionsFor(home));
+  const installed = textOf(opencode);
+  assert.throws(
+    () =>
+      uninstallPayload(
+        optionsFor(home, {
+          fs: faultyRenames([{ suffix: 'receipt.json', nth: 1 }]),
+        }),
+      ),
+    /receipt\.json/,
+  );
+  assert.equal(textOf(opencode), installed);
+  assert.equal(listedEntry(home, opencode)?.kind, 'json-instruction');
+});
+
+test('uninstall refuses a link above an absent recorded entry file', {
+  skip: NO_INSTALL,
+}, () => {
+  const home = freshHome();
+  nodeFs.mkdirSync(join(home, '.config', 'opencode'));
+  const opencode = filesOf(home).opencode;
+  nodeFs.writeFileSync(opencode, '{}\n');
+  installPayload(optionsFor(home));
+  const moved = join(home, 'moved-config');
+  nodeFs.renameSync(join(home, '.config'), moved);
+  const elsewhere = join(home, 'elsewhere');
+  nodeFs.mkdirSync(elsewhere);
+  nodeFs.symlinkSync(elsewhere, join(home, '.config'));
+  const kept = nodeFs.readFileSync(
+    join(moved, 'opencode', 'opencode.json'),
+    'utf8',
+  );
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /symbolic link on the path/,
+  );
+  assert.equal(listedEntry(home, opencode)?.kind, 'json-instruction');
+  assert.equal(
+    nodeFs.readFileSync(join(moved, 'opencode', 'opencode.json'), 'utf8'),
+    kept,
+  );
+});

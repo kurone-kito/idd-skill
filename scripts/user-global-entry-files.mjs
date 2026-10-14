@@ -673,6 +673,7 @@ export function planEntryRemoval(fs, entry) {
       kind: 'rewrite',
       priorSha256: sha256Of(bytes),
       text: kept.toString('utf8'),
+      priorText: bytes.toString('utf8'),
     };
   }
   const doc = parseOpenCode(bytes, entry.path);
@@ -694,5 +695,10 @@ export function planEntryRemoval(fs, entry) {
     }
   }
   refuseStaleTemp(dirname(entry.path), entry.path, fs);
-  return { kind: 'rewrite', priorSha256: sha256Of(bytes), text };
+  return {
+    kind: 'rewrite',
+    priorSha256: sha256Of(bytes),
+    text,
+    priorText: bytes.toString('utf8'),
+  };
 }

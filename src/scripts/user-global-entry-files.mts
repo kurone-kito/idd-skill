@@ -89,7 +89,7 @@ export type EntryRecord = Extract<
 /** What an uninstall does to an edited entry file. */
 export type RemovalPlan =
   | { kind: 'absent' }
-  | { kind: 'rewrite'; priorSha256: string; text: string };
+  | { kind: 'rewrite'; priorSha256: string; text: string; priorText: string };
 
 const BEGIN = '<!-- idd-skill:user-global:begin -->';
 const END = '<!-- idd-skill:user-global:end -->';
@@ -853,6 +853,7 @@ export function planEntryRemoval(fs: FsOps, entry: EntryRecord): RemovalPlan {
       kind: 'rewrite',
       priorSha256: sha256Of(bytes),
       text: kept.toString('utf8'),
+      priorText: bytes.toString('utf8'),
     };
   }
   const doc = parseOpenCode(bytes, entry.path);
@@ -874,5 +875,10 @@ export function planEntryRemoval(fs: FsOps, entry: EntryRecord): RemovalPlan {
     }
   }
   refuseStaleTemp(dirname(entry.path), entry.path, fs);
-  return { kind: 'rewrite', priorSha256: sha256Of(bytes), text };
+  return {
+    kind: 'rewrite',
+    priorSha256: sha256Of(bytes),
+    text,
+    priorText: bytes.toString('utf8'),
+  };
 }

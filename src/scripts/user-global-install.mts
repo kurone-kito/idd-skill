@@ -325,16 +325,26 @@ function ownedShape(ctx: Context, entry: ReceiptEntry): boolean {
  * not all real directories. A rewrite through a link above the directory
  * would otherwise land outside the harness, so uninstall checks the chain too.
  */
-function assertHarnessChain(ctx: Context, path: string): void {
+function assertHarnessChain(
+  ctx: Context,
+  path: string,
+  present: boolean,
+): void {
   const harness = ENTRY_HARNESSES.find(
     (name) => join(harnessDirOf(ctx, name), ENTRY_FILE_NAME[name]) === path,
   );
   if (harness === undefined) return;
   const dir = harnessDirOf(ctx, harness);
+  // checkContainment throws on a link above the directory, so an absent entry
+  // is checked too. A genuinely removed directory still reads as absent.
   const walk = checkContainment(ctx.entryBases[harness], dir, ctx.fs);
-  if (walk.finalKind !== 'directory') {
+  if (
+    walk.finalKind === 'symlink' ||
+    walk.finalKind === 'file' ||
+    (present && walk.finalKind !== 'directory')
+  ) {
     throw new Error(
-      `${dir} is ${walk.finalKind === 'symlink' ? 'a symbolic link' : `a ${walk.finalKind}`} on the path to ${path}; refusing`,
+      `${dir} is ${walk.finalKind === 'symlink' ? 'a symbolic link' : `not a directory (${walk.finalKind})`} on the path to ${path}; refusing`,
     );
   }
 }
@@ -1300,7 +1310,7 @@ interface Decision {
   base: string;
   action: Action;
   /** The edited file's new bytes, for an action that rewrites it in place. */
-  rewrite?: { text: string; priorSha256: string };
+  rewrite?: { text: string; priorSha256: string; priorText: string };
 }
 
 interface UninstallPlan {
@@ -1370,7 +1380,7 @@ function buildUninstallPlan(ctx: Context): UninstallPlan {
       const { root, base, walk } = inspect(ctx, entry.path);
       const decide = (
         action: Action,
-        rewrite?: { text: string; priorSha256: string },
+        rewrite?: { text: string; priorSha256: string; priorText: string },
       ): void => {
         decisions.push({
           path: entry.path,
@@ -1381,12 +1391,12 @@ function buildUninstallPlan(ctx: Context): UninstallPlan {
           rewrite,
         });
       };
-      if (
-        walk.missingDirs.length === 0 &&
-        walk.finalKind !== 'absent' &&
-        entryFileOwned(ctx, entry)
-      ) {
-        assertHarnessChain(ctx, entry.path);
+      if (entryFileOwned(ctx, entry)) {
+        assertHarnessChain(
+          ctx,
+          entry.path,
+          walk.missingDirs.length === 0 && walk.finalKind !== 'absent',
+        );
       }
       if (walk.missingDirs.length > 0 || walk.finalKind === 'absent') {
         decide('absent');
@@ -1516,8 +1526,29 @@ export function uninstallPayload(
       } catch (error) {
         stopAt(decision.path, error);
       }
+      const { text, priorText } = decision.rewrite;
       entries.delete(decision.path);
-      persist();
+      try {
+        persist();
+      } catch (error) {
+        // The receipt still lists the entry, so the file goes back to the bytes
+        // the receipt describes. Otherwise a retry would refuse the edited file.
+        entries.set(decision.path, decision.entry);
+        try {
+          replaceFileByRename(
+            decision.base,
+            decision.path,
+            sha256Hex(text),
+            priorText,
+            fs,
+          );
+        } catch (restoreError) {
+          throw new Error(
+            `${describe(error)}; restoring ${decision.path} also failed (${describe(restoreError)}), so the file keeps its edit while the receipt still lists it`,
+          );
+        }
+        throw error;
+      }
       lines.push(`edited ${decision.path}`);
       continue;
     }
