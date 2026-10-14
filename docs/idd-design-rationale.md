@@ -2019,8 +2019,8 @@ acceptance criteria are the lever for making such a gap adopt-now.
 
 The figures in this subsection were measured on 2026-10-14 from GitHub
 pull request and review data and from the git history at `origin/main`
-commit `5bcea4d4a`. Items 4 and 6 were measured on 2026-10-13 and were
-not measured again for this text.
+commit `5bcea4d4a`. Item 4 is a sample classification, with the categories
+defined in that item.
 
 1. Cohort: the 100 merged pull requests of kurone-kito/idd-skill that
    are numbered 3936 to 4158 and were merged at or before
@@ -2063,11 +2063,22 @@ not measured again for this text.
    runtime caller. `relaxStepForReviewCount` in the same file is called
    by `src/scripts/resolve-review-thread.mts`, which commit `4da6d5595`
    added.
-4. A stratified sample of 45 accepted Copilot findings at step 1 or
-   later, classified once by an independent read-only reviewer with the
-   triage rubric: safety 8, correctness 21, maintainability 5, tests 1,
-   naming 9, wording 1. This is a sample estimate, not a measurement.
-   The sample was not drawn again for this text.
+4. Accepted Copilot findings at step 1 or later in the cohort of item 1: 293
+   in all, 45 at step 1 and 248 at step 2. A sample of 45 was drawn on
+   2026-10-14: 7 from the step 1 findings and 38 from the step 2 findings,
+   taking the first items of each stratum in SHA-256 order of the finding's
+   comment id. A read-only reviewer that had not seen these counts
+   classified each finding once: safety 21, correctness 19, tests 2, wording
+   3, naming 0, maintainability 0. Safety covers an unsafe or wrong
+   operation, a bypassed guard, a false pass, a permission or secret
+   problem, or a CI-stability failure. Correctness covers any other wrong
+   behaviour, output, condition, or contract. Tests covers test coverage or
+   test code only. Maintainability covers local structure with no behaviour
+   change. Naming covers identifiers, file names, flags, labels, and
+   headings. Wording covers prose and formatting with no behaviour change.
+   This is a sample estimate, not a measurement. The categories are not the
+   repository's triage fingerprint classes, and the line between safety and
+   correctness is a judgement.
 5. Pull request size in the cohort of item 1. Changed lines are the
    additions plus deletions that GitHub reports for each pull request
    at merge. The 64 pull requests with at most 3 Copilot reviews have a
@@ -2076,11 +2087,17 @@ not measured again for this text.
    commit against its merge base with main) for the same two groups, the
    medians are 123.5 and 492.5. Spearman correlation between changed lines
    at merge and Copilot review count over all 100: 0.57.
-6. Of 181 later-wave findings in the 12 longest pull requests of the
-   cohort, 83 (46%) were within 3 lines of the previous fix, 52 elsewhere
-   in the same file, and 46 in files the previous fix did not touch.
-   This was measured on 2026-10-13 and was not measured again for this
-   text.
+6. Of 181 later-wave findings in the 12 longest pull requests of the cohort,
+   83 (46%) were within 3 lines of the previous fix, 52 elsewhere in the
+   same file, and 46 in files the previous fix did not touch. The 12 longest
+   are the pull requests with the most Copilot reviews, with ties going to
+   the higher number: 3971, 3981, 4041, 4077, 3966, 4030, 4018, 4000, 3977,
+   3938, 4058 and 3997. A later-wave finding is an inline Copilot comment in
+   a review after the first Copilot review. The previous fix is the diff
+   from the previous Copilot review's commit to this review's commit. A
+   finding is within 3 lines when its last line is within 3 lines of a line
+   that diff changes. Re-derived on 2026-10-14 from the cohort in item 1,
+   and the counts agree with the earlier figures.
 7. Authored effort and loop length in the cohort, by the effort marker
    on the issue that each pull request's branch names: `L` 8 pull
    requests, 6 with 7 or more Copilot reviews, median 8.5; `M` 35, 5,
