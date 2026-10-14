@@ -2333,7 +2333,9 @@ falling back to created_at.
 "draftCarriers" (#4257) lists every draft carrier: an open issue that carries
 the configured authoring-only label and the carrier marker outside code. The
 marker value is not checked, so a carrier with an unexpected value is still
-listed. A carrier stays in "filtered.blocked_label" and never becomes an orphan.
+listed. A carrier never becomes an orphan. A well-formed carrier stays in
+"filtered.blocked_label"; one that also names a roadmap or blocked-by marker is
+filed under that reason instead.
 Its buckets are "held" (the carrier also carries the authoring label, with
 "heldSince" the latest labeled event and "stale" true once that hold is at
 least issueAuthoring.authoringStaleAge old), "ready" (no "Blocked by" reference
