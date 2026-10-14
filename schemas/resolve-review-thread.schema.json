@@ -10,7 +10,9 @@
       "description": "Thread target (--comment-id). Lists only its own fields, so no body-item field may appear.",
       "required": ["commentId", "alreadyResolved"],
       "properties": {
-        "mode": {},
+        "mode": {
+          "enum": ["dry-run", "apply"]
+        },
         "prNumber": {},
         "commentId": {},
         "threadId": {},
@@ -26,7 +28,9 @@
       "description": "Body-item target (--review-id / --item-title). Lists only its own fields, so no thread field may appear.",
       "required": ["reviewId", "itemTitle"],
       "properties": {
-        "mode": {},
+        "mode": {
+          "enum": ["dry-run", "apply"]
+        },
         "prNumber": {},
         "reviewId": {},
         "itemTitle": {},
@@ -42,7 +46,9 @@
       "description": "Compute-only triage (no target).",
       "required": ["triage"],
       "properties": {
-        "mode": {},
+        "mode": {
+          "enum": ["triage"]
+        },
         "prNumber": {},
         "triage": {}
       },

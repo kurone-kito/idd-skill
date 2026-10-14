@@ -2307,6 +2307,7 @@ const out = (s) => { fs.writeSync(1, s); process.exit(0); };
 const fail = (msg) => { fs.writeSync(2, msg); process.exit(1); };
 if (process.env.TRIAGE_CALLS) fs.appendFileSync(process.env.TRIAGE_CALLS, JSON.stringify(args) + '\\n');
 if (args[0] === 'pr' && args[1] === 'view') {
+  if (process.env.TRIAGE_HEAD_FAIL) fail('gh: HTTP 500 for pulls/42');
   if (joined.includes('--jq')) out('${TRIAGE_HEAD}\\n');
   out(JSON.stringify({ headRefOid: '${TRIAGE_HEAD}', headRefName: 'main', author: { login: 'someone' }, url: 'https://example.invalid/pr/42', closingIssuesReferences: [] }));
 }
@@ -3937,6 +3938,84 @@ test('the compute-only output validates against the result schema, and a bare tr
     ).length > 0,
     'a triage object that names a thread target',
   );
+});
+
+test('the schema refuses a cross-mode object in either direction (#4188)', () => {
+  const crossMode = [
+    // A target-branch object that names the triage mode.
+    { mode: 'triage', prNumber: 42, commentId: 1001, alreadyResolved: false },
+    { mode: 'triage', prNumber: 42, reviewId: 7, itemTitle: 'x' },
+    // A compute-only object that names a write mode.
+    {
+      mode: 'dry-run',
+      prNumber: 42,
+      triage: 'Triage: tier low; urgency medium; step 2',
+    },
+    {
+      mode: 'apply',
+      prNumber: 42,
+      triage: 'Triage: tier low; urgency medium; step 2',
+    },
+  ];
+  for (const report of crossMode) {
+    assert.ok(
+      validate(report, resultSchema).length > 0,
+      `cross-mode object should fail: ${JSON.stringify(report)}`,
+    );
+  }
+  assert.equal(
+    validate(
+      {
+        mode: 'dry-run',
+        prNumber: 42,
+        commentId: 1001,
+        alreadyResolved: false,
+      },
+      resultSchema,
+    ).length,
+    0,
+  );
+  assert.equal(
+    validate(
+      { mode: 'apply', prNumber: 42, reviewId: 7, itemTitle: 'x' },
+      resultSchema,
+    ).length,
+    0,
+  );
+});
+
+test('compute-only triage reports a failed review-list read as kind transport and posts nothing (#4188)', () => {
+  const run = runTriageApply(
+    [...COMPUTE_ONLY_ARGS, '--tier', 'low', '--urgency', 'medium'],
+    TRIAGE_TIERED_CONFIG,
+    null,
+    { IDD_HELPER_ERROR_ENVELOPE: '1' },
+  );
+  assert.equal(run.status, 1, run.stderr);
+  assert.equal(envelopeKind(run.stderr), 'transport');
+  assert.equal(run.stdout, '');
+  assertComputeOnlyCalls(run, ['/pulls/42/reviews']);
+});
+
+test('compute-only triage reports a failed head read as kind transport and posts nothing (#4188)', () => {
+  const run = runTriageApply(
+    [
+      ...COMPUTE_ONLY_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'medium',
+      '--advisory-converged',
+      TRIAGE_HEAD.slice(0, 7),
+    ],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(7),
+    { IDD_HELPER_ERROR_ENVELOPE: '1', TRIAGE_HEAD_FAIL: '1' },
+  );
+  assert.equal(run.status, 1, run.stderr);
+  assert.equal(envelopeKind(run.stderr), 'transport');
+  assert.equal(run.stdout, '');
+  assertComputeOnlyCalls(run, ['/pulls/42/reviews', 'pr view']);
 });
 
 test('record mode reads the reviews once on an apply, since only enforce refuses (#4187)', () => {
