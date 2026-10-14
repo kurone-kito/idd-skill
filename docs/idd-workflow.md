@@ -1069,7 +1069,10 @@ Running this variant safely requires:
   equivalent). As starting values an operator may tune — this guide's
   own starting choice, not measured limits — start no new worker while
   the 1-minute load exceeds the core count or the available memory is
-  under 2 GiB; dispatch fewer workers or wait instead. In one
+  under 2 GiB; an orchestrator instead waits, re-checking every 60 seconds,
+  and dispatches once `orchestrator.hostLoadClearStreak` (default 3)
+  consecutive readings have a free slot, stopping at
+  `orchestrator.hostLoadWaitCeiling` (default `PT30M`). In one
   orchestrated private downstream adopter's run (reported 2026-09-30,
   kurone-kito/idd-skill#3677), a delegated worker's tool calls stopped
   returning and the runtime ended it (`Agent stalled: no progress for
