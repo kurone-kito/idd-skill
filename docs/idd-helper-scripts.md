@@ -815,7 +815,12 @@ in this preamble, since the fallback differs per helper.
   The `--draft-carriers` mode prints only this listing, from one label-filtered
   search. It is always live, never reads or writes the hint cache, and cannot
   be combined with `--autopilot`, `--with-claim-state`, `--current-claim-id`,
-  `--pr`, `--no-cache`, `--refresh-cache`, or `--purge-cache`.
+  `--pr`, `--no-cache`, `--refresh-cache`, or `--purge-cache`. Both the orphan
+  output's and the listing's `counts` gain `draftCarriersHeld`,
+  `draftCarriersReady`, and `draftCarriersWaiting`, each the length of its
+  bucket. The listing fails closed: a failed label search, a search at the
+  1000-result cap, or an unreadable held-carrier timeline stops the run with an
+  error rather than reporting zero carriers.
 - `scripts/discover-roadmap-graph.mjs` for A1.5/A2 recursive roadmap graph
   enumeration and classification
 - `scripts/idd-roadmap-audit-execute.mjs` for the A1.5 roadmap-completion
