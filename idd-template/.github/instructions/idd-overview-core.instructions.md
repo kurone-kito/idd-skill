@@ -141,7 +141,10 @@ live in `docs/policy-constants.md`.
   comment every 12 h while holding or when any phase is expected to
   exceed 12 h. The latest **valid** `claimed-by` comment for the same
   `{claim-id}` resets the stale clock. Embedded timestamps are ignored;
-  only the comment's GitHub `created_at` counts.
+  only the comment's GitHub `created_at` counts. In a hold, a living
+  orchestrator of the same session may post the 12 h re-post for up to 72 h
+  (`idd-orchestrator.instructions.md` section 4); without one, the 24 h stale
+  clock applies.
 - **Heartbeat-overdue**: diagnostic only; see
   `idd-resume-stall.instructions.md` S3.
 

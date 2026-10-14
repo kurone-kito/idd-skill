@@ -61,7 +61,7 @@ handle, the report draft path, and the worker's state (`running`, `reporting`,
    section 5 report request, naming that pre-created worktree, which the worker
    reuses without B1 creation. Record a `running` roster entry.
 5. A pick that fails A4.5, or A5 before the claim marker is posted, has its
-   worktree and branch removed (which deletes its lock) and leaves `--issues`
+   worktree and branch removed and leaves `--issues`
    before any refill. A failure after the marker is posted is contested: follow
    idd-claim.instructions.md, keep its claim and worktree, and remove it from
    `--issues`.
@@ -83,6 +83,13 @@ handle, the report draft path, and the worker's state (`running`, `reporting`,
 - When the graph in hand has nothing startable, re-run Discover as that cadence
   requires. Report and stop only when that re-run finds nothing startable and
   every roster entry is `disposed`.
+- A held roster worker (not `disposed`, claim taken in section 3 step 4)
+  gets this renewal: re-post its `claimed-by` every 12 h from its latest valid
+  one, with its agent id, claim id, and branch, as the overview Heartbeat
+  bullet describes. At 72 h after its first hold comment's `created_at`, post
+  `unclaimed-by` for that claim and record the hold and cap in the run report.
+  Retry a failed post once; if it fails again, record it and leave the claim
+  in place. Never post a second claim id.
 
 ## 5. Report and disposal
 
