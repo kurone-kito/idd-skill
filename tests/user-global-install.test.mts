@@ -891,6 +891,20 @@ test('a rollback keeps a listed path listed when this run recreated it and then 
   );
 });
 
+test('a symbolic-link data root is refused as a link, not as a stale temporary file', () => {
+  const home = makeHome();
+  const target = join(home, 'elsewhere');
+  nodeFs.mkdirSync(target, { recursive: true });
+  nodeFs.writeFileSync(join(target, 'receipt.json.tmp-3'), '{}');
+  nodeFs.symlinkSync(target, dataRootOf(home));
+
+  assert.throws(
+    () => installPayload(optionsFor(home)),
+    (error: Error) =>
+      /symbolic link/.test(error.message) && !/crashed run/.test(error.message),
+  );
+});
+
 test('every placeholder in the installed payload has a mapping', () => {
   const home = makeHome();
   installPayload(optionsFor(home));
