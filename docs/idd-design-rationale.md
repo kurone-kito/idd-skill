@@ -2080,13 +2080,21 @@ defined in that item.
    repository's triage fingerprint classes, and the line between safety and
    correctness is a judgement.
 5. Pull request size in the cohort of item 1. Changed lines are the
-   additions plus deletions that GitHub reports for each pull request
-   at merge. The 64 pull requests with at most 3 Copilot reviews have a
-   median of 122.5 changed lines, and the 20 with 7 or more have a
-   median of 967.5. Measured at the first Copilot review (the reviewed
-   commit against its merge base with main) for the same two groups, the
-   medians are 123.5 and 492.5. Spearman correlation between changed lines
-   at merge and Copilot review count over all 100: 0.57.
+   additions plus deletions that GitHub reports for each pull request at
+   merge. The 64 pull requests with at most 3 Copilot reviews have a median
+   of 122.5 changed lines, and the 20 with 7 or more have a median of 967.5.
+   Measured at the first Copilot review (the reviewed commit against its
+   merge base with main) for the same two groups, the medians are 123.5 and
+   492.5. Spearman correlation between changed lines at merge and Copilot
+   review count over all 100: 0.57. The earlier 2026-10-13 measurement
+   reported 106 and 541 lines at the first review, a median of 724 lines of
+   fixes after it, and a Spearman value of 0.54, on samples of 20 pull
+   requests. Those values do not reproduce on this cohort. The 20 pull
+   requests with 7 or more reviews are the whole group of that size here,
+   and by the method above their first-review median is 492.5, not 541. The
+   earlier group of 20 with at most 3 reviews is not identified in the
+   repository, so its 106 cannot be checked. The method behind the 724 and
+   the 0.54 is not recorded, so neither is carried forward.
 6. Of 181 later-wave findings in the 12 longest pull requests of the cohort,
    83 (46%) were within 3 lines of the previous fix, 52 elsewhere in the
    same file, and 46 in files the previous fix did not touch. The 12 longest
@@ -2104,22 +2112,28 @@ defined in that item.
    median 2; `S` 33, 2, median 2. The 24 pull requests whose issue has
    no effort marker include 7 with 7 or more reviews, so the 20 at step
    2 are 6 `L`, 5 `M`, 2 `S` and 7 without a marker.
-8. Copilot's review overview changed twice. The measurements come from
-   every Copilot review on pull requests updated between 2026-10-03 and
-   2026-10-12. The `Open (N)` header was last seen on
-   2026-10-07T05:04:09Z (pull request #3783), and the `N open findings`
-   header was first seen on 2026-10-07T18:17:30Z (pull request #3782).
-   Within the cohort, pull request #3940 still used relative item links, as
-   `(#discussion_rN)`, at 2026-10-09T09:41:37Z, and the first absolute item
-   link is in pull request #3962 at 2026-10-09T17:20:37Z. Across all reviews
-   measured here, relative links last appear in pull request #3851 at
-   2026-10-09T15:21:12Z, and absolute links first appear in that pull
-   request at 2026-10-09T16:59:13Z.
-   `copilot-overview-sections.mts` still expects `Open (N)`, so
-   `copilot-review-wave-audit` reported no open-finding appearances in
-   any of the 431 reviews of the cohort. The headers of those reviews
-   sum to 442 open findings. That is a sum over reviews, so an item open
-   in several reviews is counted once for each review.
+8. Copilot's review overview changed twice. The measurements come from every
+   Copilot review on pull requests updated between 2026-10-03 and
+   2026-10-12. The `Open (N)` header was last seen on 2026-10-07T05:04:09Z
+   (pull request #3783), and the `N open findings` header was first seen on
+   2026-10-07T18:17:30Z (pull request #3782). Within the cohort, pull
+   request #3940 still used relative item links, as `(#discussion_rN)`, at
+   2026-10-09T09:41:37Z, and the first absolute item link is in pull
+   request #3962 at 2026-10-09T17:20:37Z. Across all reviews measured here,
+   relative links last appear in pull request #3851 at 2026-10-09T15:21:12Z,
+   and absolute links first appear in that pull request at
+   2026-10-09T16:59:13Z. At the revision this branch was based on,
+   2897c0c1c, `copilot-overview-sections.mts` recognized only the `Open (N)`
+   section header, and its item pattern matched only relative links. A
+   section with an `N open findings` header and absolute links therefore
+   produced no item and no unparsed reason, so `copilot-review-wave-audit`
+   counted the review as clean. The audit reported no open-finding
+   appearances in any of the 431 reviews of the cohort, and flagged none as
+   unparsed. The headers of those reviews sum to 442 open findings. That is
+   a sum over reviews, so an item open in several reviews is counted once
+   for each review. Main at `5bcea4d4a` recognizes both headers (commit
+   `05ac23927`, issue #4184), and its parser returns 442 open items for the
+   same 431 review bodies.
 
 Roadmap kurone-kito/idd-skill#4182 responds to this audit.
 
