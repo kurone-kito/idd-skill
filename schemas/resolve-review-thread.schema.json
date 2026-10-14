@@ -10,7 +10,9 @@
       "description": "Thread target (--comment-id). Lists only its own fields, so no body-item field may appear.",
       "required": ["commentId", "alreadyResolved"],
       "properties": {
-        "mode": {},
+        "mode": {
+          "enum": ["dry-run", "apply"]
+        },
         "prNumber": {},
         "commentId": {},
         "threadId": {},
@@ -26,7 +28,9 @@
       "description": "Body-item target (--review-id / --item-title). Lists only its own fields, so no thread field may appear.",
       "required": ["reviewId", "itemTitle"],
       "properties": {
-        "mode": {},
+        "mode": {
+          "enum": ["dry-run", "apply"]
+        },
         "prNumber": {},
         "reviewId": {},
         "itemTitle": {},
@@ -37,14 +41,30 @@
         "error": {}
       },
       "additionalProperties": false
+    },
+    {
+      "description": "Compute-only triage (no target).",
+      "required": ["triage"],
+      "properties": {
+        "mode": {
+          "enum": ["triage"]
+        },
+        "prNumber": {},
+        "triage": {}
+      },
+      "additionalProperties": false
     }
   ],
   "additionalProperties": false,
   "properties": {
     "mode": {
       "type": "string",
-      "enum": ["dry-run", "apply"],
-      "description": "Whether the helper planned or performed the reply-and-resolve operation."
+      "enum": ["dry-run", "apply", "triage"],
+      "description": "Whether the helper planned or performed the reply-and-resolve operation, or computed a triage value without posting (triage)."
+    },
+    "triage": {
+      "type": "string",
+      "description": "Compute-only triage mode: the Triage line a reply with the same flags would carry. Set only when mode is triage."
     },
     "prNumber": {
       "type": "integer",

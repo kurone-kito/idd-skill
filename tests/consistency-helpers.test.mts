@@ -617,3 +617,108 @@ test('composed with selectStricterNoticeUtilizationPct, raising a per-file limit
   assert.equal(result.length, 1);
   assert.match(result[0], /entry-a phaseLimitBytes raised from 1000 to 2000/);
 });
+
+// --- Maintainer-approved per-file raises (#4233) -----------------------------
+
+// Both fields sit at 95% of their base limits, so an unapproved raise of
+// either field is a near-ceiling violation.
+const APPROVAL_BASE = [
+  {
+    id: 'entry-a',
+    glob: 'a/*.md',
+    phaseLimitBytes: 1000,
+    alwaysLoadedLimitBytes: 1000,
+    files: [
+      { path: 'a/x.md', bytes: 950, alwaysLoaded: false },
+      { path: 'a/y.md', bytes: 950, alwaysLoaded: true },
+    ],
+  },
+];
+
+test('an approved phaseLimitBytes raise within its approved limit passes near the ceiling', () => {
+  const current = [
+    {
+      id: 'entry-a',
+      glob: 'a/*.md',
+      phaseLimitBytes: 2000,
+      alwaysLoadedLimitBytes: 1000,
+    },
+  ];
+  const approvals = new Map([['entry-a', 2000]]);
+  assert.deepEqual(
+    collectInstructionSizeBudgetRatchetViolations(
+      NOTICE_PCT,
+      current,
+      APPROVAL_BASE,
+      approvals,
+    ),
+    [],
+  );
+});
+
+test('an approved phaseLimitBytes raise above its approved limit still fails', () => {
+  const current = [
+    {
+      id: 'entry-a',
+      glob: 'a/*.md',
+      phaseLimitBytes: 2500,
+      alwaysLoadedLimitBytes: 1000,
+    },
+  ];
+  const approvals = new Map([['entry-a', 2000]]);
+  const result = collectInstructionSizeBudgetRatchetViolations(
+    NOTICE_PCT,
+    current,
+    APPROVAL_BASE,
+    approvals,
+  );
+  assert.equal(result.length, 1);
+  assert.match(
+    result[0],
+    /entry-a phaseLimitBytes raised from 1000 to 2500 while a\/x\.md/,
+  );
+});
+
+test('an unapproved phaseLimitBytes raise still fails, with no approval or for another entry', () => {
+  const current = [
+    {
+      id: 'entry-a',
+      glob: 'a/*.md',
+      phaseLimitBytes: 2000,
+      alwaysLoadedLimitBytes: 1000,
+    },
+  ];
+  for (const approvals of [new Map(), new Map([['entry-b', 2000]])]) {
+    const result = collectInstructionSizeBudgetRatchetViolations(
+      NOTICE_PCT,
+      current,
+      APPROVAL_BASE,
+      approvals,
+    );
+    assert.equal(result.length, 1);
+    assert.match(result[0], /entry-a phaseLimitBytes raised from 1000 to 2000/);
+  }
+});
+
+test('an approved phaseLimitBytes limit never widens alwaysLoadedLimitBytes', () => {
+  const current = [
+    {
+      id: 'entry-a',
+      glob: 'a/*.md',
+      phaseLimitBytes: 1000,
+      alwaysLoadedLimitBytes: 2000,
+    },
+  ];
+  const approvals = new Map([['entry-a', 2000]]);
+  const result = collectInstructionSizeBudgetRatchetViolations(
+    NOTICE_PCT,
+    current,
+    APPROVAL_BASE,
+    approvals,
+  );
+  assert.equal(result.length, 1);
+  assert.match(
+    result[0],
+    /entry-a alwaysLoadedLimitBytes raised from 1000 to 2000 while a\/y\.md/,
+  );
+});

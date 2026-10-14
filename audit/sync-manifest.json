@@ -304,14 +304,14 @@
       "glob": ".github/instructions/idd-*.instructions.md",
       "alwaysLoadedPattern": "applyTo:\\s*\"\\*\\*\"",
       "alwaysLoadedLimitBytes": 20000,
-      "phaseLimitBytes": 36000
+      "phaseLimitBytes": 40000
     },
     {
       "id": "instruction-size-budgets-idd-template",
       "glob": "idd-template/.github/instructions/idd-*.instructions.md",
       "alwaysLoadedPattern": "applyTo:\\s*\"\\*\\*\"",
       "alwaysLoadedLimitBytes": 20000,
-      "phaseLimitBytes": 36000
+      "phaseLimitBytes": 40000
     }
   ],
   "bundleBudgets": [
@@ -523,6 +523,18 @@
         "limitBytes": 124800,
         "issue": 4142,
         "reason": "maintainer-approved raise (kurone-kito, 2026-10-14) for issue #4142: the decline-shape decision path adds about 230 bytes, and the bundle was at 98% after the #4168 and #4098 merges; sized at about 10% headroom over the measured need"
+      },
+      {
+        "bundle": "instruction-size-budgets-dogfood",
+        "limitBytes": 40000,
+        "issue": 4233,
+        "reason": "maintainer-approved per-file phaseLimitBytes raise (kurone-kito, comment 6162851754 on issue #4233; checker decision in comment 6168271034): the A0-T step 1 hold-label stop adds about 370 bytes to idd-discover.instructions.md, which sat at 35,997 of 36,000 bytes. The raise is the maintainer's explicit exception to E12's per-file-cap rule. The entry name is the instructionSizeBudgets id, and only phaseLimitBytes is covered."
+      },
+      {
+        "bundle": "instruction-size-budgets-idd-template",
+        "limitBytes": 40000,
+        "issue": 4233,
+        "reason": "maintainer-approved per-file phaseLimitBytes raise (kurone-kito, comment 6162851754 on issue #4233; checker decision in comment 6168271034): the A0-T step 1 hold-label stop adds about 370 bytes to the idd-template idd-discover.instructions.md, which sat at 35,997 of 36,000 bytes. The raise is the maintainer's explicit exception to E12's per-file-cap rule. The entry name is the instructionSizeBudgets id, and only phaseLimitBytes is covered."
       }
     ]
   },

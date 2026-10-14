@@ -283,3 +283,140 @@ test('near-ceiling-ratchet: the same near-ceiling bundle raise fails audit-docs 
     /near-ceiling-ratchet: fixture-bundle limitBytes raised from 1000 to 1200/,
   );
 });
+
+// --- Per-file phaseLimitBytes approvals (#4233) ------------------------------
+
+const PHASE_BUDGET_ID = 'fixture-budget';
+
+/** A maintainer approval for raising the fixture entry's phaseLimitBytes to
+ * 2000 bytes (the `bundle` field names the instructionSizeBudgets entry id). */
+const PHASE_RAISE_TO_2000_APPROVAL = {
+  bundle: PHASE_BUDGET_ID,
+  limitBytes: 2000,
+  issue: 4233,
+  reason: 'Fixture approval for the per-file near-ceiling raise wiring test.',
+};
+
+/** The governed file is 960 bytes against a 1000-byte phaseLimitBytes at the
+ * base ref (96%, past the 95% notice threshold), and the working-tree
+ * manifest raises phaseLimitBytes to `currentPhaseLimitBytes`. */
+function makePhaseRaiseFixture(
+  currentPhaseLimitBytes: number,
+  approvals?: unknown[],
+) {
+  const budgets = (phaseLimitBytes: number) => [
+    {
+      id: PHASE_BUDGET_ID,
+      glob: '*.instructions.md',
+      phaseLimitBytes,
+      alwaysLoadedLimitBytes: 1000,
+    },
+  ];
+  return makeFixture(
+    { contextCeiling: CONTEXT_CEILING, instructionSizeBudgets: budgets(1000) },
+    {
+      contextCeiling: {
+        ...CONTEXT_CEILING,
+        ...(approvals === undefined
+          ? {}
+          : { nearCeilingRaiseApprovals: approvals }),
+      },
+      instructionSizeBudgets: budgets(currentPhaseLimitBytes),
+    },
+    { 'idd-fixture.instructions.md': 'x'.repeat(960) },
+  );
+}
+
+test('near-ceiling-ratchet: an approved per-file phaseLimitBytes raise within its approved limit passes audit-docs --check', (t) => {
+  const { dir, cleanup } = makePhaseRaiseFixture(2000, [
+    PHASE_RAISE_TO_2000_APPROVAL,
+  ]);
+  t.after(cleanup);
+
+  const result = runAuditDocs(dir);
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(result.stdout, /documentation audit passed/);
+  assert.doesNotMatch(output, /near-ceiling-ratchet/);
+});
+
+test('near-ceiling-ratchet: an approved per-file phaseLimitBytes raise above its approved limit fails audit-docs --check', (t) => {
+  const { dir, cleanup } = makePhaseRaiseFixture(2500, [
+    PHASE_RAISE_TO_2000_APPROVAL,
+  ]);
+  t.after(cleanup);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(
+    result.stderr,
+    /near-ceiling-ratchet: fixture-budget phaseLimitBytes raised from 1000 to 2500/,
+  );
+});
+
+test('near-ceiling-ratchet: the same per-file phaseLimitBytes raise fails audit-docs --check without an approval', (t) => {
+  // Control for the approved-raise test above: the identical raise without the
+  // approval entry is rejected, so that test passes because of the approval.
+  const { dir, cleanup } = makePhaseRaiseFixture(2000);
+  t.after(cleanup);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(
+    result.stderr,
+    /near-ceiling-ratchet: fixture-budget phaseLimitBytes raised from 1000 to 2000/,
+  );
+});
+
+test('near-ceiling-ratchet: an approval id that also names a bundle is ambiguous and grants neither section (#4233)', (t) => {
+  // The same id names an instructionSizeBudgets entry and a bundleBudgets
+  // bundle. The per-file raise is approved under that id, but the id is
+  // ambiguous, so the approval must not authorize the per-file raise.
+  const SHARED_ID = 'shared-id';
+  const manifest = (
+    phaseLimitBytes: number,
+    approvals?: unknown[],
+  ): Record<string, unknown> => ({
+    contextCeiling: {
+      ...CONTEXT_CEILING,
+      ...(approvals === undefined
+        ? {}
+        : { nearCeilingRaiseApprovals: approvals }),
+    },
+    instructionSizeBudgets: [
+      {
+        id: SHARED_ID,
+        glob: '*.instructions.md',
+        phaseLimitBytes,
+        alwaysLoadedLimitBytes: 1000,
+      },
+    ],
+    bundleBudgets: [
+      {
+        id: SHARED_ID,
+        files: ['idd-fixture.instructions.md'],
+        limitBytes: 1000,
+      },
+    ],
+  });
+  const { dir, cleanup } = makeFixture(
+    manifest(1000),
+    manifest(2000, [
+      {
+        bundle: SHARED_ID,
+        limitBytes: 2000,
+        issue: 4233,
+        reason: 'Fixture approval for the shared-id ambiguity test.',
+      },
+    ]),
+    { 'idd-fixture.instructions.md': 'x'.repeat(960) },
+  );
+  t.after(cleanup);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(
+    result.stderr,
+    /near-ceiling-ratchet: shared-id phaseLimitBytes raised from 1000 to 2000/,
+  );
+});

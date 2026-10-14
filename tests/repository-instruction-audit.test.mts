@@ -914,3 +914,29 @@ for (const mutation of mutations) {
     }
   });
 }
+
+test('A0-T step 1 stops without claiming on the three configured hold labels (#4233)', () => {
+  const discover = readFileSync(
+    join(
+      REPO_ROOT,
+      'idd-template/.github/instructions/idd-discover.instructions.md',
+    ),
+    'utf8',
+  );
+  const start = discover.indexOf('1. Fetch the target issue.');
+  const end = discover.indexOf('2. If the target issue carries', start);
+  assert.ok(start >= 0 && end > start, 'A0-T step 1 is present');
+  // Collapse the line wrapping so each key and phrase is matched whole.
+  const step = discover.slice(start, end).replace(/\s+/g, ' ');
+  for (const key of [
+    'labels.blockedByHumanLabelName',
+    'labels.needsDecisionLabelName',
+    'labels.authoringOnlyLabelName',
+  ]) {
+    assert.ok(step.includes(key), `A0-T step 1 names ${key}`);
+  }
+  assert.match(
+    step,
+    /also stop without claiming: report the label name and the issue number/,
+  );
+});

@@ -31,7 +31,7 @@ and the checker never widens into them:
   instructions loader parses; mixing in OKF keys would collide with
   that contract. They are also the tightest byte-budget surface in the
   repository — `instructionSizeBudgets` caps each file at 20,000 or
-  36,000 bytes and `bundleBudgets` caps whole phase bundles, per the
+  40,000 bytes and `bundleBudgets` caps whole phase bundles, per the
   current limits in [Policy constants](policy-constants.md) — because
   every byte is
   loaded verbatim into an agent's context on every session. Frontmatter

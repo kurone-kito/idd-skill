@@ -585,7 +585,7 @@ files, or express it without the `bytes` suffix.
 | Limit type    | Value        | Applies to                                                                 | Rationale                                                                                                                                                                                               |
 | ------------- | ------------ | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Always-loaded | 20,000 bytes | Files with `applyTo: "**"` in `.github/instructions/idd-*.instructions.md` | These files load on every phase regardless of which is active, so this is the strictest ceiling — it bounds the fixed floor cost every session pays before any phase-specific content is even selected. |
-| Phase         | 36,000 bytes | Other files in `.github/instructions/idd-*.instructions.md`                | Only the one file matching the active phase loads at a time, so this ceiling can run larger than the always-loaded one without raising a session's floor cost.                                          |
+| Phase         | 40,000 bytes | Other files in `.github/instructions/idd-*.instructions.md`                | Only the one file matching the active phase loads at a time, so this ceiling can run larger than the always-loaded one without raising a session's floor cost.                                          |
 
 ### Bundle limits
 
@@ -710,8 +710,11 @@ models. Read the two as one policy: raise by default while headroom remains, and
 trim or split once headroom is nearly gone. A maintainer may approve one
 specific raise above that band by listing it in
 `contextCeiling.nearCeilingRaiseApprovals` in `audit/sync-manifest.json` with
-the bundle, the approved limit, the issue, and the reason. The check then
-accepts that bundle only up to the approved limit.
+the bundle, the approved limit, the issue, and the reason. For a per-file
+`phaseLimitBytes` raise, the bundle field names the `instructionSizeBudgets`
+entry `id`. The check then accepts that bundle or entry only up to the
+approved limit. An id that names both a bundle and an entry is ambiguous, so
+neither takes that approval.
 
 **Mechanically enforced (#2697).** `node scripts/audit-docs.mjs --check`
 fails, when the base ref and its manifest are available, when a commit

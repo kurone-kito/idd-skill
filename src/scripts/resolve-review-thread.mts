@@ -109,8 +109,13 @@ export interface ThreadMatch {
 
 /** The CLI output envelope for both `dry-run` and `--apply` modes. */
 export interface ResolveReviewThreadReport {
-  mode: 'dry-run' | 'apply';
+  mode: 'dry-run' | 'apply' | 'triage';
   prNumber: number;
+  /**
+   * The compute-only triage value (#4188): the `Triage:` line a reply with the
+   * same flags would carry. Set only in `triage` mode, which posts nothing.
+   */
+  triage?: string;
   /** The thread target's review comment id; omitted for a body item. */
   commentId?: number;
   /** Omitted when no review thread owns the comment, and for a body item. */
@@ -637,6 +642,43 @@ export function buildTriageReplyBody(input: {
       verdict: null,
     };
   }
+  const { record, verdict } = scoreTriageRecord(input);
+  if (flags.override !== null) {
+    checkOverrideReason(flags.override);
+    if (verdict === null) {
+      throw new TriageUsageError(
+        '--override requires critiqueLoop.deferByUrgency severity-tiered',
+      );
+    }
+    if (verdict.verdict !== 'defer') {
+      throw new TriageUsageError(
+        "--override requires a defer verdict, but this reply's verdict is keep",
+      );
+    }
+    record.override = flags.override.trim();
+  }
+  return {
+    body: placeTriageLine(rawBody, markerPrefix, formatTriageLine(record)),
+    record,
+    verdict,
+  };
+}
+
+/**
+ * Score one E4/E5 triage record (#4188). A reply and the compute-only mode both
+ * call this, so the same flags give the same triage value. The reviews are read
+ * only under `severity-tiered` without `--lite`, and the head only with
+ * `--advisory-converged`. The verdict comes from the same record the line
+ * carries, so the dry run and the apply path cannot disagree (#4187).
+ */
+function scoreTriageRecord(input: {
+  port: ProviderPort;
+  pr: number;
+  deferByUrgency: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
+  deferRelaxAtRounds: readonly number[];
+  flags: TriageFlags;
+}): { record: TriageRecord; verdict: TriageVerdict | null } {
+  const { flags } = input;
   let step: TriageRecord['step'] = 0;
   let convergedHead: string | null = null;
   if (input.deferByUrgency === 'severity-tiered' && !flags.lite) {
@@ -679,8 +721,6 @@ export function buildTriageReplyBody(input: {
     blocked: null,
     override: null,
   };
-  // The verdict comes from the same record the line carries, so the dry run
-  // and the apply path cannot disagree (#4187).
   const verdict =
     input.deferByUrgency === 'severity-tiered'
       ? computeTriageVerdict(record, flags)
@@ -689,25 +729,7 @@ export function buildTriageReplyBody(input: {
     record.verdict = verdict.verdict;
     record.blocked = verdict.blocked;
   }
-  if (flags.override !== null) {
-    checkOverrideReason(flags.override);
-    if (verdict === null) {
-      throw new TriageUsageError(
-        '--override requires critiqueLoop.deferByUrgency severity-tiered',
-      );
-    }
-    if (verdict.verdict !== 'defer') {
-      throw new TriageUsageError(
-        "--override requires a defer verdict, but this reply's verdict is keep",
-      );
-    }
-    record.override = flags.override.trim();
-  }
-  return {
-    body: placeTriageLine(rawBody, markerPrefix, formatTriageLine(record)),
-    record,
-    verdict,
-  };
+  return { record, verdict };
 }
 
 /** The E5 defer-matrix verdict for one Triage record (#4187). */
@@ -946,12 +968,17 @@ export function parseArgs(argv: string[]): CliArgs {
 
 const USAGE = `usage: node scripts/resolve-review-thread.mjs --pr <number> --comment-id <id> [options]
        node scripts/resolve-review-thread.mjs --pr <number> --review-id <id> --item-title <title> [options]
+       node scripts/resolve-review-thread.mjs --pr <number> --tier <tier> --urgency <urgency> [options]
 
 Post a reply to the review thread that owns <comment-id> and resolve that
 thread in one invocation (E13). With --review-id / --item-title instead,
 post one stamped top-level PR comment answering a review-body item that has
 no thread (a Copilot "Previously missed" item); no thread is resolved.
 Dry-run by default; --apply mutates.
+
+With --pr, --tier, and --urgency and no target, prints the triage value a
+reply with the same flags would carry, and posts nothing. For example:
+  node scripts/resolve-review-thread.mjs --pr 42 --tier low --urgency medium
 
   --pr <number>                  PR number (required)
   --comment-id <id>              review comment REST id whose thread to resolve
@@ -1268,8 +1295,131 @@ if (import.meta.main) {
   }
 }
 
+/**
+ * The compute-only triage mode (#4188): a valid `--pr` with `--tier` or
+ * `--urgency`, and no target, no `--body`, and no `--apply`. A lone score flag
+ * still takes this path, so `validateTriageFlags` names the missing pair. With
+ * neither score flag, the existing paths run unchanged.
+ */
+function isComputeOnlyTriage(args: CliArgs): boolean {
+  return (
+    !args.help &&
+    args.pr !== null &&
+    Number.isInteger(args.pr) &&
+    args.pr > 0 &&
+    (args.tier !== '' || args.urgency !== '') &&
+    args.commentId === null &&
+    args.reviewId === null &&
+    args.itemTitle === '' &&
+    args.itemIndex === null &&
+    args.body === '' &&
+    !args.apply
+  );
+}
+
+function triageFlagsFromArgs(args: CliArgs): TriageFlags {
+  return {
+    tier: args.tier,
+    urgency: args.urgency,
+    copilotLabel: args.copilotLabel,
+    safetyClass: args.safetyClass,
+    lite: args.lite,
+    advisoryConverged: args.advisoryConverged,
+    pathB: args.pathB,
+    scopeFence: args.scopeFence,
+    protectedAuthority: args.protectedAuthority,
+    acceptedMidFix: args.acceptedMidFix,
+    override: args.override,
+  };
+}
+
+/**
+ * Run the compute-only triage mode (#4188). The flags pass the same checks a
+ * reply's flags pass, and the value comes from `scoreTriageRecord`, so it is the
+ * `Triage:` line a reply with the same flags would carry. Nothing is posted,
+ * and no claim is read. The verdict is not repeated on stderr, because the
+ * stdout object already carries it. A success returns 0 instead of calling
+ * `process.exit`, so the CLI runner sets the exit code after stdout drains
+ * (Copilot review on #4266).
+ */
+function runComputeOnlyTriage(args: CliArgs, pr: number): number {
+  if (args.override !== null) {
+    const message =
+      '--override cannot be combined with a triage-only run: no reply is posted';
+    writeStderrSync(`${message}\n`);
+    exitClassified(1, 'usage', message);
+  }
+  const iddConfig = loadIddConfig();
+  const triagePolicy = normalizePolicyConfig(iddConfig ?? {}).critiqueLoop;
+  const flags = triageFlagsFromArgs(args);
+  try {
+    validateTriageFlags({
+      flags,
+      apply: false,
+      body: '',
+      triageRecord: triagePolicy.triageRecord,
+      reviewPolicy: iddConfig?.reviewPolicy,
+      deferByUrgency: triagePolicy.deferByUrgency,
+    });
+  } catch (error) {
+    if (!(error instanceof TriageUsageError)) {
+      throw error;
+    }
+    writeStderrSync(`${error.message}\n`);
+    exitClassified(1, 'usage', error.message);
+  }
+  // Scoring reads GitHub only under `severity-tiered` without `--lite`, so the
+  // repository lookup runs only then. A failed `gh repo view` cannot block a
+  // result that needs no GitHub data (Copilot review on #4266).
+  const readsGithub =
+    triagePolicy.deferByUrgency === 'severity-tiered' && !args.lite;
+  const currentRepo =
+    readsGithub && !(args.owner && args.repo)
+      ? resolveCurrentGithubRepository()
+      : null;
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  const port = createGithubProviderAdapter(owner, repo);
+  let triage: string;
+  try {
+    const { record } = scoreTriageRecord({
+      port,
+      pr,
+      deferByUrgency: triagePolicy.deferByUrgency,
+      deferRelaxAtRounds: triagePolicy.deferRelaxAtRounds,
+      flags,
+    });
+    triage = formatTriageLine(record);
+  } catch (error) {
+    if (error instanceof TriageUsageError) {
+      writeStderrSync(`${error.message}\n`);
+      exitClassified(1, 'usage', error.message);
+    }
+    const source = error instanceof TriageReadError ? error.original : error;
+    const classified = classifyHelperError(source);
+    writeStderrSync(`triage not computed: ${classified.message}\n`);
+    exitClassified(
+      1,
+      error instanceof TriageReadError ? 'transport' : classified.kind,
+      classified.message,
+      classified.httpStatus,
+    );
+  }
+  const report: ResolveReviewThreadReport = {
+    mode: 'triage',
+    prNumber: pr,
+    triage,
+  };
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return 0;
+}
+
 function main(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
+  // #4188: the compute-only triage mode takes no target and posts nothing.
+  if (isComputeOnlyTriage(args)) {
+    return runComputeOnlyTriage(args, args.pr as number);
+  }
   // #4012: --review-id selects the body-item target. `!== null` (not
   // `Number.isInteger`) so a malformed but supplied value still selects it
   // and is then refused, rather than falling back to the thread target.
@@ -1403,19 +1553,7 @@ function main(): HelperCliResult {
   const effectiveTriageRecord = enforceInert
     ? 'record'
     : triagePolicy.triageRecord;
-  const triageFlags: TriageFlags = {
-    tier: args.tier,
-    urgency: args.urgency,
-    copilotLabel: args.copilotLabel,
-    safetyClass: args.safetyClass,
-    lite: args.lite,
-    advisoryConverged: args.advisoryConverged,
-    pathB: args.pathB,
-    scopeFence: args.scopeFence,
-    protectedAuthority: args.protectedAuthority,
-    acceptedMidFix: args.acceptedMidFix,
-    override: args.override,
-  };
+  const triageFlags = triageFlagsFromArgs(args);
   try {
     validateTriageFlags({
       flags: triageFlags,
