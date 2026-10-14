@@ -105,8 +105,3 @@ handle, the report draft path, and state (`running`, `reporting`,
 - If verification or the append fails, keep it addressable, mark it `stalled`,
   and follow the worker-specific recovery in the
   [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant).
-
-## 6. Worker span
-
-A worker runs from B1 to its terminal phase: F4 under
-`fully_autonomous_merge`, F2.5 otherwise.
