@@ -9,11 +9,13 @@ import { fileURLToPath } from 'node:url';
 import {
   buildFindingThreads,
   buildTransitionTable,
+  type CompareFile,
   checkFailures,
   classifyDispositionReply,
   computePrAudit,
   type MergedPrCandidate,
   type ParsedOpenFinding,
+  parseChangedNewLines,
   parseOverviewBody,
   type RawComment,
   type RawReview,
@@ -22,6 +24,7 @@ import {
   resolveThreadDispositionReply,
   selectMostRecentlyMerged,
   summarizeCohort,
+  toCompareFiles,
 } from '../src/scripts/copilot-review-wave-audit.mts';
 import { stubExecutable } from './test-utils.mts';
 
@@ -1519,9 +1522,10 @@ test('summarizeCohort triage: sums the per-PR triage objects key by key', () => 
   assert.equal(summary.triage.byStep['2'].urgency.medium, 1);
 });
 
-test('computePrAudit: report keys are the existing fields plus triage and mergedAt', () => {
+test('computePrAudit: report keys are the existing fields plus triage, findingLocality, and mergedAt', () => {
   const report = computePrAudit(1, [], []);
   assert.deepEqual(Object.keys(report).sort(), [
+    'findingLocality',
     'legacyCount',
     'mergedAt',
     'openAppearances',
@@ -1536,6 +1540,221 @@ test('computePrAudit: report keys are the existing fields plus triage and merged
     'v2Count',
   ]);
   assert.equal(report.mergedAt, null);
+});
+
+// ---------------------------------------------------------------------------
+// findingLocality (issue #4190)
+// ---------------------------------------------------------------------------
+
+function copilotReview(
+  id: number,
+  submittedAt: string,
+  commitId: string | null,
+): RawReview {
+  return { ...review(id, submittedAt, ''), commitId };
+}
+
+function inlineFinding(
+  id: number,
+  reviewId: number,
+  path: string | null,
+  originalLine: number | null,
+  overrides: Partial<RawComment> = {},
+): RawComment {
+  return {
+    id,
+    inReplyToId: null,
+    body: 'finding',
+    createdAt: '2026-01-02T00:00:00Z',
+    login: 'Copilot',
+    path,
+    side: 'RIGHT',
+    originalLine,
+    pullRequestReviewId: reviewId,
+    ...overrides,
+  };
+}
+
+const TWO_REVIEWS: RawReview[] = [
+  copilotReview(1, '2026-01-01T00:00:00Z', 'a1'),
+  copilotReview(2, '2026-01-02T00:00:00Z', 'b2'),
+];
+
+/** Adds one line (new-file line 11) between context lines 10 and 12. */
+const CHANGED_SRC_PATCH = '@@ -1,1 +10,2 @@\n x\n+y\n z';
+
+const ZERO_LOCALITY = {
+  firstWave: 0,
+  nearPreviousPush: 0,
+  sameFileElsewhere: 0,
+  untouchedFile: 0,
+  unknown: 0,
+};
+
+function localityOf(
+  reviews: readonly RawReview[],
+  comments: readonly RawComment[],
+  compareFiles: ReadonlyMap<string, readonly CompareFile[] | null> = new Map(),
+) {
+  return computePrAudit(1, reviews, comments, compareFiles).findingLocality;
+}
+
+test('parseChangedNewLines: counts added and removed lines per the hunk header', () => {
+  assert.deepEqual(
+    parseChangedNewLines('@@ -10,3 +10,4 @@\n a\n-b\n+c\n+d\n e'),
+    [11, 12],
+  );
+  assert.deepEqual(parseChangedNewLines('@@ -1 +1 @@\n-a\n+b'), [1]);
+});
+
+test('parseChangedNewLines: tolerates section text after the header, reads a removed "--" line as a deletion, and resets per hunk', () => {
+  assert.deepEqual(
+    parseChangedNewLines('@@ -3,2 +3,2 @@ function foo()\n--x\n+y\n z'),
+    [3],
+  );
+  assert.deepEqual(
+    parseChangedNewLines('@@ -1 +1 @@\n a\n+b\n@@ -20 +21 @@\n-c'),
+    [2, 21],
+  );
+});
+
+test('toCompareFiles: a 300-file list and a non-array response both yield null', () => {
+  const capped = Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}` }));
+  assert.equal(toCompareFiles(capped), null);
+  assert.equal(toCompareFiles({ message: 'not a list' }), null);
+  assert.deepEqual(
+    toCompareFiles([
+      { filename: 'a.mts', patch: '@@ -1 +1 @@\n-x' },
+      { filename: 'b.mts' },
+    ]),
+    [{ filename: 'a.mts', patch: '@@ -1 +1 @@\n-x' }, { filename: 'b.mts' }],
+  );
+});
+
+test('computePrAudit findingLocality: a comment on the first Copilot review is firstWave', () => {
+  assert.deepEqual(
+    localityOf(
+      [copilotReview(1, '2026-01-01T00:00:00Z', 'a1')],
+      [inlineFinding(10, 1, 'src/a.mts', 13)],
+    ),
+    { ...ZERO_LOCALITY, firstWave: 1 },
+  );
+});
+
+test('computePrAudit findingLocality: 2 lines from a changed line is nearPreviousPush, 10 lines away in the same file is sameFileElsewhere', () => {
+  const compare = new Map<string, readonly CompareFile[] | null>([
+    ['a1...b2', [{ filename: 'src/a.mts', patch: CHANGED_SRC_PATCH }]],
+  ]);
+  assert.deepEqual(
+    localityOf(
+      TWO_REVIEWS,
+      [
+        inlineFinding(10, 2, 'src/a.mts', 13),
+        inlineFinding(11, 2, 'src/a.mts', 21),
+      ],
+      compare,
+    ),
+    { ...ZERO_LOCALITY, nearPreviousPush: 1, sameFileElsewhere: 1 },
+  );
+});
+
+test('computePrAudit findingLocality: a later comment on a file missing from the compare files is untouchedFile', () => {
+  const compare = new Map<string, readonly CompareFile[] | null>([
+    ['a1...b2', [{ filename: 'src/a.mts', patch: CHANGED_SRC_PATCH }]],
+  ]);
+  assert.deepEqual(
+    localityOf(
+      TWO_REVIEWS,
+      [inlineFinding(10, 2, 'src/other.mts', 13)],
+      compare,
+    ),
+    { ...ZERO_LOCALITY, untouchedFile: 1 },
+  );
+});
+
+test('computePrAudit findingLocality: a missing patch, a null compare entry, equal commits, a LEFT side, a missing key, and an unknown review are unknown', () => {
+  const finding = inlineFinding(10, 2, 'src/a.mts', 13);
+  const noPatch = new Map<string, readonly CompareFile[] | null>([
+    ['a1...b2', [{ filename: 'src/a.mts' }]],
+  ]);
+  assert.deepEqual(localityOf(TWO_REVIEWS, [finding], noPatch), {
+    ...ZERO_LOCALITY,
+    unknown: 1,
+  });
+
+  const failed = new Map<string, readonly CompareFile[] | null>([
+    ['a1...b2', null],
+  ]);
+  assert.deepEqual(localityOf(TWO_REVIEWS, [finding], failed), {
+    ...ZERO_LOCALITY,
+    unknown: 1,
+  });
+
+  const sameCommit = [
+    copilotReview(1, '2026-01-01T00:00:00Z', 'a1'),
+    copilotReview(2, '2026-01-02T00:00:00Z', 'a1'),
+  ];
+  assert.deepEqual(localityOf(sameCommit, [finding], noPatch), {
+    ...ZERO_LOCALITY,
+    unknown: 1,
+  });
+
+  const leftSide = inlineFinding(12, 2, 'src/a.mts', 13, { side: 'LEFT' });
+  const good = new Map<string, readonly CompareFile[] | null>([
+    ['a1...b2', [{ filename: 'src/a.mts', patch: CHANGED_SRC_PATCH }]],
+  ]);
+  assert.deepEqual(localityOf(TWO_REVIEWS, [leftSide], good), {
+    ...ZERO_LOCALITY,
+    unknown: 1,
+  });
+
+  assert.deepEqual(localityOf(TWO_REVIEWS, [finding], new Map()), {
+    ...ZERO_LOCALITY,
+    unknown: 1,
+  });
+
+  assert.deepEqual(
+    localityOf(TWO_REVIEWS, [inlineFinding(13, 99, 'src/a.mts', 13)], good),
+    { ...ZERO_LOCALITY, unknown: 1 },
+  );
+});
+
+test('computePrAudit findingLocality: replies, other logins, and a missing login are not counted', () => {
+  const compare = new Map<string, readonly CompareFile[] | null>([
+    ['a1...b2', [{ filename: 'src/a.mts', patch: CHANGED_SRC_PATCH }]],
+  ]);
+  const comments = [
+    inlineFinding(10, 2, 'src/a.mts', 13, { inReplyToId: 5 }),
+    inlineFinding(11, 2, 'src/a.mts', 13, { login: 'octocat' }),
+    inlineFinding(12, 2, 'src/a.mts', 13, { login: null }),
+  ];
+  assert.deepEqual(localityOf(TWO_REVIEWS, comments, compare), ZERO_LOCALITY);
+});
+
+test('summarizeCohort findingLocality: sums the per-PR counts key by key', () => {
+  const compare = new Map<string, readonly CompareFile[] | null>([
+    ['a1...b2', [{ filename: 'src/a.mts', patch: CHANGED_SRC_PATCH }]],
+  ]);
+  const first = computePrAudit(
+    1,
+    [copilotReview(1, '2026-01-01T00:00:00Z', 'a1')],
+    [inlineFinding(10, 1, 'src/a.mts', 13)],
+  );
+  const second = computePrAudit(
+    2,
+    TWO_REVIEWS,
+    [
+      inlineFinding(20, 2, 'src/a.mts', 13),
+      inlineFinding(21, 99, 'src/a.mts', 13),
+    ],
+    compare,
+  );
+  assert.deepEqual(summarizeCohort([first, second]).findingLocality, {
+    ...ZERO_LOCALITY,
+    firstWave: 1,
+    nearPreviousPush: 1,
+    unknown: 1,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1892,6 +2111,16 @@ if (args[0] === 'api' && String(args[1]).includes('/pulls/42/comments')) {
   for (const c of fixture.comments) process.stdout.write(JSON.stringify(c) + '\\n');
   process.exit(0);
 }
+if (args[0] === 'api' && String(args[1]).includes('/compare/')) {
+  const range = String(args[1]).split('/compare/')[1];
+  const files = fixture.compare ? fixture.compare[range] : undefined;
+  if (files === undefined) {
+    process.stderr.write('no compare fixture for ' + range + '\\n');
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify(files));
+  process.exit(0);
+}
 if (args[0] === 'pr' && args[1] === 'list') {
   // Pin the flags the CLI must send, so the stub cannot pass for wrong ones.
   const flagAt = (flag) => {
@@ -1913,7 +2142,12 @@ process.exit(1);
 const COPILOT_LOGIN = 'copilot-pull-request-reviewer[bot]';
 
 function runCheckWithFixture(
-  fixture: { reviews: unknown[]; comments: unknown[]; prs?: unknown[] },
+  fixture: {
+    reviews: unknown[];
+    comments: unknown[];
+    prs?: unknown[];
+    compare?: Record<string, unknown>;
+  },
   extraArgs: string[],
   selector: string[] = ['--prs', '42'],
 ): { status: number | null; stdout: string; stderr: string } {
@@ -2035,6 +2269,70 @@ test('CLI --check --limit: the merge time from gh pr list reaches the report', (
   };
   assert.equal(parsed.reports[0]?.pr, 42);
   assert.equal(parsed.reports[0]?.mergedAt, '2026-10-02T00:00:00Z');
+});
+
+// Two Copilot reviews on distinct commits, and one inline finding on the
+// second review (issue #4190). The compare fixture decides the lookup result.
+const LOCALITY_CLI_REVIEWS = (): unknown[] => [
+  {
+    id: 1,
+    submitted_at: '2026-01-01T00:00:00Z',
+    body: NO_FINDINGS_FIXTURE,
+    commit_id: 'a1',
+    user: { login: COPILOT_LOGIN },
+  },
+  {
+    id: 2,
+    submitted_at: '2026-01-02T00:00:00Z',
+    body: NO_FINDINGS_FIXTURE,
+    commit_id: 'b2',
+    user: { login: COPILOT_LOGIN },
+  },
+];
+
+const LOCALITY_CLI_FINDING = {
+  id: 10,
+  in_reply_to_id: null,
+  body: 'finding',
+  created_at: '2026-01-02T00:00:00Z',
+  node_id: 'N10',
+  user: { login: 'Copilot' },
+  path: 'src/a.mts',
+  side: 'RIGHT',
+  original_line: 13,
+  pull_request_review_id: 2,
+};
+
+test('CLI --check: a compare lookup that finds the changed line classifies the finding nearPreviousPush', () => {
+  const result = runCheckWithFixture(
+    {
+      reviews: LOCALITY_CLI_REVIEWS(),
+      comments: [LOCALITY_CLI_FINDING],
+      compare: {
+        'a1...b2': [{ filename: 'src/a.mts', patch: CHANGED_SRC_PATCH }],
+      },
+    },
+    ['--check'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout) as {
+    reports: Array<{ findingLocality: { nearPreviousPush: number } }>;
+    summary: { findingLocality: { nearPreviousPush: number } };
+  };
+  assert.equal(parsed.reports[0]?.findingLocality.nearPreviousPush, 1);
+  assert.equal(parsed.summary.findingLocality.nearPreviousPush, 1);
+});
+
+test('CLI --check: a failed compare lookup makes the finding unknown and the run still exits 0', () => {
+  const result = runCheckWithFixture(
+    { reviews: LOCALITY_CLI_REVIEWS(), comments: [LOCALITY_CLI_FINDING] },
+    ['--check'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout) as {
+    reports: Array<{ findingLocality: { unknown: number } }>;
+  };
+  assert.equal(parsed.reports[0]?.findingLocality.unknown, 1);
 });
 
 test('CLI: --help exits 0 with no gh call', () => {
