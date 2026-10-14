@@ -256,11 +256,11 @@ At F4, skip the primary-worktree fetch/switch/merge and `git worktree
 remove` steps; let the harness reclaim it and finish the rest (issue
 close, digest, comment cleanup).
 
-Headroom (information only): from the worktree, run
-`node scripts/audit-docs.mjs --check --report` in the source repository,
-note its `report:` lines in the session notes, and change nothing
-(claim, route, or file) because of them. The same applies when B1
-skipped creation in a host-isolated worktree.
+Headroom (information only): in the source repository, run
+`node scripts/audit-docs.mjs --check --report`, note its `report:`
+lines in the session notes, and change nothing (claim, route, or file)
+because of them. Adopter sessions skip this step. The same applies when
+B1 skipped creation in a host-isolated worktree.
 
 ## B2 — Create and refine plan
 
