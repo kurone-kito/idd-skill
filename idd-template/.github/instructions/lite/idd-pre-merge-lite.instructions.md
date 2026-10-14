@@ -52,6 +52,9 @@ is standard-profile evidence and is not run here.
    - `"proceed-to-f2"`: the branch is conflict-free and, if branch protection
      requires an up-to-date head, already current — proceed to F2.
      `syncRecommendation` is detail only, so `"merge-base"` does not stop.
+     An UNSTABLE `clean` branch takes this route only when the helper lists at
+     least one non-passing head run and every such run is non-required and
+     `action_required` or `pending` (issue `#4209`); otherwise it holds.
    - `"retry"` (mergeability still computing, a transient state): re-run the
      helper after a short wait, up to 3 attempts; only a result still
      `"retry"` after that budget falls through to stop per the condition above.

@@ -14,14 +14,20 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mjs';
 import { loadTrustedIddConfig } from './idd-config.mjs';
-import { summarizeBranchCurrency } from './protocol-helpers.mjs';
+import {
+  isCompletedCiTimestamp,
+  selectLatestCheckInstance,
+  summarizeBranchCurrency,
+} from './protocol-helpers.mjs';
 import { createGithubProviderAdapter } from './provider-adapter-github.mjs';
 /**
  * Map a classified branch state to each call site's next step.
  *
- * `clean` proceeds only with `mergeStateStatus` CLEAN, which is F1's own
- * definition; the helper's `clean` alone also covers BLOCKED and UNSTABLE,
- * and those hold, as F1's "any other state" line requires.
+ * `clean` proceeds with `mergeStateStatus` CLEAN, which is F1's own
+ * definition. UNSTABLE (#4209) also proceeds, but only when every non-passing
+ * head run is non-required and still waiting (`action_required` or
+ * `pending`); an empty list holds. A BLOCKED or other non-CLEAN status holds,
+ * as F1's "any other state" line requires.
  * `requiresUpToDateHead` is always a boolean: an unreadable policy resolves
  * to `true` (see resolveRequiresUpToDateHead).
  */
@@ -29,9 +35,14 @@ export function resolveCallSiteRouting(
   branchState,
   mergeStateStatus,
   requiresUpToDateHead,
+  nonPassingRuns,
 ) {
   if (branchState === 'clean') {
-    return String(mergeStateStatus ?? '').toUpperCase() === 'CLEAN'
+    const status = String(mergeStateStatus ?? '').toUpperCase();
+    const proceeds =
+      status === 'CLEAN' ||
+      (status === 'UNSTABLE' && nonPassingRunsAllowProceed(nonPassingRuns));
+    return proceeds
       ? { eBranchSync: 'proceed-to-f1', e11: 'skip-merge', f1: 'proceed-to-f2' }
       : { eBranchSync: 'hold', e11: 'skip-merge', f1: 'hold' };
   }
@@ -59,6 +70,314 @@ export function resolveCallSiteRouting(
     return { eBranchSync: 'retry', e11: 'skip-merge', f1: 'retry' };
   }
   return { eBranchSync: 'hold', e11: 'skip-merge', f1: 'hold' };
+}
+/** Non-required waiting states an UNSTABLE clean branch may proceed past. */
+const UNSTABLE_PROCEED_STATES = new Set(['action_required', 'pending']);
+/**
+ * `CheckRun` statuses that have not completed yet (the GraphQL
+ * `CheckStatusState` values other than `COMPLETED`). Any other status is
+ * unrecognized and holds.
+ */
+const CHECK_RUN_WAITING_STATES = new Set([
+  'QUEUED',
+  'IN_PROGRESS',
+  'PENDING',
+  'REQUESTED',
+  'WAITING',
+]);
+/**
+ * `StatusContext` states the shared CI vocabulary treats as still pending
+ * (`CI_STATUS_CONTEXT_PENDING_STATES`), so they count as waiting.
+ */
+const STATUS_CONTEXT_PENDING_STATES = new Set([
+  'PENDING',
+  'EXPECTED',
+  'REQUESTED',
+]);
+/**
+ * Completed-run conclusions this parser recognizes: the passing set, plus the
+ * failure-side conclusions GitHub reports. Any other conclusion is unknown.
+ */
+const CHECK_RUN_KNOWN_CONCLUSIONS = new Set([
+  'SUCCESS',
+  'NEUTRAL',
+  'SKIPPED',
+  'NOT_APPLICABLE',
+  'ACTION_REQUIRED',
+  'CANCELLED',
+  'FAILURE',
+  'STALE',
+  'STARTUP_FAILURE',
+  'TIMED_OUT',
+]);
+/** Conclusions and states that count as passing, so they are not listed. */
+const PASSING_CHECK_CONCLUSIONS = new Set([
+  'SUCCESS',
+  'NEUTRAL',
+  'SKIPPED',
+  'NOT_APPLICABLE',
+]);
+/**
+ * #4209: every non-passing head run must be non-required and waiting. An
+ * empty list never proceeds, so an UNSTABLE branch with no visible reason
+ * still holds.
+ */
+export function nonPassingRunsAllowProceed(runs) {
+  return (
+    runs.length > 0 &&
+    runs.every((run) => !run.required && UNSTABLE_PROCEED_STATES.has(run.state))
+  );
+}
+/**
+ * Keep only the non-passing entries of a `statusCheckRollup` page. A
+ * `CheckRun` that has not completed is `pending`. A `StatusContext` in
+ * `PENDING` is `pending`. A missing `isRequired` and an unrecognized node
+ * both fail closed (`required: true`, or an `unknown` state that never
+ * proceeds).
+ */
+export function parseNonPassingRuns(nodes) {
+  const runs = [];
+  for (const node of nodes) {
+    const entry = node ?? {};
+    // Only an explicit `false` marks a run non-required; null or absent fails
+    // closed to required.
+    const required = entry.isRequired !== false;
+    if (entry.__typename === 'CheckRun') {
+      const status = String(entry.status ?? '').toUpperCase();
+      const conclusion = String(entry.conclusion ?? '').toUpperCase();
+      const name = String(entry.name ?? '');
+      if (status === 'COMPLETED') {
+        if (!PASSING_CHECK_CONCLUSIONS.has(conclusion)) {
+          runs.push({
+            name,
+            state: conclusion ? conclusion.toLowerCase() : 'unknown',
+            required,
+          });
+        }
+      } else if (CHECK_RUN_WAITING_STATES.has(status)) {
+        runs.push({ name, state: 'pending', required });
+      } else {
+        // An unrecognized status is not evidence of a waiting run, so it holds
+        // rather than counting as pending.
+        runs.push({ name, state: 'unknown', required });
+      }
+    } else if (entry.__typename === 'StatusContext') {
+      const state = String(entry.state ?? '').toUpperCase();
+      const name = String(entry.context ?? '');
+      if (state !== 'SUCCESS') {
+        runs.push({
+          name,
+          state: STATUS_CONTEXT_PENDING_STATES.has(state)
+            ? 'pending'
+            : state.toLowerCase() || 'unknown',
+          required,
+        });
+      }
+    } else {
+      runs.push({ name: '', state: 'unknown', required: true });
+    }
+  }
+  return runs;
+}
+/**
+ * #4209: turn the GraphQL `repository.object` payload for the head commit
+ * into the non-passing run list. Fails closed to an empty list (which holds)
+ * on a missing commit, a SHA that is not the pinned head, a missing rollup,
+ * or a rollup with more contexts than the one page this reads.
+ */
+export function parseHeadRollup(object, headSha) {
+  const failClosed = (reason) => ({
+    runs: [],
+    notes: [
+      `UNSTABLE non-passing run list unavailable (${reason}); holding at F1.`,
+    ],
+  });
+  const commit = object ?? null;
+  if (!commit || typeof commit.oid !== 'string') {
+    return failClosed('head commit not found');
+  }
+  if (commit.oid.toLowerCase() !== headSha.toLowerCase()) {
+    return failClosed('head commit does not match the pinned head SHA');
+  }
+  const contexts = commit.statusCheckRollup?.contexts;
+  if (!contexts || !Array.isArray(contexts.nodes)) {
+    return failClosed('no status check rollup');
+  }
+  // The count must be a real integer that equals the page read. A missing,
+  // NaN, or smaller count is inconsistent evidence; a larger one means the
+  // rollup spans more than the single page this reads.
+  const total = contexts.totalCount;
+  const pageLength = contexts.nodes.length;
+  if (typeof total !== 'number' || !Number.isInteger(total)) {
+    return failClosed('rollup count is missing');
+  }
+  if (total > pageLength) {
+    return failClosed('rollup has more contexts than one page');
+  }
+  if (total !== pageLength) {
+    return failClosed('rollup count does not match its page');
+  }
+  return {
+    runs: parseNonPassingRuns(latestInstancePerName(contexts.nodes)),
+    notes: [],
+  };
+}
+/**
+ * The producer of a check run: its GitHub App, and the Actions workflow when
+ * one made it. Runs that share a display name but come from different
+ * producers are not reruns of each other, so the grouping key keeps them
+ * apart. Only the producer's own identity is used here, not its name.
+ */
+function checkRunProducerKey(entry) {
+  const suite = entry.checkSuite ?? {};
+  const app = suite.app?.databaseId ?? suite.app?.slug ?? '';
+  const workflow =
+    suite.workflowRun?.workflow?.databaseId ??
+    suite.workflowRun?.workflow?.name ??
+    '';
+  return `${String(app)}|${String(workflow)}`;
+}
+/**
+ * Keep only the latest instance of each check run, per name and producer. A
+ * rerun can leave an earlier instance in the rollup beside the current one,
+ * and the required-check gate governs by the latest instance, so a stale
+ * failure must not hold a current waiting run.
+ *
+ * Only a check run whose producer is identified (its App or its workflow) is
+ * ever merged with a same-named run. GraphQL gives a status context no
+ * producer identity, and a check run without one cannot be attributed, so
+ * each of those is kept and judged on its own. A stale entry from either
+ * then holds, which fails closed. Within a merged group, an entry whose order
+ * cannot be proven keeps every instance of that group. The tie-break is the
+ * shared `selectLatestCheckInstance`, the same reducer the required-check gate
+ * uses.
+ */
+function latestInstancePerName(nodes) {
+  const groups = new Map();
+  nodes.forEach((node, index) => {
+    const entry = node ?? {};
+    const isCheckRun = entry.__typename === 'CheckRun';
+    const name = String(isCheckRun ? entry.name : '');
+    const producer = isCheckRun ? checkRunProducerKey(entry) : '|';
+    const mergeable = name !== '' && producer !== '|';
+    const key = mergeable
+      ? `CheckRun:${name}:${producer}`
+      : `unmerged:${index}`;
+    const completed = String(entry.status ?? '').toUpperCase() === 'COMPLETED';
+    const state = isCheckRun
+      ? completed
+        ? String(entry.conclusion ?? '').toUpperCase()
+        : String(entry.status ?? '').toUpperCase()
+      : String(entry.state ?? '').toUpperCase();
+    const completedAt =
+      isCheckRun && completed ? String(entry.completedAt ?? '') || null : null;
+    // A live check run that has not completed is the newest instance by
+    // definition, and a completed one needs a valid timestamp to be ordered.
+    // An unrecognized status or conclusion is never ordered: it parses as
+    // unknown and holds, so it must not be allowed to hide another instance.
+    const recognized = isCheckRun
+      ? completed
+        ? CHECK_RUN_KNOWN_CONCLUSIONS.has(
+            String(entry.conclusion ?? '').toUpperCase(),
+          )
+        : CHECK_RUN_WAITING_STATES.has(String(entry.status ?? '').toUpperCase())
+      : true;
+    const orderable =
+      recognized &&
+      ((isCheckRun && !completed) || isCompletedCiTimestamp(completedAt));
+    const group = groups.get(key) ?? [];
+    group.push({ node, state, completedAt, orderable });
+    groups.set(key, group);
+  });
+  const latest = [];
+  for (const group of groups.values()) {
+    if (group.length > 1 && group.some((member) => !member.orderable)) {
+      // An entry whose order cannot be proven must not hide another instance,
+      // so keep every instance of that name and let each one be judged.
+      for (const member of group) latest.push(member.node);
+    } else {
+      latest.push(selectLatestCheckInstance(group).node);
+    }
+  }
+  return latest;
+}
+const HEAD_ROLLUP_QUERY = `query($owner: String!, $repo: String!, $oid: GitObjectID!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    object(oid: $oid) {
+      __typename
+      ... on Commit {
+        oid
+        statusCheckRollup {
+          contexts(first: 100) {
+            totalCount
+            nodes {
+              __typename
+              ... on CheckRun {
+                name status conclusion completedAt
+                isRequired(pullRequestNumber: $number)
+                checkSuite { app { databaseId slug } workflowRun { workflow { databaseId name } } }
+              }
+              ... on StatusContext { context state isRequired(pullRequestNumber: $number) }
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+/**
+ * Read the head commit's check rollup live, pinned to `headSha`, and return
+ * its non-passing runs. Any read or parse failure yields an empty list plus a
+ * note, so the UNSTABLE branch holds rather than guessing.
+ */
+function fetchNonPassingRuns(owner, repo, prNumber, headSha) {
+  let raw;
+  try {
+    raw = ghText([
+      'api',
+      'graphql',
+      '-f',
+      `query=${HEAD_ROLLUP_QUERY}`,
+      // -f keeps owner, repo, and oid as raw strings. -F would type an
+      // all-digit value as an integer, which GraphQL rejects.
+      '-f',
+      `owner=${owner}`,
+      '-f',
+      `repo=${repo}`,
+      '-f',
+      `oid=${headSha}`,
+      '-F',
+      `number=${Number(prNumber)}`,
+    ]);
+  } catch (error) {
+    return {
+      runs: [],
+      notes: [
+        `UNSTABLE non-passing run list unavailable (gh api graphql failed: ${error instanceof Error ? error.message : String(error)}); holding at F1.`,
+      ],
+    };
+  }
+  let object;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed.errors?.length) {
+      return {
+        runs: [],
+        notes: [
+          'UNSTABLE non-passing run list unavailable (GraphQL errors); holding at F1.',
+        ],
+      };
+    }
+    object = parsed.data?.repository?.object ?? null;
+  } catch {
+    return {
+      runs: [],
+      notes: [
+        'UNSTABLE non-passing run list unavailable (unparseable response); holding at F1.',
+      ],
+    };
+  }
+  return parseHeadRollup(object, headSha);
 }
 /**
  * Read `ciGate.trustEmptyProtectionReads` through the same trusted-ref loader
@@ -277,8 +596,14 @@ async function main() {
   return 0;
 }
 export async function classifyBranchConflictState(prNumber, options = {}) {
-  const { owner, repo, _testPrData, _testRequiresUpToDateHead, _skipGitProbe } =
-    options;
+  const {
+    owner,
+    repo,
+    _testPrData,
+    _testRequiresUpToDateHead,
+    _testNonPassingRuns,
+    _skipGitProbe,
+  } = options;
   const notes = [];
   const prData = _testPrData ?? fetchPrData(owner, repo, prNumber);
   const prHeadSha = String(prData.headRefOid ?? '');
@@ -300,7 +625,7 @@ export async function classifyBranchConflictState(prNumber, options = {}) {
       branchState: 'unknown',
       syncRecommendation: 'hold-unknown',
       baseAdvancedSinceMergeBase: false,
-      callSiteRouting: resolveCallSiteRouting('unknown', null, true),
+      callSiteRouting: resolveCallSiteRouting('unknown', null, true, []),
       readOnly: true,
       worktreeUnchanged: true,
       diagnostics: {
@@ -346,6 +671,45 @@ export async function classifyBranchConflictState(prNumber, options = {}) {
             String(repo ?? ''),
             prBaseRef,
           ));
+  // #4209: an UNSTABLE clean branch proceeds only past non-required, waiting
+  // head runs, so the run list is read live, pinned to prHeadSha, for that
+  // state alone. Injected PR data stays offline; with no injected list it
+  // holds on an empty list.
+  const unstableClean =
+    branchState === 'clean' &&
+    String(mergeStateStatus ?? '').toUpperCase() === 'UNSTABLE';
+  let nonPassingRuns = [];
+  if (unstableClean) {
+    let fetchFailed = false;
+    if (_testNonPassingRuns) {
+      nonPassingRuns = _testNonPassingRuns;
+    } else if (!_testPrData) {
+      const fetched = fetchNonPassingRuns(
+        String(owner ?? ''),
+        String(repo ?? ''),
+        prNumber,
+        prHeadSha,
+      );
+      nonPassingRuns = fetched.runs;
+      fetchFailed = fetched.notes.length > 0;
+      notes.push(...fetched.notes);
+    }
+    if (nonPassingRuns.length === 0 && !fetchFailed) {
+      notes.push(
+        'UNSTABLE clean head: no non-passing head run is visible; holding at F1.',
+      );
+    }
+    if (nonPassingRuns.length > 0) {
+      notes.push(
+        `UNSTABLE clean head: non-passing runs ${nonPassingRuns
+          .map(
+            (run) =>
+              `${run.name} (${run.state}, ${run.required ? 'required' : 'non-required'})`,
+          )
+          .join('; ')}.`,
+      );
+    }
+  }
   return {
     protocolVersion: '1',
     prNumber: Number(prNumber),
@@ -361,6 +725,7 @@ export async function classifyBranchConflictState(prNumber, options = {}) {
       branchState,
       mergeStateStatus,
       requiresUpToDateHead,
+      nonPassingRuns,
     ),
     readOnly: true,
     worktreeUnchanged: true,

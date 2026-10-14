@@ -8,9 +8,12 @@ import { test } from 'node:test';
 import {
   classifyBranchConflictState,
   MERGE_BASE_FETCH_STEPS,
+  type NonPassingRun,
   parseArgs,
   parseConflictFiles,
   parseGitFetchOrigin,
+  parseHeadRollup,
+  parseNonPassingRuns,
   readTrustEmptyProtectionReads,
   resolveCallSiteRouting,
   resolveFetchAttemptTimeoutMs,
@@ -1159,7 +1162,6 @@ test('resolveCallSiteRouting: one row per routing-table state', () => {
     ['clean', 'CLEAN', true, proceed],
     ['clean', 'CLEAN', false, proceed],
     ['clean', 'BLOCKED', false, hold],
-    ['clean', 'UNSTABLE', true, hold],
     ['clean', null, false, hold],
     ['behind-no-conflict', 'BEHIND', false, proceed],
     [
@@ -1194,11 +1196,512 @@ test('resolveCallSiteRouting: one row per routing-table state', () => {
   ];
   for (const [state, status, requires, expected] of rows) {
     assert.deepEqual(
-      resolveCallSiteRouting(state, status, requires as boolean),
+      resolveCallSiteRouting(state, status, requires as boolean, []),
       expected,
       `${state} / ${String(status)} / requiresUpToDateHead=${requires}`,
     );
   }
+});
+
+// #4209: UNSTABLE is conflict-free but not CLEAN. F1 proceeds only when every
+// non-passing head run is non-required and still waiting; anything else holds.
+test('resolveCallSiteRouting: UNSTABLE proceeds only past non-required waiting runs', () => {
+  const proceed = {
+    eBranchSync: 'proceed-to-f1',
+    e11: 'skip-merge',
+    f1: 'proceed-to-f2',
+  };
+  const hold = { eBranchSync: 'hold', e11: 'skip-merge', f1: 'hold' };
+  const run = (state: string, required = false): NonPassingRun => ({
+    name: 'companion',
+    state,
+    required,
+  });
+  const cases: [string, NonPassingRun[], unknown][] = [
+    ['only non-required action_required', [run('action_required')], proceed],
+    ['only non-required pending', [run('pending')], proceed],
+    ['only non-required failure', [run('failure')], hold],
+    ['failing required run', [run('failure', true)], hold],
+    ['empty list', [], hold],
+    [
+      'waiting run plus a required pending run',
+      [run('action_required'), run('pending', true)],
+      hold,
+    ],
+  ];
+  for (const [label, runs, expected] of cases) {
+    assert.deepEqual(
+      resolveCallSiteRouting('clean', 'UNSTABLE', true, runs),
+      expected,
+      label,
+    );
+  }
+  assert.deepEqual(
+    resolveCallSiteRouting('clean', 'UNSTABLE', true, [run('action_required')]),
+    proceed,
+  );
+  assert.deepEqual(resolveCallSiteRouting('clean', 'CLEAN', true, []), proceed);
+});
+
+test('parseNonPassingRuns: keeps only non-passing runs and fails closed', () => {
+  const runs = parseNonPassingRuns([
+    {
+      __typename: 'CheckRun',
+      name: 'lint',
+      status: 'COMPLETED',
+      conclusion: 'SUCCESS',
+      isRequired: true,
+    },
+    {
+      __typename: 'CheckRun',
+      name: 'IDD advisory-convergence comment refresh',
+      status: 'COMPLETED',
+      conclusion: 'ACTION_REQUIRED',
+      isRequired: false,
+    },
+    {
+      __typename: 'CheckRun',
+      name: 'queued-run',
+      status: 'QUEUED',
+      conclusion: null,
+      isRequired: false,
+    },
+    {
+      __typename: 'StatusContext',
+      context: 'CodeRabbit',
+      state: 'SUCCESS',
+      isRequired: false,
+    },
+    {
+      __typename: 'StatusContext',
+      context: 'expected-check',
+      state: 'EXPECTED',
+      isRequired: null,
+    },
+    {
+      __typename: 'StatusContext',
+      context: 'requested-check',
+      state: 'REQUESTED',
+      isRequired: false,
+    },
+    {
+      __typename: 'CheckRun',
+      name: 'Windows platform tests',
+      status: 'COMPLETED',
+      conclusion: 'FAILURE',
+      isRequired: false,
+    },
+    {
+      __typename: 'CheckRun',
+      name: 'not-applicable-run',
+      status: 'COMPLETED',
+      conclusion: 'NOT_APPLICABLE',
+      isRequired: false,
+    },
+    {
+      __typename: 'CheckRun',
+      name: 'odd-status',
+      status: 'SOMETHING_NEW',
+      conclusion: null,
+      isRequired: false,
+    },
+    { __typename: 'Mystery' },
+  ]);
+  assert.deepEqual(runs, [
+    {
+      name: 'IDD advisory-convergence comment refresh',
+      state: 'action_required',
+      required: false,
+    },
+    { name: 'queued-run', state: 'pending', required: false },
+    { name: 'expected-check', state: 'pending', required: true },
+    { name: 'requested-check', state: 'pending', required: false },
+    { name: 'Windows platform tests', state: 'failure', required: false },
+    { name: 'odd-status', state: 'unknown', required: false },
+    { name: '', state: 'unknown', required: true },
+  ]);
+});
+
+test('parseHeadRollup: fails closed unless the pinned head and full rollup match', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const contexts = (totalCount: number, nodes: unknown[]) => ({
+    oid: sha,
+    statusCheckRollup: { contexts: { totalCount, nodes } },
+  });
+  const waiting = {
+    __typename: 'CheckRun',
+    name: 'refresh',
+    status: 'COMPLETED',
+    conclusion: 'ACTION_REQUIRED',
+    isRequired: false,
+  };
+  assert.deepEqual(parseHeadRollup(contexts(1, [waiting]), sha), {
+    runs: [{ name: 'refresh', state: 'action_required', required: false }],
+    notes: [],
+  });
+  const hold = (object: unknown) => parseHeadRollup(object, sha).runs;
+  assert.deepEqual(hold(null), []);
+  assert.deepEqual(
+    hold({ ...contexts(1, [waiting]), oid: 'f'.repeat(40) }),
+    [],
+  );
+  assert.deepEqual(hold({ oid: sha, statusCheckRollup: null }), []);
+  assert.deepEqual(hold(contexts(101, [waiting])), []);
+  // A zero, NaN, or missing count is inconsistent with the page, so it holds.
+  assert.deepEqual(hold(contexts(0, [waiting])), []);
+  assert.deepEqual(hold(contexts(Number.NaN, [waiting])), []);
+  assert.deepEqual(
+    hold({ oid: sha, statusCheckRollup: { contexts: { nodes: [waiting] } } }),
+    [],
+  );
+  assert.match(
+    parseHeadRollup(null, sha).notes[0] ?? '',
+    /UNSTABLE non-passing run list unavailable/,
+  );
+});
+
+// #4209 review: a rerun can leave the stale instance in the rollup beside the
+// current one. Only the latest instance of each name governs.
+test('parseHeadRollup: judges only the latest instance of each check name', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const run = (
+    name: string,
+    status: string,
+    conclusion: string | null,
+    completedAt: string | null,
+  ) => ({
+    __typename: 'CheckRun',
+    name,
+    status,
+    conclusion,
+    completedAt,
+    isRequired: false,
+    checkSuite: {
+      app: { databaseId: 15368, slug: 'github-actions' },
+      workflowRun: { workflow: { databaseId: 1, name: 'CI' } },
+    },
+  });
+  const nodes = [
+    run('refresh', 'COMPLETED', 'FAILURE', '2026-10-14T08:00:00Z'),
+    run('refresh', 'COMPLETED', 'ACTION_REQUIRED', '2026-10-14T09:00:00Z'),
+    run('lint', 'COMPLETED', 'FAILURE', '2026-10-14T08:00:00Z'),
+    run('lint', 'COMPLETED', 'SUCCESS', '2026-10-14T09:00:00Z'),
+    run('rerun-pending', 'COMPLETED', 'FAILURE', '2026-10-14T08:00:00Z'),
+    run('rerun-pending', 'QUEUED', null, null),
+  ];
+  const object = {
+    oid: sha,
+    statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } },
+  };
+  assert.deepEqual(parseHeadRollup(object, sha).runs, [
+    { name: 'refresh', state: 'action_required', required: false },
+    { name: 'rerun-pending', state: 'pending', required: false },
+  ]);
+});
+
+// #4209 review: same-named runs from different producers are not reruns of
+// each other, so a stale failure from one workflow must not hide the other.
+test('parseHeadRollup: keeps same-named check runs from different producers apart', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const producer = (workflowId: number, workflow: string) => ({
+    app: { databaseId: 15368, slug: 'github-actions' },
+    workflowRun: { workflow: { databaseId: workflowId, name: workflow } },
+  });
+  const nodes = [
+    {
+      __typename: 'CheckRun',
+      name: 'shared',
+      status: 'COMPLETED',
+      conclusion: 'FAILURE',
+      completedAt: '2026-10-14T08:00:00Z',
+      isRequired: false,
+      checkSuite: producer(101, 'ci-a'),
+    },
+    {
+      __typename: 'CheckRun',
+      name: 'shared',
+      status: 'COMPLETED',
+      conclusion: 'ACTION_REQUIRED',
+      completedAt: '2026-10-14T09:00:00Z',
+      isRequired: false,
+      checkSuite: producer(202, 'ci-b'),
+    },
+  ];
+  assert.deepEqual(
+    parseHeadRollup(
+      {
+        oid: sha,
+        statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } },
+      },
+      sha,
+    ).runs,
+    [
+      { name: 'shared', state: 'failure', required: false },
+      { name: 'shared', state: 'action_required', required: false },
+    ],
+  );
+});
+
+// A re-posted status context has no producer identity in GraphQL, so the
+// older state is kept beside the newer one and judged on its own. A stale
+// failure then holds, which fails closed.
+test('parseHeadRollup: keeps every re-posted status context', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const nodes = [
+    {
+      __typename: 'StatusContext',
+      context: 'legacy',
+      state: 'FAILURE',
+      isRequired: false,
+    },
+    {
+      __typename: 'StatusContext',
+      context: 'legacy',
+      state: 'PENDING',
+      isRequired: false,
+    },
+  ];
+  assert.deepEqual(
+    parseHeadRollup(
+      {
+        oid: sha,
+        statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } },
+      },
+      sha,
+    ).runs,
+    [
+      { name: 'legacy', state: 'failure', required: false },
+      { name: 'legacy', state: 'pending', required: false },
+    ],
+  );
+});
+
+// A check run with no App or workflow identity cannot be attributed to a
+// producer, so same-named runs without one are never merged.
+test('parseHeadRollup: keeps same-named check runs without a producer apart', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const nodes = [
+    {
+      __typename: 'CheckRun',
+      name: 'shared',
+      status: 'COMPLETED',
+      conclusion: 'FAILURE',
+      completedAt: '2026-10-14T08:00:00Z',
+      isRequired: false,
+    },
+    {
+      __typename: 'CheckRun',
+      name: 'shared',
+      status: 'COMPLETED',
+      conclusion: 'ACTION_REQUIRED',
+      completedAt: '2026-10-14T09:00:00Z',
+      isRequired: false,
+    },
+  ];
+  assert.deepEqual(
+    parseHeadRollup(
+      {
+        oid: sha,
+        statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } },
+      },
+      sha,
+    ).runs,
+    [
+      { name: 'shared', state: 'failure', required: false },
+      { name: 'shared', state: 'action_required', required: false },
+    ],
+  );
+});
+
+// #4209 review: the same status context name from two creators must not
+// collapse, or a stale failure from one creator could hide the other's run.
+test('parseHeadRollup: keeps the same status context name from two creators apart', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const nodes = [
+    {
+      __typename: 'StatusContext',
+      context: 'shared',
+      state: 'FAILURE',
+      createdAt: '2026-10-14T08:00:00Z',
+      creator: { login: 'bot-a' },
+      isRequired: false,
+    },
+    {
+      __typename: 'StatusContext',
+      context: 'shared',
+      state: 'PENDING',
+      createdAt: '2026-10-14T09:00:00Z',
+      creator: { login: 'bot-b' },
+      isRequired: false,
+    },
+  ];
+  assert.deepEqual(
+    parseHeadRollup(
+      {
+        oid: sha,
+        statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } },
+      },
+      sha,
+    ).runs,
+    [
+      { name: 'shared', state: 'failure', required: false },
+      { name: 'shared', state: 'pending', required: false },
+    ],
+  );
+});
+
+// A status context with no creator cannot be attributed to one producer, so
+// it keeps its own slot instead of collapsing with a same-named entry.
+test('parseHeadRollup: keeps status contexts without a creator apart', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const nodes = [
+    {
+      __typename: 'StatusContext',
+      context: 'orphan',
+      state: 'FAILURE',
+      createdAt: '2026-10-14T08:00:00Z',
+      creator: null,
+      isRequired: false,
+    },
+    {
+      __typename: 'StatusContext',
+      context: 'orphan',
+      state: 'PENDING',
+      createdAt: '2026-10-14T09:00:00Z',
+      creator: null,
+      isRequired: false,
+    },
+  ];
+  assert.deepEqual(
+    parseHeadRollup(
+      {
+        oid: sha,
+        statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } },
+      },
+      sha,
+    ).runs,
+    [
+      { name: 'orphan', state: 'failure', required: false },
+      { name: 'orphan', state: 'pending', required: false },
+    ],
+  );
+});
+
+// #4209 review: a completed rerun whose completion time cannot be read must
+// not hide the older failure it may supersede. Every instance is kept.
+test('parseHeadRollup: keeps every instance when a completed rerun has no valid timestamp', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const nodes = [
+    {
+      __typename: 'CheckRun',
+      name: 'refresh',
+      status: 'COMPLETED',
+      conclusion: 'FAILURE',
+      completedAt: '2026-10-14T08:00:00Z',
+      isRequired: false,
+      checkSuite: {
+        app: { databaseId: 15368, slug: 'github-actions' },
+        workflowRun: { workflow: { databaseId: 1, name: 'CI' } },
+      },
+    },
+    {
+      __typename: 'CheckRun',
+      name: 'refresh',
+      status: 'COMPLETED',
+      conclusion: 'SUCCESS',
+      completedAt: 'not-a-time',
+      isRequired: false,
+      checkSuite: {
+        app: { databaseId: 15368, slug: 'github-actions' },
+        workflowRun: { workflow: { databaseId: 1, name: 'CI' } },
+      },
+    },
+  ];
+  assert.deepEqual(
+    parseHeadRollup(
+      {
+        oid: sha,
+        statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } },
+      },
+      sha,
+    ).runs,
+    [{ name: 'refresh', state: 'failure', required: false }],
+  );
+});
+
+// #4209 review: an unrecognized status is never ordered, so it cannot be
+// hidden by a newer waiting run of the same name and producer.
+test('parseHeadRollup: keeps an unrecognized check state beside a waiting run of its name', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const checkSuite = {
+    app: { databaseId: 15368, slug: 'github-actions' },
+    workflowRun: { workflow: { databaseId: 1, name: 'CI' } },
+  };
+  const nodes = [
+    {
+      __typename: 'CheckRun',
+      name: 'shared',
+      status: 'SOMETHING_NEW',
+      conclusion: null,
+      isRequired: false,
+      checkSuite,
+    },
+    {
+      __typename: 'CheckRun',
+      name: 'shared',
+      status: 'QUEUED',
+      conclusion: null,
+      isRequired: false,
+      checkSuite,
+    },
+  ];
+  assert.deepEqual(
+    parseHeadRollup(
+      {
+        oid: sha,
+        statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } },
+      },
+      sha,
+    ).runs,
+    [
+      { name: 'shared', state: 'unknown', required: false },
+      { name: 'shared', state: 'pending', required: false },
+    ],
+  );
+});
+
+test('classifyBranchConflictState: UNSTABLE routing reads the injected run list', async () => {
+  const fixture = loadFixture('clean');
+  const base = {
+    owner: 'test-owner',
+    repo: 'test-repo',
+    _testPrData: { ...fixture.prData, mergeStateStatus: 'UNSTABLE' },
+    _testRequiresUpToDateHead: false,
+    _skipGitProbe: true,
+  };
+  const waiting: NonPassingRun[] = [
+    { name: 'refresh', state: 'action_required', required: false },
+  ];
+  const proceed = await classifyBranchConflictState(fixture.prData.number, {
+    ...base,
+    _testNonPassingRuns: waiting,
+  });
+  assert.equal(proceed.callSiteRouting.f1, 'proceed-to-f2');
+  assert.equal(proceed.callSiteRouting.eBranchSync, 'proceed-to-f1');
+  const held = await classifyBranchConflictState(fixture.prData.number, {
+    ...base,
+    _testNonPassingRuns: [],
+  });
+  assert.equal(held.callSiteRouting.f1, 'hold');
+  assert.match(
+    held.diagnostics.notes.join('\n'),
+    /no non-passing head run is visible/,
+  );
+  const offline = await classifyBranchConflictState(
+    fixture.prData.number,
+    base,
+  );
+  assert.equal(offline.callSiteRouting.f1, 'hold');
 });
 
 test('classifyBranchConflictState: callSiteRouting follows the injected policy input', async () => {
