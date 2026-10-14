@@ -58,6 +58,7 @@ scripts/e10-recurrence.mjs linguist-generated=true
 scripts/effort.mjs linguist-generated=true
 scripts/emit-marker.mjs linguist-generated=true
 scripts/external-check-waiver.mjs linguist-generated=true
+scripts/f4-head-proof-verdict.mjs linguist-generated=true
 scripts/f4-head-proof.mjs linguist-generated=true
 scripts/force-handoff.mjs linguist-generated=true
 scripts/forced-handoff-marker.mjs linguist-generated=true
