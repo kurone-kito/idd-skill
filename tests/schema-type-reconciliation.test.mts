@@ -1937,6 +1937,7 @@ const resolveReviewThreadKeys = [
   'status',
   'replyId',
   'error',
+  'triage',
 ] as const satisfies readonly (keyof ResolveReviewThreadReport)[];
 
 const resolveReviewThreadFixture = {

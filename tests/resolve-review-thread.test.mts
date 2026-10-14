@@ -3744,6 +3744,201 @@ test('record mode prints one verdict line on an apply and posts it (#4187)', () 
   assert.equal(JSON.parse(run.stdout).body, run.posted[0]);
 });
 
+// #4188: the compute-only triage mode, run through the compiled CLI with a
+// valid --pr and a score flag, and no target, no --body, and no --apply.
+const COMPUTE_ONLY_ARGS = ['--pr', '42', '--owner', 'o', '--repo', 'r'];
+
+/**
+ * Assert a compute-only run posted nothing and made only the expected `gh`
+ * calls. `routes` lists the substrings that may appear, so an empty list means
+ * the run made no call at all.
+ */
+function assertComputeOnlyCalls(run: TriageRun, routes: string[]): void {
+  assert.deepEqual(run.posted, []);
+  for (const call of run.calls) {
+    const joined = call.join(' ');
+    assert.equal(call.includes('POST'), false, joined);
+    assert.equal(joined.includes('graphql'), false, joined);
+    assert.equal(joined.includes('/issues/'), false, joined);
+    assert.equal(joined.includes('/comments'), false, joined);
+    assert.ok(
+      routes.some((route) => joined.includes(route)),
+      `unexpected gh call: ${joined}`,
+    );
+  }
+}
+
+test('compute-only triage prints the value a reply would carry and posts nothing (#4188)', () => {
+  const run = runTriageApply(
+    [...COMPUTE_ONLY_ARGS, '--tier', 'low', '--urgency', 'medium'],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(7),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stderr, '');
+  assert.deepEqual(JSON.parse(run.stdout), {
+    mode: 'triage',
+    prNumber: 42,
+    triage: 'Triage: tier low; urgency medium; step 2; verdict defer',
+  });
+  assertComputeOnlyCalls(run, ['/pulls/42/reviews']);
+  assert.equal(run.calls.length, 1);
+});
+
+test('compute-only triage keeps a high finding at step 0 with the matrix block (#4188)', () => {
+  const run = runTriageApply(
+    [...COMPUTE_ONLY_ARGS, '--tier', 'high', '--urgency', 'high'],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(2),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(
+    JSON.parse(run.stdout).triage,
+    'Triage: tier high; urgency high; step 0; verdict keep; blocked matrix',
+  );
+  assertComputeOnlyCalls(run, ['/pulls/42/reviews']);
+});
+
+test('compute-only triage under deferByUrgency low has step 0, no verdict, and reads no reviews (#4188)', () => {
+  const run = runTriageApply(
+    [...COMPUTE_ONLY_ARGS, '--tier', 'low', '--urgency', 'medium'],
+    { critiqueLoop: { deferByUrgency: 'low', deferRelaxAtRounds: [4, 7] } },
+    triageReviewRows(7),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  const { triage } = JSON.parse(run.stdout) as { triage: string };
+  assert.equal(triage, 'Triage: tier low; urgency medium; step 0');
+  assertComputeOnlyCalls(run, []);
+});
+
+test('compute-only triage with --lite has step 0 and reads no reviews (#4188)', () => {
+  const run = runTriageApply(
+    [...COMPUTE_ONLY_ARGS, '--tier', 'low', '--urgency', 'medium', '--lite'],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(9),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(
+    JSON.parse(run.stdout).triage,
+    'Triage: tier low; urgency medium; step 0; verdict defer',
+  );
+  assertComputeOnlyCalls(run, []);
+});
+
+test('compute-only triage refuses --override as a usage error and posts nothing (#4188)', () => {
+  const run = runTriageApply(
+    [
+      ...COMPUTE_ONLY_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'medium',
+      '--override',
+      'why',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(7),
+    { IDD_HELPER_ERROR_ENVELOPE: '1' },
+  );
+  assert.equal(run.status, 1, run.stderr);
+  assert.equal(envelopeKind(run.stderr), 'usage');
+  assert.equal(run.stdout, '');
+  assertComputeOnlyCalls(run, []);
+});
+
+test('compute-only triage names a lone --tier as a usage error (#4188)', () => {
+  const run = runTriageApply(
+    [...COMPUTE_ONLY_ARGS, '--tier', 'low'],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(7),
+    { IDD_HELPER_ERROR_ENVELOPE: '1' },
+  );
+  assert.equal(run.status, 1, run.stderr);
+  assert.equal(envelopeKind(run.stderr), 'usage');
+  assert.match(run.stderr, /--tier and --urgency must be given together/u);
+  assert.equal(run.stdout, '');
+  assert.deepEqual(run.calls, []);
+});
+
+test('compute-only triage refuses --path-b with a score as a usage error (#4188)', () => {
+  const run = runTriageApply(
+    [...COMPUTE_ONLY_ARGS, '--tier', 'low', '--urgency', 'medium', '--path-b'],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(7),
+    { IDD_HELPER_ERROR_ENVELOPE: '1' },
+  );
+  assert.equal(run.status, 1, run.stderr);
+  assert.equal(envelopeKind(run.stderr), 'usage');
+  assert.equal(run.stdout, '');
+  assertComputeOnlyCalls(run, []);
+});
+
+test('compute-only triage refuses an --advisory-converged sha that is not the head (#4188)', () => {
+  const run = runTriageApply(
+    [
+      ...COMPUTE_ONLY_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'medium',
+      '--advisory-converged',
+      '0000000',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(7),
+    { IDD_HELPER_ERROR_ENVELOPE: '1' },
+  );
+  assert.equal(run.status, 1, run.stderr);
+  assert.equal(envelopeKind(run.stderr), 'usage');
+  assert.equal(run.stdout, '');
+  assert.equal(run.posted.length, 0);
+});
+
+test('a target-less call with no score flag still prints the usage (#4188)', () => {
+  const run = runTriageApply(
+    COMPUTE_ONLY_ARGS,
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(7),
+  );
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stdout, /^usage: node scripts\/resolve-review-thread/u);
+  assert.deepEqual(run.calls, []);
+});
+
+test('the compute-only output validates against the result schema, and a bare triage object does not (#4188)', () => {
+  const run = runTriageApply(
+    [...COMPUTE_ONLY_ARGS, '--tier', 'low', '--urgency', 'medium'],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(7),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(validate(JSON.parse(run.stdout), resultSchema).length, 0);
+  assert.equal(
+    validate(
+      {
+        mode: 'dry-run',
+        prNumber: 42,
+        commentId: 1001,
+        alreadyResolved: false,
+      },
+      resultSchema,
+    ).length,
+    0,
+    'dry-run output',
+  );
+  assert.ok(
+    validate({ mode: 'triage', prNumber: 42 }, resultSchema).length > 0,
+    'a triage object with no triage value',
+  );
+  assert.ok(
+    validate(
+      { mode: 'triage', prNumber: 42, triage: 'Triage: x', commentId: 1001 },
+      resultSchema,
+    ).length > 0,
+    'a triage object that names a thread target',
+  );
+});
+
 test('record mode reads the reviews once on an apply, since only enforce refuses (#4187)', () => {
   const run = runTriageApply(
     [

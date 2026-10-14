@@ -37,14 +37,28 @@
         "error": {}
       },
       "additionalProperties": false
+    },
+    {
+      "description": "Compute-only triage (no target).",
+      "required": ["triage"],
+      "properties": {
+        "mode": {},
+        "prNumber": {},
+        "triage": {}
+      },
+      "additionalProperties": false
     }
   ],
   "additionalProperties": false,
   "properties": {
     "mode": {
       "type": "string",
-      "enum": ["dry-run", "apply"],
-      "description": "Whether the helper planned or performed the reply-and-resolve operation."
+      "enum": ["dry-run", "apply", "triage"],
+      "description": "Whether the helper planned or performed the reply-and-resolve operation, or computed a triage value without posting (triage)."
+    },
+    "triage": {
+      "type": "string",
+      "description": "Compute-only triage mode: the Triage line a reply with the same flags would carry. Set only when mode is triage."
     },
     "prNumber": {
       "type": "integer",
