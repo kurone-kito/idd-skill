@@ -3392,6 +3392,16 @@ function checkEffortLReady(
       'not applicable: a roadmap is not checked against the effort L policy',
     );
   }
+  // A draft carrier is outside the orphan-and-child scope this check
+  // documents, and carrier-forbidden-markers already rejects an effort marker
+  // on one, so the unreadable-config failure does not reach it (#4282).
+  if (unreadableConfigPath !== undefined && shape === 'carrier') {
+    return pass(
+      id,
+      name,
+      'not applicable: a draft carrier is outside the effort L scope (orphan and child bodies only)',
+    );
+  }
   // An explicit --config that could not be read may be the file that refuses
   // effort L, so it is not treated as allow (#4282).
   if (effortLPolicy !== 'refuse' && unreadableConfigPath === undefined) {
