@@ -186,18 +186,21 @@ export function resolveThreadDisposition(findingId, comments) {
 const TRIAGE_URGENCIES = ['very-low', 'low', 'medium', 'high'];
 const TRIAGE_STEPS = ['0', '1', '2'];
 const TRIAGE_OUTCOMES = ['accepted', 'deferred', 'rejected'];
-// Any line that opens with `Triage:` counts as an attempted record, even
-// without the space after the colon, so a malformed line cannot pass as
-// unrecorded (Copilot review of #4268).
-const TRIAGE_LINE_PREFIX_RE = /^Triage:/mu;
-// The governing deferral clause of the reply itself. It sits right after the
-// `**Rejected** — deferred to follow-up issue #<n> ` opening, and only an
-// urgency-matrix clause starts with `(urgency `. A later quote of another
-// deferral inside the reason does not count (Copilot review of #4268).
-// Other clauses (`(round …)`, `(needs-decision; …)`, the E10 cap routes) are
-// not governed by the urgency matrix.
+// A line that reads as a Triage record counts as an attempted one, even when
+// it is not at column 0 or lacks the space after the colon, so a malformed
+// line cannot pass as unrecorded (Copilot review of #4268). The optional bullet,
+// bold, and indent, and the case-insensitive word, widen only what counts as
+// an attempt. A line that parses still counts as recorded.
+const TRIAGE_LINE_PREFIX_RE = /^[\s>*+-]*(?:\*\*)?triage(?:\*\*)?\s*:/imu;
+// The governing deferral clause of the reply itself. It opens with the same
+// rejected prefix the classifier uses (`classifyDispositionReply`), then the
+// deferral's own text, and only an urgency-matrix clause starts with `(urgency `
+// right after it. The `[^(\n]*?` gap refuses to cross a `(`, so a later quote
+// of another deferral inside the reason does not count (Copilot review of
+// #4268). Other clauses (`(round …)`, `(needs-decision; …)`, the E10 cap
+// routes) are not governed by the urgency matrix.
 const URGENCY_DEFERRAL_CLAUSE_RE =
-  /^\*\*Rejected\*\* — deferred to follow-up issue #\d+ \(urgency /u;
+  /^\*\*Rejected[.!:]?\*\*[^(\n]*?deferred to follow-up issue(?: #\d+)? \(urgency /iu;
 function isTriageOutcome(disposition) {
   return TRIAGE_OUTCOMES.includes(disposition);
 }

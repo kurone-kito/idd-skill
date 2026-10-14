@@ -1337,6 +1337,73 @@ test('computePrAudit triage: a round deferral that quotes an urgency deferral is
   assert.equal(report.triage.contradictions, 0);
 });
 
+test('computePrAudit triage: every urgency-deferral prefix form counts as a contradiction', () => {
+  // The classifier reads `**Rejected**` with an optional `.`, `!`, or `:`, and
+  // matches the deferral text case-insensitively, with or without `#<n>`.
+  const forms = [
+    '**Rejected**: deferred to follow-up issue #12 (urgency low; severity Low): later',
+    '**Rejected.** deferred to follow-up issue #12 (urgency low; severity Low): later',
+    '**Rejected** — Deferred to follow-up issue #12 (urgency low; severity Low): later',
+    '**Rejected** — deferred to follow-up issue (urgency low; severity Low): later',
+  ];
+  forms.forEach((prefix, index) => {
+    const findingId = 8050 + index;
+    const report = computePrAudit(
+      1,
+      [
+        review(
+          1,
+          '2026-01-01T00:00:00Z',
+          openReviewBody([openLine('Low', findingId)]),
+        ),
+      ],
+      [
+        reply(
+          10 + index,
+          findingId,
+          `${prefix}\n\nTriage: tier low; urgency low; step 0; verdict keep`,
+          '2026-01-02T00:00:00Z',
+        ),
+      ],
+    );
+    assert.equal(report.triage.recorded, 1, prefix);
+    assert.equal(report.triage.contradictions, 1, prefix);
+  });
+});
+
+test('computePrAudit triage: a Triage-like line off column 0 or without the space is malformed', () => {
+  const variants = [
+    '- Triage: tier low; urgency medium; step 2; verdict defer',
+    '**Triage:** tier low; urgency medium; step 2; verdict defer',
+    '  Triage: tier low; urgency medium; step 2; verdict defer',
+    'triage: tier low; urgency medium; step 2; verdict defer',
+  ];
+  variants.forEach((line, index) => {
+    const findingId = 8060 + index;
+    const report = computePrAudit(
+      1,
+      [
+        review(
+          1,
+          '2026-01-01T00:00:00Z',
+          openReviewBody([openLine('Medium', findingId)]),
+        ),
+      ],
+      [
+        reply(
+          20 + index,
+          findingId,
+          `**Accepted** — fixed\n\n${line}`,
+          '2026-01-02T00:00:00Z',
+        ),
+      ],
+    );
+    assert.equal(report.triage.recorded, 0, line);
+    assert.equal(report.triage.unrecorded, 1, line);
+    assert.equal(report.triage.malformed, 1, line);
+  });
+});
+
 test('summarizeCohort triage: sums the per-PR triage objects key by key', () => {
   const reviews = [
     review(
@@ -1805,10 +1872,18 @@ test('CLI --check: a clean PR writes the report to stdout, nothing to stderr, an
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, '');
   const parsed = JSON.parse(result.stdout) as {
-    reports: Array<{ pr: number; triage: { contradictions: number } }>;
+    reports: Array<{
+      pr: number;
+      reviewCount: number;
+      v2Count: number;
+      triage: { contradictions: number };
+    }>;
     summary: { prCount: number };
   };
   assert.equal(parsed.reports[0]?.pr, 42);
+  // The fixture review must have been read, not dropped by the stub.
+  assert.equal(parsed.reports[0]?.reviewCount, 1);
+  assert.equal(parsed.reports[0]?.v2Count, 1);
   assert.equal(parsed.reports[0]?.triage.contradictions, 0);
   assert.equal(parsed.summary.prCount, 1);
 });
