@@ -16,6 +16,9 @@
 // optional desync, before the lowest-issue-number tie-break): it never
 // skips, gates, or reorders candidates across suitability score bands,
 // and a large issue stays fully claimable when it is the only ready work.
+// The one exception is `autopilotSuitability.effortL: refuse`: under it,
+// autopilot runs route an `L` orphan candidate to humans before selection.
+// Only the orphan-filter consumer applies that rule, not this parser.
 // Like the suitability score it is fail-safe on absence — a missing or
 // invalid marker means "no effort hint" and selection behaves exactly as
 // it does today.
