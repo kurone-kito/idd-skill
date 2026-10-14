@@ -153,6 +153,7 @@ scripts/triage-structural-evidence.mjs linguist-generated=true
 scripts/trial-merge-audit.mjs linguist-generated=true
 scripts/trial-scratch.mjs linguist-generated=true
 scripts/update-fixtures.mjs linguist-generated=true
+scripts/user-global-paths.mjs linguist-generated=true
 scripts/validate-schemas.mjs linguist-generated=true
 scripts/verify-import-mirror.mjs linguist-generated=true
 scripts/verify-install-deps.mjs linguist-generated=true
