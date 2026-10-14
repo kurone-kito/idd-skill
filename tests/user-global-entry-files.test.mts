@@ -857,3 +857,19 @@ test('uninstall keeps the whitespace before a user member after a created instru
   uninstallPayload(optionsFor(home));
   assert.equal(textOf(opencode), '{  "model": "x"}');
 });
+
+test('a forged file record for a user-authored entry file is refused, and the file survives', () => {
+  const home = freshHome();
+  installPayload(optionsFor(home));
+  const receipt = receiptOf(home) as ReceiptJson;
+  for (const path of [filesOf(home).claude, filesOf(home).codex]) {
+    nodeFs.writeFileSync(path, 'mine\n');
+    const recorded = receipt.entries.find((entry) => entry.path === path);
+    assert.ok(recorded);
+    recorded.sha256 = sha256('mine\n');
+  }
+  writeReceipt(home, receipt);
+  assert.throws(() => uninstallPayload(optionsFor(home)), /does not write/);
+  assert.equal(textOf(filesOf(home).claude), 'mine\n');
+  assert.equal(textOf(filesOf(home).codex), 'mine\n');
+});

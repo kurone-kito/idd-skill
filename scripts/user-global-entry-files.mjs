@@ -115,6 +115,28 @@ function opencodeFileText(entryPath) {
   return `{\n  "instructions": ${JSON.stringify([entryPath])}\n}\n`;
 }
 /**
+ * Whether a whole-file entry holds the content install writes for its harness.
+ * Claude and OpenCode write content that depends only on the entry path, so
+ * the check is exact. Codex writes the entry text, which can change between
+ * versions, so for Codex the check is that one managed block spans every byte.
+ * A receipt can list any file by its hash, so uninstall checks this as well.
+ */
+export function isInstallerWholeFile(harness, entryPath, bytes, path) {
+  if (harness === 'opencode') {
+    return bytes.equals(Buffer.from(opencodeFileText(entryPath), 'utf8'));
+  }
+  if (harness === 'claude') {
+    const span = managedSpan('claude', entryPath, '');
+    return bytes.equals(Buffer.from(span, 'utf8'));
+  }
+  try {
+    const block = findBlock(bytes, path);
+    return block !== null && block.begin === 0 && block.end === bytes.length;
+  } catch {
+    return false;
+  }
+}
+/**
  * Find the single managed block in a Markdown file. Markers match whole lines
  * only, and each must end with LF. A file with no marker has no block. A begin
  * without an end, two begins, an end before the begin, or an unterminated

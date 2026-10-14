@@ -30,6 +30,7 @@ import { isQualifiedConfigRoot } from './idd-config.mjs';
 import {
   ENTRY_FILE_NAME,
   ENTRY_HARNESSES,
+  isInstallerWholeFile,
   planEntryFiles,
   planEntryRemoval,
 } from './user-global-entry-files.mjs';
@@ -288,6 +289,12 @@ function assertHarnessChain(ctx, path, present) {
       `${dir} is ${walk.finalKind === 'symlink' ? 'a symbolic link' : `not a directory (${walk.finalKind})`} on the path to ${path}; refusing`,
     );
   }
+}
+/** The harness whose entry file sits at `path`, or undefined. */
+function entryHarnessAt(ctx, path) {
+  return ENTRY_HARNESSES.find(
+    (name) => join(harnessDirOf(ctx, name), ENTRY_FILE_NAME[name]) === path,
+  );
 }
 /** The harness directory a harness's entry file lives in. */
 function harnessDirOf(ctx, harness) {
@@ -1169,9 +1176,24 @@ function buildUninstallPlan(ctx) {
             `${entry.path} has more than one hard link; refusing`,
           );
         }
-        if (sha256Hex(readNoFollowBytes(entry.path, fs)) !== entry.sha256) {
+        const bytes = readNoFollowBytes(entry.path, fs);
+        if (sha256Hex(bytes) !== entry.sha256) {
           throw new Error(
             `${entry.path} was edited after install (its SHA-256 differs); refusing, and it is user-edited`,
+          );
+        }
+        const harness = entryHarnessAt(ctx, entry.path);
+        if (
+          harness !== undefined &&
+          !isInstallerWholeFile(
+            harness,
+            join(ctx.currentPath, 'user-global', 'entry.md'),
+            bytes,
+            entry.path,
+          )
+        ) {
+          throw new Error(
+            `${entry.path} holds content install does not write, although the receipt lists it as one install created; refusing, and it is user-edited`,
           );
         }
         decide('remove');
