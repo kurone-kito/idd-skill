@@ -3178,7 +3178,9 @@ With `--tier` and `--urgency` both given, the helper writes one `Triage:`
 line before the reply-identity stamp, so the E4 tier, the E4 urgency, the
 relax step, and the E5 verdict travel with the reply. The other triage
 flags feed that line. Without the pair they have no line to carry them and
-change nothing, except `--path-b`, which refuses them. The line is written
+change nothing, except two flags that are refused with a usage error:
+`--path-b`, when combined with any other triage flag, and `--override`,
+which needs the pair. The line is written
 whenever the pair is given. `critiqueLoop.triageRecord` (default `off`)
 decides only whether the pair is required, whether an `enforce` refusal
 applies, and whether `--override` is accepted.
