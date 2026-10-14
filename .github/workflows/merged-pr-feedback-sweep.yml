@@ -107,10 +107,12 @@ jobs:
           if [ "$count" -gt 1 ]; then
             echo "::error::more than one open issue is titled \"$SWEEP_ISSUE_TITLE\" ($(printf '%s' "$found" | tr '\n' ' ')); close the extras, then rerun"
             exit 1
+          # The body scores the report 1 (human-only), and the repository contract
+          # pairs that score with the blocked-by-human label (issue #4283).
           elif [ "$count" -eq 1 ]; then
-            gh issue edit "$found" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/sweep-body.md"
+            gh issue edit "$found" --repo "$GITHUB_REPOSITORY" --add-label status:blocked-by-human --body-file "$RUNNER_TEMP/sweep-body.md"
           elif [ "$count" -eq 0 ]; then
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$SWEEP_ISSUE_TITLE" --body-file "$RUNNER_TEMP/sweep-body.md"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$SWEEP_ISSUE_TITLE" --label status:blocked-by-human --body-file "$RUNNER_TEMP/sweep-body.md"
           else
             echo "::error::could not count the matching issues; refusing to write"
             exit 1

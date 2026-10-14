@@ -3209,9 +3209,9 @@ test('the write step decodes the body, refuses a full, malformed, or duplicated 
     `count="$(printf '%s' "$found" | grep -c . || true)"`,
     `if [ "$count" -gt 1 ]; then`,
     `elif [ "$count" -eq 1 ]; then`,
-    `gh issue edit "$found" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/sweep-body.md"`,
+    `gh issue edit "$found" --repo "$GITHUB_REPOSITORY" --add-label status:blocked-by-human --body-file "$RUNNER_TEMP/sweep-body.md"`,
     `elif [ "$count" -eq 0 ]; then`,
-    `gh issue create --repo "$GITHUB_REPOSITORY" --title "$SWEEP_ISSUE_TITLE" --body-file "$RUNNER_TEMP/sweep-body.md"`,
+    `gh issue create --repo "$GITHUB_REPOSITORY" --title "$SWEEP_ISSUE_TITLE" --label status:blocked-by-human --body-file "$RUNNER_TEMP/sweep-body.md"`,
   ]);
 });
 
