@@ -362,27 +362,27 @@ arguments reaches `gh repo view` and is `transport`, not `usage`.
 [Discover Roadmap Graph Contract](#discover-roadmap-graph-contract));
 that is `transport`, carrying `retryAt` when known, never `gate`.
 
-| Helper                             | `usage`                                                                                        | `gate`                                                                                                                                                      |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `discover-orphan-filter.mjs`       | an unknown flag, an invalid `--pr`, a bare `--now`, or a malformed claim-state `--now`         | none today (no arguments is `transport`)                                                                                                                    |
-| `discover-roadmap-graph.mjs`       | a missing `--issue`, a flag-combination error, or an unknown flag                              | none today (`--with-progress` exit `75` is `transport`)                                                                                                     |
-| `discover-shared-file-overlap.mjs` | missing candidates, an invalid value, a flag-combination error, or an unknown flag             | none today                                                                                                                                                  |
-| `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                                       | none today                                                                                                                                                  |
-| `idd-worker-budget.mjs`            | a missing or invalid `--running` / `--startable` / `--harness-limit` value, or an unknown flag | none today                                                                                                                                                  |
-| `idd-activation.mjs`               | an unknown flag, or an empty `--cwd` value                                                     | none today                                                                                                                                                  |
-| `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                                        | none today                                                                                                                                                  |
-| `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                                            | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens`                                     |
-| `clone-lock.mjs`                   | a missing mode, `--agent-id`, or command, or an unknown flag                                   | exit `3` on an acquire timeout; a wrapped command's own non-zero status                                                                                     |
-| `phase-id-resolver.mjs`            | a missing `--phase-id`, or an unknown flag                                                     | none today                                                                                                                                                  |
-| `resume-route-selection.mjs`       | a missing `--issue`, or an unknown flag                                                        | none today                                                                                                                                                  |
-| `stalled-session-quiet-check.mjs`  | a missing `--pr`, or an unknown flag                                                           | none today                                                                                                                                                  |
-| `suitability-triage.mjs`           | a missing or conflicting input mode, or an unknown flag                                        | none today                                                                                                                                                  |
-| `suitability-close-execute.mjs`    | a missing `--issue` or `--apply` pair, or an unknown flag                                      | exit `1` when the verdict is not ready, or not closed under `--apply`                                                                                       |
-| `local-worktree-recovery.mjs`      | a missing `--issue` or `--worktree`, mismatched `--owner`/`--repo`, or an unknown flag         | exit `1` when the verdict is not ready, or when apply-mode recovery did not complete required cleanup, including primary-worktree checkout and lock cleanup |
-| `audit-authored-issue.mjs`         | a missing `--shape` or body source, or an unknown flag (exit `2`)                              | exit `1` when the audit report did not pass                                                                                                                 |
-| `idd-roadmap-audit-execute.mjs`    | a missing `--roadmap`, an invalid flag, or an unknown flag                                     | the helper's own non-zero verdict exit code                                                                                                                 |
-| `branch-name.mjs`                  | a missing `--number` or `--title`, or an unknown flag                                          | none today                                                                                                                                                  |
-| `emit-marker.mjs`                  | a missing `--type` or flag value, or an unknown flag                                           | none today                                                                                                                                                  |
+| Helper                             | `usage`                                                                                                                                             | `gate`                                                                                                                                                      |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `discover-orphan-filter.mjs`       | an unknown flag, an invalid `--pr`, a bare `--now`, a malformed claim-state or `--draft-carriers` `--now`, or a `--draft-carriers` flag combination | none today (no arguments is `transport`)                                                                                                                    |
+| `discover-roadmap-graph.mjs`       | a missing `--issue`, a flag-combination error, or an unknown flag                                                                                   | none today (`--with-progress` exit `75` is `transport`)                                                                                                     |
+| `discover-shared-file-overlap.mjs` | missing candidates, an invalid value, a flag-combination error, or an unknown flag                                                                  | none today                                                                                                                                                  |
+| `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                                                                                            | none today                                                                                                                                                  |
+| `idd-worker-budget.mjs`            | a missing or invalid `--running` / `--startable` / `--harness-limit` value, or an unknown flag                                                      | none today                                                                                                                                                  |
+| `idd-activation.mjs`               | an unknown flag, or an empty `--cwd` value                                                                                                          | none today                                                                                                                                                  |
+| `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                                                                                             | none today                                                                                                                                                  |
+| `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                                                                                                 | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens`                                     |
+| `clone-lock.mjs`                   | a missing mode, `--agent-id`, or command, or an unknown flag                                                                                        | exit `3` on an acquire timeout; a wrapped command's own non-zero status                                                                                     |
+| `phase-id-resolver.mjs`            | a missing `--phase-id`, or an unknown flag                                                                                                          | none today                                                                                                                                                  |
+| `resume-route-selection.mjs`       | a missing `--issue`, or an unknown flag                                                                                                             | none today                                                                                                                                                  |
+| `stalled-session-quiet-check.mjs`  | a missing `--pr`, or an unknown flag                                                                                                                | none today                                                                                                                                                  |
+| `suitability-triage.mjs`           | a missing or conflicting input mode, or an unknown flag                                                                                             | none today                                                                                                                                                  |
+| `suitability-close-execute.mjs`    | a missing `--issue` or `--apply` pair, or an unknown flag                                                                                           | exit `1` when the verdict is not ready, or not closed under `--apply`                                                                                       |
+| `local-worktree-recovery.mjs`      | a missing `--issue` or `--worktree`, mismatched `--owner`/`--repo`, or an unknown flag                                                              | exit `1` when the verdict is not ready, or when apply-mode recovery did not complete required cleanup, including primary-worktree checkout and lock cleanup |
+| `audit-authored-issue.mjs`         | a missing `--shape` or body source, or an unknown flag (exit `2`)                                                                                   | exit `1` when the audit report did not pass                                                                                                                 |
+| `idd-roadmap-audit-execute.mjs`    | a missing `--roadmap`, an invalid flag, or an unknown flag                                                                                          | the helper's own non-zero verdict exit code                                                                                                                 |
+| `branch-name.mjs`                  | a missing `--number` or `--title`, or an unknown flag                                                                                               | none today                                                                                                                                                  |
+| `emit-marker.mjs`                  | a missing `--type` or flag value, or an unknown flag                                                                                                | none today                                                                                                                                                  |
 
 ### Migrated helpers (marker, handoff, provider, and misc batch)
 
@@ -794,6 +794,22 @@ in this preamble, since the fallback differs per helper.
   also lists the origin in the top-level `unresolvable` array), or
   `needs_decision_label_conflicts_with_authoring_label` when the configured
   authoring and needs-decision labels collide (issue #4065)
+  Default-on (not opt-in): the output's `draftCarriers` lists the draft
+  carriers, which are the open issues that carry the authoring-only label and
+  the carrier marker outside code (issue `#4257`). Each carrier is `held` (it
+  also carries the authoring label, with `heldSince` and a `stale` flag),
+  `ready` (no open or unresolvable `Blocked by` reference), or `waiting` (with
+  `blockers`, each a `reference` and a `reason`: `open`,
+  `issue-not-found-or-inaccessible`, or `cross_repository_reference`). A
+  well-formed carrier stays in `filtered.blocked_label` (one that also names a
+  roadmap or blocked-by marker is filed under that reason instead), and its
+  blockers never enter the top-level `unresolvable` array. This listing exists
+  because on 2026-10-13 a reviewed follow-up for roadmap issue `#4079` was never
+  published, and the roadmap closed without it; it was reopened on 2026-10-14.
+  The `--draft-carriers` mode prints only this listing, from one label-filtered
+  search. It is always live, never reads or writes the hint cache, and cannot
+  be combined with `--autopilot`, `--with-claim-state`, `--current-claim-id`,
+  `--pr`, `--no-cache`, `--refresh-cache`, or `--purge-cache`.
 - `scripts/discover-roadmap-graph.mjs` for A1.5/A2 recursive roadmap graph
   enumeration and classification
 - `scripts/idd-roadmap-audit-execute.mjs` for the A1.5 roadmap-completion
@@ -2165,7 +2181,11 @@ speed-up, never a gate.
   `IDD_AGENT_LOGINS`), the worktree path, the repository, the host, the
   credential context, and a generation token. Any difference is a miss, so a
   trust, approval, label, floor, or claim-timing change never reuses an old
-  hint. Repository and host resolve without a network call: an explicit
+  hint. The key also carries a format version (`HINT_FORMAT_VERSION`, now 4),
+  which moved for issue `#4257` because the orphan output gained
+  `draftCarriers`: a hint written under an earlier version, for either helper,
+  is never served. Repository and host resolve without a network call: an
+  explicit
   `--owner`/`--repo` (a complete pair needs no `origin`), else the `origin`
   remote (compared case-insensitively); the host from `GH_HOST`, then
   `GITHUB_SERVER_URL`, then the remote, then `github.com` for a complete
