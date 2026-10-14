@@ -69,3 +69,10 @@ command (#2933).
 variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant):
 each worker must prefix scratchpad filenames with the issue number,
 or use an issue-numbered subdirectory.
+
+**Restate the hold-marker requirement.** See
+[docs/idd-workflow.md's Orchestrator fan-out
+variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant): the
+brief must tell each worker to post the stamped `idd-hold` marker when it
+stops at a hold, because the orchestrator renews only a claim that has a
+trusted hold marker.
