@@ -234,7 +234,9 @@ function resolveContext(options: UserGlobalOptions): Context {
     typeof options.homedir === 'string' && options.homedir.length > 0
       ? options.homedir
       : (env.HOME ?? '');
-  const home = homeCandidate.trim();
+  // Normalized, as the environment roots are, so the containment walk and the
+  // harness paths spell the base the same way.
+  const home = normalize(homeCandidate.trim());
   if (!isQualifiedConfigRoot(home)) {
     throw new Error(
       'HOME is not a qualified root, so the skill roots do not resolve; nothing was written',

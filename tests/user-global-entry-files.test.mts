@@ -773,3 +773,12 @@ test('uninstall refuses a link above an absent recorded entry file', {
     kept,
   );
 });
+
+test('a HOME with a dot segment is normalized before it becomes a containment base', () => {
+  const home = freshHome();
+  const spelled = `${home}/./`;
+  installPayload(
+    optionsFor(home, { env: { HOME: spelled }, homedir: spelled }),
+  );
+  assert.equal(textOf(filesOf(home).claude), claudeSpan(home));
+});
