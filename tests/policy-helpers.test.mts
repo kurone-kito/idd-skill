@@ -483,6 +483,28 @@ test('formatTriageLine refuses a converged head that is not seven lowercase hex 
   );
 });
 
+test('parseTriageLine rejects optional parts out of the fixed order, repeated, or unknown (#4186)', () => {
+  const line = (rest: string) => `Triage: tier low; urgency low; step 0${rest}`;
+  assert.equal(parseTriageLine(line('; safety; Copilot low')), null);
+  assert.equal(parseTriageLine(line('; safety; safety')), null);
+  assert.equal(parseTriageLine(line('; verdict keep; safety')), null);
+  assert.equal(parseTriageLine(line('; surprise')), null);
+  assert.deepEqual(
+    parseTriageLine(line('; Copilot low; safety; verdict keep')),
+    {
+      tier: 'low',
+      urgency: 'low',
+      step: 0,
+      convergedHead: null,
+      copilotLabel: 'low',
+      safety: true,
+      verdict: 'keep',
+      blocked: null,
+      override: null,
+    },
+  );
+});
+
 test('critiqueLoop.triageRecord defaults to off and accepts record / enforce (#4185)', () => {
   assert.equal(POLICY_DEFAULTS.critiqueLoop.triageRecord, 'off');
   assert.equal(normalizePolicyConfig({}).critiqueLoop.triageRecord, 'off');

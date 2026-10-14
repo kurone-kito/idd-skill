@@ -2650,6 +2650,26 @@ export function parseTriageLine(text: string): TriageRecord | null {
   return null;
 }
 
+/** Position of an optional part in the fixed `Triage:` order, or -1 (#4186). */
+function triagePartRank(part: string): number {
+  if (part.startsWith('converged ')) {
+    return 0;
+  }
+  if (part.startsWith('Copilot ')) {
+    return 1;
+  }
+  if (part === 'safety') {
+    return 2;
+  }
+  if (part.startsWith('verdict ')) {
+    return 3;
+  }
+  if (part.startsWith('blocked ')) {
+    return 4;
+  }
+  return -1;
+}
+
 function parseTriageRest(
   tier: TriageRecord['tier'],
   urgency: TriageRecord['urgency'],
@@ -2678,7 +2698,15 @@ function parseTriageRest(
   if (!parts.startsWith('; ')) {
     return null;
   }
+  // The format fixes the order of these parts, so each must come after the one
+  // before it. An unknown part ranks -1 and fails the same check.
+  let lastRank = -1;
   for (const part of parts.slice(2).split('; ')) {
+    const rank = triagePartRank(part);
+    if (rank <= lastRank) {
+      return null;
+    }
+    lastRank = rank;
     if (part.startsWith('converged ')) {
       const sha = part.slice('converged '.length);
       if (!/^[0-9a-f]{7}$/u.test(sha) || record.convergedHead !== null) {
