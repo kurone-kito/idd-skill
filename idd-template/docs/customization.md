@@ -1688,10 +1688,12 @@ supports these keys:
   `reviewEscalation.changesRequestedSecondEscalation`
   (default `PT24H` / `PT48H`)
 - `autopilotSuitability.effortL` (default `allow`). `refuse` makes
-  `audit-authored-issue` fail a `ready` body whose effort is `L` (check
-  `effort-l-ready`), and makes autopilot Discover route an effort `L`
-  candidate to humans, even when `autopilotSuitability.enabled` is
-  `false`. See
+  `audit-authored-issue` fail a `ready` body whose effort is `L`
+  (check `effort-l-ready`), except a roadmap, a bucket audit, or a body
+  routed to a human bucket (an authoring bucket of `needs-decision` or
+  `blocked-by-human`, or an autopilot-suitability score of `1`). It also
+  makes autopilot Discover route an effort `L` orphan candidate to humans,
+  even when `autopilotSuitability.enabled` is `false`. See
   [the 2026-10-13 review-loop audit](idd-design-rationale.md#review-loop-audit-2026-10-13).
 
 ## Suitability Outcomes and Label Mapping
