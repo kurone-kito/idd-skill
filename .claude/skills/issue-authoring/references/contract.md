@@ -1936,7 +1936,9 @@ only approval boundary.
   that operation, stop before creation. For a standalone orphan, the
   publication capability is `idd-publish-authoring-hold` (`node
   scripts/publish-authoring-hold.mjs` in this source repository). It runs
-  the steps below in order, from the journal check to `state=member`. It
+  the steps below in order, from the journal check to `state=member`. For a
+  draft carrier (`--shape carrier`), it then runs the release steps of the
+  carrier creation-hold exception under "Authoring hold and release". It
   takes `--review-result <path>`: a JSON object with `"completed": true`,
   whose optional `findings` entries must each be `fixed` or `rejected`. It
   is a dry run without `--apply`, and it refuses `--shape child` for now.
@@ -2542,9 +2544,11 @@ only approval boundary.
   stop. The guard suppresses Discover for the whole set during the provisional
   label-removal window; it does not close the set. When this release is
   proceeding under the narrow defer-source auto-release
-  exception below instead of an explicit human release request, also
-  verify here -- immediately before the first label removal below,
-  whether that removal is a non-anchor target's or the anchor's own --
+  exception below (a draft carrier follows the carrier creation-hold
+  exception's own sole-member check instead) instead of an explicit human
+  release request, also verify here -- immediately before the first label
+  removal below, whether that removal is a non-anchor target's or the
+  anchor's own --
   that the marked target is the sole member of its authoring set: it
   carries no `<marker-prefix>-roadmap-id` marker (never a roadmap
   anchor), and the read-only `authoring-set-members` helper reports
@@ -2631,7 +2635,8 @@ only approval boundary.
   stop. If restoration cannot be completed or a newer owner has appeared,
   record a set-level recovery hold and never claim a partial release. Release
   is a human action; nothing in this bundle auto-releases a held issue set,
-  except the narrow, marker-scoped exception immediately below.
+  except the two narrow, marker-scoped exceptions immediately below (the
+  defer-source exception and the carrier creation-hold exception).
 - **Fast path: `|set|==1` self-anchor Stage 2 release (observed
   2026-09-21, kurone-kito/dotfiles#465 via gist round 27;
   kurone-kito/idd-skill#3164).** A genuine standalone set -- exactly
@@ -2648,8 +2653,10 @@ only approval boundary.
   the sole target/anchor's own `mode=release` marker and verify it;
   (2) the anchor-only `mode=release-guard` marker on the same issue,
   verified against its paginated owner-marker log; (3) **only** when
-  this release is proceeding under the narrow auto-release exception
-  below instead of an explicit human release request -- an ordinary
+  this release is proceeding under the narrow defer-source auto-release
+  exception below instead of an explicit human release request (a draft
+  carrier takes the carrier creation-hold exception's branch instead) -- an
+  ordinary
   human-gated release skips straight to step (4), since the human
   request already vouches for the set's scope -- run **both** of that
   exception's own preconditions here, immediately before the label
@@ -2703,7 +2710,8 @@ only approval boundary.
   shorter path to the same guarantee, never a weaker one: it grants no
   new exemption, and release stays a human action under the same
   precondition as the general case, subject to the same narrow
-  auto-release exception named in step (3). Pairs with the Stage 1
+  defer-source auto-release exception named in step (3) or, for a draft
+  carrier, the carrier creation-hold exception. Pairs with the Stage 1
   acquire fast path above.
 - **Closing sweep (after Stage 2 closes, #2896 review, Codex; #2935).**
   The two sweep points above run _before_ Stage 2's own later marker
@@ -2812,8 +2820,8 @@ only approval boundary.
   helper runtime unavailable" -- naming the reason. This never blocks
   release either; it only ensures a fully-silent skip never happens even
   in the one failure mode the mechanical signal cannot itself cover.
-- **Narrow auto-release exception.** A single, non-roadmap follow-up
-  issue whose body carried one exact defined marker
+- **Narrow defer-source auto-release exception.** A single, non-roadmap
+  follow-up issue whose body carried one exact defined marker
   `<!-- <marker-prefix>-authoring-defer-source: {defined-value} -->` at
   Stage 1 publication time — part of the initial `authoring-publication` body
   write, never added by a later edit — may complete the full Stage 2
@@ -2901,6 +2909,40 @@ only approval boundary.
   After the authoring label is removed, the needs-decision label keeps
   the follow-up out of Discover until a person clears it; label removal
   alone does not authorize IDD execution.
+- **Carrier creation-hold exception.** A draft carrier published by
+  `publish-authoring-hold --shape carrier` (see "New-issue ownership"
+  above) holds drafts that cannot yet be published as final issues, and it
+  has no readiness bucket. Its creation hold is the authoring label, applied
+  together with the authoring-only label. That hold is released by the same
+  command right after `state=member`, without a person's release request, by
+  running fast-path steps (1) to (8) above on the carrier. Its preconditions
+  take the place of the defer-source preconditions in fast-path step (3):
+  - (a) no roadmap-id marker outside code, read on the body with fenced and
+    inline code masked (a carrier's fenced `Shape: roadmap` draft always
+    contains one);
+  - (b) `authoring-set-members --set <set> --issue <carrier>` exits 0 with
+    `soleMember: true`, `issues` equal to the carrier alone, and no
+    `skippedMarkers` entry that names the requested set, except a
+    `requested-set` entry on the carrier itself; any other result is
+    inconclusive;
+  - (c) `audit-authored-issue --shape carrier` passes on the fresh body, with
+    both configured labels supplied; the audit checks that the carrier marker
+    appears exactly once outside code, and it is the Stage 2 release
+    checklist for a carrier;
+  - (d) a freshly computed `body-sha256` equals the `mode=acquire` owner
+    marker's recorded `body-sha256`;
+  - (e) the authoring-only label and the authoring label are both present.
+
+  Checks (b), (d), and (e) run again after the `claim.verifySettleDelay` wait
+  and immediately before the label removal. A carrier's fenced drafts contain
+  placeholders by design, so the general checklist item "no unsubstituted
+  placeholder" does not apply to a carrier; the audit in (c) covers the text
+  outside code. A failed or inconclusive precondition, or a failed `release`,
+  `release-guard`, or heartbeat post, leaves both labels and the markers
+  already posted in place, and the carrier is held for a person's release.
+  The release never closes the carrier and never removes the authoring-only
+  label. Its outcomes, label restore and reapply rules, and report fields are
+  those of the general case, as implemented by `publish-authoring-hold`.
 
 ### Needs-decision follow-up body
 
@@ -2940,7 +2982,8 @@ passes the completed-draft adversarial review and then the mechanical
 [Authoring hold and release](#authoring-hold-and-release) above for the
 full two-stage contract. Removing the authoring label and starting the
 IDD execution loop both require the user's explicit hold-release
-request, except the narrow auto-release exception documented in
+request, except the narrow auto-release exceptions (the defer-source
+exception and the carrier creation-hold exception) documented in
 [Authoring hold and release](#authoring-hold-and-release) above; nothing
 else authorizes either.
 
