@@ -1354,6 +1354,10 @@ test('classifyBranchConflictState: UNSTABLE routing reads the injected run list'
     _testNonPassingRuns: [],
   });
   assert.equal(held.callSiteRouting.f1, 'hold');
+  assert.match(
+    held.diagnostics.notes.join('\n'),
+    /no non-passing head run is visible/,
+  );
   const offline = await classifyBranchConflictState(
     fixture.prData.number,
     base,

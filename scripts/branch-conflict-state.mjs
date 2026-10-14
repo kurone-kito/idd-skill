@@ -188,11 +188,13 @@ function fetchNonPassingRuns(owner, repo, prNumber, headSha) {
       'graphql',
       '-f',
       `query=${HEAD_ROLLUP_QUERY}`,
-      '-F',
+      // -f keeps owner, repo, and oid as raw strings. -F would type an
+      // all-digit value as an integer, which GraphQL rejects.
+      '-f',
       `owner=${owner}`,
-      '-F',
+      '-f',
       `repo=${repo}`,
-      '-F',
+      '-f',
       `oid=${headSha}`,
       '-F',
       `number=${Number(prNumber)}`,
@@ -528,6 +530,7 @@ export async function classifyBranchConflictState(prNumber, options = {}) {
     String(mergeStateStatus ?? '').toUpperCase() === 'UNSTABLE';
   let nonPassingRuns = [];
   if (unstableClean) {
+    let fetchFailed = false;
     if (_testNonPassingRuns) {
       nonPassingRuns = _testNonPassingRuns;
     } else if (!_testPrData) {
@@ -538,7 +541,13 @@ export async function classifyBranchConflictState(prNumber, options = {}) {
         prHeadSha,
       );
       nonPassingRuns = fetched.runs;
+      fetchFailed = fetched.notes.length > 0;
       notes.push(...fetched.notes);
+    }
+    if (nonPassingRuns.length === 0 && !fetchFailed) {
+      notes.push(
+        'UNSTABLE clean head: no non-passing head run is visible; holding at F1.',
+      );
     }
     if (nonPassingRuns.length > 0) {
       notes.push(
