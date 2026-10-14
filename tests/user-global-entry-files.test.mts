@@ -654,3 +654,55 @@ test('a failed restore names the path, fails the run, and keeps the record', () 
   );
   assert.equal(listedEntry(home, files.codex)?.kind, 'managed-block');
 });
+
+test('uninstall refuses a stale entry temporary before it removes anything', () => {
+  const home = freshHome();
+  const claude = filesOf(home).claude;
+  nodeFs.writeFileSync(claude, 'user\n');
+  installPayload(optionsFor(home));
+  nodeFs.writeFileSync(`${claude}.tmp-999`, 'stale');
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /crashed run left it behind/,
+  );
+  assert.equal(textOf(claude), `user\n${claudeSpan(home)}`);
+  assert.ok(nodeFs.existsSync(join(home, '.claude', 'skills')));
+});
+
+test('uninstall refuses when a link replaces the config directory above the entry file', {
+  skip: NO_INSTALL,
+}, () => {
+  const home = freshHome();
+  installPayload(optionsFor(home));
+  const original = textOf(filesOf(home).opencode);
+  const moved = join(home, 'moved-config');
+  nodeFs.renameSync(join(home, '.config'), moved);
+  nodeFs.symlinkSync(moved, join(home, '.config'));
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /symbolic link on the path/,
+  );
+  assert.equal(
+    nodeFs.readFileSync(join(moved, 'opencode', 'opencode.json'), 'utf8'),
+    original,
+  );
+});
+
+test('a receipt that names an instruction other than the entry text is corrupt', () => {
+  const home = freshHome();
+  nodeFs.mkdirSync(join(home, '.config', 'opencode'));
+  const opencode = filesOf(home).opencode;
+  nodeFs.writeFileSync(opencode, '{"instructions":["/home/me/notes.md"]}\n');
+  installPayload(optionsFor(home));
+  const receipt = receiptOf(home) as ReceiptJson;
+  const recorded = receipt.entries.find((entry) => entry.path === opencode);
+  assert.ok(recorded);
+  recorded.value = '/home/me/notes.md';
+  writeReceipt(home, receipt);
+  const before = textOf(opencode);
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /does not name the installer's entry text/,
+  );
+  assert.equal(textOf(opencode), before);
+});

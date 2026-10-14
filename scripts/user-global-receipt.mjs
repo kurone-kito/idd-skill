@@ -8,7 +8,7 @@
 // temporary file that is renamed over the receipt, so a failed write leaves
 // the last valid receipt in place.
 import * as nodeFs from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, sep } from 'node:path';
 import { checkContainment, writeNewFile } from './user-global-paths.mjs';
 
 /** The receipt file name inside the data root. */
@@ -129,8 +129,19 @@ function parseEntry(value, path, dataRoot) {
     };
   }
   if (value.kind === 'json-instruction') {
-    if (typeof value.value !== 'string') {
-      corrupt(path, `json-instruction entry ${entryPath} has no string value`);
+    // The installer only ever records the entry text path under a data root.
+    // Any other string could name a user's own instruction, so it is corrupt.
+    if (
+      typeof value.value !== 'string' ||
+      !isAbsolute(value.value) ||
+      !value.value.endsWith(
+        `${sep}${join('current', 'user-global', 'entry.md')}`,
+      )
+    ) {
+      corrupt(
+        path,
+        `json-instruction entry ${entryPath} does not name the installer's entry text`,
+      );
     }
     if (typeof value.keyCreated !== 'boolean') {
       corrupt(

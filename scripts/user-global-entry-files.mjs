@@ -17,7 +17,7 @@
 // this module reads no environment variable.
 import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { checkContainment } from './user-global-paths.mjs';
 /** The harnesses that load the entry text, in the order install edits them. */
 export const ENTRY_HARNESSES = ['claude', 'codex', 'opencode'];
@@ -664,6 +664,7 @@ export function planEntryRemoval(fs, entry) {
       }
       from = block.begin - 1;
     }
+    refuseStaleTemp(dirname(entry.path), entry.path, fs);
     const kept = Buffer.concat([
       bytes.subarray(0, from),
       bytes.subarray(block.end),
@@ -692,5 +693,6 @@ export function planEntryRemoval(fs, entry) {
       text = removeMember(after.text, after.root, index);
     }
   }
+  refuseStaleTemp(dirname(entry.path), entry.path, fs);
   return { kind: 'rewrite', priorSha256: sha256Of(bytes), text };
 }

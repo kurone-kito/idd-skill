@@ -19,7 +19,7 @@
 
 import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { FsOps } from './user-global-paths.mts';
 import { checkContainment } from './user-global-paths.mts';
 import type { ReceiptEntry } from './user-global-receipt.mts';
@@ -844,6 +844,7 @@ export function planEntryRemoval(fs: FsOps, entry: EntryRecord): RemovalPlan {
       }
       from = block.begin - 1;
     }
+    refuseStaleTemp(dirname(entry.path), entry.path, fs);
     const kept = Buffer.concat([
       bytes.subarray(0, from),
       bytes.subarray(block.end),
@@ -872,5 +873,6 @@ export function planEntryRemoval(fs: FsOps, entry: EntryRecord): RemovalPlan {
       text = removeMember(after.text, after.root, index);
     }
   }
+  refuseStaleTemp(dirname(entry.path), entry.path, fs);
   return { kind: 'rewrite', priorSha256: sha256Of(bytes), text };
 }

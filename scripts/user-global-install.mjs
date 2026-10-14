@@ -260,6 +260,24 @@ function ownedShape(ctx, entry) {
   }
   return false;
 }
+/**
+ * Refuse when the chain from the harness's walk base down to its directory is
+ * not all real directories. A rewrite through a link above the directory
+ * would otherwise land outside the harness, so uninstall checks the chain too.
+ */
+function assertHarnessChain(ctx, path) {
+  const harness = ENTRY_HARNESSES.find(
+    (name) => join(harnessDirOf(ctx, name), ENTRY_FILE_NAME[name]) === path,
+  );
+  if (harness === undefined) return;
+  const dir = harnessDirOf(ctx, harness);
+  const walk = checkContainment(ctx.entryBases[harness], dir, ctx.fs);
+  if (walk.finalKind !== 'directory') {
+    throw new Error(
+      `${dir} is ${walk.finalKind === 'symlink' ? 'a symbolic link' : `a ${walk.finalKind}`} on the path to ${path}; refusing`,
+    );
+  }
+}
 /** The harness directory a harness's entry file lives in. */
 function harnessDirOf(ctx, harness) {
   return rootNamed(ctx, harness).path;
@@ -1119,6 +1137,13 @@ function buildUninstallPlan(ctx) {
           rewrite,
         });
       };
+      if (
+        walk.missingDirs.length === 0 &&
+        walk.finalKind !== 'absent' &&
+        entryFileOwned(ctx, entry)
+      ) {
+        assertHarnessChain(ctx, entry.path);
+      }
       if (walk.missingDirs.length > 0 || walk.finalKind === 'absent') {
         decide('absent');
       } else if (entry.kind === 'file') {
