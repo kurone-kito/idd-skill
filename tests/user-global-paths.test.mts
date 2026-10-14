@@ -5,9 +5,10 @@
 // data root is not inspected, and a window remains between a containment
 // check and the act that follows it.
 //
-// Symbolic-link, POSIX no-follow, and removal tests skip on Windows, where
-// `constants.O_NOFOLLOW` is undefined and every export refuses by design. The
-// platform-refusal test and the export-list test run on every platform.
+// Tests that use a real symbolic link or the real no-follow opens skip on
+// Windows, where `constants.O_NOFOLLOW` is undefined and every export refuses
+// by design. Tests that inject fixed flag values run on every platform, as do
+// the platform-refusal test and the export-list test.
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -100,9 +101,20 @@ function withoutNoFollow(): FsOps {
   });
 }
 
+/**
+ * Fixed flag values, so the refusal under test rather than the host platform
+ * decides the outcome. Used only where the flags are checked before any open.
+ */
+function withFixedFlags(overrides: Record<string, unknown> = {}): FsOps {
+  return fsWith({
+    constants: { O_NOFOLLOW: 0, O_NONBLOCK: 0 },
+    ...overrides,
+  });
+}
+
 /** `lstat` that answers one path with `replacement` (or throws it). */
 function lstatReplacing(path: string, replacement: unknown): FsOps {
-  return fsWith({
+  return withFixedFlags({
     lstatSync: (p: string) => {
       if (p === path) {
         if (replacement instanceof Error) throw replacement;
@@ -199,7 +211,7 @@ test('a version outside the required pattern is refused', () => {
   withBox((box) => {
     makeRoot(box);
     assertThrowsMatching(
-      () => repointCurrent(box.dataRoot, '../escape'),
+      () => repointCurrent(box.dataRoot, '../escape', withFixedFlags()),
       /does not match the required pattern/,
     );
   });
