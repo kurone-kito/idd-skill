@@ -1081,8 +1081,8 @@ function carrierStructureView(rawText) {
   // Raw HTML blocks are not Markdown structure either: GitHub renders their
   // content as HTML, so a heading or fence inside one does not count (#4250
   // review, Copilot). Their ranges are blanked along with the comments.
-  const blank = (ranges) => {
-    const chars = rawNormalized.split('');
+  const blank = (base, ranges) => {
+    const chars = base.split('');
     for (const range of ranges) {
       for (let index = range.start; index < range.end; index += 1) {
         if (chars[index] !== '\n') {
@@ -1094,12 +1094,29 @@ function carrierStructureView(rawText) {
   };
   // The visible view keeps raw HTML text: it still renders, so dependency
   // lines and footers in it count (#4250 review, Copilot).
-  const visibleRaw = blank(commentRanges);
-  const rawFree = blank([...commentRanges, ...htmlBlockRanges]);
+  const visibleRaw = blank(rawNormalized, commentRanges);
+  const rawFree = blank(rawNormalized, [...commentRanges, ...htmlBlockRanges]);
+  // The visible view's code is found in rawFree, where HTML blocks are blank,
+  // so a fence-looking line inside a raw HTML block is text, not a fence
+  // (#4250 review, Copilot).
+  // A blanked HTML block reads as indented code in rawFree, so a range that
+  // overlaps an HTML block is that artifact, not code, and is dropped.
+  const visibleCodeRanges = [
+    ...findMarkdownCodeRanges(rawFree),
+    ...findInlineCodeSpans(rawFree).map((span) => ({
+      start: span.index,
+      end: span.end,
+    })),
+  ].filter(
+    (range) =>
+      !htmlBlockRanges.some(
+        (block) => range.start < block.end && block.start < range.end,
+      ),
+  );
   return {
     text: maskMarkdownForScan(rawFree),
     rawFree,
-    visibleText: maskMarkdownForScan(visibleRaw),
+    visibleText: blank(visibleRaw, visibleCodeRanges),
   };
 }
 function buildCarrierFindings(

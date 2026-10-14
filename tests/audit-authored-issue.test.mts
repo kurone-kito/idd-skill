@@ -6393,6 +6393,21 @@ test('a Depends on or Blocked by line behind nested list and blockquote markers 
   }
 });
 
+test('a fence-looking line inside a raw HTML block does not mask the dependency or footer text after it (#4250)', () => {
+  const body = carrierBody({
+    intro:
+      'Holds drafts.\n\n<div>\n```\nDepends on #5\n_Effort: M -- x\n</div>',
+  });
+  assert.equal(
+    carrierFinding(body, 'carrier-release-condition')?.result,
+    'fail',
+  );
+  assert.equal(
+    carrierFinding(body, 'carrier-forbidden-markers')?.result,
+    'fail',
+  );
+});
+
 test('a second ## Drafts or ## Release condition heading fails rather than hiding unchecked drafts (#4250)', () => {
   const secondDrafts = `${carrierBody()}\n## Drafts\n\n### Follow-up C\n\nReview: reviewed\nShape: child\n`;
   assert.equal(carrierFinding(secondDrafts, 'carrier-drafts')?.result, 'fail');
