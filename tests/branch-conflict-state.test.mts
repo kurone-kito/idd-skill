@@ -1629,6 +1629,47 @@ test('parseHeadRollup: keeps every instance when a completed rerun has no valid 
   );
 });
 
+// #4209 review: an unrecognized status is never ordered, so it cannot be
+// hidden by a newer waiting run of the same name and producer.
+test('parseHeadRollup: keeps an unrecognized check state beside a waiting run of its name', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const checkSuite = {
+    app: { databaseId: 15368, slug: 'github-actions' },
+    workflowRun: { workflow: { databaseId: 1, name: 'CI' } },
+  };
+  const nodes = [
+    {
+      __typename: 'CheckRun',
+      name: 'shared',
+      status: 'SOMETHING_NEW',
+      conclusion: null,
+      isRequired: false,
+      checkSuite,
+    },
+    {
+      __typename: 'CheckRun',
+      name: 'shared',
+      status: 'QUEUED',
+      conclusion: null,
+      isRequired: false,
+      checkSuite,
+    },
+  ];
+  assert.deepEqual(
+    parseHeadRollup(
+      {
+        oid: sha,
+        statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } },
+      },
+      sha,
+    ).runs,
+    [
+      { name: 'shared', state: 'unknown', required: false },
+      { name: 'shared', state: 'pending', required: false },
+    ],
+  );
+});
+
 test('classifyBranchConflictState: UNSTABLE routing reads the injected run list', async () => {
   const fixture = loadFixture('clean');
   const base = {

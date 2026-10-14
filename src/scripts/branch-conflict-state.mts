@@ -174,6 +174,23 @@ const STATUS_CONTEXT_PENDING_STATES: ReadonlySet<string> = new Set([
   'REQUESTED',
 ]);
 
+/**
+ * Completed-run conclusions this parser recognizes: the passing set, plus the
+ * failure-side conclusions GitHub reports. Any other conclusion is unknown.
+ */
+const CHECK_RUN_KNOWN_CONCLUSIONS: ReadonlySet<string> = new Set([
+  'SUCCESS',
+  'NEUTRAL',
+  'SKIPPED',
+  'NOT_APPLICABLE',
+  'ACTION_REQUIRED',
+  'CANCELLED',
+  'FAILURE',
+  'STALE',
+  'STARTUP_FAILURE',
+  'TIMED_OUT',
+]);
+
 /** Conclusions and states that count as passing, so they are not listed. */
 const PASSING_CHECK_CONCLUSIONS: ReadonlySet<string> = new Set([
   'SUCCESS',
@@ -369,9 +386,19 @@ function latestInstancePerName(nodes: readonly unknown[]): unknown[] {
     const completedAt =
       isCheckRun && completed ? String(entry.completedAt ?? '') || null : null;
     // A live check run that has not completed is the newest instance by
-    // definition. Every other entry needs a valid timestamp to be ordered.
+    // definition, and a completed one needs a valid timestamp to be ordered.
+    // An unrecognized status or conclusion is never ordered: it parses as
+    // unknown and holds, so it must not be allowed to hide another instance.
+    const recognized = isCheckRun
+      ? completed
+        ? CHECK_RUN_KNOWN_CONCLUSIONS.has(
+            String(entry.conclusion ?? '').toUpperCase(),
+          )
+        : CHECK_RUN_WAITING_STATES.has(String(entry.status ?? '').toUpperCase())
+      : true;
     const orderable =
-      (isCheckRun && !completed) || isCompletedCiTimestamp(completedAt);
+      recognized &&
+      ((isCheckRun && !completed) || isCompletedCiTimestamp(completedAt));
     const group = groups.get(key) ?? [];
     group.push({ node, state, completedAt, orderable });
     groups.set(key, group);
