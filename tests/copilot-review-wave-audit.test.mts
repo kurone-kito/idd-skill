@@ -1839,6 +1839,10 @@ if (args[0] === 'api' && String(args[1]).includes('/pulls/42/comments')) {
   for (const c of fixture.comments) process.stdout.write(JSON.stringify(c) + '\\n');
   process.exit(0);
 }
+if (args[0] === 'pr' && args[1] === 'list') {
+  process.stdout.write(JSON.stringify(fixture.prs ?? []));
+  process.exit(0);
+}
 process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
 process.exit(1);
 `;
@@ -1846,8 +1850,9 @@ process.exit(1);
 const COPILOT_LOGIN = 'copilot-pull-request-reviewer[bot]';
 
 function runCheckWithFixture(
-  fixture: { reviews: unknown[]; comments: unknown[] },
+  fixture: { reviews: unknown[]; comments: unknown[]; prs?: unknown[] },
   extraArgs: string[],
+  selector: string[] = ['--prs', '42'],
 ): { status: number | null; stdout: string; stderr: string } {
   const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-check-'));
   const fixturePath = join(dir, 'fixture.json');
@@ -1856,14 +1861,7 @@ function runCheckWithFixture(
   try {
     const result = spawnSync(
       process.execPath,
-      [
-        CLI_PATH,
-        '--repo',
-        'kurone-kito/idd-skill',
-        '--prs',
-        '42',
-        ...extraArgs,
-      ],
+      [CLI_PATH, '--repo', 'kurone-kito/idd-skill', ...selector, ...extraArgs],
       {
         encoding: 'utf8',
         env: { ...process.env, WAVE_AUDIT_FIXTURE: fixturePath },
@@ -1946,6 +1944,34 @@ test('CLI --check: a contradiction writes the report to stdout, the message to s
     result.stderr,
     /copilot-review-wave-audit: check: 1 recorded triage contradiction/,
   );
+});
+
+test('CLI --check --limit: the merge time from gh pr list reaches the report', () => {
+  // Copilot review of #4268 (Previously missed item): --limit fills mergedAt
+  // from the gh pr list candidates, and --since counts the PR by that date.
+  const result = runCheckWithFixture(
+    {
+      reviews: [
+        {
+          id: 1,
+          submitted_at: '2026-01-01T00:00:00Z',
+          body: NO_FINDINGS_FIXTURE,
+          user: { login: COPILOT_LOGIN },
+        },
+      ],
+      comments: [],
+      prs: [{ number: 42, mergedAt: '2026-10-02T00:00:00Z' }],
+    },
+    ['--check', '--since', '2026-10-01'],
+    ['--limit', '1'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  const parsed = JSON.parse(result.stdout) as {
+    reports: Array<{ pr: number; mergedAt: string | null }>;
+  };
+  assert.equal(parsed.reports[0]?.pr, 42);
+  assert.equal(parsed.reports[0]?.mergedAt, '2026-10-02T00:00:00Z');
 });
 
 test('CLI: --help exits 0 with no gh call', () => {
