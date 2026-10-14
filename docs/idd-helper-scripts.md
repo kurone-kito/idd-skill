@@ -812,6 +812,25 @@ in this preamble, since the fallback differs per helper.
   is trimmed, and an empty or whitespace-only value is a usage error that posts
   nothing. Without the flag the body carries a fixed line saying the helper did
   not verify the criteria.
+  If one of the three apply writes throws, the helper stops at that step,
+  never retries it, and returns the verdict with exit 1. Its `nothingSent`
+  field is `true` only when that write provably sent nothing (a load-control
+  refusal, or for a comment post an HTTP 401, 404, or 422 on its first
+  attempt), and `false` when the write may have landed. The next action depends
+  on the step. A failed evidence comment leaves the claim held, so release it.
+  A failed close may leave the roadmap open with the evidence comment posted,
+  so read its state: release the claim if the roadmap is closed, and close it as
+  completed and then release the claim if it is still open and the claim is
+  still this session's. A failed release leaves the roadmap closed with the
+  claim possibly active, so read the roadmap's comments for this claim's
+  `unclaimed-by` marker and release the claim when that marker is absent and
+  the claim is still this session's. In every case, do not run `--apply` again.
+  Releasing a claim means posting its `unclaimed-by` marker with the
+  `post-idd-marker` helper, using the claim's agent id, claim id, and a release
+  timestamp. A refused release was observed on 2026-10-14 on roadmap
+  [kurone-kito/idd-skill#4108](https://github.com/kurone-kito/idd-skill/issues/4108):
+  the roadmap had closed, the claim stayed active, and the operator posted the
+  marker by hand.
 - `scripts/discover-readiness-check.mjs` for A3 readiness criterion
   evaluation (referenced in
   [kurone-kito/idd-skill#391](https://github.com/kurone-kito/idd-skill/issues/391)).
