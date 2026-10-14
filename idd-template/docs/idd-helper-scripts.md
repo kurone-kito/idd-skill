@@ -1188,16 +1188,24 @@ in this preamble, since the fallback differs per helper.
   ```
 
 - `scripts/publish-authoring-hold.mjs` (`idd-publish-authoring-hold`,
-  issues #4127 and #4171) publishes one drafted orphan issue under the
-  issue-authoring hold, running the authoring contract's New-issue
-  ownership steps in order. It refuses `--shape child` (exit `2`),
-  requires `--review-result <path>` (a JSON object with
-  `"completed": true`; any `findings` entry must be `fixed` or
-  `rejected`), and stops with the `blocked-by-human` outcome (exit `2`)
-  when `issueAuthoring.journalIssue` is unset or unverifiable. It then
-  puts the `authoring-publication` line first in the body, lints that
-  exact body with `audit-authored-issue.mjs --new-issue` and looks up
-  the authoring and bucket labels. Without `--apply` it renders the
+  issues #4127 and #4171, and issue `#4253`) publishes one drafted issue
+  under the issue-authoring hold, running the authoring contract's
+  New-issue ownership steps in order. The default `--shape orphan`
+  publishes a standalone held orphan. `--shape carrier` publishes a draft
+  carrier, labelled with the authoring label and the authoring-only label,
+  and accepts only `--bucket ready` (exit `2` otherwise). A carrier is
+  linted with `audit-authored-issue.mjs --shape carrier`, which needs
+  markdown-it: without it the lint refuses, and nothing is written. The
+  helper refuses `--shape child` (exit `2`). An orphan requires
+  `--review-result <path>` (a JSON object with `"completed": true`; any
+  `findings` entry must be `fixed` or `rejected`); a carrier's review
+  result is optional, and when given it must be a JSON object whose
+  `completed` is a boolean and whose `findings`, if present, is an array of
+  objects. The helper stops with the `blocked-by-human`
+  outcome (exit `2`) when `issueAuthoring.journalIssue` is unset or
+  unverifiable. It then puts the `authoring-publication` line first in the
+  body, lints that exact body with `audit-authored-issue.mjs --new-issue`
+  and looks up the labels it applies. Without `--apply` it renders the
   pending publication-intent record through `post-idd-marker.mjs`'s dry
   run and prints the plan (exit `0`), with no trust or permission
   check. With `--apply`, and only when the authenticated login is listed
