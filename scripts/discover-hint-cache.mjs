@@ -29,9 +29,11 @@ import {
 /**
  * Bumped when a helper's cached output shape changes incompatibly. 3 (#4115):
  * the orphan output gained a `filtered.authoring_journal_target` bucket, so a
- * hint written before the bump must not be served.
+ * hint written before the bump must not be served. 4 (#4257): the orphan
+ * output gained `draftCarriers` and its matching `counts` keys, so a hint
+ * written before the bump must not be served either.
  */
-const HINT_FORMAT_VERSION = 3;
+const HINT_FORMAT_VERSION = 4;
 /** Cache-namespace names; each yields a distinct entry identity. */
 const HINT_UNIT = 'discover-hint';
 const GENERATION_UNIT = 'discover-hint-generation';
@@ -280,7 +282,7 @@ function hintEnv(env) {
 function hintKeyInputs(request, config, generation, env) {
   return {
     helper: request.helper,
-    formatVersion: HINT_FORMAT_VERSION,
+    formatVersion: request.deps?.formatVersion ?? HINT_FORMAT_VERSION,
     args: request.args,
     policy: request.policy,
     env: hintEnv(env),
