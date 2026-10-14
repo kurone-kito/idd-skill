@@ -331,10 +331,10 @@ function checkRunProducerKey(entry: Record<string, unknown>): string {
  * required-check gate governs by the latest instance, so a stale failure must
  * not hold a current waiting run. A check run and a status context that share
  * a display name stay separate. Unnamed entries each keep their own slot, so
- * they never collapse together. The tie-break is the shared
+ * they never collapse together. A status context is keyed by its creator, so
+ * the same name from two producers stays apart, and a status context with no
+ * creator keeps its own slot. The tie-break is the shared
  * `selectLatestCheckInstance`, the same reducer the required-check gate uses.
- * A status context with the same name from two different producers still
- * shares one key, because GraphQL exposes no producer identity for it.
  */
 function latestInstancePerName(nodes: readonly unknown[]): unknown[] {
   const groups = new Map<
@@ -347,11 +347,18 @@ function latestInstancePerName(nodes: readonly unknown[]): unknown[] {
     const name = String(
       entry.__typename === 'StatusContext' ? entry.context : entry.name,
     );
-    const key = name
-      ? `${String(entry.__typename)}:${name}:${
-          isCheckRun ? checkRunProducerKey(entry) : ''
-        }`
-      : `unnamed:${index}`;
+    // A status context's producer is its creator. With no creator, the same
+    // name cannot be attributed to one producer, so the entry keeps its own
+    // slot (fail closed) rather than collapsing into another producer's entry.
+    const creator = String(
+      (entry.creator as { login?: unknown } | null | undefined)?.login ?? '',
+    );
+    let key = `unnamed:${index}`;
+    if (name && isCheckRun) {
+      key = `CheckRun:${name}:${checkRunProducerKey(entry)}`;
+    } else if (name && creator) {
+      key = `StatusContext:${name}:${creator}`;
+    }
     const completed = String(entry.status ?? '').toUpperCase() === 'COMPLETED';
     const state = isCheckRun
       ? completed
@@ -391,7 +398,7 @@ const HEAD_ROLLUP_QUERY = `query($owner: String!, $repo: String!, $oid: GitObjec
                 isRequired(pullRequestNumber: $number)
                 checkSuite { app { databaseId slug } workflowRun { workflow { databaseId name } } }
               }
-              ... on StatusContext { context state createdAt isRequired(pullRequestNumber: $number) }
+              ... on StatusContext { context state createdAt creator { login } isRequired(pullRequestNumber: $number) }
             }
           }
         }

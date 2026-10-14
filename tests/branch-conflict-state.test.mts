@@ -1448,6 +1448,7 @@ test('parseHeadRollup: orders a re-posted status context by createdAt', () => {
       context: 'legacy',
       state: 'FAILURE',
       createdAt: '2026-10-14T08:00:00Z',
+      creator: { login: 'bot-a' },
       isRequired: false,
     },
     {
@@ -1455,6 +1456,7 @@ test('parseHeadRollup: orders a re-posted status context by createdAt', () => {
       context: 'legacy',
       state: 'PENDING',
       createdAt: '2026-10-14T09:00:00Z',
+      creator: { login: 'bot-a' },
       isRequired: false,
     },
   ];
@@ -1467,6 +1469,80 @@ test('parseHeadRollup: orders a re-posted status context by createdAt', () => {
       sha,
     ).runs,
     [{ name: 'legacy', state: 'pending', required: false }],
+  );
+});
+
+// #4209 review: the same status context name from two creators must not
+// collapse, or a stale failure from one creator could hide the other's run.
+test('parseHeadRollup: keeps the same status context name from two creators apart', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const nodes = [
+    {
+      __typename: 'StatusContext',
+      context: 'shared',
+      state: 'FAILURE',
+      createdAt: '2026-10-14T08:00:00Z',
+      creator: { login: 'bot-a' },
+      isRequired: false,
+    },
+    {
+      __typename: 'StatusContext',
+      context: 'shared',
+      state: 'PENDING',
+      createdAt: '2026-10-14T09:00:00Z',
+      creator: { login: 'bot-b' },
+      isRequired: false,
+    },
+  ];
+  assert.deepEqual(
+    parseHeadRollup(
+      {
+        oid: sha,
+        statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } },
+      },
+      sha,
+    ).runs,
+    [
+      { name: 'shared', state: 'failure', required: false },
+      { name: 'shared', state: 'pending', required: false },
+    ],
+  );
+});
+
+// A status context with no creator cannot be attributed to one producer, so
+// it keeps its own slot instead of collapsing with a same-named entry.
+test('parseHeadRollup: keeps status contexts without a creator apart', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const nodes = [
+    {
+      __typename: 'StatusContext',
+      context: 'orphan',
+      state: 'FAILURE',
+      createdAt: '2026-10-14T08:00:00Z',
+      creator: null,
+      isRequired: false,
+    },
+    {
+      __typename: 'StatusContext',
+      context: 'orphan',
+      state: 'PENDING',
+      createdAt: '2026-10-14T09:00:00Z',
+      creator: null,
+      isRequired: false,
+    },
+  ];
+  assert.deepEqual(
+    parseHeadRollup(
+      {
+        oid: sha,
+        statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } },
+      },
+      sha,
+    ).runs,
+    [
+      { name: 'orphan', state: 'failure', required: false },
+      { name: 'orphan', state: 'pending', required: false },
+    ],
   );
 });
 
