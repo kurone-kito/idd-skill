@@ -1919,6 +1919,29 @@ test('--apply: a release that may have landed (HTTP 502, no status) is not repor
   }
 });
 
+test('--apply: a rejected release comment (HTTP 401, 404, 422) sent nothing', async () => {
+  for (const status of [401, 404, 422]) {
+    const failure = httpFailure(status);
+    const { deps, calls } = makeDeps(readyReport(), {
+      releaseClaim: () => {
+        throw failure;
+      },
+    });
+    const { verdict, exitCode } = await runRoadmapAuditExecute(
+      APPLY_ARGS,
+      deps,
+    );
+
+    assert.equal(exitCode, 1, `HTTP ${status}`);
+    assert.equal(verdict.closed, true, `HTTP ${status}`);
+    assert.equal(verdict.claimReleased, false, `HTTP ${status}`);
+    assert.equal(verdict.nothingSent, true, `HTTP ${status}`);
+    assert.match(verdict.result, /claim is still active/, `HTTP ${status}`);
+    assertPartialResult(verdict.result, failure);
+    assert.deepEqual(calls.closed, [ROADMAP], `HTTP ${status}`);
+  }
+});
+
 test('the successful apply verdict keeps its shape and carries no nothingSent key', async () => {
   const { deps } = makeDeps(readyReport());
   const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
