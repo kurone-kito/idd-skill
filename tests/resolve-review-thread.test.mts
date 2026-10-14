@@ -37,6 +37,7 @@ import {
   runBodyItemDisposition,
   type TriageFlags,
   TriageReadError,
+  TriageRefusedError,
   TriageUsageError,
   validateTriageFlags,
 } from '../src/scripts/resolve-review-thread.mts';
@@ -2307,6 +2308,12 @@ if (args[0] === 'pr' && args[1] === 'view') {
   out(JSON.stringify({ headRefOid: '${TRIAGE_HEAD}', headRefName: 'main', author: { login: 'someone' }, url: 'https://example.invalid/pr/42', closingIssuesReferences: [] }));
 }
 if (args[0] === 'api' && joined.includes('/pulls/42/reviews')) {
+  if (process.env.TRIAGE_REVIEW_SEQUENCE) {
+    // One review list per read, in order; the last list repeats (#4187).
+    const seq = JSON.parse(process.env.TRIAGE_REVIEW_SEQUENCE);
+    const reads = fs.readFileSync(process.env.TRIAGE_CALLS, 'utf8').split('\\n').filter((line) => line.includes('/pulls/42/reviews')).length;
+    out(JSON.stringify(seq[Math.min(reads, seq.length) - 1]));
+  }
   ${reviewsRoute}
 }
 if (args[0] === 'api' && joined.includes('/issues/42/comments') && !args.includes('POST')) {
@@ -3401,4 +3408,81 @@ test('validateTriageFlags refuses a body that already carries a Triage line when
       deferByUrgency: 'severity-tiered',
     }),
   );
+});
+
+test('an apply judges the verdict again right before the post, so a count that crossed the threshold refuses (#4187)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'medium',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(4),
+    {
+      // The early read sees four reviews (step 1: keep). The read right before
+      // the post sees seven (step 2: defer), so the post must be refused.
+      TRIAGE_REVIEW_SEQUENCE: JSON.stringify([
+        triageReviewRows(4),
+        triageReviewRows(7),
+      ]),
+    },
+  );
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(
+    run.stderr,
+    /triage verdict: defer \(eligibility high, blocked by none\); pass --override "<reason>" to post anyway/u,
+  );
+  assert.deepEqual(run.posted, []);
+  assertNoWrite(run);
+  // Both the early read and the late read reached GitHub.
+  assert.equal(
+    run.calls.filter((call) =>
+      call.some((arg) => arg.includes('/pulls/42/reviews')),
+    ).length,
+    2,
+  );
+});
+
+test('runBodyItemDisposition refreshes the body after the claim check and posts nothing when it refuses (#4187)', () => {
+  const port = bodyItemPort([BODY_ITEM_CLAIM]);
+  assert.throws(
+    () =>
+      runBodyItemDisposition(port, {
+        pr: 42,
+        reviewId: BODY_ITEM_REVIEW_ID,
+        itemTitle: BODY_ITEM_TITLE,
+        stampedBody: BODY_ITEM_STAMPED,
+        apply: true,
+        assertClaim: bodyItemAssertClaim(port, 'claim-a'),
+        refreshBody: () => {
+          throw new TriageRefusedError('refused by the late verdict');
+        },
+      }),
+    (error: unknown) => error instanceof TriageRefusedError,
+  );
+  assert.equal((port.fixture.postedComments ?? []).length, 0);
+});
+
+test('runBodyItemDisposition posts the body refreshBody returns, not the early one (#4187)', () => {
+  const port = bodyItemPort([BODY_ITEM_CLAIM]);
+  const refreshed =
+    '**Rejected** — refreshed on the late read\n\n<!-- idd-skill-review-reply -->';
+  const { report } = runBodyItemDisposition(port, {
+    pr: 42,
+    reviewId: BODY_ITEM_REVIEW_ID,
+    itemTitle: BODY_ITEM_TITLE,
+    stampedBody: BODY_ITEM_STAMPED,
+    apply: true,
+    assertClaim: bodyItemAssertClaim(port, 'claim-a'),
+    refreshBody: () => refreshed,
+  });
+  assert.deepEqual(port.fixture.postedComments, [
+    { number: 42, body: refreshed },
+  ]);
+  assert.equal(report.body, refreshed);
 });

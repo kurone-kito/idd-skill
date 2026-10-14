@@ -346,6 +346,11 @@ export function runBodyItemDisposition(
     stampedBody: string;
     apply: boolean;
     assertClaim: () => void;
+    /**
+     * Rebuilds the stamped body from a fresh read, called after the claim check
+     * and right before the post (#4187). Absent in a dry run.
+     */
+    refreshBody?: () => string;
   },
 ): { report: ResolveReviewThreadReport; exitCode: 0 | 1 } {
   const report: ResolveReviewThreadReport = {
@@ -375,7 +380,9 @@ export function runBodyItemDisposition(
     return { report, exitCode: 0 };
   }
   input.assertClaim();
-  const posted = port.postWorkItemComment(input.pr, input.stampedBody);
+  const body = input.refreshBody ? input.refreshBody() : input.stampedBody;
+  report.body = body;
+  const posted = port.postWorkItemComment(input.pr, body);
   report.status = 'applied';
   report.replyId = posted.id;
   return { report, exitCode: 0 };
@@ -410,6 +417,12 @@ export interface TriageFlags {
 
 /** A refused triage input. The CLI exits 1 with kind `usage` and posts nothing. */
 export class TriageUsageError extends Error {}
+
+/**
+ * The `enforce` refusal, raised by the late verdict check right before a post
+ * (#4187). The CLI exits 1 with kind `gate` and the post is not made.
+ */
+export class TriageRefusedError extends Error {}
 
 /** A failed read of the reviews or the head. The CLI reports kind `transport`. */
 export class TriageReadError extends Error {
@@ -731,6 +744,14 @@ export function computeTriageVerdict(
     eligibility: decision.eligibility,
     blocked: decision.blockedBy,
   };
+}
+
+/**
+ * The one stderr line a verdict prints: the verdict, its eligibility tier, and
+ * its block reason (#4187). The refusal text is built from it.
+ */
+function verdictLine(verdict: TriageVerdict): string {
+  return `triage verdict: ${verdict.verdict} (eligibility ${verdict.eligibility ?? 'none'}, blocked by ${verdict.blocked ?? 'none'})`;
 }
 
 /**
@@ -1471,27 +1492,58 @@ function main(): HelperCliResult {
     );
   }
   const stampedBody = built.body;
-  // #4187: the verdict prints once, in dry run and apply. Under `enforce` an
-  // apply of an Accepted reply the matrix defers is refused here, before any
-  // write, and the refusal carries the same text plus the override hint. A
-  // refusal covers both targets, because this runs before the body-item branch.
+  // #4187: an apply judges the verdict twice. The early read above can refuse
+  // before any claim or thread read. `freshBodyForApply` reads again right
+  // before the post, so the review count the post lands under decides. A dry
+  // run prints its one verdict line here; an apply prints its one line at the
+  // late read, unless the early read already refuses.
+  const refusalFor = (verdict: TriageVerdict): string | null =>
+    effectiveTriageRecord === 'enforce' &&
+    verdict.verdict === 'defer' &&
+    DISPOSITION_ACCEPTED_PREFIX_RE.test(args.body.trimEnd()) &&
+    triageFlags.override === null
+      ? `${verdictLine(verdict)}; pass --override "<reason>" to post anyway`
+      : null;
   if (built.verdict !== null) {
-    const verdictText = `triage verdict: ${built.verdict.verdict} (eligibility ${built.verdict.eligibility ?? 'none'}, blocked by ${built.verdict.blocked ?? 'none'})`;
-    if (
-      effectiveTriageRecord === 'enforce' &&
-      args.apply &&
-      built.verdict.verdict === 'defer' &&
-      DISPOSITION_ACCEPTED_PREFIX_RE.test(args.body.trimEnd()) &&
-      triageFlags.override === null
-    ) {
-      const refusal = `${verdictText}; pass --override "<reason>" to post anyway`;
-      writeStderrSync(`${refusal}\n`);
-      exitClassified(1, 'gate', refusal);
+    const earlyRefusal = args.apply ? refusalFor(built.verdict) : null;
+    if (earlyRefusal !== null) {
+      writeStderrSync(`${earlyRefusal}\n`);
+      exitClassified(1, 'gate', earlyRefusal);
     }
-    writeStderrSync(`${verdictText}\n`);
+    if (!args.apply) {
+      writeStderrSync(`${verdictLine(built.verdict)}\n`);
+    }
   }
+  const freshBodyForApply = (): string => {
+    const fresh = buildTriageReplyBody({
+      port,
+      pr,
+      rawBody,
+      markerPrefix:
+        typeof markerPrefixRaw === 'string' ? markerPrefixRaw : undefined,
+      deferByUrgency: triagePolicy.deferByUrgency,
+      deferRelaxAtRounds: triagePolicy.deferRelaxAtRounds,
+      flags: triageFlags,
+    });
+    if (fresh.verdict !== null) {
+      const refusal = refusalFor(fresh.verdict);
+      if (refusal !== null) {
+        writeStderrSync(`${refusal}\n`);
+        throw new TriageRefusedError(refusal);
+      }
+      writeStderrSync(`${verdictLine(fresh.verdict)}\n`);
+    }
+    return fresh.body;
+  };
   if (bodyItem) {
-    runBodyItemCli(port, args, { pr, owner, repo, iddConfig, stampedBody });
+    runBodyItemCli(port, args, {
+      pr,
+      owner,
+      repo,
+      iddConfig,
+      stampedBody,
+      refreshBody: freshBodyForApply,
+    });
   }
 
   const commentId = args.commentId as number;
@@ -1547,15 +1599,15 @@ function main(): HelperCliResult {
   // posted, resolve not confirmed) reports the reply id instead of looking like
   // nothing was posted — that distinguishes "retry the resolve" from "re-post".
   let postedReplyId: number | undefined;
+  let postedBody: string | undefined;
   try {
     const result = applyResolveReviewThread({
       assertClaim,
       postReply: () => {
-        const posted = port.postReviewCommentReply(
-          pr,
-          rootCommentId,
-          stampedBody,
-        );
+        // The verdict is judged again right before the post (#4187).
+        const body = freshBodyForApply();
+        postedBody = body;
+        const posted = port.postReviewCommentReply(pr, rootCommentId, body);
         postedReplyId = posted.id;
         return posted;
       },
@@ -1564,6 +1616,9 @@ function main(): HelperCliResult {
     });
     report.status = 'applied';
     report.replyId = result.replyId;
+    if (postedBody !== undefined) {
+      report.body = postedBody;
+    }
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     process.exit(0);
   } catch (error) {
@@ -1588,6 +1643,10 @@ function main(): HelperCliResult {
  * keeps transport/not-found.
  */
 function classifyMutationErrorKind(error: unknown): IddHelperErrorKind {
+  // The late verdict refusal is a completed gate, not a transport failure (#4187).
+  if (error instanceof TriageRefusedError) {
+    return 'gate';
+  }
   const classified = classifyHelperError(error);
   const message = (error as Error)?.message ?? '';
   return classified.kind === 'transport' || classified.kind === 'not-found'
@@ -1743,6 +1802,8 @@ function runBodyItemCli(
     repo: string;
     iddConfig: ReturnType<typeof loadIddConfig>;
     stampedBody: string;
+    /** The late verdict check's body builder, for an apply (#4187). */
+    refreshBody: () => string;
   },
 ): never {
   const { pr, stampedBody } = context;
@@ -1762,6 +1823,7 @@ function runBodyItemCli(
       stampedBody,
       apply: args.apply,
       assertClaim: buildClaimAssertion(port, args, context),
+      refreshBody: context.refreshBody,
     });
     process.stdout.write(`${JSON.stringify(result.report, null, 2)}\n`);
     if (result.exitCode === 0) {
