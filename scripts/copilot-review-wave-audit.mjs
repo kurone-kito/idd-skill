@@ -186,14 +186,16 @@ export function resolveThreadDisposition(findingId, comments) {
 const TRIAGE_URGENCIES = ['very-low', 'low', 'medium', 'high'];
 const TRIAGE_STEPS = ['0', '1', '2'];
 const TRIAGE_OUTCOMES = ['accepted', 'deferred', 'rejected'];
-// A Triage-like line counts as an attempted record, even when it is indented,
-// bulleted, bold or `*`-emphasised, lower-case, or lacks the space after the
-// colon, so a malformed line cannot pass as unrecorded (Copilot reviews of
-// #4268). The prefix class is spaces, tabs, `-`, `+`, and `*`, and it never
-// spans a newline. Underscore emphasis is not matched. A reply is recorded when its first Triage-like line parses
-// with `parseTriageLine`. A reply whose first Triage-like line does not parse
+// A Triage-like line is an attempted record, so a malformed one cannot pass as
+// unrecorded (Copilot reviews of #4268). It is the case-insensitive word
+// `Triage` with an optional space or tab before its colon, after optional
+// indent, a list bullet (`-`, `+`, `*`), or `*`/`**` emphasis around the word,
+// the colon, or both. Underscore emphasis is not matched. The prefix class
+// never spans a newline. A reply is recorded when its first Triage-like line
+// parses with `parseTriageLine`. A reply whose first such line does not parse
 // is malformed, even when a later line would parse: that fails closed.
-const TRIAGE_OPENER_LINE_RE = /^[ \t*+-]*(?:\*\*)?triage(?:\*\*)?[ \t]*:/iu;
+const TRIAGE_OPENER_LINE_RE =
+  /^[ \t*+-]*(?:\*\*|\*)?triage(?:\*\*|\*)?[ \t]*:/iu;
 function isTriageOutcome(disposition) {
   return TRIAGE_OUTCOMES.includes(disposition);
 }
@@ -250,7 +252,7 @@ function computeTriageAudit(threads, comments) {
     const outcome = thread.disposition;
     const { body } = resolveThreadDispositionReply(thread.id, comments);
     // The first Triage-like line decides, so a malformed first line is not
-    // rescued by a later readable one (Copilot review of #4268).
+    // rescued by a later parseable one (Copilot review of #4268).
     const opener =
       body === null
         ? undefined

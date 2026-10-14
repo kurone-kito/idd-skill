@@ -1323,7 +1323,7 @@ test('computePrAudit triage: a Triage line with no space after the colon is malf
   );
 });
 
-test('computePrAudit triage: a malformed first Triage-like line is not rescued by a later readable one', () => {
+test('computePrAudit triage: a malformed first Triage-like line is not rescued by a later parseable one', () => {
   // Copilot review of #4268 (Previously missed item): the first Triage-like
   // line decides, so a no-space malformed opener before a valid line is malformed.
   const report = computePrAudit(
@@ -1351,7 +1351,7 @@ test('computePrAudit triage: a malformed first Triage-like line is not rescued b
 });
 
 test('computePrAudit triage: a bulleted opener before a valid column-0 line is malformed, not recorded', () => {
-  // The first Triage-like line is the bullet, so the later readable line does
+  // The first Triage-like line is the bullet, so the later parseable line does
   // not rescue it. This is the case the first-line rule changes.
   const report = computePrAudit(
     1,
@@ -1376,7 +1376,7 @@ test('computePrAudit triage: a bulleted opener before a valid column-0 line is m
   assert.equal(report.triage.malformed, 1);
 });
 
-test('computePrAudit triage: a readable column-0 line wins over a Triage-like stray line', () => {
+test('computePrAudit triage: a parseable column-0 line wins over a Triage-like stray line', () => {
   const report = computePrAudit(
     1,
     [
@@ -1429,6 +1429,7 @@ test('computePrAudit triage: a Triage-like line off column 0 or without the spac
     '**Triage:** tier low; urgency medium; step 2; verdict defer',
     '  Triage: tier low; urgency medium; step 2; verdict defer',
     'triage: tier low; urgency medium; step 2; verdict defer',
+    '*Triage*: tier low; urgency medium; step 2; verdict defer',
   ];
   variants.forEach((line, index) => {
     const findingId = 8060 + index;
@@ -1867,7 +1868,8 @@ if (args[0] === 'api' && String(args[1]).includes('/pulls/42/comments')) {
 }
 if (args[0] === 'pr' && args[1] === 'list') {
   // Pin the flags the CLI must send, so the stub cannot pass for wrong ones.
-  const pinned = args.includes('merged') && args.includes('--json') && args.includes('number,mergedAt');
+  const flagAt = (flag) => args[args.indexOf(flag) + 1];
+  const pinned = flagAt('--state') === 'merged' && flagAt('--json') === 'number,mergedAt' && flagAt('--repo') !== undefined;
   if (!pinned) {
     process.stderr.write('unexpected gh pr list flags: ' + args.join(' ') + '\\n');
     process.exit(1);

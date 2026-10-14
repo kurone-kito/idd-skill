@@ -188,9 +188,9 @@ export interface TriageStepCounts {
  * Recorded `Triage:` lines on finding threads whose disposition is accepted,
  * deferred, or rejected (issue #4189). `recorded` and `unrecorded` partition
  * those threads; `malformed` is the subset of `unrecorded` whose reply's first
- * Triage-like line (a case-insensitive `Triage:` opener after
- * optional indent, bullet, or emphasis) yields no record, so parser drift shows
- * up as a count instead of silently lowering the recorded share.
+ * Triage-like line (the opener forms of `TRIAGE_OPENER_LINE_RE`) yields no
+ * record, so parser drift shows up as a count instead of silently lowering the
+ * recorded share.
  */
 export interface TriageAudit {
   recorded: number;
@@ -395,14 +395,16 @@ const TRIAGE_OUTCOMES: readonly TriageOutcome[] = [
   'deferred',
   'rejected',
 ];
-// A Triage-like line counts as an attempted record, even when it is indented,
-// bulleted, bold or `*`-emphasised, lower-case, or lacks the space after the
-// colon, so a malformed line cannot pass as unrecorded (Copilot reviews of
-// #4268). The prefix class is spaces, tabs, `-`, `+`, and `*`, and it never
-// spans a newline. Underscore emphasis is not matched. A reply is recorded when its first Triage-like line parses
-// with `parseTriageLine`. A reply whose first Triage-like line does not parse
+// A Triage-like line is an attempted record, so a malformed one cannot pass as
+// unrecorded (Copilot reviews of #4268). It is the case-insensitive word
+// `Triage` with an optional space or tab before its colon, after optional
+// indent, a list bullet (`-`, `+`, `*`), or `*`/`**` emphasis around the word,
+// the colon, or both. Underscore emphasis is not matched. The prefix class
+// never spans a newline. A reply is recorded when its first Triage-like line
+// parses with `parseTriageLine`. A reply whose first such line does not parse
 // is malformed, even when a later line would parse: that fails closed.
-const TRIAGE_OPENER_LINE_RE = /^[ \t*+-]*(?:\*\*)?triage(?:\*\*)?[ \t]*:/iu;
+const TRIAGE_OPENER_LINE_RE =
+  /^[ \t*+-]*(?:\*\*|\*)?triage(?:\*\*|\*)?[ \t]*:/iu;
 
 function isTriageOutcome(
   disposition: Disposition,
@@ -469,7 +471,7 @@ function computeTriageAudit(
     const outcome = thread.disposition;
     const { body } = resolveThreadDispositionReply(thread.id, comments);
     // The first Triage-like line decides, so a malformed first line is not
-    // rescued by a later readable one (Copilot review of #4268).
+    // rescued by a later parseable one (Copilot review of #4268).
     const opener =
       body === null
         ? undefined
