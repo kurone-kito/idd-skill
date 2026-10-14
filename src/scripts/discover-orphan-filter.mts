@@ -838,8 +838,7 @@ export function classifyIssue(
   }
   // #4115: the configured authoring journal is checked in the same
   // number-first position, after the draft-carrier check, for the same reason:
-  // it carries no markers or
-  // blocking labels of its own.
+  // it carries no markers or blocking labels of its own.
   if (
     options.authoringJournalTarget != null &&
     Number(issue.number) === options.authoringJournalTarget
