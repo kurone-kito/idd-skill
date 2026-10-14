@@ -35,8 +35,6 @@ One entry per worker: the issue number, claim ID, branch, the harness's worker
 handle, the report draft path, and the worker's state (`running`, `reporting`,
 `disposed`, or `stalled`).
 
-Lost on restart: see [recovery](../../docs/idd-workflow.md#orchestrator-restart).
-
 ## 3. Dispatch
 
 1. Run Discover A0 through A4 Step 1.5 as written; its survivors are the
