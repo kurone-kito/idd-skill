@@ -2318,11 +2318,12 @@ the user-global installer could list a user's own `CLAUDE.md` with its
 SHA-256 and make uninstall delete it. The fix makes uninstall remove a
 whole-file entry record only when its content is what the installer
 writes for that harness. The receipt still cannot prove who wrote a
-file, so a forged record for a file that equals the installer's own
-output, or for a file or span delimited by the installer's own marker
-lines, is not refused. The maintainer accepted that residual risk and
-documented it (kurone-kito/idd-skill#4305). A new provenance mechanism
-needs its own decision. The source repository's
+file, so a forged record is not refused for a file that equals the
+installer's own output, for a file or span delimited by the installer's
+own marker lines, or for an `opencode.json` instruction string that
+equals the installer's own entry path. The maintainer accepted that
+residual risk and documented it (kurone-kito/idd-skill#4305). A new
+provenance mechanism needs its own decision. The source repository's
 `docs/idd-design-rationale.md` has the full entry under the same
 heading.
 

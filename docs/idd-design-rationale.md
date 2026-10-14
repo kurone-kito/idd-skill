@@ -2734,7 +2734,11 @@ change (the receipt format is version 1):
   install's output.
 - A `json-instruction` record: the receipt parser accepts only the data
   root's own entry text as the value, so uninstall can remove only that
-  one string from `instructions`.
+  one string from `instructions`, and the then-empty `instructions` key
+  when the record says install created it. The residual risk is a
+  user-authored `instructions` string with that same value, which appears
+  exactly once. The value restriction narrows what a forged record can
+  name; it does not prove who added the string.
 
 This entry covers the entry-file records that issue #4244 added. The
 payload records from issue #4243 are outside the question the
