@@ -35,9 +35,12 @@ import type { WindowsAclReader } from './windows-acl.mts';
 /**
  * Bumped when a helper's cached output shape changes incompatibly. 3 (#4115):
  * the orphan output gained a `filtered.authoring_journal_target` bucket, so a
- * hint written before the bump must not be served.
+ * hint written before the bump must not be served. 4 (#4281): a merged pull
+ * request reference now resolves, and the single-root graph report gained
+ * `pullRequestReferences`, so a hint written before the bump must not keep
+ * serving the old `issue_not_found` answer for that reference.
  */
-const HINT_FORMAT_VERSION = 3;
+const HINT_FORMAT_VERSION = 4;
 
 /** Cache-namespace names; each yields a distinct entry identity. */
 const HINT_UNIT = 'discover-hint';
