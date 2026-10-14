@@ -1430,6 +1430,23 @@ function blankEscapedCommentOpeners(text: string): string {
 }
 
 /**
+ * The inline code spans of `text` that do not overlap a fence (#4250 review,
+ * Copilot). A span can pair the closing delimiter of a fence with a later
+ * backtick run, and the span then runs across the fence's boundary.
+ */
+function inlineSpansOutsideFences(
+  text: string,
+  fencedRanges: readonly { start: number; end: number }[],
+): { index: number; end: number }[] {
+  return findInlineCodeSpans(text).filter(
+    (span) =>
+      !fencedRanges.some(
+        (fence) => span.index < fence.end && fence.start < span.end,
+      ),
+  );
+}
+
+/**
  * The HTML comment ranges and raw HTML block ranges of a normalized body
  * (#4250 review, Copilot). Code can exclude a comment opener only when it is
  * real code: a code range that overlaps an HTML block is text inside that
@@ -1449,23 +1466,24 @@ function carrierCommentRanges(rawNormalized: string): {
   // findMarkdownCodeRanges misses a span that crosses a line break, so
   // multiline spans come from findInlineCodeSpans, with each line-start
   // comment opener carved out of its span.
-  const multilineInlineRanges = findInlineCodeSpans(rawNormalized).flatMap(
-    (span) => {
-      const ranges: { start: number; end: number }[] = [];
-      let start = span.index;
-      for (let position = span.index + 1; position < span.end; position += 1) {
-        if (
-          rawNormalized[position - 1] === '\n' &&
-          rawNormalized.startsWith('<!--', position)
-        ) {
-          ranges.push({ start, end: position });
-          start = position + 1;
-        }
+  const multilineInlineRanges = inlineSpansOutsideFences(
+    rawNormalized,
+    fencedRanges,
+  ).flatMap((span) => {
+    const ranges: { start: number; end: number }[] = [];
+    let start = span.index;
+    for (let position = span.index + 1; position < span.end; position += 1) {
+      if (
+        rawNormalized[position - 1] === '\n' &&
+        rawNormalized.startsWith('<!--', position)
+      ) {
+        ranges.push({ start, end: position });
+        start = position + 1;
       }
-      ranges.push({ start, end: span.end });
-      return ranges;
-    },
-  );
+    }
+    ranges.push({ start, end: span.end });
+    return ranges;
+  });
   const exclusions = [
     ...findMarkdownCodeRanges(rawNormalized),
     ...multilineInlineRanges,
@@ -1554,10 +1572,12 @@ function carrierStructureView(rawText: string): {
   const blocks = [...commentRanges, ...htmlBlockRanges];
   const codeRanges = [
     ...findMarkdownCodeRanges(rawFree),
-    ...findInlineCodeSpans(rawFree).map((span) => ({
-      start: span.index,
-      end: span.end,
-    })),
+    ...inlineSpansOutsideFences(rawFree, findFencedCodeRanges(rawFree)).map(
+      (span) => ({
+        start: span.index,
+        end: span.end,
+      }),
+    ),
   ].filter(
     (range) =>
       !blocks.some(

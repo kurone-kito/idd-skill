@@ -6488,6 +6488,15 @@ test('a fence-looking line inside raw HTML does not mask a live marker after it 
   );
 });
 
+test('an inline code span that starts at a fence closer does not hide a live marker after it (#4250)', () => {
+  const drafts = `${CARRIER_DRAFTS}\n\nSee ${'```'} marks.\n\n<!-- idd-skill-effort: M -->`;
+  assert.equal(
+    carrierFinding(carrierBody({ drafts }), 'carrier-forbidden-markers')
+      ?.result,
+    'fail',
+  );
+});
+
 test('a second ## Drafts or ## Release condition heading fails rather than hiding unchecked drafts (#4250)', () => {
   const secondDrafts = `${carrierBody()}\n## Drafts\n\n### Follow-up C\n\nReview: reviewed\nShape: child\n`;
   assert.equal(carrierFinding(secondDrafts, 'carrier-drafts')?.result, 'fail');
