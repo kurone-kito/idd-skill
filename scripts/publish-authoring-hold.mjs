@@ -5,8 +5,9 @@
 // .mts source named above by `pnpm run build`. Edit the .mts source, never
 // the generated .mjs. See docs/typescript-sources.md.
 //
-// Capability-checked Stage 1 publication of one held orphan issue
-// (kurone-kito/idd-skill#4127). The issue-authoring skill allows a new issue
+// Capability-checked Stage 1 publication of one held issue: a standalone
+// orphan (kurone-kito/idd-skill#4127) or a draft carrier (#4253). The
+// issue-authoring skill allows a new issue
 // only through a create-with-label command and stops when none exists. This
 // helper runs the contract's "New-issue ownership" sequence in order: journal
 // check, publication line, lint, labels, pending intent, create, identity
@@ -384,6 +385,7 @@ function parseArgs(argv) {
     title: text('title'),
     bodyFile: values['body-file'] ?? '',
     reviewResult: values['review-result'] ?? '',
+    reviewResultGiven: values['review-result'] !== undefined,
     shape: text('shape'),
     bucket: text('bucket'),
     apply: values.apply === true,
@@ -670,6 +672,9 @@ function runCli() {
   }
   if (args.bodyFile === '') {
     return usage('--body-file is required');
+  }
+  if (args.reviewResultGiven && args.reviewResult === '') {
+    return usage('--review-result needs a file path');
   }
   if (args.reviewResult === '' && args.shape === 'orphan') {
     return usage(

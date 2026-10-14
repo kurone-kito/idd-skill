@@ -1505,3 +1505,104 @@ test('CLI: --help says the review result is optional for a carrier', () => {
     fixture.restore();
   }
 });
+
+test('CLI: a carrier apply creates a missing authoring-only label before the journal write', () => {
+  const fixture = setup({ labels: ['status:authoring'] });
+  try {
+    const result = fixture.run([...carrierFiles(fixture), '--apply']);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.deepEqual(writeKinds(fixture), [
+      'label',
+      'journal-pending',
+      'create status:authoring,status:authoring-only',
+      'identity-attach',
+      'owner-marker',
+      'member',
+    ]);
+    const created = fixture.state().issues[String(NEW_ISSUE)] as {
+      labels: string[];
+    };
+    assert.deepEqual(created.labels, [
+      'status:authoring',
+      'status:authoring-only',
+    ]);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a carrier whose created issue lacks its labels gets both back as a safe hold and exits 1', () => {
+  const fixture = setup({
+    labels: ['status:authoring', 'status:authoring-only'],
+    dropLabels: true,
+  });
+  try {
+    const result = fixture.run([...carrierFiles(fixture), '--apply']);
+    assert.equal(result.status, 1);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.failedStep, 'create-verify');
+    assert.equal(report.journalState, 'pending');
+    const issue = fixture.state().issues[String(NEW_ISSUE)] as {
+      labels: string[];
+    };
+    assert.deepEqual(issue.labels, [
+      'status:authoring',
+      'status:authoring-only',
+    ]);
+    assert.ok(
+      !fixture.state().comments.some((comment) => comment.issue === NEW_ISSUE),
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a carrier accepts an explicit --bucket ready, which is its default', () => {
+  const fixture = setup({
+    labels: ['status:authoring', 'status:authoring-only'],
+  });
+  try {
+    const result = fixture.run([...carrierFiles(fixture), '--bucket', 'ready']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).mode, 'dry-run');
+    assert.deepEqual(writes(fixture.log()), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: an empty --review-result path is a usage error for either shape, before any gh call', () => {
+  const fixture = setup({
+    labels: ['status:authoring', 'status:authoring-only'],
+  });
+  try {
+    const carrier = fixture.run([
+      ...carrierFiles(fixture),
+      '--review-result',
+      '',
+      '--apply',
+    ]);
+    assert.equal(carrier.status, 2);
+    const body = join(fixture.dir, 'orphan-empty.md');
+    writeFileSync(body, draftBody());
+    const orphan = fixture.run([
+      '--title',
+      TITLE,
+      '--body-file',
+      body,
+      '--review-result',
+      '',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--marker-prefix',
+      'idd-skill',
+      '--apply',
+    ]);
+    assert.equal(orphan.status, 2);
+    assert.deepEqual(fixture.log(), []);
+  } finally {
+    fixture.restore();
+  }
+});
