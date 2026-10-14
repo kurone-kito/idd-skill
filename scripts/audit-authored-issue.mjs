@@ -693,7 +693,13 @@ export function auditAuthoredIssue(body, options) {
   // on (#3281; originally stripMarkdownCodeRegions, which missed
   // indented code), rather than a second, independently-maintained
   // fence tracker.
-  const text = maskMarkdownForScan(rawText);
+  // A draft carrier's marker checks read the carrier marker view, in which a
+  // fence-looking line inside raw HTML masks nothing (#4250 review, Copilot).
+  const carrierViews =
+    options.shape === 'carrier' ? carrierStructureView(rawText) : undefined;
+  const text = carrierViews
+    ? carrierViews.markerText
+    : maskMarkdownForScan(rawText);
   const shape = options.shape;
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
   const blockedByHumanLabelName =
@@ -774,7 +780,7 @@ export function auditAuthoredIssue(body, options) {
       options.upstreamEscalationEnabled === true,
     ),
     checkRequiredHeadings(
-      shape === 'carrier' ? carrierStructureView(rawText).text : text,
+      carrierViews ? carrierViews.text : text,
       shape,
       isBucketAudit,
     ),
@@ -1132,12 +1138,12 @@ function carrierStructureView(rawText) {
   // lines and footers in it count (#4250 review, Copilot).
   const visibleRaw = blank(rawNormalized, commentRanges);
   const rawFree = blank(rawNormalized, [...commentRanges, ...htmlBlockRanges]);
-  // The visible view's code is found in rawFree, where HTML blocks are blank,
-  // so a fence-looking line inside a raw HTML block is text, not a fence
-  // (#4250 review, Copilot).
-  // A blanked HTML block reads as indented code in rawFree, so a range that
-  // overlaps an HTML block is that artifact, not code, and is dropped.
-  const visibleCodeRanges = [
+  // Code is found in rawFree, where comments and HTML blocks are blank. A
+  // range that starts inside one of them is blank-run noise or text there,
+  // not code, so it is dropped. A real fence starts outside them, even when
+  // a comment sits inside it (#4250 review, Copilot).
+  const blocks = [...commentRanges, ...htmlBlockRanges];
+  const codeRanges = [
     ...findMarkdownCodeRanges(rawFree),
     ...findInlineCodeSpans(rawFree).map((span) => ({
       start: span.index,
@@ -1145,14 +1151,32 @@ function carrierStructureView(rawText) {
     })),
   ].filter(
     (range) =>
-      !htmlBlockRanges.some(
-        (block) => range.start < block.end && block.start < range.end,
+      !blocks.some(
+        (block) => block.start <= range.start && range.start < block.end,
       ),
   );
+  // A heading inside a list item is list content, not a carrier section, so
+  // its line is blanked for the section and heading checks (#4250 review,
+  // Copilot).
+  let lineStart = 0;
+  const structureText = maskMarkdownForScan(rawFree)
+    .split('\n')
+    .map((line) => {
+      const start = lineStart;
+      lineStart += line.length + 1;
+      return /^\s*#{2,3}\s/u.test(line) &&
+        stripEnclosingListContentIndent(rawFree, start) !== null
+        ? ' '.repeat(line.length)
+        : line;
+    })
+    .join('\n');
   return {
-    text: maskMarkdownForScan(rawFree),
+    text: structureText,
     rawFree,
-    visibleText: blank(visibleRaw, visibleCodeRanges),
+    visibleText: blank(visibleRaw, codeRanges),
+    // The marker view keeps comment text, so a hidden marker still counts,
+    // and masks only code, so a fence-looking line in raw HTML masks nothing.
+    markerText: blank(rawNormalized, codeRanges),
   };
 }
 function buildCarrierFindings(

@@ -6443,6 +6443,35 @@ test('a fence-looking line inside a comment does not mask a live marker after it
   );
 });
 
+test('a heading inside a list item is list content, not a carrier section or subsection (#4250)', () => {
+  const nestedSection = carrierBody().replace(
+    '## Drafts',
+    '- wrapper\n  ## Drafts',
+  );
+  assert.equal(
+    carrierFinding(nestedSection, 'required-headings')?.result,
+    'fail',
+  );
+  const nestedSubsection = carrierBody({
+    drafts:
+      '- wrapper\n  ### Fake\n\n  Review: reviewed\n  Shape: child\n\n```md\n# x\n```',
+  });
+  assert.equal(
+    carrierFinding(nestedSubsection, 'carrier-drafts')?.result,
+    'fail',
+  );
+});
+
+test('a fence-looking line inside raw HTML does not mask a live marker after it (#4250)', () => {
+  const body = carrierBody({
+    intro: 'Holds drafts.\n\n<div>\n```\n<!-- idd-skill-effort: M -->\n</div>',
+  });
+  assert.equal(
+    carrierFinding(body, 'carrier-forbidden-markers')?.result,
+    'fail',
+  );
+});
+
 test('a second ## Drafts or ## Release condition heading fails rather than hiding unchecked drafts (#4250)', () => {
   const secondDrafts = `${carrierBody()}\n## Drafts\n\n### Follow-up C\n\nReview: reviewed\nShape: child\n`;
   assert.equal(carrierFinding(secondDrafts, 'carrier-drafts')?.result, 'fail');
