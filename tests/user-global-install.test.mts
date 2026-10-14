@@ -829,6 +829,24 @@ test('a manifest path that escapes the payload directory makes install refuse be
   assert.deepEqual(snapshot(home), before);
 });
 
+test('a stale temporary file beside a listed skill file makes install refuse before any write', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceTree();
+  nodeFs.appendFileSync(join(source, 'skills', SKILL_RELATIVE), '\nupgrade\n');
+  nodeFs.writeFileSync(`${skillFileOf(home, '.claude')}.tmp-7`, 'stale\n');
+  const before = snapshot(home);
+
+  assert.throws(
+    () =>
+      installPayload(
+        optionsFor(home, { sourceRoot: source, version: UPGRADE_VERSION }),
+      ),
+    /crashed run/,
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
 test('every placeholder in the installed payload has a mapping', () => {
   const home = makeHome();
   installPayload(optionsFor(home));

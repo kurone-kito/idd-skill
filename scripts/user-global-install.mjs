@@ -73,6 +73,28 @@ function lstatOrNull(path, fs) {
     throw error;
   }
 }
+/**
+ * Refuse when a crashed run left `<path>.tmp-<digits>` beside `path`. The
+ * replacement and repoint primitives refuse that case too, and checking it
+ * here keeps the refusal before any write rather than in the middle of a run.
+ */
+function refuseStaleTemp(path, fs) {
+  let names;
+  try {
+    names = fs.readdirSync(dirname(path));
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return;
+    throw error;
+  }
+  const base = basename(path).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`^${base}\\.tmp-[0-9]+$`);
+  const stale = names.find((name) => pattern.test(name));
+  if (stale !== undefined) {
+    throw new Error(
+      `${join(dirname(path), stale)} exists, so a crashed run left it behind; refusing to replace ${path}; remove it by hand before installing`,
+    );
+  }
+}
 function sha256Hex(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }
@@ -421,6 +443,7 @@ function buildInstallPlan(ctx, sourceRoot, version) {
         if (current === target.sha256) {
           lines.push(`keep ${target.dest}`);
         } else if (listed !== undefined) {
+          refuseStaleTemp(target.dest, fs);
           writes.push({ ...target, root, priorSha256: current });
           lines.push(`replace ${target.dest}`);
         } else {
@@ -439,6 +462,7 @@ function buildInstallPlan(ctx, sourceRoot, version) {
   }
   let current;
   try {
+    refuseStaleTemp(ctx.currentPath, fs);
     const walk = checkContainment(ctx.dataRoot, ctx.currentPath, fs);
     const listedCurrent = entries.get(ctx.currentPath);
     if (listedCurrent !== undefined && listedCurrent.kind !== 'link') {
