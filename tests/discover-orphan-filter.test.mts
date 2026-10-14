@@ -1334,6 +1334,7 @@ test('--draft-carriers rejects the flags that select the orphan path, a cache mo
     ['--autopilot'],
     ['--with-claim-state'],
     ['--current-claim-id', 'abc'],
+    ['--current-claim-id'],
     ['--pr', '3'],
     ['--no-cache'],
     ['--refresh-cache'],

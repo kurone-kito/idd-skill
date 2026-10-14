@@ -483,6 +483,8 @@ interface ParsedArgs {
   autopilot: boolean;
   withClaimState: boolean;
   currentClaimId: string;
+  /** Set when `--current-claim-id` appears, with or without a value (#4257). */
+  currentClaimIdGiven: boolean;
   /** `--no-cache`: compute live and neither read nor write a hint. */
   noCache: boolean;
   /** `--refresh-cache`: recompute strict-fresh and store the result. */
@@ -812,8 +814,8 @@ export function classifyIssue(
   // #4257: a draft carrier is filed as blocked_label before the number-based
   // targets below, so every carrier lands there, as the listing's acceptance
   // criteria require, even when it is also a configured outage or journal
-  // target. audit-authored-issue's carrier-forbidden-markers rule rejects such
-  // a carrier, so this changes only where a malformed carrier is filed.
+  // target. The audit does not reject a carrier that is only such a target, so
+  // this changes where such an issue is filed.
   if (
     labels.has(authoringOnlyLabelName) &&
     createMarkerRegex(markerPrefix, 'draft-carrier').test(bodyForMarkerTests)
@@ -835,7 +837,8 @@ export function classifyIssue(
     return { orphan: false, reason: 'provider_outage_target' };
   }
   // #4115: the configured authoring journal is checked in the same
-  // number-first position, for the same reason: it carries no markers or
+  // number-first position, after the draft-carrier check, for the same reason:
+  // it carries no markers or
   // blocking labels of its own.
   if (
     options.authoringJournalTarget != null &&
@@ -1865,7 +1868,7 @@ function rejectDraftCarrierCombinations(args: ParsedArgs): void {
   if (args.withClaimState) {
     combined.push('--with-claim-state');
   }
-  if (args.currentClaimId !== '') {
+  if (args.currentClaimIdGiven) {
     combined.push('--current-claim-id');
   }
   if (args.pr !== null) {
@@ -2129,6 +2132,7 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
     autopilot: false,
     withClaimState: false,
     currentClaimId: '',
+    currentClaimIdGiven: false,
     noCache: false,
     refreshCache: false,
     purgeCache: false,
@@ -2198,6 +2202,7 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
       continue;
     }
     if (token === '--current-claim-id') {
+      parsed.currentClaimIdGiven = true;
       // Only consume the next token as the id when it exists and is not
       // itself a flag, mirroring discover-roadmap-graph's own parsing, so
       // `--current-claim-id --with-claim-state` does not swallow the
@@ -2272,7 +2277,8 @@ the configured "providerOutage.declarationTarget" -- a permanent,
 adopter-authored coordination issue documented to stay open indefinitely,
 never claimed, never closed, and carrying no roadmap/blocked marker or
 blocking label of its own. Checked by issue number alone, ahead of every
-marker/label check above, since none of them would otherwise catch it.
+marker/label check above, except that a draft carrier is filed under
+"filtered.blocked_label" first. None of those checks would otherwise catch it.
 Absent config leaves this filter a no-op.
 
 "filtered.authoring_journal_target" (#4115) excludes the issue named by the
@@ -2280,10 +2286,11 @@ configured "issueAuthoring.journalIssue", but only when that reference names
 this repository (owner and repo compared case-insensitively). A journal in
 another repository, a malformed reference, or no reference contributes
 nothing. The journal is durable infrastructure, not work, so it is excluded
-by number ahead of the marker and label checks. Its scan covers open issues
-only, so a closed journal is reported only by the per-issue mode of
-discover-readiness-check. When both numbers are equal, the outage reason
-takes precedence.
+by number ahead of the marker and label checks, except that a draft carrier is
+filed under "filtered.blocked_label" first. Its scan covers open issues only,
+so a closed journal is reported only by the per-issue mode of
+discover-readiness-check. When both numbers are equal, the outage reason takes
+precedence for a non-carrier.
 
 "filtered.runtime_observation_precondition" (#2467) excludes an issue whose
 body names a runtime/production-observation precondition in prose --
