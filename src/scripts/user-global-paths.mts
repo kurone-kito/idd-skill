@@ -348,7 +348,6 @@ function assertRepointable(
  * final component's kind and the directories a write would create. Creates
  * nothing and refuses a symbolic link on any component above the final one.
  */
-// audit:ignore-dead-export: consumed by issue #4243
 export function checkContainment(
   root: string,
   target: string,
@@ -364,7 +363,6 @@ export function checkContainment(
  * first. Refuses any existing final component, a link included. If the
  * content write fails after the create, the created file is removed.
  */
-// audit:ignore-dead-export: consumed by issue #4243
 export function writeNewFile(
   root: string,
   target: string,
@@ -407,7 +405,6 @@ export function writeNewFile(
  * temporary file is `<target>.tmp-<pid>`, created exclusively, and any
  * existing `<target>.tmp-<digits>` refuses the replacement.
  */
-// audit:ignore-dead-export: consumed by issue #4243
 export function replaceFileByRename(
   root: string,
   target: string,
@@ -472,7 +469,6 @@ export function replaceFileByRename(
  * recursive; a non-empty directory and a file with a second hard link are
  * refused.
  */
-// audit:ignore-dead-export: consumed by issue #4243
 export function removeSingleEntry(
   root: string,
   target: string,
@@ -502,7 +498,6 @@ export function removeSingleEntry(
  * version directory directly under the data root. Any existing
  * `current.tmp-<digits>` refuses the repoint.
  */
-// audit:ignore-dead-export: consumed by issue #4243
 export function repointCurrent(
   dataRoot: string,
   version: string,
