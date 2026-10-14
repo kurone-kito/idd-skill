@@ -372,6 +372,8 @@ export function runBodyItemDisposition(
     report.error = lookup.error;
     if (input.apply) {
       report.status = 'failed';
+      // Nothing was posted, so the report carries no body (#4187).
+      delete report.body;
     }
     return { report, exitCode: input.apply ? 1 : 0 };
   }
@@ -1505,7 +1507,8 @@ function main(): HelperCliResult {
   // can refuse before any claim or thread read. Under `enforce`,
   // `freshBodyForApply` reads again right before the post, so the review count
   // the post lands under decides. That late read prints a line only when the
-  // verdict changed or the call refuses.
+  // verdict line changed (its verdict, eligibility, or block), or the call
+  // refuses.
   const refusalFor = (verdict: TriageVerdict): string | null =>
     effectiveTriageRecord === 'enforce' &&
     verdict.verdict === 'defer' &&
@@ -1580,6 +1583,8 @@ function main(): HelperCliResult {
     report.error = `no review thread found for comment ${commentId} on PR #${pr}`;
     if (args.apply) {
       report.status = 'failed';
+      // Nothing was posted, so the report carries no body (#4187).
+      delete report.body;
     }
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     // A missing thread is informational in dry-run but a hard failure in apply.
@@ -1596,6 +1601,8 @@ function main(): HelperCliResult {
   const rootCommentId = match.rootCommentId;
   if (rootCommentId === null) {
     report.status = 'failed';
+    // Nothing was posted, so the report carries no body (#4187).
+    delete report.body;
     report.error = `review thread ${match.threadId} exposes no top-level comment id to reply to`;
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     exitClassified(1, 'gate', report.error);

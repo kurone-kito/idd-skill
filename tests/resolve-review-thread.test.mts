@@ -3442,6 +3442,19 @@ test('an apply judges the verdict again right before the post, so a count that c
   );
   assert.deepEqual(run.posted, []);
   assertNoWrite(run);
+  // The early line, then the refusal line.
+  assert.equal((run.stderr.match(/^triage verdict:/gmu) ?? []).length, 2);
+  // Nothing was posted, so the report carries no body.
+  assert.equal(JSON.parse(run.stdout).body, undefined);
+  // The post waits for the claim check: a pr view call falls between the reads.
+  const readIndexes = run.calls.flatMap((call, index) =>
+    call.some((arg) => arg.includes('/pulls/42/reviews')) ? [index] : [],
+  );
+  assert.ok(
+    run.calls
+      .slice(readIndexes[0] + 1, readIndexes[1])
+      .some((call) => call[0] === 'pr' && call[1] === 'view'),
+  );
   // Both the early read and the late read reached GitHub.
   assert.equal(
     run.calls.filter((call) =>
@@ -3543,7 +3556,10 @@ test('an apply whose late verdict read fails posts nothing and reports the read 
     TRIAGE_ENFORCE_CONFIG,
     triageReviewRows(4),
     // The early read succeeds (step 1: keep); the read right before the post fails.
-    { TRIAGE_REVIEW_SEQUENCE: JSON.stringify([triageReviewRows(4), null]) },
+    {
+      TRIAGE_REVIEW_SEQUENCE: JSON.stringify([triageReviewRows(4), null]),
+      IDD_HELPER_ERROR_ENVELOPE: '1',
+    },
   );
   assert.equal(run.status, 1, run.stderr);
   assert.deepEqual(run.posted, []);
@@ -3551,6 +3567,8 @@ test('an apply whose late verdict read fails posts nothing and reports the read 
   const report = JSON.parse(run.stdout) as { status?: string; error?: string };
   assert.equal(report.status, 'failed');
   assert.match(report.error ?? '', /500/u);
+  assert.equal(JSON.parse(run.stdout).body, undefined);
+  assert.equal(envelopeKind(run.stderr), 'transport');
 });
 
 test('a body-item apply refused by the late verdict check posts nothing and reports no body (#4187)', () => {
@@ -3602,6 +3620,56 @@ test('a body-item apply refused by the late verdict check posts nothing and repo
   assert.deepEqual(run.posted, []);
   assertNoWrite(run);
   assert.equal(JSON.parse(run.stdout).body, undefined);
+});
+
+test('a late read that turns keep under --override reports kind usage in the envelope (#4187)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'medium',
+      '--override',
+      'why',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(7),
+    {
+      // The early read sees seven reviews (step 2: defer, so the override is
+      // accepted). The late read sees three (step 0: keep).
+      TRIAGE_REVIEW_SEQUENCE: JSON.stringify([
+        triageReviewRows(7),
+        triageReviewRows(3),
+      ]),
+      IDD_HELPER_ERROR_ENVELOPE: '1',
+    },
+  );
+  assert.equal(run.status, 1, run.stderr);
+  assert.deepEqual(run.posted, []);
+  assertNoWrite(run);
+  assert.equal(envelopeKind(run.stderr), 'usage');
+});
+
+test('record mode prints one verdict line on an apply and posts it (#4187)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'medium',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(7),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal((run.stderr.match(/^triage verdict:/gmu) ?? []).length, 1);
+  assert.equal(JSON.parse(run.stdout).body, run.posted[0]);
 });
 
 test('record mode reads the reviews once on an apply, since only enforce refuses (#4187)', () => {
