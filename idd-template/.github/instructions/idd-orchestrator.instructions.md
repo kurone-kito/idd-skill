@@ -22,8 +22,8 @@ Activate fan-out only when all conditions hold:
 - the effective `orchestrator.maxWorkers` is at least 2 (the `maxWorkers` in the
   profile-selected `idd-worker-budget --running 0 --startable 0` output);
 - the session is not on the lite profile;
-- the session was not started for one explicit issue (A0-T), and the operator
-  did not ask for a single-issue session;
+- the session was neither started for one explicit issue (A0-T) nor asked for
+  a single-issue run;
 - `GITHUB_ACTIONS` is not `true`.
 
 Otherwise, continue with [idd-discover.instructions.md](idd-discover.instructions.md)
@@ -32,7 +32,7 @@ unchanged. The cap is per orchestrator session, not per host.
 ## 2. Roster
 
 One entry per worker: the issue number, claim ID, branch, the harness's worker
-handle, the report draft path, and the worker's state (`running`, `reporting`,
+handle, the report draft path, and state (`running`, `reporting`,
 `disposed`, or `stalled`).
 
 ## 3. Dispatch
@@ -79,20 +79,19 @@ handle, the report draft path, and the worker's state (`running`, `reporting`,
   requires. Report and stop only when that re-run finds nothing startable and
   every roster entry is `disposed`.
 - A held roster worker (not `disposed`, claim from section 3 step 4)
-  gets this renewal at this section's wake-ups once due: re-post its
-  `claimed-by` every 12 h from its latest valid one, with its agent id, claim
-  id, and branch, per the overview Heartbeat bullet. At 72 h after its first
-  hold comment's `created_at`, post `unclaimed-by` for that claim and record
-  the hold and cap in the run report. Retry a failed post once; if it fails
-  again, record it and leave the claim in place. Never post a second claim id.
+  gets this renewal at this section's wake-ups once due. Before each post, the
+  claim revalidation gate must confirm the active claim still has its agent id
+  and claim id; copy its `branch` verbatim. Then re-post `claimed-by` every 12 h
+  from its latest valid one. At 72 h after its first hold comment's
+  `created_at`, post `unclaimed-by` for that claim and record the hold and cap
+  in the run report. Retry a failed post once; if it fails again, record it and
+  leave the claim in place. Never post a second claim id.
 
 ## 5. Report and disposal
 
-- The delegation brief asks for a JSON draft matching
-  `schemas/worker-report.schema.json` at a per-worker path outside the worker
-  worktree, as the
-  [worker final report store](../../docs/idd-helper-scripts.md#worker-final-report-store)
-  describes.
+- The brief asks for a JSON draft matching `schemas/worker-report.schema.json`
+  at a per-worker path outside the worker worktree, per the
+  [worker final report store](../../docs/idd-helper-scripts.md#worker-final-report-store).
 - Verify the outcome against live GitHub state, complete the draft, append it
   with the profile-selected `idd-worker-report append --file <path>`, then
   dispose of the worker as the table's row says and mark its roster entry
@@ -103,5 +102,5 @@ handle, the report draft path, and the worker's state (`running`, `reporting`,
 
 ## 6. Worker span
 
-A worker runs from B1 to the merge policy's terminal phase: F4 under
+A worker runs from B1 to its terminal phase: F4 under
 `fully_autonomous_merge`, F2.5 otherwise.
