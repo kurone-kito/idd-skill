@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { after, test } from 'node:test';
+import { after, test as nodeTest } from 'node:test';
 import { PAYLOAD_PLACEHOLDER_FIELDS } from '../src/scripts/payload-placeholders.mts';
 import {
   installPayload,
@@ -35,6 +35,24 @@ const NO_LINKS =
     : false;
 const ENTRY_RELATIVE = '.github/instructions/idd-overview-core.instructions.md';
 const SKILL_RELATIVE = 'issue-authoring/SKILL.md';
+
+/**
+ * Every test here installs or uninstalls. The installer refuses on Windows
+ * before any write, because the no-follow opens it needs are unavailable, so
+ * each test skips there with this reason. A test that passes its own `skip`
+ * option keeps it.
+ */
+const NO_INSTALL =
+  process.platform === 'win32'
+    ? 'the installer refuses on Windows before any write: no-follow opens are unavailable'
+    : false;
+
+const test = ((name: string, ...rest: unknown[]) => {
+  const fn = rest[rest.length - 1] as () => void;
+  const options =
+    rest.length === 2 ? (rest[0] as { skip?: string | boolean }) : {};
+  return nodeTest(name, { ...options, skip: NO_INSTALL || options.skip }, fn);
+}) as unknown as typeof nodeTest;
 
 const sandboxes: string[] = [];
 
