@@ -331,6 +331,16 @@ unambiguous:
   constraints, applied here to the `**Accepted**`-only prefix this
   phase posts.
 
+- With `triageRecord` on, the reply also carries the E5 `Triage:` line
+  before the stamp: pass the E5 triage flags to `resolve-review-thread`
+  (drop `--advisory-converged`; the head changed), or write the line
+  yourself for a regular comment. Dry-run the reply first. Pass
+  `--override` only when the fresh line says `verdict defer`: if E5 said
+  `verdict keep` and the line now says `verdict defer` (the step moved),
+  add `--override "verdict keep at E5"`. When the fresh verdict is `keep`,
+  omit any override from E5, because the helper refuses `--override` unless
+  the verdict is `defer`.
+
 - **Review threads**: after posting your reply, **immediately resolve
   the thread**, using the same resolve-review-thread mechanism as
   `idd-review-triage.instructions.md`'s E6 (profile-selected helper

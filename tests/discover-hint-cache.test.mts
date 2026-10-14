@@ -268,9 +268,10 @@ test('any change to args, policy, IDD env, or worktree is a miss', async () => {
 });
 
 test('a hint written under the previous format version is never served (#4257)', async () => {
-  // 3 is the format version before the #4257 bump. The key includes the
-  // version, so the same request under the current version is a miss.
-  const fx = fixture({ formatVersion: 3 });
+  // 4 is the format version before the #4257 bump (set by #4281). The key
+  // includes the version, so the same request under the current version is a
+  // miss.
+  const fx = fixture({ formatVersion: 4 });
   const { compute, calls } = counter([{ leaves: [1] }]);
   try {
     await readDiscoverHint(request(fx, compute));

@@ -2240,7 +2240,7 @@ only ranks candidates: the selected candidate's live A3-A5 gates and the claim
 post never read from it. --no-cache computes live and stores nothing;
 --refresh-cache recomputes and stores; --purge-cache removes every cached body
 from the host-local read cache and exits. A hint written under an earlier
-format version (version 4, from #4257, which added draftCarriers) is never
+format version (version 5, from #4257, which added draftCarriers) is never
 served. When the cache is active or a cache flag is passed, the output gains
 an additive "cache" object:
   "cache": {"mode": "hint|refresh|off|bypass", "source": "hint|live", "ageMs": 0, "maxAgeMs": 0, "complete": true, "enumerations": 0, "exhaustionRefresh": false}

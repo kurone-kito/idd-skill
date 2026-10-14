@@ -108,6 +108,52 @@ function parseEntry(value, path, dataRoot) {
   if (value.kind === 'directory') {
     return { kind: 'directory', path: entryPath };
   }
+  if (value.kind === 'managed-block') {
+    if (
+      typeof value.sha256 !== 'string' ||
+      !SHA256_PATTERN.test(value.sha256)
+    ) {
+      corrupt(path, `managed-block entry ${entryPath} has no valid sha256`);
+    }
+    if (typeof value.separator !== 'boolean') {
+      corrupt(
+        path,
+        `managed-block entry ${entryPath} has no boolean separator`,
+      );
+    }
+    return {
+      kind: 'managed-block',
+      path: entryPath,
+      sha256: value.sha256,
+      separator: value.separator,
+    };
+  }
+  if (value.kind === 'json-instruction') {
+    // The receipt sits in its data root, so the only instruction it may name
+    // is that root's entry text. Any other string could be a user's own
+    // instruction, or another installation's, so it makes the receipt corrupt.
+    if (
+      typeof value.value !== 'string' ||
+      value.value !== join(dataRoot, 'current', 'user-global', 'entry.md')
+    ) {
+      corrupt(
+        path,
+        `json-instruction entry ${entryPath} does not name the installer's entry text`,
+      );
+    }
+    if (typeof value.keyCreated !== 'boolean') {
+      corrupt(
+        path,
+        `json-instruction entry ${entryPath} has no boolean keyCreated`,
+      );
+    }
+    return {
+      kind: 'json-instruction',
+      path: entryPath,
+      value: value.value,
+      keyCreated: value.keyCreated,
+    };
+  }
   if (value.kind === 'link') {
     if (typeof value.target !== 'string' || !value.target.startsWith('/')) {
       corrupt(path, `link entry ${entryPath} has no absolute target`);

@@ -75,6 +75,37 @@ test('orchestrator.maxWorkers defaults to 2, accepts 1..8, and falls back for in
   }
 });
 
+test('orchestrator host-load wait defaults to a 3-reading streak and PT30M ceiling', () => {
+  assert.equal(POLICY_DEFAULTS.orchestrator.hostLoadClearStreak, 3);
+  assert.equal(POLICY_DEFAULTS.orchestrator.hostLoadWaitCeiling, 'PT30M');
+  const omitted = normalizePolicyConfig({}).orchestrator;
+  assert.equal(omitted.hostLoadClearStreak, 3);
+  assert.equal(omitted.hostLoadWaitCeiling, 'PT30M');
+  const configured = normalizePolicyConfig({
+    orchestrator: { hostLoadClearStreak: 5, hostLoadWaitCeiling: 'PT45M' },
+  }).orchestrator;
+  assert.equal(configured.hostLoadClearStreak, 5);
+  // PT45M is above the ten-minute githubApi.loadControl.maxWait clamp; it
+  // must be accepted here, not clamped to the default.
+  assert.equal(configured.hostLoadWaitCeiling, 'PT45M');
+  for (const value of [0, -1, 1.5, '3', null]) {
+    assert.equal(
+      normalizePolicyConfig({ orchestrator: { hostLoadClearStreak: value } })
+        .orchestrator.hostLoadClearStreak,
+      3,
+      `expected ${String(value)} to fall back to 3`,
+    );
+  }
+  for (const value of ['soon', 30, null]) {
+    assert.equal(
+      normalizePolicyConfig({ orchestrator: { hostLoadWaitCeiling: value } })
+        .orchestrator.hostLoadWaitCeiling,
+      'PT30M',
+      `expected ${String(value)} to fall back to PT30M`,
+    );
+  }
+});
+
 test('advisoryWait.convergenceScope defaults to all-prs and accepts idd-claimed', () => {
   assert.equal(POLICY_DEFAULTS.advisoryWait.convergenceScope, 'all-prs');
   assert.equal(

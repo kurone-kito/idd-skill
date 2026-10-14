@@ -210,8 +210,20 @@ Reply
   `; step <k>` above step 0. Read `converged` once per pass; if true,
   add one step ([wave gradient]).
 
+**Triage record.** With `triageRecord` on, before deciding each PATH A
+item run `resolve-review-thread --pr <n>` with `--tier`, `--urgency`,
+and its other [triage flags] (`--lite` on a lite-profile claim), and no
+target, body, or `--apply`; it prints the step and, under
+`severity-tiered`, the verdict. Accepting against `defer` under `enforce`
+needs `--override "<reason>"` (such as `verdict keep at E5` when the step
+moved); `enforce` refuses it without one, while `record` posts it with or
+without one. Reuse the flags on the reply, minus
+`--advisory-converged` after a push; a reply posted without the helper
+puts the same `Triage:` line before the stamp ([audit]).
+
 Bundle one E5 pass's deferred items into one follow-up issue (E6; do
-not append). Each keeps an AC bullet, exactly one
+not append; `idd-review-defer-bundle` renders and lints it). Each keeps
+an AC bullet, exactly one
 `Refs #<originating-issue>` line, and the
 `<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->`
 marker, then issue-authoring's Stage 2 narrow auto-release, not the Stage 1
@@ -361,8 +373,8 @@ PATH B — Advisory items (completed review of current HEAD):
   needed:
   - `**Accepted** — {what the advisory comment confirmed}`
   - `**Rejected** — {why no action is required}`, with evidence if no code changes
-- **Review threads**: resolve immediately after posting. **Regular
-  comments**: reply only.
+- **Review threads**: resolve immediately after posting (helper:
+  `--path-b`). **Regular comments**: reply only.
 - PATH B never enters review-fix — work is complete once the marker
   (and any thread resolution) is posted.
 
@@ -647,3 +659,5 @@ of re-posting the disposition (#3324).
 [needs-decision route]: ../../docs/idd-review-policy-profiles.md#needs-decision-deferral
 [wave gradient]: ../../docs/idd-review-policy-profiles.md#wave-gradient-urgency-defer
 [regression]: ../../docs/idd-review-policy-profiles.md#what-counts-as-a-regression
+[triage flags]: ../../docs/idd-helper-scripts.md#triage-record-flags
+[audit]: ../../docs/idd-design-rationale.md#review-loop-audit-2026-10-13

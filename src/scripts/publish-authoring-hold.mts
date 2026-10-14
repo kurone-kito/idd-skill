@@ -5,9 +5,10 @@
 // .mts source named above by `pnpm run build`. Edit the .mts source, never
 // the generated .mjs. See docs/typescript-sources.md.
 //
-// Capability-checked Stage 1 publication of one held orphan issue
-// (kurone-kito/idd-skill#4127). The issue-authoring skill allows a new issue
-// only through a create-with-label command and stops when none exists. This
+// Capability-checked Stage 1 publication of one held issue: a standalone
+// orphan (kurone-kito/idd-skill#4127) or a draft carrier (#4253). The
+// issue-authoring skill allows a new issue only through a create-with-label
+// command and stops when none exists. This
 // helper runs the contract's "New-issue ownership" sequence in order: journal
 // check, publication line, lint, labels, pending intent, create, identity
 // attach, owner marker, provenance, member. It spawns the sibling helpers
@@ -172,11 +173,12 @@ export function injectPublicationLine(
 }
 
 /**
- * Check the review-result file contents. It must be a JSON object with
- * `"completed": true`. An optional `findings` array holds findings-ledger
- * entries; each needs a `disposition` of `fixed` or `rejected`, because a
- * draft with an open `deferred` entry is not published (contract.md,
- * "Carry-forward of rejected findings"). Returns a refusal reason, or null.
+ * For an orphan, check the review-result file contents. It must be a JSON
+ * object with `"completed": true`. An optional `findings` array holds
+ * findings-ledger entries; each needs a `disposition` of `fixed` or
+ * `rejected`, because a draft with an open `deferred` entry is not published
+ * (contract.md, "Carry-forward of rejected findings"). Returns a refusal
+ * reason, or null.
  */
 export function checkReviewResult(raw: string): string | null {
   let parsed: unknown;
@@ -211,9 +213,47 @@ export function checkReviewResult(raw: string): string | null {
 }
 
 /**
- * The linter argv for the injected body. A ready publish passes neither
- * `--expect-bucket` nor `--label`; a non-ready publish passes the bucket and
- * one `--label` for each configured label.
+ * Check a draft carrier's review-result file. A carrier publishes on the lint
+ * alone, because each draft's `Review:` line records its own review state, so
+ * the file only has to be a JSON object whose `completed` is a boolean (false
+ * is accepted) and whose `findings`, when present, is an array of objects.
+ * Findings dispositions are not checked: a carrier holds drafts whose review
+ * may be incomplete. Returns a refusal reason, or null.
+ */
+export function checkCarrierReviewResult(raw: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return 'the review result is not valid JSON';
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return 'the review result is not a JSON object';
+  }
+  const record = parsed as { completed?: unknown; findings?: unknown };
+  if (typeof record.completed !== 'boolean') {
+    return 'the review result does not record whether the review completed ("completed": true or false)';
+  }
+  if (record.findings === undefined) {
+    return null;
+  }
+  if (
+    !Array.isArray(record.findings) ||
+    record.findings.some(
+      (entry) =>
+        entry === null || typeof entry !== 'object' || Array.isArray(entry),
+    )
+  ) {
+    return 'the review result "findings" is not an array of objects';
+  }
+  return null;
+}
+
+/**
+ * The linter argv for the injected body. A ready orphan publish passes neither
+ * `--expect-bucket` nor `--label`; a non-ready orphan publish passes the bucket
+ * and one `--label` for each configured label. A carrier passes one `--label`
+ * for each configured label and never a bucket.
  */
 export function buildLintArgs(input: {
   shape: string;
@@ -241,7 +281,12 @@ export function buildLintArgs(input: {
   if (input.policy) {
     args.push('--config', input.policy);
   }
-  if (input.bucket !== 'ready') {
+  if (input.shape === 'carrier') {
+    // audit-authored-issue refuses --expect-bucket with --shape carrier (#4250).
+    for (const label of input.labels) {
+      args.push('--label', label);
+    }
+  } else if (input.bucket !== 'ready') {
     args.push('--expect-bucket', input.bucket);
     for (const label of input.labels) {
       args.push('--label', label);
@@ -250,13 +295,23 @@ export function buildLintArgs(input: {
   return args;
 }
 
-/** The authoring label, plus the bucket label for a non-ready publish. */
+/**
+ * The labels one publish applies. An orphan takes the authoring label, plus the
+ * bucket label for a non-ready publish. A draft carrier (#4253) has no bucket
+ * and takes the authoring label and the authoring-only label (#4250), which
+ * keeps Discover from claiming it. The authoring label stays at index 0.
+ */
 export function resolvePublishLabels(
   config: unknown,
   bucket: PublishBucket,
+  shape = 'orphan',
 ): string[] {
   const normalized = normalizePolicyConfig(config);
   const labels = [normalized.issueAuthoring.authoringLabelName];
+  if (shape === 'carrier') {
+    labels.push(normalized.labels.authoringOnlyLabelName);
+    return labels;
+  }
   if (bucket === 'needs-decision') {
     labels.push(normalized.labels.needsDecisionLabelName);
   } else if (bucket === 'blocked-by-human') {
@@ -299,13 +354,17 @@ export function requestsChildShape(argv: readonly string[]): boolean {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> --review-result <path> [--shape orphan] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--apply]
+  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> [--review-result <path>] [--shape orphan|carrier] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--apply]
 
-Publishes one drafted orphan issue under the issue-authoring hold, running
-contract.md's "New-issue ownership" steps in order:
+Publishes one drafted issue under the issue-authoring hold, running
+contract.md's "New-issue ownership" steps in order. The default shape,
+orphan, publishes one standalone held orphan. --shape carrier publishes a
+draft carrier: an issue that holds drafts which cannot be published as
+their final issues yet.
 
   1. refuse --shape child (exit 2, nothing else runs), then check the review
-     result file;
+     result file: required for an orphan, optional for a carrier (when
+     given, it is checked as described below);
   2. check issueAuthoring.journalIssue in the repository policy file: it
      must be set, match owner/repo#N, and name an existing issue (it may be
      closed). Otherwise report the blocked-by-human outcome and exit 2;
@@ -313,10 +372,13 @@ contract.md's "New-issue ownership" steps in order:
      owner ids and put the authoring-publication line first in the body;
   4. lint that exact body with audit-authored-issue --new-issue (a
      non-ready bucket adds the expected bucket and one label flag per
-     configured label);
+     configured label; a carrier adds one label flag per configured label
+     and no bucket, and needs markdown-it, so without it nothing is
+     written);
   5. resolve the authoring label (issueAuthoring.authoringLabelName) and,
      for a non-ready bucket, labels.needsDecisionLabelName or
-     labels.blockedByHumanLabelName; create a missing label;
+     labels.blockedByHumanLabelName, or for a carrier
+     labels.authoringOnlyLabelName; create a missing label;
   6. append the pending publication-intent record (issue=none) to the
      journal through post-idd-marker and read it back;
   7. create the issue with every label in one gh issue create call;
@@ -340,10 +402,18 @@ are trusted by it later) and, unless it is a bot, hold Write, Maintain or
 Admin permission on the issue's and the journal's repositories. A dry run
 makes neither check.
 
-The review result file is a JSON object with "completed": true. An
-optional "findings" array holds findings-ledger entries, and each needs a
-disposition of fixed or rejected. The file is not tied to the body; the
-caller keeps it for the reviewed draft.
+For an orphan, the review result file is a JSON object with "completed": true.
+An optional "findings" array holds findings-ledger entries, and each needs a
+disposition of fixed or rejected. For a carrier, --review-result is optional.
+When it is given, the file must be a JSON object whose "completed" is true or
+false, and any "findings" must be an array of objects; the findings are not
+checked, because a carrier holds drafts whose review may be incomplete. The
+file is not tied to the body; the caller keeps it for the reviewed draft.
+
+A carrier takes only --bucket ready, its default, because it has no readiness
+bucket; any other bucket exits 2 before anything is read. It is labelled with
+the authoring label and labels.authoringOnlyLabelName, and it stays held after
+state=member: removing the hold is a separate step.
 
 Without --apply this is a dry run: it makes the read-only checks, the lint
 and the label lookups, prints the planned steps, and writes nothing.
@@ -367,7 +437,8 @@ labels and is never closed. The Stage 2 release stays a separate,
 explicit request.
 
 Exit codes: 0 published (or planned), 1 refused or failed, 2 usage error,
---shape child, or the blocked-by-human journal stop.
+--shape child, a carrier with a bucket other than ready, or the
+blocked-by-human journal stop.
 `);
 }
 
@@ -375,6 +446,7 @@ interface ParsedArgs {
   title: string;
   bodyFile: string;
   reviewResult: string;
+  reviewResultGiven: boolean;
   shape: string;
   bucket: string;
   apply: boolean;
@@ -393,6 +465,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     title: text('title'),
     bodyFile: (values['body-file'] as string | undefined) ?? '',
     reviewResult: (values['review-result'] as string | undefined) ?? '',
+    reviewResultGiven: values['review-result'] !== undefined,
     shape: text('shape'),
     bucket: text('bucket'),
     apply: values.apply === true,
@@ -730,7 +803,7 @@ function runCli(): HelperCliResult {
   const argv = process.argv.slice(2);
   if (requestsChildShape(argv)) {
     const message =
-      '--shape child is not supported yet; this command publishes a standalone orphan only';
+      '--shape child is not supported yet; for a set whose drafts cannot be published as held issues now, use --shape carrier';
     process.stdout.write(
       `${JSON.stringify({ outcome: 'refused', reason: message }, null, 2)}\n`,
     );
@@ -746,40 +819,56 @@ function runCli(): HelperCliResult {
     printHelp();
     return 0;
   }
-  if (args.shape !== 'orphan') {
-    return usage(`--shape must be orphan (got ${JSON.stringify(args.shape)})`);
+  if (args.shape !== 'orphan' && args.shape !== 'carrier') {
+    return usage(
+      `--shape must be orphan or carrier (got ${JSON.stringify(args.shape)})`,
+    );
   }
   if (!(PUBLISH_BUCKETS as readonly string[]).includes(args.bucket)) {
     return usage(`--bucket must be one of ${PUBLISH_BUCKETS.join(', ')}`);
   }
   const bucket = args.bucket as PublishBucket;
+  if (args.shape === 'carrier' && bucket !== 'ready') {
+    return usage(
+      `--bucket must be ready for --shape carrier (got ${JSON.stringify(bucket)}): a draft carrier has no readiness bucket`,
+    );
+  }
   if (args.title === '') {
     return usage('--title is required');
   }
   if (args.bodyFile === '') {
     return usage('--body-file is required');
   }
-  if (args.reviewResult === '') {
+  if (args.reviewResultGiven && args.reviewResult === '') {
+    return usage('--review-result needs a file path');
+  }
+  if (args.reviewResult === '' && args.shape === 'orphan') {
     return usage(
-      '--review-result is required: the completed draft adversarial review must be recorded before publication',
+      '--review-result is required for --shape orphan: the completed draft adversarial review must be recorded before publication',
     );
   }
   if ((args.owner === '') !== (args.repo === '')) {
     return usage('--owner and --repo must be provided together or not at all');
   }
 
-  // Step 1: the completed review is recorded, and the draft is readable.
-  let reviewRaw: string;
-  try {
-    reviewRaw = readFileSync(args.reviewResult, 'utf8');
-  } catch (error) {
-    return refuse(
-      `cannot read the review result ${args.reviewResult}: ${(error as Error).message}`,
-    );
-  }
-  const reviewProblem = checkReviewResult(reviewRaw);
-  if (reviewProblem !== null) {
-    return refuse(reviewProblem);
+  // Step 1: a given review result is readable and well formed, and the draft
+  // is readable. An orphan requires one; a carrier's review result is optional.
+  if (args.reviewResult !== '') {
+    let reviewRaw: string;
+    try {
+      reviewRaw = readFileSync(args.reviewResult, 'utf8');
+    } catch (error) {
+      return refuse(
+        `cannot read the review result ${args.reviewResult}: ${(error as Error).message}`,
+      );
+    }
+    const reviewProblem =
+      args.shape === 'carrier'
+        ? checkCarrierReviewResult(reviewRaw)
+        : checkReviewResult(reviewRaw);
+    if (reviewProblem !== null) {
+      return refuse(reviewProblem);
+    }
   }
   let draft: string;
   try {
@@ -964,7 +1053,7 @@ function publish(input: {
   };
 
   // Step 4: lint the exact body that will be created.
-  const labels = resolvePublishLabels(input.config, bucket);
+  const labels = resolvePublishLabels(input.config, bucket, args.shape);
   const lintArgs = buildLintArgs({
     shape: args.shape,
     title: args.title,

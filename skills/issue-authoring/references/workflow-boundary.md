@@ -30,7 +30,11 @@ approval boundary that hands off to IDD execution.
 - Bundled skill then publishes directly under the configured authoring
   label (`issueAuthoring.authoringLabelName`, defaulting to
   `status:authoring`) — **no prior user approval of the drafted body
-  is required**. If the current request asked only for a preview
+  is required**. The interactive-choice ask in
+  [Human-dependency isolation](contract.md#human-dependency-isolation) is not an
+  approval of the body, and this sentence does not waive it. It does not apply
+  to a choice that the interactive rule holds unpublished, such as a question
+  with no reply yet. If the current request asked only for a preview
   (drafts to look at before anything is created), bundled skill stops
   after reporting the proposed set instead of publishing; publishing
   is otherwise the default outcome of drafting, not an opt-in step

@@ -51,6 +51,7 @@
           "kind": {
             "type": "string",
             "enum": [
+              "roadmap-closed",
               "roadmap-blocked",
               "childless",
               "open-child",
