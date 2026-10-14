@@ -6508,6 +6508,19 @@ test('an inline code span that starts at a fence closer does not hide a live mar
   );
 });
 
+test('a dependency keyword behind a task-list checkbox counts outside the release condition (#4250)', () => {
+  for (const line of ['- [ ] Depends on #5', '- [x] Blocked by #5']) {
+    assert.equal(
+      carrierFinding(
+        carrierBody({ intro: `Holds drafts.\n\n${line}` }),
+        'carrier-release-condition',
+      )?.result,
+      'fail',
+      line,
+    );
+  }
+});
+
 test('draft-carrier is a carrier-only marker suffix, so a child body quoting another prefix is unchanged (#4250)', () => {
   const quoted = `${childBody()}\n\n<!-- other-draft-carrier: v1 -->`;
   assert.equal(

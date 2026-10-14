@@ -216,9 +216,9 @@ const CARRIER_FORBIDDEN_MARKER_SUFFIXES = [
 // markers (#4250 review, Copilot: `- > Depends on` counts too). It matches
 // whether or not the reference list parses.
 const DEPENDS_ON_LINE_PATTERN =
-  /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+)*Depends on\b/iu;
+  /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+|\[[ xX]\][ \t]+)*Depends on\b/iu;
 const BLOCKED_BY_LINE_PATTERN =
-  /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+)*Blocked by\b/iu;
+  /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+|\[[ xX]\][ \t]+)*Blocked by\b/iu;
 
 // The visible footer lines, allowing any list or blockquote container prefix
 // (#4250 review, Copilot): `> _Effort: M` is still a visible footer.
