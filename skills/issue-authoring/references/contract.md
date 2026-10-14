@@ -2655,9 +2655,9 @@ only approval boundary.
   verified against its paginated owner-marker log; (3) **only** when
   this release is proceeding under the narrow defer-source auto-release
   exception below instead of an explicit human release request (a draft
-  carrier takes the carrier creation-hold exception's branch instead) -- an
-  ordinary
-  human-gated release skips straight to step (4), since the human
+  carrier is released under the carrier creation-hold exception bullet
+  below, with the preconditions that bullet lists instead of these) -- an
+  ordinary human-gated release skips straight to step (4), since the human
   request already vouches for the set's scope -- run **both** of that
   exception's own preconditions here, immediately before the label
   removal in step (4): first, verify that this sole target really is
