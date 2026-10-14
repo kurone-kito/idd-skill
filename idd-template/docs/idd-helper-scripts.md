@@ -798,8 +798,10 @@ in this preamble, since the fallback differs per helper.
   enumeration and classification
 - `scripts/idd-roadmap-audit-execute.mjs` for the A1.5 roadmap-completion
   mutation: dry-run gates only the mechanical completion preconditions
-  (all descendants closed/complete, no open/unresolved/nested-roadmap
-  blocker) via the roadmap-graph traversal and emits `{ready, blockers,
+  (the roadmap itself open, so a roadmap that is not open is not ready and
+  reports the `roadmap-closed` blocker; all descendants closed/complete, no
+  open/unresolved/nested-roadmap blocker) via the roadmap-graph traversal and
+  emits `{ready, blockers,
   evidenceBody}` — it does **not** verify the roadmap's free-form success
   criteria or autonomy-gap items, which the caller must confirm
   separately before `--apply`; `--apply` re-validates the roadmap-audit
