@@ -2707,36 +2707,28 @@ function parseTriageRest(
       return null;
     }
     lastRank = rank;
-    if (part.startsWith('converged ')) {
+    if (rank === 0) {
       const sha = part.slice('converged '.length);
-      if (!/^[0-9a-f]{7}$/u.test(sha) || record.convergedHead !== null) {
+      if (!/^[0-9a-f]{7}$/u.test(sha)) {
         return null;
       }
       record.convergedHead = sha;
-    } else if (part.startsWith('Copilot ')) {
+    } else if (rank === 1) {
       const label = part.slice('Copilot '.length);
-      if (!TRIAGE_TIER_VALUES.includes(label) || record.copilotLabel !== null) {
+      if (!TRIAGE_TIER_VALUES.includes(label)) {
         return null;
       }
       record.copilotLabel = label as TriageRecord['copilotLabel'];
-    } else if (part === 'safety') {
-      if (record.safety) {
-        return null;
-      }
+    } else if (rank === 2) {
       record.safety = true;
-    } else if (part.startsWith('verdict ')) {
+    } else if (rank === 3) {
       const verdict = part.slice('verdict '.length);
-      if (!TRIAGE_VERDICT_VALUES.includes(verdict) || record.verdict !== null) {
+      if (!TRIAGE_VERDICT_VALUES.includes(verdict)) {
         return null;
       }
       record.verdict = verdict as TriageRecord['verdict'];
-    } else if (part.startsWith('blocked ')) {
-      if (record.blocked !== null) {
-        return null;
-      }
-      record.blocked = part.slice('blocked '.length);
     } else {
-      return null;
+      record.blocked = part.slice('blocked '.length);
     }
   }
   return record;
