@@ -6159,6 +6159,15 @@ test('a draft carrier cannot hide its headings or Review line inside an HTML com
   );
 });
 
+test('carrier-release-condition accepts a comma-wrapped Blocked by list (#4250)', () => {
+  const finding = carrierFinding(
+    carrierBody({ release: ['Blocked by #12,', '#13'] }),
+    'carrier-release-condition',
+  );
+  assert.equal(finding?.result, 'pass');
+  assert.equal(finding?.detail, 'release condition references #12, #13');
+});
+
 test('carrier-release-condition rejects a Blocked by line followed by prose (#4250)', () => {
   const finding = carrierFinding(
     carrierBody({ release: ['Blocked by #12 because rollout is pending'] }),

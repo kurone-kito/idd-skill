@@ -1306,7 +1306,9 @@ function checkCarrierReleaseCondition(structureLines, visibleLines) {
     // A declaration whose reference list is followed by prose ("Blocked by
     // #12 because ...") still matches the grammar, but the release condition
     // is a bare declaration only (#4250 review, Copilot).
-    if (declaration.remaining.trim() !== '') {
+    // A trailing comma is a list separator for a wrapped reference list, so
+    // only other text counts as trailing prose (#4250 review, Copilot).
+    if (!/^[\s,]*$/u.test(declaration.remaining)) {
       problems.push(
         `trailing text after the Blocked by references in the release condition: "${lines[index].trim()}"`,
       );
@@ -1318,7 +1320,7 @@ function checkCarrierReleaseCondition(structureLines, visibleLines) {
     );
     // The continuation sweep is line-based and stops at the first line that
     // does not fully parse to references, mirroring consumeDependencyContinuationRefLines.
-    if (declaration.remaining.trim() === '') {
+    if (/^[\s,]*$/u.test(declaration.remaining)) {
       for (let next = index + 1; next < section.end; next += 1) {
         const trimmed = lines[next].trim();
         if (trimmed === '') {
