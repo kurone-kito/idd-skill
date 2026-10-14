@@ -1310,11 +1310,21 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     isCopilotDefaultPrimaryBot &&
     review.bodyShape === 'unrecognized' &&
     !hasValidReviewAck;
+  // Copilot's "wasn't able to review any files" decline (copilot-review-body.mts)
+  // is neither a finding nor an approval. It stays fail-closed like
+  // `unrecognized` above: Clause 1 needs a valid trusted `review-ack`. Its
+  // own terminal route (`COPILOT_UNAVAILABLE`, computed below) opens the
+  // waiver without waiting for the terminal window.
+  const copilotDeclineBlocksClause =
+    isCopilotDefaultPrimaryBot &&
+    review.bodyShape === 'decline-no-reviewable-files' &&
+    !hasValidReviewAck;
   const reviewSatisfied =
     review.matchesHead &&
     itemCountClauseSatisfied &&
     suppressedClauseSatisfied &&
-    !unrecognizedBodyBlocksClause;
+    !unrecognizedBodyBlocksClause &&
+    !copilotDeclineBlocksClause;
   // Clause 1's "review is not clean" reason is pushed here, after Clause 2's
   // `threadClause` and the disposition-aware overrides above are available
   // -- deliberately deferred from the `pending` check above (whose own `if`
@@ -1370,6 +1380,14 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     if (review.itemCount === 0 && review.suppressedCount > 0) {
       reasons.push(
         `latest ${primaryBotLogin} review on current HEAD carries ${review.suppressedCount} suppressed comment(s) not reflected in itemCount (posted comment count is 0) -- check the review body directly, since a suppressed finding is never posted as a comment or review thread${ackSuffix}`,
+      );
+    } else if (
+      review.itemCount === 0 &&
+      review.suppressedCount === 0 &&
+      copilotDeclineBlocksClause
+    ) {
+      reasons.push(
+        `latest ${primaryBotLogin} review on current HEAD is Copilot's "wasn't able to review any files" decline (bodyShape: decline-no-reviewable-files) -- a terminal decline for this head, not a review; treated as fail-closed until a trusted review-ack marker is posted for it`,
       );
     } else if (
       review.itemCount === 0 &&
@@ -1655,7 +1673,17 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
       ? Number(options.terminalWindowMinutes)
       : DEFAULT_ADVISORY_TERMINAL_WINDOW_MINUTES;
   const terminal = buildCopilotRecoverySummary(
-    { comments, prHeadSha, lastCopilotCommit: review.commitId },
+    {
+      comments,
+      prHeadSha,
+      lastCopilotCommit: review.commitId,
+      // The decline names this head, so `review.commitId` equals the head. It
+      // must not read as a completed review, so the flag routes it to terminal.
+      copilotDeclinedHead:
+        isCopilotDefaultPrimaryBot &&
+        review.bodyShape === 'decline-no-reviewable-files' &&
+        review.matchesHead,
+    },
     {
       now,
       trustedMarkerLogins,
@@ -4268,6 +4296,12 @@ export function collectAssertNextActions(verdict) {
     bot === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN &&
     verdict.review.bodyShape === 'unrecognized' &&
     !verdict.review.satisfied;
+  // The decline is named separately. It is a terminal decline for this head,
+  // so the summary says so, and the same review-ack route covers it.
+  const copilotDeclineNeedsAck =
+    bot === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN &&
+    verdict.review.bodyShape === 'decline-no-reviewable-files' &&
+    !verdict.review.satisfied;
   // #4007 (#3942): a suppressed item that names a file or line needs its own
   // stamped disposition reply, and a review-ack does not cover it. The
   // stamped item comes first so the stderr `::notice::` leads with it.
@@ -4289,13 +4323,19 @@ export function collectAssertNextActions(verdict) {
   // ack exists yet. It is the same condition as `suppressedClauseSatisfied`.
   const citationFreeNeedsAck =
     citationFreeCount > 0 && !verdict.review.suppressedCitation.reviewAckValid;
-  if (citationFreeNeedsAck || unrecognizedBodyNeedsAck) {
+  if (
+    citationFreeNeedsAck ||
+    unrecognizedBodyNeedsAck ||
+    copilotDeclineNeedsAck
+  ) {
     const pointer = `node scripts/post-idd-marker.mjs --type review-ack --target pr ${pr} --agent-id <id> --head-sha ${sha} --timestamp <ISO8601> --apply`;
     const summary = citationFreeNeedsAck
       ? citedCount === 0
         ? `Latest ${bot} review reports ${verdict.review.suppressedCount} suppressed comment(s). After reading the review body, post a trusted review-ack if they are handled: ${pointer}`
         : `Latest ${bot} review reports ${citationFreeCount} citation-free suppressed comment(s). After reading the review body, post a trusted review-ack if they are handled: ${pointer}`
-      : `Latest ${bot} review on current HEAD has an unrecognized body shape (bodyShape: unrecognized). After reading the review body, post a trusted review-ack if it is handled: ${pointer}`;
+      : copilotDeclineNeedsAck
+        ? `Latest ${bot} review on current HEAD is Copilot's "wasn't able to review any files" decline (bodyShape: decline-no-reviewable-files), a terminal decline for this head rather than a review. After reading the review body, post a trusted review-ack if it is handled: ${pointer}`
+        : `Latest ${bot} review on current HEAD has an unrecognized body shape (bodyShape: unrecognized). After reading the review body, post a trusted review-ack if it is handled: ${pointer}`;
     items.push({ token: T.ACK_SUPPRESSED, summary, pointer });
   }
   if (verdict.terminal.state === 'COPILOT_UNAVAILABLE') {

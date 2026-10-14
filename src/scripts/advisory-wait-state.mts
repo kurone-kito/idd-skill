@@ -38,6 +38,7 @@ import {
   classifyCommentEditState,
   compareIsoTimestamps,
   computeCopilotPendingCoversHead,
+  findLastCopilotDeclineCommit,
   findLastCopilotReviewCommit,
   isCopilotPending,
   isValidIsoTimestamp,
@@ -249,6 +250,7 @@ const COPILOT_RECOVERY_REASONS = {
   capNotExhausted: 'recovery-cap-not-exhausted',
   windowNotElapsed: 'terminal-window-not-elapsed',
   currentHeadReviewExists: 'current-head-review-exists',
+  copilotDeclinedNoReviewableFiles: 'copilot-declined-no-reviewable-files',
   copilotUnavailable:
     'recovery-cap-exhausted-and-terminal-window-elapsed-and-no-current-head-review',
 } as const;
@@ -299,10 +301,19 @@ export function buildCopilotRecoverySummary(
     comments = [],
     prHeadSha,
     lastCopilotCommit,
+    copilotDeclinedHead = false,
   }: {
     comments?: CopilotRecoveryCommentLike[];
     prHeadSha: string;
     lastCopilotCommit: string;
+    /**
+     * True when the latest default-Copilot review names the current head with
+     * the "wasn't able to review any files" decline (see
+     * `findLastCopilotDeclineCommit`). Copilot can only decline a head whose
+     * changed files are all excluded, so later runs on that head cannot
+     * change the outcome.
+     */
+    copilotDeclinedHead?: boolean;
   },
   options: {
     now: string;
@@ -406,8 +417,16 @@ export function buildCopilotRecoverySummary(
 
   let state: CopilotRecoverySummary['state'] = 'NOT_TERMINAL';
   let reason: string;
+  // The decline is terminal at once, so it is checked before the clock and
+  // cap gates. It is placed after the active-claim check so a caller that
+  // cannot bind the claim still fails closed to NOT_TERMINAL, the same as
+  // every other terminal route. The decline is a GitHub-authored review body,
+  // not a marker, so no trust filter applies to it.
   if (!activeClaimProvided) {
     reason = COPILOT_RECOVERY_REASONS.activeClaimNotProvided;
+  } else if (copilotDeclinedHead) {
+    state = 'COPILOT_UNAVAILABLE';
+    reason = COPILOT_RECOVERY_REASONS.copilotDeclinedNoReviewableFiles;
   } else if (clockAnchor === '') {
     reason = COPILOT_RECOVERY_REASONS.noTrustedRecoveryMarkers;
   } else if (!capExhausted) {
@@ -479,6 +498,7 @@ export interface StaleRequestRecoveryAction {
 }
 
 const STALE_REQUEST_RECOVERY_REASONS = {
+  copilotDeclinedNoReviewableFiles: 'copilot-declined-no-reviewable-files',
   activeClaimNotProvided: 'active-claim-not-provided',
   notPending: 'not-pending',
   sameHeadMarkerPresent: 'same-head-marker-present',
@@ -495,6 +515,12 @@ export function evaluateStaleRequestRecoveryAction(input: {
   copilotPendingCoversHead: boolean;
   sameHeadMarkerPresent: boolean;
   remainingBudget: number;
+  /**
+   * True when the head carries Copilot's terminal "wasn't able to review any
+   * files" decline. A recovery cycle cannot change that outcome, so this
+   * never returns `attempt`.
+   */
+  copilotDeclinedHead?: boolean;
   /**
    * Mirrors {@link CopilotRecoverySummary.activeClaimProvided}: `true` only
    * when the caller supplied both `--claim-id` and `--agent-id` so the
@@ -537,6 +563,13 @@ export function evaluateStaleRequestRecoveryAction(input: {
     return {
       action: 'not-applicable',
       reason: STALE_REQUEST_RECOVERY_REASONS.activeClaimNotProvided,
+    };
+  }
+
+  if (input.copilotDeclinedHead === true) {
+    return {
+      action: 'not-applicable',
+      reason: STALE_REQUEST_RECOVERY_REASONS.copilotDeclinedNoReviewableFiles,
     };
   }
 
@@ -963,11 +996,14 @@ function main(): HelperCliResult {
 
   // Reuse summary.now (not a fresh new Date() call) so both computations
   // agree on the exact same instant.
+  const copilotDeclinedHead =
+    findLastCopilotDeclineCommit(reviews, primaryBotLogin) === prHeadSha;
   const copilotRecovery = buildCopilotRecoverySummary(
     {
       comments: comments.map(normalizeComment),
       prHeadSha,
       lastCopilotCommit: summary.lastCopilotCommit,
+      copilotDeclinedHead,
     },
     {
       now: summary.now,
@@ -991,6 +1027,7 @@ function main(): HelperCliResult {
     copilotPendingCoversHead: summary.copilotPendingCoversHead,
     sameHeadMarkerPresent: summary.sameHeadMarkerPresent,
     sameHeadRequestMarkerPresent: summary.sameHeadRequestMarkerPresent,
+    copilotDeclinedHead,
     remainingBudget: copilotRecovery.remainingBudget,
     activeClaimProvided: copilotRecovery.activeClaimProvided,
     elapsedMinutes: summary.elapsedMinutes,

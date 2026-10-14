@@ -5080,6 +5080,56 @@ export function findLastCopilotReviewCommit(
   return latest?.commitId ?? '';
 }
 /**
+ * Commit id the latest default-Copilot review names when that review is the
+ * "wasn't able to review any files" decline (`decline-no-reviewable-files`,
+ * copilot-review-body.mts), or `''` otherwise.
+ *
+ * This is a separate signal, not a coverage signal. The decline is never
+ * counted by {@link findLastCopilotReviewCommit}, so the shared `outcome` and
+ * `f3Outcome` cannot read it as a completed review. Callers use it only to
+ * reach the terminal `COPILOT_UNAVAILABLE` state for the head it names, with
+ * no recovery marker and no window wait.
+ *
+ * Selection mirrors {@link findLastCopilotReviewCommit}: the same default-bot
+ * author gate, ordered by `submittedAt`. The error template is skipped, as
+ * the review clause skips it. Unlike that selector, every other recognized or
+ * unrecognized review counts as "later" here, so a newer review of any other
+ * shape on the same head turns this into `''` (fail closed).
+ */
+export function findLastCopilotDeclineCommit(
+  reviews,
+  primaryBotLogin = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+) {
+  if (!isDefaultCopilotPrimary(primaryBotLogin)) {
+    return '';
+  }
+  const latest = reviews
+    .filter((review) => {
+      const authorType = review.user?.type ?? review.author?.type ?? null;
+      if (
+        !isCopilotReviewerLogin(
+          review.user?.login ?? review.author?.login ?? '',
+          primaryBotLogin,
+          authorType,
+        ) ||
+        !isBotOrUntypedAuthor(authorType)
+      ) {
+        return false;
+      }
+      return !isCopilotErrorReviewBody(review.body);
+    })
+    .map((review) => ({
+      submittedAt: review.submitted_at ?? review.submittedAt ?? '',
+      commitId: review.commit_id ?? review.commitId ?? '',
+      shape: classifyCopilotReviewBody(review.body).shape,
+    }))
+    .sort((left, right) =>
+      compareIsoTimestamps(left.submittedAt, right.submittedAt),
+    )
+    .at(-1);
+  return latest?.shape === 'decline-no-reviewable-files' ? latest.commitId : '';
+}
+/**
  * `true` when `author` is a verified Copilot (or the configured primary
  * bot login)-authored review/comment -- reuses `isCopilotReviewerLogin`
  * (protocol-helpers.mts) for the login match itself (the exact,

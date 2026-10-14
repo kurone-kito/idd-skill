@@ -382,6 +382,11 @@ finding(s) have already been read and handled, a reroll is
 unnecessary — post a trusted `review-ack:` marker instead; see
 `idd-review-triage.instructions.md`'s `review-ack:` paragraph (E6).
 
+**Declined head (`#4142`)**: a `decline-no-reviewable-files` review on HEAD is a
+terminal decline, not a review: with an active claim, `COPILOT_UNAVAILABLE`
+applies at once, with no recovery marker or window wait; a trusted `review-ack:`
+is still required.
+
 ## Terminal Copilot stall-recovery contract (state, policy, markers, clock)
 
 `#1572` defines the state/policy/marker contract for a terminal
@@ -411,9 +416,9 @@ alone never proves `COPILOT_UNAVAILABLE` (see **State**).
 - **State**: `COPILOT_UNAVAILABLE` only when all three hold, from
   trusted evidence — cap exhausted (`completedCycleCount >= cap`),
   terminal window elapsed since the anchor, and no current-HEAD
-  Copilot review (`lastCopilotCommit != PR_HEAD_SHA`). Any missing or
-  ambiguous evidence fails closed to `NOT_TERMINAL` with a
-  machine-readable reason.
+  Copilot review (`lastCopilotCommit != PR_HEAD_SHA`), or the declined
+  head below (`#4142`). Any missing or ambiguous evidence fails closed
+  to `NOT_TERMINAL` with a machine-readable reason.
 - **Non-bypass by construction**: `COPILOT_UNAVAILABLE` is structurally
   independent of every advisory-satisfied field (`outcome`, `f3Outcome`,
   future rollups) — neither derives from the other. Consumers may treat

@@ -752,10 +752,14 @@ function collectUnaddressedComments(
         primaryBotLogin,
       )
     : null;
+  // A "wasn't able to review any files" decline is neither a review nor an
+  // approval, so it cannot supersede earlier findings. It is not itself a
+  // finding either, so it is not surfaced as feedback.
   const canSupersedeHistoricalPrimaryFindings =
     latestPrimaryClause?.satisfied === true &&
     latestPrimaryClause.bodyShape !== null &&
-    latestPrimaryClause.bodyShape !== 'unrecognized';
+    latestPrimaryClause.bodyShape !== 'unrecognized' &&
+    latestPrimaryClause.bodyShape !== 'decline-no-reviewable-files';
 
   for (const [commentIndex, comment] of comments.entries()) {
     const author = authorLogin(comment);

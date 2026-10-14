@@ -220,8 +220,8 @@ export function fetchHeadObservedAt(
 }
 /**
  * Clause 1's ack rule for the review that matches HEAD (kurone-kito/idd-skill#3907):
- * `suppressedCount > 0`, or an `unrecognized` body with the default Copilot
- * bot. It mirrors `advisory-convergence.mts`'s Clause 1 ack term and covers
+ * `suppressedCount > 0`, or an `unrecognized` or `decline-no-reviewable-files`
+ * body (#4142) with the default Copilot bot. It mirrors `advisory-convergence.mts`'s Clause 1 ack term and covers
  * that rule only; it does not say whether Clause 1 applies at all
  * (`reviewPolicy`, `convergenceScope`, waivers). The same rule still lives in
  * `advisory-convergence.mts` (two sites) and `merged-pr-feedback-sweep.mts`;
@@ -231,7 +231,8 @@ export function fetchHeadObservedAt(
 export function copilotReviewAckNeeded(input) {
   return (
     input.suppressedCount > 0 ||
-    (input.bodyShape === 'unrecognized' &&
+    ((input.bodyShape === 'unrecognized' ||
+      input.bodyShape === 'decline-no-reviewable-files') &&
       input.primaryBotLogin.trim().toLowerCase() ===
         DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN)
   );
