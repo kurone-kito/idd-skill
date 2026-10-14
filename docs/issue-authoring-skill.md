@@ -227,17 +227,19 @@ rules.
   publication, unless it carries a plain-text `Split out of #<n>` line;
   `audit-authored-issue`'s `effort-candidate-file-limit` check enforces
   that table.
-- In Discover, the hint reorders candidates **within** one
+- In Discover, the hint only reorders candidates **within** one
   suitability-score band (after the score and optional desync rules,
   before the lowest-issue-number tie-break). It never crosses a score band
   or bypasses the A4.5/A5 gates. It never skips or gates, and a large issue
-  stays claimable when it is the only ready work, except that under
-  `autopilotSuitability.effortL: refuse` autopilot Discover routes an `L`
-  orphan candidate to humans.
+  stays claimable when it is the only ready work. The one exception, which
+  overrides the claims above, is an `L` orphan candidate in an autopilot run
+  under `autopilotSuitability.effortL: refuse`: autopilot Discover routes it
+  to humans, whatever its score.
 - Under `autopilotSuitability.effortL: refuse`, `effort-l-ready` refuses a
   `ready` orphan or child body with a coherent `L` effort marker at
   publication. Roadmaps, audits run with `--expect-bucket`, and bodies routed
-  to a human bucket or scored `1` are exempt.
+  to a human bucket (a coherent `needs-decision` or `blocked-by-human`
+  authoring-bucket marker, or a suitability score of `1`) are exempt.
 - A missing or invalid hint is **fail-safe**: it sorts as the neutral
   middle, as-if `M`, per `idd-discover.instructions.md` A4 Step 2.
 
