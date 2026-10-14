@@ -1462,6 +1462,13 @@ test('(a) --apply reports already-complete: closed roadmap + trusted evidence + 
   assert.equal(verdict.closed, true);
   assert.match(verdict.result, /already-complete/);
   assert.equal(exitCode, 0);
+  // #4275: the closed root is reported as not ready, even on this no-op exit.
+  assert.equal(verdict.ready, false);
+  assert.deepEqual(
+    verdict.blockers.map((blocker) => blocker.kind),
+    ['roadmap-closed'],
+  );
+  assert.equal(verdict.evidenceBody, '');
   // Idempotent no-op: none of the mutating deps ran.
   assert.deepEqual(calls.closed, []);
   assert.deepEqual(calls.comments, []);
@@ -1502,6 +1509,145 @@ test('(c) --apply keeps claim-not-owned when the roadmap is closed but lacks tru
   assert.equal(exitCode, 1);
   assert.deepEqual(calls.closed, []);
   assert.deepEqual(calls.comments, []);
+  // #4275: the same closed-root verdict contract as (a), without the no-op exit.
+  assert.equal(verdict.ready, false);
+  assert.deepEqual(
+    verdict.blockers.map((blocker) => blocker.kind),
+    ['roadmap-closed'],
+  );
+  assert.equal(verdict.evidenceBody, '');
+});
+
+// ---------------------------------------------------------------------------
+// roadmap-closed gate (#4275): a roadmap that is not open is never ready
+// ---------------------------------------------------------------------------
+
+test('a closed roadmap root is not ready: one roadmap-closed blocker, dry-run exit 1 (#4275)', async () => {
+  const closedReport = readyReport();
+  closedReport.root = { ...closedReport.root, state: 'CLOSED' };
+  const { deps, calls } = makeDeps(closedReport);
+  const { verdict, exitCode } = await runRoadmapAuditExecute(
+    ['--roadmap', String(ROADMAP)],
+    deps,
+  );
+
+  assert.equal(verdict.ready, false);
+  assert.equal(exitCode, 1);
+  assert.equal(verdict.blockers.length, 1);
+  assert.equal(verdict.blockers[0]?.kind, 'roadmap-closed');
+  assert.equal(verdict.blockers[0]?.target, ROADMAP);
+  assert.match(verdict.blockers[0]?.detail ?? '', /"CLOSED"/);
+  assert.equal(verdict.evidenceBody, '');
+  assert.match(verdict.result, /not open/);
+  assert.match(verdict.result, /roadmap-closed/);
+  assert.deepEqual(calls.comments, []);
+});
+
+test('an empty root state also reports roadmap-closed, failing closed (#4275)', () => {
+  const report = readyReport();
+  report.root = { ...report.root, state: '' };
+  const blockers = evaluateRoadmapAuditGates(report);
+
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.kind),
+    ['roadmap-closed'],
+  );
+  assert.match(blockers[0]?.detail ?? '', /\(state ""\)/);
+});
+
+test('--apply on a closed roadmap with an owned claim writes nothing and says the claim is still held (#4275)', async () => {
+  const closedReport = readyReport();
+  closedReport.root = { ...closedReport.root, state: 'CLOSED' };
+  const { deps, calls } = makeDeps(closedReport);
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(exitCode, 1);
+  assert.match(verdict.result, /claim is still held/);
+  assert.match(verdict.result, /unclaimed-by/);
+  assert.match(verdict.result, /do not run --apply again/);
+  // Only the early re-validation ran; the owned claim did not reach the
+  // re-fetch, the evidence post, the close or the release.
+  assert.equal(calls.claimChecks, 1);
+  assert.equal(calls.collects, 1);
+  assert.deepEqual(calls.comments, []);
+  assert.deepEqual(calls.closed, []);
+  assert.deepEqual(calls.released, []);
+});
+
+test('--apply on a closed roadmap that also has an open child keeps the not-ready exit before any claim check (#4275)', async () => {
+  const report = readyReport();
+  report.root = { ...report.root, state: 'CLOSED' };
+  report.nodes = report.nodes.map((entry) =>
+    entry.number === 1048 ? { ...entry, state: 'OPEN' } : entry,
+  );
+  report.executionCandidates = [1048];
+  const { deps, calls } = makeDeps(report);
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(exitCode, 1);
+  assert.match(verdict.result, /^not-ready: completion blockers present/);
+  assert.deepEqual(verdict.blockers.map((blocker) => blocker.kind).sort(), [
+    'open-child',
+    'roadmap-closed',
+  ]);
+  assert.equal(calls.claimChecks, 0);
+  assert.deepEqual(calls.comments, []);
+  assert.deepEqual(calls.closed, []);
+  assert.deepEqual(calls.released, []);
+});
+
+test('--apply on a closed roadmap keeps its earlier usage results: claim-id, claim-issue and now (#4275)', async () => {
+  const closedReport = readyReport();
+  closedReport.root = { ...closedReport.root, state: 'CLOSED' };
+
+  const missingClaim = makeDeps(closedReport);
+  const noClaim = await runRoadmapAuditExecute(
+    ['--roadmap', String(ROADMAP), '--apply'],
+    missingClaim.deps,
+  );
+  assert.equal(noClaim.exitCode, 1);
+  assert.match(noClaim.verdict.result, /^not-applied: --claim-id is required/);
+  assert.equal(missingClaim.calls.claimChecks, 0);
+
+  const mismatchedIssue = makeDeps(closedReport);
+  const wrongIssue = await runRoadmapAuditExecute(
+    [...APPLY_ARGS, '--claim-issue', '9999'],
+    mismatchedIssue.deps,
+  );
+  assert.equal(wrongIssue.exitCode, 1);
+  assert.match(wrongIssue.verdict.result, /must equal the roadmap/);
+  assert.equal(mismatchedIssue.calls.claimChecks, 0);
+
+  const badNow = makeDeps(closedReport, { now: () => 'not-a-date' });
+  const invalidNow = await runRoadmapAuditExecute(APPLY_ARGS, badNow.deps);
+  assert.equal(invalidNow.exitCode, 1);
+  assert.match(invalidNow.verdict.result, /invalid "now" value/);
+  assert.equal(badNow.calls.claimChecks, 0);
+});
+
+test('--apply with an owned claim whose root closes before the re-fetch writes nothing (#4275)', async () => {
+  const closedReport = readyReport();
+  closedReport.root = { ...closedReport.root, state: 'CLOSED' };
+  let reads = 0;
+  const { deps, calls } = makeDeps(readyReport(), {
+    collect: async () => {
+      reads += 1;
+      return reads === 1 ? readyReport() : closedReport;
+    },
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(reads, 2);
+  assert.equal(exitCode, 1);
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.evidenceBody, '');
+  assert.ok(
+    verdict.blockers.some((blocker) => blocker.kind === 'roadmap-closed'),
+  );
+  assert.match(verdict.result, /claim is still held/);
+  assert.deepEqual(calls.comments, []);
+  assert.deepEqual(calls.closed, []);
+  assert.deepEqual(calls.released, []);
 });
 
 // ---------------------------------------------------------------------------
@@ -1997,6 +2143,17 @@ test('the successful apply verdict keeps its shape and carries no nothingSent ke
   assert.equal(verdict.closed, true);
   assert.equal(verdict.claimReleased, true);
   assert.equal('nothingSent' in verdict, false);
+});
+
+test('--help names the roadmap-closed blocker in the usage text (#4275)', () => {
+  const result = spawnSync(process.execPath, [CLI_SCRIPT, '--help'], {
+    encoding: 'utf8',
+    env: fixtureEnv(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /roadmap-closed/);
 });
 
 test('--help names nothingSent and unclaimed-by in the usage text', () => {
