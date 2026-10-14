@@ -905,6 +905,31 @@ test('a symbolic-link data root is refused as a link, not as a stale temporary f
   );
 });
 
+test('a receipt that lists a user symbolic link as a link entry is corrupt for install and uninstall', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const userLink = join(home, '.claude', 'skills', 'user-link');
+  nodeFs.mkdirSync(join(home, '.claude', 'skills'), { recursive: true });
+  nodeFs.symlinkSync('/elsewhere/user-owned', userLink);
+  nodeFs.mkdirSync(dataRootOf(home), { recursive: true });
+  nodeFs.writeFileSync(
+    receiptOf(home),
+    JSON.stringify({
+      version: 1,
+      entries: [
+        { kind: 'link', path: userLink, target: '/elsewhere/user-owned' },
+      ],
+    }),
+  );
+  const before = snapshot(home);
+
+  assert.throws(() => installPayload(optionsFor(home)), /corrupt/);
+  assert.throws(() => uninstallPayload(optionsFor(home)), /corrupt/);
+  assert.deepEqual(snapshot(home), before);
+  assert.equal(nodeFs.readlinkSync(userLink), '/elsewhere/user-owned');
+});
+
 test('every placeholder in the installed payload has a mapping', () => {
   const home = makeHome();
   installPayload(optionsFor(home));

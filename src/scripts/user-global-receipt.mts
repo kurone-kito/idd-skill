@@ -10,7 +10,7 @@
 // the last valid receipt in place.
 
 import * as nodeFs from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {
   checkContainment,
   type FsOps,
@@ -43,6 +43,12 @@ export type ReceiptRead =
 const DEFAULT_FS: FsOps = nodeFs;
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+
+/**
+ * The version directory name a link entry may target. This duplicates the
+ * pattern in `user-global-paths.mts` (#4242), which keeps it private.
+ */
+const VERSION_NAME_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/;
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -121,7 +127,11 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function parseEntry(value: unknown, path: string): ReceiptEntry {
+function parseEntry(
+  value: unknown,
+  path: string,
+  dataRoot: string,
+): ReceiptEntry {
   if (!isObject(value) || typeof value.path !== 'string') {
     corrupt(path, 'an entry has no string path');
   }
@@ -145,12 +155,26 @@ function parseEntry(value: unknown, path: string): ReceiptEntry {
     if (typeof value.target !== 'string' || !value.target.startsWith('/')) {
       corrupt(path, `link entry ${entryPath} has no absolute target`);
     }
-    return { kind: 'link', path: entryPath, target: value.target };
+    // The installer only ever records its own `current` link, which targets a
+    // version directory directly under the data root. Any other link entry
+    // could name a user's symbolic link, so it makes the receipt corrupt.
+    const target = value.target;
+    if (
+      entryPath !== join(dataRoot, 'current') ||
+      dirname(target) !== dataRoot ||
+      !VERSION_NAME_PATTERN.test(basename(target))
+    ) {
+      corrupt(
+        path,
+        `link entry ${entryPath} is not the installer's current link to a version directory under ${dataRoot}`,
+      );
+    }
+    return { kind: 'link', path: entryPath, target };
   }
   corrupt(path, `entry ${entryPath} has an unknown kind`);
 }
 
-function parseReceipt(text: string, path: string): Receipt {
+function parseReceipt(text: string, path: string, dataRoot: string): Receipt {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -163,7 +187,9 @@ function parseReceipt(text: string, path: string): Receipt {
   if (!Array.isArray(parsed.entries)) {
     corrupt(path, 'it has no entries array');
   }
-  const entries = parsed.entries.map((value) => parseEntry(value, path));
+  const entries = parsed.entries.map((value) =>
+    parseEntry(value, path, dataRoot),
+  );
   const seen = new Set<string>();
   for (const entry of entries) {
     if (seen.has(entry.path)) {
@@ -191,7 +217,7 @@ export function readReceipt(
   }
   return {
     state: 'valid',
-    receipt: parseReceipt(readNoFollowText(path, fs), path),
+    receipt: parseReceipt(readNoFollowText(path, fs), path, dataRoot),
   };
 }
 
