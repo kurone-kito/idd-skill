@@ -791,6 +791,29 @@ test('a listed link retargeted by someone else makes install refuse', {
   assert.deepEqual(snapshot(home), before);
 });
 
+test('a manifest path that escapes the payload directory makes install refuse before any write', () => {
+  const home = makeHome();
+  const source = copySourceTree();
+  const manifestPath = join(source, 'audit', 'sync-manifest.json');
+  const manifest = JSON.parse(nodeFs.readFileSync(manifestPath, 'utf8'));
+  const block = manifest.generatedBlocks.find(
+    (candidate: { id: string }) => candidate.id === 'idd-template-core-files',
+  );
+  block.paths.push('idd-template/../escape.md');
+  nodeFs.writeFileSync(manifestPath, JSON.stringify(manifest));
+  nodeFs.writeFileSync(join(source, 'escape.md'), 'outside\n');
+  const before = snapshot(home);
+
+  assert.throws(
+    () =>
+      installPayload(
+        optionsFor(home, { sourceRoot: source, version: PACKAGE_VERSION }),
+      ),
+    /escapes the payload directory/,
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
 test('every placeholder in the installed payload has a mapping', () => {
   const home = makeHome();
   installPayload(optionsFor(home));

@@ -13,7 +13,15 @@
 // - a window remains between a containment check and the act that follows it.
 import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
-import { basename, dirname, join, normalize, resolve, sep } from 'node:path';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  normalize,
+  resolve,
+  sep,
+} from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveBundleRoot } from './bundle-root.mjs';
 import { resolveInstalledPayloadRoot } from './idd-activation.mjs';
@@ -301,6 +309,20 @@ function buildTargets(ctx, sourceRoot, version) {
     if (!path.startsWith(block.stripPrefix)) {
       throw new Error(
         `payload path ${path} lacks the ${block.stripPrefix} prefix`,
+      );
+    }
+    // A manifest path must stay under the version directory once joined, so a
+    // `..` or absolute segment in it refuses before any source is read.
+    const rel = path.slice(block.stripPrefix.length);
+    if (
+      rel === '' ||
+      isAbsolute(rel) ||
+      rel
+        .split('/')
+        .some((part) => part === '' || part === '.' || part === '..')
+    ) {
+      throw new Error(
+        `payload path ${path} escapes the payload directory; refusing; nothing was written`,
       );
     }
     const source = readSource(join(sourceRoot, path), fs);
