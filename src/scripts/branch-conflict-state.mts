@@ -17,7 +17,10 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mts';
 import { loadTrustedIddConfig } from './idd-config.mts';
-import { summarizeBranchCurrency } from './protocol-helpers.mts';
+import {
+  selectLatestCheckInstance,
+  summarizeBranchCurrency,
+} from './protocol-helpers.mts';
 import { createGithubProviderAdapter } from './provider-adapter-github.mts';
 
 interface PrData {
@@ -276,7 +279,51 @@ export function parseHeadRollup(
   if (total !== pageLength) {
     return failClosed('rollup count does not match its page');
   }
-  return { runs: parseNonPassingRuns(contexts.nodes), notes: [] };
+  return {
+    runs: parseNonPassingRuns(latestInstancePerName(contexts.nodes)),
+    notes: [],
+  };
+}
+
+/**
+ * Keep only the latest instance of each check name. A rerun can leave an
+ * earlier instance in the rollup beside the current one, and the required-
+ * check gate governs by the latest instance, so a stale failure must not hold
+ * a current waiting run. The producer is the GraphQL type, so a check run and
+ * a status context that share a display name stay separate. Unnamed entries
+ * each keep their own slot, so they never collapse together. The tie-break is
+ * the shared `selectLatestCheckInstance`, the same reducer the required-check
+ * gate uses.
+ */
+function latestInstancePerName(nodes: readonly unknown[]): unknown[] {
+  const groups = new Map<
+    string,
+    { node: unknown; state: string; completedAt: string | null }[]
+  >();
+  nodes.forEach((node, index) => {
+    const entry = (node ?? {}) as Record<string, unknown>;
+    const name = String(
+      entry.__typename === 'StatusContext' ? entry.context : entry.name,
+    );
+    const key = name
+      ? `${String(entry.__typename)}:${name}`
+      : `unnamed:${index}`;
+    const isCheckRun = entry.__typename === 'CheckRun';
+    const completed = String(entry.status ?? '').toUpperCase() === 'COMPLETED';
+    const state = isCheckRun
+      ? completed
+        ? String(entry.conclusion ?? '').toUpperCase()
+        : String(entry.status ?? '').toUpperCase()
+      : String(entry.state ?? '').toUpperCase();
+    const completedAt =
+      isCheckRun && completed ? String(entry.completedAt ?? '') || null : null;
+    const group = groups.get(key) ?? [];
+    group.push({ node, state, completedAt });
+    groups.set(key, group);
+  });
+  return [...groups.values()].map(
+    (group) => selectLatestCheckInstance(group).node,
+  );
 }
 
 const HEAD_ROLLUP_QUERY = `query($owner: String!, $repo: String!, $oid: GitObjectID!, $number: Int!) {
@@ -290,7 +337,7 @@ const HEAD_ROLLUP_QUERY = `query($owner: String!, $repo: String!, $oid: GitObjec
             totalCount
             nodes {
               __typename
-              ... on CheckRun { name status conclusion isRequired(pullRequestNumber: $number) }
+              ... on CheckRun { name status conclusion completedAt isRequired(pullRequestNumber: $number) }
               ... on StatusContext { context state isRequired(pullRequestNumber: $number) }
             }
           }

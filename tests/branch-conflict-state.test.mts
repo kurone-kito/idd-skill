@@ -1352,6 +1352,41 @@ test('parseHeadRollup: fails closed unless the pinned head and full rollup match
   );
 });
 
+// #4209 review: a rerun can leave the stale instance in the rollup beside the
+// current one. Only the latest instance of each name governs.
+test('parseHeadRollup: judges only the latest instance of each check name', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const run = (
+    name: string,
+    status: string,
+    conclusion: string | null,
+    completedAt: string | null,
+  ) => ({
+    __typename: 'CheckRun',
+    name,
+    status,
+    conclusion,
+    completedAt,
+    isRequired: false,
+  });
+  const nodes = [
+    run('refresh', 'COMPLETED', 'FAILURE', '2026-10-14T08:00:00Z'),
+    run('refresh', 'COMPLETED', 'ACTION_REQUIRED', '2026-10-14T09:00:00Z'),
+    run('lint', 'COMPLETED', 'FAILURE', '2026-10-14T08:00:00Z'),
+    run('lint', 'COMPLETED', 'SUCCESS', '2026-10-14T09:00:00Z'),
+    run('rerun-pending', 'COMPLETED', 'FAILURE', '2026-10-14T08:00:00Z'),
+    run('rerun-pending', 'QUEUED', null, null),
+  ];
+  const object = {
+    oid: sha,
+    statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } },
+  };
+  assert.deepEqual(parseHeadRollup(object, sha).runs, [
+    { name: 'refresh', state: 'action_required', required: false },
+    { name: 'rerun-pending', state: 'pending', required: false },
+  ]);
+});
+
 test('classifyBranchConflictState: UNSTABLE routing reads the injected run list', async () => {
   const fixture = loadFixture('clean');
   const base = {
