@@ -3524,7 +3524,9 @@ test('runBodyItemDisposition checks the claim before it refreshes the body (#418
       return BODY_ITEM_STAMPED;
     },
   });
-  assert.deepEqual(order, ['claim', 'refresh']);
+  // The claim is checked, the body refreshed, and the claim checked again
+  // right before the post, so a handoff during the read cannot reach it.
+  assert.deepEqual(order, ['claim', 'refresh', 'claim']);
 });
 
 test('runBodyItemDisposition refuses an apply without refreshBody, so no stale body is posted (#4187)', () => {
@@ -3684,6 +3686,43 @@ test('an apply with no matching thread fails with no body and posts nothing (#41
   const report = JSON.parse(run.stdout) as { status?: string; body?: string };
   assert.equal(report.status, 'failed');
   assert.equal(report.body, undefined);
+});
+
+test('an apply re-checks the claim after the late read and before the post (#4187)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'medium',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(4),
+    // Both reads keep (step 1), so the post goes through.
+    {
+      TRIAGE_REVIEW_SEQUENCE: JSON.stringify([
+        triageReviewRows(4),
+        triageReviewRows(4),
+      ]),
+    },
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.posted, [
+    `${ACCEPTED_FIXED}\nTriage: tier high; urgency medium; step 1; verdict keep; blocked matrix\n\n${TRIAGE_STAMP}`,
+  ]);
+  const reads = run.calls.flatMap((call, index) =>
+    call.some((arg) => arg.includes('/pulls/42/reviews')) ? [index] : [],
+  );
+  assert.equal(reads.length, 2);
+  // A claim check (a pr view call) falls after the late read, before the post.
+  assert.ok(
+    run.calls
+      .slice(reads[1] + 1)
+      .some((call) => call[0] === 'pr' && call[1] === 'view'),
+  );
 });
 
 test('record mode prints one verdict line on an apply and posts it (#4187)', () => {

@@ -285,6 +285,8 @@ export function runBodyItemDisposition(port, input) {
     );
   }
   const body = input.refreshBody();
+  // A claim handoff during the late read must not reach the post (#4187).
+  input.assertClaim();
   report.body = body;
   const posted = port.postWorkItemComment(input.pr, body);
   report.status = 'applied';
@@ -1343,6 +1345,8 @@ function main() {
       postReply: () => {
         // The verdict is judged again right before the post (#4187).
         const body = freshBodyForApply();
+        // A claim handoff during the late read must not reach the post (#4187).
+        assertClaim();
         const posted = port.postReviewCommentReply(pr, rootCommentId, body);
         postedBody = body;
         postedReplyId = posted.id;
