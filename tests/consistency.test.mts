@@ -885,6 +885,8 @@ test('policy normalization provides default-safe values and supports aliases', (
     issueScope: 'roadmap-first',
     orchestrator: {
       maxWorkers: 2,
+      hostLoadClearStreak: 3,
+      hostLoadWaitCeiling: 'PT30M',
     },
     orphanFirstPolicy: 'none',
     skipIssueAuthorApprovalGate: false,
@@ -1110,6 +1112,8 @@ test('policy normalization provides default-safe values and supports aliases', (
       issueScope: 'orphan-first',
       orchestrator: {
         maxWorkers: 2,
+        hostLoadClearStreak: 3,
+        hostLoadWaitCeiling: 'PT30M',
       },
       orphanFirstPolicy: 'maintainer-approved',
       skipIssueAuthorApprovalGate: true,
