@@ -114,6 +114,8 @@ if (args[0] === 'issue' && args[1] === 'edit') {
   if (removes.length > 0) {
     if (state.removeLabelFailure === 'unchanged') fail('gh: HTTP 502 Bad Gateway (label edit)');
     if (!state.keepLabelOnRemove) issue.labels = issue.labels.filter((name) => !removes.includes(name));
+    if (state.dropAuthoringOnlyOnRemove) issue.labels = issue.labels.filter((name) => name !== 'status:authoring-only');
+    if (state.failReadsAfterRemove) state.readsFail = true;
     if (state.dropReleaseAfterRemove) {
       state.comments = state.comments.filter((c) => !(c.issue === Number(args[2]) && /mode=release;/.test(c.body)));
     }
@@ -271,6 +273,7 @@ if ((match = /^repos\/o\/r\/issues\/comments\/(\d+)$/.exec(path))) {
 }
 if ((match = /^repos\/o\/r\/issues\/(\d+)$/.exec(path))) {
   const number = Number(match[1]);
+  if (state.readsFail && number === ${NEW_ISSUE}) fail('gh: HTTP 502 Bad Gateway (read)');
   if (number === 2674) out({ number, title: 'journal', state: 'closed', body: 'journal', labels: [], html_url: 'https://github.com/o/r/issues/2674' });
   const issue = state.issues[number];
   if (!issue) fail('gh: Not Found (HTTP 404)');
@@ -338,6 +341,8 @@ function setup(
     failReadsOnComplete?: boolean;
     indexLagFull?: boolean;
     authoringOnlyLabelName?: string;
+    dropAuthoringOnlyOnRemove?: boolean;
+    failReadsAfterRemove?: boolean;
   } = {},
 ): Fixture {
   const dir = mkdtempSync(join(tmpdir(), 'idd-publish-authoring-hold-test-'));
@@ -393,6 +398,8 @@ function setup(
       mutateBodyText: options.mutateBodyText ?? '',
       failReadsOnComplete: options.failReadsOnComplete === true,
       indexLagFull: options.indexLagFull === true,
+      dropAuthoringOnlyOnRemove: options.dropAuthoringOnlyOnRemove === true,
+      failReadsAfterRemove: options.failReadsAfterRemove === true,
       readsFail: false,
       loadControlModule: pathToFileURL(
         join(REPO_ROOT, 'scripts/github-api-load-control.mjs'),
@@ -2254,3 +2261,37 @@ test('release: the set snapshot normalizes the repository identity before hashin
     expected,
   );
 });
+
+carrierLintTest(
+  'CLI: a removal that also drops the authoring-only label restores both labels and reports held',
+  () => {
+    const run = releaseRun({ dropAuthoringOnlyOnRemove: true });
+    try {
+      assert.equal(run.status, 0, JSON.stringify(run.report));
+      assert.equal(run.report.release.state, 'held');
+      assert.equal(run.report.release.failedStep, 'label-removal-verify');
+      assert.equal(countOf(writeKinds(run.fixture), 'add-label'), 1);
+      assert.deepEqual([...labelsOf(run.fixture)].sort(), [
+        'status:authoring',
+        'status:authoring-only',
+      ]);
+    } finally {
+      run.fixture.restore();
+    }
+  },
+);
+
+carrierLintTest(
+  'CLI: a label removal whose follow-up reads stay unreadable reports recovery-hold and exits 1',
+  () => {
+    const run = releaseRun({ failReadsAfterRemove: true });
+    try {
+      assert.equal(run.status, 1, JSON.stringify(run.report));
+      assert.equal(run.report.outcome, 'recovery-hold');
+      assert.equal(run.report.release.state, 'recovery-hold');
+      assert.equal(run.report.release.failedStep, 'label-removal');
+    } finally {
+      run.fixture.restore();
+    }
+  },
+);

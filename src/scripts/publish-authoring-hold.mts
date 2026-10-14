@@ -1787,7 +1787,9 @@ function oursMatching(
   accept: (parsed: ParsedOwnerMarker) => boolean,
 ): { id: number; createdAt: string; parsed: ParsedOwnerMarker } | null {
   const trusted = new Set(input.trusted.map((login) => login.toLowerCase()));
-  const issueRef = `${input.owner}/${input.repo}#${input.number}`;
+  // GitHub repository identities are case-insensitive, so the target and the
+  // anchor are compared without case (a retry may name the repo in other case).
+  const issueRef = `${input.owner}/${input.repo}#${input.number}`.toLowerCase();
   let best: {
     id: number;
     createdAt: string;
@@ -1806,8 +1808,8 @@ function oursMatching(
       parsed.owner !== input.ids.owner ||
       parsed.set !== input.ids.set ||
       parsed.session !== input.ids.session ||
-      parsed.target !== issueRef ||
-      parsed.anchor !== issueRef ||
+      parsed.target.toLowerCase() !== issueRef ||
+      parsed.anchor.toLowerCase() !== issueRef ||
       !accept(parsed)
     ) {
       continue;
@@ -2388,7 +2390,19 @@ function removeAuthoringLabel(
   if (problems.length === 0) {
     return;
   }
-  // Verification failed with the label absent: restore it once, then verify.
+  // Verification failed with the label absent. Replay the owner log once more
+  // right before the restore: a competing trusted marker that appeared since
+  // the first read stops here with no write.
+  replayOrRecover(
+    input,
+    readOwnerLogAfterWrite(input, 'label-removal-verify'),
+    'label-removal-verify',
+  );
+  // Restore every release label that is missing, the authoring-only label
+  // included, so no path leaves the carrier without its exclusion label.
+  const restoreNames = [input.authoringLabel, input.authoringOnlyLabel].filter(
+    (name) => !hasLabel(after.labels, name),
+  );
   try {
     ghText([
       'issue',
@@ -2396,37 +2410,30 @@ function removeAuthoringLabel(
       String(input.number),
       '--repo',
       repoRef,
-      '--add-label',
-      input.authoringLabel,
+      ...restoreNames.flatMap((name) => ['--add-label', name]),
     ]);
   } catch (error) {
     throw new CarrierReleaseStop(
       'recovery-hold',
       'label-restore',
-      `the restore of the authoring label failed: ${messageOf(error)}`,
+      `the restore of the labels failed: ${messageOf(error)}`,
     );
   }
-  let restored: IssueSnapshot;
-  try {
-    restored = readIssue(input.owner, input.repo, input.number);
-  } catch (error) {
+  const restored = readCarrierAfterWrite(input, 'label-restore');
+  if (
+    !hasLabel(restored.labels, input.authoringLabel) ||
+    !hasLabel(restored.labels, input.authoringOnlyLabel)
+  ) {
     throw new CarrierReleaseStop(
       'recovery-hold',
       'label-restore',
-      `the restored label cannot be read: ${messageOf(error)}`,
-    );
-  }
-  if (!hasLabel(restored.labels, input.authoringLabel)) {
-    throw new CarrierReleaseStop(
-      'recovery-hold',
-      'label-restore',
-      'the restored authoring label is not on the carrier',
+      'the restored labels are not all on the carrier',
     );
   }
   throw new CarrierReleaseStop(
     'held',
     'label-removal-verify',
-    `verification after the removal failed (${problems.join('; ')}); the authoring label was restored`,
+    `verification after the removal failed (${problems.join('; ')}); the missing labels were restored`,
   );
 }
 
@@ -2437,34 +2444,48 @@ function readCarrierAfterWrite(
   input: CarrierReleaseInput,
   step: string,
 ): IssueSnapshot {
-  try {
-    return readIssue(input.owner, input.repo, input.number);
-  } catch (error) {
-    throw new CarrierReleaseStop(
-      'recovery-hold',
-      step,
-      `the carrier cannot be read after a label write: ${messageOf(error)}`,
-    );
+  let lastError = '';
+  for (let attempt = 1; attempt <= CARRIER_READ_ATTEMPTS; attempt += 1) {
+    try {
+      return readIssue(input.owner, input.repo, input.number);
+    } catch (error) {
+      lastError = messageOf(error);
+    }
+    if (attempt < CARRIER_READ_ATTEMPTS) {
+      sleepMs(input.settleMs);
+    }
   }
+  throw new CarrierReleaseStop(
+    'recovery-hold',
+    step,
+    `the carrier cannot be read after a label write (${CARRIER_READ_ATTEMPTS} attempts): ${lastError}`,
+  );
 }
 
 function readOwnerLogAfterWrite(
   input: CarrierReleaseInput,
   step: string,
 ): AuthoringOwnerProvenanceComment[] {
-  try {
-    return fetchProvenanceCommentsGraphql(
-      input.owner,
-      input.repo,
-      input.number,
-    );
-  } catch (error) {
-    throw new CarrierReleaseStop(
-      'recovery-hold',
-      step,
-      `the owner-marker log cannot be read after a label write: ${messageOf(error)}`,
-    );
+  let lastError = '';
+  for (let attempt = 1; attempt <= CARRIER_READ_ATTEMPTS; attempt += 1) {
+    try {
+      return fetchProvenanceCommentsGraphql(
+        input.owner,
+        input.repo,
+        input.number,
+      );
+    } catch (error) {
+      lastError = messageOf(error);
+    }
+    if (attempt < CARRIER_READ_ATTEMPTS) {
+      sleepMs(input.settleMs);
+    }
   }
+  throw new CarrierReleaseStop(
+    'recovery-hold',
+    step,
+    `the owner-marker log cannot be read after a label write (${CARRIER_READ_ATTEMPTS} attempts): ${lastError}`,
+  );
 }
 
 /** Run the release for one carrier. Never throws: every stop is reported. */
