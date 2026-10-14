@@ -52,6 +52,7 @@ import {
   ghTextUnbounded,
   resolveGhApiHostname,
 } from './gh-exec.mts';
+import { parseTriageLine } from './policy-helpers.mts';
 import {
   AMD_MARKER_PATTERN,
   classifyCommentEditState,
@@ -174,6 +175,31 @@ export interface PrReviewRecord {
   unparsedReason?: string;
 }
 
+export type TriageOutcome = 'accepted' | 'deferred' | 'rejected';
+export type TriageUrgency = 'very-low' | 'low' | 'medium' | 'high';
+export type TriageStep = '0' | '1' | '2';
+
+export interface TriageStepCounts {
+  urgency: Record<TriageUrgency, number>;
+  outcome: Record<TriageOutcome, number>;
+}
+
+/**
+ * Recorded `Triage:` lines on finding threads whose disposition is accepted,
+ * deferred, or rejected (issue #4189). `recorded` and `unrecorded` partition
+ * those threads; `malformed` is the subset of `unrecorded` whose reply has a
+ * `Triage: ` line that `parseTriageLine` cannot read, so parser drift shows
+ * up as a count instead of silently lowering the recorded share.
+ */
+export interface TriageAudit {
+  recorded: number;
+  unrecorded: number;
+  malformed: number;
+  byStep: Record<TriageStep, TriageStepCounts>;
+  overrides: number;
+  contradictions: number;
+}
+
 export interface PrAuditReport {
   pr: number;
   reviewCount: number;
@@ -185,6 +211,9 @@ export interface PrAuditReport {
   reviews: PrReviewRecord[];
   threads: FindingThread[];
   transitions: TransitionRow[];
+  triage: TriageAudit;
+  /** Merge time from `gh pr list` under `--limit`; `null` under `--prs`. */
+  mergedAt: string | null;
 }
 
 export interface CohortSummary {
@@ -199,6 +228,7 @@ export interface CohortSummary {
   previouslyMissed: SeverityCounts;
   allLowFollowed: { followed: number; total: number };
   transitions: TransitionRow[];
+  triage: TriageAudit;
 }
 
 function emptyDispositionCounts(): Record<Disposition, number> {
@@ -296,10 +326,21 @@ export function classifyDispositionReply(rawBody: unknown): Disposition | null {
  * disposition). `none` covers both "no reply at all" and "replies exist but
  * none are recognized".
  */
-export function resolveThreadDisposition(
+export interface ThreadDispositionReply {
+  disposition: Disposition;
+  /** Body of the winning reply, or `null` when no reply is recognized. */
+  body: string | null;
+}
+
+/**
+ * Resolve one finding thread's winning disposition reply, and its body, by
+ * the rules of {@link resolveThreadDisposition}. The body feeds the triage
+ * audit; the disposition is the same value the thread metrics use.
+ */
+export function resolveThreadDispositionReply(
   findingId: number,
   comments: readonly RawComment[],
-): Disposition {
+): ThreadDispositionReply {
   const replies = comments
     .filter(
       (comment) =>
@@ -316,13 +357,142 @@ export function resolveThreadDisposition(
       return a.id - b.id;
     });
   let resolved: Disposition | null = null;
+  let resolvedBody: string | null = null;
   for (const reply of replies) {
     const classified = classifyDispositionReply(reply.body);
     if (classified) {
       resolved = classified;
+      resolvedBody = reply.body;
     }
   }
-  return resolved ?? 'none';
+  if (resolved === null) {
+    return { disposition: 'none', body: null };
+  }
+  return { disposition: resolved, body: resolvedBody };
+}
+
+export function resolveThreadDisposition(
+  findingId: number,
+  comments: readonly RawComment[],
+): Disposition {
+  return resolveThreadDispositionReply(findingId, comments).disposition;
+}
+
+// ---------------------------------------------------------------------------
+// Pure core: triage audit (issue #4189)
+// ---------------------------------------------------------------------------
+
+const TRIAGE_URGENCIES: readonly TriageUrgency[] = [
+  'very-low',
+  'low',
+  'medium',
+  'high',
+];
+const TRIAGE_STEPS: readonly TriageStep[] = ['0', '1', '2'];
+const TRIAGE_OUTCOMES: readonly TriageOutcome[] = [
+  'accepted',
+  'deferred',
+  'rejected',
+];
+const TRIAGE_LINE_PREFIX_RE = /^Triage: /mu;
+// The deferral clause of a `**Rejected** — deferred to follow-up issue #<n>
+// (<clause>): <reason>` reply starts with `(urgency ` for an urgency-matrix
+// deferral. Other clauses (`(round …)`, `(needs-decision; …)`, the E10 cap
+// routes) are not governed by the urgency matrix.
+const URGENCY_DEFERRAL_CLAUSE_RE =
+  /deferred to follow-up issue #\d+ \(urgency /u;
+
+function isTriageOutcome(
+  disposition: Disposition,
+): disposition is TriageOutcome {
+  return (TRIAGE_OUTCOMES as readonly Disposition[]).includes(disposition);
+}
+
+function emptyTriageStepCounts(): TriageStepCounts {
+  return {
+    urgency: { 'very-low': 0, low: 0, medium: 0, high: 0 },
+    outcome: { accepted: 0, deferred: 0, rejected: 0 },
+  };
+}
+
+function emptyTriageAudit(): TriageAudit {
+  return {
+    recorded: 0,
+    unrecorded: 0,
+    malformed: 0,
+    byStep: {
+      '0': emptyTriageStepCounts(),
+      '1': emptyTriageStepCounts(),
+      '2': emptyTriageStepCounts(),
+    },
+    overrides: 0,
+    contradictions: 0,
+  };
+}
+
+function addTriageAudit(target: TriageAudit, source: TriageAudit): void {
+  target.recorded += source.recorded;
+  target.unrecorded += source.unrecorded;
+  target.malformed += source.malformed;
+  target.overrides += source.overrides;
+  target.contradictions += source.contradictions;
+  for (const step of TRIAGE_STEPS) {
+    for (const urgency of TRIAGE_URGENCIES) {
+      target.byStep[step].urgency[urgency] +=
+        source.byStep[step].urgency[urgency];
+    }
+    for (const outcome of TRIAGE_OUTCOMES) {
+      target.byStep[step].outcome[outcome] +=
+        source.byStep[step].outcome[outcome];
+    }
+  }
+}
+
+/**
+ * Count the `Triage:` lines of one PR's accepted, deferred, or rejected
+ * threads (issue #4189). Threads with `other` or `none` are not counted. A
+ * recorded line with an `override:` part is an override and is never a
+ * contradiction. Otherwise the two contradictions are an accepted reply with
+ * `verdict defer`, and a urgency-matrix deferral with `verdict keep`.
+ */
+function computeTriageAudit(
+  threads: readonly FindingThread[],
+  comments: readonly RawComment[],
+): TriageAudit {
+  const audit = emptyTriageAudit();
+  for (const thread of threads) {
+    if (!isTriageOutcome(thread.disposition)) {
+      continue;
+    }
+    const outcome = thread.disposition;
+    const { body } = resolveThreadDispositionReply(thread.id, comments);
+    const record = body === null ? null : parseTriageLine(body);
+    if (body === null || record === null) {
+      audit.unrecorded += 1;
+      if (body !== null && TRIAGE_LINE_PREFIX_RE.test(body)) {
+        audit.malformed += 1;
+      }
+      continue;
+    }
+    audit.recorded += 1;
+    const step = String(record.step) as TriageStep;
+    audit.byStep[step].urgency[record.urgency] += 1;
+    audit.byStep[step].outcome[outcome] += 1;
+    if (record.override !== null) {
+      audit.overrides += 1;
+      continue;
+    }
+    if (outcome === 'accepted' && record.verdict === 'defer') {
+      audit.contradictions += 1;
+    } else if (
+      outcome === 'deferred' &&
+      record.verdict === 'keep' &&
+      URGENCY_DEFERRAL_CLAUSE_RE.test(body)
+    ) {
+      audit.contradictions += 1;
+    }
+  }
+  return audit;
 }
 
 /**
@@ -453,6 +623,7 @@ export function computePrAudit(
   const transitions = buildTransitionTable(
     parsedReviews.map((parsed) => ({ kind: parsed.kind, open: parsed.open })),
   );
+  const triage = computeTriageAudit(threads, comments);
   const reviews: PrReviewRecord[] = copilotReviewsInOrder.map(
     (review, index) => {
       const parsed = parsedReviews[index];
@@ -480,6 +651,8 @@ export function computePrAudit(
     reviews,
     threads,
     transitions,
+    triage,
+    mergedAt: null,
   };
 }
 
@@ -510,7 +683,9 @@ export function summarizeCohort(
     transitionTotals.set(key, { followed: 0, last: 0 });
   }
 
+  const triage = emptyTriageAudit();
   for (const report of reports) {
+    addTriageAudit(triage, report.triage);
     reviewCount += report.reviewCount;
     v2Count += report.v2Count;
     legacyCount += report.legacyCount;
@@ -556,6 +731,7 @@ export function summarizeCohort(
       severity,
       ...(transitionTotals.get(severity) ?? { followed: 0, last: 0 }),
     })),
+    triage,
   };
 }
 
@@ -798,11 +974,16 @@ export function selectMostRecentlyMerged(
     .map((entry) => entry.number);
 }
 
+interface RecentMergedPrs {
+  numbers: number[];
+  mergedAtByNumber: Map<number, string | null>;
+}
+
 function resolveRecentMergedPrNumbers(
   owner: string,
   repo: string,
   limit: number,
-): number[] {
+): RecentMergedPrs {
   const fetchCount = Math.min(
     Math.max(
       limit * RECENT_MERGED_OVER_FETCH_MULTIPLIER,
@@ -850,7 +1031,12 @@ function resolveRecentMergedPrNumbers(
         'fully precise number set.\n',
     );
   }
-  return selectMostRecentlyMerged(parsed, limit);
+  return {
+    numbers: selectMostRecentlyMerged(parsed, limit),
+    mergedAtByNumber: new Map(
+      parsed.map((candidate) => [candidate.number, candidate.mergedAt]),
+    ),
+  };
 }
 
 const COPILOT_REVIEW_WAVE_AUDIT_FLAG_SPEC = {
@@ -892,6 +1078,11 @@ per-PR report also preserves the full per-review breakdown (severity,
 discussion_r id, and new-versus-carried status per Open finding) --
 "reviews" in JSON output, a second severity/finding-id/is_new table in
 TSV output.
+
+Each PR's "triage" object counts the \`Triage:\` lines of its accepted,
+deferred, or rejected threads: recorded versus unrecorded (plus malformed,
+a line that does not parse), per step and urgency, overrides, and
+contradictions with the urgency-matrix verdict. JSON output only.
 `);
 }
 
@@ -1050,15 +1241,21 @@ if (import.meta.main) {
   }
   const [owner, repo] = parseRepository(repository);
 
-  const prNumbers = prsFlag
-    ? parsePrNumberList(prsFlag)
+  const recent = prsFlag
+    ? null
     : resolveRecentMergedPrNumbers(
         owner,
         repo,
         parseCanonicalIntegerOrThrow(limitFlag, '--limit'),
       );
+  const prNumbers = recent
+    ? recent.numbers
+    : parsePrNumberList(prsFlag as string);
 
-  const reports = prNumbers.map((prNumber) => auditPr(owner, repo, prNumber));
+  const reports = prNumbers.map((prNumber) => ({
+    ...auditPr(owner, repo, prNumber),
+    mergedAt: recent?.mergedAtByNumber.get(prNumber) ?? null,
+  }));
   const summary = summarizeCohort(reports);
 
   if (format === 'tsv') {

@@ -16,6 +16,7 @@ import {
   type RawReview,
   RECENT_MERGED_OVER_FETCH_MAX,
   resolveThreadDisposition,
+  resolveThreadDispositionReply,
   selectMostRecentlyMerged,
   summarizeCohort,
 } from '../src/scripts/copilot-review-wave-audit.mts';
@@ -1007,6 +1008,341 @@ test('selectMostRecentlyMerged: respects the exact requested limit', () => {
 // ---------------------------------------------------------------------------
 // CLI smoke tests (no gh calls: --help and argument-validation-only paths)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Recorded triage (issue #4189)
+// ---------------------------------------------------------------------------
+
+/** One v2 review whose Open section lists the given findings. */
+function openReviewBody(items: string[]): string {
+  return `<!-- ccr-overview-v2 -->
+
+<details open>
+<summary><strong>Open (${items.length})</strong></summary>
+
+${items.join('\n')}
+</details>
+`;
+}
+
+const TRIAGE_DEFER_LINE =
+  'Triage: tier low; urgency medium; step 2; verdict defer';
+
+test('resolveThreadDispositionReply: returns the winning reply body with its disposition', () => {
+  const comments = [
+    reply(10, 1, '**Accepted** — fixed', '2026-01-01T00:00:00Z'),
+    reply(11, 1, 'Thanks!', '2026-01-02T00:00:00Z'),
+  ];
+  assert.deepEqual(resolveThreadDispositionReply(1, comments), {
+    disposition: 'accepted',
+    body: '**Accepted** — fixed',
+  });
+  assert.deepEqual(resolveThreadDispositionReply(1, []), {
+    disposition: 'none',
+    body: null,
+  });
+});
+
+test('resolveThreadDisposition: always agrees with resolveThreadDispositionReply', () => {
+  const sets: RawComment[][] = [
+    [],
+    [reply(10, 1, '**Accepted** — fixed', '2026-01-01T00:00:00Z')],
+    [
+      reply(10, 1, '**Accepted** — fixed', '2026-01-01T00:00:00Z'),
+      reply(11, 1, '**Rejected** — reverted', '2026-01-02T00:00:00Z'),
+    ],
+  ];
+  for (const comments of sets) {
+    assert.equal(
+      resolveThreadDisposition(1, comments),
+      resolveThreadDispositionReply(1, comments).disposition,
+    );
+  }
+});
+
+test('computePrAudit triage: an accepted reply with verdict defer is recorded and one contradiction', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Medium', 8001)]),
+    ),
+  ];
+  const comments = [
+    reply(
+      10,
+      8001,
+      `**Accepted** — fixed\n\n${TRIAGE_DEFER_LINE}`,
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 1);
+  assert.equal(report.triage.unrecorded, 0);
+  assert.equal(report.triage.malformed, 0);
+  assert.equal(report.triage.overrides, 0);
+  assert.equal(report.triage.contradictions, 1);
+});
+
+test('computePrAudit triage: the same reply with an override part is an override, not a contradiction', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Medium', 8001)]),
+    ),
+  ];
+  const comments = [
+    reply(
+      10,
+      8001,
+      `**Accepted** — fixed\n\n${TRIAGE_DEFER_LINE}; override: verdict keep at E5`,
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 1);
+  assert.equal(report.triage.overrides, 1);
+  assert.equal(report.triage.contradictions, 0);
+});
+
+test('computePrAudit triage: a urgency-matrix deferral with verdict defer is recorded with no contradiction', () => {
+  const reviews = [
+    review(1, '2026-01-01T00:00:00Z', openReviewBody([openLine('Low', 8002)])),
+  ];
+  const comments = [
+    reply(
+      10,
+      8002,
+      '**Rejected** — deferred to follow-up issue #12 (urgency low; severity Low): later\n\nTriage: tier low; urgency low; step 0; verdict defer',
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 1);
+  assert.equal(report.triage.contradictions, 0);
+  assert.equal(report.triage.byStep['0'].outcome.deferred, 1);
+});
+
+test('computePrAudit triage: an urgency-matrix deferral with verdict keep is one contradiction', () => {
+  const reviews = [
+    review(1, '2026-01-01T00:00:00Z', openReviewBody([openLine('Low', 8003)])),
+  ];
+  const comments = [
+    reply(
+      10,
+      8003,
+      '**Rejected** — deferred to follow-up issue #12 (urgency low; severity Low): later\n\nTriage: tier low; urgency low; step 0; verdict keep',
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.contradictions, 1);
+});
+
+test('computePrAudit triage: a round-clause deferral with verdict keep is not a contradiction', () => {
+  const reviews = [
+    review(1, '2026-01-01T00:00:00Z', openReviewBody([openLine('Low', 8004)])),
+  ];
+  const comments = [
+    reply(
+      10,
+      8004,
+      '**Rejected** — deferred to follow-up issue #12 (round 12/12): later\n\nTriage: tier low; urgency low; step 0; verdict keep',
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 1);
+  assert.equal(report.triage.contradictions, 0);
+});
+
+test('computePrAudit triage: an accepted reply with no verdict part is recorded with no contradiction', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Medium', 8005)]),
+    ),
+  ];
+  const comments = [
+    reply(
+      10,
+      8005,
+      '**Accepted** — fixed\n\nTriage: tier medium; urgency medium; step 1',
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 1);
+  assert.equal(report.triage.contradictions, 0);
+});
+
+test('computePrAudit triage: an accepted reply without a Triage line is unrecorded', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Medium', 8006)]),
+    ),
+  ];
+  const comments = [
+    reply(10, 8006, '**Accepted** — fixed', '2026-01-02T00:00:00Z'),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 0);
+  assert.equal(report.triage.unrecorded, 1);
+  assert.equal(report.triage.malformed, 0);
+});
+
+test('computePrAudit triage: a Triage line that does not parse is unrecorded and malformed', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Medium', 8007)]),
+    ),
+  ];
+  const comments = [
+    reply(
+      10,
+      8007,
+      '**Accepted** — fixed\n\nTriage: tier low; urgency medium; step 2; verdict bogus',
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 0);
+  assert.equal(report.triage.unrecorded, 1);
+  assert.equal(report.triage.malformed, 1);
+});
+
+test('computePrAudit triage: other and none threads are not counted', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Medium', 8008), openLine('Low', 8009)]),
+    ),
+  ];
+  const comments = [
+    reply(
+      10,
+      8008,
+      '**Awaiting maintainer decision** — pending',
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.deepEqual(report.triage, {
+    recorded: 0,
+    unrecorded: 0,
+    malformed: 0,
+    byStep: {
+      '0': {
+        urgency: { 'very-low': 0, low: 0, medium: 0, high: 0 },
+        outcome: { accepted: 0, deferred: 0, rejected: 0 },
+      },
+      '1': {
+        urgency: { 'very-low': 0, low: 0, medium: 0, high: 0 },
+        outcome: { accepted: 0, deferred: 0, rejected: 0 },
+      },
+      '2': {
+        urgency: { 'very-low': 0, low: 0, medium: 0, high: 0 },
+        outcome: { accepted: 0, deferred: 0, rejected: 0 },
+      },
+    },
+    overrides: 0,
+    contradictions: 0,
+  });
+});
+
+test('computePrAudit triage: two step-1 threads land in the matching byStep cells', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Low', 8010), openLine('Medium', 8011)]),
+    ),
+  ];
+  const comments = [
+    reply(
+      10,
+      8010,
+      '**Accepted** — fixed\n\nTriage: tier low; urgency low; step 1',
+      '2026-01-02T00:00:00Z',
+    ),
+    reply(
+      11,
+      8011,
+      '**Rejected** — deferred to follow-up issue #12 (round 2/12): later\n\nTriage: tier medium; urgency medium; step 1; verdict keep',
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  const zero = { 'very-low': 0, low: 0, medium: 0, high: 0 };
+  assert.deepEqual(report.triage.byStep['1'], {
+    urgency: { ...zero, low: 1, medium: 1 },
+    outcome: { accepted: 1, deferred: 1, rejected: 0 },
+  });
+  assert.equal(report.triage.recorded, 2);
+  assert.equal(report.triage.contradictions, 0);
+});
+
+test('summarizeCohort triage: sums the per-PR triage objects key by key', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Medium', 8020)]),
+    ),
+  ];
+  const deferComments = [
+    reply(
+      10,
+      8020,
+      `**Accepted** — fixed\n\n${TRIAGE_DEFER_LINE}`,
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const clean = computePrAudit(1, reviews, deferComments);
+  const unrecorded = computePrAudit(
+    2,
+    [
+      review(
+        2,
+        '2026-01-01T00:00:00Z',
+        openReviewBody([openLine('Medium', 8021)]),
+      ),
+    ],
+    [reply(11, 8021, '**Accepted** — fixed', '2026-01-02T00:00:00Z')],
+  );
+  const summary = summarizeCohort([clean, unrecorded]);
+  assert.equal(summary.triage.recorded, 1);
+  assert.equal(summary.triage.unrecorded, 1);
+  assert.equal(summary.triage.contradictions, 1);
+  assert.equal(summary.triage.byStep['2'].outcome.accepted, 1);
+  assert.equal(summary.triage.byStep['2'].urgency.medium, 1);
+});
+
+test('computePrAudit: report keys are the existing fields plus triage and mergedAt', () => {
+  const report = computePrAudit(1, [], []);
+  assert.deepEqual(Object.keys(report).sort(), [
+    'legacyCount',
+    'mergedAt',
+    'openAppearances',
+    'pr',
+    'previouslyMissed',
+    'reviewCount',
+    'reviews',
+    'threads',
+    'transitions',
+    'triage',
+    'unparsedCount',
+    'v2Count',
+  ]);
+  assert.equal(report.mergedAt, null);
+});
 
 test('CLI: --help exits 0 with no gh call', () => {
   const output = execFileSync('node', [CLI_PATH, '--help'], {

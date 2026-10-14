@@ -184,6 +184,18 @@ review comments (`gh api repos/{owner}/{repo}/pulls/{n}/reviews` and
 - **Transition table**: per v2 review, keyed by the highest "Open"
   severity in that review (`none` when Open is empty), split into
   "followed by another Copilot review" versus "last review".
+- **Recorded triage** (`triage` in the JSON output): over the PR's
+  accepted, deferred, and rejected threads, the count of replies that
+  carry a readable `Triage:` line (`recorded`) versus those that do not
+  (`unrecorded`). `malformed` counts the unrecorded replies that carry a
+  line starting with `Triage:` that `parseTriageLine` cannot read. `byStep`
+  counts the recorded lines by step (`0` to `2`), urgency, and outcome.
+  `overrides` counts lines with an `override:` part. `contradictions`
+  counts the recorded lines without an override where an accepted reply
+  says `verdict defer`, or an urgency-matrix deferral (its clause starts
+  with `(urgency` followed by a space) says `verdict keep`. Threads with
+  other or no dispositions are not counted. `mergedAt` is the PR's merge
+  time under `--limit` and `null` under `--prs`.
 
 ### Known limitation: a legacy listing carries no severity or thread data
 
