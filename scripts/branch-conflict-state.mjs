@@ -69,6 +69,15 @@ export function resolveCallSiteRouting(
 }
 /** Non-required waiting states an UNSTABLE clean branch may proceed past. */
 const UNSTABLE_PROCEED_STATES = new Set(['action_required', 'pending']);
+/**
+ * `StatusContext` states the shared CI vocabulary treats as still pending
+ * (`CI_STATUS_CONTEXT_PENDING_STATES`), so they count as waiting.
+ */
+const STATUS_CONTEXT_PENDING_STATES = new Set([
+  'PENDING',
+  'EXPECTED',
+  'REQUESTED',
+]);
 /** Conclusions and states that count as passing, so they are not listed. */
 const PASSING_CHECK_CONCLUSIONS = new Set([
   'SUCCESS',
@@ -120,8 +129,9 @@ export function parseNonPassingRuns(nodes) {
       if (state !== 'SUCCESS') {
         runs.push({
           name,
-          state:
-            state === 'PENDING' ? 'pending' : state.toLowerCase() || 'unknown',
+          state: STATUS_CONTEXT_PENDING_STATES.has(state)
+            ? 'pending'
+            : state.toLowerCase() || 'unknown',
           required,
         });
       }

@@ -147,6 +147,16 @@ const UNSTABLE_PROCEED_STATES: ReadonlySet<string> = new Set([
   'pending',
 ]);
 
+/**
+ * `StatusContext` states the shared CI vocabulary treats as still pending
+ * (`CI_STATUS_CONTEXT_PENDING_STATES`), so they count as waiting.
+ */
+const STATUS_CONTEXT_PENDING_STATES: ReadonlySet<string> = new Set([
+  'PENDING',
+  'EXPECTED',
+  'REQUESTED',
+]);
+
 /** Conclusions and states that count as passing, so they are not listed. */
 const PASSING_CHECK_CONCLUSIONS: ReadonlySet<string> = new Set([
   'SUCCESS',
@@ -204,8 +214,9 @@ export function parseNonPassingRuns(
       if (state !== 'SUCCESS') {
         runs.push({
           name,
-          state:
-            state === 'PENDING' ? 'pending' : state.toLowerCase() || 'unknown',
+          state: STATUS_CONTEXT_PENDING_STATES.has(state)
+            ? 'pending'
+            : state.toLowerCase() || 'unknown',
           required,
         });
       }

@@ -1279,6 +1279,12 @@ test('parseNonPassingRuns: keeps only non-passing runs and fails closed', () => 
       isRequired: null,
     },
     {
+      __typename: 'StatusContext',
+      context: 'requested-check',
+      state: 'REQUESTED',
+      isRequired: false,
+    },
+    {
       __typename: 'CheckRun',
       name: 'Windows platform tests',
       status: 'COMPLETED',
@@ -1301,7 +1307,8 @@ test('parseNonPassingRuns: keeps only non-passing runs and fails closed', () => 
       required: false,
     },
     { name: 'queued-run', state: 'pending', required: false },
-    { name: 'expected-check', state: 'expected', required: true },
+    { name: 'expected-check', state: 'pending', required: true },
+    { name: 'requested-check', state: 'pending', required: false },
     { name: 'Windows platform tests', state: 'failure', required: false },
     { name: '', state: 'unknown', required: true },
   ]);
