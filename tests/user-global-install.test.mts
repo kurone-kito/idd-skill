@@ -847,6 +847,24 @@ test('a stale temporary file beside a listed skill file makes install refuse bef
   assert.deepEqual(snapshot(home), before);
 });
 
+test('a listed skill file with a second hard link makes install refuse before any write', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceTree();
+  nodeFs.appendFileSync(join(source, 'skills', SKILL_RELATIVE), '\nupgrade\n');
+  nodeFs.linkSync(skillFileOf(home, '.claude'), join(home, 'alias.md'));
+  const before = snapshot(home);
+
+  assert.throws(
+    () =>
+      installPayload(
+        optionsFor(home, { sourceRoot: source, version: UPGRADE_VERSION }),
+      ),
+    /more than one hard link/,
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
 test('every placeholder in the installed payload has a mapping', () => {
   const home = makeHome();
   installPayload(optionsFor(home));

@@ -554,6 +554,13 @@ function buildInstallPlan(
         if (current === target.sha256) {
           lines.push(`keep ${target.dest}`);
         } else if (listed !== undefined) {
+          // Refused here, before any write: replaceFileByRename would refuse a
+          // second hard link only at apply time, after earlier writes.
+          if (fs.lstatSync(target.dest).nlink > 1) {
+            throw new Error(
+              `${target.dest} has more than one hard link; refusing to replace it`,
+            );
+          }
           refuseStaleTemp(target.dest, fs);
           writes.push({ ...target, root, priorSha256: current });
           lines.push(`replace ${target.dest}`);
