@@ -7265,7 +7265,8 @@ same as `AW4`/`AW5`.
   non-passing head run is listed and every such run is non-required and
   `action_required` or `pending` (issue `#4209`). The helper reads the head's
   check rollup live for that state alone, so with an empty or unavailable list
-  it holds. The helper's `clean` alone also covers
+  it holds. A caller without helper runtime cannot collect that list, so an
+  `UNSTABLE` branch holds there. The helper's `clean` alone also covers
   `BLOCKED`, which holds. A `retry` result is re-polled a small fixed number
   of times (distributed default: three attempts, a few seconds apart), then
   routed by the first settled result.
