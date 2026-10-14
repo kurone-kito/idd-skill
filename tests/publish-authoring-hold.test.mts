@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   mkdirSync,
   mkdtempSync,
@@ -19,6 +20,7 @@ import {
   checkReviewResult,
   generatePublicationIds,
   injectPublicationLine,
+  markerPostSentNothing,
   parseJournalReference,
   requestsChildShape,
   resolvePublishLabels,
@@ -130,6 +132,7 @@ if (args[0] === 'issue' && args[1] === 'edit') {
 if (args[0] !== 'api') fail('unexpected gh call: ' + args.join(' '));
 if (args.includes('graphql')) {
   const queryText = args.find((arg) => arg.startsWith('query=')) || '';
+  if (state.readsFail) fail('gh: HTTP 502 Bad Gateway (read)');
   if (queryText.includes('mutation')) {
     out({ data: { minimizeComment: { minimizedComment: { isMinimized: true } } } });
   }
@@ -173,6 +176,7 @@ if (searchPath) {
 }
 const path = args.find((arg) => arg === 'user' || arg.startsWith('repos/'));
 if (path && path.startsWith('repos/o/r/issues?')) {
+  if (state.indexLagFull) out(Array.from({ length: 100 }, (_, index) => ({ number: 9000 + index, updated_at: '2026-10-13T00:00:00Z' })));
   out(Object.keys(state.issues).map((number) => ({ number: Number(number), updated_at: '2026-10-13T00:00:00Z' })));
 }
 if (path === 'user') {
@@ -227,6 +231,10 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
     const body = JSON.parse(stdin).body;
     const modeMatch = /mode=([a-z-]+);/.exec(body);
     const mode = modeMatch ? modeMatch[1] : '';
+    if (number === ${NEW_ISSUE} && mode === 'release-complete' && state.failReadsOnComplete) {
+      state.readsFail = true;
+      save();
+    }
     const failSpec = number === ${NEW_ISSUE} && state.postFail && state.postFail.mode === mode ? state.postFail : null;
     if (failSpec && !failSpec.landed) fail('gh: Validation Failed (HTTP ' + failSpec.status + ')');
     const id = 7000 + state.comments.length;
@@ -327,6 +335,9 @@ function setup(
     failSweep?: boolean;
     searchIncomplete?: boolean;
     mutateBodyText?: string;
+    failReadsOnComplete?: boolean;
+    indexLagFull?: boolean;
+    authoringOnlyLabelName?: string;
   } = {},
 ): Fixture {
   const dir = mkdtempSync(join(tmpdir(), 'idd-publish-authoring-hold-test-'));
@@ -344,6 +355,9 @@ function setup(
   }
   if (options.journal !== null) {
     config.issueAuthoring = { journalIssue: options.journal ?? 'o/r#2674' };
+  }
+  if (options.authoringOnlyLabelName !== undefined) {
+    config.labels = { authoringOnlyLabelName: options.authoringOnlyLabelName };
   }
   writeFileSync(
     join(work, '.github/idd/config.json'),
@@ -377,6 +391,9 @@ function setup(
       failSweep: options.failSweep === true,
       searchIncomplete: options.searchIncomplete === true,
       mutateBodyText: options.mutateBodyText ?? '',
+      failReadsOnComplete: options.failReadsOnComplete === true,
+      indexLagFull: options.indexLagFull === true,
+      readsFail: false,
       loadControlModule: pathToFileURL(
         join(REPO_ROOT, 'scripts/github-api-load-control.mjs'),
       ).href,
@@ -1829,6 +1846,14 @@ carrierLintTest(
       assert.equal(run.report.journalState, 'member');
       assert.equal(run.report.release.state, 'released');
       assert.equal(run.report.release.failedStep, null);
+      assert.deepEqual(writeKinds(run.fixture).slice(5), [
+        'owner-marker:release',
+        'owner-marker:release-guard',
+        'owner-marker:heartbeat',
+        'remove-label',
+        'owner-marker:release-complete',
+      ]);
+      assert.equal(countOf(writeKinds(run.fixture), 'remove-label'), 1);
       assert.deepEqual(labelsOf(run.fixture), ['status:authoring-only']);
       assert.equal(
         run.fixture.log().some((entry) => entry.args.includes('close')),
@@ -1897,6 +1922,11 @@ const CARRIER_HELD_CASES: {
   {
     name: 'an inconclusive sole-member result',
     options: { searchIncomplete: true },
+    step: 'precondition-sole-member',
+  },
+  {
+    name: 'an unfinished index-lag window',
+    options: { indexLagFull: true },
     step: 'precondition-sole-member',
   },
   {
@@ -2149,7 +2179,7 @@ carrierLintTest(
 );
 
 carrierLintTest(
-  'CLI: a carrier whose fenced roadmap draft has a roadmap-id marker and a placeholder is released',
+  'CLI: a carrier with a roadmap-id marker and a placeholder inside its fenced draft is released',
   () => {
     const fenced = CARRIER_BODY.replace(
       'Shape: orphan',
@@ -2167,3 +2197,60 @@ carrierLintTest(
     }
   },
 );
+
+carrierLintTest(
+  'CLI: a release-complete reconciliation whose reads stay unreadable keeps the release guard and reports recovery-hold',
+  () => {
+    const run = releaseRun({
+      postFail: { mode: 'release-complete', status: 500, landed: false },
+      failReadsOnComplete: true,
+    });
+    try {
+      assert.equal(run.status, 1, JSON.stringify(run.report));
+      assert.equal(run.report.release.state, 'recovery-hold');
+      assert.equal(run.report.release.failedStep, 'release-complete');
+      const kinds = writeKinds(run.fixture);
+      assert.equal(countOf(kinds, 'owner-marker:release-guard'), 1);
+      assert.equal(countOf(kinds, 'add-label'), 0);
+    } finally {
+      run.fixture.restore();
+    }
+  },
+);
+
+test('CLI: a carrier whose authoring-only label has the authoring name is refused before any write', () => {
+  const fixture = setup({
+    labels: ['status:authoring'],
+    authoringOnlyLabelName: 'status:authoring',
+  });
+  try {
+    const result = fixture.run([...carrierFiles(fixture), '--apply']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /must be different, non-empty names/);
+    assert.deepEqual(writeKinds(fixture), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('release: a notDispatched or HTTP 401, 404 or 422 envelope proves nothing was sent; other envelopes do not', () => {
+  const envelope = (fields: Record<string, unknown>): string =>
+    JSON.stringify({
+      iddHelperError: { helper: 'post-idd-marker', message: 'x', ...fields },
+    });
+  assert.equal(markerPostSentNothing(envelope({ notDispatched: true })), true);
+  assert.equal(markerPostSentNothing(envelope({ httpStatus: 422 })), true);
+  assert.equal(markerPostSentNothing(envelope({ httpStatus: 502 })), false);
+  assert.equal(markerPostSentNothing('gh: boom'), false);
+});
+
+test('release: the set snapshot normalizes the repository identity before hashing', () => {
+  const bodySha = 'a'.repeat(64);
+  const expected = createHash('sha256')
+    .update(`kurone-kito/idd-skill#4254:${bodySha}`, 'utf8')
+    .digest('hex');
+  assert.equal(
+    carrierSetSnapshot('Kurone-Kito', 'IDD-Skill', 4254, bodySha),
+    expected,
+  );
+});
