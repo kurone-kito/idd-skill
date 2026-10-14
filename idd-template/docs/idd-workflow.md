@@ -1205,16 +1205,17 @@ Running this variant safely requires:
 - **Held-worker renewal.** A roster worker in a hold (not `disposed`, claim
   taken in section 3 step 4) is renewed at the orchestrator's wake-ups in
   section 4 of its phase file. At or after 72 h from its first hold comment's
-  `created_at`, post `unclaimed-by` for that claim and record the hold and cap
-  in the run report; once that succeeds, mark the entry `disposed`. Before the
-  cap, each `claimed-by` re-post, due every 12 h from the latest valid one,
-  first has the claim revalidation gate confirm the active claim's agent id
-  and claim id, then copies its `branch` verbatim. A failed heartbeat is
-  retried once; if the retry also fails, the run report records the hold and
-  the failed post, and the claim is left untouched. A failed 72-hour
-  `unclaimed-by` leaves the claim in place, and the run report records that
-  the cap was reached and the release post failed. In both cases the
-  orchestrator posts no second claim id and starts no new claim.
+  `created_at`, the claim revalidation gate confirms the active claim is still
+  this claim; the orchestrator then posts `unclaimed-by` for it and records
+  the hold and cap in the run report, and once that succeeds it marks the
+  entry `disposed`. Before the cap, each `claimed-by` re-post, due every 12 h
+  from the latest valid one, first has the claim revalidation gate confirm the
+  active claim's agent id and claim id, then copies its `branch` verbatim. A
+  failed heartbeat is retried once; if the retry also fails, the run report
+  records the hold and the failed post, and the claim is left untouched. A
+  failed 72-hour `unclaimed-by` leaves the claim in place, and the run report
+  records that the cap was reached and the release post failed. In both cases
+  the orchestrator posts no second claim id and starts no new claim.
 
 ### Orchestrator restart
 
