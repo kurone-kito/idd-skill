@@ -116,6 +116,8 @@ interface GithubApiPolicy {
 
 interface OrchestratorPolicy {
   maxWorkers: number;
+  hostLoadClearStreak: number;
+  hostLoadWaitCeiling: string;
 }
 
 /** How one policy document presents `critiqueLoop.delegate`. */
@@ -519,7 +521,11 @@ interface RawConfig {
     legacyRoots?: unknown;
     milestoneScope?: unknown;
   };
-  orchestrator?: { maxWorkers?: unknown };
+  orchestrator?: {
+    maxWorkers?: unknown;
+    hostLoadClearStreak?: unknown;
+    hostLoadWaitCeiling?: unknown;
+  };
   claim?: { verifySettleDelay?: unknown };
   critiqueLoop?: {
     cPhaseLowSeveritySkipAfter?: unknown;
@@ -751,8 +757,12 @@ export const POLICY_DEFAULTS = Object.freeze({
   }),
   // #3835: per-session worker cap used by the read-only dispatch budget
   // helper. One still permits one worker; it does not disable activation.
+  // #4258: host-load wait after a `host-load` budget stop. The 60-second
+  // re-check interval is an instruction constant, not a key.
   orchestrator: Object.freeze({
     maxWorkers: 2,
+    hostLoadClearStreak: 3,
+    hostLoadWaitCeiling: 'PT30M',
   }) as Readonly<OrchestratorPolicy>,
   claim: Object.freeze({
     verifySettleDelay: 'PT5S',
@@ -985,6 +995,14 @@ export function normalizePolicyConfig(config: unknown) {
   const rawOrchestratorMaxWorkers = parsePositiveInteger(
     c?.orchestrator?.maxWorkers,
     POLICY_DEFAULTS.orchestrator.maxWorkers,
+  );
+  const rawOrchestratorHostLoadClearStreak = parsePositiveInteger(
+    c?.orchestrator?.hostLoadClearStreak,
+    POLICY_DEFAULTS.orchestrator.hostLoadClearStreak,
+  );
+  const rawOrchestratorHostLoadWaitCeiling = parsePositiveDuration(
+    c?.orchestrator?.hostLoadWaitCeiling,
+    POLICY_DEFAULTS.orchestrator.hostLoadWaitCeiling,
   );
 
   const forcedHandoffAuthorityAlias = firstAcceptedString(
@@ -1338,6 +1356,8 @@ export function normalizePolicyConfig(config: unknown) {
         rawOrchestratorMaxWorkers <= 8
           ? rawOrchestratorMaxWorkers
           : POLICY_DEFAULTS.orchestrator.maxWorkers,
+      hostLoadClearStreak: rawOrchestratorHostLoadClearStreak,
+      hostLoadWaitCeiling: rawOrchestratorHostLoadWaitCeiling,
     },
     claim: {
       verifySettleDelay: parseDuration(
