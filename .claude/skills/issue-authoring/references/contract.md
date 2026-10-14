@@ -1477,6 +1477,27 @@ triage finding is downgraded to a warning instead of failing the
 report, mirroring how this linter already treats a bucket body as
 deliberately non-ready everywhere else.
 
+For the `carrier` shape, the linter checks a **draft carrier**: an
+issue that holds drafts which cannot yet be published as their final
+issues, labelled with the configured authoring-only label
+(`labels.authoringOnlyLabelName`, default `status:authoring-only`).
+Reviewed drafts kept only in local files are lost, and a duplicate
+search cannot see them (observed on the follow-up for roadmap
+`#4079`, 2026-10-13). A carrier is never an execution candidate, so the
+ready-shape checks above do not apply to it, and every triage finding
+reports "not applicable". Its checks are `carrier-marker` (the hidden
+`<!-- {prefix}-draft-carrier: v1 -->` marker, exactly once),
+`carrier-forbidden-markers` (no suitability, effort, roadmap-id,
+blocked-by, or authoring-bucket marker or footer outside code),
+`carrier-release-condition` (the `## Release condition` section holds
+only `Blocked by` declarations, and is empty when the drafts can be
+re-authored now), `carrier-drafts` (each `###` subsection under
+`## Drafts` has exactly one `Review:` line, one `Shape:` line, and one
+fenced draft), and `carrier-label` (when `--label` values are given, one
+of them is the configured authoring-only label). The carrier also needs
+the `## Review ledger` heading. `--shape carrier` cannot be combined
+with `--expect-bucket`, because a carrier has no readiness bucket.
+
 The linter also emits one **advisory, warning-severity-only** finding
 (`prose-dependency`): it flags an issue/PR reference (`#<digits>` or a
 full GitHub issue/PR URL) that appears near coordination language (for
@@ -1562,7 +1583,7 @@ convert the prose into a proper dependency marker or consciously
 confirm the reference is a mere breadcrumb.
 
 ```sh
-node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \
+node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child|carrier> \
   --marker-prefix <resolved-target-prefix> --title <drafted-title> \
   --body-file <path-to-drafted-body> [--label <label>]... \
   [--expect-bucket <needs-decision|blocked-by-human>]

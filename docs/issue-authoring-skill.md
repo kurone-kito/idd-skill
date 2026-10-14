@@ -1043,6 +1043,17 @@ normally, since A4's criteria are title-independent). With
 instead of failing the report, mirroring how this linter already treats
 a bucket body as deliberately non-ready everywhere else.
 
+For the `carrier` shape, the linter checks a **draft carrier**: an issue
+that holds drafts which cannot yet be published as their final issues,
+labelled with the configured authoring-only label. Its five checks
+(`carrier-marker`, `carrier-forbidden-markers`,
+`carrier-release-condition`, `carrier-drafts`, and `carrier-label`) and
+the required `## Release condition`, `## Drafts`, and `## Review ledger`
+headings are defined in the contract's
+[Mechanical pre-publish gate](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#mechanical-pre-publish-gate)
+section. A carrier is never an execution candidate, so every triage
+finding reports "not applicable" for it.
+
 It also emits one **advisory, warning-severity-only** finding
 (`prose-dependency`): it flags an issue/PR reference (`#<digits>` or a
 full GitHub issue/PR URL) used near coordination language (for example
@@ -1103,7 +1114,7 @@ to convert the prose into a proper dependency marker or consciously
 confirm the reference is a mere breadcrumb.
 
 ```sh
-node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> \
+node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child|carrier> \
   --marker-prefix <resolved-target-prefix> --title <drafted-title> \
   --body-file <path-to-drafted-body> [--label <label>]... \
   [--expect-bucket <needs-decision|blocked-by-human>]
