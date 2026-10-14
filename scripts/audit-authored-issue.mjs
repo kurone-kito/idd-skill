@@ -777,6 +777,7 @@ export function auditAuthoredIssue(body, options) {
       text,
       markerPrefix,
       options.upstreamEscalationEnabled === true,
+      options.shape === 'carrier',
     ),
     checkRequiredHeadings(
       carrierViews ? carrierViews.structure : text,
@@ -1353,6 +1354,17 @@ function checkCarrierDrafts(lines, topLevelFenceLines) {
   const reviewLine = /^Review: (?:reviewed|not reviewed)(?: .*)?$/u;
   const shapeLine = /^Shape: (?:orphan|roadmap|child)$/u;
   const problems = [];
+  // A fenced draft before the first ### subsection belongs to no subsection,
+  // so it cannot pass the per-subsection checks (#4250 review, Copilot).
+  const prelude = fenceLines.filter(
+    (line) =>
+      line >= section.start && line < (subsectionStarts[0] ?? section.end),
+  ).length;
+  if (prelude > 0) {
+    problems.push(
+      `${prelude} top-level fenced draft(s) sit in the Drafts section outside any ### subsection`,
+    );
+  }
   subsectionStarts.forEach((headingIndex, position) => {
     const end =
       position + 1 < subsectionStarts.length
@@ -1692,6 +1704,7 @@ function checkMarkerPrefixConsistency(
   text,
   markerPrefix,
   upstreamEscalationEnabled,
+  carrier,
 ) {
   const id = 'marker-prefix-consistency';
   const name = 'Every authoring marker uses the resolved target markerPrefix';
@@ -1716,11 +1729,14 @@ function checkMarkerPrefixConsistency(
   // publish-blocking finding for a repository roadmap #2700 promises
   // "sees no behavior change at all", the same risk the pairing check's
   // own gate exists to close.
-  const suffixes = upstreamEscalationEnabled
-    ? AUTHORING_MARKER_SUFFIXES
-    : AUTHORING_MARKER_SUFFIXES.filter(
-        (suffix) => suffix !== 'upstream-candidate',
-      );
+  // draft-carrier is a carrier-only marker (#4250 review, Copilot): a
+  // non-carrier body that quotes another prefix's carrier marker is not a
+  // failure, so the suffix joins the scan only for the carrier shape.
+  const suffixes = AUTHORING_MARKER_SUFFIXES.filter(
+    (suffix) =>
+      (suffix !== 'upstream-candidate' || upstreamEscalationEnabled) &&
+      (suffix !== 'draft-carrier' || carrier),
+  );
   const pattern = new RegExp(
     `<!--\\s*([^\\s>:]+)-(${suffixes.join('|')})\\b[\\s\\S]*?-->`,
     'gi',

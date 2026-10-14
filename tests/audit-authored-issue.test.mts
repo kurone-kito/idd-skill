@@ -6508,6 +6508,33 @@ test('an inline code span that starts at a fence closer does not hide a live mar
   );
 });
 
+test('draft-carrier is a carrier-only marker suffix, so a child body quoting another prefix is unchanged (#4250)', () => {
+  const quoted = `${childBody()}\n\n<!-- other-draft-carrier: v1 -->`;
+  assert.equal(
+    auditAuthoredIssue(quoted, {
+      shape: 'child',
+      markerPrefix: 'idd-skill',
+    }).findings.find((finding) => finding.id === 'marker-prefix-consistency')
+      ?.result,
+    'pass',
+  );
+  const carrierQuoted = carrierBody({
+    intro: 'Holds drafts.\n\n<!-- other-draft-carrier: v1 -->',
+  });
+  assert.equal(
+    carrierFinding(carrierQuoted, 'marker-prefix-consistency')?.result,
+    'fail',
+  );
+});
+
+test('a fenced draft in the Drafts prelude, before the first ### subsection, fails carrier-drafts (#4250)', () => {
+  const drafts = `${'```md\n# Untracked\n```'}\n\n${CARRIER_DRAFTS}`;
+  assert.equal(
+    carrierFinding(carrierBody({ drafts }), 'carrier-drafts')?.result,
+    'fail',
+  );
+});
+
 test('a second ## Drafts or ## Release condition heading fails rather than hiding unchecked drafts (#4250)', () => {
   const secondDrafts = `${carrierBody()}\n## Drafts\n\n### Follow-up C\n\nReview: reviewed\nShape: child\n`;
   assert.equal(carrierFinding(secondDrafts, 'carrier-drafts')?.result, 'fail');
