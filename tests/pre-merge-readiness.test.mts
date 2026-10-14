@@ -1767,9 +1767,11 @@ test('computePreMergeReadinessBlockers: missing ci on a DIRTY head carries the m
   assert.equal(clean.hint, undefined);
   const hint = String(dirty.hint);
   assert.ok(
-    hint.includes('merge origin/main'),
-    'hint should name the merge route',
+    hint.includes('merge the PR base branch'),
+    'hint should name the merge route by role',
   );
+  assert.ok(!hint.includes('origin/main'), 'hint should not name origin/main');
+  assert.doesNotMatch(hint, /\bmain\b/, 'hint should not name a fixed branch');
   assert.ok(hint.includes('DIRTY'), 'hint should name the DIRTY cause');
   // The blocker item must accept `hint` on its own, too.
   const blockerItemSchema = (
@@ -1818,7 +1820,7 @@ test('buildPreMergeReadinessSummary: a DIRTY head with a missing required check 
   const blockers = summary.blockers as Array<Record<string, unknown>>;
   const ciBlocker = blockers.find((b) => b.gate === 'ci');
   assert.ok(ciBlocker, 'expected a ci blocker');
-  assert.match(String(ciBlocker.hint), /merge origin\/main/);
+  assert.match(String(ciBlocker.hint), /merge the PR base branch/);
   assert.deepEqual(validate(summary, readinessSchema), []);
 });
 

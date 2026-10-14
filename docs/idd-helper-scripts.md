@@ -6250,9 +6250,10 @@ reflexively as any other CLI option.
   `missing` (a required check has no run for the head) and
   `branchCurrency.mergeStateStatus` is `DIRTY` (the head conflicts with its
   base), the `ci` entry in `blockers[]` carries an optional `hint` naming the
-  default post-push sync: merge `origin/main` (or the development branch when
-  it is not `main`) into the PR branch, push, and re-run readiness once CI
-  and review settle on the new head. The hint is diagnostic only; `gate`,
+  default post-push sync: merge the PR base branch (the configured
+  `developmentBranch`, or the repository default branch when it is unset)
+  into the PR branch, push, and re-run readiness once CI and review settle
+  on the new head. The hint is diagnostic only; `gate`,
   `detail`, and the verdict are unchanged. It is absent for a `DIRTY` head
   whose checks are present, and for a `missing` check on a head that is not
   `DIRTY`. Observed on PR `#4077` (issue `#4071`, head `58688f7fc`): the head
