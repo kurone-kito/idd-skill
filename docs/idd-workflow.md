@@ -1256,7 +1256,7 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    and is not treated as worktree-less. A readable linked record stays
    authoritative. For a worktree-less claim, take the issue number from the
    worker's brief in the agent listing, or from the issue-number prefix of its
-   report draft in the session scratchpad, and never from a `main` branch. Then
+   report draft in the session scratchpad, and never from the default branch. Then
    read that issue's trusted `claimed-by` and `unclaimed-by` markers for the
    agent-id and claim-id, and apply the same test, so that both the agent id and
    the claim id must match the marker. Also enumerate the candidates for
