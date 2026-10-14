@@ -1084,14 +1084,18 @@ function contextAndPlan(options) {
  */
 // audit:ignore-dead-export: consumed by issue #4245
 export function planInstall(options = {}) {
-  const { plan } = contextAndPlan(options);
-  return { lines: plan.lines, priorCurrentTarget: priorTargetOf(plan) };
+  const { plan, version } = contextAndPlan(options);
+  return {
+    lines: plan.lines,
+    priorCurrentTarget: priorTargetOf(plan),
+    version,
+  };
 }
 /** Install the payload and skills, recording each created path. */
 // audit:ignore-dead-export: consumed by issue #4245
 export function installPayload(options = {}) {
   const { ctx, plan, version } = contextAndPlan(options);
-  return applyInstall(ctx, plan, version);
+  return { ...applyInstall(ctx, plan, version), version };
 }
 function expectedOf(entry) {
   if (entry.kind === 'file') return { kind: 'file', sha256: entry.sha256 };

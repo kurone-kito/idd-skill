@@ -234,6 +234,21 @@ test('a second install of the same version writes no file', () => {
   assert.ok(result.lines.every((line) => line.startsWith('keep ')));
 });
 
+test('plan and install report the version the payload is installed under (#4245)', () => {
+  const home = makeHome();
+
+  // The default is the package.json version of the bundle being installed.
+  assert.equal(planInstall(optionsFor(home)).version, PACKAGE_VERSION);
+  assert.equal(installPayload(optionsFor(home)).version, PACKAGE_VERSION);
+  assert.ok(nodeFs.existsSync(versionDirOf(home)));
+
+  // An explicit version is what is reported, and what the directory is named.
+  const upgraded = optionsFor(home, { version: UPGRADE_VERSION });
+  assert.equal(planInstall(upgraded).version, UPGRADE_VERSION);
+  assert.equal(installPayload(upgraded).version, UPGRADE_VERSION);
+  assert.ok(nodeFs.existsSync(versionDirOf(home, UPGRADE_VERSION)));
+});
+
 test('plan functions write nothing and create no directory', () => {
   const home = makeHome();
   const options = optionsFor(home);
