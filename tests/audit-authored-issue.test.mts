@@ -6159,6 +6159,13 @@ test('a draft carrier cannot hide its headings or Review line inside an HTML com
   );
 });
 
+test('suitability-marker fails a carrier with a visible footer and no hidden marker (#4250)', () => {
+  const body = carrierBody({
+    intro: 'Holds drafts.\n\n_Autopilot suitability: 4 / 5 -- x_',
+  });
+  assert.equal(carrierFinding(body, 'suitability-marker')?.result, 'fail');
+});
+
 test('carrier-release-condition accepts a comma-wrapped Blocked by list (#4250)', () => {
   const finding = carrierFinding(
     carrierBody({ release: ['Blocked by #12,', '#13'] }),

@@ -1126,7 +1126,14 @@ export function auditAuthoredIssue(
   const isBucketAudit = options.expectedAuthoringBucket !== undefined;
 
   const findings: AuditFinding[] = [
-    checkSuitabilityMarker(suitabilityCount, suitability, isBucketAudit, shape),
+    checkSuitabilityMarker(
+      suitabilityCount,
+      suitability,
+      isBucketAudit,
+      shape,
+      carrierViews !== undefined &&
+        AUTOPILOT_SUITABILITY_FOOTER_PATTERN.test(carrierViews.visibleText),
+    ),
     checkSuitabilityBlockedByHuman(
       suitability,
       authoringBucket,
@@ -1914,6 +1921,7 @@ function checkSuitabilityMarker(
   suitability: AutopilotSuitabilityMarkerDetection,
   isBucketAudit: boolean,
   shape: IssueShape,
+  visibleFooter: boolean,
 ): AuditFinding {
   const id = 'suitability-marker';
   const name = 'Exactly one coherent autopilot-suitability marker (1-5)';
@@ -1923,13 +1931,18 @@ function checkSuitabilityMarker(
   // A draft carrier (#4250) is never an execution candidate, so it carries
   // no suitability footer at all: the check inverts, passing only at zero.
   if (shape === 'carrier') {
-    return count === 0
-      ? pass(id, name, 'no autopilot-suitability footer on this carrier')
-      : fail(
-          id,
-          name,
-          `a draft carrier must not carry an autopilot-suitability marker, found ${count}`,
-        );
+    // A visible footer with no hidden marker is still a footer (#4250 review,
+    // Copilot), so the carrier passes only when neither is present.
+    if (count === 0 && !visibleFooter) {
+      return pass(id, name, 'no autopilot-suitability footer on this carrier');
+    }
+    return fail(
+      id,
+      name,
+      count > 0
+        ? `a draft carrier must not carry an autopilot-suitability marker, found ${count}`
+        : 'a draft carrier must not carry a visible autopilot-suitability footer line',
+    );
   }
   if (count === 0) {
     return fail(id, name, 'missing autopilot-suitability marker');
