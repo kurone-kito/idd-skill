@@ -313,13 +313,16 @@ function buildTargets(ctx, sourceRoot, version) {
     }
     // A manifest path must stay under the version directory once joined, so a
     // `..` or absolute segment in it refuses before any source is read.
+    // The full manifest path is checked too, because the source is read
+    // from `join(sourceRoot, path)`, so a `..` in the prefix would escape.
     const rel = path.slice(block.stripPrefix.length);
+    const segments = (value) => value.split(/[\\/]/);
     if (
       rel === '' ||
+      isAbsolute(path) ||
       isAbsolute(rel) ||
-      rel
-        .split('/')
-        .some((part) => part === '' || part === '.' || part === '..')
+      segments(path).some((part) => part === '..') ||
+      segments(rel).some((part) => part === '' || part === '.' || part === '..')
     ) {
       throw new Error(
         `payload path ${path} escapes the payload directory; refusing; nothing was written`,
@@ -372,7 +375,6 @@ function buildInstallPlan(ctx, sourceRoot, version) {
   const mkdirs = [];
   const seen = new Set();
   const writes = [];
-  const repairs = [];
   const lines = [];
   const refusals = [];
   // A listed path must sit under exactly one root with no link above it,
@@ -408,19 +410,16 @@ function buildInstallPlan(ctx, sourceRoot, version) {
         lines.push(`create ${target.dest}`);
       } else if (walk.finalKind === 'file') {
         const current = sha256Hex(readNoFollowBytes(target.dest, fs));
-        if (current === target.sha256) {
-          // A replacement whose receipt write failed leaves the source bytes
-          // under the old hash. Record the hash instead of refusing it.
-          if (listed !== undefined && listed.sha256 !== current) {
-            repairs.push({ dest: target.dest, sha256: current });
-            lines.push(`record ${target.dest} (the receipt lagged the file)`);
-          } else {
-            lines.push(`keep ${target.dest}`);
-          }
-        } else if (listed !== undefined && current !== listed.sha256) {
+        // The verdict table refuses a listed file whose hash differs from the
+        // receipt, even when its bytes equal the new source: those bytes could
+        // be a user edit, and uninstall would then remove the user's file.
+        if (listed !== undefined && current !== listed.sha256) {
           throw new Error(
             `${target.dest} was edited after install (its SHA-256 differs from the receipt); refusing, and it is user-edited`,
           );
+        }
+        if (current === target.sha256) {
+          lines.push(`keep ${target.dest}`);
         } else if (listed !== undefined) {
           writes.push({ ...target, root, priorSha256: current });
           lines.push(`replace ${target.dest}`);
@@ -510,7 +509,7 @@ function buildInstallPlan(ctx, sourceRoot, version) {
   } else {
     lines.push(`keep ${ctx.currentPath} (already points at ${versionDir})`);
   }
-  return { entries, mkdirs, writes, repairs, current, lines };
+  return { entries, mkdirs, writes, current, lines };
 }
 /**
  * Write the receipt for `entries`. An empty set removes the receipt instead,
@@ -723,14 +722,6 @@ function applyInstall(ctx, plan, version) {
         });
       }
       pending.push(write.dest);
-      persist();
-    }
-    for (const repair of plan.repairs) {
-      entries.set(repair.dest, {
-        kind: 'file',
-        path: repair.dest,
-        sha256: repair.sha256,
-      });
       persist();
     }
     const { current } = plan;

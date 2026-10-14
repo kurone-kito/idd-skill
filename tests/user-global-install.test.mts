@@ -27,6 +27,8 @@ const REPO = join(import.meta.dirname, '..');
 const PACKAGE_VERSION: string = JSON.parse(
   nodeFs.readFileSync(join(REPO, 'package.json'), 'utf8'),
 ).version;
+/** A version the package never ships, so an upgrade always targets a new directory. */
+const UPGRADE_VERSION = '99.0.0';
 const NO_LINKS =
   process.platform === 'win32'
     ? 'symbolic links need the no-follow opens, which Windows lacks'
@@ -564,13 +566,13 @@ test('a failed upgrade restores the replaced skill file and the prior current ta
   assert.throws(
     () =>
       installPayload(
-        optionsFor(home, { sourceRoot: source, version: '0.14.1', fs }),
+        optionsFor(home, { sourceRoot: source, version: UPGRADE_VERSION, fs }),
       ),
     /rolled back/,
   );
   assert.deepEqual(nodeFs.readFileSync(skillFileOf(home, '.claude')), v1Claude);
   assert.equal(nodeFs.readlinkSync(currentOf(home)), versionDirOf(home));
-  assert.equal(nodeFs.existsSync(versionDirOf(home, '0.14.1')), false);
+  assert.equal(nodeFs.existsSync(versionDirOf(home, UPGRADE_VERSION)), false);
 });
 
 test('an upgrade replaces the listed skill file, re-records its hash, and repoints current', () => {
@@ -582,7 +584,7 @@ test('an upgrade replaces the listed skill file, re-records its hash, and repoin
   const newBytes = nodeFs.readFileSync(join(source, 'skills', SKILL_RELATIVE));
 
   const result = installPayload(
-    optionsFor(home, { sourceRoot: source, version: '0.14.1' }),
+    optionsFor(home, { sourceRoot: source, version: UPGRADE_VERSION }),
   );
 
   assert.equal(
@@ -592,7 +594,7 @@ test('an upgrade replaces the listed skill file, re-records its hash, and repoin
   assert.equal(result.priorCurrentTarget, versionDirOf(home));
   assert.equal(
     nodeFs.readlinkSync(currentOf(home)),
-    versionDirOf(home, '0.14.1'),
+    versionDirOf(home, UPGRADE_VERSION),
   );
   const claude = readReceiptEntries(home).find(
     (entry) => entry.path === skillFileOf(home, '.claude'),
@@ -603,7 +605,9 @@ test('an upgrade replaces the listed skill file, re-records its hash, and repoin
     'the older version stays listed',
   );
 
-  uninstallPayload(optionsFor(home, { sourceRoot: source, version: '0.14.1' }));
+  uninstallPayload(
+    optionsFor(home, { sourceRoot: source, version: UPGRADE_VERSION }),
+  );
   assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
 });
 
@@ -617,7 +621,7 @@ test('an upgrade refuses a listed skill file that was edited after the last inst
   assert.throws(
     () =>
       installPayload(
-        optionsFor(home, { sourceRoot: source, version: '0.14.1' }),
+        optionsFor(home, { sourceRoot: source, version: UPGRADE_VERSION }),
       ),
     /edited after install/,
   );
@@ -699,22 +703,22 @@ test('a retry after the receipt write failed on a repoint records the link inste
   });
 
   assert.throws(
-    () => installPayload(optionsFor(home, { fs, version: '0.14.1' })),
+    () => installPayload(optionsFor(home, { fs, version: UPGRADE_VERSION })),
     /receipt rewrite failed/,
   );
   assert.equal(
     nodeFs.readlinkSync(currentOf(home)),
-    versionDirOf(home, '0.14.1'),
+    versionDirOf(home, UPGRADE_VERSION),
   );
 
-  const retry = installPayload(optionsFor(home, { version: '0.14.1' }));
+  const retry = installPayload(optionsFor(home, { version: UPGRADE_VERSION }));
   assert.ok(retry.lines.some((line) => line.startsWith('record ')));
   const current = readReceiptEntries(home).find(
     (entry) => entry.path === currentOf(home),
   ) as { target?: string } | undefined;
-  assert.equal(current?.target, versionDirOf(home, '0.14.1'));
+  assert.equal(current?.target, versionDirOf(home, UPGRADE_VERSION));
 
-  uninstallPayload(optionsFor(home, { version: '0.14.1' }));
+  uninstallPayload(optionsFor(home, { version: UPGRADE_VERSION }));
   assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
 });
 
@@ -734,7 +738,7 @@ test('a receipt-owned link rewritten with a relative target is repointed to the 
   assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
 });
 
-test('a retry after the receipt write failed on a replaced skill file records its hash', () => {
+test('a retry after the receipt write failed on a replaced skill file refuses it as user-edited', () => {
   const home = makeHome();
   installPayload(optionsFor(home));
   const source = copySourceTree();
@@ -755,26 +759,21 @@ test('a retry after the receipt write failed on a replaced skill file records it
   assert.throws(
     () =>
       installPayload(
-        optionsFor(home, { sourceRoot: source, version: '0.14.1', fs }),
+        optionsFor(home, { sourceRoot: source, version: UPGRADE_VERSION, fs }),
       ),
     /receipt rewrite failed/,
   );
+  const before = snapshot(home);
 
-  const retry = installPayload(
-    optionsFor(home, { sourceRoot: source, version: '0.14.1' }),
+  assert.throws(
+    () =>
+      installPayload(
+        optionsFor(home, { sourceRoot: source, version: UPGRADE_VERSION }),
+      ),
+    /edited after install/,
   );
-  assert.ok(
-    retry.lines.some((line) => line.startsWith(`record ${claudeSkill}`)),
-  );
-  const entry = readReceiptEntries(home).find(
-    (candidate) => candidate.path === claudeSkill,
-  ) as { sha256?: string } | undefined;
-  assert.equal(entry?.sha256, sha256(nodeFs.readFileSync(claudeSkill)));
-
-  uninstallPayload(optionsFor(home));
-  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+  assert.deepEqual(snapshot(home), before);
 });
-
 test('a listed link retargeted by someone else makes install refuse', {
   skip: NO_LINKS,
 }, () => {
