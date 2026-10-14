@@ -1546,6 +1546,40 @@ test('parseHeadRollup: keeps status contexts without a creator apart', () => {
   );
 });
 
+// #4209 review: a completed rerun whose completion time cannot be read must
+// not hide the older failure it may supersede. Every instance is kept.
+test('parseHeadRollup: keeps every instance when a completed rerun has no valid timestamp', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const nodes = [
+    {
+      __typename: 'CheckRun',
+      name: 'refresh',
+      status: 'COMPLETED',
+      conclusion: 'FAILURE',
+      completedAt: '2026-10-14T08:00:00Z',
+      isRequired: false,
+    },
+    {
+      __typename: 'CheckRun',
+      name: 'refresh',
+      status: 'COMPLETED',
+      conclusion: 'SUCCESS',
+      completedAt: 'not-a-time',
+      isRequired: false,
+    },
+  ];
+  assert.deepEqual(
+    parseHeadRollup(
+      {
+        oid: sha,
+        statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } },
+      },
+      sha,
+    ).runs,
+    [{ name: 'refresh', state: 'failure', required: false }],
+  );
+});
+
 test('classifyBranchConflictState: UNSTABLE routing reads the injected run list', async () => {
   const fixture = loadFixture('clean');
   const base = {

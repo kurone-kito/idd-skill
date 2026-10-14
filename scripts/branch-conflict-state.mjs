@@ -15,6 +15,7 @@ import {
 } from './helper-cli-runner.mjs';
 import { loadTrustedIddConfig } from './idd-config.mjs';
 import {
+  isCompletedCiTimestamp,
   selectLatestCheckInstance,
   summarizeBranchCurrency,
 } from './protocol-helpers.mjs';
@@ -263,13 +264,25 @@ function latestInstancePerName(nodes) {
     } else {
       completedAt = String(entry.createdAt ?? '') || null;
     }
+    // A live check run that has not completed is the newest instance by
+    // definition. Every other entry needs a valid timestamp to be ordered.
+    const orderable =
+      (isCheckRun && !completed) || isCompletedCiTimestamp(completedAt);
     const group = groups.get(key) ?? [];
-    group.push({ node, state, completedAt });
+    group.push({ node, state, completedAt, orderable });
     groups.set(key, group);
   });
-  return [...groups.values()].map(
-    (group) => selectLatestCheckInstance(group).node,
-  );
+  const latest = [];
+  for (const group of groups.values()) {
+    if (group.length > 1 && group.some((member) => !member.orderable)) {
+      // An entry whose order cannot be proven must not hide another instance,
+      // so keep every instance of that name and let each one be judged.
+      for (const member of group) latest.push(member.node);
+    } else {
+      latest.push(selectLatestCheckInstance(group).node);
+    }
+  }
+  return latest;
 }
 const HEAD_ROLLUP_QUERY = `query($owner: String!, $repo: String!, $oid: GitObjectID!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
