@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   type DeferBundleInput,
@@ -710,4 +715,378 @@ test('lint fails an acceptance with no verification signal', () => {
       failure.startsWith('triage-a45-verifiability: '),
     ),
   );
+});
+
+// ---------------------------------------------------------------------------
+// The idd-review-defer-bundle command, run as a child process against the
+// committed scripts/review-defer-bundle.mjs. The test does not build, so
+// rerun `pnpm run build` after editing the .mts source. Most runs turn on the
+// error envelope, so the `kind` of a non-zero exit is the last stderr line's
+// `iddHelperError.kind`; one run per path turns it off, matching an adopter.
+// Every run starts in an empty directory, so no repository policy file is
+// read unless a test writes one there.
+// ---------------------------------------------------------------------------
+
+const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+const CLI_PATH = join(REPO_ROOT, 'scripts/review-defer-bundle.mjs');
+const VALID_ITEMS = JSON.stringify(bundleInput().items);
+
+interface CliRun {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+interface RenderedReport {
+  title: string;
+  body: string;
+  lint: { passed: boolean; failures: string[] };
+}
+
+function withSandbox(run: (dir: string) => void): void {
+  const dir = mkdtempSync(join(tmpdir(), 'review-defer-bundle-cli-'));
+  try {
+    run(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function writeFixture(dir: string, name: string, content: string): string {
+  const path = join(dir, name);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, content);
+  return path;
+}
+
+function runCli(args: string[], cwd: string, envelope = true): CliRun {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (envelope) {
+    env.IDD_HELPER_ERROR_ENVELOPE = '1';
+  } else {
+    delete env.IDD_HELPER_ERROR_ENVELOPE;
+  }
+  const result = spawnSync(process.execPath, [CLI_PATH, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env,
+    timeout: 60_000,
+  });
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
+
+function envelopeKind(stderr: string): string | undefined {
+  const lastLine = stderr.trimEnd().split('\n').at(-1) ?? '';
+  if (!lastLine.startsWith('{"iddHelperError":')) {
+    return undefined;
+  }
+  const envelope = JSON.parse(lastLine) as {
+    iddHelperError: { kind: string };
+  };
+  return envelope.iddHelperError.kind;
+}
+
+function requiredArgs(itemsFile: string): string[] {
+  return [
+    '--origin-issue',
+    '4100',
+    '--pr',
+    '4200',
+    '--title',
+    TITLE,
+    '--items-file',
+    itemsFile,
+  ];
+}
+
+test('the CLI prints the rendered bundle and a passing lint as JSON and exits 0', () => {
+  withSandbox((dir) => {
+    const items = writeFixture(dir, 'items.json', VALID_ITEMS);
+    const run = runCli(requiredArgs(items), dir);
+    assert.equal(run.status, 0, run.stderr);
+    const report = JSON.parse(run.stdout) as RenderedReport;
+    assert.equal(report.title, TITLE);
+    assert.equal(report.lint.passed, true);
+    assert.deepEqual(report.lint.failures, []);
+    assert.ok(report.body.includes('Refs #4100'));
+    // No policy file in the empty working directory: the default prefix.
+    assert.ok(
+      report.body.includes(
+        '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->',
+      ),
+    );
+  });
+});
+
+test('a --policy file with markerPrefix acme renders the acme- defer-source marker', () => {
+  withSandbox((dir) => {
+    const items = writeFixture(dir, 'items.json', VALID_ITEMS);
+    const policy = writeFixture(
+      dir,
+      'policy.json',
+      JSON.stringify({ markerPrefix: 'acme' }),
+    );
+    const run = runCli([...requiredArgs(items), '--policy', policy], dir);
+    assert.equal(run.status, 0, run.stderr);
+    const report = JSON.parse(run.stdout) as RenderedReport;
+    assert.ok(
+      report.body.includes(
+        '<!-- acme-authoring-defer-source: review-fix-loop-cutoff -->',
+      ),
+    );
+    assert.equal(report.body.includes('idd-skill-'), false);
+  });
+});
+
+test('a missing --title exits 1 with kind usage', () => {
+  withSandbox((dir) => {
+    const items = writeFixture(dir, 'items.json', VALID_ITEMS);
+    const args = requiredArgs(items);
+    const titleAt = args.indexOf('--title');
+    args.splice(titleAt, 2);
+    const run = runCli(args, dir);
+    assert.equal(run.status, 1);
+    assert.equal(run.stdout, '');
+    assert.equal(envelopeKind(run.stderr), 'usage');
+    assert.match(run.stderr, /missing required --title argument/);
+  });
+});
+
+test('an item without acceptance exits 1 with kind usage', () => {
+  withSandbox((dir) => {
+    const items = writeFixture(
+      dir,
+      'items.json',
+      JSON.stringify([
+        {
+          title: 'Retry hint',
+          threadUrl: THREAD_URL,
+          finding: 'The retry hint names the wrong command.',
+          path: 'src/scripts/claim.mts',
+        },
+      ]),
+    );
+    const run = runCli(requiredArgs(items), dir);
+    assert.equal(run.status, 1);
+    assert.equal(envelopeKind(run.stderr), 'usage');
+    assert.match(run.stderr, /items\[0\]\.acceptance/);
+  });
+});
+
+test('a body that fails the authored-issue lint prints the JSON and exits 1 with kind gate', () => {
+  withSandbox((dir) => {
+    const items = writeFixture(
+      dir,
+      'items.json',
+      JSON.stringify([
+        { ...item(), acceptance: 'The retry hint reads better' },
+      ]),
+    );
+    const run = runCli(requiredArgs(items), dir);
+    assert.equal(run.status, 1);
+    assert.equal(envelopeKind(run.stderr), 'gate');
+    const report = JSON.parse(run.stdout) as RenderedReport;
+    assert.equal(report.lint.passed, false);
+    assert.ok(
+      report.lint.failures.some((failure) =>
+        failure.startsWith('triage-a45-verifiability: '),
+      ),
+    );
+  });
+});
+
+test('an explicit --policy path that does not exist exits 1 with kind usage', () => {
+  withSandbox((dir) => {
+    const items = writeFixture(dir, 'items.json', VALID_ITEMS);
+    const missing = join(dir, 'no-such-policy.json');
+    const run = runCli([...requiredArgs(items), '--policy', missing], dir);
+    assert.equal(run.status, 1);
+    assert.equal(run.stdout, '');
+    assert.equal(envelopeKind(run.stderr), 'usage');
+  });
+});
+
+test('a malformed --policy file exits 1 with kind usage', () => {
+  withSandbox((dir) => {
+    const items = writeFixture(dir, 'items.json', VALID_ITEMS);
+    const policy = writeFixture(dir, 'policy.json', '{ "markerPrefix": ');
+    const run = runCli([...requiredArgs(items), '--policy', policy], dir);
+    assert.equal(run.status, 1);
+    assert.equal(envelopeKind(run.stderr), 'usage');
+  });
+});
+
+test('an items file that is unreadable, not JSON, or not an array exits 1 with kind usage', () => {
+  withSandbox((dir) => {
+    const cases = [
+      join(dir, 'absent.json'),
+      writeFixture(dir, 'not-json.json', 'Retry hint'),
+      writeFixture(dir, 'not-array.json', '{"title": "Retry hint"}'),
+    ];
+    for (const items of cases) {
+      const run = runCli(requiredArgs(items), dir);
+      assert.equal(run.status, 1, items);
+      assert.equal(envelopeKind(run.stderr), 'usage', items);
+    }
+  });
+});
+
+test('no arguments and an unknown flag both exit 1 with kind usage', () => {
+  withSandbox((dir) => {
+    for (const args of [[], ['--bogus']]) {
+      const run = runCli(args, dir);
+      assert.equal(run.status, 1, args.join(' '));
+      assert.equal(envelopeKind(run.stderr), 'usage', args.join(' '));
+    }
+  });
+});
+
+test('--help exits 0 and lists every flag the command accepts', () => {
+  withSandbox((dir) => {
+    const run = runCli(['--help'], dir);
+    assert.equal(run.status, 0, run.stderr);
+    for (const flag of [
+      '--origin-issue',
+      '--pr',
+      '--title',
+      '--items-file',
+      '--policy',
+      '--help',
+    ]) {
+      assert.ok(run.stdout.includes(flag), flag);
+    }
+  });
+});
+
+test('without --policy, the policy file in the working directory sets the marker prefix', () => {
+  withSandbox((dir) => {
+    writeFixture(
+      dir,
+      '.github/idd/config.json',
+      JSON.stringify({ markerPrefix: 'acme' }),
+    );
+    const items = writeFixture(dir, 'items.json', VALID_ITEMS);
+    const run = runCli(requiredArgs(items), dir);
+    assert.equal(run.status, 0, run.stderr);
+    const report = JSON.parse(run.stdout) as RenderedReport;
+    assert.ok(
+      report.body.includes(
+        '<!-- acme-authoring-defer-source: review-fix-loop-cutoff -->',
+      ),
+    );
+  });
+});
+
+test('a default policy file without markerPrefix falls back to idd-skill', () => {
+  withSandbox((dir) => {
+    writeFixture(dir, '.github/idd/config.json', JSON.stringify({}));
+    const items = writeFixture(dir, 'items.json', VALID_ITEMS);
+    const run = runCli(requiredArgs(items), dir);
+    assert.equal(run.status, 0, run.stderr);
+    const report = JSON.parse(run.stdout) as RenderedReport;
+    assert.ok(
+      report.body.includes(
+        '<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->',
+      ),
+    );
+  });
+});
+
+test('a malformed default policy file exits 1 with kind usage', () => {
+  withSandbox((dir) => {
+    writeFixture(dir, '.github/idd/config.json', '{ "markerPrefix": ');
+    const items = writeFixture(dir, 'items.json', VALID_ITEMS);
+    const run = runCli(requiredArgs(items), dir);
+    assert.equal(run.status, 1);
+    assert.equal(run.stdout, '');
+    assert.equal(envelopeKind(run.stderr), 'usage');
+  });
+});
+
+test('a markerPrefix that is empty or not a string exits 1 with kind usage', () => {
+  withSandbox((dir) => {
+    const items = writeFixture(dir, 'items.json', VALID_ITEMS);
+    const cases: [unknown, string][] = [
+      [7, 'a number'],
+      ['', 'an empty string'],
+      ['   ', 'a whitespace-only string'],
+    ];
+    for (const [value, label] of cases) {
+      const policy = writeFixture(
+        dir,
+        'policy.json',
+        JSON.stringify({ markerPrefix: value }),
+      );
+      const run = runCli([...requiredArgs(items), '--policy', policy], dir);
+      assert.equal(run.status, 1, label);
+      assert.equal(envelopeKind(run.stderr), 'usage', label);
+      // The CLI's own message names the policy file; the renderer's message
+      // does not, so this distinguishes the two.
+      assert.ok(
+        run.stderr.includes(
+          `markerPrefix in ${policy} must be a non-empty string`,
+        ),
+        label,
+      );
+    }
+  });
+});
+
+test('an empty --policy value exits 1 with kind usage', () => {
+  withSandbox((dir) => {
+    const items = writeFixture(dir, 'items.json', VALID_ITEMS);
+    const run = runCli([...requiredArgs(items), '--policy', ''], dir);
+    assert.equal(run.status, 1);
+    assert.equal(envelopeKind(run.stderr), 'usage');
+    assert.match(run.stderr, /--policy must not be empty/);
+  });
+});
+
+test('each required flag, when missing, exits 1 with kind usage', () => {
+  withSandbox((dir) => {
+    const items = writeFixture(dir, 'items.json', VALID_ITEMS);
+    for (const flag of ['--origin-issue', '--pr', '--items-file']) {
+      const args = requiredArgs(items);
+      args.splice(args.indexOf(flag), 2);
+      const run = runCli(args, dir);
+      assert.equal(run.status, 1, flag);
+      assert.equal(envelopeKind(run.stderr), 'usage', flag);
+      assert.match(run.stderr, new RegExp(`missing required ${flag} argument`));
+    }
+  });
+});
+
+test('a non-canonical --origin-issue or --pr exits 1 with kind usage', () => {
+  withSandbox((dir) => {
+    const items = writeFixture(dir, 'items.json', VALID_ITEMS);
+    const cases: [string, string][] = [
+      ['--origin-issue', 'abc'],
+      ['--origin-issue', '0'],
+      ['--pr', '4.5'],
+    ];
+    for (const [flag, value] of cases) {
+      const args = requiredArgs(items);
+      args[args.indexOf(flag) + 1] = value;
+      const run = runCli(args, dir);
+      assert.equal(run.status, 1, `${flag} ${value}`);
+      assert.equal(envelopeKind(run.stderr), 'usage', `${flag} ${value}`);
+    }
+  });
+});
+
+test('with the error envelope unset, a usage error prints no envelope and a success exits 0', () => {
+  withSandbox((dir) => {
+    const usageRun = runCli([], dir, false);
+    assert.equal(usageRun.status, 1);
+    assert.equal(usageRun.stdout, '');
+    assert.equal(envelopeKind(usageRun.stderr), undefined);
+    assert.match(usageRun.stderr, /missing required --origin-issue argument/);
+    const items = writeFixture(dir, 'items.json', VALID_ITEMS);
+    const okRun = runCli(requiredArgs(items), dir, false);
+    assert.equal(okRun.status, 0, okRun.stderr);
+  });
 });

@@ -7079,6 +7079,48 @@ Fail closed the same way mid-poll or if the verdict JSON is missing or
 unusable: treat the carve-out as not applicable / stop and post a hold,
 same as `AW4`/`AW5`.
 
+### E5 deferred-findings bundle
+
+- Preferred command when helper runtime is enabled:
+
+  ```sh
+  idd-review-defer-bundle --origin-issue <n> --pr <n> --title '<text>' \
+    --items-file <path> [--policy <path>]
+  ```
+
+- Source repository equivalent: `node scripts/review-defer-bundle.mjs`
+  with the same flags.
+- Flags: `--origin-issue` (the issue the findings belong to, rendered as
+  the `Refs` line), `--pr` (the pull request they were deferred from),
+  and `--title` (the follow-up issue title) are required. `--items-file`
+  is required and holds a JSON array of deferred findings, each with
+  `title`, `threadUrl`, `finding`, `acceptance`, and `path`.
+- Policy: `--policy` names the repository policy file whose
+  `markerPrefix` labels the footer and defer-source markers. Without it,
+  `.github/idd/config.json` is read from the current directory, so run
+  the helper from the repository root. An absent file or a missing field
+  falls back to `idd-skill`. An explicit `--policy` path that is missing
+  or malformed is a usage error, never a silent fallback. So are a
+  malformed default file, an empty `--policy` value, and a
+  `markerPrefix` that is empty or not a string. (Unlike
+  `publish-authoring-hold`, an empty `--policy` is not treated as absent.)
+- Output: one JSON object on stdout:
+
+  ```json
+  {
+    "title": "...",
+    "body": "...",
+    "lint": { "passed": true, "failures": [] }
+  }
+  ```
+
+- Exit codes: `0` when `lint.passed` is true. `1` for a usage error
+  (a missing or unknown flag, an unreadable or malformed items or policy
+  file, or an input that the renderer rejects) and for a body that fails
+  the authored-issue lint; the JSON is still printed in the lint case.
+- Network-free boundary: the helper never calls the GitHub API and never
+  creates an issue. The caller files the rendered title and body.
+
 ### E7 disposition verification
 
 - Preferred command when helper runtime is enabled:

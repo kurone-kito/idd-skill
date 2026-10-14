@@ -4,17 +4,26 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 //
-// Pure rendering and linting of the follow-up issue body that bundles one
-// review pass's deferred findings (the "Bundle one E5 pass's deferred
-// items" rule in idd-review-triage). renderDeferBundle builds the title and
-// body; lintDeferBundle runs the orphan-shape authored-issue audit over
-// them. There is no command-line entry point here: the command that wires
-// these functions is a later roadmap issue.
+// Rendering and linting of the follow-up issue body that bundles one review
+// pass's deferred findings (the "Bundle one E5 pass's deferred items" rule
+// in idd-review-triage). renderDeferBundle builds the title and body;
+// lintDeferBundle runs the orphan-shape authored-issue audit over them. The
+// idd-review-defer-bundle command-line entry point at the end of this file
+// (issue #4194) wires both functions to flags and stdout. It makes no
+// network call and creates no issue.
+import { readFileSync } from 'node:fs';
 import {
   auditAuthoredIssue,
   EFFORT_CANDIDATE_FILE_LIMITS,
 } from './audit-authored-issue.mjs';
+import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mjs';
 import { extractDeferSourceRefsIssueNumbers } from './discover-readiness-check.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
+import { readRepositoryPolicyFile } from './idd-config.mjs';
 
 const DEFER_SOURCE_VALUE = 'review-fix-loop-cutoff';
 const AUTOPILOT_SUITABILITY_SCORE = 4;
@@ -113,7 +122,6 @@ function indentContinuation(text) {
  * Only that Refs invariant is guaranteed here. Every other lint finding, such
  * as a mid-line Depends on reference in prose, is left to lintDeferBundle.
  */
-// audit:ignore-dead-export: wired by the idd-review-defer-bundle command in a later roadmap issue
 export function renderDeferBundle(input) {
   if (typeof input !== 'object' || input === null) {
     throw new TypeError('input must be an object');
@@ -200,7 +208,6 @@ export function renderDeferBundle(input) {
  * markerPrefix that fails the same rule as renderDeferBundle throws a
  * TypeError naming markerPrefix.
  */
-// audit:ignore-dead-export: wired by the idd-review-defer-bundle command in a later roadmap issue
 export function lintDeferBundle(rendered, markerPrefix) {
   const report = auditAuthoredIssue(rendered.body, {
     shape: 'orphan',
@@ -213,4 +220,170 @@ export function lintDeferBundle(rendered, markerPrefix) {
       .filter((finding) => finding.result === 'fail')
       .map((finding) => `${finding.id}: ${finding.detail}`),
   };
+}
+// Flag-spec keys stay the dashed literal on purpose: the flag-name checks scan
+// this file's compiled .mjs source text for quoted flag literals. Declared
+// above the import.meta.main trigger so it is initialized when runCli() runs.
+const REVIEW_DEFER_BUNDLE_FLAG_SPEC = {
+  '--origin-issue': { type: 'string' },
+  '--pr': { type: 'string' },
+  '--title': { type: 'string' },
+  '--items-file': { type: 'string' },
+  '--policy': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+};
+/** The marker prefix when no policy file is present or it has no markerPrefix. */
+const DEFAULT_MARKER_PREFIX = 'idd-skill';
+const GATE_MESSAGE = 'rendered body failed the authored-issue lint';
+function printHelp() {
+  process.stdout.write(
+    `${[
+      'Usage:',
+      '  node scripts/review-defer-bundle.mjs --origin-issue <n> --pr <n> --title <text> --items-file <path> [--policy <path>]',
+      '  node scripts/review-defer-bundle.mjs --help',
+      '',
+      "Renders the follow-up issue body for one review pass's deferred findings,",
+      'lints it with the authored-issue audit, and prints',
+      '{ title, body, lint: { passed, failures } } as JSON on stdout. It is',
+      'network-free: it never calls the GitHub API and never creates an issue.',
+      '',
+      'Flags:',
+      '  --origin-issue <n>   required: the issue the findings belong to (Refs #<n>)',
+      '  --pr <n>             required: the pull request the findings came from',
+      '  --title <text>       required: the follow-up issue title',
+      '  --items-file <path>  required: JSON array of { title, threadUrl, finding, acceptance, path }',
+      '  --policy <path>      optional: repository policy file read for markerPrefix.',
+      '                       Without it, .github/idd/config.json is read from the',
+      '                       current directory (run from the repository root), then',
+      '                       idd-skill. A missing explicit path, a malformed file, an',
+      '                       empty --policy value, or an empty or non-string',
+      '                       markerPrefix is a usage error.',
+      '  -h, --help           print this help and exit 0',
+      '',
+      'Exit codes: 0 when the lint passes; 1 for a usage error, or for a body',
+      'that fails the lint (the JSON is still printed).',
+      '',
+    ].join('\n')}`,
+  );
+}
+function usage(message) {
+  process.stderr.write(`idd-review-defer-bundle: ${message}\n`);
+  return { exitCode: 1, kind: 'usage', message };
+}
+function runCli() {
+  let parsed;
+  try {
+    parsed = parseCliArgs(process.argv.slice(2), REVIEW_DEFER_BUNDLE_FLAG_SPEC);
+  } catch (error) {
+    return usage(error.message);
+  }
+  if (parsed.help) {
+    printHelp();
+    return 0;
+  }
+  const { values } = parsed;
+  const text = (name) => {
+    const value = values[name];
+    return typeof value === 'string' ? value : undefined;
+  };
+  const originToken = text('origin-issue');
+  const prToken = text('pr');
+  const title = text('title');
+  const itemsFile = text('items-file');
+  const policyFlag = text('policy');
+  if (originToken === undefined) {
+    return usage('missing required --origin-issue argument');
+  }
+  if (prToken === undefined) {
+    return usage('missing required --pr argument');
+  }
+  if (title === undefined) {
+    return usage('missing required --title argument');
+  }
+  if (itemsFile === undefined) {
+    return usage('missing required --items-file argument');
+  }
+  if (policyFlag === '') {
+    return usage('--policy must not be empty');
+  }
+  let originIssue;
+  let pr;
+  try {
+    originIssue = parseCanonicalIntegerOrThrow(originToken, '--origin-issue');
+    pr = parseCanonicalIntegerOrThrow(prToken, '--pr');
+  } catch (error) {
+    return usage(error.message);
+  }
+  let itemsText;
+  try {
+    itemsText = readFileSync(itemsFile, 'utf8');
+  } catch (error) {
+    return usage(`cannot read --items-file ${itemsFile}: ${error.message}`);
+  }
+  let items;
+  try {
+    items = JSON.parse(itemsText);
+  } catch (error) {
+    return usage(
+      `--items-file ${itemsFile} is not valid JSON: ${error.message}`,
+    );
+  }
+  // The marker prefix describes the target repository, so it comes from that
+  // repository's own policy file only. An absent default file falls back to
+  // the distributed prefix; an explicit --policy path must exist and parse.
+  let policy;
+  try {
+    policy = readRepositoryPolicyFile(policyFlag);
+  } catch (error) {
+    return usage(error.message);
+  }
+  // The reader returns only a plain object or null, so this narrowing is safe.
+  const repositoryPolicy = policy.config;
+  const configured = repositoryPolicy?.markerPrefix;
+  if (
+    configured !== undefined &&
+    (typeof configured !== 'string' || configured.trim() === '')
+  ) {
+    return usage(`markerPrefix in ${policy.path} must be a non-empty string`);
+  }
+  const markerPrefix = configured ?? DEFAULT_MARKER_PREFIX;
+  let bundle;
+  try {
+    // renderDeferBundle validates every parsed field at run time, so the
+    // untyped JSON is only narrowed to the item shape here.
+    bundle = renderDeferBundle({
+      originIssue,
+      pr,
+      title,
+      items: items,
+      markerPrefix,
+    });
+  } catch (error) {
+    if (error instanceof TypeError) {
+      return usage(error.message);
+    }
+    throw error;
+  }
+  // Render has already validated markerPrefix, so the lint cannot raise the
+  // input TypeError that the usage mapping above covers. A failure here is a
+  // bug and propagates.
+  const lint = lintDeferBundle(bundle, markerPrefix);
+  const report = {
+    title: bundle.title,
+    body: bundle.body,
+    lint: { passed: lint.passed, failures: lint.failures },
+  };
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  if (lint.passed) {
+    return 0;
+  }
+  process.stderr.write(`idd-review-defer-bundle: ${GATE_MESSAGE}\n`);
+  return { exitCode: 1, kind: 'gate', message: GATE_MESSAGE };
+}
+if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('idd-review-defer-bundle', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
