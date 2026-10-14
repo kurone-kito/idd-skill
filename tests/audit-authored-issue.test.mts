@@ -6359,6 +6359,40 @@ test('escaped marker examples do not trip the existing marker checks on a carrie
   assert.equal(carrierFinding(body, 'dependency-marker-rule')?.result, 'pass');
 });
 
+test('dependency lines and footers inside a raw HTML block still count, though its headings do not (#4250)', () => {
+  const dependency = carrierBody({
+    intro: 'Holds drafts.\n\n<div>\nDepends on #5\n</div>',
+  });
+  assert.equal(
+    carrierFinding(dependency, 'carrier-release-condition')?.result,
+    'fail',
+  );
+  const footer = carrierBody({
+    intro: 'Holds drafts.\n\n<div>\n_Effort: M -- x\n</div>',
+  });
+  assert.equal(
+    carrierFinding(footer, 'carrier-forbidden-markers')?.result,
+    'fail',
+  );
+});
+
+test('a Depends on or Blocked by line behind nested list and blockquote markers counts outside the release condition (#4250)', () => {
+  for (const line of [
+    '- > Depends on #5',
+    '- - Blocked by #5',
+    '> - > Blocked by #5',
+  ]) {
+    assert.equal(
+      carrierFinding(
+        carrierBody({ intro: `Holds drafts.\n\n${line}` }),
+        'carrier-release-condition',
+      )?.result,
+      'fail',
+      line,
+    );
+  }
+});
+
 test('a second ## Drafts or ## Release condition heading fails rather than hiding unchecked drafts (#4250)', () => {
   const secondDrafts = `${carrierBody()}\n## Drafts\n\n### Follow-up C\n\nReview: reviewed\nShape: child\n`;
   assert.equal(carrierFinding(secondDrafts, 'carrier-drafts')?.result, 'fail');

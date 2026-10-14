@@ -194,12 +194,13 @@ const CARRIER_FORBIDDEN_MARKER_SUFFIXES = [
   'blocked-by',
   'authoring-bucket',
 ];
-// A line that opens with the keyword, after an optional blockquote marker and
-// list marker (#4250). It matches whether or not the reference list parses.
+// A line that opens with the keyword, after any nesting of blockquote and list
+// markers (#4250 review, Copilot: `- > Depends on` counts too). It matches
+// whether or not the reference list parses.
 const DEPENDS_ON_LINE_PATTERN =
-  /^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+|\d+[.)][ \t]+)?Depends on\b/iu;
+  /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+)*Depends on\b/iu;
 const BLOCKED_BY_LINE_PATTERN =
-  /^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+|\d+[.)][ \t]+)?Blocked by\b/iu;
+  /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+)*Blocked by\b/iu;
 // The visible footer lines, allowing any list or blockquote container prefix
 // (#4250 review, Copilot): `> _Effort: M` is still a visible footer.
 const AUTOPILOT_SUITABILITY_FOOTER_PATTERN =
@@ -1080,16 +1081,26 @@ function carrierStructureView(rawText) {
   // Raw HTML blocks are not Markdown structure either: GitHub renders their
   // content as HTML, so a heading or fence inside one does not count (#4250
   // review, Copilot). Their ranges are blanked along with the comments.
-  const chars = rawNormalized.split('');
-  for (const range of [...commentRanges, ...htmlBlockRanges]) {
-    for (let index = range.start; index < range.end; index += 1) {
-      if (chars[index] !== '\n') {
-        chars[index] = ' ';
+  const blank = (ranges) => {
+    const chars = rawNormalized.split('');
+    for (const range of ranges) {
+      for (let index = range.start; index < range.end; index += 1) {
+        if (chars[index] !== '\n') {
+          chars[index] = ' ';
+        }
       }
     }
-  }
-  const rawFree = chars.join('');
-  return { text: maskMarkdownForScan(rawFree), rawFree };
+    return chars.join('');
+  };
+  // The visible view keeps raw HTML text: it still renders, so dependency
+  // lines and footers in it count (#4250 review, Copilot).
+  const visibleRaw = blank(commentRanges);
+  const rawFree = blank([...commentRanges, ...htmlBlockRanges]);
+  return {
+    text: maskMarkdownForScan(rawFree),
+    rawFree,
+    visibleText: maskMarkdownForScan(visibleRaw),
+  };
 }
 function buildCarrierFindings(
   text,
@@ -1105,8 +1116,11 @@ function buildCarrierFindings(
   const structure = carrierStructureView(rawText);
   return [
     checkCarrierMarker(text, markerPrefix),
-    checkCarrierForbiddenMarkers(text, structure.text, markerPrefix),
-    checkCarrierReleaseCondition(structure.text.split('\n')),
+    checkCarrierForbiddenMarkers(text, structure.visibleText, markerPrefix),
+    checkCarrierReleaseCondition(
+      structure.text.split('\n'),
+      structure.visibleText.split('\n'),
+    ),
     checkCarrierDrafts(structure.text.split('\n'), structure.rawFree),
     checkCarrierLabel(labels, authoringOnlyLabelName),
   ];
@@ -1168,10 +1182,15 @@ function checkCarrierForbiddenMarkers(text, visibleText, markerPrefix) {
  * fails outside the section. An empty section means the drafts can be
  * re-authored now.
  */
-function checkCarrierReleaseCondition(lines) {
+function checkCarrierReleaseCondition(structureLines, visibleLines) {
   const id = 'carrier-release-condition';
   const name = 'The release condition holds only Blocked by declarations';
-  const section = locateLevel2Section(lines, 'Release condition');
+  // The section bounds and heading count come from the structure view, so a
+  // heading hidden in raw HTML does not count. The declarations come from the
+  // visible view, since text inside an HTML block still renders (#4250
+  // review, Copilot).
+  const lines = visibleLines;
+  const section = locateLevel2Section(structureLines, 'Release condition');
   if (!section) {
     return pass(
       id,
@@ -1179,7 +1198,10 @@ function checkCarrierReleaseCondition(lines) {
       'not applicable: the Release condition heading is missing (see required-headings)',
     );
   }
-  const releaseHeadings = countLevel2Headings(lines, 'Release condition');
+  const releaseHeadings = countLevel2Headings(
+    structureLines,
+    'Release condition',
+  );
   if (releaseHeadings > 1) {
     return fail(
       id,
