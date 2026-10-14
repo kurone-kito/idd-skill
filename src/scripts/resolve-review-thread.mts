@@ -1338,9 +1338,11 @@ function triageFlagsFromArgs(args: CliArgs): TriageFlags {
  * reply's flags pass, and the value comes from `scoreTriageRecord`, so it is the
  * `Triage:` line a reply with the same flags would carry. Nothing is posted,
  * and no claim is read. The verdict is not repeated on stderr, because the
- * stdout object already carries it.
+ * stdout object already carries it. A success returns 0 instead of calling
+ * `process.exit`, so the CLI runner sets the exit code after stdout drains
+ * (Copilot review on #4266).
  */
-function runComputeOnlyTriage(args: CliArgs, pr: number): never {
+function runComputeOnlyTriage(args: CliArgs, pr: number): number {
   if (args.override !== null) {
     const message =
       '--override cannot be combined with a triage-only run: no reply is posted';
@@ -1402,14 +1404,14 @@ function runComputeOnlyTriage(args: CliArgs, pr: number): never {
     triage,
   };
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-  process.exit(0);
+  return 0;
 }
 
 function main(): HelperCliResult {
   const args = parseArgs(process.argv.slice(2));
   // #4188: the compute-only triage mode takes no target and posts nothing.
   if (isComputeOnlyTriage(args)) {
-    runComputeOnlyTriage(args, args.pr as number);
+    return runComputeOnlyTriage(args, args.pr as number);
   }
   // #4012: --review-id selects the body-item target. `!== null` (not
   // `Number.isInteger`) so a malformed but supplied value still selects it
