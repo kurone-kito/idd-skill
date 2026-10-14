@@ -3,6 +3,10 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
+  DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
+  parseAutopilotSuitability,
+} from '../src/scripts/autopilot-suitability.mts';
+import {
   buildMergedPrFeedbackSweep,
   buildOpenReadySection,
   buildWeeklyBodyOptions,
@@ -2782,7 +2786,7 @@ test('renderWeeklySweepIssueBody: nothing open, with the count checked, says so 
   );
   assert.equal(
     body,
-    'None are open as of 2026-10-13 (UTC): none of the 3 pull requests merged since 2026-10-06 has unresolved review threads or unaddressed comments.\n',
+    'None are open as of 2026-10-13 (UTC): none of the 3 pull requests merged since 2026-10-06 has unresolved review threads or unaddressed comments.\n\n<!-- idd-skill-autopilot-suitability: 1 -->\n',
   );
 });
 
@@ -2798,7 +2802,7 @@ test('renderWeeklySweepIssueBody: a window with no merges says the scan found no
   );
   assert.equal(
     body,
-    'None are open as of 2026-10-13 (UTC): the scan found no pull request merged since 2026-10-06.\n',
+    'None are open as of 2026-10-13 (UTC): the scan found no pull request merged since 2026-10-06.\n\n<!-- idd-skill-autopilot-suitability: 1 -->\n',
   );
 });
 
@@ -2814,7 +2818,7 @@ test('renderWeeklySweepIssueBody: an explicit PR list with no date names the sca
   );
   assert.equal(
     body,
-    'None are open as of 2026-10-13 (UTC): none of the 2 pull requests in the scanned set has unresolved review threads or unaddressed comments.\n',
+    'None are open as of 2026-10-13 (UTC): none of the 2 pull requests in the scanned set has unresolved review threads or unaddressed comments.\n\n<!-- idd-skill-autopilot-suitability: 1 -->\n',
   );
 });
 
@@ -2836,7 +2840,8 @@ test('renderWeeklySweepIssueBody: an enumeration that reached the cap says so, e
     body,
     /The scan reached its limit of 500 pull requests, so some merges in the window may not have been checked\./,
   );
-  assert.equal(body.split('\n').length, 3);
+  // Two summary lines, a blank line, then the not-work footer and its newline.
+  assert.equal(body.split('\n').length, 5);
 });
 
 test('renderWeeklySweepIssueBody: the cap is named only when the enumeration reached it', () => {
@@ -2850,6 +2855,29 @@ test('renderWeeklySweepIssueBody: the cap is named only when the enumeration rea
     },
   );
   assert.doesNotMatch(body, /limit/);
+});
+
+test('renderWeeklySweepIssueBody: the report ends with a not-work footer scored below the floor (issue #4283)', () => {
+  const body = renderWeeklySweepIssueBody(
+    { prs: [], summary: { prCount: 3, ...NO_FLAGGED_SUMMARY } },
+    {
+      sinceDate: '2026-10-06',
+      scanLimit: 500,
+      enumeratedCount: 3,
+      generatedOn: RUN_DATE,
+    },
+  );
+  assert.ok(
+    body.endsWith('\n\n<!-- idd-skill-autopilot-suitability: 1 -->\n'),
+    'the footer closes the body after one blank line',
+  );
+  // Autopilot skips the report only because the footer parses below the floor.
+  const score = parseAutopilotSuitability(body);
+  assert.equal(score, 1);
+  assert.ok(
+    score !== null && score < DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
+    'the footer score must sit below the default autopilot floor',
+  );
 });
 
 test('buildWeeklyBodyOptions: an explicit PR list carries no cap, and a window carries its limit', () => {
@@ -2943,6 +2971,8 @@ test('renderWeeklySweepIssueBody: a non-empty result lists each flagged PR with 
       '',
       '- PR 1234 (merged 2026-10-09): 1 unresolved review thread, 2 unaddressed comments.',
       '- PR 1240: 0 unresolved review threads, 1 unaddressed comment.',
+      '',
+      '<!-- idd-skill-autopilot-suitability: 1 -->',
       '',
     ].join('\n'),
   );
