@@ -1228,6 +1228,24 @@ in this preamble, since the fallback differs per helper.
   file only, and `--marker-prefix` is required when the issue or the
   journal is in another repository.
 
+  For `--shape carrier`, after `state=member` the helper runs the carrier
+  release (contract.md, "Carrier creation-hold exception"). It posts the
+  `release`, `release-guard`, and `heartbeat` owner markers, removes the
+  authoring label with one `gh issue edit --remove-label` call, and posts
+  `release-complete`. The authoring-only label stays. Before the heartbeat
+  and again after its settle wait, the release checks the sole-member
+  result, the roadmap-id marker outside code, the carrier audit, the body
+  digest, and both labels. It runs three `sweep-authoring-markers.mjs`
+  sweeps; a failed sweep is recorded and never blocks the release. Each
+  sweep also records its `authoring-marker-minimization-backlog` count. The
+  report's `outcome` is `published` when the release ends `released` or
+  `held` (exit `0`), and `recovery-hold` otherwise (exit `1`). `journalState`
+  is `member` in every case. A `release` object carries `state`,
+  `failedStep`, `nextAction`, `sweeps`, and `backlog`. A `held` release keeps
+  both labels for a person's release, and a `recovery-hold` needs an
+  owner-log replay before any release. The dry run lists the release steps
+  as planned and writes nothing.
+
 - `scripts/review-disposition-verify.mjs` for read-only E7 disposition
   marker presence verification across PATH A and PATH B items
 - `scripts/disposition-non-review-notices.mjs` for dry-run/apply
