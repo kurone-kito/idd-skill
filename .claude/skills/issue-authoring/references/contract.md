@@ -1383,7 +1383,10 @@ finding reopens as a new finding.
 
 Before publishing a drafted `ready` **orphan, roadmap, or child** body
 (the shapes the linter supports), run the `audit-authored-issue`
-linter against it when a helper runtime is available. Before newly
+linter against it when a helper runtime is available. Before publishing
+a draft carrier (the `carrier` shape, described below), also run it
+with `--shape carrier`; a carrier is never published without that
+check. Before newly
 publishing a body into the **`needs-decision`** or **`blocked-by-human`**
 bucket instead, also run it, passing
 `--expect-bucket <needs-decision|blocked-by-human>` (choose the one
