@@ -8,9 +8,12 @@ import { test } from 'node:test';
 import {
   classifyBranchConflictState,
   MERGE_BASE_FETCH_STEPS,
+  type NonPassingRun,
   parseArgs,
   parseConflictFiles,
   parseGitFetchOrigin,
+  parseHeadRollup,
+  parseNonPassingRuns,
   readTrustEmptyProtectionReads,
   resolveCallSiteRouting,
   resolveFetchAttemptTimeoutMs,
@@ -1159,7 +1162,6 @@ test('resolveCallSiteRouting: one row per routing-table state', () => {
     ['clean', 'CLEAN', true, proceed],
     ['clean', 'CLEAN', false, proceed],
     ['clean', 'BLOCKED', false, hold],
-    ['clean', 'UNSTABLE', true, hold],
     ['clean', null, false, hold],
     ['behind-no-conflict', 'BEHIND', false, proceed],
     [
@@ -1194,11 +1196,169 @@ test('resolveCallSiteRouting: one row per routing-table state', () => {
   ];
   for (const [state, status, requires, expected] of rows) {
     assert.deepEqual(
-      resolveCallSiteRouting(state, status, requires as boolean),
+      resolveCallSiteRouting(state, status, requires as boolean, []),
       expected,
       `${state} / ${String(status)} / requiresUpToDateHead=${requires}`,
     );
   }
+});
+
+// #4209: UNSTABLE is conflict-free but not CLEAN. F1 proceeds only when every
+// non-passing head run is non-required and still waiting; anything else holds.
+test('resolveCallSiteRouting: UNSTABLE proceeds only past non-required waiting runs', () => {
+  const proceed = {
+    eBranchSync: 'proceed-to-f1',
+    e11: 'skip-merge',
+    f1: 'proceed-to-f2',
+  };
+  const hold = { eBranchSync: 'hold', e11: 'skip-merge', f1: 'hold' };
+  const run = (state: string, required = false): NonPassingRun => ({
+    name: 'companion',
+    state,
+    required,
+  });
+  const cases: [string, NonPassingRun[], unknown][] = [
+    ['only non-required action_required', [run('action_required')], proceed],
+    ['only non-required pending', [run('pending')], proceed],
+    ['only non-required failure', [run('failure')], hold],
+    ['failing required run', [run('failure', true)], hold],
+    ['empty list', [], hold],
+    [
+      'waiting run plus a required pending run',
+      [run('action_required'), run('pending', true)],
+      hold,
+    ],
+  ];
+  for (const [label, runs, expected] of cases) {
+    assert.deepEqual(
+      resolveCallSiteRouting('clean', 'UNSTABLE', true, runs),
+      expected,
+      label,
+    );
+  }
+  assert.deepEqual(
+    resolveCallSiteRouting('clean', 'UNSTABLE', true, [run('action_required')]),
+    proceed,
+  );
+  assert.deepEqual(resolveCallSiteRouting('clean', 'CLEAN', true, []), proceed);
+});
+
+test('parseNonPassingRuns: keeps only non-passing runs and fails closed', () => {
+  const runs = parseNonPassingRuns([
+    {
+      __typename: 'CheckRun',
+      name: 'lint',
+      status: 'COMPLETED',
+      conclusion: 'SUCCESS',
+      isRequired: true,
+    },
+    {
+      __typename: 'CheckRun',
+      name: 'IDD advisory-convergence comment refresh',
+      status: 'COMPLETED',
+      conclusion: 'ACTION_REQUIRED',
+      isRequired: false,
+    },
+    {
+      __typename: 'CheckRun',
+      name: 'queued-run',
+      status: 'QUEUED',
+      conclusion: null,
+      isRequired: false,
+    },
+    {
+      __typename: 'StatusContext',
+      context: 'CodeRabbit',
+      state: 'SUCCESS',
+      isRequired: false,
+    },
+    {
+      __typename: 'StatusContext',
+      context: 'expected-check',
+      state: 'EXPECTED',
+      isRequired: null,
+    },
+    {
+      __typename: 'CheckRun',
+      name: 'Windows platform tests',
+      status: 'COMPLETED',
+      conclusion: 'FAILURE',
+      isRequired: false,
+    },
+    { __typename: 'Mystery' },
+  ]);
+  assert.deepEqual(runs, [
+    {
+      name: 'IDD advisory-convergence comment refresh',
+      state: 'action_required',
+      required: false,
+    },
+    { name: 'queued-run', state: 'pending', required: false },
+    { name: 'expected-check', state: 'expected', required: true },
+    { name: 'Windows platform tests', state: 'failure', required: false },
+    { name: '', state: 'unknown', required: true },
+  ]);
+});
+
+test('parseHeadRollup: fails closed unless the pinned head and full rollup match', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const contexts = (totalCount: number, nodes: unknown[]) => ({
+    oid: sha,
+    statusCheckRollup: { contexts: { totalCount, nodes } },
+  });
+  const waiting = {
+    __typename: 'CheckRun',
+    name: 'refresh',
+    status: 'COMPLETED',
+    conclusion: 'ACTION_REQUIRED',
+    isRequired: false,
+  };
+  assert.deepEqual(parseHeadRollup(contexts(1, [waiting]), sha), {
+    runs: [{ name: 'refresh', state: 'action_required', required: false }],
+    notes: [],
+  });
+  const hold = (object: unknown) => parseHeadRollup(object, sha).runs;
+  assert.deepEqual(hold(null), []);
+  assert.deepEqual(
+    hold({ ...contexts(1, [waiting]), oid: 'f'.repeat(40) }),
+    [],
+  );
+  assert.deepEqual(hold({ oid: sha, statusCheckRollup: null }), []);
+  assert.deepEqual(hold(contexts(101, [waiting])), []);
+  assert.match(
+    parseHeadRollup(null, sha).notes[0] ?? '',
+    /UNSTABLE non-passing run list unavailable/,
+  );
+});
+
+test('classifyBranchConflictState: UNSTABLE routing reads the injected run list', async () => {
+  const fixture = loadFixture('clean');
+  const base = {
+    owner: 'test-owner',
+    repo: 'test-repo',
+    _testPrData: { ...fixture.prData, mergeStateStatus: 'UNSTABLE' },
+    _testRequiresUpToDateHead: false,
+    _skipGitProbe: true,
+  };
+  const waiting: NonPassingRun[] = [
+    { name: 'refresh', state: 'action_required', required: false },
+  ];
+  const proceed = await classifyBranchConflictState(fixture.prData.number, {
+    ...base,
+    _testNonPassingRuns: waiting,
+  });
+  assert.equal(proceed.callSiteRouting.f1, 'proceed-to-f2');
+  assert.equal(proceed.callSiteRouting.eBranchSync, 'proceed-to-f1');
+  const held = await classifyBranchConflictState(fixture.prData.number, {
+    ...base,
+    _testNonPassingRuns: [],
+  });
+  assert.equal(held.callSiteRouting.f1, 'hold');
+  const offline = await classifyBranchConflictState(
+    fixture.prData.number,
+    base,
+  );
+  assert.equal(offline.callSiteRouting.f1, 'hold');
 });
 
 test('classifyBranchConflictState: callSiteRouting follows the injected policy input', async () => {
