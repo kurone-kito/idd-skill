@@ -1542,13 +1542,21 @@ default below is unchanged.
   - `roadmapNodes`: `number[]` — nested roadmap nodes discovered through
     traversal; **excludes** the root roadmap (A1 traversal entry point)
   - `executionCandidates`: `number[]`
+  - `pullRequestReferences`: `[{ source: number, target: number,`
+    `relationship: string, evidence: string }]`. Each reference whose
+    target is a merged pull request resolves the reference (issue `#4281`):
+    the target gets no node and no traversal, and no
+    `unresolvedReferences` entry. The edge still appears in `edges`.
   - `diagnostics`: `{ duplicateReferences: object[], cycles: object[],`
     `inaccessibleReferences: object[], unresolvedReferences: object[] }`.
     `duplicateReferences` does not report a task-list entry plus a native
     sub-issue link for the same child under the same parent: that pair is
     one membership, and both edges stay in `edges`. Every other pair of
     different relationships on one source and target, for example a
-    task-list entry plus a `Blocked by` line, is still reported.
+    task-list entry plus a `Blocked by` line, is still reported. An open or
+    closed-unmerged pull request target appears in `unresolvedReferences`
+    with reason `pull_request_not_merged`; a number that is neither an
+    issue nor a pull request keeps reason `issue_not_found`.
   - `summary`: `{ rootNumber: number, nodeCount: number, edgeCount: number,`
     `roadmapNodeCount: number, executionCandidateCount: number,`
     `duplicateReferenceCount: number, cycleCount: number,`
