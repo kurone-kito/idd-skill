@@ -94,7 +94,6 @@ import {
   findHtmlBlockRanges,
   findHtmlCommentRanges,
   findIndentedCodeRanges,
-  findInlineCodeSpans,
   maskMarkdownForScan,
   stripMarkdownCodeRegions,
 } from './markdown-code.mts';
@@ -1429,19 +1428,6 @@ function commentAt(text: string, open: number): string | undefined {
   const pattern = /<!--(?!-?>)(?:(?!--)[\s\S])*?-->/uy;
   pattern.lastIndex = open;
   return pattern.exec(text)?.[0];
-}
-
-/** Whether the character at `index` is escaped by an odd backslash run. */
-function isBackslashEscaped(text: string, index: number): boolean {
-  let slashes = 0;
-  for (
-    let position = index - 1;
-    position >= 0 && text[position] === '\\';
-    position -= 1
-  ) {
-    slashes += 1;
-  }
-  return slashes % 2 === 1;
 }
 
 /** The first backtick run of exactly `run` length at or after `from`. */
