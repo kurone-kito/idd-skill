@@ -20,6 +20,7 @@ import {
   dirname,
   isAbsolute,
   join,
+  normalize,
   relative,
   resolve,
   sep,
@@ -59,9 +60,23 @@ function requirePlatformFlags(fs) {
   }
   return { noFollow, nonBlock };
 }
-function assertAbsolutePaths(root, target) {
+/**
+ * Paths must be absolute and already normalized. The kernel resolves a `..`
+ * after any symbolic link before it, so a normalized copy of a path can name
+ * a different file than the string the caller passed.
+ */
+function assertSafePaths(root, target) {
   if (!isAbsolute(root) || !isAbsolute(target)) {
     throw new Error(`paths must be absolute: ${root}, ${target}`);
+  }
+  assertNormalized(root);
+  assertNormalized(target);
+}
+function assertNormalized(path) {
+  if (normalize(path) !== path) {
+    throw new Error(
+      `${path} is not in normalized form (it has '.', '..', or a repeated separator); refusing it`,
+    );
   }
 }
 /** The components of `target` below `root`, each a single name. */
@@ -97,7 +112,7 @@ function classifyFinal(stat, path) {
  * intermediates are listed in `missingDirs`, root first.
  */
 function walkTo(root, target, fs) {
-  assertAbsolutePaths(root, target);
+  assertSafePaths(root, target);
   const parts = segmentsBelow(root, target);
   const last = parts.length - 1;
   const missingDirs = [];
@@ -226,7 +241,9 @@ function assertRepointable(current, root, stat, fs) {
       `${current} is not a symbolic link; refusing to replace it`,
     );
   }
-  const resolved = resolve(root, fs.readlinkSync(current));
+  const linkTarget = fs.readlinkSync(current);
+  assertNormalized(linkTarget);
+  const resolved = resolve(root, linkTarget);
   if (dirname(resolved) !== root) {
     throw new Error(
       `${current} targets ${resolved}, which is not directly under the data root`,
@@ -395,7 +412,8 @@ export function repointCurrent(dataRoot, version, fs = DEFAULT_FS) {
   if (!isAbsolute(dataRoot)) {
     throw new Error(`data root must be absolute: ${dataRoot}`);
   }
-  const root = resolve(dataRoot);
+  assertNormalized(dataRoot);
+  const root = dataRoot;
   if (!VERSION_PATTERN.test(version)) {
     throw new Error(`version ${version} does not match the required pattern`);
   }

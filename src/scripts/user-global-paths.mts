@@ -22,6 +22,7 @@ import {
   dirname,
   isAbsolute,
   join,
+  normalize,
   relative,
   resolve,
   sep,
@@ -102,9 +103,24 @@ function requirePlatformFlags(fs: FsOps): {
   return { noFollow, nonBlock };
 }
 
-function assertAbsolutePaths(root: string, target: string): void {
+/**
+ * Paths must be absolute and already normalized. The kernel resolves a `..`
+ * after any symbolic link before it, so a normalized copy of a path can name
+ * a different file than the string the caller passed.
+ */
+function assertSafePaths(root: string, target: string): void {
   if (!isAbsolute(root) || !isAbsolute(target)) {
     throw new Error(`paths must be absolute: ${root}, ${target}`);
+  }
+  assertNormalized(root);
+  assertNormalized(target);
+}
+
+function assertNormalized(path: string): void {
+  if (normalize(path) !== path) {
+    throw new Error(
+      `${path} is not in normalized form (it has '.', '..', or a repeated separator); refusing it`,
+    );
   }
 }
 
@@ -144,7 +160,7 @@ function classifyFinal(stat: nodeFs.Stats, path: string): FinalKind {
  * intermediates are listed in `missingDirs`, root first.
  */
 function walkTo(root: string, target: string, fs: FsOps): Walk {
-  assertAbsolutePaths(root, target);
+  assertSafePaths(root, target);
   const parts = segmentsBelow(root, target);
   const last = parts.length - 1;
   const missingDirs: string[] = [];
@@ -302,7 +318,9 @@ function assertRepointable(
       `${current} is not a symbolic link; refusing to replace it`,
     );
   }
-  const resolved = resolve(root, fs.readlinkSync(current));
+  const linkTarget = fs.readlinkSync(current);
+  assertNormalized(linkTarget);
+  const resolved = resolve(root, linkTarget);
   if (dirname(resolved) !== root) {
     throw new Error(
       `${current} targets ${resolved}, which is not directly under the data root`,
@@ -494,7 +512,8 @@ export function repointCurrent(
   if (!isAbsolute(dataRoot)) {
     throw new Error(`data root must be absolute: ${dataRoot}`);
   }
-  const root = resolve(dataRoot);
+  assertNormalized(dataRoot);
+  const root = dataRoot;
   if (!VERSION_PATTERN.test(version)) {
     throw new Error(`version ${version} does not match the required pattern`);
   }

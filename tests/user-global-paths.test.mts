@@ -933,6 +933,45 @@ posixTest(
   },
 );
 
+posixTest(
+  'a path that climbs out of a symbolic link is refused and nothing is written outside',
+  () => {
+    withBox((box) => {
+      makeRoot(box);
+      nodeFs.symlinkSync(box.outside, join(box.dataRoot, 'link'));
+      // The kernel follows `link` before `..`, so this names base/escaped.txt.
+      const traversal = `${box.dataRoot}/link/../escaped.txt`;
+      assertThrowsMatching(
+        () => writeNewFile(box.dataRoot, traversal, 'x'),
+        /not in normalized form/,
+      );
+      assert.equal(nodeFs.existsSync(join(box.base, 'escaped.txt')), false);
+    });
+  },
+);
+
+posixTest(
+  'a current link whose target climbs out of a symbolic link is refused and kept',
+  () => {
+    withBox((box) => {
+      makeRoot(box);
+      nodeFs.mkdirSync(join(box.dataRoot, '0.1.0'));
+      nodeFs.mkdirSync(join(box.dataRoot, '0.2.0'));
+      nodeFs.mkdirSync(join(box.outside, 'sub'), { recursive: true });
+      nodeFs.mkdirSync(join(box.outside, '0.1.0'));
+      nodeFs.symlinkSync(join(box.outside, 'sub'), join(box.dataRoot, 'link'));
+      // Lexically this is root/0.1.0; the kernel resolves it to outside/0.1.0.
+      nodeFs.symlinkSync('link/../0.1.0', join(box.dataRoot, 'current'));
+      const before = snapshot(box.home);
+      assertThrowsMatching(
+        () => repointCurrent(box.dataRoot, '0.2.0'),
+        /not in normalized form/,
+      );
+      assert.deepEqual(snapshot(box.home), before);
+    });
+  },
+);
+
 // --- Root creation -----------------------------------------------------------
 
 posixTest(
