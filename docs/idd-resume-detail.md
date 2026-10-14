@@ -368,8 +368,8 @@ F2 watermark identifies the reviewed snapshot, while `{branch-tip-SHA}`
 binds local-branch cleanup. Do not require either to equal the merged PR
 head. A contributor can advance the PR after F2 while the local branch
 remains at an older tip (PR `#3741` review comment `#4174335516`). Derive
-the merged PR head independently from the live PR and merge commit in
-step 7 below. Persist this proof on the claimed issue only after that
+the merged PR head independently from the live PR and merge commit before
+step 3. Persist this proof on the claimed issue before step 3, once that
 validation succeeds, including the verified merge commit and resulting
 `PR_HEAD_SHA_F3`; hold before posting or cleanup on a malformed merge
 commit, conflicting proof, or read failure. This prevents a stale F2
