@@ -777,6 +777,117 @@ test('idd-roadmap-audit-execute: runRoadmapAuditExecute output validates against
   );
 });
 
+test('idd-roadmap-audit-execute: a partial apply verdict carrying nothingSent validates against schema', async () => {
+  const ROADMAP = 995;
+  const report = {
+    root: {
+      number: ROADMAP,
+      title: 'completed roadmap',
+      state: 'OPEN',
+      classification: 'roadmap',
+      roadmapMarkerId: 'epic',
+    },
+    nodes: [
+      {
+        number: ROADMAP,
+        title: `issue ${ROADMAP}`,
+        state: 'OPEN',
+        labels: [],
+        classification: 'roadmap',
+        roadmapMarkerId: 'epic',
+        autopilotSuitability: null,
+        effort: null,
+        depth: 0,
+      },
+      {
+        number: 1047,
+        title: 'issue 1047',
+        state: 'CLOSED',
+        labels: [],
+        classification: 'execution',
+        roadmapMarkerId: '',
+        autopilotSuitability: null,
+        effort: null,
+        depth: 1,
+      },
+    ],
+    edges: [
+      {
+        source: ROADMAP,
+        target: 1047,
+        relationship: 'task-list',
+        evidence: '- [x] #1047',
+      },
+    ],
+    provenancePaths: [
+      { target: ROADMAP, path: [ROADMAP] },
+      { target: 1047, path: [ROADMAP, 1047] },
+    ],
+    roadmapNodes: [],
+    executionCandidates: [],
+    diagnostics: {
+      duplicateReferences: [],
+      cycles: [],
+      inaccessibleReferences: [],
+      unresolvedReferences: [],
+    },
+    summary: {
+      rootNumber: ROADMAP,
+      nodeCount: 2,
+      edgeCount: 1,
+      roadmapNodeCount: 0,
+      executionCandidateCount: 0,
+      duplicateReferenceCount: 0,
+      cycleCount: 0,
+      inaccessibleReferenceCount: 0,
+      unresolvedReferenceCount: 0,
+      maxDepth: 1,
+    },
+  } as unknown as RoadmapGraphReport;
+  const deps: RoadmapAuditExecuteDeps = {
+    collect: async () => report,
+    resolveOpenLinkedPrIssues: () => [],
+    revalidateClaim: () => ({
+      owned: true,
+      reason: 'match',
+      stale: false,
+      activeClaim: {
+        agentId: 'github-copilot-cli',
+        claimId: 'claim-20260626T000000Z-995',
+        supersedes: 'none',
+        branch: 'roadmap-audit/995-completed-roadmap',
+        createdAt: '2026-06-26T00:00:00Z',
+      },
+    }),
+    hasTrustedCompletionEvidence: () => false,
+    postEvidenceComment: () => {},
+    closeRoadmap: () => {},
+    releaseClaim: () => {
+      throw createLoadControlRefusal({
+        outcome: 'not-dispatched',
+        reason: 'busy',
+      });
+    },
+    now: () => '2026-06-26T01:00:00Z',
+  };
+  const { verdict, exitCode } = await runRoadmapAuditExecute(
+    [
+      '--roadmap',
+      String(ROADMAP),
+      '--claim-id',
+      'claim-20260626T000000Z-995',
+      '--apply',
+    ],
+    deps,
+  );
+  assert.equal(exitCode, 1);
+  assert.equal(verdict.nothingSent, true);
+  assertRoundtrip(
+    verdict,
+    loadJson('schemas/idd-roadmap-audit-execute.schema.json'),
+  );
+});
+
 test('pre-merge-readiness: buildPreMergeReadinessSummary output validates against schema', () => {
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json') as {
     input: Record<string, unknown>;

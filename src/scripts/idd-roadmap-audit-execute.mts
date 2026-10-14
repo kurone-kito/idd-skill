@@ -29,6 +29,8 @@ import {
   type RoadmapCycleDiagnostic,
   type RoadmapGraphReport,
 } from './discover-roadmap-graph.mts';
+import { deriveGhHttpStatus } from './gh-http-status.mts';
+import { findOwnLoadControlRefusal } from './github-api-refusal.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -161,6 +163,13 @@ export interface IddRoadmapAuditExecuteVerdict {
    * field existed.
    */
   localCoordinationNote?: string;
+  /**
+   * Set only on a failed apply write (the evidence comment, the close, or the
+   * claim release): `true` when that write provably sent nothing, `false` when
+   * it may have landed. Absent on every other verdict, so the successful path
+   * keeps its shape.
+   */
+  nothingSent?: boolean;
 }
 
 /** Outcome of re-validating the roadmap-audit claim before any mutation. */
@@ -1440,6 +1449,29 @@ function applyLocalCoordinationGate(
 }
 
 /**
+ * True when a failed apply write provably sent nothing. An own load-control
+ * refusal means no `gh` process started. For a comment post (`comment`), a
+ * first-attempt 401, 404, or 422 means the request was rejected before
+ * anything landed, because the comment-post retry layer rethrows those only
+ * for a first attempt (#4171). A close (`close`) has no status rule, since a
+ * rejected close may still have landed.
+ */
+function applyWriteSentNothing(
+  error: unknown,
+  kind: 'comment' | 'close',
+): boolean {
+  if (findOwnLoadControlRefusal(error) !== undefined) return true;
+  if (kind !== 'comment') return false;
+  const status = deriveGhHttpStatus(error);
+  return status === 401 || status === 404 || status === 422;
+}
+
+/** The thrown error's message, for the end of a partial verdict's result. */
+function thrownMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
  * Build the A1.5 verdict and, under `--apply`, execute the audit. The dry-run
  * path performs NO mutation. The apply path fails closed: if the roadmap is
  * not ready it exits without mutating; if it is ready it RE-VALIDATES the
@@ -1646,7 +1678,16 @@ export async function runRoadmapAuditExecute(
     args.criteriaNote,
   );
   verdict.evidenceBody = finalEvidenceBody;
-  resolvedDeps.postEvidenceComment(roadmapNumber, finalEvidenceBody);
+  try {
+    resolvedDeps.postEvidenceComment(roadmapNumber, finalEvidenceBody);
+  } catch (error: unknown) {
+    const nothingSent = applyWriteSentNothing(error, 'comment');
+    verdict.nothingSent = nothingSent;
+    verdict.result = nothingSent
+      ? `evidence comment not posted; nothing was sent for it. Roadmap #${roadmapNumber} was not closed, and the roadmap-audit claim is still held; do not run --apply again. Next action: release the claim by posting this claim's unclaimed-by marker (agent ${claim.activeClaim.agentId}, claim ${claim.activeClaim.claimId}) with the post-idd-marker helper, using a release timestamp. ${thrownMessage(error)}`
+      : `evidence comment may have been posted, and roadmap #${roadmapNumber} was not closed; the roadmap-audit claim is still held; do not run --apply again. Next action: release the claim by posting this claim's unclaimed-by marker (agent ${claim.activeClaim.agentId}, claim ${claim.activeClaim.claimId}) with the post-idd-marker helper, using a release timestamp. ${thrownMessage(error)}`;
+    return { verdict, exitCode: 1 };
+  }
 
   const preCloseClaim = resolvedDeps.revalidateClaim({
     issueNumber: roadmapNumber,
@@ -1675,14 +1716,33 @@ export async function runRoadmapAuditExecute(
 
   // Ownership held through the comment: close, then release using the last
   // verdict's activeClaim and the normalized second-precision "now".
-  resolvedDeps.closeRoadmap(roadmapNumber);
-  resolvedDeps.releaseClaim(roadmapNumber, {
-    agentId: preCloseClaim.activeClaim.agentId,
-    claimId: preCloseClaim.activeClaim.claimId,
-    timestamp: nowIso,
-  });
-
+  try {
+    resolvedDeps.closeRoadmap(roadmapNumber);
+  } catch (error: unknown) {
+    const nothingSent = applyWriteSentNothing(error, 'close');
+    verdict.nothingSent = nothingSent;
+    verdict.result = nothingSent
+      ? `roadmap #${roadmapNumber} is still open with the evidence comment posted; nothing was sent for the close, and the roadmap-audit claim is still held; do not run --apply again. Next action: read the roadmap's state. If it is closed, release the claim by posting this claim's unclaimed-by marker (agent ${preCloseClaim.activeClaim.agentId}, claim ${preCloseClaim.activeClaim.claimId}) with the post-idd-marker helper, using a release timestamp. If it is still open and the claim is still this session's, close it as completed, then release the claim the same way. ${thrownMessage(error)}`
+      : `the roadmap close may have landed, and the roadmap-audit claim is still held; do not run --apply again. Next action: read the roadmap's state. If it is closed, release the claim by posting this claim's unclaimed-by marker (agent ${preCloseClaim.activeClaim.agentId}, claim ${preCloseClaim.activeClaim.claimId}) with the post-idd-marker helper, using a release timestamp. If it is still open and the claim is still this session's, close it as completed, then release the claim the same way. ${thrownMessage(error)}`;
+    return { verdict, exitCode: 1 };
+  }
   verdict.closed = true;
+
+  try {
+    resolvedDeps.releaseClaim(roadmapNumber, {
+      agentId: preCloseClaim.activeClaim.agentId,
+      claimId: preCloseClaim.activeClaim.claimId,
+      timestamp: nowIso,
+    });
+  } catch (error: unknown) {
+    const nothingSent = applyWriteSentNothing(error, 'comment');
+    verdict.nothingSent = nothingSent;
+    verdict.result = nothingSent
+      ? `roadmap #${roadmapNumber} is closed, and the roadmap-audit claim is still active; nothing was sent for the unclaimed-by marker; do not run --apply again. Next action: read the roadmap's comments for this claim's unclaimed-by marker and, when it is absent and the claim is still this session's, release the claim by posting this claim's unclaimed-by marker (agent ${preCloseClaim.activeClaim.agentId}, claim ${preCloseClaim.activeClaim.claimId}) with the post-idd-marker helper, using a release timestamp. ${thrownMessage(error)}`
+      : `roadmap #${roadmapNumber} is closed, and the release of the roadmap-audit claim may have landed; do not run --apply again. Next action: read the roadmap's comments for this claim's unclaimed-by marker and, when it is absent and the claim is still this session's, release the claim by posting this claim's unclaimed-by marker (agent ${preCloseClaim.activeClaim.agentId}, claim ${preCloseClaim.activeClaim.claimId}) with the post-idd-marker helper, using a release timestamp. ${thrownMessage(error)}`;
+    return { verdict, exitCode: 1 };
+  }
+
   verdict.claimReleased = true;
   verdict.result =
     'roadmap closed as completed; evidence comment posted and roadmap-audit claim released';
@@ -2141,6 +2201,21 @@ function printHelp(): void {
   (branch roadmap-audit/<roadmap>-<slug>) and match --claim-id (required under
   --apply) and, when given, --agent-id. --owner and --repo must be passed
   together or not at all.
+
+  Partial failure under --apply: the helper makes three writes in order (the
+  evidence comment, the close, then the release of the claim), each one time.
+  When a write throws, the helper stops at that step, never retries the write,
+  and prints this verdict with exit 1. The result names the next action and
+  ends with the thrown error's message. nothingSent is true only when that
+  write provably sent nothing: a load-control refusal, or, for a comment post,
+  a first-attempt HTTP 401, 404 or 422. Otherwise nothingSent is false and the
+  write may have landed. The three outcomes are: the evidence comment failed,
+  so the roadmap is not closed and the claim is still held; the close failed,
+  so the roadmap may still be open and the claim is still held; the release
+  failed, so the roadmap is closed and the claim may still be active. In every
+  case, do not run --apply again. Releasing the claim means posting this
+  claim's unclaimed-by marker with the post-idd-marker helper, using the claim's
+  agent id, its claim id, and a release timestamp.
 
   CLAIM REJECTION REASONS: a not-owned result's "reason" code is one of:
     match                 the claim is owned (not a rejection)

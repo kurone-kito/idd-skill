@@ -10,6 +10,7 @@ import {
   enumerateRoadmapGraph,
   type RoadmapGraphReport,
 } from '../src/scripts/discover-roadmap-graph.mts';
+import { createLoadControlRefusal } from '../src/scripts/github-api-refusal.mts';
 import {
   buildRoadmapCompletionAuditBody,
   type ConnectedPrEvent,
@@ -1743,6 +1744,201 @@ test('--apply aborts the CLOSE when the claim is lost in the comment→close gap
   assert.deepEqual(calls.released, []);
   // early + pre-comment + pre-close re-validations all ran.
   assert.equal(checks, 3);
+});
+
+/** An error shaped like a failed `gh api` call, which `deriveGhHttpStatus` reads. */
+function httpFailure(status: number): Error {
+  return Object.assign(new Error(`gh api request failed (HTTP ${status})`), {
+    stderr: `gh: request failed (HTTP ${status})`,
+  });
+}
+
+/** A partial verdict names the next action and ends with the thrown message. */
+function assertPartialResult(result: string, error: Error): void {
+  assert.match(result, /do not run --apply again/);
+  assert.match(result, /unclaimed-by/);
+  assert.ok(
+    result.endsWith(error.message),
+    `result must end with the thrown message: ${result}`,
+  );
+}
+
+test('--apply: a refused evidence comment stops before the close and the release', async () => {
+  const refusal = createLoadControlRefusal({
+    outcome: 'not-dispatched',
+    reason: 'busy',
+  });
+  const { deps, calls } = makeDeps(readyReport(), {
+    postEvidenceComment: () => {
+      throw refusal;
+    },
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(exitCode, 1);
+  assert.equal(verdict.closed, false);
+  assert.equal(verdict.claimReleased, false);
+  assert.equal(verdict.nothingSent, true);
+  assert.match(verdict.result, /not posted/);
+  assertPartialResult(verdict.result, refusal);
+  assert.deepEqual(calls.closed, []);
+  assert.deepEqual(calls.released, []);
+});
+
+test('--apply: a rejected evidence comment (HTTP 401, 404, 422) sent nothing', async () => {
+  for (const status of [401, 404, 422]) {
+    const failure = httpFailure(status);
+    const { deps, calls } = makeDeps(readyReport(), {
+      postEvidenceComment: () => {
+        throw failure;
+      },
+    });
+    const { verdict, exitCode } = await runRoadmapAuditExecute(
+      APPLY_ARGS,
+      deps,
+    );
+
+    assert.equal(exitCode, 1, `HTTP ${status}`);
+    assert.equal(verdict.nothingSent, true, `HTTP ${status}`);
+    assert.match(verdict.result, /not posted/, `HTTP ${status}`);
+    assertPartialResult(verdict.result, failure);
+    assert.deepEqual(calls.closed, [], `HTTP ${status}`);
+    assert.deepEqual(calls.released, [], `HTTP ${status}`);
+  }
+});
+
+test('--apply: an evidence comment that may have landed is not reported as nothing sent', async () => {
+  const failures = [httpFailure(502), new Error('socket hang up')];
+  for (const failure of failures) {
+    const { deps, calls } = makeDeps(readyReport(), {
+      postEvidenceComment: () => {
+        throw failure;
+      },
+    });
+    const { verdict, exitCode } = await runRoadmapAuditExecute(
+      APPLY_ARGS,
+      deps,
+    );
+
+    assert.equal(exitCode, 1, failure.message);
+    assert.equal(verdict.nothingSent, false, failure.message);
+    assert.match(verdict.result, /may have been posted/, failure.message);
+    assertPartialResult(verdict.result, failure);
+    assert.equal(verdict.closed, false, failure.message);
+    assert.equal(verdict.claimReleased, false, failure.message);
+    assert.deepEqual(calls.closed, [], failure.message);
+    assert.deepEqual(calls.released, [], failure.message);
+  }
+});
+
+test('--apply: a refused close releases nothing and leaves the roadmap open', async () => {
+  const refusal = createLoadControlRefusal({
+    outcome: 'not-dispatched',
+    reason: 'busy',
+  });
+  const { deps, calls } = makeDeps(readyReport(), {
+    closeRoadmap: () => {
+      throw refusal;
+    },
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(exitCode, 1);
+  assert.equal(verdict.closed, false);
+  assert.equal(verdict.claimReleased, false);
+  assert.equal(verdict.nothingSent, true);
+  assert.match(verdict.result, /still open/);
+  assertPartialResult(verdict.result, refusal);
+  assert.equal(calls.comments.length, 1);
+  assert.deepEqual(calls.released, []);
+});
+
+test('--apply: a close that may have landed (HTTP 422, 502) is not reported as nothing sent', async () => {
+  for (const status of [422, 502]) {
+    const failure = httpFailure(status);
+    const { deps, calls } = makeDeps(readyReport(), {
+      closeRoadmap: () => {
+        throw failure;
+      },
+    });
+    const { verdict, exitCode } = await runRoadmapAuditExecute(
+      APPLY_ARGS,
+      deps,
+    );
+
+    assert.equal(exitCode, 1, `HTTP ${status}`);
+    assert.equal(verdict.nothingSent, false, `HTTP ${status}`);
+    assert.match(verdict.result, /may have landed/, `HTTP ${status}`);
+    assertPartialResult(verdict.result, failure);
+    assert.equal(verdict.closed, false, `HTTP ${status}`);
+    assert.deepEqual(calls.released, [], `HTTP ${status}`);
+  }
+});
+
+test('--apply: a refused release keeps the roadmap closed and the claim active, with nothing sent', async () => {
+  const refusal = createLoadControlRefusal({
+    outcome: 'not-dispatched',
+    reason: 'busy',
+  });
+  const { deps, calls } = makeDeps(readyReport(), {
+    releaseClaim: () => {
+      throw refusal;
+    },
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(exitCode, 1);
+  assert.equal(verdict.closed, true);
+  assert.equal(verdict.claimReleased, false);
+  assert.equal(verdict.nothingSent, true);
+  assert.match(verdict.result, /claim is still active/);
+  assertPartialResult(verdict.result, refusal);
+  assert.deepEqual(calls.closed, [ROADMAP]);
+});
+
+test('--apply: a release that may have landed (HTTP 502, no status) is not reported as nothing sent', async () => {
+  const failures = [httpFailure(502), new Error('socket hang up')];
+  for (const failure of failures) {
+    const { deps, calls } = makeDeps(readyReport(), {
+      releaseClaim: () => {
+        throw failure;
+      },
+    });
+    const { verdict, exitCode } = await runRoadmapAuditExecute(
+      APPLY_ARGS,
+      deps,
+    );
+
+    assert.equal(exitCode, 1, failure.message);
+    assert.equal(verdict.closed, true, failure.message);
+    assert.equal(verdict.claimReleased, false, failure.message);
+    assert.equal(verdict.nothingSent, false, failure.message);
+    assert.match(verdict.result, /may have landed/, failure.message);
+    assertPartialResult(verdict.result, failure);
+    assert.deepEqual(calls.closed, [ROADMAP], failure.message);
+  }
+});
+
+test('the successful apply verdict keeps its shape and carries no nothingSent key', async () => {
+  const { deps } = makeDeps(readyReport());
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(exitCode, 0);
+  assert.equal(verdict.closed, true);
+  assert.equal(verdict.claimReleased, true);
+  assert.equal('nothingSent' in verdict, false);
+});
+
+test('--help names nothingSent and unclaimed-by in the usage text', () => {
+  const result = spawnSync(process.execPath, [CLI_SCRIPT, '--help'], {
+    encoding: 'utf8',
+    env: fixtureEnv(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /nothingSent/);
+  assert.match(result.stdout, /unclaimed-by/);
 });
 
 test('missing --roadmap is rejected', async () => {
