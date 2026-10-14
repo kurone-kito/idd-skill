@@ -866,6 +866,33 @@ test('draft carriers: a carrier that also carries the authoring label is held, s
   assert.deepEqual(stale.warnings, []);
 });
 
+test('draft carriers: a held carrier with no labeled event reports no heldSince and is not stale (#4257)', async () => {
+  const result = await filterOrphanIssues(
+    [
+      carrierIssue(63, 'No blocker.', {
+        labels: [
+          { name: 'status:authoring-only' },
+          { name: 'status:authoring' },
+        ],
+      }),
+    ],
+    {
+      issueStateByNumber: new Map<number, string>(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      now: '2026-10-14T05:00:00Z',
+    },
+  );
+  assert.deepEqual(result.draftCarriers.held, [
+    {
+      number: 63,
+      title: 'carrier 63',
+      url: 'https://example.com/63',
+      heldSince: null,
+      stale: false,
+    },
+  ]);
+});
+
 test('draft carriers: an authoring-only issue without the marker, a marker without the label, and a marker only inside code are in no bucket (#4257)', async () => {
   const result = await filterOrphanIssues(
     [
@@ -890,7 +917,7 @@ test('draft carriers: an authoring-only issue without the marker, a marker witho
         title: 'marker in a fence',
         state: 'OPEN',
         labels: [{ name: 'status:authoring-only' }],
-        body: '```\n' + CARRIER_MARKER + '\n```',
+        body: ['```', CARRIER_MARKER, '```'].join('\n'),
         url: 'https://example.com/72',
       },
       {
@@ -898,7 +925,7 @@ test('draft carriers: an authoring-only issue without the marker, a marker witho
         title: 'marker in a code span',
         state: 'OPEN',
         labels: [{ name: 'status:authoring-only' }],
-        body: 'Example: `' + CARRIER_MARKER + '`',
+        body: ['Example: `', CARRIER_MARKER, '`'].join(''),
         url: 'https://example.com/73',
       },
     ],
@@ -1145,6 +1172,17 @@ process.exit(1);
     }
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('--help documents --draft-carriers, which help-text-flags does not cover for this helper (#4257)', () => {
+  const result = spawnHelperBinWithEnvelope('idd-discover-orphan-filter.mjs', [
+    '--help',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(
+    result.stdout.includes('discover-orphan-filter.mjs --draft-carriers'),
+    result.stdout,
+  );
 });
 
 test('--draft-carriers rejects the flags that select the orphan path, a cache mode, or a malformed --now (#4257)', () => {
