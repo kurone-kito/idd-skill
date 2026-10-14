@@ -6347,7 +6347,18 @@ test('a comment opened after an even run of backslashes hides carrier structure,
   const evenRun = carrierBody()
     .replace('## Release condition', '\\\\<!--\n## Release condition')
     .replace('## Review ledger', '## Review ledger\n-->');
-  assert.equal(carrierFinding(evenRun, 'required-headings')?.result, 'fail');
+  // GitHub renders an unclosed opener before a heading as text, and a comment
+  // cannot span a heading, so the heading stays visible (checked with the
+  // GitHub markdown API).
+  assert.equal(carrierFinding(evenRun, 'required-headings')?.result, 'pass');
+  // Inside one paragraph, the even run opens a live comment that counts.
+  const evenMarker = carrierBody({
+    intro: 'Holds drafts.\n\n\\\\<!-- idd-skill-effort: M -->',
+  });
+  assert.equal(
+    carrierFinding(evenMarker, 'carrier-forbidden-markers')?.result,
+    'fail',
+  );
   // `\<!--` is an escaped opener, so nothing is hidden and the headings stay.
   const oddRun = carrierBody()
     .replace('## Release condition', '\\<!--\n## Release condition')

@@ -91,11 +91,10 @@ import {
   findHtmlCommentRanges,
   findIndentedCodeRanges,
   findInlineCodeSpans,
-  findMarkdownCodeRanges,
   maskMarkdownForScan,
-  stripEnclosingListContentIndent,
   stripMarkdownCodeRegions,
 } from './markdown-code.mjs';
+import { scanMarkdownStructure } from './markdown-structure.mjs';
 import {
   classifyAuthoringMarkerFamily,
   countMarkerOccurrences,
@@ -676,14 +675,7 @@ function applyConfirmedMinimization(comments, mutations) {
   });
 }
 export function auditAuthoredIssue(body, options) {
-  const sourceText = typeof body === 'string' ? body : String(body ?? '');
-  // A draft carrier's escaped comment openers render as text (#4250 review,
-  // Copilot), so they are blanked once here and every check, existing or
-  // new, reads the same body. Other shapes keep their text unchanged.
-  const rawText =
-    options.shape === 'carrier'
-      ? neutralizeCommentCode(blankEscapedCommentOpeners(sourceText))
-      : sourceText;
+  const rawText = typeof body === 'string' ? body : String(body ?? '');
   // Mask Markdown code regions (fenced blocks, indented blocks, and
   // inline spans) once, up front, and run every check (marker counting,
   // heading detection, visible-line scoping) against the result. A
@@ -696,9 +688,9 @@ export function auditAuthoredIssue(body, options) {
   // A draft carrier's marker checks read the carrier marker view, in which a
   // fence-looking line inside raw HTML masks nothing (#4250 review, Copilot).
   const carrierViews =
-    options.shape === 'carrier' ? carrierStructureView(rawText) : undefined;
+    options.shape === 'carrier' ? buildCarrierViews(rawText) : undefined;
   const text = carrierViews
-    ? carrierViews.markerText
+    ? carrierViews.marker
     : maskMarkdownForScan(rawText);
   const shape = options.shape;
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
@@ -754,7 +746,7 @@ export function auditAuthoredIssue(body, options) {
       isBucketAudit,
       shape,
       carrierViews !== undefined &&
-        AUTOPILOT_SUITABILITY_FOOTER_PATTERN.test(carrierViews.visibleText),
+        AUTOPILOT_SUITABILITY_FOOTER_PATTERN.test(carrierViews.visible),
     ),
     checkSuitabilityBlockedByHuman(
       suitability,
@@ -787,7 +779,7 @@ export function auditAuthoredIssue(body, options) {
       options.upstreamEscalationEnabled === true,
     ),
     checkRequiredHeadings(
-      carrierViews ? carrierViews.text : text,
+      carrierViews ? carrierViews.structure : text,
       shape,
       isBucketAudit,
     ),
@@ -839,8 +831,7 @@ export function auditAuthoredIssue(body, options) {
       options.upstreamEscalationEnabled === true,
     ),
     ...buildCarrierFindings(
-      text,
-      rawText,
+      carrierViews,
       markerPrefix,
       shape,
       labels,
@@ -1010,218 +1001,148 @@ function buildTriageFindings(
   });
   return [titleFinding, ...a4Findings, ...a45Findings];
 }
-// Draft-carrier shape (#4250). A carrier holds drafts that cannot yet be
-// published as their final issues, labelled with the authoring-only label.
-// Its findings exist only for `shape === 'carrier'`, so every other shape's
-// report is unchanged. Section and marker checks read the code-masked text,
-// so a fenced draft never counts. Fence offsets come from the CRLF-normalized
-// raw body and map to line indexes: masking preserves the line structure.
-/**
- * `findHtmlCommentRanges` treats any preceding backslash as an escape, but an
- * even run of backslashes escapes only itself, so `\\<!--` opens a live
- * comment (#4250 review, Copilot). This returns a probe copy in which the
- * last backslash of each even run before `<!--` is a space, so the comment
- * scan sees a live opener there. Offsets are unchanged.
- */
-function commentOpenerParityProbe(text) {
-  return text.replace(/(\\+)<!--/gu, (match, slashes) =>
-    slashes.length % 2 === 0 ? `${slashes.slice(0, -1)} <!--` : match,
-  );
+/** Whether the character at `index` is escaped by an odd backslash run. */
+function isBackslashEscaped(text, index) {
+  let slashes = 0;
+  for (
+    let position = index - 1;
+    position >= 0 && text[position] === '\\';
+    position -= 1
+  ) {
+    slashes += 1;
+  }
+  return slashes % 2 === 1;
 }
-/**
- * Blanks each HTML comment opener `<!--` that a backslash escapes (an odd run
- * of backslashes before it), since an escaped opener renders as text (#4250
- * review, Copilot). Blanking first means an escaped example cannot start a
- * marker match that consumes a later live marker. An even run leaves the
- * opener live, because the backslashes escape each other.
- */
-function blankEscapedCommentOpeners(text) {
-  return text.replace(/(\\*)<!--/gu, (match, slashes) =>
-    slashes.length % 2 === 1 ? `${slashes}    ` : match,
-  );
-}
-/**
- * The inline code spans of `text` that do not overlap a fence (#4250 review,
- * Copilot). A span can pair the closing delimiter of a fence with a later
- * backtick run, and the span then runs across the fence's boundary.
- */
-function inlineSpansOutsideFences(text, fencedRanges) {
-  return findInlineCodeSpans(text).filter(
-    (span) =>
-      !fencedRanges.some(
-        (fence) => span.index < fence.end && fence.start < span.end,
-      ),
-  );
-}
-/**
- * The HTML comment ranges and raw HTML block ranges of a normalized body
- * (#4250 review, Copilot). Code can exclude a comment opener only when it is
- * real code: a code range that overlaps an HTML block is text inside that
- * block (and an indented run in it is blank-run noise), so it is dropped
- * from the exclusions. Inline code spans are excluded too, so a `<!--` in a
- * code span is not a comment; a line-start opener inside a multiline span is
- * the exception, since GitHub renders it as a block-level comment (checked
- * with the GitHub markdown API).
- */
-function carrierCommentRanges(rawNormalized) {
-  const fencedRanges = findFencedCodeRanges(rawNormalized);
-  const indentedRanges = findIndentedCodeRanges(rawNormalized, fencedRanges);
-  const htmlBlockRanges = findHtmlBlockRanges(rawNormalized, fencedRanges);
-  // findMarkdownCodeRanges misses a span that crosses a line break, so
-  // multiline spans come from findInlineCodeSpans, with each line-start
-  // comment opener carved out of its span.
-  const multilineInlineRanges = inlineSpansOutsideFences(
-    rawNormalized,
-    fencedRanges,
-  ).flatMap((span) => {
-    const ranges = [];
-    let start = span.index;
-    for (let position = span.index + 1; position < span.end; position += 1) {
-      if (
-        rawNormalized[position - 1] === '\n' &&
-        rawNormalized.startsWith('<!--', position)
-      ) {
-        ranges.push({ start, end: position });
-        start = position + 1;
-      }
-    }
-    ranges.push({ start, end: span.end });
-    return ranges;
-  });
-  const exclusions = [
-    ...findMarkdownCodeRanges(rawNormalized),
-    ...multilineInlineRanges,
-    ...fencedRanges,
-    ...indentedRanges,
-  ].filter(
-    (range) =>
-      !htmlBlockRanges.some(
-        (block) => range.start < block.end && block.start < range.end,
-      ),
-  );
-  const commentRanges = findHtmlCommentRanges(
-    commentOpenerParityProbe(rawNormalized),
-    exclusions,
-    fencedRanges,
-    htmlBlockRanges,
-  );
-  return { commentRanges, htmlBlockRanges };
-}
-/**
- * Replaces each backtick and tilde inside an HTML comment with a middle dot
- * (#4250 review, Copilot). GitHub hides a comment's content, so a fence-looking
- * line in one is not a fence and must not mask the live markers after it. The
- * marker text itself is kept, and offsets are unchanged.
- */
-function neutralizeCommentCode(rawText) {
-  const rawNormalized = rawText.replace(/\r\n/g, '\n');
-  const { commentRanges } = carrierCommentRanges(rawNormalized);
-  const chars = rawNormalized.split('');
-  for (const range of commentRanges) {
+/** Replaces each range of `text` with spaces, keeping every newline. */
+function blankRanges(text, ranges) {
+  const chars = text.split('');
+  for (const range of ranges) {
     for (let index = range.start; index < range.end; index += 1) {
-      if (chars[index] === '`' || chars[index] === '~') {
-        chars[index] = '·';
+      if (chars[index] !== '\n') {
+        chars[index] = ' ';
       }
     }
   }
   return chars.join('');
 }
-/**
- * The structural view a draft carrier's section, fence, and dependency-line
- * checks read (#4250 review, Copilot): the raw body with every HTML comment
- * blanked, then code-masked. Discover's grammar masks comments the same way
- * (checkDependencyLineGrammar's `discoverMaskedLines`), so a heading, Review
- * or Shape line, fence, or dependency line hidden in a comment never counts
- * as carrier structure. Markers stay on the code-masked text that keeps
- * comments, so a hidden marker is still detected.
- */
-function carrierStructureView(rawText) {
-  const rawNormalized = rawText.replace(/\r\n/g, '\n');
-  const { commentRanges, htmlBlockRanges } =
-    carrierCommentRanges(rawNormalized);
-  // Index by UTF-16 code unit, as the range helpers do, and keep every
-  // newline so line indexes stay aligned with the masked text.
-  // Raw HTML blocks are not Markdown structure either: GitHub renders their
-  // content as HTML, so a heading or fence inside one does not count (#4250
-  // review, Copilot). Their ranges are blanked along with the comments.
-  const blank = (base, ranges) => {
-    const chars = base.split('');
-    for (const range of ranges) {
-      for (let index = range.start; index < range.end; index += 1) {
-        if (chars[index] !== '\n') {
-          chars[index] = ' ';
-        }
+function buildCarrierViews(rawText) {
+  const body = rawText.replace(/\r\n?/gu, '\n');
+  const scan = scanMarkdownStructure(body);
+  const lineOffsets = [0];
+  for (let index = 0; index < body.length; index += 1) {
+    if (body[index] === '\n') {
+      lineOffsets.push(index + 1);
+    }
+  }
+  // A scan span is inclusive 1-based lines; this gives its character range.
+  const spanRange = (startLine, endLine) => ({
+    start: lineOffsets[startLine - 1] ?? body.length,
+    end: endLine < lineOffsets.length ? lineOffsets[endLine] - 1 : body.length,
+  });
+  const codeRanges = scan.codeBlocks.map((block) =>
+    spanRange(block.startLine, block.endLine),
+  );
+  const htmlRanges = scan.htmlBlocks.map((block) =>
+    spanRange(block.startLine, block.endLine),
+  );
+  const listRanges = scan.listItems.map((item) =>
+    spanRange(item.startLine, item.endLine),
+  );
+  // Inline code and inline comments, located inside their paragraphs.
+  const paragraphs = new Map();
+  for (const entry of [
+    ...scan.inlineCode,
+    ...scan.htmlComments.filter((comment) => comment.inline),
+  ]) {
+    paragraphs.set(`${entry.startLine}:${entry.endLine}`, entry);
+  }
+  const codeSpanRanges = [];
+  const commentRanges = [];
+  for (const paragraph of paragraphs.values()) {
+    const range = spanRange(paragraph.startLine, paragraph.endLine);
+    const text = body.slice(range.start, range.end);
+    const spans = findInlineCodeSpans(text).map((span) => ({
+      start: span.index,
+      end: span.end,
+    }));
+    codeSpanRanges.push(
+      ...spans.map((span) => ({
+        start: range.start + span.start,
+        end: range.start + span.end,
+      })),
+    );
+    const plain = blankRanges(text, spans);
+    for (const match of plain.matchAll(/<!--/gu)) {
+      const open = match.index;
+      const close = plain.indexOf('-->', open + 4);
+      if (!isBackslashEscaped(plain, open) && close !== -1) {
+        commentRanges.push({
+          start: range.start + open,
+          end: range.start + close + 3,
+        });
       }
     }
-    return chars.join('');
-  };
-  // The visible view keeps raw HTML text: it still renders, so dependency
-  // lines and footers in it count (#4250 review, Copilot).
-  const visibleRaw = blank(rawNormalized, commentRanges);
-  const rawFree = blank(rawNormalized, [...commentRanges, ...htmlBlockRanges]);
-  // Code is found in rawFree, where comments and HTML blocks are blank. A
-  // range that starts inside one of them is blank-run noise or text there,
-  // not code, so it is dropped. A real fence starts outside them, even when
-  // a comment sits inside it (#4250 review, Copilot).
-  const blocks = [...commentRanges, ...htmlBlockRanges];
-  const codeRanges = [
-    ...findMarkdownCodeRanges(rawFree),
-    ...inlineSpansOutsideFences(rawFree, findFencedCodeRanges(rawFree)).map(
-      (span) => ({
-        start: span.index,
-        end: span.end,
-      }),
-    ),
-  ].filter(
-    (range) =>
-      !blocks.some(
-        (block) => block.start <= range.start && range.start < block.end,
-      ),
-  );
-  // A heading inside a list item is list content, not a carrier section, so
-  // its line is blanked for the section and heading checks (#4250 review,
-  // Copilot).
-  let lineStart = 0;
-  const structureText = maskMarkdownForScan(rawFree)
-    .split('\n')
-    .map((line) => {
-      const start = lineStart;
-      lineStart += line.length + 1;
-      return /^\s*#{2,3}\s/u.test(line) &&
-        stripEnclosingListContentIndent(rawFree, start) !== null
-        ? ' '.repeat(line.length)
-        : line;
+  }
+  // Comments inside a raw HTML block are comments too, but a block's text is
+  // otherwise visible HTML.
+  for (const range of htmlRanges) {
+    const text = body.slice(range.start, range.end);
+    for (const match of text.matchAll(/<!--[\s\S]*?-->/gu)) {
+      commentRanges.push({
+        start: range.start + (match.index ?? 0),
+        end: range.start + (match.index ?? 0) + match[0].length,
+      });
+    }
+  }
+  // An escaped opener renders as text, so the marker view blanks it.
+  const escapedOpenerRanges = [...body.matchAll(/(\\+)<!--/gu)]
+    .filter((match) => match[1].length % 2 === 1)
+    .map((match) => {
+      const start = (match.index ?? 0) + match[1].length;
+      return { start, end: start + 4 };
     })
-    .join('\n');
+    .filter(
+      (range) =>
+        !htmlRanges.some(
+          (block) => range.start >= block.start && range.start < block.end,
+        ),
+    );
+  const codeOnly = [...codeRanges, ...codeSpanRanges];
   return {
-    text: structureText,
-    rawFree,
-    visibleText: blank(visibleRaw, codeRanges),
-    // The marker view keeps comment text, so a hidden marker still counts,
-    // and masks only code, so a fence-looking line in raw HTML masks nothing.
-    markerText: blank(rawNormalized, codeRanges),
+    structure: blankRanges(body, [
+      ...codeOnly,
+      ...commentRanges,
+      ...htmlRanges,
+      ...listRanges,
+    ]),
+    visible: blankRanges(body, [...codeOnly, ...commentRanges]),
+    marker: blankRanges(body, [...codeOnly, ...escapedOpenerRanges]),
+    topLevelFenceLines: scan.codeBlocks
+      .filter(
+        (block) =>
+          block.kind === 'fenced' &&
+          block.listDepth === 0 &&
+          block.quoteDepth === 0,
+      )
+      .map((block) => block.startLine),
   };
 }
 function buildCarrierFindings(
-  text,
-  rawText,
+  views,
   markerPrefix,
   shape,
   labels,
   authoringOnlyLabelName,
 ) {
-  if (shape !== 'carrier') {
+  if (shape !== 'carrier' || views === undefined) {
     return [];
   }
-  const structure = carrierStructureView(rawText);
+  const structureLines = views.structure.split('\n');
   return [
-    checkCarrierMarker(text, markerPrefix),
-    checkCarrierForbiddenMarkers(text, structure.visibleText, markerPrefix),
-    checkCarrierReleaseCondition(
-      structure.text.split('\n'),
-      structure.visibleText.split('\n'),
-    ),
-    checkCarrierDrafts(structure.text.split('\n'), structure.rawFree),
+    checkCarrierMarker(views.marker, markerPrefix),
+    checkCarrierForbiddenMarkers(views.marker, views.visible, markerPrefix),
+    checkCarrierReleaseCondition(structureLines, views.visible.split('\n')),
+    checkCarrierDrafts(structureLines, views.topLevelFenceLines),
     checkCarrierLabel(labels, authoringOnlyLabelName),
   ];
 }
@@ -1398,7 +1319,7 @@ function checkCarrierReleaseCondition(structureLines, visibleLines) {
  * not top-level (#4250 review, Copilot). A second `## Drafts` section fails
  * rather than hiding unchecked drafts (#4250 review, Codex).
  */
-function checkCarrierDrafts(lines, rawNormalized) {
+function checkCarrierDrafts(lines, topLevelFenceLines) {
   const id = 'carrier-drafts';
   const name =
     'Each draft subsection has one Review line, one Shape line, and one fenced draft';
@@ -1428,9 +1349,7 @@ function checkCarrierDrafts(lines, rawNormalized) {
   if (subsectionStarts.length === 0) {
     return fail(id, name, 'the Drafts section has no ### draft subsection');
   }
-  const fenceLines = findFencedCodeRanges(rawNormalized)
-    .filter((range) => isTopLevelFenceOpener(rawNormalized, range.start))
-    .map((range) => rawNormalized.slice(0, range.start).split('\n').length - 1);
+  const fenceLines = topLevelFenceLines.map((line) => line - 1);
   const reviewLine = /^Review: (?:reviewed|not reviewed)(?: .*)?$/u;
   const shapeLine = /^Shape: (?:orphan|roadmap|child)$/u;
   const problems = [];
@@ -1471,25 +1390,6 @@ function checkCarrierDrafts(lines, rawNormalized) {
         name,
         `${subsectionStarts.length} draft subsection(s) each have one Review line, one Shape line, and one fenced draft`,
       );
-}
-/**
- * Whether the fence whose opener starts at `openIndex` is a top-level draft
- * fence (#4250 review, Copilot, Codex). An opener indented four or more
- * columns, or quoted with `>`, is not a fence here. Any other opener is
- * top-level unless the list-container parser places it inside a list item's
- * content (`stripEnclosingListContentIndent` returns null outside one), which
- * follows CommonMark's content-column rule for indented lists.
- */
-function isTopLevelFenceOpener(rawNormalized, openIndex) {
-  const lineStart = rawNormalized.lastIndexOf('\n', openIndex - 1) + 1;
-  const lineEnd = rawNormalized.indexOf('\n', lineStart);
-  const opener = /^( *)(?:`{3,}|~{3,})/u.exec(
-    rawNormalized.slice(lineStart, lineEnd === -1 ? undefined : lineEnd),
-  );
-  if (opener === null || opener[1].length > 3) {
-    return false;
-  }
-  return stripEnclosingListContentIndent(rawNormalized, lineStart) === null;
 }
 function checkCarrierLabel(labels, authoringOnlyLabelName) {
   const id = 'carrier-label';
