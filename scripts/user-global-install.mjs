@@ -380,13 +380,15 @@ function buildInstallPlan(ctx, sourceRoot, version) {
       `version ${version} does not match the required pattern; nothing was written`,
     );
   }
+  // The receipt read refuses a symbolic-link data root first. The stale-temp
+  // scan lists the data root, which would otherwise follow that link.
+  const existing = readReceipt(ctx.dataRoot, fs);
   const stale = findStaleReceiptTemps(ctx.dataRoot, fs);
   if (stale.length > 0) {
     throw new Error(
       `${stale[0]} exists, so a crashed run left it behind; remove it by hand before installing; nothing was written`,
     );
   }
-  const existing = readReceipt(ctx.dataRoot, fs);
   const entries = new Map();
   if (existing.state === 'valid') {
     for (const entry of existing.receipt.entries) {
