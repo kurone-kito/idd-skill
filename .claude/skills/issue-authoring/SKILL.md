@@ -114,7 +114,9 @@ needs-decision, blocked-by-human, and out-of-scope.
    [Mechanical pre-publish gate](references/contract.md#mechanical-pre-publish-gate)
    in the bundled contract, including the manual fallback for
    `instructions-only` installs with no helper runtime. Resolve every
-   reported failure before treating the issue as ready. Before newly
+   reported failure before treating the issue as ready. Before publishing
+   a draft carrier, run the same linter with `--shape carrier`; a carrier
+   is never published without that check. Before newly
    publishing a body into the `needs-decision` or `blocked-by-human`
    bucket instead, also run the linter, passing
    `--expect-bucket <needs-decision|blocked-by-human>` (choose the one
@@ -379,7 +381,8 @@ needs-decision, blocked-by-human, and out-of-scope.
 - Run the completed-draft adversarial review, then the
   `audit-authored-issue` linter (or its manual fallback in
   `instructions-only` installs), against every drafted roadmap, child,
-  or orphan body. That includes a body published into
+  or orphan body and every draft carrier (`--shape carrier`). That
+  includes a body published into
   `needs-decision` or `blocked-by-human`; pass `--expect-bucket` for
   those two buckets. Resolve every reported failure before publishing.
   A failed review does not publish.

@@ -53,6 +53,7 @@ import {
 } from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
+  consumeDependencyReferenceList,
   hasDependencyReferenceListStart,
   matchDependencyKeywordLine,
 } from './dependency-grammar.mjs';
@@ -92,6 +93,10 @@ import {
   maskMarkdownForScan,
   stripMarkdownCodeRegions,
 } from './markdown-code.mjs';
+import {
+  markdownItAvailable,
+  scanMarkdownStructure,
+} from './markdown-structure.mjs';
 import {
   classifyAuthoringMarkerFamily,
   countMarkerOccurrences,
@@ -161,6 +166,10 @@ const SPLIT_OUT_OF_LINE_PATTERN =
 // a triage verdict Discover itself never computes.
 const TRIAGE_NOT_APPLICABLE_ROADMAP_DETAIL =
   'not applicable: Discover never routes a roadmap node through A4 or A4.5 triage';
+// Same idea for `shape === 'carrier'` (#4250): a draft carrier is never an
+// execution candidate, so no triage verdict applies to it at all.
+const TRIAGE_NOT_APPLICABLE_CARRIER_DETAIL =
+  'not applicable: a draft carrier is never an execution candidate and never enters A4 or A4.5 triage';
 // The authoring-marker suffixes this file checks for prefix consistency.
 // Most are defined in the contract (skills/issue-authoring/references/
 // contract.md); `upstream-candidate` is defined by roadmap #2700 and
@@ -174,7 +183,37 @@ const AUTHORING_MARKER_SUFFIXES = [
   'effort',
   'authoring-bucket',
   'upstream-candidate',
+  'draft-carrier',
 ];
+// Marker suffixes a draft carrier must not carry outside code (#4250). Kept
+// above the module's entry-point block: that block runs `main()` in the
+// middle of the module, so any const declared later is still uninitialized.
+const CARRIER_FORBIDDEN_MARKER_SUFFIXES = [
+  'autopilot-suitability',
+  'effort',
+  'roadmap-id',
+  'blocked-by',
+  'authoring-bucket',
+];
+// A line that opens with the keyword, after any nesting of blockquote and list
+// markers (#4250 review, Copilot: `- > Depends on` counts too). It matches
+// whether or not the reference list parses.
+const DEPENDS_ON_LINE_PATTERN =
+  /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+|\[[ xX]\][ \t]+)*Depends on\b/iu;
+const BLOCKED_BY_LINE_PATTERN =
+  /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+|\[[ xX]\][ \t]+)*Blocked by\b/iu;
+/**
+ * Raw inline HTML tags, as CommonMark's open and closing tag grammar reads
+ * them. A backtick inside one is not a code delimiter (#4250 review, Copilot).
+ */
+const RAW_INLINE_TAG_PATTERN =
+  /<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*\/?>|<\/[A-Za-z][A-Za-z0-9-]*\s*>/uy;
+// The visible footer lines, allowing any list or blockquote container prefix
+// (#4250 review, Copilot): `> _Effort: M` is still a visible footer.
+const AUTOPILOT_SUITABILITY_FOOTER_PATTERN =
+  /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+|\[[ xX]\][ \t]+)*_Autopilot suitability:/imu;
+const EFFORT_FOOTER_PATTERN =
+  /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+|\[[ xX]\][ \t]+)*_Effort:/imu;
 /**
  * The fixed GitHub label paired with the
  * `<!-- {prefix}-upstream-candidate: true -->` marker (roadmap #2700's
@@ -200,6 +239,11 @@ const SHAPE_HEADING_REQUIREMENTS = {
     { anyOf: ['Background'] },
     { anyOf: ['Proposed change'] },
     { anyOf: ['Acceptance criteria'] },
+  ],
+  carrier: [
+    { anyOf: ['Release condition'] },
+    { anyOf: ['Drafts'] },
+    { anyOf: ['Review ledger'] },
   ],
 };
 // Coordination-language keywords that, alongside an unencoded issue/PR
@@ -649,7 +693,13 @@ export function auditAuthoredIssue(body, options) {
   // on (#3281; originally stripMarkdownCodeRegions, which missed
   // indented code), rather than a second, independently-maintained
   // fence tracker.
-  const text = maskMarkdownForScan(rawText);
+  // A draft carrier's marker checks read the carrier marker view, in which a
+  // fence-looking line inside raw HTML masks nothing (#4250 review, Copilot).
+  const carrierViews =
+    options.shape === 'carrier' ? buildCarrierViews(rawText) : undefined;
+  const text = carrierViews
+    ? carrierViews.marker
+    : maskMarkdownForScan(rawText);
   const shape = options.shape;
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
   const blockedByHumanLabelName =
@@ -673,6 +723,14 @@ export function auditAuthoredIssue(body, options) {
   )
     .trim()
     .toLowerCase();
+  const authoringOnlyLabelName = (
+    typeof options.authoringOnlyLabelName === 'string' &&
+    options.authoringOnlyLabelName.trim().length > 0
+      ? options.authoringOnlyLabelName
+      : POLICY_DEFAULTS.labels.authoringOnlyLabelName
+  )
+    .trim()
+    .toLowerCase();
   // #3281 review (CodeRabbit): parseAutopilotSuitabilityMarker masks its
   // own input (maskMarkdownForScan), so passing the already-masked
   // `text` here would mask it a SECOND time -- a masked inline code
@@ -690,7 +748,14 @@ export function auditAuthoredIssue(body, options) {
   const authoringBucket = parseAuthoringBucketMarker(text, markerPrefix);
   const isBucketAudit = options.expectedAuthoringBucket !== undefined;
   const findings = [
-    checkSuitabilityMarker(suitabilityCount, suitability, isBucketAudit),
+    checkSuitabilityMarker(
+      suitabilityCount,
+      suitability,
+      isBucketAudit,
+      shape,
+      carrierViews !== undefined &&
+        AUTOPILOT_SUITABILITY_FOOTER_PATTERN.test(carrierViews.visible),
+    ),
     checkSuitabilityBlockedByHuman(
       suitability,
       authoringBucket,
@@ -720,8 +785,13 @@ export function auditAuthoredIssue(body, options) {
       text,
       markerPrefix,
       options.upstreamEscalationEnabled === true,
+      options.shape === 'carrier',
     ),
-    checkRequiredHeadings(text, shape, isBucketAudit),
+    checkRequiredHeadings(
+      carrierViews ? carrierViews.structure : text,
+      shape,
+      isBucketAudit,
+    ),
     checkRoadmapTracksParse(
       text,
       shape,
@@ -769,6 +839,13 @@ export function auditAuthoredIssue(body, options) {
       labels,
       options.upstreamEscalationEnabled === true,
     ),
+    ...buildCarrierFindings(
+      carrierViews,
+      markerPrefix,
+      shape,
+      labels,
+      authoringOnlyLabelName,
+    ),
     ...buildTriageFindings(
       rawText,
       shape,
@@ -812,6 +889,13 @@ function buildTriageFindings(
   markerPrefix,
 ) {
   const isRoadmap = shape === 'roadmap';
+  // Every triage finding below reports this detail instead of evaluating,
+  // for the shapes Discover never routes through A4/A4.5 (#4250).
+  const notApplicableDetail = isRoadmap
+    ? TRIAGE_NOT_APPLICABLE_ROADMAP_DETAIL
+    : shape === 'carrier'
+      ? TRIAGE_NOT_APPLICABLE_CARRIER_DETAIL
+      : undefined;
   const { title: autoTitle, body: autoBody } =
     splitLocalDraftTitleAndBody(rawText);
   const trimmedExplicitTitle =
@@ -834,8 +918,8 @@ function buildTriageFindings(
     const id = 'triage-title-missing';
     const name =
       'A title is resolvable (--title, or a leading "# <title>" body line)';
-    if (isRoadmap) {
-      return pass(id, name, TRIAGE_NOT_APPLICABLE_ROADMAP_DETAIL);
+    if (notApplicableDetail !== undefined) {
+      return pass(id, name, notApplicableDetail);
     }
     // Unlike the A4/A4.5 findings below, a bucket body's own distinct
     // Background/Required action/Ready signal shape carries no title
@@ -871,8 +955,8 @@ function buildTriageFindings(
   const a4Findings = a4Result.criteria.map((criterion) => {
     const id = `triage-a4-${criterion.id}`;
     const name = `A4 viability: ${criterion.name}`;
-    if (isRoadmap) {
-      return pass(id, name, TRIAGE_NOT_APPLICABLE_ROADMAP_DETAIL);
+    if (notApplicableDetail !== undefined) {
+      return pass(id, name, notApplicableDetail);
     }
     if (criterion.result !== 'fail') {
       return pass(id, name, criterion.evidence);
@@ -898,8 +982,8 @@ function buildTriageFindings(
   const a45Findings = suitability.checks.map((check) => {
     const id = `triage-a45-${check.id}`;
     const name = `A4.5 suitability: ${check.name}`;
-    if (isRoadmap) {
-      return pass(id, name, TRIAGE_NOT_APPLICABLE_ROADMAP_DETAIL);
+    if (notApplicableDetail !== undefined) {
+      return pass(id, name, notApplicableDetail);
     }
     // Check 4 (duplicate_or_superseded) fundamentally needs a live GitHub
     // search index -- reported as "not applicable" here the same way this
@@ -926,11 +1010,519 @@ function buildTriageFindings(
   });
   return [titleFinding, ...a4Findings, ...a45Findings];
 }
-function checkSuitabilityMarker(count, suitability, isBucketAudit) {
+/**
+ * The CommonMark HTML comment that opens at `open`, or `undefined` (#4250
+ * review, Codex). Its text must not start with `>` or `->` and must not
+ * contain `--`, so a malformed opener is not a comment and cannot blank the
+ * text up to a later closer.
+ */
+function commentAt(text, open) {
+  const pattern = /<!--(?!-?>)(?:(?!--)[\s\S])*?-->/uy;
+  pattern.lastIndex = open;
+  return pattern.exec(text)?.[0];
+}
+/** The first backtick run of exactly `run` length at or after `from`. */
+function findBacktickRun(text, from, run) {
+  let index = from;
+  while (index < text.length) {
+    if (text[index] === '`') {
+      let length = 1;
+      while (text[index + length] === '`') {
+        length += 1;
+      }
+      if (length === run) {
+        return index;
+      }
+      index += length;
+    } else {
+      index += 1;
+    }
+  }
+  return -1;
+}
+/**
+ * The code spans and HTML comments of one paragraph, scanned left to right so
+ * the leftmost construct wins, as CommonMark specifies (#4250 review, Copilot).
+ * A backtick inside a comment or a raw tag never opens a span, and a comment
+ * inside a span is not a comment. Escaped characters are skipped.
+ */
+function scanInlineTokens(text) {
+  const codeSpans = [];
+  const comments = [];
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index];
+    if (char === '\\') {
+      index += 2;
+      continue;
+    }
+    if (char === '<') {
+      const comment = commentAt(text, index);
+      if (comment !== undefined) {
+        comments.push([index, index + comment.length]);
+        index += comment.length;
+        continue;
+      }
+      RAW_INLINE_TAG_PATTERN.lastIndex = index;
+      const tag = RAW_INLINE_TAG_PATTERN.exec(text);
+      if (tag !== null) {
+        index += tag[0].length;
+        continue;
+      }
+    }
+    if (char === '`') {
+      let run = 1;
+      while (text[index + run] === '`') {
+        run += 1;
+      }
+      const close = findBacktickRun(text, index + run, run);
+      if (close !== -1) {
+        codeSpans.push([index, close + run]);
+        index = close + run;
+      } else {
+        index += run;
+      }
+      continue;
+    }
+    index += 1;
+  }
+  return { codeSpans, comments };
+}
+/** Replaces each range of `text` with spaces, keeping every newline. */
+function blankRanges(text, ranges) {
+  const chars = text.split('');
+  for (const range of ranges) {
+    for (let index = range.start; index < range.end; index += 1) {
+      if (chars[index] !== '\n') {
+        chars[index] = ' ';
+      }
+    }
+  }
+  return chars.join('');
+}
+function buildCarrierViews(rawText) {
+  const body = rawText.replace(/\r\n?/gu, '\n');
+  const scan = scanMarkdownStructure(body);
+  const lineOffsets = [0];
+  for (let index = 0; index < body.length; index += 1) {
+    if (body[index] === '\n') {
+      lineOffsets.push(index + 1);
+    }
+  }
+  // A scan span is inclusive 1-based lines; this gives its character range.
+  const spanRange = (startLine, endLine) => ({
+    start: lineOffsets[startLine - 1] ?? body.length,
+    end: endLine < lineOffsets.length ? lineOffsets[endLine] - 1 : body.length,
+  });
+  const codeRanges = scan.codeBlocks.map((block) =>
+    spanRange(block.startLine, block.endLine),
+  );
+  const htmlRanges = scan.htmlBlocks.map((block) =>
+    spanRange(block.startLine, block.endLine),
+  );
+  const listRanges = scan.listItems.map((item) =>
+    spanRange(item.startLine, item.endLine),
+  );
+  // Inline code and inline comments, located inside their paragraphs.
+  const paragraphs = new Map();
+  for (const entry of [
+    ...scan.inlineCode,
+    ...scan.htmlComments.filter((comment) => comment.inline),
+  ]) {
+    paragraphs.set(`${entry.startLine}:${entry.endLine}`, entry);
+  }
+  const codeSpanRanges = [];
+  const commentRanges = [];
+  for (const paragraph of paragraphs.values()) {
+    const range = spanRange(paragraph.startLine, paragraph.endLine);
+    const text = body.slice(range.start, range.end);
+    const tokens = scanInlineTokens(text);
+    codeSpanRanges.push(
+      ...tokens.codeSpans.map(([start, end]) => ({
+        start: range.start + start,
+        end: range.start + end,
+      })),
+    );
+    commentRanges.push(
+      ...tokens.comments.map(([start, end]) => ({
+        start: range.start + start,
+        end: range.start + end,
+      })),
+    );
+  }
+  // Comments inside a raw HTML block are comments too, but a block's text is
+  // otherwise visible HTML.
+  for (const range of htmlRanges) {
+    const text = body.slice(range.start, range.end);
+    // Raw HTML is read by the browser, which ends a comment at its first
+    // closer, so the lenient rule applies here (CommonMark’s rule is for
+    // inline HTML only).
+    for (const match of text.matchAll(/<!--[\s\S]*?-->/gu)) {
+      commentRanges.push({
+        start: range.start + (match.index ?? 0),
+        end: range.start + (match.index ?? 0) + match[0].length,
+      });
+    }
+  }
+  // An escaped opener renders as text, so the marker view blanks it.
+  const escapedOpenerRanges = [...body.matchAll(/(\\+)<!--/gu)]
+    .filter((match) => match[1].length % 2 === 1)
+    .map((match) => {
+      const start = (match.index ?? 0) + match[1].length;
+      return { start, end: start + 4 };
+    })
+    .filter(
+      (range) =>
+        !htmlRanges.some(
+          (block) => range.start >= block.start && range.start < block.end,
+        ),
+    );
+  const codeOnly = [...codeRanges, ...codeSpanRanges];
+  return {
+    structure: blankRanges(body, [
+      ...codeOnly,
+      ...commentRanges,
+      ...htmlRanges,
+      ...listRanges,
+    ])
+      .split('\n')
+      .map((line) =>
+        /^ {0,3}#{2,3}\s/u.test(line)
+          ? line.replace(/(\s+#+\s*)$/u, (closing) =>
+              ' '.repeat(closing.length),
+            )
+          : line,
+      )
+      .join('\n'),
+    visible: blankRanges(body, [...codeOnly, ...commentRanges]),
+    marker: blankRanges(body, [...codeOnly, ...escapedOpenerRanges]),
+    topLevelFenceLines: scan.codeBlocks
+      .filter(
+        (block) =>
+          block.kind === 'fenced' &&
+          block.listDepth === 0 &&
+          block.quoteDepth === 0,
+      )
+      .map((block) => block.startLine),
+  };
+}
+function buildCarrierFindings(
+  views,
+  markerPrefix,
+  shape,
+  labels,
+  authoringOnlyLabelName,
+) {
+  if (shape !== 'carrier' || views === undefined) {
+    return [];
+  }
+  const structureLines = views.structure.split('\n');
+  return [
+    checkCarrierMarker(views.marker, markerPrefix),
+    checkCarrierForbiddenMarkers(views.marker, views.visible, markerPrefix),
+    checkCarrierReleaseCondition(structureLines, views.visible.split('\n')),
+    checkCarrierDrafts(structureLines, views.topLevelFenceLines),
+    checkCarrierLabel(labels, authoringOnlyLabelName),
+  ];
+}
+function checkCarrierMarker(text, markerPrefix) {
+  const id = 'carrier-marker';
+  const name = 'Exactly one draft-carrier marker, with value v1';
+  const pattern = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-draft-carrier\\b([\\s\\S]*?)-->`,
+    'gi',
+  );
+  const bodies = [...text.matchAll(pattern)].map((match) =>
+    (match[1] ?? '').trim(),
+  );
+  if (bodies.length !== 1) {
+    return fail(
+      id,
+      name,
+      bodies.length === 0
+        ? `missing the <!-- ${markerPrefix}-draft-carrier: v1 --> marker`
+        : `expected exactly one draft-carrier marker, found ${bodies.length}`,
+    );
+  }
+  const value = (bodies[0] ?? '').match(/^:\s*(\S+)$/u)?.[1];
+  if (value !== 'v1') {
+    return fail(id, name, 'the draft-carrier marker value must be v1');
+  }
+  return pass(id, name, 'exactly one draft-carrier marker with value v1');
+}
+function checkCarrierForbiddenMarkers(text, visibleText, markerPrefix) {
+  const id = 'carrier-forbidden-markers';
+  const name =
+    'A draft carrier carries no suitability, effort, roadmap-id, blocked-by, or authoring-bucket marker or footer';
+  const found = [];
+  for (const suffix of CARRIER_FORBIDDEN_MARKER_SUFFIXES) {
+    const count = countMarkerOccurrences(text, markerPrefix, suffix);
+    if (count > 0) {
+      found.push(`${markerPrefix}-${suffix} x${count}`);
+    }
+  }
+  // The visible footer lines that accompany the suitability and effort
+  // markers are footers too, even when their hidden marker is absent. They
+  // read the comment-free view, since a commented-out line is not visible
+  // (#4250 review, Copilot); hidden markers are still counted above.
+  if (AUTOPILOT_SUITABILITY_FOOTER_PATTERN.test(visibleText)) {
+    found.push('autopilot-suitability footer line');
+  }
+  if (EFFORT_FOOTER_PATTERN.test(visibleText)) {
+    found.push('effort footer line');
+  }
+  return found.length === 0
+    ? pass(id, name, 'no forbidden marker or footer outside code')
+    : fail(id, name, `forbidden outside code: ${found.join(', ')}`);
+}
+/**
+ * The `## Release condition` section: every non-blank line must be a
+ * `Blocked by` declaration (a wrapped continuation line joins its
+ * declaration), `Depends on` fails anywhere outside code, and `Blocked by`
+ * fails outside the section. An empty section means the drafts can be
+ * re-authored now.
+ */
+function checkCarrierReleaseCondition(structureLines, visibleLines) {
+  const id = 'carrier-release-condition';
+  const name = 'The release condition holds only Blocked by declarations';
+  // The section bounds and heading count come from the structure view, so a
+  // heading hidden in raw HTML does not count. The declarations come from the
+  // visible view, since text inside an HTML block still renders (#4250
+  // review, Copilot).
+  const lines = visibleLines;
+  const section = locateLevel2Section(structureLines, 'Release condition');
+  if (!section) {
+    return pass(
+      id,
+      name,
+      'not applicable: the Release condition heading is missing (see required-headings)',
+    );
+  }
+  const releaseHeadings = countLevel2Headings(
+    structureLines,
+    'Release condition',
+  );
+  if (releaseHeadings > 1) {
+    return fail(
+      id,
+      name,
+      `the ## Release condition heading appears ${releaseHeadings} times; a carrier takes exactly one`,
+    );
+  }
+  const problems = [];
+  const references = [];
+  const covered = new Set();
+  for (let index = section.start; index < section.end; index += 1) {
+    if (covered.has(index) || lines[index].trim() === '') {
+      continue;
+    }
+    const declaration = matchDependencyKeywordLine(lines, index, 'Blocked by');
+    if (!declaration) {
+      const kind = matchDependencyKeywordLine(lines, index, 'Depends on')
+        ? 'a Depends on line'
+        : 'a non-dependency line';
+      problems.push(
+        `${kind} in the release condition: "${lines[index].trim()}"`,
+      );
+      continue;
+    }
+    // A declaration whose reference list is followed by prose ("Blocked by
+    // #12 because ...") still matches the grammar, but the release condition
+    // is a bare declaration only (#4250 review, Copilot).
+    // A trailing comma is a list separator for a wrapped reference list, so
+    // only other text counts as trailing prose (#4250 review, Copilot).
+    if (!/^[\s,]*$/u.test(declaration.remaining)) {
+      problems.push(
+        `trailing text after the Blocked by references in the release condition: "${lines[index].trim()}"`,
+      );
+      continue;
+    }
+    references.push(
+      ...declaration.numbers.map((number) => `#${number}`),
+      ...declaration.unresolvable.map((entry) => entry.token),
+    );
+    // The continuation sweep is line-based and stops at the first line that
+    // does not fully parse to references, mirroring consumeDependencyContinuationRefLines.
+    if (/^[\s,]*$/u.test(declaration.remaining)) {
+      for (let next = index + 1; next < section.end; next += 1) {
+        const trimmed = lines[next].trim();
+        if (trimmed === '') {
+          break;
+        }
+        const parsed = consumeDependencyReferenceList(trimmed);
+        if (
+          parsed.remaining.trim() !== '' ||
+          parsed.numbers.length + parsed.unresolvable.length === 0
+        ) {
+          break;
+        }
+        covered.add(next);
+      }
+    }
+  }
+  lines.forEach((line, index) => {
+    if (index >= section.start && index < section.end) {
+      return;
+    }
+    if (line.trim() === '') {
+      return;
+    }
+    // The anchored keyword alone marks a dependency line here (#4250 review,
+    // Copilot): `Depends on rollout pending` does not parse into references,
+    // yet the shape forbids a Depends on line outside code all the same.
+    if (DEPENDS_ON_LINE_PATTERN.test(line)) {
+      problems.push(`Depends on line outside code: "${line.trim()}"`);
+    } else if (BLOCKED_BY_LINE_PATTERN.test(line)) {
+      problems.push(
+        `Blocked by line outside the Release condition section: "${line.trim()}"`,
+      );
+    }
+  });
+  if (problems.length > 0) {
+    return fail(id, name, problems.join('; '));
+  }
+  return pass(
+    id,
+    name,
+    references.length === 0
+      ? 'release condition is empty: the drafts can be re-authored now'
+      : `release condition references ${references.join(', ')}`,
+  );
+}
+/**
+ * The `## Drafts` section: one or more `###` subsections, each with exactly
+ * one `Review:` line and exactly one `Shape:` line (both read from the
+ * code-masked text) and exactly one top-level fenced draft. The fence is
+ * found on the raw body, so a nested fence stays inside the draft; a fence
+ * whose opener is indented or quoted (inside a list item or a blockquote) is
+ * not top-level (#4250 review, Copilot). A second `## Drafts` section fails
+ * rather than hiding unchecked drafts (#4250 review, Codex).
+ */
+function checkCarrierDrafts(lines, topLevelFenceLines) {
+  const id = 'carrier-drafts';
+  const name =
+    'Each draft subsection has one Review line, one Shape line, and one fenced draft';
+  const section = locateLevel2Section(lines, 'Drafts');
+  if (!section) {
+    return pass(
+      id,
+      name,
+      'not applicable: the Drafts heading is missing (see required-headings)',
+    );
+  }
+  const drafts = countLevel2Headings(lines, 'Drafts');
+  if (drafts > 1) {
+    return fail(
+      id,
+      name,
+      `the ## Drafts heading appears ${drafts} times; a carrier takes exactly one`,
+    );
+  }
+  const subsectionHeadingRe = /^ {0,3}###\s+(.+?)\s*$/u;
+  const subsectionStarts = [];
+  for (let index = section.start; index < section.end; index += 1) {
+    if (subsectionHeadingRe.test(lines[index])) {
+      subsectionStarts.push(index);
+    }
+  }
+  if (subsectionStarts.length === 0) {
+    return fail(id, name, 'the Drafts section has no ### draft subsection');
+  }
+  const fenceLines = topLevelFenceLines.map((line) => line - 1);
+  const reviewLine = /^Review: (?:reviewed|not reviewed)(?: .*)?$/u;
+  const shapeLine = /^Shape: (?:orphan|roadmap|child)$/u;
+  const problems = [];
+  // A fenced draft before the first ### subsection belongs to no subsection,
+  // so it cannot pass the per-subsection checks (#4250 review, Copilot).
+  const prelude = fenceLines.filter(
+    (line) =>
+      line >= section.start && line < (subsectionStarts[0] ?? section.end),
+  ).length;
+  if (prelude > 0) {
+    problems.push(
+      `${prelude} top-level fenced draft(s) sit in the Drafts section outside any ### subsection`,
+    );
+  }
+  subsectionStarts.forEach((headingIndex, position) => {
+    const end =
+      position + 1 < subsectionStarts.length
+        ? (subsectionStarts[position + 1] ?? section.end)
+        : section.end;
+    const title = (lines[headingIndex] ?? '')
+      .replace(/^ {0,3}###\s+/u, '')
+      .trim();
+    const body = lines.slice(headingIndex + 1, end).map((line) => line.trim());
+    const reviews = body.filter((line) => line.startsWith('Review:'));
+    if (reviews.length !== 1 || !reviewLine.test(reviews[0] ?? '')) {
+      problems.push(
+        `"${title}" needs exactly one "Review: reviewed" or "Review: not reviewed" line`,
+      );
+    }
+    const shapes = body.filter((line) => line.startsWith('Shape:'));
+    if (shapes.length !== 1 || !shapeLine.test(shapes[0] ?? '')) {
+      problems.push(
+        `"${title}" needs exactly one "Shape: orphan", "Shape: roadmap", or "Shape: child" line`,
+      );
+    }
+    const fences = fenceLines.filter(
+      (line) => line > headingIndex && line < end,
+    ).length;
+    if (fences !== 1) {
+      problems.push(
+        `"${title}" needs exactly one top-level fenced draft, found ${fences}`,
+      );
+    }
+  });
+  return problems.length > 0
+    ? fail(id, name, problems.join('; '))
+    : pass(
+        id,
+        name,
+        `${subsectionStarts.length} draft subsection(s) each have one Review line, one Shape line, and one fenced draft`,
+      );
+}
+function checkCarrierLabel(labels, authoringOnlyLabelName) {
+  const id = 'carrier-label';
+  const name = 'A draft carrier carries the configured authoring-only label';
+  if (labels.length === 0) {
+    return pass(id, name, 'not applicable: no --label was supplied');
+  }
+  if (labels.includes(authoringOnlyLabelName)) {
+    return pass(id, name, `label "${authoringOnlyLabelName}" is present`);
+  }
+  return fail(
+    id,
+    name,
+    `expected the authoring-only label "${authoringOnlyLabelName}" among the supplied labels`,
+  );
+}
+function checkSuitabilityMarker(
+  count,
+  suitability,
+  isBucketAudit,
+  shape,
+  visibleFooter,
+) {
   const id = 'suitability-marker';
   const name = 'Exactly one coherent autopilot-suitability marker (1-5)';
   if (isBucketAudit) {
     return pass(id, name, NOT_APPLICABLE_BUCKET_AUDIT_DETAIL);
+  }
+  // A draft carrier (#4250) is never an execution candidate, so it carries
+  // no suitability footer at all: the check inverts, passing only at zero.
+  if (shape === 'carrier') {
+    // A visible footer with no hidden marker is still a footer (#4250 review,
+    // Copilot), so the carrier passes only when neither is present.
+    if (count === 0 && !visibleFooter) {
+      return pass(id, name, 'no autopilot-suitability footer on this carrier');
+    }
+    return fail(
+      id,
+      name,
+      count > 0
+        ? `a draft carrier must not carry an autopilot-suitability marker, found ${count}`
+        : 'a draft carrier must not carry a visible autopilot-suitability footer line',
+    );
   }
   if (count === 0) {
     return fail(id, name, 'missing autopilot-suitability marker');
@@ -1190,6 +1782,7 @@ function checkMarkerPrefixConsistency(
   text,
   markerPrefix,
   upstreamEscalationEnabled,
+  carrier,
 ) {
   const id = 'marker-prefix-consistency';
   const name = 'Every authoring marker uses the resolved target markerPrefix';
@@ -1214,11 +1807,14 @@ function checkMarkerPrefixConsistency(
   // publish-blocking finding for a repository roadmap #2700 promises
   // "sees no behavior change at all", the same risk the pairing check's
   // own gate exists to close.
-  const suffixes = upstreamEscalationEnabled
-    ? AUTHORING_MARKER_SUFFIXES
-    : AUTHORING_MARKER_SUFFIXES.filter(
-        (suffix) => suffix !== 'upstream-candidate',
-      );
+  // draft-carrier is a carrier-only marker (#4250 review, Copilot): a
+  // non-carrier body that quotes another prefix's carrier marker is not a
+  // failure, so the suffix joins the scan only for the carrier shape.
+  const suffixes = AUTHORING_MARKER_SUFFIXES.filter(
+    (suffix) =>
+      (suffix !== 'upstream-candidate' || upstreamEscalationEnabled) &&
+      (suffix !== 'draft-carrier' || carrier),
+  );
   const pattern = new RegExp(
     `<!--\\s*([^\\s>:]+)-(${suffixes.join('|')})\\b[\\s\\S]*?-->`,
     'gi',
@@ -1262,25 +1858,28 @@ function checkRequiredHeadings(text, shape, isBucketAudit) {
   return pass(id, name, 'all required headings are present');
 }
 /**
- * Slices the `## Tracks` section's own lines out of `text` (already
- * code-masked by the caller): from the line after the `## Tracks` heading
- * up to (but excluding) the next `##` heading, or the end of the text
- * when none follows. Empty when no `## Tracks` heading is present.
+ * Slices the lines under the level-2 `## <heading>` section out of `text`
+ * (already code-masked by the caller): from the line after that heading up
+ * to (but excluding) the next `##` heading, or the end of the text when
+ * none follows. Empty when no such heading is present. Shared by the
+ * roadmap `Tracks` check and the draft-carrier sections (#4250).
  */
-function extractTracksSectionLines(text) {
-  const lines = text.split(/\r?\n/u);
+/**
+ * Line-index bounds (`start` inclusive, `end` exclusive) of the body under
+ * the first level-2 `## <heading>` line, or `undefined` when that heading
+ * is absent. `lines` must already be code-masked, so a heading quoted in a
+ * fenced draft never counts.
+ */
+function locateLevel2Section(lines, heading) {
   const headingRe = /^ {0,3}##\s+(.+?)\s*$/u;
-  let start = -1;
-  for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index].match(headingRe);
-    if (match && match[1].trim() === 'Tracks') {
-      start = index + 1;
-      break;
-    }
+  const headingIndex = lines.findIndex((line) => {
+    const match = line.match(headingRe);
+    return match !== null && match[1].trim() === heading;
+  });
+  if (headingIndex === -1) {
+    return undefined;
   }
-  if (start === -1) {
-    return [];
-  }
+  const start = headingIndex + 1;
   let end = lines.length;
   for (let index = start; index < lines.length; index += 1) {
     if (headingRe.test(lines[index])) {
@@ -1288,7 +1887,20 @@ function extractTracksSectionLines(text) {
       break;
     }
   }
-  return lines.slice(start, end);
+  return { start, end };
+}
+/** How many level-2 `## <heading>` lines the (code-masked) body carries. */
+function countLevel2Headings(lines, heading) {
+  const headingRe = /^ {0,3}##\s+(.+?)\s*$/u;
+  return lines.filter((line) => {
+    const match = line.match(headingRe);
+    return match !== null && match[1].trim() === heading;
+  }).length;
+}
+function extractLevel2SectionLines(text, heading) {
+  const lines = text.split(/\r?\n/u);
+  const bounds = locateLevel2Section(lines, heading);
+  return bounds ? lines.slice(bounds.start, bounds.end) : [];
 }
 /**
  * Roadmap-shape only (idd-skill#2765): fails when the `## Tracks` section
@@ -1321,7 +1933,7 @@ function checkRoadmapTracksParse(text, shape, isBucketAudit, currentRepo) {
       'not applicable: only the roadmap shape has a ## Tracks section',
     );
   }
-  const sectionLines = extractTracksSectionLines(text);
+  const sectionLines = extractLevel2SectionLines(text, 'Tracks');
   const checkboxLineIndexes = sectionLines
     .map((line, index) => (isTaskListCheckboxLine(line) ? index : -1))
     .filter((index) => index >= 0);
@@ -1586,6 +2198,15 @@ function checkDependencyMarkerRule(text, rawText, markerPrefix, shape) {
       id,
       name,
       `orphan issues must not carry a blocked-by marker, found ${blockedByCount}`,
+    );
+  }
+  // A draft carrier's release condition is a `Blocked by` line (#4250),
+  // never a blocked-by marker, so any such marker is a misuse here.
+  if (shape === 'carrier' && blockedByCount > 0) {
+    return fail(
+      id,
+      name,
+      `carrier issues must not carry a blocked-by marker, found ${blockedByCount}`,
     );
   }
   if (
@@ -4082,7 +4703,20 @@ function main() {
     process.exit(0);
   }
   if (!args.shape || !isIssueShape(args.shape)) {
-    fail_(`--shape is required and must be one of orphan|roadmap|child`);
+    fail_(
+      `--shape is required and must be one of orphan|roadmap|child|carrier`,
+    );
+  }
+  // A draft carrier has no readiness bucket (#4250), so the two cannot combine.
+  // The carrier scan needs markdown-it. A vendored-node install ships only the
+  // helper files, so it refuses here with a remediation message (#4250).
+  if (args.shape === 'carrier' && !markdownItAvailable()) {
+    fail_(
+      '--shape carrier needs markdown-it, which this install does not provide: install this package with its dependencies, or run the manual carrier checks in the contract',
+    );
+  }
+  if (args.shape === 'carrier' && args.expectBucket !== undefined) {
+    fail_('--shape carrier cannot be combined with --expect-bucket');
   }
   if (!args.bodyFile && !args.stdin) {
     fail_('either --body-file <path> or --stdin is required');
@@ -4184,6 +4818,7 @@ function main() {
     needsDecisionLabelName: policy.needsDecisionLabelName,
     expectedAuthoringBucket: args.expectBucket,
     authoringLabelName: policy.authoringLabelName,
+    authoringOnlyLabelName: policy.authoringOnlyLabelName,
     currentRepo,
     issueNumber:
       args.issue !== undefined ? Number.parseInt(args.issue, 10) : undefined,
@@ -4215,7 +4850,12 @@ function main() {
   return report.passed ? 0 : 1;
 }
 function isIssueShape(value) {
-  return value === 'orphan' || value === 'roadmap' || value === 'child';
+  return (
+    value === 'orphan' ||
+    value === 'roadmap' ||
+    value === 'child' ||
+    value === 'carrier'
+  );
 }
 /**
  * Deliberate exception (#1721): every sibling `*.mts` `loadPolicy()` throws
@@ -4268,6 +4908,7 @@ function loadPolicy(configPath) {
       blockedByHumanLabelName: POLICY_DEFAULTS.labels.blockedByHumanLabelName,
       needsDecisionLabelName: POLICY_DEFAULTS.labels.needsDecisionLabelName,
       authoringLabelName: POLICY_DEFAULTS.issueAuthoring.authoringLabelName,
+      authoringOnlyLabelName: POLICY_DEFAULTS.labels.authoringOnlyLabelName,
       upstreamEscalationEnabled: false,
       effortLPolicy: 'allow',
       rawConfig: null,
@@ -4281,6 +4922,8 @@ function loadPolicy(configPath) {
       normalizePolicyConfig(config).labels.needsDecisionLabelName,
     authoringLabelName:
       normalizePolicyConfig(config).issueAuthoring.authoringLabelName,
+    authoringOnlyLabelName:
+      normalizePolicyConfig(config).labels.authoringOnlyLabelName,
     upstreamEscalationEnabled: isUpstreamEscalationEnabled(config),
     effortLPolicy: resolveEffortLPolicy(config),
     rawConfig: config,
@@ -4346,7 +4989,7 @@ function parseArgs(argv) {
   };
 }
 function printUsage() {
-  console.log(`usage: node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child> (--body-file <path> | --stdin) [options]
+  console.log(`usage: node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child|carrier> (--body-file <path> | --stdin) [options]
 
 Mechanically audits a drafted GitHub issue body against the issue-authoring
 contract's structural expectations (skills/issue-authoring/references/
@@ -4382,7 +5025,9 @@ check fails, 2 on a usage error; the advisory check and
 authoring-marker-minimization-backlog never affect the exit code.
 
 Options:
-  --shape <orphan|roadmap|child>   declared issue shape (required)
+  --shape <orphan|roadmap|child|carrier>
+                                    declared issue shape (required); carrier is
+                                    a draft carrier, which takes no --expect-bucket
   --title <text>                   the drafted issue's title, for the A4/A4.5
                                     triage checks (orphan/child shapes only);
                                     without it, a leading "# <title>" line of

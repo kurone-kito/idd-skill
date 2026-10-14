@@ -15,6 +15,7 @@ import {
   DEFER_SOURCE_VALUES,
   extractBlockedByRoadmapMarkers,
 } from '../src/scripts/discover-readiness-check.mts';
+import { markdownItAvailable } from '../src/scripts/markdown-structure.mts';
 import {
   renderAuthoringOwnerMarker,
   renderAuthoringPublicationIntentMarker,
@@ -5895,3 +5896,1079 @@ test('cleanup evidence CLI rejects unrecognized, malformed, and conflicting form
     rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+// The carrier scan needs markdown-it. The bare-node lint lane installs no
+// dependencies, so the carrier group skips with a reason there and runs in
+// the installed lanes (#4250 review, Copilot and CodeRabbit).
+const CARRIER_SCAN_SKIP = markdownItAvailable()
+  ? false
+  : 'markdown-it is not installed (bare-node lane)';
+
+function carrierTest(name: string, fn: () => void): void {
+  test(name, { skip: CARRIER_SCAN_SKIP }, fn);
+}
+
+// --- Draft-carrier shape (#4250) -------------------------------------------
+
+const CARRIER_MARKER = '<!-- idd-skill-draft-carrier: v1 -->';
+
+// A draft whose body carries every marker, footer, and dependency line the
+// carrier checks must ignore, plus a nested fence. The outer fence has four
+// backticks so the three-backtick fence stays inside the draft.
+const CARRIER_DRAFT_BODY = [
+  '# Follow-up A',
+  '',
+  'Background text.',
+  '',
+  '<!-- idd-skill-autopilot-suitability: 4 -->',
+  '_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable._',
+  '',
+  'Blocked by #99',
+  '',
+  '<!-- idd-skill-authoring-bucket: needs-decision -->',
+  '',
+  '```text',
+  'nested fence inside the draft',
+  '```',
+].join('\n');
+
+const CARRIER_DRAFTS = [
+  '### Follow-up A',
+  '',
+  'Review: reviewed',
+  'Shape: child',
+  '',
+  '````md',
+  CARRIER_DRAFT_BODY,
+  '````',
+  '',
+  '### Follow-up B',
+  '',
+  'Review: not reviewed',
+  'Shape: orphan',
+  '',
+  '```md',
+  '# Follow-up B',
+  '```',
+].join('\n');
+
+function carrierBody({
+  marker = CARRIER_MARKER,
+  release = [],
+  drafts = CARRIER_DRAFTS,
+  ledger = true,
+  intro = 'Holds drafts that cannot yet be published as their final issues.',
+}: {
+  marker?: string;
+  release?: readonly string[];
+  drafts?: string;
+  ledger?: boolean;
+  intro?: string;
+} = {}): string {
+  return [
+    '# Draft carrier for the follow-ups',
+    '',
+    marker,
+    '',
+    intro,
+    '',
+    '## Release condition',
+    '',
+    ...release,
+    '',
+    '## Drafts',
+    '',
+    drafts,
+    '',
+    ...(ledger ? ['## Review ledger', '', '- Follow-up A: reviewed.'] : []),
+  ].join('\n');
+}
+
+function carrierAudit(
+  body: string,
+  options: { labels?: readonly string[]; authoringOnlyLabelName?: string } = {},
+) {
+  return auditAuthoredIssue(body, {
+    shape: 'carrier',
+    markerPrefix: 'idd-skill',
+    labels: ['status:authoring-only'],
+    ...options,
+  });
+}
+
+function carrierFinding(
+  body: string,
+  id: string,
+  options: { labels?: readonly string[]; authoringOnlyLabelName?: string } = {},
+) {
+  return carrierAudit(body, options).findings.find(
+    (finding) => finding.id === id,
+  );
+}
+
+carrierTest(
+  'a well-formed draft carrier passes every check, with an empty or a one-line release condition (#4250)',
+  () => {
+    for (const release of [[], ['Blocked by #12']]) {
+      const audit = carrierAudit(carrierBody({ release }));
+      assert.equal(
+        audit.passed,
+        true,
+        JSON.stringify(audit.findings.filter((f) => f.result === 'fail')),
+      );
+    }
+    assert.match(
+      carrierFinding(carrierBody(), 'carrier-release-condition')?.detail ?? '',
+      /empty/u,
+    );
+    assert.equal(
+      carrierAudit(carrierBody({ release: ['Blocked by #12'] })).passed,
+      true,
+    );
+    // The same body under CRLF line endings: fence offsets must still map to
+    // the right lines.
+    assert.equal(
+      carrierAudit(
+        carrierBody({ release: ['Blocked by #12'] }).replace(/\n/g, '\r\n'),
+      ).passed,
+      true,
+    );
+    // The carrier findings never appear for another shape.
+    const child = auditAuthoredIssue(childBody(), { shape: 'child' });
+    assert.equal(
+      child.findings.some((finding) => finding.id.startsWith('carrier-')),
+      false,
+    );
+  },
+);
+
+carrierTest(
+  'carrier-marker fails without the marker, with two markers, or with a value other than v1 (#4250)',
+  () => {
+    const cases: [string, string][] = [
+      ['no marker', carrierBody({ marker: '' })],
+      [
+        'two markers',
+        carrierBody({ marker: `${CARRIER_MARKER}\n\n${CARRIER_MARKER}` }),
+      ],
+      [
+        'value v2',
+        carrierBody({ marker: '<!-- idd-skill-draft-carrier: v2 -->' }),
+      ],
+    ];
+    for (const [label, body] of cases) {
+      assert.equal(
+        carrierFinding(body, 'carrier-marker')?.result,
+        'fail',
+        `carrier-marker: ${label}`,
+      );
+    }
+    assert.equal(
+      carrierFinding(carrierBody(), 'carrier-marker')?.result,
+      'pass',
+    );
+  },
+);
+
+carrierTest(
+  'marker-prefix-consistency fails a draft-carrier marker with the wrong prefix (#4250)',
+  () => {
+    const body = carrierBody({
+      marker: '<!-- other-draft-carrier: v1 -->',
+    });
+    assert.equal(
+      carrierFinding(body, 'marker-prefix-consistency')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'required-headings requires the Release condition, Drafts, and Review ledger headings (#4250)',
+  () => {
+    const body = carrierBody();
+    for (const heading of [
+      '## Release condition',
+      '## Drafts',
+      '## Review ledger',
+    ]) {
+      const renamed = body.replace(heading, '## Renamed section');
+      assert.equal(
+        carrierFinding(renamed, 'required-headings')?.result,
+        'fail',
+        heading,
+      );
+    }
+  },
+);
+
+carrierTest(
+  'carrier-release-condition accepts Blocked by declarations and lists only the parsed references (#4250)',
+  () => {
+    // The #99 reference sits inside the fenced draft and never counts.
+    const finding = carrierFinding(
+      carrierBody({ release: ['Blocked by #12', '#13'] }),
+      'carrier-release-condition',
+    );
+    assert.equal(finding?.result, 'pass');
+    assert.equal(finding?.detail, 'release condition references #12, #13');
+  },
+);
+
+carrierTest(
+  'carrier-release-condition rejects a non-dependency line, a Depends on line, or a stray Blocked by or Depends on line (#4250)',
+  () => {
+    const cases: [string, string][] = [
+      [
+        'prose in the section',
+        carrierBody({ release: ['We wait for the rollout.'] }),
+      ],
+      [
+        'a Depends on line in the section',
+        carrierBody({ release: ['Depends on #12'] }),
+      ],
+      [
+        'prose after a declaration',
+        carrierBody({ release: ['Blocked by #12', 'after the rollout'] }),
+      ],
+      [
+        'a Blocked by line outside the section',
+        carrierBody({ intro: 'Blocked by #5\n\nHolds drafts.' }),
+      ],
+      [
+        'a Depends on line outside code',
+        carrierBody({ intro: 'Depends on #5\n\nHolds drafts.' }),
+      ],
+    ];
+    for (const [label, body] of cases) {
+      assert.equal(
+        carrierFinding(body, 'carrier-release-condition')?.result,
+        'fail',
+        label,
+      );
+    }
+  },
+);
+
+carrierTest(
+  'a draft carrier cannot hide its headings or Review line inside an HTML comment (#4250)',
+  () => {
+    // The release and ledger headings sit inside one multiline comment that
+    // runs through the drafts. They are not visible structure, so the
+    // carrier must fail required-headings rather than read them as present.
+    const hiddenHeadings = carrierBody()
+      .replace('## Release condition', '<!--\n## Release condition')
+      .replace('## Review ledger', '## Review ledger\n-->');
+    assert.equal(
+      carrierFinding(hiddenHeadings, 'required-headings')?.result,
+      'fail',
+    );
+    // Every required heading, a draft subsection, and the Review and Shape
+    // lines sit only inside one multiline comment: none of it is visible.
+    const commentedWhole = [
+      '# Draft carrier for the follow-ups',
+      '',
+      CARRIER_MARKER,
+      '',
+      '<!--',
+      '## Release condition',
+      '',
+      '## Drafts',
+      '',
+      CARRIER_DRAFTS,
+      '',
+      '## Review ledger',
+      '-->',
+    ].join('\n');
+    assert.equal(
+      carrierFinding(commentedWhole, 'required-headings')?.result,
+      'fail',
+    );
+    const commentedReview = carrierBody().replace(
+      'Review: reviewed',
+      '<!--\nReview: reviewed\n-->',
+    );
+    assert.equal(
+      carrierFinding(commentedReview, 'carrier-drafts')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'suitability-marker fails a carrier with a visible footer and no hidden marker (#4250)',
+  () => {
+    const body = carrierBody({
+      intro: 'Holds drafts.\n\n_Autopilot suitability: 4 / 5 -- x_',
+    });
+    assert.equal(carrierFinding(body, 'suitability-marker')?.result, 'fail');
+  },
+);
+
+carrierTest(
+  'carrier-release-condition accepts a comma-wrapped Blocked by list (#4250)',
+  () => {
+    const finding = carrierFinding(
+      carrierBody({ release: ['Blocked by #12,', '#13'] }),
+      'carrier-release-condition',
+    );
+    assert.equal(finding?.result, 'pass');
+    assert.equal(finding?.detail, 'release condition references #12, #13');
+  },
+);
+
+carrierTest(
+  'carrier-release-condition rejects a Blocked by line followed by prose (#4250)',
+  () => {
+    const finding = carrierFinding(
+      carrierBody({ release: ['Blocked by #12 because rollout is pending'] }),
+      'carrier-release-condition',
+    );
+    assert.equal(finding?.result, 'fail');
+    assert.match(finding?.detail ?? '', /trailing text/u);
+  },
+);
+
+carrierTest(
+  'a commented-out visible footer line does not fail a draft carrier, but a hidden marker still does (#4250)',
+  () => {
+    const commentedFooter = carrierBody({
+      intro:
+        'Holds drafts.\n\n<!--\n_Effort: M -- x\n_Autopilot suitability: 4 / 5 -- x\n-->',
+    });
+    assert.equal(
+      carrierFinding(commentedFooter, 'carrier-forbidden-markers')?.result,
+      'pass',
+    );
+    const hiddenMarker = carrierBody({
+      intro: 'Holds drafts.\n\n<!-- idd-skill-effort: M -->',
+    });
+    assert.equal(
+      carrierFinding(hiddenMarker, 'carrier-forbidden-markers')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'a draft fence inside a list item or a blockquote is not a top-level draft (#4250)',
+  () => {
+    const listDraft = CARRIER_DRAFTS.replace(
+      '```md\n# Follow-up B\n```',
+      '- item\n\n  ```md\n  # Follow-up B\n  ```',
+    );
+    assert.equal(
+      carrierFinding(carrierBody({ drafts: listDraft }), 'carrier-drafts')
+        ?.result,
+      'fail',
+      'list continuation',
+    );
+    const quotedDraft = CARRIER_DRAFTS.replace(
+      '```md\n# Follow-up B\n```',
+      '> ```md\n> # Follow-up B\n> ```',
+    );
+    assert.equal(
+      carrierFinding(carrierBody({ drafts: quotedDraft }), 'carrier-drafts')
+        ?.result,
+      'fail',
+      'blockquote',
+    );
+  },
+);
+
+carrierTest(
+  'a fence indented one to three columns after prose is still a top-level draft (#4250)',
+  () => {
+    const indentedDraft = CARRIER_DRAFTS.replace(
+      '```md\n# Follow-up B\n```',
+      '   ```md\n   # Follow-up B\n   ```',
+    );
+    assert.equal(
+      carrierFinding(carrierBody({ drafts: indentedDraft }), 'carrier-drafts')
+        ?.result,
+      'pass',
+    );
+  },
+);
+
+carrierTest(
+  'a multiline inline code span hides nothing mid-line, but a line-start comment opener inside it still hides what follows (#4250)',
+  () => {
+    // GitHub renders the mid-line opener as code, so the headings stay visible.
+    const midLine = carrierBody({
+      intro: 'Holds `drafts <!--\nthat` cannot yet be published.',
+    });
+    assert.equal(
+      carrierFinding(midLine, 'required-headings')?.result,
+      'pass',
+      'mid-line, the span is code',
+    );
+    // GitHub renders a line-start opener as a comment that swallows the rest.
+    const lineStart = carrierBody({
+      intro: 'Holds `drafts\n<!--\nthat` cannot yet be published.',
+    });
+    assert.equal(
+      carrierFinding(lineStart, 'required-headings')?.result,
+      'fail',
+      'at a line start, the opener is a comment',
+    );
+  },
+);
+
+carrierTest(
+  'an invalid-reference Depends on or Blocked by line outside the release section fails (#4250)',
+  () => {
+    for (const line of [
+      'Depends on rollout pending',
+      'Blocked by rollout pending',
+      '- Depends on rollout pending',
+    ]) {
+      assert.equal(
+        carrierFinding(
+          carrierBody({ intro: `Holds drafts.\n\n${line}` }),
+          'carrier-release-condition',
+        )?.result,
+        'fail',
+        line,
+      );
+    }
+  },
+);
+
+carrierTest(
+  'an escaped comment opener is an example, not a live marker, and an even backslash run stays live (#4250)',
+  () => {
+    const exampleOnly = carrierBody({
+      marker: '',
+      intro: 'Quote the marker as \\<!-- idd-skill-draft-carrier: v1 -->.',
+    });
+    assert.equal(carrierFinding(exampleOnly, 'carrier-marker')?.result, 'fail');
+    const forbiddenExample = carrierBody({
+      intro: 'Holds drafts.\n\nQuote it as \\<!-- idd-skill-effort: M -->.',
+    });
+    assert.equal(
+      carrierFinding(forbiddenExample, 'carrier-forbidden-markers')?.result,
+      'pass',
+    );
+    const evenRun = carrierBody({
+      intro: 'Holds drafts.\n\n\\\\<!-- idd-skill-effort: M -->',
+    });
+    assert.equal(
+      carrierFinding(evenRun, 'carrier-forbidden-markers')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'a visible footer inside a list or blockquote container still fails a draft carrier (#4250)',
+  () => {
+    for (const line of [
+      '> _Effort: M -- x',
+      '- _Autopilot suitability: 4 / 5 -- x',
+      '> - _Effort: M -- x',
+    ]) {
+      assert.equal(
+        carrierFinding(
+          carrierBody({ intro: `Holds drafts.\n\n${line}` }),
+          'carrier-forbidden-markers',
+        )?.result,
+        'fail',
+        line,
+      );
+    }
+  },
+);
+
+carrierTest(
+  'a fence under an indented list marker is list content, and a fence under a numbered item at a lower indent is top-level (#4250)',
+  () => {
+    // Codex: a one-column indented `-` item owns a three-column fence.
+    const indentedMarker = CARRIER_DRAFTS.replace(
+      '```md\n# Follow-up B\n```',
+      ' - wrapper\n\n   ```md\n   # Follow-up B\n   ```',
+    );
+    assert.equal(
+      carrierFinding(carrierBody({ drafts: indentedMarker }), 'carrier-drafts')
+        ?.result,
+      'fail',
+      'indented list marker owns the fence',
+    );
+    // A `1.` item's content starts at column three, so a two-column fence
+    // after it is outside the item and top-level.
+    const numberedLowerIndent = CARRIER_DRAFTS.replace(
+      '```md\n# Follow-up B\n```',
+      '1. wrapper\n\n  ```md\n  # Follow-up B\n  ```',
+    );
+    assert.equal(
+      carrierFinding(
+        carrierBody({ drafts: numberedLowerIndent }),
+        'carrier-drafts',
+      )?.result,
+      'pass',
+      'a two-column fence is outside a three-column numbered item',
+    );
+  },
+);
+
+carrierTest(
+  'a comment opened after an even run of backslashes hides carrier structure, and an odd run does not (#4250)',
+  () => {
+    // `\\<!--` is an escaped backslash followed by a live comment opener.
+    const evenRun = carrierBody()
+      .replace('## Release condition', '\\\\<!--\n## Release condition')
+      .replace('## Review ledger', '## Review ledger\n-->');
+    // GitHub renders an unclosed opener before a heading as text, and a comment
+    // cannot span a heading, so the heading stays visible (checked with the
+    // GitHub markdown API).
+    assert.equal(carrierFinding(evenRun, 'required-headings')?.result, 'pass');
+    // Inside one paragraph, the even run opens a live comment that counts.
+    const evenMarker = carrierBody({
+      intro: 'Holds drafts.\n\n\\\\<!-- idd-skill-effort: M -->',
+    });
+    assert.equal(
+      carrierFinding(evenMarker, 'carrier-forbidden-markers')?.result,
+      'fail',
+    );
+    // `\<!--` is an escaped opener, so nothing is hidden and the headings stay.
+    const oddRun = carrierBody()
+      .replace('## Release condition', '\\<!--\n## Release condition')
+      .replace('## Review ledger', '## Review ledger\n-->');
+    assert.equal(carrierFinding(oddRun, 'required-headings')?.result, 'pass');
+  },
+);
+
+carrierTest(
+  'a heading inside a raw HTML block is not carrier structure (#4250)',
+  () => {
+    const body = carrierBody().replace(
+      '## Release condition',
+      '<div>\n## Release condition\n</div>',
+    );
+    assert.equal(carrierFinding(body, 'required-headings')?.result, 'fail');
+  },
+);
+
+carrierTest(
+  'escaped marker examples do not trip the existing marker checks on a carrier (#4250)',
+  () => {
+    const body = carrierBody({
+      intro:
+        'Holds drafts.\n\nQuote \\<!-- other-draft-carrier: v1 --> and \\<!-- idd-skill-blocked-by: example -->.',
+    });
+    assert.equal(
+      carrierFinding(body, 'marker-prefix-consistency')?.result,
+      'pass',
+    );
+    assert.equal(
+      carrierFinding(body, 'dependency-marker-rule')?.result,
+      'pass',
+    );
+  },
+);
+
+carrierTest(
+  'dependency lines and footers inside a raw HTML block still count, though its headings do not (#4250)',
+  () => {
+    const dependency = carrierBody({
+      intro: 'Holds drafts.\n\n<div>\nDepends on #5\n</div>',
+    });
+    assert.equal(
+      carrierFinding(dependency, 'carrier-release-condition')?.result,
+      'fail',
+    );
+    const footer = carrierBody({
+      intro: 'Holds drafts.\n\n<div>\n_Effort: M -- x\n</div>',
+    });
+    assert.equal(
+      carrierFinding(footer, 'carrier-forbidden-markers')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'a Depends on or Blocked by line behind nested list and blockquote markers counts outside the release condition (#4250)',
+  () => {
+    for (const line of [
+      '- > Depends on #5',
+      '- - Blocked by #5',
+      '> - > Blocked by #5',
+    ]) {
+      assert.equal(
+        carrierFinding(
+          carrierBody({ intro: `Holds drafts.\n\n${line}` }),
+          'carrier-release-condition',
+        )?.result,
+        'fail',
+        line,
+      );
+    }
+  },
+);
+
+carrierTest(
+  'a fence-looking line inside a raw HTML block does not mask the dependency or footer text after it (#4250)',
+  () => {
+    const body = carrierBody({
+      intro:
+        'Holds drafts.\n\n<div>\n```\nDepends on #5\n_Effort: M -- x\n</div>',
+    });
+    assert.equal(
+      carrierFinding(body, 'carrier-release-condition')?.result,
+      'fail',
+    );
+    assert.equal(
+      carrierFinding(body, 'carrier-forbidden-markers')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'a comment indented inside a raw HTML block hides its text from the carrier checks (#4250)',
+  () => {
+    const footer = carrierBody({
+      intro: 'Holds drafts.\n\n<div>\n    <!--\n_Effort: M -- x\n-->\n</div>',
+    });
+    assert.equal(
+      carrierFinding(footer, 'carrier-forbidden-markers')?.result,
+      'pass',
+    );
+    const dependency = carrierBody({
+      intro: 'Holds drafts.\n\n<div>\n    <!-- Depends on #5 -->\n</div>',
+    });
+    assert.equal(
+      carrierFinding(dependency, 'carrier-release-condition')?.result,
+      'pass',
+    );
+  },
+);
+
+carrierTest(
+  'a fence-looking line inside a comment does not mask a live marker after it (#4250)',
+  () => {
+    const effort = carrierBody({
+      intro: 'Holds drafts.\n\n<!--\n```\n-->\n\n<!-- idd-skill-effort: M -->',
+    });
+    assert.equal(
+      carrierFinding(effort, 'carrier-forbidden-markers')?.result,
+      'fail',
+    );
+    const wrongPrefix = carrierBody({
+      intro:
+        'Holds drafts.\n\n<!--\n```\n-->\n\n<!-- other-draft-carrier: v1 -->',
+    });
+    assert.equal(
+      carrierFinding(wrongPrefix, 'marker-prefix-consistency')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'a heading inside a list item is list content, not a carrier section or subsection (#4250)',
+  () => {
+    const nestedSection = carrierBody().replace(
+      '## Drafts',
+      '- wrapper\n  ## Drafts',
+    );
+    assert.equal(
+      carrierFinding(nestedSection, 'required-headings')?.result,
+      'fail',
+    );
+    const nestedSubsection = carrierBody({
+      drafts:
+        '- wrapper\n  ### Fake\n\n  Review: reviewed\n  Shape: child\n\n```md\n# x\n```',
+    });
+    assert.equal(
+      carrierFinding(nestedSubsection, 'carrier-drafts')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'a fence-looking line inside raw HTML does not mask a live marker after it (#4250)',
+  () => {
+    const body = carrierBody({
+      intro:
+        'Holds drafts.\n\n<div>\n```\n<!-- idd-skill-effort: M -->\n</div>',
+    });
+    assert.equal(
+      carrierFinding(body, 'carrier-forbidden-markers')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'an inline code span that starts at a fence closer does not hide a live marker after it (#4250)',
+  () => {
+    const drafts = `${CARRIER_DRAFTS}\n\nSee ${'```'} marks.\n\n<!-- idd-skill-effort: M -->`;
+    assert.equal(
+      carrierFinding(carrierBody({ drafts }), 'carrier-forbidden-markers')
+        ?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'a dependency keyword behind a task-list checkbox counts outside the release condition (#4250)',
+  () => {
+    for (const line of ['- [ ] Depends on #5', '- [x] Blocked by #5']) {
+      assert.equal(
+        carrierFinding(
+          carrierBody({ intro: `Holds drafts.\n\n${line}` }),
+          'carrier-release-condition',
+        )?.result,
+        'fail',
+        line,
+      );
+    }
+  },
+);
+
+carrierTest(
+  'draft-carrier is a carrier-only marker suffix, so a child body quoting another prefix is unchanged (#4250)',
+  () => {
+    const quoted = `${childBody()}\n\n<!-- other-draft-carrier: v1 -->`;
+    assert.equal(
+      auditAuthoredIssue(quoted, {
+        shape: 'child',
+        markerPrefix: 'idd-skill',
+      }).findings.find((finding) => finding.id === 'marker-prefix-consistency')
+        ?.result,
+      'pass',
+    );
+    const carrierQuoted = carrierBody({
+      intro: 'Holds drafts.\n\n<!-- other-draft-carrier: v1 -->',
+    });
+    assert.equal(
+      carrierFinding(carrierQuoted, 'marker-prefix-consistency')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'a fenced draft in the Drafts prelude, before the first ### subsection, fails carrier-drafts (#4250)',
+  () => {
+    const drafts = `${'```md\n# Untracked\n```'}\n\n${CARRIER_DRAFTS}`;
+    assert.equal(
+      carrierFinding(carrierBody({ drafts }), 'carrier-drafts')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'a task-list checkbox before a footer does not hide it from the carrier checks (#4250)',
+  () => {
+    for (const line of [
+      '- [ ] _Effort: M -- x',
+      '- [x] _Autopilot suitability: 4 / 5 -- x',
+    ]) {
+      assert.equal(
+        carrierFinding(
+          carrierBody({ intro: `Holds drafts.\n\n${line}` }),
+          'carrier-forbidden-markers',
+        )?.result,
+        'fail',
+        line,
+      );
+    }
+  },
+);
+
+carrierTest(
+  'a malformed comment opener does not blank the text up to a later closer (#4250)',
+  () => {
+    // `<!-- bad --` is not a comment (its text contains --), so the Depends on
+    // line between it and the closer stays visible and counts.
+    const body = carrierBody({
+      intro: 'Holds drafts <!-- bad --\nDepends on #5\n--> <!-- ok -->.',
+    });
+    assert.equal(
+      carrierFinding(body, 'carrier-release-condition')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'a backtick inside a comment does not pair with a later backtick and hide a marker (#4250)',
+  () => {
+    // The leftmost construct is the comment, so the second comment is live and
+    // the lone backtick after it is literal text (CommonMark's leftmost rule).
+    const body = carrierBody({
+      intro: 'Intro <!-- ` --> <!-- idd-skill-effort: M --> `',
+    });
+    assert.equal(
+      carrierFinding(body, 'carrier-forbidden-markers')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'a backtick inside a raw HTML tag does not open a code span that hides a footer (#4250)',
+  () => {
+    const body = carrierBody({
+      intro: 'Start <span title="`">x</span> then `y`\n_Effort: M -- x_',
+    });
+    assert.equal(
+      carrierFinding(body, 'carrier-forbidden-markers')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'a closing-hash ## Drafts ## heading counts as a second Drafts section (#4250)',
+  () => {
+    const body = `${carrierBody()}\n## Drafts ##\n\n### Follow-up C\n\nReview: reviewed\nShape: child\n`;
+    assert.equal(carrierFinding(body, 'carrier-drafts')?.result, 'fail');
+  },
+);
+
+carrierTest(
+  'a second ## Drafts or ## Release condition heading fails rather than hiding unchecked drafts (#4250)',
+  () => {
+    const secondDrafts = `${carrierBody()}\n## Drafts\n\n### Follow-up C\n\nReview: reviewed\nShape: child\n`;
+    assert.equal(
+      carrierFinding(secondDrafts, 'carrier-drafts')?.result,
+      'fail',
+    );
+    const secondRelease = `${carrierBody()}\n## Release condition\n\n`;
+    assert.equal(
+      carrierFinding(secondRelease, 'carrier-release-condition')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'carrier-drafts requires one Review line, one Shape line, and one fenced draft per subsection (#4250)',
+  () => {
+    const cases: [string, string][] = [
+      ['no Review line', CARRIER_DRAFTS.replace('Review: reviewed\n', '')],
+      [
+        'another Review value',
+        CARRIER_DRAFTS.replace('Review: reviewed', 'Review: maybe'),
+      ],
+      [
+        'another Shape value',
+        CARRIER_DRAFTS.replace('Shape: child', 'Shape: epic'),
+      ],
+      [
+        'no fenced draft',
+        CARRIER_DRAFTS.replace(
+          '```md\n# Follow-up B\n```',
+          'Follow-up B has no draft yet.',
+        ),
+      ],
+    ];
+    for (const [label, drafts] of cases) {
+      assert.equal(
+        carrierFinding(carrierBody({ drafts }), 'carrier-drafts')?.result,
+        'fail',
+        label,
+      );
+    }
+    assert.equal(
+      carrierFinding(carrierBody(), 'carrier-drafts')?.result,
+      'pass',
+    );
+  },
+);
+
+carrierTest(
+  'carrier-forbidden-markers fails each suitability, effort, roadmap-id, blocked-by, or bucket marker or footer outside code (#4250)',
+  () => {
+    const forbidden = [
+      '<!-- idd-skill-autopilot-suitability: 4 -->',
+      '_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable._',
+      '<!-- idd-skill-effort: M -->',
+      '_Effort: M -- author-estimated size._',
+      '<!-- idd-skill-roadmap-id: example -->',
+      '<!-- idd-skill-blocked-by: example -->',
+      '<!-- idd-skill-authoring-bucket: needs-decision -->',
+    ];
+    for (const snippet of forbidden) {
+      const body = carrierBody({ intro: `Holds drafts.\n\n${snippet}` });
+      assert.equal(
+        carrierFinding(body, 'carrier-forbidden-markers')?.result,
+        'fail',
+        snippet,
+      );
+    }
+    // The same markers inside the fenced draft never count.
+    assert.equal(
+      carrierFinding(carrierBody(), 'carrier-forbidden-markers')?.result,
+      'pass',
+    );
+  },
+);
+
+carrierTest(
+  'suitability-marker and dependency-marker-rule reject a carrier that carries those markers (#4250)',
+  () => {
+    const withSuitability = carrierBody({
+      intro: 'Holds drafts.\n\n<!-- idd-skill-autopilot-suitability: 4 -->',
+    });
+    assert.equal(
+      carrierFinding(withSuitability, 'suitability-marker')?.result,
+      'fail',
+    );
+    assert.equal(
+      carrierFinding(carrierBody(), 'suitability-marker')?.result,
+      'pass',
+    );
+
+    const withBlockedBy = carrierBody({
+      intro: 'Holds drafts.\n\n<!-- idd-skill-blocked-by: example -->',
+    });
+    assert.equal(
+      carrierFinding(withBlockedBy, 'dependency-marker-rule')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'carrier-label requires the configured authoring-only label when labels are supplied (#4250)',
+  () => {
+    const body = carrierBody();
+    assert.equal(
+      carrierFinding(body, 'carrier-label', { labels: ['status:authoring'] })
+        ?.result,
+      'fail',
+    );
+    assert.equal(
+      carrierFinding(body, 'carrier-label', {
+        labels: ['status:authoring-only'],
+      })?.result,
+      'pass',
+    );
+    assert.equal(
+      carrierFinding(body, 'carrier-label', { labels: [] })?.result,
+      'pass',
+    );
+    assert.equal(
+      carrierFinding(body, 'carrier-label', {
+        labels: ['status:carrier'],
+        authoringOnlyLabelName: 'status:carrier',
+      })?.result,
+      'pass',
+    );
+    assert.equal(
+      carrierFinding(body, 'carrier-label', {
+        labels: ['status:authoring-only'],
+        authoringOnlyLabelName: 'status:carrier',
+      })?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'every triage finding reports not applicable for a draft carrier, even with no title (#4250)',
+  () => {
+    const body = carrierBody().replace(
+      '# Draft carrier for the follow-ups\n\n',
+      '',
+    );
+    const triage = carrierAudit(body).findings.filter((finding) =>
+      finding.id.startsWith('triage-'),
+    );
+    assert.ok(triage.length > 0);
+    for (const finding of triage) {
+      assert.equal(finding.result, 'pass', finding.id);
+      assert.match(
+        finding.detail,
+        /not applicable: a draft carrier/u,
+        finding.id,
+      );
+    }
+  },
+);
+
+carrierTest(
+  'the compiled CLI rejects --shape carrier with --expect-bucket and an unknown shape (#4250)',
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'idd-audit-carrier-cli-'));
+    try {
+      const bodyPath = join(tempRoot, 'carrier.md');
+      writeFileSync(bodyPath, carrierBody());
+      assert.equal(
+        runCliRaw([
+          '--shape',
+          'carrier',
+          '--body-file',
+          bodyPath,
+          '--expect-bucket',
+          'needs-decision',
+        ]).status,
+        2,
+      );
+      assert.equal(
+        runCliRaw(['--shape', 'epic', '--body-file', bodyPath]).status,
+        2,
+      );
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+carrierTest(
+  'the compiled CLI honors a configured labels.authoringOnlyLabelName for a CRLF carrier (#4250)',
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'idd-audit-carrier-label-'));
+    try {
+      const bodyPath = join(tempRoot, 'carrier.md');
+      writeFileSync(
+        bodyPath,
+        carrierBody({ release: ['Blocked by #12'] }).replace(/\n/g, '\r\n'),
+      );
+      const configPath = join(tempRoot, 'config.json');
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          labels: { authoringOnlyLabelName: 'status:carrier-only' },
+        }),
+      );
+      const labelFinding = (label: string) =>
+        runCli([
+          '--shape',
+          'carrier',
+          '--body-file',
+          bodyPath,
+          '--marker-prefix',
+          'idd-skill',
+          '--config',
+          configPath,
+          '--label',
+          label,
+        ]).findings.find((entry) => entry.id === 'carrier-label');
+
+      assert.equal(labelFinding('status:carrier-only')?.result, 'pass');
+      assert.equal(labelFinding('status:authoring-only')?.result, 'fail');
+      const drafts = runCli([
+        '--shape',
+        'carrier',
+        '--body-file',
+        bodyPath,
+        '--marker-prefix',
+        'idd-skill',
+        '--config',
+        configPath,
+      ]).findings.find((entry) => entry.id === 'carrier-drafts');
+      assert.equal(drafts?.result, 'pass');
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);

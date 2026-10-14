@@ -3168,20 +3168,20 @@ test('the write step decodes the body, refuses a full, malformed, or duplicated 
     stepNamed(sweepJob('write'), 'Create or update the summary issue').run,
   );
   assertLinesInOrder(run, [
-    String.raw`printf '%s' "$BODY_B64" | base64 -d > "$RUNNER_TEMP/sweep-body.md"`,
-    String.raw`test -s "$RUNNER_TEMP/sweep-body.md"`,
-    String.raw`listing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json number,title)"`,
-    String.raw`length="$(printf '%s' "$listing" | jq 'length')"`,
+    `printf '%s' "$BODY_B64" | base64 -d > "$RUNNER_TEMP/sweep-body.md"`,
+    `test -s "$RUNNER_TEMP/sweep-body.md"`,
+    `listing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 --json number,title)"`,
+    `length="$(printf '%s' "$listing" | jq 'length')"`,
     'case "$length" in',
     "''|*[!0-9]*)",
-    String.raw`if [ "$length" -ge 1000 ]; then`,
-    String.raw`found="$(printf '%s' "$listing" | jq -r --arg t "$SWEEP_ISSUE_TITLE" '[.[] | select(.title == $t) | .number] | sort | .[]')"`,
-    String.raw`count="$(printf '%s' "$found" | grep -c . || true)"`,
-    String.raw`if [ "$count" -gt 1 ]; then`,
-    String.raw`elif [ "$count" -eq 1 ]; then`,
-    String.raw`gh issue edit "$found" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/sweep-body.md"`,
-    String.raw`elif [ "$count" -eq 0 ]; then`,
-    String.raw`gh issue create --repo "$GITHUB_REPOSITORY" --title "$SWEEP_ISSUE_TITLE" --body-file "$RUNNER_TEMP/sweep-body.md"`,
+    `if [ "$length" -ge 1000 ]; then`,
+    `found="$(printf '%s' "$listing" | jq -r --arg t "$SWEEP_ISSUE_TITLE" '[.[] | select(.title == $t) | .number] | sort | .[]')"`,
+    `count="$(printf '%s' "$found" | grep -c . || true)"`,
+    `if [ "$count" -gt 1 ]; then`,
+    `elif [ "$count" -eq 1 ]; then`,
+    `gh issue edit "$found" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/sweep-body.md"`,
+    `elif [ "$count" -eq 0 ]; then`,
+    `gh issue create --repo "$GITHUB_REPOSITORY" --title "$SWEEP_ISSUE_TITLE" --body-file "$RUNNER_TEMP/sweep-body.md"`,
   ]);
 });
 
