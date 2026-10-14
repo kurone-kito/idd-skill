@@ -618,7 +618,8 @@ the **highest authored autopilot-suitability score** (the
 **lowest issue number**. In autopilot runs, skip scores below
 `autopilotSuitability.floor` (default `3`) as human-oriented; a missing
 or out-of-range score defaults to the floor and is never skipped
-(subject to the scored-vs-unscored tie-breaker below). Advisory only —
+(subject to the scored-vs-unscored tie-breaker below; an `L`-effort
+candidate under `effortL: refuse` is the exception, A4 Step 1). Advisory only —
 the pick still passes A4.5/A5 unchanged and never bypasses a gate. When
 `autopilotSuitability.enabled` is `false`, ignore the score entirely and
 select by **lowest issue number**.
@@ -678,7 +679,9 @@ matches, after desync and before effort — see
 **Effort hint.** When tied after score/desync/milestone, prefer lower
 effort (`S` < `M` < `L`; missing or invalid counts as `M`), then the
 lowest issue number, per the `idd-skill-effort` marker or
-`discover-roadmap-graph`'s `effort` (already in this order).
+`discover-roadmap-graph`'s `effort` (already in this order). Under
+`effortL: refuse`, an `L` candidate is already discarded in A4 Step 1 and
+never reaches this tie-break.
 
 **High-contention shared-file overlap (advisory).** Concurrent sessions
 tend to edit the same F-phase bundle files and `audit/sync-manifest.json`.
