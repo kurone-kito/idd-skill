@@ -1100,9 +1100,9 @@ or log — never as an issue/PR comment on a non-owned claim:
 Use this sequence when a fresh claim must reuse an existing PR branch, an
 inheritable branch whose commits beyond the base must be kept. The
 fresh-branch order in `idd-claim.instructions.md` creates a new branch from
-its base ref and does not apply. The full claim file's fresh-branch order
-starts from `origin/{development-branch}`, and the lite file's starts from
-`origin/main`. This sequence attaches the existing branch instead and chooses
+its base ref and does not apply. The fresh-branch orders in the full and lite
+claim files both start from `origin/{development-branch}`. This sequence
+attaches the existing branch instead and chooses
 no new base ref: the branch keeps its own history, which may be based on
 `origin/main` or another ref. Observed 2026-10-12,
 `kurone-kito/idd-skill#3708` (PR `#4030`): the claimant attached the existing
