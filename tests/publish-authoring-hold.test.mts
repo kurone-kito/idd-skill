@@ -1268,6 +1268,15 @@ test('carrier review result: a boolean completed passes, and anything else that 
     checkCarrierReviewResult('{"completed": true, "findings": [1]}'),
     null,
   );
+  assert.notEqual(checkCarrierReviewResult('null'), null);
+  assert.notEqual(
+    checkCarrierReviewResult('{"completed": true, "findings": null}'),
+    null,
+  );
+  assert.notEqual(
+    checkCarrierReviewResult('{"completed": true, "findings": [null]}'),
+    null,
+  );
 });
 
 test('lint args and labels for a carrier: both labels and no bucket, even when the bucket is ready', () => {
@@ -1475,6 +1484,7 @@ test('CLI: an orphan body under --shape carrier fails the lint and writes nothin
       '--apply',
     ]);
     assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stdout, /carrier-marker/);
     assert.deepEqual(writes(fixture.log()), []);
     assert.deepEqual(fixture.state().issues, {});
   } finally {

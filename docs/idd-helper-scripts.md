@@ -1200,7 +1200,8 @@ in this preamble, since the fallback differs per helper.
   `--review-result <path>` (a JSON object with `"completed": true`; any
   `findings` entry must be `fixed` or `rejected`); a carrier's review
   result is optional, and when given it must be a JSON object whose
-  `completed` is a boolean. The helper stops with the `blocked-by-human`
+  `completed` is a boolean and whose `findings`, if present, is an array of
+  objects. The helper stops with the `blocked-by-human`
   outcome (exit `2`) when `issueAuthoring.journalIssue` is unset or
   unverifiable. It then puts the `authoring-publication` line first in the
   body, lints that exact body with `audit-authored-issue.mjs --new-issue`

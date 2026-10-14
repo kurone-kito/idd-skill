@@ -7,8 +7,8 @@
 //
 // Capability-checked Stage 1 publication of one held issue: a standalone
 // orphan (kurone-kito/idd-skill#4127) or a draft carrier (#4253). The
-// issue-authoring skill allows a new issue
-// only through a create-with-label command and stops when none exists. This
+// issue-authoring skill allows a new issue only through a create-with-label
+// command and stops when none exists. This
 // helper runs the contract's "New-issue ownership" sequence in order: journal
 // check, publication line, lint, labels, pending intent, create, identity
 // attach, owner marker, provenance, member. It spawns the sibling helpers
@@ -132,11 +132,12 @@ export function injectPublicationLine(body, markerPrefix, ids) {
   return injected;
 }
 /**
- * Check the review-result file contents. It must be a JSON object with
- * `"completed": true`. An optional `findings` array holds findings-ledger
- * entries; each needs a `disposition` of `fixed` or `rejected`, because a
- * draft with an open `deferred` entry is not published (contract.md,
- * "Carry-forward of rejected findings"). Returns a refusal reason, or null.
+ * For an orphan, check the review-result file contents. It must be a JSON
+ * object with `"completed": true`. An optional `findings` array holds
+ * findings-ledger entries; each needs a `disposition` of `fixed` or
+ * `rejected`, because a draft with an open `deferred` entry is not published
+ * (contract.md, "Carry-forward of rejected findings"). Returns a refusal
+ * reason, or null.
  */
 export function checkReviewResult(raw) {
   let parsed;
