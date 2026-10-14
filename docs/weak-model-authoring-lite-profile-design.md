@@ -174,9 +174,10 @@ where they transfer to an authoring context:
 5. **Explicit stop-and-ask conditions** — transfers directly; the
    existing skill's own **Under-clarification stop rule** ("if you
    still cannot name the concrete surface to edit or an objective
-   verification for a candidate task, route it to `needs-decision` or
-   ask") is already this principle applied to authoring, and a
-   condensed profile should keep it rather than trim it away as
+   verification for a candidate task, route it to `needs-decision`, or for an
+   interactive choice ask the operator first under the interactive rule in
+   Human-dependency isolation") is already this principle applied to
+   authoring, and a condensed profile should keep it rather than trim it away as
    "judgment-heavy."
 
 **One principle that does not transfer as-is**: #1419's principle 4

@@ -42,15 +42,20 @@ Draft a roadmap plus sub-issues when the request needs visible
 sequencing, parallel tracks, or multi-session handoff.
 
 Draft only stable non-ready buckets when the work still depends on a
-human decision, missing asset, or unclear verification.
+human decision, missing asset, or unclear verification. In an interactive
+session, ask first for an operator-answerable product, policy, or design
+choice, or for a missing concrete surface or objective verification, under the
+interactive rule in [Human-dependency isolation](contract.md#human-dependency-isolation),
+unless an unchanged route applies. A missing asset stays `blocked-by-human`.
 
 ## Under-clarification stop rule
 
 Before drafting a `ready` issue, confirm you can name a concrete surface
 to edit and an objective verification for it. If, after bounded
-clarification, you still cannot, route the candidate to `needs-decision`
-or ask — do not publish a confidently-vague `ready` issue. Reliability
-over speed.
+clarification, you still cannot, route the candidate to `needs-decision`,
+or for an interactive choice ask first under the interactive rule in
+[Human-dependency isolation](contract.md#human-dependency-isolation) — do not
+publish a confidently-vague `ready` issue. Reliability over speed.
 
 This is an Intake-phase gate on your own confidence, not a wording
 judgment on an already-written draft — it is distinct from the
@@ -60,8 +65,9 @@ has already been drafted.
 **Example**: "Improve the error handling in the API layer" fails this
 check — no concrete surface, no objective verification — even before
 you consider how detailed to write the body. Ask which endpoint or
-module, and what the observable failure mode is, or route the request
-to `needs-decision` instead of guessing at a plausible-sounding scope.
+module, and what the observable failure mode is, under the interactive rule
+(or route the request to `needs-decision` in a session that is not
+interactive) instead of guessing at a plausible-sounding scope.
 
 ## Specificity target
 
@@ -198,7 +204,9 @@ Before you publish a `ready` issue, confirm:
 - the implementation does not still depend on unresolved credentials,
   access, or unavailable infrastructure
 - unresolved product, policy, or design choices have been routed to
-  `needs-decision` instead of being buried in implementation steps
+  `needs-decision` instead of being buried in implementation steps, and an
+  interactive session has asked the operator first under the interactive rule
+  in [Human-dependency isolation](contract.md#human-dependency-isolation)
 - acceptance criteria use objective verification, while optional
   post-implementation review stays optional
 - roadmap narrative does not hide human-dependent work that belongs in a
@@ -728,7 +736,9 @@ Before publishing an issue, apply a reuse-first decision tree:
 4. Does the issue have any of these properties? If yes, escalate to
    `needs-decision` or `blocked-by-human` during drafting:
    - Unclear intent or malformed body (→ fix during drafting or mark needs-decision)
-   - Requires maintainer or product decision (→ mark needs-decision)
+   - Requires maintainer or product decision (→ in an interactive session,
+     ask first when the operator can answer it, under the interactive rule
+     and unless an unchanged route applies; otherwise mark needs-decision)
    - Blocked by external work or human coordination (→ mark
      blocked-by-human)
    - Depends on unavailable resources or credentials (→ mark blocked-by-human)
