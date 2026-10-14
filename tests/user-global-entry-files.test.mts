@@ -796,3 +796,20 @@ test('a HOME with a dot segment is normalized before it becomes a containment ba
   );
   assert.equal(textOf(filesOf(home).claude), claudeSpan(home));
 });
+
+test('an unqualified HOME with a leading double slash is refused even when XDG_DATA_HOME resolves', () => {
+  const home = freshHome();
+  const doubled = `/${home}`;
+  assert.throws(
+    () =>
+      installPayload(
+        optionsFor(home, {
+          env: { HOME: doubled, XDG_DATA_HOME: join(home, '.local', 'share') },
+          homedir: doubled,
+        }),
+      ),
+    /HOME is not a qualified root/,
+  );
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+  assert.equal(nodeFs.existsSync(join(home, '.claude', 'skills')), false);
+});

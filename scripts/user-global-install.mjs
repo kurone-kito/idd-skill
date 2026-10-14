@@ -178,14 +178,17 @@ function resolveContext(options) {
     typeof options.homedir === 'string' && options.homedir.length > 0
       ? options.homedir
       : (env.HOME ?? '');
-  // Normalized, as the environment roots are, so the containment walk and the
-  // harness paths spell the base the same way.
-  const home = normalize(homeCandidate.trim());
-  if (!isQualifiedConfigRoot(home)) {
+  // Qualified before it is normalized. normalize() folds a leading "//" to "/",
+  // which would let an unqualified HOME through.
+  const trimmedHome = homeCandidate.trim();
+  if (!isQualifiedConfigRoot(trimmedHome)) {
     throw new Error(
       'HOME is not a qualified root, so the skill roots do not resolve; nothing was written',
     );
   }
+  // Normalized, as the environment roots are, so the containment walk and the
+  // harness paths spell the base the same way.
+  const home = normalize(trimmedHome);
   const codexHome = qualifiedValue(env.CODEX_HOME) ?? join(home, '.codex');
   const configHome =
     qualifiedValue(env.XDG_CONFIG_HOME) ?? join(home, '.config');
