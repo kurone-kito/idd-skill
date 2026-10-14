@@ -160,10 +160,14 @@ function assertRealParent(root: string, fs: FsOps): void {
   }
 }
 
+/**
+ * An environment-derived root, normalized. The containment walk requires a
+ * normalized path, and `isQualifiedConfigRoot` accepts a `..` segment.
+ */
 function qualifiedValue(value: string | undefined): string | undefined {
   const trimmed = typeof value === 'string' ? value.trim() : '';
   return trimmed.length > 0 && isQualifiedConfigRoot(trimmed)
-    ? trimmed
+    ? normalize(trimmed)
     : undefined;
 }
 
@@ -248,12 +252,18 @@ interface Inspected {
 }
 
 /**
- * Walk one path with no-follow stats. A path that equals its root is walked
- * from its parent, since a root is never a containment base for itself.
+ * The containment base for a path under `root`. A path that equals its root
+ * is walked from its parent, since a root is never a containment base for
+ * itself.
  */
+function baseOf(root: Root, path: string): string {
+  return path === root.path ? dirname(path) : root.path;
+}
+
+/** Walk one path with no-follow stats. */
 function inspect(ctx: Context, path: string): Inspected {
   const root = rootFor(ctx, path);
-  const base = path === root.path ? dirname(path) : root.path;
+  const base = baseOf(root, path);
   const walk = checkContainment(base, path, ctx.fs);
   return { root, base, walk };
 }
@@ -411,7 +421,8 @@ interface InstallPlan {
         priorTarget: string;
         listed: boolean;
       }
-    | { action: 'keep'; versionDir: string };
+    | { action: 'keep'; versionDir: string }
+    | { action: 'record'; versionDir: string };
   lines: string[];
 }
 
@@ -524,15 +535,30 @@ function buildInstallPlan(
     } else if (walk.finalKind === 'symlink') {
       const priorTarget = fs.readlinkSync(ctx.currentPath);
       assertCurrentTarget(ctx, priorTarget, fs);
-      current =
-        resolve(ctx.dataRoot, priorTarget) === versionDir
-          ? { action: 'keep', versionDir }
-          : {
-              action: 'repoint',
-              versionDir,
-              priorTarget,
-              listed: listedCurrent !== undefined,
-            };
+      const resolved = resolve(ctx.dataRoot, priorTarget);
+      const recorded =
+        listedCurrent !== undefined && listedCurrent.kind === 'link'
+          ? listedCurrent.target
+          : undefined;
+      if (resolved === versionDir) {
+        // A repoint whose receipt rewrite failed leaves the link here but
+        // the receipt on the old target. Record it rather than keep it.
+        current =
+          recorded !== undefined && recorded !== versionDir
+            ? { action: 'record', versionDir }
+            : { action: 'keep', versionDir };
+      } else if (recorded !== undefined && recorded !== resolved) {
+        throw new Error(
+          `${ctx.currentPath} points at ${resolved}, but the receipt records ${recorded}; it was retargeted after install, so refusing to replace it`,
+        );
+      } else {
+        current = {
+          action: 'repoint',
+          versionDir,
+          priorTarget,
+          listed: listedCurrent !== undefined,
+        };
+      }
     } else {
       throw new Error(
         `${ctx.currentPath} is a ${walk.finalKind}, not a link; refusing to replace it`,
@@ -554,6 +580,10 @@ function buildInstallPlan(
   } else if (current.action === 'repoint') {
     lines.push(
       `repoint ${ctx.currentPath} -> ${versionDir} (prior target ${current.priorTarget})`,
+    );
+  } else if (current.action === 'record') {
+    lines.push(
+      `record ${ctx.currentPath} -> ${versionDir} (the receipt lagged the link)`,
     );
   } else {
     lines.push(`keep ${ctx.currentPath} (already points at ${versionDir})`);
@@ -591,9 +621,47 @@ function persistEntries(
   removeReceiptIfPresent(ctx, fs);
 }
 
+/** Remove the receipt through the no-follow containment walk, if present. */
 function removeReceiptIfPresent(ctx: Context, fs: FsOps): void {
   const path = join(ctx.dataRoot, 'receipt.json');
-  if (lstatOrNull(path, fs) !== null) fs.unlinkSync(path);
+  const walk = checkContainment(ctx.dataRoot, path, fs);
+  if (walk.finalKind === 'absent') return;
+  if (walk.finalKind !== 'file') {
+    throw new Error(
+      `${path} is a ${walk.finalKind}, not a file; refusing to remove it`,
+    );
+  }
+  fs.unlinkSync(path);
+}
+
+/**
+ * Remove the data root once only the receipt is left. The receipt goes first,
+ * because the root must be empty. If the root's removal fails, the receipt is
+ * rewritten to list the root, so the operator can resume from a valid state.
+ */
+function removeDataRoot(ctx: Context, fs: FsOps): void {
+  removeReceiptIfPresent(ctx, fs);
+  try {
+    removeSingleEntry(
+      dirname(ctx.dataRoot),
+      ctx.dataRoot,
+      { kind: 'directory' },
+      fs,
+    );
+  } catch (error) {
+    try {
+      writeReceipt(
+        ctx.dataRoot,
+        [{ kind: 'directory', path: ctx.dataRoot }],
+        fs,
+      );
+    } catch (restoreError) {
+      throw new Error(
+        `${describe(error)}; the receipt could not be restored (${describe(restoreError)}), so ${ctx.dataRoot} no longer has one`,
+      );
+    }
+    throw error;
+  }
 }
 
 /** Remove a directory this run created, or the whole data root when only the receipt is left. */
@@ -610,12 +678,10 @@ function removeCreatedDirectory(
         `${path} holds more than the receipt; leaving it in place`,
       );
     }
-    fs.unlinkSync(join(path, 'receipt.json'));
-    removeSingleEntry(dirname(path), path, { kind: 'directory' }, fs);
+    removeDataRoot(ctx, fs);
     return;
   }
-  const base = path === root.path ? dirname(path) : root.path;
-  removeSingleEntry(base, path, { kind: 'directory' }, fs);
+  removeSingleEntry(baseOf(root, path), path, { kind: 'directory' }, fs);
 }
 
 /** Undo one step of this run and update the in-memory receipt. */
@@ -706,11 +772,17 @@ function applyInstall(
 
   try {
     for (const dir of plan.mkdirs) {
-      const existing = lstatOrNull(dir.path, fs);
-      if (existing !== null) {
-        if (existing.isDirectory()) continue;
+      // Re-walk the path with no-follow stats right before the mkdir, so a
+      // link that appeared since planning refuses rather than being followed.
+      const recheck = checkContainment(
+        baseOf(dir.root, dir.path),
+        dir.path,
+        fs,
+      );
+      if (recheck.finalKind === 'directory') continue;
+      if (recheck.finalKind !== 'absent') {
         throw new Error(
-          `${dir.path} appeared during the run as a non-directory; refusing`,
+          `${dir.path} appeared during the run as a ${recheck.finalKind}; refusing`,
         );
       }
       fs.mkdirSync(dir.path);
@@ -801,6 +873,13 @@ function applyInstall(
         priorTarget: current.priorTarget,
         listed: current.listed,
       });
+    } else if (current.action === 'record') {
+      entries.set(ctx.currentPath, {
+        kind: 'link',
+        path: ctx.currentPath,
+        target: current.versionDir,
+      });
+      persist();
     }
   } catch (error) {
     if (receiptFailed) throw error;
@@ -1110,23 +1189,17 @@ export function uninstallPayload(
     lines.push(
       `kept receipt (${others.length + (dataRootListed ? 1 : 0)} entries remain)`,
     );
+  } else if (dataRootListed) {
+    try {
+      removeDataRoot(ctx, fs);
+    } catch (error) {
+      stopAt(ctx.dataRoot, error);
+    }
+    entries.delete(ctx.dataRoot);
+    lines.push('removed receipt', `removed ${ctx.dataRoot}`);
   } else {
     removeReceiptIfPresent(ctx, fs);
     lines.push('removed receipt');
-    if (dataRootListed) {
-      try {
-        removeSingleEntry(
-          dirname(ctx.dataRoot),
-          ctx.dataRoot,
-          { kind: 'directory' },
-          fs,
-        );
-      } catch (error) {
-        stopAt(ctx.dataRoot, error);
-      }
-      entries.delete(ctx.dataRoot);
-      lines.push(`removed ${ctx.dataRoot}`);
-    }
   }
 
   const currentStat = lstatOrNull(ctx.currentPath, fs);

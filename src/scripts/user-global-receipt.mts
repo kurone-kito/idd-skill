@@ -211,6 +211,17 @@ export function writeReceipt(
   const body = `${JSON.stringify(receipt, null, 2)}\n`;
   writeNewFile(dataRoot, temp, body, fs);
   try {
+    // Re-walk the destination with no-follow stats right before the rename:
+    // it must be absent or a regular file, never a link that appeared since.
+    const destination = checkContainment(dataRoot, path, fs);
+    if (
+      destination.finalKind !== 'absent' &&
+      destination.finalKind !== 'file'
+    ) {
+      throw new Error(
+        `${path} is a ${destination.finalKind}; refusing to replace it`,
+      );
+    }
     fs.renameSync(temp, path);
   } catch (error) {
     try {

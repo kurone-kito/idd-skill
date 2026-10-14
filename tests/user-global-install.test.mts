@@ -681,6 +681,59 @@ test('a directory that existed before install is not listed and survives uninsta
   assert.equal(nodeFs.existsSync(join(home, '.claude', 'skills')), true);
 });
 
+test('a retry after the receipt write failed on a repoint records the link instead of keeping it', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  let repointed = false;
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (op !== 'renameSync') return;
+    const target = String(args[1]);
+    if (target === currentOf(home)) repointed = true;
+    if (repointed && !failed && target.endsWith('receipt.json')) {
+      failed = true;
+      throw new Error('injected receipt failure');
+    }
+  });
+
+  assert.throws(
+    () => installPayload(optionsFor(home, { fs, version: '0.14.1' })),
+    /receipt rewrite failed/,
+  );
+  assert.equal(
+    nodeFs.readlinkSync(currentOf(home)),
+    versionDirOf(home, '0.14.1'),
+  );
+
+  const retry = installPayload(optionsFor(home, { version: '0.14.1' }));
+  assert.ok(retry.lines.some((line) => line.startsWith('record ')));
+  const current = readReceiptEntries(home).find(
+    (entry) => entry.path === currentOf(home),
+  ) as { target?: string } | undefined;
+  assert.equal(current?.target, versionDirOf(home, '0.14.1'));
+
+  uninstallPayload(optionsFor(home, { version: '0.14.1' }));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+});
+
+test('a listed link retargeted by someone else makes install refuse', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const options = optionsFor(home);
+  installPayload(options);
+  const other = join(dataRootOf(home), '0.0.3');
+  nodeFs.mkdirSync(other);
+  nodeFs.unlinkSync(currentOf(home));
+  nodeFs.symlinkSync(other, currentOf(home));
+  const before = snapshot(home);
+
+  assert.throws(() => installPayload(options), /retargeted after install/);
+  assert.deepEqual(snapshot(home), before);
+});
+
 test('every placeholder in the installed payload has a mapping', () => {
   const home = makeHome();
   installPayload(optionsFor(home));
