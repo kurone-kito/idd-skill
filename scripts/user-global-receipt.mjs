@@ -108,6 +108,43 @@ function parseEntry(value, path, dataRoot) {
   if (value.kind === 'directory') {
     return { kind: 'directory', path: entryPath };
   }
+  if (value.kind === 'managed-block') {
+    if (
+      typeof value.sha256 !== 'string' ||
+      !SHA256_PATTERN.test(value.sha256)
+    ) {
+      corrupt(path, `managed-block entry ${entryPath} has no valid sha256`);
+    }
+    if (typeof value.separator !== 'boolean') {
+      corrupt(
+        path,
+        `managed-block entry ${entryPath} has no boolean separator`,
+      );
+    }
+    return {
+      kind: 'managed-block',
+      path: entryPath,
+      sha256: value.sha256,
+      separator: value.separator,
+    };
+  }
+  if (value.kind === 'json-instruction') {
+    if (typeof value.value !== 'string') {
+      corrupt(path, `json-instruction entry ${entryPath} has no string value`);
+    }
+    if (typeof value.keyCreated !== 'boolean') {
+      corrupt(
+        path,
+        `json-instruction entry ${entryPath} has no boolean keyCreated`,
+      );
+    }
+    return {
+      kind: 'json-instruction',
+      path: entryPath,
+      value: value.value,
+      keyCreated: value.keyCreated,
+    };
+  }
   if (value.kind === 'link') {
     if (typeof value.target !== 'string' || !value.target.startsWith('/')) {
       corrupt(path, `link entry ${entryPath} has no absolute target`);

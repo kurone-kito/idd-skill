@@ -23,11 +23,29 @@ const RECEIPT_FILENAME = 'receipt.json';
 /** The receipt format version. A later format bumps this integer. */
 const RECEIPT_FORMAT_VERSION = 1;
 
-/** One created path. A file carries the SHA-256 of the bytes install wrote. */
+/**
+ * One listed path. A file carries the SHA-256 of the bytes install wrote. A
+ * managed block carries the SHA-256 of its span only, and `separator` records
+ * whether install wrote one LF before the span. A JSON instruction carries the
+ * string it added to `instructions`, and `keyCreated` records whether install
+ * also added the `instructions` key.
+ */
 export type ReceiptEntry =
   | { kind: 'file'; path: string; sha256: string }
   | { kind: 'directory'; path: string }
-  | { kind: 'link'; path: string; target: string };
+  | { kind: 'link'; path: string; target: string }
+  | {
+      kind: 'managed-block';
+      path: string;
+      sha256: string;
+      separator: boolean;
+    }
+  | {
+      kind: 'json-instruction';
+      path: string;
+      value: string;
+      keyCreated: boolean;
+    };
 
 /** The parsed receipt: the format version and the listed entries. */
 export interface Receipt {
@@ -150,6 +168,43 @@ function parseEntry(
   }
   if (value.kind === 'directory') {
     return { kind: 'directory', path: entryPath };
+  }
+  if (value.kind === 'managed-block') {
+    if (
+      typeof value.sha256 !== 'string' ||
+      !SHA256_PATTERN.test(value.sha256)
+    ) {
+      corrupt(path, `managed-block entry ${entryPath} has no valid sha256`);
+    }
+    if (typeof value.separator !== 'boolean') {
+      corrupt(
+        path,
+        `managed-block entry ${entryPath} has no boolean separator`,
+      );
+    }
+    return {
+      kind: 'managed-block',
+      path: entryPath,
+      sha256: value.sha256,
+      separator: value.separator,
+    };
+  }
+  if (value.kind === 'json-instruction') {
+    if (typeof value.value !== 'string') {
+      corrupt(path, `json-instruction entry ${entryPath} has no string value`);
+    }
+    if (typeof value.keyCreated !== 'boolean') {
+      corrupt(
+        path,
+        `json-instruction entry ${entryPath} has no boolean keyCreated`,
+      );
+    }
+    return {
+      kind: 'json-instruction',
+      path: entryPath,
+      value: value.value,
+      keyCreated: value.keyCreated,
+    };
   }
   if (value.kind === 'link') {
     if (typeof value.target !== 'string' || !value.target.startsWith('/')) {
