@@ -203,6 +203,12 @@ const DEPENDS_ON_LINE_PATTERN =
   /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+|\[[ xX]\][ \t]+)*Depends on\b/iu;
 const BLOCKED_BY_LINE_PATTERN =
   /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+|\[[ xX]\][ \t]+)*Blocked by\b/iu;
+/**
+ * Raw inline HTML tags, as CommonMark's open and closing tag grammar reads
+ * them. A backtick inside one is not a code delimiter (#4250 review, Copilot).
+ */
+const RAW_INLINE_TAG_PATTERN =
+  /<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*\/?>|<\/[A-Za-z][A-Za-z0-9-]*\s*>/uy;
 // The visible footer lines, allowing any list or blockquote container prefix
 // (#4250 review, Copilot): `> _Effort: M` is still a visible footer.
 const AUTOPILOT_SUITABILITY_FOOTER_PATTERN =
@@ -1028,12 +1034,6 @@ function isBackslashEscaped(text, index) {
   }
   return slashes % 2 === 1;
 }
-/**
- * Raw inline HTML tags, as CommonMark's open and closing tag grammar reads
- * them. A backtick inside one is not a code delimiter (#4250 review, Copilot).
- */
-const RAW_INLINE_TAG_PATTERN =
-  /<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*\/?>|<\/[A-Za-z][A-Za-z0-9-]*\s*>/uy;
 /** The first backtick run of exactly `run` length at or after `from`. */
 function findBacktickRun(text, from, run) {
   let index = from;
