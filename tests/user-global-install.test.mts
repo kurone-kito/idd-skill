@@ -992,3 +992,886 @@ test('every placeholder in the installed payload has a mapping', () => {
     );
   }
 });
+
+// ---------------------------------------------------------------------------
+// An upgrade prunes the skill files the new package no longer ships (#4302)
+// ---------------------------------------------------------------------------
+
+const DROPPED_RELATIVE = 'issue-authoring/references/draft-patterns.md';
+const SPEC_DROPPED_RELATIVE = 'idd-spec-audit/references/report-template.md';
+
+const droppedOf = (home: string, root: '.claude' | '.agents'): string =>
+  join(home, root, 'skills', DROPPED_RELATIVE);
+
+/** A source tree copy that no longer ships the named files under `skills/`. */
+function copySourceWithout(...relatives: string[]): string {
+  const dir = copySourceTree();
+  for (const relative of relatives) {
+    nodeFs.rmSync(join(dir, 'skills', relative));
+  }
+  return dir;
+}
+
+/** Options that install `source` as the upgrade version. */
+function upgradeOptions(
+  home: string,
+  source: string,
+  extra: Partial<UserGlobalOptions> = {},
+): UserGlobalOptions {
+  return optionsFor(home, {
+    sourceRoot: source,
+    version: UPGRADE_VERSION,
+    ...extra,
+  });
+}
+
+type ReceiptRow = { path: string; kind: string; sha256?: string };
+
+const receiptRows = (home: string): ReceiptRow[] =>
+  readReceiptEntries(home) as ReceiptRow[];
+
+const isListed = (home: string, path: string): boolean =>
+  receiptRows(home).some((entry) => entry.path === path);
+
+/** Every listed file exists and still has the hash the receipt records. */
+function assertListedFilesMatchDisk(home: string): void {
+  for (const entry of receiptRows(home)) {
+    if (entry.kind !== 'file') continue;
+    assert.equal(
+      sha256(nodeFs.readFileSync(entry.path)),
+      entry.sha256,
+      `${entry.path} matches the receipt`,
+    );
+  }
+}
+
+/** The path a refusal is expected to name, as a literal pattern. */
+const literal = (value: string): RegExp =>
+  new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
+/**
+ * An fs whose bigint `lstatSync` reports one fixed device and inode for each
+ * named path. A filesystem that folds case or Unicode form reports one file for
+ * two spellings; real inodes cannot show that here, so the fs reports it.
+ */
+function fsReportingIdentity(paths: string[], dev: bigint, ino: bigint): FsOps {
+  const real = nodeFs as unknown as Record<
+    string,
+    (...args: unknown[]) => unknown
+  >;
+  return {
+    ...nodeFs,
+    lstatSync: (path: string, options?: { bigint?: boolean }) => {
+      const stat = real.lstatSync(path, options) as object;
+      return paths.includes(path) && options?.bigint
+        ? Object.create(stat, { dev: { value: dev }, ino: { value: ino } })
+        : stat;
+    },
+  } as unknown as FsOps;
+}
+
+test('an upgrade that drops an unchanged skill file removes it and its receipt entry', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = [droppedOf(home, '.claude'), droppedOf(home, '.agents')];
+  for (const path of dropped) {
+    assert.ok(nodeFs.existsSync(path), 'the file is installed first');
+    assert.ok(isListed(home, path), 'the receipt lists it first');
+  }
+
+  const result = installPayload(upgradeOptions(home, source));
+
+  for (const path of dropped) {
+    assert.equal(nodeFs.existsSync(path), false);
+    assert.equal(isListed(home, path), false);
+    assert.ok(result.lines.includes(`remove ${path}`));
+  }
+  const kept = join(home, '.claude', 'skills', 'issue-authoring', 'references');
+  assert.ok(
+    nodeFs.existsSync(join(kept, 'contract.md')),
+    'a shipped file stays',
+  );
+  assert.ok(isListed(home, join(kept, 'contract.md')));
+  assert.ok(isListed(home, kept), 'the directory stays listed');
+  const olderFile = join(versionDirOf(home), ENTRY_RELATIVE);
+  assert.ok(nodeFs.existsSync(olderFile), 'the older version stays on disk');
+  assert.ok(isListed(home, olderFile), 'the older version stays listed');
+  assertListedFilesMatchDisk(home);
+
+  // The prune is finished, so a repeat install writes nothing at all.
+  let writes = 0;
+  installPayload(
+    upgradeOptions(home, source, {
+      fs: hookedFs((op, args) => {
+        if (isWriteCall(op, args)) writes += 1;
+      }),
+    }),
+  );
+  assert.equal(writes, 0);
+
+  uninstallPayload(upgradeOptions(home, source));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+  assert.equal(nodeFs.existsSync(join(home, '.claude', 'skills')), false);
+  assert.equal(nodeFs.existsSync(join(home, '.agents', 'skills')), false);
+});
+
+test('a dropped skill file that was edited after install is refused, named, and left in place', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const edited = droppedOf(home, '.claude');
+  nodeFs.appendFileSync(edited, 'my own notes\n');
+  const before = snapshot(home);
+
+  for (const run of [
+    () => installPayload(upgradeOptions(home, source)),
+    () => planInstall(upgradeOptions(home, source)),
+  ]) {
+    assert.throws(
+      run,
+      (error: Error) =>
+        literal(edited).test(error.message) &&
+        /edited after install/.test(error.message) &&
+        /nothing was written/.test(error.message),
+    );
+  }
+  assert.deepEqual(snapshot(home), before);
+  assert.ok(nodeFs.readFileSync(edited, 'utf8').endsWith('my own notes\n'));
+  assert.ok(
+    nodeFs.existsSync(droppedOf(home, '.agents')),
+    'the unedited copy is not removed either',
+  );
+  assert.ok(isListed(home, edited));
+});
+
+test('a dropped skill file that is now a symbolic link is refused and nothing is followed', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const sentinel = join(makeSandbox('user-global-sentinel-'), 'sentinel.txt');
+  nodeFs.writeFileSync(sentinel, 'sentinel\n');
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  nodeFs.unlinkSync(dropped);
+  nodeFs.symlinkSync(sentinel, dropped);
+  const before = snapshot(home);
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source)),
+    (error: Error) =>
+      literal(dropped).test(error.message) &&
+      /is now a symlink/.test(error.message),
+  );
+  assert.deepEqual(snapshot(home), before);
+  assert.ok(nodeFs.lstatSync(dropped).isSymbolicLink());
+  assert.equal(nodeFs.readFileSync(sentinel, 'utf8'), 'sentinel\n');
+});
+
+test('a dropped skill file that is now a directory is refused and left in place', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  nodeFs.unlinkSync(dropped);
+  nodeFs.mkdirSync(dropped);
+  nodeFs.writeFileSync(join(dropped, 'mine.txt'), 'mine\n');
+  const before = snapshot(home);
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source)),
+    (error: Error) =>
+      literal(dropped).test(error.message) &&
+      /is now a directory/.test(error.message),
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
+test('a dropped skill file with a second hard link is refused and left in place', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  nodeFs.linkSync(dropped, join(home, 'alias.md'));
+  const before = snapshot(home);
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source)),
+    (error: Error) =>
+      literal(dropped).test(error.message) &&
+      /more than one hard link/.test(error.message),
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
+test('a dropped skill file that is already absent is unlisted and not recreated', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(SPEC_DROPPED_RELATIVE);
+  const claudeCopy = join(home, '.claude', 'skills', SPEC_DROPPED_RELATIVE);
+  const agentsCopy = join(home, '.agents', 'skills', SPEC_DROPPED_RELATIVE);
+  // One copy loses its whole directory, the other only the file.
+  nodeFs.rmSync(dirname(claudeCopy), { recursive: true });
+  nodeFs.rmSync(agentsCopy);
+
+  const result = installPayload(upgradeOptions(home, source));
+
+  for (const path of [claudeCopy, agentsCopy]) {
+    assert.equal(nodeFs.existsSync(path), false, `${path} is not recreated`);
+    assert.equal(isListed(home, path), false);
+    assert.ok(
+      result.lines.includes(`absent ${path} (listed, no longer shipped)`),
+    );
+  }
+
+  uninstallPayload(upgradeOptions(home, source));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+});
+
+test('a file the user added beside a dropped skill file survives the prune', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const mine = join(dirname(droppedOf(home, '.claude')), 'mine.md');
+  nodeFs.writeFileSync(mine, 'mine\n');
+
+  installPayload(upgradeOptions(home, source));
+
+  assert.equal(nodeFs.existsSync(droppedOf(home, '.claude')), false);
+  assert.equal(nodeFs.readFileSync(mine, 'utf8'), 'mine\n');
+  assert.equal(isListed(home, mine), false);
+});
+
+test('a receipt entry that is not a path the prune may touch is refused and the file is untouched', () => {
+  const user = 'mine\n';
+  const cases = [
+    {
+      name: 'a path that climbs out of the skill tree',
+      path: (home: string) =>
+        `${home}/.claude/skills/issue-authoring/../../notes.md`,
+      file: (home: string) => join(home, '.claude', 'notes.md'),
+      message: /not a path the installer creates|under no root/,
+    },
+    {
+      name: 'a non-normalized path that stays inside another skill',
+      path: (home: string) =>
+        `${home}/.claude/skills/issue-authoring/../idd-spec-audit/SKILL.md`,
+      file: (home: string) =>
+        join(home, '.claude', 'skills', 'idd-spec-audit', 'SKILL.md'),
+      message: /not in normalized form/,
+    },
+    {
+      name: 'a skill the package does not ship',
+      path: (home: string) =>
+        join(home, '.claude', 'skills', 'my-own-skill', 'SKILL.md'),
+      file: (home: string) =>
+        join(home, '.claude', 'skills', 'my-own-skill', 'SKILL.md'),
+      message: /not a path the installer creates/,
+    },
+  ];
+  for (const { name, path, file, message } of cases) {
+    const home = makeHome();
+    nodeFs.mkdirSync(dirname(file(home)), { recursive: true });
+    nodeFs.writeFileSync(file(home), user);
+    nodeFs.mkdirSync(dataRootOf(home), { recursive: true });
+    nodeFs.writeFileSync(
+      receiptOf(home),
+      JSON.stringify({
+        version: 1,
+        entries: [{ kind: 'file', path: path(home), sha256: sha256(user) }],
+      }),
+    );
+    const before = snapshot(home);
+
+    assert.throws(() => installPayload(optionsFor(home)), message, name);
+    assert.deepEqual(snapshot(home), before, name);
+    assert.equal(nodeFs.readFileSync(file(home), 'utf8'), user, name);
+  }
+});
+
+test('a dropped skill file under a directory that was swapped for a link is refused and nothing is followed', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const references = dirname(droppedOf(home, '.claude'));
+  const outside = join(makeSandbox('user-global-outside-'), 'references');
+  nodeFs.cpSync(references, outside, { recursive: true });
+  nodeFs.rmSync(references, { recursive: true });
+  nodeFs.symlinkSync(outside, references);
+  const outsideBefore = snapshot(outside);
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source)),
+    /symbolic link/,
+  );
+  assert.deepEqual(snapshot(outside), outsideBefore);
+  assert.ok(nodeFs.existsSync(join(outside, 'draft-patterns.md')));
+});
+
+test('a dropped skill file that is the same file as a shipped one is kept, not removed', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  const shipped = join(dirname(dropped), 'contract.md');
+
+  const result = installPayload(
+    upgradeOptions(home, source, {
+      fs: fsReportingIdentity([dropped, shipped], 7n, 7n),
+    }),
+  );
+
+  assert.ok(
+    result.lines.includes(`keep ${dropped} (the same file as ${shipped})`),
+  );
+  assert.ok(nodeFs.existsSync(dropped), 'the aliased file is not removed');
+  assert.ok(isListed(home, dropped), 'its entry stays listed');
+  assert.equal(
+    nodeFs.existsSync(droppedOf(home, '.agents')),
+    false,
+    'the other copy is a different file and is removed',
+  );
+  assertListedFilesMatchDisk(home);
+
+  uninstallPayload(upgradeOptions(home, source));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+  assert.equal(nodeFs.existsSync(join(home, '.claude', 'skills')), false);
+});
+
+test('a filesystem that reports no inode number does not turn every dropped skill file into an alias', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  const shipped = join(dirname(dropped), 'contract.md');
+
+  installPayload(
+    upgradeOptions(home, source, {
+      fs: fsReportingIdentity([dropped, shipped], 0n, 0n),
+    }),
+  );
+
+  assert.equal(nodeFs.existsSync(dropped), false);
+  assert.equal(isListed(home, dropped), false);
+});
+
+test('two skill files with the same inode number on different devices are not the same file', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  const shipped = join(dirname(dropped), 'contract.md');
+  const real = nodeFs as unknown as Record<
+    string,
+    (...args: unknown[]) => unknown
+  >;
+  const fs = {
+    ...nodeFs,
+    lstatSync: (path: string, options?: { bigint?: boolean }) => {
+      const stat = real.lstatSync(path, options) as object;
+      if (!options?.bigint) return stat;
+      if (path === dropped) {
+        return Object.create(stat, { dev: { value: 7n }, ino: { value: 5n } });
+      }
+      if (path === shipped) {
+        return Object.create(stat, { dev: { value: 8n }, ino: { value: 5n } });
+      }
+      return stat;
+    },
+  } as unknown as FsOps;
+
+  installPayload(upgradeOptions(home, source, { fs }));
+
+  assert.equal(nodeFs.existsSync(dropped), false);
+  assert.equal(isListed(home, dropped), false);
+});
+
+test('a byte-identical file that was there before install is never listed, so the prune never touches it', () => {
+  const home = makeHome();
+  for (const root of ['.claude', '.agents'] as const) {
+    const path = droppedOf(home, root);
+    nodeFs.mkdirSync(dirname(path), { recursive: true });
+    nodeFs.copyFileSync(join(REPO, 'skills', DROPPED_RELATIVE), path);
+  }
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+
+  const result = installPayload(upgradeOptions(home, source));
+
+  for (const root of ['.claude', '.agents'] as const) {
+    const path = droppedOf(home, root);
+    assert.ok(nodeFs.existsSync(path), `${path} is left in place`);
+    assert.equal(isListed(home, path), false);
+    assert.equal(result.lines.includes(`remove ${path}`), false);
+  }
+});
+
+test('a stale temporary file beside a dropped skill file makes install refuse before any write', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  nodeFs.writeFileSync(`${droppedOf(home, '.claude')}.tmp-7`, 'stale\n');
+  const before = snapshot(home);
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source)),
+    (error: Error) =>
+      /crashed run/.test(error.message) &&
+      /refusing to remove/.test(error.message),
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
+test('a dropped skill file edited after the plan stops the prune, keeps the edit, and a retry refuses it', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const racing = droppedOf(home, '.claude');
+  let opens = 0;
+  const fs = hookedFs((op, args) => {
+    if (op !== 'openSync' || String(args[0]) !== racing) return;
+    opens += 1;
+    // The first open is the plan's hash read; the second is the removal's.
+    if (opens === 2) nodeFs.appendFileSync(racing, 'edited late\n');
+  });
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source, { fs })),
+    (error: Error) =>
+      literal(racing).test(error.message) &&
+      /payload is installed/.test(error.message) &&
+      /install again/.test(error.message),
+  );
+  assert.equal(opens, 2, 'the removal opened the file once after the plan');
+  assert.ok(nodeFs.readFileSync(racing, 'utf8').endsWith('edited late\n'));
+  assert.equal(
+    nodeFs.readlinkSync(currentOf(home)),
+    versionDirOf(home, UPGRADE_VERSION),
+    'the new version stays installed',
+  );
+  assert.ok(isListed(home, racing), 'the edited file stays listed');
+  assert.ok(nodeFs.existsSync(droppedOf(home, '.agents')));
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source)),
+    /edited after install/,
+  );
+});
+
+test('a failed removal leaves the new version installed and a consistent receipt, and a retry finishes the prune', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const first = droppedOf(home, '.claude');
+  const second = droppedOf(home, '.agents');
+  const fs = hookedFs((op, args) => {
+    if (op === 'unlinkSync' && String(args[0]) === second) {
+      throw new Error('injected unlink failure');
+    }
+  });
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source, { fs })),
+    (error: Error) =>
+      /payload is installed/.test(error.message) &&
+      /injected unlink failure/.test(error.message) &&
+      literal(second).test(error.message) &&
+      literal(`current used to point at ${versionDirOf(home)}`).test(
+        error.message,
+      ) &&
+      /install again/.test(error.message),
+  );
+  assert.equal(nodeFs.existsSync(first), false);
+  assert.equal(isListed(home, first), false);
+  assert.ok(nodeFs.existsSync(second));
+  assert.ok(isListed(home, second));
+  assert.equal(
+    nodeFs.readlinkSync(currentOf(home)),
+    versionDirOf(home, UPGRADE_VERSION),
+  );
+  assertListedFilesMatchDisk(home);
+
+  installPayload(upgradeOptions(home, source));
+  assert.equal(nodeFs.existsSync(second), false);
+  assert.equal(isListed(home, second), false);
+  assertListedFilesMatchDisk(home);
+});
+
+test('a failed receipt rewrite after a removal names the path, and a retry drops it as absent', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const first = droppedOf(home, '.claude');
+  const second = droppedOf(home, '.agents');
+  let removed = false;
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (op === 'unlinkSync' && String(args[0]) === first) removed = true;
+    if (
+      op === 'renameSync' &&
+      removed &&
+      !failed &&
+      String(args[1]).endsWith('receipt.json')
+    ) {
+      failed = true;
+      throw new Error('injected receipt failure');
+    }
+  });
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source, { fs })),
+    (error: Error) =>
+      /receipt rewrite failed/.test(error.message) &&
+      literal(first).test(error.message) &&
+      /gone from disk but still listed/.test(error.message),
+  );
+  assert.equal(nodeFs.existsSync(first), false);
+  assert.ok(isListed(home, first), 'the receipt still lists the removed file');
+  assert.ok(nodeFs.existsSync(second));
+  assert.ok(
+    planUninstall(upgradeOptions(home, source)).lines.includes(
+      `absent ${first}`,
+    ),
+    'uninstall reports the removed file as absent',
+  );
+
+  const retry = installPayload(upgradeOptions(home, source));
+  assert.ok(
+    retry.lines.includes(`absent ${first} (listed, no longer shipped)`),
+  );
+  assert.ok(retry.lines.includes(`remove ${second}`));
+  assert.equal(isListed(home, first), false);
+  assert.equal(isListed(home, second), false);
+  assertListedFilesMatchDisk(home);
+});
+
+test('a failed receipt rewrite after the last removal says that nothing else is left', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const last = droppedOf(home, '.agents');
+  nodeFs.rmSync(droppedOf(home, '.claude'));
+  let removed = false;
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (op === 'unlinkSync' && String(args[0]) === last) removed = true;
+    if (
+      op === 'renameSync' &&
+      removed &&
+      !failed &&
+      String(args[1]).endsWith('receipt.json')
+    ) {
+      failed = true;
+      throw new Error('injected receipt failure');
+    }
+  });
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source, { fs })),
+    (error: Error) =>
+      literal(last).test(error.message) &&
+      /not yet handled: none/.test(error.message),
+  );
+  assert.ok(failed);
+});
+
+test('an absent dropped skill file whose name the new version uses for a directory stays listed as that directory', () => {
+  const home = makeHome();
+  const oldSource = copySourceTree();
+  nodeFs.writeFileSync(
+    join(oldSource, 'skills', 'issue-authoring', 'notes'),
+    'old\n',
+  );
+  installPayload(
+    optionsFor(home, { sourceRoot: oldSource, version: '98.0.0' }),
+  );
+  const names = ['.claude', '.agents'].map((root) =>
+    join(home, root, 'skills', 'issue-authoring', 'notes'),
+  );
+  for (const name of names) {
+    assert.ok(isListed(home, name));
+    nodeFs.rmSync(name);
+  }
+  const source = copySourceTree();
+  nodeFs.mkdirSync(join(source, 'skills', 'issue-authoring', 'notes'));
+  nodeFs.writeFileSync(
+    join(source, 'skills', 'issue-authoring', 'notes', 'x.md'),
+    'new\n',
+  );
+
+  installPayload(upgradeOptions(home, source));
+
+  for (const name of names) {
+    assert.ok(nodeFs.statSync(name).isDirectory());
+    assert.equal(
+      receiptRows(home).find((entry) => entry.path === name)?.kind,
+      'directory',
+      `${name} is listed as the directory it now is`,
+    );
+  }
+  assertListedFilesMatchDisk(home);
+  uninstallPayload(upgradeOptions(home, source));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+  assert.equal(nodeFs.existsSync(join(home, '.claude', 'skills')), false);
+  assert.equal(nodeFs.existsSync(join(home, '.agents', 'skills')), false);
+});
+
+test('an upgrade that replaces one skill file, drops another, and keeps an entry file lists all of it', () => {
+  const home = makeHome();
+  const harnesses = ['claude'] as const;
+  installPayload(optionsFor(home, { harnesses }));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  nodeFs.appendFileSync(join(source, 'skills', SKILL_RELATIVE), '\nupgrade\n');
+  const newBytes = nodeFs.readFileSync(join(source, 'skills', SKILL_RELATIVE));
+  const entryFile = join(home, '.claude', 'CLAUDE.md');
+  const entryBefore = nodeFs.readFileSync(entryFile);
+
+  installPayload(upgradeOptions(home, source, { harnesses }));
+
+  const replaced = skillFileOf(home, '.claude');
+  assert.deepEqual(nodeFs.readFileSync(replaced), newBytes);
+  assert.equal(
+    receiptRows(home).find((entry) => entry.path === replaced)?.sha256,
+    sha256(newBytes),
+  );
+  assert.equal(nodeFs.existsSync(droppedOf(home, '.claude')), false);
+  assert.equal(isListed(home, droppedOf(home, '.claude')), false);
+  assert.deepEqual(nodeFs.readFileSync(entryFile), entryBefore);
+  assert.ok(isListed(home, entryFile));
+  assertListedFilesMatchDisk(home);
+
+  uninstallPayload(upgradeOptions(home, source, { harnesses }));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+  assert.deepEqual(nodeFs.readdirSync(join(home, '.claude')), []);
+});
+
+test('a dropped skill file that vanishes between the plan and the prune is only unlisted', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = [droppedOf(home, '.claude'), droppedOf(home, '.agents')];
+  let fired = false;
+  const fs = hookedFs((op, args) => {
+    // The repoint comes after planning and before the prune.
+    if (op === 'renameSync' && String(args[1]) === currentOf(home)) {
+      fired = true;
+      for (const path of dropped) nodeFs.rmSync(path);
+    }
+  });
+
+  installPayload(upgradeOptions(home, source, { fs }));
+
+  assert.ok(fired, 'the files were removed between the plan and the prune');
+
+  for (const path of dropped) {
+    assert.equal(isListed(home, path), false);
+    assert.equal(nodeFs.existsSync(path), false);
+  }
+  assertListedFilesMatchDisk(home);
+});
+
+test('a dropped skill file swapped for a symbolic link after the plan is not followed', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const sentinel = join(makeSandbox('user-global-sentinel-'), 'sentinel.txt');
+  nodeFs.writeFileSync(sentinel, 'sentinel\n');
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  let fired = false;
+  const fs = hookedFs((op, args) => {
+    // The repoint comes after planning and before the prune.
+    if (op === 'renameSync' && String(args[1]) === currentOf(home)) {
+      fired = true;
+      nodeFs.unlinkSync(dropped);
+      nodeFs.symlinkSync(sentinel, dropped);
+    }
+  });
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source, { fs })),
+    (error: Error) =>
+      literal(dropped).test(error.message) &&
+      /payload is installed/.test(error.message),
+  );
+  assert.ok(fired);
+  assert.ok(nodeFs.lstatSync(dropped).isSymbolicLink());
+  assert.equal(nodeFs.readFileSync(sentinel, 'utf8'), 'sentinel\n');
+  assert.ok(isListed(home, dropped));
+});
+
+test('a skill directory swapped for a symbolic link after the plan is not followed by the prune', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  const references = dirname(dropped);
+  const outside = join(makeSandbox('user-global-outside-'), 'references');
+  nodeFs.cpSync(references, outside, { recursive: true });
+  const outsideBefore = snapshot(outside);
+  let fired = false;
+  const fs = hookedFs((op, args) => {
+    if (op === 'renameSync' && String(args[1]) === currentOf(home)) {
+      fired = true;
+      nodeFs.rmSync(references, { recursive: true });
+      nodeFs.symlinkSync(outside, references);
+    }
+  });
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source, { fs })),
+    (error: Error) =>
+      literal(dropped).test(error.message) &&
+      /symbolic link/.test(error.message) &&
+      /payload is installed/.test(error.message),
+  );
+  assert.ok(fired);
+  assert.deepEqual(snapshot(outside), outsideBefore);
+  assert.ok(nodeFs.existsSync(join(outside, 'draft-patterns.md')));
+});
+
+test('a failure in a late install step leaves the dropped skill files in place and listed', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = [droppedOf(home, '.claude'), droppedOf(home, '.agents')];
+  let fired = false;
+  const fs = hookedFs((op, args) => {
+    if (
+      op === 'openSync' &&
+      isWriteCall(op, args) &&
+      String(args[0]) === join(home, '.claude', 'CLAUDE.md')
+    ) {
+      fired = true;
+      throw new Error('injected entry-file write failure');
+    }
+  });
+
+  assert.throws(
+    () =>
+      installPayload(
+        upgradeOptions(home, source, { fs, harnesses: ['claude'] }),
+      ),
+    /rolled back/,
+  );
+  assert.ok(fired);
+  for (const path of dropped) {
+    assert.ok(nodeFs.existsSync(path), `${path} is untouched`);
+    assert.ok(isListed(home, path), `${path} is still listed`);
+  }
+  assert.equal(nodeFs.readlinkSync(currentOf(home)), versionDirOf(home));
+  assert.equal(nodeFs.existsSync(versionDirOf(home, UPGRADE_VERSION)), false);
+  assertListedFilesMatchDisk(home);
+});
+
+test('an older version directory inside a skill directory is not taken for a skill file', () => {
+  const home = makeHome();
+  const xdg = join(home, '.claude', 'skills', 'issue-authoring', 'xdg');
+  nodeFs.mkdirSync(xdg, { recursive: true });
+  const env = { HOME: home, XDG_DATA_HOME: xdg };
+  installPayload({ env, homedir: home });
+  const olderFile = join(xdg, 'idd-skill', PACKAGE_VERSION, ENTRY_RELATIVE);
+  assert.ok(nodeFs.existsSync(olderFile));
+
+  installPayload({
+    env,
+    homedir: home,
+    sourceRoot: copySourceTree(),
+    version: UPGRADE_VERSION,
+  });
+
+  assert.ok(nodeFs.existsSync(olderFile), 'the older version stays on disk');
+  assert.ok(
+    (
+      JSON.parse(
+        nodeFs.readFileSync(join(xdg, 'idd-skill', 'receipt.json'), 'utf8'),
+      ).entries as ReceiptRow[]
+    ).some((entry) => entry.path === olderFile),
+    'the older version stays listed',
+  );
+});
+
+test('a source skill with no SKILL.md makes install refuse before any write', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout('idd-spec-audit/SKILL.md');
+  const before = snapshot(home);
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source)),
+    /has no SKILL\.md/,
+  );
+  assert.deepEqual(snapshot(home), before);
+  assert.ok(
+    nodeFs.existsSync(
+      join(home, '.claude', 'skills', 'idd-spec-audit', 'SKILL.md'),
+    ),
+  );
+
+  const fresh = makeHome();
+  assert.throws(
+    () => installPayload(upgradeOptions(fresh, source)),
+    /has no SKILL\.md/,
+  );
+  assert.equal(nodeFs.existsSync(dataRootOf(fresh)), false);
+});
+
+test('an upgrade that drops nothing reports no removal and keeps every listed entry', () => {
+  for (const harnesses of [[], ['claude']] as const) {
+    const home = makeHome();
+    installPayload(optionsFor(home, { harnesses }));
+    const before = receiptRows(home);
+    const skillsBefore = [
+      ...snapshot(join(home, '.claude', 'skills')),
+      ...snapshot(join(home, '.agents', 'skills')),
+    ];
+    const source = copySourceTree();
+
+    const result = installPayload(upgradeOptions(home, source, { harnesses }));
+
+    assert.ok(
+      result.lines.every(
+        (line) => !line.startsWith('remove ') && !line.startsWith('absent '),
+      ),
+      'no removal is reported',
+    );
+    const after = receiptRows(home);
+    // The upgrade adds entries for the new version and updates the link, and
+    // keeps every earlier entry listed, in its original order.
+    const earlier = after.filter((entry) =>
+      before.some((prior) => prior.path === entry.path),
+    );
+    assert.deepEqual(
+      earlier.map((entry) => [entry.path, entry.kind, entry.sha256]),
+      before.map((entry) => [entry.path, entry.kind, entry.sha256]),
+    );
+    assert.deepEqual(
+      [
+        ...snapshot(join(home, '.claude', 'skills')),
+        ...snapshot(join(home, '.agents', 'skills')),
+      ],
+      skillsBefore,
+      'the skill trees keep their bytes',
+    );
+  }
+});
+
+test('planInstall reports the removals an upgrade would make and writes nothing', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const before = snapshot(home);
+
+  const plan = planInstall(upgradeOptions(home, source));
+
+  for (const root of ['.claude', '.agents'] as const) {
+    assert.ok(plan.lines.includes(`remove ${droppedOf(home, root)}`));
+  }
+  assert.deepEqual(snapshot(home), before);
+});
