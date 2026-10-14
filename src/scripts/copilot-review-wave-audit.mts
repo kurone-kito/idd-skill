@@ -394,13 +394,18 @@ const TRIAGE_OUTCOMES: readonly TriageOutcome[] = [
   'deferred',
   'rejected',
 ];
-const TRIAGE_LINE_PREFIX_RE = /^Triage: /mu;
-// The deferral clause of a `**Rejected** — deferred to follow-up issue #<n>
-// (<clause>): <reason>` reply starts with `(urgency ` for an urgency-matrix
-// deferral. Other clauses (`(round …)`, `(needs-decision; …)`, the E10 cap
-// routes) are not governed by the urgency matrix.
+// Any line that opens with `Triage:` counts as an attempted record, even
+// without the space after the colon, so a malformed line cannot pass as
+// unrecorded (Copilot review of #4268).
+const TRIAGE_LINE_PREFIX_RE = /^Triage:/mu;
+// The governing deferral clause of the reply itself. It sits right after the
+// `**Rejected** — deferred to follow-up issue #<n> ` opening, and only an
+// urgency-matrix clause starts with `(urgency `. A later quote of another
+// deferral inside the reason does not count (Copilot review of #4268).
+// Other clauses (`(round …)`, `(needs-decision; …)`, the E10 cap routes) are
+// not governed by the urgency matrix.
 const URGENCY_DEFERRAL_CLAUSE_RE =
-  /deferred to follow-up issue #\d+ \(urgency /u;
+  /^\*\*Rejected\*\* — deferred to follow-up issue #\d+ \(urgency /u;
 
 function isTriageOutcome(
   disposition: Disposition,

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -1293,6 +1293,50 @@ test('computePrAudit triage: two step-1 threads land in the matching byStep cell
   assert.equal(report.triage.contradictions, 0);
 });
 
+test('computePrAudit triage: a Triage line with no space after the colon is malformed', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Medium', 8030)]),
+    ),
+  ];
+  const comments = [
+    reply(
+      10,
+      8030,
+      '**Accepted** — fixed\n\nTriage:tier low; urgency medium; step 2; verdict defer',
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 0);
+  assert.equal(report.triage.unrecorded, 1);
+  assert.equal(report.triage.malformed, 1);
+  assert.equal(report.triage.contradictions, 0);
+  assert.equal(
+    checkFailures(summarizeCohort([report]), [report], SHARE_OPTIONS).length,
+    1,
+  );
+});
+
+test('computePrAudit triage: a round deferral that quotes an urgency deferral is not a contradiction', () => {
+  const reviews = [
+    review(1, '2026-01-01T00:00:00Z', openReviewBody([openLine('Low', 8031)])),
+  ];
+  const comments = [
+    reply(
+      10,
+      8031,
+      '**Rejected** — deferred to follow-up issue #12 (round 12/12): earlier reply said deferred to follow-up issue #3 (urgency low; severity Low)\n\nTriage: tier low; urgency low; step 0; verdict keep',
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 1);
+  assert.equal(report.triage.contradictions, 0);
+});
+
 test('summarizeCohort triage: sums the per-PR triage objects key by key', () => {
   const reviews = [
     review(
@@ -1681,6 +1725,126 @@ test('CLI: --help lists the check-mode flags', () => {
   assert.match(output, /--check/);
   assert.match(output, /--since <YYYY-MM-DD>/);
   assert.match(output, /--min-recorded-share <n>/);
+});
+
+// A gh stub that answers the three calls auditPr makes from one JSON fixture
+// (path in WAVE_AUDIT_FIXTURE), so the real --check exit and output path runs
+// with no network.
+const GH_FIXTURE_STUB = `const fs = require('node:fs');
+const args = process.argv.slice(2);
+const fixture = JSON.parse(fs.readFileSync(process.env.WAVE_AUDIT_FIXTURE, 'utf8'));
+if (args[0] === 'api' && args[1] === 'graphql') {
+  const ids = args.filter((a) => a.startsWith('ids[]=')).map((a) => a.slice('ids[]='.length));
+  process.stdout.write(JSON.stringify({ data: { nodes: ids.map((id) => ({ id, lastEditedAt: null })) } }));
+  process.exit(0);
+}
+if (args[0] === 'api' && String(args[1]).includes('/pulls/42/reviews')) {
+  for (const r of fixture.reviews) process.stdout.write(JSON.stringify(r) + '\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && String(args[1]).includes('/pulls/42/comments')) {
+  for (const c of fixture.comments) process.stdout.write(JSON.stringify(c) + '\\n');
+  process.exit(0);
+}
+process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
+process.exit(1);
+`;
+
+const COPILOT_LOGIN = 'copilot-pull-request-reviewer[bot]';
+
+function runCheckWithFixture(
+  fixture: { reviews: unknown[]; comments: unknown[] },
+  extraArgs: string[],
+): { status: number | null; stdout: string; stderr: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-check-'));
+  const fixturePath = join(dir, 'fixture.json');
+  writeFileSync(fixturePath, JSON.stringify(fixture));
+  const restore = stubExecutable('gh', GH_FIXTURE_STUB);
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        CLI_PATH,
+        '--repo',
+        'kurone-kito/idd-skill',
+        '--prs',
+        '42',
+        ...extraArgs,
+      ],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, WAVE_AUDIT_FIXTURE: fixturePath },
+      },
+    );
+    return {
+      status: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    };
+  } finally {
+    restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('CLI --check: a clean PR writes the report to stdout, nothing to stderr, and exits 0', () => {
+  const result = runCheckWithFixture(
+    {
+      reviews: [
+        {
+          id: 1,
+          submitted_at: '2026-01-01T00:00:00Z',
+          body: NO_FINDINGS_FIXTURE,
+          user: { login: COPILOT_LOGIN },
+        },
+      ],
+      comments: [],
+    },
+    ['--check'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  const parsed = JSON.parse(result.stdout) as {
+    reports: Array<{ pr: number; triage: { contradictions: number } }>;
+    summary: { prCount: number };
+  };
+  assert.equal(parsed.reports[0]?.pr, 42);
+  assert.equal(parsed.reports[0]?.triage.contradictions, 0);
+  assert.equal(parsed.summary.prCount, 1);
+});
+
+test('CLI --check: a contradiction writes the report to stdout, the message to stderr, and exits 1', () => {
+  const result = runCheckWithFixture(
+    {
+      reviews: [
+        {
+          id: 1,
+          submitted_at: '2026-01-01T00:00:00Z',
+          body: openReviewBody([openLine('Medium', 9701)]),
+          user: { login: COPILOT_LOGIN },
+        },
+      ],
+      comments: [
+        {
+          id: 10,
+          in_reply_to_id: 9701,
+          body: `**Accepted** — fixed\n\n${TRIAGE_DEFER_LINE}`,
+          created_at: '2026-01-02T00:00:00Z',
+          node_id: 'PRRC_10',
+        },
+      ],
+    },
+    ['--check'],
+  );
+  assert.equal(result.status, 1, result.stderr);
+  const parsed = JSON.parse(result.stdout) as {
+    reports: Array<{ triage: { contradictions: number } }>;
+  };
+  assert.equal(parsed.reports[0]?.triage.contradictions, 1);
+  assert.match(
+    result.stderr,
+    /copilot-review-wave-audit: check: 1 recorded triage contradiction/,
+  );
 });
 
 test('CLI: --help exits 0 with no gh call', () => {
