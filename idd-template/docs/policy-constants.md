@@ -713,7 +713,8 @@ specific raise above that band by listing it in
 the bundle, the approved limit, the issue, and the reason. For a per-file
 `phaseLimitBytes` raise, the bundle field names the `instructionSizeBudgets`
 entry `id`. The check then accepts that bundle or entry only up to the
-approved limit.
+approved limit. An id that names both a bundle and an entry is ambiguous, so
+neither takes that approval.
 
 **Mechanically enforced (#2697).** `node scripts/audit-docs.mjs --check`
 fails, when the base ref and its manifest are available, when a commit

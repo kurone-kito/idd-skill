@@ -108,6 +108,13 @@ disambiguates it a second time. Add a new entry (with its own `id`) for
 any future glob that needs the same per-file byte cap, rather than
 widening an existing entry's `glob` to cover unrelated files.
 
+A `contextCeiling.nearCeilingRaiseApprovals` record can approve a
+`phaseLimitBytes` raise for one entry by naming the entry's `id` in its
+`bundle` field. Approval ids are scoped to their own array. An id that names
+both a `bundleBudgets` bundle and an `instructionSizeBudgets` entry is
+ambiguous, so neither section accepts that approval and the near-ceiling
+check fails closed.
+
 Like `checkFileSets`'s changed-file scoping, each entry only measures
 files that changed against the resolved git comparison base (skipped
 with a notice, never an error, when no base resolves — for example a

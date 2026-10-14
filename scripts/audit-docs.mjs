@@ -1828,15 +1828,32 @@ function checkNearCeilingRatchet(
     noticeUtilizationPct,
     baseManifest.contextCeiling?.noticeUtilizationPct,
   );
-  const approvedRaises = parseNearCeilingRaiseApprovals(
+  // Approval ids are scoped to their own array (audit/README.md). An id that
+  // names both a bundleBudgets bundle and an instructionSizeBudgets entry is
+  // ambiguous, so neither section takes that approval (fail closed).
+  const approvals = parseNearCeilingRaiseApprovals(
     config.nearCeilingRaiseApprovals,
+  );
+  const bundleIds = new Set(currentBundleStats.map((stat) => stat.id));
+  const instructionSizeBudgetIds = new Set(
+    currentInstructionSizeBudgetStats.map((stat) => stat.id),
+  );
+  const bundleApprovals = new Map(
+    [...approvals].filter(
+      ([id]) => bundleIds.has(id) && !instructionSizeBudgetIds.has(id),
+    ),
+  );
+  const instructionSizeBudgetApprovals = new Map(
+    [...approvals].filter(
+      ([id]) => instructionSizeBudgetIds.has(id) && !bundleIds.has(id),
+    ),
   );
   errors.push(
     ...collectNearCeilingRatchetViolations(
       effectiveNoticeUtilizationPct,
       currentBundleStats,
       baseBundleStats,
-      approvedRaises,
+      bundleApprovals,
     ),
   );
   // Per-file instructionSizeBudgets ratchet (#3028): same base ref and the
@@ -1852,7 +1869,7 @@ function checkNearCeilingRatchet(
       effectiveNoticeUtilizationPct,
       currentInstructionSizeBudgetStats,
       baseInstructionSizeBudgetStats,
-      approvedRaises,
+      instructionSizeBudgetApprovals,
     ),
   );
 }

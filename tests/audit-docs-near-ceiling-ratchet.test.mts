@@ -367,3 +367,56 @@ test('near-ceiling-ratchet: the same per-file phaseLimitBytes raise fails audit-
     /near-ceiling-ratchet: fixture-budget phaseLimitBytes raised from 1000 to 2000/,
   );
 });
+
+test('near-ceiling-ratchet: an approval id that also names a bundle is ambiguous and grants neither section (#4233)', (t) => {
+  // The same id names an instructionSizeBudgets entry and a bundleBudgets
+  // bundle. The per-file raise is approved under that id, but the id is
+  // ambiguous, so the approval must not authorize the per-file raise.
+  const SHARED_ID = 'shared-id';
+  const manifest = (
+    phaseLimitBytes: number,
+    approvals?: unknown[],
+  ): Record<string, unknown> => ({
+    contextCeiling: {
+      ...CONTEXT_CEILING,
+      ...(approvals === undefined
+        ? {}
+        : { nearCeilingRaiseApprovals: approvals }),
+    },
+    instructionSizeBudgets: [
+      {
+        id: SHARED_ID,
+        glob: '*.instructions.md',
+        phaseLimitBytes,
+        alwaysLoadedLimitBytes: 1000,
+      },
+    ],
+    bundleBudgets: [
+      {
+        id: SHARED_ID,
+        files: ['idd-fixture.instructions.md'],
+        limitBytes: 1000,
+      },
+    ],
+  });
+  const { dir, cleanup } = makeFixture(
+    manifest(1000),
+    manifest(2000, [
+      {
+        bundle: SHARED_ID,
+        limitBytes: 2000,
+        issue: 4233,
+        reason: 'Fixture approval for the shared-id ambiguity test.',
+      },
+    ]),
+    { 'idd-fixture.instructions.md': 'x'.repeat(960) },
+  );
+  t.after(cleanup);
+
+  const result = runAuditDocs(dir);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(
+    result.stderr,
+    /near-ceiling-ratchet: shared-id phaseLimitBytes raised from 1000 to 2000/,
+  );
+});
