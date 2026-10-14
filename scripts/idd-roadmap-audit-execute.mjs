@@ -26,6 +26,8 @@ import {
   enumerateRoadmapGraph,
   isClaimStaleByAge,
 } from './discover-roadmap-graph.mjs';
+import { deriveGhHttpStatus } from './gh-http-status.mjs';
+import { findOwnLoadControlRefusal } from './github-api-refusal.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   classifyHelperError,
@@ -75,7 +77,7 @@ const NON_CHILD_RELATIONSHIP_KINDS = new Set(['non-blocking-reference']);
 // before --apply, exactly as the merge gate trusts that review actually
 // happened.
 const MECHANICAL_GATE_NOTE =
-  'Mechanical preconditions only: every descendant is closed/complete with no open / unresolved / inaccessible / linked-PR / nested-roadmap / childless / cycle / human-gate blocker. Separately verify the roadmap’s free-form success criteria and autonomy-gap items before --apply (this helper does not, just as the merge gate trusts that review happened).';
+  'Mechanical preconditions only: the roadmap is open (a roadmap that is not open is not ready and reports the roadmap-closed blocker), and every descendant is closed/complete with no open / unresolved / inaccessible / linked-PR / nested-roadmap / childless / cycle / human-gate blocker. Separately verify the roadmap’s free-form success criteria and autonomy-gap items before --apply (this helper does not, just as the merge gate trusts that review happened).';
 /** Branch field that scopes a roadmap-audit coordination claim to one roadmap. */
 function roadmapAuditBranchPattern(roadmapNumber) {
   return new RegExp(`^roadmap-audit/${roadmapNumber}-`);
@@ -113,6 +115,17 @@ export function evaluateRoadmapAuditGates(report, options = {}) {
       POLICY_DEFAULTS.labels.needsDecisionLabelName,
     ),
   ]);
+  // A root that is not OPEN is never ready: an audit must not comment on or
+  // close an already-closed roadmap again (#4275). Checked first, so it leads
+  // the blocker list; any state other than OPEN, including '', fails closed.
+  if (report.root.state !== 'OPEN') {
+    blockers.push({
+      kind: 'roadmap-closed',
+      target: rootNumber,
+      provenance: [rootNumber],
+      detail: `roadmap #${rootNumber} is not open (state ${JSON.stringify(report.root.state)})`,
+    });
+  }
   // Root carrying a human-gate label is never auto-closed.
   const rootNode = report.nodes.find((node) => node.number === rootNumber);
   const rootBlockedLabel = (rootNode?.labels ?? []).find((label) =>
@@ -1042,6 +1055,24 @@ function applyLocalCoordinationGate(resolvedDeps, branchName, verdict) {
   return false;
 }
 /**
+ * True when a failed apply write provably sent nothing. An own load-control
+ * refusal means no `gh` process started. For a comment post (`comment`), a
+ * first-attempt 401, 404, or 422 means the request was rejected before
+ * anything landed, because the comment-post retry layer rethrows those only
+ * for a first attempt (#4171). A close (`close`) has no status rule, since a
+ * rejected close may still have landed.
+ */
+function applyWriteSentNothing(error, kind) {
+  if (findOwnLoadControlRefusal(error) !== undefined) return true;
+  if (kind !== 'comment') return false;
+  const status = deriveGhHttpStatus(error);
+  return status === 401 || status === 404 || status === 422;
+}
+/** The thrown error's message, for the end of a partial verdict's result. */
+function thrownMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+/**
  * Build the A1.5 verdict and, under `--apply`, execute the audit. The dry-run
  * path performs NO mutation. The apply path fails closed: if the roadmap is
  * not ready it exits without mutating; if it is ready it RE-VALIDATES the
@@ -1050,6 +1081,11 @@ function applyLocalCoordinationGate(resolvedDeps, branchName, verdict) {
  * owned claim or any newly-discovered blocker. Only after both re-validations
  * pass does it post the evidence comment, close the roadmap, and release the
  * claim — in that order.
+ *
+ * A root that is not OPEN is never ready (the roadmap-closed blocker). Under
+ * --apply, when that blocker is the only one, the claim checks still run: an
+ * unowned claim keeps the #1299 verdicts below, and an owned claim stops with
+ * the claim still held and no write, so the operator releases it.
  *
  * One claim-loss shape at the EARLY re-validation is recognized as a distinct
  * idempotent no-op instead of a bare failure (#1299): a retry after a prior
@@ -1105,7 +1141,12 @@ export async function runRoadmapAuditExecute(argv, deps) {
     verdict.result = MECHANICAL_GATE_NOTE;
     return { verdict, exitCode: ready ? 0 : 1 };
   }
-  if (!ready) {
+  // A first read whose only blocker is roadmap-closed still runs the checks
+  // below, so the #1299 already-complete retry keeps working (#4275). Any other
+  // blocker stays not-ready at once, before any claim check.
+  const closedOnly =
+    blockers.length === 1 && blockers[0]?.kind === 'roadmap-closed';
+  if (!ready && !closedOnly) {
     // Apply but not ready: fail closed, do not mutate.
     verdict.result =
       'not-ready: completion blockers present; no comment, close, or claim release attempted';
@@ -1166,6 +1207,13 @@ export async function runRoadmapAuditExecute(argv, deps) {
     verdict.result = `claim not owned on re-validation (reason="${earlyClaim.reason}": ${explainRoadmapClaimReason(earlyClaim.reason)}); no mutation${viewerLoginUnavailableCaveat(resolvedDeps.viewerLoginUnavailable)}`;
     return { verdict, exitCode: 1 };
   }
+  if (closedOnly) {
+    // Owned claim on a roadmap that is not open (#4275): nothing is commented
+    // on, closed or released here. The claim stays held until its owner posts
+    // the unclaimed-by marker, so the next action is that release, not a rerun.
+    verdict.result = `not-ready: roadmap #${roadmapNumber} is not open (state ${JSON.stringify(report.root.state)}); the roadmap-audit claim is still held by agent ${earlyClaim.activeClaim.agentId} (claim ${earlyClaim.activeClaim.claimId}); no comment, close or release was sent; next action: post this claim's unclaimed-by marker with the post-idd-marker helper, using a release timestamp; do not run --apply again.`;
+    return { verdict, exitCode: 1 };
+  }
   // Local worktree/branch safety (#2225): a released/stale claim record
   // proves nothing about what is actually checked out locally. Re-checked
   // again below, after the graph re-fetch and immediately before the close
@@ -1196,8 +1244,11 @@ export async function runRoadmapAuditExecute(argv, deps) {
     verdict.blockers = revalidatedBlockers;
     verdict.ready = false;
     verdict.evidenceBody = '';
-    verdict.result =
-      're-validation found new completion blockers immediately before close; no mutation';
+    verdict.result = revalidatedBlockers.some(
+      (blocker) => blocker.kind === 'roadmap-closed',
+    )
+      ? `not-ready: roadmap #${roadmapNumber} is not open immediately before close (state ${JSON.stringify(revalidated.root.state)}); the roadmap-audit claim is still held by agent ${earlyClaim.activeClaim.agentId} (claim ${earlyClaim.activeClaim.claimId}); no comment, close or release was sent; next action: post this claim's unclaimed-by marker with the post-idd-marker helper, using a release timestamp; do not run --apply again.`
+      : 're-validation found new completion blockers immediately before close; no mutation';
     return { verdict, exitCode: 1 };
   }
   // The graph re-fetch can span many API calls during which another session
@@ -1232,7 +1283,16 @@ export async function runRoadmapAuditExecute(argv, deps) {
     args.criteriaNote,
   );
   verdict.evidenceBody = finalEvidenceBody;
-  resolvedDeps.postEvidenceComment(roadmapNumber, finalEvidenceBody);
+  try {
+    resolvedDeps.postEvidenceComment(roadmapNumber, finalEvidenceBody);
+  } catch (error) {
+    const nothingSent = applyWriteSentNothing(error, 'comment');
+    verdict.nothingSent = nothingSent;
+    verdict.result = nothingSent
+      ? `evidence comment not posted; nothing was sent for it. Roadmap #${roadmapNumber} was not closed, and the roadmap-audit claim is still held; do not run --apply again. Next action: release the claim by posting this claim's unclaimed-by marker (agent ${claim.activeClaim.agentId}, claim ${claim.activeClaim.claimId}) with the post-idd-marker helper, using a release timestamp. ${thrownMessage(error)}`
+      : `evidence comment may have been posted, and roadmap #${roadmapNumber} was not closed; the roadmap-audit claim is still held; do not run --apply again. Next action: release the claim by posting this claim's unclaimed-by marker (agent ${claim.activeClaim.agentId}, claim ${claim.activeClaim.claimId}) with the post-idd-marker helper, using a release timestamp. ${thrownMessage(error)}`;
+    return { verdict, exitCode: 1 };
+  }
   const preCloseClaim = resolvedDeps.revalidateClaim({
     issueNumber: roadmapNumber,
     roadmapNumber,
@@ -1258,13 +1318,31 @@ export async function runRoadmapAuditExecute(argv, deps) {
   }
   // Ownership held through the comment: close, then release using the last
   // verdict's activeClaim and the normalized second-precision "now".
-  resolvedDeps.closeRoadmap(roadmapNumber);
-  resolvedDeps.releaseClaim(roadmapNumber, {
-    agentId: preCloseClaim.activeClaim.agentId,
-    claimId: preCloseClaim.activeClaim.claimId,
-    timestamp: nowIso,
-  });
+  try {
+    resolvedDeps.closeRoadmap(roadmapNumber);
+  } catch (error) {
+    const nothingSent = applyWriteSentNothing(error, 'close');
+    verdict.nothingSent = nothingSent;
+    verdict.result = nothingSent
+      ? `roadmap #${roadmapNumber} is still open with the evidence comment posted; nothing was sent for the close, and the roadmap-audit claim is still held; do not run --apply again. Next action: read the roadmap's state. If it is closed, release the claim by posting this claim's unclaimed-by marker (agent ${preCloseClaim.activeClaim.agentId}, claim ${preCloseClaim.activeClaim.claimId}) with the post-idd-marker helper, using a release timestamp. If it is still open and the claim is still this session's, close it as completed, then release the claim the same way. ${thrownMessage(error)}`
+      : `the roadmap close may have landed, and the roadmap-audit claim is still held; do not run --apply again. Next action: read the roadmap's state. If it is closed, release the claim by posting this claim's unclaimed-by marker (agent ${preCloseClaim.activeClaim.agentId}, claim ${preCloseClaim.activeClaim.claimId}) with the post-idd-marker helper, using a release timestamp. If it is still open and the claim is still this session's, close it as completed, then release the claim the same way. ${thrownMessage(error)}`;
+    return { verdict, exitCode: 1 };
+  }
   verdict.closed = true;
+  try {
+    resolvedDeps.releaseClaim(roadmapNumber, {
+      agentId: preCloseClaim.activeClaim.agentId,
+      claimId: preCloseClaim.activeClaim.claimId,
+      timestamp: nowIso,
+    });
+  } catch (error) {
+    const nothingSent = applyWriteSentNothing(error, 'comment');
+    verdict.nothingSent = nothingSent;
+    verdict.result = nothingSent
+      ? `roadmap #${roadmapNumber} is closed, and the roadmap-audit claim is still active; nothing was sent for the unclaimed-by marker; do not run --apply again. Next action: read the roadmap's comments for this claim's unclaimed-by marker and, when it is absent and the claim is still this session's, release the claim by posting this claim's unclaimed-by marker (agent ${preCloseClaim.activeClaim.agentId}, claim ${preCloseClaim.activeClaim.claimId}) with the post-idd-marker helper, using a release timestamp. ${thrownMessage(error)}`
+      : `roadmap #${roadmapNumber} is closed, and the release of the roadmap-audit claim may have landed; do not run --apply again. Next action: read the roadmap's comments for this claim's unclaimed-by marker and, when it is absent and the claim is still this session's, release the claim by posting this claim's unclaimed-by marker (agent ${preCloseClaim.activeClaim.agentId}, claim ${preCloseClaim.activeClaim.claimId}) with the post-idd-marker helper, using a release timestamp. ${thrownMessage(error)}`;
+    return { verdict, exitCode: 1 };
+  }
   verdict.claimReleased = true;
   verdict.result =
     'roadmap closed as completed; evidence comment posted and roadmap-audit claim released';
@@ -1668,6 +1746,21 @@ function printHelp() {
   --apply) and, when given, --agent-id. --owner and --repo must be passed
   together or not at all.
 
+  Partial failure under --apply: the helper makes three writes in order (the
+  evidence comment, the close, then the release of the claim), each one time.
+  When a write throws, the helper stops at that step, never retries the write,
+  and prints this verdict with exit 1. The result names the next action and
+  ends with the thrown error's message. nothingSent is true only when that
+  write provably sent nothing: a load-control refusal, or, for a comment post,
+  a first-attempt HTTP 401, 404 or 422. Otherwise nothingSent is false and the
+  write may have landed. The three outcomes are: the evidence comment failed,
+  so the roadmap is not closed and the claim is still held; the close failed,
+  so the roadmap may still be open and the claim is still held; the release
+  failed, so the roadmap is closed and the claim may still be active. In every
+  case, do not run --apply again. Releasing the claim means posting this
+  claim's unclaimed-by marker with the post-idd-marker helper, using the claim's
+  agent id, its claim id, and a release timestamp.
+
   CLAIM REJECTION REASONS: a not-owned result's "reason" code is one of:
     match                 the claim is owned (not a rejection)
     missing-active-claim  no active claim is present on the roadmap issue
@@ -1691,12 +1784,13 @@ function printHelp() {
   failed lookup is never silently indistinguishable from a real not-owned
   claim. Absent (never explicitly false) whenever the lookup succeeded.
 
-  SCOPE: this helper gates only the MECHANICAL completion preconditions (all
-  descendants closed/complete; no open / unresolved / inaccessible / linked-PR
-  / nested-roadmap / childless / cycle / human-gate blocker). It does NOT verify
-  the roadmap's free-form success criteria or autonomy-gap items — the caller
-  must confirm those separately before --apply, exactly as the merge gate
-  trusts that review actually happened.
+  SCOPE: this helper gates only the MECHANICAL completion preconditions (the
+  roadmap is open, so a roadmap that is not open is not ready and reports the
+  roadmap-closed blocker; all descendants closed/complete; no open / unresolved
+  / inaccessible / linked-PR / nested-roadmap / childless / cycle / human-gate
+  blocker). It does NOT verify the roadmap's free-form success criteria or
+  autonomy-gap items — the caller must confirm those separately before
+  --apply, exactly as the merge gate trusts that review actually happened.
 `);
 }
 async function main() {

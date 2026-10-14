@@ -1742,7 +1742,82 @@ test('treats pull request references as unresolved issue targets', async () => {
       target: 411,
       relationship: 'task-list',
       evidence: '- [ ] #411',
-      reason: 'issue_not_found',
+      reason: 'pull_request_not_merged',
+    },
+  ]);
+  assert.deepEqual(graph.pullRequestReferences, []);
+});
+
+test('#4281: a merged pull request reference resolves without a diagnostic', async () => {
+  const issues = new Map<number, unknown>([
+    [410, roadmapIssue(410, '- [ ] #411', 'root-roadmap')],
+    [
+      411,
+      {
+        number: 411,
+        title: 'merged pull request 411',
+        state: 'closed',
+        body: '',
+        labels: [],
+        pull_request: {
+          url: 'https://example.test/pulls/411',
+          merged_at: '2026-10-01T00:00:00Z',
+        },
+      },
+    ],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(410, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(graph.diagnostics.unresolvedReferences, []);
+  assert.deepEqual(graph.pullRequestReferences, [
+    {
+      source: 410,
+      target: 411,
+      relationship: 'task-list',
+      evidence: '- [ ] #411',
+    },
+  ]);
+  assert.deepEqual(graph.executionCandidates, []);
+  assert.equal(
+    graph.nodes.some((node) => node.number === 411),
+    false,
+  );
+});
+
+test('#4281: a closed-unmerged pull request reference stays unresolved', async () => {
+  const issues = new Map<number, unknown>([
+    [410, roadmapIssue(410, '- [ ] #411', 'root-roadmap')],
+    [
+      411,
+      {
+        number: 411,
+        title: 'closed pull request 411',
+        state: 'closed',
+        body: '',
+        labels: [],
+        pull_request: {
+          url: 'https://example.test/pulls/411',
+          merged_at: null,
+        },
+      },
+    ],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(410, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(graph.pullRequestReferences, []);
+  assert.deepEqual(graph.diagnostics.unresolvedReferences, [
+    {
+      source: 410,
+      target: 411,
+      relationship: 'task-list',
+      evidence: '- [ ] #411',
+      reason: 'pull_request_not_merged',
     },
   ]);
 });

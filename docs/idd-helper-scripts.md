@@ -798,20 +798,40 @@ in this preamble, since the fallback differs per helper.
   enumeration and classification
 - `scripts/idd-roadmap-audit-execute.mjs` for the A1.5 roadmap-completion
   mutation: dry-run gates only the mechanical completion preconditions
-  (all descendants closed/complete, no open/unresolved/nested-roadmap
-  blocker) via the roadmap-graph traversal and emits `{ready, blockers,
-  evidenceBody}` — it does **not** verify the roadmap's free-form success
-  criteria or autonomy-gap items, which the caller must confirm
-  separately before `--apply`; `--apply` re-validates the roadmap-audit
-  claim and the graph immediately before mutating, then posts the
-  evidence comment, closes the completed roadmap, and releases the claim
-  (referenced in
+  (the roadmap itself is open; a roadmap that is not open is not ready and
+  reports the `roadmap-closed` blocker; all descendants closed/complete, no
+  open/unresolved/nested-roadmap blocker) via the roadmap-graph traversal and
+  emits `{ready, blockers, evidenceBody}` — it does **not** verify the
+  roadmap's free-form success criteria or autonomy-gap items, which the
+  caller must confirm separately before `--apply`; `--apply` re-validates
+  the roadmap-audit claim and the graph immediately before mutating, then
+  posts the evidence comment, closes the completed roadmap, and releases
+  the claim (referenced in
   [kurone-kito/idd-skill#1071](https://github.com/kurone-kito/idd-skill/issues/1071))
   `--criteria-note <text>` (#4034) records the caller's own check of those
   criteria on the evidence body as a `Success criteria: <text>` line. The text
   is trimmed, and an empty or whitespace-only value is a usage error that posts
   nothing. Without the flag the body carries a fixed line saying the helper did
   not verify the criteria.
+  If one of the three apply writes throws, the helper stops at that step,
+  never retries it, and returns the verdict with exit 1. Its `nothingSent`
+  field is `true` only when that write provably sent nothing (a load-control
+  refusal, or for a comment post an HTTP 401, 404, or 422 on its first
+  attempt), and `false` when the write may have landed. The next action depends
+  on the step. A failed evidence comment leaves the claim held, so release it.
+  A failed close may leave the roadmap open with the evidence comment posted,
+  so read its state: release the claim if the roadmap is closed, and close it as
+  completed and then release the claim if it is still open and the claim is
+  still this session's. A failed release leaves the roadmap closed with the
+  claim possibly active, so read the roadmap's comments for this claim's
+  `unclaimed-by` marker and release the claim when that marker is absent and
+  the claim is still this session's. In every case, do not run `--apply` again.
+  Releasing a claim means posting its `unclaimed-by` marker with the
+  `post-idd-marker` helper, using the claim's agent id, claim id, and a release
+  timestamp. A refused release was observed on 2026-10-14 on roadmap
+  [kurone-kito/idd-skill#4108](https://github.com/kurone-kito/idd-skill/issues/4108):
+  the roadmap had closed, the claim stayed active, and the operator posted the
+  marker by hand.
 - `scripts/discover-readiness-check.mjs` for A3 readiness criterion
   evaluation (referenced in
   [kurone-kito/idd-skill#391](https://github.com/kurone-kito/idd-skill/issues/391)).
@@ -1169,16 +1189,24 @@ in this preamble, since the fallback differs per helper.
   ```
 
 - `scripts/publish-authoring-hold.mjs` (`idd-publish-authoring-hold`,
-  issues #4127 and #4171) publishes one drafted orphan issue under the
-  issue-authoring hold, running the authoring contract's New-issue
-  ownership steps in order. It refuses `--shape child` (exit `2`),
-  requires `--review-result <path>` (a JSON object with
-  `"completed": true`; any `findings` entry must be `fixed` or
-  `rejected`), and stops with the `blocked-by-human` outcome (exit `2`)
-  when `issueAuthoring.journalIssue` is unset or unverifiable. It then
-  puts the `authoring-publication` line first in the body, lints that
-  exact body with `audit-authored-issue.mjs --new-issue` and looks up
-  the authoring and bucket labels. Without `--apply` it renders the
+  issues #4127 and #4171, and issue `#4253`) publishes one drafted issue
+  under the issue-authoring hold, running the authoring contract's
+  New-issue ownership steps in order. The default `--shape orphan`
+  publishes a standalone held orphan. `--shape carrier` publishes a draft
+  carrier, labelled with the authoring label and the authoring-only label,
+  and accepts only `--bucket ready` (exit `2` otherwise). A carrier is
+  linted with `audit-authored-issue.mjs --shape carrier`, which needs
+  markdown-it: without it the lint refuses, and nothing is written. The
+  helper refuses `--shape child` (exit `2`). An orphan requires
+  `--review-result <path>` (a JSON object with `"completed": true`; any
+  `findings` entry must be `fixed` or `rejected`); a carrier's review
+  result is optional, and when given it must be a JSON object whose
+  `completed` is a boolean and whose `findings`, if present, is an array of
+  objects. The helper stops with the `blocked-by-human`
+  outcome (exit `2`) when `issueAuthoring.journalIssue` is unset or
+  unverifiable. It then puts the `authoring-publication` line first in the
+  body, lints that exact body with `audit-authored-issue.mjs --new-issue`
+  and looks up the labels it applies. Without `--apply` it renders the
   pending publication-intent record through `post-idd-marker.mjs`'s dry
   run and prints the plan (exit `0`), with no trust or permission
   check. With `--apply`, and only when the authenticated login is listed
@@ -1523,13 +1551,21 @@ default below is unchanged.
   - `roadmapNodes`: `number[]` — nested roadmap nodes discovered through
     traversal; **excludes** the root roadmap (A1 traversal entry point)
   - `executionCandidates`: `number[]`
+  - `pullRequestReferences`: `[{ source: number, target: number,`
+    `relationship: string, evidence: string }]`. Each reference whose
+    target is a merged pull request resolves the reference (issue `#4281`):
+    the target gets no node and no traversal, and no
+    `unresolvedReferences` entry. The edge still appears in `edges`.
   - `diagnostics`: `{ duplicateReferences: object[], cycles: object[],`
     `inaccessibleReferences: object[], unresolvedReferences: object[] }`.
     `duplicateReferences` does not report a task-list entry plus a native
     sub-issue link for the same child under the same parent: that pair is
     one membership, and both edges stay in `edges`. Every other pair of
     different relationships on one source and target, for example a
-    task-list entry plus a `Blocked by` line, is still reported.
+    task-list entry plus a `Blocked by` line, is still reported. An open or
+    closed-unmerged pull request target appears in `unresolvedReferences`
+    with reason `pull_request_not_merged`; a number that is neither an
+    issue nor a pull request keeps reason `issue_not_found`.
   - `summary`: `{ rootNumber: number, nodeCount: number, edgeCount: number,`
     `roadmapNodeCount: number, executionCandidateCount: number,`
     `duplicateReferenceCount: number, cycleCount: number,`
@@ -3152,6 +3188,83 @@ The adopted helper boundaries are intentionally narrow:
   `idd-review-fix.instructions.md` stays authoritative; this helper is the
   helper-first convenience path with the manual REST + GraphQL fallback
   retained.
+
+#### Triage record flags
+
+With `--tier` and `--urgency` both given, the helper writes one `Triage:`
+line before the reply-identity stamp, so the E4 tier, the E4 urgency, the
+relax step, and the E5 verdict travel with the reply. The other triage
+flags feed that line. Without the pair they have no line to carry them and
+change nothing, except two flags that are refused with a usage error:
+`--path-b`, when combined with any other triage flag, and `--override`,
+which needs the pair. The line is written
+whenever the pair is given. `critiqueLoop.triageRecord` (default `off`)
+decides only whether the pair is required, whether an `enforce` refusal
+applies, and whether `--override` is accepted.
+
+The line has a fixed layout. A part in brackets appears only when it is
+set. `verdict` and `blocked` appear only under `deferByUrgency`
+`severity-tiered`:
+
+```text
+Triage: tier <low|medium|high>; urgency <very-low|low|medium|high>; step <0|1|2>[; converged <7-hex>][; Copilot <low|medium|high>][; safety][; verdict <defer|keep>][; blocked <reason>][; override: <reason>]
+```
+
+Flags, one line each:
+
+- `--tier <low|medium|high>`: the E4 tier of the finding. Needs `--urgency`.
+- `--urgency <very-low|low|medium|high>`: the E4 urgency score. Needs
+  `--tier`.
+- `--copilot-label <low|medium|high>`: Copilot's own severity label, if any.
+- `--safety-class`: the finding is in the safety class.
+- `--lite`: the caller follows the lite profile. The relax step stays `0`,
+  and no review list is read.
+- `--advisory-converged <sha>`: the full head SHA that the
+  advisory-convergence verdict covered. Under `severity-tiered` without
+  `--lite`, any other value is refused. With the pair and a `reviewPolicy`
+  other than `copilot-advisory`, the flag is refused too. Only a convergence
+  that raised the step appears on the line, as its first seven characters.
+  Drop the flag after a push, since the head moved.
+- `--path-b`: the reply answers a PATH B item. It cannot combine with any
+  other triage flag.
+- `--scope-fence`: the finding is scope-fenced. This blocks a deferral.
+- `--protected-authority`: the reply's author is a CODEOWNER or a required
+  reviewer. This blocks a deferral.
+- `--accepted-mid-fix`: the item was Accepted in an earlier E5 pass, and its
+  fix is still in progress. This blocks a deferral.
+- `--override <reason>`: posts an Accepted reply that the defer matrix
+  refuses, and records the reason as the line's last part, after
+  `override:`. See the rules below.
+
+Rules:
+
+- **Required pair.** Under `record` or `enforce`, an `--apply` reply whose
+  body opens with `**Accepted**` or `**Rejected**` must carry both `--tier`
+  and `--urgency`, unless it is a `--path-b` reply. A
+  `**Rejection confirmed by maintainer**` body is exempt. A missing pair
+  exits `1` with kind `usage` and posts nothing. With the pair, a body that
+  already holds a `Triage:` line is refused, because the helper writes the
+  line itself.
+- **Compute-only mode.** `--pr <number>` with `--tier` or `--urgency` (or
+  both), and none of `--comment-id`, `--review-id`, `--item-title`,
+  `--item-index`, `--body`, or `--apply`, prints a JSON object on stdout
+  with `mode` set to `triage`, `prNumber`, and `triage` (the line). It posts
+  nothing and exits `0`. A lone score flag takes this path too, so the pair
+  check names the missing flag. It accepts no `--override`. A refused input
+  exits `1` with kind `usage`. It reads GitHub only under `severity-tiered`
+  without `--lite`.
+- **Override.** `--override` needs `record` or `enforce`, `deferByUrgency`
+  `severity-tiered`, the pair, an `**Accepted**` body, and a `defer` verdict.
+  A `keep` verdict is refused with a usage error. The reason must be one
+  non-empty line.
+- **Enforce refusal.** Under `enforce` with `deferByUrgency`
+  `severity-tiered`, an `--apply` Accepted reply whose verdict is `defer`,
+  and that has no `--override`, posts nothing and exits `1` with kind
+  `gate`. The message is the verdict line followed by
+  `; pass --override "<reason>" to post anyway`. The helper scores again
+  right before the post, so a review count that changed in between decides.
+  Under any other `deferByUrgency`, `enforce` behaves as `record`, and the
+  helper writes one warning line on stderr.
 
 ## Stable Helper Evidence Outputs
 

@@ -155,6 +155,7 @@ scripts/triage-structural-evidence.mjs linguist-generated=true
 scripts/trial-merge-audit.mjs linguist-generated=true
 scripts/trial-scratch.mjs linguist-generated=true
 scripts/update-fixtures.mjs linguist-generated=true
+scripts/user-global-entry-files.mjs linguist-generated=true
 scripts/user-global-install.mjs linguist-generated=true
 scripts/user-global-paths.mjs linguist-generated=true
 scripts/user-global-receipt.mjs linguist-generated=true

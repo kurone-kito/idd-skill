@@ -1758,6 +1758,17 @@ it. The needs-decision route uses the same definition. The trade-off is that
 an unlisted gap in a narrowing pull request stays deferrable, so the
 acceptance criteria are the lever for making such a gap adopt-now.
 
+#### Review-loop audit (2026-10-13)
+
+An audit of 100 merged pull requests in kurone-kito/idd-skill (2026-10-13)
+found six deferral-format replies on four pull requests. Five of the six
+follow Low-severity findings. The sixth records no severity tier, so its
+severity is unknown, and the audit cannot say whether it deferred a Medium
+or High finding. The same audit found that a Copilot overview format change
+had left the review-wave audit's open-finding counts at zero without any
+error. Recording the urgency on each disposition is what lets the defer
+matrix run. Roadmap kurone-kito/idd-skill#4182 responds to this audit.
+
 ### Needs-decision deferral of review findings (kurone-kito/idd-skill#3776)
 
 The review loop stops for a person at several points: the

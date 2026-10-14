@@ -938,7 +938,7 @@ test('a receipt that lists a user symbolic link as a link entry is corrupt for i
 
 test('a receipt that lists a path the installer never creates is refused by install and uninstall', () => {
   const home = makeHome();
-  const userFile = join(home, '.claude', 'CLAUDE.md');
+  const userFile = join(home, '.claude', 'notes.md');
   nodeFs.writeFileSync(userFile, 'mine\n');
   nodeFs.mkdirSync(dataRootOf(home), { recursive: true });
   nodeFs.writeFileSync(

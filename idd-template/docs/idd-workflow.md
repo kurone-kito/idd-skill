@@ -1051,7 +1051,11 @@ Running this variant safely requires:
   equivalent). As starting values an operator may tune — this guide's
   own starting choice, not measured limits — start no new worker while
   the 1-minute load exceeds the core count or the available memory is
-  under 2 GiB; dispatch fewer workers or wait instead. In one
+  under 2 GiB. A `host-load` stop with a readable load and core count is
+  waited out: the orchestrator re-checks every 60 seconds and dispatches once
+  `orchestrator.hostLoadClearStreak` (default 3) consecutive readings have a
+  free slot, stopping at `orchestrator.hostLoadWaitCeiling` (default `PT30M`).
+  A memory stop is not waited out; dispatch fewer workers instead. In one
   orchestrated private downstream adopter's run (reported 2026-09-30,
   kurone-kito/idd-skill#3677), a delegated worker's tool calls stopped
   returning and the runtime ended it (`Agent stalled: no progress for
@@ -1198,8 +1202,14 @@ Running this variant safely requires:
   `gh pr view <n> --json mergeable,mergeStateStatus`) or an orphaned
   claim before dispatching further workers, rather than assuming success
   or failure either way.
-- **Held-renewal failures.** The orchestrator renews a held worker's claim as
-  section 4 of its phase file describes. A failed `claimed-by` renewal is
+- **Held-worker renewal.** A roster worker in a hold (not `disposed`, claim
+  taken in section 3 step 4) is renewed at the orchestrator's wake-ups in
+  section 4 of its phase file. At or after 72 h from its first hold comment's
+  `created_at`, post `unclaimed-by` for that claim and record the hold and cap
+  in the run report; once that succeeds, mark the entry `disposed`. Before the
+  cap, each `claimed-by` re-post, due every 12 h from the latest valid one,
+  first has the claim revalidation gate confirm the active claim's agent id
+  and claim id, then copies its `branch` verbatim. A failed heartbeat is
   retried once; if the retry also fails, the run report records the hold and
   the failed post, and the claim is left untouched. A failed 72-hour
   `unclaimed-by` leaves the claim in place, and the run report records that
@@ -1247,7 +1257,7 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    and is not treated as worktree-less. A readable linked record stays
    authoritative. For a worktree-less claim, take the issue number from the
    worker's brief in the agent listing, or from the issue-number prefix of its
-   report draft in the session scratchpad, and never from a `main` branch. Then
+   report draft in the session scratchpad, and never from the default branch. Then
    read that issue's trusted `claimed-by` and `unclaimed-by` markers for the
    agent-id and claim-id, and apply the same test, so that both the agent id and
    the claim id must match the marker. Also enumerate the candidates for

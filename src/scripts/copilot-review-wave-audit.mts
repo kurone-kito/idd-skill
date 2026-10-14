@@ -115,6 +115,8 @@ export interface RawReview {
   submittedAt: string | null;
   body: string;
   login: string;
+  /** The commit the review was made on (REST `commit_id`). */
+  commitId?: string | null;
 }
 
 export interface RawComment {
@@ -123,6 +125,30 @@ export interface RawComment {
   body: string;
   createdAt: string | null;
   lastEditedAt?: string | null;
+  login?: string | null;
+  path?: string | null;
+  side?: string | null;
+  /** REST `original_line`: the line on the commit the comment was made on. */
+  originalLine?: number | null;
+  pullRequestReviewId?: number | null;
+}
+
+/** One file entry of a `repos/.../compare/{base}...{head}` response. */
+export interface CompareFile {
+  filename: string;
+  patch?: string;
+}
+
+/**
+ * Where a Copilot inline finding sits relative to the previous push (issue
+ * #4190). `unknown` covers every comment the locality rules cannot place.
+ */
+export interface FindingLocality {
+  firstWave: number;
+  nearPreviousPush: number;
+  sameFileElsewhere: number;
+  untouchedFile: number;
+  unknown: number;
 }
 
 export interface ParsedOverview {
@@ -213,6 +239,7 @@ export interface PrAuditReport {
   threads: FindingThread[];
   transitions: TransitionRow[];
   triage: TriageAudit;
+  findingLocality: FindingLocality;
   /** Merge time from `gh pr list` under `--limit`; `null` under `--prs`. */
   mergedAt: string | null;
 }
@@ -230,6 +257,7 @@ export interface CohortSummary {
   allLowFollowed: { followed: number; total: number };
   transitions: TransitionRow[];
   triage: TriageAudit;
+  findingLocality: FindingLocality;
 }
 
 function emptyDispositionCounts(): Record<Disposition, number> {
@@ -584,20 +612,160 @@ export function buildTransitionTable(
 // Pure core: per-PR and cohort aggregation
 // ---------------------------------------------------------------------------
 
+/** A finding this close to a line the previous push changed is `nearPreviousPush`. */
+const NEAR_PREVIOUS_PUSH_LINE_DISTANCE = 3;
+/** GitHub's compare endpoint caps its `files` list at this many entries. */
+const COMPARE_FILES_CAP = 300;
+const HUNK_HEADER_RE = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/u;
+
+/**
+ * The new-file line numbers a unified-diff `patch` changed (issue #4190).
+ * A `+` line records its line and advances; a `-` line records the line it
+ * would occupy without advancing; a space advances; `\` and empty lines are
+ * ignored. A `patch` field has no `---`/`+++` file header, so a removed line
+ * such as `-- x` is correctly read as a deletion.
+ */
+export function parseChangedNewLines(patch: string): number[] {
+  const changed = new Set<number>();
+  let counter: number | null = null;
+  for (const line of patch.split('\n')) {
+    const header = HUNK_HEADER_RE.exec(line);
+    if (header) {
+      counter = Number(header[1]);
+      continue;
+    }
+    if (counter === null) {
+      continue;
+    }
+    if (line.startsWith('+')) {
+      changed.add(counter);
+      counter += 1;
+    } else if (line.startsWith('-')) {
+      changed.add(counter);
+    } else if (line.startsWith(' ')) {
+      counter += 1;
+    }
+  }
+  return [...changed].sort((a, b) => a - b);
+}
+
+/**
+ * The compare response's file list, or `null` when it cannot be trusted:
+ * a non-array, or exactly the endpoint's cap, which may hide a file that
+ * the previous push touched. A `null` makes its comments `unknown`, never
+ * `untouchedFile`.
+ */
+export function toCompareFiles(raw: unknown): readonly CompareFile[] | null {
+  if (!Array.isArray(raw) || raw.length >= COMPARE_FILES_CAP) {
+    return null;
+  }
+  return raw.map((entry: unknown): CompareFile => {
+    const file = (entry ?? {}) as { filename?: unknown; patch?: unknown };
+    return {
+      filename: String(file.filename ?? ''),
+      ...(typeof file.patch === 'string' ? { patch: file.patch } : {}),
+    };
+  });
+}
+
+function emptyFindingLocality(): FindingLocality {
+  return {
+    firstWave: 0,
+    nearPreviousPush: 0,
+    sameFileElsewhere: 0,
+    untouchedFile: 0,
+    unknown: 0,
+  };
+}
+
+/** Only Copilot's own inline finding comments count, never replies. */
+function isCopilotInlineFinding(comment: RawComment): boolean {
+  return isCopilotReviewerLogin(comment.login) && comment.inReplyToId === null;
+}
+
+function classifyFindingLocality(
+  comment: RawComment,
+  reviewsInOrder: readonly RawReview[],
+  reviewIndexById: ReadonlyMap<number, number>,
+  compareFiles: ReadonlyMap<string, readonly CompareFile[] | null>,
+): keyof FindingLocality {
+  const reviewIndex =
+    comment.pullRequestReviewId === null ||
+    comment.pullRequestReviewId === undefined
+      ? undefined
+      : reviewIndexById.get(comment.pullRequestReviewId);
+  if (reviewIndex === undefined) {
+    return 'unknown';
+  }
+  if (reviewIndex === 0) {
+    return 'firstWave';
+  }
+  const previous = reviewsInOrder[reviewIndex - 1];
+  const current = reviewsInOrder[reviewIndex];
+  if (!previous || !current) {
+    return 'unknown';
+  }
+  const { commitId: base } = previous;
+  const { commitId: head } = current;
+  if (!base || !head || base === head) {
+    return 'unknown';
+  }
+  const files = compareFiles.get(`${base}...${head}`);
+  if (!files) {
+    return 'unknown';
+  }
+  const path = comment.path;
+  const line = comment.originalLine;
+  if (comment.side === 'LEFT' || !path || line === null || line === undefined) {
+    return 'unknown';
+  }
+  const file = files.find((entry) => entry.filename === path);
+  if (!file) {
+    return 'untouchedFile';
+  }
+  if (typeof file.patch !== 'string') {
+    return 'unknown';
+  }
+  const near = parseChangedNewLines(file.patch).some(
+    (changed) => Math.abs(changed - line) <= NEAR_PREVIOUS_PUSH_LINE_DISTANCE,
+  );
+  return near ? 'nearPreviousPush' : 'sameFileElsewhere';
+}
+
 /**
  * Pure composition: given one PR's Copilot reviews (already filtered to
  * `isCopilotReviewerLogin`, sorted to submission order) and its review
- * comments, compute the full per-PR report. No `gh` call inside -- see
- * {@link auditPr} for the fetch-then-compute wrapper.
+ * comments, compute the full per-PR report. `compareFiles` is keyed by
+ * `base...head`; a missing key, or a `null` entry, makes its comments
+ * `unknown`. No `gh` call inside -- see {@link auditPr} for the
+ * fetch-then-compute wrapper.
  */
 export function computePrAudit(
   prNumber: number,
   copilotReviewsInOrder: readonly RawReview[],
   comments: readonly RawComment[],
+  compareFiles: ReadonlyMap<string, readonly CompareFile[] | null> = new Map(),
 ): PrAuditReport {
   const parsedReviews = copilotReviewsInOrder.map((review) =>
     parseOverviewBody(review.body),
   );
+
+  const findingLocality = emptyFindingLocality();
+  const reviewIndexById = new Map(
+    copilotReviewsInOrder.map((review, index) => [review.id, index] as const),
+  );
+  for (const comment of comments) {
+    if (isCopilotInlineFinding(comment)) {
+      findingLocality[
+        classifyFindingLocality(
+          comment,
+          copilotReviewsInOrder,
+          reviewIndexById,
+          compareFiles,
+        )
+      ] += 1;
+    }
+  }
 
   let v2Count = 0;
   let legacyCount = 0;
@@ -656,6 +824,7 @@ export function computePrAudit(
     threads,
     transitions,
     triage,
+    findingLocality,
     mergedAt: null,
   };
 }
@@ -688,8 +857,14 @@ export function summarizeCohort(
   }
 
   const triage = emptyTriageAudit();
+  const findingLocality = emptyFindingLocality();
   for (const report of reports) {
     addTriageAudit(triage, report.triage);
+    for (const key of Object.keys(
+      findingLocality,
+    ) as (keyof FindingLocality)[]) {
+      findingLocality[key] += report.findingLocality[key];
+    }
     reviewCount += report.reviewCount;
     v2Count += report.v2Count;
     legacyCount += report.legacyCount;
@@ -736,6 +911,7 @@ export function summarizeCohort(
       ...(transitionTotals.get(severity) ?? { followed: 0, last: 0 }),
     })),
     triage,
+    findingLocality,
   };
 }
 
@@ -747,6 +923,7 @@ interface RestReviewPayload {
   id?: unknown;
   submitted_at?: unknown;
   body?: unknown;
+  commit_id?: unknown;
   user?: { login?: unknown } | null;
 }
 
@@ -756,6 +933,11 @@ interface RestCommentPayload {
   body?: unknown;
   created_at?: unknown;
   node_id?: unknown;
+  user?: { login?: unknown } | null;
+  path?: unknown;
+  side?: unknown;
+  original_line?: unknown;
+  pull_request_review_id?: unknown;
 }
 
 function toRawReview(raw: RestReviewPayload): RawReview {
@@ -764,6 +946,7 @@ function toRawReview(raw: RestReviewPayload): RawReview {
     submittedAt: typeof raw.submitted_at === 'string' ? raw.submitted_at : null,
     body: String(raw.body ?? ''),
     login: String(raw.user?.login ?? ''),
+    commitId: typeof raw.commit_id === 'string' ? raw.commit_id : null,
   };
 }
 
@@ -779,6 +962,15 @@ function toRawComment(
     body: String(raw.body ?? ''),
     createdAt: typeof raw.created_at === 'string' ? raw.created_at : null,
     lastEditedAt,
+    login: typeof raw.user?.login === 'string' ? raw.user.login : null,
+    path: typeof raw.path === 'string' ? raw.path : null,
+    side: typeof raw.side === 'string' ? raw.side : null,
+    originalLine:
+      typeof raw.original_line === 'number' ? raw.original_line : null,
+    pullRequestReviewId:
+      typeof raw.pull_request_review_id === 'number'
+        ? raw.pull_request_review_id
+        : null,
   };
 }
 
@@ -870,7 +1062,78 @@ export function auditPr(
     return toRawComment(comment, lastEditedAtByNodeId.get(nodeId));
   });
 
-  return computePrAudit(prNumber, copilotReviews, comments);
+  return computePrAudit(
+    prNumber,
+    copilotReviews,
+    comments,
+    fetchCompareFilesForFindings(owner, repo, copilotReviews, comments),
+  );
+}
+
+/**
+ * One `compare/{base}...{head}` lookup. The response is not paginated and
+ * a diff's patches can be large, so the body is read unbounded. Any failure
+ * (including the cap check in {@link toCompareFiles}) yields `null`, which
+ * the audit reads as an unknown locality, never a fatal error.
+ */
+function fetchCompareFiles(
+  owner: string,
+  repo: string,
+  range: string,
+): readonly CompareFile[] | null {
+  try {
+    const hostname = resolveGhApiHostname();
+    const raw = ghTextUnbounded(
+      [
+        'api',
+        `repos/${owner}/${repo}/compare/${range}`,
+        ...(hostname ? ['--hostname', hostname] : []),
+        '--jq',
+        '.files',
+      ],
+      { timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS },
+    );
+    return toCompareFiles(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One compare lookup per distinct `base...head` pair that a Copilot inline
+ * finding on the later review actually needs. Pairs with a null or equal
+ * commit are skipped; they are `unknown` without a fetch.
+ */
+function fetchCompareFilesForFindings(
+  owner: string,
+  repo: string,
+  reviewsInOrder: readonly RawReview[],
+  comments: readonly RawComment[],
+): Map<string, readonly CompareFile[] | null> {
+  const reviewIdsWithFindings = new Set(
+    comments
+      .filter((comment) => isCopilotInlineFinding(comment))
+      .map((comment) => comment.pullRequestReviewId)
+      .filter((id): id is number => typeof id === 'number'),
+  );
+  const compareFiles = new Map<string, readonly CompareFile[] | null>();
+  for (let index = 1; index < reviewsInOrder.length; index += 1) {
+    const previous = reviewsInOrder[index - 1];
+    const current = reviewsInOrder[index];
+    if (!previous || !current || !reviewIdsWithFindings.has(current.id)) {
+      continue;
+    }
+    const { commitId: base } = previous;
+    const { commitId: head } = current;
+    if (!base || !head || base === head) {
+      continue;
+    }
+    const range = `${base}...${head}`;
+    if (!compareFiles.has(range)) {
+      compareFiles.set(range, fetchCompareFiles(owner, repo, range));
+    }
+  }
+  return compareFiles;
 }
 
 // ---------------------------------------------------------------------------

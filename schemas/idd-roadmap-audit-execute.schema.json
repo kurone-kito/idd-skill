@@ -51,6 +51,7 @@
           "kind": {
             "type": "string",
             "enum": [
+              "roadmap-closed",
               "roadmap-blocked",
               "childless",
               "open-child",
@@ -107,6 +108,10 @@
     "localCoordinationNote": {
       "type": "string",
       "description": "Present only when the local worktree/branch state check (#2225) found something worth a human's attention: a positively broken matched worktree (which also blocks the apply), or a non-blocking informational signal (a present-but-clean matched worktree, an unreadable local git state, or a repo-wide detached worktree). Absent when no local worktree exists for the branch at all."
+    },
+    "nothingSent": {
+      "type": "boolean",
+      "description": "Present only on a failed apply write (the evidence comment, the close, or the claim release): true when that write provably sent nothing (a load-control refusal, or for a comment post an HTTP 401, 404, or 422 on its first attempt), false when it may have landed. Absent on every other verdict."
     }
   },
   "additionalProperties": false

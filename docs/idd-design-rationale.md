@@ -2015,6 +2015,128 @@ it. The needs-decision route uses the same definition. The trade-off is that
 an unlisted gap in a narrowing pull request stays deferrable, so the
 acceptance criteria are the lever for making such a gap adopt-now.
 
+#### Review-loop audit (2026-10-13)
+
+The figures in this subsection were measured on 2026-10-14 from GitHub
+pull request and review data and from the git history at `origin/main`
+commit `5bcea4d4a`. Item 4 is a sample classification, with the categories
+defined in that item.
+
+1. Cohort: the 100 merged pull requests of kurone-kito/idd-skill that
+   are numbered 3936 to 4158 and were merged at or before
+   2026-10-13T06:58:55Z, the merge time of pull request 4157. The rule
+   fixes the cohort, so later merges do not change it. The first merge in
+   the cohort is at 2026-10-09T06:40:05Z and the last at
+   2026-10-13T06:58:55Z. The members are:
+   3936, 3937, 3938, 3940, 3962, 3963, 3964, 3965, 3966, 3967, 3968,
+   3969, 3971, 3976, 3977, 3979, 3980, 3981, 3983, 3985, 3986, 3988,
+   3989, 3990, 3991, 3992, 3993, 3994, 3995, 3996, 3997, 3999, 4000,
+   4001, 4002, 4003, 4004, 4005, 4016, 4017, 4018, 4020, 4023, 4024,
+   4026, 4027, 4028, 4029, 4030, 4031, 4036, 4038, 4039, 4040, 4041,
+   4043, 4044, 4045, 4047, 4048, 4052, 4055, 4056, 4057, 4058, 4060,
+   4061, 4062, 4068, 4069, 4072, 4074, 4076, 4077, 4078, 4091, 4092,
+   4096, 4100, 4102, 4103, 4105, 4125, 4126, 4131, 4134, 4135, 4137,
+   4140, 4141, 4143, 4144, 4145, 4146, 4149, 4151, 4152, 4154, 4157,
+   4158;
+   that is 100 pull requests. A pull request's relax step comes from its
+   Copilot review count alone: step 0 below 4 reviews, step 1 at 4 to 6,
+   and step 2 at 7 or more, which is the `[4, 7]` threshold list without
+   an advisory-convergence raise.
+2. Deferral replies in the cohort of item 1, written in the policy's
+   deferral form: six replies on four pull requests. Pull request #4043 has
+   one review-thread reply. Pull request #3966 has two conversation replies,
+   pull request #4044 has two conversation replies, and pull request #3971
+   has one reply within a conversation comment. By review count, pull
+   request #4043 is at step 0 with 2 reviews, pull request #4044 at step 1
+   with 4, pull request #3966 at step 2 with 16, and pull request #3971 at
+   step 2 with 32. Five of the six replies follow Low findings. The sixth,
+   on pull request #3971, records no tier: it carries only a round-count
+   clause, "round 5/5". Across the cohort, 64 pull requests are at step 0,
+   16 at step 1, and 20 at step 2. The 20 at step 2 have 358 review-thread
+   replies that begin with `**Accepted**`. Conversation replies are not in
+   that count. Of 535 review-thread replies in the cohort that begin with
+   `**Accepted**` or `**Rejected**`, one records an urgency: the reply on
+   pull request #4043. The two conversation replies that record urgencies,
+   on pull request #3966 and on pull request #4044, are outside that count.
+3. On `origin/main` at `5bcea4d4a`, `decideUrgencyDefer` and
+   `relaxStepClauseParts` in `src/scripts/policy-helpers.mts` have no
+   runtime caller. `relaxStepForReviewCount` in the same file is called
+   by `src/scripts/resolve-review-thread.mts`, which commit `4da6d5595`
+   added.
+4. Accepted Copilot findings at step 1 or later in the cohort of item 1: 293
+   in all, 45 at step 1 and 248 at step 2. A sample of 45 was drawn on
+   2026-10-14: 7 from the step 1 findings and 38 from the step 2 findings,
+   taking the first items of each stratum in SHA-256 order of the finding's
+   comment id. A read-only reviewer that had not seen these counts
+   classified each finding once: safety 21, correctness 19, tests 2, wording
+   3, naming 0, maintainability 0. Safety covers an unsafe or wrong
+   operation, a bypassed guard, a false pass, a permission or secret
+   problem, or a CI-stability failure. Correctness covers any other wrong
+   behaviour, output, condition, or contract. Tests covers test coverage or
+   test code only. Maintainability covers local structure with no behaviour
+   change. Naming covers identifiers, file names, flags, labels, and
+   headings. Wording covers prose and formatting with no behaviour change.
+   This is a sample estimate, not a measurement. The categories are not the
+   repository's triage fingerprint classes, and the line between safety and
+   correctness is a judgement.
+5. Pull request size in the cohort of item 1. Changed lines are the
+   additions plus deletions that GitHub reports for each pull request at
+   merge. The 64 pull requests with at most 3 Copilot reviews have a median
+   of 122.5 changed lines, and the 20 with 7 or more have a median of 967.5.
+   Measured at the first Copilot review (the reviewed commit against its
+   merge base with main) for the same two groups, the medians are 123.5 and
+   492.5. Spearman correlation between changed lines at merge and Copilot
+   review count over all 100: 0.57. The earlier 2026-10-13 measurement
+   reported 106 and 541 lines at the first review, a median of 724 lines of
+   fixes after it, and a Spearman value of 0.54, on samples of 20 pull
+   requests. Those values do not reproduce on this cohort. The 20 pull
+   requests with 7 or more reviews are the whole group of that size here,
+   and by the method above their first-review median is 492.5, not 541. The
+   earlier group of 20 with at most 3 reviews is not identified in the
+   repository, so its 106 cannot be checked. The method behind the 724 and
+   the 0.54 is not recorded, so neither is carried forward.
+6. Of 181 later-wave findings in the 12 longest pull requests of the cohort,
+   83 (46%) were within 3 lines of the previous fix, 52 elsewhere in the
+   same file, and 46 in files the previous fix did not touch. The 12 longest
+   are the pull requests with the most Copilot reviews, with ties going to
+   the higher number: 3971, 3981, 4041, 4077, 3966, 4030, 4018, 4000, 3977,
+   3938, 4058 and 3997. A later-wave finding is an inline Copilot comment in
+   a review after the first Copilot review. The previous fix is the diff
+   from the previous Copilot review's commit to this review's commit. A
+   finding is within 3 lines when its last line is within 3 lines of a line
+   that diff changes. Re-derived on 2026-10-14 from the cohort in item 1,
+   and the counts agree with the earlier figures.
+7. Authored effort and loop length in the cohort, by the effort marker
+   on the issue that each pull request's branch names: `L` 8 pull
+   requests, 6 with 7 or more Copilot reviews, median 8.5; `M` 35, 5,
+   median 2; `S` 33, 2, median 2. The 24 pull requests whose issue has
+   no effort marker include 7 with 7 or more reviews, so the 20 at step
+   2 are 6 `L`, 5 `M`, 2 `S` and 7 without a marker.
+8. Copilot's review overview changed twice. The measurements come from every
+   Copilot review on pull requests updated between 2026-10-03 and
+   2026-10-12. The `Open (N)` header was last seen on 2026-10-07T05:04:09Z
+   (pull request #3783), and the `N open findings` header was first seen on
+   2026-10-07T18:17:30Z (pull request #3782). Within the cohort, pull
+   request #3940 still used relative item links, as `(#discussion_rN)`, at
+   2026-10-09T09:41:37Z, and the first absolute item link is in pull
+   request #3962 at 2026-10-09T17:20:37Z. Across all reviews measured here,
+   relative links last appear in pull request #3851 at 2026-10-09T15:21:12Z,
+   and absolute links first appear in that pull request at
+   2026-10-09T16:59:13Z. At the revision this branch was based on,
+   2897c0c1c, `copilot-overview-sections.mts` recognized only the `Open (N)`
+   section header, and its item pattern matched only relative links. A
+   section with an `N open findings` header and absolute links therefore
+   produced no item and no unparsed reason, so `copilot-review-wave-audit`
+   counted the review as clean. The audit reported no open-finding
+   appearances in any of the 431 reviews of the cohort, and flagged none as
+   unparsed. The headers of those reviews sum to 442 open findings. That is
+   a sum over reviews, so an item open in several reviews is counted once
+   for each review. Main at `5bcea4d4a` recognizes both headers (commit
+   `05ac23927`, issue #4184), and its parser returns 442 open items for the
+   same 431 review bodies.
+
+Roadmap kurone-kito/idd-skill#4182 responds to this audit.
+
 ### Needs-decision deferral of review findings (kurone-kito/idd-skill#3776)
 
 The review loop stops for a person at several points: the

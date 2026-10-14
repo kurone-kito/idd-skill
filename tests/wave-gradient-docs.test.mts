@@ -144,8 +144,13 @@ test('both rationale copies introduce the severity-tiered matrix as step 0 and c
     );
     assert.equal(
       headings[at + 1],
+      '#### Review-loop audit (2026-10-13)',
+      `${path}: the audit subsection follows the wave-gradient subsection`,
+    );
+    assert.equal(
+      headings[at + 2],
       '### Needs-decision deferral of review findings (kurone-kito/idd-skill#3776)',
-      `${path}: the subsection precedes Needs-decision deferral`,
+      `${path}: the audit subsection precedes Needs-decision deferral`,
     );
   }
 });

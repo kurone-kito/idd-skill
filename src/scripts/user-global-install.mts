@@ -31,6 +31,16 @@ import { resolveBundleRoot } from './bundle-root.mts';
 import { resolveInstalledPayloadRoot } from './idd-activation.mts';
 import { isQualifiedConfigRoot } from './idd-config.mts';
 import {
+  ENTRY_FILE_NAME,
+  ENTRY_HARNESSES,
+  type EntryHarness,
+  type EntryStep,
+  type EntryTarget,
+  isInstallerWholeFile,
+  planEntryFiles,
+  planEntryRemoval,
+} from './user-global-entry-files.mts';
+import {
   type ContainmentResult,
   checkContainment,
   type FsOps,
@@ -53,6 +63,8 @@ export interface UserGlobalOptions {
   sourceRoot?: string;
   version?: string;
   fs?: FsOps;
+  /** The harnesses whose entry file install edits. Empty edits none. */
+  harnesses?: readonly EntryHarness[];
 }
 
 /** The lines an entry point reports, one per path. */
@@ -71,6 +83,8 @@ interface Context {
   dataRoot: string;
   currentPath: string;
   roots: Root[];
+  /** The containment base each harness directory is walked from. */
+  entryBases: Record<EntryHarness, string>;
 }
 
 interface Target {
@@ -90,6 +104,7 @@ const PAYLOAD_BLOCK_ID = 'idd-template-core-files';
 const PAYLOAD_EXTRA_FILES = ['idd-template/user-global/entry.md'];
 const SKILL_NAMES = ['issue-authoring', 'idd-spec-audit'];
 const SKILL_ROOT_NAMES = ['claude-skills', 'agents-skills'];
+const HARNESS_ROOT_NAMES = ['claude', 'codex', 'opencode'];
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_FS: FsOps = nodeFs;
 
@@ -220,19 +235,33 @@ function resolveContext(options: UserGlobalOptions): Context {
     typeof options.homedir === 'string' && options.homedir.length > 0
       ? options.homedir
       : (env.HOME ?? '');
-  const home = homeCandidate.trim();
-  if (!isQualifiedConfigRoot(home)) {
+  // Qualified before it is normalized. normalize() folds a leading "//" to "/",
+  // which would let an unqualified HOME through.
+  const trimmedHome = homeCandidate.trim();
+  if (!isQualifiedConfigRoot(trimmedHome)) {
     throw new Error(
       'HOME is not a qualified root, so the skill roots do not resolve; nothing was written',
     );
   }
+  // Normalized, as the environment roots are, so the containment walk and the
+  // harness paths spell the base the same way.
+  const home = normalize(trimmedHome);
   const codexHome = qualifiedValue(env.CODEX_HOME) ?? join(home, '.codex');
   const configHome =
     qualifiedValue(env.XDG_CONFIG_HOME) ?? join(home, '.config');
+  const codexFromEnv = qualifiedValue(env.CODEX_HOME) !== undefined;
+  const configFromEnv = qualifiedValue(env.XDG_CONFIG_HOME) !== undefined;
   return {
     fs,
     dataRoot,
     currentPath: join(dataRoot, CURRENT),
+    entryBases: {
+      claude: home,
+      // A CODEX_HOME names the harness directory itself, so it is walked from
+      // its parent; the default is walked from the home directory.
+      codex: codexFromEnv ? dirname(codexHome) : home,
+      opencode: configFromEnv ? configHome : home,
+    },
     roots: [
       { name: 'data', path: dataRoot },
       { name: 'claude', path: join(home, '.claude') },
@@ -265,6 +294,10 @@ function segmentsUnder(base: string, path: string): string[] | null {
  */
 function ownedShape(ctx: Context, entry: ReceiptEntry): boolean {
   if (entry.kind === 'link') return true;
+  if (entry.kind === 'managed-block' || entry.kind === 'json-instruction') {
+    return entryFileOwned(ctx, entry);
+  }
+  if (entryFileOwned(ctx, entry)) return true;
   const isDir = entry.kind === 'directory';
   if (isDir && entry.path === ctx.dataRoot) return true;
   const data = segmentsUnder(ctx.dataRoot, entry.path);
@@ -284,9 +317,90 @@ function ownedShape(ctx: Context, entry: ReceiptEntry): boolean {
   }
   if (
     isDir &&
-    SKILL_ROOT_NAMES.some((name) => rootNamed(ctx, name).path === entry.path)
+    [...SKILL_ROOT_NAMES, ...HARNESS_ROOT_NAMES].some(
+      (name) => rootNamed(ctx, name).path === entry.path,
+    )
   ) {
     return true;
+  }
+  return false;
+}
+
+/**
+ * Refuse when the chain from the harness's walk base down to its directory is
+ * not all real directories. A rewrite through a link above the directory
+ * would otherwise land outside the harness, so uninstall checks the chain too.
+ */
+function assertHarnessChain(
+  ctx: Context,
+  path: string,
+  present: boolean,
+): void {
+  const harness = ENTRY_HARNESSES.find(
+    (name) => join(harnessDirOf(ctx, name), ENTRY_FILE_NAME[name]) === path,
+  );
+  if (harness === undefined) return;
+  const dir = harnessDirOf(ctx, harness);
+  // checkContainment throws on a link above the directory, so an absent entry
+  // is checked too. A genuinely removed directory still reads as absent.
+  const walk = checkContainment(ctx.entryBases[harness], dir, ctx.fs);
+  if (
+    walk.finalKind === 'symlink' ||
+    walk.finalKind === 'file' ||
+    (present && walk.finalKind !== 'directory')
+  ) {
+    throw new Error(
+      `${dir} is ${walk.finalKind === 'symlink' ? 'a symbolic link' : `not a directory (${walk.finalKind})`} on the path to ${path}; refusing`,
+    );
+  }
+}
+
+/** The harness whose entry file sits at `path`, or undefined. */
+function entryHarnessAt(ctx: Context, path: string): EntryHarness | undefined {
+  return ENTRY_HARNESSES.find(
+    (name) => join(harnessDirOf(ctx, name), ENTRY_FILE_NAME[name]) === path,
+  );
+}
+
+/** The harness directory a harness's entry file lives in. */
+function harnessDirOf(ctx: Context, harness: EntryHarness): string {
+  return rootNamed(ctx, harness).path;
+}
+
+/** The entry-file targets for the selected harnesses, in install order. */
+function entryTargetsOf(
+  ctx: Context,
+  harnesses: readonly EntryHarness[],
+): EntryTarget[] {
+  return ENTRY_HARNESSES.filter((harness) => harnesses.includes(harness)).map(
+    (harness) => ({
+      harness,
+      dir: harnessDirOf(ctx, harness),
+      walkBase: ctx.entryBases[harness],
+    }),
+  );
+}
+
+/**
+ * Whether a listed entry file sits at the one path its harness reads. The
+ * kinds it may hold are fixed too: a managed block only in a Markdown file, a
+ * JSON instruction only in opencode.json, and a whole file in any of the three.
+ */
+function entryFileOwned(ctx: Context, entry: ReceiptEntry): boolean {
+  const claude = join(harnessDirOf(ctx, 'claude'), ENTRY_FILE_NAME.claude);
+  const codex = join(harnessDirOf(ctx, 'codex'), ENTRY_FILE_NAME.codex);
+  const opencode = join(
+    harnessDirOf(ctx, 'opencode'),
+    ENTRY_FILE_NAME.opencode,
+  );
+  if (entry.kind === 'managed-block') {
+    return entry.path === claude || entry.path === codex;
+  }
+  if (entry.kind === 'json-instruction') return entry.path === opencode;
+  if (entry.kind === 'file') {
+    return (
+      entry.path === claude || entry.path === codex || entry.path === opencode
+    );
   }
   return false;
 }
@@ -521,6 +635,7 @@ interface InstallPlan {
       }
     | { action: 'keep'; versionDir: string };
   lines: string[];
+  entrySteps: EntryStep[];
 }
 
 /**
@@ -532,6 +647,7 @@ function buildInstallPlan(
   ctx: Context,
   sourceRoot: string,
   version: string,
+  harnesses: readonly EntryHarness[],
 ): InstallPlan {
   const fs = ctx.fs;
   if (!VERSION_PATTERN.test(version)) {
@@ -572,7 +688,8 @@ function buildInstallPlan(
     }
   }
 
-  for (const target of buildTargets(ctx, sourceRoot, version)) {
+  const targets = buildTargets(ctx, sourceRoot, version);
+  for (const target of targets) {
     try {
       const root = rootFor(ctx, target.dest);
       const walk = checkContainment(root.path, target.dest, fs);
@@ -682,6 +799,36 @@ function buildInstallPlan(
     refusals.push(describe(error));
     current = { action: 'keep', versionDir };
   }
+  // The entry files are planned after the payload targets. Their harness
+  // directories join the same mkdir list, and their refusals join this list.
+  let entrySteps: EntryStep[] = [];
+  let entryLines: string[] = [];
+  if (harnesses.length > 0) {
+    const entryText = targets.find(
+      (target) => target.dest === join(versionDir, 'user-global', 'entry.md'),
+    );
+    if (entryText === undefined) {
+      throw new Error(
+        'the payload has no user-global entry text; nothing was written',
+      );
+    }
+    const entryPlan = planEntryFiles({
+      fs,
+      targets: entryTargetsOf(ctx, harnesses),
+      entryPath: join(ctx.currentPath, 'user-global', 'entry.md'),
+      entryText: entryText.text,
+      listed: entries,
+    });
+    refusals.push(...entryPlan.refusals);
+    for (const dir of entryPlan.dirs) {
+      mkdirs.push({
+        path: dir.path,
+        root: { name: 'harness-base', path: dir.base },
+      });
+    }
+    entrySteps = entryPlan.steps;
+    entryLines = entryPlan.lines;
+  }
   if (refusals.length > 0) {
     throw new Error(
       `install refused before any write; nothing was written: ${refusals.join('; ')}`,
@@ -698,7 +845,8 @@ function buildInstallPlan(
   } else {
     lines.push(`keep ${ctx.currentPath} (already points at ${versionDir})`);
   }
-  return { entries, mkdirs, writes, current, lines };
+  lines.push(...entryLines);
+  return { entries, mkdirs, writes, current, lines, entrySteps };
 }
 
 /**
@@ -727,6 +875,14 @@ type Applied =
       op: 'link';
       path: string;
       target: string;
+      prior: ReceiptEntry | null;
+    }
+  | {
+      op: 'bytes';
+      path: string;
+      root: Root;
+      priorBytes: Buffer;
+      sha256: string;
       prior: ReceiptEntry | null;
     }
   | { op: 'repoint'; priorTarget: string; listed: boolean };
@@ -860,6 +1016,24 @@ function undoStep(
         path: step.path,
         sha256: step.priorSha256,
       });
+      return;
+    case 'bytes':
+      replaceFileByRename(
+        step.root.path,
+        step.path,
+        step.sha256,
+        step.priorBytes.toString('utf8'),
+        fs,
+      );
+      if (
+        sha256Hex(readNoFollowBytes(step.path, fs)) !==
+        sha256Hex(step.priorBytes)
+      ) {
+        throw new Error(
+          `${step.path} was restored, but its SHA-256 does not match the bytes from before the run; it is not verified`,
+        );
+      }
+      restoreEntry(entries, step.path, step.prior);
       return;
     case 'link':
       removeSingleEntry(
@@ -1028,6 +1202,48 @@ function applyInstall(
         listed: current.listed,
       });
     }
+    for (const step of plan.entrySteps) {
+      const root: Root = { name: 'harness', path: step.dir };
+      if (step.kind === 'create') {
+        writeNewFile(step.dir, step.path, step.text, fs);
+        entries.set(step.path, step.entry);
+        applied.push({
+          op: 'file',
+          path: step.path,
+          root,
+          sha256: sha256Hex(step.text),
+          prior: null,
+        });
+      } else {
+        // The snapshot is the bytes this run replaces. The rename refuses
+        // unless the file still has the hash the plan read.
+        const priorBytes = readNoFollowBytes(step.path, fs);
+        if (sha256Hex(priorBytes) !== step.priorSha256) {
+          throw new Error(
+            `${step.path} changed during the run; refusing to replace it`,
+          );
+        }
+        const prior = entries.get(step.path) ?? null;
+        replaceFileByRename(
+          step.dir,
+          step.path,
+          step.priorSha256,
+          step.text,
+          fs,
+        );
+        entries.set(step.path, step.entry);
+        applied.push({
+          op: 'bytes',
+          path: step.path,
+          root,
+          priorBytes,
+          sha256: sha256Hex(step.text),
+          prior,
+        });
+      }
+      pending.push(step.path);
+      persist();
+    }
   } catch (error) {
     if (receiptFailed) throw error;
     const leftovers: string[] = [];
@@ -1066,7 +1282,12 @@ function contextAndPlan(options: UserGlobalOptions): {
   const fs = ctx.fs;
   const sourceRoot = options.sourceRoot ?? resolveBundleRoot(HERE);
   const version = options.version ?? readPackageVersion(sourceRoot, fs);
-  const plan = buildInstallPlan(ctx, sourceRoot, version);
+  const plan = buildInstallPlan(
+    ctx,
+    sourceRoot,
+    version,
+    options.harnesses ?? [],
+  );
   return { ctx, plan, version };
 }
 
@@ -1093,7 +1314,7 @@ export function installPayload(
 // Uninstall
 // ---------------------------------------------------------------------------
 
-type Action = 'remove' | 'absent' | 'dir';
+type Action = 'remove' | 'absent' | 'dir' | 'rewrite';
 
 interface Decision {
   path: string;
@@ -1101,6 +1322,8 @@ interface Decision {
   root: Root;
   base: string;
   action: Action;
+  /** The edited file's new bytes, for an action that rewrites it in place. */
+  rewrite?: { text: string; priorSha256: string; priorText: string };
 }
 
 interface UninstallPlan {
@@ -1168,9 +1391,26 @@ function buildUninstallPlan(ctx: Context): UninstallPlan {
     try {
       assertOwnedShape(ctx, entry);
       const { root, base, walk } = inspect(ctx, entry.path);
-      const decide = (action: Action): void => {
-        decisions.push({ path: entry.path, entry, root, base, action });
+      const decide = (
+        action: Action,
+        rewrite?: { text: string; priorSha256: string; priorText: string },
+      ): void => {
+        decisions.push({
+          path: entry.path,
+          entry,
+          root,
+          base,
+          action,
+          rewrite,
+        });
       };
+      if (entryFileOwned(ctx, entry)) {
+        assertHarnessChain(
+          ctx,
+          entry.path,
+          walk.missingDirs.length === 0 && walk.finalKind !== 'absent',
+        );
+      }
       if (walk.missingDirs.length > 0 || walk.finalKind === 'absent') {
         decide('absent');
       } else if (entry.kind === 'file') {
@@ -1185,9 +1425,24 @@ function buildUninstallPlan(ctx: Context): UninstallPlan {
             `${entry.path} has more than one hard link; refusing`,
           );
         }
-        if (sha256Hex(readNoFollowBytes(entry.path, fs)) !== entry.sha256) {
+        const bytes = readNoFollowBytes(entry.path, fs);
+        if (sha256Hex(bytes) !== entry.sha256) {
           throw new Error(
             `${entry.path} was edited after install (its SHA-256 differs); refusing, and it is user-edited`,
+          );
+        }
+        const harness = entryHarnessAt(ctx, entry.path);
+        if (
+          harness !== undefined &&
+          !isInstallerWholeFile(
+            harness,
+            join(ctx.currentPath, 'user-global', 'entry.md'),
+            bytes,
+            entry.path,
+          )
+        ) {
+          throw new Error(
+            `${entry.path} holds content install does not write, although the receipt lists it as one install created; refusing, and it is user-edited`,
           );
         }
         decide('remove');
@@ -1201,6 +1456,18 @@ function buildUninstallPlan(ctx: Context): UninstallPlan {
           throw new Error(`${entry.path} points somewhere else now; refusing`);
         }
         decide('remove');
+      } else if (
+        entry.kind === 'managed-block' ||
+        entry.kind === 'json-instruction'
+      ) {
+        if (walk.finalKind !== 'file') {
+          throw new Error(
+            `${entry.path} is now a ${walk.finalKind}, not a file; refusing`,
+          );
+        }
+        const removal = planEntryRemoval(fs, entry);
+        if (removal.kind === 'absent') decide('absent');
+        else decide('rewrite', removal);
       } else {
         if (walk.finalKind !== 'directory') {
           throw new Error(
@@ -1225,6 +1492,7 @@ function uninstallLines(plan: UninstallPlan): string[] {
   if (plan.reason !== null) return [plan.reason];
   return plan.decisions.map((decision) => {
     if (decision.action === 'absent') return `absent ${decision.path}`;
+    if (decision.action === 'rewrite') return `edit ${decision.path}`;
     if (decision.action === 'dir')
       return `dir ${decision.path} (removed only when empty)`;
     return `remove ${decision.path}`;
@@ -1272,6 +1540,44 @@ export function uninstallPayload(
       entries.delete(decision.path);
       persist();
       lines.push(`absent ${decision.path}`);
+      continue;
+    }
+    if (decision.action === 'rewrite' && decision.rewrite !== undefined) {
+      try {
+        replaceFileByRename(
+          decision.base,
+          decision.path,
+          decision.rewrite.priorSha256,
+          decision.rewrite.text,
+          fs,
+        );
+      } catch (error) {
+        stopAt(decision.path, error);
+      }
+      const { text, priorText } = decision.rewrite;
+      entries.delete(decision.path);
+      try {
+        persist();
+      } catch (error) {
+        // The receipt still lists the entry, so the file goes back to the bytes
+        // the receipt describes. Otherwise a retry would refuse the edited file.
+        entries.set(decision.path, decision.entry);
+        try {
+          replaceFileByRename(
+            decision.base,
+            decision.path,
+            sha256Hex(text),
+            priorText,
+            fs,
+          );
+        } catch (restoreError) {
+          throw new Error(
+            `${describe(error)}; restoring ${decision.path} also failed (${describe(restoreError)}), so the file keeps its edit while the receipt still lists it`,
+          );
+        }
+        throw error;
+      }
+      lines.push(`edited ${decision.path}`);
       continue;
     }
     try {

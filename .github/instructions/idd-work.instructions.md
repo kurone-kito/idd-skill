@@ -49,11 +49,9 @@ for when this applies).
    git merge --ff-only origin/{default-branch}
    ```
 
-   After this fast-forward, do **not** change the primary
-   worktree's HEAD off `{default-branch}` during B1 — see Anti-patterns
-   below for the forbidden commands; read-only inspection and the
-   HEAD-preserving commands of Steps 2-3 and Worktree creation stay
-   allowed.
+   After this fast-forward, see Anti-patterns below for the forbidden
+   commands; read-only inspection and the HEAD-preserving commands of
+   Steps 2-3 and Worktree creation stay allowed.
 
 2. Run `git worktree list` — if a worktree for the branch already
    exists, inspect and acquire its
@@ -82,7 +80,7 @@ for when this applies).
    force-delete without confirming no remote or PR claim is tied to it.
 
 Then create the worktree below; for a takeover, reuse the exact branch
-name from the existing claim comment instead of generating a new one.
+name from the claim comment.
 
 ### Anti-patterns
 
@@ -99,13 +97,11 @@ B1 self-check repair path below.
 
 ### Worktree creation
 
-**Naming convention**: the worktree directory lives as a sibling of the
-repository root. Compute the path as
+**Naming convention**: compute the worktree path as
 `../<repo-name>.<normalized-branch>` where `<normalized-branch>` is the
 branch name with every `/` replaced by `-`.
 
-Example: repo `idd-skill`, branch `issue/123-add-foo` → path
-`../idd-skill.issue-123-add-foo`.
+Example: `issue/123-add-foo` → `../idd-skill.issue-123-add-foo`.
 
 **Harness-native worktree tools**: an agent harness's own worktree
 primitive (e.g. Claude Code's `EnterWorktree`) is a third path outside
@@ -183,7 +179,7 @@ returns. If it
 installs dependencies, its **first** command must acquire the lock for
 the new worktree with the current `{agent-id}` / `{claim-id}` and
 re-run `--record-tokens` (with the same `{nonce}` the A5 write used),
-then run the install — doing either afterward is too late. Under
+then run the install. Under
 `package-manager`, the new worktree's `idd:claim-lock` bin may not exist
 yet: invoke a pre-install-available helper from the primary worktree
 with the new path as `--worktree`, or use the helper-free fallback
@@ -238,16 +234,16 @@ misplaced branch (after confirming no work is lost) and recreating the
 sibling worktree through the Worktree creation steps above.
 
 The optional local `_idd-worktree-guard.sh` hook (enabled via
-`worktreeGuard.enabled: true`) automates part of this self-check by
-refusing a commit/push from the primary worktree while HEAD matches an
+`worktreeGuard.enabled: true`) refuses a commit/push from the primary
+worktree while HEAD matches an
 implementation-branch pattern (default `issue/*`, `roadmap-audit/*`).
 It does **not** catch skipping B1 and committing on the base
 branch — set `worktreeGuard.refuseBaseBranchCommits: true` (#2801) to
 also refuse that case.
 
-If WorkTrunk reports its `Cannot change directory — shell integration
-installed but not active` diagnostic, re-verify the current working
-directory on every later command — see
+If WorkTrunk prints `Cannot change directory — shell integration
+installed but not active`, re-verify the working directory on every
+later command — see
 [rationale](../../docs/idd-design-rationale.md#worktrunk-cwd-caveat).
 
 ### Already inside a host-isolated worktree
@@ -264,6 +260,12 @@ or orchestrator — never remove or recreate this checkout.
 At F4, skip the primary-worktree fetch/switch/merge and `git worktree
 remove` steps; let the harness reclaim it and finish the rest (issue
 close, digest, comment cleanup).
+
+Headroom (information only): in the source repository, run
+`node scripts/audit-docs.mjs --check --report`, note its `report:`
+lines in the session notes, and change nothing (claim, route, or file)
+because of them. Adopter sessions skip this step. The same applies when
+B1 skipped creation in a host-isolated worktree.
 
 ## B2 — Create and refine plan
 
