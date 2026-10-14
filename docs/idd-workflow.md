@@ -1231,10 +1231,14 @@ Running this variant safely requires:
   newer than its latest `claimed-by`, not counting the orchestrator's own
   renewals of that claim. The hold starts at the earliest such marker's GitHub
   `created_at`, not its embedded timestamp. The hold ends when the worker
-  posts any other `claimed-by`, when the claim is released or superseded, or
-  when the entry is `disposed`. A restarted orchestrator cannot tell its
-  earlier renewals apart, so it treats any `claimed-by` newer than the marker
-  as ending the hold and renews nothing.
+  posts any other `claimed-by`, when the entry is `disposed`, or when the
+  claim is released or superseded. A resumed worker follows the normal report
+  path. A released or superseded claim cannot be renewed, so the orchestrator
+  marks its entry `stalled` and follows the worker-specific recovery, which
+  re-verifies the claim and reports its state to the operator; the entry
+  leaves `--running` only when that recovery disposes of it. A restarted
+  orchestrator cannot tell its earlier renewals apart, so it treats any
+  `claimed-by` newer than the marker as ending the hold and renews nothing.
 - **Held-worker renewal.** A held worker, as the hold marker defines, is
   renewed at the orchestrator's wake-ups in section 4 of its phase file. At or
   after 72 h from the hold start, the claim revalidation gate confirms the
