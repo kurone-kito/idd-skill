@@ -718,6 +718,22 @@ test('a retry after the receipt write failed on a repoint records the link inste
   assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
 });
 
+test('a receipt-owned link rewritten with a relative target is repointed to the recorded path', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const options = optionsFor(home);
+  installPayload(options);
+  nodeFs.unlinkSync(currentOf(home));
+  nodeFs.symlinkSync(PACKAGE_VERSION, currentOf(home));
+
+  installPayload(options);
+  assert.equal(nodeFs.readlinkSync(currentOf(home)), versionDirOf(home));
+
+  uninstallPayload(options);
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+});
+
 test('a retry after the receipt write failed on a replaced skill file records its hash', () => {
   const home = makeHome();
   installPayload(optionsFor(home));

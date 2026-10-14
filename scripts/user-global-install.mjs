@@ -435,18 +435,24 @@ function buildInstallPlan(ctx, sourceRoot, version) {
         listedCurrent !== undefined && listedCurrent.kind === 'link'
           ? listedCurrent.target
           : undefined;
-      if (resolved === versionDir) {
+      if (priorTarget === versionDir) {
         // A repoint whose receipt rewrite failed leaves the link here but
         // the receipt on the old target. Record it rather than keep it.
         current =
           recorded !== undefined && recorded !== versionDir
             ? { action: 'record', versionDir }
             : { action: 'keep', versionDir };
-      } else if (recorded !== undefined && recorded !== resolved) {
+      } else if (
+        recorded !== undefined &&
+        recorded !== resolved &&
+        resolved !== versionDir
+      ) {
         throw new Error(
           `${ctx.currentPath} points at ${resolved}, but the receipt records ${recorded}; it was retargeted after install, so refusing to replace it`,
         );
       } else {
+        // A relative spelling of the same target is repointed to the
+        // absolute path the receipt records, so uninstall's raw compare holds.
         current = {
           action: 'repoint',
           versionDir,
