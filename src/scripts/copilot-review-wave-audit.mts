@@ -188,7 +188,7 @@ export interface TriageStepCounts {
  * Recorded `Triage:` lines on finding threads whose disposition is accepted,
  * deferred, or rejected (issue #4189). `recorded` and `unrecorded` partition
  * those threads; `malformed` is the subset of `unrecorded` whose reply's first
- * line that reads as a Triage record (a case-insensitive `Triage:` opener after
+ * Triage-like line (a case-insensitive `Triage:` opener after
  * optional indent, bullet, or emphasis) yields no record, so parser drift shows
  * up as a count instead of silently lowering the recorded share.
  */
@@ -395,11 +395,11 @@ const TRIAGE_OUTCOMES: readonly TriageOutcome[] = [
   'deferred',
   'rejected',
 ];
-// A line that reads as a Triage record counts as an attempted one, even when
-// it is indented, bulleted, emphasised, lower-case, or lacks the space after
-// the colon, so a malformed line cannot pass as unrecorded (Copilot reviews of
+// A Triage-like line counts as an attempted record, even when it is indented,
+// bulleted, bold or `*`-emphasised, lower-case, or lacks the space after the
+// colon, so a malformed line cannot pass as unrecorded (Copilot reviews of
 // #4268). The prefix class is spaces, tabs, `-`, `+`, and `*`, and it never
-// spans a newline. A reply is recorded when its first Triage-like line parses
+// spans a newline. Underscore emphasis is not matched. A reply is recorded when its first Triage-like line parses
 // with `parseTriageLine`. A reply whose first Triage-like line does not parse
 // is malformed, even when a later line would parse: that fails closed.
 const TRIAGE_OPENER_LINE_RE = /^[ \t*+-]*(?:\*\*)?triage(?:\*\*)?[ \t]*:/iu;

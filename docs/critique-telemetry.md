@@ -186,11 +186,12 @@ review comments (`gh api repos/{owner}/{repo}/pulls/{n}/reviews` and
   "followed by another Copilot review" versus "last review".
 - **Recorded triage** (`triage` in the JSON output): over the PR's
   accepted, deferred, and rejected threads, the count of replies that
-  carry a readable `Triage:` line (`recorded`) versus those that do not
-  (`unrecorded`). `malformed` counts the unrecorded replies whose first
-  Triage-like line (case-insensitive `Triage:` after optional indent, a
-  bullet, or emphasis) yields no record, even when a later line would parse. `byStep`
-  counts the recorded lines by step (`0` to `2`), urgency, and outcome.
+  have a first Triage-like line that parses (`recorded`) versus those that
+  do not (`unrecorded`). A reply's first Triage-like line is its opener: a
+  case-insensitive `Triage:` after optional indent, a bullet, or bold or
+  `*` emphasis. `malformed` counts the unrecorded replies whose opener
+  yields no record, even when a later line would parse. `byStep` counts the
+  recorded lines by step (`0` to `2`), urgency, and outcome.
   `overrides` counts lines with an `override:` part. `contradictions`
   counts the recorded lines without an override where an accepted reply
   says `verdict defer`. Deferrals are not checked against their verdict,

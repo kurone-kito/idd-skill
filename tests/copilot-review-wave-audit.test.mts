@@ -1350,6 +1350,32 @@ test('computePrAudit triage: a malformed first Triage-like line is not rescued b
   assert.equal(report.triage.contradictions, 0);
 });
 
+test('computePrAudit triage: a bulleted opener before a valid column-0 line is malformed, not recorded', () => {
+  // The first Triage-like line is the bullet, so the later readable line does
+  // not rescue it. This is the case the first-line rule changes.
+  const report = computePrAudit(
+    1,
+    [
+      review(
+        1,
+        '2026-01-01T00:00:00Z',
+        openReviewBody([openLine('Medium', 8074)]),
+      ),
+    ],
+    [
+      reply(
+        34,
+        8074,
+        '**Accepted** — fixed\n\n- Triage: stray\nTriage: tier medium; urgency medium; step 1',
+        '2026-01-02T00:00:00Z',
+      ),
+    ],
+  );
+  assert.equal(report.triage.recorded, 0);
+  assert.equal(report.triage.unrecorded, 1);
+  assert.equal(report.triage.malformed, 1);
+});
+
 test('computePrAudit triage: a readable column-0 line wins over a Triage-like stray line', () => {
   const report = computePrAudit(
     1,
@@ -1840,6 +1866,12 @@ if (args[0] === 'api' && String(args[1]).includes('/pulls/42/comments')) {
   process.exit(0);
 }
 if (args[0] === 'pr' && args[1] === 'list') {
+  // Pin the flags the CLI must send, so the stub cannot pass for wrong ones.
+  const pinned = args.includes('merged') && args.includes('--json') && args.includes('number,mergedAt');
+  if (!pinned) {
+    process.stderr.write('unexpected gh pr list flags: ' + args.join(' ') + '\\n');
+    process.exit(1);
+  }
   process.stdout.write(JSON.stringify(fixture.prs ?? []));
   process.exit(0);
 }

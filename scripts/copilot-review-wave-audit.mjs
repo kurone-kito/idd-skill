@@ -186,11 +186,11 @@ export function resolveThreadDisposition(findingId, comments) {
 const TRIAGE_URGENCIES = ['very-low', 'low', 'medium', 'high'];
 const TRIAGE_STEPS = ['0', '1', '2'];
 const TRIAGE_OUTCOMES = ['accepted', 'deferred', 'rejected'];
-// A line that reads as a Triage record counts as an attempted one, even when
-// it is indented, bulleted, emphasised, lower-case, or lacks the space after
-// the colon, so a malformed line cannot pass as unrecorded (Copilot reviews of
+// A Triage-like line counts as an attempted record, even when it is indented,
+// bulleted, bold or `*`-emphasised, lower-case, or lacks the space after the
+// colon, so a malformed line cannot pass as unrecorded (Copilot reviews of
 // #4268). The prefix class is spaces, tabs, `-`, `+`, and `*`, and it never
-// spans a newline. A reply is recorded when its first Triage-like line parses
+// spans a newline. Underscore emphasis is not matched. A reply is recorded when its first Triage-like line parses
 // with `parseTriageLine`. A reply whose first Triage-like line does not parse
 // is malformed, even when a later line would parse: that fails closed.
 const TRIAGE_OPENER_LINE_RE = /^[ \t*+-]*(?:\*\*)?triage(?:\*\*)?[ \t]*:/iu;
