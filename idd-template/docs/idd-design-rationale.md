@@ -2179,7 +2179,9 @@ are fixed upstream): F2 states one sequence and F3 points at it.
 2. Keep the branch check and the empty-status check.
 3. Run the shadow-path check before any command that moves HEAD, because
    `git merge --ff-only` overwrites an ignored file that the target tree
-   tracks while `git status --porcelain` is empty.
+   tracks while `git status --porcelain` is empty. The pipeline is in the
+   closing-set and impact-checklist re-verification bullet of
+   [F2](../.github/instructions/idd-pre-merge.instructions.md#f2--pre-merge-condition-check).
 4. Require `git rev-parse HEAD` to equal `$PR_HEAD_SHA`. A strictly
    behind HEAD advances by `git merge --ff-only` after the claim is
    re-validated, since this is a git-state mutation, and must then equal
