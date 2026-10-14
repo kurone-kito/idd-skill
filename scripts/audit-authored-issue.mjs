@@ -996,6 +996,18 @@ function buildTriageFindings(
 // so a fenced draft never counts. Fence offsets come from the CRLF-normalized
 // raw body and map to line indexes: masking preserves the line structure.
 /**
+ * `findHtmlCommentRanges` treats any preceding backslash as an escape, but an
+ * even run of backslashes escapes only itself, so `\\<!--` opens a live
+ * comment (#4250 review, Copilot). This returns a probe copy in which the
+ * last backslash of each even run before `<!--` is a space, so the comment
+ * scan sees a live opener there. Offsets are unchanged.
+ */
+function commentOpenerParityProbe(text) {
+  return text.replace(/(\\+)<!--/gu, (match, slashes) =>
+    slashes.length % 2 === 0 ? `${slashes.slice(0, -1)} <!--` : match,
+  );
+}
+/**
  * Blanks each HTML comment opener `<!--` that a backslash escapes (an odd run
  * of backslashes before it), since an escaped opener renders as text (#4250
  * review, Copilot). Blanking first means an escaped example cannot start a
@@ -1030,7 +1042,7 @@ function carrierStructureView(rawText) {
     (span) => ({ start: span.index, end: span.end }),
   );
   const commentRanges = findHtmlCommentRanges(
-    rawNormalized,
+    commentOpenerParityProbe(rawNormalized),
     [
       ...findMarkdownCodeRanges(rawNormalized),
       ...multilineInlineRanges,

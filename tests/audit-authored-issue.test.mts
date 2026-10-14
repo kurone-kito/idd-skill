@@ -6316,6 +6316,19 @@ test('a fence under an indented list marker is list content, and a fence under a
   );
 });
 
+test('a comment opened after an even run of backslashes hides carrier structure, and an odd run does not (#4250)', () => {
+  // `\\<!--` is an escaped backslash followed by a live comment opener.
+  const evenRun = carrierBody()
+    .replace('## Release condition', '\\\\<!--\n## Release condition')
+    .replace('## Review ledger', '## Review ledger\n-->');
+  assert.equal(carrierFinding(evenRun, 'required-headings')?.result, 'fail');
+  // `\<!--` is an escaped opener, so nothing is hidden and the headings stay.
+  const oddRun = carrierBody()
+    .replace('## Release condition', '\\<!--\n## Release condition')
+    .replace('## Review ledger', '## Review ledger\n-->');
+  assert.equal(carrierFinding(oddRun, 'required-headings')?.result, 'pass');
+});
+
 test('a second ## Drafts or ## Release condition heading fails rather than hiding unchecked drafts (#4250)', () => {
   const secondDrafts = `${carrierBody()}\n## Drafts\n\n### Follow-up C\n\nReview: reviewed\nShape: child\n`;
   assert.equal(carrierFinding(secondDrafts, 'carrier-drafts')?.result, 'fail');
