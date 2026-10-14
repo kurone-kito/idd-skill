@@ -1456,8 +1456,9 @@ candidate-file count against the
 not have to hold every rule in its head at once while drafting.
 With `autopilotSuitability.effortL: refuse`, `effort-l-ready` also refuses
 a `ready` orphan or child body whose coherent effort marker is `L`. Roadmaps,
-bucket audits, and bodies routed to a human bucket (an authoring-bucket
-marker, or a suitability score of `1`) are exempt.
+audits run with `--expect-bucket`, and bodies routed to a human bucket (a
+coherent `needs-decision` or `blocked-by-human` authoring-bucket marker, or a
+suitability score of `1`) are exempt.
 The linter also checks every live defer-source comment against the shared
 defined-value set and requires its single `Refs` origin. For
 `review-needs-decision`, pass `--origin-issue <number>` matching that
@@ -1796,8 +1797,8 @@ single source of the values.
 When the target repository sets `autopilotSuitability.effortL` to
 `refuse` (the default is `allow`), an `L` child or orphan cannot be
 published as `ready`: split the work into `S` or `M` issues (a roadmap
-whose children are each `S` or `M` is also fine, since a roadmap's own
-effort is not checked), or publish it in the `needs-decision` bucket.
+whose children are each `S` or `M` is also fine, since the effort L rule
+does not check a roadmap), or publish it in the `needs-decision` bucket.
 `audit-authored-issue`'s `effort-l-ready` check enforces this. Under
 `refuse`, autopilot Discover routes an `L` orphan candidate to humans;
 roadmaps and roadmap children are not routed by this policy. See the
@@ -1829,7 +1830,7 @@ Binding rules:
   exception below). Effort only reorders candidates **within** a single
   suitability-score band, after the score and optional desync rules and
   **before** the lowest-issue-number tie-break. It never crosses a score
-  band or bypasses the A4.5/A5 gates. Effort otherwise never skips or gates,
+  band or bypasses the A4.5/A5 gates. Effort never skips or gates,
   and a large (`L`) issue stays fully claimable when it is the only ready
   work, except an `L` orphan candidate in an autopilot run under
   `autopilotSuitability.effortL: refuse`, which is routed to humans instead of
