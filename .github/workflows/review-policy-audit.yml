@@ -1,16 +1,67 @@
 name: Review policy audit
-# Bootstrap (idd-pr-submit D2 "Adding a new CI job"): this file only
-# registers the workflow_dispatch trigger on the default branch, so the
-# pull request that adds the real weekly audit job can dispatch it from
-# its own branch. The job below is deliberately inert.
+# Weekly audit of this repository's recent merged pull requests with
+# copilot-review-wave-audit --check (issue #4189). The check exits 1 when a
+# Copilot overview cannot be parsed, when a Triage line is malformed, or when
+# an accepted reply carries a defer verdict. The recorded-share threshold needs
+# --since, which this job does not pass yet, so it is not enforced here. The
+# audit imports only Node built-ins and the repository's own generated
+# scripts/*.mjs modules, so the job needs no dependency install.
+#
+# Source-repository only: this workflow is never distributed to idd-template/.
 on:
+  schedule:
+    # Mondays 06:41 UTC. The minute is offset from the top of the hour and the
+    # half hour, where GitHub documents scheduled runs being delayed under
+    # load. The slot avoids stale.yml (Monday 00:00 UTC), codeql.yml (Monday
+    # 03:30 UTC), merged-pr-feedback-sweep.yml (Monday 06:00 UTC), and
+    # scheduled-typecheck.yml (daily 05:17 UTC).
+    - cron: '41 6 * * 1'
   workflow_dispatch:
 permissions:
   contents: read
+  pull-requests: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   audit:
     runs-on: ubuntu-slim
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
-      - name: Bootstrap placeholder
-        run: echo "Inert bootstrap; the audit job lands in a later pull request."
+      # Read-only audit: no need to persist the token in git config. The
+      # default fetch depth is kept because the audit reads no git history.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Assert Node.js floor
+        run: |
+          # This required-check workflow relies on the runner's
+          # preinstalled Node. idd-doctor.mjs's `if (import.meta.main)`
+          # entry guard is silently falsy (not an error) on Node
+          # 24.0.x/24.1.x (#1447), which would make this check pass
+          # having checked nothing. Matches lint.yml's and
+          # idd-advisory-convergence.yml's own Node-floor guard. Exact
+          # match to package.json's engines.node (^22.23.2 || ^24.2.0 || >=26.0.0),
+          # including the patch/minor digits, so the error message's
+          # claimed range is actually what the check enforces.
+          node -e '
+            const versionParts = process.versions.node.split(".");
+            const [major, minor, patch] = versionParts.map(Number);
+            const isPrerelease = versionParts.some((part) => part.includes("-"));
+            const ok =
+              !isPrerelease &&
+              ((major === 22 && (minor > 23 || (minor === 23 && patch >= 2))) ||
+                (major === 24 && minor >= 2) ||
+                major >= 26);
+            if (!ok) {
+              console.error(
+                "Node " + process.version + " does not satisfy this " +
+                "repository'"'"'s engines.node range (^22.23.2 || ^24.2.0 || >=26.0.0).",
+              );
+              process.exit(1);
+            }
+          '
+      - name: Audit recent pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/copilot-review-wave-audit.mjs --limit 30 --check
