@@ -45,12 +45,15 @@ import {
   renderReviewReplyStamp,
 } from './marker-helpers.mjs';
 import {
+  decideUrgencyDefer,
   formatTriageLine,
   normalizePolicyConfig,
   relaxStepForReviewCount,
+  TRIAGE_LINE_BREAK_PATTERN,
 } from './policy-helpers.mjs';
 import {
   classifyPrLoopMembership,
+  DISPOSITION_ACCEPTED_PREFIX_RE,
   isCopilotReviewerLogin,
   isDispositionComment,
   isRejectionConfirmedDisposition,
@@ -263,6 +266,8 @@ export function runBodyItemDisposition(port, input) {
     report.error = lookup.error;
     if (input.apply) {
       report.status = 'failed';
+      // Nothing was posted, so the report carries no body (#4187).
+      delete report.body;
     }
     return { report, exitCode: input.apply ? 1 : 0 };
   }
@@ -272,13 +277,29 @@ export function runBodyItemDisposition(port, input) {
     return { report, exitCode: 0 };
   }
   input.assertClaim();
-  const posted = port.postWorkItemComment(input.pr, input.stampedBody);
+  // An apply reads the verdict again right before the post (#4187). Posting
+  // the early stamped body without that read would let a stale verdict through.
+  if (!input.refreshBody) {
+    throw new Error(
+      'an apply needs refreshBody, so the verdict is read again before the post (#4187)',
+    );
+  }
+  const body = input.refreshBody();
+  // A claim handoff during the late read must not reach the post (#4187).
+  input.assertClaim();
+  report.body = body;
+  const posted = port.postWorkItemComment(input.pr, body);
   report.status = 'applied';
   report.replyId = posted.id;
   return { report, exitCode: 0 };
 }
 /** A refused triage input. The CLI exits 1 with kind `usage` and posts nothing. */
 export class TriageUsageError extends Error {}
+/**
+ * The `enforce` refusal, raised by the late verdict check right before a post
+ * (#4187). The CLI exits 1 with kind `gate` and the post is not made.
+ */
+export class TriageRefusedError extends Error {}
 /** A failed read of the reviews or the head. The CLI reports kind `transport`. */
 export class TriageReadError extends Error {
   original;
@@ -297,12 +318,27 @@ function readTriageInput(read) {
 const TRIAGE_TIER_VALUES = ['low', 'medium', 'high'];
 const TRIAGE_URGENCY_VALUES = ['very-low', 'low', 'medium', 'high'];
 /**
+ * Refuse an empty, whitespace-only, or multi-line `--override` reason (#4187).
+ * A usage error, so nothing is posted and the reason never reaches
+ * `formatTriageLine`, which would throw a plain `Error` instead.
+ */
+function checkOverrideReason(reason) {
+  if (reason.trim() === '') {
+    throw new TriageUsageError('--override requires a non-empty reason');
+  }
+  if (TRIAGE_LINE_BREAK_PATTERN.test(reason)) {
+    throw new TriageUsageError('--override reason must be on one line');
+  }
+}
+/**
  * Refuse a triage flag combination before any network call (#4186): the enum
  * values, the `--tier`/`--urgency` pair, `--path-b` exclusivity, the
  * `record`/`enforce` requirement on an Accepted or Rejected reply, and the
  * `--advisory-converged` reviewPolicy check. A valid triage flag with no line
- * to carry it is a no-op, not an error; an invalid value is always a usage
- * error.
+ * to carry it is a no-op, not an error, except under `--path-b`, which refuses
+ * every verdict input (#4187). An invalid value is always a usage error. The
+ * static `--override` conditions are checked here too (#4187); the verdict
+ * condition needs the relax step, so `buildTriageReplyBody` checks it.
  */
 export function validateTriageFlags(input) {
   const { flags } = input;
@@ -328,18 +364,30 @@ export function validateTriageFlags(input) {
     flags.copilotLabel !== '' ||
     flags.safetyClass ||
     flags.lite ||
-    flags.advisoryConverged !== '';
+    flags.advisoryConverged !== '' ||
+    flags.scopeFence ||
+    flags.protectedAuthority ||
+    flags.acceptedMidFix ||
+    flags.override !== null;
   // Checked before the pair, so `--path-b` with a lone score names `--path-b`.
   if (
     flags.pathB &&
     (flags.tier !== '' || flags.urgency !== '' || scoringFlags)
   ) {
     throw new TriageUsageError(
-      '--path-b cannot be combined with --tier, --urgency, --copilot-label, --safety-class, --lite, or --advisory-converged',
+      '--path-b cannot be combined with --tier, --urgency, --copilot-label, --safety-class, --scope-fence, --protected-authority, --accepted-mid-fix, --override, --lite, or --advisory-converged',
     );
   }
   if ((flags.tier === '') !== (flags.urgency === '')) {
     throw new TriageUsageError('--tier and --urgency must be given together');
+  }
+  // A body that already carries a Triage line would hold two, and the audit
+  // reads the first one. Refuse before any read, so the record stays
+  // unambiguous: the fail-closed default for ambiguous state (#4187).
+  if (flags.tier !== '' && /^Triage:/mu.test(input.body)) {
+    throw new TriageUsageError(
+      'the body already carries a Triage line; the helper writes one from --tier and --urgency',
+    );
   }
   // The same prefix test the apply gate uses, so a body that gate admits (for
   // example `**Accepted:**`) cannot skip the requirement. A `**Rejection
@@ -369,6 +417,25 @@ export function validateTriageFlags(input) {
       `--advisory-converged requires reviewPolicy copilot-advisory, but reviewPolicy is ${JSON.stringify(reviewPolicy)}`,
     );
   }
+  if (flags.override !== null) {
+    checkOverrideReason(flags.override);
+    if (input.triageRecord !== 'record' && input.triageRecord !== 'enforce') {
+      throw new TriageUsageError(
+        '--override requires triageRecord record or enforce',
+      );
+    }
+    if (input.deferByUrgency !== 'severity-tiered') {
+      throw new TriageUsageError(
+        '--override requires critiqueLoop.deferByUrgency severity-tiered',
+      );
+    }
+    if (flags.tier === '' || flags.urgency === '') {
+      throw new TriageUsageError('--override requires --tier and --urgency');
+    }
+    if (!DISPOSITION_ACCEPTED_PREFIX_RE.test(input.body.trimEnd())) {
+      throw new TriageUsageError('--override requires an Accepted reply body');
+    }
+  }
 }
 function reviewAuthorLogin(review) {
   return review?.user?.login;
@@ -382,16 +449,24 @@ function reviewAuthorLogin(review) {
  * the head throws a `TriageUsageError`. A failed read throws a
  * `TriageReadError` that wraps the original error. The caller passes the
  * normalized policy, so this function loads no config.
+ *
+ * Under `severity-tiered` the line also carries the E5 verdict (#4187). An
+ * `--override` must match a defer verdict, or this throws a `TriageUsageError`.
  */
 export function buildTriageReplyBody(input) {
   const { flags, rawBody, markerPrefix } = input;
   if (rawBody.trim() === '') {
-    return { body: '', record: null };
+    return { body: '', record: null, verdict: null };
   }
   if (flags.tier === '' || flags.urgency === '') {
+    // An override needs a Triage line to carry it (#4187).
+    if (flags.override !== null) {
+      throw new TriageUsageError('--override requires --tier and --urgency');
+    }
     return {
       body: appendReviewReplyStamp(rawBody, markerPrefix),
       record: null,
+      verdict: null,
     };
   }
   let step = 0;
@@ -433,10 +508,71 @@ export function buildTriageReplyBody(input) {
     blocked: null,
     override: null,
   };
+  // The verdict comes from the same record the line carries, so the dry run
+  // and the apply path cannot disagree (#4187).
+  const verdict =
+    input.deferByUrgency === 'severity-tiered'
+      ? computeTriageVerdict(record, flags)
+      : null;
+  if (verdict !== null) {
+    record.verdict = verdict.verdict;
+    record.blocked = verdict.blocked;
+  }
+  if (flags.override !== null) {
+    checkOverrideReason(flags.override);
+    if (verdict === null) {
+      throw new TriageUsageError(
+        '--override requires critiqueLoop.deferByUrgency severity-tiered',
+      );
+    }
+    if (verdict.verdict !== 'defer') {
+      throw new TriageUsageError(
+        "--override requires a defer verdict, but this reply's verdict is keep",
+      );
+    }
+    record.override = flags.override.trim();
+  }
   return {
     body: placeTriageLine(rawBody, markerPrefix, formatTriageLine(record)),
     record,
+    verdict,
   };
+}
+/**
+ * Compute the E5 defer-matrix verdict for one Triage record under
+ * `severity-tiered` (#4187). Pure: it reads and prints nothing, so the dry
+ * run, the apply path, and any later compute-only mode share one answer.
+ * `decideUrgencyDefer` does the matrix work; this maps its output onto the
+ * fields the `Triage:` line carries. The inputs are the issue's: path A, no
+ * awaiting-decision hold, no adopt-now.
+ */
+export function computeTriageVerdict(record, flags) {
+  const decision = decideUrgencyDefer({
+    mode: 'severity-tiered',
+    path: 'A',
+    e4Severity: record.tier,
+    copilotLabel: record.copilotLabel,
+    urgency: record.urgency,
+    relaxStep: record.step,
+    safetyClass: record.safety,
+    scopeFence: flags.scopeFence,
+    protectedAuthority: flags.protectedAuthority,
+    acceptedMidFix: flags.acceptedMidFix,
+    awaitingMaintainerDecision: false,
+    adoptNow: false,
+  });
+  return {
+    verdict: decision.defer ? 'defer' : 'keep',
+    eligibility: decision.eligibility,
+    blocked: decision.blockedBy,
+  };
+}
+/**
+ * The one stderr line a verdict prints: the verdict, its eligibility tier, and
+ * its block reason (#4187). The refusal text is built from it.
+ */
+function verdictLine(verdict) {
+  return `triage verdict: ${verdict.verdict} (eligibility ${verdict.eligibility ?? 'none'}, blocked by ${verdict.blocked ?? 'none'})`;
 }
 /**
  * Put `line` on its own line directly before an existing reply-identity
@@ -496,6 +632,12 @@ const RESOLVE_REVIEW_THREAD_FLAG_SPEC = {
   '--lite': { type: 'boolean', default: false },
   '--advisory-converged': { type: 'string', default: '' },
   '--path-b': { type: 'boolean', default: false },
+  '--scope-fence': { type: 'boolean', default: false },
+  '--protected-authority': { type: 'boolean', default: false },
+  '--accepted-mid-fix': { type: 'boolean', default: false },
+  // No default: an absent flag is `undefined`, so `--override ""` (an empty
+  // reason, refused later) is still visible (#4187).
+  '--override': { type: 'string' },
   '--apply': { type: 'boolean', default: false },
   '--help': { type: 'boolean', short: 'h' },
 };
@@ -548,6 +690,10 @@ export function parseArgs(argv) {
     lite: values.lite,
     advisoryConverged: values['advisory-converged'],
     pathB: values['path-b'],
+    scopeFence: values['scope-fence'],
+    protectedAuthority: values['protected-authority'],
+    acceptedMidFix: values['accepted-mid-fix'],
+    override: values.override ?? null,
     apply: values.apply,
     help,
   };
@@ -598,6 +744,13 @@ Dry-run by default; --apply mutates.
   --lite                         the caller follows the lite profile: relax step 0
   --advisory-converged <sha>     head commit the advisory-convergence verdict was for
   --path-b                       the reply answers a PATH B item; no triage flags
+  --scope-fence                  the finding is scope-fenced; blocks a deferral (optional)
+  --protected-authority          the reply's author is a CODEOWNER or required reviewer;
+                                 blocks a deferral (optional)
+  --accepted-mid-fix             Accepted in an earlier E5 pass, fix still in progress;
+                                 blocks a deferral (optional)
+  --override <reason>            post an Accepted reply the defer matrix refuses, with the
+                                 reason recorded on its Triage line (needs a defer verdict)
   --apply                        post the reply and resolve the thread, or post the
                                  body-item comment (default: dry-run)
   -h, --help                     show this help
@@ -961,6 +1114,19 @@ function main() {
   // #4186: the triage flags are refused before the port is created and before
   // any read or gh call. A flag with no line to carry it is a no-op.
   const triagePolicy = normalizePolicyConfig(iddConfig ?? {}).critiqueLoop;
+  // #4187: `enforce` refuses only under `severity-tiered`. Under any other mode
+  // it behaves as `record` for this call, and the call says so once on stderr.
+  const enforceInert =
+    triagePolicy.triageRecord === 'enforce' &&
+    triagePolicy.deferByUrgency !== 'severity-tiered';
+  if (enforceInert) {
+    writeStderrSync(
+      'warning: triageRecord enforce refuses only under deferByUrgency severity-tiered; treating it as record\n',
+    );
+  }
+  const effectiveTriageRecord = enforceInert
+    ? 'record'
+    : triagePolicy.triageRecord;
   const triageFlags = {
     tier: args.tier,
     urgency: args.urgency,
@@ -969,14 +1135,19 @@ function main() {
     lite: args.lite,
     advisoryConverged: args.advisoryConverged,
     pathB: args.pathB,
+    scopeFence: args.scopeFence,
+    protectedAuthority: args.protectedAuthority,
+    acceptedMidFix: args.acceptedMidFix,
+    override: args.override,
   };
   try {
     validateTriageFlags({
       flags: triageFlags,
       apply: args.apply,
       body: args.body,
-      triageRecord: triagePolicy.triageRecord,
+      triageRecord: effectiveTriageRecord,
       reviewPolicy: iddConfig?.reviewPolicy,
+      deferByUrgency: triagePolicy.deferByUrgency,
     });
   } catch (error) {
     if (!(error instanceof TriageUsageError)) {
@@ -1025,9 +1196,9 @@ function main() {
   // #4186: the Triage line is built once the port exists, because the relax
   // step may read the pull request's reviews and head. A usage error or a
   // failed read exits here, before any mutation.
-  let stampedBody;
+  let built;
   try {
-    stampedBody = buildTriageReplyBody({
+    built = buildTriageReplyBody({
       port,
       pr,
       rawBody,
@@ -1036,7 +1207,7 @@ function main() {
       deferByUrgency: triagePolicy.deferByUrgency,
       deferRelaxAtRounds: triagePolicy.deferRelaxAtRounds,
       flags: triageFlags,
-    }).body;
+    });
   } catch (error) {
     if (error instanceof TriageUsageError) {
       writeStderrSync(`${error.message}\n`);
@@ -1054,8 +1225,67 @@ function main() {
       classified.httpStatus,
     );
   }
+  const stampedBody = built.body;
+  // #4187: an apply judges the verdict twice, and only `enforce` refuses. The
+  // early read prints the one verdict line in dry run and apply alike, and it
+  // can refuse before any claim or thread read. Under `enforce`,
+  // `freshBodyForApply` reads again right before the post, so the review count
+  // the post lands under decides. That late read prints a line only when the
+  // verdict line changed (its verdict, eligibility, or block), or the call
+  // refuses.
+  const refusalFor = (verdict) =>
+    effectiveTriageRecord === 'enforce' &&
+    verdict.verdict === 'defer' &&
+    DISPOSITION_ACCEPTED_PREFIX_RE.test(args.body.trimEnd()) &&
+    triageFlags.override === null
+      ? `${verdictLine(verdict)}; pass --override "<reason>" to post anyway`
+      : null;
+  if (built.verdict !== null) {
+    const earlyRefusal = args.apply ? refusalFor(built.verdict) : null;
+    if (earlyRefusal !== null) {
+      writeStderrSync(`${earlyRefusal}\n`);
+      exitClassified(1, 'gate', earlyRefusal);
+    }
+    writeStderrSync(`${verdictLine(built.verdict)}\n`);
+  }
+  const freshBodyForApply = () => {
+    const early = built.verdict;
+    // Outside `enforce` nothing refuses, so the early body stands, as in #4186.
+    if (effectiveTriageRecord !== 'enforce' || early === null) {
+      return built.body;
+    }
+    const fresh = buildTriageReplyBody({
+      port,
+      pr,
+      rawBody,
+      markerPrefix:
+        typeof markerPrefixRaw === 'string' ? markerPrefixRaw : undefined,
+      deferByUrgency: triagePolicy.deferByUrgency,
+      deferRelaxAtRounds: triagePolicy.deferRelaxAtRounds,
+      flags: triageFlags,
+    });
+    if (fresh.verdict !== null) {
+      const refusal = refusalFor(fresh.verdict);
+      if (refusal !== null) {
+        writeStderrSync(`${refusal}\n`);
+        throw new TriageRefusedError(refusal);
+      }
+      const line = verdictLine(fresh.verdict);
+      if (line !== verdictLine(early)) {
+        writeStderrSync(`${line}\n`);
+      }
+    }
+    return fresh.body;
+  };
   if (bodyItem) {
-    runBodyItemCli(port, args, { pr, owner, repo, iddConfig, stampedBody });
+    runBodyItemCli(port, args, {
+      pr,
+      owner,
+      repo,
+      iddConfig,
+      stampedBody,
+      refreshBody: freshBodyForApply,
+    });
   }
   const commentId = args.commentId;
   const match = findThreadForComment(
@@ -1074,6 +1304,8 @@ function main() {
     report.error = `no review thread found for comment ${commentId} on PR #${pr}`;
     if (args.apply) {
       report.status = 'failed';
+      // Nothing was posted, so the report carries no body (#4187).
+      delete report.body;
     }
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     // A missing thread is informational in dry-run but a hard failure in apply.
@@ -1088,6 +1320,8 @@ function main() {
   const rootCommentId = match.rootCommentId;
   if (rootCommentId === null) {
     report.status = 'failed';
+    // Nothing was posted, so the report carries no body (#4187).
+    delete report.body;
     report.error = `review thread ${match.threadId} exposes no top-level comment id to reply to`;
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     exitClassified(1, 'gate', report.error);
@@ -1104,15 +1338,17 @@ function main() {
   // posted, resolve not confirmed) reports the reply id instead of looking like
   // nothing was posted — that distinguishes "retry the resolve" from "re-post".
   let postedReplyId;
+  let postedBody;
   try {
     const result = applyResolveReviewThread({
       assertClaim,
       postReply: () => {
-        const posted = port.postReviewCommentReply(
-          pr,
-          rootCommentId,
-          stampedBody,
-        );
+        // The verdict is judged again right before the post (#4187).
+        const body = freshBodyForApply();
+        // A claim handoff during the late read must not reach the post (#4187).
+        assertClaim();
+        const posted = port.postReviewCommentReply(pr, rootCommentId, body);
+        postedBody = body;
         postedReplyId = posted.id;
         return posted;
       },
@@ -1121,6 +1357,9 @@ function main() {
     });
     report.status = 'applied';
     report.replyId = result.replyId;
+    if (postedBody !== undefined) {
+      report.body = postedBody;
+    }
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     process.exit(0);
   } catch (error) {
@@ -1128,8 +1367,14 @@ function main() {
     if (postedReplyId !== undefined) {
       report.replyId = postedReplyId;
     }
-    const classified = classifyHelperError(error);
-    report.error = error.message;
+    // Report only the body that reached GitHub, so a refusal shows none (#4187).
+    if (postedBody !== undefined) {
+      report.body = postedBody;
+    } else {
+      delete report.body;
+    }
+    const classified = classifyHelperError(mutationCause(error));
+    report.error = mutationCause(error).message;
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     exitClassified(
       1,
@@ -1139,11 +1384,26 @@ function main() {
     );
   }
 }
+/** The error a failed mutation reports: a late triage read reports its own cause (#4187). */
+function mutationCause(error) {
+  return error instanceof TriageReadError ? error.original : error;
+}
 /**
  * Deliberate ownership denials are a completed gate. A tagged gh failure
  * keeps transport/not-found.
  */
 function classifyMutationErrorKind(error) {
+  // The late verdict check keeps the early path's kinds: a refusal is a gate,
+  // a refused input is usage, and a failed read is transport (#4187).
+  if (error instanceof TriageRefusedError) {
+    return 'gate';
+  }
+  if (error instanceof TriageUsageError) {
+    return 'usage';
+  }
+  if (error instanceof TriageReadError) {
+    return 'transport';
+  }
   const classified = classifyHelperError(error);
   const message = error?.message ?? '';
   return classified.kind === 'transport' || classified.kind === 'not-found'
@@ -1289,6 +1549,7 @@ function runBodyItemCli(port, args, context) {
       stampedBody,
       apply: args.apply,
       assertClaim: buildClaimAssertion(port, args, context),
+      refreshBody: context.refreshBody,
     });
     process.stdout.write(`${JSON.stringify(result.report, null, 2)}\n`);
     if (result.exitCode === 0) {
@@ -1296,11 +1557,13 @@ function runBodyItemCli(port, args, context) {
     }
     exitClassified(1, 'gate', result.report.error ?? 'body item not found');
   } catch (error) {
-    const classified = classifyHelperError(error);
+    const classified = classifyHelperError(mutationCause(error));
     if (args.apply) {
       report.status = 'failed';
+      // Nothing reached GitHub when the late check fails or refuses (#4187).
+      delete report.body;
     }
-    report.error = error.message;
+    report.error = mutationCause(error).message;
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     exitClassified(
       1,
