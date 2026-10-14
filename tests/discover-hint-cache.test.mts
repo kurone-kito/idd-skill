@@ -279,6 +279,14 @@ test('a hint written under the previous format version is never served (#4257)',
     );
     assert.equal(current.cache?.source, 'live');
     assert.equal(calls(), 2);
+    // Positive control: a repeat under the current version is served from the
+    // hint it just stored, so the miss above is the version key, not a broken
+    // cache.
+    const repeat = await readDiscoverHint(
+      request(fx, compute, { deps: { ...fx.deps, formatVersion: undefined } }),
+    );
+    assert.equal(repeat.cache?.source, 'hint');
+    assert.equal(calls(), 2);
   } finally {
     rmSync(fx.root, { recursive: true, force: true });
   }
