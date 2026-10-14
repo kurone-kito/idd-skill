@@ -1304,7 +1304,6 @@ function contextAndPlan(options: UserGlobalOptions): {
  * Plan an install without writing anything. Runs the same checks and returns
  * one line per path. Creates no directory.
  */
-// audit:ignore-dead-export: consumed by issue #4245
 export function planInstall(
   options: UserGlobalOptions = {},
 ): UserGlobalInstallResult {
@@ -1317,7 +1316,6 @@ export function planInstall(
 }
 
 /** Install the payload and skills, recording each created path. */
-// audit:ignore-dead-export: consumed by issue #4245
 export function installPayload(
   options: UserGlobalOptions = {},
 ): UserGlobalInstallResult {
@@ -1515,7 +1513,6 @@ function uninstallLines(plan: UninstallPlan): string[] {
 }
 
 /** Plan an uninstall without removing anything. */
-// audit:ignore-dead-export: consumed by issue #4245
 export function planUninstall(
   options: UserGlobalOptions = {},
 ): UserGlobalResult {
@@ -1531,7 +1528,6 @@ export function planUninstall(
  * its turn stops the run. A directory that is not empty at its turn is kept
  * and named, and the run exits 0.
  */
-// audit:ignore-dead-export: consumed by issue #4245
 export function uninstallPayload(
   options: UserGlobalOptions = {},
 ): UserGlobalResult {
