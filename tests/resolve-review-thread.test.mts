@@ -1847,21 +1847,61 @@ test('buildTriageReplyBody propagates a failed review read as a transport error 
   );
 });
 
-test('validateTriageFlags refuses a record-mode Accepted reply without both scores (#4186)', () => {
-  const record = {
-    apply: true,
-    body: '**Accepted** — x',
-    triageRecord: 'record' as const,
-    reviewPolicy: undefined,
-  };
-  for (const flags of [{}, { tier: 'high' }, { urgency: 'high' }]) {
-    assert.throws(
-      () => validateTriageFlags({ ...record, flags: triageFlags(flags) }),
-      (error: unknown) =>
-        error instanceof TriageUsageError &&
-        error.message.includes('--urgency'),
-    );
+test('validateTriageFlags refuses an Accepted reply without both scores under record and enforce (#4186)', () => {
+  for (const triageRecord of ['record', 'enforce'] as const) {
+    const record = {
+      apply: true,
+      body: '**Accepted** — x',
+      triageRecord,
+      reviewPolicy: undefined,
+    };
+    for (const flags of [{}, { tier: 'high' }, { urgency: 'high' }]) {
+      assert.throws(
+        () => validateTriageFlags({ ...record, flags: triageFlags(flags) }),
+        (error: unknown) =>
+          error instanceof TriageUsageError &&
+          error.message.includes('--urgency'),
+        `${triageRecord} ${JSON.stringify(flags)}`,
+      );
+    }
   }
+});
+
+test('buildTriageReplyBody counts only Copilot reviews toward the relax step (#4186)', () => {
+  const rows = [
+    ...triageReviewRows(3),
+    { id: 10, user: { login: 'octocat' }, state: 'COMMENTED', body: '' },
+    { id: 11, user: { login: 'octocat' }, state: 'APPROVED', body: '' },
+    {
+      id: 12,
+      user: { login: 'coderabbitai[bot]' },
+      state: 'COMMENTED',
+      body: '',
+    },
+  ];
+  const port = createFakeProviderAdapter({
+    reviews: { [TRIAGE_PR]: rows },
+    changeRequestHeadShas: { [TRIAGE_PR]: TRIAGE_HEAD },
+  });
+  // Six reviews in all, but three from Copilot: the step stays 0 at 3.
+  const { record } = buildTriage(port, '**Accepted** — x', {
+    tier: 'high',
+    urgency: 'high',
+  });
+  assert.equal(record?.step, 0);
+});
+
+test('buildTriageReplyBody honours a custom reply-identity marker prefix (#4186)', () => {
+  const { body } = buildTriage(
+    triagePort(2),
+    '**Accepted** — x\n<!-- acme-review-reply -->',
+    { tier: 'high', urgency: 'high' },
+    { markerPrefix: 'acme' },
+  );
+  assert.equal(
+    body,
+    '**Accepted** — x\nTriage: tier high; urgency high; step 0\n<!-- acme-review-reply -->',
+  );
 });
 
 test('validateTriageFlags applies the record requirement to every disposition prefix the gate admits (#4186)', () => {
@@ -2200,11 +2240,13 @@ function triageReviewRows(count: number): unknown[] {
  * view, the review list, the head SHA, the thread lookup and resolve, and the
  * work-item duplicate read, and it appends each POST body to the ledger.
  */
-function triageGhStub(reviews: unknown[] | null): string {
+function triageGhStub(reviews: unknown[] | string | null): string {
   const reviewsRoute =
     reviews === null
       ? "fail('gh: HTTP 500 for pulls/42/reviews');"
-      : `out(JSON.stringify(${JSON.stringify(reviews)}));`;
+      : typeof reviews === 'string'
+        ? `out(${JSON.stringify(reviews)});`
+        : `out(JSON.stringify(${JSON.stringify(reviews)}));`;
   return `const fs = require('node:fs');
 const args = process.argv.slice(2);
 const joined = args.join(' ');
@@ -2245,7 +2287,8 @@ fail('unexpected gh invocation: ' + joined);
 function runTriageApply(
   cliArgs: string[],
   config: Record<string, unknown>,
-  reviews: unknown[] | null,
+  reviews: unknown[] | string | null,
+  extraEnv: Record<string, string> = {},
 ): { status: number; stderr: string; posted: string[] } {
   let scratch = '';
   let restore: (() => void) | undefined;
@@ -2272,6 +2315,7 @@ function runTriageApply(
             HOME: scratch,
             XDG_CONFIG_HOME: scratch,
             TRIAGE_LEDGER: ledger,
+            ...extraEnv,
           },
           stdio: ['ignore', 'pipe', 'pipe'],
         },
@@ -2373,6 +2417,29 @@ test('the compiled CLI writes a converged step 2 when --advisory-converged names
   assert.deepEqual(run.posted, [
     `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 2; converged deadbee\n\n${TRIAGE_STAMP}`,
   ]);
+});
+
+test('a review read that returns non-JSON reports kind transport in the error envelope (#4186)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--body',
+      '**Accepted** — fixed in abc',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    'not json',
+    { IDD_HELPER_ERROR_ENVELOPE: '1' },
+  );
+  assert.equal(run.status, 1);
+  assert.deepEqual(run.posted, []);
+  const envelope = JSON.parse(run.stderr.trim().split('\n').at(-1) ?? '{}') as {
+    iddHelperError?: { kind?: string };
+  };
+  assert.equal(envelope.iddHelperError?.kind, 'transport');
 });
 
 test('the compiled CLI writes step 1 for four Copilot reviews on a record-mode thread reply (#4186)', () => {

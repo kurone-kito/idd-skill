@@ -1251,11 +1251,12 @@ function main(): HelperCliResult {
     }
     const classified = classifyHelperError(error);
     writeStderrSync(`reply not posted: ${classified.message}\n`);
-    // The issue's contract is kind `transport` for a read that fails, so a
-    // 404 on the review list or the head is reported as transport here too.
+    // The issue's contract is kind `transport` for a read that fails. The only
+    // errors that reach this branch come from the reviews and the head read,
+    // so every kind other than `usage` is reported as `transport`.
     exitClassified(
       1,
-      classified.kind === 'not-found' ? 'transport' : classified.kind,
+      classified.kind === 'usage' ? 'usage' : 'transport',
       classified.message,
       classified.httpStatus,
     );
