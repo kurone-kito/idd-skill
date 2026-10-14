@@ -104,10 +104,28 @@ let markdownItConstructor: MarkdownItConstructor | undefined;
 
 /** Resolves markdown-it on first use, never at module load. */
 function loadMarkdownIt(): MarkdownItConstructor {
-  markdownItConstructor ??= requireFromHere(
-    'markdown-it',
-  ) as MarkdownItConstructor;
+  if (markdownItConstructor === undefined) {
+    try {
+      markdownItConstructor = requireFromHere(
+        'markdown-it',
+      ) as MarkdownItConstructor;
+    } catch {
+      throw new Error(
+        'markdown-it is not installed: the draft-carrier scan needs it, so install this package with its dependencies',
+      );
+    }
+  }
   return markdownItConstructor;
+}
+
+/** Whether the scan’s parser resolves in this install (#4250). */
+export function markdownItAvailable(): boolean {
+  try {
+    loadMarkdownIt();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function spanOf(token: RawToken): MarkdownLineSpan {

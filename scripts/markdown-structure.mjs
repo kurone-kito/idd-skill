@@ -25,8 +25,25 @@ const requireFromHere = createRequire(import.meta.url);
 let markdownItConstructor;
 /** Resolves markdown-it on first use, never at module load. */
 function loadMarkdownIt() {
-  markdownItConstructor ??= requireFromHere('markdown-it');
+  if (markdownItConstructor === undefined) {
+    try {
+      markdownItConstructor = requireFromHere('markdown-it');
+    } catch {
+      throw new Error(
+        'markdown-it is not installed: the draft-carrier scan needs it, so install this package with its dependencies',
+      );
+    }
+  }
   return markdownItConstructor;
+}
+/** Whether the scan’s parser resolves in this install (#4250). */
+export function markdownItAvailable() {
+  try {
+    loadMarkdownIt();
+    return true;
+  } catch {
+    return false;
+  }
 }
 function spanOf(token) {
   if (token.map === null) {

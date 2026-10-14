@@ -98,7 +98,10 @@ import {
   maskMarkdownForScan,
   stripMarkdownCodeRegions,
 } from './markdown-code.mts';
-import { scanMarkdownStructure } from './markdown-structure.mts';
+import {
+  markdownItAvailable,
+  scanMarkdownStructure,
+} from './markdown-structure.mts';
 import type {
   AuthoringBucketMarkerDetection,
   AuthoringBucketMarkerValue,
@@ -223,9 +226,9 @@ const BLOCKED_BY_LINE_PATTERN =
 // The visible footer lines, allowing any list or blockquote container prefix
 // (#4250 review, Copilot): `> _Effort: M` is still a visible footer.
 const AUTOPILOT_SUITABILITY_FOOTER_PATTERN =
-  /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+)*_Autopilot suitability:/imu;
+  /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+|\[[ xX]\][ \t]+)*_Autopilot suitability:/imu;
 const EFFORT_FOOTER_PATTERN =
-  /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+)*_Effort:/imu;
+  /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+|\[[ xX]\][ \t]+)*_Effort:/imu;
 
 /**
  * The fixed GitHub label paired with the
@@ -1409,6 +1412,18 @@ interface CarrierViews {
   readonly topLevelFenceLines: readonly number[];
 }
 
+/**
+ * The CommonMark HTML comment that opens at `open`, or `undefined` (#4250
+ * review, Codex). Its text must not start with `>` or `->` and must not
+ * contain `--`, so a malformed opener is not a comment and cannot blank the
+ * text up to a later closer.
+ */
+function commentAt(text: string, open: number): string | undefined {
+  const pattern = /<!--(?!-?>)(?:(?!--)[\s\S])*?-->/uy;
+  pattern.lastIndex = open;
+  return pattern.exec(text)?.[0];
+}
+
 /** Whether the character at `index` is escaped by an odd backslash run. */
 function isBackslashEscaped(text: string, index: number): boolean {
   let slashes = 0;
@@ -1488,11 +1503,11 @@ function buildCarrierViews(rawText: string): CarrierViews {
     const plain = blankRanges(text, spans);
     for (const match of plain.matchAll(/<!--/gu)) {
       const open = match.index;
-      const close = plain.indexOf('-->', open + 4);
-      if (!isBackslashEscaped(plain, open) && close !== -1) {
+      const comment = commentAt(plain, open);
+      if (!isBackslashEscaped(plain, open) && comment !== undefined) {
         commentRanges.push({
           start: range.start + open,
-          end: range.start + close + 3,
+          end: range.start + open + comment.length,
         });
       }
     }
@@ -1502,6 +1517,9 @@ function buildCarrierViews(rawText: string): CarrierViews {
   // otherwise visible HTML.
   for (const range of htmlRanges) {
     const text = body.slice(range.start, range.end);
+    // Raw HTML is read by the browser, which ends a comment at its first
+    // closer, so the lenient rule applies here (CommonMark’s rule is for
+    // inline HTML only).
     for (const match of text.matchAll(/<!--[\s\S]*?-->/gu)) {
       commentRanges.push({
         start: range.start + (match.index ?? 0),
@@ -5374,6 +5392,13 @@ function main(): HelperCliResult {
     );
   }
   // A draft carrier has no readiness bucket (#4250), so the two cannot combine.
+  // The carrier scan needs markdown-it. A vendored-node install ships only the
+  // helper files, so it refuses here with a remediation message (#4250).
+  if (args.shape === 'carrier' && !markdownItAvailable()) {
+    fail_(
+      '--shape carrier needs markdown-it, which this install does not provide: install this package with its dependencies, or run the manual carrier checks in the contract',
+    );
+  }
   if (args.shape === 'carrier' && args.expectBucket !== undefined) {
     fail_('--shape carrier cannot be combined with --expect-bucket');
   }
