@@ -4018,6 +4018,34 @@ test('compute-only triage reports a failed head read as kind transport and posts
   assertComputeOnlyCalls(run, ['/pulls/42/reviews', 'pr view']);
 });
 
+test('compute-only triage without repository flags does no lookup when it reads no reviews (#4188)', () => {
+  // The stub fails any call it does not route, so a `gh repo view` lookup
+  // would exit 1 here. Exit 0 with no calls shows the lookup did not run.
+  const low = runTriageApply(
+    ['--pr', '42', '--tier', 'low', '--urgency', 'medium'],
+    { critiqueLoop: { deferByUrgency: 'low', deferRelaxAtRounds: [4, 7] } },
+    null,
+  );
+  assert.equal(low.status, 0, low.stderr);
+  assert.equal(
+    JSON.parse(low.stdout).triage,
+    'Triage: tier low; urgency medium; step 0',
+  );
+  assertComputeOnlyCalls(low, []);
+
+  const lite = runTriageApply(
+    ['--pr', '42', '--tier', 'low', '--urgency', 'medium', '--lite'],
+    TRIAGE_TIERED_CONFIG,
+    null,
+  );
+  assert.equal(lite.status, 0, lite.stderr);
+  assert.equal(
+    JSON.parse(lite.stdout).triage,
+    'Triage: tier low; urgency medium; step 0; verdict defer',
+  );
+  assertComputeOnlyCalls(lite, []);
+});
+
 test('record mode reads the reviews once on an apply, since only enforce refuses (#4187)', () => {
   const run = runTriageApply(
     [

@@ -1078,8 +1078,15 @@ function runComputeOnlyTriage(args, pr) {
     writeStderrSync(`${error.message}\n`);
     exitClassified(1, 'usage', error.message);
   }
+  // Scoring reads GitHub only under `severity-tiered` without `--lite`, so the
+  // repository lookup runs only then. A failed `gh repo view` cannot block a
+  // result that needs no GitHub data (Copilot review on #4266).
+  const readsGithub =
+    triagePolicy.deferByUrgency === 'severity-tiered' && !args.lite;
   const currentRepo =
-    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+    readsGithub && !(args.owner && args.repo)
+      ? resolveCurrentGithubRepository()
+      : null;
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
   const port = createGithubProviderAdapter(owner, repo);
