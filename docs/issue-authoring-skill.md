@@ -230,13 +230,14 @@ rules.
 - In Discover, the hint reorders candidates **within** one
   suitability-score band (after the score and optional desync rules,
   before the lowest-issue-number tie-break). It never crosses a score band
-  or bypasses the A4.5/A5 gates. Except for an `L` orphan in an autopilot
-  run under `autopilotSuitability.effortL: refuse`, it never skips or gates,
-  and a large issue stays claimable when it is the only ready work. Under
-  `refuse`, autopilot Discover routes an `L` orphan candidate to humans.
+  or bypasses the A4.5/A5 gates. It never skips or gates, and a large issue
+  stays claimable when it is the only ready work, except that under
+  `autopilotSuitability.effortL: refuse` autopilot Discover routes an `L`
+  orphan candidate to humans.
 - Under `autopilotSuitability.effortL: refuse`, `effort-l-ready` refuses a
-  `ready` `L` orphan or child body at publication. Roadmaps, bucket audits,
-  and bodies routed to a human bucket or scored `1` are exempt.
+  `ready` orphan or child body with a coherent `L` effort marker at
+  publication. Roadmaps, audits run with `--expect-bucket`, and bodies routed
+  to a human bucket or scored `1` are exempt.
 - A missing or invalid hint is **fail-safe**: it sorts as the neutral
   middle, as-if `M`, per `idd-discover.instructions.md` A4 Step 2.
 
