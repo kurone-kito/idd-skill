@@ -718,6 +718,47 @@ test('a retry after the receipt write failed on a repoint records the link inste
   assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
 });
 
+test('a retry after the receipt write failed on a replaced skill file records its hash', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceTree();
+  nodeFs.appendFileSync(join(source, 'skills', SKILL_RELATIVE), '\nupgrade\n');
+  const claudeSkill = skillFileOf(home, '.claude');
+  let replaced = false;
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (op !== 'renameSync') return;
+    const target = String(args[1]);
+    if (target === claudeSkill) replaced = true;
+    if (replaced && !failed && target.endsWith('receipt.json')) {
+      failed = true;
+      throw new Error('injected receipt failure');
+    }
+  });
+
+  assert.throws(
+    () =>
+      installPayload(
+        optionsFor(home, { sourceRoot: source, version: '0.14.1', fs }),
+      ),
+    /receipt rewrite failed/,
+  );
+
+  const retry = installPayload(
+    optionsFor(home, { sourceRoot: source, version: '0.14.1' }),
+  );
+  assert.ok(
+    retry.lines.some((line) => line.startsWith(`record ${claudeSkill}`)),
+  );
+  const entry = readReceiptEntries(home).find(
+    (candidate) => candidate.path === claudeSkill,
+  ) as { sha256?: string } | undefined;
+  assert.equal(entry?.sha256, sha256(nodeFs.readFileSync(claudeSkill)));
+
+  uninstallPayload(optionsFor(home));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+});
+
 test('a listed link retargeted by someone else makes install refuse', {
   skip: NO_LINKS,
 }, () => {

@@ -413,6 +413,7 @@ interface InstallPlan {
   entries: Map<string, ReceiptEntry>;
   mkdirs: Mkdir[];
   writes: Write[];
+  repairs: { dest: string; sha256: string }[];
   current:
     | { action: 'create'; versionDir: string }
     | {
@@ -459,6 +460,7 @@ function buildInstallPlan(
   const mkdirs: Mkdir[] = [];
   const seen = new Set<string>();
   const writes: Write[] = [];
+  const repairs: { dest: string; sha256: string }[] = [];
   const lines: string[] = [];
   const refusals: string[] = [];
 
@@ -496,13 +498,19 @@ function buildInstallPlan(
         lines.push(`create ${target.dest}`);
       } else if (walk.finalKind === 'file') {
         const current = sha256Hex(readNoFollowBytes(target.dest, fs));
-        if (listed !== undefined && current !== listed.sha256) {
+        if (current === target.sha256) {
+          // A replacement whose receipt write failed leaves the source bytes
+          // under the old hash. Record the hash instead of refusing it.
+          if (listed !== undefined && listed.sha256 !== current) {
+            repairs.push({ dest: target.dest, sha256: current });
+            lines.push(`record ${target.dest} (the receipt lagged the file)`);
+          } else {
+            lines.push(`keep ${target.dest}`);
+          }
+        } else if (listed !== undefined && current !== listed.sha256) {
           throw new Error(
             `${target.dest} was edited after install (its SHA-256 differs from the receipt); refusing, and it is user-edited`,
           );
-        }
-        if (current === target.sha256) {
-          lines.push(`keep ${target.dest}`);
         } else if (listed !== undefined) {
           writes.push({ ...target, root, priorSha256: current });
           lines.push(`replace ${target.dest}`);
@@ -588,7 +596,7 @@ function buildInstallPlan(
   } else {
     lines.push(`keep ${ctx.currentPath} (already points at ${versionDir})`);
   }
-  return { entries, mkdirs, writes, current, lines };
+  return { entries, mkdirs, writes, repairs, current, lines };
 }
 
 type Applied =
@@ -841,6 +849,14 @@ function applyInstall(
         });
       }
       pending.push(write.dest);
+      persist();
+    }
+    for (const repair of plan.repairs) {
+      entries.set(repair.dest, {
+        kind: 'file',
+        path: repair.dest,
+        sha256: repair.sha256,
+      });
       persist();
     }
     const { current } = plan;

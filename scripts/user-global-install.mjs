@@ -350,6 +350,7 @@ function buildInstallPlan(ctx, sourceRoot, version) {
   const mkdirs = [];
   const seen = new Set();
   const writes = [];
+  const repairs = [];
   const lines = [];
   const refusals = [];
   // A listed path must sit under exactly one root with no link above it,
@@ -385,13 +386,19 @@ function buildInstallPlan(ctx, sourceRoot, version) {
         lines.push(`create ${target.dest}`);
       } else if (walk.finalKind === 'file') {
         const current = sha256Hex(readNoFollowBytes(target.dest, fs));
-        if (listed !== undefined && current !== listed.sha256) {
+        if (current === target.sha256) {
+          // A replacement whose receipt write failed leaves the source bytes
+          // under the old hash. Record the hash instead of refusing it.
+          if (listed !== undefined && listed.sha256 !== current) {
+            repairs.push({ dest: target.dest, sha256: current });
+            lines.push(`record ${target.dest} (the receipt lagged the file)`);
+          } else {
+            lines.push(`keep ${target.dest}`);
+          }
+        } else if (listed !== undefined && current !== listed.sha256) {
           throw new Error(
             `${target.dest} was edited after install (its SHA-256 differs from the receipt); refusing, and it is user-edited`,
           );
-        }
-        if (current === target.sha256) {
-          lines.push(`keep ${target.dest}`);
         } else if (listed !== undefined) {
           writes.push({ ...target, root, priorSha256: current });
           lines.push(`replace ${target.dest}`);
@@ -475,7 +482,7 @@ function buildInstallPlan(ctx, sourceRoot, version) {
   } else {
     lines.push(`keep ${ctx.currentPath} (already points at ${versionDir})`);
   }
-  return { entries, mkdirs, writes, current, lines };
+  return { entries, mkdirs, writes, repairs, current, lines };
 }
 /**
  * Write the receipt for `entries`. An empty set removes the receipt instead,
@@ -688,6 +695,14 @@ function applyInstall(ctx, plan, version) {
         });
       }
       pending.push(write.dest);
+      persist();
+    }
+    for (const repair of plan.repairs) {
+      entries.set(repair.dest, {
+        kind: 'file',
+        path: repair.dest,
+        sha256: repair.sha256,
+      });
       persist();
     }
     const { current } = plan;
