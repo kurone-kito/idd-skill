@@ -2329,11 +2329,6 @@ fail('unexpected gh invocation: ' + joined);
 `;
 }
 
-/**
- * Run the compiled CLI in apply mode from a scratch cwd whose only policy
- * layer is `config`, against the stubbed `gh`. Returns the exit status, the
- * stderr text, and each POST body the stub received, in order.
- */
 /** One compiled-CLI run against the stubbed `gh` (#4187). */
 interface TriageRun {
   status: number;
@@ -2345,6 +2340,11 @@ interface TriageRun {
   calls: string[][];
 }
 
+/**
+ * Run the compiled CLI, apply or dry run, from a scratch cwd whose only policy
+ * layer is `config`, against the stubbed `gh`. Returns the status, stdout,
+ * stderr, each POST body, and every `gh` argv the stub received, in order.
+ */
 function runTriageApply(
   cliArgs: string[],
   config: Record<string, unknown>,
@@ -3057,6 +3057,7 @@ test('enforce refuses an Accepted: variant, which the apply gate also admits (#4
     triageReviewRows(7),
   );
   assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /triage verdict: defer/u);
   assert.deepEqual(run.posted, []);
   assertNoWrite(run);
 });
@@ -3359,6 +3360,7 @@ test('validateTriageFlags refuses --path-b with each verdict input (#4187)', () 
     { scopeFence: true },
     { protectedAuthority: true },
     { acceptedMidFix: true },
+    { override: 'why' },
   ]) {
     assert.throws(
       () =>
@@ -3372,4 +3374,31 @@ test('validateTriageFlags refuses --path-b with each verdict input (#4187)', () 
       /--path-b/u,
     );
   }
+});
+
+test('validateTriageFlags refuses a body that already carries a Triage line when a line is built (#4187)', () => {
+  const carrying = `${ACCEPTED_FIXED}\nTriage: tier low; urgency low; step 0`;
+  assert.throws(
+    () =>
+      validateTriageFlags({
+        flags: triageFlags({ tier: 'low', urgency: 'low' }),
+        apply: false,
+        body: carrying,
+        triageRecord: 'record',
+        reviewPolicy: undefined,
+        deferByUrgency: 'severity-tiered',
+      }),
+    /already carries a Triage line/u,
+  );
+  // With no tier and urgency no line is built, so the body is left alone.
+  assert.doesNotThrow(() =>
+    validateTriageFlags({
+      flags: triageFlags({}),
+      apply: false,
+      body: carrying,
+      triageRecord: 'record',
+      reviewPolicy: undefined,
+      deferByUrgency: 'severity-tiered',
+    }),
+  );
 });

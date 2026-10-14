@@ -496,18 +496,27 @@ export function validateTriageFlags(input: {
     flags.advisoryConverged !== '' ||
     flags.scopeFence ||
     flags.protectedAuthority ||
-    flags.acceptedMidFix;
+    flags.acceptedMidFix ||
+    flags.override !== null;
   // Checked before the pair, so `--path-b` with a lone score names `--path-b`.
   if (
     flags.pathB &&
     (flags.tier !== '' || flags.urgency !== '' || scoringFlags)
   ) {
     throw new TriageUsageError(
-      '--path-b cannot be combined with --tier, --urgency, --copilot-label, --safety-class, --scope-fence, --protected-authority, --accepted-mid-fix, --lite, or --advisory-converged',
+      '--path-b cannot be combined with --tier, --urgency, --copilot-label, --safety-class, --scope-fence, --protected-authority, --accepted-mid-fix, --override, --lite, or --advisory-converged',
     );
   }
   if ((flags.tier === '') !== (flags.urgency === '')) {
     throw new TriageUsageError('--tier and --urgency must be given together');
+  }
+  // A body that already carries a Triage line would hold two, and the audit
+  // reads the first one. Refuse before any read, so the record stays
+  // unambiguous: the fail-closed default for ambiguous state (#4187).
+  if (flags.tier !== '' && /^Triage:/mu.test(input.body)) {
+    throw new TriageUsageError(
+      'the body already carries a Triage line; the helper writes one from --tier and --urgency',
+    );
   }
   // The same prefix test the apply gate uses, so a body that gate admits (for
   // example `**Accepted:**`) cannot skip the requirement. A `**Rejection
