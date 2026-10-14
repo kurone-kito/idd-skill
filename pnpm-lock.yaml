@@ -173,6 +173,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      markdown-it:
+        specifier: ^14.3.0
+        version: 14.3.0
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.5.12
@@ -204,9 +208,6 @@ importers:
       husky:
         specifier: ^9.1.7
         version: 9.1.7
-      markdown-it:
-        specifier: ^14.3.0
-        version: 14.3.0
       markdownlint-cli2:
         specifier: ^0.23.2
         version: 0.23.2
