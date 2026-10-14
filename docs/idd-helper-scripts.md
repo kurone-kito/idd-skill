@@ -7248,22 +7248,23 @@ same as `AW4`/`AW5`.
         read fails or is unreadable. Otherwise it is `false`.
   3. Route with the table below.
 
-  | `branchState`                                                  | `requiresUpToDateHead` | `eBranchSync`   | `e11`                      | `f1`                            |
-  | -------------------------------------------------------------- | ---------------------- | --------------- | -------------------------- | ------------------------------- |
-  | `clean` with `mergeStateStatus` `CLEAN`                        | either                 | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
-  | `clean` with `UNSTABLE` and only waiting non-required runs     | either                 | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
-  | `clean` with any other `mergeStateStatus`                      | either                 | `hold`          | `skip-merge`               | `hold`                          |
-  | `behind-no-conflict`                                           | `false`                | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
-  | `behind-no-conflict`                                           | `true`                 | `sync-path`     | `skip-merge`               | `return-to-e-phase-branch-sync` |
-  | `content-conflict`                                             | either                 | `sync-path`     | `merge-development-branch` | `return-to-e-phase-branch-sync` |
-  | `computing`                                                    | either                 | `retry`         | `skip-merge`               | `retry`                         |
-  | `dirty`, `unknown`, `force-push-exception`, or any other state | either                 | `hold`          | `skip-merge`               | `hold`                          |
+  | `branchState`                                                                  | `requiresUpToDateHead` | `eBranchSync`   | `e11`                      | `f1`                            |
+  | ------------------------------------------------------------------------------ | ---------------------- | --------------- | -------------------------- | ------------------------------- |
+  | `clean` with `mergeStateStatus` `CLEAN`                                        | either                 | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
+  | `clean` with `UNSTABLE`, at least one listed run, all waiting and non-required | either                 | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
+  | `clean` with any other `mergeStateStatus`                                      | either                 | `hold`          | `skip-merge`               | `hold`                          |
+  | `behind-no-conflict`                                                           | `false`                | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
+  | `behind-no-conflict`                                                           | `true`                 | `sync-path`     | `skip-merge`               | `return-to-e-phase-branch-sync` |
+  | `content-conflict`                                                             | either                 | `sync-path`     | `merge-development-branch` | `return-to-e-phase-branch-sync` |
+  | `computing`                                                                    | either                 | `retry`         | `skip-merge`               | `retry`                         |
+  | `dirty`, `unknown`, `force-push-exception`, or any other state                 | either                 | `hold`          | `skip-merge`               | `hold`                          |
 
   `clean` proceeds with `mergeStateStatus` `CLEAN`, which is the phase files'
-  own definition. An `UNSTABLE` `clean` branch proceeds only when every
-  non-passing head run is non-required and `action_required` or `pending`
-  (issue `#4209`), so the helper reads the head's check rollup live for that
-  state alone; an empty list holds. The helper's `clean` alone also covers
+  own definition. An `UNSTABLE` `clean` branch proceeds only when at least one
+  non-passing head run is listed and every such run is non-required and
+  `action_required` or `pending` (issue `#4209`). The helper reads the head's
+  check rollup live for that state alone, so with an empty or unavailable list
+  it holds. The helper's `clean` alone also covers
   `BLOCKED`, which holds. A `retry` result is re-polled a small fixed number
   of times (distributed default: three attempts, a few seconds apart), then
   routed by the first settled result.

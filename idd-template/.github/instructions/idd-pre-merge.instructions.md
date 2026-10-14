@@ -44,9 +44,11 @@ disabled, route the state from the `gh pr view` output with the table in
 the [helper contract](../../docs/idd-helper-scripts.md#branch-conflict-and-synchronization-state-evidence).
 
 - **`proceed-to-f2`**: proceed to F2. This route means conflict-freeness
-  only. An UNSTABLE `clean` branch takes this route only when every
-  non-passing head run is non-required and `action_required` or `pending`
-  (issue `#4209`); otherwise it holds. If `baseAdvancedSinceMergeBase: true`,
+  only. An UNSTABLE `clean` branch takes this route only when the helper
+  lists at least one non-passing head run and every such run is non-required
+  and `action_required` or `pending` (issue `#4209`); otherwise it holds, and
+  with helper runtime disabled an UNSTABLE branch always holds. If
+  `baseAdvancedSinceMergeBase: true`,
   run the profile-selected trial-merge audit command for `--pr {pr-number}`
   (see the trial-merge audit entry in `docs/idd-helper-scripts.md`) for
   push-free evidence (advisory; this routing does not change). With helper
