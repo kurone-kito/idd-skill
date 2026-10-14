@@ -600,6 +600,17 @@ function removeCreatedDirectory(ctx, path, root, fs) {
   }
   removeSingleEntry(baseOf(root, path), path, { kind: 'directory' }, fs);
 }
+/**
+ * Put back the entry a path held before this run touched it. A path that was
+ * not listed before the run is removed from the receipt.
+ */
+function restoreEntry(entries, path, prior) {
+  if (prior === null) {
+    entries.delete(path);
+  } else {
+    entries.set(path, prior);
+  }
+}
 /** Undo one step of this run and update the in-memory receipt. */
 function undoStep(ctx, step, entries, fs) {
   switch (step.op) {
@@ -610,11 +621,11 @@ function undoStep(ctx, step, entries, fs) {
         { kind: 'file', sha256: step.sha256 },
         fs,
       );
-      entries.delete(step.path);
+      restoreEntry(entries, step.path, step.prior);
       return;
     case 'dir':
       removeCreatedDirectory(ctx, step.path, step.root, fs);
-      entries.delete(step.path);
+      restoreEntry(entries, step.path, step.prior);
       return;
     case 'replace':
       replaceFileByRename(
@@ -637,7 +648,7 @@ function undoStep(ctx, step, entries, fs) {
         { kind: 'symlink', target: step.target },
         fs,
       );
-      entries.delete(ctx.currentPath);
+      restoreEntry(entries, ctx.currentPath, step.prior);
       return;
     case 'repoint':
       repointCurrent(ctx.dataRoot, basename(step.priorTarget), fs);
@@ -690,8 +701,14 @@ function applyInstall(ctx, plan, version) {
         );
       }
       fs.mkdirSync(dir.path);
+      const priorDir = entries.get(dir.path) ?? null;
       entries.set(dir.path, { kind: 'directory', path: dir.path });
-      applied.push({ op: 'dir', path: dir.path, root: dir.root });
+      applied.push({
+        op: 'dir',
+        path: dir.path,
+        root: dir.root,
+        prior: priorDir,
+      });
       pending.push(dir.path);
       persist();
     }
@@ -732,6 +749,7 @@ function applyInstall(ctx, plan, version) {
         });
       } else {
         writeNewFile(write.root.path, write.dest, write.text, fs);
+        const priorFile = entries.get(write.dest) ?? null;
         entries.set(write.dest, {
           kind: 'file',
           path: write.dest,
@@ -742,6 +760,7 @@ function applyInstall(ctx, plan, version) {
           path: write.dest,
           root: write.root,
           sha256: write.sha256,
+          prior: priorFile,
         });
       }
       pending.push(write.dest);
@@ -750,6 +769,7 @@ function applyInstall(ctx, plan, version) {
     const { current } = plan;
     if (current.action === 'create') {
       repointCurrent(ctx.dataRoot, version, fs);
+      const priorLink = entries.get(ctx.currentPath) ?? null;
       entries.set(ctx.currentPath, {
         kind: 'link',
         path: ctx.currentPath,
@@ -759,6 +779,7 @@ function applyInstall(ctx, plan, version) {
         op: 'link',
         path: ctx.currentPath,
         target: current.versionDir,
+        prior: priorLink,
       });
       pending.push(ctx.currentPath);
       persist();
@@ -770,6 +791,8 @@ function applyInstall(ctx, plan, version) {
           path: ctx.currentPath,
           target: current.versionDir,
         });
+        // The link has already moved, so a failed receipt write must name it.
+        pending.push(ctx.currentPath);
         persist();
       }
       applied.push({

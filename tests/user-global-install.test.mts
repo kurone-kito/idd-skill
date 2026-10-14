@@ -720,7 +720,9 @@ test('a retry after the receipt write failed on a repoint is refused and named',
 
   assert.throws(
     () => installPayload(optionsFor(home, { fs, version: UPGRADE_VERSION })),
-    /receipt rewrite failed/,
+    (error: Error) =>
+      /receipt rewrite failed/.test(error.message) &&
+      error.message.includes(currentOf(home)),
   );
   assert.equal(
     nodeFs.readlinkSync(currentOf(home)),
@@ -863,6 +865,30 @@ test('a listed skill file with a second hard link makes install refuse before an
     /more than one hard link/,
   );
   assert.deepEqual(snapshot(home), before);
+});
+
+test('a rollback keeps a listed path listed when this run recreated it and then failed', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const claude = skillFileOf(home, '.claude');
+  nodeFs.rmSync(claude);
+  nodeFs.rmSync(skillFileOf(home, '.agents'));
+  const fs = hookedFs((op, args) => {
+    if (
+      op === 'openSync' &&
+      isWriteCall(op, args) &&
+      String(args[0]).includes('/.agents/skills/')
+    ) {
+      throw new Error('injected write failure');
+    }
+  });
+
+  assert.throws(() => installPayload(optionsFor(home, { fs })), /rolled back/);
+  assert.equal(nodeFs.existsSync(claude), false);
+  assert.ok(
+    readReceiptEntries(home).some((entry) => entry.path === claude),
+    'the receipt still lists the path the rollback removed',
+  );
 });
 
 test('every placeholder in the installed payload has a mapping', () => {
