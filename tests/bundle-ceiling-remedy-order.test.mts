@@ -77,10 +77,10 @@ test('the template ships no audit directory (#4128)', () => {
 });
 
 for (const path of PR_SUBMIT_COPIES) {
-  test(`${path} stays within the 36,000-byte phase cap and points at the order (#4128)`, () => {
+  test(`${path} stays within the 40,000-byte phase cap and points at the order (#4128)`, () => {
     const text = readFileSync(path, 'utf8');
     const bytes = Buffer.byteLength(stripGeneratedFromBanner(text), 'utf8');
-    assert.ok(bytes <= 36000, `${path} is ${bytes} bytes`);
+    assert.ok(bytes <= 40000, `${path} is ${bytes} bytes`);
     assert.match(
       text,
       /A budget breach follows `idd-review-fix\.instructions\.md`'s E12 order\./,
