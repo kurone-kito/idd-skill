@@ -205,6 +205,19 @@ review comments (`gh api repos/{owner}/{repo}/pulls/{n}/reviews` and
   flagged. Threads with other or no dispositions are not counted.
   `mergedAt` is the PR's merge time under `--limit` and `null` under
   `--prs`.
+- **Finding locality** (`findingLocality` in the JSON output): each
+  Copilot inline finding (a review comment from the `Copilot` login with
+  no reply link) is placed relative to the previous push. Findings on
+  the first Copilot review count as `firstWave`. For a later review, the
+  compare range from the previous review's commit to this review's commit
+  is read. A finding is `nearPreviousPush` when its `original_line` is
+  within 3 lines of a new-file line that the previous push added or
+  removed, `sameFileElsewhere` when its file changed in that push but the
+  finding is farther away, and `untouchedFile` when the previous push did
+  not change that file. `unknown` covers a finding the rules cannot
+  place: a `LEFT` side, a missing commit or patch, a failed compare
+  lookup, or a compare response at GitHub's 300-file cap, which may hide
+  a changed file.
 
 ### Check mode
 
