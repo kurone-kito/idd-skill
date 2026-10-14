@@ -818,10 +818,10 @@ in this preamble, since the fallback differs per helper.
   `--pr`, `--no-cache`, `--refresh-cache`, or `--purge-cache`. Both the orphan
   output's and the listing's `counts` gain `draftCarriersHeld`,
   `draftCarriersReady`, and `draftCarriersWaiting`, each the length of its
-  bucket. The listing fails closed: a failed label search, a search at the
-  1000-result cap, or an unreadable held-carrier timeline stops the run with an
-  error instead of returning an incomplete listing (preventive; no observed
-  incident yet).
+  bucket. Three failures stop the run with an error instead of returning an
+  incomplete listing: a failed label search, a search at the 1000-result cap,
+  or an unreadable held-carrier timeline (preventive; no observed incident
+  yet).
 - `scripts/discover-roadmap-graph.mjs` for A1.5/A2 recursive roadmap graph
   enumeration and classification
 - `scripts/idd-roadmap-audit-execute.mjs` for the A1.5 roadmap-completion
