@@ -1027,7 +1027,7 @@ function buildCarrierFindings(
   const structure = carrierStructureView(rawText);
   return [
     checkCarrierMarker(text, markerPrefix),
-    checkCarrierForbiddenMarkers(text, markerPrefix),
+    checkCarrierForbiddenMarkers(text, structure.text, markerPrefix),
     checkCarrierReleaseCondition(structure.text.split('\n')),
     checkCarrierDrafts(structure.text.split('\n'), structure.rawFree),
     checkCarrierLabel(labels, authoringOnlyLabelName),
@@ -1058,7 +1058,7 @@ function checkCarrierMarker(text, markerPrefix) {
   }
   return pass(id, name, 'exactly one draft-carrier marker with value v1');
 }
-function checkCarrierForbiddenMarkers(text, markerPrefix) {
+function checkCarrierForbiddenMarkers(text, visibleText, markerPrefix) {
   const id = 'carrier-forbidden-markers';
   const name =
     'A draft carrier carries no suitability, effort, roadmap-id, blocked-by, or authoring-bucket marker or footer';
@@ -1070,11 +1070,13 @@ function checkCarrierForbiddenMarkers(text, markerPrefix) {
     }
   }
   // The visible footer lines that accompany the suitability and effort
-  // markers are footers too, even when their hidden marker is absent.
-  if (/^[ \t]*_Autopilot suitability:/imu.test(text)) {
+  // markers are footers too, even when their hidden marker is absent. They
+  // read the comment-free view, since a commented-out line is not visible
+  // (#4250 review, Copilot); hidden markers are still counted above.
+  if (/^[ \t]*_Autopilot suitability:/imu.test(visibleText)) {
     found.push('autopilot-suitability footer line');
   }
-  if (/^[ \t]*_Effort:/imu.test(text)) {
+  if (/^[ \t]*_Effort:/imu.test(visibleText)) {
     found.push('effort footer line');
   }
   return found.length === 0
@@ -1097,6 +1099,14 @@ function checkCarrierReleaseCondition(lines) {
       id,
       name,
       'not applicable: the Release condition heading is missing (see required-headings)',
+    );
+  }
+  const releaseHeadings = countLevel2Headings(lines, 'Release condition');
+  if (releaseHeadings > 1) {
+    return fail(
+      id,
+      name,
+      `the ## Release condition heading appears ${releaseHeadings} times; a carrier takes exactly one`,
     );
   }
   const problems = [];
@@ -1177,8 +1187,11 @@ function checkCarrierReleaseCondition(lines) {
 /**
  * The `## Drafts` section: one or more `###` subsections, each with exactly
  * one `Review:` line and exactly one `Shape:` line (both read from the
- * code-masked text) and exactly one top-level fenced draft (found on the raw
- * body, so a nested fence stays inside the draft).
+ * code-masked text) and exactly one top-level fenced draft. The fence is
+ * found on the raw body, so a nested fence stays inside the draft; a fence
+ * whose opener is indented or quoted (inside a list item or a blockquote) is
+ * not top-level (#4250 review, Copilot). A second `## Drafts` section fails
+ * rather than hiding unchecked drafts (#4250 review, Codex).
  */
 function checkCarrierDrafts(lines, rawNormalized) {
   const id = 'carrier-drafts';
@@ -1192,6 +1205,14 @@ function checkCarrierDrafts(lines, rawNormalized) {
       'not applicable: the Drafts heading is missing (see required-headings)',
     );
   }
+  const drafts = countLevel2Headings(lines, 'Drafts');
+  if (drafts > 1) {
+    return fail(
+      id,
+      name,
+      `the ## Drafts heading appears ${drafts} times; a carrier takes exactly one`,
+    );
+  }
   const subsectionHeadingRe = /^ {0,3}###\s+(.+?)\s*$/u;
   const subsectionStarts = [];
   for (let index = section.start; index < section.end; index += 1) {
@@ -1202,9 +1223,10 @@ function checkCarrierDrafts(lines, rawNormalized) {
   if (subsectionStarts.length === 0) {
     return fail(id, name, 'the Drafts section has no ### draft subsection');
   }
-  const fenceLines = findFencedCodeRanges(rawNormalized).map(
-    (range) => rawNormalized.slice(0, range.start).split('\n').length - 1,
-  );
+  const rawLines = rawNormalized.split('\n');
+  const fenceLines = findFencedCodeRanges(rawNormalized)
+    .map((range) => rawNormalized.slice(0, range.start).split('\n').length - 1)
+    .filter((line) => /^(?:`{3,}|~{3,})/u.test(rawLines[line] ?? ''));
   const reviewLine = /^Review: (?:reviewed|not reviewed)(?: .*)?$/u;
   const shapeLine = /^Shape: (?:orphan|roadmap|child)$/u;
   const problems = [];
@@ -1638,6 +1660,14 @@ function locateLevel2Section(lines, heading) {
     }
   }
   return { start, end };
+}
+/** How many level-2 `## <heading>` lines the (code-masked) body carries. */
+function countLevel2Headings(lines, heading) {
+  const headingRe = /^ {0,3}##\s+(.+?)\s*$/u;
+  return lines.filter((line) => {
+    const match = line.match(headingRe);
+    return match !== null && match[1].trim() === heading;
+  }).length;
 }
 function extractLevel2SectionLines(text, heading) {
   const lines = text.split(/\r?\n/u);

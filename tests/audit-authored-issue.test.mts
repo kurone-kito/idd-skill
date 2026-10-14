@@ -6168,6 +6168,57 @@ test('carrier-release-condition rejects a Blocked by line followed by prose (#42
   assert.match(finding?.detail ?? '', /trailing text/u);
 });
 
+test('a commented-out visible footer line does not fail a draft carrier, but a hidden marker still does (#4250)', () => {
+  const commentedFooter = carrierBody({
+    intro:
+      'Holds drafts.\n\n<!--\n_Effort: M -- x\n_Autopilot suitability: 4 / 5 -- x\n-->',
+  });
+  assert.equal(
+    carrierFinding(commentedFooter, 'carrier-forbidden-markers')?.result,
+    'pass',
+  );
+  const hiddenMarker = carrierBody({
+    intro: 'Holds drafts.\n\n<!-- idd-skill-effort: M -->',
+  });
+  assert.equal(
+    carrierFinding(hiddenMarker, 'carrier-forbidden-markers')?.result,
+    'fail',
+  );
+});
+
+test('a draft fence inside a list item or a blockquote is not a top-level draft (#4250)', () => {
+  const listDraft = CARRIER_DRAFTS.replace(
+    '```md\n# Follow-up B\n```',
+    '- item\n\n  ```md\n  # Follow-up B\n  ```',
+  );
+  assert.equal(
+    carrierFinding(carrierBody({ drafts: listDraft }), 'carrier-drafts')
+      ?.result,
+    'fail',
+    'list continuation',
+  );
+  const quotedDraft = CARRIER_DRAFTS.replace(
+    '```md\n# Follow-up B\n```',
+    '> ```md\n> # Follow-up B\n> ```',
+  );
+  assert.equal(
+    carrierFinding(carrierBody({ drafts: quotedDraft }), 'carrier-drafts')
+      ?.result,
+    'fail',
+    'blockquote',
+  );
+});
+
+test('a second ## Drafts or ## Release condition heading fails rather than hiding unchecked drafts (#4250)', () => {
+  const secondDrafts = `${carrierBody()}\n## Drafts\n\n### Follow-up C\n\nReview: reviewed\nShape: child\n`;
+  assert.equal(carrierFinding(secondDrafts, 'carrier-drafts')?.result, 'fail');
+  const secondRelease = `${carrierBody()}\n## Release condition\n\n`;
+  assert.equal(
+    carrierFinding(secondRelease, 'carrier-release-condition')?.result,
+    'fail',
+  );
+});
+
 test('carrier-drafts requires one Review line, one Shape line, and one fenced draft per subsection (#4250)', () => {
   const cases: [string, string][] = [
     ['no Review line', CARRIER_DRAFTS.replace('Review: reviewed\n', '')],
