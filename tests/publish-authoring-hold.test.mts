@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-
+import { markdownItAvailable } from '../src/scripts/markdown-structure.mts';
 import {
   buildLintArgs,
   checkCarrierReviewResult,
@@ -1219,6 +1219,18 @@ const CARRIER_BODY = [
   '- Follow-up A: reviewed.',
 ].join('\n');
 
+// The real carrier linter needs markdown-it. The bare-node lint lane installs
+// no dependencies, so the cases that reach the linter skip there, as the
+// carrier linter tests do (#4250); the installed lanes run them.
+const CARRIER_LINT_SKIP = markdownItAvailable()
+  ? false
+  : 'markdown-it is not installed (bare-node lane)';
+
+/** A carrier case whose publish reaches the real linter. */
+function carrierLintTest(name: string, fn: () => void): void {
+  test(name, { skip: CARRIER_LINT_SKIP }, fn);
+}
+
 /** The arguments of one carrier publish. The review result is optional. */
 function carrierFiles(fixture: Fixture, review?: unknown): string[] {
   const body = join(fixture.dir, 'carrier.md');
@@ -1301,77 +1313,87 @@ test('lint args and labels for a carrier: both labels and no bucket, even when t
   ]);
 });
 
-test('CLI: a carrier dry run lints with both labels, plans the create, and writes nothing', () => {
-  const fixture = setup({ labels: ['status:authoring'] });
-  try {
-    const result = fixture.run(carrierFiles(fixture));
-    assert.equal(result.status, 0, result.stderr);
-    const report = JSON.parse(result.stdout);
-    assert.equal(report.mode, 'dry-run');
-    const lint = report.steps.find((s: { step: string }) => s.step === 'lint');
-    assert.deepEqual(lint.detail.args.slice(-4), [
-      '--label',
-      'status:authoring',
-      '--label',
-      'status:authoring-only',
-    ]);
-    assert.ok(!lint.detail.args.includes('--expect-bucket'));
-    const labels = report.steps.find(
-      (s: { step: string }) => s.step === 'labels',
-    );
-    assert.deepEqual(labels.detail.labels, [
-      'status:authoring',
-      'status:authoring-only',
-    ]);
-    assert.deepEqual(labels.detail.create, ['status:authoring-only']);
-    assert.deepEqual(writes(fixture.log()), []);
-  } finally {
-    fixture.restore();
-  }
-});
+carrierLintTest(
+  'CLI: a carrier dry run lints with both labels, plans the create, and writes nothing',
+  () => {
+    const fixture = setup({ labels: ['status:authoring'] });
+    try {
+      const result = fixture.run(carrierFiles(fixture));
+      assert.equal(result.status, 0, result.stderr);
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.mode, 'dry-run');
+      const lint = report.steps.find(
+        (s: { step: string }) => s.step === 'lint',
+      );
+      assert.deepEqual(lint.detail.args.slice(-4), [
+        '--label',
+        'status:authoring',
+        '--label',
+        'status:authoring-only',
+      ]);
+      assert.ok(!lint.detail.args.includes('--expect-bucket'));
+      const labels = report.steps.find(
+        (s: { step: string }) => s.step === 'labels',
+      );
+      assert.deepEqual(labels.detail.labels, [
+        'status:authoring',
+        'status:authoring-only',
+      ]);
+      assert.deepEqual(labels.detail.create, ['status:authoring-only']);
+      assert.deepEqual(writes(fixture.log()), []);
+    } finally {
+      fixture.restore();
+    }
+  },
+);
 
-test('CLI: a carrier apply makes the orphan write sequence with both labels, with or without a review result', () => {
-  const expected = [
-    'journal-pending',
-    'create status:authoring,status:authoring-only',
-    'identity-attach',
-    'owner-marker',
-    'member',
-  ];
-  const bare = setup({ labels: ['status:authoring', 'status:authoring-only'] });
-  try {
-    const result = bare.run([...carrierFiles(bare), '--apply']);
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    const report = JSON.parse(result.stdout);
-    assert.equal(report.outcome, 'published');
-    assert.equal(report.journalState, 'member');
-    assert.deepEqual(writeKinds(bare), expected);
-    const created = bare.state().issues[String(NEW_ISSUE)] as {
-      body: string;
-      labels: string[];
-    };
-    assert.match(created.body, /^<!-- idd-skill-authoring-publication: /);
-    assert.deepEqual(created.labels, [
-      'status:authoring',
-      'status:authoring-only',
-    ]);
-  } finally {
-    bare.restore();
-  }
-  const reviewed = setup({
-    labels: ['status:authoring', 'status:authoring-only'],
-  });
-  try {
-    const result = reviewed.run([
-      ...carrierFiles(reviewed, { completed: false }),
-      '--apply',
-    ]);
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.deepEqual(writeKinds(reviewed), expected);
-  } finally {
-    reviewed.restore();
-  }
-});
+carrierLintTest(
+  'CLI: a carrier apply makes the orphan write sequence with both labels, with or without a review result',
+  () => {
+    const expected = [
+      'journal-pending',
+      'create status:authoring,status:authoring-only',
+      'identity-attach',
+      'owner-marker',
+      'member',
+    ];
+    const bare = setup({
+      labels: ['status:authoring', 'status:authoring-only'],
+    });
+    try {
+      const result = bare.run([...carrierFiles(bare), '--apply']);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.outcome, 'published');
+      assert.equal(report.journalState, 'member');
+      assert.deepEqual(writeKinds(bare), expected);
+      const created = bare.state().issues[String(NEW_ISSUE)] as {
+        body: string;
+        labels: string[];
+      };
+      assert.match(created.body, /^<!-- idd-skill-authoring-publication: /);
+      assert.deepEqual(created.labels, [
+        'status:authoring',
+        'status:authoring-only',
+      ]);
+    } finally {
+      bare.restore();
+    }
+    const reviewed = setup({
+      labels: ['status:authoring', 'status:authoring-only'],
+    });
+    try {
+      const result = reviewed.run([
+        ...carrierFiles(reviewed, { completed: false }),
+        '--apply',
+      ]);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.deepEqual(writeKinds(reviewed), expected);
+    } finally {
+      reviewed.restore();
+    }
+  },
+);
 
 test('CLI: a carrier review result that is malformed or unreadable refuses before any write', () => {
   const fixture = setup({
@@ -1443,54 +1465,60 @@ test('CLI: a carrier refuses any bucket other than ready before any gh call', ()
   }
 });
 
-test('CLI: a carrier whose authoring-only label cannot be created refuses before the journal write', () => {
-  const fixture = setup({
-    labels: ['status:authoring'],
-    failLabelCreate: true,
-  });
-  try {
-    const result = fixture.run([...carrierFiles(fixture), '--apply']);
-    assert.equal(result.status, 1);
-    assert.deepEqual(writes(fixture.log()), [
-      'label create status:authoring-only --repo',
-    ]);
-    assert.deepEqual(fixture.state().comments, []);
-    assert.deepEqual(fixture.state().issues, {});
-  } finally {
-    fixture.restore();
-  }
-});
+carrierLintTest(
+  'CLI: a carrier whose authoring-only label cannot be created refuses before the journal write',
+  () => {
+    const fixture = setup({
+      labels: ['status:authoring'],
+      failLabelCreate: true,
+    });
+    try {
+      const result = fixture.run([...carrierFiles(fixture), '--apply']);
+      assert.equal(result.status, 1);
+      assert.deepEqual(writes(fixture.log()), [
+        'label create status:authoring-only --repo',
+      ]);
+      assert.deepEqual(fixture.state().comments, []);
+      assert.deepEqual(fixture.state().issues, {});
+    } finally {
+      fixture.restore();
+    }
+  },
+);
 
-test('CLI: an orphan body under --shape carrier fails the lint and writes nothing', () => {
-  const fixture = setup({
-    labels: ['status:authoring', 'status:authoring-only'],
-  });
-  try {
-    const body = join(fixture.dir, 'orphan.md');
-    writeFileSync(body, draftBody());
-    const result = fixture.run([
-      '--shape',
-      'carrier',
-      '--title',
-      CARRIER_TITLE,
-      '--body-file',
-      body,
-      '--owner',
-      'o',
-      '--repo',
-      'r',
-      '--marker-prefix',
-      'idd-skill',
-      '--apply',
-    ]);
-    assert.equal(result.status, 1, result.stdout);
-    assert.match(result.stdout, /carrier-marker/);
-    assert.deepEqual(writes(fixture.log()), []);
-    assert.deepEqual(fixture.state().issues, {});
-  } finally {
-    fixture.restore();
-  }
-});
+carrierLintTest(
+  'CLI: an orphan body under --shape carrier fails the lint and writes nothing',
+  () => {
+    const fixture = setup({
+      labels: ['status:authoring', 'status:authoring-only'],
+    });
+    try {
+      const body = join(fixture.dir, 'orphan.md');
+      writeFileSync(body, draftBody());
+      const result = fixture.run([
+        '--shape',
+        'carrier',
+        '--title',
+        CARRIER_TITLE,
+        '--body-file',
+        body,
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--marker-prefix',
+        'idd-skill',
+        '--apply',
+      ]);
+      assert.equal(result.status, 1, result.stdout);
+      assert.match(result.stdout, /carrier-marker/);
+      assert.deepEqual(writes(fixture.log()), []);
+      assert.deepEqual(fixture.state().issues, {});
+    } finally {
+      fixture.restore();
+    }
+  },
+);
 
 test('CLI: --shape child names --shape carrier as the route and makes no gh call', () => {
   const fixture = setup();
@@ -1516,70 +1544,85 @@ test('CLI: --help says the review result is optional for a carrier', () => {
   }
 });
 
-test('CLI: a carrier apply creates a missing authoring-only label before the journal write', () => {
-  const fixture = setup({ labels: ['status:authoring'] });
-  try {
-    const result = fixture.run([...carrierFiles(fixture), '--apply']);
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.deepEqual(writeKinds(fixture), [
-      'label',
-      'journal-pending',
-      'create status:authoring,status:authoring-only',
-      'identity-attach',
-      'owner-marker',
-      'member',
-    ]);
-    const created = fixture.state().issues[String(NEW_ISSUE)] as {
-      labels: string[];
-    };
-    assert.deepEqual(created.labels, [
-      'status:authoring',
-      'status:authoring-only',
-    ]);
-  } finally {
-    fixture.restore();
-  }
-});
+carrierLintTest(
+  'CLI: a carrier apply creates a missing authoring-only label before the journal write',
+  () => {
+    const fixture = setup({ labels: ['status:authoring'] });
+    try {
+      const result = fixture.run([...carrierFiles(fixture), '--apply']);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.deepEqual(writeKinds(fixture), [
+        'label',
+        'journal-pending',
+        'create status:authoring,status:authoring-only',
+        'identity-attach',
+        'owner-marker',
+        'member',
+      ]);
+      const created = fixture.state().issues[String(NEW_ISSUE)] as {
+        labels: string[];
+      };
+      assert.deepEqual(created.labels, [
+        'status:authoring',
+        'status:authoring-only',
+      ]);
+    } finally {
+      fixture.restore();
+    }
+  },
+);
 
-test('CLI: a carrier whose created issue lacks its labels gets both back as a safe hold and exits 1', () => {
-  const fixture = setup({
-    labels: ['status:authoring', 'status:authoring-only'],
-    dropLabels: true,
-  });
-  try {
-    const result = fixture.run([...carrierFiles(fixture), '--apply']);
-    assert.equal(result.status, 1);
-    const report = JSON.parse(result.stdout);
-    assert.equal(report.failedStep, 'create-verify');
-    assert.equal(report.journalState, 'pending');
-    const issue = fixture.state().issues[String(NEW_ISSUE)] as {
-      labels: string[];
-    };
-    assert.deepEqual(issue.labels, [
-      'status:authoring',
-      'status:authoring-only',
-    ]);
-    assert.ok(
-      !fixture.state().comments.some((comment) => comment.issue === NEW_ISSUE),
-    );
-  } finally {
-    fixture.restore();
-  }
-});
+carrierLintTest(
+  'CLI: a carrier whose created issue lacks its labels gets both back as a safe hold and exits 1',
+  () => {
+    const fixture = setup({
+      labels: ['status:authoring', 'status:authoring-only'],
+      dropLabels: true,
+    });
+    try {
+      const result = fixture.run([...carrierFiles(fixture), '--apply']);
+      assert.equal(result.status, 1);
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.failedStep, 'create-verify');
+      assert.equal(report.journalState, 'pending');
+      const issue = fixture.state().issues[String(NEW_ISSUE)] as {
+        labels: string[];
+      };
+      assert.deepEqual(issue.labels, [
+        'status:authoring',
+        'status:authoring-only',
+      ]);
+      assert.ok(
+        !fixture
+          .state()
+          .comments.some((comment) => comment.issue === NEW_ISSUE),
+      );
+    } finally {
+      fixture.restore();
+    }
+  },
+);
 
-test('CLI: a carrier accepts an explicit --bucket ready, which is its default', () => {
-  const fixture = setup({
-    labels: ['status:authoring', 'status:authoring-only'],
-  });
-  try {
-    const result = fixture.run([...carrierFiles(fixture), '--bucket', 'ready']);
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(JSON.parse(result.stdout).mode, 'dry-run');
-    assert.deepEqual(writes(fixture.log()), []);
-  } finally {
-    fixture.restore();
-  }
-});
+carrierLintTest(
+  'CLI: a carrier accepts an explicit --bucket ready, which is its default',
+  () => {
+    const fixture = setup({
+      labels: ['status:authoring', 'status:authoring-only'],
+    });
+    try {
+      const result = fixture.run([
+        ...carrierFiles(fixture),
+        '--bucket',
+        'ready',
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).mode, 'dry-run');
+      assert.deepEqual(writes(fixture.log()), []);
+    } finally {
+      fixture.restore();
+    }
+  },
+);
 
 test('CLI: an empty --review-result path is a usage error for either shape, before any gh call', () => {
   const fixture = setup({
