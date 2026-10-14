@@ -233,9 +233,10 @@ rules.
   or bypasses the A4.5/A5 gates. Except for an `L` orphan in an autopilot
   run under `autopilotSuitability.effortL: refuse`, it never skips or gates,
   and a large issue stays claimable when it is the only ready work. Under
-  `refuse`, `effort-l-ready` refuses a `ready` `L` orphan or child body
-  (roadmaps are exempt) at publication, and autopilot Discover routes an
-  `L` orphan candidate to humans.
+  `refuse`, autopilot Discover routes an `L` orphan candidate to humans.
+- Under `autopilotSuitability.effortL: refuse`, `effort-l-ready` refuses a
+  `ready` `L` orphan or child body at publication. Roadmaps, bucket audits,
+  and bodies routed to a human bucket or scored `1` are exempt.
 - A missing or invalid hint is **fail-safe**: it sorts as the neutral
   middle, as-if `M`, per `idd-discover.instructions.md` A4 Step 2.
 
