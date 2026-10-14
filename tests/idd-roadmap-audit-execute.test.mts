@@ -104,6 +104,7 @@ function readyReport(): RoadmapGraphReport {
     ],
     roadmapNodes: [],
     executionCandidates: [],
+    pullRequestReferences: [],
     diagnostics: {
       duplicateReferences: [],
       cycles: [],
@@ -468,6 +469,52 @@ test('resolveOpenLinkedPrIssues fails closed on a truncated connected-PR timelin
     },
   });
   assert.deepEqual(resolveOpenLinkedPrIssues(port, [1048]), [1048]);
+});
+
+test('#4281: a closed child citing a merged pull request is not an unresolved blocker', async () => {
+  const issues = new Map<number, unknown>([
+    [
+      ROADMAP,
+      {
+        number: ROADMAP,
+        title: 'roadmap',
+        state: 'open',
+        body: '<!-- idd-skill-roadmap-id: epic -->\n- [x] #996',
+        labels: [{ name: 'roadmap' }],
+      },
+    ],
+    [
+      996,
+      {
+        number: 996,
+        title: 'closed child',
+        state: 'closed',
+        body: 'Refs #997',
+        labels: [],
+      },
+    ],
+    [
+      997,
+      {
+        number: 997,
+        title: 'merged pull request 997',
+        state: 'closed',
+        body: '',
+        labels: [],
+        pull_request: {
+          url: 'https://example.test/pulls/997',
+          merged_at: '2026-10-01T00:00:00Z',
+        },
+      },
+    ],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(ROADMAP, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(graph.diagnostics.unresolvedReferences, []);
+  assert.deepEqual(evaluateRoadmapAuditGates(graph), []);
 });
 
 test('unresolved, inaccessible, and cycle diagnostics each surface a blocker', () => {
