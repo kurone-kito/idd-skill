@@ -797,7 +797,9 @@ in this preamble, since the fallback differs per helper.
   Default-on (not opt-in): the output's `draftCarriers` lists the draft
   carriers, which are the open issues that carry the authoring-only label and
   the carrier marker outside code (issue `#4257`). Each carrier is `held` (it
-  also carries the authoring label, with `heldSince` and a `stale` flag),
+  also carries the authoring label, with `heldSince` (null when no labeled
+  event was read, which in A0-O output also covers a failed timeline read)
+  and a `stale` flag),
   `ready` (no open or unresolvable `Blocked by` reference), or `waiting` (with
   `blockers`, each a `reference` and a `reason`: `open`,
   `issue-not-found-or-inaccessible`, or `cross_repository_reference`). A
