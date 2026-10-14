@@ -512,9 +512,9 @@ function reviewAuthorLogin(review: unknown): unknown {
  * before this change. The relax step reads the pull request's reviews only
  * under `severity-tiered` without `--lite`, and reads the head only when
  * `--advisory-converged` is also set on that path. A SHA that does not match
- * the head throws a `TriageUsageError`. A failed read propagates for the
- * caller to classify. The caller passes the normalized policy, so this
- * function loads no config.
+ * the head throws a `TriageUsageError`. A failed read throws a
+ * `TriageReadError` that wraps the original error. The caller passes the
+ * normalized policy, so this function loads no config.
  */
 export function buildTriageReplyBody(input: {
   port: ProviderPort;

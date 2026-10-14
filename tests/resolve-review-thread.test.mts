@@ -1693,6 +1693,26 @@ test('buildTriageReplyBody writes step 0 with a blank line before the stamp (#41
   );
 });
 
+test('buildTriageReplyBody wraps a failed head read so a 404 still reads as a read failure (#4186)', () => {
+  const port = {
+    ...triagePort(4),
+    getChangeRequestHeadSha: () => {
+      throw tagGhCommandError(new Error('gh: Not Found (HTTP 404)'));
+    },
+  };
+  assert.throws(
+    () =>
+      buildTriage(port, '**Accepted** — x', {
+        tier: 'high',
+        urgency: 'high',
+        advisoryConverged: TRIAGE_HEAD,
+      }),
+    (error: unknown) =>
+      error instanceof TriageReadError &&
+      classifyHelperError(error.original).kind === 'not-found',
+  );
+});
+
 test('buildTriageReplyBody relax step follows the Copilot review count at 4 and 7 (#4186)', () => {
   const four = buildTriage(triagePort(4), '**Accepted** — x', {
     tier: 'high',
@@ -2255,13 +2275,19 @@ function triageReviewRows(count: number): unknown[] {
  * view, the review list, the head SHA, the thread lookup and resolve, and the
  * work-item duplicate read, and it appends each POST body to the ledger.
  */
-function triageGhStub(reviews: unknown[] | string | null): string {
-  const reviewsRoute =
-    reviews === null
-      ? "fail('gh: HTTP 500 for pulls/42/reviews');"
-      : typeof reviews === 'string'
-        ? `out(${JSON.stringify(reviews)});`
-        : `out(JSON.stringify(${JSON.stringify(reviews)}));`;
+function triageGhStub(
+  reviews: unknown[] | string | { status: number } | null,
+): string {
+  let reviewsRoute: string;
+  if (reviews === null) {
+    reviewsRoute = "fail('gh: HTTP 500 for pulls/42/reviews');";
+  } else if (typeof reviews === 'string') {
+    reviewsRoute = `out(${JSON.stringify(reviews)});`;
+  } else if (Array.isArray(reviews)) {
+    reviewsRoute = `out(JSON.stringify(${JSON.stringify(reviews)}));`;
+  } else {
+    reviewsRoute = `fail('gh: Not Found (HTTP ${reviews.status}) for pulls/42/reviews');`;
+  }
   return `const fs = require('node:fs');
 const args = process.argv.slice(2);
 const joined = args.join(' ');
@@ -2302,7 +2328,7 @@ fail('unexpected gh invocation: ' + joined);
 function runTriageApply(
   cliArgs: string[],
   config: Record<string, unknown>,
-  reviews: unknown[] | string | null,
+  reviews: unknown[] | string | { status: number } | null,
   extraEnv: Record<string, string> = {},
 ): { status: number; stderr: string; posted: string[] } {
   let scratch = '';
@@ -2455,6 +2481,56 @@ test('a review read that returns non-JSON reports kind transport in the error en
     iddHelperError?: { kind?: string };
   };
   assert.equal(envelope.iddHelperError?.kind, 'transport');
+});
+
+/** The `kind` of the helper error envelope printed as the last stderr line. */
+function envelopeKind(stderr: string): string | undefined {
+  const envelope = JSON.parse(stderr.trim().split('\n').at(-1) ?? '{}') as {
+    iddHelperError?: { kind?: string };
+  };
+  return envelope.iddHelperError?.kind;
+}
+
+test('a 404 on the review list reports kind transport in the error envelope (#4186)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--body',
+      '**Accepted** — fixed in abc',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    { status: 404 },
+    { IDD_HELPER_ERROR_ENVELOPE: '1' },
+  );
+  assert.equal(run.status, 1);
+  assert.deepEqual(run.posted, []);
+  assert.equal(envelopeKind(run.stderr), 'transport');
+});
+
+test('a mismatched --advisory-converged reports kind usage in the error envelope (#4186)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--advisory-converged',
+      'f00dfeed',
+      '--body',
+      '**Accepted** — fixed in abc',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(4),
+    { IDD_HELPER_ERROR_ENVELOPE: '1' },
+  );
+  assert.equal(run.status, 1);
+  assert.deepEqual(run.posted, []);
+  assert.equal(envelopeKind(run.stderr), 'usage');
 });
 
 test('the compiled CLI stamps a record-mode reply with the configured marker prefix (#4186)', () => {
