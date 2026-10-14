@@ -1,10 +1,11 @@
 name: Review policy audit
 # Weekly audit of this repository's recent merged pull requests with
 # copilot-review-wave-audit --check (issue #4189). The check exits 1 when a
-# Copilot overview cannot be parsed, when too few dispositions record the
-# triage, or when a disposition contradicts the defer matrix. The audit
-# imports only Node built-ins and the repository's own generated scripts/*.mjs
-# modules, so the job needs no dependency install.
+# Copilot overview cannot be parsed, when a Triage line is malformed, or when
+# an accepted reply carries a defer verdict. The recorded-share threshold needs
+# --since, which this job does not pass yet, so it is not enforced here. The
+# audit imports only Node built-ins and the repository's own generated
+# scripts/*.mjs modules, so the job needs no dependency install.
 #
 # Source-repository only: this workflow is never distributed to idd-template/.
 on:
