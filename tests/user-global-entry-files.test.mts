@@ -235,7 +235,7 @@ test('uninstall after a fresh install removes the entry files and the directory 
   assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
 });
 
-test('user text without a trailing LF survives install and uninstall byte for byte', () => {
+test('user text without a trailing LF survives install and uninstall, which keeps the separator LF', () => {
   const home = freshHome();
   const claude = filesOf(home).claude;
   nodeFs.writeFileSync(claude, 'user line');
@@ -243,7 +243,21 @@ test('user text without a trailing LF survives install and uninstall byte for by
   assert.equal(textOf(claude), `user line\n${claudeSpan(home)}`);
   assert.equal(listedEntry(home, claude)?.kind, 'managed-block');
   uninstallPayload(optionsFor(home));
-  assert.equal(textOf(claude), 'user line');
+  // The LF install wrote before the block stays, so one extra LF remains.
+  assert.equal(textOf(claude), 'user line\n');
+});
+
+test('a user line above a managed block survives install and uninstall byte for byte', () => {
+  const home = freshHome();
+  const claude = filesOf(home).claude;
+  nodeFs.writeFileSync(claude, 'user');
+  installPayload(optionsFor(home));
+  // The user inserts a line directly above the block that install separated.
+  nodeFs.writeFileSync(claude, `user\nnew line\n${claudeSpan(home)}`);
+  installPayload(optionsFor(home));
+  assert.equal(textOf(claude), `user\nnew line\n${claudeSpan(home)}`);
+  uninstallPayload(optionsFor(home));
+  assert.equal(textOf(claude), 'user\nnew line\n');
 });
 
 test('a zero-byte entry file gets the block with no separator, and uninstall leaves it empty', () => {

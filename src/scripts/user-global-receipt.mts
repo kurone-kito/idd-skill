@@ -25,8 +25,9 @@ const RECEIPT_FORMAT_VERSION = 1;
 
 /**
  * One listed path. A file carries the SHA-256 of the bytes install wrote. A
- * managed block carries the SHA-256 of its span only, and `separator` records
- * whether install wrote one LF before the span. A JSON instruction carries the
+ * managed block carries the SHA-256 of its span only. `separator` records
+ * whether install wrote one LF before the span. Uninstall leaves that LF in
+ * place, so text a user inserts above the block is never changed. A JSON instruction carries the
  * string it added to `instructions`, and `keyCreated` records whether install
  * also added the `instructions` key.
  */

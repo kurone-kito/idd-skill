@@ -643,6 +643,11 @@ export function planEntryFiles(input) {
  * removal. A managed block that is absent reads as `absent`, and a block whose
  * span differs refuses. A JSON instruction must match exactly once, and its
  * key goes too when install created it and the array is then empty.
+ *
+ * The LF that install wrote before a block (the separator) stays in place. A
+ * line the user inserted above the block ends in that LF, so removing it would
+ * change the user's text. When the file had no trailing LF before install, the
+ * result therefore keeps one extra LF.
  */
 export function planEntryRemoval(fs, entry) {
   const bytes = readRegular(entry.path, fs);
@@ -655,18 +660,9 @@ export function planEntryRemoval(fs, entry) {
         `${entry.path} managed block was edited after install (its span SHA-256 differs); refusing, and it is user-edited`,
       );
     }
-    let from = block.begin;
-    if (entry.separator) {
-      if (block.begin === 0 || bytes[block.begin - 1] !== LF) {
-        throw new Error(
-          `${entry.path} no longer has the LF install wrote before its block; refusing, and it is user-edited`,
-        );
-      }
-      from = block.begin - 1;
-    }
     refuseStaleTemp(dirname(entry.path), entry.path, fs);
     const kept = Buffer.concat([
-      bytes.subarray(0, from),
+      bytes.subarray(0, block.begin),
       bytes.subarray(block.end),
     ]);
     return {
