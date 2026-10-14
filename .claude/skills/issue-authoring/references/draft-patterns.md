@@ -43,9 +43,10 @@ sequencing, parallel tracks, or multi-session handoff.
 
 Draft only stable non-ready buckets when the work still depends on a
 human decision, missing asset, or unclear verification. In an interactive
-session, ask first for a human decision or unclear verification under the
-interactive rule in [Human-dependency isolation](contract.md#human-dependency-isolation);
-a missing asset stays `blocked-by-human`.
+session, ask first for an operator-answerable product, policy, or design
+choice, or for a missing concrete surface or objective verification, under the
+interactive rule in [Human-dependency isolation](contract.md#human-dependency-isolation),
+unless an unchanged route applies. A missing asset stays `blocked-by-human`.
 
 ## Under-clarification stop rule
 
@@ -736,7 +737,8 @@ Before publishing an issue, apply a reuse-first decision tree:
    `needs-decision` or `blocked-by-human` during drafting:
    - Unclear intent or malformed body (→ fix during drafting or mark needs-decision)
    - Requires maintainer or product decision (→ in an interactive session,
-     ask first under the interactive rule; otherwise mark needs-decision)
+     ask first when the operator can answer it, under the interactive rule
+     and unless an unchanged route applies; otherwise mark needs-decision)
    - Blocked by external work or human coordination (→ mark
      blocked-by-human)
    - Depends on unavailable resources or credentials (→ mark blocked-by-human)

@@ -418,33 +418,33 @@ isolated away from ready execution issues whenever possible.
   approval-needed hold instead of the normal ready-to-start set.
 - **Interactive choice.** In an interactive session, meaning the operator
   asked for issue authoring in the current conversation, a product,
-  policy, or design choice the operator can answer, and a candidate with
-  no concrete surface or objective verification, are asked about before
-  they are published as `needs-decision`. The session asks in one turn,
-  covering every such choice in the current set, each with a recommended
-  option. That turn is one clarification round under
-  `issueAuthoring.maxClarificationRounds`. A choice not yet asked is
-  asked, not treated as silence, while the session is below the cap. A
-  reply that names a concrete surface and an objective verification, and
-  does not park the choice, is drafted into the ready scope. A reply that
-  explicitly parks the choice, or leaves it open, publishes
-  `needs-decision` at any cap, whether or not it names a surface or a
-  verification. Any other reply that leaves a surface or a verification
-  unnamed is published neither as `ready` nor as `needs-decision`. Below
-  the cap, the session asks for that missing item in the same turn,
-  unless it was already asked in that turn; a later round below the cap
-  asks again. At or above the cap, the session does not ask again. With
-  no reply after the question was sent, nothing is published for that
-  choice, at, below, or above the cap. A later interactive session starts
-  a new count. A session that is not interactive keeps the
-  `needs-decision` route for these two cases. The other routes stay as
-  they are: an incomplete previously-declined search, a same-shape
-  follow-up with no new signal, unclear intent, a malformed body, possible
-  incoherence, an uncertain check outside these two cases, a
-  `review-needs-decision` follow-up, an unattended A1.5 gap filing, and a
-  `credential`, another person, or an unavailable system, which waits as
-  `blocked-by-human`. An unchanged route wins when a candidate also
-  matches one of the two cases.
+  policy, or design choice the operator can answer, and a candidate missing
+  either a concrete surface or an objective verification, are asked about
+  before they are published as `needs-decision`. The session asks in one
+  turn, covering every such choice in the current set, each with a
+  recommended option. That turn is one clarification round under
+  `issueAuthoring.maxClarificationRounds`. A choice not yet asked is asked,
+  not treated as silence, while the session is below the cap. A reply that
+  names a concrete surface and an objective verification, and does not park
+  the choice, is drafted into the ready scope. A reply that explicitly parks
+  the choice, or explicitly leaves it open, publishes `needs-decision` at any
+  cap, whether or not it names a surface or a verification. Any other reply
+  that leaves a surface or a verification unnamed is published neither as
+  `ready` nor as `needs-decision`. Below the cap, the session asks for that
+  missing item in the same turn, unless it was already asked in that turn; a
+  later round below the cap asks again. At or above the cap, the session does
+  not ask again. With no reply after the question was sent, nothing is
+  published for that choice, at, below, or above the cap. A later interactive
+  session starts a new count. A session that is not interactive keeps the
+  `needs-decision` route for these two cases. The other routes stay as they
+  are: an incomplete previously-declined search, a same-shape follow-up with
+  no new signal, unclear intent, a malformed body, possible incoherence, an
+  uncertain check outside these two cases, a `review-needs-decision`
+  follow-up, an unattended A1.5 gap filing, and a `credential`, another
+  person, or an unavailable system, which waits as `blocked-by-human`. An
+  unchanged route wins when a candidate also matches one of the two cases:
+  unclear intent, for example, stays on `needs-decision` even when the
+  candidate also lacks a surface or a verification.
 - If a task cannot be expressed without unresolved human coordination in
   the middle of implementation, it is not yet `ready`.
 

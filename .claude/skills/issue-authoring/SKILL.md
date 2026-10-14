@@ -135,7 +135,9 @@ needs-decision, blocked-by-human, and out-of-scope.
    Intake critique stays the pre-draft
    pass above and does not replace step 6. No separate publish
    approval is needed. Only skip publishing when the current request
-   explicitly asked for a preview instead. Manage the authoring label
+   explicitly asked for a preview instead, or when the interactive rule in
+   [Human-dependency isolation](references/contract.md#human-dependency-isolation)
+   holds that choice unpublished. Manage the authoring label
    for each created or updated issue:
    - resolve `issueAuthoring.authoringLabelName`, defaulting to
      `status:authoring`
