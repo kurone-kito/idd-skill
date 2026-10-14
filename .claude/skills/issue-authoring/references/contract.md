@@ -1798,7 +1798,10 @@ When the target repository sets `autopilotSuitability.effortL` to
 `refuse` (the default is `allow`), an `L` child or orphan cannot be
 published as `ready`: split the work into `S` or `M` issues (a roadmap
 whose children are each `S` or `M` is also fine, since `effort-l-ready`
-does not check a roadmap), or publish it in the `needs-decision` bucket.
+does not check a roadmap), or publish it in the human bucket that matches
+the blocker: `needs-decision` for an open design decision, or
+`blocked-by-human` when a person, credential, asset, or outside system is
+needed.
 `audit-authored-issue`'s `effort-l-ready` check enforces this. Under
 `refuse`, autopilot Discover routes an `L` orphan candidate to humans;
 roadmaps and roadmap children are not routed by this policy. See the
