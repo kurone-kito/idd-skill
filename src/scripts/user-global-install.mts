@@ -446,8 +446,7 @@ interface InstallPlan {
         priorTarget: string;
         listed: boolean;
       }
-    | { action: 'keep'; versionDir: string }
-    | { action: 'record'; versionDir: string };
+    | { action: 'keep'; versionDir: string };
   lines: string[];
 }
 
@@ -568,24 +567,20 @@ function buildInstallPlan(
         listedCurrent !== undefined && listedCurrent.kind === 'link'
           ? listedCurrent.target
           : undefined;
-      if (priorTarget === versionDir) {
-        // A repoint whose receipt rewrite failed leaves the link here but
-        // the receipt on the old target. Record it rather than keep it.
-        current =
-          recorded !== undefined && recorded !== versionDir
-            ? { action: 'record', versionDir }
-            : { action: 'keep', versionDir };
-      } else if (
-        recorded !== undefined &&
-        recorded !== resolved &&
-        resolved !== versionDir
-      ) {
+      // A listed link whose resolved target is not the recorded one was
+      // retargeted, or its receipt write lagged a repoint. Neither is proven
+      // from the link alone, so refuse and name it; the operator reconciles
+      // the receipt by hand.
+      if (recorded !== undefined && recorded !== resolved) {
         throw new Error(
-          `${ctx.currentPath} points at ${resolved}, but the receipt records ${recorded}; it was retargeted after install, so refusing to replace it`,
+          `${ctx.currentPath} points at ${resolved}, but the receipt records ${recorded}; it was retargeted or its receipt write lagged, so refusing to replace it`,
         );
+      }
+      if (priorTarget === versionDir) {
+        current = { action: 'keep', versionDir };
       } else {
-        // A relative spelling of the same target is repointed to the
-        // absolute path the receipt records, so uninstall's raw compare holds.
+        // An unlisted link, or a listed link at its recorded target written
+        // with a relative spelling, is repointed to the absolute path.
         current = {
           action: 'repoint',
           versionDir,
@@ -614,10 +609,6 @@ function buildInstallPlan(
   } else if (current.action === 'repoint') {
     lines.push(
       `repoint ${ctx.currentPath} -> ${versionDir} (prior target ${current.priorTarget})`,
-    );
-  } else if (current.action === 'record') {
-    lines.push(
-      `record ${ctx.currentPath} -> ${versionDir} (the receipt lagged the link)`,
     );
   } else {
     lines.push(`keep ${ctx.currentPath} (already points at ${versionDir})`);
@@ -907,13 +898,6 @@ function applyInstall(
         priorTarget: current.priorTarget,
         listed: current.listed,
       });
-    } else if (current.action === 'record') {
-      entries.set(ctx.currentPath, {
-        kind: 'link',
-        path: ctx.currentPath,
-        target: current.versionDir,
-      });
-      persist();
     }
   } catch (error) {
     if (receiptFailed) throw error;

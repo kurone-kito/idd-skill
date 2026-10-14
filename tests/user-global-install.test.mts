@@ -685,9 +685,7 @@ test('a directory that existed before install is not listed and survives uninsta
   assert.equal(nodeFs.existsSync(join(home, '.claude', 'skills')), true);
 });
 
-test('a retry after the receipt write failed on a repoint records the link instead of keeping it', {
-  skip: NO_LINKS,
-}, () => {
+test('a retry after the receipt write failed on a repoint is refused and named', () => {
   const home = makeHome();
   installPayload(optionsFor(home));
   let repointed = false;
@@ -710,16 +708,13 @@ test('a retry after the receipt write failed on a repoint records the link inste
     nodeFs.readlinkSync(currentOf(home)),
     versionDirOf(home, UPGRADE_VERSION),
   );
+  const before = snapshot(home);
 
-  const retry = installPayload(optionsFor(home, { version: UPGRADE_VERSION }));
-  assert.ok(retry.lines.some((line) => line.startsWith('record ')));
-  const current = readReceiptEntries(home).find(
-    (entry) => entry.path === currentOf(home),
-  ) as { target?: string } | undefined;
-  assert.equal(current?.target, versionDirOf(home, UPGRADE_VERSION));
-
-  uninstallPayload(optionsFor(home, { version: UPGRADE_VERSION }));
-  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+  assert.throws(
+    () => installPayload(optionsFor(home, { version: UPGRADE_VERSION })),
+    /receipt records/,
+  );
+  assert.deepEqual(snapshot(home), before);
 });
 
 test('a receipt-owned link rewritten with a relative target is repointed to the recorded path', {
@@ -786,7 +781,10 @@ test('a listed link retargeted by someone else makes install refuse', {
   nodeFs.symlinkSync(other, currentOf(home));
   const before = snapshot(home);
 
-  assert.throws(() => installPayload(options), /retargeted after install/);
+  assert.throws(
+    () => installPayload(options),
+    /retargeted or its receipt write lagged/,
+  );
   assert.deepEqual(snapshot(home), before);
 });
 
