@@ -1298,6 +1298,13 @@ test('parseNonPassingRuns: keeps only non-passing runs and fails closed', () => 
       conclusion: 'NOT_APPLICABLE',
       isRequired: false,
     },
+    {
+      __typename: 'CheckRun',
+      name: 'odd-status',
+      status: 'SOMETHING_NEW',
+      conclusion: null,
+      isRequired: false,
+    },
     { __typename: 'Mystery' },
   ]);
   assert.deepEqual(runs, [
@@ -1310,6 +1317,7 @@ test('parseNonPassingRuns: keeps only non-passing runs and fails closed', () => 
     { name: 'expected-check', state: 'pending', required: true },
     { name: 'requested-check', state: 'pending', required: false },
     { name: 'Windows platform tests', state: 'failure', required: false },
+    { name: 'odd-status', state: 'unknown', required: false },
     { name: '', state: 'unknown', required: true },
   ]);
 });
@@ -1385,6 +1393,81 @@ test('parseHeadRollup: judges only the latest instance of each check name', () =
     { name: 'refresh', state: 'action_required', required: false },
     { name: 'rerun-pending', state: 'pending', required: false },
   ]);
+});
+
+// #4209 review: same-named runs from different producers are not reruns of
+// each other, so a stale failure from one workflow must not hide the other.
+test('parseHeadRollup: keeps same-named check runs from different producers apart', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const producer = (workflowId: number, workflow: string) => ({
+    app: { databaseId: 15368, slug: 'github-actions' },
+    workflowRun: { workflow: { databaseId: workflowId, name: workflow } },
+  });
+  const nodes = [
+    {
+      __typename: 'CheckRun',
+      name: 'shared',
+      status: 'COMPLETED',
+      conclusion: 'FAILURE',
+      completedAt: '2026-10-14T08:00:00Z',
+      isRequired: false,
+      checkSuite: producer(101, 'ci-a'),
+    },
+    {
+      __typename: 'CheckRun',
+      name: 'shared',
+      status: 'COMPLETED',
+      conclusion: 'ACTION_REQUIRED',
+      completedAt: '2026-10-14T09:00:00Z',
+      isRequired: false,
+      checkSuite: producer(202, 'ci-b'),
+    },
+  ];
+  assert.deepEqual(
+    parseHeadRollup(
+      {
+        oid: sha,
+        statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } },
+      },
+      sha,
+    ).runs,
+    [
+      { name: 'shared', state: 'failure', required: false },
+      { name: 'shared', state: 'action_required', required: false },
+    ],
+  );
+});
+
+// A status context re-posted under one name keeps only the newest state, by
+// `createdAt`, since GraphQL exposes no completion time for it.
+test('parseHeadRollup: orders a re-posted status context by createdAt', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const nodes = [
+    {
+      __typename: 'StatusContext',
+      context: 'legacy',
+      state: 'FAILURE',
+      createdAt: '2026-10-14T08:00:00Z',
+      isRequired: false,
+    },
+    {
+      __typename: 'StatusContext',
+      context: 'legacy',
+      state: 'PENDING',
+      createdAt: '2026-10-14T09:00:00Z',
+      isRequired: false,
+    },
+  ];
+  assert.deepEqual(
+    parseHeadRollup(
+      {
+        oid: sha,
+        statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } },
+      },
+      sha,
+    ).runs,
+    [{ name: 'legacy', state: 'pending', required: false }],
+  );
 });
 
 test('classifyBranchConflictState: UNSTABLE routing reads the injected run list', async () => {

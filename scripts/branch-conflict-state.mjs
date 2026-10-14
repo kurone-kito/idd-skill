@@ -73,6 +73,18 @@ export function resolveCallSiteRouting(
 /** Non-required waiting states an UNSTABLE clean branch may proceed past. */
 const UNSTABLE_PROCEED_STATES = new Set(['action_required', 'pending']);
 /**
+ * `CheckRun` statuses that have not completed yet (the GraphQL
+ * `CheckStatusState` values other than `COMPLETED`). Any other status is
+ * unrecognized and holds.
+ */
+const CHECK_RUN_WAITING_STATES = new Set([
+  'QUEUED',
+  'IN_PROGRESS',
+  'PENDING',
+  'REQUESTED',
+  'WAITING',
+]);
+/**
  * `StatusContext` states the shared CI vocabulary treats as still pending
  * (`CI_STATUS_CONTEXT_PENDING_STATES`), so they count as waiting.
  */
@@ -117,14 +129,20 @@ export function parseNonPassingRuns(nodes) {
       const status = String(entry.status ?? '').toUpperCase();
       const conclusion = String(entry.conclusion ?? '').toUpperCase();
       const name = String(entry.name ?? '');
-      if (status !== 'COMPLETED') {
+      if (status === 'COMPLETED') {
+        if (!PASSING_CHECK_CONCLUSIONS.has(conclusion)) {
+          runs.push({
+            name,
+            state: conclusion ? conclusion.toLowerCase() : 'unknown',
+            required,
+          });
+        }
+      } else if (CHECK_RUN_WAITING_STATES.has(status)) {
         runs.push({ name, state: 'pending', required });
-      } else if (!PASSING_CHECK_CONCLUSIONS.has(conclusion)) {
-        runs.push({
-          name,
-          state: conclusion ? conclusion.toLowerCase() : 'unknown',
-          required,
-        });
+      } else {
+        // An unrecognized status is not evidence of a waiting run, so it holds
+        // rather than counting as pending.
+        runs.push({ name, state: 'unknown', required });
       }
     } else if (entry.__typename === 'StatusContext') {
       const state = String(entry.state ?? '').toUpperCase();
@@ -188,34 +206,56 @@ export function parseHeadRollup(object, headSha) {
   };
 }
 /**
- * Keep only the latest instance of each check name. A rerun can leave an
- * earlier instance in the rollup beside the current one, and the required-
- * check gate governs by the latest instance, so a stale failure must not hold
- * a current waiting run. The producer is the GraphQL type, so a check run and
- * a status context that share a display name stay separate. Unnamed entries
- * each keep their own slot, so they never collapse together. The tie-break is
- * the shared `selectLatestCheckInstance`, the same reducer the required-check
- * gate uses.
+ * The producer of a check run: its GitHub App, and the Actions workflow when
+ * one made it. Runs that share a display name but come from different
+ * producers are not reruns of each other, so the grouping key keeps them
+ * apart. Only the producer's own identity is used here, not its name.
+ */
+function checkRunProducerKey(entry) {
+  const suite = entry.checkSuite ?? {};
+  const app = suite.app?.databaseId ?? suite.app?.slug ?? '';
+  const workflow =
+    suite.workflowRun?.workflow?.databaseId ??
+    suite.workflowRun?.workflow?.name ??
+    '';
+  return `${String(app)}|${String(workflow)}`;
+}
+/**
+ * Keep only the latest instance of each check name and producer. A rerun can
+ * leave an earlier instance in the rollup beside the current one, and the
+ * required-check gate governs by the latest instance, so a stale failure must
+ * not hold a current waiting run. A check run and a status context that share
+ * a display name stay separate. Unnamed entries each keep their own slot, so
+ * they never collapse together. The tie-break is the shared
+ * `selectLatestCheckInstance`, the same reducer the required-check gate uses.
+ * A status context with the same name from two different producers still
+ * shares one key, because GraphQL exposes no producer identity for it.
  */
 function latestInstancePerName(nodes) {
   const groups = new Map();
   nodes.forEach((node, index) => {
     const entry = node ?? {};
+    const isCheckRun = entry.__typename === 'CheckRun';
     const name = String(
       entry.__typename === 'StatusContext' ? entry.context : entry.name,
     );
     const key = name
-      ? `${String(entry.__typename)}:${name}`
+      ? `${String(entry.__typename)}:${name}:${isCheckRun ? checkRunProducerKey(entry) : ''}`
       : `unnamed:${index}`;
-    const isCheckRun = entry.__typename === 'CheckRun';
     const completed = String(entry.status ?? '').toUpperCase() === 'COMPLETED';
     const state = isCheckRun
       ? completed
         ? String(entry.conclusion ?? '').toUpperCase()
         : String(entry.status ?? '').toUpperCase()
       : String(entry.state ?? '').toUpperCase();
-    const completedAt =
-      isCheckRun && completed ? String(entry.completedAt ?? '') || null : null;
+    // A status context has no completion time, so its `createdAt` is the only
+    // ordering signal the query exposes.
+    let completedAt = null;
+    if (isCheckRun) {
+      completedAt = completed ? String(entry.completedAt ?? '') || null : null;
+    } else {
+      completedAt = String(entry.createdAt ?? '') || null;
+    }
     const group = groups.get(key) ?? [];
     group.push({ node, state, completedAt });
     groups.set(key, group);
@@ -235,8 +275,12 @@ const HEAD_ROLLUP_QUERY = `query($owner: String!, $repo: String!, $oid: GitObjec
             totalCount
             nodes {
               __typename
-              ... on CheckRun { name status conclusion completedAt isRequired(pullRequestNumber: $number) }
-              ... on StatusContext { context state isRequired(pullRequestNumber: $number) }
+              ... on CheckRun {
+                name status conclusion completedAt
+                isRequired(pullRequestNumber: $number)
+                checkSuite { app { databaseId slug } workflowRun { workflow { databaseId name } } }
+              }
+              ... on StatusContext { context state createdAt isRequired(pullRequestNumber: $number) }
             }
           }
         }
