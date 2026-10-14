@@ -746,8 +746,8 @@ function isDependencyEpicExempt(ref, options) {
  * Classify one issue as a draft carrier, or return `null` (#4257). A carrier
  * carries the authoring-only label and the carrier marker outside code. The
  * label is checked first, so only labelled issues pay for the masked body
- * scan. The verdict does not depend on what `classifyIssue` reaches: a carrier
- * still lands in `filtered.blocked_label` there.
+ * scan. The verdict does not depend on what `classifyIssue` reaches. A
+ * well-formed carrier still lands in `filtered.blocked_label` there.
  */
 function classifyDraftCarrier(issue, options) {
   const labels = new Set(normalizeLabels(issue.labels));
@@ -770,7 +770,11 @@ function classifyDraftCarrier(issue, options) {
     return null;
   }
   const number = Number(issue.number);
-  const entry = { number, title: issue.title, url: issue.url ?? '' };
+  const entry = {
+    number,
+    title: String(issue.title ?? ''),
+    url: String(issue.url ?? ''),
+  };
   const authoringLabelName = normalizeAuthoringLabelName(
     options.authoringLabelName,
   );
@@ -778,6 +782,7 @@ function classifyDraftCarrier(issue, options) {
     const labelEvents = resolveIssueLabelEvents(
       issue,
       options.fetchLabelEventsByIssueNumber,
+      options.strictLabelEvents === true,
     );
     const warning = buildAuthoringLabelWarning({
       issueNumber: number,
@@ -1439,6 +1444,7 @@ export function buildDraftCarrierOutput(port, input) {
         fetchIssueState(port, issueNumber),
       fetchLabelEventsByIssueNumber: (issueNumber) =>
         fetchIssueLabelEvents(port, issueNumber),
+      strictLabelEvents: true,
       markerPrefix: input.policy.markerPrefix,
       authoringLabelName: input.policy.authoringLabelName,
       authoringOnlyLabelName: input.policy.authoringOnlyLabelName,
@@ -1822,7 +1828,8 @@ listed. A carrier never becomes an orphan. A well-formed carrier stays in
 "filtered.blocked_label"; one that also names a roadmap or blocked-by marker is
 filed under that reason instead.
 Its buckets are "held" (the carrier also carries the authoring label, with
-"heldSince" the latest labeled event and "stale" true once that hold is at
+"heldSince" the latest labeled event (null when none was read) and "stale"
+true once that hold is at
 least issueAuthoring.authoringStaleAge old), "ready" (no "Blocked by" reference
 is open or unresolvable), and "waiting" (each "blockers" entry carries "reason"
 open, issue-not-found-or-inaccessible, or cross_repository_reference). Blockers
@@ -1969,12 +1976,21 @@ function extractOpenMilestoneTitle(milestone) {
     ? record.title
     : null;
 }
-function resolveIssueLabelEvents(issue, fetchLabelEventsByIssueNumber) {
+function resolveIssueLabelEvents(
+  issue,
+  fetchLabelEventsByIssueNumber,
+  strict = false,
+) {
   if (Array.isArray(issue.labelEvents) && issue.labelEvents.length > 0) {
     return issue.labelEvents;
   }
   if (typeof fetchLabelEventsByIssueNumber !== 'function') {
     return [];
+  }
+  // A strict caller (`--draft-carriers`, #4257) must not read an unreadable
+  // timeline as "no labeled event": the error propagates, and the run fails.
+  if (strict) {
+    return fetchLabelEventsByIssueNumber(issue.number);
   }
   try {
     return fetchLabelEventsByIssueNumber(issue.number);

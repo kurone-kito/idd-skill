@@ -1099,6 +1099,121 @@ test('--draft-carriers listing fails closed when the search reaches the result c
   }
 });
 
+test('--draft-carriers fails closed when a held carrier timeline cannot be read (#4257)', () => {
+  const { policy, cleanup } = loadDraftPolicy();
+  try {
+    const port = createFakeProviderAdapter({
+      searchResults: [
+        searchRow(120, `${CARRIER_MARKER}\n\nNo blocker.`, [
+          'status:authoring-only',
+          'status:authoring',
+        ]),
+      ],
+    });
+    const unreadable = {
+      ...port,
+      getWorkItemTimeline: () => {
+        throw new Error('timeline unavailable');
+      },
+    };
+    assert.throws(
+      () =>
+        buildDraftCarrierOutput(unreadable, {
+          owner: 'kurone-kito',
+          repo: 'idd-skill',
+          policy,
+          now: '2026-10-14T05:00:00Z',
+        }),
+      /timeline unavailable/,
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('--draft-carriers resolves blockers and held events through the port (#4257)', () => {
+  const { policy, cleanup } = loadDraftPolicy();
+  try {
+    const port = createFakeProviderAdapter({
+      issueStates: { 130: 'OPEN', 131: 'CLOSED' },
+      timelines: {
+        132: [
+          {
+            event: 'labeled',
+            label: { name: 'status:authoring' },
+            created_at: '2026-10-14T00:00:00Z',
+          },
+        ],
+      },
+      searchResults: [
+        searchRow(132, `${CARRIER_MARKER}\n\nNo blocker.`, [
+          'status:authoring-only',
+          'status:authoring',
+        ]),
+        searchRow(133, `${CARRIER_MARKER}\n\nBlocked by #130`, [
+          'status:authoring-only',
+        ]),
+        searchRow(134, `${CARRIER_MARKER}\n\nBlocked by #131`, [
+          'status:authoring-only',
+        ]),
+      ],
+    });
+    const output = buildDraftCarrierOutput(port, {
+      owner: 'kurone-kito',
+      repo: 'idd-skill',
+      policy,
+      now: '2026-10-14T05:00:00Z',
+    });
+    assert.deepEqual(output.draftCarriers, {
+      held: [
+        {
+          number: 132,
+          title: 'row 132',
+          url: 'https://example.com/132',
+          heldSince: '2026-10-14T00:00:00Z',
+          stale: true,
+        },
+      ],
+      ready: [
+        {
+          number: 134,
+          title: 'row 134',
+          url: 'https://example.com/134',
+        },
+      ],
+      waiting: [
+        {
+          number: 133,
+          title: 'row 133',
+          url: 'https://example.com/133',
+          blockers: [{ reference: 130, reason: 'open' }],
+        },
+      ],
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('draft carriers: a carrier that also names a blocked-by marker is filed under that reason and still listed (#4257)', async () => {
+  const result = await filterOrphanIssues(
+    [carrierIssue(140, '<!-- idd-skill-blocked-by: #1 -->\n\nNo blocker.')],
+    {
+      issueStateByNumber: new Map<number, string>(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.deepEqual(
+    result.filtered.blocked_by_marker.map((entry) => entry.number),
+    [140],
+  );
+  assert.deepEqual(result.filtered.blocked_label, []);
+  assert.deepEqual(
+    result.draftCarriers.ready.map((entry) => entry.number),
+    [140],
+  );
+});
+
 test('--draft-carriers makes one label-filtered search, prints the listing, and reads no hint cache (#4257)', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-draft-carriers-cli-'));
   const workspace = join(root, 'workspace');

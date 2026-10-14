@@ -30,8 +30,9 @@ import {
  * Bumped when a helper's cached output shape changes incompatibly. 3 (#4115):
  * the orphan output gained a `filtered.authoring_journal_target` bucket, so a
  * hint written before the bump must not be served. 4 (#4257): the orphan
- * output gained `draftCarriers` and its matching `counts` keys, so a hint
- * written before the bump must not be served either.
+ * output gained `draftCarriers`, its matching `counts` keys, and the
+ * `policy.authoringOnlyLabelName` key, so a hint written before the bump must
+ * not be served either.
  */
 const HINT_FORMAT_VERSION = 4;
 /** Cache-namespace names; each yields a distinct entry identity. */
