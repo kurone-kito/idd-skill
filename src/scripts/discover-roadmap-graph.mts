@@ -381,6 +381,18 @@ export interface RoadmapCycleDiagnostic {
   path: number[];
 }
 
+/**
+ * One reference whose target is a merged pull request (#4281). A merged pull
+ * request resolves the reference: it is never a node or a traversal target,
+ * so it is listed here instead of in `diagnostics.unresolvedReferences`.
+ */
+export interface RoadmapPullRequestReference {
+  source: number;
+  target: number;
+  relationship: string;
+  evidence: string;
+}
+
 /** Full enumeration report returned by `enumerateRoadmapGraph`. */
 export interface RoadmapGraphReport {
   root: {
@@ -395,6 +407,7 @@ export interface RoadmapGraphReport {
   provenancePaths: RoadmapProvenancePath[];
   roadmapNodes: number[];
   executionCandidates: number[];
+  pullRequestReferences: RoadmapPullRequestReference[];
   diagnostics: {
     duplicateReferences: RoadmapDuplicateReferenceDiagnostic[];
     cycles: RoadmapCycleDiagnostic[];
@@ -538,6 +551,9 @@ interface NormalizedIssue {
   body: string;
   labels: Set<string>;
   isPullRequest: boolean;
+  // True only for a pull request whose REST `pull_request.merged_at` is set
+  // (#4281). An open or closed-unmerged pull request stays unresolved.
+  isMergedPullRequest: boolean;
   // Native GitHub sub-issue count from the REST `sub_issues_summary.total`, or
   // null when the field is absent (e.g. injected test issues). `0` lets the
   // traversal skip the per-node sub-issue GraphQL round-trip (#1072); null is
@@ -1319,6 +1335,8 @@ export async function enumerateRoadmapGraph(
   const cycleKeys = new Set<string>();
   const inaccessibleKeys = new Set<string>();
   const unresolvedKeys = new Set<string>();
+  const pullRequestReferences: RoadmapPullRequestReference[] = [];
+  const pullRequestReferenceKeys = new Set<string>();
   const referenceCache = new Map<number, RoadmapGraphReference[]>();
   const fetchedRoot = await getIssue(rootIssueNumber, issueCache, loadIssue);
   if (!fetchedRoot) {
@@ -1450,6 +1468,7 @@ export async function enumerateRoadmapGraph(
     provenancePaths: sortedProvenancePaths,
     roadmapNodes,
     executionCandidates,
+    pullRequestReferences: pullRequestReferences.sort(compareDiagnostics),
     diagnostics: {
       duplicateReferences:
         diagnostics.duplicateReferences.sort(compareDiagnostics),
@@ -1617,12 +1636,29 @@ export async function enumerateRoadmapGraph(
         continue;
       }
       if (targetIssue.isPullRequest) {
-        recordReferenceDiagnostic(
-          diagnostics.unresolvedReferences,
-          unresolvedKeys,
-          edge,
-          'issue_not_found',
-        );
+        // #4281: a merged pull request resolves the reference. The edge is
+        // already recorded above; it gets no node, no traversal, and no
+        // diagnostic. An open or closed-unmerged pull request stays
+        // unresolved (fail closed), so its open work is not hidden.
+        if (targetIssue.isMergedPullRequest) {
+          const pullRequestKey = `${edge.source}:${edge.target}:${edge.relationship}`;
+          if (!pullRequestReferenceKeys.has(pullRequestKey)) {
+            pullRequestReferenceKeys.add(pullRequestKey);
+            pullRequestReferences.push({
+              source: edge.source,
+              target: edge.target,
+              relationship: edge.relationship,
+              evidence: edge.evidence,
+            });
+          }
+        } else {
+          recordReferenceDiagnostic(
+            diagnostics.unresolvedReferences,
+            unresolvedKeys,
+            edge,
+            'pull_request_not_merged',
+          );
+        }
         continue;
       }
 
@@ -4113,6 +4149,7 @@ Output schema (JSON mode) — --issue single-root report:
     "provenancePaths": [{ "target": 640, "path": [638, 640] }],
     "roadmapNodes": [],
     "executionCandidates": [640],
+    "pullRequestReferences": [],
     "diagnostics": {
       "duplicateReferences": [],
       "cycles": [],
@@ -4162,6 +4199,20 @@ top-level shape from the single-root report above):
 `);
 }
 
+/**
+ * Whether a REST issue payload's `pull_request` object records a merge
+ * (#4281): `merged_at` is a non-empty timestamp only once the pull request
+ * has merged. A missing or non-object `pull_request` (an issue, or a
+ * malformed payload) is not a merged pull request.
+ */
+function readMergedPullRequest(pullRequest: unknown): boolean {
+  if (typeof pullRequest !== 'object' || pullRequest === null) {
+    return false;
+  }
+  const mergedAt = (pullRequest as { merged_at?: unknown }).merged_at;
+  return typeof mergedAt === 'string' && mergedAt.length > 0;
+}
+
 function normalizeIssue(issue: {
   number?: unknown;
   id?: unknown;
@@ -4181,6 +4232,7 @@ function normalizeIssue(issue: {
     body: String(issue.body ?? ''),
     labels: normalizeLabels(issue.labels),
     isPullRequest: Boolean(issue.pull_request),
+    isMergedPullRequest: readMergedPullRequest(issue.pull_request),
     subIssueSummaryTotal: extractSubIssueSummaryTotal(issue.sub_issues_summary),
     openMilestoneTitle: extractOpenMilestoneTitle(issue.milestone),
     stateReason: extractStateReason(issue.state_reason),
