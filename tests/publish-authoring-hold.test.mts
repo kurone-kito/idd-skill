@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { markdownItAvailable } from '../src/scripts/markdown-structure.mts';
 import {
   buildLintArgs,
+  carrierSetSnapshot,
   checkCarrierReviewResult,
   checkReviewResult,
   generatePublicationIds,
@@ -102,12 +103,41 @@ if (args[0] === 'issue' && args[1] === 'create') {
 }
 if (args[0] === 'issue' && args[1] === 'edit') {
   const issue = state.issues[Number(args[2])];
-  args.forEach((arg, index) => { if (arg === '--add-label') issue.labels.push(args[index + 1]); });
-  save();
+  const removes = [];
+  const adds = [];
+  args.forEach((arg, index) => {
+    if (arg === '--remove-label') removes.push(args[index + 1]);
+    if (arg === '--add-label') adds.push(args[index + 1]);
+  });
+  if (removes.length > 0) {
+    if (state.removeLabelFailure === 'unchanged') fail('gh: HTTP 502 Bad Gateway (label edit)');
+    if (!state.keepLabelOnRemove) issue.labels = issue.labels.filter((name) => !removes.includes(name));
+    if (state.dropReleaseAfterRemove) {
+      state.comments = state.comments.filter((c) => !(c.issue === Number(args[2]) && /mode=release;/.test(c.body)));
+    }
+    save();
+    if (state.removeLabelFailure === 'landed') fail('gh: HTTP 502 Bad Gateway (label edit)');
+    out('');
+  }
+  if (adds.length > 0) {
+    if (state.failAddLabel) fail('gh: HTTP 502 Bad Gateway (label add)');
+    adds.forEach((name) => { if (!issue.labels.includes(name)) issue.labels.push(name); });
+    save();
+    out('');
+  }
   out('');
 }
 if (args[0] !== 'api') fail('unexpected gh call: ' + args.join(' '));
 if (args.includes('graphql')) {
+  const queryText = args.find((arg) => arg.startsWith('query=')) || '';
+  if (queryText.includes('mutation')) {
+    out({ data: { minimizeComment: { minimizedComment: { isMinimized: true } } } });
+  }
+  if (queryText.includes('query($ids')) out({ data: { nodes: [] } });
+  if (queryText.includes('query($id:ID!)')) out({ data: { node: null } });
+  if (state.failSweep && queryText.includes('comments(first:100') && !queryText.includes('lastEditedAt')) {
+    fail('gh: sweep read failed');
+  }
   const numberArg = args.find((arg) => arg.startsWith('number='));
   const number = Number(numberArg.slice('number='.length));
   const queryArg = args.find((arg) => arg.startsWith('query=')) || '';
@@ -122,6 +152,8 @@ if (args.includes('graphql')) {
   }
   save();
   const nodes = state.comments.filter((c) => c.issue === number).map((c) => ({
+    id: 'IC_' + c.id,
+    url: 'https://github.com/o/r/issues/' + number + '#issuecomment-' + c.id,
     databaseId: c.id,
     lastEditedAt: state.editedComments ? '2026-10-13T00:00:01Z' : null,
     createdAt: c.createdAt,
@@ -133,7 +165,16 @@ if (args.includes('graphql')) {
   }));
   out({ data: { repository: { issue: { comments: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } } } });
 }
+const searchPath = args.find((arg) => arg.startsWith('search/issues'));
+if (searchPath) {
+  if (state.searchIncomplete) out({ total_count: 1, incomplete_results: true, items: [{ number: ${NEW_ISSUE} }] });
+  const owners = [...new Set(state.comments.filter((c) => c.body.includes('authoring-owner:')).map((c) => c.issue))];
+  out({ total_count: owners.length, incomplete_results: false, items: owners.map((number) => ({ number })) });
+}
 const path = args.find((arg) => arg === 'user' || arg.startsWith('repos/'));
+if (path && path.startsWith('repos/o/r/issues?')) {
+  out(Object.keys(state.issues).map((number) => ({ number: Number(number), updated_at: '2026-10-13T00:00:00Z' })));
+}
 if (path === 'user') {
   state.userCalls = (state.userCalls || 0) + 1;
   save();
@@ -170,7 +211,7 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
       // From this POST on, every journal POST fails without landing.
       if (state.failJournalPostsFrom && state.journalPosts >= state.failJournalPostsFrom) fail(state.failJournalPostMessage);
       if (state.journalPosts === state.mutateBodyAt) {
-        state.issues[${NEW_ISSUE}].body += '\nedited by someone else';
+        state.issues[${NEW_ISSUE}].body += state.mutateBodyText || '\nedited by someone else';
         save();
       }
     }
@@ -184,9 +225,29 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
       fail('gh: HTTP 502');
     }
     const body = JSON.parse(stdin).body;
+    const modeMatch = /mode=([a-z-]+);/.exec(body);
+    const mode = modeMatch ? modeMatch[1] : '';
+    const failSpec = number === ${NEW_ISSUE} && state.postFail && state.postFail.mode === mode ? state.postFail : null;
+    if (failSpec && !failSpec.landed) fail('gh: Validation Failed (HTTP ' + failSpec.status + ')');
     const id = 7000 + state.comments.length;
     state.comments.push({ id, issue: number, journalIndex: number === 2674 ? state.journalPosts : 0, body, user, createdAt: new Date(Date.UTC(2026, 9, 13, 0, 0, state.comments.length)).toISOString() });
     save();
+    if (failSpec && failSpec.landed) fail('gh: HTTP ' + failSpec.status + ' Bad Gateway');
+    for (const rule of (state.afterPost || []).filter((item) => item.mode === mode)) {
+      if (rule.action === 'mutateBody') state.issues[${NEW_ISSUE}].body += rule.text;
+      if (rule.action === 'dropLabel') state.issues[${NEW_ISSUE}].labels = state.issues[${NEW_ISSUE}].labels.filter((name) => name !== rule.text);
+      if (rule.action === 'competing') {
+        state.comments.push({ id: 7100 + state.comments.length, issue: ${NEW_ISSUE}, body: '<!-- idd-skill-authoring-owner: target=o/r#${NEW_ISSUE}; anchor=o/r#${NEW_ISSUE}; mode=release; owner=owner-other; set=set-other; session=session-other; body-sha256=' + '0'.repeat(64) + '; snapshot-sha256=none; supersedes=owner-other -->', user, createdAt: '2026-10-13T00:40:00Z' });
+      }
+      if (rule.action === 'anotherMember') {
+        const setId = /set=([^;]+);/.exec(body)[1];
+        state.comments.push({ id: 7200 + state.comments.length, issue: 6001, body: '<!-- idd-skill-authoring-owner: target=o/r#6001; anchor=o/r#6001; mode=acquire; owner=owner-x; set=' + setId + '; session=session-x; body-sha256=' + '0'.repeat(64) + '; snapshot-sha256=none; supersedes=none -->', user, createdAt: '2026-10-13T00:41:00Z' });
+      }
+      if (rule.action === 'dropRelease') {
+        state.comments = state.comments.filter((c) => !(c.issue === ${NEW_ISSUE} && /mode=release;/.test(c.body)));
+      }
+      save();
+    }
     out({ id, html_url: 'https://github.com/o/r/issues/' + number + '#issuecomment-' + id, body });
   }
   if (number === 2674 && state.journalListFails) fail('gh: HTTP 502');
@@ -257,6 +318,15 @@ function setup(
     failJournalPostMessage?: string;
     throttleOnUserCall?: number;
     ambiguousOwnerPost?: boolean;
+    postFail?: { mode: string; status: number; landed: boolean };
+    afterPost?: { mode: string; action: string; text?: string }[];
+    removeLabelFailure?: 'unchanged' | 'landed';
+    keepLabelOnRemove?: boolean;
+    dropReleaseAfterRemove?: boolean;
+    failAddLabel?: boolean;
+    failSweep?: boolean;
+    searchIncomplete?: boolean;
+    mutateBodyText?: string;
   } = {},
 ): Fixture {
   const dir = mkdtempSync(join(tmpdir(), 'idd-publish-authoring-hold-test-'));
@@ -298,6 +368,15 @@ function setup(
       failJournalPostMessage: options.failJournalPostMessage ?? 'gh: HTTP 500',
       throttleOnUserCall: options.throttleOnUserCall ?? 0,
       ambiguousOwnerPost: options.ambiguousOwnerPost === true,
+      postFail: options.postFail ?? null,
+      afterPost: options.afterPost ?? [],
+      removeLabelFailure: options.removeLabelFailure ?? '',
+      keepLabelOnRemove: options.keepLabelOnRemove === true,
+      dropReleaseAfterRemove: options.dropReleaseAfterRemove === true,
+      failAddLabel: options.failAddLabel === true,
+      failSweep: options.failSweep === true,
+      searchIncomplete: options.searchIncomplete === true,
+      mutateBodyText: options.mutateBodyText ?? '',
       loadControlModule: pathToFileURL(
         join(REPO_ROOT, 'scripts/github-api-load-control.mjs'),
       ).href,
@@ -394,7 +473,14 @@ function kindOf(entry: { args: string[]; stdin: string }): string | null {
   const args = entry.args;
   if (args[0] === 'label') return 'label';
   if (args[0] === 'issue' && args[1] === 'create') return 'create';
-  if (args.includes('graphql')) return 'provenance';
+  if (args[0] === 'issue' && args[1] === 'edit') {
+    return args.includes('--remove-label') ? 'remove-label' : 'add-label';
+  }
+  if (args.includes('graphql')) {
+    return args.some((arg) => arg.startsWith('query=mutation'))
+      ? 'sweep-minimize'
+      : 'provenance';
+  }
   const path = args.find((arg) => arg.startsWith('repos/')) ?? '';
   if (path === 'repos/o/r/issues/2674' && !args.includes('POST')) {
     return 'journal-check';
@@ -409,7 +495,11 @@ function kindOf(entry: { args: string[]; stdin: string }): string | null {
     path === `repos/o/r/issues/${NEW_ISSUE}/comments` &&
     args.includes('POST')
   ) {
-    return 'owner-marker';
+    const posted = JSON.parse(entry.stdin).body as string;
+    const mode = /mode=([a-z-]+);/.exec(posted)?.[1] ?? '';
+    return mode === '' || mode === 'acquire'
+      ? 'owner-marker'
+      : `owner-marker:${mode}`;
   }
   return null;
 }
@@ -1350,13 +1440,24 @@ carrierLintTest(
 carrierLintTest(
   'CLI: a carrier apply makes the orphan write sequence with both labels, with or without a review result',
   () => {
-    const expected = [
+    const publishWrites = [
       'journal-pending',
       'create status:authoring,status:authoring-only',
       'identity-attach',
       'owner-marker',
       'member',
     ];
+    // The carrier release (contract.md, "Carrier creation-hold exception")
+    // follows member: four owner markers, one label removal, and the sweeps
+    // that run no write on this fixture.
+    const releaseWrites = [
+      'owner-marker:release',
+      'owner-marker:release-guard',
+      'owner-marker:heartbeat',
+      'remove-label',
+      'owner-marker:release-complete',
+    ];
+    const expected = [...publishWrites, ...releaseWrites];
     const bare = setup({
       labels: ['status:authoring', 'status:authoring-only'],
     });
@@ -1366,16 +1467,14 @@ carrierLintTest(
       const report = JSON.parse(result.stdout);
       assert.equal(report.outcome, 'published');
       assert.equal(report.journalState, 'member');
+      assert.equal(report.release.state, 'released');
       assert.deepEqual(writeKinds(bare), expected);
       const created = bare.state().issues[String(NEW_ISSUE)] as {
         body: string;
         labels: string[];
       };
       assert.match(created.body, /^<!-- idd-skill-authoring-publication: /);
-      assert.deepEqual(created.labels, [
-        'status:authoring',
-        'status:authoring-only',
-      ]);
+      assert.deepEqual(created.labels, ['status:authoring-only']);
     } finally {
       bare.restore();
     }
@@ -1558,14 +1657,16 @@ carrierLintTest(
         'identity-attach',
         'owner-marker',
         'member',
+        'owner-marker:release',
+        'owner-marker:release-guard',
+        'owner-marker:heartbeat',
+        'remove-label',
+        'owner-marker:release-complete',
       ]);
       const created = fixture.state().issues[String(NEW_ISSUE)] as {
         labels: string[];
       };
-      assert.deepEqual(created.labels, [
-        'status:authoring',
-        'status:authoring-only',
-      ]);
+      assert.deepEqual(created.labels, ['status:authoring-only']);
     } finally {
       fixture.restore();
     }
@@ -1659,3 +1760,410 @@ test('CLI: an empty --review-result path is a usage error for either shape, befo
     fixture.restore();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Carrier release (contract.md, "Carrier creation-hold exception", #4254).
+// ---------------------------------------------------------------------------
+
+/** The carrier args, with the body file replaced by `body`. */
+function carrierFilesWithBody(fixture: Fixture, body: string): string[] {
+  const args = carrierFiles(fixture);
+  writeFileSync(join(fixture.dir, 'carrier.md'), body);
+  return args;
+}
+
+interface ReleaseRun {
+  fixture: Fixture;
+  status: number | null;
+  report: {
+    outcome: string;
+    journalState: string;
+    release: {
+      state: string;
+      failedStep: string | null;
+      nextAction: string;
+      reason: string | null;
+      sweeps: { point: string; failed: boolean }[];
+      backlog: { point: string; count: number | null }[];
+    };
+  };
+}
+
+/** One carrier apply with the release enabled. */
+function releaseRun(
+  options: Parameters<typeof setup>[0] = {},
+  body?: string,
+): ReleaseRun {
+  const fixture = setup({
+    labels: ['status:authoring', 'status:authoring-only'],
+    ...options,
+  });
+  const args =
+    body === undefined
+      ? carrierFiles(fixture)
+      : carrierFilesWithBody(fixture, body);
+  const result = fixture.run([...args, '--apply']);
+  return {
+    fixture,
+    status: result.status,
+    report: JSON.parse(result.stdout),
+  };
+}
+
+function labelsOf(fixture: Fixture): string[] {
+  return (fixture.state().issues[String(NEW_ISSUE)] as { labels: string[] })
+    .labels;
+}
+
+function countOf(kinds: string[], kind: string): number {
+  return kinds.filter((entry) => entry === kind).length;
+}
+
+carrierLintTest(
+  'CLI: a carrier release records the set snapshot, removes only the authoring label, and never closes',
+  () => {
+    const run = releaseRun();
+    try {
+      assert.equal(run.status, 0, JSON.stringify(run.report));
+      assert.equal(run.report.outcome, 'published');
+      assert.equal(run.report.journalState, 'member');
+      assert.equal(run.report.release.state, 'released');
+      assert.equal(run.report.release.failedStep, null);
+      assert.deepEqual(labelsOf(run.fixture), ['status:authoring-only']);
+      assert.equal(
+        run.fixture.log().some((entry) => entry.args.includes('close')),
+        false,
+      );
+      const comments = run.fixture.state().comments;
+      const acquire = comments.find((c) => c.body.includes('mode=acquire;'));
+      const complete = comments.find((c) =>
+        c.body.includes('mode=release-complete;'),
+      );
+      const bodySha = /body-sha256=([0-9a-f]{64});/.exec(acquire?.body ?? '');
+      assert.ok(bodySha, 'the acquire marker carries a body digest');
+      assert.match(
+        complete?.body ?? '',
+        new RegExp(
+          `snapshot-sha256=${carrierSetSnapshot('o', 'r', NEW_ISSUE, bodySha[1])};`,
+        ),
+      );
+      assert.equal(run.report.release.sweeps.length, 3);
+      assert.equal(run.report.release.backlog.length, 3);
+    } finally {
+      run.fixture.restore();
+    }
+  },
+);
+
+carrierLintTest(
+  'CLI: a carrier dry run lists the carrier release steps as planned and writes nothing',
+  () => {
+    const fixture = setup({
+      labels: ['status:authoring', 'status:authoring-only'],
+    });
+    try {
+      const result = fixture.run(carrierFiles(fixture));
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      const report = JSON.parse(result.stdout);
+      const planned = report.steps.find(
+        (step: { step: string }) => step.step === 'carrier-release',
+      );
+      assert.deepEqual(planned.detail.steps, [
+        'release-preflight',
+        'release-guard',
+        'preconditions',
+        'heartbeat',
+        'label-removal',
+        'release-complete',
+        'closing-sweep',
+      ]);
+      assert.deepEqual(writeKinds(fixture), []);
+    } finally {
+      fixture.restore();
+    }
+  },
+);
+
+const CARRIER_HELD_CASES: {
+  name: string;
+  options: Parameters<typeof setup>[0];
+  step: string;
+}[] = [
+  {
+    name: 'another set member',
+    options: { afterPost: [{ mode: 'acquire', action: 'anotherMember' }] },
+    step: 'precondition-sole-member',
+  },
+  {
+    name: 'an inconclusive sole-member result',
+    options: { searchIncomplete: true },
+    step: 'precondition-sole-member',
+  },
+  {
+    name: 'a roadmap-id marker outside code',
+    options: {
+      mutateBodyAt: 3,
+      mutateBodyText: '\n<!-- idd-skill-roadmap-id: 9 -->\n',
+    },
+    step: 'precondition-roadmap-id',
+  },
+  {
+    name: 'a carrier marker that does not appear exactly once',
+    options: {
+      mutateBodyAt: 3,
+      mutateBodyText: '\n<!-- idd-skill-draft-carrier: v1 -->\n',
+    },
+    step: 'precondition-audit',
+  },
+  {
+    name: 'a body that changed before the release-guard',
+    options: {
+      afterPost: [
+        {
+          mode: 'release-guard',
+          action: 'mutateBody',
+          text: '\nedited by someone else\n',
+        },
+      ],
+    },
+    step: 'precondition-body-digest',
+  },
+  {
+    name: 'a body that changed after the heartbeat',
+    options: {
+      afterPost: [
+        {
+          mode: 'heartbeat',
+          action: 'mutateBody',
+          text: '\nedited by someone else\n',
+        },
+      ],
+    },
+    step: 'heartbeat-replay',
+  },
+  {
+    name: 'a missing authoring-only label',
+    options: {
+      afterPost: [
+        { mode: 'release', action: 'dropLabel', text: 'status:authoring-only' },
+      ],
+    },
+    step: 'precondition-labels',
+  },
+  {
+    name: 'a failed release post',
+    options: { postFail: { mode: 'release', status: 422, landed: false } },
+    step: 'release-preflight',
+  },
+  {
+    name: 'a failed release-guard post',
+    options: {
+      postFail: { mode: 'release-guard', status: 422, landed: false },
+    },
+    step: 'release-guard',
+  },
+  {
+    name: 'a failed heartbeat post',
+    options: { postFail: { mode: 'heartbeat', status: 422, landed: false } },
+    step: 'heartbeat',
+  },
+];
+
+for (const held of CARRIER_HELD_CASES) {
+  carrierLintTest(
+    `CLI: a carrier release held for ${held.name} keeps the authoring label and exits 0`,
+    () => {
+      const run = releaseRun(held.options);
+      try {
+        assert.equal(run.status, 0, JSON.stringify(run.report));
+        assert.equal(run.report.outcome, 'published');
+        assert.equal(run.report.release.state, 'held');
+        assert.equal(run.report.release.failedStep, held.step);
+        assert.notEqual(run.report.release.nextAction, '');
+        assert.equal(writeKinds(run.fixture).includes('remove-label'), false);
+        assert.equal(labelsOf(run.fixture).includes('status:authoring'), true);
+      } finally {
+        run.fixture.restore();
+      }
+    },
+  );
+}
+
+carrierLintTest(
+  'CLI: a competing owner marker after the release marker stops the release at recovery-hold with no further write',
+  () => {
+    const run = releaseRun({
+      afterPost: [{ mode: 'release', action: 'competing' }],
+    });
+    try {
+      assert.equal(run.status, 1, JSON.stringify(run.report));
+      assert.equal(run.report.outcome, 'recovery-hold');
+      assert.equal(run.report.journalState, 'member');
+      assert.equal(run.report.release.state, 'recovery-hold');
+      assert.equal(run.report.release.failedStep, 'release-guard');
+      assert.equal(writeKinds(run.fixture).at(-1), 'owner-marker:release');
+    } finally {
+      run.fixture.restore();
+    }
+  },
+);
+
+carrierLintTest(
+  'CLI: a label removal that cannot be verified and still shows the label reports held without a restore',
+  () => {
+    const run = releaseRun({ removeLabelFailure: 'unchanged' });
+    try {
+      assert.equal(run.status, 0, JSON.stringify(run.report));
+      assert.equal(run.report.release.state, 'held');
+      assert.equal(run.report.release.failedStep, 'label-removal');
+      assert.equal(countOf(writeKinds(run.fixture), 'add-label'), 0);
+      assert.equal(labelsOf(run.fixture).includes('status:authoring'), true);
+    } finally {
+      run.fixture.restore();
+    }
+  },
+);
+
+carrierLintTest(
+  'CLI: a failed verification after the label removal restores the authoring label once and reports held',
+  () => {
+    const run = releaseRun({ dropReleaseAfterRemove: true });
+    try {
+      assert.equal(run.status, 0, JSON.stringify(run.report));
+      assert.equal(run.report.release.state, 'held');
+      assert.equal(run.report.release.failedStep, 'label-removal-verify');
+      assert.equal(countOf(writeKinds(run.fixture), 'add-label'), 1);
+      assert.deepEqual([...labelsOf(run.fixture)].sort(), [
+        'status:authoring',
+        'status:authoring-only',
+      ]);
+    } finally {
+      run.fixture.restore();
+    }
+  },
+);
+
+carrierLintTest(
+  'CLI: a failed label restore after a failed verification reports recovery-hold and exits 1',
+  () => {
+    const run = releaseRun({
+      dropReleaseAfterRemove: true,
+      failAddLabel: true,
+    });
+    try {
+      assert.equal(run.status, 1, JSON.stringify(run.report));
+      assert.equal(run.report.outcome, 'recovery-hold');
+      assert.equal(run.report.release.state, 'recovery-hold');
+      assert.equal(run.report.release.failedStep, 'label-restore');
+    } finally {
+      run.fixture.restore();
+    }
+  },
+);
+
+carrierLintTest(
+  'CLI: a release-complete post that errors after landing reconciles to released',
+  () => {
+    const run = releaseRun({
+      postFail: { mode: 'release-complete', status: 502, landed: true },
+    });
+    try {
+      assert.equal(run.status, 0, JSON.stringify(run.report));
+      assert.equal(run.report.release.state, 'released');
+      assert.deepEqual(labelsOf(run.fixture), ['status:authoring-only']);
+    } finally {
+      run.fixture.restore();
+    }
+  },
+);
+
+carrierLintTest(
+  'CLI: a release-complete post that sent nothing reapplies the authoring label and reports held',
+  () => {
+    const run = releaseRun({
+      postFail: { mode: 'release-complete', status: 422, landed: false },
+    });
+    try {
+      assert.equal(run.status, 0, JSON.stringify(run.report));
+      assert.equal(run.report.release.state, 'held');
+      assert.equal(run.report.release.failedStep, 'release-complete');
+      assert.equal(countOf(writeKinds(run.fixture), 'add-label'), 1);
+      assert.deepEqual([...labelsOf(run.fixture)].sort(), [
+        'status:authoring',
+        'status:authoring-only',
+      ]);
+    } finally {
+      run.fixture.restore();
+    }
+  },
+);
+
+carrierLintTest(
+  'CLI: a release-complete reapply that fails reports recovery-hold and exits 1',
+  () => {
+    const run = releaseRun({
+      postFail: { mode: 'release-complete', status: 422, landed: false },
+      failAddLabel: true,
+    });
+    try {
+      assert.equal(run.status, 1, JSON.stringify(run.report));
+      assert.equal(run.report.release.state, 'recovery-hold');
+      assert.equal(run.report.release.failedStep, 'release-complete-reapply');
+    } finally {
+      run.fixture.restore();
+    }
+  },
+);
+
+carrierLintTest(
+  'CLI: an inconclusive release-complete reconciliation keeps the release guard and reports recovery-hold',
+  () => {
+    const run = releaseRun({
+      postFail: { mode: 'release-complete', status: 500, landed: false },
+    });
+    try {
+      assert.equal(run.status, 1, JSON.stringify(run.report));
+      assert.equal(run.report.release.state, 'recovery-hold');
+      assert.equal(run.report.release.failedStep, 'release-complete');
+      const kinds = writeKinds(run.fixture);
+      assert.equal(countOf(kinds, 'owner-marker:release-guard'), 1);
+      assert.equal(countOf(kinds, 'add-label'), 0);
+    } finally {
+      run.fixture.restore();
+    }
+  },
+);
+
+carrierLintTest(
+  'CLI: a failing sweep is recorded and still reaches released',
+  () => {
+    const run = releaseRun({ failSweep: true });
+    try {
+      assert.equal(run.status, 0, JSON.stringify(run.report));
+      assert.equal(run.report.release.state, 'released');
+      assert.ok(run.report.release.sweeps.some((sweep) => sweep.failed));
+    } finally {
+      run.fixture.restore();
+    }
+  },
+);
+
+carrierLintTest(
+  'CLI: a carrier whose fenced roadmap draft has a roadmap-id marker and a placeholder is released',
+  () => {
+    const fenced = CARRIER_BODY.replace(
+      'Shape: orphan',
+      'Shape: roadmap',
+    ).replace(
+      '\n# Follow-up B\n',
+      '\n# Roadmap draft\n\n<!-- idd-skill-roadmap-id: 9 -->\n\n- [ ] #<child>\n',
+    );
+    const run = releaseRun({}, fenced);
+    try {
+      assert.equal(run.status, 0, JSON.stringify(run.report));
+      assert.equal(run.report.release.state, 'released');
+    } finally {
+      run.fixture.restore();
+    }
+  },
+);

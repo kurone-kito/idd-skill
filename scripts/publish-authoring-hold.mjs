@@ -13,8 +13,9 @@
 // check, publication line, lint, labels, pending intent, create, identity
 // attach, owner marker, provenance, member. It spawns the sibling helpers
 // (audit-authored-issue, post-idd-marker, authoring-owner-provenance) rather
-// than reimplementing their checks. It never runs a review, a Stage 2
-// release, or a close. A failed marker post is uncertain unless the
+// than reimplementing their checks. It never runs a review or a close. For a
+// draft carrier it then runs the carrier release (contract.md, "Carrier
+// creation-hold exception"). A failed marker post is uncertain unless the
 // child's error envelope proves that nothing was sent (#4171).
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -39,6 +40,7 @@ import {
 } from './helper-cli-runner.mjs';
 import { readRepositoryPolicyFile } from './idd-config.mjs';
 import { resolveOpenLinkedPrIssues } from './idd-roadmap-audit-execute.mjs';
+import { maskMarkdownCodeRegionsPreservingPositions } from './markdown-code.mjs';
 import {
   normalizeMarkerPrefix,
   parseAuthoringOwnerComment,
@@ -79,6 +81,41 @@ const JOURNAL_STATE_UNCERTAIN = 'uncertain: replay the journal';
 /** HTTP statuses that, on the post's first attempt, prove nothing landed
  * (the retry layer never reports them after a later attempt, #4171). */
 const NOTHING_SENT_HTTP_STATUSES = new Set([401, 404, 422]);
+/** The release steps in order; a dry run lists them as planned. */
+export const CARRIER_RELEASE_PLAN = [
+  'release-preflight',
+  'release-guard',
+  'preconditions',
+  'heartbeat',
+  'label-removal',
+  'release-complete',
+  'closing-sweep',
+];
+const CARRIER_READ_ATTEMPTS = 3;
+const CARRIER_SWEEP_DEADLINE_MS = 300_000;
+const CARRIER_HELD_NEXT_ACTION =
+  "A person's release is required. Both labels stay in place, and the release, release-guard and heartbeat markers already posted stay for that release to reuse.";
+const CARRIER_RECOVERY_NEXT_ACTION =
+  "Replay the carrier's owner-marker log and the journal's publication-intent log before any release. Do not release from this report.";
+/** Heartbeat coalescing: only these modes may be reused (contract.md). */
+const COALESCING_MODES = new Set([
+  'acquire',
+  'bootstrap',
+  'resume',
+  'heartbeat',
+]);
+/** Stops the carrier release at a named step: `held` keeps the labels for a
+ * person's release, `recovery-hold` needs an owner-log replay first. Declared
+ * above the entry-point call, so the class is initialized when the CLI runs. */
+class CarrierReleaseStop extends Error {
+  state;
+  failedStep;
+  constructor(state, failedStep, message) {
+    super(message);
+    this.state = state;
+    this.failedStep = failedStep;
+  }
+}
 if (import.meta.main) {
   if (isHelperErrorEnvelopeEnabled()) {
     runHelperCli('publish-authoring-hold', runCli);
@@ -323,7 +360,14 @@ their final issues yet.
   8. attach the returned identity to the pending record, append the
      mode=acquire owner marker, wait claim.verifySettleDelay, run
      authoring-owner-provenance, re-read labels, body and claim state,
-     and only then append state=member.
+     and only then append state=member;
+  9. for --shape carrier only, the carrier release (contract.md, "Carrier
+     creation-hold exception"): the release, release-guard, heartbeat,
+     release-complete markers, the preconditions, one label removal of the
+     authoring label, three sweeps and their minimization-backlog counts. The
+     authoring-only label stays. The report's release object carries state
+     (released, held or recovery-hold), failedStep, nextAction, sweeps and
+     backlog.
 
 Every policy value (the journal, the marker prefix, the label names, the
 trusted marker actors and claim.verifySettleDelay) comes from the
@@ -350,8 +394,11 @@ file is not tied to the body; the caller keeps it for the reviewed draft.
 
 A carrier takes only --bucket ready, its default, because it has no readiness
 bucket; any other bucket exits 2 before anything is read. It is labelled with
-the authoring label and labels.authoringOnlyLabelName, and it stays held after
-state=member: removing the hold is a separate step.
+the authoring label and labels.authoringOnlyLabelName, which must be different
+names. After state=member it runs the carrier release: the authoring label is
+removed only when every precondition holds, and the authoring-only label stays.
+A held outcome leaves the carrier held for a person's release and exits 0; a
+recovery-hold exits 1.
 
 Without --apply this is a dry run: it makes the read-only checks, the lint
 and the label lookups, prints the planned steps, and writes nothing.
@@ -371,12 +418,13 @@ A failure after the create prints a recovery-hold JSON object with the
 created issue, the failed step and the last journal state, and exits 1.
 That state is pending, or "uncertain: replay the journal" when a record
 may have been posted but could not be verified. The issue keeps its
-labels and is never closed. The Stage 2 release stays a separate,
-explicit request.
+labels and is never closed. An orphan's Stage 2 release stays a separate,
+explicit request; a carrier's release runs after member, as described above.
 
-Exit codes: 0 published (or planned), 1 refused or failed, 2 usage error,
---shape child, a carrier with a bucket other than ready, or the
-blocked-by-human journal stop.
+Exit codes: 0 published (or planned; a carrier whose release is held also
+exits 0), 1 refused, failed, or a recovery hold (a carrier release that stops
+at a recovery hold), 2 usage error, --shape child, a carrier with a bucket
+other than ready, or the blocked-by-human journal stop.
 `);
 }
 function parseArgs(argv) {
@@ -860,6 +908,17 @@ function publish(input) {
   };
   // Step 4: lint the exact body that will be created.
   const labels = resolvePublishLabels(input.config, bucket, args.shape);
+  // A carrier's release removes the authoring label by name, so identical names
+  // would strip the authoring-only label too: refuse before any write.
+  if (
+    args.shape === 'carrier' &&
+    (labels[1] ?? '').toLowerCase() === (labels[0] ?? '').toLowerCase()
+  ) {
+    return refuse(
+      'the authoring label and labels.authoringOnlyLabelName must be different names for a carrier',
+      base,
+    );
+  }
   const lintArgs = buildLintArgs({
     shape: args.shape,
     title: args.title,
@@ -964,6 +1023,13 @@ function publish(input) {
       { step: 'provenance', status: 'planned' },
       { step: 'member', status: 'planned' },
     );
+    if (args.shape === 'carrier') {
+      steps.push({
+        step: 'carrier-release',
+        status: 'planned',
+        detail: { steps: CARRIER_RELEASE_PLAN },
+      });
+    }
     process.stdout.write(
       `${JSON.stringify({ mode: 'dry-run', outcome: 'planned', ...base, labels, steps }, null, 2)}\n`,
     );
@@ -1354,10 +1420,833 @@ function publish(input) {
       ...postOutcome(error),
     });
   }
+  if (args.shape === 'carrier') {
+    const coalesceWindow =
+      input.config?.issueAuthoring?.heartbeatCoalesceWindow;
+    const release = releaseCarrier({
+      owner,
+      repo,
+      number,
+      markerPrefix,
+      trusted: input.trusted,
+      ids,
+      journal,
+      authoringLabel: labels[0] ?? '',
+      authoringOnlyLabel: labels[1] ?? '',
+      settleMs: input.settleMs,
+      heartbeatWindowMs:
+        parseIsoDurationToMs(coalesceWindow ?? 'PT2M') ?? 120_000,
+      policyPath: input.policyPath,
+      trustedFlag,
+      postMarker: postVerified,
+    });
+    const stuck = release.state === 'recovery-hold';
+    process.stdout.write(
+      `${JSON.stringify({ mode: 'apply', outcome: stuck ? 'recovery-hold' : 'published', ...held, journalState: 'member', release }, null, 2)}\n`,
+    );
+    if (stuck) {
+      const message = `release recovery hold at step ${String(release.failedStep)}: ${String(release.reason)}`;
+      process.stderr.write(
+        `publish-authoring-hold: ${message} (issue ${issueRef} stays held)\n`,
+      );
+      return { exitCode: 1, kind: 'gate', message };
+    }
+    return 0;
+  }
   process.stdout.write(
     `${JSON.stringify({ mode: 'apply', outcome: 'published', ...held, journalState: 'member' }, null, 2)}\n`,
   );
   return 0;
+}
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function sha256Hex(text) {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+function messageOf(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+/** The set snapshot digest (contract.md, "Stage 2"): SHA-256 of the
+ * `<owner>/<repo>#<number>:<body-sha256>` line, with the repository identity
+ * normalized as NFC(lowercase(NFC(component))). */
+export function carrierSetSnapshot(owner, repo, number, bodySha256) {
+  const identity = (component) =>
+    component.normalize('NFC').toLowerCase().normalize('NFC');
+  return sha256Hex(
+    `${identity(owner)}/${identity(repo)}#${number}:${bodySha256}`,
+  );
+}
+/** The earliest unedited trusted authoring-owner marker of this run that the
+ * predicate accepts, or null. Edited or unparseable markers never match. */
+function oursMatching(log, input, accept) {
+  const trusted = new Set(input.trusted.map((login) => login.toLowerCase()));
+  let best = null;
+  for (const comment of log) {
+    if (!trusted.has(comment.authorLogin.trim().toLowerCase())) {
+      continue;
+    }
+    if (comment.lastEditedAt !== null) {
+      continue;
+    }
+    const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
+    if (
+      parsed === null ||
+      parsed.owner !== input.ids.owner ||
+      parsed.set !== input.ids.set ||
+      parsed.session !== input.ids.session ||
+      !accept(parsed)
+    ) {
+      continue;
+    }
+    if (best === null || comment.id < best.id) {
+      best = { id: comment.id, createdAt: comment.createdAt, parsed };
+    }
+  }
+  return best;
+}
+/** The latest unedited trusted marker of this run, by comment id: the one a
+ * heartbeat coalescing check reads (contract.md, "Heartbeat coalescing"). */
+function latestOursMarker(log, input) {
+  let latest = null;
+  for (const comment of log) {
+    const earliest = oursMatching([comment], input, () => true);
+    if (earliest !== null && (latest === null || earliest.id > latest.id)) {
+      latest = earliest;
+    }
+  }
+  return latest;
+}
+function readOwnerLog(input, step) {
+  try {
+    return fetchProvenanceCommentsGraphql(
+      input.owner,
+      input.repo,
+      input.number,
+    );
+  } catch (error) {
+    throw new CarrierReleaseStop(
+      'held',
+      step,
+      `the owner-marker log is unreadable: ${messageOf(error)}`,
+    );
+  }
+}
+/** Competing or edited trusted owner markers are recovery-hold, with no write. */
+function replayOrRecover(input, log, step) {
+  const problem = checkOwnerLogStillOurs({
+    comments: log,
+    markerPrefix: input.markerPrefix,
+    trusted: input.trusted,
+    ids: input.ids,
+  });
+  if (problem !== null) {
+    throw new CarrierReleaseStop('recovery-hold', step, problem);
+  }
+}
+function readCarrierSnapshot(input, step) {
+  try {
+    return readIssue(input.owner, input.repo, input.number);
+  } catch (error) {
+    throw new CarrierReleaseStop(
+      'held',
+      step,
+      `the carrier cannot be read: ${messageOf(error)}`,
+    );
+  }
+}
+/** Up to CARRIER_READ_ATTEMPTS bounded re-reads; true only when the check
+ * finds what it looks for. An unreadable log counts as inconclusive. */
+function readUntil(input, check) {
+  for (let attempt = 1; attempt <= CARRIER_READ_ATTEMPTS; attempt += 1) {
+    try {
+      const log = fetchProvenanceCommentsGraphql(
+        input.owner,
+        input.repo,
+        input.number,
+      );
+      if (check(log)) {
+        return true;
+      }
+    } catch {
+      // Inconclusive: retry within the bound.
+    }
+    if (attempt < CARRIER_READ_ATTEMPTS) {
+      sleepMs(input.settleMs);
+    }
+  }
+  return false;
+}
+function markerOnLog(log, input, id, mode) {
+  return oursMatching(log, input, (parsed) => parsed.mode === mode)?.id === id;
+}
+function ownerMarkerArgs(input, mode, bodySha256, snapshotSha256) {
+  const issueRef = `${input.owner}/${input.repo}#${input.number}`;
+  return [
+    '--type',
+    'authoring-owner',
+    '--target',
+    'issue',
+    String(input.number),
+    '--owner',
+    input.owner,
+    '--repo',
+    input.repo,
+    '--marker-target',
+    issueRef,
+    '--anchor',
+    issueRef,
+    '--mode',
+    mode,
+    '--marker-owner',
+    input.ids.owner,
+    '--set',
+    input.ids.set,
+    '--session',
+    input.ids.session,
+    '--body-sha256',
+    bodySha256,
+    '--snapshot-sha256',
+    snapshotSha256,
+    '--supersedes',
+    input.ids.owner,
+    '--marker-prefix',
+    input.markerPrefix,
+    ...input.trustedFlag,
+  ];
+}
+/** Post one owner marker through the verified poster; a failure is held. */
+function postCarrierMarker(input, mode, bodySha256, snapshotSha256, step) {
+  try {
+    return input.postMarker(
+      ownerMarkerArgs(input, mode, bodySha256, snapshotSha256),
+      { owner: input.owner, repo: input.repo, number: input.number },
+    );
+  } catch (error) {
+    throw new CarrierReleaseStop('held', step, messageOf(error));
+  }
+}
+/** A runnable helper call; the helper's own output is parsed, never trusted
+ * as a pass unless its own exit and fields say so. */
+function runCarrierHelper(script, args) {
+  const run = runSiblingHelper(script, args);
+  return { status: run.status, json: parseJsonOutput(run), run };
+}
+function runCarrierAudit(input, bodyFile, extra) {
+  const args = [
+    '--shape',
+    'carrier',
+    '--body-file',
+    bodyFile,
+    '--marker-prefix',
+    input.markerPrefix,
+    '--current-repo',
+    `${input.owner}/${input.repo}`,
+    '--label',
+    input.authoringLabel,
+    '--label',
+    input.authoringOnlyLabel,
+    ...extra,
+  ];
+  if (input.policyPath) {
+    args.push('--config', input.policyPath);
+  }
+  const { status, json } = runCarrierHelper('audit-authored-issue.mjs', args);
+  const rawFindings = json?.findings;
+  const findings = Array.isArray(rawFindings) ? rawFindings : [];
+  const failingIds = findings
+    .filter(
+      (finding) =>
+        typeof finding === 'object' &&
+        finding !== null &&
+        finding.result === 'fail',
+    )
+    .map((finding) => finding.id);
+  return {
+    status,
+    passed: status === 0 && json?.passed === true,
+    failingIds,
+    findings,
+  };
+}
+/** Preconditions (a) to (e) of the carrier creation-hold exception, in order.
+ * Returns the acquire marker's body digest, which the removal must keep. */
+function checkCarrierPreconditions(input, scratch, snapshot) {
+  const { body, labels } = snapshot;
+  // (a) no roadmap-id marker outside code: read on the code-masked body.
+  const masked = maskMarkdownCodeRegionsPreservingPositions(body);
+  if (
+    new RegExp(
+      `<!--\\s*${escapeRegExp(input.markerPrefix)}-roadmap-id\\b`,
+      'iu',
+    ).test(masked)
+  ) {
+    throw new CarrierReleaseStop(
+      'held',
+      'precondition-roadmap-id',
+      'a roadmap-id marker is outside code in the carrier body',
+    );
+  }
+  // (b) sole member of the set, with no requested-set entry that blocks.
+  const setArgs = [
+    '--set',
+    input.ids.set,
+    '--issue',
+    String(input.number),
+    '--owner',
+    input.owner,
+    '--repo',
+    input.repo,
+    '--marker-prefix',
+    input.markerPrefix,
+  ];
+  if (input.policyPath) {
+    setArgs.push('--policy', input.policyPath);
+  }
+  if (input.trusted.length > 0) {
+    setArgs.push('--trusted-marker-logins', input.trusted.join(','));
+  }
+  const members = runCarrierHelper('authoring-set-members.mjs', setArgs);
+  if (members.status !== 0 || members.json === null) {
+    throw new CarrierReleaseStop(
+      'held',
+      'precondition-sole-member',
+      `the sole-member check is inconclusive: ${helperFailure('authoring-set-members', members.run)}`,
+    );
+  }
+  const issues = Array.isArray(members.json.issues)
+    ? members.json.issues
+    : null;
+  if (
+    members.json.soleMember !== true ||
+    issues === null ||
+    issues.length !== 1 ||
+    issues[0] !== input.number
+  ) {
+    throw new CarrierReleaseStop(
+      'held',
+      'precondition-sole-member',
+      `the carrier is not the sole member of its set: issues ${JSON.stringify(members.json.issues ?? null)}`,
+    );
+  }
+  const skipped = Array.isArray(members.json.skippedMarkers)
+    ? members.json.skippedMarkers
+    : [];
+  for (const entry of skipped) {
+    const record = entry;
+    if (
+      record.kind === 'requested-set' &&
+      record.issueNumber === input.number
+    ) {
+      continue;
+    }
+    if (record.namesRequestedSet === true) {
+      throw new CarrierReleaseStop(
+        'held',
+        'precondition-sole-member',
+        'a skipped marker names the requested set',
+      );
+    }
+  }
+  // (c) the carrier audit: one carrier marker outside code, and the checklist.
+  const bodyFile = join(scratch, 'carrier-body.md');
+  writeFileSync(bodyFile, body);
+  const audit = runCarrierAudit(input, bodyFile, []);
+  if (!audit.passed) {
+    throw new CarrierReleaseStop(
+      'held',
+      'precondition-audit',
+      `audit-authored-issue --shape carrier did not pass: ${audit.failingIds.join(', ') || 'no verdict'}`,
+    );
+  }
+  // (d) the body digest still equals the acquire marker's body-sha256.
+  const log = readOwnerLog(input, 'precondition-body-digest');
+  replayOrRecover(input, log, 'precondition-body-digest');
+  const acquire = oursMatching(
+    log,
+    input,
+    (parsed) => parsed.mode === 'acquire',
+  );
+  if (acquire === null) {
+    throw new CarrierReleaseStop(
+      'held',
+      'precondition-body-digest',
+      'no acquire owner marker of this run is on the carrier',
+    );
+  }
+  const digest = sha256Hex(body);
+  if (digest !== acquire.parsed.bodySha256) {
+    throw new CarrierReleaseStop(
+      'held',
+      'precondition-body-digest',
+      'the body no longer matches the acquire marker body-sha256',
+    );
+  }
+  // (e) both labels are present.
+  if (
+    !hasLabel(labels, input.authoringOnlyLabel) ||
+    !hasLabel(labels, input.authoringLabel)
+  ) {
+    throw new CarrierReleaseStop(
+      'held',
+      'precondition-labels',
+      'a required label is missing from the carrier',
+    );
+  }
+  return acquire.parsed.bodySha256;
+}
+/** The backlog count from `authoring-marker-minimization-backlog`, read from
+ * the audit's own finding detail. Recorded only: it never blocks. */
+function runCarrierBacklog(input, point, bodyFile, scratch, backlog) {
+  const toAuditComments = (comments) =>
+    comments.map((comment) => ({
+      id: String(comment.id),
+      body: comment.body,
+      author: comment.authorLogin,
+      createdAt: comment.createdAt,
+      isMinimized: comment.isMinimized === true,
+    }));
+  let count = null;
+  try {
+    const carrier = fetchProvenanceCommentsGraphql(
+      input.owner,
+      input.repo,
+      input.number,
+    );
+    const journal = fetchProvenanceCommentsGraphql(
+      input.journal.owner,
+      input.journal.repo,
+      input.journal.number,
+    );
+    const commentsFile = join(scratch, `comments-${point}.json`);
+    const journalFile = join(scratch, `journal-${point}.json`);
+    writeFileSync(commentsFile, JSON.stringify(toAuditComments(carrier)));
+    writeFileSync(journalFile, JSON.stringify(toAuditComments(journal)));
+    const audit = runCarrierAudit(input, bodyFile, [
+      '--comments-file',
+      commentsFile,
+      '--journal-comments-file',
+      journalFile,
+      '--trusted-marker-logins',
+      input.trusted.join(','),
+    ]);
+    const finding = audit.findings.find(
+      (entry) => entry.id === 'authoring-marker-minimization-backlog',
+    );
+    const detail = typeof finding?.detail === 'string' ? finding.detail : '';
+    const match = /^(\d+) eligible/u.exec(detail);
+    if (match) {
+      count = Number(match[1]);
+    } else if (/no eligible/u.test(detail)) {
+      count = 0;
+    }
+  } catch {
+    count = null;
+  }
+  backlog.push({ point, count });
+}
+/** A sweep attempt: recorded, never blocking (contract.md, "Mandatory
+ * release-time hide-on-supersede sweep"). */
+function runCarrierSweep(input, point, sweeps) {
+  const args = [
+    '--owner',
+    input.owner,
+    '--repo',
+    input.repo,
+    '--issue',
+    String(input.number),
+    '--issue',
+    input.journal.ref,
+    '--marker-prefix',
+    input.markerPrefix,
+    '--trusted-marker-logins',
+    input.trusted.join(','),
+    '--deadline-ms',
+    String(CARRIER_SWEEP_DEADLINE_MS),
+    '--apply',
+    '--format',
+    'json',
+  ];
+  const { status, json, run } = runCarrierHelper(
+    'sweep-authoring-markers.mjs',
+    args,
+  );
+  const failed = status !== 0 || json === null;
+  sweeps.push({
+    point,
+    exitCode: status,
+    failed,
+    detail: failed ? helperFailure('sweep-authoring-markers', run) : 'ok',
+  });
+}
+/** Bounded re-reads until the marker with this id is on the carrier's log. */
+function requireMarkerOnLog(input, id, mode, step) {
+  if (!readUntil(input, (log) => markerOnLog(log, input, id, mode))) {
+    throw new CarrierReleaseStop(
+      'held',
+      step,
+      `the ${mode} marker ${id} is not found conclusively on the carrier log`,
+    );
+  }
+}
+/** Remove the authoring label, then verify. A failed verification restores the
+ * label only when the owner log is still ours (contract.md, "label removal"). */
+function removeAuthoringLabel(input, releaseId, acquireDigest) {
+  const repoRef = `${input.owner}/${input.repo}`;
+  let removeError = null;
+  try {
+    ghText([
+      'issue',
+      'edit',
+      String(input.number),
+      '--repo',
+      repoRef,
+      '--remove-label',
+      input.authoringLabel,
+    ]);
+  } catch (error) {
+    removeError = messageOf(error);
+  }
+  const after = readCarrierSnapshotForRemoval(input);
+  if (hasLabel(after.labels, input.authoringLabel)) {
+    throw new CarrierReleaseStop(
+      'held',
+      'label-removal',
+      removeError === null
+        ? 'the authoring label is still present after the removal'
+        : `the removal could not be verified and the label is still present: ${removeError}`,
+    );
+  }
+  // The label is gone. Verify the rest of the release state.
+  const problems = [];
+  if (!hasLabel(after.labels, input.authoringOnlyLabel)) {
+    problems.push('the authoring-only label is missing');
+  }
+  if (sha256Hex(after.body) !== acquireDigest) {
+    problems.push('the body snapshot changed');
+  }
+  const log = readOwnerLogForVerify(input);
+  replayOrRecover(input, log, 'label-removal-verify');
+  if (!markerOnLog(log, input, releaseId, 'release')) {
+    problems.push('the release marker is missing');
+  }
+  if (problems.length === 0) {
+    return;
+  }
+  // Verification failed with the label absent: restore it once, then verify.
+  try {
+    ghText([
+      'issue',
+      'edit',
+      String(input.number),
+      '--repo',
+      repoRef,
+      '--add-label',
+      input.authoringLabel,
+    ]);
+  } catch (error) {
+    throw new CarrierReleaseStop(
+      'recovery-hold',
+      'label-restore',
+      `the restore of the authoring label failed: ${messageOf(error)}`,
+    );
+  }
+  let restored;
+  try {
+    restored = readIssue(input.owner, input.repo, input.number);
+  } catch (error) {
+    throw new CarrierReleaseStop(
+      'recovery-hold',
+      'label-restore',
+      `the restored label cannot be read: ${messageOf(error)}`,
+    );
+  }
+  if (!hasLabel(restored.labels, input.authoringLabel)) {
+    throw new CarrierReleaseStop(
+      'recovery-hold',
+      'label-restore',
+      'the restored authoring label is not on the carrier',
+    );
+  }
+  throw new CarrierReleaseStop(
+    'held',
+    'label-removal-verify',
+    `verification after the removal failed (${problems.join('; ')}); the authoring label was restored`,
+  );
+}
+function readCarrierSnapshotForRemoval(input) {
+  try {
+    return readIssue(input.owner, input.repo, input.number);
+  } catch (error) {
+    throw new CarrierReleaseStop(
+      'recovery-hold',
+      'label-removal',
+      `the labels cannot be read after the removal: ${messageOf(error)}`,
+    );
+  }
+}
+function readOwnerLogForVerify(input) {
+  try {
+    return fetchProvenanceCommentsGraphql(
+      input.owner,
+      input.repo,
+      input.number,
+    );
+  } catch (error) {
+    throw new CarrierReleaseStop(
+      'recovery-hold',
+      'label-removal-verify',
+      `the owner-marker log cannot be read after the removal: ${messageOf(error)}`,
+    );
+  }
+}
+/** Run the release for one carrier. Never throws: every stop is reported. */
+export function releaseCarrier(input) {
+  const sweeps = [];
+  const backlog = [];
+  const steps = [];
+  const scratch = mkdtempSync(join(tmpdir(), 'idd-carrier-release-'));
+  let step = CARRIER_RELEASE_PLAN[0];
+  const mark = (name) => {
+    step = name;
+    steps.push(name);
+  };
+  try {
+    runCarrierRelease(input, scratch, { sweeps, backlog, mark });
+    return {
+      state: 'released',
+      failedStep: null,
+      nextAction: '',
+      reason: null,
+      sweeps,
+      backlog,
+      steps,
+    };
+  } catch (error) {
+    const stop =
+      error instanceof CarrierReleaseStop
+        ? error
+        : new CarrierReleaseStop('recovery-hold', step, messageOf(error));
+    return {
+      state: stop.state,
+      failedStep: stop.failedStep,
+      nextAction:
+        stop.state === 'held'
+          ? CARRIER_HELD_NEXT_ACTION
+          : CARRIER_RECOVERY_NEXT_ACTION,
+      reason: stop.message,
+      sweeps,
+      backlog,
+      steps,
+    };
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+function runCarrierRelease(input, scratch, ctx) {
+  const { owner, repo, number } = input;
+  const repoRef = `${owner}/${repo}`;
+  const bodyFile = join(scratch, 'release-body.md');
+  // (1) Preflight: replay, sweep, backlog, then reuse or post `release`.
+  ctx.mark('release-preflight');
+  replayOrRecover(
+    input,
+    readOwnerLog(input, 'release-preflight'),
+    'release-preflight',
+  );
+  runCarrierSweep(input, 'preflight', ctx.sweeps);
+  const preflight = readCarrierSnapshot(input, 'release-preflight');
+  writeFileSync(bodyFile, preflight.body);
+  runCarrierBacklog(input, 'preflight', bodyFile, scratch, ctx.backlog);
+  const digest = sha256Hex(preflight.body);
+  const existingRelease = oursMatching(
+    readOwnerLog(input, 'release-preflight'),
+    input,
+    (parsed) => parsed.mode === 'release',
+  );
+  const releaseId =
+    existingRelease?.id ??
+    postCarrierMarker(input, 'release', digest, 'none', 'release-preflight');
+  // (2) release-guard on the anchor, which is the carrier itself.
+  ctx.mark('release-guard');
+  const guardLog = readOwnerLog(input, 'release-guard');
+  replayOrRecover(input, guardLog, 'release-guard');
+  const guardExisting = oursMatching(
+    guardLog,
+    input,
+    (parsed) => parsed.mode === 'release-guard',
+  );
+  const guardId =
+    guardExisting?.id ??
+    postCarrierMarker(input, 'release-guard', 'none', 'none', 'release-guard');
+  requireMarkerOnLog(input, guardId, 'release-guard', 'release-guard');
+  replayOrRecover(input, readOwnerLog(input, 'release-guard'), 'release-guard');
+  // (3) Preconditions, before the heartbeat.
+  ctx.mark('preconditions');
+  const beforeHeartbeat = readCarrierSnapshot(input, 'preconditions');
+  const acquireDigest = checkCarrierPreconditions(
+    input,
+    scratch,
+    beforeHeartbeat,
+  );
+  // (4) Heartbeat, with the coalescing rule, then the settle wait and replay.
+  ctx.mark('heartbeat');
+  const heartbeatBody = readCarrierSnapshot(input, 'heartbeat');
+  const heartbeatDigest = sha256Hex(heartbeatBody.body);
+  const heartbeatLog = readOwnerLog(input, 'heartbeat');
+  replayOrRecover(input, heartbeatLog, 'heartbeat');
+  const latest = latestOursMarker(heartbeatLog, input);
+  const coalescedId =
+    latest !== null &&
+    COALESCING_MODES.has(latest.parsed.mode) &&
+    Date.now() - Date.parse(latest.createdAt) < input.heartbeatWindowMs &&
+    latest.parsed.bodySha256 === heartbeatDigest
+      ? latest.id
+      : null;
+  const heartbeatId =
+    coalescedId ??
+    postCarrierMarker(input, 'heartbeat', heartbeatDigest, 'none', 'heartbeat');
+  sleepMs(input.settleMs);
+  const replayLog = readOwnerLog(input, 'heartbeat-replay');
+  replayOrRecover(input, replayLog, 'heartbeat-replay');
+  if (!markerOnLog(replayLog, input, releaseId, 'release')) {
+    throw new CarrierReleaseStop(
+      'held',
+      'heartbeat-replay',
+      'the release marker is not on the carrier after the settle wait',
+    );
+  }
+  if (
+    coalescedId === null &&
+    !markerOnLog(replayLog, input, heartbeatId, 'heartbeat')
+  ) {
+    throw new CarrierReleaseStop(
+      'held',
+      'heartbeat-replay',
+      'the heartbeat marker is not on the carrier after the settle wait',
+    );
+  }
+  const afterSettle = readCarrierSnapshot(input, 'heartbeat-replay');
+  if (sha256Hex(afterSettle.body) !== acquireDigest) {
+    throw new CarrierReleaseStop(
+      'held',
+      'heartbeat-replay',
+      'the body no longer matches the acquire marker body-sha256 after the settle wait',
+    );
+  }
+  checkCarrierPreconditions(input, scratch, afterSettle);
+  // (5) The single label removal, with its verification.
+  ctx.mark('label-removal');
+  removeAuthoringLabel(input, releaseId, acquireDigest);
+  // (6) release-complete: sweep and backlog immediately before the decision.
+  ctx.mark('release-complete');
+  runCarrierSweep(input, 'pre-release-complete', ctx.sweeps);
+  const beforeComplete = readCarrierSnapshot(input, 'release-complete');
+  writeFileSync(bodyFile, beforeComplete.body);
+  runCarrierBacklog(
+    input,
+    'pre-release-complete',
+    bodyFile,
+    scratch,
+    ctx.backlog,
+  );
+  const snapshot = carrierSetSnapshot(owner, repo, number, acquireDigest);
+  const completeExisting = oursMatching(
+    readOwnerLog(input, 'release-complete'),
+    input,
+    (parsed) =>
+      parsed.mode === 'release-complete' && parsed.snapshotSha256 === snapshot,
+  );
+  let postError = null;
+  if (completeExisting === null) {
+    try {
+      input.postMarker(
+        ownerMarkerArgs(input, 'release-complete', 'none', snapshot),
+        { owner, repo, number },
+      );
+    } catch (error) {
+      postError = error;
+    }
+  }
+  let found = completeExisting !== null;
+  let conclusive = false;
+  for (
+    let attempt = 1;
+    attempt <= CARRIER_READ_ATTEMPTS && !found;
+    attempt += 1
+  ) {
+    try {
+      const log = readOwnerLog(input, 'release-complete');
+      conclusive = true;
+      replayOrRecover(input, log, 'release-complete');
+      found =
+        oursMatching(
+          log,
+          input,
+          (parsed) =>
+            parsed.mode === 'release-complete' &&
+            parsed.snapshotSha256 === snapshot,
+        ) !== null;
+    } catch (error) {
+      if (
+        error instanceof CarrierReleaseStop &&
+        error.state === 'recovery-hold'
+      ) {
+        throw error;
+      }
+      conclusive = false;
+    }
+    if (!found && attempt < CARRIER_READ_ATTEMPTS) {
+      sleepMs(input.settleMs);
+    }
+  }
+  if (!found) {
+    // A post that reported nothing sent, plus a complete read that finds no
+    // trusted marker, proves nothing was appended: reapply the label.
+    if (postError !== null && !isPosted(postError) && conclusive) {
+      try {
+        ghText([
+          'issue',
+          'edit',
+          String(number),
+          '--repo',
+          repoRef,
+          '--add-label',
+          input.authoringLabel,
+        ]);
+      } catch (error) {
+        throw new CarrierReleaseStop(
+          'recovery-hold',
+          'release-complete-reapply',
+          `the authoring label could not be reapplied: ${messageOf(error)}`,
+        );
+      }
+      const reapplied = readCarrierSnapshotForRemoval(input);
+      if (!hasLabel(reapplied.labels, input.authoringLabel)) {
+        throw new CarrierReleaseStop(
+          'recovery-hold',
+          'release-complete-reapply',
+          'the reapplied authoring label cannot be verified',
+        );
+      }
+      throw new CarrierReleaseStop(
+        'held',
+        'release-complete',
+        'the release-complete post reported nothing sent; the authoring label was reapplied',
+      );
+    }
+    throw new CarrierReleaseStop(
+      'recovery-hold',
+      'release-complete',
+      'the release-complete marker cannot be reconciled; the release guard and the current labels stay in place',
+    );
+  }
+  // (7) Closing sweep, once the release is complete.
+  ctx.mark('closing-sweep');
+  runCarrierSweep(input, 'closing', ctx.sweeps);
+  const closing = readCarrierSnapshot(input, 'closing-sweep');
+  writeFileSync(bodyFile, closing.body);
+  runCarrierBacklog(input, 'closing', bodyFile, scratch, ctx.backlog);
 }
 function isPosted(error) {
   return error?.posted === true;
