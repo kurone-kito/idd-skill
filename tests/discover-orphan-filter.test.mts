@@ -893,6 +893,30 @@ test('draft carriers: a held carrier with no labeled event reports no heldSince 
   ]);
 });
 
+test('draft carriers: an A0-O label-event read that throws keeps the carrier and reports no heldSince (#4257)', async () => {
+  const result = await filterOrphanIssues(
+    [
+      carrierIssue(64, 'No blocker.', {
+        labels: [
+          { name: 'status:authoring-only' },
+          { name: 'status:authoring' },
+        ],
+      }),
+    ],
+    {
+      issueStateByNumber: new Map<number, string>(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      fetchLabelEventsByIssueNumber: () => {
+        throw new Error('timeline unavailable');
+      },
+      now: '2026-10-14T05:00:00Z',
+    },
+  );
+  assert.equal(result.draftCarriers.held[0]?.number, 64);
+  assert.equal(result.draftCarriers.held[0]?.heldSince, null);
+  assert.equal(result.draftCarriers.held[0]?.stale, false);
+});
+
 test('draft carriers: an authoring-only issue without the marker, a marker without the label, and a marker only inside code are in no bucket (#4257)', async () => {
   const result = await filterOrphanIssues(
     [
@@ -1314,6 +1338,36 @@ process.exit(1);
     } else {
       process.env.XDG_CACHE_HOME = savedCacheHome;
     }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('--draft-carriers fails closed when the label search prints no JSON array (#4257)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-draft-carriers-search-'));
+  const workspace = join(root, 'workspace');
+  mkdirSync(workspace, { recursive: true });
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+if (args[0] === 'search' && args[1] === 'issues') {
+  // Exit 0 with no output: the failure shape a non-strict read would take
+  // for zero hits (#3624).
+  process.exit(0);
+}
+process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
+process.exit(1);
+`,
+  );
+  try {
+    const result = spawnHelperBinWithEnvelope(
+      'idd-discover-orphan-filter.mjs',
+      ['--owner', 'kurone-kito', '--repo', 'idd-skill', '--draft-carriers'],
+      { cwd: workspace },
+    );
+    assert.notEqual(result.status, 0);
+    assert.equal(result.stdout.includes('draftCarriers'), false);
+  } finally {
+    restore();
     rmSync(root, { recursive: true, force: true });
   }
 });
