@@ -52,6 +52,7 @@ import {
   ghTextUnbounded,
   resolveGhApiHostname,
 } from './gh-exec.mts';
+import { parseTriageLine } from './policy-helpers.mts';
 import {
   AMD_MARKER_PATTERN,
   classifyCommentEditState,
@@ -174,6 +175,32 @@ export interface PrReviewRecord {
   unparsedReason?: string;
 }
 
+export type TriageOutcome = 'accepted' | 'deferred' | 'rejected';
+export type TriageUrgency = 'very-low' | 'low' | 'medium' | 'high';
+export type TriageStep = '0' | '1' | '2';
+
+export interface TriageStepCounts {
+  urgency: Record<TriageUrgency, number>;
+  outcome: Record<TriageOutcome, number>;
+}
+
+/**
+ * Recorded `Triage:` lines on finding threads whose disposition is accepted,
+ * deferred, or rejected (issue #4189). `recorded` and `unrecorded` partition
+ * those threads; `malformed` is the subset of `unrecorded` whose reply's first
+ * Triage-like line (the opener forms of `TRIAGE_OPENER_LINE_RE`) yields no
+ * record, so parser drift shows up as a count instead of silently lowering the
+ * recorded share.
+ */
+export interface TriageAudit {
+  recorded: number;
+  unrecorded: number;
+  malformed: number;
+  byStep: Record<TriageStep, TriageStepCounts>;
+  overrides: number;
+  contradictions: number;
+}
+
 export interface PrAuditReport {
   pr: number;
   reviewCount: number;
@@ -185,6 +212,9 @@ export interface PrAuditReport {
   reviews: PrReviewRecord[];
   threads: FindingThread[];
   transitions: TransitionRow[];
+  triage: TriageAudit;
+  /** Merge time from `gh pr list` under `--limit`; `null` under `--prs`. */
+  mergedAt: string | null;
 }
 
 export interface CohortSummary {
@@ -199,6 +229,7 @@ export interface CohortSummary {
   previouslyMissed: SeverityCounts;
   allLowFollowed: { followed: number; total: number };
   transitions: TransitionRow[];
+  triage: TriageAudit;
 }
 
 function emptyDispositionCounts(): Record<Disposition, number> {
@@ -296,10 +327,21 @@ export function classifyDispositionReply(rawBody: unknown): Disposition | null {
  * disposition). `none` covers both "no reply at all" and "replies exist but
  * none are recognized".
  */
-export function resolveThreadDisposition(
+export interface ThreadDispositionReply {
+  disposition: Disposition;
+  /** Body of the winning reply, or `null` when no reply is recognized. */
+  body: string | null;
+}
+
+/**
+ * Resolve one finding thread's winning disposition reply, and its body, by
+ * the rules of {@link resolveThreadDisposition}. The body feeds the triage
+ * audit; the disposition is the same value the thread metrics use.
+ */
+export function resolveThreadDispositionReply(
   findingId: number,
   comments: readonly RawComment[],
-): Disposition {
+): ThreadDispositionReply {
   const replies = comments
     .filter(
       (comment) =>
@@ -316,13 +358,145 @@ export function resolveThreadDisposition(
       return a.id - b.id;
     });
   let resolved: Disposition | null = null;
+  let resolvedBody: string | null = null;
   for (const reply of replies) {
     const classified = classifyDispositionReply(reply.body);
     if (classified) {
       resolved = classified;
+      resolvedBody = reply.body;
     }
   }
-  return resolved ?? 'none';
+  if (resolved === null) {
+    return { disposition: 'none', body: null };
+  }
+  return { disposition: resolved, body: resolvedBody };
+}
+
+export function resolveThreadDisposition(
+  findingId: number,
+  comments: readonly RawComment[],
+): Disposition {
+  return resolveThreadDispositionReply(findingId, comments).disposition;
+}
+
+// ---------------------------------------------------------------------------
+// Pure core: triage audit (issue #4189)
+// ---------------------------------------------------------------------------
+
+const TRIAGE_URGENCIES: readonly TriageUrgency[] = [
+  'very-low',
+  'low',
+  'medium',
+  'high',
+];
+const TRIAGE_STEPS: readonly TriageStep[] = ['0', '1', '2'];
+const TRIAGE_OUTCOMES: readonly TriageOutcome[] = [
+  'accepted',
+  'deferred',
+  'rejected',
+];
+// A Triage-like line is an attempted record, so a malformed one cannot pass as
+// unrecorded (Copilot reviews of #4268). It is the case-insensitive word
+// `Triage` followed by optional spaces or tabs and a colon, at the start of the
+// line after any run of spaces, tabs, list bullets (`-`, `+`), and `*` marks,
+// with an optional `*` or `**` right after the word. The emphasis marks need
+// not pair up. Underscore emphasis is not matched. The prefix never spans a
+// newline. A reply is recorded when its first Triage-like line parses with
+// `parseTriageLine`. A reply whose first such line does not parse is
+// malformed, even when a later line would parse: that fails closed.
+const TRIAGE_OPENER_LINE_RE = /^[ \t*+-]*triage(?:\*\*|\*)?[ \t]*:/iu;
+
+function isTriageOutcome(
+  disposition: Disposition,
+): disposition is TriageOutcome {
+  return (TRIAGE_OUTCOMES as readonly Disposition[]).includes(disposition);
+}
+
+function emptyTriageStepCounts(): TriageStepCounts {
+  return {
+    urgency: { 'very-low': 0, low: 0, medium: 0, high: 0 },
+    outcome: { accepted: 0, deferred: 0, rejected: 0 },
+  };
+}
+
+function emptyTriageAudit(): TriageAudit {
+  return {
+    recorded: 0,
+    unrecorded: 0,
+    malformed: 0,
+    byStep: {
+      '0': emptyTriageStepCounts(),
+      '1': emptyTriageStepCounts(),
+      '2': emptyTriageStepCounts(),
+    },
+    overrides: 0,
+    contradictions: 0,
+  };
+}
+
+function addTriageAudit(target: TriageAudit, source: TriageAudit): void {
+  target.recorded += source.recorded;
+  target.unrecorded += source.unrecorded;
+  target.malformed += source.malformed;
+  target.overrides += source.overrides;
+  target.contradictions += source.contradictions;
+  for (const step of TRIAGE_STEPS) {
+    for (const urgency of TRIAGE_URGENCIES) {
+      target.byStep[step].urgency[urgency] +=
+        source.byStep[step].urgency[urgency];
+    }
+    for (const outcome of TRIAGE_OUTCOMES) {
+      target.byStep[step].outcome[outcome] +=
+        source.byStep[step].outcome[outcome];
+    }
+  }
+}
+
+/**
+ * Count the `Triage:` lines of one PR's accepted, deferred, or rejected
+ * threads (issue #4189). Threads with `other` or `none` are not counted. A
+ * recorded line with an `override:` part is an override and is never a
+ * contradiction. Otherwise a contradiction is an accepted reply whose recorded
+ * line says `verdict defer`.
+ */
+function computeTriageAudit(
+  threads: readonly FindingThread[],
+  comments: readonly RawComment[],
+): TriageAudit {
+  const audit = emptyTriageAudit();
+  for (const thread of threads) {
+    if (!isTriageOutcome(thread.disposition)) {
+      continue;
+    }
+    const outcome = thread.disposition;
+    const { body } = resolveThreadDispositionReply(thread.id, comments);
+    // The first Triage-like line decides, so a malformed first line is not
+    // rescued by a later parseable one (Copilot review of #4268).
+    const opener =
+      body === null
+        ? undefined
+        : body.split(/\r?\n/u).find((line) => TRIAGE_OPENER_LINE_RE.test(line));
+    const record = opener === undefined ? null : parseTriageLine(opener);
+    if (record === null) {
+      audit.unrecorded += 1;
+      if (opener !== undefined) {
+        audit.malformed += 1;
+      }
+      continue;
+    }
+    audit.recorded += 1;
+    const step = String(record.step) as TriageStep;
+    audit.byStep[step].urgency[record.urgency] += 1;
+    audit.byStep[step].outcome[outcome] += 1;
+    if (record.override !== null) {
+      audit.overrides += 1;
+      continue;
+    }
+    if (outcome === 'accepted' && record.verdict === 'defer') {
+      audit.contradictions += 1;
+    }
+  }
+  return audit;
 }
 
 /**
@@ -453,6 +627,7 @@ export function computePrAudit(
   const transitions = buildTransitionTable(
     parsedReviews.map((parsed) => ({ kind: parsed.kind, open: parsed.open })),
   );
+  const triage = computeTriageAudit(threads, comments);
   const reviews: PrReviewRecord[] = copilotReviewsInOrder.map(
     (review, index) => {
       const parsed = parsedReviews[index];
@@ -480,6 +655,8 @@ export function computePrAudit(
     reviews,
     threads,
     transitions,
+    triage,
+    mergedAt: null,
   };
 }
 
@@ -510,7 +687,9 @@ export function summarizeCohort(
     transitionTotals.set(key, { followed: 0, last: 0 });
   }
 
+  const triage = emptyTriageAudit();
   for (const report of reports) {
+    addTriageAudit(triage, report.triage);
     reviewCount += report.reviewCount;
     v2Count += report.v2Count;
     legacyCount += report.legacyCount;
@@ -556,6 +735,7 @@ export function summarizeCohort(
       severity,
       ...(transitionTotals.get(severity) ?? { followed: 0, last: 0 }),
     })),
+    triage,
   };
 }
 
@@ -798,11 +978,16 @@ export function selectMostRecentlyMerged(
     .map((entry) => entry.number);
 }
 
+interface RecentMergedPrs {
+  numbers: number[];
+  mergedAtByNumber: Map<number, string | null>;
+}
+
 function resolveRecentMergedPrNumbers(
   owner: string,
   repo: string,
   limit: number,
-): number[] {
+): RecentMergedPrs {
   const fetchCount = Math.min(
     Math.max(
       limit * RECENT_MERGED_OVER_FETCH_MULTIPLIER,
@@ -850,7 +1035,12 @@ function resolveRecentMergedPrNumbers(
         'fully precise number set.\n',
     );
   }
-  return selectMostRecentlyMerged(parsed, limit);
+  return {
+    numbers: selectMostRecentlyMerged(parsed, limit),
+    mergedAtByNumber: new Map(
+      parsed.map((candidate) => [candidate.number, candidate.mergedAt]),
+    ),
+  };
 }
 
 const COPILOT_REVIEW_WAVE_AUDIT_FLAG_SPEC = {
@@ -859,8 +1049,87 @@ const COPILOT_REVIEW_WAVE_AUDIT_FLAG_SPEC = {
   '--format': { type: 'string', default: 'json' },
   '--repo': { type: 'string' },
   '--owner': { type: 'string' },
+  '--check': { type: 'boolean', default: false },
+  '--since': { type: 'string' },
+  '--min-recorded-share': { type: 'string' },
   '--help': { type: 'boolean', short: 'h', default: false },
 } as const;
+
+const DEFAULT_MIN_RECORDED_SHARE = 0.9;
+const DECIMAL_SHARE_RE = /^(\d+(\.\d+)?|\.\d+)$/u;
+const CALENDAR_DATE_RE = /^\d{4}-\d{2}-\d{2}$/u;
+
+export interface CheckOptions {
+  /** `YYYY-MM-DD`: only reports merged on or after this UTC date count. */
+  since: string | null;
+  minRecordedShare: number;
+}
+
+/**
+ * Pure `--check` gate (issue #4189). Returns one message per failed check,
+ * or an empty list. The recorded share is computed over the reports merged
+ * on or after `since`, not over the whole cohort; a report with no merge
+ * time, or one with no accepted, deferred, or rejected threads, adds nothing
+ * to that share.
+ */
+export function checkFailures(
+  summary: CohortSummary,
+  reports: readonly PrAuditReport[],
+  options: CheckOptions,
+): string[] {
+  const failures: string[] = [];
+  if (summary.unparsedCount > 0) {
+    failures.push(
+      `${summary.unparsedCount} unparsed Copilot review(s): the overview parser has drifted`,
+    );
+  }
+  if (summary.triage.malformed > 0) {
+    failures.push(
+      `${summary.triage.malformed} malformed Triage line(s) on accepted, deferred, or rejected threads`,
+    );
+  }
+  if (options.since !== null) {
+    const sinceMs = Date.parse(`${options.since}T00:00:00Z`);
+    let recorded = 0;
+    let unrecorded = 0;
+    for (const report of reports) {
+      const mergedMs =
+        report.mergedAt === null ? Number.NaN : Date.parse(report.mergedAt);
+      if (!(mergedMs >= sinceMs)) {
+        continue;
+      }
+      recorded += report.triage.recorded;
+      unrecorded += report.triage.unrecorded;
+    }
+    const total = recorded + unrecorded;
+    if (total > 0) {
+      const share = recorded / total;
+      if (share < options.minRecordedShare) {
+        failures.push(
+          `recorded triage share ${share.toFixed(3)} since ${options.since} is below ${options.minRecordedShare} (${recorded} of ${total} threads)`,
+        );
+      }
+    }
+  }
+  if (summary.triage.contradictions > 0) {
+    failures.push(
+      `${summary.triage.contradictions} recorded triage contradiction(s): accepted replies that carry verdict defer`,
+    );
+  }
+  return failures;
+}
+
+function parseSinceDate(value: string): string {
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (
+    !CALENDAR_DATE_RE.test(value) ||
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== value
+  ) {
+    fail(`--since must be a real calendar date as YYYY-MM-DD, got "${value}"`);
+  }
+  return value;
+}
 
 function printHelp(): void {
   process.stdout.write(`Usage:
@@ -880,6 +1149,16 @@ function printHelp(): void {
   --owner <owner>     Repository override, split form (use with
                       --repo <name>, the bare repository name -- not
                       both --owner and a combined --repo together).
+  --check             Exit 1 when a check fails (an unparsed Copilot review,
+                      a malformed Triage line, a recorded triage
+                      contradiction, or a recorded share below
+                      --min-recorded-share with --since). The report is still
+                      printed; each failure is written to stderr.
+  --since <YYYY-MM-DD> With --check and --limit only: count only PRs merged on
+                      or after this UTC date in the recorded-share check.
+  --min-recorded-share <n>
+                      Minimum recorded share from 0 to 1 (default 0.9). Valid
+                      only with --check and --since.
   --help, -h          Show this help.
 
 Computes, per PR and as a cohort summary: Copilot review count (v2 vs.
@@ -892,6 +1171,11 @@ per-PR report also preserves the full per-review breakdown (severity,
 discussion_r id, and new-versus-carried status per Open finding) --
 "reviews" in JSON output, a second severity/finding-id/is_new table in
 TSV output.
+
+Each PR's "triage" object counts the \`Triage:\` lines of its accepted,
+deferred, or rejected threads: recorded versus unrecorded (plus malformed,
+a Triage-like line that yields no record), per step and urgency, overrides, and
+contradictions (accepted replies that carry verdict defer). JSON output only.
 `);
 }
 
@@ -1040,6 +1324,33 @@ if (import.meta.main) {
     fail(`--format must be "json" or "tsv", got "${format}"`);
   }
 
+  // Validated before detectRepository, so no misuse below reaches gh (#4189).
+  const checkMode = values.check === true;
+  const sinceFlag = values.since as string | undefined;
+  if (sinceFlag !== undefined) {
+    if (!checkMode) {
+      fail('--since is only valid with --check');
+    }
+    if (prsFlag) {
+      fail('--since is not valid with --prs; merge dates come from --limit');
+    }
+    parseSinceDate(sinceFlag);
+  }
+  const shareFlag = values['min-recorded-share'] as string | undefined;
+  let minRecordedShare = DEFAULT_MIN_RECORDED_SHARE;
+  if (shareFlag !== undefined) {
+    if (!checkMode || sinceFlag === undefined) {
+      fail('--min-recorded-share is only valid with --check and --since');
+    }
+    const value = DECIMAL_SHARE_RE.test(shareFlag) ? Number(shareFlag) : NaN;
+    if (!(value >= 0 && value <= 1)) {
+      fail(
+        `--min-recorded-share must be a decimal from 0 to 1, got "${shareFlag}"`,
+      );
+    }
+    minRecordedShare = value;
+  }
+
   let repository: string;
   try {
     repository =
@@ -1050,20 +1361,40 @@ if (import.meta.main) {
   }
   const [owner, repo] = parseRepository(repository);
 
-  const prNumbers = prsFlag
-    ? parsePrNumberList(prsFlag)
+  const recent = prsFlag
+    ? null
     : resolveRecentMergedPrNumbers(
         owner,
         repo,
         parseCanonicalIntegerOrThrow(limitFlag, '--limit'),
       );
+  const prNumbers = recent
+    ? recent.numbers
+    : parsePrNumberList(prsFlag as string);
 
-  const reports = prNumbers.map((prNumber) => auditPr(owner, repo, prNumber));
+  const reports = prNumbers.map((prNumber) => ({
+    ...auditPr(owner, repo, prNumber),
+    mergedAt: recent?.mergedAtByNumber.get(prNumber) ?? null,
+  }));
   const summary = summarizeCohort(reports);
 
   if (format === 'tsv') {
     writeTsvReport(reports, summary);
   } else {
     writeJsonReport(reports, summary);
+  }
+
+  if (checkMode) {
+    const failures = checkFailures(summary, reports, {
+      since: sinceFlag ?? null,
+      minRecordedShare,
+    });
+    for (const message of failures) {
+      process.stderr.write(`copilot-review-wave-audit: check: ${message}\n`);
+    }
+    if (failures.length > 0) {
+      // Not process.exit: piped stdout may still be flushing (Windows CI).
+      process.exitCode = 1;
+    }
   }
 }

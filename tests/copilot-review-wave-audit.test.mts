@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import {
   buildFindingThreads,
   buildTransitionTable,
+  checkFailures,
   classifyDispositionReply,
   computePrAudit,
   type MergedPrCandidate,
@@ -16,9 +19,11 @@ import {
   type RawReview,
   RECENT_MERGED_OVER_FETCH_MAX,
   resolveThreadDisposition,
+  resolveThreadDispositionReply,
   selectMostRecentlyMerged,
   summarizeCohort,
 } from '../src/scripts/copilot-review-wave-audit.mts';
+import { stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const CLI_PATH = join(REPO_ROOT, 'scripts/copilot-review-wave-audit.mjs');
@@ -1007,6 +1012,1030 @@ test('selectMostRecentlyMerged: respects the exact requested limit', () => {
 // ---------------------------------------------------------------------------
 // CLI smoke tests (no gh calls: --help and argument-validation-only paths)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Recorded triage (issue #4189)
+// ---------------------------------------------------------------------------
+
+/** One v2 review whose Open section lists the given findings. */
+function openReviewBody(items: string[]): string {
+  return `<!-- ccr-overview-v2 -->
+
+<details open>
+<summary><strong>Open (${items.length})</strong></summary>
+
+${items.join('\n')}
+</details>
+`;
+}
+
+const TRIAGE_DEFER_LINE =
+  'Triage: tier low; urgency medium; step 2; verdict defer';
+
+test('resolveThreadDispositionReply: returns the winning reply body with its disposition', () => {
+  const comments = [
+    reply(10, 1, '**Accepted** — fixed', '2026-01-01T00:00:00Z'),
+    reply(11, 1, 'Thanks!', '2026-01-02T00:00:00Z'),
+  ];
+  assert.deepEqual(resolveThreadDispositionReply(1, comments), {
+    disposition: 'accepted',
+    body: '**Accepted** — fixed',
+  });
+  assert.deepEqual(resolveThreadDispositionReply(1, []), {
+    disposition: 'none',
+    body: null,
+  });
+});
+
+test('resolveThreadDisposition: always agrees with resolveThreadDispositionReply', () => {
+  const sets: RawComment[][] = [
+    [],
+    [reply(10, 1, '**Accepted** — fixed', '2026-01-01T00:00:00Z')],
+    [
+      reply(10, 1, '**Accepted** — fixed', '2026-01-01T00:00:00Z'),
+      reply(11, 1, '**Rejected** — reverted', '2026-01-02T00:00:00Z'),
+    ],
+  ];
+  for (const comments of sets) {
+    assert.equal(
+      resolveThreadDisposition(1, comments),
+      resolveThreadDispositionReply(1, comments).disposition,
+    );
+  }
+});
+
+test('computePrAudit triage: an accepted reply with verdict defer is recorded and one contradiction', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Medium', 8001)]),
+    ),
+  ];
+  const comments = [
+    reply(
+      10,
+      8001,
+      `**Accepted** — fixed\n\n${TRIAGE_DEFER_LINE}`,
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 1);
+  assert.equal(report.triage.unrecorded, 0);
+  assert.equal(report.triage.malformed, 0);
+  assert.equal(report.triage.overrides, 0);
+  assert.equal(report.triage.contradictions, 1);
+});
+
+test('computePrAudit triage: the same reply with an override part is an override, not a contradiction', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Medium', 8001)]),
+    ),
+  ];
+  const comments = [
+    reply(
+      10,
+      8001,
+      `**Accepted** — fixed\n\n${TRIAGE_DEFER_LINE}; override: verdict keep at E5`,
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 1);
+  assert.equal(report.triage.overrides, 1);
+  assert.equal(report.triage.contradictions, 0);
+});
+
+test('computePrAudit triage: a deferral with verdict defer is recorded with no contradiction', () => {
+  const reviews = [
+    review(1, '2026-01-01T00:00:00Z', openReviewBody([openLine('Low', 8002)])),
+  ];
+  const comments = [
+    reply(
+      10,
+      8002,
+      '**Rejected** — deferred to follow-up issue #12 (urgency low; severity Low): later\n\nTriage: tier low; urgency low; step 0; verdict defer',
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 1);
+  assert.equal(report.triage.contradictions, 0);
+  assert.equal(report.triage.byStep['0'].outcome.deferred, 1);
+});
+
+test('computePrAudit triage: only an accepted reply with verdict defer is a contradiction, not a deferral with verdict keep', () => {
+  // The deferral-clause check was removed (E10 hold option 2, issue #4189):
+  // the contradiction count now covers accepted replies only.
+  const reviews = [
+    review(1, '2026-01-01T00:00:00Z', openReviewBody([openLine('Low', 8090)])),
+  ];
+  const comments = [
+    reply(
+      10,
+      8090,
+      '**Rejected** — deferred to follow-up issue #12 (urgency low; severity Low): later\n\nTriage: tier low; urgency low; step 0; verdict keep',
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 1);
+  assert.equal(report.triage.contradictions, 0);
+});
+
+test('computePrAudit triage: a round-clause deferral with verdict keep is not a contradiction', () => {
+  const reviews = [
+    review(1, '2026-01-01T00:00:00Z', openReviewBody([openLine('Low', 8004)])),
+  ];
+  const comments = [
+    reply(
+      10,
+      8004,
+      '**Rejected** — deferred to follow-up issue #12 (round 12/12): later\n\nTriage: tier low; urgency low; step 0; verdict keep',
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 1);
+  assert.equal(report.triage.contradictions, 0);
+});
+
+test('computePrAudit triage: an accepted reply with no verdict part is recorded with no contradiction', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Medium', 8005)]),
+    ),
+  ];
+  const comments = [
+    reply(
+      10,
+      8005,
+      '**Accepted** — fixed\n\nTriage: tier medium; urgency medium; step 1',
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 1);
+  assert.equal(report.triage.contradictions, 0);
+});
+
+test('computePrAudit triage: an accepted reply without a Triage line is unrecorded', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Medium', 8006)]),
+    ),
+  ];
+  const comments = [
+    reply(10, 8006, '**Accepted** — fixed', '2026-01-02T00:00:00Z'),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 0);
+  assert.equal(report.triage.unrecorded, 1);
+  assert.equal(report.triage.malformed, 0);
+});
+
+test('computePrAudit triage: a Triage line that does not parse is unrecorded and malformed', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Medium', 8007)]),
+    ),
+  ];
+  const comments = [
+    reply(
+      10,
+      8007,
+      '**Accepted** — fixed\n\nTriage: tier low; urgency medium; step 2; verdict bogus',
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 0);
+  assert.equal(report.triage.unrecorded, 1);
+  assert.equal(report.triage.malformed, 1);
+});
+
+test('computePrAudit triage: other and none threads are not counted', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Medium', 8008), openLine('Low', 8009)]),
+    ),
+  ];
+  const comments = [
+    reply(
+      10,
+      8008,
+      '**Awaiting maintainer decision** — pending',
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.deepEqual(report.triage, {
+    recorded: 0,
+    unrecorded: 0,
+    malformed: 0,
+    byStep: {
+      '0': {
+        urgency: { 'very-low': 0, low: 0, medium: 0, high: 0 },
+        outcome: { accepted: 0, deferred: 0, rejected: 0 },
+      },
+      '1': {
+        urgency: { 'very-low': 0, low: 0, medium: 0, high: 0 },
+        outcome: { accepted: 0, deferred: 0, rejected: 0 },
+      },
+      '2': {
+        urgency: { 'very-low': 0, low: 0, medium: 0, high: 0 },
+        outcome: { accepted: 0, deferred: 0, rejected: 0 },
+      },
+    },
+    overrides: 0,
+    contradictions: 0,
+  });
+});
+
+test('computePrAudit triage: two step-1 threads land in the matching byStep cells', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Low', 8010), openLine('Medium', 8011)]),
+    ),
+  ];
+  const comments = [
+    reply(
+      10,
+      8010,
+      '**Accepted** — fixed\n\nTriage: tier low; urgency low; step 1',
+      '2026-01-02T00:00:00Z',
+    ),
+    reply(
+      11,
+      8011,
+      '**Rejected** — deferred to follow-up issue #12 (round 2/12): later\n\nTriage: tier medium; urgency medium; step 1; verdict keep',
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  const zero = { 'very-low': 0, low: 0, medium: 0, high: 0 };
+  assert.deepEqual(report.triage.byStep['1'], {
+    urgency: { ...zero, low: 1, medium: 1 },
+    outcome: { accepted: 1, deferred: 1, rejected: 0 },
+  });
+  assert.equal(report.triage.recorded, 2);
+  assert.equal(report.triage.contradictions, 0);
+});
+
+test('computePrAudit triage: a Triage line with no space after the colon is malformed', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Medium', 8030)]),
+    ),
+  ];
+  const comments = [
+    reply(
+      10,
+      8030,
+      '**Accepted** — fixed\n\nTriage:tier low; urgency medium; step 2; verdict defer',
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const report = computePrAudit(1, reviews, comments);
+  assert.equal(report.triage.recorded, 0);
+  assert.equal(report.triage.unrecorded, 1);
+  assert.equal(report.triage.malformed, 1);
+  assert.equal(report.triage.contradictions, 0);
+  assert.equal(
+    checkFailures(summarizeCohort([report]), [report], SHARE_OPTIONS).length,
+    1,
+  );
+});
+
+test('computePrAudit triage: a malformed first Triage-like line is not rescued by a later parseable one', () => {
+  // Copilot review of #4268 (Previously missed item): the first Triage-like
+  // line decides, so a no-space malformed opener before a valid line is malformed.
+  const report = computePrAudit(
+    1,
+    [
+      review(
+        1,
+        '2026-01-01T00:00:00Z',
+        openReviewBody([openLine('Medium', 8073)]),
+      ),
+    ],
+    [
+      reply(
+        33,
+        8073,
+        '**Accepted** — fixed\n\nTriage:tier low; urgency medium; step 2; verdict defer\nTriage: tier low; urgency medium; step 2; verdict defer',
+        '2026-01-02T00:00:00Z',
+      ),
+    ],
+  );
+  assert.equal(report.triage.recorded, 0);
+  assert.equal(report.triage.unrecorded, 1);
+  assert.equal(report.triage.malformed, 1);
+  assert.equal(report.triage.contradictions, 0);
+});
+
+test('computePrAudit triage: a bulleted opener before a valid column-0 line is malformed, not recorded', () => {
+  // The first Triage-like line is the bullet, so the later parseable line does
+  // not rescue it. This is the case the first-line rule changes.
+  const report = computePrAudit(
+    1,
+    [
+      review(
+        1,
+        '2026-01-01T00:00:00Z',
+        openReviewBody([openLine('Medium', 8074)]),
+      ),
+    ],
+    [
+      reply(
+        34,
+        8074,
+        '**Accepted** — fixed\n\n- Triage: stray\nTriage: tier medium; urgency medium; step 1',
+        '2026-01-02T00:00:00Z',
+      ),
+    ],
+  );
+  assert.equal(report.triage.recorded, 0);
+  assert.equal(report.triage.unrecorded, 1);
+  assert.equal(report.triage.malformed, 1);
+});
+
+test('computePrAudit triage: an underscore-emphasised Triage line is unrecorded, not malformed', () => {
+  // Underscore emphasis is not an opener, so it is not a Triage-like line.
+  const report = computePrAudit(
+    1,
+    [
+      review(
+        1,
+        '2026-01-01T00:00:00Z',
+        openReviewBody([openLine('Medium', 8075)]),
+      ),
+    ],
+    [
+      reply(
+        35,
+        8075,
+        '**Accepted** — fixed\n\n_Triage:_ tier low; urgency medium; step 2; verdict defer',
+        '2026-01-02T00:00:00Z',
+      ),
+    ],
+  );
+  assert.equal(report.triage.recorded, 0);
+  assert.equal(report.triage.unrecorded, 1);
+  assert.equal(report.triage.malformed, 0);
+});
+
+test('computePrAudit triage: a parseable column-0 line wins over a Triage-like stray line', () => {
+  const report = computePrAudit(
+    1,
+    [
+      review(
+        1,
+        '2026-01-01T00:00:00Z',
+        openReviewBody([openLine('Medium', 8071)]),
+      ),
+    ],
+    [
+      reply(
+        31,
+        8071,
+        '**Accepted** — fixed\n\nTriage: tier medium; urgency medium; step 1\n- Triage: stray',
+        '2026-01-02T00:00:00Z',
+      ),
+    ],
+  );
+  assert.equal(report.triage.recorded, 1);
+  assert.equal(report.triage.malformed, 0);
+});
+
+test('computePrAudit triage: a first column-0 Triage line that does not parse is malformed even if a later one parses', () => {
+  const report = computePrAudit(
+    1,
+    [
+      review(
+        1,
+        '2026-01-01T00:00:00Z',
+        openReviewBody([openLine('Medium', 8072)]),
+      ),
+    ],
+    [
+      reply(
+        32,
+        8072,
+        '**Accepted** — fixed\n\nTriage: tier low; urgency medium; step 2; verdict bogus\nTriage: tier low; urgency medium; step 2; verdict defer',
+        '2026-01-02T00:00:00Z',
+      ),
+    ],
+  );
+  assert.equal(report.triage.recorded, 0);
+  assert.equal(report.triage.unrecorded, 1);
+  assert.equal(report.triage.malformed, 1);
+});
+
+test('computePrAudit triage: a Triage-like line off column 0 or without the space is malformed', () => {
+  const variants = [
+    '- Triage: tier low; urgency medium; step 2; verdict defer',
+    '**Triage:** tier low; urgency medium; step 2; verdict defer',
+    '  Triage: tier low; urgency medium; step 2; verdict defer',
+    'triage: tier low; urgency medium; step 2; verdict defer',
+    '*Triage*: tier low; urgency medium; step 2; verdict defer',
+    'Triage : tier low; urgency medium; step 2; verdict defer',
+  ];
+  variants.forEach((line, index) => {
+    const findingId = 8060 + index;
+    const report = computePrAudit(
+      1,
+      [
+        review(
+          1,
+          '2026-01-01T00:00:00Z',
+          openReviewBody([openLine('Medium', findingId)]),
+        ),
+      ],
+      [
+        reply(
+          20 + index,
+          findingId,
+          `**Accepted** — fixed\n\n${line}`,
+          '2026-01-02T00:00:00Z',
+        ),
+      ],
+    );
+    assert.equal(report.triage.recorded, 0, line);
+    assert.equal(report.triage.unrecorded, 1, line);
+    assert.equal(report.triage.malformed, 1, line);
+  });
+});
+
+test('summarizeCohort triage: sums the per-PR triage objects key by key', () => {
+  const reviews = [
+    review(
+      1,
+      '2026-01-01T00:00:00Z',
+      openReviewBody([openLine('Medium', 8020)]),
+    ),
+  ];
+  const deferComments = [
+    reply(
+      10,
+      8020,
+      `**Accepted** — fixed\n\n${TRIAGE_DEFER_LINE}`,
+      '2026-01-02T00:00:00Z',
+    ),
+  ];
+  const clean = computePrAudit(1, reviews, deferComments);
+  const unrecorded = computePrAudit(
+    2,
+    [
+      review(
+        2,
+        '2026-01-01T00:00:00Z',
+        openReviewBody([openLine('Medium', 8021)]),
+      ),
+    ],
+    [reply(11, 8021, '**Accepted** — fixed', '2026-01-02T00:00:00Z')],
+  );
+  const summary = summarizeCohort([clean, unrecorded]);
+  assert.equal(summary.triage.recorded, 1);
+  assert.equal(summary.triage.unrecorded, 1);
+  assert.equal(summary.triage.contradictions, 1);
+  assert.equal(summary.triage.byStep['2'].outcome.accepted, 1);
+  assert.equal(summary.triage.byStep['2'].urgency.medium, 1);
+});
+
+test('computePrAudit: report keys are the existing fields plus triage and mergedAt', () => {
+  const report = computePrAudit(1, [], []);
+  assert.deepEqual(Object.keys(report).sort(), [
+    'legacyCount',
+    'mergedAt',
+    'openAppearances',
+    'pr',
+    'previouslyMissed',
+    'reviewCount',
+    'reviews',
+    'threads',
+    'transitions',
+    'triage',
+    'unparsedCount',
+    'v2Count',
+  ]);
+  assert.equal(report.mergedAt, null);
+});
+
+// ---------------------------------------------------------------------------
+// --check gate (issue #4189)
+// ---------------------------------------------------------------------------
+
+const SHARE_OPTIONS = { since: null, minRecordedShare: 0.9 };
+
+/** A PR report with a merge time, built from one review and its comments. */
+function mergedReport(
+  pr: number,
+  mergedAt: string | null,
+  items: string[],
+  comments: RawComment[],
+) {
+  return {
+    ...computePrAudit(
+      pr,
+      [review(pr, '2026-01-01T00:00:00Z', openReviewBody(items))],
+      comments,
+    ),
+    mergedAt,
+  };
+}
+
+const RECORDED_DEFER_COMMENTS = (findingId: number): RawComment[] => [
+  reply(
+    findingId * 10,
+    findingId,
+    `**Accepted** — fixed\n\n${TRIAGE_DEFER_LINE}`,
+    '2026-01-02T00:00:00Z',
+  ),
+];
+
+// A recorded line with no verdict: counts as recorded, never a contradiction.
+const RECORDED_PLAIN_COMMENTS = (findingId: number): RawComment[] => [
+  reply(
+    findingId * 10,
+    findingId,
+    '**Accepted** — fixed\n\nTriage: tier low; urgency medium; step 2',
+    '2026-01-02T00:00:00Z',
+  ),
+];
+
+const UNRECORDED_COMMENTS = (findingId: number): RawComment[] => [
+  reply(
+    findingId * 10,
+    findingId,
+    '**Accepted** — fixed',
+    '2026-01-02T00:00:00Z',
+  ),
+];
+
+test('checkFailures: a clean cohort returns no messages', () => {
+  const reports = [computePrAudit(1, [], [])];
+  const summary = summarizeCohort(reports);
+  assert.deepEqual(checkFailures(summary, reports, SHARE_OPTIONS), []);
+});
+
+test('checkFailures: one unparsed Copilot review gives one message', () => {
+  const reports = [
+    computePrAudit(
+      1,
+      [
+        review(
+          1,
+          '2026-01-01T00:00:00Z',
+          `<!-- ccr-overview-v2 -->\n\n<details open>\n<summary><strong>Open (2)</strong></summary>\n\n${openLine('Medium', 9001)}\n</details>\n`,
+        ),
+      ],
+      [],
+    ),
+  ];
+  const summary = summarizeCohort(reports);
+  const messages = checkFailures(summary, reports, SHARE_OPTIONS);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0] ?? '', /unparsed/);
+});
+
+test('checkFailures: a recorded share of 0.5 since the date gives one message', () => {
+  const reports = [
+    mergedReport(
+      1,
+      '2026-10-02T00:00:00Z',
+      [openLine('Medium', 9101)],
+      RECORDED_PLAIN_COMMENTS(9101),
+    ),
+    mergedReport(
+      2,
+      '2026-10-03T00:00:00Z',
+      [openLine('Medium', 9102)],
+      UNRECORDED_COMMENTS(9102),
+    ),
+  ];
+  const summary = summarizeCohort(reports);
+  const messages = checkFailures(summary, reports, {
+    since: '2026-10-01',
+    minRecordedShare: 0.9,
+  });
+  assert.equal(messages.length, 1);
+  assert.match(messages[0] ?? '', /share 0\.500 since 2026-10-01/);
+});
+
+test('checkFailures: one verdict contradiction gives one message', () => {
+  const reports = [
+    mergedReport(
+      1,
+      '2026-10-02T00:00:00Z',
+      [openLine('Medium', 9201)],
+      RECORDED_DEFER_COMMENTS(9201),
+    ),
+  ];
+  const summary = summarizeCohort(reports);
+  const messages = checkFailures(summary, reports, SHARE_OPTIONS);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0] ?? '', /contradiction/);
+});
+
+test('checkFailures: a malformed Triage line gives one message', () => {
+  const reports = [
+    computePrAudit(
+      1,
+      [
+        review(
+          1,
+          '2026-01-01T00:00:00Z',
+          openReviewBody([openLine('Medium', 9301)]),
+        ),
+      ],
+      [
+        reply(
+          10,
+          9301,
+          '**Accepted** — fixed\n\nTriage: tier low; urgency medium; step 2; verdict bogus',
+          '2026-01-02T00:00:00Z',
+        ),
+      ],
+    ),
+  ];
+  const summary = summarizeCohort(reports);
+  const messages = checkFailures(summary, reports, SHARE_OPTIONS);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0] ?? '', /malformed Triage/);
+});
+
+test('checkFailures: reports merged before since are ignored for the share', () => {
+  const reports = [
+    mergedReport(
+      1,
+      '2026-09-30T23:59:59Z',
+      [openLine('Medium', 9401)],
+      UNRECORDED_COMMENTS(9401),
+    ),
+    mergedReport(
+      2,
+      '2026-10-02T00:00:00Z',
+      [openLine('Medium', 9402)],
+      RECORDED_PLAIN_COMMENTS(9402),
+    ),
+  ];
+  const summary = summarizeCohort(reports);
+  assert.deepEqual(
+    checkFailures(summary, reports, {
+      since: '2026-10-01',
+      minRecordedShare: 0.9,
+    }),
+    [],
+  );
+});
+
+test('checkFailures: a zero denominator gives no share message', () => {
+  const reports = [computePrAudit(1, [], [])].map((report) => ({
+    ...report,
+    mergedAt: '2026-10-02T00:00:00Z',
+  }));
+  const summary = summarizeCohort(reports);
+  assert.deepEqual(
+    checkFailures(summary, reports, {
+      since: '2026-10-01',
+      minRecordedShare: 0.9,
+    }),
+    [],
+  );
+});
+
+test('checkFailures: a null mergedAt is excluded from the share window', () => {
+  const reports = [
+    mergedReport(
+      1,
+      null,
+      [openLine('Medium', 9501)],
+      UNRECORDED_COMMENTS(9501),
+    ),
+  ];
+  const summary = summarizeCohort(reports);
+  assert.deepEqual(
+    checkFailures(summary, reports, {
+      since: '2026-10-01',
+      minRecordedShare: 0.9,
+    }),
+    [],
+  );
+});
+
+/**
+ * Run the CLI with a recording `gh` stub on PATH. `ghCalled` is true only if
+ * the process reached a `gh` invocation, which the misuse cases must not.
+ */
+function runCliWithGhStub(args: string[]): {
+  status: number;
+  stderr: string;
+  ghCalled: boolean;
+} {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-4189-'));
+  const marker = join(dir, 'gh-called');
+  const restore = stubExecutable(
+    'gh',
+    `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'called\\n');\nprocess.exit(97);\n`,
+  );
+  try {
+    let status = 0;
+    let stderr = '';
+    try {
+      execFileSync(process.execPath, [CLI_PATH, ...args], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      const shaped = error as { status?: number; stderr?: string };
+      status = shaped.status ?? -1;
+      stderr = shaped.stderr ?? '';
+    }
+    return { status, stderr, ghCalled: existsSync(marker) };
+  } finally {
+    restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const REPO_ARGS = ['--repo', 'kurone-kito/idd-skill'];
+
+test('CLI: --since without --check fails with exit 2 and no gh call', () => {
+  const result = runCliWithGhStub([
+    ...REPO_ARGS,
+    '--limit',
+    '5',
+    '--since',
+    '2026-10-01',
+  ]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--since is only valid with --check/);
+  assert.equal(result.ghCalled, false);
+});
+
+test('CLI: --since with --prs fails with exit 2 and no gh call', () => {
+  const result = runCliWithGhStub([
+    ...REPO_ARGS,
+    '--prs',
+    '1',
+    '--check',
+    '--since',
+    '2026-10-01',
+  ]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--since is not valid with --prs/);
+  assert.equal(result.ghCalled, false);
+});
+
+test('CLI: --since that is not a real calendar date fails with exit 2 and no gh call', () => {
+  const result = runCliWithGhStub([
+    ...REPO_ARGS,
+    '--limit',
+    '5',
+    '--check',
+    '--since',
+    '2026-13-40',
+  ]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--since must be a real calendar date/);
+  assert.equal(result.ghCalled, false);
+});
+
+test('CLI: --min-recorded-share without --since fails with exit 2 and no gh call', () => {
+  const result = runCliWithGhStub([
+    ...REPO_ARGS,
+    '--limit',
+    '5',
+    '--check',
+    '--min-recorded-share',
+    '0.5',
+  ]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--min-recorded-share is only valid/);
+  assert.equal(result.ghCalled, false);
+});
+
+test('CLI: --min-recorded-share above 1 fails with exit 2 and no gh call', () => {
+  const result = runCliWithGhStub([
+    ...REPO_ARGS,
+    '--limit',
+    '5',
+    '--check',
+    '--since',
+    '2026-10-01',
+    '--min-recorded-share',
+    '1.5',
+  ]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--min-recorded-share must be a decimal/);
+  assert.equal(result.ghCalled, false);
+});
+
+test('CLI: a non-numeric --min-recorded-share fails with exit 2 and no gh call', () => {
+  const result = runCliWithGhStub([
+    ...REPO_ARGS,
+    '--limit',
+    '5',
+    '--check',
+    '--since',
+    '2026-10-01',
+    '--min-recorded-share',
+    'abc',
+  ]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--min-recorded-share must be a decimal/);
+  assert.equal(result.ghCalled, false);
+});
+
+test('CLI: --help lists the check-mode flags', () => {
+  const output = execFileSync(process.execPath, [CLI_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  assert.match(output, /--check/);
+  assert.match(output, /--since <YYYY-MM-DD>/);
+  assert.match(output, /--min-recorded-share <n>/);
+});
+
+// A gh stub that answers the three calls auditPr makes from one JSON fixture
+// (path in WAVE_AUDIT_FIXTURE), so the real --check exit and output path runs
+// with no network.
+const GH_FIXTURE_STUB = `const fs = require('node:fs');
+const args = process.argv.slice(2);
+const fixture = JSON.parse(fs.readFileSync(process.env.WAVE_AUDIT_FIXTURE, 'utf8'));
+if (args[0] === 'api' && args[1] === 'graphql') {
+  const ids = args.filter((a) => a.startsWith('ids[]=')).map((a) => a.slice('ids[]='.length));
+  process.stdout.write(JSON.stringify({ data: { nodes: ids.map((id) => ({ id, lastEditedAt: null })) } }));
+  process.exit(0);
+}
+if (args[0] === 'api' && String(args[1]).includes('/pulls/42/reviews')) {
+  for (const r of fixture.reviews) process.stdout.write(JSON.stringify(r) + '\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && String(args[1]).includes('/pulls/42/comments')) {
+  for (const c of fixture.comments) process.stdout.write(JSON.stringify(c) + '\\n');
+  process.exit(0);
+}
+if (args[0] === 'pr' && args[1] === 'list') {
+  // Pin the flags the CLI must send, so the stub cannot pass for wrong ones.
+  const flagAt = (flag) => {
+    const at = args.indexOf(flag);
+    return at === -1 ? undefined : args[at + 1];
+  };
+  const pinned = flagAt('--state') === 'merged' && flagAt('--json') === 'number,mergedAt' && flagAt('--repo') === 'kurone-kito/idd-skill';
+  if (!pinned) {
+    process.stderr.write('unexpected gh pr list flags: ' + args.join(' ') + '\\n');
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify(fixture.prs ?? []));
+  process.exit(0);
+}
+process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
+process.exit(1);
+`;
+
+const COPILOT_LOGIN = 'copilot-pull-request-reviewer[bot]';
+
+function runCheckWithFixture(
+  fixture: { reviews: unknown[]; comments: unknown[]; prs?: unknown[] },
+  extraArgs: string[],
+  selector: string[] = ['--prs', '42'],
+): { status: number | null; stdout: string; stderr: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-check-'));
+  const fixturePath = join(dir, 'fixture.json');
+  writeFileSync(fixturePath, JSON.stringify(fixture));
+  const restore = stubExecutable('gh', GH_FIXTURE_STUB);
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_PATH, '--repo', 'kurone-kito/idd-skill', ...selector, ...extraArgs],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, WAVE_AUDIT_FIXTURE: fixturePath },
+      },
+    );
+    return {
+      status: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    };
+  } finally {
+    restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('CLI --check: a clean PR writes the report to stdout, nothing to stderr, and exits 0', () => {
+  const result = runCheckWithFixture(
+    {
+      reviews: [
+        {
+          id: 1,
+          submitted_at: '2026-01-01T00:00:00Z',
+          body: NO_FINDINGS_FIXTURE,
+          user: { login: COPILOT_LOGIN },
+        },
+      ],
+      comments: [],
+    },
+    ['--check'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  const parsed = JSON.parse(result.stdout) as {
+    reports: Array<{
+      pr: number;
+      reviewCount: number;
+      v2Count: number;
+      triage: { contradictions: number };
+    }>;
+    summary: { prCount: number };
+  };
+  assert.equal(parsed.reports[0]?.pr, 42);
+  // The fixture review must have been read, not dropped by the stub.
+  assert.equal(parsed.reports[0]?.reviewCount, 1);
+  assert.equal(parsed.reports[0]?.v2Count, 1);
+  assert.equal(parsed.reports[0]?.triage.contradictions, 0);
+  assert.equal(parsed.summary.prCount, 1);
+});
+
+test('CLI --check: a contradiction writes the report to stdout, the message to stderr, and exits 1', () => {
+  const result = runCheckWithFixture(
+    {
+      reviews: [
+        {
+          id: 1,
+          submitted_at: '2026-01-01T00:00:00Z',
+          body: openReviewBody([openLine('Medium', 9701)]),
+          user: { login: COPILOT_LOGIN },
+        },
+      ],
+      comments: [
+        {
+          id: 10,
+          in_reply_to_id: 9701,
+          body: `**Accepted** — fixed\n\n${TRIAGE_DEFER_LINE}`,
+          created_at: '2026-01-02T00:00:00Z',
+          node_id: 'PRRC_10',
+        },
+      ],
+    },
+    ['--check'],
+  );
+  assert.equal(result.status, 1, result.stderr);
+  const parsed = JSON.parse(result.stdout) as {
+    reports: Array<{ triage: { contradictions: number } }>;
+  };
+  assert.equal(parsed.reports[0]?.triage.contradictions, 1);
+  assert.match(
+    result.stderr,
+    /copilot-review-wave-audit: check: 1 recorded triage contradiction/,
+  );
+});
+
+test('CLI --check --limit: the merge time from gh pr list reaches the report', () => {
+  // Copilot review of #4268 (Previously missed item): --limit fills mergedAt
+  // from the gh pr list candidates, and --since counts the PR by that date.
+  const result = runCheckWithFixture(
+    {
+      reviews: [
+        {
+          id: 1,
+          submitted_at: '2026-01-01T00:00:00Z',
+          body: NO_FINDINGS_FIXTURE,
+          user: { login: COPILOT_LOGIN },
+        },
+      ],
+      comments: [],
+      prs: [{ number: 42, mergedAt: '2026-10-02T00:00:00Z' }],
+    },
+    ['--check', '--since', '2026-10-01'],
+    ['--limit', '1'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  const parsed = JSON.parse(result.stdout) as {
+    reports: Array<{ pr: number; mergedAt: string | null }>;
+  };
+  assert.equal(parsed.reports[0]?.pr, 42);
+  assert.equal(parsed.reports[0]?.mergedAt, '2026-10-02T00:00:00Z');
+});
 
 test('CLI: --help exits 0 with no gh call', () => {
   const output = execFileSync('node', [CLI_PATH, '--help'], {

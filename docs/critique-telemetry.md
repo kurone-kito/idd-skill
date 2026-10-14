@@ -184,6 +184,45 @@ review comments (`gh api repos/{owner}/{repo}/pulls/{n}/reviews` and
 - **Transition table**: per v2 review, keyed by the highest "Open"
   severity in that review (`none` when Open is empty), split into
   "followed by another Copilot review" versus "last review".
+- **Recorded triage** (`triage` in the JSON output): over the PR's
+  accepted, deferred, and rejected threads, the count of replies that
+  have a first Triage-like line that parses (`recorded`) versus those that
+  do not (`unrecorded`). A reply's first Triage-like line is its opener: the
+  case-insensitive word `Triage` followed by optional spaces or tabs and a
+  colon, at the start of the line after any run of spaces, tabs, list bullets
+  (`-`, `+`), and `*` marks, with an optional `*` or `**` right after the
+  word. The emphasis marks need not pair up. So `Triage :`, `- Triage:`,
+  `**Triage:**`, `*Triage*:`, and `*Triage:*` are openers. Underscore
+  emphasis (`_Triage:_`) is not an opener, so a reply whose only Triage line
+  is underscored counts as unrecorded and not malformed.
+  `malformed` counts the unrecorded replies whose opener yields no record,
+  even when a later line would parse. `byStep` counts the
+  recorded lines by step (`0` to `2`), urgency, and outcome.
+  `overrides` counts lines with an `override:` part. `contradictions`
+  counts the recorded lines without an override where an accepted reply
+  says `verdict defer`. Deferrals are not checked against their verdict,
+  so a deferral whose text does not match the urgency matrix is not
+  flagged. Threads with other or no dispositions are not counted.
+  `mergedAt` is the PR's merge time under `--limit` and `null` under
+  `--prs`.
+
+### Check mode
+
+```sh
+node scripts/copilot-review-wave-audit.mjs --limit <N> --check [--since <YYYY-MM-DD>] [--min-recorded-share <n>]
+```
+
+`--check` still prints the report on stdout. Each failed check is written
+to stderr, and the exit status is 1 when there is at least one. The checks
+are an unparsed Copilot review (the overview parser has drifted), a
+malformed `Triage:` line, and a recorded-triage contradiction. With
+`--since`, a further check fails when the recorded share of threads among
+PRs merged on or after that UTC date is below `--min-recorded-share`
+(default `0.9`). A PR with no merge time is left out of that share, and a
+share is not checked when no thread in the window has a recorded or
+unrecorded disposition. `--since` needs `--check` and `--limit`, because
+`--prs` carries no merge dates. `--min-recorded-share` needs `--check` and
+`--since`. Misuse of either exits 2 before any `gh` call.
 
 ### Known limitation: a legacy listing carries no severity or thread data
 

@@ -1916,7 +1916,6 @@ export function formatTriageLine(record) {
  * line matches or the line has a malformed part. The inverse of
  * `formatTriageLine`.
  */
-// audit:ignore-dead-export: parsed by the wave audit in a later roadmap issue
 export function parseTriageLine(text) {
   for (const line of text.split(/\r?\n/u)) {
     const match = TRIAGE_LINE_PATTERN.exec(line);
