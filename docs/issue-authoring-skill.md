@@ -69,7 +69,9 @@ In this phase, the agent:
 - identifies missing context, assumptions, and ambiguity that could
   affect issue quality
 - runs a secondary critique pass on the emerging interpretation
-- asks the user only the questions that block safe issue drafting
+- asks the user only the questions that block safe issue drafting; for
+  the two interactive cases in Human-dependency isolation, the question
+  blocks publishing, so it is asked
 
 The secondary critique pass must be agent-neutral:
 
@@ -105,7 +107,9 @@ Clarification must converge. The skill should:
   value when the target repository records one
 - avoid asking questions that are merely nice to know
 - prefer explicit assumptions when issue drafting is still safe without
-  immediate user input
+  immediate user input; the assumption path stays only for a gap that is
+  not one of the two interactive cases in Human-dependency isolation and
+  still leaves a stable ready draft
 
 If bounded clarification is exhausted and safe drafting is still not
 possible, the skill should stop and report the unresolved blockers
@@ -113,9 +117,10 @@ instead of looping indefinitely.
 
 **Under-clarification stop rule.** If, after bounded clarification, the
 skill still cannot name the concrete surface to edit or an objective
-verification for a candidate task, it should route that candidate to
-`needs-decision` or ask, instead of publishing a confidently-vague
-`ready` issue. Reliability over speed. This is distinct from the
+verification for a candidate task, for an interactive choice it should ask
+first under the interactive rule in Human-dependency isolation; otherwise it
+should route that candidate to `needs-decision`, instead of publishing a
+confidently-vague `ready` issue. Reliability over speed. This is distinct from the
 "Under-specified" specificity band below: that band judges an
 already-drafted body's wording, while this rule stops publication
 earlier, during Intake, before a body is even drafted.
@@ -399,7 +404,8 @@ Recommended routing rules:
 
 - if only **limited scope** fails, split the work or draft a roadmap
 - if **clear verification** fails because intent is unresolved, route to
-  `needs-decision`
+  `needs-decision` (an interactive choice asks the operator first under
+  Human-dependency isolation)
 - if **autonomous completion** fails because a human must act, route to
   `blocked-by-human`
 - if **confidence** is too low but the request may still become valid,
@@ -432,6 +438,35 @@ isolated away from ready execution issues whenever possible.
   `blocked-by-human`, use `deferred` when timing or decomposition is not
   strong enough yet, and keep approval-gated ready work in the
   approval-needed hold instead of the normal ready-to-start set.
+- **Interactive choice.** In an interactive session, meaning the operator
+  asked for issue authoring in the current conversation, a product,
+  policy, or design choice the operator can answer, and a candidate with
+  no concrete surface or objective verification, are asked about before
+  they are published as `needs-decision`. The session asks in one turn,
+  covering every such choice in the current set, each with a recommended
+  option. That turn is one clarification round under
+  `issueAuthoring.maxClarificationRounds`. A choice not yet asked is
+  asked, not treated as silence, while the session is below the cap. A
+  reply that names a concrete surface and an objective verification, and
+  does not park the choice, is drafted into the ready scope. A reply that
+  explicitly parks the choice, or leaves it open, publishes
+  `needs-decision` at any cap, whether or not it names a surface or a
+  verification. Any other reply that leaves a surface or a verification
+  unnamed is published neither as `ready` nor as `needs-decision`. Below
+  the cap, the session asks for that missing item in the same turn,
+  unless it was already asked in that turn; a later round below the cap
+  asks again. At or above the cap, the session does not ask again. With
+  no reply after the question was sent, nothing is published for that
+  choice, at, below, or above the cap. A later interactive session starts
+  a new count. A session that is not interactive keeps the
+  `needs-decision` route for these two cases. The other routes stay as
+  they are: an incomplete previously-declined search, a same-shape
+  follow-up with no new signal, unclear intent, a malformed body, possible
+  incoherence, an uncertain check outside these two cases, a
+  `review-needs-decision` follow-up, an unattended A1.5 gap filing, and a
+  `credential`, another person, or an unavailable system, which waits as
+  `blocked-by-human`. An unchanged route wins when a candidate also
+  matches one of the two cases.
 - If a task cannot be expressed without unresolved human coordination in
   the middle of implementation, it is not yet `ready`.
 
@@ -455,7 +490,9 @@ Ask these checks:
    be front-loaded into a separate prerequisite issue.
 2. Does any implementation step or acceptance criterion depend on a
    product, policy, or design decision that has not been made? If yes,
-   route the work to `needs-decision`.
+   route the work to `needs-decision`, unless the interactive choice rule
+   in Human-dependency isolation applies, in which case ask the operator
+   first.
 3. Do the acceptance criteria require subjective human approval instead
    of objective verification? If yes, rewrite the ready issue around
    measurable checks and back-load the optional review or publication
@@ -2796,7 +2833,9 @@ authors and publishes each `ready`, `needs-decision`, or
 default `status:authoring`), gated by the completed-draft adversarial
 review and then the mechanical `audit-authored-issue` check — no prior
 user
-approval of the drafted body is required.
+approval of the drafted body is required. The interactive-choice ask in
+Human-dependency isolation is not an approval of the body, and this
+sentence does not waive it.
 
 The one exception: if the current request asks only for a preview
 (drafts to review before anything is created), the skill should honor
