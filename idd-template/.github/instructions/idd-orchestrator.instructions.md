@@ -78,14 +78,15 @@ handle, the report draft path, and state (`running`, `reporting`,
 - When the graph in hand has nothing startable, re-run Discover as that cadence
   requires. Report and stop only when that re-run finds nothing startable and
   every roster entry is `disposed`.
-- A held roster worker (not `disposed`, claim from section 3 step 4)
-  gets this renewal at this section's wake-ups once due. Before each post, the
-  claim revalidation gate must confirm the active claim still has its agent id
-  and claim id; copy its `branch` verbatim. Then re-post `claimed-by` every 12 h
-  from its latest valid one. At 72 h after its first hold comment's
-  `created_at`, post `unclaimed-by` for that claim and record the hold and cap
-  in the run report. Retry a failed post once; if it fails again, record it and
-  leave the claim in place. Never post a second claim id.
+- A held roster worker (not `disposed`, claim from section 3 step 4) is renewed
+  at this section's wake-ups once due. Before each post, the claim revalidation
+  gate confirms the active claim's agent id and claim id; copy its `branch`
+  verbatim. Re-post `claimed-by` every 12 h from its latest valid one. At 72 h
+  after its first hold comment's `created_at`, post `unclaimed-by` and record
+  the hold and cap in the run report. A failed post follows the held-renewal
+  failure rules in the
+  [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant);
+  no second claim id.
 
 ## 5. Report and disposal
 

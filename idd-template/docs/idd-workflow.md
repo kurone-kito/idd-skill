@@ -1198,6 +1198,13 @@ Running this variant safely requires:
   `gh pr view <n> --json mergeable,mergeStateStatus`) or an orphaned
   claim before dispatching further workers, rather than assuming success
   or failure either way.
+- **Held-renewal failures.** The orchestrator renews a held worker's claim as
+  section 4 of its phase file describes. A failed `claimed-by` renewal is
+  retried once; if the retry also fails, the run report records the hold and
+  the failed post, and the claim is left untouched. A failed 72-hour
+  `unclaimed-by` leaves the claim in place, and the run report records that
+  the cap was reached and the release post failed. In both cases the
+  orchestrator posts no second claim id and starts no new claim.
 
 ### Orchestrator restart
 
