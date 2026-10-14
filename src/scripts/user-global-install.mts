@@ -9,8 +9,23 @@
 // and what still matches it. Every write and removal goes through the
 // containment primitives in `user-global-paths.mts` (#4242).
 //
-// Open risks, accepted for the operator (see #4242):
-// - a symbolic link above a root is not inspected;
+// Ceilings (#4303). `resolveContext` declares the roots the operator named
+// (HOME first, then XDG_DATA_HOME, the parent of CODEX_HOME and
+// XDG_CONFIG_HOME when those are set) on the `fs` handle every primitive
+// receives, so each walk first reads the chain from the first declared root
+// that covers its root down to its own root and refuses a symbolic link on it.
+// A skill root, which sits under HOME, is therefore refused when HOME, or a
+// directory between HOME and the root, is a link. So is the data root, unless
+// XDG_DATA_HOME names it outside HOME. The refusal says to move the real
+// directory into the link's place. For a new install the operator can instead
+// name the real path with HOME (it moves the skill roots) or XDG_DATA_HOME (it
+// moves only the data root); an existing install's receipt records the path it
+// was made under, so there the link has to go. A platform without the
+// no-follow opens refuses uninstall too, even when nothing is installed.
+//
+// Open risks, accepted for the operator (see #4242 and #4303):
+// - a symbolic link above a declared root is not inspected, so system links
+//   such as /var -> /private/var (macOS) cannot make an ordinary install fail;
 // - a window remains between a containment check and the act that follows it.
 
 import { createHash } from 'node:crypto';
@@ -41,12 +56,14 @@ import {
   planEntryRemoval,
 } from './user-global-entry-files.mts';
 import {
+  assertRealChain,
   type ContainmentResult,
   checkContainment,
   type FsOps,
   removeSingleEntry,
   replaceFileByRename,
   repointCurrent,
+  withCeilings,
   writeNewFile,
 } from './user-global-paths.mts';
 import {
@@ -260,8 +277,17 @@ function resolveContext(options: UserGlobalOptions): Context {
     qualifiedValue(env.XDG_CONFIG_HOME) ?? join(home, '.config');
   const codexFromEnv = qualifiedValue(env.CODEX_HOME) !== undefined;
   const configFromEnv = qualifiedValue(env.XDG_CONFIG_HOME) !== undefined;
+  // The roots the operator named, HOME first: the first one that covers a path
+  // is the top of the chain the walks inspect, and nothing above it is. A
+  // CODEX_HOME declares its parent, which is the base the entry-file walk
+  // starts from.
+  const dataHome = qualifiedValue(env.XDG_DATA_HOME);
+  const ceilings = [home];
+  if (dataHome !== undefined) ceilings.push(dataHome);
+  if (codexFromEnv) ceilings.push(dirname(codexHome));
+  if (configFromEnv) ceilings.push(configHome);
   return {
-    fs,
+    fs: withCeilings(fs, ceilings),
     dataRoot,
     currentPath: join(dataRoot, CURRENT),
     entryBases: {
@@ -664,6 +690,17 @@ function buildInstallPlan(
       `version ${version} does not match the required pattern; nothing was written`,
     );
   }
+  // Read the chain above each install root before any other plan work. The
+  // first refusal stops the plan, so a link above several roots is one message.
+  for (const name of ['data', ...SKILL_ROOT_NAMES]) {
+    try {
+      assertRealChain(rootNamed(ctx, name).path, fs);
+    } catch (error) {
+      throw new Error(
+        `install refused before any write; nothing was written: ${describe(error)}`,
+      );
+    }
+  }
   // The receipt read refuses a symbolic-link data root first. The stale-temp
   // scan lists the data root, which would otherwise follow that link.
   const existing = readReceipt(ctx.dataRoot, fs);
@@ -840,7 +877,7 @@ function buildInstallPlan(
   }
   if (refusals.length > 0) {
     throw new Error(
-      `install refused before any write; nothing was written: ${refusals.join('; ')}`,
+      `install refused before any write; nothing was written: ${[...new Set(refusals)].join('; ')}`,
     );
   }
 
@@ -1362,6 +1399,15 @@ function expectedOf(
  */
 function buildUninstallPlan(ctx: Context): UninstallPlan {
   const fs = ctx.fs;
+  // Read the declared chain before the first raw lstat of the data root, which
+  // would otherwise follow a link above it.
+  try {
+    assertRealChain(ctx.dataRoot, fs);
+  } catch (error) {
+    throw new Error(
+      `uninstall refused before any removal; nothing was removed: ${describe(error)}`,
+    );
+  }
   const rootStat = lstatOrNull(ctx.dataRoot, fs);
   if (rootStat === null) {
     return {
@@ -1495,7 +1541,7 @@ function buildUninstallPlan(ctx: Context): UninstallPlan {
   }
   if (refusals.length > 0) {
     throw new Error(
-      `uninstall refused before any removal; nothing was removed: ${refusals.join('; ')}`,
+      `uninstall refused before any removal; nothing was removed: ${[...new Set(refusals)].join('; ')}`,
     );
   }
   return { reason: null, entries, decisions };

@@ -6,6 +6,11 @@
 // so no test writes to the real home directory. Tests that use real symbolic
 // links skip on Windows, where the no-follow opens are unavailable and the
 // installer refuses before any write.
+//
+// The "links above the roots" tests (#4303) cover the chain from a declared
+// root (HOME, or an XDG or CODEX root) down to each install root. A link on
+// that chain is refused by every entry point and changes nothing; a link above
+// the declared root is not inspected, so those tests are regression guards.
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -1006,4 +1011,476 @@ test('every placeholder in the installed payload has a mapping', () => {
       `placeholder ${name} has no mapping`,
     );
   }
+});
+
+// --- Links above the roots (#4303) --------------------------------------------
+
+/** A directory outside the sandbox HOME, holding one sentinel file. */
+function makeOutside(): string {
+  const outside = makeSandbox('user-global-outside-');
+  nodeFs.writeFileSync(join(outside, 'sentinel.txt'), 'keep\n');
+  return outside;
+}
+
+/** Plan, install, plan an uninstall, and uninstall: each must refuse as a link. */
+function assertRefusedEverywhere(
+  options: UserGlobalOptions,
+  trees: string[],
+): void {
+  const before = trees.map((tree) => snapshot(tree));
+  for (const run of [
+    planInstall,
+    installPayload,
+    planUninstall,
+    uninstallPayload,
+  ]) {
+    assert.throws(() => run(options), /symbolic link/);
+  }
+  assert.deepEqual(
+    trees.map((tree) => snapshot(tree)),
+    before,
+    'a refusal changes neither the home tree nor the directory outside it',
+  );
+}
+
+/** A HOME with the usual directories, inside its own parent directory. */
+function seedHomeIn(parent: string): string {
+  const home = join(parent, 'home');
+  for (const dir of ['.local/share', '.claude', '.agents']) {
+    nodeFs.mkdirSync(join(home, dir), { recursive: true });
+  }
+  return home;
+}
+
+test('a link at HOME/.local with nothing beyond it makes every entry point refuse, with HOME spelled either way', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const outside = makeOutside();
+  nodeFs.rmSync(join(home, '.local'), { recursive: true });
+  nodeFs.symlinkSync(outside, join(home, '.local'));
+
+  assertRefusedEverywhere(optionsFor(home), [home, outside]);
+  assertRefusedEverywhere(optionsFor(`${home}/`), [home, outside]);
+});
+
+test('a link at HOME/.local/share with the data root beyond it makes every entry point refuse', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const outside = makeOutside();
+  nodeFs.mkdirSync(join(outside, 'idd-skill'));
+  nodeFs.rmSync(join(home, '.local', 'share'), { recursive: true });
+  nodeFs.symlinkSync(outside, join(home, '.local', 'share'));
+
+  assertRefusedEverywhere(optionsFor(home), [home, outside]);
+});
+
+test('a link at HOME/.claude or HOME/.agents with the skills directory beyond it makes install and plan refuse', {
+  skip: NO_LINKS,
+}, () => {
+  for (const name of ['.claude', '.agents']) {
+    const home = makeHome();
+    const outside = makeOutside();
+    nodeFs.mkdirSync(join(outside, 'skills'));
+    nodeFs.rmSync(join(home, name), { recursive: true });
+    nodeFs.symlinkSync(outside, join(home, name));
+    const before = [snapshot(home), snapshot(outside)];
+
+    for (const run of [planInstall, installPayload]) {
+      assert.throws(() => run(optionsFor(home)), /symbolic link/);
+    }
+    assert.deepEqual([snapshot(home), snapshot(outside)], before);
+    assert.equal(nodeFs.existsSync(dataRootOf(home)), false, name);
+  }
+});
+
+test('a symbolic-link HOME is refused by every entry point, with HOME spelled either way', {
+  skip: NO_LINKS,
+}, () => {
+  const real = makeHome();
+  const link = join(makeSandbox('user-global-linkparent-'), 'home-link');
+  nodeFs.symlinkSync(real, link);
+
+  assertRefusedEverywhere(optionsFor(link), [real]);
+  assertRefusedEverywhere(optionsFor(`${link}/`), [real]);
+});
+
+test('uninstall refuses a link that appeared above the data root or above a skill root after install', {
+  skip: NO_LINKS,
+}, () => {
+  for (const name of ['.local', '.claude']) {
+    const home = makeHome();
+    installPayload(optionsFor(home));
+    nodeFs.renameSync(join(home, name), join(home, `${name}-real`));
+    nodeFs.symlinkSync(join(home, `${name}-real`), join(home, name));
+    const before = snapshot(home);
+
+    assert.throws(
+      () => uninstallPayload(optionsFor(home)),
+      /symbolic link/,
+      name,
+    );
+    assert.deepEqual(snapshot(home), before, name);
+  }
+});
+
+test('a symbolic-link XDG_DATA_HOME is refused by every entry point', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const real = makeSandbox('user-global-xdg-');
+  nodeFs.mkdirSync(join(real, 'idd-skill'));
+  const link = join(makeSandbox('user-global-linkparent-'), 'xdg-link');
+  nodeFs.symlinkSync(real, link);
+  const options = optionsFor(home, {
+    env: { HOME: home, XDG_DATA_HOME: link },
+  });
+
+  assertRefusedEverywhere(options, [home, real]);
+});
+
+test('a link above XDG_DATA_HOME is not inspected, and a link at HOME/.local is irrelevant when XDG_DATA_HOME points elsewhere', {
+  skip: NO_LINKS,
+}, () => {
+  const parentReal = makeSandbox('user-global-xdg-parent-');
+  nodeFs.mkdirSync(join(parentReal, 'xdg'));
+  const parentLink = join(makeSandbox('user-global-linkparent-'), 'linked');
+  nodeFs.symlinkSync(parentReal, parentLink);
+  const xdg = join(parentLink, 'xdg');
+  const home = makeHome();
+  const outside = makeOutside();
+  nodeFs.rmSync(join(home, '.local'), { recursive: true });
+  nodeFs.symlinkSync(outside, join(home, '.local'));
+  const before = snapshot(outside);
+  const options = optionsFor(home, { env: { HOME: home, XDG_DATA_HOME: xdg } });
+
+  installPayload(options);
+  assert.equal(
+    nodeFs.existsSync(join(parentReal, 'xdg', 'idd-skill', 'receipt.json')),
+    true,
+  );
+  uninstallPayload(options);
+  assert.equal(nodeFs.existsSync(join(parentReal, 'xdg', 'idd-skill')), false);
+  assert.deepEqual(snapshot(outside), before);
+});
+
+test('a HOME reached through a linked parent installs and uninstalls as before', {
+  skip: NO_LINKS,
+}, () => {
+  const parentReal = makeSandbox('user-global-realparent-');
+  seedHomeIn(parentReal);
+  const parentLink = join(makeSandbox('user-global-linkparent-'), 'linked');
+  nodeFs.symlinkSync(parentReal, parentLink);
+  const home = join(parentLink, 'home');
+  const options = optionsFor(home);
+
+  installPayload(options);
+  assert.equal(
+    nodeFs.readFileSync(
+      skillFileOf(join(parentReal, 'home'), '.claude'),
+      'utf8',
+    ),
+    nodeFs.readFileSync(join(REPO, 'skills', SKILL_RELATIVE), 'utf8'),
+  );
+  uninstallPayload(options);
+  assert.equal(nodeFs.existsSync(dataRootOf(join(parentReal, 'home'))), false);
+});
+
+test('a link at HOME/.config does not block an install that edits no opencode file', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const outside = makeOutside();
+  nodeFs.symlinkSync(outside, join(home, '.config'));
+  const before = snapshot(outside);
+
+  installPayload(optionsFor(home, { harnesses: ['claude'] }));
+  assert.deepEqual(snapshot(outside), before);
+  uninstallPayload(optionsFor(home, { harnesses: ['claude'] }));
+});
+
+test('a link planted above the data root during an install makes the next step refuse and no payload lands', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  let planted = false;
+  const fs = hookedFs((op, args) => {
+    if (planted || op !== 'renameSync') return;
+    if (!String(args[1]).endsWith('receipt.json')) return;
+    planted = true;
+    nodeFs.renameSync(join(home, '.local'), join(home, '.local-real'));
+    nodeFs.symlinkSync(join(home, '.local-real'), join(home, '.local'));
+  });
+
+  assert.throws(
+    () => installPayload(optionsFor(home, { fs })),
+    (error: Error) =>
+      /symbolic link/.test(error.message) &&
+      /rollback left these paths in place/.test(error.message),
+    'the rollback refuses through the link too, and names what it left',
+  );
+  assert.equal(planted, true);
+  assert.equal(
+    nodeFs.existsSync(
+      join(home, '.local-real', 'share', 'idd-skill', PACKAGE_VERSION),
+    ),
+    false,
+    'no payload version directory landed after the link appeared',
+  );
+  assert.equal(nodeFs.existsSync(join(home, '.claude', 'skills')), false);
+  assert.equal(nodeFs.existsSync(join(home, '.agents', 'skills')), false);
+});
+
+test('a link planted above the data root during an uninstall stops it and leaves the payload version in place', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  let planted = false;
+  const fs = hookedFs((op) => {
+    if (planted || op !== 'unlinkSync') return;
+    planted = true;
+    nodeFs.renameSync(join(home, '.local'), join(home, '.local-real'));
+    nodeFs.symlinkSync(join(home, '.local-real'), join(home, '.local'));
+  });
+
+  assert.throws(
+    () => uninstallPayload(optionsFor(home, { fs })),
+    /symbolic link/,
+  );
+  assert.equal(planted, true);
+  assert.equal(
+    nodeFs.existsSync(
+      join(home, '.local-real', 'share', 'idd-skill', PACKAGE_VERSION),
+    ),
+    true,
+    'the payload version directory is still in place',
+  );
+});
+
+test('XDG_DATA_HOME exported as the default location does not hide a link above it', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const outside = makeOutside();
+  nodeFs.mkdirSync(join(outside, 'share'));
+  nodeFs.rmSync(join(home, '.local'), { recursive: true });
+  nodeFs.symlinkSync(outside, join(home, '.local'));
+  const options = optionsFor(home, {
+    env: { HOME: home, XDG_DATA_HOME: join(home, '.local', 'share') },
+  });
+
+  assertRefusedEverywhere(options, [home, outside]);
+});
+
+test('a CODEX_HOME outside HOME is declared by its parent: a link above the parent is not inspected, a link at the parent is refused', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const parentReal = makeSandbox('user-global-codexparent-');
+  nodeFs.mkdirSync(join(parentReal, 'roots', 'codex'), { recursive: true });
+  const parentLink = join(makeSandbox('user-global-linkparent-'), 'linked');
+  nodeFs.symlinkSync(parentReal, parentLink);
+  const options = optionsFor(home, {
+    env: { HOME: home, CODEX_HOME: join(parentLink, 'roots', 'codex') },
+    harnesses: ['codex'],
+  });
+
+  installPayload(options);
+  const agents = join(parentReal, 'roots', 'codex', 'AGENTS.md');
+  assert.equal(nodeFs.existsSync(agents), true);
+  uninstallPayload(options);
+  assert.equal(nodeFs.existsSync(agents), false);
+
+  const real = makeSandbox('user-global-codexreal-');
+  nodeFs.mkdirSync(join(real, 'codex'));
+  const link = join(makeSandbox('user-global-linkparent-'), 'codex-parent');
+  nodeFs.symlinkSync(real, link);
+  const refused = optionsFor(home, {
+    env: { HOME: home, CODEX_HOME: join(link, 'codex') },
+    harnesses: ['codex'],
+  });
+  assert.throws(() => installPayload(refused), /symbolic link/);
+  assert.deepEqual(nodeFs.readdirSync(join(real, 'codex')), []);
+});
+
+test('an XDG_CONFIG_HOME outside HOME is a declared root: a link above it is not inspected', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const parentReal = makeSandbox('user-global-cfgparent-');
+  nodeFs.mkdirSync(join(parentReal, 'cfg'));
+  const parentLink = join(makeSandbox('user-global-linkparent-'), 'linked');
+  nodeFs.symlinkSync(parentReal, parentLink);
+  const options = optionsFor(home, {
+    env: { HOME: home, XDG_CONFIG_HOME: join(parentLink, 'cfg') },
+    harnesses: ['opencode'],
+  });
+
+  installPayload(options);
+  const config = join(parentReal, 'cfg', 'opencode', 'opencode.json');
+  assert.equal(nodeFs.existsSync(config), true);
+  uninstallPayload(options);
+  assert.equal(nodeFs.existsSync(config), false);
+});
+
+test('a link planted above an entry-file directory during an install makes the entry step refuse', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  nodeFs.mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
+  let planted = false;
+  const fs = hookedFs((op, args) => {
+    if (planted || op !== 'renameSync') return;
+    if (!String(args[1]).endsWith('receipt.json')) return;
+    planted = true;
+    nodeFs.renameSync(join(home, '.config'), join(home, '.config-real'));
+    nodeFs.symlinkSync(join(home, '.config-real'), join(home, '.config'));
+  });
+
+  assert.throws(
+    () => installPayload(optionsFor(home, { fs, harnesses: ['opencode'] })),
+    /symbolic link/,
+  );
+  assert.equal(planted, true);
+  assert.equal(
+    nodeFs.existsSync(join(home, '.config-real', 'opencode', 'opencode.json')),
+    false,
+    'the entry file did not land through the link',
+  );
+});
+
+test('a CODEX_HOME beside HOME under a linked ancestor does not widen what is read for the other roots', {
+  skip: NO_LINKS,
+}, () => {
+  const parentReal = makeSandbox('user-global-sharedparent-');
+  seedHomeIn(parentReal);
+  nodeFs.mkdirSync(join(parentReal, 'codex'));
+  const parentLink = join(makeSandbox('user-global-linkparent-'), 'linked');
+  nodeFs.symlinkSync(parentReal, parentLink);
+  const home = join(parentLink, 'home');
+  const env = { HOME: home, CODEX_HOME: join(parentLink, 'codex') };
+
+  // No codex harness is selected, so the declared parent is never walked.
+  installPayload(optionsFor(home, { env }));
+  uninstallPayload(optionsFor(home, { env }));
+  // The entry-file walk starts at that parent, which must be a real directory.
+  assert.throws(
+    () => installPayload(optionsFor(home, { env, harnesses: ['codex'] })),
+    /symbolic link/,
+  );
+  assert.equal(
+    nodeFs.existsSync(join(parentReal, 'codex', 'AGENTS.md')),
+    false,
+  );
+});
+
+test('a symbolic-link XDG_CONFIG_HOME is refused when the opencode harness is selected', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const real = makeSandbox('user-global-cfgreal-');
+  const link = join(makeSandbox('user-global-linkparent-'), 'cfg-link');
+  nodeFs.symlinkSync(real, link);
+  const options = optionsFor(home, {
+    env: { HOME: home, XDG_CONFIG_HOME: link },
+    harnesses: ['opencode'],
+  });
+  const before = snapshot(real);
+
+  assert.throws(() => installPayload(options), /symbolic link/);
+  assert.deepEqual(snapshot(real), before);
+});
+
+test('a link planted above the data root during an upgrade refuses and keeps the prior current target', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceTree();
+  nodeFs.appendFileSync(join(source, 'skills', SKILL_RELATIVE), '\nupgrade\n');
+  let planted = false;
+  const fs = hookedFs((op, args) => {
+    if (planted || op !== 'renameSync') return;
+    if (!String(args[1]).endsWith('receipt.json')) return;
+    planted = true;
+    nodeFs.renameSync(join(home, '.local'), join(home, '.local-real'));
+    nodeFs.symlinkSync(join(home, '.local-real'), join(home, '.local'));
+  });
+
+  assert.throws(
+    () =>
+      installPayload(
+        optionsFor(home, { sourceRoot: source, version: UPGRADE_VERSION, fs }),
+      ),
+    /symbolic link/,
+  );
+  assert.equal(planted, true);
+  const moved = join(home, '.local-real', 'share', 'idd-skill');
+  assert.equal(nodeFs.readlinkSync(join(moved, 'current')), versionDirOf(home));
+  assert.deepEqual(
+    nodeFs.readdirSync(join(moved, UPGRADE_VERSION)),
+    [],
+    'only the directory made before the link appeared exists, and it is empty',
+  );
+});
+
+test('the refusal for a link above the data root names the remedy and says nothing changed', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const outside = makeOutside();
+  nodeFs.mkdirSync(join(outside, 'idd-skill'));
+  nodeFs.rmSync(join(home, '.local', 'share'), { recursive: true });
+  nodeFs.symlinkSync(outside, join(home, '.local', 'share'));
+
+  assert.throws(
+    () => installPayload(optionsFor(home)),
+    /nothing was written.*symbolic link.*move the real directory into the link's place/s,
+  );
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /nothing was removed.*symbolic link.*move the real directory into the link's place/s,
+  );
+});
+
+test('a regular file on the chain is refused without the link remedy, once per run', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  nodeFs.rmSync(join(home, '.local'), { recursive: true });
+  nodeFs.writeFileSync(join(home, '.local'), 'not a directory\n');
+
+  for (const run of [installPayload, uninstallPayload]) {
+    assert.throws(
+      () => run(optionsFor(home)),
+      (error: Error) =>
+        /is not a directory/.test(error.message) &&
+        !/move the real directory/.test(error.message),
+    );
+  }
+});
+
+test('a platform without the no-follow opens is refused once by install and uninstall, writing nothing', () => {
+  const home = makeHome();
+  const noFollow = {
+    ...nodeFs,
+    constants: {
+      ...nodeFs.constants,
+      O_NOFOLLOW: undefined,
+      O_NONBLOCK: undefined,
+    },
+  } as unknown as FsOps;
+  const before = snapshot(home);
+
+  for (const run of [installPayload, uninstallPayload]) {
+    assert.throws(
+      () => run(optionsFor(home, { fs: noFollow })),
+      (error: Error) =>
+        error.message.split('does not support').length === 2 &&
+        !/move the real directory/.test(error.message),
+    );
+  }
+  assert.deepEqual(snapshot(home), before);
 });
