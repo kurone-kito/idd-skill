@@ -2696,11 +2696,13 @@ showed that a hand-edited `receipt.json` could list a user's own
 `CLAUDE.md` as a `file` record with that file's SHA-256, and uninstall
 then deleted the whole file after checking only that hash. Commit
 `b7f957284` fixed the defect: uninstall now removes a whole-file entry
-record only when the bytes equal what install writes for that harness.
+record only when the content is what install writes for that harness.
 For `CLAUDE.md` and `opencode.json` that content depends only on the
-entry path, so the check is exact. For `AGENTS.md` the check is that one
-managed block spans every byte. A forged record that names an ordinary
-user file is refused, and the file survives.
+entry path, so the check is exact. For `AGENTS.md` the entry text inside
+the block can change between versions, so the check is that one managed
+block spans every byte, and the text between the markers is not
+compared. A forged record that names an ordinary user file is refused,
+and the file survives.
 
 The fix cannot prove authorship, because the receipt is a plain file in
 the user's data root with no signature, and a path plus a hash cannot
@@ -2717,9 +2719,13 @@ The reason for (a) is that the fix already limits the risk to what
 uninstall compares, by record kind, while (b) would be a receipt design
 change (the receipt format is version 1):
 
-- A `file` record for an entry file: uninstall removes it only when its
-  bytes equal install's own output. The residual risk is a user-authored
-  file that equals that output byte for byte.
+- A `file` record for `CLAUDE.md` or `opencode.json`: uninstall removes
+  it only when its bytes equal install's own output. The residual risk
+  is a user-authored file that equals that output byte for byte.
+- A `file` record for `AGENTS.md`: uninstall removes it when the file is
+  exactly one managed block, from the installer's begin marker line
+  through its end marker line. The residual risk is a user-authored file
+  that is one such block with other text between the markers.
 - A `managed-block` record: uninstall removes the span between the
   installer's own begin and end marker lines when the span's SHA-256
   equals the record, and it leaves every byte outside the span. The
