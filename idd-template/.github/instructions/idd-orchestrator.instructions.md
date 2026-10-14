@@ -78,17 +78,17 @@ handle, the report draft path, and the worker's state (`running`, `reporting`,
 - When the graph in hand has nothing startable, re-run Discover as that cadence
   requires. Report and stop only when that re-run finds nothing startable and
   every roster entry is `disposed`.
-- A held roster worker (not `disposed`, claim taken in section 3 step 4)
-  gets this renewal: re-post its `claimed-by` every 12 h from its latest valid
-  one, with its agent id, claim id, and branch, as the overview Heartbeat
-  bullet describes. At 72 h after its first hold comment's `created_at`, post
-  `unclaimed-by` for that claim and record the hold and cap in the run report.
-  Retry a failed post once; if it fails again, record it and leave the claim
-  in place. Never post a second claim id.
+- A held roster worker (not `disposed`, claim from section 3 step 4)
+  gets this renewal at this section's wake-ups once due: re-post its
+  `claimed-by` every 12 h from its latest valid one, with its agent id, claim
+  id, and branch, per the overview Heartbeat bullet. At 72 h after its first
+  hold comment's `created_at`, post `unclaimed-by` for that claim and record
+  the hold and cap in the run report. Retry a failed post once; if it fails
+  again, record it and leave the claim in place. Never post a second claim id.
 
 ## 5. Report and disposal
 
-- The orchestrator's brief asks for a JSON draft matching
+- The delegation brief asks for a JSON draft matching
   `schemas/worker-report.schema.json` at a per-worker path outside the worker
   worktree, as the
   [worker final report store](../../docs/idd-helper-scripts.md#worker-final-report-store)
@@ -104,4 +104,4 @@ handle, the report draft path, and the worker's state (`running`, `reporting`,
 ## 6. Worker span
 
 A worker runs from B1 to the merge policy's terminal phase: F4 under
-`fully_autonomous_merge`, and F2.5 otherwise.
+`fully_autonomous_merge`, F2.5 otherwise.
