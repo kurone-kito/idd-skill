@@ -239,7 +239,8 @@ rules.
   `ready` orphan or child body with a coherent `L` effort marker at
   publication. Roadmaps, audits run with `--expect-bucket`, and bodies routed
   to a human bucket (a coherent `needs-decision` or `blocked-by-human`
-  authoring-bucket marker, or a suitability score of `1`) are exempt.
+  authoring-bucket marker, or a suitability score of `1`) are exempt. See the
+  [2026-10-13 review-loop audit](https://github.com/kurone-kito/idd-skill/blob/main/docs/idd-design-rationale.md#review-loop-audit-2026-10-13).
 - A missing or invalid hint is **fail-safe**: it sorts as the neutral
   middle, as-if `M`, per `idd-discover.instructions.md` A4 Step 2.
 
