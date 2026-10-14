@@ -14,6 +14,156 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-14
+
+Release cut after the user-global policy layer, the review-defer route,
+and the orchestrator worker cap landed. The default changes are listed
+first under Changed so that a re-sync reader sees them before the rest.
+
+### Added
+
+- Layered user-global policy: every loader reads the layered user-global
+  policy (#3842, #3969), and the `user-global` helper runtime profile
+  dispatches helpers through the pinned archive (#3844, #3892). A
+  read-only activation gate helper (#3968), a global-only profile check
+  (#3997), and an opt-in global-only run that passes with no required
+  checks (#4047) complete the layer. Onboarding payload placeholders map
+  to policy fields (#4062).
+- `helperRuntime.launcher` accepts `pnpm-dlx` and `auto` (#3896), with
+  its documentation and benchmark (#3912).
+- Review-defer route: the needs-decision defer source (#3786), a defer
+  follow-up bundle that renders and lints its body (#4236), the
+  `idd-review-defer-bundle` command (#4241), the defer tier, urgency, and
+  relax step record (#4240), the wave-gradient relax setting
+  `critiqueLoop.deferRelaxAtRounds` (#3810), and one relax step once
+  advisory review has converged (#3815). `critiqueLoop.triageRecord` is
+  an opt-in setting (#4221).
+- Review-body findings with a file citation can be fixed or deferred
+  (#4000), and their dispositions are posted (#4028).
+- Scope overrun returns to authoring instead of asking (#4160), and the
+  lite work profile gains the same route (#4173).
+- Publish helper for held issue drafts (#4159). Its `--apply` write path,
+  restored by #4229, publishes a held orphan issue.
+- Trial-merge audit: a push-free audit helper (#4030), and an audit of
+  the trial merge when a branch is behind main, before push (#4074).
+- Effort `L` routing: an opt-in `autopilotSuitability.effortL` setting
+  (#4219), refusal of effort `L` bodies as `ready` on opt-in (#4227), and
+  routing of effort `L` orphans to humans on opt-in (#4230).
+- Worker and handoff guards: a local store for each worker's final report
+  (#3843), candidates that do not overlap are batched (#3849), orchestrated
+  sessions route to a phase file (#3971), a handoff the trusted copies
+  cannot honor is refused (#3915), owner markers that contradict the set
+  are refused (#3936), a refused forced handoff marker names why (#3938),
+  the stray closing-reference check runs before push (#3940), and an owner
+  post is checked against the latest marker (#4023).
+- Reporting: the post-merge cleanup evidence shows skipped counts by reason
+  (#3920), completion evidence records a criteria note (#4040), E1 reports
+  the primary bot review ack state (#3928), the Copilot overview labels are
+  reported (#3902), a row reports which attempt superseded it (#4158),
+  ready open pull requests that no session has merged are listed (#4176),
+  the merged-PR sweep publishes a summary issue (#4179), and
+  `--report` prints bundle bytes and headroom (#3980).
+- Tooling: an in-repo workflow YAML subset parser (#4133), the F4
+  head-proof renderer (#4134), a readiness hint for merge conflicts behind
+  missing required checks (#4103), and a warning when the advisory workflow
+  ref is not the default branch (#4096).
+
+### Changed
+
+- Default changes, read these before re-syncing:
+  - `critiqueLoop.deferNeedsDecision` is a new switch that defaults to
+    `on` (#3784). A needs-decision item that v0.14.0 held now defers by
+    default. `off` restores the hold.
+  - The C-phase low-severity guard `critiqueLoop.cPhaseLowSeveritySkipAfter`
+    defaults to `2` instead of `3` (#4048). An explicit value still applies.
+  - The E10 per-issue pass cap `critiqueLoop.e10MaxPasses` defaults to `2`
+    (#4048). Residual Low findings then move to one follow-up issue instead
+    of extending the loop.
+  - `orchestrator.maxWorkers` defaults to `2` for each orchestrator session,
+    and `idd-worker-budget` applies it at dispatch (#3965).
+  - Discover skips issues that carry an authoring-only label (#4147).
+  - `prepare` no longer runs on install. Contributors run
+    `pnpm run setup:hooks` once per clone and once per new worktree (#3846).
+- Check pipeline: validation runs as five ordered groups (#3976), the
+  generated artifacts are verified without rewriting the checkout (#3765),
+  `pnpm run check` is the default CI gate (#3990), and the project check
+  runs before the GitHub diagnosis (#3989).
+- Internal ownership refactors that keep helper outputs the same: #3761,
+  #3762, #3766, #3770, #3771, #3772, #3851, #3977, #4016, #4091, #4135.
+- Helper output and wording: a profile-selected pointer is required before
+  helper commands (#3811), a mirror re-import reports reverted overlay
+  lines (#3805), structure pairs compare listed sections exactly (#4041),
+  dry runs print a note on stderr (#4141), and a forced handoff refusal
+  is named (#3938).
+- Phase bundles were trimmed to stay under their budgets: #4039, #4055,
+  #4076, #4206, #4217, #4237.
+- Documentation that tracks these behaviors: #3741, #3785, #3790, #3807,
+  #3808, #3813, #3848, #3895, #3904, #3905, #3906, #3911, #3914, #3918,
+  #3919, #3922, #3935, #3937, #3979, #3981, #3988, #3991, #3992, #4002,
+  #4004, #4018, #4024, #4026, #4029, #4038, #4045, #4046, #4057, #4058,
+  #4077, #4078, #4102, #4125, #4126, #4131, #4137, #4140, #4143, #4169,
+  #4178, #4226.
+- Test harness: #4017 passes the fixture environment to source helpers and
+  CLI runs, and #4172 forbids `main` in the six lite files.
+
+### Fixed
+
+- Claim, worktree and handoff fixes: #3963 creates the worktree first and
+  verifies it after the lock, #3986 adopts the claim-phase worktree on a
+  fresh claim, #4043 stops a new worktree from blocking a released-claim
+  gate, #4069 accepts a pushed pull request branch tip in the own-worktree
+  gate, #3921 judges an issue-only handoff by the pull request's first
+  commit, #3933 detects a recreated git-admin directory with a reused inode,
+  and #3909 allows pushes of other refs from the base worktree.
+- Advisory and review fixes: #4056 waits for a Copilot re-review of a new
+  head, #4092 fails closed when same-head reviews disagree, #4151 names every
+  stale-head advisory-wait outcome, #4231 ends the wait on a Copilot
+  no-reviewable-files notice, #4222 parses the current Copilot overview
+  format, #4207 skips superseded live-coverage rows, #4155 prefers the
+  actions repository variable, #3930 recognizes the current Codex
+  usage-limit trailer, #3812 verifies cosmetic review-thread edits,
+  #3913 codes every skip and names superseded threads, and #4174 names the
+  E6 command for bot summary dispositions.
+- Readiness and disposition fixes: #4214 flags watermark-dependent
+  disposition blockers, #4223 corrects readiness comments and tests BEHIND
+  mergeable, #4146 plans or skips each bot comment in readiness counts,
+  #4148 drops issue-comment dispositions from the quiet anchor, #4205 does
+  not count bot notices that a trusted rejection already names, #4020
+  names the stamped disposition for cited suppressed items, #4072 names the
+  body-item helper in the stamped-disposition pointer, #4068 blocks orphan
+  defer follow-ups with an open origin, and #3962 names the watermark step
+  when it is missing.
+- Authoring and discovery fixes: #4149 splits an over-scope issue at
+  authoring instead of mid-loop, #4144 excludes the configured authoring
+  journal from discovery, #4105 audits zero-leaf roadmap roots before the
+  orphan fallback, #3993 bounds the sole-member search by target, #3994
+  reads policy config from the pull request base ref, #3908 fails closed on a
+  hidden sole marker, and #4145 restores the adopt-verbatim rule in the
+  claim file.
+- Policy and gate fixes: #4044 requires approval for decision-rule changes
+  in the waiver, #4061 honors the global-only zero-check opt-in on the
+  watermark, #4154 proceeds on a ready decision-rule pull request, #4152
+  settles bundle-ceiling breaches by a fixed remedy order, #4153 hints the
+  next step for same-timestamp count growth, #4157 computes same-family
+  recurrence instead of judging it, #4100 and #4156 name default and base
+  branches by role, #3809 requires the exact PR head in the F2 and F3 local
+  checks, #3903 fails the F4 submodule probe when any leg fails, #3925 fails
+  closed in the shell fallback checks, and #3999 keeps the `gh` tag on a
+  rebuilt comment-read error.
+- Sweep, audit and parser fixes: #3781 lists each file once during an
+  unresolved merge, #3783 keeps comment stripping from hiding bare imports,
+  #3884 corrects import-scan misreads of division and postfix signs, #3804
+  counts closers after padded list-item code, #3816 treats text after a task
+  checkbox as prose, #3764 ignores incidental issue mentions, #3760 accepts
+  wrapped cleanup evidence, #3917 reads closing keywords only from standalone
+  lines, #3897 accepts the colon form of GitHub links, #3932 accepts config
+  prose such as "key needs a", #3934 and #4005 stop flagging `std*` option
+  values (the second only in inline code spans), #3788 stops `process.exit`
+  from truncating the failure report, #3924 reads search and index-lag pages
+  past 1 MiB, #3927 checks date-time as an RFC 3339 instant, and #3894 notes
+  the workflow definition a rerun reuses.
+- Verification fix: #3806 makes the same-second tie-break a verification.
+
 ## [0.14.0] - 2026-10-03
 
 ### Added
