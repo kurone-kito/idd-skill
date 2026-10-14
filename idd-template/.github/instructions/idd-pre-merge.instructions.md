@@ -44,10 +44,15 @@ disabled, route the state from the `gh pr view` output with the table in
 the [helper contract](../../docs/idd-helper-scripts.md#branch-conflict-and-synchronization-state-evidence).
 
 - **`proceed-to-f2`**: proceed to F2. This route means conflict-freeness
-  only. If `baseAdvancedSinceMergeBase: true`, run the profile-selected
-  trial-merge audit command for `--pr {pr-number}` (see the trial-merge audit
-  entry in `docs/idd-helper-scripts.md`) for push-free evidence (advisory;
-  this routing does not change). With helper runtime disabled, skip it.
+  only. An UNSTABLE `clean` branch takes this route only when the helper
+  lists at least one non-passing head run and every such run is non-required
+  and `action_required` or `pending` (issue `#4209`); otherwise it holds, and
+  with helper runtime disabled an UNSTABLE branch always holds. If
+  `baseAdvancedSinceMergeBase: true`,
+  run the profile-selected trial-merge audit command for `--pr {pr-number}`
+  (see the trial-merge audit entry in `docs/idd-helper-scripts.md`) for
+  push-free evidence (advisory; this routing does not change). With helper
+  runtime disabled, skip it.
 - **`return-to-e-phase-branch-sync`**: return to the E-phase branch-sync
   check in `idd-review-triage.instructions.md`, first setting
   `Phase: F1 sync-required`, the branch state in `Open blockers`, and
@@ -443,7 +448,9 @@ is diagnostic and never changes the verdict.
   `git rev-parse refs/remotes/origin/pull/{pr-number}/head` is not
   `$PR_HEAD_SHA`, the PR moved: return to E1. The claim gate must confirm
   `git branch --show-current` is `{branch-name}`; else hold.
-  Require empty `git status --porcelain`; else hold. Under
+  Require empty `git status --porcelain`; else hold.
+  The shadow-path check that F3 cites is the pipeline below, including
+  its ignored-path rerun, run against `$PR_HEAD_SHA`. Under
   `set -o pipefail`, run
   `git ls-tree -r -z --full-tree --name-only "$PR_HEAD_SHA" |
   (cd "$(git rev-parse --show-toplevel)" &&

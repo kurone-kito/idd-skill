@@ -72,7 +72,13 @@ routing:
    stale-authoring warning check above, and stop without claiming — this
    check runs first and applies whether the target turns out to be an
    execution leaf or a roadmap node in step 2 below, so an
-   authoring-held roadmap is never routed into step 2's traversal.
+   authoring-held roadmap is never routed into step 2's traversal. If it
+   carries `labels.blockedByHumanLabelName` (default
+   `status:blocked-by-human`), `labels.needsDecisionLabelName` (default
+   `status:needs-decision`), or `labels.authoringOnlyLabelName` (default
+   `status:authoring-only`), also stop without claiming: report the label
+   name and the issue number. Naming the issue does not clear the hold
+   (issue `#4233`).
 2. If the target issue carries an
    `idd-skill-roadmap-id` marker — the same test
    **A2**'s roadmap-node/execution-leaf classification rule uses (an
