@@ -448,7 +448,9 @@ is diagnostic and never changes the verdict.
   `git rev-parse refs/remotes/origin/pull/{pr-number}/head` is not
   `$PR_HEAD_SHA`, the PR moved: return to E1. The claim gate must confirm
   `git branch --show-current` is `{branch-name}`; else hold.
-  Require empty `git status --porcelain`; else hold. Under
+  Require empty `git status --porcelain`; else hold.
+  The shadow-path check that F3 cites is the pipeline below, including
+  its ignored-path rerun, run against `$PR_HEAD_SHA`. Under
   `set -o pipefail`, run
   `git ls-tree -r -z --full-tree --name-only "$PR_HEAD_SHA" |
   (cd "$(git rev-parse --show-toplevel)" &&
