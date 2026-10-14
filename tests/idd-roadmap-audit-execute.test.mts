@@ -1521,6 +1521,7 @@ test('--apply on a closed roadmap with an owned claim writes nothing and says th
   // Only the early re-validation ran; the owned claim did not reach the
   // re-fetch, the evidence post, the close or the release.
   assert.equal(calls.claimChecks, 1);
+  assert.equal(calls.collects, 1);
   assert.deepEqual(calls.comments, []);
   assert.deepEqual(calls.closed, []);
   assert.deepEqual(calls.released, []);
@@ -1592,6 +1593,7 @@ test('--apply with an owned claim whose root closes before the re-fetch writes n
   assert.equal(reads, 2);
   assert.equal(exitCode, 1);
   assert.equal(verdict.ready, false);
+  assert.equal(verdict.evidenceBody, '');
   assert.ok(
     verdict.blockers.some((blocker) => blocker.kind === 'roadmap-closed'),
   );
