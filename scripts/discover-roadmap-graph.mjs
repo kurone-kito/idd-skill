@@ -1150,8 +1150,9 @@ function isExpectedRootEnumerationFailure(error, rootNumber) {
  *
  * The helper stays READ-ONLY / evidence-only: it reads issue bodies and
  * GitHub sub-issue relationships and never claims, mutates, or writes to
- * GitHub. The single-root report shape is unchanged; this union shape is
- * only produced in `--all-roadmaps` mode.
+ * GitHub. The union report has no `pullRequestReferences` field (that field
+ * belongs to the single-root report); this union shape is only produced in
+ * `--all-roadmaps` mode.
  */
 export async function enumerateAllRoadmapsGraph(options = {}) {
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);

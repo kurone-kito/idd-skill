@@ -505,9 +505,10 @@ export interface RoadmapUnionRoot {
 /**
  * Cross-roadmap union report returned by `enumerateAllRoadmapsGraph`.
  *
- * Additive `--all-roadmaps` mode: the single-root `RoadmapGraphReport`
- * shape (returned by `enumerateRoadmapGraph`) is unchanged. This report
- * is only produced when `--all-roadmaps` is passed.
+ * Additive `--all-roadmaps` mode. This union shape is separate from the
+ * single-root `RoadmapGraphReport` (returned by `enumerateRoadmapGraph`),
+ * which carries `pullRequestReferences` (#4281); the union report has no
+ * such field. This report is only produced when `--all-roadmaps` is passed.
  */
 export interface RoadmapGraphUnionReport {
   mode: 'all-roadmaps';
@@ -1862,8 +1863,9 @@ function isExpectedRootEnumerationFailure(
  *
  * The helper stays READ-ONLY / evidence-only: it reads issue bodies and
  * GitHub sub-issue relationships and never claims, mutates, or writes to
- * GitHub. The single-root report shape is unchanged; this union shape is
- * only produced in `--all-roadmaps` mode.
+ * GitHub. The union report has no `pullRequestReferences` field (that field
+ * belongs to the single-root report); this union shape is only produced in
+ * `--all-roadmaps` mode.
  */
 export async function enumerateAllRoadmapsGraph(
   options: EnumerateAllRoadmapsGraphOptions = {},
