@@ -193,10 +193,11 @@ review comments (`gh api repos/{owner}/{repo}/pulls/{n}/reviews` and
   counts the recorded lines by step (`0` to `2`), urgency, and outcome.
   `overrides` counts lines with an `override:` part. `contradictions`
   counts the recorded lines without an override where an accepted reply
-  says `verdict defer`, or an urgency-matrix deferral (its clause starts
-  with `(urgency` followed by a space) says `verdict keep`. Threads with
-  other or no dispositions are not counted. `mergedAt` is the PR's merge
-  time under `--limit` and `null` under `--prs`.
+  says `verdict defer`. Deferrals are not checked against their verdict,
+  so a deferral whose text does not match the urgency matrix is not
+  flagged. Threads with other or no dispositions are not counted.
+  `mergedAt` is the PR's merge time under `--limit` and `null` under
+  `--prs`.
 
 ### Check mode
 

@@ -194,16 +194,6 @@ const TRIAGE_OUTCOMES = ['accepted', 'deferred', 'rejected'];
 // column-0 Triage line. A reply whose first column-0 line is unreadable is
 // malformed, even when a later line would parse: that fails closed.
 const TRIAGE_LINE_PREFIX_RE = /^[ \t*+-]*(?:\*\*)?triage(?:\*\*)?[ \t]*:/imu;
-// The governing deferral clause sits at the canonical position of the reply:
-// the rejected prefix the classifier uses (`classifyDispositionReply`), an
-// optional dash, colon, or period separator, then `deferred to follow-up issue`
-// and the urgency-matrix clause `(urgency `. Text before the deferral is off
-// template, so it never governs. A quoted deferral in the lead-in or in the
-// reason cannot be mistaken for the reply's own clause (Copilot review of
-// #4268, round 2). Other clauses (`(round …)`, `(needs-decision; …)`, the E10
-// cap routes) are not governed by the urgency matrix.
-const URGENCY_DEFERRAL_CLAUSE_RE =
-  /^\*\*Rejected[.!:]?\*\*[ \t]*(?:[—:.!-][ \t]*)?deferred to follow-up issue(?: #\d+)? \(urgency /iu;
 function isTriageOutcome(disposition) {
   return TRIAGE_OUTCOMES.includes(disposition);
 }
@@ -248,8 +238,8 @@ function addTriageAudit(target, source) {
  * Count the `Triage:` lines of one PR's accepted, deferred, or rejected
  * threads (issue #4189). Threads with `other` or `none` are not counted. A
  * recorded line with an `override:` part is an override and is never a
- * contradiction. Otherwise the two contradictions are an accepted reply with
- * `verdict defer`, and a urgency-matrix deferral with `verdict keep`.
+ * contradiction. Otherwise a contradiction is an accepted reply whose recorded
+ * line says `verdict defer`.
  */
 function computeTriageAudit(threads, comments) {
   const audit = emptyTriageAudit();
@@ -276,12 +266,6 @@ function computeTriageAudit(threads, comments) {
       continue;
     }
     if (outcome === 'accepted' && record.verdict === 'defer') {
-      audit.contradictions += 1;
-    } else if (
-      outcome === 'deferred' &&
-      record.verdict === 'keep' &&
-      URGENCY_DEFERRAL_CLAUSE_RE.test(body)
-    ) {
       audit.contradictions += 1;
     }
   }
@@ -795,7 +779,7 @@ export function checkFailures(summary, reports, options) {
   }
   if (summary.triage.contradictions > 0) {
     failures.push(
-      `${summary.triage.contradictions} recorded triage contradiction(s) with the urgency-matrix verdict`,
+      `${summary.triage.contradictions} recorded triage contradiction(s): accepted replies that carry verdict defer`,
     );
   }
   return failures;
@@ -855,7 +839,7 @@ TSV output.
 Each PR's "triage" object counts the \`Triage:\` lines of its accepted,
 deferred, or rejected threads: recorded versus unrecorded (plus malformed,
 a Triage-like line that yields no record), per step and urgency, overrides, and
-contradictions with the urgency-matrix verdict. JSON output only.
+contradictions (accepted replies that carry verdict defer). JSON output only.
 `);
 }
 function formatSeverityCounts(counts) {

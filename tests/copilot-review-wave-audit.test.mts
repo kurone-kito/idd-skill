@@ -1110,7 +1110,7 @@ test('computePrAudit triage: the same reply with an override part is an override
   assert.equal(report.triage.contradictions, 0);
 });
 
-test('computePrAudit triage: a urgency-matrix deferral with verdict defer is recorded with no contradiction', () => {
+test('computePrAudit triage: a deferral with verdict defer is recorded with no contradiction', () => {
   const reviews = [
     review(1, '2026-01-01T00:00:00Z', openReviewBody([openLine('Low', 8002)])),
   ];
@@ -1128,20 +1128,23 @@ test('computePrAudit triage: a urgency-matrix deferral with verdict defer is rec
   assert.equal(report.triage.byStep['0'].outcome.deferred, 1);
 });
 
-test('computePrAudit triage: an urgency-matrix deferral with verdict keep is one contradiction', () => {
+test('computePrAudit triage: only an accepted reply with verdict defer is a contradiction, not a deferral with verdict keep', () => {
+  // The deferral-clause check was removed (E10 hold option 2, issue #4189):
+  // the contradiction count now covers accepted replies only.
   const reviews = [
-    review(1, '2026-01-01T00:00:00Z', openReviewBody([openLine('Low', 8003)])),
+    review(1, '2026-01-01T00:00:00Z', openReviewBody([openLine('Low', 8090)])),
   ];
   const comments = [
     reply(
       10,
-      8003,
+      8090,
       '**Rejected** — deferred to follow-up issue #12 (urgency low; severity Low): later\n\nTriage: tier low; urgency low; step 0; verdict keep',
       '2026-01-02T00:00:00Z',
     ),
   ];
   const report = computePrAudit(1, reviews, comments);
-  assert.equal(report.triage.contradictions, 1);
+  assert.equal(report.triage.recorded, 1);
+  assert.equal(report.triage.contradictions, 0);
 });
 
 test('computePrAudit triage: a round-clause deferral with verdict keep is not a contradiction', () => {
@@ -1318,84 +1321,6 @@ test('computePrAudit triage: a Triage line with no space after the colon is malf
     checkFailures(summarizeCohort([report]), [report], SHARE_OPTIONS).length,
     1,
   );
-});
-
-test('computePrAudit triage: a round deferral that quotes an urgency deferral is not a contradiction', () => {
-  const reviews = [
-    review(1, '2026-01-01T00:00:00Z', openReviewBody([openLine('Low', 8031)])),
-  ];
-  const comments = [
-    reply(
-      10,
-      8031,
-      '**Rejected** — deferred to follow-up issue #12 (round 12/12): earlier reply said deferred to follow-up issue #3 (urgency low; severity Low)\n\nTriage: tier low; urgency low; step 0; verdict keep',
-      '2026-01-02T00:00:00Z',
-    ),
-  ];
-  const report = computePrAudit(1, reviews, comments);
-  assert.equal(report.triage.recorded, 1);
-  assert.equal(report.triage.contradictions, 0);
-});
-
-test('computePrAudit triage: every urgency-deferral prefix form counts as a contradiction', () => {
-  // The classifier reads `**Rejected**` with an optional `.`, `!`, or `:`, and
-  // matches the deferral text case-insensitively, with or without `#<n>`.
-  const forms = [
-    '**Rejected**: deferred to follow-up issue #12 (urgency low; severity Low): later',
-    '**Rejected.** deferred to follow-up issue #12 (urgency low; severity Low): later',
-    '**Rejected** — Deferred to follow-up issue #12 (urgency low; severity Low): later',
-    '**Rejected** — deferred to follow-up issue (urgency low; severity Low): later',
-    '**Rejected** deferred to follow-up issue #12 (urgency low; severity Low): later',
-    '**Rejected!** — deferred to follow-up issue #12 (urgency low; severity Low): later',
-  ];
-  forms.forEach((prefix, index) => {
-    const findingId = 8050 + index;
-    const report = computePrAudit(
-      1,
-      [
-        review(
-          1,
-          '2026-01-01T00:00:00Z',
-          openReviewBody([openLine('Low', findingId)]),
-        ),
-      ],
-      [
-        reply(
-          10 + index,
-          findingId,
-          `${prefix}\n\nTriage: tier low; urgency low; step 0; verdict keep`,
-          '2026-01-02T00:00:00Z',
-        ),
-      ],
-    );
-    assert.equal(report.triage.recorded, 1, prefix);
-    assert.equal(report.triage.contradictions, 1, prefix);
-  });
-});
-
-test('computePrAudit triage: a quoted deferral before the governing clause is not a contradiction', () => {
-  // The governing clause is `(round 2/12)`, at the canonical position. The
-  // quote of an urgency deferral sits in the lead-in, so it must not count.
-  const report = computePrAudit(
-    1,
-    [
-      review(
-        1,
-        '2026-01-01T00:00:00Z',
-        openReviewBody([openLine('Low', 8070)]),
-      ),
-    ],
-    [
-      reply(
-        30,
-        8070,
-        '**Rejected** — the earlier reply deferred to follow-up issue #3 (urgency low; severity Low), so deferred to follow-up issue #12 (round 2/12): reason\n\nTriage: tier low; urgency low; step 0; verdict keep',
-        '2026-01-02T00:00:00Z',
-      ),
-    ],
-  );
-  assert.equal(report.triage.recorded, 1);
-  assert.equal(report.triage.contradictions, 0);
 });
 
 test('computePrAudit triage: a readable column-0 line wins over a Triage-like stray line', () => {
