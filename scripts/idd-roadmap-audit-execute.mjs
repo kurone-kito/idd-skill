@@ -1082,6 +1082,11 @@ function thrownMessage(error) {
  * pass does it post the evidence comment, close the roadmap, and release the
  * claim — in that order.
  *
+ * A root that is not OPEN is never ready (the roadmap-closed blocker). Under
+ * --apply, when that blocker is the only one, the claim checks still run: an
+ * unowned claim keeps the #1299 verdicts below, and an owned claim stops with
+ * the claim still held and no write, so the operator releases it.
+ *
  * One claim-loss shape at the EARLY re-validation is recognized as a distinct
  * idempotent no-op instead of a bare failure (#1299): a retry after a prior
  * `--apply` already fully completed (e.g. its stdout was lost) finds no owned
@@ -1783,10 +1788,9 @@ function printHelp() {
   roadmap is open, so a roadmap that is not open is not ready and reports the
   roadmap-closed blocker; all descendants closed/complete; no open / unresolved
   / inaccessible / linked-PR / nested-roadmap / childless / cycle / human-gate
-  blocker). It does NOT verify
-  the roadmap's free-form success criteria or autonomy-gap items — the caller
-  must confirm those separately before --apply, exactly as the merge gate
-  trusts that review actually happened.
+  blocker). It does NOT verify the roadmap's free-form success criteria or
+  autonomy-gap items — the caller must confirm those separately before
+  --apply, exactly as the merge gate trusts that review actually happened.
 `);
 }
 async function main() {
