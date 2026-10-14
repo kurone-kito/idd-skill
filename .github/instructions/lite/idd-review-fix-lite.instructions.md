@@ -304,11 +304,14 @@ self-critique and record risk.
 3. For a review thread, post the reply and resolve it in one call with
    the profile-selected `resolve-review-thread` helper (`--pr`,
    `--comment-id`, `--body`, `--claim-issue`, `--claim-id`, `--apply`;
+   with `triageRecord` on, also the E5 triage flags (without
+   `--advisory-converged`) and `--lite`;
    package-manager / ephemeral-npx / user-global equivalent in
    `docs/idd-helper-scripts.md`), which appends the stamp and replies
    before resolving, so a failed reply never leaves a silently-resolved
    thread.
-4. For a regular comment, reply only and append the stamp yourself; do
+4. For a regular comment, reply only and append the stamp yourself and,
+   when `triageRecord` is on, the E5 `Triage:` line before it; do
    not resolve. Any reply posted another way (the manual fallback)
    must append the stamp itself too.
 5. If a non-review notice (rate-limit / usage-limit / review-limit) was
