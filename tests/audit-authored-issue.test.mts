@@ -6209,6 +6209,46 @@ test('a draft fence inside a list item or a blockquote is not a top-level draft 
   );
 });
 
+test('a fence indented one to three columns after prose is still a top-level draft (#4250)', () => {
+  const indentedDraft = CARRIER_DRAFTS.replace(
+    '```md\n# Follow-up B\n```',
+    '   ```md\n   # Follow-up B\n   ```',
+  );
+  assert.equal(
+    carrierFinding(carrierBody({ drafts: indentedDraft }), 'carrier-drafts')
+      ?.result,
+    'pass',
+  );
+});
+
+test('a multiline inline code span containing a comment opener hides no carrier structure (#4250)', () => {
+  const body = carrierBody({
+    intro: 'Holds `drafts\n<!--\nthat` cannot yet be published.',
+  });
+  assert.equal(
+    carrierFinding(body, 'required-headings')?.result,
+    'pass',
+    'the code span is not a comment, so the headings stay visible',
+  );
+});
+
+test('an invalid-reference Depends on or Blocked by line outside the release section fails (#4250)', () => {
+  for (const line of [
+    'Depends on rollout pending',
+    'Blocked by rollout pending',
+    '- Depends on rollout pending',
+  ]) {
+    assert.equal(
+      carrierFinding(
+        carrierBody({ intro: `Holds drafts.\n\n${line}` }),
+        'carrier-release-condition',
+      )?.result,
+      'fail',
+      line,
+    );
+  }
+});
+
 test('a second ## Drafts or ## Release condition heading fails rather than hiding unchecked drafts (#4250)', () => {
   const secondDrafts = `${carrierBody()}\n## Drafts\n\n### Follow-up C\n\nReview: reviewed\nShape: child\n`;
   assert.equal(carrierFinding(secondDrafts, 'carrier-drafts')?.result, 'fail');

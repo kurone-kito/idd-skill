@@ -90,6 +90,8 @@ import {
   findHtmlBlockRanges,
   findHtmlCommentRanges,
   findIndentedCodeRanges,
+  findInlineCodeSpans,
+  findMarkdownCodeRanges,
   maskMarkdownForScan,
   stripMarkdownCodeRegions,
 } from './markdown-code.mjs';
@@ -191,6 +193,12 @@ const CARRIER_FORBIDDEN_MARKER_SUFFIXES = [
   'blocked-by',
   'authoring-bucket',
 ];
+// A line that opens with the keyword, after an optional blockquote marker and
+// list marker (#4250). It matches whether or not the reference list parses.
+const DEPENDS_ON_LINE_PATTERN =
+  /^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+|\d+[.)][ \t]+)?Depends on\b/iu;
+const BLOCKED_BY_LINE_PATTERN =
+  /^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+|\d+[.)][ \t]+)?Blocked by\b/iu;
 /**
  * The fixed GitHub label paired with the
  * `<!-- {prefix}-upstream-candidate: true -->` marker (roadmap #2700's
@@ -994,9 +1002,22 @@ function carrierStructureView(rawText) {
   const fencedRanges = findFencedCodeRanges(rawNormalized);
   const indentedRanges = findIndentedCodeRanges(rawNormalized, fencedRanges);
   const htmlBlockRanges = findHtmlBlockRanges(rawNormalized, fencedRanges);
+  // Inline code spans are excluded from the comment-opener scan too: a
+  // multiline span containing `<!--` at a line start is not a comment
+  // (#4250 review, Copilot).
+  // findMarkdownCodeRanges misses a span that crosses a line break, so the
+  // multiline spans come from findInlineCodeSpans.
+  const multilineInlineRanges = findInlineCodeSpans(rawNormalized).map(
+    (span) => ({ start: span.index, end: span.end }),
+  );
   const commentRanges = findHtmlCommentRanges(
     rawNormalized,
-    [...fencedRanges, ...indentedRanges],
+    [
+      ...findMarkdownCodeRanges(rawNormalized),
+      ...multilineInlineRanges,
+      ...fencedRanges,
+      ...indentedRanges,
+    ],
     fencedRanges,
     htmlBlockRanges,
   );
@@ -1165,9 +1186,12 @@ function checkCarrierReleaseCondition(lines) {
     if (line.trim() === '') {
       return;
     }
-    if (matchDependencyKeywordLine(lines, index, 'Depends on')) {
+    // The anchored keyword alone marks a dependency line here (#4250 review,
+    // Copilot): `Depends on rollout pending` does not parse into references,
+    // yet the shape forbids a Depends on line outside code all the same.
+    if (DEPENDS_ON_LINE_PATTERN.test(line)) {
       problems.push(`Depends on line outside code: "${line.trim()}"`);
-    } else if (matchDependencyKeywordLine(lines, index, 'Blocked by')) {
+    } else if (BLOCKED_BY_LINE_PATTERN.test(line)) {
       problems.push(
         `Blocked by line outside the Release condition section: "${line.trim()}"`,
       );
@@ -1226,7 +1250,7 @@ function checkCarrierDrafts(lines, rawNormalized) {
   const rawLines = rawNormalized.split('\n');
   const fenceLines = findFencedCodeRanges(rawNormalized)
     .map((range) => rawNormalized.slice(0, range.start).split('\n').length - 1)
-    .filter((line) => /^(?:`{3,}|~{3,})/u.test(rawLines[line] ?? ''));
+    .filter((line) => isTopLevelFenceOpener(rawLines, line));
   const reviewLine = /^Review: (?:reviewed|not reviewed)(?: .*)?$/u;
   const shapeLine = /^Shape: (?:orphan|roadmap|child)$/u;
   const problems = [];
@@ -1267,6 +1291,33 @@ function checkCarrierDrafts(lines, rawNormalized) {
         name,
         `${subsectionStarts.length} draft subsection(s) each have one Review line, one Shape line, and one fenced draft`,
       );
+}
+/**
+ * Whether the fence opener at `line` is a top-level draft fence (#4250
+ * review, Copilot). An opener indented four or more columns, or quoted with
+ * `>`, is not one here. An opener indented one to three columns is top-level
+ * unless the nearest unindented non-blank line above it is a list item, which
+ * makes it a list continuation. This is a line-level approximation, since
+ * the range helpers do not report container nesting.
+ */
+function isTopLevelFenceOpener(rawLines, line) {
+  const opener = /^( *)(?:`{3,}|~{3,})/u.exec(rawLines[line] ?? '');
+  if (opener === null || opener[1].length > 3) {
+    return false;
+  }
+  if (opener[1].length === 0) {
+    return true;
+  }
+  for (let index = line - 1; index >= 0; index -= 1) {
+    const above = rawLines[index] ?? '';
+    if (above.trim() === '') {
+      continue;
+    }
+    if (/^\S/u.test(above)) {
+      return !/^(?:[-*+]|\d+[.)])[ \t]/u.test(above);
+    }
+  }
+  return true;
 }
 function checkCarrierLabel(labels, authoringOnlyLabelName) {
   const id = 'carrier-label';
