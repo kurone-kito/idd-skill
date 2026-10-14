@@ -1,17 +1,16 @@
 # IDD — Orchestrator Phase (fan-out)
 
 Read this file only when the activation conditions below hold or a fan-out
-session restarts. Everything else in the IDD loop is unchanged. The fan-out
-requirements live in
+session restarts. The fan-out requirements live in
 [Orchestrator fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)
 and in
 [Orchestrator delegation](idd-claim.instructions.md#orchestrator-delegation).
 
 ## 1. Activation
 
-A restarted session with a unique session-suffixed agent id skips this section
-and goes to section 2. Any other restart neither activates fan-out nor refills:
-it follows [recovery](../../docs/idd-workflow.md#orchestrator-restart).
+A restarted session with a unique session-suffixed agent id skips this section.
+Any other restart neither activates fan-out nor refills: it follows
+[recovery](../../docs/idd-workflow.md#orchestrator-restart).
 
 Activate fan-out only when all conditions hold:
 
@@ -20,9 +19,8 @@ Activate fan-out only when all conditions hold:
   Eligibility `orchestrator`;
 - helper support is installed, so the profile-selected `idd-worker-budget`
   command exists (`instructions-only` has none);
-- the effective `orchestrator.maxWorkers` is at least 2 (run the
-  profile-selected `idd-worker-budget` command with `--running 0 --startable
-  0` and read `maxWorkers` from its output);
+- the effective `orchestrator.maxWorkers` is at least 2 (the `maxWorkers` in the
+  profile-selected `idd-worker-budget --running 0 --startable 0` output);
 - the session is not on the lite profile;
 - the session was not started for one explicit issue (A0-T), and the operator
   did not ask for a single-issue session;
@@ -33,26 +31,21 @@ unchanged. The cap is per orchestrator session, not per host.
 
 ## 2. Roster
 
-One entry per worker:
-
-- the issue number;
-- the claim ID;
-- the branch;
-- the harness's worker handle;
-- the report draft path;
-- the worker's state (`running`, `reporting`, `disposed`, or `stalled`).
+One entry per worker: the issue number, claim ID, branch, the harness's worker
+handle, the report draft path, and the worker's state (`running`, `reporting`,
+`disposed`, or `stalled`).
 
 Lost on restart: see [recovery](../../docs/idd-workflow.md#orchestrator-restart).
 
 ## 3. Dispatch
 
-1. Run Discover A0 through A4 Step 1.5 as written. The startable candidates
-   are the survivors of A4 Step 1.5.
+1. Run Discover A0 through A4 Step 1.5 as written; its survivors are the
+   startable candidates.
 2. Call the profile-selected `idd-worker-budget` command with
    `--running <count of entries not disposed>` and
-   `--startable <candidate count>`. Add `--harness-limit <limit>` from the
-   worker mechanism table's row for this harness when that row gives a
-   numeric limit, and omit it otherwise. Its `slots` is the number to start now.
+   `--startable <candidate count>`. Add `--harness-limit <limit>` from this
+   harness's worker mechanism table row when it gives a numeric limit; otherwise
+   omit it. Its `slots` is the number to start now.
 3. If `slots` is `0`, go to section 4. Otherwise pick that many candidates with
    `discover-shared-file-overlap`, passing the survivors with `--issues`,
    `--batch <slots>`, one `--in-flight` per roster entry not `disposed`, and
@@ -61,18 +54,16 @@ Lost on restart: see [recovery](../../docs/idd-workflow.md#orchestrator-restart)
    Pass it on every refill.
 4. For each pick in batch order, run A4.5, then the fresh-claim order in
    idd-claim.instructions.md through its claim verification only (worktree
-   first; B1 is the worker's). Then start a worker with the existing delegation
-   brief, adding the section 5 report request with a per-worker report path
-   and naming that pre-created worktree, which the worker reuses without B1
-   creation. Record the worker as a `running` roster entry.
+   first). Then start a worker with the existing delegation brief plus the
+   section 5 report request, naming that pre-created worktree, which the worker
+   reuses without B1 creation. Record a `running` roster entry.
 5. A pick that fails A4.5, or A5 before the claim marker is posted, has its
    worktree and branch removed (which deletes its lock) and leaves `--issues`
    before any refill. A failure after the marker is posted is contested: follow
    idd-claim.instructions.md, keep its claim and worktree, and remove it from
-   `--issues`. No worker started, so no roster entry is made.
-6. Every dispatched issue also leaves `--issues`, so a refill cannot claim it
-   again. Only a later full Discover run reconsiders a
-   failed pick.
+   `--issues`.
+6. Dispatched issues also leave `--issues`, so a refill cannot claim them again.
+   Only a later full Discover run reconsiders a failed pick.
 
 ## 4. Waiting and refill
 
@@ -81,15 +72,14 @@ Lost on restart: see [recovery](../../docs/idd-workflow.md#orchestrator-restart)
   to `reporting` before verification.
 - After each completion or wave, process `reporting` entries (§5), then call
   `idd-worker-budget` again and refill from the cached graph. Follow the Discover
-  re-run cadence, including the target-local A3 recheck.
-- When `slots` is `0` but candidates remain: apply stalled recovery to `stalled`
-  entries first. If every entry is
-  `disposed` or the roster is empty, report the budget's `limitingFactor` and
-  stop. Otherwise, wait for a `running` completion, or repeat recovery when none
-  is running.
+  re-run cadence.
+- When `slots` is `0` but candidates remain, recover `stalled` entries first. If
+  every entry is `disposed` or the roster is empty, report the budget's
+  `limitingFactor` and stop. Otherwise, wait for a `running` completion, or
+  repeat recovery when none is running.
 - When the graph in hand has nothing startable, re-run Discover as that cadence
-  requires. Report and stop only when that re-run finds nothing startable and every
-  roster entry is `disposed`.
+  requires. Report and stop only when that re-run finds nothing startable and
+  every roster entry is `disposed`.
 
 ## 5. Report and disposal
 
@@ -98,13 +88,13 @@ Lost on restart: see [recovery](../../docs/idd-workflow.md#orchestrator-restart)
   worktree, as the
   [worker final report store](../../docs/idd-helper-scripts.md#worker-final-report-store)
   describes.
-- The orchestrator verifies the outcome against live GitHub state, completes
-  the draft as the worker final report store describes, appends it with the
-  profile-selected `idd-worker-report append --file <path>`, then disposes of
-  the worker as the table's row says and marks its roster entry `disposed`.
-- If verification or the append fails, it keeps it
-  addressable, marks it `stalled`, and follows the worker-specific recovery in
-  the [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant).
+- Verify the outcome against live GitHub state, complete the draft, append it
+  with the profile-selected `idd-worker-report append --file <path>`, then
+  dispose of the worker as the table's row says and mark its roster entry
+  `disposed`.
+- If verification or the append fails, keep it addressable, mark it `stalled`,
+  and follow the worker-specific recovery in the
+  [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant).
 
 ## 6. Worker span
 

@@ -33,8 +33,8 @@ _{agent-id}: issue claim — IDD automation marker. Do not edit._
 
 **Important**: operational marker bodies are HTML comments. `gh issue
 comment` and `gh api -f body=` silently reject HTML-only bodies (and
-mishandle `@`-prefixed values) — always include the visible note and
-post via direct HTTP `POST` with a JSON body; see
+mishandle `@`-prefixed values) — post via direct HTTP `POST` with a JSON
+body; see
 `docs/idd-helper-scripts.md` for the full `gh api` pitfalls. When
 helper runtime is enabled, the `post-idd-marker` helper (`--type claim
 --target issue <number> --apply` plus the claim fields) posts this
@@ -101,9 +101,8 @@ when they affect a decision, but do not let them release, extend,
 supersede, restore, or block a claim.
 
 `claim-id` is a public correlation token, not a secret. Ownership proof
-comes from the current session having recorded the claim token, the
-marker being authored by a trusted actor, and the GitHub server
-`created_at` timestamp satisfying the phase rules.
+comes from the marker being authored by a trusted actor and the GitHub
+server `created_at` timestamp satisfying the phase rules.
 
 Repository-local actor policy and any forced-handoff settings live in
 `docs/customization.md`.
