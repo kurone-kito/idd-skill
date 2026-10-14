@@ -6221,14 +6221,24 @@ test('a fence indented one to three columns after prose is still a top-level dra
   );
 });
 
-test('a multiline inline code span containing a comment opener hides no carrier structure (#4250)', () => {
-  const body = carrierBody({
+test('a multiline inline code span hides nothing mid-line, but a line-start comment opener inside it still hides what follows (#4250)', () => {
+  // GitHub renders the mid-line opener as code, so the headings stay visible.
+  const midLine = carrierBody({
+    intro: 'Holds `drafts <!--\nthat` cannot yet be published.',
+  });
+  assert.equal(
+    carrierFinding(midLine, 'required-headings')?.result,
+    'pass',
+    'mid-line, the span is code',
+  );
+  // GitHub renders a line-start opener as a comment that swallows the rest.
+  const lineStart = carrierBody({
     intro: 'Holds `drafts\n<!--\nthat` cannot yet be published.',
   });
   assert.equal(
-    carrierFinding(body, 'required-headings')?.result,
-    'pass',
-    'the code span is not a comment, so the headings stay visible',
+    carrierFinding(lineStart, 'required-headings')?.result,
+    'fail',
+    'at a line start, the opener is a comment',
   );
 });
 
@@ -6327,6 +6337,26 @@ test('a comment opened after an even run of backslashes hides carrier structure,
     .replace('## Release condition', '\\<!--\n## Release condition')
     .replace('## Review ledger', '## Review ledger\n-->');
   assert.equal(carrierFinding(oddRun, 'required-headings')?.result, 'pass');
+});
+
+test('a heading inside a raw HTML block is not carrier structure (#4250)', () => {
+  const body = carrierBody().replace(
+    '## Release condition',
+    '<div>\n## Release condition\n</div>',
+  );
+  assert.equal(carrierFinding(body, 'required-headings')?.result, 'fail');
+});
+
+test('escaped marker examples do not trip the existing marker checks on a carrier (#4250)', () => {
+  const body = carrierBody({
+    intro:
+      'Holds drafts.\n\nQuote \\<!-- other-draft-carrier: v1 --> and \\<!-- idd-skill-blocked-by: example -->.',
+  });
+  assert.equal(
+    carrierFinding(body, 'marker-prefix-consistency')?.result,
+    'pass',
+  );
+  assert.equal(carrierFinding(body, 'dependency-marker-rule')?.result, 'pass');
 });
 
 test('a second ## Drafts or ## Release condition heading fails rather than hiding unchecked drafts (#4250)', () => {

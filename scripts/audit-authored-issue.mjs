@@ -675,7 +675,14 @@ function applyConfirmedMinimization(comments, mutations) {
   });
 }
 export function auditAuthoredIssue(body, options) {
-  const rawText = typeof body === 'string' ? body : String(body ?? '');
+  const sourceText = typeof body === 'string' ? body : String(body ?? '');
+  // A draft carrier's escaped comment openers render as text (#4250 review,
+  // Copilot), so they are blanked once here and every check, existing or
+  // new, reads the same body. Other shapes keep their text unchanged.
+  const rawText =
+    options.shape === 'carrier'
+      ? blankEscapedCommentOpeners(sourceText)
+      : sourceText;
   // Mask Markdown code regions (fenced blocks, indented blocks, and
   // inline spans) once, up front, and run every check (marker counting,
   // heading detection, visible-line scoping) against the result. A
@@ -1033,13 +1040,29 @@ function carrierStructureView(rawText) {
   const fencedRanges = findFencedCodeRanges(rawNormalized);
   const indentedRanges = findIndentedCodeRanges(rawNormalized, fencedRanges);
   const htmlBlockRanges = findHtmlBlockRanges(rawNormalized, fencedRanges);
-  // Inline code spans are excluded from the comment-opener scan too: a
-  // multiline span containing `<!--` at a line start is not a comment
-  // (#4250 review, Copilot).
-  // findMarkdownCodeRanges misses a span that crosses a line break, so the
-  // multiline spans come from findInlineCodeSpans.
-  const multilineInlineRanges = findInlineCodeSpans(rawNormalized).map(
-    (span) => ({ start: span.index, end: span.end }),
+  // Inline code spans are excluded from the comment-opener scan too, so a
+  // `<!--` inside a code span is not a comment. findMarkdownCodeRanges misses
+  // a span that crosses a line break, so multiline spans come from
+  // findInlineCodeSpans. An opener at a line start is the exception: GitHub
+  // renders it as a block-level comment that interrupts the paragraph and
+  // swallows what follows, whatever span it sits in (checked with the
+  // GitHub markdown API), so each such opener is carved out of its span.
+  const multilineInlineRanges = findInlineCodeSpans(rawNormalized).flatMap(
+    (span) => {
+      const ranges = [];
+      let start = span.index;
+      for (let position = span.index + 1; position < span.end; position += 1) {
+        if (
+          rawNormalized[position - 1] === '\n' &&
+          rawNormalized.startsWith('<!--', position)
+        ) {
+          ranges.push({ start, end: position });
+          start = position + 1;
+        }
+      }
+      ranges.push({ start, end: span.end });
+      return ranges;
+    },
   );
   const commentRanges = findHtmlCommentRanges(
     commentOpenerParityProbe(rawNormalized),
@@ -1054,8 +1077,11 @@ function carrierStructureView(rawText) {
   );
   // Index by UTF-16 code unit, as the range helpers do, and keep every
   // newline so line indexes stay aligned with the masked text.
+  // Raw HTML blocks are not Markdown structure either: GitHub renders their
+  // content as HTML, so a heading or fence inside one does not count (#4250
+  // review, Copilot). Their ranges are blanked along with the comments.
   const chars = rawNormalized.split('');
-  for (const range of commentRanges) {
+  for (const range of [...commentRanges, ...htmlBlockRanges]) {
     for (let index = range.start; index < range.end; index += 1) {
       if (chars[index] !== '\n') {
         chars[index] = ' ';
@@ -1078,12 +1104,8 @@ function buildCarrierFindings(
   }
   const structure = carrierStructureView(rawText);
   return [
-    checkCarrierMarker(blankEscapedCommentOpeners(text), markerPrefix),
-    checkCarrierForbiddenMarkers(
-      blankEscapedCommentOpeners(text),
-      structure.text,
-      markerPrefix,
-    ),
+    checkCarrierMarker(text, markerPrefix),
+    checkCarrierForbiddenMarkers(text, structure.text, markerPrefix),
     checkCarrierReleaseCondition(structure.text.split('\n')),
     checkCarrierDrafts(structure.text.split('\n'), structure.rawFree),
     checkCarrierLabel(labels, authoringOnlyLabelName),
