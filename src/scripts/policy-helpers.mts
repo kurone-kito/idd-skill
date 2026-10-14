@@ -29,6 +29,7 @@ interface CritiqueLoopPolicy {
   e10MaxPasses: number;
   deferAfterRounds: number;
   deferByUrgency: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
+  triageRecord: 'off' | 'record' | 'enforce';
   /**
    * Review-count thresholds at which `severity-tiered` relaxes (#3796): one
    * or two strictly ascending positive integers, `[]` when off or invalid.
@@ -526,6 +527,7 @@ interface RawConfig {
     e10MaxPasses?: unknown;
     deferAfterRounds?: unknown;
     deferByUrgency?: unknown;
+    triageRecord?: unknown;
     deferRelaxAtRounds?: unknown;
     deferNeedsDecision?: unknown;
     subagentWaitCeiling?: unknown;
@@ -550,6 +552,7 @@ interface RawConfig {
     roadmapLabelName?: unknown;
     blockedByHumanLabelName?: unknown;
     needsDecisionLabelName?: unknown;
+    authoringOnlyLabelName?: unknown;
     untrustedLabelerLogins?: unknown;
   };
   mergeGate?: { soloCodeownerAdminFallback?: unknown };
@@ -612,6 +615,7 @@ const DEFER_BY_URGENCY_MODES = new Set([
   'low-and-medium',
   'severity-tiered',
 ]);
+const TRIAGE_RECORD_MODES = new Set(['off', 'record', 'enforce']);
 const DEFER_NEEDS_DECISION_MODES = new Set(['on', 'off']);
 const EXTERNAL_CHECK_WAIVER_MODES = new Set([
   'disabled',
@@ -765,6 +769,7 @@ export const POLICY_DEFAULTS = Object.freeze({
     e10MaxPasses: 2,
     deferAfterRounds: 12,
     deferByUrgency: 'off',
+    triageRecord: 'off',
     deferRelaxAtRounds: Object.freeze([]),
     deferNeedsDecision: 'on',
     subagentWaitCeiling: 'PT20M',
@@ -796,7 +801,8 @@ export const POLICY_DEFAULTS = Object.freeze({
     roadmapLabelName: 'roadmap',
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
-    // Added in #2669: string array default, resolved like the three
+    authoringOnlyLabelName: 'status:authoring-only',
+    // Added in #2669: string array default, resolved like the four
     // sibling label-name fields above but via parseNonEmptyStringArray
     // (fail-closed to [] on a non-array, an empty array, or any entry
     // that isn't a non-empty string) instead of parseNonEmptyString.
@@ -1029,6 +1035,11 @@ export function normalizePolicyConfig(config: unknown) {
       DEFER_BY_URGENCY_MODES,
       POLICY_DEFAULTS.critiqueLoop.deferByUrgency,
     ) as CritiqueLoopPolicy['deferByUrgency'],
+    triageRecord: parseEnum(
+      c?.critiqueLoop?.triageRecord,
+      TRIAGE_RECORD_MODES,
+      POLICY_DEFAULTS.critiqueLoop.triageRecord,
+    ) as CritiqueLoopPolicy['triageRecord'],
     deferRelaxAtRounds: parseDeferRelaxAtRounds(
       c?.critiqueLoop?.deferRelaxAtRounds,
     ),
@@ -1374,16 +1385,21 @@ export function normalizePolicyConfig(config: unknown) {
         c?.labels?.needsDecisionLabelName,
         POLICY_DEFAULTS.labels.needsDecisionLabelName,
       ),
+      authoringOnlyLabelName: parseNonEmptyString(
+        c?.labels?.authoringOnlyLabelName,
+        POLICY_DEFAULTS.labels.authoringOnlyLabelName,
+      ),
       // #2669 PR review (Codex): this resolves to [] (trust everyone) on
       // any malformed entry, including a mix of valid + invalid logins --
       // fail-open for this denylist field, unlike an allowlist field's
       // fail-to-[] (fail-closed). Kept matching the sibling label-name
-      // fields' resolution pattern per #2669's own acceptance criteria;
-      // no consumer reads this list yet (see the schema description), so
-      // there is no live enforcement gap today. Reconsider the fail
-      // direction -- and whether schema validation alone is a sufficient
-      // guarantee for the consumer -- when #2671 designs the actual
-      // enforcement this list feeds.
+      // fields' resolution pattern per #2669's own acceptance criteria.
+      // idd-onboard --substitute now reads this list to generate the
+      // reserved-label guard workflow (#2671). A malformed entry resolves
+      // to [], which generates no guard, so the fail-open direction is a
+      // live enforcement gap. Reconsider it -- and whether schema validation
+      // alone is a sufficient guarantee for that consumer -- when the guard's
+      // own validation is designed.
       untrustedLabelerLogins: parseNonEmptyStringArray(
         c?.labels?.untrustedLabelerLogins,
         POLICY_DEFAULTS.labels.untrustedLabelerLogins,
@@ -2484,7 +2500,6 @@ interface RelaxStepResult {
  * it. With `[4, 7]`, counts 0 to 3 give 0 or 1, counts 4 to 6 give 1 or 2,
  * and counts 7 or more give 2 either way.
  */
-// audit:ignore-dead-export: E4/E5 applies the step from instruction text; tests lock every boundary and there is no helper caller
 export function relaxStepForReviewCount(
   reviewCount: number,
   thresholds: readonly number[],
@@ -2531,6 +2546,192 @@ export function relaxStepClauseParts(
     parts.push(`converged ${prHeadSha.slice(0, 7)}`);
   }
   return parts;
+}
+
+/**
+ * One E4/E5 triage record, written as the `Triage:` line of a disposition
+ * reply (#4186). `verdict`, `blocked` and `override` are reserved for later
+ * issues and stay `null` in this one. `convergedHead` is the first 7
+ * characters of the head SHA, set only when convergence raised the step.
+ */
+export interface TriageRecord {
+  tier: 'low' | 'medium' | 'high';
+  urgency: 'very-low' | 'low' | 'medium' | 'high';
+  step: 0 | 1 | 2;
+  convergedHead: string | null;
+  copilotLabel: 'low' | 'medium' | 'high' | null;
+  safety: boolean;
+  verdict: 'defer' | 'keep' | null;
+  blocked: string | null;
+  override: string | null;
+}
+
+const TRIAGE_TIER_VALUES: readonly string[] = ['low', 'medium', 'high'];
+const TRIAGE_VERDICT_VALUES: readonly string[] = ['defer', 'keep'];
+const TRIAGE_LINE_PATTERN =
+  /^Triage: tier (low|medium|high); urgency (very-low|low|medium|high); step ([012])(.*)$/u;
+const TRIAGE_OVERRIDE_SEPARATOR = '; override: ';
+const TRIAGE_LINE_BREAK_PATTERN = /[\r\n\u2028\u2029]/u;
+
+/**
+ * Format the `Triage:` line (#4186). The layout is fixed: `step` is always
+ * present, and each optional part appears only when it is set, in the order
+ * below. `override` comes last, so its reason may contain `; `. A `blocked`
+ * reason must not contain `; `, and no reason may contain a line break, so
+ * the line stays parseable. Throws on such input.
+ */
+export function formatTriageLine(record: TriageRecord): string {
+  const { blocked, override } = record;
+  // JavaScript's `.` does not match U+2028 or U+2029, so a reason containing
+  // either one would not parse back.
+  if (
+    blocked !== null &&
+    (blocked.includes('; ') || TRIAGE_LINE_BREAK_PATTERN.test(blocked))
+  ) {
+    throw new Error(
+      'triage blocked reason must not contain "; " or a line break',
+    );
+  }
+  if (
+    record.convergedHead !== null &&
+    !/^[0-9a-f]{7}$/u.test(record.convergedHead)
+  ) {
+    throw new Error(
+      'triage converged head must be seven lowercase hexadecimal characters',
+    );
+  }
+  if (override !== null && TRIAGE_LINE_BREAK_PATTERN.test(override)) {
+    throw new Error('triage override reason must not contain a line break');
+  }
+  const parts = [
+    `tier ${record.tier}`,
+    `urgency ${record.urgency}`,
+    `step ${record.step}`,
+  ];
+  if (record.convergedHead !== null) {
+    parts.push(`converged ${record.convergedHead}`);
+  }
+  if (record.copilotLabel !== null) {
+    parts.push(`Copilot ${record.copilotLabel}`);
+  }
+  if (record.safety) {
+    parts.push('safety');
+  }
+  if (record.verdict !== null) {
+    parts.push(`verdict ${record.verdict}`);
+  }
+  if (blocked !== null) {
+    parts.push(`blocked ${blocked}`);
+  }
+  const line = `Triage: ${parts.join('; ')}`;
+  return override === null
+    ? line
+    : `${line}${TRIAGE_OVERRIDE_SEPARATOR}${override}`;
+}
+
+/**
+ * Read the first `Triage:` line in `text` (#4186), or return `null` when no
+ * line matches or the line has a malformed part. The inverse of
+ * `formatTriageLine`.
+ */
+// audit:ignore-dead-export: parsed by the wave audit in a later roadmap issue
+export function parseTriageLine(text: string): TriageRecord | null {
+  for (const line of text.split(/\r?\n/u)) {
+    const match = TRIAGE_LINE_PATTERN.exec(line);
+    if (match !== null) {
+      return parseTriageRest(
+        match[1] as TriageRecord['tier'],
+        match[2] as TriageRecord['urgency'],
+        Number(match[3]) as TriageRecord['step'],
+        match[4] ?? '',
+      );
+    }
+  }
+  return null;
+}
+
+/** Position of an optional part in the fixed `Triage:` order, or -1 (#4186). */
+function triagePartRank(part: string): number {
+  if (part.startsWith('converged ')) {
+    return 0;
+  }
+  if (part.startsWith('Copilot ')) {
+    return 1;
+  }
+  if (part === 'safety') {
+    return 2;
+  }
+  if (part.startsWith('verdict ')) {
+    return 3;
+  }
+  if (part.startsWith('blocked ')) {
+    return 4;
+  }
+  return -1;
+}
+
+function parseTriageRest(
+  tier: TriageRecord['tier'],
+  urgency: TriageRecord['urgency'],
+  step: TriageRecord['step'],
+  rest: string,
+): TriageRecord | null {
+  const overrideAt = rest.indexOf(TRIAGE_OVERRIDE_SEPARATOR);
+  const parts = overrideAt === -1 ? rest : rest.slice(0, overrideAt);
+  const record: TriageRecord = {
+    tier,
+    urgency,
+    step,
+    convergedHead: null,
+    copilotLabel: null,
+    safety: false,
+    verdict: null,
+    blocked: null,
+    override:
+      overrideAt === -1
+        ? null
+        : rest.slice(overrideAt + TRIAGE_OVERRIDE_SEPARATOR.length),
+  };
+  if (parts === '') {
+    return record;
+  }
+  if (!parts.startsWith('; ')) {
+    return null;
+  }
+  // The format fixes the order of these parts, so each must come after the one
+  // before it. An unknown part ranks -1 and fails the same check.
+  let lastRank = -1;
+  for (const part of parts.slice(2).split('; ')) {
+    const rank = triagePartRank(part);
+    if (rank <= lastRank) {
+      return null;
+    }
+    lastRank = rank;
+    if (rank === 0) {
+      const sha = part.slice('converged '.length);
+      if (!/^[0-9a-f]{7}$/u.test(sha)) {
+        return null;
+      }
+      record.convergedHead = sha;
+    } else if (rank === 1) {
+      const label = part.slice('Copilot '.length);
+      if (!TRIAGE_TIER_VALUES.includes(label)) {
+        return null;
+      }
+      record.copilotLabel = label as TriageRecord['copilotLabel'];
+    } else if (rank === 2) {
+      record.safety = true;
+    } else if (rank === 3) {
+      const verdict = part.slice('verdict '.length);
+      if (!TRIAGE_VERDICT_VALUES.includes(verdict)) {
+        return null;
+      }
+      record.verdict = verdict as TriageRecord['verdict'];
+    } else {
+      record.blocked = part.slice('blocked '.length);
+    }
+  }
+  return record;
 }
 
 function severityTieredDefers(

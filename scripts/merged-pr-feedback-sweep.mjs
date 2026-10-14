@@ -552,10 +552,14 @@ function collectUnaddressedComments(
         primaryBotLogin,
       )
     : null;
+  // A "wasn't able to review any files" decline is neither a review nor an
+  // approval, so it cannot supersede earlier findings. It is not itself a
+  // finding either, so it is not surfaced as feedback.
   const canSupersedeHistoricalPrimaryFindings =
     latestPrimaryClause?.satisfied === true &&
     latestPrimaryClause.bodyShape !== null &&
-    latestPrimaryClause.bodyShape !== 'unrecognized';
+    latestPrimaryClause.bodyShape !== 'unrecognized' &&
+    latestPrimaryClause.bodyShape !== 'decline-no-reviewable-files';
   for (const [commentIndex, comment] of comments.entries()) {
     const author = authorLogin(comment);
     // Only IDD-agent comments are excluded by author (their dispositions are
@@ -794,8 +798,12 @@ export function renderOpenReadySection(
 // state also passes F1 (`resolveCallSiteRouting` in
 // branch-conflict-state.mts): CLEAN, or BEHIND, which readiness itself
 // already blocks when the base requires an up-to-date head. GitHub computes
-// `mergeable` asynchronously, and F1 classifies anything short of a
-// resolved MERGEABLE as still computing, so require that too.
+// `mergeable` asynchronously, and the two states differ. For CLEAN, F1 waits
+// for an UNKNOWN or missing `mergeable` to resolve. For BEHIND, F1 ignores
+// `mergeable` and decides with a `git merge-tree` probe; it rejects
+// CONFLICTING before either. The sweep cannot run that probe, so it requires
+// MERGEABLE for BEHIND too, on purpose: a BEHIND head whose `mergeable` is
+// still UNKNOWN is not listed.
 const F1_PASSING_MERGE_STATES = new Set(['CLEAN', 'BEHIND']);
 function isReadyReport(report) {
   const record = report !== null && typeof report === 'object' ? report : null;

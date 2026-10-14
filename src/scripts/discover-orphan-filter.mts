@@ -16,6 +16,7 @@ import {
   normalizeAutopilotSuitabilityFloor,
   parseAutopilotSuitability,
   rankAndRouteBySuitability,
+  resolveEffortLPolicy,
 } from './autopilot-suitability.mts';
 import { stripLeadingArgumentSeparator } from './cli-args.mts';
 import {
@@ -291,6 +292,7 @@ interface ClassifyIssueOptions {
   authoringLabelName?: unknown;
   blockedByHumanLabelName?: unknown;
   needsDecisionLabelName?: unknown;
+  authoringOnlyLabelName?: unknown;
   roadmapLabelName?: unknown;
   /**
    * The configured `providerOutage.declarationTarget` issue number
@@ -337,6 +339,7 @@ interface FilterOrphanIssuesOptions {
   authoringLabelName?: unknown;
   blockedByHumanLabelName?: unknown;
   needsDecisionLabelName?: unknown;
+  authoringOnlyLabelName?: unknown;
   roadmapLabelName?: unknown;
   /** See {@link ClassifyIssueOptions.providerOutageDeclarationTarget}. */
   providerOutageDeclarationTarget?: number | null;
@@ -345,6 +348,8 @@ interface FilterOrphanIssuesOptions {
   authoringStaleAgeMs?: number;
   autopilotSuitabilityFloor?: number;
   autopilotSuitabilityEnabled?: boolean;
+  /** #4199: `refuse` routes effort `L` orphans out under `autopilot`. */
+  effortLPolicy?: 'allow' | 'refuse';
   autopilot?: boolean;
   /** See {@link ClassifyIssueOptions.currentRepo}. */
   currentRepo?: string;
@@ -802,6 +807,9 @@ export function classifyIssue(
   const needsDecisionLabelName = normalizeNeedsDecisionLabelName(
     options.needsDecisionLabelName,
   );
+  const authoringOnlyLabelName = normalizeAuthoringOnlyLabelName(
+    options.authoringOnlyLabelName,
+  );
   // #4065 review fix (Codex P2): the same comparison the readiness check uses
   // for needs_decision_label_conflicts_with_authoring_label.
   const labelsCollide =
@@ -828,6 +836,7 @@ export function classifyIssue(
   const blockedLabels = new Set([
     blockedByHumanLabelName,
     needsDecisionLabelName,
+    authoringOnlyLabelName,
   ]);
   const blockedLabel = [...labels].find((label) => blockedLabels.has(label));
   if (blockedLabel) {
@@ -1180,6 +1189,7 @@ export async function filterOrphanIssues(
       authoringLabelName: options.authoringLabelName,
       blockedByHumanLabelName: options.blockedByHumanLabelName,
       needsDecisionLabelName: options.needsDecisionLabelName,
+      authoringOnlyLabelName: options.authoringOnlyLabelName,
       roadmapLabelName: options.roadmapLabelName,
       providerOutageDeclarationTarget: options.providerOutageDeclarationTarget,
       authoringJournalTarget: options.authoringJournalTarget,
@@ -1423,7 +1433,7 @@ export async function filterOrphanIssues(
   // Below-floor routing is opt-in (autopilot runs only): in attended
   // discovery the low-score issues stay selectable, just ranked last.
   // Advisory throughout — the A4.5/A5 gates still run on any selected
-  // candidate, and unscored issues are never routed out (fail-safe).
+  // candidate, and unscored issues are never routed out by score (fail-safe).
   const orphansByEffortThenNumber = [...orphans].sort(
     (left, right) =>
       effortOrdinal(left.effort) - effortOrdinal(right.effort) ||
@@ -1438,6 +1448,10 @@ export async function filterOrphanIssues(
       enabled: options.autopilotSuitabilityEnabled !== false,
       routeBelowFloor: options.autopilot === true,
       getScore: (orphan) => orphan.autopilotSuitability,
+      // #4199: effort `L` routing is autopilot-only and opt-in via refuse.
+      routeEffortL:
+        options.autopilot === true && options.effortLPolicy === 'refuse',
+      getEffort: (orphan) => orphan.effort,
     },
   );
 
@@ -1690,11 +1704,13 @@ async function produceOutput(
     authoringStaleAgeMs: policy.authoringStaleAgeMs,
     blockedByHumanLabelName: policy.blockedByHumanLabelName,
     needsDecisionLabelName: policy.needsDecisionLabelName,
+    authoringOnlyLabelName: policy.authoringOnlyLabelName,
     roadmapLabelName: policy.roadmapLabelName,
     providerOutageDeclarationTarget: durableTargets.providerOutageTarget,
     authoringJournalTarget: durableTargets.authoringJournalTarget,
     autopilotSuitabilityFloor: policy.autopilotSuitabilityFloor,
     autopilotSuitabilityEnabled: policy.autopilotSuitabilityEnabled,
+    effortLPolicy: policy.effortLPolicy,
     autopilot: args.autopilot,
     now: args.now || new Date(),
     claimState,
@@ -1934,7 +1950,9 @@ first; equal scores tie-break by lowest issue number). With --autopilot
 (autopilot runs), orphans whose score is below autopilotSuitabilityFloor
 (default 3) are moved to routed_to_human; without it (attended runs) they
 stay in orphans, ranked last. A missing or out-of-range score is treated
-as no score: the issue stays in orphans and is never routed out.
+as no score: the issue stays in orphans and is never routed out by score. With
+autopilotSuitability.effortL set to refuse, --autopilot also moves effort L
+orphans to routed_to_human.
 
 "filtered.triage_verdict_rejected" (#2243, default-on, not opt-in) excludes
 a candidate whose most recent trusted "A4.5 suitability gate rejection"
@@ -2015,6 +2033,7 @@ export function loadPolicy(policyPath: string) {
     authoringStaleAgeMs: authoringPolicy.staleAgeMs,
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+    authoringOnlyLabelName: labelsPolicy.authoringOnlyLabelName,
     roadmapLabelName: labelsPolicy.roadmapLabelName,
     // #2800: own-property-omitted when unconfigured or invalid, matching
     // normalizePolicyConfig's own absence semantics -- resolved to
@@ -2028,6 +2047,9 @@ export function loadPolicy(policyPath: string) {
     authoringJournalReference: config.issueAuthoring?.journalIssue ?? null,
     autopilotSuitabilityFloor: resolveAutopilotSuitabilityFloor(config),
     autopilotSuitabilityEnabled: resolveAutopilotSuitabilityEnabled(config),
+    // #4199: part of the returned policy, so it is also in the hint-cache
+    // key and an allow-to-refuse switch cannot serve a stale cached result.
+    effortLPolicy: resolveEffortLPolicy(config),
     // Passed through verbatim (raw, un-normalized) for
     // buildClaimStateResolution (#1395), which expects this same shape —
     // it is only consumed when --with-claim-state is passed. Undefined
@@ -2211,6 +2233,13 @@ function normalizeNeedsDecisionLabelName(labelName: unknown): string {
   return typeof labelName === 'string' && labelName.length > 0
     ? labelName
     : POLICY_DEFAULTS.labels.needsDecisionLabelName;
+}
+
+/** Resolve the configured `labels.authoringOnlyLabelName`. */
+function normalizeAuthoringOnlyLabelName(labelName: unknown): string {
+  return typeof labelName === 'string' && labelName.length > 0
+    ? labelName
+    : POLICY_DEFAULTS.labels.authoringOnlyLabelName;
 }
 
 /**

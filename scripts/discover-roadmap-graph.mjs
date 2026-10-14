@@ -1566,6 +1566,7 @@ async function annotateReadiness(
       roadmapLabelName: readiness.roadmapLabelName,
       blockedByHumanLabelName: readiness.blockedByHumanLabelName,
       needsDecisionLabelName: readiness.needsDecisionLabelName,
+      authoringOnlyLabelName: readiness.authoringOnlyLabelName,
       markerPrefix,
       // #3284 (Copilot review, PR #3415): without this, a `Blocked
       // by`/`Depends on` line naming this same repository
@@ -2189,6 +2190,7 @@ function buildReadinessResolution(owner, repo, policy) {
     roadmapLabelName: labelsPolicy.roadmapLabelName,
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+    authoringOnlyLabelName: labelsPolicy.authoringOnlyLabelName,
     nowIso: new Date().toISOString(),
   };
 }

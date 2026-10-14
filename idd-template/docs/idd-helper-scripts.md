@@ -1169,22 +1169,36 @@ in this preamble, since the fallback differs per helper.
   ```
 
 - `scripts/publish-authoring-hold.mjs` (`idd-publish-authoring-hold`,
-  #4127) plans and validates the Stage 1 publication of one drafted
-  orphan issue and writes nothing. It refuses `--shape child` (exit
-  `2`), requires `--review-result <path>` (a JSON object with
+  issues #4127 and #4171) publishes one drafted orphan issue under the
+  issue-authoring hold, running the authoring contract's New-issue
+  ownership steps in order. It refuses `--shape child` (exit `2`),
+  requires `--review-result <path>` (a JSON object with
   `"completed": true`; any `findings` entry must be `fixed` or
   `rejected`), and stops with the `blocked-by-human` outcome (exit `2`)
   when `issueAuthoring.journalIssue` is unset or unverifiable. It then
   puts the `authoring-publication` line first in the body, lints that
-  exact body with `audit-authored-issue.mjs --new-issue`, looks up the
-  authoring and bucket labels, renders the pending publication-intent
-  record through `post-idd-marker.mjs`'s dry run, and prints the plan
-  (exit `0`; a refusal exits `1`). The journal, the marker prefix and
-  the label names come from the repository policy file only, and
-  `--marker-prefix` is required when the issue or the journal is in
-  another repository. `--apply` is refused with exit `2` before any
-  `gh` call until the publication path lands as a follow-up, so the
-  issue-authoring publication capability is still unavailable.
+  exact body with `audit-authored-issue.mjs --new-issue` and looks up
+  the authoring and bucket labels. Without `--apply` it renders the
+  pending publication-intent record through `post-idd-marker.mjs`'s dry
+  run and prints the plan (exit `0`), with no trust or permission
+  check. With `--apply`, and only when the authenticated login is listed
+  in the repository policy file's `trustedMarkerActors` (no flag or
+  environment variable replaces that list) and has Write, Maintain or
+  Admin permission (a `[bot]` login skips the permission read), it
+  creates a missing label, posts the pending record, creates the issue
+  with its labels, attaches the issue to the record, posts the owner
+  marker, checks provenance, and posts `state=member` (exit `0`). A
+  refusal before the create exits `1`; a failure after it prints a
+  recovery hold and exits `1`. A failed marker post counts as unsent
+  (`"nothingSent": true`; a retry is permitted only before the create)
+  only when
+  `post-idd-marker.mjs`'s error envelope reports `notDispatched` or HTTP
+  status 401, 404 or 422; any other failure reports the journal as
+  `uncertain: replay the journal` (an owner marker reports
+  `"ownerMarker": "uncertain"`), and an uncertain pending record stops
+  before the create. Every policy value comes from the repository policy
+  file only, and `--marker-prefix` is required when the issue or the
+  journal is in another repository.
 
 - `scripts/review-disposition-verify.mjs` for read-only E7 disposition
   marker presence verification across PATH A and PATH B items
@@ -2321,6 +2335,11 @@ properties: `notDispatched: true` and `loadControl` (`outcome`
 duplicate re-read or retry. After an earlier ambiguous failure it stops
 posting and runs only its existing final duplicate check, and the error it
 then throws is the earlier failure, never a claim that nothing was sent.
+A 401, 404 or 422 is handled the same way (#4171): on the first attempt
+it is rethrown with its status (nothing landed), and on a later attempt
+it stops the retries and goes through that final duplicate check, so the
+error's status never reads as "nothing was sent" after a post that may
+have landed.
 The disposition apply loop and the live-status digest repair writes skip
 their reconciliation for a refusal, and the traversal and comment reads
 rethrow it instead of rebuilding a retryable error. No new automatic
@@ -5725,9 +5744,10 @@ to post it is the consuming track's job.
   its classification bucket, so `counts.rerunEligible` covers only rows a
   plan can still act on and the buckets still sum to `counts.total`. A
   superseded `pass` instance stays in `counts.pass`. Superseded instances are
-  counted in neither `counts.rerunEligible` nor `counts.rerunBudgetHeld`. This
-  is reporting only: no classification, plan, or recovery plan changes. A
-  superseded row in the `awaiting-fresh-review`,
+  counted in neither `counts.rerunEligible` nor `counts.rerunBudgetHeld`. The
+  counts are reporting only and change no classification. A superseded row is
+  excluded from the live-coverage recovery plan (kurone-kito/idd-skill#4150).
+  A superseded row in the `awaiting-fresh-review`,
   `bot-gated-skip`, or `unresolved` classification no longer produces its
   outstanding-state note, because it moves to the `superseded` bucket. The
   stderr summary adds one line for the superseded non-pass rows, in the form
@@ -6838,7 +6858,7 @@ first (August) form -- every review generated from 2026-09-04 onward
 parsed as `suppressedCount: 0` regardless of its real content.
 `classifyCopilotReviewBody` (a leaf module, `copilot-review-body.mts`,
 importing only `markdown-code.mts`'s code-region stripper)
-recognizes four shapes, reported as the new `review.bodyShape` field
+recognizes five shapes, reported as the new `review.bodyShape` field
 alongside `suppressedCount`:
 
 - `overview-v2`: the body carries the `<!-- ccr-overview-v2 -->` marker
@@ -6866,6 +6886,15 @@ alongside `suppressedCount`:
   `resolveLatestCopilotReviewClause`'s own output in practice, since that
   function already excludes an error-bodied review before selecting the
   absolute-latest one (unchanged, `#3015`).
+- `decline-no-reviewable-files`: Copilot's exact "wasn't able to review
+  any files" notice (`#4142`, observed on `kurone-kito/dotfiles#609`),
+  matched by whole-body equality after the `#3015` normalization. It is a
+  terminal decline for the head it names, not a review.
+  `findLastCopilotReviewCommit` never counts it as coverage, and
+  `findLastCopilotDeclineCommit` reports it separately, so
+  `advisory-wait-state` and the convergence and readiness gates reach
+  `COPILOT_UNAVAILABLE` at once, with no recovery marker and no window
+  wait.
 - `unrecognized`: none of the above, including an absent/empty body.
 
 **Fail-closed on an unrecognized shape (kurone-kito/idd-skill#3258,
@@ -6875,7 +6904,10 @@ override (below) additionally requires `review.bodyShape` to be
 anything other than `unrecognized`, unless a trusted `review-ack`
 already covers the review -- so a review body this gate cannot parse at
 all no longer silently converges. The verdict's `reasons` entry and the
-review-ack next action both name `bodyShape: unrecognized` explicitly.
+review-ack next action both name `bodyShape: unrecognized` explicitly. The
+`decline-no-reviewable-files` shape is held the same way, with its own
+reason and review-ack next action, so it never converges on its own
+(`#4142`).
 A configured non-Copilot `primaryBotLogin` (the `external-bot` review
 policy, `#2137`) has no known body shapes at all -- a reply-only review
 from such a bot can legitimately have an empty body -- so this rule
@@ -6922,7 +6954,9 @@ matchesHead
           && every citation-bearing suppressed item has its own stamped
              disposition))
   && (primaryBotLogin is not the Copilot default
-      || bodyShape !== 'unrecognized' || hasValidReviewAck)
+      || ((bodyShape !== 'unrecognized'
+           && bodyShape !== 'decline-no-reviewable-files')
+          || hasValidReviewAck))
 ```
 
 The `itemCount` half is bound to the LATEST review specifically
@@ -7044,6 +7078,48 @@ from F2 on a non-zero `--assert` exit:
 Fail closed the same way mid-poll or if the verdict JSON is missing or
 unusable: treat the carve-out as not applicable / stop and post a hold,
 same as `AW4`/`AW5`.
+
+### E5 deferred-findings bundle
+
+- Preferred command when helper runtime is enabled:
+
+  ```sh
+  idd-review-defer-bundle --origin-issue <n> --pr <n> --title '<text>' \
+    --items-file <path> [--policy <path>]
+  ```
+
+- Source repository equivalent: `node scripts/review-defer-bundle.mjs`
+  with the same flags.
+- Flags: `--origin-issue` (the issue the findings belong to, rendered as
+  the `Refs` line), `--pr` (the pull request they were deferred from),
+  and `--title` (the follow-up issue title) are required. `--items-file`
+  is required and holds a JSON array of deferred findings, each with
+  `title`, `threadUrl`, `finding`, `acceptance`, and `path`.
+- Policy: `--policy` names the repository policy file whose
+  `markerPrefix` labels the footer and defer-source markers. Without it,
+  `.github/idd/config.json` is read from the current directory, so run
+  the helper from the repository root. An absent file or a missing field
+  falls back to `idd-skill`. An explicit `--policy` path that is missing
+  or malformed is a usage error, never a silent fallback. So are a
+  malformed default file, an empty `--policy` value, and a
+  `markerPrefix` that is empty or not a string. (Unlike
+  `publish-authoring-hold`, an empty `--policy` is not treated as absent.)
+- Output: one JSON object on stdout:
+
+  ```json
+  {
+    "title": "...",
+    "body": "...",
+    "lint": { "passed": true, "failures": [] }
+  }
+  ```
+
+- Exit codes: `0` when `lint.passed` is true. `1` for a usage error
+  (a missing or unknown flag, an unreadable or malformed items or policy
+  file, or an input that the renderer rejects) and for a body that fails
+  the authored-issue lint; the JSON is still printed in the lint case.
+- Network-free boundary: the helper never calls the GitHub API and never
+  creates an issue. The caller files the rendered title and body.
 
 ### E7 disposition verification
 

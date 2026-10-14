@@ -633,6 +633,69 @@ test('resolves configured blocked-label names (#1273)', async () => {
   );
 });
 
+// #4109: an open issue carrying the authoring-only label is excluded from
+// Discover like needs-decision; the unlabelled copy is the guard.
+test('excludes an issue carrying the authoring-only label with its own reason (#4109)', async () => {
+  const issue = (number: number, labels: string[]) => ({
+    number,
+    title: `authoring-only guard ${number}`,
+    state: 'OPEN',
+    body: '',
+    labels: labels.map((name) => ({ name })),
+  });
+  const summary = await evaluateDiscoverReadiness([4109001, 4109002], {
+    loadIssue: async (number) =>
+      number === 4109001
+        ? issue(4109001, ['status:authoring-only'])
+        : issue(4109002, []),
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.deepEqual(
+    summary.ready.map((entry) => entry.number),
+    [4109002],
+  );
+  const excluded = summary.filteredOut.find(
+    (entry) => entry.number === 4109001,
+  );
+  assert.deepEqual(excluded?.reasons, ['label:status:authoring-only']);
+});
+
+// Non-default override: a dropped forwarding site would fall back to the
+// default name and fail this assertion.
+test('a configured authoring-only label name replaces the default (#4109)', async () => {
+  const summary = await evaluateDiscoverReadiness([4109003, 4109004], {
+    loadIssue: async (number) => ({
+      number,
+      title: `override ${number}`,
+      state: 'OPEN',
+      body: '',
+      labels: [
+        {
+          name:
+            number === 4109003
+              ? 'triage:authoring-only'
+              : 'status:authoring-only',
+        },
+      ],
+    }),
+    findRoadmapsByMarker: async () => [],
+    authoringOnlyLabelName: 'triage:authoring-only',
+  });
+
+  const byNumber = new Map(
+    summary.filteredOut.map((entry) => [entry.number, entry]),
+  );
+  assert.deepEqual(byNumber.get(4109003)?.reasons, [
+    'label:triage:authoring-only',
+  ]);
+  // The stock default no longer matches once overridden, so #4109004 is ready.
+  assert.deepEqual(
+    summary.ready.map((entry) => entry.number),
+    [4109004],
+  );
+});
+
 test('an empty-string label-name option falls back to the default instead of disabling the check (#1273 review fix)', async () => {
   const summary = await evaluateDiscoverReadiness([104], {
     loadIssue: async () => ({

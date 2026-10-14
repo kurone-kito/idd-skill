@@ -78,6 +78,32 @@ export function isCopilotErrorReviewBody(body) {
     .replace(/\s+/g, ' ');
   return normalized === COPILOT_ERROR_REVIEW_BODY;
 }
+/**
+ * Observed on `kurone-kito/dotfiles#609` (2026-10-13): Copilot posted this
+ * COMMENTED review on head `53c50daa` for a PR whose only change was a file
+ * GitHub excludes by default (`.gitignore`). Every later Copilot run on that
+ * head sees the same exclusion, so the notice is a terminal decline for the
+ * head it names, not a transient failure. It is neither a finding nor an
+ * approval. Matched byte-for-byte after the #3015 normalization, so any
+ * other wording stays `unrecognized` and fails closed.
+ */
+const COPILOT_NO_REVIEWABLE_FILES_BODY =
+  "copilot wasn't able to review any files in this pull request. check if " +
+  'the **files changed** in this pull request are included in [default ' +
+  'exclusions](https://docs.github.com/en/copilot/reference/review-excluded-files).';
+/**
+ * `true` when `body` is Copilot's exact "wasn't able to review any files"
+ * decline notice (see {@link COPILOT_NO_REVIEWABLE_FILES_BODY}). Read only by
+ * `classifyCopilotReviewBody`, so every selector that classifies a review body
+ * reads this notice the same way.
+ */
+function isCopilotNoReviewableFilesBody(body) {
+  const normalized = String(body ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+  return normalized === COPILOT_NO_REVIEWABLE_FILES_BODY;
+}
 // -----------------------------------------------------------------------
 // Shape classification (#3258)
 // -----------------------------------------------------------------------
@@ -165,6 +191,9 @@ export function classifyCopilotReviewBody(body) {
   }
   if (isCopilotErrorReviewBody(body)) {
     return { shape: 'error', suppressedCount: 0 };
+  }
+  if (isCopilotNoReviewableFilesBody(body)) {
+    return { shape: 'decline-no-reviewable-files', suppressedCount: 0 };
   }
   const stripped = stripMarkdownCodeRegions(body);
   const trimmedStart = stripped.trimStart();

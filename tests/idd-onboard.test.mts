@@ -763,6 +763,12 @@ test('planUntrustedLabelerGuardWorkflow generates the guard workflow for non-emp
     plan.content ?? '',
     /github\.event\.label\.name == 'status:needs-decision'/,
   );
+  // #4109: the authoring-only label is a reserved name too, so an untrusted
+  // labeler cannot silently remove an issue from Discover.
+  assert.match(
+    plan.content ?? '',
+    /github\.event\.label\.name == 'status:authoring-only'/,
+  );
   assert.match(
     plan.content ?? '',
     /export GH_HOST="\$\{GITHUB_SERVER_URL#https:\/\/\}"/,
@@ -783,10 +789,15 @@ test('planUntrustedLabelerGuardWorkflow substitutes custom (non-default) label n
     roadmapLabelName: 'epic',
     blockedByHumanLabelName: 'blocked:human',
     needsDecisionLabelName: 'needs:decision',
+    authoringOnlyLabelName: 'triage:authoring-only',
     untrustedLabelerLogins: ['triage-bot[bot]'],
   });
   const plan = planUntrustedLabelerGuardWorkflow(root);
   assert.match(plan.content ?? '', /github\.event\.label\.name == 'epic'/);
+  assert.match(
+    plan.content ?? '',
+    /github\.event\.label\.name == 'triage:authoring-only'/,
+  );
   assert.match(
     plan.content ?? '',
     /github\.event\.label\.name == 'blocked:human'/,
@@ -902,6 +913,7 @@ test('buildUntrustedLabelerGuardWorkflowContent escapes an embedded single quote
     roadmapLabelName: "adopter's-roadmap",
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
+    authoringOnlyLabelName: 'status:authoring-only',
     untrustedLabelerLogins: ['bot[bot]'],
   });
   assert.match(content, /github\.event\.label\.name == 'adopter''s-roadmap'/);
@@ -919,9 +931,27 @@ test('buildUntrustedLabelerGuardWorkflowContent rejects a label name containing 
         roadmapLabelName: 'roadmap\npermissions:\n  contents: write\nfoo:',
         blockedByHumanLabelName: 'status:blocked-by-human',
         needsDecisionLabelName: 'status:needs-decision',
+        authoringOnlyLabelName: 'status:authoring-only',
         untrustedLabelerLogins: ['bot[bot]'],
       }),
     /labels\.roadmapLabelName must not contain control characters/,
+  );
+});
+
+test('buildUntrustedLabelerGuardWorkflowContent rejects an authoring-only label name containing a newline (#4109)', () => {
+  // The authoring-only name is interpolated into the same `if: |-` block
+  // scalar as the other reserved names, so it gets the same rejection.
+  assert.throws(
+    () =>
+      buildUntrustedLabelerGuardWorkflowContent({
+        roadmapLabelName: 'roadmap',
+        blockedByHumanLabelName: 'status:blocked-by-human',
+        needsDecisionLabelName: 'status:needs-decision',
+        authoringOnlyLabelName:
+          'status:authoring-only\npermissions:\n  contents: write',
+        untrustedLabelerLogins: ['bot[bot]'],
+      }),
+    /labels\.authoringOnlyLabelName must not contain control characters/,
   );
 });
 
@@ -936,6 +966,7 @@ test('buildUntrustedLabelerGuardWorkflowContent rejects a label name containing 
           roadmapLabelName: `roadmap${injected}permissions:`,
           blockedByHumanLabelName: 'status:blocked-by-human',
           needsDecisionLabelName: 'status:needs-decision',
+          authoringOnlyLabelName: 'status:authoring-only',
           untrustedLabelerLogins: ['bot[bot]'],
         }),
       /labels\.roadmapLabelName must not contain control characters/,
@@ -948,13 +979,14 @@ test('buildUntrustedLabelerGuardWorkflowContent safely escapes a control charact
   // JSON.stringify already renders a control character as a short escape
   // (e.g. "\r" -> the two characters backslash + "r"), so the serialized
   // logins blob this function embeds never contains a raw control byte --
-  // unlike the three label-name fields above, which are interpolated as
+  // unlike the four label-name fields above, which are interpolated as
   // raw strings and do need the explicit rejection this test's sibling
   // above covers.
   const content = buildUntrustedLabelerGuardWorkflowContent({
     roadmapLabelName: 'roadmap',
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
+    authoringOnlyLabelName: 'status:authoring-only',
     untrustedLabelerLogins: ['bot\r[bot]'],
   });
   assert.match(content, /contains\(fromJSON\('\["bot\\r\[bot\]"\]'\)/);

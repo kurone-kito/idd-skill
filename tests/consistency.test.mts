@@ -945,6 +945,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       e10MaxPasses: 2,
       deferAfterRounds: 12,
       deferByUrgency: 'off',
+      triageRecord: 'off',
       deferRelaxAtRounds: [],
       deferNeedsDecision: 'on',
       subagentWaitCeiling: 'PT20M',
@@ -969,6 +970,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       roadmapLabelName: 'roadmap',
       blockedByHumanLabelName: 'status:blocked-by-human',
       needsDecisionLabelName: 'status:needs-decision',
+      authoringOnlyLabelName: 'status:authoring-only',
       untrustedLabelerLogins: [],
     },
     mergeGate: {
@@ -1170,6 +1172,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         e10MaxPasses: 2,
         deferAfterRounds: 20,
         deferByUrgency: 'low-and-medium',
+        triageRecord: 'off',
         deferRelaxAtRounds: [4, 7],
         deferNeedsDecision: 'off',
         subagentWaitCeiling: 'PT45M',
@@ -1194,6 +1197,7 @@ test('policy normalization provides default-safe values and supports aliases', (
         roadmapLabelName: 'epic',
         blockedByHumanLabelName: 'blocked:human',
         needsDecisionLabelName: 'needs:decision',
+        authoringOnlyLabelName: 'status:authoring-only',
         untrustedLabelerLogins: ['triage-bot'],
       },
       mergeGate: {

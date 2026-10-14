@@ -344,7 +344,7 @@
     },
     {
       "id": "bundle-orchestrator-phase",
-      "description": "Orchestrator fan-out phase file: idd-orchestrator (loaded with bundle-core and bundle-discovery-phase, only when its activation conditions hold)",
+      "description": "Orchestrator fan-out phase file: idd-orchestrator (loaded with bundle-core and bundle-discovery-phase, only when its activation conditions hold or a fan-out session restarts)",
       "files": [
         ".github/instructions/idd-orchestrator.instructions.md"
       ],
@@ -456,7 +456,7 @@
         ".github/instructions/idd-merge.instructions.md",
         ".github/instructions/idd-pre-merge.instructions.md"
       ],
-      "limitBytes": 115500
+      "limitBytes": 124800
     },
     {
       "id": "bundle-onboarding-front-door",
@@ -478,7 +478,7 @@
         "idd-template/docs/onboarding/project-tuning.md",
         "idd-template/docs/onboarding/template-distribution.md"
       ],
-      "limitBytes": 175000
+      "limitBytes": 175150
     }
   ],
   "contextCeiling": {
@@ -507,10 +507,22 @@
         "reason": "Maintainer-approved option 1 on issue #3943, sized by the docs convention (roughly 10% headroom over measured need, not an exact fit): the lite E10 cap wording adds about 370 bytes to review-fix-lite, which sat at 97.92% of its limit before. Measured 43,387 bytes on the current tree; raised to 46,800, about 10% above measured and rounded up to the nearest 100. Stays under the 95% notice band at 92.7%."
       },
       {
+        "bundle": "bundle-onboarding-companions",
+        "limitBytes": 175150,
+        "issue": 4109,
+        "reason": "Operator-approved option A on issue #4109 (PR #4147). The companions bundle sat at 97.99% of its 175,000-byte limit with 24 bytes of headroom. Naming the fourth reserved label, labels.authoringOnlyLabelName, in project-tuning.md and issue-mediated-bootstrap.md adds about 60 bytes, so the limit rises by 150 bytes to 175,150 to keep the bundle under its 98% ceiling. The hearing catalog is JSON and sits outside this bundle."
+      },
+      {
         "bundle": "bundle-review-triage-phase",
         "limitBytes": 59300,
         "issue": 4195,
         "reason": "Maintainer-approved in the roadmap hearing of 2026-10-13, sized by the docs convention (roughly 10% headroom over measured need, not an exact fit): the E5 triage-record rule adds about 800 bytes to review-triage, which had 0 bytes of headroom. Measured 53,214 bytes before the change, about 54,010 after; raised to 59,300, the value approved in the hearing, about 10% above that."
+      },
+      {
+        "bundle": "bundle-merge-phase",
+        "limitBytes": 124800,
+        "issue": 4142,
+        "reason": "maintainer-approved raise (kurone-kito, 2026-10-14) for issue #4142: the decline-shape decision path adds about 230 bytes, and the bundle was at 98% after the #4168 and #4098 merges; sized at about 10% headroom over the measured need"
       }
     ]
   },

@@ -394,3 +394,112 @@ test('resolveEffortLPolicy fails safe to allow for any non-exact or malformed in
   assert.equal(resolveEffortLPolicy('refuse'), 'allow');
   assert.equal(resolveEffortLPolicy(undefined), 'allow');
 });
+
+interface EffortCandidate {
+  id: string;
+  score: number;
+  effort: 'S' | 'M' | 'L';
+}
+
+const effortCandidates: EffortCandidate[] = [
+  { id: 'a', score: 5, effort: 'L' },
+  { id: 'b', score: 4, effort: 'S' },
+  { id: 'c', score: 3, effort: 'M' },
+];
+
+test('rankAndRouteBySuitability routes effort L items to humans with routeEffortL (#4199)', () => {
+  const options = {
+    floor: 3,
+    getScore: (item: EffortCandidate) => item.score,
+    getEffort: (item: EffortCandidate) => item.effort,
+    routeEffortL: true,
+  };
+  const ranked = rankAndRouteBySuitability(effortCandidates, {
+    ...options,
+    enabled: true,
+  });
+  assert.deepEqual(
+    ranked.ranked.map((item) => item.id),
+    ['b', 'c'],
+  );
+  assert.deepEqual(
+    ranked.routedToHuman.map((item) => item.id),
+    ['a'],
+  );
+
+  // Effort is a separate axis, so L routing still applies under the
+  // score kill-switch, which otherwise returns every item unchanged.
+  const killSwitch = rankAndRouteBySuitability(effortCandidates, {
+    ...options,
+    enabled: false,
+  });
+  assert.deepEqual(
+    killSwitch.ranked.map((item) => item.id),
+    ['b', 'c'],
+  );
+  assert.deepEqual(
+    killSwitch.routedToHuman.map((item) => item.id),
+    ['a'],
+  );
+});
+
+test('rankAndRouteBySuitability leaves effort L items ranked without routeEffortL (#4199)', () => {
+  const options = {
+    floor: 3,
+    getScore: (item: EffortCandidate) => item.score,
+    getEffort: (item: EffortCandidate) => item.effort,
+  };
+  for (const enabled of [true, false]) {
+    const { ranked, routedToHuman } = rankAndRouteBySuitability(
+      effortCandidates,
+      { ...options, enabled },
+    );
+    assert.deepEqual(routedToHuman, [], `enabled=${enabled}`);
+    assert.deepEqual(
+      ranked.map((item) => item.id),
+      ['a', 'b', 'c'],
+      `enabled=${enabled}`,
+    );
+  }
+});
+
+test('rankAndRouteBySuitability routes an effort L item once when it is also below floor (#4199)', () => {
+  const items: EffortCandidate[] = [
+    { id: 'x', score: 1, effort: 'L' },
+    { id: 'y', score: 1, effort: 'S' },
+    { id: 'z', score: 4, effort: 'L' },
+    { id: 'w', score: 4, effort: 'M' },
+  ];
+  const { ranked, routedToHuman } = rankAndRouteBySuitability(items, {
+    floor: 3,
+    routeBelowFloor: true,
+    getScore: (item) => item.score,
+    getEffort: (item) => item.effort,
+    routeEffortL: true,
+  });
+  // Input order is kept; x is routed by both rules but appears once.
+  assert.deepEqual(
+    routedToHuman.map((item) => item.id),
+    ['x', 'y', 'z'],
+  );
+  assert.deepEqual(
+    ranked.map((item) => item.id),
+    ['w'],
+  );
+});
+
+test('rankAndRouteBySuitability ignores routeEffortL when no getEffort is given (#4199)', () => {
+  const { ranked, routedToHuman } = rankAndRouteBySuitability(
+    effortCandidates,
+    {
+      floor: 3,
+      getScore: (item) => item.score,
+      routeEffortL: true,
+    },
+  );
+  assert.deepEqual(routedToHuman, []);
+  assert.deepEqual(
+    ranked.map((item) => item.id),
+    ['a', 'b', 'c'],
+  );
+});

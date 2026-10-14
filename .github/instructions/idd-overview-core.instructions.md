@@ -323,6 +323,7 @@ Read this file first, then load the phase file matching your situation.
 | Starting fresh, and fan-out holds: helper support installed, a worker-table harness with Eligibility `orchestrator`, `orchestrator.maxWorkers` at least 2, not lite, not one explicit issue or single-issue request, not `GITHUB_ACTIONS` | `idd-orchestrator.instructions.md`, then `idd-discover.instructions.md` |
 | Starting fresh (no active claim) | `idd-discover.instructions.md`, then `idd-claim.instructions.md` |
 | Starting fresh with one explicit issue target | `idd-discover.instructions.md` A0-T, then `idd-claim.instructions.md` |
+| Orchestrating session restarted with claims or workers it started (roster lost) | `idd-orchestrator.instructions.md`, then [Orchestrator restart](../../docs/idd-workflow.md#orchestrator-restart); `idd-discover.instructions.md` only for the Discover pass that restart step 3 runs after its gate |
 | Unsure mid E/F-phase while still owning claim | [Live-session E/F orientation](../../docs/idd-workflow.md#live-session-ef-orientation) |
 | Resuming after crash / rate-limit / handoff / operator-present deliberate pause | `idd-resume.instructions.md` |
 | Claimed, branch exists, no PR yet | `idd-work.instructions.md` |

@@ -994,7 +994,8 @@ function escapeActionsExpressionStringLiteral(value, context) {
 /**
  * Build the generated `strip-untrusted-labels.yml` content from a target
  * repository's own configured (or defaulted) `labels.roadmapLabelName` /
- * `labels.blockedByHumanLabelName` / `labels.needsDecisionLabelName` and
+ * `labels.blockedByHumanLabelName` / `labels.needsDecisionLabelName` /
+ * `labels.authoringOnlyLabelName` and
  * declared `labels.untrustedLabelerLogins` (#2671) — the same trust-model
  * shape as this repository's own hand-written workflow of the same name,
  * but with the reserved-label set and untrusted-actor logins substituted
@@ -1007,6 +1008,7 @@ export function buildUntrustedLabelerGuardWorkflowContent(labels) {
     ['labels.roadmapLabelName', labels.roadmapLabelName],
     ['labels.blockedByHumanLabelName', labels.blockedByHumanLabelName],
     ['labels.needsDecisionLabelName', labels.needsDecisionLabelName],
+    ['labels.authoringOnlyLabelName', labels.authoringOnlyLabelName],
   ];
   const labelCondition = labelFields
     .map(
@@ -1022,8 +1024,8 @@ export function buildUntrustedLabelerGuardWorkflowContent(labels) {
 # repository's own \`.github/idd/config.json\` \`labels.*\` configuration
 # (#2671). Re-running onboarding regenerates this file; edit
 # \`labels.untrustedLabelerLogins\` / \`labels.roadmapLabelName\` /
-# \`labels.blockedByHumanLabelName\` / \`labels.needsDecisionLabelName\`
-# instead of this file directly.
+# \`labels.blockedByHumanLabelName\` / \`labels.needsDecisionLabelName\` /
+# \`labels.authoringOnlyLabelName\` instead of this file directly.
 #
 # Trust model: this workflow triggers on \`issues: labeled\` and
 # \`pull_request_target: labeled\`, which each fire once per label
@@ -1042,7 +1044,7 @@ export function buildUntrustedLabelerGuardWorkflowContent(labels) {
 #   - The job runs only when BOTH hold for this one event:
 #     \`github.event.sender.login\` is one of this repository's declared
 #     \`labels.untrustedLabelerLogins\`, AND \`github.event.label.name\` is
-#     one of this repository's three configured reserved IDD role labels.
+#     one of this repository's four configured reserved IDD role labels.
 #   - This is fail-safe by construction against ever re-fighting a human: a
 #     human re-adding the same label afterward is a *separate* \`labeled\`
 #     event whose \`sender.login\` is the human, not a declared untrusted

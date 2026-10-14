@@ -284,12 +284,12 @@
         "state": {
           "type": "string",
           "enum": ["NOT_TERMINAL", "COPILOT_UNAVAILABLE"],
-          "description": "COPILOT_UNAVAILABLE only when the recovery-cycle cap is exhausted, the terminal window has elapsed since clockAnchor, and no current-HEAD Copilot review exists (lastCopilotCommit !== prHeadSha) -- all proven from trusted evidence. Any missing or ambiguous evidence fails closed to NOT_TERMINAL."
+          "description": "COPILOT_UNAVAILABLE only when the recovery-cycle cap is exhausted, the terminal window has elapsed since clockAnchor, and no current-HEAD Copilot review exists (lastCopilotCommit !== prHeadSha) -- all proven from trusted evidence. The one exception is a declined head (kurone-kito/idd-skill#4142): when the latest default-Copilot review names the head with the decline notice (wasn't able to review any files), COPILOT_UNAVAILABLE needs only the active claim binding, with no cap, window, or clockAnchor. Any missing or ambiguous evidence fails closed to NOT_TERMINAL."
         },
         "reason": {
           "type": "string",
           "minLength": 1,
-          "description": "Machine-readable reason for the current state: active-claim-not-provided, no-trusted-recovery-markers, recovery-cap-not-exhausted, terminal-window-not-elapsed, current-head-review-exists, or the COPILOT_UNAVAILABLE satisfied-all-conditions reason."
+          "description": "Machine-readable reason for the current state: active-claim-not-provided, no-trusted-recovery-markers, recovery-cap-not-exhausted, terminal-window-not-elapsed, current-head-review-exists, copilot-declined-no-reviewable-files (#4142: a declined head, terminal without the cap or window), or the COPILOT_UNAVAILABLE satisfied-all-conditions reason."
         }
       },
       "additionalProperties": false
@@ -307,7 +307,7 @@
         "reason": {
           "type": "string",
           "minLength": 1,
-          "description": "Machine-readable reason: active-claim-not-provided, not-pending, same-head-marker-present, recovery-marker-only-no-request-marker (#2327), proven-covers-head, recovery-cap-exhausted, recovery-attempt-eligible, recheck-budget-unspent (#2327), or non-pending-recovery-attempt-eligible (#2327)."
+          "description": "Machine-readable reason: active-claim-not-provided, not-pending, same-head-marker-present, recovery-marker-only-no-request-marker (#2327), proven-covers-head, recovery-cap-exhausted, recovery-attempt-eligible, recheck-budget-unspent (#2327), non-pending-recovery-attempt-eligible (#2327), or copilot-declined-no-reviewable-files (#4142, a declined head, which never yields an attempt)."
         }
       },
       "additionalProperties": false

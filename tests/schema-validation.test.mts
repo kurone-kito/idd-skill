@@ -832,6 +832,59 @@ test('policy schema rejects a critiqueLoop.deferByUrgency value outside the enum
   );
 });
 
+test('policy schema accepts every critiqueLoop.triageRecord value (#4185)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const triageRecord of ['off', 'record', 'enforce']) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = { ...instance.critiqueLoop, triageRecord };
+    assert.deepEqual(
+      validate(instance, schema),
+      [],
+      `expected triageRecord ${triageRecord} to validate`,
+    );
+  }
+});
+
+test('policy schema rejects a critiqueLoop.triageRecord value outside the enum (#4185)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = { ...instance.critiqueLoop, triageRecord: 'on' };
+  assert.ok(
+    validate(instance, schema).length > 0,
+    'expected an unlisted triageRecord value to be rejected',
+  );
+});
+
+test('policy schema defines critiqueLoop.triageRecord as a three-value string enum with its default in words (#4185)', () => {
+  const schema = loadJson('schemas/policy.schema.json') as {
+    properties: {
+      critiqueLoop: {
+        properties: {
+          triageRecord: {
+            type?: string;
+            enum?: unknown[];
+            description: string;
+          };
+        };
+      };
+    };
+  };
+  const property = schema.properties.critiqueLoop.properties.triageRecord;
+  assert.equal(property.type, 'string');
+  assert.deepEqual(property.enum, ['off', 'record', 'enforce']);
+  assert.ok(
+    property.description.includes('defaults to "off"'),
+    'expected the description to state the default in words',
+  );
+  // validate-schemas rejects the `default` keyword, so the default lives
+  // in the description only.
+  assert.equal('default' in property, false);
+});
+
 test('policy schema accepts critiqueLoop.deferNeedsDecision on and off (#3777)', () => {
   const schema = loadJson('schemas/policy.schema.json');
   for (const deferNeedsDecision of ['on', 'off']) {
@@ -3309,6 +3362,29 @@ test('policy schema rejects labels needsDecisionLabelName empty string', () => {
   const errors = validate(instance, schema);
   assert.ok(
     errors.some((e) => e.includes('labels.needsDecisionLabelName')),
+    errors.join('\n'),
+  );
+});
+
+test('policy schema accepts labels.authoringOnlyLabelName (#4109)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.labels = { authoringOnlyLabelName: 'status:authoring-only' };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema rejects labels authoringOnlyLabelName empty string (#4109)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.labels = { authoringOnlyLabelName: '' };
+  const errors = validate(instance, schema);
+  assert.ok(
+    errors.some((e) => e.includes('labels.authoringOnlyLabelName')),
     errors.join('\n'),
   );
 });

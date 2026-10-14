@@ -287,6 +287,7 @@ interface PolicyConfigFile {
     e10MaxPasses?: number;
     deferAfterRounds?: number;
     deferByUrgency?: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
+    triageRecord?: 'off' | 'record' | 'enforce';
     deferRelaxAtRounds?: readonly number[];
     deferNeedsDecision?: 'on' | 'off';
     subagentWaitCeiling?: string;
@@ -329,6 +330,7 @@ interface PolicyConfigFile {
     roadmapLabelName?: string;
     blockedByHumanLabelName?: string;
     needsDecisionLabelName?: string;
+    authoringOnlyLabelName?: string;
     untrustedLabelerLogins?: readonly string[];
   };
   mergeGate?: {
@@ -1561,6 +1563,7 @@ const policyConfigFixture = {
     e10MaxPasses: 2,
     deferAfterRounds: 12,
     deferByUrgency: 'off',
+    triageRecord: 'off',
     deferRelaxAtRounds: [4, 7],
     deferNeedsDecision: 'on',
     subagentWaitCeiling: 'PT20M',
@@ -1590,6 +1593,7 @@ const policyConfigFixture = {
     roadmapLabelName: 'roadmap',
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
+    authoringOnlyLabelName: 'status:authoring-only',
     untrustedLabelerLogins: ['triage-bot'],
   },
   mergeGate: { soloCodeownerAdminFallback: 'auto-admin-retry' },
