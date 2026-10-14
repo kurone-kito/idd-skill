@@ -1449,6 +1449,8 @@ test('runBodyItemDisposition apply refuses an unknown title before the claim che
   assert.equal(exitCode, 1);
   assert.equal(report.status, 'failed');
   assert.match(report.error ?? '', /lists no Previously missed item titled/);
+  // Nothing was posted, so the report carries no body (#4187).
+  assert.equal(report.body, undefined);
   assert.equal(claimChecks, 0);
   assert.deepEqual(port.fixture.postedComments, []);
   assert.equal(validate(report, resultSchema).length, 0);
@@ -3651,6 +3653,37 @@ test('a late read that turns keep under --override reports kind usage in the env
   assert.deepEqual(run.posted, []);
   assertNoWrite(run);
   assert.equal(envelopeKind(run.stderr), 'usage');
+});
+
+test('an apply with no matching thread fails with no body and posts nothing (#4187)', () => {
+  const run = runTriageApply(
+    [
+      '--pr',
+      '42',
+      '--comment-id',
+      '999',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--claimless',
+      '--apply',
+      '--tier',
+      'low',
+      '--urgency',
+      'low',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(0),
+  );
+  assert.equal(run.status, 1, run.stderr);
+  assert.deepEqual(run.posted, []);
+  assertNoWrite(run);
+  const report = JSON.parse(run.stdout) as { status?: string; body?: string };
+  assert.equal(report.status, 'failed');
+  assert.equal(report.body, undefined);
 });
 
 test('record mode prints one verdict line on an apply and posts it (#4187)', () => {
