@@ -40,9 +40,18 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
-import { appendReviewReplyStamp } from './marker-helpers.mjs';
+import {
+  appendReviewReplyStamp,
+  renderReviewReplyStamp,
+} from './marker-helpers.mjs';
+import {
+  formatTriageLine,
+  normalizePolicyConfig,
+  relaxStepForReviewCount,
+} from './policy-helpers.mjs';
 import {
   classifyPrLoopMembership,
+  isCopilotReviewerLogin,
   isDispositionComment,
   isRejectionConfirmedDisposition,
   normalizeTrustedMarkerLogins,
@@ -268,6 +277,197 @@ export function runBodyItemDisposition(port, input) {
   report.replyId = posted.id;
   return { report, exitCode: 0 };
 }
+/** A refused triage input. The CLI exits 1 with kind `usage` and posts nothing. */
+export class TriageUsageError extends Error {}
+/** A failed read of the reviews or the head. The CLI reports kind `transport`. */
+export class TriageReadError extends Error {
+  original;
+  constructor(original) {
+    super('triage read failed');
+    this.original = original;
+  }
+}
+function readTriageInput(read) {
+  try {
+    return read();
+  } catch (error) {
+    throw new TriageReadError(error);
+  }
+}
+const TRIAGE_TIER_VALUES = ['low', 'medium', 'high'];
+const TRIAGE_URGENCY_VALUES = ['very-low', 'low', 'medium', 'high'];
+/**
+ * Refuse a triage flag combination before any network call (#4186): the enum
+ * values, the `--tier`/`--urgency` pair, `--path-b` exclusivity, the
+ * `record`/`enforce` requirement on an Accepted or Rejected reply, and the
+ * `--advisory-converged` reviewPolicy check. A valid triage flag with no line
+ * to carry it is a no-op, not an error; an invalid value is always a usage
+ * error.
+ */
+export function validateTriageFlags(input) {
+  const { flags } = input;
+  if (flags.tier !== '' && !TRIAGE_TIER_VALUES.includes(flags.tier)) {
+    throw new TriageUsageError(
+      `--tier must be one of ${TRIAGE_TIER_VALUES.join(', ')}`,
+    );
+  }
+  if (
+    flags.copilotLabel !== '' &&
+    !TRIAGE_TIER_VALUES.includes(flags.copilotLabel)
+  ) {
+    throw new TriageUsageError(
+      `--copilot-label must be one of ${TRIAGE_TIER_VALUES.join(', ')}`,
+    );
+  }
+  if (flags.urgency !== '' && !TRIAGE_URGENCY_VALUES.includes(flags.urgency)) {
+    throw new TriageUsageError(
+      `--urgency must be one of ${TRIAGE_URGENCY_VALUES.join(', ')}`,
+    );
+  }
+  const scoringFlags =
+    flags.copilotLabel !== '' ||
+    flags.safetyClass ||
+    flags.lite ||
+    flags.advisoryConverged !== '';
+  // Checked before the pair, so `--path-b` with a lone score names `--path-b`.
+  if (
+    flags.pathB &&
+    (flags.tier !== '' || flags.urgency !== '' || scoringFlags)
+  ) {
+    throw new TriageUsageError(
+      '--path-b cannot be combined with --tier, --urgency, --copilot-label, --safety-class, --lite, or --advisory-converged',
+    );
+  }
+  if ((flags.tier === '') !== (flags.urgency === '')) {
+    throw new TriageUsageError('--tier and --urgency must be given together');
+  }
+  // The same prefix test the apply gate uses, so a body that gate admits (for
+  // example `**Accepted:**`) cannot skip the requirement. A `**Rejection
+  // confirmed by maintainer**` body does not match it, which keeps that
+  // exemption.
+  const dispositionReply = isDispositionComment({ body: input.body });
+  if (
+    input.apply &&
+    (input.triageRecord === 'record' || input.triageRecord === 'enforce') &&
+    !flags.pathB &&
+    dispositionReply &&
+    flags.tier === ''
+  ) {
+    throw new TriageUsageError(
+      `triageRecord ${input.triageRecord} requires --tier and --urgency on an Accepted or Rejected reply`,
+    );
+  }
+  const reviewPolicy = input.reviewPolicy;
+  if (
+    flags.advisoryConverged !== '' &&
+    flags.tier !== '' &&
+    reviewPolicy !== undefined &&
+    reviewPolicy !== null &&
+    reviewPolicy !== 'copilot-advisory'
+  ) {
+    throw new TriageUsageError(
+      `--advisory-converged requires reviewPolicy copilot-advisory, but reviewPolicy is ${JSON.stringify(reviewPolicy)}`,
+    );
+  }
+}
+function reviewAuthorLogin(review) {
+  return review?.user?.login;
+}
+/**
+ * Build the stamped reply body, with the `Triage:` line when `--tier` and
+ * `--urgency` are both set (#4186). Without both, the body is what it was
+ * before this change. The relax step reads the pull request's reviews only
+ * under `severity-tiered` without `--lite`, and reads the head only when
+ * `--advisory-converged` is also set on that path. A SHA that does not match
+ * the head throws a `TriageUsageError`. A failed read throws a
+ * `TriageReadError` that wraps the original error. The caller passes the
+ * normalized policy, so this function loads no config.
+ */
+export function buildTriageReplyBody(input) {
+  const { flags, rawBody, markerPrefix } = input;
+  if (rawBody.trim() === '') {
+    return { body: '', record: null };
+  }
+  if (flags.tier === '' || flags.urgency === '') {
+    return {
+      body: appendReviewReplyStamp(rawBody, markerPrefix),
+      record: null,
+    };
+  }
+  let step = 0;
+  let convergedHead = null;
+  if (input.deferByUrgency === 'severity-tiered' && !flags.lite) {
+    const reviews = readTriageInput(() => input.port.listReviews(input.pr));
+    const copilotReviews = reviews.filter((review) =>
+      isCopilotReviewerLogin(reviewAuthorLogin(review)),
+    ).length;
+    let converged = false;
+    let head = '';
+    if (flags.advisoryConverged !== '') {
+      head = readTriageInput(() =>
+        input.port.getChangeRequestHeadSha(input.pr),
+      );
+      if (flags.advisoryConverged !== head) {
+        throw new TriageUsageError(
+          `--advisory-converged ${flags.advisoryConverged} does not match the pull request head ${head}`,
+        );
+      }
+      converged = true;
+    }
+    const relax = relaxStepForReviewCount(
+      copilotReviews,
+      input.deferRelaxAtRounds,
+      converged,
+    );
+    step = relax.step;
+    convergedHead = relax.raisedByConvergence ? head.slice(0, 7) : null;
+  }
+  const record = {
+    tier: flags.tier,
+    urgency: flags.urgency,
+    step,
+    convergedHead,
+    copilotLabel: flags.copilotLabel === '' ? null : flags.copilotLabel,
+    safety: flags.safetyClass,
+    verdict: null,
+    blocked: null,
+    override: null,
+  };
+  return {
+    body: placeTriageLine(rawBody, markerPrefix, formatTriageLine(record)),
+    record,
+  };
+}
+/**
+ * Put `line` on its own line directly before an existing reply-identity
+ * stamp, or, with no stamp, append it and then the stamp (#4186). The
+ * appended form leaves one blank line before the stamp, as
+ * `appendReviewReplyStamp` always does.
+ */
+function placeTriageLine(rawBody, markerPrefix, line) {
+  const stampAt = findReviewReplyStamp(rawBody, markerPrefix);
+  if (stampAt !== -1) {
+    const before = rawBody.slice(0, stampAt);
+    const separator = before === '' || before.endsWith('\n') ? '' : '\n';
+    return `${before}${separator}${line}\n${rawBody.slice(stampAt)}`;
+  }
+  return appendReviewReplyStamp(
+    `${rawBody.replace(/\s+$/u, '')}\n${line}`,
+    markerPrefix,
+  );
+}
+/**
+ * The index of the first reply-identity stamp in `body`, or -1. The search
+ * accepts the same whitespace and case variants `hasReviewReplyStamp` does.
+ */
+function findReviewReplyStamp(body, markerPrefix) {
+  const literal = renderReviewReplyStamp(markerPrefix);
+  const pattern = literal
+    .replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+    .replace(/ /gu, '\\s*');
+  const match = new RegExp(pattern, 'iu').exec(body);
+  return match === null ? -1 : match.index;
+}
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --pr spec key
@@ -289,6 +489,13 @@ const RESOLVE_REVIEW_THREAD_FLAG_SPEC = {
   '--agent-id': { type: 'string', default: '' },
   '--trusted-marker-logins': { type: 'string', default: '' },
   '--claimless': { type: 'boolean', default: false },
+  '--tier': { type: 'string', default: '' },
+  '--urgency': { type: 'string', default: '' },
+  '--copilot-label': { type: 'string', default: '' },
+  '--safety-class': { type: 'boolean', default: false },
+  '--lite': { type: 'boolean', default: false },
+  '--advisory-converged': { type: 'string', default: '' },
+  '--path-b': { type: 'boolean', default: false },
   '--apply': { type: 'boolean', default: false },
   '--help': { type: 'boolean', short: 'h' },
 };
@@ -334,6 +541,13 @@ export function parseArgs(argv) {
     agentId: values['agent-id'],
     trustedMarkerLogins: splitList(values['trusted-marker-logins']),
     claimless: values.claimless,
+    tier: values.tier,
+    urgency: values.urgency,
+    copilotLabel: values['copilot-label'],
+    safetyClass: values['safety-class'],
+    lite: values.lite,
+    advisoryConverged: values['advisory-converged'],
+    pathB: values['path-b'],
     apply: values.apply,
     help,
   };
@@ -374,6 +588,16 @@ Dry-run by default; --apply mutates.
                                  reason:bootstrap ... --> marker naming this PR and whose
                                  closing issue(s) have no active claim; cannot combine
                                  with --claim-issue / --claim-id
+  --tier <low|medium|high>       E4 tier of the finding; needs --urgency. With both,
+                                 the reply carries a Triage line (#4186)
+  --urgency <very-low|low|medium|high>
+                                 E4 urgency score; needs --tier
+  --copilot-label <low|medium|high>
+                                 Copilot's own severity label for the finding (optional)
+  --safety-class                 the finding is in the safety class (optional)
+  --lite                         the caller follows the lite profile: relax step 0
+  --advisory-converged <sha>     head commit the advisory-convergence verdict was for
+  --path-b                       the reply answers a PATH B item; no triage flags
   --apply                        post the reply and resolve the thread, or post the
                                  body-item comment (default: dry-run)
   -h, --help                     show this help
@@ -734,21 +958,42 @@ function main() {
   // to be needed) come from this single read.
   const iddConfig = loadIddConfig();
   const markerPrefixRaw = iddConfig?.markerPrefix;
-  // `--body` is optional in dry-run. `parseCliArgs` defaults it to '', but
-  // coerce anyway so a missing value cannot throw on `.trim()` before the
-  // report is written.
-  const rawBody = typeof args.body === 'string' ? args.body : '';
-  const stampedBody = rawBody.trim()
-    ? appendReviewReplyStamp(
-        rawBody,
-        typeof markerPrefixRaw === 'string' ? markerPrefixRaw : undefined,
-      )
-    : '';
+  // #4186: the triage flags are refused before the port is created and before
+  // any read or gh call. A flag with no line to carry it is a no-op.
+  const triagePolicy = normalizePolicyConfig(iddConfig ?? {}).critiqueLoop;
+  const triageFlags = {
+    tier: args.tier,
+    urgency: args.urgency,
+    copilotLabel: args.copilotLabel,
+    safetyClass: args.safetyClass,
+    lite: args.lite,
+    advisoryConverged: args.advisoryConverged,
+    pathB: args.pathB,
+  };
+  try {
+    validateTriageFlags({
+      flags: triageFlags,
+      apply: args.apply,
+      body: args.body,
+      triageRecord: triagePolicy.triageRecord,
+      reviewPolicy: iddConfig?.reviewPolicy,
+    });
+  } catch (error) {
+    if (!(error instanceof TriageUsageError)) {
+      throw error;
+    }
+    writeStderrSync(`${error.message}\n`);
+    exitClassified(1, 'usage', error.message);
+  }
   const currentRepo =
     args.owner && args.repo ? null : resolveCurrentGithubRepository();
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
   const port = createGithubProviderAdapter(owner, repo);
+  // `--body` is optional in dry-run. `parseCliArgs` defaults it to '', but
+  // coerce anyway so a missing value cannot throw on `.trim()` before the
+  // report is written.
+  const rawBody = typeof args.body === 'string' ? args.body : '';
   // #2616: fast fail-closed preview for both dry-run and --apply -- the
   // per-mutation re-check below (inside assertClaim) is the one that
   // actually gates the apply-mode mutations.
@@ -776,6 +1021,38 @@ function main() {
         classified.httpStatus,
       );
     }
+  }
+  // #4186: the Triage line is built once the port exists, because the relax
+  // step may read the pull request's reviews and head. A usage error or a
+  // failed read exits here, before any mutation.
+  let stampedBody;
+  try {
+    stampedBody = buildTriageReplyBody({
+      port,
+      pr,
+      rawBody,
+      markerPrefix:
+        typeof markerPrefixRaw === 'string' ? markerPrefixRaw : undefined,
+      deferByUrgency: triagePolicy.deferByUrgency,
+      deferRelaxAtRounds: triagePolicy.deferRelaxAtRounds,
+      flags: triageFlags,
+    }).body;
+  } catch (error) {
+    if (error instanceof TriageUsageError) {
+      writeStderrSync(`${error.message}\n`);
+      exitClassified(1, 'usage', error.message);
+    }
+    // #4186: a failed read of the reviews or the head is kind `transport`, the
+    // issue's contract. Any other error keeps the kind the classifier gives it.
+    const source = error instanceof TriageReadError ? error.original : error;
+    const classified = classifyHelperError(source);
+    writeStderrSync(`reply not posted: ${classified.message}\n`);
+    exitClassified(
+      1,
+      error instanceof TriageReadError ? 'transport' : classified.kind,
+      classified.message,
+      classified.httpStatus,
+    );
   }
   if (bodyItem) {
     runBodyItemCli(port, args, { pr, owner, repo, iddConfig, stampedBody });

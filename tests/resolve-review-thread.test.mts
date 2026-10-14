@@ -1,11 +1,20 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { extractPreviouslyMissedItemTitles } from '../src/scripts/copilot-review-body.mts';
+import { tagGhCommandError } from '../src/scripts/gh-exec.mts';
+import { classifyHelperError } from '../src/scripts/helper-cli-runner.mts';
 import { renderOutOfLoopMarker } from '../src/scripts/marker-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import type {
@@ -16,6 +25,7 @@ import {
   activeOwnedClaim,
   applyResolveReviewThread,
   assertNoGraphqlErrors,
+  buildTriageReplyBody,
   findBodyItem,
   findThreadForComment,
   hasBodyItemDispositionPrefix,
@@ -25,6 +35,10 @@ import {
   type ResolveReviewThreadReport,
   type ReviewThreadNode,
   runBodyItemDisposition,
+  type TriageFlags,
+  TriageReadError,
+  TriageUsageError,
+  validateTriageFlags,
 } from '../src/scripts/resolve-review-thread.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 import { buildReviewThreadNode, stubExecutable } from './test-utils.mts';
@@ -866,6 +880,8 @@ test('--apply --claimless does not require --claim-issue / --claim-id (compiled 
         env: {
           ...process.env,
           PATH: '',
+          HOME: scratch,
+          XDG_CONFIG_HOME: scratch,
           IDD_TEST_GH_GUARD_LEDGER: ledgerPath,
           IDD_TEST_GH_GUARD_SELF_CHECK: '1',
         },
@@ -999,7 +1015,27 @@ if (args[0] === 'api' && joined.includes('.head.ref')) {
 fail('unexpected gh invocation: ' + joined);
 `,
   );
+  // Run from a scratch cwd whose fixture config has no critiqueLoop, so a
+  // later repository opt-in (for example a triageRecord mode) cannot change
+  // this operator-authorized reply. HOME and XDG_CONFIG_HOME point at the
+  // same scratch directory so no user-global policy layer applies either.
+  let scratch = '';
+  let decoy = '';
+  const savedXdg = process.env.XDG_CONFIG_HOME;
   try {
+    // A user-global triage mode in the parent environment. The child's own
+    // HOME and XDG_CONFIG_HOME must hide it, so removing those overrides
+    // would make the child read it and fail this test.
+    decoy = mkdtempSync(join(tmpdir(), 'idd-operator-decoy-'));
+    mkdirSync(join(decoy, 'idd-skill'), { recursive: true });
+    writeFileSync(
+      join(decoy, 'idd-skill', 'config.json'),
+      `${JSON.stringify({ critiqueLoop: { triageRecord: 'record' } })}\n`,
+    );
+    process.env.XDG_CONFIG_HOME = decoy;
+    scratch = mkdtempSync(join(tmpdir(), 'idd-operator-apply-'));
+    mkdirSync(join(scratch, '.github', 'idd'), { recursive: true });
+    writeFileSync(join(scratch, '.github', 'idd', 'config.json'), '{}\n');
     const output = execFileSync(
       process.execPath,
       [
@@ -1017,14 +1053,39 @@ fail('unexpected gh invocation: ' + joined);
         '--body',
         '**Accepted** — operator-authorized, no linked issue',
       ],
-      { cwd: REPO_ROOT, encoding: 'utf8' },
+      {
+        cwd: scratch,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          // Inherited on a GitHub runner, where it would skip the user-global
+          // layer the decoy relies on.
+          GITHUB_ACTIONS: '',
+          HOME: scratch,
+          XDG_CONFIG_HOME: scratch,
+        },
+      },
     );
     const report = JSON.parse(output) as ResolveReviewThreadReport;
     assert.equal(report.status, 'applied');
     assert.equal(report.replyId, 4242);
     assert.equal(report.threadId, 'THREAD1');
   } finally {
-    restore();
+    try {
+      restore();
+    } finally {
+      if (savedXdg === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = savedXdg;
+      }
+      if (decoy) {
+        rmSync(decoy, { recursive: true, force: true });
+      }
+      if (scratch) {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    }
   }
 });
 
@@ -1551,6 +1612,1077 @@ fail('unexpected gh invocation: ' + joined);
   } finally {
     restore();
   }
+});
+
+// Triage line (#4186). The fake port answers the Copilot review count and the
+// head SHA from fixtures; `throwingReviewsPort` proves a path makes no read.
+const TRIAGE_PR = 42;
+const TRIAGE_HEAD = 'deadbeefcafe0123456789abcdef0123456789ab';
+const TRIAGE_LOGIN = 'copilot-pull-request-reviewer[bot]';
+const TRIAGE_STAMP = '<!-- idd-skill-review-reply -->';
+
+function triageFlags(overrides: Partial<TriageFlags> = {}): TriageFlags {
+  return {
+    tier: '',
+    urgency: '',
+    copilotLabel: '',
+    safetyClass: false,
+    lite: false,
+    advisoryConverged: '',
+    pathB: false,
+    ...overrides,
+  };
+}
+
+function triagePort(reviewCount: number): ProviderPort {
+  return createFakeProviderAdapter({
+    reviews: {
+      [TRIAGE_PR]: Array.from({ length: reviewCount }, (_, index) => ({
+        id: index + 1,
+        user: { login: TRIAGE_LOGIN },
+        state: 'COMMENTED',
+        body: '',
+      })),
+    },
+    changeRequestHeadShas: { [TRIAGE_PR]: TRIAGE_HEAD },
+  });
+}
+
+function throwingReviewsPort(): ProviderPort {
+  return {
+    ...triagePort(0),
+    listReviews: () => {
+      throw new Error('listReviews must not be called on this path');
+    },
+  };
+}
+
+function buildTriage(
+  port: ProviderPort,
+  rawBody: string,
+  flags: Partial<TriageFlags>,
+  policy: {
+    deferByUrgency?: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
+    markerPrefix?: string;
+  } = {},
+) {
+  return buildTriageReplyBody({
+    port,
+    pr: TRIAGE_PR,
+    rawBody,
+    markerPrefix: policy.markerPrefix,
+    deferByUrgency: policy.deferByUrgency ?? 'severity-tiered',
+    deferRelaxAtRounds: [4, 7],
+    flags: triageFlags(flags),
+  });
+}
+
+test('buildTriageReplyBody writes step 0 with a blank line before the stamp (#4186)', () => {
+  const { body, record } = buildTriage(
+    triagePort(2),
+    '**Accepted** — fixed in abc',
+    {
+      tier: 'high',
+      urgency: 'high',
+    },
+  );
+  assert.equal(record?.step, 0);
+  assert.equal(
+    body,
+    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0\n\n${TRIAGE_STAMP}`,
+  );
+});
+
+test('buildTriageReplyBody wraps a failed head read so a 404 still reads as a read failure (#4186)', () => {
+  const port = {
+    ...triagePort(4),
+    getChangeRequestHeadSha: () => {
+      throw tagGhCommandError(new Error('gh: Not Found (HTTP 404)'));
+    },
+  };
+  assert.throws(
+    () =>
+      buildTriage(port, '**Accepted** — x', {
+        tier: 'high',
+        urgency: 'high',
+        advisoryConverged: TRIAGE_HEAD,
+      }),
+    (error: unknown) =>
+      error instanceof TriageReadError &&
+      classifyHelperError(error.original).kind === 'not-found',
+  );
+});
+
+test('buildTriageReplyBody relax step follows the Copilot review count at 4 and 7 (#4186)', () => {
+  const four = buildTriage(triagePort(4), '**Accepted** — x', {
+    tier: 'high',
+    urgency: 'high',
+  });
+  assert.equal(four.record?.step, 1);
+  const seven = buildTriage(triagePort(7), '**Accepted** — x', {
+    tier: 'high',
+    urgency: 'high',
+  });
+  assert.equal(seven.record?.step, 2);
+});
+
+test('buildTriageReplyBody keeps step 0 under --lite at nine reviews (#4186)', () => {
+  const { record } = buildTriage(triagePort(9), '**Accepted** — x', {
+    tier: 'high',
+    urgency: 'high',
+    lite: true,
+  });
+  assert.equal(record?.step, 0);
+});
+
+test('buildTriageReplyBody reads no review under lite or a non-severity-tiered mode (#4186)', () => {
+  const lite = buildTriage(throwingReviewsPort(), '**Accepted** — x', {
+    tier: 'high',
+    urgency: 'high',
+    lite: true,
+  });
+  assert.equal(lite.record?.step, 0);
+  const low = buildTriage(
+    throwingReviewsPort(),
+    '**Accepted** — x',
+    { tier: 'high', urgency: 'high' },
+    { deferByUrgency: 'low' },
+  );
+  assert.equal(low.record?.step, 0);
+});
+
+test('buildTriageReplyBody converged head raises the step only with the matching SHA (#4186)', () => {
+  const four = buildTriage(triagePort(4), '**Accepted** — x', {
+    tier: 'high',
+    urgency: 'high',
+    advisoryConverged: TRIAGE_HEAD,
+  });
+  assert.equal(four.record?.step, 2);
+  assert.equal(four.record?.convergedHead, 'deadbee');
+  assert.equal(
+    four.body,
+    `**Accepted** — x\nTriage: tier high; urgency high; step 2; converged deadbee\n\n${TRIAGE_STAMP}`,
+  );
+  const seven = buildTriage(triagePort(7), '**Accepted** — x', {
+    tier: 'high',
+    urgency: 'high',
+    advisoryConverged: TRIAGE_HEAD,
+  });
+  assert.equal(seven.record?.step, 2);
+  assert.equal(seven.record?.convergedHead, null);
+  assert.equal(
+    seven.body,
+    `**Accepted** — x\nTriage: tier high; urgency high; step 2\n\n${TRIAGE_STAMP}`,
+  );
+  assert.throws(
+    () =>
+      buildTriage(triagePort(4), '**Accepted** — x', {
+        tier: 'high',
+        urgency: 'high',
+        advisoryConverged: 'f00dfeed',
+      }),
+    (error: unknown) =>
+      error instanceof TriageUsageError &&
+      error.message.includes('f00dfeed') &&
+      error.message.includes(TRIAGE_HEAD),
+  );
+});
+
+test('buildTriageReplyBody writes the Copilot label and safety class in order (#4186)', () => {
+  const { body } = buildTriage(triagePort(4), '**Accepted** — x', {
+    tier: 'medium',
+    urgency: 'low',
+    copilotLabel: 'low',
+    safetyClass: true,
+  });
+  assert.equal(
+    body,
+    `**Accepted** — x\nTriage: tier medium; urgency low; step 1; Copilot low; safety\n\n${TRIAGE_STAMP}`,
+  );
+});
+
+test('buildTriageReplyBody inserts the line directly before an existing stamp (#4186)', () => {
+  const { body } = buildTriage(
+    triagePort(2),
+    `**Accepted** — x\n${TRIAGE_STAMP}`,
+    {
+      tier: 'high',
+      urgency: 'high',
+    },
+  );
+  assert.equal(
+    body,
+    `**Accepted** — x\nTriage: tier high; urgency high; step 0\n${TRIAGE_STAMP}`,
+  );
+});
+
+test('buildTriageReplyBody leaves a body without a Triage line exactly as before (#4186)', () => {
+  const { body, record } = buildTriage(
+    throwingReviewsPort(),
+    '**Accepted** — x',
+    {},
+  );
+  assert.equal(record, null);
+  assert.equal(body, `**Accepted** — x\n\n${TRIAGE_STAMP}`);
+});
+
+test('buildTriageReplyBody writes nothing and reads nothing for a blank body (#4186)', () => {
+  const { body, record } = buildTriage(throwingReviewsPort(), '  ', {
+    tier: 'high',
+    urgency: 'high',
+  });
+  assert.equal(body, '');
+  assert.equal(record, null);
+});
+
+test('buildTriageReplyBody carries the line to a review-body item unchanged (#4186)', () => {
+  const { body } = buildTriage(bodyItemPort(), '**Accepted** — fixed in abc', {
+    tier: 'high',
+    urgency: 'high',
+  });
+  const report = runBodyItemDisposition(bodyItemPort(), {
+    pr: 42,
+    reviewId: BODY_ITEM_REVIEW_ID,
+    itemTitle: BODY_ITEM_TITLE,
+    stampedBody: body,
+    apply: false,
+    assertClaim: () => {},
+  }).report;
+  assert.equal(
+    report.body,
+    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0\n\n${TRIAGE_STAMP}`,
+  );
+});
+
+test('buildTriageReplyBody propagates a failed review read as a transport error (#4186)', () => {
+  const port = {
+    ...triagePort(0),
+    listReviews: () => {
+      throw tagGhCommandError(new Error('gh command failed: gh: HTTP 500'));
+    },
+  };
+  assert.throws(
+    () =>
+      buildTriage(port, '**Accepted** — x', { tier: 'high', urgency: 'high' }),
+    (error: unknown) =>
+      error instanceof TriageReadError &&
+      classifyHelperError(error.original).kind === 'transport',
+  );
+});
+
+test('validateTriageFlags refuses an Accepted reply without both scores under record and enforce (#4186)', () => {
+  for (const triageRecord of ['record', 'enforce'] as const) {
+    const record = {
+      apply: true,
+      body: '**Accepted** — x',
+      triageRecord,
+      reviewPolicy: undefined,
+    };
+    // With no score the record requirement itself refuses, under this mode.
+    assert.throws(
+      () => validateTriageFlags({ ...record, flags: triageFlags() }),
+      (error: unknown) =>
+        error instanceof TriageUsageError &&
+        error.message.includes(`triageRecord ${triageRecord} requires`),
+      triageRecord,
+    );
+    // A lone score fails the pair check first, which names --urgency.
+    for (const flags of [{ tier: 'high' }, { urgency: 'high' }]) {
+      assert.throws(
+        () => validateTriageFlags({ ...record, flags: triageFlags(flags) }),
+        (error: unknown) =>
+          error instanceof TriageUsageError &&
+          error.message.includes('--urgency'),
+        `${triageRecord} ${JSON.stringify(flags)}`,
+      );
+    }
+  }
+});
+
+test('buildTriageReplyBody counts only Copilot reviews toward the relax step (#4186)', () => {
+  // Four Copilot reviews (one dismissed, which still counts: the issue says
+  // any state) and seven others. Counting every review gives 11 (step 2), an
+  // inverted filter gives 7 (step 2), and dropping the dismissed one gives 3
+  // (step 0). Only the correct count, 4, gives step 1.
+  const others = Array.from({ length: 7 }, (_, index) => ({
+    id: 20 + index,
+    user: { login: index % 2 === 0 ? 'octocat' : 'coderabbitai[bot]' },
+    state: 'COMMENTED',
+    body: '',
+  }));
+  const rows = [
+    ...triageReviewRows(3),
+    { id: 9, user: { login: TRIAGE_LOGIN }, state: 'DISMISSED', body: '' },
+    ...others,
+  ];
+  const port = createFakeProviderAdapter({
+    reviews: { [TRIAGE_PR]: rows },
+    changeRequestHeadShas: { [TRIAGE_PR]: TRIAGE_HEAD },
+  });
+  const { record } = buildTriage(port, '**Accepted** — x', {
+    tier: 'high',
+    urgency: 'high',
+  });
+  assert.equal(record?.step, 1);
+});
+
+test('buildTriageReplyBody honours a custom reply-identity marker prefix (#4186)', () => {
+  const { body } = buildTriage(
+    triagePort(2),
+    '**Accepted** — x\n<!-- acme-review-reply -->',
+    { tier: 'high', urgency: 'high' },
+    { markerPrefix: 'acme' },
+  );
+  assert.equal(
+    body,
+    '**Accepted** — x\nTriage: tier high; urgency high; step 0\n<!-- acme-review-reply -->',
+  );
+});
+
+test('validateTriageFlags applies the record requirement to every disposition prefix the gate admits (#4186)', () => {
+  for (const body of [
+    '**Accepted:** fixed in abc',
+    '**Rejected.** not needed',
+    '**Rejected** — deferred to follow-up issue #5',
+  ]) {
+    assert.throws(
+      () =>
+        validateTriageFlags({
+          flags: triageFlags(),
+          apply: true,
+          body,
+          triageRecord: 'record',
+          reviewPolicy: undefined,
+        }),
+      (error: unknown) =>
+        error instanceof TriageUsageError && error.message.includes('--tier'),
+      body,
+    );
+  }
+});
+
+test('validateTriageFlags refuses an invalid --urgency value (#4186)', () => {
+  assert.throws(
+    () =>
+      validateTriageFlags({
+        flags: triageFlags({ tier: 'high', urgency: 'urgent' }),
+        apply: false,
+        body: '',
+        triageRecord: 'off',
+        reviewPolicy: undefined,
+      }),
+    (error: unknown) =>
+      error instanceof TriageUsageError &&
+      error.message.includes('--urgency must be one of'),
+  );
+});
+
+test('validateTriageFlags refuses an invalid --copilot-label value (#4186)', () => {
+  assert.throws(
+    () =>
+      validateTriageFlags({
+        flags: triageFlags({ copilotLabel: 'bogus' }),
+        apply: false,
+        body: '',
+        triageRecord: 'off',
+        reviewPolicy: undefined,
+      }),
+    (error: unknown) =>
+      error instanceof TriageUsageError &&
+      error.message.includes('--copilot-label must be one of'),
+  );
+});
+
+test('an optional triage flag with no line is a no-op, not an error (#4186)', () => {
+  for (const flags of [
+    { lite: true },
+    { safetyClass: true },
+    { copilotLabel: 'low' },
+    { advisoryConverged: TRIAGE_HEAD },
+  ]) {
+    assert.doesNotThrow(() =>
+      validateTriageFlags({
+        flags: triageFlags(flags),
+        apply: false,
+        body: '',
+        triageRecord: 'off',
+        reviewPolicy: 'human-required',
+      }),
+    );
+    const { body, record } = buildTriage(
+      throwingReviewsPort(),
+      '**Accepted** — x',
+      flags,
+    );
+    assert.equal(record, null);
+    assert.equal(body, `**Accepted** — x\n\n${TRIAGE_STAMP}`);
+  }
+});
+
+test('validateTriageFlags allows the record-mode exemptions and the off and dry-run paths (#4186)', () => {
+  const flags = triageFlags();
+  assert.doesNotThrow(() =>
+    validateTriageFlags({
+      flags,
+      apply: true,
+      body: '**Rejection confirmed by maintainer** — x',
+      triageRecord: 'record',
+      reviewPolicy: undefined,
+    }),
+  );
+  assert.doesNotThrow(() =>
+    validateTriageFlags({
+      flags: triageFlags({ pathB: true }),
+      apply: true,
+      body: '**Accepted** — x',
+      triageRecord: 'record',
+      reviewPolicy: undefined,
+    }),
+  );
+  assert.doesNotThrow(() =>
+    validateTriageFlags({
+      flags,
+      apply: true,
+      body: '**Accepted** — x',
+      triageRecord: 'off',
+      reviewPolicy: undefined,
+    }),
+  );
+  assert.doesNotThrow(() =>
+    validateTriageFlags({
+      flags,
+      apply: false,
+      body: '**Accepted** — x',
+      triageRecord: 'record',
+      reviewPolicy: undefined,
+    }),
+  );
+});
+
+test('validateTriageFlags refuses --path-b with a triage flag and a lone tier or urgency (#4186)', () => {
+  assert.throws(
+    () =>
+      validateTriageFlags({
+        flags: triageFlags({ tier: 'low', urgency: 'low', pathB: true }),
+        apply: false,
+        body: '',
+        triageRecord: 'off',
+        reviewPolicy: undefined,
+      }),
+    /--path-b/u,
+  );
+  assert.throws(
+    () =>
+      validateTriageFlags({
+        flags: triageFlags({ pathB: true, lite: true }),
+        apply: false,
+        body: '',
+        triageRecord: 'off',
+        reviewPolicy: undefined,
+      }),
+    /--path-b/u,
+  );
+  assert.throws(
+    () =>
+      validateTriageFlags({
+        flags: triageFlags({ tier: 'low' }),
+        apply: false,
+        body: '',
+        triageRecord: 'off',
+        reviewPolicy: undefined,
+      }),
+    /--urgency/u,
+  );
+});
+
+test('validateTriageFlags refuses --advisory-converged under a reviewPolicy other than copilot-advisory (#4186)', () => {
+  const flags = triageFlags({
+    tier: 'high',
+    urgency: 'high',
+    advisoryConverged: TRIAGE_HEAD,
+  });
+  assert.throws(
+    () =>
+      validateTriageFlags({
+        flags,
+        apply: false,
+        body: '',
+        triageRecord: 'off',
+        reviewPolicy: 'human-required',
+      }),
+    /copilot-advisory/u,
+  );
+  assert.doesNotThrow(() =>
+    validateTriageFlags({
+      flags,
+      apply: false,
+      body: '',
+      triageRecord: 'off',
+      reviewPolicy: 'copilot-advisory',
+    }),
+  );
+});
+
+test('--help lists the seven triage flags (#4186)', () => {
+  const output = execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/resolve-review-thread.mjs'), '--help'],
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  );
+  for (const flag of [
+    '--tier',
+    '--urgency',
+    '--copilot-label',
+    '--safety-class',
+    '--lite',
+    '--advisory-converged',
+    '--path-b',
+  ]) {
+    assert.match(output, new RegExp(`^ {2}${flag}[ <]`, 'mu'), flag);
+  }
+});
+
+/**
+ * Run the compiled CLI from a scratch cwd whose only policy layer is a
+ * fixture config, with `PATH` empty so any `gh` call would fail to spawn.
+ */
+function runCliWithPolicy(
+  cliArgs: string[],
+  config: Record<string, unknown>,
+): { status: number; stderr: string } {
+  let scratch = '';
+  try {
+    scratch = mkdtempSync(join(tmpdir(), 'idd-triage-cli-'));
+    mkdirSync(join(scratch, '.github', 'idd'), { recursive: true });
+    writeFileSync(
+      join(scratch, '.github', 'idd', 'config.json'),
+      `${JSON.stringify(config)}\n`,
+    );
+    execFileSync(
+      process.execPath,
+      [join(REPO_ROOT, 'scripts/resolve-review-thread.mjs'), ...cliArgs],
+      {
+        cwd: scratch,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: '',
+          HOME: scratch,
+          XDG_CONFIG_HOME: scratch,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    throw new Error('expected the CLI to exit non-zero');
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    if (failure.status === undefined) {
+      throw error;
+    }
+    return { status: failure.status, stderr: failure.stderr ?? '' };
+  } finally {
+    if (scratch) {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }
+}
+
+const CLI_ACCEPTED_BODY = '**Accepted** — operator-authorized, no linked issue';
+
+test('the compiled CLI refuses a record-mode Accepted reply without --urgency (#4186)', () => {
+  const failure = runCliWithPolicy(
+    [
+      '--pr',
+      '42',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--comment-id',
+      '1001',
+      '--claimless',
+      '--apply',
+      '--body',
+      CLI_ACCEPTED_BODY,
+    ],
+    { critiqueLoop: { triageRecord: 'record' } },
+  );
+  assert.equal(failure.status, 1);
+  assert.match(failure.stderr, /--urgency/u);
+});
+
+test('the compiled CLI refuses --path-b with a triage flag (#4186)', () => {
+  const failure = runCliWithPolicy(
+    [
+      '--pr',
+      '42',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--comment-id',
+      '1001',
+      '--path-b',
+      '--tier',
+      'low',
+      '--urgency',
+      'low',
+      '--body',
+      CLI_ACCEPTED_BODY,
+    ],
+    { critiqueLoop: { triageRecord: 'record' } },
+  );
+  assert.equal(failure.status, 1);
+  assert.match(failure.stderr, /--path-b/u);
+});
+
+test('the compiled CLI refuses an unknown --urgency value (#4186)', () => {
+  const failure = runCliWithPolicy(
+    [
+      '--pr',
+      '42',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--comment-id',
+      '1001',
+      '--tier',
+      'high',
+      '--urgency',
+      'urgent',
+      '--body',
+      CLI_ACCEPTED_BODY,
+    ],
+    {},
+  );
+  assert.equal(failure.status, 1);
+  assert.match(failure.stderr, /--urgency must be one of/u);
+});
+
+/** Copilot review rows for the first `count` reviews, for the stubbed `gh`. */
+function triageReviewRows(count: number): unknown[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: index + 1,
+    user: { login: TRIAGE_LOGIN },
+    state: 'COMMENTED',
+    body: '',
+  }));
+}
+
+/**
+ * A stubbed `gh` for the apply-mode triage tests. It answers the pull request
+ * view, the review list, the head SHA, the thread lookup and resolve, and the
+ * work-item duplicate read, and it appends each POST body to the ledger.
+ */
+function triageGhStub(
+  reviews: unknown[] | string | { status: number } | null,
+): string {
+  let reviewsRoute: string;
+  if (reviews === null) {
+    reviewsRoute = "fail('gh: HTTP 500 for pulls/42/reviews');";
+  } else if (typeof reviews === 'string') {
+    reviewsRoute = `out(${JSON.stringify(reviews)});`;
+  } else if (Array.isArray(reviews)) {
+    reviewsRoute = `out(JSON.stringify(${JSON.stringify(reviews)}));`;
+  } else {
+    reviewsRoute = `fail('gh: Not Found (HTTP ${reviews.status}) for pulls/42/reviews');`;
+  }
+  return `const fs = require('node:fs');
+const args = process.argv.slice(2);
+const joined = args.join(' ');
+const out = (s) => { fs.writeSync(1, s); process.exit(0); };
+const fail = (msg) => { fs.writeSync(2, msg); process.exit(1); };
+if (args[0] === 'pr' && args[1] === 'view') {
+  if (joined.includes('--jq')) out('${TRIAGE_HEAD}\\n');
+  out(JSON.stringify({ headRefOid: '${TRIAGE_HEAD}', headRefName: 'main', author: { login: 'someone' }, url: 'https://example.invalid/pr/42', closingIssuesReferences: [] }));
+}
+if (args[0] === 'api' && joined.includes('/pulls/42/reviews')) {
+  ${reviewsRoute}
+}
+if (args[0] === 'api' && joined.includes('/issues/42/comments') && !args.includes('POST')) {
+  out('[]\\n');
+}
+if (args[0] === 'api' && args.includes('POST')) {
+  const body = JSON.parse(fs.readFileSync(0, 'utf8')).body;
+  fs.appendFileSync(process.env.TRIAGE_LEDGER, JSON.stringify({ posted: body }) + '\\n');
+  out(JSON.stringify({ id: 4242, html_url: 'https://example.invalid/comment/4242', body }));
+}
+if (args[0] === 'api' && args[1] === 'graphql') {
+  if (joined.includes('reviewThreads')) {
+    out(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: 'THREAD1', isResolved: false, path: 'x', comments: { nodes: [{ databaseId: 1001 }], pageInfo: { hasNextPage: false, endCursor: null } } }], pageInfo: { hasNextPage: false, endCursor: null } } } } } }));
+  }
+  if (joined.includes('resolveReviewThread')) {
+    out(JSON.stringify({ data: { resolveReviewThread: { thread: { isResolved: true } } } }));
+  }
+}
+fail('unexpected gh invocation: ' + joined);
+`;
+}
+
+/**
+ * Run the compiled CLI in apply mode from a scratch cwd whose only policy
+ * layer is `config`, against the stubbed `gh`. Returns the exit status, the
+ * stderr text, and each POST body the stub received, in order.
+ */
+function runTriageApply(
+  cliArgs: string[],
+  config: Record<string, unknown>,
+  reviews: unknown[] | string | { status: number } | null,
+  extraEnv: Record<string, string> = {},
+): { status: number; stderr: string; posted: string[] } {
+  let scratch = '';
+  let restore: (() => void) | undefined;
+  try {
+    scratch = mkdtempSync(join(tmpdir(), 'idd-triage-apply-'));
+    mkdirSync(join(scratch, '.github', 'idd'), { recursive: true });
+    writeFileSync(
+      join(scratch, '.github', 'idd', 'config.json'),
+      `${JSON.stringify(config)}\n`,
+    );
+    const ledger = join(scratch, 'posted.jsonl');
+    restore = stubExecutable('gh', triageGhStub(reviews));
+    let status = 0;
+    let stderr = '';
+    try {
+      execFileSync(
+        process.execPath,
+        [join(REPO_ROOT, 'scripts/resolve-review-thread.mjs'), ...cliArgs],
+        {
+          cwd: scratch,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            HOME: scratch,
+            XDG_CONFIG_HOME: scratch,
+            TRIAGE_LEDGER: ledger,
+            ...extraEnv,
+          },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      );
+    } catch (error) {
+      const failure = error as { status?: number; stderr?: string };
+      if (failure.status === undefined) {
+        throw error;
+      }
+      status = failure.status;
+      stderr = failure.stderr ?? '';
+    }
+    const posted = existsSync(ledger)
+      ? readFileSync(ledger, 'utf8')
+          .split('\n')
+          .filter((line) => line !== '')
+          .map((line) => (JSON.parse(line) as { posted: string }).posted)
+      : [];
+    return { status, stderr, posted };
+  } finally {
+    restore?.();
+    if (scratch) {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }
+}
+
+const TRIAGE_THREAD_ARGS = [
+  '--pr',
+  '42',
+  '--comment-id',
+  '1001',
+  '--owner',
+  'o',
+  '--repo',
+  'r',
+  '--claimless',
+  '--apply',
+];
+const TRIAGE_TIERED_CONFIG = {
+  critiqueLoop: {
+    triageRecord: 'record',
+    deferByUrgency: 'severity-tiered',
+    deferRelaxAtRounds: [4, 7],
+  },
+};
+
+test('the compiled CLI posts the Triage line before the stamp on a record-mode thread reply (#4186)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--body',
+      '**Accepted** — fixed in abc',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(2),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.posted, [
+    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0\n\n${TRIAGE_STAMP}`,
+  ]);
+});
+
+test('validateTriageFlags names --path-b when a lone urgency is given with it (#4186)', () => {
+  assert.throws(
+    () =>
+      validateTriageFlags({
+        flags: triageFlags({ pathB: true, urgency: 'low' }),
+        apply: false,
+        body: '',
+        triageRecord: 'off',
+        reviewPolicy: undefined,
+      }),
+    /--path-b/u,
+  );
+});
+
+test('the compiled CLI writes a converged step 2 when --advisory-converged names the head (#4186)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--advisory-converged',
+      TRIAGE_HEAD,
+      '--body',
+      '**Accepted** — fixed in abc',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(4),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.posted, [
+    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 2; converged deadbee\n\n${TRIAGE_STAMP}`,
+  ]);
+});
+
+test('a review read that returns non-JSON reports kind transport in the error envelope (#4186)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--body',
+      '**Accepted** — fixed in abc',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    'not json',
+    { IDD_HELPER_ERROR_ENVELOPE: '1' },
+  );
+  assert.equal(run.status, 1);
+  assert.deepEqual(run.posted, []);
+  const envelope = JSON.parse(run.stderr.trim().split('\n').at(-1) ?? '{}') as {
+    iddHelperError?: { kind?: string };
+  };
+  assert.equal(envelope.iddHelperError?.kind, 'transport');
+});
+
+/** The `kind` of the helper error envelope printed as the last stderr line. */
+function envelopeKind(stderr: string): string | undefined {
+  const envelope = JSON.parse(stderr.trim().split('\n').at(-1) ?? '{}') as {
+    iddHelperError?: { kind?: string };
+  };
+  return envelope.iddHelperError?.kind;
+}
+
+test('a 404 on the review list reports kind transport in the error envelope (#4186)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--body',
+      '**Accepted** — fixed in abc',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    { status: 404 },
+    { IDD_HELPER_ERROR_ENVELOPE: '1' },
+  );
+  assert.equal(run.status, 1);
+  assert.deepEqual(run.posted, []);
+  assert.equal(envelopeKind(run.stderr), 'transport');
+});
+
+test('a mismatched --advisory-converged reports kind usage in the error envelope (#4186)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--advisory-converged',
+      'f00dfeed',
+      '--body',
+      '**Accepted** — fixed in abc',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(4),
+    { IDD_HELPER_ERROR_ENVELOPE: '1' },
+  );
+  assert.equal(run.status, 1);
+  assert.deepEqual(run.posted, []);
+  assert.equal(envelopeKind(run.stderr), 'usage');
+});
+
+test('the compiled CLI stamps a record-mode reply with the configured marker prefix (#4186)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--body',
+      '**Accepted** — fixed in abc',
+    ],
+    { ...TRIAGE_TIERED_CONFIG, markerPrefix: 'acme' },
+    triageReviewRows(2),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.posted, [
+    '**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0\n\n<!-- acme-review-reply -->',
+  ]);
+});
+
+test('the compiled CLI writes step 1 for four Copilot reviews on a record-mode thread reply (#4186)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--body',
+      '**Accepted** — fixed in abc',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(4),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.posted, [
+    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 1\n\n${TRIAGE_STAMP}`,
+  ]);
+});
+
+test('the compiled CLI exits 1 with a message and posts nothing when the review read fails (#4186)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--body',
+      '**Accepted** — fixed in abc',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    null,
+  );
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /reply not posted: .*gh: HTTP 500/u);
+  assert.deepEqual(run.posted, []);
+});
+
+test('the compiled CLI posts the reply body unchanged with no triage flag (#4186)', () => {
+  const run = runTriageApply(
+    [...TRIAGE_THREAD_ARGS, '--body', '**Accepted** — fixed in abc'],
+    {},
+    triageReviewRows(2),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.posted, [
+    `**Accepted** — fixed in abc\n\n${TRIAGE_STAMP}`,
+  ]);
+});
+
+test('the compiled CLI posts nothing when --advisory-converged names another head (#4186)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--advisory-converged',
+      'f00dfeed',
+      '--body',
+      '**Accepted** — fixed in abc',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(4),
+  );
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /f00dfeed/u);
+  assert.deepEqual(run.posted, []);
+});
+
+test('the compiled CLI posts a Rejection confirmed reply under record with no triage flag (#4186)', () => {
+  const body = '**Rejection confirmed by maintainer** — x';
+  const run = runTriageApply(
+    [...TRIAGE_THREAD_ARGS, '--body', body],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(2),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.posted, [`${body}\n\n${TRIAGE_STAMP}`]);
+});
+
+test('the compiled CLI posts a path B reply under record with no triage line (#4186)', () => {
+  const body = '**Accepted** — advisory remark';
+  const run = runTriageApply(
+    [...TRIAGE_THREAD_ARGS, '--path-b', '--body', body],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(2),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.posted, [`${body}\n\n${TRIAGE_STAMP}`]);
+});
+
+test('the compiled CLI puts the Triage line before the stamp on a review-body item (#4186)', () => {
+  const run = runTriageApply(
+    [
+      '--pr',
+      '42',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--review-id',
+      String(BODY_ITEM_REVIEW_ID),
+      '--item-title',
+      BODY_ITEM_TITLE,
+      '--claimless',
+      '--apply',
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--body',
+      '**Accepted** — fixed in abc',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    [
+      {
+        id: BODY_ITEM_REVIEW_ID,
+        user: { login: TRIAGE_LOGIN },
+        state: 'COMMENTED',
+        body: BODY_ITEM_REVIEW_BODY,
+      },
+    ],
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.posted, [
+    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0\n\n${TRIAGE_STAMP}`,
+  ]);
 });
 
 test('the schema refuses an envelope that names both targets or neither (#4012)', () => {
