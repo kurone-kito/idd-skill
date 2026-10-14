@@ -3172,6 +3172,81 @@ The adopted helper boundaries are intentionally narrow:
   helper-first convenience path with the manual REST + GraphQL fallback
   retained.
 
+#### Triage record flags
+
+With `--tier` and `--urgency` both given, the helper writes one `Triage:`
+line before the reply-identity stamp, so the E4 tier, the E4 urgency, the
+relax step, and the E5 verdict travel with the reply. The other triage
+flags feed that line. Without the pair they have no line to carry them and
+change nothing, except `--path-b`, which refuses them. The line is written
+whenever the pair is given. `critiqueLoop.triageRecord` (default `off`)
+decides only whether the pair is required, whether an `enforce` refusal
+applies, and whether `--override` is accepted.
+
+The line has a fixed layout. A part in brackets appears only when it is
+set. `verdict` and `blocked` appear only under `deferByUrgency`
+`severity-tiered`:
+
+```text
+Triage: tier <low|medium|high>; urgency <very-low|low|medium|high>; step <0|1|2>[; converged <7-hex>][; Copilot <low|medium|high>][; safety][; verdict <defer|keep>][; blocked <reason>][; override: <reason>]
+```
+
+Flags, one line each:
+
+- `--tier <low|medium|high>`: the E4 tier of the finding. Needs `--urgency`.
+- `--urgency <very-low|low|medium|high>`: the E4 urgency score. Needs
+  `--tier`.
+- `--copilot-label <low|medium|high>`: Copilot's own severity label, if any.
+- `--safety-class`: the finding is in the safety class.
+- `--lite`: the caller follows the lite profile. The relax step stays `0`,
+  and no review list is read.
+- `--advisory-converged <sha>`: the full head SHA that the
+  advisory-convergence verdict covered. Under `severity-tiered` without
+  `--lite`, any other value is refused. With the pair and a `reviewPolicy`
+  other than `copilot-advisory`, the flag is refused too. Only a convergence
+  that raised the step appears on the line, as its first seven characters.
+  Drop the flag after a push, since the head moved.
+- `--path-b`: the reply answers a PATH B item. It cannot combine with any
+  other triage flag.
+- `--scope-fence`: the finding is scope-fenced. This blocks a deferral.
+- `--protected-authority`: the reply's author is a CODEOWNER or a required
+  reviewer. This blocks a deferral.
+- `--accepted-mid-fix`: the item was Accepted in an earlier E5 pass, and its
+  fix is still in progress. This blocks a deferral.
+- `--override <reason>`: posts an Accepted reply that the defer matrix
+  refuses, and records the reason as the line's last part, after
+  `override:`. See the rules below.
+
+Rules:
+
+- **Required pair.** Under `record` or `enforce`, an `--apply` reply whose
+  body opens with `**Accepted**` or `**Rejected**` must carry both `--tier`
+  and `--urgency`, unless it is a `--path-b` reply. A
+  `**Rejection confirmed by maintainer**` body is exempt. A missing pair
+  exits `1` with kind `usage` and posts nothing. With the pair, a body that
+  already holds a `Triage:` line is refused, because the helper writes the
+  line itself.
+- **Compute-only mode.** `--pr <number>` with `--tier` or `--urgency` (or
+  both), and none of `--comment-id`, `--review-id`, `--item-title`,
+  `--item-index`, `--body`, or `--apply`, prints a JSON object on stdout
+  with `mode` set to `triage`, `prNumber`, and `triage` (the line). It posts
+  nothing and exits `0`. A lone score flag takes this path too, so the pair
+  check names the missing flag. It accepts no `--override`. A refused input
+  exits `1` with kind `usage`. It reads GitHub only under `severity-tiered`
+  without `--lite`.
+- **Override.** `--override` needs `record` or `enforce`, `deferByUrgency`
+  `severity-tiered`, the pair, an `**Accepted**` body, and a `defer` verdict.
+  A `keep` verdict is refused with a usage error. The reason must be one
+  non-empty line.
+- **Enforce refusal.** Under `enforce` with `deferByUrgency`
+  `severity-tiered`, an `--apply` Accepted reply whose verdict is `defer`,
+  and that has no `--override`, posts nothing and exits `1` with kind
+  `gate`. The message is the verdict line followed by
+  `; pass --override "<reason>" to post anyway`. The helper scores again
+  right before the post, so a review count that changed in between decides.
+  Under any other `deferByUrgency`, `enforce` behaves as `record`, and the
+  helper writes one warning line on stderr.
+
 ## Stable Helper Evidence Outputs
 
 ### Operator forced-handoff helpers
