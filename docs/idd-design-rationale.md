@@ -2687,6 +2687,61 @@ alone. A future audit that re-discovers this question (see #1727)
 should treat it as a decided trade-off rather than re-running the
 investigation.
 
+### User-global install: the receipt cannot prove who wrote a file (2026-10-14)
+
+Observed 2026-10-14 on pull request #4271 (issue #4244, the
+user-global installer's entry-file edits): a Copilot review thread
+([discussion r4272506041](https://github.com/kurone-kito/idd-skill/pull/4271#discussion_r4272506041))
+showed that a hand-edited `receipt.json` could list a user's own
+`CLAUDE.md` as a `file` record with that file's SHA-256, and uninstall
+then deleted the whole file after checking only that hash. Commit
+`b7f957284` fixed the defect: uninstall now removes a whole-file entry
+record only when the bytes equal what install writes for that harness.
+For `CLAUDE.md` and `opencode.json` that content depends only on the
+entry path, so the check is exact. For `AGENTS.md` the check is that one
+managed block spans every byte. A forged record that names an ordinary
+user file is refused, and the file survives.
+
+The fix cannot prove authorship, because the receipt is a plain file in
+the user's data root with no signature, and a path plus a hash cannot
+tell an installer-written file from a user-written one with the same
+bytes. The issue #4244
+[hold comment](https://github.com/kurone-kito/idd-skill/issues/4244#issuecomment-6171923692)
+posed three options: (a) accept the residual risk and document it, (b)
+add a provenance mechanism to the receipt, and (c) refuse identical
+content by another rule, for example a fresh receipt check. The
+maintainer chose (a). The body of issue #4305 is the written record of
+that choice; no comment on issue #4244 or pull request #4271 states it.
+
+The reason for (a) is that the fix already limits the risk to what
+uninstall compares, by record kind, while (b) would be a receipt design
+change (the receipt format is version 1):
+
+- A `file` record for an entry file: uninstall removes it only when its
+  bytes equal install's own output. The residual risk is a user-authored
+  file that equals that output byte for byte.
+- A `managed-block` record: uninstall removes the span between the
+  installer's own begin and end marker lines when the span's SHA-256
+  equals the record, and it leaves every byte outside the span. The
+  residual risk is a span a user wrote between those marker lines, with a
+  hand-written record of its hash. The span is not compared with
+  install's output.
+- A `json-instruction` record: the receipt parser accepts only the data
+  root's own entry text as the value, so uninstall can remove only that
+  one string from `instructions`.
+
+This entry covers the entry-file records that issue #4244 added. The
+payload records from issue #4243 are outside the question the
+maintainer decided. No wrongful removal has been seen in use: the
+entry-file code is merged but dormant, because no production path passes
+a harness set until issue #4245 does.
+
+Read this entry before enabling harness entry edits. A new provenance
+mechanism, for example a signed receipt, needs its own maintainer
+decision, recorded here; this entry does not authorize one. Conditions
+that would revisit this: an observed uninstall that removed
+user-authored content, or a decision to add a provenance mechanism.
+
 ## Helper runtime launchers
 
 <!-- cspell:words bunx -->

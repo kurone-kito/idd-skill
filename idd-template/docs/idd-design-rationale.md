@@ -2310,6 +2310,21 @@ not already serve; or a bounded pilot of `skills/issue-authoring/`
 alone. A project that reaches this same conclusion independently should
 record it here rather than re-running the investigation.
 
+### User-global install: the receipt cannot prove who wrote a file (2026-10-14)
+
+Observed 2026-10-14 in kurone-kito/idd-skill pull request
+kurone-kito/idd-skill#4271: a review found that a hand-edited receipt of
+the user-global installer could list a user's own `CLAUDE.md` with its
+SHA-256 and make uninstall delete it. The fix makes uninstall remove a
+whole-file entry record only when its bytes equal what the installer
+writes. The receipt still cannot prove who wrote a file, so a forged
+record for a file that equals the installer's own output, or for a span
+between the installer's own marker lines, is not refused. The maintainer
+accepted that residual risk and documented it
+(kurone-kito/idd-skill#4305). A new provenance mechanism needs its own
+decision. The source repository's `docs/idd-design-rationale.md` has the
+full entry under the same heading.
+
 ## Helper runtime launchers
 
 <!-- cspell:words bunx -->
