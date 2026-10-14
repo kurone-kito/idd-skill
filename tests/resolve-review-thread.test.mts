@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -1630,6 +1630,10 @@ function triageFlags(overrides: Partial<TriageFlags> = {}): TriageFlags {
     lite: false,
     advisoryConverged: '',
     pathB: false,
+    scopeFence: false,
+    protectedAuthority: false,
+    acceptedMidFix: false,
+    override: null,
     ...overrides,
   };
 }
@@ -1689,7 +1693,7 @@ test('buildTriageReplyBody writes step 0 with a blank line before the stamp (#41
   assert.equal(record?.step, 0);
   assert.equal(
     body,
-    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0\n\n${TRIAGE_STAMP}`,
+    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0; verdict keep; blocked matrix\n\n${TRIAGE_STAMP}`,
   );
 });
 
@@ -1761,7 +1765,7 @@ test('buildTriageReplyBody converged head raises the step only with the matching
   assert.equal(four.record?.convergedHead, 'deadbee');
   assert.equal(
     four.body,
-    `**Accepted** — x\nTriage: tier high; urgency high; step 2; converged deadbee\n\n${TRIAGE_STAMP}`,
+    `**Accepted** — x\nTriage: tier high; urgency high; step 2; converged deadbee; verdict keep; blocked matrix\n\n${TRIAGE_STAMP}`,
   );
   const seven = buildTriage(triagePort(7), '**Accepted** — x', {
     tier: 'high',
@@ -1772,7 +1776,7 @@ test('buildTriageReplyBody converged head raises the step only with the matching
   assert.equal(seven.record?.convergedHead, null);
   assert.equal(
     seven.body,
-    `**Accepted** — x\nTriage: tier high; urgency high; step 2\n\n${TRIAGE_STAMP}`,
+    `**Accepted** — x\nTriage: tier high; urgency high; step 2; verdict keep; blocked matrix\n\n${TRIAGE_STAMP}`,
   );
   assert.throws(
     () =>
@@ -1797,7 +1801,7 @@ test('buildTriageReplyBody writes the Copilot label and safety class in order (#
   });
   assert.equal(
     body,
-    `**Accepted** — x\nTriage: tier medium; urgency low; step 1; Copilot low; safety\n\n${TRIAGE_STAMP}`,
+    `**Accepted** — x\nTriage: tier medium; urgency low; step 1; Copilot low; safety; verdict keep; blocked safety-class\n\n${TRIAGE_STAMP}`,
   );
 });
 
@@ -1812,7 +1816,7 @@ test('buildTriageReplyBody inserts the line directly before an existing stamp (#
   );
   assert.equal(
     body,
-    `**Accepted** — x\nTriage: tier high; urgency high; step 0\n${TRIAGE_STAMP}`,
+    `**Accepted** — x\nTriage: tier high; urgency high; step 0; verdict keep; blocked matrix\n${TRIAGE_STAMP}`,
   );
 });
 
@@ -1850,7 +1854,7 @@ test('buildTriageReplyBody carries the line to a review-body item unchanged (#41
   }).report;
   assert.equal(
     report.body,
-    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0\n\n${TRIAGE_STAMP}`,
+    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0; verdict keep; blocked matrix\n\n${TRIAGE_STAMP}`,
   );
 });
 
@@ -1935,7 +1939,7 @@ test('buildTriageReplyBody honours a custom reply-identity marker prefix (#4186)
   );
   assert.equal(
     body,
-    '**Accepted** — x\nTriage: tier high; urgency high; step 0\n<!-- acme-review-reply -->',
+    '**Accepted** — x\nTriage: tier high; urgency high; step 0; verdict keep; blocked matrix\n<!-- acme-review-reply -->',
   );
 });
 
@@ -2123,7 +2127,7 @@ test('validateTriageFlags refuses --advisory-converged under a reviewPolicy othe
   );
 });
 
-test('--help lists the seven triage flags (#4186)', () => {
+test('--help lists the triage flags, including the verdict flags (#4186, #4187)', () => {
   const output = execFileSync(
     process.execPath,
     [join(REPO_ROOT, 'scripts/resolve-review-thread.mjs'), '--help'],
@@ -2137,6 +2141,10 @@ test('--help lists the seven triage flags (#4186)', () => {
     '--lite',
     '--advisory-converged',
     '--path-b',
+    '--scope-fence',
+    '--protected-authority',
+    '--accepted-mid-fix',
+    '--override',
   ]) {
     assert.match(output, new RegExp(`^ {2}${flag}[ <]`, 'mu'), flag);
   }
@@ -2293,6 +2301,7 @@ const args = process.argv.slice(2);
 const joined = args.join(' ');
 const out = (s) => { fs.writeSync(1, s); process.exit(0); };
 const fail = (msg) => { fs.writeSync(2, msg); process.exit(1); };
+if (process.env.TRIAGE_CALLS) fs.appendFileSync(process.env.TRIAGE_CALLS, JSON.stringify(args) + '\\n');
 if (args[0] === 'pr' && args[1] === 'view') {
   if (joined.includes('--jq')) out('${TRIAGE_HEAD}\\n');
   out(JSON.stringify({ headRefOid: '${TRIAGE_HEAD}', headRefName: 'main', author: { login: 'someone' }, url: 'https://example.invalid/pr/42', closingIssuesReferences: [] }));
@@ -2325,12 +2334,23 @@ fail('unexpected gh invocation: ' + joined);
  * layer is `config`, against the stubbed `gh`. Returns the exit status, the
  * stderr text, and each POST body the stub received, in order.
  */
+/** One compiled-CLI run against the stubbed `gh` (#4187). */
+interface TriageRun {
+  status: number;
+  stdout: string;
+  stderr: string;
+  /** Each POST body the stub received, in order. */
+  posted: string[];
+  /** The argv of every `gh` call the CLI made, in order. */
+  calls: string[][];
+}
+
 function runTriageApply(
   cliArgs: string[],
   config: Record<string, unknown>,
   reviews: unknown[] | string | { status: number } | null,
   extraEnv: Record<string, string> = {},
-): { status: number; stderr: string; posted: string[] } {
+): TriageRun {
   let scratch = '';
   let restore: (() => void) | undefined;
   try {
@@ -2341,41 +2361,46 @@ function runTriageApply(
       `${JSON.stringify(config)}\n`,
     );
     const ledger = join(scratch, 'posted.jsonl');
+    const callLog = join(scratch, 'calls.jsonl');
     restore = stubExecutable('gh', triageGhStub(reviews));
-    let status = 0;
-    let stderr = '';
-    try {
-      execFileSync(
-        process.execPath,
-        [join(REPO_ROOT, 'scripts/resolve-review-thread.mjs'), ...cliArgs],
-        {
-          cwd: scratch,
-          encoding: 'utf8',
-          env: {
-            ...process.env,
-            HOME: scratch,
-            XDG_CONFIG_HOME: scratch,
-            TRIAGE_LEDGER: ledger,
-            ...extraEnv,
-          },
-          stdio: ['ignore', 'pipe', 'pipe'],
+    // spawnSync, not execFileSync, so stdout and stderr come back on every
+    // exit, including the success path a dry run and a warning take (#4187).
+    const result = spawnSync(
+      process.execPath,
+      [join(REPO_ROOT, 'scripts/resolve-review-thread.mjs'), ...cliArgs],
+      {
+        cwd: scratch,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          HOME: scratch,
+          XDG_CONFIG_HOME: scratch,
+          TRIAGE_LEDGER: ledger,
+          TRIAGE_CALLS: callLog,
+          ...extraEnv,
         },
-      );
-    } catch (error) {
-      const failure = error as { status?: number; stderr?: string };
-      if (failure.status === undefined) {
-        throw error;
-      }
-      status = failure.status;
-      stderr = failure.stderr ?? '';
-    }
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
     const posted = existsSync(ledger)
       ? readFileSync(ledger, 'utf8')
           .split('\n')
           .filter((line) => line !== '')
           .map((line) => (JSON.parse(line) as { posted: string }).posted)
       : [];
-    return { status, stderr, posted };
+    const calls = existsSync(callLog)
+      ? readFileSync(callLog, 'utf8')
+          .split('\n')
+          .filter((line) => line !== '')
+          .map((line) => JSON.parse(line) as string[])
+      : [];
+    return {
+      status: result.status ?? -1,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      posted,
+      calls,
+    };
   } finally {
     restore?.();
     if (scratch) {
@@ -2420,7 +2445,7 @@ test('the compiled CLI posts the Triage line before the stamp on a record-mode t
   );
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(run.posted, [
-    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0\n\n${TRIAGE_STAMP}`,
+    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0; verdict keep; blocked matrix\n\n${TRIAGE_STAMP}`,
   ]);
 });
 
@@ -2456,7 +2481,7 @@ test('the compiled CLI writes a converged step 2 when --advisory-converged names
   );
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(run.posted, [
-    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 2; converged deadbee\n\n${TRIAGE_STAMP}`,
+    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 2; converged deadbee; verdict keep; blocked matrix\n\n${TRIAGE_STAMP}`,
   ]);
 });
 
@@ -2549,7 +2574,7 @@ test('the compiled CLI stamps a record-mode reply with the configured marker pre
   );
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(run.posted, [
-    '**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0\n\n<!-- acme-review-reply -->',
+    '**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0; verdict keep; blocked matrix\n\n<!-- acme-review-reply -->',
   ]);
 });
 
@@ -2569,7 +2594,7 @@ test('the compiled CLI writes step 1 for four Copilot reviews on a record-mode t
   );
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(run.posted, [
-    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 1\n\n${TRIAGE_STAMP}`,
+    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 1; verdict keep; blocked matrix\n\n${TRIAGE_STAMP}`,
   ]);
 });
 
@@ -2681,7 +2706,7 @@ test('the compiled CLI puts the Triage line before the stamp on a review-body it
   );
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(run.posted, [
-    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0\n\n${TRIAGE_STAMP}`,
+    `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0; verdict keep; blocked matrix\n\n${TRIAGE_STAMP}`,
   ]);
 });
 
@@ -2722,4 +2747,533 @@ test('the schema refuses an envelope that names both targets or neither (#4012)'
   assert.notEqual(validate(both, resultSchema).length, 0, 'both targets');
   const neither = { mode: 'dry-run', prNumber: 7 };
   assert.notEqual(validate(neither, resultSchema).length, 0, 'no target');
+});
+
+// ---------------------------------------------------------------------------
+// The E5 defer-matrix verdict and the --override reason (#4187)
+// ---------------------------------------------------------------------------
+
+const TRIAGE_ENFORCE_CONFIG = {
+  critiqueLoop: {
+    triageRecord: 'enforce',
+    deferByUrgency: 'severity-tiered',
+    deferRelaxAtRounds: [4, 7],
+  },
+};
+const TRIAGE_THREAD_DRY_ARGS = TRIAGE_THREAD_ARGS.filter(
+  (arg) => arg !== '--apply',
+);
+const ACCEPTED_FIXED = '**Accepted** — fixed in abc';
+const DEFERRAL_BODY =
+  '**Rejected** — deferred to follow-up issue #4300 (needs decision): wider scope';
+
+/** True when a `gh` call the CLI made would change GitHub state (#4187). */
+function madeWriteCall(calls: string[][]): boolean {
+  return calls.some(
+    (call) =>
+      call.includes('POST') ||
+      call.some((arg) => arg.includes('resolveReviewThread')),
+  );
+}
+
+/** The usage message for an `--override` the static check refuses, or null (#4187). */
+function overrideError(
+  flags: Partial<TriageFlags>,
+  body: string,
+  triageRecord: 'off' | 'record' | 'enforce' = 'record',
+  deferByUrgency:
+    | 'off'
+    | 'low'
+    | 'low-and-medium'
+    | 'severity-tiered' = 'severity-tiered',
+): string | null {
+  try {
+    validateTriageFlags({
+      flags: triageFlags({
+        tier: 'low',
+        urgency: 'medium',
+        override: 'why',
+        ...flags,
+      }),
+      apply: false,
+      body,
+      triageRecord,
+      reviewPolicy: undefined,
+      deferByUrgency,
+    });
+    return null;
+  } catch (error) {
+    assert.ok(error instanceof TriageUsageError, String(error));
+    return (error as Error).message;
+  }
+}
+
+test('enforce refuses an Accepted defer on apply and posts nothing; the dry run shows the verdict (#4187)', () => {
+  const applied = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'medium',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(7),
+  );
+  assert.equal(applied.status, 1, applied.stderr);
+  assert.match(
+    applied.stderr,
+    /triage verdict: defer \(eligibility low, blocked by none\); pass --override "<reason>" to post anyway/u,
+  );
+  assert.deepEqual(applied.posted, []);
+  assert.equal(madeWriteCall(applied.calls), false);
+
+  const dry = runTriageApply(
+    [
+      ...TRIAGE_THREAD_DRY_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'medium',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(7),
+  );
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(
+    dry.stderr,
+    /^triage verdict: defer \(eligibility low, blocked by none\)$/mu,
+  );
+  assert.equal(
+    JSON.parse(dry.stdout).body,
+    `${ACCEPTED_FIXED}\nTriage: tier low; urgency medium; step 2; verdict defer\n\n${TRIAGE_STAMP}`,
+  );
+});
+
+test('enforce posts an Accepted keep at step 1 and writes the matrix block (#4187)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(4),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.posted, [
+    `${ACCEPTED_FIXED}\nTriage: tier high; urgency high; step 1; verdict keep; blocked matrix\n\n${TRIAGE_STAMP}`,
+  ]);
+});
+
+test('enforce posts an Accepted keep blocked by accepted-mid-fix and reports eligibility none (#4187)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'very-low',
+      '--accepted-mid-fix',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(7),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(
+    run.stderr,
+    /triage verdict: keep \(eligibility none, blocked by accepted-mid-fix\)/u,
+  );
+  assert.deepEqual(run.posted, [
+    `${ACCEPTED_FIXED}\nTriage: tier low; urgency very-low; step 2; verdict keep; blocked accepted-mid-fix\n\n${TRIAGE_STAMP}`,
+  ]);
+});
+
+test('a safety-class finding at step 1 is blocked by the safety class (#4187)', () => {
+  const { body, verdict } = buildTriage(triagePort(4), ACCEPTED_FIXED, {
+    tier: 'low',
+    urgency: 'low',
+    safetyClass: true,
+  });
+  assert.equal(verdict?.verdict, 'keep');
+  assert.equal(verdict?.eligibility, 'low');
+  assert.equal(
+    body,
+    `${ACCEPTED_FIXED}\nTriage: tier low; urgency low; step 1; safety; verdict keep; blocked safety-class\n\n${TRIAGE_STAMP}`,
+  );
+});
+
+test('the Copilot label raises eligibility to high, so a medium finding at step 1 defers (#4187)', () => {
+  const { body, verdict } = buildTriage(triagePort(4), ACCEPTED_FIXED, {
+    tier: 'medium',
+    urgency: 'low',
+    copilotLabel: 'high',
+  });
+  assert.equal(verdict?.verdict, 'defer');
+  assert.equal(verdict?.eligibility, 'high');
+  assert.equal(
+    body,
+    `${ACCEPTED_FIXED}\nTriage: tier medium; urgency low; step 1; Copilot high; verdict defer\n\n${TRIAGE_STAMP}`,
+  );
+});
+
+test('--scope-fence and --protected-authority block a deferral with eligibility none (#4187)', () => {
+  const scoped = buildTriage(triagePort(0), ACCEPTED_FIXED, {
+    tier: 'low',
+    urgency: 'low',
+    scopeFence: true,
+  });
+  assert.equal(scoped.verdict?.eligibility, null);
+  assert.equal(
+    scoped.body,
+    `${ACCEPTED_FIXED}\nTriage: tier low; urgency low; step 0; verdict keep; blocked scope-fence\n\n${TRIAGE_STAMP}`,
+  );
+  const authority = buildTriage(triagePort(0), ACCEPTED_FIXED, {
+    tier: 'low',
+    urgency: 'low',
+    protectedAuthority: true,
+  });
+  assert.equal(authority.verdict?.eligibility, null);
+  assert.equal(
+    authority.body,
+    `${ACCEPTED_FIXED}\nTriage: tier low; urgency low; step 0; verdict keep; blocked protected-authority\n\n${TRIAGE_STAMP}`,
+  );
+});
+
+test('enforce posts a refused Accepted defer when --override gives a reason, which ends the line (#4187)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'medium',
+      '--override',
+      'verdict keep at E5',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(7),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.posted, [
+    `${ACCEPTED_FIXED}\nTriage: tier low; urgency medium; step 2; verdict defer; override: verdict keep at E5\n\n${TRIAGE_STAMP}`,
+  ]);
+});
+
+test('a dry run accepts --override and shows the line the apply would post (#4187)', () => {
+  const dry = runTriageApply(
+    [
+      ...TRIAGE_THREAD_DRY_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'medium',
+      '--override',
+      'needed now',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(7),
+  );
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.equal(
+    JSON.parse(dry.stdout).body,
+    `${ACCEPTED_FIXED}\nTriage: tier low; urgency medium; step 2; verdict defer; override: needed now\n\n${TRIAGE_STAMP}`,
+  );
+});
+
+test('a deferral (Rejected) posts under enforce at defer and at keep, with its verdict (#4187)', () => {
+  const deferred = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'medium',
+      '--body',
+      DEFERRAL_BODY,
+    ],
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(7),
+  );
+  assert.equal(deferred.status, 0, deferred.stderr);
+  assert.deepEqual(deferred.posted, [
+    `${DEFERRAL_BODY}\nTriage: tier low; urgency medium; step 2; verdict defer\n\n${TRIAGE_STAMP}`,
+  ]);
+  const kept = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--body',
+      DEFERRAL_BODY,
+    ],
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(4),
+  );
+  assert.equal(kept.status, 0, kept.stderr);
+  assert.deepEqual(kept.posted, [
+    `${DEFERRAL_BODY}\nTriage: tier high; urgency high; step 1; verdict keep; blocked matrix\n\n${TRIAGE_STAMP}`,
+  ]);
+});
+
+test('enforce refuses an Accepted: variant, which the apply gate also admits (#4187)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'medium',
+      '--body',
+      '**Accepted:** fixed in abc',
+    ],
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(7),
+  );
+  assert.equal(run.status, 1, run.stderr);
+  assert.deepEqual(run.posted, []);
+  assert.equal(madeWriteCall(run.calls), false);
+});
+
+test('record mode posts a defer with no override, and --override adds its reason (#4187)', () => {
+  const plain = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'medium',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(7),
+  );
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.deepEqual(plain.posted, [
+    `${ACCEPTED_FIXED}\nTriage: tier low; urgency medium; step 2; verdict defer\n\n${TRIAGE_STAMP}`,
+  ]);
+  const overridden = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'medium',
+      '--override',
+      'needed now',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(7),
+  );
+  assert.equal(overridden.status, 0, overridden.stderr);
+  assert.deepEqual(overridden.posted, [
+    `${ACCEPTED_FIXED}\nTriage: tier low; urgency medium; step 2; verdict defer; override: needed now\n\n${TRIAGE_STAMP}`,
+  ]);
+});
+
+test('the off mode still computes the verdict on a dry run (#4187)', () => {
+  const dry = runTriageApply(
+    [
+      ...TRIAGE_THREAD_DRY_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'medium',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    {
+      critiqueLoop: {
+        triageRecord: 'off',
+        deferByUrgency: 'severity-tiered',
+        deferRelaxAtRounds: [4, 7],
+      },
+    },
+    triageReviewRows(7),
+  );
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(dry.stderr, /triage verdict: defer/u);
+  assert.equal(
+    JSON.parse(dry.stdout).body,
+    `${ACCEPTED_FIXED}\nTriage: tier low; urgency medium; step 2; verdict defer\n\n${TRIAGE_STAMP}`,
+  );
+});
+
+test('enforce under a non-severity-tiered mode warns, computes no verdict, and posts (#4187)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    { critiqueLoop: { triageRecord: 'enforce', deferByUrgency: 'low' } },
+    triageReviewRows(0),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(
+    run.stderr,
+    /^warning: triageRecord enforce refuses only under deferByUrgency severity-tiered/mu,
+  );
+  assert.doesNotMatch(run.stderr, /triage verdict/u);
+  assert.deepEqual(run.posted, [
+    `${ACCEPTED_FIXED}\nTriage: tier high; urgency high; step 0\n\n${TRIAGE_STAMP}`,
+  ]);
+});
+
+test('--lite with a keep verdict refuses --override as a usage error (#4187)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_DRY_ARGS,
+      '--lite',
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--override',
+      'why',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(7),
+  );
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /--override requires a defer verdict/u);
+  assert.equal(run.stdout, '');
+});
+
+test('validateTriageFlags refuses each static --override condition before any read (#4187)', () => {
+  assert.match(
+    overrideError({ override: '' }, ACCEPTED_FIXED) ?? '',
+    /non-empty reason/u,
+  );
+  assert.match(
+    overrideError({ override: '   ' }, ACCEPTED_FIXED) ?? '',
+    /non-empty reason/u,
+  );
+  assert.match(
+    overrideError({ override: 'a\nb' }, ACCEPTED_FIXED) ?? '',
+    /one line/u,
+  );
+  assert.match(
+    overrideError({}, ACCEPTED_FIXED, 'off') ?? '',
+    /triageRecord record or enforce/u,
+  );
+  assert.match(
+    overrideError({}, ACCEPTED_FIXED, 'record', 'low') ?? '',
+    /severity-tiered/u,
+  );
+  assert.match(
+    overrideError({ tier: '', urgency: '' }, ACCEPTED_FIXED) ?? '',
+    /--tier and --urgency/u,
+  );
+  assert.match(
+    overrideError({}, '**Rejected** — x') ?? '',
+    /Accepted reply body/u,
+  );
+  assert.equal(overrideError({}, '**Accepted:** x'), null);
+  assert.equal(overrideError({}, ACCEPTED_FIXED), null);
+});
+
+test('buildTriageReplyBody refuses --override on a keep verdict, trims the reason, and refuses a line break (#4187)', () => {
+  assert.throws(
+    () =>
+      buildTriage(triagePort(4), ACCEPTED_FIXED, {
+        tier: 'high',
+        urgency: 'high',
+        override: 'why',
+      }),
+    (error: unknown) =>
+      error instanceof TriageUsageError &&
+      /requires a defer verdict/u.test(error.message),
+  );
+  assert.throws(
+    () =>
+      buildTriage(triagePort(0), ACCEPTED_FIXED, {
+        tier: 'low',
+        urgency: 'medium',
+        override: 'a\nb',
+      }),
+    (error: unknown) =>
+      error instanceof TriageUsageError && /one line/u.test(error.message),
+  );
+  const { body } = buildTriage(triagePort(0), ACCEPTED_FIXED, {
+    tier: 'low',
+    urgency: 'medium',
+    override: '  needed now  ',
+  });
+  assert.equal(
+    body,
+    `${ACCEPTED_FIXED}\nTriage: tier low; urgency medium; step 0; verdict defer; override: needed now\n\n${TRIAGE_STAMP}`,
+  );
+});
+
+test('parseArgs reads the verdict flags, with --override null when absent (#4187)', () => {
+  const absent = parseArgs(['--pr', '42', '--comment-id', '1001']);
+  assert.equal(absent.override, null);
+  assert.equal(absent.scopeFence, false);
+  const empty = parseArgs([
+    '--pr',
+    '42',
+    '--comment-id',
+    '1001',
+    '--override',
+    '',
+  ]);
+  assert.equal(empty.override, '');
+  const flags = parseArgs([
+    '--pr',
+    '42',
+    '--comment-id',
+    '1001',
+    '--scope-fence',
+    '--protected-authority',
+    '--accepted-mid-fix',
+  ]);
+  assert.equal(flags.scopeFence, true);
+  assert.equal(flags.protectedAuthority, true);
+  assert.equal(flags.acceptedMidFix, true);
+});
+
+test('validateTriageFlags refuses --path-b with each verdict input (#4187)', () => {
+  for (const flag of [
+    { scopeFence: true },
+    { protectedAuthority: true },
+    { acceptedMidFix: true },
+  ]) {
+    assert.throws(
+      () =>
+        validateTriageFlags({
+          flags: triageFlags({ pathB: true, ...flag }),
+          apply: false,
+          body: ACCEPTED_FIXED,
+          triageRecord: 'off',
+          reviewPolicy: undefined,
+        }),
+      /--path-b/u,
+    );
+  }
 });

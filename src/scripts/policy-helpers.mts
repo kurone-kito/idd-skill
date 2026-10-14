@@ -2550,9 +2550,10 @@ export function relaxStepClauseParts(
 
 /**
  * One E4/E5 triage record, written as the `Triage:` line of a disposition
- * reply (#4186). `verdict`, `blocked` and `override` are reserved for later
- * issues and stay `null` in this one. `convergedHead` is the first 7
- * characters of the head SHA, set only when convergence raised the step.
+ * reply (#4186). `verdict` and `blocked` are set under `severity-tiered` and
+ * `override` only when `--override` is given (#4187). `convergedHead` is the
+ * first 7 characters of the head SHA, set only when convergence raised the
+ * step.
  */
 export interface TriageRecord {
   tier: 'low' | 'medium' | 'high';
@@ -2571,7 +2572,7 @@ const TRIAGE_VERDICT_VALUES: readonly string[] = ['defer', 'keep'];
 const TRIAGE_LINE_PATTERN =
   /^Triage: tier (low|medium|high); urgency (very-low|low|medium|high); step ([012])(.*)$/u;
 const TRIAGE_OVERRIDE_SEPARATOR = '; override: ';
-const TRIAGE_LINE_BREAK_PATTERN = /[\r\n\u2028\u2029]/u;
+export const TRIAGE_LINE_BREAK_PATTERN = /[\r\n\u2028\u2029]/u;
 
 /**
  * Format the `Triage:` line (#4186). The layout is fixed: `step` is always
@@ -2746,17 +2747,17 @@ function severityTieredDefers(
 }
 
 /**
- * Pure specification of the E4/E5 urgency-defer matrix. Instruction text
- * applies it; this module has no production caller. Check order fails
- * closed toward not deferring. `severity-tiered` ignores `adoptNow` and
- * treats an unknown E4 tier as Medium before the Copilot floor, which
+ * Pure specification of the E4/E5 urgency-defer matrix. The E5 Triage line
+ * applies it through `computeTriageVerdict` in `resolve-review-thread.mts`
+ * (#4187). Check order fails closed toward not deferring.
+ * `severity-tiered` ignores `adoptNow` and treats an unknown E4 tier as
+ * Medium before the Copilot floor, which
  * only raises eligibility. `low` and `low-and-medium` do not: they need
  * a known E4 tier, and the floor never stands in for it. `relaxStep` and
  * `safetyClass` apply to `severity-tiered` only (#3796): from step 1 a
  * safety-class finding never defers, and each step raises the highest
  * urgency a tier may defer at; the other modes ignore both.
  */
-// audit:ignore-dead-export: E4/E5 applies this matrix from instruction text; tests lock every cell and there is no helper caller
 export function decideUrgencyDefer(
   input: UrgencyDeferInput,
 ): UrgencyDeferDecision {
