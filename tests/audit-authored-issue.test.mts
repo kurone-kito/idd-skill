@@ -6249,6 +6249,73 @@ test('an invalid-reference Depends on or Blocked by line outside the release sec
   }
 });
 
+test('an escaped comment opener is an example, not a live marker, and an even backslash run stays live (#4250)', () => {
+  const exampleOnly = carrierBody({
+    marker: '',
+    intro: 'Quote the marker as \\<!-- idd-skill-draft-carrier: v1 -->.',
+  });
+  assert.equal(carrierFinding(exampleOnly, 'carrier-marker')?.result, 'fail');
+  const forbiddenExample = carrierBody({
+    intro: 'Holds drafts.\n\nQuote it as \\<!-- idd-skill-effort: M -->.',
+  });
+  assert.equal(
+    carrierFinding(forbiddenExample, 'carrier-forbidden-markers')?.result,
+    'pass',
+  );
+  const evenRun = carrierBody({
+    intro: 'Holds drafts.\n\n\\\\<!-- idd-skill-effort: M -->',
+  });
+  assert.equal(
+    carrierFinding(evenRun, 'carrier-forbidden-markers')?.result,
+    'fail',
+  );
+});
+
+test('a visible footer inside a list or blockquote container still fails a draft carrier (#4250)', () => {
+  for (const line of [
+    '> _Effort: M -- x',
+    '- _Autopilot suitability: 4 / 5 -- x',
+    '> - _Effort: M -- x',
+  ]) {
+    assert.equal(
+      carrierFinding(
+        carrierBody({ intro: `Holds drafts.\n\n${line}` }),
+        'carrier-forbidden-markers',
+      )?.result,
+      'fail',
+      line,
+    );
+  }
+});
+
+test('a fence under an indented list marker is list content, and a fence under a numbered item at a lower indent is top-level (#4250)', () => {
+  // Codex: a one-column indented `-` item owns a three-column fence.
+  const indentedMarker = CARRIER_DRAFTS.replace(
+    '```md\n# Follow-up B\n```',
+    ' - wrapper\n\n   ```md\n   # Follow-up B\n   ```',
+  );
+  assert.equal(
+    carrierFinding(carrierBody({ drafts: indentedMarker }), 'carrier-drafts')
+      ?.result,
+    'fail',
+    'indented list marker owns the fence',
+  );
+  // A `1.` item's content starts at column three, so a two-column fence
+  // after it is outside the item and top-level.
+  const numberedLowerIndent = CARRIER_DRAFTS.replace(
+    '```md\n# Follow-up B\n```',
+    '1. wrapper\n\n  ```md\n  # Follow-up B\n  ```',
+  );
+  assert.equal(
+    carrierFinding(
+      carrierBody({ drafts: numberedLowerIndent }),
+      'carrier-drafts',
+    )?.result,
+    'pass',
+    'a two-column fence is outside a three-column numbered item',
+  );
+});
+
 test('a second ## Drafts or ## Release condition heading fails rather than hiding unchecked drafts (#4250)', () => {
   const secondDrafts = `${carrierBody()}\n## Drafts\n\n### Follow-up C\n\nReview: reviewed\nShape: child\n`;
   assert.equal(carrierFinding(secondDrafts, 'carrier-drafts')?.result, 'fail');

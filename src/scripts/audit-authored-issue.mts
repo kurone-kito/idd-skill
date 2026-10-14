@@ -97,6 +97,7 @@ import {
   findInlineCodeSpans,
   findMarkdownCodeRanges,
   maskMarkdownForScan,
+  stripEnclosingListContentIndent,
   stripMarkdownCodeRegions,
 } from './markdown-code.mts';
 import type {
@@ -218,6 +219,13 @@ const DEPENDS_ON_LINE_PATTERN =
   /^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+|\d+[.)][ \t]+)?Depends on\b/iu;
 const BLOCKED_BY_LINE_PATTERN =
   /^[ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+|\d+[.)][ \t]+)?Blocked by\b/iu;
+
+// The visible footer lines, allowing any list or blockquote container prefix
+// (#4250 review, Copilot): `> _Effort: M` is still a visible footer.
+const AUTOPILOT_SUITABILITY_FOOTER_PATTERN =
+  /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+)*_Autopilot suitability:/imu;
+const EFFORT_FOOTER_PATTERN =
+  /^[ \t]*(?:>[ \t]*|[-*+][ \t]+|\d+[.)][ \t]+)*_Effort:/imu;
 
 /**
  * The fixed GitHub label paired with the
@@ -1375,6 +1383,19 @@ function buildTriageFindings(
 // raw body and map to line indexes: masking preserves the line structure.
 
 /**
+ * Blanks each HTML comment opener `<!--` that a backslash escapes (an odd run
+ * of backslashes before it), since an escaped opener renders as text (#4250
+ * review, Copilot). Blanking first means an escaped example cannot start a
+ * marker match that consumes a later live marker. An even run leaves the
+ * opener live, because the backslashes escape each other.
+ */
+function blankEscapedCommentOpeners(text: string): string {
+  return text.replace(/(\\*)<!--/gu, (match, slashes: string) =>
+    slashes.length % 2 === 1 ? `${slashes}    ` : match,
+  );
+}
+
+/**
  * The structural view a draft carrier's section, fence, and dependency-line
  * checks read (#4250 review, Copilot): the raw body with every HTML comment
  * blanked, then code-masked. Discover's grammar masks comments the same way
@@ -1437,8 +1458,12 @@ function buildCarrierFindings(
   }
   const structure = carrierStructureView(rawText);
   return [
-    checkCarrierMarker(text, markerPrefix),
-    checkCarrierForbiddenMarkers(text, structure.text, markerPrefix),
+    checkCarrierMarker(blankEscapedCommentOpeners(text), markerPrefix),
+    checkCarrierForbiddenMarkers(
+      blankEscapedCommentOpeners(text),
+      structure.text,
+      markerPrefix,
+    ),
     checkCarrierReleaseCondition(structure.text.split('\n')),
     checkCarrierDrafts(structure.text.split('\n'), structure.rawFree),
     checkCarrierLabel(labels, authoringOnlyLabelName),
@@ -1490,10 +1515,10 @@ function checkCarrierForbiddenMarkers(
   // markers are footers too, even when their hidden marker is absent. They
   // read the comment-free view, since a commented-out line is not visible
   // (#4250 review, Copilot); hidden markers are still counted above.
-  if (/^[ \t]*_Autopilot suitability:/imu.test(visibleText)) {
+  if (AUTOPILOT_SUITABILITY_FOOTER_PATTERN.test(visibleText)) {
     found.push('autopilot-suitability footer line');
   }
-  if (/^[ \t]*_Effort:/imu.test(visibleText)) {
+  if (EFFORT_FOOTER_PATTERN.test(visibleText)) {
     found.push('effort footer line');
   }
   return found.length === 0
@@ -1648,10 +1673,9 @@ function checkCarrierDrafts(
   if (subsectionStarts.length === 0) {
     return fail(id, name, 'the Drafts section has no ### draft subsection');
   }
-  const rawLines = rawNormalized.split('\n');
   const fenceLines = findFencedCodeRanges(rawNormalized)
-    .map((range) => rawNormalized.slice(0, range.start).split('\n').length - 1)
-    .filter((line) => isTopLevelFenceOpener(rawLines, line));
+    .filter((range) => isTopLevelFenceOpener(rawNormalized, range.start))
+    .map((range) => rawNormalized.slice(0, range.start).split('\n').length - 1);
   const reviewLine = /^Review: (?:reviewed|not reviewed)(?: .*)?$/u;
   const shapeLine = /^Shape: (?:orphan|roadmap|child)$/u;
   const problems: string[] = [];
@@ -1695,34 +1719,26 @@ function checkCarrierDrafts(
 }
 
 /**
- * Whether the fence opener at `line` is a top-level draft fence (#4250
- * review, Copilot). An opener indented four or more columns, or quoted with
- * `>`, is not one here. An opener indented one to three columns is top-level
- * unless the nearest unindented non-blank line above it is a list item, which
- * makes it a list continuation. This is a line-level approximation, since
- * the range helpers do not report container nesting.
+ * Whether the fence whose opener starts at `openIndex` is a top-level draft
+ * fence (#4250 review, Copilot, Codex). An opener indented four or more
+ * columns, or quoted with `>`, is not a fence here. Any other opener is
+ * top-level unless the list-container parser places it inside a list item's
+ * content (`stripEnclosingListContentIndent` returns null outside one), which
+ * follows CommonMark's content-column rule for indented lists.
  */
 function isTopLevelFenceOpener(
-  rawLines: readonly string[],
-  line: number,
+  rawNormalized: string,
+  openIndex: number,
 ): boolean {
-  const opener = /^( *)(?:`{3,}|~{3,})/u.exec(rawLines[line] ?? '');
+  const lineStart = rawNormalized.lastIndexOf('\n', openIndex - 1) + 1;
+  const lineEnd = rawNormalized.indexOf('\n', lineStart);
+  const opener = /^( *)(?:`{3,}|~{3,})/u.exec(
+    rawNormalized.slice(lineStart, lineEnd === -1 ? undefined : lineEnd),
+  );
   if (opener === null || opener[1].length > 3) {
     return false;
   }
-  if (opener[1].length === 0) {
-    return true;
-  }
-  for (let index = line - 1; index >= 0; index -= 1) {
-    const above = rawLines[index] ?? '';
-    if (above.trim() === '') {
-      continue;
-    }
-    if (/^\S/u.test(above)) {
-      return !/^(?:[-*+]|\d+[.)])[ \t]/u.test(above);
-    }
-  }
-  return true;
+  return stripEnclosingListContentIndent(rawNormalized, lineStart) === null;
 }
 
 function checkCarrierLabel(
