@@ -798,16 +798,15 @@ in this preamble, since the fallback differs per helper.
   enumeration and classification
 - `scripts/idd-roadmap-audit-execute.mjs` for the A1.5 roadmap-completion
   mutation: dry-run gates only the mechanical completion preconditions
-  (the roadmap itself open, so a roadmap that is not open is not ready and
+  (the roadmap itself is open; a roadmap that is not open is not ready and
   reports the `roadmap-closed` blocker; all descendants closed/complete, no
   open/unresolved/nested-roadmap blocker) via the roadmap-graph traversal and
-  emits `{ready, blockers,
-  evidenceBody}` — it does **not** verify the roadmap's free-form success
-  criteria or autonomy-gap items, which the caller must confirm
-  separately before `--apply`; `--apply` re-validates the roadmap-audit
-  claim and the graph immediately before mutating, then posts the
-  evidence comment, closes the completed roadmap, and releases the claim
-  (referenced in
+  emits `{ready, blockers, evidenceBody}` — it does **not** verify the
+  roadmap's free-form success criteria or autonomy-gap items, which the
+  caller must confirm separately before `--apply`; `--apply` re-validates
+  the roadmap-audit claim and the graph immediately before mutating, then
+  posts the evidence comment, closes the completed roadmap, and releases
+  the claim (referenced in
   [kurone-kito/idd-skill#1071](https://github.com/kurone-kito/idd-skill/issues/1071))
   `--criteria-note <text>` (#4034) records the caller's own check of those
   criteria on the evidence body as a `Success criteria: <text>` line. The text
