@@ -813,3 +813,47 @@ test('an unqualified HOME with a leading double slash is refused even when XDG_D
   assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
   assert.equal(nodeFs.existsSync(join(home, '.claude', 'skills')), false);
 });
+
+test('uninstall keeps the whitespace around a removed first instruction', () => {
+  const home = freshHome();
+  nodeFs.mkdirSync(join(home, '.config', 'opencode'));
+  const opencode = filesOf(home).opencode;
+  nodeFs.writeFileSync(opencode, '{"instructions":[]}');
+  installPayload(optionsFor(home));
+  // The user puts the entry first and adds a spaced sibling after it.
+  nodeFs.writeFileSync(
+    opencode,
+    `{"instructions":[${JSON.stringify(entryPathOf(home))},  "user.md"]}`,
+  );
+  uninstallPayload(optionsFor(home));
+  assert.equal(textOf(opencode), '{"instructions":[  "user.md"]}');
+});
+
+test('uninstall keeps the whitespace around a removed later instruction', () => {
+  const home = freshHome();
+  nodeFs.mkdirSync(join(home, '.config', 'opencode'));
+  const opencode = filesOf(home).opencode;
+  nodeFs.writeFileSync(opencode, '{"instructions":["user.md"]}');
+  installPayload(optionsFor(home));
+  // The user spaces the entry away from the comma, and that space stays.
+  nodeFs.writeFileSync(
+    opencode,
+    `{"instructions":["user.md" , ${JSON.stringify(entryPathOf(home))}]}`,
+  );
+  uninstallPayload(optionsFor(home));
+  assert.equal(textOf(opencode), '{"instructions":["user.md"  ]}');
+});
+
+test('uninstall keeps the whitespace before a user member after a created instructions key', () => {
+  const home = freshHome();
+  nodeFs.mkdirSync(join(home, '.config', 'opencode'));
+  const opencode = filesOf(home).opencode;
+  nodeFs.writeFileSync(opencode, '{}');
+  installPayload(optionsFor(home));
+  nodeFs.writeFileSync(
+    opencode,
+    `{"instructions":[${JSON.stringify(entryPathOf(home))}],  "model": "x"}`,
+  );
+  uninstallPayload(optionsFor(home));
+  assert.equal(textOf(opencode), '{  "model": "x"}');
+});

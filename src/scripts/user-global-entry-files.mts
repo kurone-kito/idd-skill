@@ -474,31 +474,46 @@ function insertItem(text: string, array: JsonArray, valueJson: string): string {
  * Remove one item. The item and the comma before it go, or the comma after it
  * when the item is first, so the rest of the text keeps its bytes.
  */
-function removeItem(text: string, array: JsonArray, index: number): string {
-  const items = array.items;
-  const item = items[index];
-  let from = item.start;
-  let to = item.end;
-  if (items.length > 1 && index > 0) {
-    from = text.indexOf(',', items[index - 1].end);
-  } else if (items.length > 1) {
-    to = items[1].start;
-  }
-  return text.slice(0, from) + text.slice(to);
+/** The byte span of one array item or object member. */
+interface Span {
+  start: number;
+  end: number;
 }
 
-/** Remove one member, with the same comma rule as `removeItem`. */
-function removeMember(text: string, root: JsonObject, index: number): string {
-  const members = root.members;
-  const member = members[index];
-  let from = member.keyStart;
-  let to = member.value.end;
-  if (members.length > 1 && index > 0) {
-    from = text.indexOf(',', members[index - 1].value.end);
-  } else if (members.length > 1) {
-    to = members[1].keyStart;
+/**
+ * Remove the span at `index` and one comma, and keep every other byte. The
+ * comma removed is the one before the span, or the one after it when the span
+ * is first. A lone span has no comma. Whitespace the user wrote around the
+ * removed bytes stays where it was.
+ */
+function removeSpanAt(text: string, spans: Span[], index: number): string {
+  const span = spans[index];
+  const cuts: Span[] = [span];
+  if (spans.length > 1) {
+    const from = index > 0 ? spans[index - 1].end : span.end;
+    const comma = text.indexOf(',', from);
+    cuts.push({ start: comma, end: comma + 1 });
   }
-  return text.slice(0, from) + text.slice(to);
+  let out = text;
+  // Apply the later cut first, so the earlier offsets stay valid.
+  for (const cut of cuts.sort((a, b) => b.start - a.start)) {
+    out = out.slice(0, cut.start) + out.slice(cut.end);
+  }
+  return out;
+}
+
+/** Remove one array item, with the comma rule of `removeSpanAt`. */
+function removeItem(text: string, array: JsonArray, index: number): string {
+  return removeSpanAt(text, array.items, index);
+}
+
+/** Remove one member, with the comma rule of `removeSpanAt`. */
+function removeMember(text: string, root: JsonObject, index: number): string {
+  const spans = root.members.map((member) => ({
+    start: member.keyStart,
+    end: member.value.end,
+  }));
+  return removeSpanAt(text, spans, index);
 }
 
 /**
