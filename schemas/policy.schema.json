@@ -670,9 +670,19 @@
           "minimum": 1,
           "enum": [1, 2, 3, 4, 5, 6, 7, 8],
           "description": "Maximum workers running in one orchestrator session. Optional; defaults to `2`. A value of `1` allows one worker."
+        },
+        "hostLoadClearStreak": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Consecutive `idd-worker-budget` readings with `slots` above 0 that the orchestrator waits for after a `host-load` stop. Optional; defaults to `3`. A value below 1 or not an integer falls back to `3`."
+        },
+        "hostLoadWaitCeiling": {
+          "type": "string",
+          "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+          "description": "Longest the orchestrator waits for host load to clear, measured from the first `host-load` reading, as an ISO 8601 duration. Optional; defaults to `PT30M`. An unparseable value falls back to `PT30M`."
         }
       },
-      "description": "Per-session worker concurrency settings. Optional; omitting it keeps the default cap."
+      "description": "Per-session worker concurrency and host-load wait settings. Optional; omitting it keeps the default cap and the default wait."
     },
     "discover": {
       "type": "object",
