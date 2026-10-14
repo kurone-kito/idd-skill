@@ -36,6 +36,7 @@ import {
   type ReviewThreadNode,
   runBodyItemDisposition,
   type TriageFlags,
+  TriageReadError,
   TriageUsageError,
   validateTriageFlags,
 } from '../src/scripts/resolve-review-thread.mts';
@@ -1843,7 +1844,9 @@ test('buildTriageReplyBody propagates a failed review read as a transport error 
   assert.throws(
     () =>
       buildTriage(port, '**Accepted** — x', { tier: 'high', urgency: 'high' }),
-    (error: unknown) => classifyHelperError(error).kind === 'transport',
+    (error: unknown) =>
+      error instanceof TriageReadError &&
+      classifyHelperError(error.original).kind === 'transport',
   );
 });
 
@@ -1855,7 +1858,16 @@ test('validateTriageFlags refuses an Accepted reply without both scores under re
       triageRecord,
       reviewPolicy: undefined,
     };
-    for (const flags of [{}, { tier: 'high' }, { urgency: 'high' }]) {
+    // With no score the record requirement itself refuses, under this mode.
+    assert.throws(
+      () => validateTriageFlags({ ...record, flags: triageFlags() }),
+      (error: unknown) =>
+        error instanceof TriageUsageError &&
+        error.message.includes(`triageRecord ${triageRecord} requires`),
+      triageRecord,
+    );
+    // A lone score fails the pair check first, which names --urgency.
+    for (const flags of [{ tier: 'high' }, { urgency: 'high' }]) {
       assert.throws(
         () => validateTriageFlags({ ...record, flags: triageFlags(flags) }),
         (error: unknown) =>
@@ -1868,27 +1880,30 @@ test('validateTriageFlags refuses an Accepted reply without both scores under re
 });
 
 test('buildTriageReplyBody counts only Copilot reviews toward the relax step (#4186)', () => {
+  // Four Copilot reviews (one dismissed, which still counts: the issue says
+  // any state) and seven others. Counting every review gives 11 (step 2), an
+  // inverted filter gives 7 (step 2), and dropping the dismissed one gives 3
+  // (step 0). Only the correct count, 4, gives step 1.
+  const others = Array.from({ length: 7 }, (_, index) => ({
+    id: 20 + index,
+    user: { login: index % 2 === 0 ? 'octocat' : 'coderabbitai[bot]' },
+    state: 'COMMENTED',
+    body: '',
+  }));
   const rows = [
     ...triageReviewRows(3),
-    { id: 10, user: { login: 'octocat' }, state: 'COMMENTED', body: '' },
-    { id: 11, user: { login: 'octocat' }, state: 'APPROVED', body: '' },
-    {
-      id: 12,
-      user: { login: 'coderabbitai[bot]' },
-      state: 'COMMENTED',
-      body: '',
-    },
+    { id: 9, user: { login: TRIAGE_LOGIN }, state: 'DISMISSED', body: '' },
+    ...others,
   ];
   const port = createFakeProviderAdapter({
     reviews: { [TRIAGE_PR]: rows },
     changeRequestHeadShas: { [TRIAGE_PR]: TRIAGE_HEAD },
   });
-  // Six reviews in all, but three from Copilot: the step stays 0 at 3.
   const { record } = buildTriage(port, '**Accepted** — x', {
     tier: 'high',
     urgency: 'high',
   });
-  assert.equal(record?.step, 0);
+  assert.equal(record?.step, 1);
 });
 
 test('buildTriageReplyBody honours a custom reply-identity marker prefix (#4186)', () => {
@@ -2440,6 +2455,26 @@ test('a review read that returns non-JSON reports kind transport in the error en
     iddHelperError?: { kind?: string };
   };
   assert.equal(envelope.iddHelperError?.kind, 'transport');
+});
+
+test('the compiled CLI stamps a record-mode reply with the configured marker prefix (#4186)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--body',
+      '**Accepted** — fixed in abc',
+    ],
+    { ...TRIAGE_TIERED_CONFIG, markerPrefix: 'acme' },
+    triageReviewRows(2),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.posted, [
+    '**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0\n\n<!-- acme-review-reply -->',
+  ]);
 });
 
 test('the compiled CLI writes step 1 for four Copilot reviews on a record-mode thread reply (#4186)', () => {

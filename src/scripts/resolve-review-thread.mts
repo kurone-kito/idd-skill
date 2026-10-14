@@ -396,6 +396,24 @@ export interface TriageFlags {
 /** A refused triage input. The CLI exits 1 with kind `usage` and posts nothing. */
 export class TriageUsageError extends Error {}
 
+/** A failed read of the reviews or the head. The CLI reports kind `transport`. */
+export class TriageReadError extends Error {
+  readonly original: unknown;
+
+  constructor(original: unknown) {
+    super('triage read failed');
+    this.original = original;
+  }
+}
+
+function readTriageInput<T>(read: () => T): T {
+  try {
+    return read();
+  } catch (error) {
+    throw new TriageReadError(error);
+  }
+}
+
 const TRIAGE_TIER_VALUES: readonly string[] = ['low', 'medium', 'high'];
 const TRIAGE_URGENCY_VALUES: readonly string[] = [
   'very-low',
@@ -520,15 +538,16 @@ export function buildTriageReplyBody(input: {
   let step: TriageRecord['step'] = 0;
   let convergedHead: string | null = null;
   if (input.deferByUrgency === 'severity-tiered' && !flags.lite) {
-    const copilotReviews = input.port
-      .listReviews(input.pr)
-      .filter((review) =>
-        isCopilotReviewerLogin(reviewAuthorLogin(review)),
-      ).length;
+    const reviews = readTriageInput(() => input.port.listReviews(input.pr));
+    const copilotReviews = reviews.filter((review) =>
+      isCopilotReviewerLogin(reviewAuthorLogin(review)),
+    ).length;
     let converged = false;
     let head = '';
     if (flags.advisoryConverged !== '') {
-      head = input.port.getChangeRequestHeadSha(input.pr);
+      head = readTriageInput(() =>
+        input.port.getChangeRequestHeadSha(input.pr),
+      );
       if (flags.advisoryConverged !== head) {
         throw new TriageUsageError(
           `--advisory-converged ${flags.advisoryConverged} does not match the pull request head ${head}`,
@@ -1249,14 +1268,14 @@ function main(): HelperCliResult {
       writeStderrSync(`${error.message}\n`);
       exitClassified(1, 'usage', error.message);
     }
-    const classified = classifyHelperError(error);
+    // #4186: a failed read of the reviews or the head is kind `transport`, the
+    // issue's contract. Any other error keeps the kind the classifier gives it.
+    const source = error instanceof TriageReadError ? error.original : error;
+    const classified = classifyHelperError(source);
     writeStderrSync(`reply not posted: ${classified.message}\n`);
-    // The issue's contract is kind `transport` for a read that fails. The only
-    // errors that reach this branch come from the reviews and the head read,
-    // so every kind other than `usage` is reported as `transport`.
     exitClassified(
       1,
-      classified.kind === 'usage' ? 'usage' : 'transport',
+      error instanceof TriageReadError ? 'transport' : classified.kind,
       classified.message,
       classified.httpStatus,
     );
