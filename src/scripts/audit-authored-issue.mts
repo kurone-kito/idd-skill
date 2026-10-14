@@ -1126,7 +1126,11 @@ export function auditAuthoredIssue(
       markerPrefix,
       options.upstreamEscalationEnabled === true,
     ),
-    checkRequiredHeadings(text, shape, isBucketAudit),
+    checkRequiredHeadings(
+      shape === 'carrier' ? carrierStructureView(rawText).text : text,
+      shape,
+      isBucketAudit,
+    ),
     checkRoadmapTracksParse(
       text,
       shape,
@@ -1361,6 +1365,43 @@ function buildTriageFindings(
 // so a fenced draft never counts. Fence offsets come from the CRLF-normalized
 // raw body and map to line indexes: masking preserves the line structure.
 
+/**
+ * The structural view a draft carrier's section, fence, and dependency-line
+ * checks read (#4250 review, Copilot): the raw body with every HTML comment
+ * blanked, then code-masked. Discover's grammar masks comments the same way
+ * (checkDependencyLineGrammar's `discoverMaskedLines`), so a heading, Review
+ * or Shape line, fence, or dependency line hidden in a comment never counts
+ * as carrier structure. Markers stay on the code-masked text that keeps
+ * comments, so a hidden marker is still detected.
+ */
+function carrierStructureView(rawText: string): {
+  text: string;
+  rawFree: string;
+} {
+  const rawNormalized = rawText.replace(/\r\n/g, '\n');
+  const fencedRanges = findFencedCodeRanges(rawNormalized);
+  const indentedRanges = findIndentedCodeRanges(rawNormalized, fencedRanges);
+  const htmlBlockRanges = findHtmlBlockRanges(rawNormalized, fencedRanges);
+  const commentRanges = findHtmlCommentRanges(
+    rawNormalized,
+    [...fencedRanges, ...indentedRanges],
+    fencedRanges,
+    htmlBlockRanges,
+  );
+  // Index by UTF-16 code unit, as the range helpers do, and keep every
+  // newline so line indexes stay aligned with the masked text.
+  const chars = rawNormalized.split('');
+  for (const range of commentRanges) {
+    for (let index = range.start; index < range.end; index += 1) {
+      if (chars[index] !== '\n') {
+        chars[index] = ' ';
+      }
+    }
+  }
+  const rawFree = chars.join('');
+  return { text: maskMarkdownForScan(rawFree), rawFree };
+}
+
 function buildCarrierFindings(
   text: string,
   rawText: string,
@@ -1372,13 +1413,12 @@ function buildCarrierFindings(
   if (shape !== 'carrier') {
     return [];
   }
-  const lines = text.split('\n');
-  const rawNormalized = rawText.replace(/\r\n/g, '\n');
+  const structure = carrierStructureView(rawText);
   return [
     checkCarrierMarker(text, markerPrefix),
     checkCarrierForbiddenMarkers(text, markerPrefix),
-    checkCarrierReleaseCondition(lines),
-    checkCarrierDrafts(lines, rawNormalized),
+    checkCarrierReleaseCondition(structure.text.split('\n')),
+    checkCarrierDrafts(structure.text.split('\n'), structure.rawFree),
     checkCarrierLabel(labels, authoringOnlyLabelName),
   ];
 }
@@ -1468,6 +1508,15 @@ function checkCarrierReleaseCondition(lines: readonly string[]): AuditFinding {
         : 'a non-dependency line';
       problems.push(
         `${kind} in the release condition: "${lines[index].trim()}"`,
+      );
+      continue;
+    }
+    // A declaration whose reference list is followed by prose ("Blocked by
+    // #12 because ...") still matches the grammar, but the release condition
+    // is a bare declaration only (#4250 review, Copilot).
+    if (declaration.remaining.trim() !== '') {
+      problems.push(
+        `trailing text after the Blocked by references in the release condition: "${lines[index].trim()}"`,
       );
       continue;
     }

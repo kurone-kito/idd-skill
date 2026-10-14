@@ -6117,6 +6117,57 @@ test('carrier-release-condition rejects a non-dependency line, a Depends on line
   }
 });
 
+test('a draft carrier cannot hide its headings or Review line inside an HTML comment (#4250)', () => {
+  // The release and ledger headings sit inside one multiline comment that
+  // runs through the drafts. They are not visible structure, so the
+  // carrier must fail required-headings rather than read them as present.
+  const hiddenHeadings = carrierBody()
+    .replace('## Release condition', '<!--\n## Release condition')
+    .replace('## Review ledger', '## Review ledger\n-->');
+  assert.equal(
+    carrierFinding(hiddenHeadings, 'required-headings')?.result,
+    'fail',
+  );
+  // Every required heading, a draft subsection, and the Review and Shape
+  // lines sit only inside one multiline comment: none of it is visible.
+  const commentedWhole = [
+    '# Draft carrier for the follow-ups',
+    '',
+    CARRIER_MARKER,
+    '',
+    '<!--',
+    '## Release condition',
+    '',
+    '## Drafts',
+    '',
+    CARRIER_DRAFTS,
+    '',
+    '## Review ledger',
+    '-->',
+  ].join('\n');
+  assert.equal(
+    carrierFinding(commentedWhole, 'required-headings')?.result,
+    'fail',
+  );
+  const commentedReview = carrierBody().replace(
+    'Review: reviewed',
+    '<!--\nReview: reviewed\n-->',
+  );
+  assert.equal(
+    carrierFinding(commentedReview, 'carrier-drafts')?.result,
+    'fail',
+  );
+});
+
+test('carrier-release-condition rejects a Blocked by line followed by prose (#4250)', () => {
+  const finding = carrierFinding(
+    carrierBody({ release: ['Blocked by #12 because rollout is pending'] }),
+    'carrier-release-condition',
+  );
+  assert.equal(finding?.result, 'fail');
+  assert.match(finding?.detail ?? '', /trailing text/u);
+});
+
 test('carrier-drafts requires one Review line, one Shape line, and one fenced draft per subsection (#4250)', () => {
   const cases: [string, string][] = [
     ['no Review line', CARRIER_DRAFTS.replace('Review: reviewed\n', '')],
