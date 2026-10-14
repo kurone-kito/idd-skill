@@ -829,6 +829,29 @@ export function classifyIssue(
   // (the default): the markers themselves are HTML comments.
   const bodyForMarkerTests = maskMarkdownForScan(body);
 
+  const blockedLabels = new Set([
+    blockedByHumanLabelName,
+    needsDecisionLabelName,
+    authoringOnlyLabelName,
+  ]);
+  const blockedLabel = [...labels].find((label) => blockedLabels.has(label));
+
+  // #4257: a draft carrier is filed as blocked_label before the marker checks
+  // below, so every carrier lands there, as the listing's acceptance criteria
+  // require. audit-authored-issue's carrier-forbidden-markers rule rejects a
+  // carrier that names a roadmap or blocked-by marker, so this changes only
+  // where a malformed carrier is filed. Every other issue keeps the order below.
+  if (
+    labels.has(authoringOnlyLabelName) &&
+    createMarkerRegex(markerPrefix, 'draft-carrier').test(bodyForMarkerTests)
+  ) {
+    return {
+      orphan: false,
+      reason: 'blocked_label',
+      details: blockedLabel ?? authoringOnlyLabelName,
+    };
+  }
+
   if (roadmapMarkerRegex.test(bodyForMarkerTests)) {
     return { orphan: false, reason: 'roadmap_marker' };
   }
@@ -837,12 +860,6 @@ export function classifyIssue(
     return { orphan: false, reason: 'blocked_by_marker' };
   }
 
-  const blockedLabels = new Set([
-    blockedByHumanLabelName,
-    needsDecisionLabelName,
-    authoringOnlyLabelName,
-  ]);
-  const blockedLabel = [...labels].find((label) => blockedLabels.has(label));
   if (blockedLabel) {
     return { orphan: false, reason: 'blocked_label', details: blockedLabel };
   }
@@ -1173,8 +1190,8 @@ type DraftCarrierVerdict =
  * Classify one issue as a draft carrier, or return `null` (#4257). A carrier
  * carries the authoring-only label and the carrier marker outside code. The
  * label is checked first, so only labelled issues pay for the masked body
- * scan. The verdict does not depend on what `classifyIssue` reaches. A
- * well-formed carrier still lands in `filtered.blocked_label` there.
+ * scan. The verdict does not depend on what `classifyIssue` reaches, and
+ * `classifyIssue` files every carrier under `filtered.blocked_label`.
  */
 function classifyDraftCarrier(
   issue: OrphanIssueInput,
@@ -1202,8 +1219,8 @@ function classifyDraftCarrier(
   const number = Number(issue.number);
   const entry = {
     number,
-    title: String(issue.title ?? ''),
-    url: String(issue.url ?? ''),
+    title: typeof issue.title === 'string' ? issue.title : '',
+    url: typeof issue.url === 'string' ? issue.url : '',
   };
   const authoringLabelName = normalizeAuthoringLabelName(
     options.authoringLabelName,
@@ -2341,9 +2358,8 @@ falling back to created_at.
 "draftCarriers" (#4257) lists every draft carrier: an open issue that carries
 the configured authoring-only label and the carrier marker outside code. The
 marker value is not checked, so a carrier with an unexpected value is still
-listed. A carrier never becomes an orphan. A well-formed carrier stays in
-"filtered.blocked_label"; one that also names a roadmap or blocked-by marker is
-filed under that reason instead.
+listed. A carrier never becomes an orphan, and every carrier stays in
+"filtered.blocked_label", whichever roadmap or blocked-by markers it names.
 Its buckets are "held" (the carrier also carries the authoring label, with
 "heldSince" the latest labeled event (null when none was read) and "stale"
 true once that hold is at

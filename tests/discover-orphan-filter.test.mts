@@ -1195,22 +1195,29 @@ test('--draft-carriers resolves blockers and held events through the port (#4257
   }
 });
 
-test('draft carriers: a carrier that also names a blocked-by marker is filed under that reason and still listed (#4257)', async () => {
+test('draft carriers: a carrier that also names a roadmap or blocked-by marker is still filed as blocked_label (#4257)', async () => {
+  // audit-authored-issue rejects such a carrier, but every carrier must land in
+  // filtered.blocked_label. A marker is not a Blocked by line, so the listing
+  // still reads it as ready.
   const result = await filterOrphanIssues(
-    [carrierIssue(140, '<!-- idd-skill-blocked-by: #1 -->\n\nNo blocker.')],
+    [
+      carrierIssue(140, '<!-- idd-skill-blocked-by: #1 -->\n\nNo blocker.'),
+      carrierIssue(141, '<!-- idd-skill-roadmap-id: 1 -->\n\nNo blocker.'),
+    ],
     {
       issueStateByNumber: new Map<number, string>(),
       fetchIssueStateByNumber: () => 'UNRESOLVABLE',
     },
   );
   assert.deepEqual(
-    result.filtered.blocked_by_marker.map((entry) => entry.number),
-    [140],
+    result.filtered.blocked_label.map((entry) => entry.number),
+    [140, 141],
   );
-  assert.deepEqual(result.filtered.blocked_label, []);
+  assert.deepEqual(result.filtered.blocked_by_marker, []);
+  assert.deepEqual(result.filtered.roadmap_marker, []);
   assert.deepEqual(
     result.draftCarriers.ready.map((entry) => entry.number),
-    [140],
+    [140, 141],
   );
 });
 
