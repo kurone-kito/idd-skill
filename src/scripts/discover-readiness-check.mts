@@ -507,9 +507,9 @@ export async function evaluateDiscoverReadiness(
   for (const issueNumber of normalizeIssueNumbers(issueNumbers)) {
     // #4115: a configured durable record is excluded by number before any
     // GitHub read, matching discover-orphan-filter's number-first check. The
-    // outage target keeps precedence when both numbers are equal. Unlike the
-    // draft-carrier listing (#4257), this per-issue mode keeps the durable
-    // reason for a carrier that is one of these numbers.
+    // outage target keeps precedence when both numbers are equal. Unlike
+    // discover-orphan-filter's A0-O output (#4257), which files such a carrier
+    // under blocked_label first, this per-issue mode keeps the durable reason.
     const durableReason =
       issueNumber === providerOutageTarget
         ? 'provider_outage_target'
