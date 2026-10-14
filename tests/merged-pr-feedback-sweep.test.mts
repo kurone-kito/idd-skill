@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
+import { auditAuthoredIssue } from '../src/scripts/audit-authored-issue.mts';
 import {
   DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
   parseAutopilotSuitability,
@@ -25,6 +26,7 @@ import {
   type SweepReviewInput,
   WEEKLY_SWEEP_ISSUE_TITLE,
 } from '../src/scripts/merged-pr-feedback-sweep.mts';
+import { POLICY_DEFAULTS } from '../src/scripts/policy-helpers.mts';
 import { parseArgs as parseReadinessArgs } from '../src/scripts/pre-merge-readiness.mts';
 import { CODERABBIT_SUMMARY_MARKER } from '../src/scripts/protocol-helpers.mts';
 import {
@@ -2765,6 +2767,17 @@ const NO_FLAGGED_SUMMARY = {
 
 const RUN_DATE = '2026-10-13';
 
+// The score footer the issue-authoring contract defines, written out literally
+// so a drift in the renderer fails the exact-body tests (issue #4308).
+const WEEKLY_FOOTER = [
+  '---',
+  '',
+  '_Autopilot suitability: 1 / 5 -- higher is more autopilot-suitable;',
+  'below the configured floor is human-oriented._',
+  '',
+  '<!-- idd-skill-autopilot-suitability: 1 -->',
+].join('\n');
+
 test('parseArgs: --issue-body is a boolean that defaults to false', () => {
   assert.equal(parseArgs(['--issue-body']).issueBody, true);
   assert.equal(parseArgs([]).issueBody, false);
@@ -2786,7 +2799,7 @@ test('renderWeeklySweepIssueBody: nothing open, with the count checked, says so 
   );
   assert.equal(
     body,
-    'None are open as of 2026-10-13 (UTC): none of the 3 pull requests merged since 2026-10-06 has unresolved review threads or unaddressed comments.\n\n<!-- idd-skill-autopilot-suitability: 1 -->\n',
+    `None are open as of 2026-10-13 (UTC): none of the 3 pull requests merged since 2026-10-06 has unresolved review threads or unaddressed comments.\n\n${WEEKLY_FOOTER}\n`,
   );
 });
 
@@ -2802,7 +2815,7 @@ test('renderWeeklySweepIssueBody: a window with no merges says the scan found no
   );
   assert.equal(
     body,
-    'None are open as of 2026-10-13 (UTC): the scan found no pull request merged since 2026-10-06.\n\n<!-- idd-skill-autopilot-suitability: 1 -->\n',
+    `None are open as of 2026-10-13 (UTC): the scan found no pull request merged since 2026-10-06.\n\n${WEEKLY_FOOTER}\n`,
   );
 });
 
@@ -2818,7 +2831,7 @@ test('renderWeeklySweepIssueBody: an explicit PR list with no date names the sca
   );
   assert.equal(
     body,
-    'None are open as of 2026-10-13 (UTC): none of the 2 pull requests in the scanned set has unresolved review threads or unaddressed comments.\n\n<!-- idd-skill-autopilot-suitability: 1 -->\n',
+    `None are open as of 2026-10-13 (UTC): none of the 2 pull requests in the scanned set has unresolved review threads or unaddressed comments.\n\n${WEEKLY_FOOTER}\n`,
   );
 });
 
@@ -2840,8 +2853,8 @@ test('renderWeeklySweepIssueBody: an enumeration that reached the cap says so, e
     body,
     /The scan reached its limit of 500 pull requests, so some merges in the window may not have been checked\./,
   );
-  // Two summary lines, a blank line, then the not-work footer and its newline.
-  assert.equal(body.split('\n').length, 5);
+  // Two summary lines, a blank line, the six-line footer, and its newline.
+  assert.equal(body.split('\n').length, 10);
 });
 
 test('renderWeeklySweepIssueBody: the cap is named only when the enumeration reached it', () => {
@@ -2857,7 +2870,7 @@ test('renderWeeklySweepIssueBody: the cap is named only when the enumeration rea
   assert.doesNotMatch(body, /limit/);
 });
 
-test('renderWeeklySweepIssueBody: the report ends with a not-work footer scored below the floor (issue #4283)', () => {
+test('renderWeeklySweepIssueBody: the report ends with the contract footer, scored below the default floor (issues #4283 and #4308)', () => {
   const body = renderWeeklySweepIssueBody(
     { prs: [], summary: { prCount: 3, ...NO_FLAGGED_SUMMARY } },
     {
@@ -2868,12 +2881,16 @@ test('renderWeeklySweepIssueBody: the report ends with a not-work footer scored 
     },
   );
   assert.ok(
-    body.endsWith('\n\n<!-- idd-skill-autopilot-suitability: 1 -->\n'),
+    body.endsWith(`\n\n${WEEKLY_FOOTER}\n`),
     'the footer closes the body after one blank line',
   );
-  // Autopilot skips the report only because the footer parses below the floor.
+  // The visible line is a mirror of the marker, so it must name the same score.
+  const visible = /_Autopilot suitability:\s*([0-9]+)\s*\/\s*5/.exec(body);
   const score = parseAutopilotSuitability(body);
   assert.equal(score, 1);
+  assert.equal(Number(visible?.[1]), score);
+  // Below the default floor only: at floor 1 the score no longer routes the
+  // report, and the blocked-by-human label is what holds in every mode.
   assert.ok(
     score !== null && score < DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
     'the footer score must sit below the default autopilot floor',
@@ -2972,7 +2989,7 @@ test('renderWeeklySweepIssueBody: a non-empty result lists each flagged PR with 
       '- PR 1234 (merged 2026-10-09): 1 unresolved review thread, 2 unaddressed comments.',
       '- PR 1240: 0 unresolved review threads, 1 unaddressed comment.',
       '',
-      '<!-- idd-skill-autopilot-suitability: 1 -->',
+      WEEKLY_FOOTER,
       '',
     ].join('\n'),
   );
@@ -3213,6 +3230,100 @@ test('the write step decodes the body, refuses a full, malformed, or duplicated 
     `elif [ "$count" -eq 0 ]; then`,
     `gh issue create --repo "$GITHUB_REPOSITORY" --title "$SWEEP_ISSUE_TITLE" --label status:blocked-by-human --body-file "$RUNNER_TEMP/sweep-body.md"`,
   ]);
+});
+
+/** The label values the write step passes on its create and edit calls. */
+function sweepWriteLabels(): string[] {
+  const run = String(
+    stepNamed(sweepJob('write'), 'Create or update the summary issue').run,
+  );
+  return [...run.matchAll(/--(?:add-)?label\s+(\S+)/g)].map(
+    (match) => match[1] ?? '',
+  );
+}
+
+function auditFindingResult(
+  report: ReturnType<typeof auditAuthoredIssue>,
+  id: string,
+): string {
+  const finding = report.findings.find((entry) => entry.id === id);
+  assert.ok(finding, `expected a finding with id ${id}`);
+  return `${finding.result}: ${finding.detail}`;
+}
+
+test('the weekly body passes the authoring score-footer audit with the label the write step applies (issue #4308)', () => {
+  const body = renderWeeklySweepIssueBody(
+    { prs: [], summary: { prCount: 3, ...NO_FLAGGED_SUMMARY } },
+    {
+      sinceDate: '2026-10-06',
+      scanLimit: 500,
+      enumeratedCount: 3,
+      generatedOn: RUN_DATE,
+    },
+  );
+  // The create call and the edit call must apply the same label, and it must
+  // be the one the contract pairs with a score of 1.
+  const labels = sweepWriteLabels();
+  assert.equal(labels.length, 2);
+  assert.equal(labels[0], labels[1]);
+  const auditOptions = {
+    shape: 'orphan' as const,
+    labels,
+    blockedByHumanLabelName: POLICY_DEFAULTS.labels.blockedByHumanLabelName,
+  };
+  const report = auditAuthoredIssue(body, auditOptions);
+  for (const id of [
+    'suitability-marker',
+    'suitability-visible-line-agreement',
+    'suitability-blocked-by-human',
+  ]) {
+    assert.match(auditFindingResult(report, id), /^pass:/, id);
+  }
+
+  // Control: without the visible line the audit must object.
+  const withoutVisibleLine = body.replace(
+    /_Autopilot suitability:[^_]*_\n\n/,
+    '',
+  );
+  assert.notEqual(withoutVisibleLine, body, 'the control must change the body');
+  assert.match(
+    auditFindingResult(
+      auditAuthoredIssue(withoutVisibleLine, auditOptions),
+      'suitability-visible-line-agreement',
+    ),
+    /^fail:/,
+  );
+
+  // Control: without the label, a score of 1 breaks the pairing.
+  assert.match(
+    auditFindingResult(
+      auditAuthoredIssue(body, { ...auditOptions, labels: [] }),
+      'suitability-blocked-by-human',
+    ),
+    /^fail:/,
+  );
+});
+
+test('the footer comment in the sweep source names the floor and kill-switch conditions and the label guard (issue #4308)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/merged-pr-feedback-sweep.mts', import.meta.url),
+    'utf8',
+  );
+  const end = source.indexOf('const WEEKLY_SWEEP_SUITABILITY_SCORE');
+  assert.notEqual(end, -1);
+  const lines = source.slice(0, end).trimEnd().split('\n');
+  const block: string[] = [];
+  for (
+    let index = lines.length - 1;
+    index >= 0 && lines[index]?.startsWith('//');
+    index -= 1
+  ) {
+    block.unshift((lines[index] ?? '').replace(/^\/\/ ?/, ''));
+  }
+  const comment = block.join(' ').replace(/\s+/g, ' ');
+  assert.match(comment, /`autopilotSuitability\.floor` is above 1/);
+  assert.match(comment, /`autopilotSuitability\.enabled` is not `false`/);
+  assert.match(comment, /blocked-by-human label/);
 });
 
 test('the cap follows the enumeration, not the pull requests that survived filtering', () => {

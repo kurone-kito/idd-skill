@@ -272,11 +272,29 @@ export function buildMergedPrFeedbackSweep(prs, options) {
 // test asserts that the two match.
 // audit:ignore-dead-export: the workflow's job env and its contract test share this title; the script itself never reads it
 export const WEEKLY_SWEEP_ISSUE_TITLE = 'Merged-PR feedback sweep (weekly)';
-// Not-work footer of the weekly summary issue (issue #4283). The report is a
-// status summary, not a work item. Its autopilot-suitability score of 1 sits
-// below the configured floor, so autopilot runs skip it instead of claiming it.
-const WEEKLY_SWEEP_NOT_WORK_FOOTER =
-  '<!-- idd-skill-autopilot-suitability: 1 -->';
+// Not-work footer of the weekly summary issue (issues #4283 and #4308). The
+// report is a status summary, not a work item, so it carries the score footer
+// the issue-authoring contract defines (a rule, the visible line, and the
+// hidden marker) with a score of 1.
+//
+// The footer routes the report away from autopilot only while
+// `autopilotSuitability.floor` is above 1 (the policy schema allows 1 through
+// 5; the default is 3) and `autopilotSuitability.enabled` is not `false`,
+// because Discover ignores the score when the kill switch is off. Outside those
+// conditions the footer does not skip the report, and an attended run does not
+// skip below-floor issues at all. While the report carries the blocked-by-human
+// label the weekly workflow applies (it hard-codes the default name), that
+// label is the guard that holds at any floor and in every mode, since Discover
+// stops claims on the label itself.
+const WEEKLY_SWEEP_SUITABILITY_SCORE = 1;
+const WEEKLY_SWEEP_NOT_WORK_FOOTER = [
+  '---',
+  '',
+  `_Autopilot suitability: ${WEEKLY_SWEEP_SUITABILITY_SCORE} / 5 -- higher is more autopilot-suitable;`,
+  'below the configured floor is human-oriented._',
+  '',
+  `<!-- idd-skill-autopilot-suitability: ${WEEKLY_SWEEP_SUITABILITY_SCORE} -->`,
+].join('\n');
 /**
  * Build the renderer's options from the sweep's own inputs. An explicit PR
  * list has no enumeration cap, so the cap is null there.
@@ -295,10 +313,13 @@ function pluralize(count, noun) {
 /**
  * Render the body of the weekly summary issue from a sweep result. The
  * function is pure (no network, no clock). The body carries only numbers,
- * dates, and counts, never comment text, so no user-written content reaches
- * the issue. Pull requests are written as "PR 1234", never "#1234", so the
- * body adds no cross-reference event to them. The body ends with the
- * not-work footer (issue #4283), so autopilot never claims the report.
+ * dates, and counts, plus a fixed score footer, and never comment text, so no
+ * user-written content reaches the issue. Pull requests are written as
+ * "PR 1234", never "#1234", so the body adds no cross-reference event to
+ * them. The body ends with the not-work footer (issues #4283 and #4308), the
+ * contract's visible line and hidden marker, which keeps autopilot runs from
+ * claiming the report while the floor is above its score and the suitability
+ * system is enabled.
  */
 export function renderWeeklySweepIssueBody(result, options) {
   const scope = options.sinceDate
