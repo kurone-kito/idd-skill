@@ -2776,6 +2776,16 @@ function madeWriteCall(calls: string[][]): boolean {
   );
 }
 
+/**
+ * Asserts the stub logged the CLI's `gh` calls and that none of them wrote.
+ * The log must be non-empty first, so a broken log cannot pass vacuously
+ * (#4187).
+ */
+function assertNoWrite(run: TriageRun): void {
+  assert.ok(run.calls.length > 0, 'the stub logged the CLI gh calls');
+  assert.equal(madeWriteCall(run.calls), false);
+}
+
 /** The usage message for an `--override` the static check refuses, or null (#4187). */
 function overrideError(
   flags: Partial<TriageFlags>,
@@ -2828,7 +2838,7 @@ test('enforce refuses an Accepted defer on apply and posts nothing; the dry run 
     /triage verdict: defer \(eligibility low, blocked by none\); pass --override "<reason>" to post anyway/u,
   );
   assert.deepEqual(applied.posted, []);
-  assert.equal(madeWriteCall(applied.calls), false);
+  assertNoWrite(applied);
 
   const dry = runTriageApply(
     [
@@ -3048,7 +3058,7 @@ test('enforce refuses an Accepted: variant, which the apply gate also admits (#4
   );
   assert.equal(run.status, 1, run.stderr);
   assert.deepEqual(run.posted, []);
-  assert.equal(madeWriteCall(run.calls), false);
+  assertNoWrite(run);
 });
 
 test('record mode posts a defer with no override, and --override adds its reason (#4187)', () => {
@@ -3163,6 +3173,92 @@ test('--lite with a keep verdict refuses --override as a usage error (#4187)', (
   assert.equal(run.status, 1);
   assert.match(run.stderr, /--override requires a defer verdict/u);
   assert.equal(run.stdout, '');
+});
+
+test('apply with --override on a keep verdict exits 1 and posts nothing (#4187)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'high',
+      '--override',
+      'why',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(4),
+  );
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(run.stderr, /--override requires a defer verdict/u);
+  assert.deepEqual(run.posted, []);
+  assertNoWrite(run);
+});
+
+test('the compiled CLI refuses --override under triageRecord off (#4187)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_DRY_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'medium',
+      '--override',
+      'why',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    {
+      critiqueLoop: {
+        triageRecord: 'off',
+        deferByUrgency: 'severity-tiered',
+        deferRelaxAtRounds: [4, 7],
+      },
+    },
+    triageReviewRows(7),
+  );
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(
+    run.stderr,
+    /--override requires triageRecord record or enforce/u,
+  );
+  assert.equal(run.stdout, '');
+});
+
+test('enforce refuses a body-item Accepted defer before any write (#4187)', () => {
+  const run = runTriageApply(
+    [
+      '--pr',
+      '42',
+      '--review-id',
+      '9',
+      '--item-title',
+      'Previously missed title',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--claimless',
+      '--apply',
+      '--tier',
+      'low',
+      '--urgency',
+      'medium',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(7),
+  );
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(
+    run.stderr,
+    /triage verdict: defer \(eligibility low, blocked by none\); pass --override "<reason>" to post anyway/u,
+  );
+  assert.deepEqual(run.posted, []);
+  assertNoWrite(run);
 });
 
 test('validateTriageFlags refuses each static --override condition before any read (#4187)', () => {
