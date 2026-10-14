@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import {
   buildFindingThreads,
   buildTransitionTable,
+  checkFailures,
   classifyDispositionReply,
   computePrAudit,
   type MergedPrCandidate,
@@ -20,6 +23,7 @@ import {
   selectMostRecentlyMerged,
   summarizeCohort,
 } from '../src/scripts/copilot-review-wave-audit.mts';
+import { stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const CLI_PATH = join(REPO_ROOT, 'scripts/copilot-review-wave-audit.mjs');
@@ -1342,6 +1346,341 @@ test('computePrAudit: report keys are the existing fields plus triage and merged
     'v2Count',
   ]);
   assert.equal(report.mergedAt, null);
+});
+
+// ---------------------------------------------------------------------------
+// --check gate (issue #4189)
+// ---------------------------------------------------------------------------
+
+const SHARE_OPTIONS = { since: null, minRecordedShare: 0.9 };
+
+/** A PR report with a merge time, built from one review and its comments. */
+function mergedReport(
+  pr: number,
+  mergedAt: string | null,
+  items: string[],
+  comments: RawComment[],
+) {
+  return {
+    ...computePrAudit(
+      pr,
+      [review(pr, '2026-01-01T00:00:00Z', openReviewBody(items))],
+      comments,
+    ),
+    mergedAt,
+  };
+}
+
+const RECORDED_DEFER_COMMENTS = (findingId: number): RawComment[] => [
+  reply(
+    findingId * 10,
+    findingId,
+    `**Accepted** — fixed\n\n${TRIAGE_DEFER_LINE}`,
+    '2026-01-02T00:00:00Z',
+  ),
+];
+
+// A recorded line with no verdict: counts as recorded, never a contradiction.
+const RECORDED_PLAIN_COMMENTS = (findingId: number): RawComment[] => [
+  reply(
+    findingId * 10,
+    findingId,
+    '**Accepted** — fixed\n\nTriage: tier low; urgency medium; step 2',
+    '2026-01-02T00:00:00Z',
+  ),
+];
+
+const UNRECORDED_COMMENTS = (findingId: number): RawComment[] => [
+  reply(
+    findingId * 10,
+    findingId,
+    '**Accepted** — fixed',
+    '2026-01-02T00:00:00Z',
+  ),
+];
+
+test('checkFailures: a clean cohort returns no messages', () => {
+  const reports = [computePrAudit(1, [], [])];
+  const summary = summarizeCohort(reports);
+  assert.deepEqual(checkFailures(summary, reports, SHARE_OPTIONS), []);
+});
+
+test('checkFailures: one unparsed Copilot review gives one message', () => {
+  const reports = [
+    computePrAudit(
+      1,
+      [
+        review(
+          1,
+          '2026-01-01T00:00:00Z',
+          `<!-- ccr-overview-v2 -->\n\n<details open>\n<summary><strong>Open (2)</strong></summary>\n\n${openLine('Medium', 9001)}\n</details>\n`,
+        ),
+      ],
+      [],
+    ),
+  ];
+  const summary = summarizeCohort(reports);
+  const messages = checkFailures(summary, reports, SHARE_OPTIONS);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0] ?? '', /unparsed/);
+});
+
+test('checkFailures: a recorded share of 0.5 since the date gives one message', () => {
+  const reports = [
+    mergedReport(
+      1,
+      '2026-10-02T00:00:00Z',
+      [openLine('Medium', 9101)],
+      RECORDED_PLAIN_COMMENTS(9101),
+    ),
+    mergedReport(
+      2,
+      '2026-10-03T00:00:00Z',
+      [openLine('Medium', 9102)],
+      UNRECORDED_COMMENTS(9102),
+    ),
+  ];
+  const summary = summarizeCohort(reports);
+  const messages = checkFailures(summary, reports, {
+    since: '2026-10-01',
+    minRecordedShare: 0.9,
+  });
+  assert.equal(messages.length, 1);
+  assert.match(messages[0] ?? '', /share 0\.500 since 2026-10-01/);
+});
+
+test('checkFailures: one verdict contradiction gives one message', () => {
+  const reports = [
+    mergedReport(
+      1,
+      '2026-10-02T00:00:00Z',
+      [openLine('Medium', 9201)],
+      RECORDED_DEFER_COMMENTS(9201),
+    ),
+  ];
+  const summary = summarizeCohort(reports);
+  const messages = checkFailures(summary, reports, SHARE_OPTIONS);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0] ?? '', /contradiction/);
+});
+
+test('checkFailures: a malformed Triage line gives one message', () => {
+  const reports = [
+    computePrAudit(
+      1,
+      [
+        review(
+          1,
+          '2026-01-01T00:00:00Z',
+          openReviewBody([openLine('Medium', 9301)]),
+        ),
+      ],
+      [
+        reply(
+          10,
+          9301,
+          '**Accepted** — fixed\n\nTriage: tier low; urgency medium; step 2; verdict bogus',
+          '2026-01-02T00:00:00Z',
+        ),
+      ],
+    ),
+  ];
+  const summary = summarizeCohort(reports);
+  const messages = checkFailures(summary, reports, SHARE_OPTIONS);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0] ?? '', /malformed Triage/);
+});
+
+test('checkFailures: reports merged before since are ignored for the share', () => {
+  const reports = [
+    mergedReport(
+      1,
+      '2026-09-30T23:59:59Z',
+      [openLine('Medium', 9401)],
+      UNRECORDED_COMMENTS(9401),
+    ),
+    mergedReport(
+      2,
+      '2026-10-02T00:00:00Z',
+      [openLine('Medium', 9402)],
+      RECORDED_PLAIN_COMMENTS(9402),
+    ),
+  ];
+  const summary = summarizeCohort(reports);
+  assert.deepEqual(
+    checkFailures(summary, reports, {
+      since: '2026-10-01',
+      minRecordedShare: 0.9,
+    }),
+    [],
+  );
+});
+
+test('checkFailures: a zero denominator gives no share message', () => {
+  const reports = [computePrAudit(1, [], [])].map((report) => ({
+    ...report,
+    mergedAt: '2026-10-02T00:00:00Z',
+  }));
+  const summary = summarizeCohort(reports);
+  assert.deepEqual(
+    checkFailures(summary, reports, {
+      since: '2026-10-01',
+      minRecordedShare: 0.9,
+    }),
+    [],
+  );
+});
+
+test('checkFailures: a null mergedAt is excluded from the share window', () => {
+  const reports = [
+    mergedReport(
+      1,
+      null,
+      [openLine('Medium', 9501)],
+      UNRECORDED_COMMENTS(9501),
+    ),
+  ];
+  const summary = summarizeCohort(reports);
+  assert.deepEqual(
+    checkFailures(summary, reports, {
+      since: '2026-10-01',
+      minRecordedShare: 0.9,
+    }),
+    [],
+  );
+});
+
+/**
+ * Run the CLI with a recording `gh` stub on PATH. `ghCalled` is true only if
+ * the process reached a `gh` invocation, which the misuse cases must not.
+ */
+function runCliWithGhStub(args: string[]): {
+  status: number;
+  stderr: string;
+  ghCalled: boolean;
+} {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-4189-'));
+  const marker = join(dir, 'gh-called');
+  const restore = stubExecutable(
+    'gh',
+    `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'called\\n');\nprocess.exit(97);\n`,
+  );
+  try {
+    let status = 0;
+    let stderr = '';
+    try {
+      execFileSync(process.execPath, [CLI_PATH, ...args], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      const shaped = error as { status?: number; stderr?: string };
+      status = shaped.status ?? -1;
+      stderr = shaped.stderr ?? '';
+    }
+    return { status, stderr, ghCalled: existsSync(marker) };
+  } finally {
+    restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const REPO_ARGS = ['--repo', 'kurone-kito/idd-skill'];
+
+test('CLI: --since without --check fails with exit 2 and no gh call', () => {
+  const result = runCliWithGhStub([
+    ...REPO_ARGS,
+    '--limit',
+    '5',
+    '--since',
+    '2026-10-01',
+  ]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--since is only valid with --check/);
+  assert.equal(result.ghCalled, false);
+});
+
+test('CLI: --since with --prs fails with exit 2 and no gh call', () => {
+  const result = runCliWithGhStub([
+    ...REPO_ARGS,
+    '--prs',
+    '1',
+    '--check',
+    '--since',
+    '2026-10-01',
+  ]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--since is not valid with --prs/);
+  assert.equal(result.ghCalled, false);
+});
+
+test('CLI: --since that is not a real calendar date fails with exit 2 and no gh call', () => {
+  const result = runCliWithGhStub([
+    ...REPO_ARGS,
+    '--limit',
+    '5',
+    '--check',
+    '--since',
+    '2026-13-40',
+  ]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--since must be a real calendar date/);
+  assert.equal(result.ghCalled, false);
+});
+
+test('CLI: --min-recorded-share without --since fails with exit 2 and no gh call', () => {
+  const result = runCliWithGhStub([
+    ...REPO_ARGS,
+    '--limit',
+    '5',
+    '--check',
+    '--min-recorded-share',
+    '0.5',
+  ]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--min-recorded-share is only valid/);
+  assert.equal(result.ghCalled, false);
+});
+
+test('CLI: --min-recorded-share above 1 fails with exit 2 and no gh call', () => {
+  const result = runCliWithGhStub([
+    ...REPO_ARGS,
+    '--limit',
+    '5',
+    '--check',
+    '--since',
+    '2026-10-01',
+    '--min-recorded-share',
+    '1.5',
+  ]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--min-recorded-share must be a decimal/);
+  assert.equal(result.ghCalled, false);
+});
+
+test('CLI: a non-numeric --min-recorded-share fails with exit 2 and no gh call', () => {
+  const result = runCliWithGhStub([
+    ...REPO_ARGS,
+    '--limit',
+    '5',
+    '--check',
+    '--since',
+    '2026-10-01',
+    '--min-recorded-share',
+    'abc',
+  ]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--min-recorded-share must be a decimal/);
+  assert.equal(result.ghCalled, false);
+});
+
+test('CLI: --help lists the check-mode flags', () => {
+  const output = execFileSync(process.execPath, [CLI_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  assert.match(output, /--check/);
+  assert.match(output, /--since <YYYY-MM-DD>/);
+  assert.match(output, /--min-recorded-share <n>/);
 });
 
 test('CLI: --help exits 0 with no gh call', () => {

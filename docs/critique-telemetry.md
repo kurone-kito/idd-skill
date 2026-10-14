@@ -197,6 +197,24 @@ review comments (`gh api repos/{owner}/{repo}/pulls/{n}/reviews` and
   other or no dispositions are not counted. `mergedAt` is the PR's merge
   time under `--limit` and `null` under `--prs`.
 
+### Check mode
+
+```sh
+node scripts/copilot-review-wave-audit.mjs --limit <N> --check [--since <YYYY-MM-DD>] [--min-recorded-share <n>]
+```
+
+`--check` still prints the report on stdout. Each failed check is written
+to stderr, and the exit status is 1 when there is at least one. The checks
+are an unparsed Copilot review (the overview parser has drifted), a
+malformed `Triage:` line, and a recorded-triage contradiction. With
+`--since`, a further check fails when the recorded share of threads among
+PRs merged on or after that UTC date is below `--min-recorded-share`
+(default `0.9`). A PR with no merge time is left out of that share, and a
+share is not checked when no thread in the window has a recorded or
+unrecorded disposition. `--since` needs `--check` and `--limit`, because
+`--prs` carries no merge dates. `--min-recorded-share` needs `--check` and
+`--since`. Misuse of either exits 2 before any `gh` call.
+
 ### Known limitation: a legacy listing carries no severity or thread data
 
 A **legacy** (non-`ccr-overview-v2`) review's body carries no severity

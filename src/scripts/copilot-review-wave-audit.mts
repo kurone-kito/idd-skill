@@ -1045,8 +1045,87 @@ const COPILOT_REVIEW_WAVE_AUDIT_FLAG_SPEC = {
   '--format': { type: 'string', default: 'json' },
   '--repo': { type: 'string' },
   '--owner': { type: 'string' },
+  '--check': { type: 'boolean', default: false },
+  '--since': { type: 'string' },
+  '--min-recorded-share': { type: 'string' },
   '--help': { type: 'boolean', short: 'h', default: false },
 } as const;
+
+const DEFAULT_MIN_RECORDED_SHARE = 0.9;
+const DECIMAL_SHARE_RE = /^(\d+(\.\d+)?|\.\d+)$/u;
+const CALENDAR_DATE_RE = /^\d{4}-\d{2}-\d{2}$/u;
+
+export interface CheckOptions {
+  /** `YYYY-MM-DD`: only reports merged on or after this UTC date count. */
+  since: string | null;
+  minRecordedShare: number;
+}
+
+/**
+ * Pure `--check` gate (issue #4189). Returns one message per failed check,
+ * or an empty list. The recorded share is computed over the reports merged
+ * on or after `since`, not over the whole cohort; a report with no merge
+ * time, or one with no accepted, deferred, or rejected threads, adds nothing
+ * to that share.
+ */
+export function checkFailures(
+  summary: CohortSummary,
+  reports: readonly PrAuditReport[],
+  options: CheckOptions,
+): string[] {
+  const failures: string[] = [];
+  if (summary.unparsedCount > 0) {
+    failures.push(
+      `${summary.unparsedCount} unparsed Copilot review(s): the overview parser has drifted`,
+    );
+  }
+  if (summary.triage.malformed > 0) {
+    failures.push(
+      `${summary.triage.malformed} malformed Triage line(s) on accepted, deferred, or rejected threads`,
+    );
+  }
+  if (options.since !== null) {
+    const sinceMs = Date.parse(`${options.since}T00:00:00Z`);
+    let recorded = 0;
+    let unrecorded = 0;
+    for (const report of reports) {
+      const mergedMs =
+        report.mergedAt === null ? Number.NaN : Date.parse(report.mergedAt);
+      if (!(mergedMs >= sinceMs)) {
+        continue;
+      }
+      recorded += report.triage.recorded;
+      unrecorded += report.triage.unrecorded;
+    }
+    const total = recorded + unrecorded;
+    if (total > 0) {
+      const share = recorded / total;
+      if (share < options.minRecordedShare) {
+        failures.push(
+          `recorded triage share ${share.toFixed(3)} since ${options.since} is below ${options.minRecordedShare} (${recorded} of ${total} threads)`,
+        );
+      }
+    }
+  }
+  if (summary.triage.contradictions > 0) {
+    failures.push(
+      `${summary.triage.contradictions} recorded triage contradiction(s) with the urgency-matrix verdict`,
+    );
+  }
+  return failures;
+}
+
+function parseSinceDate(value: string): string {
+  const parsed = new Date(`${value}T00:00:00Z`);
+  if (
+    !CALENDAR_DATE_RE.test(value) ||
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== value
+  ) {
+    fail(`--since must be a real calendar date as YYYY-MM-DD, got "${value}"`);
+  }
+  return value;
+}
 
 function printHelp(): void {
   process.stdout.write(`Usage:
@@ -1066,6 +1145,16 @@ function printHelp(): void {
   --owner <owner>     Repository override, split form (use with
                       --repo <name>, the bare repository name -- not
                       both --owner and a combined --repo together).
+  --check             Exit 1 when a check fails (an unparsed Copilot review,
+                      a malformed Triage line, a recorded triage
+                      contradiction, or a recorded share below
+                      --min-recorded-share with --since). The report is still
+                      printed; each failure is written to stderr.
+  --since <YYYY-MM-DD> With --check and --limit only: count only PRs merged on
+                      or after this UTC date in the recorded-share check.
+  --min-recorded-share <n>
+                      Minimum recorded share from 0 to 1 (default 0.9). Valid
+                      only with --check and --since.
   --help, -h          Show this help.
 
 Computes, per PR and as a cohort summary: Copilot review count (v2 vs.
@@ -1231,6 +1320,33 @@ if (import.meta.main) {
     fail(`--format must be "json" or "tsv", got "${format}"`);
   }
 
+  // Validated before detectRepository, so no misuse below reaches gh (#4189).
+  const checkMode = values.check === true;
+  const sinceFlag = values.since as string | undefined;
+  if (sinceFlag !== undefined) {
+    if (!checkMode) {
+      fail('--since is only valid with --check');
+    }
+    if (prsFlag) {
+      fail('--since is not valid with --prs; merge dates come from --limit');
+    }
+    parseSinceDate(sinceFlag);
+  }
+  const shareFlag = values['min-recorded-share'] as string | undefined;
+  let minRecordedShare = DEFAULT_MIN_RECORDED_SHARE;
+  if (shareFlag !== undefined) {
+    if (!checkMode || sinceFlag === undefined) {
+      fail('--min-recorded-share is only valid with --check and --since');
+    }
+    const value = DECIMAL_SHARE_RE.test(shareFlag) ? Number(shareFlag) : NaN;
+    if (!(value >= 0 && value <= 1)) {
+      fail(
+        `--min-recorded-share must be a decimal from 0 to 1, got "${shareFlag}"`,
+      );
+    }
+    minRecordedShare = value;
+  }
+
   let repository: string;
   try {
     repository =
@@ -1262,5 +1378,19 @@ if (import.meta.main) {
     writeTsvReport(reports, summary);
   } else {
     writeJsonReport(reports, summary);
+  }
+
+  if (checkMode) {
+    const failures = checkFailures(summary, reports, {
+      since: sinceFlag ?? null,
+      minRecordedShare,
+    });
+    for (const message of failures) {
+      process.stderr.write(`copilot-review-wave-audit: check: ${message}\n`);
+    }
+    if (failures.length > 0) {
+      // Not process.exit: piped stdout may still be flushing (Windows CI).
+      process.exitCode = 1;
+    }
   }
 }
