@@ -69,7 +69,6 @@ interface MarkdownInlineCode extends MarkdownBlock {
 }
 
 /** The structure the draft-carrier checks read from a Markdown body. */
-// audit:ignore-dead-export: consumed by issue #4250
 export interface MarkdownStructure {
   readonly codeBlocks: readonly MarkdownCodeBlock[];
   readonly htmlBlocks: readonly MarkdownHtmlBlock[];
@@ -142,7 +141,6 @@ function blockOf(
  * backslash-escaped backtick opens no span, and an HTML block ends at the
  * CommonMark rule for its type.
  */
-// audit:ignore-dead-export: consumed by issue #4250
 export function scanMarkdownStructure(body: string): MarkdownStructure {
   const MarkdownIt = loadMarkdownIt();
   const parser = new MarkdownIt('commonmark');

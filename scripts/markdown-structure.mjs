@@ -53,7 +53,6 @@ function blockOf(token, containers) {
  * backslash-escaped backtick opens no span, and an HTML block ends at the
  * CommonMark rule for its type.
  */
-// audit:ignore-dead-export: consumed by issue #4250
 export function scanMarkdownStructure(body) {
   const MarkdownIt = loadMarkdownIt();
   const parser = new MarkdownIt('commonmark');
