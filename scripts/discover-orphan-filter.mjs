@@ -433,24 +433,6 @@ export function getOrphanFirstPolicy(config) {
   return 'none';
 }
 export function classifyIssue(issue, options) {
-  // #2800: checked first, ahead of every marker/label check below — the
-  // declaration target is deliberately marker-less and label-less, so
-  // none of those checks would ever catch it on their own.
-  if (
-    options.providerOutageDeclarationTarget != null &&
-    Number(issue.number) === options.providerOutageDeclarationTarget
-  ) {
-    return { orphan: false, reason: 'provider_outage_target' };
-  }
-  // #4115: the configured authoring journal is checked in the same
-  // number-first position, for the same reason: it carries no markers or
-  // blocking labels of its own.
-  if (
-    options.authoringJournalTarget != null &&
-    Number(issue.number) === options.authoringJournalTarget
-  ) {
-    return { orphan: false, reason: 'authoring_journal_target' };
-  }
   const labels = new Set(normalizeLabels(issue.labels));
   const body = String(issue.body ?? '');
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
@@ -466,19 +448,11 @@ export function classifyIssue(issue, options) {
   const authoringOnlyLabelName = normalizeAuthoringOnlyLabelName(
     options.authoringOnlyLabelName,
   );
-  // #4065 review fix (Codex P2): the same comparison the readiness check uses
-  // for needs_decision_label_conflicts_with_authoring_label.
-  const labelsCollide =
-    authoringLabelName.trim().toLowerCase() ===
-    needsDecisionLabelName.trim().toLowerCase();
-  const roadmapMarkerRegex = createMarkerRegex(markerPrefix, 'roadmap-id');
-  const blockedMarkerRegex = createMarkerRegex(markerPrefix, 'blocked-by');
-  // #3281: these two marker tests previously ran against the raw body,
-  // unlike the rest of this function's later checks — an issue that only
-  // *quotes* a `roadmap-id`/`blocked-by` marker as an example (inside a
-  // code span, fence, or indented code block) was wrongly classified as
-  // a real roadmap node or blocked leaf. Mask first, HTML comments kept
-  // (the default): the markers themselves are HTML comments.
+  // #3281: the marker tests below run against a masked body, not the raw one:
+  // an issue that only *quotes* a `roadmap-id`/`blocked-by` marker as an
+  // example (inside a code span, fence, or indented code block) is not a real
+  // roadmap node or blocked leaf. Mask first, HTML comments kept (the default):
+  // the markers themselves are HTML comments.
   const bodyForMarkerTests = maskMarkdownForScan(body);
   const blockedLabels = new Set([
     blockedByHumanLabelName,
@@ -486,11 +460,11 @@ export function classifyIssue(issue, options) {
     authoringOnlyLabelName,
   ]);
   const blockedLabel = [...labels].find((label) => blockedLabels.has(label));
-  // #4257: a draft carrier is filed as blocked_label before the marker checks
-  // below, so every carrier lands there, as the listing's acceptance criteria
-  // require. audit-authored-issue's carrier-forbidden-markers rule rejects a
-  // carrier that names a roadmap or blocked-by marker, so this changes only
-  // where a malformed carrier is filed. Every other issue keeps the order below.
+  // #4257: a draft carrier is filed as blocked_label before the number-based
+  // targets below, so every carrier lands there, as the listing's acceptance
+  // criteria require, even when it is also a configured outage or journal
+  // target. audit-authored-issue's carrier-forbidden-markers rule rejects such
+  // a carrier, so this changes only where a malformed carrier is filed.
   if (
     labels.has(authoringOnlyLabelName) &&
     createMarkerRegex(markerPrefix, 'draft-carrier').test(bodyForMarkerTests)
@@ -501,6 +475,31 @@ export function classifyIssue(issue, options) {
       details: blockedLabel ?? authoringOnlyLabelName,
     };
   }
+  // #2800: checked ahead of every marker/label check below — the declaration
+  // target is deliberately marker-less and label-less, so none of those checks
+  // would ever catch it on their own.
+  if (
+    options.providerOutageDeclarationTarget != null &&
+    Number(issue.number) === options.providerOutageDeclarationTarget
+  ) {
+    return { orphan: false, reason: 'provider_outage_target' };
+  }
+  // #4115: the configured authoring journal is checked in the same
+  // number-first position, for the same reason: it carries no markers or
+  // blocking labels of its own.
+  if (
+    options.authoringJournalTarget != null &&
+    Number(issue.number) === options.authoringJournalTarget
+  ) {
+    return { orphan: false, reason: 'authoring_journal_target' };
+  }
+  // #4065 review fix (Codex P2): the same comparison the readiness check uses
+  // for needs_decision_label_conflicts_with_authoring_label.
+  const labelsCollide =
+    authoringLabelName.trim().toLowerCase() ===
+    needsDecisionLabelName.trim().toLowerCase();
+  const roadmapMarkerRegex = createMarkerRegex(markerPrefix, 'roadmap-id');
+  const blockedMarkerRegex = createMarkerRegex(markerPrefix, 'blocked-by');
   if (roadmapMarkerRegex.test(bodyForMarkerTests)) {
     return { orphan: false, reason: 'roadmap_marker' };
   }
@@ -1840,7 +1839,8 @@ falling back to created_at.
 the configured authoring-only label and the carrier marker outside code. The
 marker value is not checked, so a carrier with an unexpected value is still
 listed. A carrier never becomes an orphan, and every carrier stays in
-"filtered.blocked_label", whichever roadmap or blocked-by markers it names.
+"filtered.blocked_label", whichever markers it names or configured target
+number it carries.
 Its buckets are "held" (the carrier also carries the authoring label, with
 "heldSince" the latest labeled event (null when none was read) and "stale"
 true once that hold is at

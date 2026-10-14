@@ -937,6 +937,28 @@ test('draft carriers: an authoring-only issue without the marker, a marker witho
   assert.deepEqual(result.draftCarriers, { held: [], ready: [], waiting: [] });
 });
 
+test('draft carriers: a carrier that is also the outage or journal target is still filed as blocked_label (#4257)', async () => {
+  const result = await filterOrphanIssues(
+    [carrierIssue(150, 'No blocker.'), carrierIssue(151, 'No blocker.')],
+    {
+      issueStateByNumber: new Map<number, string>(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      providerOutageDeclarationTarget: 150,
+      authoringJournalTarget: 151,
+    },
+  );
+  assert.deepEqual(
+    result.filtered.blocked_label.map((entry) => entry.number),
+    [150, 151],
+  );
+  assert.deepEqual(result.filtered.provider_outage_target, []);
+  assert.deepEqual(result.filtered.authoring_journal_target, []);
+  assert.deepEqual(
+    result.draftCarriers.ready.map((entry) => entry.number),
+    [150, 151],
+  );
+});
+
 test('draft carriers: a Blocked by line inside a fenced draft does not block the carrier (#4257)', async () => {
   const result = await filterOrphanIssues(
     [
