@@ -6698,6 +6698,42 @@ carrierTest(
 );
 
 carrierTest(
+  'a backtick inside a comment does not pair with a later backtick and hide a marker (#4250)',
+  () => {
+    // The leftmost construct is the comment, so the second comment is live and
+    // the lone backtick after it is literal text (CommonMark's leftmost rule).
+    const body = carrierBody({
+      intro: 'Intro <!-- ` --> <!-- idd-skill-effort: M --> `',
+    });
+    assert.equal(
+      carrierFinding(body, 'carrier-forbidden-markers')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'a backtick inside a raw HTML tag does not open a code span that hides a footer (#4250)',
+  () => {
+    const body = carrierBody({
+      intro: 'Start <span title="`">x</span> then `y`\n_Effort: M -- x_',
+    });
+    assert.equal(
+      carrierFinding(body, 'carrier-forbidden-markers')?.result,
+      'fail',
+    );
+  },
+);
+
+carrierTest(
+  'a closing-hash ## Drafts ## heading counts as a second Drafts section (#4250)',
+  () => {
+    const body = `${carrierBody()}\n## Drafts ##\n\n### Follow-up C\n\nReview: reviewed\nShape: child\n`;
+    assert.equal(carrierFinding(body, 'carrier-drafts')?.result, 'fail');
+  },
+);
+
+carrierTest(
   'a second ## Drafts or ## Release condition heading fails rather than hiding unchecked drafts (#4250)',
   () => {
     const secondDrafts = `${carrierBody()}\n## Drafts\n\n### Follow-up C\n\nReview: reviewed\nShape: child\n`;

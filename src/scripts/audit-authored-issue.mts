@@ -1437,6 +1437,85 @@ function isBackslashEscaped(text: string, index: number): boolean {
   return slashes % 2 === 1;
 }
 
+/**
+ * Raw inline HTML tags, as CommonMark's open and closing tag grammar reads
+ * them. A backtick inside one is not a code delimiter (#4250 review, Copilot).
+ */
+const RAW_INLINE_TAG_PATTERN =
+  /<[A-Za-z][A-Za-z0-9-]*(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?)*\s*\/?>|<\/[A-Za-z][A-Za-z0-9-]*\s*>/uy;
+
+/** The first backtick run of exactly `run` length at or after `from`. */
+function findBacktickRun(text: string, from: number, run: number): number {
+  let index = from;
+  while (index < text.length) {
+    if (text[index] === '`') {
+      let length = 1;
+      while (text[index + length] === '`') {
+        length += 1;
+      }
+      if (length === run) {
+        return index;
+      }
+      index += length;
+    } else {
+      index += 1;
+    }
+  }
+  return -1;
+}
+
+/**
+ * The code spans and HTML comments of one paragraph, scanned left to right so
+ * the leftmost construct wins, as CommonMark specifies (#4250 review, Copilot).
+ * A backtick inside a comment or a raw tag never opens a span, and a comment
+ * inside a span is not a comment. Escaped characters are skipped.
+ */
+function scanInlineTokens(text: string): {
+  codeSpans: [number, number][];
+  comments: [number, number][];
+} {
+  const codeSpans: [number, number][] = [];
+  const comments: [number, number][] = [];
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index];
+    if (char === '\\') {
+      index += 2;
+      continue;
+    }
+    if (char === '<') {
+      const comment = commentAt(text, index);
+      if (comment !== undefined) {
+        comments.push([index, index + comment.length]);
+        index += comment.length;
+        continue;
+      }
+      RAW_INLINE_TAG_PATTERN.lastIndex = index;
+      const tag = RAW_INLINE_TAG_PATTERN.exec(text);
+      if (tag !== null) {
+        index += tag[0].length;
+        continue;
+      }
+    }
+    if (char === '`') {
+      let run = 1;
+      while (text[index + run] === '`') {
+        run += 1;
+      }
+      const close = findBacktickRun(text, index + run, run);
+      if (close !== -1) {
+        codeSpans.push([index, close + run]);
+        index = close + run;
+      } else {
+        index += run;
+      }
+      continue;
+    }
+    index += 1;
+  }
+  return { codeSpans, comments };
+}
+
 /** Replaces each range of `text` with spaces, keeping every newline. */
 function blankRanges(
   text: string,
@@ -1490,27 +1569,19 @@ function buildCarrierViews(rawText: string): CarrierViews {
   for (const paragraph of paragraphs.values()) {
     const range = spanRange(paragraph.startLine, paragraph.endLine);
     const text = body.slice(range.start, range.end);
-    const spans = findInlineCodeSpans(text).map((span) => ({
-      start: span.index,
-      end: span.end,
-    }));
+    const tokens = scanInlineTokens(text);
     codeSpanRanges.push(
-      ...spans.map((span) => ({
-        start: range.start + span.start,
-        end: range.start + span.end,
+      ...tokens.codeSpans.map(([start, end]) => ({
+        start: range.start + start,
+        end: range.start + end,
       })),
     );
-    const plain = blankRanges(text, spans);
-    for (const match of plain.matchAll(/<!--/gu)) {
-      const open = match.index;
-      const comment = commentAt(plain, open);
-      if (!isBackslashEscaped(plain, open) && comment !== undefined) {
-        commentRanges.push({
-          start: range.start + open,
-          end: range.start + open + comment.length,
-        });
-      }
-    }
+    commentRanges.push(
+      ...tokens.comments.map(([start, end]) => ({
+        start: range.start + start,
+        end: range.start + end,
+      })),
+    );
   }
 
   // Comments inside a raw HTML block are comments too, but a block's text is
@@ -1549,7 +1620,16 @@ function buildCarrierViews(rawText: string): CarrierViews {
       ...commentRanges,
       ...htmlRanges,
       ...listRanges,
-    ]),
+    ])
+      .split('\n')
+      .map((line) =>
+        /^ {0,3}#{2,3}\s/u.test(line)
+          ? line.replace(/(\s+#+\s*)$/u, (closing) =>
+              ' '.repeat(closing.length),
+            )
+          : line,
+      )
+      .join('\n'),
     visible: blankRanges(body, [...codeOnly, ...commentRanges]),
     marker: blankRanges(body, [...codeOnly, ...escapedOpenerRanges]),
     topLevelFenceLines: scan.codeBlocks
