@@ -1210,19 +1210,23 @@ Running this variant safely requires:
   does not read this marker yet; the orchestrator reads it from the issue
   comments. The delegation brief must tell the worker to post it when it stops
   at a hold. A hold marker is trusted only when a trusted marker actor posted
-  it and its agent id and claim id match the active claim. A held worker is a
-  roster entry that is not `disposed` whose claim has a trusted hold marker
-  newer than its latest `claimed-by`, not counting the orchestrator's own
-  renewals of that claim. The hold starts at the earliest such marker's GitHub
-  `created_at`, not its embedded timestamp. The hold ends when the worker
-  posts any other `claimed-by`, when the entry is `disposed`, or when the
-  claim is released or superseded. A resumed worker follows the normal report
-  path. A released or superseded claim cannot be renewed, so the orchestrator
-  marks its entry `stalled` and follows the worker-specific recovery, which
-  re-verifies the claim and reports its state to the operator; the entry
-  leaves `--running` only when that recovery disposes of it. A restarted
-  orchestrator cannot tell its earlier renewals apart, so it treats any
-  `claimed-by` newer than the marker as ending the hold and renews nothing.
+  it and its agent id and claim id match the active claim. It also needs an
+  explicit GraphQL `lastEditedAt: null`, resolved for each returned comment by
+  node id; an edited marker, or an edit state that cannot be resolved, is
+  ignored, as the claim-family marker edit-state contract in
+  `idd-helper-scripts.md` requires. A held worker is a roster entry that is
+  not `disposed` whose claim has a trusted hold marker newer than its latest
+  `claimed-by`, not counting the orchestrator's own renewals of that claim.
+  The hold starts at the earliest such marker's GitHub `created_at`, not its
+  embedded timestamp. The hold ends when the worker posts any other
+  `claimed-by`, when the entry is `disposed`, or when the claim is released or
+  superseded. A resumed worker follows the normal report path. A released or
+  superseded claim cannot be renewed, so the orchestrator marks its entry
+  `stalled` and follows the worker-specific recovery, which re-verifies the
+  claim and reports its state to the operator; the entry leaves `--running`
+  only when that recovery disposes of it. A restarted orchestrator cannot tell
+  its earlier renewals apart, so it treats any `claimed-by` newer than the
+  marker as ending the hold and renews nothing.
 - **Held-worker renewal.** A held worker, as the hold marker defines, is
   renewed at the orchestrator's wake-ups in section 4 of its phase file. At or
   after 72 h from the hold start, the claim revalidation gate confirms the
