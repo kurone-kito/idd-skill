@@ -275,7 +275,14 @@ export function runBodyItemDisposition(port, input) {
     return { report, exitCode: 0 };
   }
   input.assertClaim();
-  const body = input.refreshBody ? input.refreshBody() : input.stampedBody;
+  // An apply reads the verdict again right before the post (#4187). Posting
+  // the early stamped body without that read would let a stale verdict through.
+  if (!input.refreshBody) {
+    throw new Error(
+      'an apply needs refreshBody, so the verdict is read again before the post (#4187)',
+    );
+  }
+  const body = input.refreshBody();
   report.body = body;
   const posted = port.postWorkItemComment(input.pr, body);
   report.status = 'applied';
@@ -1215,11 +1222,12 @@ function main() {
     );
   }
   const stampedBody = built.body;
-  // #4187: an apply judges the verdict twice. The early read above can refuse
-  // before any claim or thread read. `freshBodyForApply` reads again right
-  // before the post, so the review count the post lands under decides. A dry
-  // run prints its one verdict line here; an apply prints its one line at the
-  // late read, unless the early read already refuses.
+  // #4187: an apply judges the verdict twice, and only `enforce` refuses. The
+  // early read prints the one verdict line in dry run and apply alike, and it
+  // can refuse before any claim or thread read. Under `enforce`,
+  // `freshBodyForApply` reads again right before the post, so the review count
+  // the post lands under decides. That late read prints a line only when the
+  // verdict changed or the call refuses.
   const refusalFor = (verdict) =>
     effectiveTriageRecord === 'enforce' &&
     verdict.verdict === 'defer' &&
@@ -1233,11 +1241,14 @@ function main() {
       writeStderrSync(`${earlyRefusal}\n`);
       exitClassified(1, 'gate', earlyRefusal);
     }
-    if (!args.apply) {
-      writeStderrSync(`${verdictLine(built.verdict)}\n`);
-    }
+    writeStderrSync(`${verdictLine(built.verdict)}\n`);
   }
   const freshBodyForApply = () => {
+    const early = built.verdict;
+    // Outside `enforce` nothing refuses, so the early body stands, as in #4186.
+    if (effectiveTriageRecord !== 'enforce' || early === null) {
+      return built.body;
+    }
     const fresh = buildTriageReplyBody({
       port,
       pr,
@@ -1254,7 +1265,10 @@ function main() {
         writeStderrSync(`${refusal}\n`);
         throw new TriageRefusedError(refusal);
       }
-      writeStderrSync(`${verdictLine(fresh.verdict)}\n`);
+      const line = verdictLine(fresh.verdict);
+      if (line !== verdictLine(early)) {
+        writeStderrSync(`${line}\n`);
+      }
     }
     return fresh.body;
   };
@@ -1322,8 +1336,8 @@ function main() {
       postReply: () => {
         // The verdict is judged again right before the post (#4187).
         const body = freshBodyForApply();
-        postedBody = body;
         const posted = port.postReviewCommentReply(pr, rootCommentId, body);
+        postedBody = body;
         postedReplyId = posted.id;
         return posted;
       },
@@ -1342,8 +1356,14 @@ function main() {
     if (postedReplyId !== undefined) {
       report.replyId = postedReplyId;
     }
-    const classified = classifyHelperError(error);
-    report.error = error.message;
+    // Report only the body that reached GitHub, so a refusal shows none (#4187).
+    if (postedBody !== undefined) {
+      report.body = postedBody;
+    } else {
+      delete report.body;
+    }
+    const classified = classifyHelperError(mutationCause(error));
+    report.error = mutationCause(error).message;
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     exitClassified(
       1,
@@ -1353,14 +1373,25 @@ function main() {
     );
   }
 }
+/** The error a failed mutation reports: a late triage read reports its own cause (#4187). */
+function mutationCause(error) {
+  return error instanceof TriageReadError ? error.original : error;
+}
 /**
  * Deliberate ownership denials are a completed gate. A tagged gh failure
  * keeps transport/not-found.
  */
 function classifyMutationErrorKind(error) {
-  // The late verdict refusal is a completed gate, not a transport failure (#4187).
+  // The late verdict check keeps the early path's kinds: a refusal is a gate,
+  // a refused input is usage, and a failed read is transport (#4187).
   if (error instanceof TriageRefusedError) {
     return 'gate';
+  }
+  if (error instanceof TriageUsageError) {
+    return 'usage';
+  }
+  if (error instanceof TriageReadError) {
+    return 'transport';
   }
   const classified = classifyHelperError(error);
   const message = error?.message ?? '';
@@ -1515,11 +1546,13 @@ function runBodyItemCli(port, args, context) {
     }
     exitClassified(1, 'gate', result.report.error ?? 'body item not found');
   } catch (error) {
-    const classified = classifyHelperError(error);
+    const classified = classifyHelperError(mutationCause(error));
     if (args.apply) {
       report.status = 'failed';
+      // Nothing reached GitHub when the late check fails or refuses (#4187).
+      delete report.body;
     }
-    report.error = error.message;
+    report.error = mutationCause(error).message;
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     exitClassified(
       1,

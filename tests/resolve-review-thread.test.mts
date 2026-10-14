@@ -1417,6 +1417,7 @@ test('runBodyItemDisposition apply posts exactly one stamped top-level comment a
     stampedBody: BODY_ITEM_STAMPED,
     apply: true,
     assertClaim: bodyItemAssertClaim(port, 'claim-a'),
+    refreshBody: () => BODY_ITEM_STAMPED,
   });
   assert.equal(exitCode, 0);
   assert.equal(report.status, 'applied');
@@ -2312,7 +2313,9 @@ if (args[0] === 'api' && joined.includes('/pulls/42/reviews')) {
     // One review list per read, in order; the last list repeats (#4187).
     const seq = JSON.parse(process.env.TRIAGE_REVIEW_SEQUENCE);
     const reads = fs.readFileSync(process.env.TRIAGE_CALLS, 'utf8').split('\\n').filter((line) => line.includes('/pulls/42/reviews')).length;
-    out(JSON.stringify(seq[Math.min(reads, seq.length) - 1]));
+    const entry = seq[Math.min(reads, seq.length) - 1];
+    if (entry === null) fail('gh: HTTP 500 for pulls/42/reviews');
+    out(JSON.stringify(entry));
   }
   ${reviewsRoute}
 }
@@ -3485,4 +3488,144 @@ test('runBodyItemDisposition posts the body refreshBody returns, not the early o
     { number: 42, body: refreshed },
   ]);
   assert.equal(report.body, refreshed);
+});
+
+test('runBodyItemDisposition checks the claim before it refreshes the body (#4187)', () => {
+  const port = bodyItemPort([BODY_ITEM_CLAIM]);
+  const order: string[] = [];
+  const claim = bodyItemAssertClaim(port, 'claim-a');
+  runBodyItemDisposition(port, {
+    pr: 42,
+    reviewId: BODY_ITEM_REVIEW_ID,
+    itemTitle: BODY_ITEM_TITLE,
+    stampedBody: BODY_ITEM_STAMPED,
+    apply: true,
+    assertClaim: () => {
+      order.push('claim');
+      claim();
+    },
+    refreshBody: () => {
+      order.push('refresh');
+      return BODY_ITEM_STAMPED;
+    },
+  });
+  assert.deepEqual(order, ['claim', 'refresh']);
+});
+
+test('runBodyItemDisposition refuses an apply without refreshBody, so no stale body is posted (#4187)', () => {
+  const port = bodyItemPort([BODY_ITEM_CLAIM]);
+  assert.throws(
+    () =>
+      runBodyItemDisposition(port, {
+        pr: 42,
+        reviewId: BODY_ITEM_REVIEW_ID,
+        itemTitle: BODY_ITEM_TITLE,
+        stampedBody: BODY_ITEM_STAMPED,
+        apply: true,
+        assertClaim: bodyItemAssertClaim(port, 'claim-a'),
+      }),
+    /needs refreshBody/u,
+  );
+  assert.equal((port.fixture.postedComments ?? []).length, 0);
+});
+
+test('an apply whose late verdict read fails posts nothing and reports the read failure (#4187)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'high',
+      '--urgency',
+      'medium',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(4),
+    // The early read succeeds (step 1: keep); the read right before the post fails.
+    { TRIAGE_REVIEW_SEQUENCE: JSON.stringify([triageReviewRows(4), null]) },
+  );
+  assert.equal(run.status, 1, run.stderr);
+  assert.deepEqual(run.posted, []);
+  assertNoWrite(run);
+  const report = JSON.parse(run.stdout) as { status?: string; error?: string };
+  assert.equal(report.status, 'failed');
+  assert.match(report.error ?? '', /500/u);
+});
+
+test('a body-item apply refused by the late verdict check posts nothing and reports no body (#4187)', () => {
+  const itemReview = {
+    id: BODY_ITEM_REVIEW_ID,
+    user: { login: TRIAGE_LOGIN },
+    state: 'COMMENTED',
+    body: BODY_ITEM_REVIEW_BODY,
+  };
+  // The early read sees four Copilot reviews including the item's (step 1:
+  // keep). The item lookup reads again, and the read right before the post
+  // sees seven (step 2: defer).
+  const run = runTriageApply(
+    [
+      '--pr',
+      '42',
+      '--review-id',
+      String(BODY_ITEM_REVIEW_ID),
+      '--item-title',
+      BODY_ITEM_TITLE,
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--claimless',
+      '--apply',
+      '--tier',
+      'high',
+      '--urgency',
+      'medium',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_ENFORCE_CONFIG,
+    [...triageReviewRows(3), itemReview],
+    {
+      TRIAGE_REVIEW_SEQUENCE: JSON.stringify([
+        [...triageReviewRows(3), itemReview],
+        [...triageReviewRows(3), itemReview],
+        [...triageReviewRows(6), itemReview],
+      ]),
+    },
+  );
+  assert.equal(run.status, 1, run.stderr);
+  assert.match(
+    run.stderr,
+    /triage verdict: defer \(eligibility high, blocked by none\); pass --override "<reason>" to post anyway/u,
+  );
+  assert.deepEqual(run.posted, []);
+  assertNoWrite(run);
+  assert.equal(JSON.parse(run.stdout).body, undefined);
+});
+
+test('record mode reads the reviews once on an apply, since only enforce refuses (#4187)', () => {
+  const run = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'medium',
+      '--body',
+      ACCEPTED_FIXED,
+    ],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(7),
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.posted, [
+    `${ACCEPTED_FIXED}\nTriage: tier low; urgency medium; step 2; verdict defer\n\n${TRIAGE_STAMP}`,
+  ]);
+  assert.equal(
+    run.calls.filter((call) =>
+      call.some((arg) => arg.includes('/pulls/42/reviews')),
+    ).length,
+    1,
+  );
 });
