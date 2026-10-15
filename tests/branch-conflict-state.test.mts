@@ -7,18 +7,24 @@ import { test } from 'node:test';
 
 import {
   classifyBranchConflictState,
+  collectPinnedRequiredAppIds,
+  describeUnstableHold,
   MERGE_BASE_FETCH_STEPS,
+  markSuiteRequirement,
   type NonPassingRun,
   parseArgs,
   parseConflictFiles,
   parseGitFetchOrigin,
+  parseHeadNonPassing,
   parseHeadRollup,
+  parseHeadSuites,
   parseNonPassingRuns,
   readTrustEmptyProtectionReads,
   resolveCallSiteRouting,
   resolveFetchAttemptTimeoutMs,
   resolveFetchOrigin,
   resolveMergeBaseWithRetry,
+  resolvePinnedRequiredAppIds,
   resolveRequiresUpToDateHead,
 } from '../src/scripts/branch-conflict-state.mts';
 import { trackTempDirectories } from './temp-fixtures.mts';
@@ -1702,6 +1708,526 @@ test('classifyBranchConflictState: UNSTABLE routing reads the injected run list'
     base,
   );
   assert.equal(offline.callSiteRouting.f1, 'hold');
+});
+
+// #4309: a check suite with no check run is absent from the status check
+// rollup, so a queued external app left UNSTABLE with an empty run list.
+// PR 4292 had six such suites (netlify, sentry, coderabbitai, codecov, cursor,
+// claude) queued for more than 70 minutes.
+test('classifyBranchConflictState: UNSTABLE proceeds past a queued non-required suite', async () => {
+  const fixture = loadFixture('clean');
+  const result = await classifyBranchConflictState(fixture.prData.number, {
+    owner: 'test-owner',
+    repo: 'test-repo',
+    _testPrData: { ...fixture.prData, mergeStateStatus: 'UNSTABLE' },
+    _testRequiresUpToDateHead: false,
+    _skipGitProbe: true,
+    _testNonPassingRuns: [
+      {
+        name: 'netlify',
+        state: 'pending',
+        suiteStatus: 'queued',
+        required: false,
+      },
+    ],
+  });
+  assert.equal(result.callSiteRouting.f1, 'proceed-to-f2');
+  assert.equal(result.callSiteRouting.eBranchSync, 'proceed-to-f1');
+  const notes = result.diagnostics.notes.join('\n');
+  assert.match(notes, /netlify \(queued suite, non-required\)/);
+  assert.doesNotMatch(notes, /UNSTABLE hold:/);
+});
+
+test('classifyBranchConflictState: UNSTABLE holds on a queued required suite and names its app slug', async () => {
+  const fixture = loadFixture('clean');
+  const result = await classifyBranchConflictState(fixture.prData.number, {
+    owner: 'test-owner',
+    repo: 'test-repo',
+    _testPrData: { ...fixture.prData, mergeStateStatus: 'UNSTABLE' },
+    _testRequiresUpToDateHead: false,
+    _skipGitProbe: true,
+    _testNonPassingRuns: [
+      {
+        name: 'sentry',
+        state: 'pending',
+        suiteStatus: 'queued',
+        required: false,
+      },
+      {
+        name: 'netlify',
+        state: 'pending',
+        suiteStatus: 'queued',
+        required: true,
+      },
+    ],
+  });
+  assert.equal(result.callSiteRouting.f1, 'hold');
+  assert.equal(result.callSiteRouting.eBranchSync, 'hold');
+  const holds = result.diagnostics.notes.filter((note) =>
+    note.startsWith('UNSTABLE hold:'),
+  );
+  // Only the entry that blocks the proceed path is named as a hold, with its
+  // reason and the condition that resumes F1.
+  assert.equal(holds.length, 1);
+  assert.match(holds[0] ?? '', /netlify \(queued suite, required\)/);
+  assert.match(holds[0] ?? '', /because it is required and has not passed/);
+  assert.match(
+    holds[0] ?? '',
+    /resumes when it passes, or a maintainer clears/,
+  );
+});
+
+test('describeUnstableHold: names a non-required entry that is not waiting', () => {
+  assert.equal(
+    describeUnstableHold({
+      name: 'Windows platform tests',
+      state: 'failure',
+      required: false,
+    }),
+    'UNSTABLE hold: Windows platform tests (failure, non-required) holds F1 because it is non-required but neither pending nor action_required; resumes when it passes, or a maintainer clears the hold.',
+  );
+  assert.match(
+    describeUnstableHold({
+      name: 'github-actions/refresh',
+      state: 'failure',
+      suiteStatus: 'failure',
+      required: false,
+    }),
+    /github-actions\/refresh \(failure suite, non-required\)/,
+  );
+});
+
+/** A stable App id per slug, so two fixture apps are never one producer. */
+const appIdOf = (slug: string): number =>
+  [...slug].reduce((id, char) => (id * 31 + char.charCodeAt(0)) % 100_003, 7);
+
+/** One `checkSuites` node as the head-rollup GraphQL query returns it. */
+function suiteNode(
+  slug: string | null,
+  options: {
+    appId?: number | null;
+    status?: string;
+    conclusion?: string | null;
+    createdAt?: string;
+    runs?: number;
+    workflow?: { databaseId: number; name: string } | null;
+  } = {},
+): unknown {
+  return {
+    status: options.status ?? 'QUEUED',
+    conclusion: options.conclusion ?? null,
+    createdAt: options.createdAt ?? '2026-10-14T16:37:56Z',
+    app:
+      slug === null
+        ? null
+        : {
+            databaseId:
+              options.appId === undefined ? appIdOf(slug) : options.appId,
+            slug,
+          },
+    workflowRun: options.workflow ? { workflow: options.workflow } : null,
+    checkRuns: { totalCount: options.runs ?? 0 },
+  };
+}
+
+const suitesOf = (nodes: unknown[], totalCount = nodes.length) => ({
+  checkSuites: { totalCount, nodes },
+});
+
+test('parseHeadSuites: lists run-less suites by app slug and status', () => {
+  const result = parseHeadSuites(
+    suitesOf([
+      suiteNode('netlify', { appId: 13473 }),
+      suiteNode('sentry', { appId: 12637, status: 'IN_PROGRESS' }),
+      suiteNode('codecov', { appId: 254, status: 'WAITING' }),
+      // A suite with a run is judged through that run in the rollup.
+      suiteNode('cursor', { runs: 1 }),
+      suiteNode('github-advanced-security', {
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        runs: 1,
+      }),
+      suiteNode('claude', { status: 'COMPLETED', conclusion: 'SKIPPED' }),
+      suiteNode('github-actions', {
+        appId: 15368,
+        status: 'COMPLETED',
+        conclusion: 'ACTION_REQUIRED',
+        workflow: { databaseId: 7, name: 'IDD advisory-convergence refresh' },
+      }),
+      suiteNode('odd-app', { status: 'SOMETHING_NEW' }),
+    ]),
+  );
+  assert.deepEqual(result, {
+    suites: [
+      {
+        name: 'netlify',
+        state: 'pending',
+        suiteStatus: 'queued',
+        appId: 13473,
+      },
+      {
+        name: 'sentry',
+        state: 'pending',
+        suiteStatus: 'in_progress',
+        appId: 12637,
+      },
+      { name: 'codecov', state: 'pending', suiteStatus: 'waiting', appId: 254 },
+      {
+        name: 'github-actions/IDD advisory-convergence refresh',
+        state: 'action_required',
+        suiteStatus: 'action_required',
+        appId: 15368,
+      },
+      {
+        name: 'odd-app',
+        state: 'unknown',
+        suiteStatus: 'something_new',
+        appId: appIdOf('odd-app'),
+      },
+    ],
+    notes: [],
+  });
+});
+
+test('parseHeadSuites: a failed or unfinished-conclusion suite never proceeds', () => {
+  const states = (nodes: unknown[]) =>
+    parseHeadSuites(suitesOf(nodes)).suites.map((suite) => suite.state);
+  assert.deepEqual(
+    states([
+      suiteNode('a', { status: 'COMPLETED', conclusion: 'FAILURE' }),
+      suiteNode('b', { status: 'COMPLETED', conclusion: 'STARTUP_FAILURE' }),
+      suiteNode('c', { status: 'COMPLETED', conclusion: 'TIMED_OUT' }),
+      suiteNode('d', { status: 'COMPLETED', conclusion: null }),
+    ]),
+    ['failure', 'startup_failure', 'timed_out', 'unknown'],
+  );
+});
+
+// Observed 2026-10-15: the comment-refresh workflow leaves cancelled suites
+// with no run on the head. They are concurrency control, so they list nothing.
+test('parseHeadSuites: a run-less cancelled suite is not a check result', () => {
+  const result = parseHeadSuites(
+    suitesOf([
+      suiteNode('github-actions', {
+        appId: 15368,
+        status: 'COMPLETED',
+        conclusion: 'CANCELLED',
+        workflow: { databaseId: 7, name: 'refresh' },
+      }),
+    ]),
+  );
+  assert.deepEqual(result, { suites: [], notes: [] });
+});
+
+test('parseHeadSuites: only the newest suite of each producer governs', () => {
+  const workflow = { databaseId: 7, name: 'refresh' };
+  const failed = (createdAt: string, extra: object = {}) =>
+    suiteNode('github-actions', {
+      appId: 15368,
+      status: 'COMPLETED',
+      conclusion: 'FAILURE',
+      createdAt,
+      workflow,
+      ...extra,
+    });
+  const passed = (createdAt: string) =>
+    suiteNode('github-actions', {
+      appId: 15368,
+      status: 'COMPLETED',
+      conclusion: 'SUCCESS',
+      createdAt,
+      runs: 1,
+      workflow,
+    });
+  const list = (nodes: unknown[]) => parseHeadSuites(suitesOf(nodes)).suites;
+  // A later passing suite of the same workflow supersedes the failed one.
+  assert.deepEqual(
+    list([failed('2026-10-14T16:40:41Z'), passed('2026-10-14T16:50:39Z')]),
+    [],
+  );
+  // The order does not depend on the node order of the page.
+  assert.deepEqual(
+    list([passed('2026-10-14T16:50:39Z'), failed('2026-10-14T16:40:41Z')]),
+    [],
+  );
+  // A newer failed suite still holds.
+  assert.equal(
+    list([passed('2026-10-14T16:40:41Z'), failed('2026-10-14T16:50:39Z')])
+      .length,
+    1,
+  );
+  // Suites that share the newest timestamp are not provably ordered.
+  assert.equal(
+    list([passed('2026-10-14T16:40:41Z'), failed('2026-10-14T16:40:41Z')])
+      .length,
+    1,
+  );
+  // A suite without a valid timestamp keeps every member of its group.
+  assert.equal(
+    list([failed('not a time'), passed('2026-10-14T16:50:39Z')]).length,
+    1,
+  );
+  // A different workflow of the same app is a different producer.
+  assert.equal(
+    list([
+      failed('2026-10-14T16:40:41Z', {
+        workflow: { databaseId: 8, name: 'other' },
+      }),
+      passed('2026-10-14T16:50:39Z'),
+    ]).length,
+    1,
+  );
+});
+
+test('parseHeadSuites: a suite without an app is kept and never merged', () => {
+  const result = parseHeadSuites(
+    suitesOf([
+      suiteNode(null, { createdAt: '2026-10-14T16:40:41Z' }),
+      suiteNode(null, {
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        createdAt: '2026-10-14T16:50:39Z',
+      }),
+    ]),
+  );
+  assert.deepEqual(result.suites, [
+    {
+      name: 'unknown-app',
+      state: 'pending',
+      suiteStatus: 'queued',
+      appId: null,
+    },
+  ]);
+});
+
+test('parseHeadSuites: fails closed on a missing or inconsistent page', () => {
+  const held = (object: unknown, reason: RegExp) => {
+    const result = parseHeadSuites(object);
+    assert.deepEqual(result.suites, []);
+    assert.match(result.notes[0] ?? '', reason);
+  };
+  const queued = suiteNode('netlify');
+  held(null, /no check suites/);
+  held({}, /no check suites/);
+  held({ checkSuites: { totalCount: 1 } }, /no check suites/);
+  held({ checkSuites: { nodes: [queued] } }, /suite count is missing/);
+  held(suitesOf([queued], 101), /more check suites than one page/);
+  held(suitesOf([queued], 0), /does not match its page/);
+  held(
+    suitesOf([{ ...(queued as object), checkRuns: null }]),
+    /run count is missing/,
+  );
+});
+
+test('markSuiteRequirement: a suite is required when a pinned check names its app', () => {
+  const suites = [
+    { name: 'netlify', state: 'pending', suiteStatus: 'queued', appId: 13473 },
+    { name: 'sentry', state: 'pending', suiteStatus: 'queued', appId: 12637 },
+    { name: 'mystery', state: 'pending', suiteStatus: 'queued', appId: null },
+  ];
+  const required = (pinned: Set<number> | null) =>
+    markSuiteRequirement(suites, pinned).map((run) => run.required);
+  assert.deepEqual(required(new Set()), [false, false, true]);
+  assert.deepEqual(required(new Set([13473])), [true, false, true]);
+  // An unreadable policy marks every suite required.
+  assert.deepEqual(required(null), [true, true, true]);
+});
+
+test('collectPinnedRequiredAppIds: reads App pins from rules and classic protection', () => {
+  const rule = (checks: unknown[]) => ({
+    type: 'required_status_checks',
+    parameters: { required_status_checks: checks },
+  });
+  assert.deepEqual(
+    collectPinnedRequiredAppIds(
+      [
+        { type: 'pull_request' },
+        rule([
+          { context: 'lint' },
+          { context: 'build', integration_id: 15368 },
+        ]),
+      ],
+      {
+        required_status_checks: {
+          contexts: ['legacy'],
+          checks: [
+            { context: 'deploy', app_id: 13473 },
+            { context: 'any', app_id: -1 },
+          ],
+        },
+      },
+    ),
+    new Set([15368, 13473]),
+  );
+  assert.deepEqual(collectPinnedRequiredAppIds([], {}), new Set());
+  // A pin the read cannot turn into an App id is unresolvable.
+  assert.equal(
+    collectPinnedRequiredAppIds([rule([{ context: 'x', source: 'app' }])], {}),
+    null,
+  );
+  assert.equal(
+    collectPinnedRequiredAppIds([rule([{ integration_id: 'abc' }])], {}),
+    null,
+  );
+  // A required workflow produces Actions suites that no pin names.
+  assert.equal(
+    collectPinnedRequiredAppIds([{ type: 'workflows', parameters: {} }], {}),
+    null,
+  );
+});
+
+test('resolvePinnedRequiredAppIds: a 404 or a failed read is unreadable', () => {
+  const ok = (value: unknown) => ({ outcome: 'ok', value });
+  const notFound = { outcome: 'not-found' };
+  const port = (
+    rules: unknown,
+    protection: unknown,
+  ): Parameters<typeof resolvePinnedRequiredAppIds>[3] =>
+    ({
+      listBranchRules: () => rules,
+      getBranchProtection: () => protection,
+    }) as unknown as Parameters<typeof resolvePinnedRequiredAppIds>[3];
+  const rules = ok([
+    {
+      type: 'required_status_checks',
+      parameters: {
+        required_status_checks: [{ context: 'build', integration_id: 15368 }],
+      },
+    },
+  ]);
+  assert.deepEqual(
+    resolvePinnedRequiredAppIds('o', 'r', 'main', port(rules, ok({})), false),
+    new Set([15368]),
+  );
+  // A 404 is unreadable unless the trust flag is set.
+  assert.equal(
+    resolvePinnedRequiredAppIds('o', 'r', 'main', port(rules, notFound), false),
+    null,
+  );
+  assert.deepEqual(
+    resolvePinnedRequiredAppIds('o', 'r', 'main', port(rules, notFound), true),
+    new Set([15368]),
+  );
+  const throwing = {
+    listBranchRules: () => {
+      throw new Error('HTTP 403');
+    },
+    getBranchProtection: () => notFound,
+  } as unknown as Parameters<typeof resolvePinnedRequiredAppIds>[3];
+  assert.equal(
+    resolvePinnedRequiredAppIds('o', 'r', 'main', throwing, true),
+    null,
+  );
+});
+
+test('parseHeadNonPassing: joins the rollup runs with the run-less suites', () => {
+  const sha = 'a13f804ba88e71f2a373c947edbe9d9fc99d2d95';
+  const head = (suites: unknown[], rollupNodes: unknown[] = []) => ({
+    oid: sha,
+    statusCheckRollup: {
+      contexts: { totalCount: rollupNodes.length, nodes: rollupNodes },
+    },
+    ...suitesOf(suites),
+  });
+  const queuedSix = [
+    'netlify',
+    'sentry',
+    'coderabbitai',
+    'codecov',
+    'cursor',
+    'claude',
+  ].map((slug, index) => suiteNode(slug, { appId: 100 + index }));
+  let policyReads = 0;
+  const policy = (pinned: Set<number> | null) => () => {
+    policyReads += 1;
+    return pinned;
+  };
+
+  // PR 4292: six queued external suites and nothing pinned proceeds.
+  const proceed = parseHeadNonPassing(head(queuedSix), sha, policy(new Set()));
+  assert.equal(proceed.runs.length, 6);
+  assert.deepEqual(proceed.notes, []);
+  assert.equal(
+    resolveCallSiteRouting('clean', 'UNSTABLE', true, proceed.runs).f1,
+    'proceed-to-f2',
+  );
+
+  // One of them is pinned by a required check: the branch holds and the
+  // listed entry carries the app slug.
+  const required = parseHeadNonPassing(
+    head(queuedSix),
+    sha,
+    policy(new Set([101])),
+  );
+  assert.deepEqual(
+    required.runs.filter((run) => run.required).map((run) => run.name),
+    ['sentry'],
+  );
+  assert.equal(
+    resolveCallSiteRouting('clean', 'UNSTABLE', true, required.runs).f1,
+    'hold',
+  );
+
+  // An unreadable policy marks every suite required and says why.
+  const unreadable = parseHeadNonPassing(head(queuedSix), sha, policy(null));
+  assert.ok(unreadable.runs.every((run) => run.required));
+  assert.match(unreadable.notes[0] ?? '', /requirement unavailable/);
+  assert.equal(
+    resolveCallSiteRouting('clean', 'UNSTABLE', true, unreadable.runs).f1,
+    'hold',
+  );
+
+  // The rollup's own non-passing runs stay in the list.
+  const withRun = parseHeadNonPassing(
+    head(
+      [suiteNode('netlify')],
+      [
+        {
+          __typename: 'CheckRun',
+          name: 'Windows platform tests',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+          isRequired: false,
+        },
+      ],
+    ),
+    sha,
+    policy(new Set()),
+  );
+  assert.deepEqual(
+    withRun.runs.map((run) => run.name),
+    ['Windows platform tests', 'netlify'],
+  );
+
+  // The policy is read only when a suite is listed.
+  policyReads = 0;
+  const none = parseHeadNonPassing(
+    head([suiteNode('claude', { status: 'COMPLETED', conclusion: 'SUCCESS' })]),
+    sha,
+    policy(new Set()),
+  );
+  assert.deepEqual(none, { runs: [], notes: [] });
+  assert.equal(policyReads, 0);
+});
+
+test('parseHeadNonPassing: an unreadable suite page or rollup holds', () => {
+  const sha = 'a13f804ba88e71f2a373c947edbe9d9fc99d2d95';
+  const rollup = { contexts: { totalCount: 0, nodes: [] } };
+  const readPolicy = () => new Set<number>();
+  const noSuites = parseHeadNonPassing(
+    { oid: sha, statusCheckRollup: rollup },
+    sha,
+    readPolicy,
+  );
+  assert.deepEqual(noSuites.runs, []);
+  assert.match(noSuites.notes[0] ?? '', /check suite list unavailable/);
+  const noRollup = parseHeadNonPassing(
+    { oid: sha, statusCheckRollup: null, ...suitesOf([suiteNode('netlify')]) },
+    sha,
+    readPolicy,
+  );
+  assert.deepEqual(noRollup.runs, []);
+  assert.match(noRollup.notes[0] ?? '', /non-passing run list unavailable/);
 });
 
 test('classifyBranchConflictState: callSiteRouting follows the injected policy input', async () => {
