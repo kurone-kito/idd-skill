@@ -74,3 +74,9 @@ command (#2933).
 variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant):
 each worker must prefix scratchpad filenames with the issue number,
 or use an issue-numbered subdirectory.
+
+**Cite the branch rules, do not restate them.** The brief must cite
+`idd-pr-submit.instructions.md` (D1) and, in
+`idd-review-triage.instructions.md`, the "E-phase branch-sync check"
+section, by file and heading. Tell the worker to open both before any
+branch-state action, and forbid paraphrasing them.
