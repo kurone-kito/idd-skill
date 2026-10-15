@@ -139,7 +139,7 @@ only the one `opencode.json` string, and keeps the rest of the file. The CLI
 reports that rewrite as `change`.
 
 If the run stops partway, it does not roll back. A receipt-listed directory that
-is not empty at its turn is kept, and the run reports `kept <path> (not empty)`,
+is not empty at its turn is kept, and the CLI reports `keep <path> (not empty)`,
 so uninstall can finish with that directory still present. Two rewrite failures
 need a note. If the receipt rewrite fails after a removal, the receipt can still
 list the removed path. A retry reconciles that stale entry, so the receipt does
@@ -209,18 +209,20 @@ Each `overrides[]` entry has a `match` and a partial `config`. The `match` holds
 exactly one of these keys:
 
 - `repo`: an `owner/repo` slug, compared case-insensitively with the GitHub
-  origin.
-- `path`: segments that match the end of the main worktree's path. The value may
-  be relative or in Windows drive form, such as `C:\...`. This applies only when
-  the repository has no GitHub origin.
+  origin. - `path`: segments that match the end of the main worktree's path. The
+  value may be relative or in Windows drive form, such as `C:\...`. This applies
+  only when the origin is not `github.com`, so a GitHub Enterprise origin can
+  match `path`.
 
-A `repo` entry matches only a repository whose GitHub origin has that slug. A
-`path` entry matches only a repository without a GitHub origin. The two kinds
-therefore never compete. Among `path` entries, the one with more matching
-segments wins. If two or more entries tie for the highest rank, none applies,
-and the run records a diagnostic. A malformed entry is ignored with a
-diagnostic. Only one override applies, and its `config` sits above the
-user-global values.
+A `repo` entry matches only a repository whose `github.com` origin has that
+slug. A `path` entry matches only a repository whose origin is not `github.com`.
+The two kinds therefore never compete. Among `path` entries, the one with more
+matching segments wins. If two or more entries tie for the highest rank, none
+applies, and the run records a diagnostic. An entry with a missing or invalid
+`match` key, or a non-object `config`, is ignored with a diagnostic. The loader
+does not check unknown keys inside an entry; the user-global schema defines
+them. Only one override applies, and its `config` sits above the user-global
+values.
 
 To see which layer supplied a key, run `node scripts/idd-effective-config.mjs
 --key <dotted.path>` from a checkout of this repository. The installer does not
@@ -228,6 +230,11 @@ copy `scripts/` helpers, so an adopter repository uses the package's
 `idd-effective-config` command instead, once the package is installed. That
 prints the key's value and its source layer. Run it without `--key` to also see
 the selected override index and the layering diagnostics. It is read-only.
+
+Phase instructions use these layered values only when `idd-effective-config`
+output is available. Without that output they read `.github/idd/config.json` and
+no user-global layers. The installer does not copy the helper scripts, so an
+install alone does not apply the layers to the phases.
 
 ### Repository-policy field class
 
