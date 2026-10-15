@@ -5157,13 +5157,22 @@ test('explainFreshDisposition agrees with the three existing hasFreshDisposition
 // outside a Markdown code region. Observed 2026-10-14 on PR #4271 (issue
 // #4244): a stamped `**Accepted**` reply left a forged-receipt question open
 // and the advisory gate counted the thread as settled.
-test('hasPendingDecisionMarker reads the marker at a line start outside code (#4306)', () => {
+test('hasPendingDecisionMarker reads the marker at a top-level line start outside code (#4306)', () => {
   const pending = [
     '**Awaiting maintainer decision** — needs the provenance call.',
     '**awaiting maintainer decision** — case does not matter',
     '**Accepted** (defect part), fixed in abc1234.\n\n**Awaiting maintainer decision** — the provenance question is open.',
-    '**Accepted** — fixed in abc1234.\n   **Awaiting maintainer decision** — an indent of up to three spaces is a line start',
     '**Accepted** — fixed in abc1234.\r\n\r\n**Awaiting maintainer decision** — CRLF bodies read the same',
+    // A marker on the next plain line is still the author's own line.
+    '**Accepted** — fixed in abc1234.\n**Awaiting maintainer decision** — no blank line needed',
+    // A blank line ends a quote or a list item, so the marker is top-level again.
+    '> quoted text\n\n**Awaiting maintainer decision** — after the quote',
+    '- item\n\n**Awaiting maintainer decision** — after the list',
+    '1. item\n\n**Awaiting maintainer decision** — after the list',
+    // A closed fence is not a paragraph, so nothing is lazy after it.
+    '> ```\n> code\n> ```\n**Awaiting maintainer decision** — after the quoted fence',
+    // An empty quote line ends the quote's paragraph, so nothing is lazy after it.
+    '> quoted text\n>\n**Awaiting maintainer decision** — after an empty quote line',
   ];
   for (const body of pending) {
     assert.equal(hasPendingDecisionMarker(body), true, body);
@@ -5177,6 +5186,16 @@ test('hasPendingDecisionMarker reads the marker at a line start outside code (#4
     '**Accepted** — fixed.\n\n> **Awaiting maintainer decision** — quoted in a block quote',
     '**Accepted** — fixed.\n\n    **Awaiting maintainer decision** — an indented code block',
     '**Accepted** — fixed.\n\n- **Awaiting maintainer decision** — a list item is not a line start',
+    // An indented line may sit inside a list item, so only column 0 counts.
+    '**Accepted** — fixed.\n\n   **Awaiting maintainer decision** — indented',
+    // Lazy continuation: the marker line is part of the quote's or item's paragraph.
+    '> quoted text\n**Awaiting maintainer decision** — lazy quote line',
+    '> quoted\nmore lazy text\n**Awaiting maintainer decision** — a chain of lazy lines',
+    '- item\n**Awaiting maintainer decision** — lazy list line',
+    '* item\n**Awaiting maintainer decision** — lazy list line',
+    '+ item\n**Awaiting maintainer decision** — lazy list line',
+    '1. item\n**Awaiting maintainer decision** — lazy ordered line',
+    '1) item\n**Awaiting maintainer decision** — lazy ordered line',
   ];
   for (const body of settled) {
     assert.equal(hasPendingDecisionMarker(body), false, body);

@@ -2886,30 +2886,60 @@ export function isDispositionComment(comment) {
 }
 // #4306: the pending-decision marker is the existing AMD prefix
 // (`AMD_MARKER_PATTERN`), not a second token. A line that opens with it, at the
-// start of the body or of a later paragraph, marks the reply as an undecided
-// question. Requiring the line start keeps a mid-sentence quote of the phrase
-// from counting, and the code-region mask keeps a quoted example in a code span
-// or fence from counting, the same prose-quoting guard `copilot-review-body.mts`
-// applies. Observed 2026-10-14 on PR #4271 (issue #4244): a stamped
-// `**Accepted**` reply whose body left the forged-receipt question open
-// settled the review thread for the advisory gate.
+// start of the body or of a later top-level paragraph, marks the reply as an
+// undecided question. Requiring column 0 keeps a mid-sentence quote of the
+// phrase, and an indented line that may sit inside a list item, from counting.
+// The code-region mask keeps a quoted example in a code span or fence from
+// counting, the same prose-quoting guard `copilot-review-body.mts` applies.
+// Observed 2026-10-14 on PR #4271 (issue #4244): a stamped `**Accepted**`
+// reply whose body left the forged-receipt question open settled the review
+// thread for the advisory gate.
 const PENDING_DECISION_MARKER_LINE_RE =
-  /^[ \t]{0,3}\*\*Awaiting maintainer decision\*\*/imu;
+  /^\*\*Awaiting maintainer decision\*\*/iu;
+/** A line that opens a block quote or a list item (at most three spaces of
+ * indent, then `>` or a bullet or ordered-list marker with a space). */
+const QUOTE_OR_LIST_ITEM_LINE_RE = /^ {0,3}(?:>|[-+*][ \t]|\d{1,9}[.)][ \t])/u;
+/** A block-quote line with no content (`>`, `> >`): a blank line inside the
+ * quote, so it ends the quote's paragraph the way a blank line does. */
+const EMPTY_QUOTE_LINE_RE = /^ {0,3}>[ \t>]*$/u;
 /**
  * Whether a reply body carries the pending-decision marker
- * (`**Awaiting maintainer decision**`) at the start of any line outside a
- * Markdown code region. A reply that opens with it is the plain AMD hold; an
+ * (`**Awaiting maintainer decision**`) at the start of a top-level line outside
+ * a Markdown code region. A reply that opens with it is the plain AMD hold; an
  * `**Accepted**` or `**Rejected**` reply that carries it in a later paragraph
  * is a partial answer whose open part still waits on the maintainer.
+ *
+ * A marker line that follows a block quote or a list item with no blank line
+ * between is a lazy continuation of that container's paragraph, so it is quoted
+ * or listed text and does not count. A blank line (or an empty quote line) ends
+ * that run, and a marker after one is a top-level paragraph again. The reader
+ * keeps this small run model on purpose rather than a full container parser,
+ * as `copilot-review-body.mts`'s remark reader does: it can miss a marker
+ * indented into a container or a list item's later paragraph, which reads as
+ * settled, no worse than before this check existed, and it never counts a
+ * plain quoted example.
  */
 export function hasPendingDecisionMarker(body) {
   const text = String(body ?? '');
   // Cheap pre-check: the mask below walks the whole body, and almost no
   // reply mentions the phrase at all.
-  return (
-    /awaiting maintainer decision/i.test(text) &&
-    PENDING_DECISION_MARKER_LINE_RE.test(maskMarkdownForScan(text))
-  );
+  if (!/awaiting maintainer decision/i.test(text)) {
+    return false;
+  }
+  let inContainerRun = false;
+  for (const line of maskMarkdownForScan(text).split('\n')) {
+    if (line.trim() === '' || EMPTY_QUOTE_LINE_RE.test(line)) {
+      inContainerRun = false;
+      continue;
+    }
+    if (!inContainerRun && PENDING_DECISION_MARKER_LINE_RE.test(line)) {
+      return true;
+    }
+    if (QUOTE_OR_LIST_ITEM_LINE_RE.test(line)) {
+      inContainerRun = true;
+    }
+  }
+  return false;
 }
 /**
  * A reply that settles its finding: it opens with `**Accepted**` or
