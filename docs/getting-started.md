@@ -89,8 +89,8 @@ Run the command from a checkout of `kurone-kito/idd-skill`. Before the first
 install, create the parent directories that the installer does not create
 itself. These are the parent of the data root, for example `~/.local/share` or
 `$XDG_DATA_HOME`; `~/.claude` and `~/.agents` for every run; `~/.config` when
-OpenCode is selected; and the parent of a `CODEX_HOME` you set. The full
-preconditions are in the
+OpenCode is selected; and, when Codex CLI is selected, the parent of a
+`CODEX_HOME` you set. The full preconditions are in the
 [user-global installation guide](https://github.com/kurone-kito/idd-skill/blob/main/docs/user-global-install.md#preconditions).
 
 Run with `--dry-run` first to see the plan. To remove the installation, run

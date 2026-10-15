@@ -91,7 +91,8 @@ before writing anything, or failed after a clean plan. 2 means a usage error.
     required even when `--harness` selects only Codex CLI;
   - when OpenCode is selected, `~/.config` or `$XDG_CONFIG_HOME`, the parent of
     the OpenCode directory;
-  - when `CODEX_HOME` is set to a qualified path, the parent of that path.
+  - when Codex CLI is selected and `CODEX_HOME` is set to a qualified path, the
+    parent of that path.
 
   The installer creates a harness directory itself, such as `~/.codex` or
   `~/.config/opencode`, when its parent exists and it is missing.
@@ -123,15 +124,19 @@ lists.
 
 ## Uninstall
 
-`--uninstall` removes what the receipt lists and what still matches it. Each
-removal is reported as `remove`. Before any removal, the run refuses the whole
-run when a listed file or link no longer matches its receipt entry, such as a
-skill file edited after install. An entry file the installer created is a whole
-file in the receipt. Uninstall removes it when its bytes still match, and
-refuses it as edited when they do not. An entry file that already existed is
-different. The installer rewrites it in place, so uninstall removes only the
-managed block, or only the one `opencode.json` string, and keeps the rest of the
-file. The CLI reports that rewrite as `change`.
+`--uninstall` removes what the receipt lists and what still matches it. Run
+uninstall with the same `HOME`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, and
+`CODEX_HOME` values that install used. Uninstall derives the receipt location
+and the entry-file paths from those values, so different values can report no
+receipt, or refuse recorded entries as outside its roots. Each removal is
+reported as `remove`. Before any removal, the run refuses the whole run when a
+listed file or link no longer matches its receipt entry, such as a skill file
+edited after install. An entry file the installer created is a whole file in the
+receipt. Uninstall removes it when its bytes still match, and refuses it as
+edited when they do not. An entry file that already existed is different. The
+installer rewrites it in place, so uninstall removes only the managed block, or
+only the one `opencode.json` string, and keeps the rest of the file. The CLI
+reports that rewrite as `change`.
 
 If the run stops partway, it does not roll back. A receipt-listed directory that
 is not empty at its turn is kept, and the run reports `kept <path> (not empty)`,
