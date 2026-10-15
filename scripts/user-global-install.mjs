@@ -296,6 +296,37 @@ function entryHarnessAt(ctx, path) {
     (name) => join(harnessDirOf(ctx, name), ENTRY_FILE_NAME[name]) === path,
   );
 }
+/**
+ * The entry text of every version directory the receipt lists, for the Codex
+ * whole-file check. Install renders the text between the markers from one of
+ * these, and `AGENTS.md` can hold an older version's text after a later
+ * install that selected no harness. A text counts only when its bytes hash to
+ * that record. A file that is gone or changed is skipped here, because its own
+ * entry check refuses the run.
+ */
+function recordedEntryTexts(ctx, entries) {
+  const texts = [];
+  for (const entry of entries.values()) {
+    if (entry.kind !== 'file') continue;
+    const data = segmentsUnder(ctx.dataRoot, entry.path);
+    if (
+      data === null ||
+      data.length !== 3 ||
+      !VERSION_PATTERN.test(data[0]) ||
+      data[1] !== 'user-global' ||
+      data[2] !== 'entry.md'
+    ) {
+      continue;
+    }
+    try {
+      const bytes = readNoFollowBytes(entry.path, ctx.fs);
+      if (sha256Hex(bytes) === entry.sha256) texts.push(bytes.toString('utf8'));
+    } catch {
+      // Skipped; see above.
+    }
+  }
+  return texts;
+}
 /** The harness directory a harness's entry file lives in. */
 function harnessDirOf(ctx, harness) {
   return rootNamed(ctx, harness).path;
@@ -1191,7 +1222,7 @@ function buildUninstallPlan(ctx) {
             harness,
             join(ctx.currentPath, 'user-global', 'entry.md'),
             bytes,
-            entry.path,
+            harness === 'codex' ? recordedEntryTexts(ctx, entries) : [],
           )
         ) {
           throw new Error(
