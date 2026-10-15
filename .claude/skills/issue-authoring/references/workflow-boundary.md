@@ -526,11 +526,21 @@ and entry 5 last. The defer-source auto-release exception adds a
 sole-member check before the first label removal. This checklist does not
 cover that path; follow the contract for it.
 
-1. **Preflight, every target.** Run the contract's
-   `sweep-authoring-markers` attempt for the target first (attempted, not
-   blocking). Then append the release marker only when the re-fetched owner
-   log has no valid `mode=release` marker for this owner and set. Otherwise
-   reuse the earliest matching comment ID.
+1. **Preflight, every target.** Run the contract's sweep against the target
+   and the journal first (attempted, not blocking, so the command ends in
+   `|| true`). Use `owner/repo#number` for a journal in another repository.
+
+   ```sh
+   node scripts/sweep-authoring-markers.mjs --issue <target-issue-number> \
+     --issue <journal-issue-number> \
+     --marker-prefix <resolved-target-prefix> \
+     --trusted-marker-logins <trusted-login-1,...> \
+     --deadline-ms 300000 --apply || true
+   ```
+
+   Then append the release marker only when the re-fetched owner log has no
+   valid `mode=release` marker for this owner and set. Otherwise reuse the
+   earliest matching comment ID.
 
    ```sh
    node scripts/post-idd-marker.mjs --type authoring-owner \
@@ -597,9 +607,19 @@ cover that path; follow the contract for it.
    ```
 
 5. **Release complete, anchor, once per set.** After every target's label
-   removal is verified, run the contract's anchor sweep first. Compute
-   `<snapshot-sha256>` with the set-snapshot algorithm in the same contract
-   section.
+   removal is verified, run the anchor sweep first, with the anchor as the
+   target:
+
+   ```sh
+   node scripts/sweep-authoring-markers.mjs --issue <anchor-issue-number> \
+     --issue <journal-issue-number> \
+     --marker-prefix <resolved-target-prefix> \
+     --trusted-marker-logins <trusted-login-1,...> \
+     --deadline-ms 300000 --apply || true
+   ```
+
+   Then compute `<snapshot-sha256>` with the set-snapshot algorithm in the
+   same contract section, and post the completion marker.
 
    ```sh
    node scripts/post-idd-marker.mjs --type authoring-owner \
@@ -616,6 +636,9 @@ cover that path; follow the contract for it.
      --marker-prefix <marker-prefix> \
      --apply
    ```
+
+After entry 5 closes the set, the contract's closing sweep runs once more.
+It is not one of the five entries above; see its **Closing sweep** bullet.
 
 ## A4.5 Gate Timing
 
