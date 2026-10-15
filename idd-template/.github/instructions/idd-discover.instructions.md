@@ -9,8 +9,8 @@ A0-O/A3/A3.5/A4/A4.5; tables win if absent/disagrees.
 
 **Abort conditions**: A0-T, A1 (`orphan-first`/`roadmap` scope only —
 see A0), A3 (default; see decision tree).
-**Early stop condition**: A0-T, A0-C, A1.5, A4, or A4.5 (no claim made —
-see below).
+**Early stop condition**: A0-T, A1.5, A4, or A4.5 (no claim made — see
+below).
 
 ## Authoring label guard
 
@@ -48,18 +48,18 @@ the run report; releasing them is out of scope.
 
 If `draftCarriers.ready` is non-empty, re-author at most one carrier, the
 lowest number that passes the actor check, by the Re-authoring steps of
-"Draft carrier" in the `issue-authoring` companion's contract
-(`skills/issue-authoring/references/contract.md`); without it, name the
-ready carriers in the run report. Under `orphan-first-policy`
-`public-disabled`, a carrier passes only if its earliest trusted
-`mode=acquire` or `mode=bootstrap` authoring-owner marker was written by a
-login in `trustedMarkerActors` (no marker fails); under any other policy
-every ready carrier passes. Name each failing carrier in the run report; if
-all fail, re-author none and continue. If the procedure stops with the
-carrier open or a published target still under the authoring hold, record
-the carrier's number and the stop reason in the run report, continue the
-pass, and never claim the carrier as ordinary work; add no second recovery
-path.
+"Draft carrier" in the `issue-authoring` companion's
+`references/contract.md`; without the companion, name the ready carriers in
+the run report. Under `orphan-first-policy` `public-disabled`, read that one
+carrier's comments (per the portable owner resolver above; not a repo-wide
+query): a carrier passes only if its earliest trusted `mode=acquire` or
+`mode=bootstrap` authoring-owner marker was written by a login in
+`trustedMarkerActors` (no marker fails); under any other policy every ready
+carrier passes. Name each failing carrier in the run report; if all fail,
+re-author none and continue. If the procedure stops with the carrier still
+open or a published target in a recovery hold, record the carrier's number
+and the stop reason in the run report, continue the pass, and never claim
+the carrier as ordinary work; add no second recovery path.
 
 ## A0-T — Explicit issue target shortcut
 
@@ -673,8 +673,7 @@ node scripts/select-desynced-index.mjs --token <session-token> --band-size <band
 ```
 
 Resolve `<profile-selected-select-desynced-index-command>` from
-`docs/idd-helper-scripts.md` (do not hardcode `node scripts/...` for
-non-vendored profiles); the formula above is the canonical fallback
+`docs/idd-helper-scripts.md`; the formula above is the canonical fallback
 when the helper is unavailable. It reorders **only within** a single
 score tie band, never across bands, and never bypasses A4.5/A5. With
 `off`, a single-entry band, or no applicable score, keep the
