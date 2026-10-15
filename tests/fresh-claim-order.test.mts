@@ -290,6 +290,15 @@ test('a failure before the claim marker reports no success and posts nothing', {
   }
 });
 
+test('a non-zero fresh-claim gate stops before any claim post', {
+  skip: WRAPPER_SKIP,
+}, () => {
+  const run = runFreshClaimWrapper({ gate: 1 });
+  assert.notEqual(run.status, 0);
+  assert.deepEqual(run.steps, ['record', 'gate']);
+  assert.equal(run.stdout.includes(WRAPPER_SUCCESS), false);
+});
+
 test('a failed claim post, nonce record, or acquire stops the later steps', {
   skip: WRAPPER_SKIP,
 }, () => {
