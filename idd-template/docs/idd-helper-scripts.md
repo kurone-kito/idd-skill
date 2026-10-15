@@ -6823,6 +6823,28 @@ reflexively as any other CLI option.
   live GitHub state, discard helper output and use the portable manual
   fetch path.
 
+### Advisory-item scope
+
+Which advisory items the readiness gate reads. This is the detail behind
+the E14 step 5 sentence in `idd-review-fix.instructions.md`, which says
+that unanswered advisory items block merge until each one is
+dispositioned.
+
+- The disposition check covers the regular comments of Copilot,
+  CodeRabbit, Codex, and each `advisoryBotLogins` login. A regular
+  comment from any other bot needs no advisory disposition, but it still
+  blocks until a later IDD-agent reply answers it. A reply that starts
+  with `**Awaiting maintainer decision**` answers nothing.
+- A CodeRabbit no-actionable-comments summary settles without a
+  disposition only while no unresolved known-bot review thread exists.
+  While one does, the summary stays a missing regular comment until it is
+  dispositioned or that thread is resolved.
+- Copilot's review-body items fall under the
+  [advisory convergence check (F2)](#advisory-convergence-f2).
+- An embedded CodeRabbit finding in a COMMENTED review body is a PATH B
+  snapshot item that the merge gate does not read. A threaded finding is
+  gated through its review thread instead.
+
 ### Merge execution (F3)
 
 - Preferred F3 path when helper runtime is enabled: dry-run first to
