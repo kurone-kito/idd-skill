@@ -181,6 +181,18 @@
         }
       }
     },
+    "idd-claimed-push.mjs": {
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
     "idd-clone-lock.mjs": {
       "runs": {
         "unknownFlag": {

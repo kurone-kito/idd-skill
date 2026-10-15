@@ -50,6 +50,7 @@ const FLAG_CONCEPTS: readonly FlagConcept[] = [
     helpers: [
       'advisory-wait-state.mjs',
       'audit-pr-cleanup.mjs',
+      'claimed-push.mjs',
       'external-check-waiver.mjs',
       'idd-merge-execute.mjs',
       'live-status-digest.mjs',

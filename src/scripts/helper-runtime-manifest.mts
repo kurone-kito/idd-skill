@@ -378,6 +378,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Acquire, reacquire, or inspect a worktree-local same-machine claim lock.',
   },
   {
+    id: 'claimed-push',
+    scriptName: 'idd:claimed-push',
+    binName: 'idd-claimed-push',
+    entryPath: 'scripts/claimed-push.mjs',
+    vendoredCommand: 'node scripts/claimed-push.mjs',
+    description:
+      'Push the claimed branch to origin only after the claim, the worktree location, and the configured pre-push gate pass in order (dry run unless --apply).',
+  },
+  {
     id: 'clone-lock',
     scriptName: 'idd:clone-lock',
     binName: 'idd-clone-lock',
