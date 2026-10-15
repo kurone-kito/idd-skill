@@ -57,6 +57,7 @@ distinct from the phase rules in `.github/instructions/`:
 | guide | [Getting Started with IDD](getting-started.md) | Walks a new adopter through the shortest safe path from deciding to adopt IDD to running the first Issue-Driven Development loop. |
 | guide | [IDD Review Policy Profiles](idd-review-policy-profiles.md) | Names the supported PR review policy profiles and the instruction files an adopter must edit to select one other than the Copilot-advisory default. |
 | guide | [Permissions and Threat Model](permissions.md) | Defines the credential profiles, merge-policy boundaries, and threat model an operator must choose before granting IDD agents GitHub access. |
+| guide | [User-global installation](user-global-install.md) | Installs IDD and its skills for the current user, explains how user-global policy layers and overrides resolve, and states the activation gate and the CI off switches. |
 | concept | [Core IDD Concepts](concepts.md) | Introduces the loop-engineering vocabulary and mental model behind the IDD phase instructions before diving into phase-by-phase rules. |
 | reference | [Critique-Loop Telemetry Methodology](critique-telemetry.md) | Documents how this repository harvests and aggregates its own C-phase critique-loop telemetry. |
 | reference | [Global-only profile](global-only-profile.md) | Defines the global-only IDD profile, its trust rule, and its pre-merge and cleanup behavior. |

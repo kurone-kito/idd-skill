@@ -125,6 +125,21 @@ update, and — when a capable helper runtime is available — points a
 session at `idd-onboard --hear` instead of walking through the policy
 and placeholder companions by hand.
 
+### Install for your user (optional)
+
+To make IDD available to Claude Code, Codex CLI, and OpenCode for your whole
+user account, run the user-global installer from a checkout of this repository:
+
+```sh
+node scripts/idd-onboard.mjs --install-user-global [--harness <list>] [--dry-run]
+```
+
+Remove it again with `node scripts/idd-onboard.mjs --uninstall`. The installer
+needs the parent directories of its roots to exist already, for example
+`~/.local/share` and `~/.agents`. See
+[User-global installation](docs/user-global-install.md) for the files it writes,
+the failure outcome, and the activation rules.
+
 ## How it works
 
 Every phase has a named job, a resumable marker, and a next step:

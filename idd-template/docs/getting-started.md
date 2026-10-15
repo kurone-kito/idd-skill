@@ -75,6 +75,28 @@ The report checks core IDD file presence, unresolved placeholders,
 marker-prefix consistency, command-table sanity, and (when `gh` access
 is available) branch-protection and required-check signals.
 
+### Install user-globally (optional)
+
+To install IDD for the current user rather than only in one repository, install
+the instruction payload and the issue-authoring and idd-spec-audit skills for
+Claude Code, Codex CLI, or OpenCode:
+
+```sh
+node scripts/idd-onboard.mjs --install-user-global [--harness <list>] [--dry-run]
+```
+
+Run the command from a checkout of `kurone-kito/idd-skill`. Before the first
+install, create the parent directories that the installer does not create
+itself. These are the parent of the data root, for example `~/.local/share` or
+`$XDG_DATA_HOME`; `~/.claude` and `~/.agents` for every run; `~/.config`, or a
+qualified `XDG_CONFIG_HOME`, when OpenCode is selected; and, when Codex CLI is
+selected, the parent of a qualified `CODEX_HOME` you set. The full preconditions
+are in the [user-global installation guide](https://github.com/kurone-kito/idd-skill/blob/main/docs/user-global-install.md#preconditions).
+
+Run with `--dry-run` first to see the plan. To remove the installation, run
+`node scripts/idd-onboard.mjs --uninstall`, and see the guide for the file list,
+the failure outcome, and the activation rules.
+
 ## 2. Choose the Review Policy
 
 Before the first full loop, decide whether the default Copilot advisory
