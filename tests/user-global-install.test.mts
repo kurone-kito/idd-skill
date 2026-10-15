@@ -1223,11 +1223,7 @@ test('a dropped skill file that is already absent is unlisted and not recreated'
   for (const path of [claudeCopy, agentsCopy]) {
     assert.equal(nodeFs.existsSync(path), false, `${path} is not recreated`);
     assert.equal(isListed(home, path), false);
-    assert.ok(
-      result.lines.includes(
-        `remove ${path} (already absent; dropping its receipt entry)`,
-      ),
-    );
+    assert.ok(result.lines.includes(`absent ${path}`));
   }
 
   uninstallPayload(upgradeOptions(home, source));
@@ -1252,6 +1248,9 @@ test('a stale temporary file beside an already-absent dropped skill file makes i
       (error: Error) =>
         literal(`${absent}.tmp-7`).test(error.message) &&
         /crashed run/.test(error.message) &&
+        literal(`refusing to drop the receipt entry for ${absent}`).test(
+          error.message,
+        ) &&
         /nothing was written/.test(error.message),
     );
   }
@@ -1323,6 +1322,12 @@ test('a hard link made to a dropped skill file after the plan stops the prune an
   assert.ok(nodeFs.existsSync(dropped));
   assert.ok(nodeFs.existsSync(alias));
   assert.ok(isListed(home, dropped));
+  const second = droppedOf(home, '.agents');
+  assert.ok(
+    nodeFs.existsSync(second),
+    'the prune stopped before the second copy',
+  );
+  assert.ok(isListed(home, second));
 });
 
 test('a file the user added beside a dropped skill file survives the prune', () => {
@@ -1641,11 +1646,7 @@ test('a failed receipt rewrite after a removal names the path, and a retry drops
   );
 
   const retry = installPayload(upgradeOptions(home, source));
-  assert.ok(
-    retry.lines.includes(
-      `remove ${first} (already absent; dropping its receipt entry)`,
-    ),
-  );
+  assert.ok(retry.lines.includes(`absent ${first}`));
   assert.ok(retry.lines.includes(`remove ${second}`));
   assert.equal(isListed(home, first), false);
   assert.equal(isListed(home, second), false);

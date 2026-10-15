@@ -148,7 +148,7 @@ function lstatOrNull(path: string, fs: FsOps): Stats | null {
 function refuseStaleTemp(
   path: string,
   fs: FsOps,
-  action: 'replace' | 'remove' = 'replace',
+  action: 'replace' | 'remove' | 'drop the receipt entry for' = 'replace',
 ): void {
   let names: string[];
   try {
@@ -747,17 +747,21 @@ function planPrunes(
       // First, for every verdict below: a leftover temporary file beside the
       // path marks a crashed run there, whether or not the file is still present.
       // An absent parent has nothing to list, so it passes.
-      refuseStaleTemp(entry.path, fs, 'remove');
-      if (walk.missingDirs.length > 0 || walk.finalKind === 'absent') {
+      const gone = walk.missingDirs.length > 0 || walk.finalKind === 'absent';
+      refuseStaleTemp(
+        entry.path,
+        fs,
+        gone ? 'drop the receipt entry for' : 'remove',
+      );
+      if (gone) {
         prunes.push({
           path: entry.path,
           root,
           sha256: entry.sha256,
           present: false,
         });
-        lines.push(
-          `remove ${entry.path} (already absent; dropping its receipt entry)`,
-        );
+        // The same word uninstall uses for a listed path that is already gone.
+        lines.push(`absent ${entry.path}`);
         continue;
       }
       // checkContainment throws only for a link above the final component, so
