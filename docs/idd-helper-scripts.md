@@ -5513,13 +5513,17 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
 - Write-side companion to `emit-marker`: it renders the canonical body for
   each operational marker `<type>` (`claim`, `unclaim`, `activation-nonce`,
   `watermark`, `baseline`, `advisory`, `advisory-recovery`,
-  `advisory-reroll`, `idd-hold`, `f4-head-proof`) by reusing the
-  single-sourced `protocol-helpers` renderers, then POSTs it as a JSON
-  document (`{"body": …}`) via
+  `advisory-reroll`, `idd-hold`) by reusing the single-sourced
+  `protocol-helpers` renderers, then POSTs it as a JSON document
+  (`{"body": …}`) via
   `gh api --method POST .../comments --input -`. The JSON path is
   mandatory because `gh issue comment` / `gh api -f body=` silently
   reject the HTML-comment-first claim-family bodies. `-f` also treats a
   leading `@` as a literal character — only `-F` reads `@file` contents.
+  `f4-head-proof` is not in that list: its body comes from
+  `renderF4HeadProofBody` (`f4-head-proof.mts`), and its command reads the
+  live state before it renders (see the
+  [F4 head-proof marker contract](#f4-head-proof-marker-contract)).
 - The `claim` / `unclaim` / `activation-nonce` / `watermark` / `baseline` /
   `idd-hold` bodies are HTML-comment-first with a visible "Do not edit" note;
   `advisory` / `advisory-recovery` / `advisory-reroll` are the
