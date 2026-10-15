@@ -927,11 +927,11 @@ in this preamble, since the fallback differs per helper.
   label's local-name stem. Removing either one means editing the issue body
   or title, and a worker must not make that edit to clear a trigger
   (preventive; no observed incident yet). The blocking-label check, which
-  covers `status:needs-decision` too, runs first within the autonomy check
-  and returns early, so removing a blocking label can expose a marker,
-  title, or body-text failure that it had hidden. A body-text failure has no
-  marker or title to remove, and `--verbose` names which body-text check
-  fired.
+  also covers the configured `labels.needsDecisionLabelName` (default
+  `status:needs-decision`), runs first within the autonomy check and returns
+  early, so removing a blocking label can expose a marker, title, or
+  body-text failure that it had hidden. A body-text failure has no marker or
+  title to remove, and `--verbose` names which body-text check fired.
 - `scripts/suitability-close-execute.mjs` for the A4.5 high-confidence
   duplicate/superseded coordination-close path (referenced in
   [kurone-kito/idd-skill#1485](https://github.com/kurone-kito/idd-skill/issues/1485));
