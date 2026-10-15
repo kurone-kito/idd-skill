@@ -65,6 +65,7 @@ import {
   isNonReviewNoticeDisposition,
   isReviewSummaryComment,
   MISSING_WATERMARK_HINT,
+  PENDING_DECISION_THREAD_HINT,
   readClaimStaleAgeMs,
   resolveActiveClaimForWriteGate as resolveActiveClaimForWriteGateImpl,
   resolveCodeownersForFiles,
@@ -257,6 +258,404 @@ test('the readiness schema accepts the optional missingThreads hint and still re
   const unknownKey = JSON.parse(JSON.stringify(summary));
   unknownKey.dispositionEvidence.missingThreads[0].nextStep = 'post a reply';
   assert.ok(validate(unknownKey, readinessSchema).length > 0);
+});
+
+test('a thread whose newest IDD reply is a pending decision reports reason pending-decision with its own hint, and the schema accepts it (#4306)', () => {
+  const pendingThread = (isResolved: boolean) => ({
+    id: 'thread-4306',
+    isResolved,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'reviewer-a' },
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'a forged receipt can name a user file',
+        },
+        {
+          author: { login: 'idd-bot' },
+          createdAt: '2026-05-12T00:30:00Z',
+          body: '**Accepted** (defect part), fixed in abc1234.\n\n**Awaiting maintainer decision** — the provenance question is open.\n\n<!-- idd-skill-review-reply -->',
+          lastEditedAt: null,
+        },
+      ],
+    },
+  });
+  for (const isResolved of [false, true]) {
+    const summary = summarizeDispositionEvidenceForGate(
+      { comments: [], threads: [pendingThread(isResolved)] },
+      { iddAgentLogins: ['idd-bot'] },
+    );
+    assert.equal(summary.route, 'return-to-e1', `resolved ${isResolved}`);
+    assert.equal(summary.missingThreadCount, 1);
+    assert.equal(summary.missingThreads[0].id, 'thread-4306');
+    assert.equal(summary.missingThreads[0].reason, 'pending-decision');
+    assert.equal(summary.missingThreads[0].hint, PENDING_DECISION_THREAD_HINT);
+    assert.match(
+      summary.missingThreads[0].hint ?? '',
+      /wait for the maintainer/,
+    );
+
+    const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+    const report = JSON.parse(
+      JSON.stringify(
+        buildPreMergeReadinessSummary(fixture.input, {
+          ...fixture.options,
+          includeDispositionEvidence: true,
+        }),
+      ),
+    );
+    report.dispositionEvidence = JSON.parse(JSON.stringify(summary));
+    assert.deepEqual(validate(report, readinessSchema), []);
+  }
+
+  // A settled reply posted after the pending one clears the entry.
+  const decided = pendingThread(false);
+  decided.comments.nodes.push({
+    author: { login: 'idd-bot' },
+    createdAt: '2026-05-12T01:00:00Z',
+    body: '**Accepted** — the maintainer chose to document the residual risk',
+    lastEditedAt: null,
+  });
+  const cleared = summarizeDispositionEvidenceForGate(
+    { comments: [], threads: [decided] },
+    { iddAgentLogins: ['idd-bot'] },
+  );
+  assert.equal(cleared.route, 'proceed');
+  assert.equal(cleared.missingThreadCount, 0);
+});
+
+const PENDING_PARTLY_ACCEPTED =
+  '**Accepted** (part), fixed in abc1234.\n\n**Awaiting maintainer decision** — the rest is open.\n\n<!-- idd-skill-review-reply -->';
+
+test('a reply that carries the pending marker clears no regular advisory comment, and a settled reply still does (#4306)', () => {
+  const summarize = (replyBody: string) =>
+    summarizeDispositionEvidenceForGate(
+      {
+        comments: [
+          {
+            author: { login: 'coderabbitai[bot]' },
+            createdAt: '2026-05-12T00:00:00Z',
+            body: 'Consider handling the empty case.',
+            lastEditedAt: null,
+          },
+          {
+            author: { login: 'idd-bot' },
+            createdAt: '2026-05-12T00:30:00Z',
+            body: replyBody,
+            lastEditedAt: null,
+          },
+        ],
+        threads: [],
+      },
+      { iddAgentLogins: ['idd-bot'], advisoryBotLogins: ['coderabbitai[bot]'] },
+    );
+  const pending = summarize(PENDING_PARTLY_ACCEPTED);
+  assert.equal(pending.route, 'return-to-e1');
+  assert.equal(pending.missingRegularCommentCount, 1);
+  const settled = summarize(
+    '**Accepted** — fixed in abc1234.\n\n<!-- idd-skill-review-reply -->',
+  );
+  assert.equal(settled.route, 'proceed');
+  assert.equal(settled.missingRegularCommentCount, 0);
+});
+
+test('a trusted pending reply on a human-authored thread is not presence-only, and ordinary replies still are (#4306)', () => {
+  const thread = (
+    replyBody: string,
+    extra: Record<string, unknown>[] = [],
+  ) => ({
+    id: 'thread-human-4306',
+    isResolved: false,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'reviewer-a' },
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'please reconsider this',
+        },
+        {
+          author: { login: 'idd-bot' },
+          createdAt: '2026-05-12T00:30:00Z',
+          body: replyBody,
+          lastEditedAt: null,
+        },
+        ...extra,
+      ],
+    },
+  });
+  const summarize = (candidate: ReturnType<typeof thread>) =>
+    summarizeDispositionEvidenceForGate(
+      { comments: [], threads: [candidate] },
+      { iddAgentLogins: ['idd-bot'] },
+    );
+
+  // An unstamped plain hold from the IDD agent is an IDD reply, not presence.
+  const hold = summarize(thread('**Awaiting maintainer decision** — open'));
+  assert.equal(hold.missingThreadCount, 1);
+  assert.equal(hold.missingThreads[0].reason, 'pending-decision');
+
+  // So is an Accepted reply that carries a pending paragraph.
+  assert.equal(
+    summarize(thread(PENDING_PARTLY_ACCEPTED)).missingThreadCount,
+    1,
+  );
+
+  // A human's reply after the hold does not end it.
+  const answered = summarize(
+    thread('**Awaiting maintainer decision** — open', [
+      {
+        author: { login: 'reviewer-a' },
+        createdAt: '2026-05-12T01:00:00Z',
+        body: 'go ahead',
+        lastEditedAt: null,
+      },
+    ]),
+  );
+  assert.equal(answered.missingThreadCount, 1);
+
+  // A settled reply from the IDD agent after the hold does.
+  const decided = summarize(
+    thread('**Awaiting maintainer decision** — open', [
+      {
+        author: { login: 'idd-bot' },
+        createdAt: '2026-05-12T01:00:00Z',
+        body: '**Accepted** — the maintainer chose (a): fixed in def5678',
+        lastEditedAt: null,
+      },
+    ]),
+  );
+  assert.equal(decided.missingThreadCount, 0);
+
+  // An unmarked ordinary reply stays presence-only on a human's thread.
+  assert.equal(summarize(thread('thanks, noted')).missingThreadCount, 0);
+});
+
+test('a pending reply after a settled one leaves the thread pending-decision with its hint, never ack-only (#4306)', () => {
+  const thread = {
+    id: 'thread-pending-after-settled',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'reviewer-a' },
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'please reconsider',
+          lastEditedAt: null,
+        },
+        {
+          author: { login: 'idd-bot' },
+          createdAt: '2026-05-12T00:30:00Z',
+          body: '**Accepted** — fixed in abc1234',
+          lastEditedAt: null,
+        },
+        {
+          author: { login: 'idd-bot' },
+          createdAt: '2026-05-12T01:00:00Z',
+          body: '**Awaiting maintainer decision** — a new question',
+          lastEditedAt: null,
+        },
+        {
+          author: { login: 'coderabbitai[bot]' },
+          createdAt: '2026-05-12T02:00:00Z',
+          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+        },
+      ],
+    },
+  };
+  const summary = summarizeDispositionEvidenceForGate(
+    { comments: [], threads: [thread] },
+    { iddAgentLogins: ['idd-bot'], advisoryBotLogins: ['coderabbitai[bot]'] },
+  );
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreads[0].reason, 'pending-decision');
+  assert.equal(summary.missingThreads[0].ackOnlyPostDisposition, false);
+  assert.equal(summary.missingThreads[0].inPlaceEditOnly, false);
+  assert.equal(summary.missingThreads[0].hint, PENDING_DECISION_THREAD_HINT);
+  assert.equal(summary.soleCauseAckOnlyPostDisposition, false);
+  assert.equal(summary.soleCauseInPlaceEditOnly, false);
+});
+
+test("a reply that carries the pending marker answers no regular comment, a human reviewer's included, and an ordinary reply still does (#4306)", () => {
+  const summarize = (replyBody: string) =>
+    summarizeDispositionEvidenceForGate(
+      {
+        comments: [
+          {
+            author: { login: 'reviewer-a' },
+            createdAt: '2026-05-12T00:00:00Z',
+            body: 'Please address this.',
+            lastEditedAt: null,
+          },
+          {
+            author: { login: 'idd-bot' },
+            createdAt: '2026-05-12T01:00:00Z',
+            body: replyBody,
+            lastEditedAt: null,
+          },
+        ],
+        threads: [],
+      },
+      { iddAgentLogins: ['idd-bot'] },
+    );
+  assert.equal(
+    summarize('**Awaiting maintainer decision** — open')
+      .missingRegularCommentCount,
+    1,
+  );
+  assert.equal(
+    summarize(PENDING_PARTLY_ACCEPTED).missingRegularCommentCount,
+    1,
+  );
+  assert.equal(summarize('thanks, fixed').missingRegularCommentCount, 0);
+  assert.equal(
+    summarize('**Accepted** — fixed in abc1234').missingRegularCommentCount,
+    0,
+  );
+});
+
+test('a pending reply keeps a trusted machine disposition from clearing its advisory sticky in both summaries (#4306)', () => {
+  const SHA = 'a'.repeat(40);
+  const CR = 'coderabbitai[bot]';
+  const comments = (
+    dispositionBody: string,
+    sticky: Record<string, unknown>,
+  ) => [
+    {
+      id: '777',
+      author: { login: CR },
+      createdAt: '2026-05-12T00:00:00Z',
+      updatedAt: '2026-05-12T00:00:00Z',
+      lastEditedAt: null,
+      ...sticky,
+    },
+    {
+      id: '778',
+      author: { login: 'idd-bot' },
+      createdAt: '2026-05-12T00:30:00Z',
+      updatedAt: '2026-05-12T00:30:00Z',
+      lastEditedAt: null,
+      body: dispositionBody,
+    },
+  ];
+  const counts = (dispositionBody: string, sticky: Record<string, unknown>) => {
+    const input = comments(dispositionBody, sticky);
+    const options = {
+      iddAgentLogins: [] as string[],
+      trustedMarkerLogins: ['idd-bot'],
+      advisoryBotLogins: [CR],
+      prHeadSha: SHA,
+    };
+    return {
+      evidence: summarizeDispositionEvidenceForGate(
+        { comments: input, threads: [] },
+        options,
+      ).missingRegularCommentCount,
+      unreplied: summarizeRegularCommentsForGate(input, {
+        ...options,
+        threads: [],
+      }).count,
+    };
+  };
+  const notice = {
+    body: '> [!WARNING]\n> ## Review limit reached\n> rate limited',
+  };
+  const noticeDisposition = `**Rejected** — ${CR} did not review HEAD ${SHA} (review limit reached / rate limited); this is not a completed review (source: #issuecomment-777)`;
+  const summary = {
+    body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n\n## Summary by CodeRabbit\n\nNo issues.',
+  };
+  const summaryDisposition = `**Accepted** — ${CR} summary walkthrough at HEAD ${SHA}`;
+  const pending = '\n\n**Awaiting maintainer decision** — also open';
+
+  for (const [label, sticky, disposition] of [
+    ['notice', notice, noticeDisposition],
+    ['summary', summary, summaryDisposition],
+  ] as const) {
+    // Control: the settled machine disposition clears its sticky in both.
+    assert.deepEqual(
+      counts(disposition, sticky),
+      { evidence: 0, unreplied: 0 },
+      `${label} control`,
+    );
+    // A pending paragraph on the same body clears neither.
+    const withPending = counts(disposition + pending, sticky);
+    assert.ok(withPending.evidence >= 1, `${label} evidence`);
+    assert.ok(withPending.unreplied >= 1, `${label} unreplied`);
+  }
+});
+
+test('a pending reply does not advance the last-reply watermark, so an earlier comment stays unreplied (#4306)', () => {
+  const unreplied = (replyBody: string) =>
+    summarizeRegularCommentsForGate(
+      [
+        {
+          id: '1',
+          author: { login: 'reviewer-a' },
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+          body: 'Please address this.',
+          lastEditedAt: null,
+        },
+        {
+          id: '2',
+          author: { login: 'idd-bot' },
+          createdAt: '2026-05-12T01:00:00Z',
+          updatedAt: '2026-05-12T01:00:00Z',
+          body: replyBody,
+          lastEditedAt: null,
+        },
+      ],
+      { iddAgentLogins: ['idd-bot'], trustedMarkerLogins: ['idd-bot'] },
+    ).count;
+  assert.equal(unreplied('**Accepted** — fixed in abc1234'), 0);
+  assert.equal(unreplied('thanks, fixed'), 0);
+  assert.equal(unreplied(PENDING_PARTLY_ACCEPTED), 1);
+  assert.equal(unreplied('**Awaiting maintainer decision** — open'), 1);
+});
+
+test('selectAdvisoryThreadCommentIdsEditedAfterDisposition: a pending reply anchors no disposition (#4306)', () => {
+  const thread = (replyBody: string) => ({
+    id: 'RT_4306',
+    isResolved: true,
+    comments: {
+      nodes: [
+        {
+          id: 'c-4306',
+          author: { login: 'coderabbitai' },
+          createdAt: '2026-09-20T05:00:00Z',
+          updatedAt: '2026-09-20T09:00:00Z',
+          lastEditedAt: '2026-09-20T08:00:00Z',
+          body: 'finding',
+        },
+        {
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-09-20T07:00:00Z',
+          updatedAt: '2026-09-20T07:00:00Z',
+          body: replyBody,
+        },
+      ],
+    },
+  });
+  const options = {
+    isDispositionAuthor: (login: string) => login === 'kurone-kito',
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  };
+  assert.deepEqual(
+    selectAdvisoryThreadCommentIdsEditedAfterDisposition(
+      [thread('**Accepted** — fixed.')],
+      options,
+    ),
+    ['c-4306'],
+  );
+  assert.deepEqual(
+    selectAdvisoryThreadCommentIdsEditedAfterDisposition(
+      [thread(PENDING_PARTLY_ACCEPTED)],
+      options,
+    ),
+    [],
+  );
 });
 
 // #4163: the E6 PATH B hint on dispositionEvidence. The bot bodies mirror the

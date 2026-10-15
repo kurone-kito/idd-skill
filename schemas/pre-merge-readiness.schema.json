@@ -1240,10 +1240,11 @@
               },
               "reason": {
                 "type": "string",
-                "description": "Why this thread is still outstanding, distinguishing an incomplete comment page from a missing or stale disposition.",
+                "description": "Why this thread is still outstanding, distinguishing an incomplete comment page from a missing or stale disposition, and a pending decision (the newest IDD reply carries **Awaiting maintainer decision**) from both.",
                 "enum": [
                   "incomplete-thread-comments",
                   "missing-fresh-disposition",
+                  "pending-decision",
                   "unresolved-without-fresh-disposition"
                 ]
               },
@@ -1257,7 +1258,7 @@
               },
               "hint": {
                 "type": "string",
-                "description": "Diagnostic-only next step, present only for missing-fresh-disposition and unresolved-without-fresh-disposition entries that are not ackOnlyPostDisposition: post a new marker-first **Accepted** or **Rejected** reply after the newest non-disposition comment on the thread. A plain-prose correction counts as feedback, and an edited disposition never counts. If the newest comment is a no-new-content advisory-bot reply that reappears after every reply, the hint says to post a hold comment instead. Never changes route or reason (#3670)."
+                "description": "Diagnostic-only next step, present only for missing-fresh-disposition, unresolved-without-fresh-disposition and pending-decision entries that are not ackOnlyPostDisposition: post a new marker-first **Accepted** or **Rejected** reply after the newest non-disposition comment on the thread. For pending-decision the step is to keep the hold and wait for the maintainer first, because an **Accepted** posted before the decision is how the open question got counted as settled (#4306). A plain-prose correction counts as feedback, and an edited disposition never counts. If the newest comment is a no-new-content advisory-bot reply that reappears after every reply, the hint says to post a hold comment instead. Never changes route or reason (#3670)."
               }
             }
           }
