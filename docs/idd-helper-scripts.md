@@ -4250,8 +4250,10 @@ for the repository of the current directory. `--target pr` is refused. So are
 `--trusted-marker-logins` and `--advisory-bot-logins`: the trusted logins come
 from the viewer, `IDD_TRUSTED_MARKER_ACTORS`, the trusted configuration, and
 (when collaborator-marker trust is on) collaborators with write access, never
-a flag. `--owner` and `--repo` are refused too: the repository is the current
-checkout's, which must register `--worktree`.
+a flag. `--owner` and `--repo` are refused too: the repository is the one the current
+checkout's origin names, and `--worktree` must be registered in that checkout.
+The repository must be the origin's, so an inherited `GH_REPO` that names
+another repository is refused before any claim read.
 
 Before any POST the command reads the stored activation nonce (`claim-lock
 --read-tokens`), runs `resume-claim-routing --assert`, checks that the claim
