@@ -58,13 +58,16 @@ const OPERATIONAL_MARKER_ENTRIES = [
     // kurone-kito/idd-skill#4310: held-worker marker (`docs/idd-workflow.md`,
     // "Hold marker"). Issue-scoped and informational: recognized here so it
     // reads as IDD automation rather than human discussion, but never part of
-    // claim-family resolution.
+    // claim-family resolution. Both identifiers use the same grammar as
+    // `renderHoldMarker` and `parseHoldMarker` (no whitespace, and no `<!--`
+    // or `-->` inside the token), so a body whose identifier closes the HTML
+    // comment early is not recognized as a hold marker here either.
     label: '<!-- idd-hold:',
     pattern:
-      /^<!--\s*idd-hold:\s+\S+\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+      /^<!--\s*idd-hold:\s+(?:(?!<!--|-->)\S)+\s+(?:(?!<!--|-->)\S)+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
     startPattern: /^<!--\s*idd-hold:/i,
     malformedPrefixPattern:
-      /^<!--\s*idd-hold:\s+\S+\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->/i,
+      /^<!--\s*idd-hold:\s+(?:(?!<!--|-->)\S)+\s+(?:(?!<!--|-->)\S)+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->/i,
   },
   {
     label: '<!-- review-watermark:',

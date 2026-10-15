@@ -155,6 +155,16 @@ test('the hold marker is a recognized operational marker that is kept visible', 
     detectMalformedOperationalMarker(`${holdBody()}\n\nand some more text`),
     '<!-- idd-hold:',
   );
+  // An identifier that closes the HTML comment early is not a hold marker to
+  // the registry either, matching renderHoldMarker and parseHoldMarker.
+  for (const early of [
+    `<!-- idd-hold: actor--> ${CLAIM} ${TS} -->`,
+    `<!-- idd-hold: ${AGENT} <!--claim ${TS} -->`,
+    `<!-- idd-hold: ${AGENT} ${CLAIM}--> ${TS} -->`,
+  ]) {
+    assert.equal(operationalMarkerPrefix(early), null, early);
+    assert.equal(detectMalformedOperationalMarker(early), null, early);
+  }
   assert.equal(MARKER_HIDE_POLICY.get('<!-- idd-hold:')?.policy, 'excluded');
   // A worker posts it as itself, like activation-nonce, so its author is an
   // IDD agent login.
