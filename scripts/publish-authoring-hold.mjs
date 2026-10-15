@@ -34,6 +34,7 @@ import {
   looksLikeOwnerMarker,
   sameIssueRef,
 } from './authoring-owner-provenance.mjs';
+import { isOutdatedMinimized } from './authoring-set-members.mjs';
 import { resolveBundleRoot } from './bundle-root.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
@@ -94,6 +95,14 @@ const PUBLISH_AUTHORING_HOLD_FLAG_SPEC = {
   '--help': { type: 'boolean', short: 'h' },
 };
 const REPO_TOKEN_PATTERN = /^[A-Za-z0-9_.-]+$/;
+/** The transitions an exact-token publication-intent record may make. Declared
+ * above the entry-point call, so it is initialized when the CLI runs. */
+const INTENT_TRANSITIONS = {
+  pending: ['pending', 'member', 'cleanup'],
+  member: ['cleanup'],
+  cleanup: ['abandoned'],
+  abandoned: [],
+};
 /** A record that may have been posted but could not be verified: replay the
  * journal to learn its state. */
 const JOURNAL_STATE_UNCERTAIN = 'uncertain: replay the journal';
@@ -385,13 +394,15 @@ roadmap's Tracks list stays a separate reviewed edit.
      open linked pull request, whose trusted unedited owner-marker log
      replays to one open generation (every marker follows the field rules
      of its mode; no release in progress, no second opener, no reuse of a
-     completed set; a resume keeps a release in progress). The journal
-     must also hold the anchor's own trusted state=member publication-intent
-     record, matching the anchor's own publication line on target, anchor,
-     set, session and token, which is how the set's originating hold is
-     verified. Otherwise the report is a refusal and nothing is written.
-     The command does not serialize concurrent calls of one session, so
-     publish the children of a set one call at a time;
+     completed set; a resume keeps a release in progress). The token of
+     the anchor's own publication line must also replay to state=member in
+     the journal (trusted, unedited records that match the line on target,
+     anchor, set, session and token, in order, with a conflicting or
+     out-of-order record failing closed), which is how the set's
+     originating hold is verified. Otherwise the report is a refusal and
+     nothing is written. The command does not serialize concurrent calls
+     of one session, so publish the children of a set one call at a time
+     (preventive; no observed incident yet);
   4. lint that exact body with audit-authored-issue --new-issue (a
      non-ready bucket adds the expected bucket and one label flag per
      configured label; a carrier adds one label flag per configured label
@@ -879,6 +890,18 @@ export function resolveAnchorGeneration(input) {
     if (edited !== null) {
       return { problem: edited };
     }
+    // A read that omits the minimization state, or a minimized comment without
+    // its reason, is incomplete evidence and fails closed.
+    if (
+      typeof comment.isMinimized !== 'boolean' ||
+      (comment.isMinimized &&
+        (typeof comment.minimizedReason !== 'string' ||
+          comment.minimizedReason.trim() === ''))
+    ) {
+      return {
+        problem: `owner marker ${comment.id} has no readable minimization state`,
+      };
+    }
     const time = Date.parse(comment.createdAt);
     if (!Number.isFinite(time)) {
       return {
@@ -909,6 +932,7 @@ export function resolveAnchorGeneration(input) {
       session: parsed.session,
       createdAt: comment.createdAt,
       bodySha256: parsed.bodySha256,
+      outdated: isOutdatedMinimized(comment),
     });
     if ('problem' in next) {
       return next;
@@ -926,6 +950,14 @@ export function resolveAnchorGeneration(input) {
       problem: `the set of ${input.anchorRef} is being released, so a child cannot join it`,
     };
   }
+  // History that a sweep hid still counts, but the marker that carries the
+  // generation to now is never a hidden one: a latest marker minimized as
+  // outdated was disavowed, so it cannot prove an open generation.
+  if (open.latest.outdated) {
+    return {
+      problem: `the latest owner marker of ${input.anchorRef}, comment ${open.latest.id}, is minimized as outdated, so it cannot prove an open generation`,
+    };
+  }
   return {
     generation: {
       owner: open.owner,
@@ -936,16 +968,108 @@ export function resolveAnchorGeneration(input) {
   };
 }
 /**
+ * Replay the journal's records of one publication token (contract.md, "On
+ * resume, paginate the hold log and select the latest valid record for the
+ * exact token tuple; missing, conflicting, or out-of-order records fail
+ * closed"). Every record that carries the token must be written by a trusted
+ * author who is the actor it names, be unedited, and repeat the publication
+ * line's target, anchor, set and session and this journal. The records, in
+ * comment order, must run `pending` (no issue yet), `pending` with the
+ * issue, `member`, and only then `cleanup` and `abandoned`; the issue never
+ * changes once attached. The replay must end at `member` for the anchor.
+ * Returns a problem, or null.
+ */
+export function replayAnchorHold(input) {
+  const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
+  const intentToken = `${input.markerPrefix.toLowerCase()}-authoring-publication-intent:`;
+  const tokenField = `token=${input.publication.token}`;
+  const records = [];
+  for (const comment of input.comments) {
+    const lower = comment.body.toLowerCase();
+    if (!lower.includes(intentToken) || !comment.body.includes(tokenField)) {
+      continue;
+    }
+    const where = `publication-intent record ${comment.id} of the token`;
+    const author = comment.authorLogin.trim().toLowerCase();
+    if (!trustedSet.has(author)) {
+      return `${where} is written by ${comment.authorLogin}, who is not a trusted marker actor`;
+    }
+    if (inspectLastEditedAt(comment) !== null) {
+      return `${where} was edited after posting, or its edit state is unreadable`;
+    }
+    const intent = parseAuthoringPublicationIntentComment(
+      comment.body,
+      input.markerPrefix,
+    );
+    if (intent === null || intent.token !== input.publication.token) {
+      return `${where} does not parse`;
+    }
+    if (
+      intent.target !== input.publication.target ||
+      intent.anchor !== input.publication.anchor ||
+      intent.set !== input.publication.set ||
+      intent.session !== input.publication.session ||
+      !sameIssueRef(intent.journal, input.journalRef) ||
+      intent.actor.toLowerCase() !== author
+    ) {
+      return `${where} conflicts with the anchor's publication line, this journal, or its own author`;
+    }
+    const time = Date.parse(comment.createdAt);
+    if (!Number.isFinite(time)) {
+      return `${where} has a creation time that cannot be read`;
+    }
+    records.push({
+      id: comment.id,
+      time,
+      state: intent.state,
+      issue: intent.issue,
+    });
+  }
+  if (records.length === 0) {
+    return `no publication-intent record of the anchor's token is in the journal ${input.journalRef}`;
+  }
+  records.sort((a, b) => a.time - b.time || a.id - b.id);
+  let state = null;
+  let attached = null;
+  for (const record of records) {
+    if (state === null) {
+      if (record.state !== 'pending' || record.issue.toLowerCase() !== 'none') {
+        return `the first record of the token, comment ${record.id}, is not the pending record without an issue`;
+      }
+    } else if (!(INTENT_TRANSITIONS[state] ?? []).includes(record.state)) {
+      return `record ${record.id} moves the token from ${state} to ${record.state}, which is out of order`;
+    }
+    if (record.state === 'member' && attached === null) {
+      return `record ${record.id} makes the token a member before any record attached its issue`;
+    }
+    if (record.issue.toLowerCase() === 'none') {
+      if (attached !== null || record.state !== 'pending') {
+        return `record ${record.id} drops the issue of the token after it was attached`;
+      }
+    } else if (attached === null) {
+      if (!sameIssueRef(record.issue, input.anchorRef)) {
+        return `record ${record.id} attaches the token to ${record.issue}, not the anchor ${input.anchorRef}`;
+      }
+      attached = record.issue;
+    } else if (!sameIssueRef(record.issue, attached)) {
+      return `record ${record.id} changes the issue of the token from ${attached} to ${record.issue}`;
+    }
+    state = record.state;
+  }
+  if (state !== 'member') {
+    return `the latest record of the anchor's token is ${state}, not member`;
+  }
+  return null;
+}
+/**
  * Verify the originating Stage 1 hold of a child's anchor (#4251). This command
  * records a set in `issueAuthoring.journalIssue`, so an anchor it can extend has
- * its own publication-intent record there: trusted, written by the actor it
- * names, naming the anchor and this journal, carrying the same full
- * target/anchor/set/session/token tuple as the anchor's own publication line
- * (self-anchored, in the open generation's set), and still `state=member` (the
- * latest record of its token). An anchor whose hold is elsewhere, whose body
- * carries no publication line, or whose record was never made a member, is
- * refused, so a child's records never land in a log the set's recovery would
- * not replay. Returns a problem, or null.
+ * its own publication-intent records there: the replay of the token in the
+ * anchor's own publication line (self-anchored, in the open generation's set)
+ * must end at `state=member` (see {@link replayAnchorHold}). An anchor whose
+ * hold is elsewhere, whose body carries no publication line, or whose records
+ * were never made a member, is refused, so a child's records never land in a
+ * log the set's recovery would not replay. Returns a problem, or null.
  */
 function checkAnchorHold(input) {
   const publication = parseAuthoringPublicationComment(
@@ -961,49 +1085,27 @@ function checkAnchorHold(input) {
   if (publication.set !== input.set) {
     return `the authoring-publication line of ${input.anchorRef} names set ${publication.set}, not the open generation's set ${input.set}`;
   }
-  let rows;
+  let comments;
   try {
-    rows = ghApiJson(
-      `repos/${input.journal.owner}/${input.journal.repo}/issues/${input.journal.number}/comments`,
-      { paginate: true },
+    comments = fetchProvenanceCommentsGraphql(
+      input.journal.owner,
+      input.journal.repo,
+      input.journal.number,
     );
   } catch (error) {
     return `the journal ${input.journal.ref} cannot be read, so the hold of the anchor ${input.anchorRef} is not verified: ${messageOf(error)}`;
   }
-  if (!Array.isArray(rows)) {
-    return `the journal ${input.journal.ref} comments are not readable, so the hold of the anchor ${input.anchorRef} is not verified`;
-  }
-  const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
-  // The latest record of each publication token, in comment order.
-  const latestByToken = new Map();
-  for (const row of rows) {
-    const comment = row;
-    const author = String(comment.user?.login ?? '').toLowerCase();
-    if (!trustedSet.has(author) || typeof comment.body !== 'string') {
-      continue;
-    }
-    const intent = parseAuthoringPublicationIntentComment(
-      comment.body,
-      input.markerPrefix,
-    );
-    if (
-      intent !== null &&
-      intent.target === publication.target &&
-      intent.anchor === publication.anchor &&
-      intent.set === publication.set &&
-      intent.session === publication.session &&
-      intent.token === publication.token &&
-      intent.actor.toLowerCase() === author &&
-      sameIssueRef(intent.issue, input.anchorRef) &&
-      sameIssueRef(intent.journal, input.journal.ref)
-    ) {
-      latestByToken.set(intent.token, intent.state);
-    }
-  }
-  if (![...latestByToken.values()].includes('member')) {
-    return `the originating hold of the anchor ${input.anchorRef} is not in the journal ${input.journal.ref}: no trusted state=member publication-intent record names it under set ${input.set}`;
-  }
-  return null;
+  const problem = replayAnchorHold({
+    comments,
+    publication,
+    anchorRef: input.anchorRef,
+    journalRef: input.journal.ref,
+    markerPrefix: input.markerPrefix,
+    trusted: input.trusted,
+  });
+  return problem === null
+    ? null
+    : `the originating hold of the anchor ${input.anchorRef} is not verified in the journal ${input.journal.ref}: ${problem}`;
 }
 function sameGeneration(a, b) {
   return a.owner === b.owner && a.set === b.set && a.session === b.session;

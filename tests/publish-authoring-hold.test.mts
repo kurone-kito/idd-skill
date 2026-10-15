@@ -24,6 +24,7 @@ import {
   injectPublicationLine,
   markerPostSentNothing,
   parseJournalReference,
+  replayAnchorHold,
   resolveAnchorGeneration,
   resolvePublishLabels,
 } from '../src/scripts/publish-authoring-hold.mts';
@@ -2542,6 +2543,17 @@ function journalIntentText(
   ].join('\n');
 }
 
+/** The anchor's records as the helper writes them: pending, attached, member. */
+function holdSequence(
+  fields: Parameters<typeof journalIntentText>[1] = {},
+): string[] {
+  return [
+    journalIntentText('pending', { ...fields, issue: 'none' }),
+    journalIntentText('pending', fields),
+    journalIntentText('member', fields),
+  ];
+}
+
 function seedAnchor(
   fixture: Fixture,
   options: {
@@ -2558,7 +2570,11 @@ function seedAnchor(
 ): string {
   const body = options.body ?? anchorBodyText();
   const markers = options.markers ?? [ownerMarkerText('acquire')];
-  const hold = options.journalRecords ?? [journalIntentText('member')];
+  const hold = options.journalRecords ?? [
+    journalIntentText('pending', { issue: 'none' }),
+    journalIntentText('pending'),
+    journalIntentText('member'),
+  ];
   fixture.seed((stored) => {
     for (const [index, text] of hold.entries()) {
       stored.comments.push({
@@ -2614,6 +2630,9 @@ function provenanceComment(
     authorLogin?: string;
     lastEditedAt?: string | null;
     body?: string;
+    isMinimized?: boolean;
+    minimizedReason?: string | null;
+    omitMinimization?: boolean;
   } = {},
 ): AuthoringOwnerProvenanceComment {
   const createdAt = new Date(Date.UTC(2026, 9, 12, 0, id)).toISOString();
@@ -2624,6 +2643,12 @@ function provenanceComment(
     createdAt,
     updatedAt: createdAt,
     lastEditedAt: overrides.lastEditedAt ?? null,
+    ...(overrides.omitMinimization === true
+      ? {}
+      : {
+          isMinimized: overrides.isMinimized ?? false,
+          minimizedReason: overrides.minimizedReason ?? null,
+        }),
   };
 }
 
@@ -2952,6 +2977,230 @@ test('anchor replay: an edited, unparseable, untrusted or mistargeted marker is 
     }),
   ]);
   assert.ok('generation' in mixedCase, JSON.stringify(mixedCase));
+});
+
+test('anchor replay: minimization evidence is read, and a hidden latest marker proves nothing', () => {
+  // History that a sweep hid still counts when a visible marker follows it.
+  const swept = replay([
+    provenanceComment(
+      1,
+      'acquire',
+      {},
+      {
+        isMinimized: true,
+        minimizedReason: 'OUTDATED',
+      },
+    ),
+    provenanceComment(2, 'heartbeat'),
+  ]);
+  assert.ok('generation' in swept, JSON.stringify(swept));
+  assert.equal(swept.generation.latest.mode, 'heartbeat');
+
+  // The marker that carries the generation to now is never a hidden one.
+  const hidden = replay([
+    provenanceComment(
+      1,
+      'acquire',
+      {},
+      {
+        isMinimized: true,
+        minimizedReason: 'OUTDATED',
+      },
+    ),
+  ]);
+  assert.ok('problem' in hidden);
+  assert.match(hidden.problem, /minimized as outdated/);
+
+  // Unreadable minimization evidence fails closed.
+  for (const overrides of [
+    { omitMinimization: true },
+    { isMinimized: true, minimizedReason: null },
+    { isMinimized: true, minimizedReason: '  ' },
+  ]) {
+    const unreadable = replay([provenanceComment(1, 'acquire', {}, overrides)]);
+    assert.ok('problem' in unreadable, JSON.stringify(overrides));
+    assert.match(unreadable.problem, /no readable minimization state/);
+  }
+});
+
+function intentComment(
+  id: number,
+  state: string,
+  fields: Parameters<typeof journalIntentText>[1] = {},
+  overrides: {
+    authorLogin?: string;
+    lastEditedAt?: string | null;
+    body?: string;
+  } = {},
+): AuthoringOwnerProvenanceComment {
+  const createdAt = new Date(Date.UTC(2026, 9, 12, 0, id)).toISOString();
+  return {
+    id,
+    authorLogin: overrides.authorLogin ?? 'kurone-kito',
+    body: overrides.body ?? journalIntentText(state, fields),
+    createdAt,
+    updatedAt: createdAt,
+    lastEditedAt: overrides.lastEditedAt ?? null,
+    isMinimized: false,
+    minimizedReason: null,
+  };
+}
+
+function holdReplay(comments: AuthoringOwnerProvenanceComment[]) {
+  return replayAnchorHold({
+    comments,
+    publication: {
+      target: 'target-anchor',
+      anchor: 'target-anchor',
+      set: ANCHOR_SET,
+      session: ANCHOR_SESSION,
+      token: 'token-anchor',
+    },
+    anchorRef: ANCHOR_REF,
+    journalRef: 'o/r#2674',
+    markerPrefix: 'idd-skill',
+    trusted: ['kurone-kito'],
+  });
+}
+
+test('hold replay: the exact token must run pending, attached, member without a gap', () => {
+  const sequence = [
+    intentComment(1, 'pending', { issue: 'none' }),
+    intentComment(2, 'pending'),
+    intentComment(3, 'member'),
+  ];
+  assert.equal(holdReplay(sequence), null);
+  // Records of other tokens and unrelated comments do not matter.
+  assert.equal(
+    holdReplay([
+      intentComment(10, 'member', { token: 'token-other' }),
+      { ...intentComment(11, 'member'), body: 'a plain comment' },
+      ...sequence,
+    ]),
+    null,
+  );
+  // A later cleanup and abandoned pair leaves the token not a member.
+  assert.match(
+    holdReplay([
+      ...sequence,
+      intentComment(4, 'cleanup'),
+      intentComment(5, 'abandoned'),
+    ]) ?? '',
+    /is abandoned, not member/,
+  );
+  assert.match(holdReplay([]) ?? '', /no publication-intent record/);
+  assert.match(
+    holdReplay(sequence.slice(0, 2)) ?? '',
+    /is pending, not member/,
+  );
+});
+
+test('hold replay: a missing, repeated or reordered record fails closed', () => {
+  // member straight after the pending record without an issue
+  assert.match(
+    holdReplay([
+      intentComment(1, 'pending', { issue: 'none' }),
+      intentComment(2, 'member'),
+    ]) ?? '',
+    /before any record attached its issue/,
+  );
+  // the history does not start at the pending record
+  assert.match(
+    holdReplay([intentComment(1, 'member')]) ?? '',
+    /not the pending record without an issue/,
+  );
+  // member, cleanup, then member again
+  assert.match(
+    holdReplay([
+      intentComment(1, 'pending', { issue: 'none' }),
+      intentComment(2, 'pending'),
+      intentComment(3, 'member'),
+      intentComment(4, 'cleanup'),
+      intentComment(5, 'member'),
+    ]) ?? '',
+    /from cleanup to member, which is out of order/,
+  );
+  // a pending record after member
+  assert.match(
+    holdReplay([
+      intentComment(1, 'pending', { issue: 'none' }),
+      intentComment(2, 'pending'),
+      intentComment(3, 'member'),
+      intentComment(4, 'pending'),
+    ]) ?? '',
+    /from member to pending, which is out of order/,
+  );
+  // the issue is dropped, or changed, once attached
+  assert.match(
+    holdReplay([
+      intentComment(1, 'pending', { issue: 'none' }),
+      intentComment(2, 'pending'),
+      intentComment(3, 'pending', { issue: 'none' }),
+    ]) ?? '',
+    /drops the issue/,
+  );
+  assert.match(
+    holdReplay([
+      intentComment(1, 'pending', { issue: 'none' }),
+      intentComment(2, 'pending'),
+      intentComment(3, 'member', { issue: 'o/r#4001' }),
+    ]) ?? '',
+    /changes the issue of the token/,
+  );
+});
+
+test('hold replay: an edited, untrusted, mismatched or unparseable record of the token fails closed', () => {
+  const valid = [
+    intentComment(1, 'pending', { issue: 'none' }),
+    intentComment(2, 'pending'),
+  ];
+  // A pending record edited into member is not an append-only transition.
+  for (const lastEditedAt of ['2026-10-12T01:00:00Z', 'not-a-time']) {
+    const edited = holdReplay([
+      ...valid,
+      intentComment(
+        3,
+        'member',
+        {},
+        {
+          lastEditedAt,
+        },
+      ),
+    ]);
+    assert.match(
+      edited ?? '',
+      /edited after posting|edit state/,
+      String(lastEditedAt),
+    );
+  }
+  assert.match(
+    holdReplay([
+      ...valid,
+      intentComment(3, 'member', {}, { authorLogin: 'someone-else' }),
+    ]) ?? '',
+    /not a trusted marker actor/,
+  );
+  assert.match(
+    holdReplay([
+      ...valid,
+      intentComment(3, 'member', { actor: 'someone-else' }),
+    ]) ?? '',
+    /conflicts with the anchor's publication line/,
+  );
+  assert.match(
+    holdReplay([
+      ...valid,
+      intentComment(
+        3,
+        'member',
+        {},
+        {
+          body: '<!-- idd-skill-authoring-publication-intent: token=token-anchor -->',
+        },
+      ),
+    ]) ?? '',
+    /does not parse/,
+  );
 });
 
 test('CLI: a roadmap or child usage error exits 2 before any gh call', () => {
@@ -3288,8 +3537,8 @@ test('CLI: a child apply heartbeats the anchor, joins its set and never edits th
       ),
     );
     assert.doesNotMatch(childMarker ?? '', /owner=owner-anchor;/);
-    // The first journal record is the anchor's own, seeded by the test.
-    const records = journalRecords(fixture).slice(1);
+    // The first three journal records are the anchor's own, seeded by the test.
+    const records = journalRecords(fixture).slice(3);
     assert.equal(records.length, 3);
     for (const record of records) {
       assert.match(
@@ -3399,72 +3648,74 @@ const ANCHOR_REFUSALS: [string, Parameters<typeof seedAnchor>[1], RegExp][] = [
     /reuses set set-anchor/,
   ],
   [
-    'an anchor whose journal holds no member record',
+    'an anchor whose journal holds no record of its token',
     { journalRecords: [] },
-    /originating hold of the anchor o\/r#4000 is not in the journal/,
+    /originating hold of the anchor o\/r#4000 is not verified in the journal/,
   ],
   [
     'an anchor whose journal record is still pending',
-    { journalRecords: [journalIntentText('pending')] },
-    /originating hold/,
+    { journalRecords: holdSequence().slice(0, 2) },
+    /is pending, not member/,
   ],
   [
     'an anchor whose journal record later moved to cleanup',
     {
+      journalRecords: [...holdSequence(), journalIntentText('cleanup')],
+    },
+    /is cleanup, not member/,
+  ],
+  [
+    'an anchor whose journal history returns to member after cleanup',
+    {
       journalRecords: [
-        journalIntentText('member'),
+        ...holdSequence(),
         journalIntentText('cleanup'),
+        journalIntentText('member'),
       ],
     },
-    /originating hold/,
+    /out of order/,
   ],
   [
     'an anchor whose journal record names another set',
-    { journalRecords: [journalIntentText('member', { set: 'set-other' })] },
-    /originating hold/,
+    { journalRecords: holdSequence({ set: 'set-other' }) },
+    /conflicts with the anchor's publication line/,
   ],
   [
-    'an anchor whose journal record names another issue',
-    {
-      journalRecords: [journalIntentText('member', { issue: 'o/r#4001' })],
-    },
-    /originating hold/,
+    'an anchor whose journal records attach another issue',
+    { journalRecords: holdSequence({ issue: 'o/r#4001' }) },
+    /attaches the token to o\/r#4001/,
   ],
   [
     'an anchor whose journal record is not self-anchored',
-    {
-      journalRecords: [journalIntentText('member', { anchor: 'o/r#3999' })],
-    },
-    /originating hold/,
+    { journalRecords: holdSequence({ anchor: 'o/r#3999' }) },
+    /conflicts with the anchor's publication line/,
   ],
   [
     'an anchor whose journal record has another session',
     {
-      journalRecords: [
-        journalIntentText('member').replace(
-          `session=${ANCHOR_SESSION}`,
-          'session=session-other',
-        ),
-      ],
+      journalRecords: holdSequence().map((record, index) =>
+        index === 2
+          ? record.replace(`session=${ANCHOR_SESSION}`, 'session=session-other')
+          : record,
+      ),
     },
-    /originating hold/,
-  ],
-  [
-    'an anchor whose journal record has another token',
-    { journalRecords: [journalIntentText('member', { token: 'token-other' })] },
-    /originating hold/,
+    /conflicts with the anchor's publication line/,
   ],
   [
     'an anchor whose journal record has another target',
     {
-      journalRecords: [
-        journalIntentText('member').replace(
-          'target=target-anchor',
-          'target=target-other',
-        ),
-      ],
+      journalRecords: holdSequence().map((record, index) =>
+        index === 2
+          ? record.replace('target=target-anchor', 'target=target-other')
+          : record,
+      ),
     },
-    /originating hold/,
+    /conflicts with the anchor's publication line/,
+  ],
+  [
+    'an anchor whose journal records carry another token',
+    { journalRecords: holdSequence({ token: 'token-other' }) },
+    /no publication-intent record of the anchor's token/,
   ],
   [
     'an anchor whose body has no publication line',
@@ -3487,17 +3738,13 @@ const ANCHOR_REFUSALS: [string, Parameters<typeof seedAnchor>[1], RegExp][] = [
   ],
   [
     'an anchor whose journal record names an actor other than its author',
-    {
-      journalRecords: [journalIntentText('member', { actor: 'someone-else' })],
-    },
-    /originating hold/,
+    { journalRecords: holdSequence({ actor: 'someone-else' }) },
+    /conflicts with the anchor's publication line/,
   ],
   [
     'an anchor whose journal record names another journal',
-    {
-      journalRecords: [journalIntentText('member', { journal: 'o/r#9999' })],
-    },
-    /originating hold/,
+    { journalRecords: holdSequence({ journal: 'o/r#9999' }) },
+    /conflicts with the anchor's publication line/,
   ],
   [
     'an anchor with an active claim',
@@ -3564,8 +3811,8 @@ test('CLI: a failed anchor heartbeat is a recovery hold on the held, journalled 
       ['status:authoring'],
     );
     // The record is attached but not a member, and no owner marker was posted.
-    // The first journal record is the anchor's own, seeded by the test.
-    const records = journalRecords(fixture).slice(1);
+    // The first three journal records are the anchor's own, seeded by the test.
+    const records = journalRecords(fixture).slice(3);
     assert.equal(records.length, 2);
     assert.match(
       records[1] ?? '',
