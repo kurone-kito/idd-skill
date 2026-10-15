@@ -910,7 +910,28 @@ in this preamble, since the fallback differs per helper.
   of any kind, so a local six-of-seven pass can never be mistaken for a
   live `--issue <n>` verdict; `duplicate_or_superseded` always reports
   `"not_evaluated"`, never omitted (referenced in
-  [kurone-kito/idd-skill#2102](https://github.com/kurone-kito/idd-skill/issues/2102))
+  [kurone-kito/idd-skill#2102](https://github.com/kurone-kito/idd-skill/issues/2102)).
+  `--verbose` adds each reported check's `evidence` string to the live
+  `--issue` output (and to the local `--body-file` / `--stdin` output), and
+  the default omits `evidence`. Without it, the `--issue` output's
+  `"failedCheck": "autonomy"` names no reason. When `autonomy` fails on the
+  body marker or the title prefix,
+  clearing the `status:blocked-by-human` label clears neither trigger.
+  Removing the label can leave `autonomy` failing (observed 2026-10-14 on
+  `kurone-kito/idd-skill#4239`; the trigger was not recorded).
+  That label name is the default; `labels.blockedByHumanLabelName` can
+  change it. The body marker is
+  `<!-- idd-skill-authoring-bucket: blocked-by-human -->`,
+  read only from an HTML comment outside code. The title prefix is
+  `blocked-by-human:`, matched case-insensitively, including the configured
+  label's local-name stem. Removing either one means editing the issue body
+  or title, and a worker must not make that edit to clear a trigger
+  (preventive; no observed incident yet). The blocking-label check, which
+  covers `status:needs-decision` too, runs first within the autonomy check
+  and returns early, so removing a blocking label can expose a marker,
+  title, or body-text failure that it had hidden. A body-text failure has no
+  marker or title to remove, and `--verbose` names which body-text check
+  fired.
 - `scripts/suitability-close-execute.mjs` for the A4.5 high-confidence
   duplicate/superseded coordination-close path (referenced in
   [kurone-kito/idd-skill#1485](https://github.com/kurone-kito/idd-skill/issues/1485));
