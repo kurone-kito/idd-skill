@@ -516,6 +516,105 @@ test("a reply that carries the pending marker answers no regular comment, a huma
   );
 });
 
+test('a pending reply keeps a trusted machine disposition from clearing its advisory sticky in both summaries (#4306)', () => {
+  const SHA = 'a'.repeat(40);
+  const CR = 'coderabbitai[bot]';
+  const comments = (
+    dispositionBody: string,
+    sticky: Record<string, unknown>,
+  ) => [
+    {
+      id: '777',
+      author: { login: CR },
+      createdAt: '2026-05-12T00:00:00Z',
+      updatedAt: '2026-05-12T00:00:00Z',
+      lastEditedAt: null,
+      ...sticky,
+    },
+    {
+      id: '778',
+      author: { login: 'idd-bot' },
+      createdAt: '2026-05-12T00:30:00Z',
+      updatedAt: '2026-05-12T00:30:00Z',
+      lastEditedAt: null,
+      body: dispositionBody,
+    },
+  ];
+  const counts = (dispositionBody: string, sticky: Record<string, unknown>) => {
+    const input = comments(dispositionBody, sticky);
+    const options = {
+      iddAgentLogins: [] as string[],
+      trustedMarkerLogins: ['idd-bot'],
+      advisoryBotLogins: [CR],
+      prHeadSha: SHA,
+    };
+    return {
+      evidence: summarizeDispositionEvidenceForGate(
+        { comments: input, threads: [] },
+        options,
+      ).missingRegularCommentCount,
+      unreplied: summarizeRegularCommentsForGate(input, {
+        ...options,
+        threads: [],
+      }).count,
+    };
+  };
+  const notice = {
+    body: '> [!WARNING]\n> ## Review limit reached\n> rate limited',
+  };
+  const noticeDisposition = `**Rejected** — ${CR} did not review HEAD ${SHA} (review limit reached / rate limited); this is not a completed review (source: #issuecomment-777)`;
+  const summary = {
+    body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n\n## Summary by CodeRabbit\n\nNo issues.',
+  };
+  const summaryDisposition = `**Accepted** — ${CR} summary walkthrough at HEAD ${SHA}`;
+  const pending = '\n\n**Awaiting maintainer decision** — also open';
+
+  for (const [label, sticky, disposition] of [
+    ['notice', notice, noticeDisposition],
+    ['summary', summary, summaryDisposition],
+  ] as const) {
+    // Control: the settled machine disposition clears its sticky in both.
+    assert.deepEqual(
+      counts(disposition, sticky),
+      { evidence: 0, unreplied: 0 },
+      `${label} control`,
+    );
+    // A pending paragraph on the same body clears neither.
+    const withPending = counts(disposition + pending, sticky);
+    assert.ok(withPending.evidence >= 1, `${label} evidence`);
+    assert.ok(withPending.unreplied >= 1, `${label} unreplied`);
+  }
+});
+
+test('a pending reply does not advance the last-reply watermark, so an earlier comment stays unreplied (#4306)', () => {
+  const unreplied = (replyBody: string) =>
+    summarizeRegularCommentsForGate(
+      [
+        {
+          id: '1',
+          author: { login: 'reviewer-a' },
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+          body: 'Please address this.',
+          lastEditedAt: null,
+        },
+        {
+          id: '2',
+          author: { login: 'idd-bot' },
+          createdAt: '2026-05-12T01:00:00Z',
+          updatedAt: '2026-05-12T01:00:00Z',
+          body: replyBody,
+          lastEditedAt: null,
+        },
+      ],
+      { iddAgentLogins: ['idd-bot'], trustedMarkerLogins: ['idd-bot'] },
+    ).count;
+  assert.equal(unreplied('**Accepted** — fixed in abc1234'), 0);
+  assert.equal(unreplied('thanks, fixed'), 0);
+  assert.equal(unreplied(PENDING_PARTLY_ACCEPTED), 1);
+  assert.equal(unreplied('**Awaiting maintainer decision** — open'), 1);
+});
+
 test('selectAdvisoryThreadCommentIdsEditedAfterDisposition: a pending reply anchors no disposition (#4306)', () => {
   const thread = (replyBody: string) => ({
     id: 'RT_4306',

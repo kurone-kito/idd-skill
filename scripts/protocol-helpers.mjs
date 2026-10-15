@@ -4073,9 +4073,12 @@ export const BOT_WORDING_CLASSIFIERS = [
 // rejection of reviewer feedback is excluded.
 export function isNonReviewNoticeDisposition(comment) {
   const body = (comment.body ?? '').trimStart();
+  // #4306: a machine disposition that also carries the pending-decision marker
+  // is an open question, not a settled notice rejection.
   return (
     DISPOSITION_REJECTED_PREFIX_RE.test(body) &&
-    /\bdid not review HEAD\b/i.test(body)
+    /\bdid not review HEAD\b/i.test(body) &&
+    !hasPendingDecisionMarker(body)
   );
 }
 const NON_REVIEW_NOTICE_SOURCE_ID_RE = /\(source:\s*#issuecomment-(\d+)\)/i;
@@ -4221,9 +4224,11 @@ export function isReviewSummaryComment(body) {
 // miscredited (which would under-post and strand the gate).
 export function isReviewSummaryDisposition(comment) {
   const body = (comment.body ?? '').trimStart();
+  // #4306: as for a notice disposition, a pending marker makes it not settled.
   return (
     DISPOSITION_ACCEPTED_PREFIX_RE.test(body) &&
-    /\bsummary walkthrough\b/i.test(body)
+    /\bsummary walkthrough\b/i.test(body) &&
+    !hasPendingDecisionMarker(body)
   );
 }
 // The stable identity token of an advisory bot, used to attribute a non-review
@@ -6751,6 +6756,11 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
       isIddOperationalComment(comment) ||
       !iddAgentLogins.has(comment.authorLogin)
     ) {
+      return latestTimestamp;
+    }
+    // #4306: a reply that leaves a decision open answers nothing, so it never
+    // advances the watermark that clears earlier comments.
+    if (hasPendingDecisionMarker(comment.body)) {
       return latestTimestamp;
     }
     // #3249: an edited or edit-state-unresolved disposition must remain in

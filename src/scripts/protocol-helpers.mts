@@ -5493,9 +5493,12 @@ export function isNonReviewNoticeDisposition(comment: {
   body?: string | null;
 }): boolean {
   const body = (comment.body ?? '').trimStart();
+  // #4306: a machine disposition that also carries the pending-decision marker
+  // is an open question, not a settled notice rejection.
   return (
     DISPOSITION_REJECTED_PREFIX_RE.test(body) &&
-    /\bdid not review HEAD\b/i.test(body)
+    /\bdid not review HEAD\b/i.test(body) &&
+    !hasPendingDecisionMarker(body)
   );
 }
 
@@ -5659,9 +5662,11 @@ export function isReviewSummaryDisposition(comment: {
   body?: string | null;
 }): boolean {
   const body = (comment.body ?? '').trimStart();
+  // #4306: as for a notice disposition, a pending marker makes it not settled.
   return (
     DISPOSITION_ACCEPTED_PREFIX_RE.test(body) &&
-    /\bsummary walkthrough\b/i.test(body)
+    /\bsummary walkthrough\b/i.test(body) &&
+    !hasPendingDecisionMarker(body)
   );
 }
 
@@ -8543,6 +8548,11 @@ export function summarizeRegularCommentsForGate(
       isIddOperationalComment(comment) ||
       !iddAgentLogins.has(comment.authorLogin)
     ) {
+      return latestTimestamp;
+    }
+    // #4306: a reply that leaves a decision open answers nothing, so it never
+    // advances the watermark that clears earlier comments.
+    if (hasPendingDecisionMarker(comment.body)) {
       return latestTimestamp;
     }
     // #3249: an edited or edit-state-unresolved disposition must remain in
