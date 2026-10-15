@@ -94,7 +94,7 @@ export const CARRIER_RELEASE_PLAN = [
 const CARRIER_READ_ATTEMPTS = 3;
 const CARRIER_SWEEP_DEADLINE_MS = 300_000;
 const CARRIER_HELD_NEXT_ACTION =
-  "A person's release is required. Both labels stay in place, and the release, release-guard and heartbeat markers already posted stay for that release to reuse.";
+  "A person's release is required. The labels are left in place, and any release, release-guard, or heartbeat marker already posted stays for that release to reuse.";
 const CARRIER_RECOVERY_NEXT_ACTION =
   "Replay the carrier's owner-marker log and the journal's publication-intent log before any release. Do not release from this report.";
 /** Heartbeat coalescing: only these modes may be reused (contract.md). */
@@ -1755,7 +1755,7 @@ function runCarrierAudit(input, bodyFile, extra) {
 /** Preconditions (a) to (e) of the carrier creation-hold exception, in order.
  * Returns the acquire marker's body digest, which the removal must keep. */
 function checkCarrierPreconditions(input, scratch, snapshot) {
-  const { body, labels } = snapshot;
+  const { body } = snapshot;
   // (a) no roadmap-id marker outside code: read on the code-masked body.
   const masked = maskMarkdownCodeRegionsPreservingPositions(body);
   if (
@@ -1867,6 +1867,17 @@ function checkCarrierPreconditions(input, scratch, snapshot) {
       `audit-authored-issue --shape carrier did not pass: ${audit.failingIds.join(', ') || 'no verdict'}`,
     );
   }
+  // The body and the labels that (d) and (e) check are read now, after the
+  // slow checks above: a body edit or label change during them must not pass
+  // on the start-of-check snapshot.
+  const current = readCarrierSnapshot(input, 'precondition-body-digest');
+  if (sha256Hex(current.body) !== sha256Hex(body)) {
+    throw new CarrierReleaseStop(
+      'held',
+      'precondition-body-digest',
+      'the body changed while the preconditions ran',
+    );
+  }
   // (d) the body digest still equals the acquire marker's body-sha256.
   const log = readOwnerLog(input, 'precondition-body-digest');
   replayOrRecover(input, log, 'precondition-body-digest');
@@ -1902,10 +1913,10 @@ function checkCarrierPreconditions(input, scratch, snapshot) {
       'the acquire marker does not carry supersedes none and snapshot none',
     );
   }
-  // (e) both labels are present.
+  // (e) both labels are present, on the fresh read.
   if (
-    !hasLabel(labels, input.authoringOnlyLabel) ||
-    !hasLabel(labels, input.authoringLabel)
+    !hasLabel(current.labels, input.authoringOnlyLabel) ||
+    !hasLabel(current.labels, input.authoringLabel)
   ) {
     throw new CarrierReleaseStop(
       'held',
@@ -2103,26 +2114,41 @@ function removeAuthoringLabel(input, releaseId, acquireDigest) {
     readOwnerLogAfterWrite(input, 'label-removal-verify'),
     'label-removal-verify',
   );
-  // Restore every release label that is missing, the authoring-only label
-  // included, so no path leaves the carrier without its exclusion label.
-  const restoreNames = [input.authoringLabel, input.authoringOnlyLabel].filter(
-    (name) => !hasLabel(after.labels, name),
+  restoreReleaseLabels(
+    input,
+    after.labels,
+    `verification after the removal failed (${problems.join('; ')})`,
+    'label-removal-verify',
   );
-  try {
-    ghText([
-      'issue',
-      'edit',
-      String(input.number),
-      '--repo',
-      repoRef,
-      ...restoreNames.flatMap((name) => ['--add-label', name]),
-    ]);
-  } catch (error) {
-    throw new CarrierReleaseStop(
-      'recovery-hold',
-      'label-restore',
-      `the restore of the labels failed: ${messageOf(error)}`,
-    );
+}
+/** Restore the release labels that are missing, then verify the restore. The
+ * caller has replayed the owner log and found it ours. Always throws: `held`
+ * once both labels are back (a person's release is still needed), and
+ * `recovery-hold` when the restore fails or cannot be verified. */
+function restoreReleaseLabels(input, labels, problem, step) {
+  const repoRef = `${input.owner}/${input.repo}`;
+  // Every missing release label, the authoring-only label included, so no
+  // path leaves the carrier without its exclusion label.
+  const restoreNames = [input.authoringLabel, input.authoringOnlyLabel].filter(
+    (name) => !hasLabel(labels, name),
+  );
+  if (restoreNames.length > 0) {
+    try {
+      ghText([
+        'issue',
+        'edit',
+        String(input.number),
+        '--repo',
+        repoRef,
+        ...restoreNames.flatMap((name) => ['--add-label', name]),
+      ]);
+    } catch (error) {
+      throw new CarrierReleaseStop(
+        'recovery-hold',
+        'label-restore',
+        `the restore of the labels failed: ${messageOf(error)}`,
+      );
+    }
   }
   const restored = readCarrierAfterWrite(input, 'label-restore');
   if (
@@ -2137,8 +2163,8 @@ function removeAuthoringLabel(input, releaseId, acquireDigest) {
   }
   throw new CarrierReleaseStop(
     'held',
-    'label-removal-verify',
-    `verification after the removal failed (${problems.join('; ')}); the missing labels were restored`,
+    step,
+    `${problem}; both release labels are on the carrier`,
   );
 }
 /** A read after the label has been removed or reapplied. It is recovery-hold,
@@ -2396,10 +2422,13 @@ function runCarrierRelease(input, scratch, ctx) {
       'release-complete',
     ).every((owned) => owned.id !== guardId);
   if (drifted) {
-    throw new CarrierReleaseStop(
-      'recovery-hold',
-      'release-complete',
+    // The removal already landed, so restore what is missing while the owner
+    // log is ours, and stay held: no completion marker was posted.
+    restoreReleaseLabels(
+      input,
+      current.labels,
       'the carrier drifted after the label removal (body, labels, or a release marker); no completion marker was posted',
+      'release-complete',
     );
   }
   const snapshot = carrierSetSnapshot(owner, repo, number, acquireDigest);

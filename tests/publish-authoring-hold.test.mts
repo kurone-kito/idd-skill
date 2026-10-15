@@ -116,6 +116,7 @@ if (args[0] === 'issue' && args[1] === 'edit') {
     if (!state.keepLabelOnRemove) issue.labels = issue.labels.filter((name) => !removes.includes(name));
     if (state.dropAuthoringOnlyOnRemove) issue.labels = issue.labels.filter((name) => name !== 'status:authoring-only');
     if (state.failReadsAfterRemove) state.readsFail = true;
+    state.removed = true;
     if (state.dropReleaseAfterRemove) {
       state.comments = state.comments.filter((c) => !(c.issue === Number(args[2]) && /mode=release;/.test(c.body)));
     }
@@ -135,6 +136,11 @@ if (args[0] !== 'api') fail('unexpected gh call: ' + args.join(' '));
 if (args.includes('graphql')) {
   const queryText = args.find((arg) => arg.startsWith('query=')) || '';
   if (state.readsFail) fail('gh: HTTP 502 Bad Gateway (read)');
+  if (state.removed && state.mutateBodyOnSweep && queryText.includes('comments(first:100')) {
+    state.issues[${NEW_ISSUE}].body += state.mutateBodyOnSweep;
+    state.mutateBodyOnSweep = '';
+    save();
+  }
   if (queryText.includes('mutation')) {
     out({ data: { minimizeComment: { minimizedComment: { isMinimized: true } } } });
   }
@@ -349,6 +355,7 @@ function setup(
     authoringOnlyLabelName?: string;
     dropAuthoringOnlyOnRemove?: boolean;
     failReadsAfterRemove?: boolean;
+    mutateBodyOnSweep?: string;
   } = {},
 ): Fixture {
   const dir = mkdtempSync(join(tmpdir(), 'idd-publish-authoring-hold-test-'));
@@ -406,6 +413,8 @@ function setup(
       indexLagFull: options.indexLagFull === true,
       dropAuthoringOnlyOnRemove: options.dropAuthoringOnlyOnRemove === true,
       failReadsAfterRemove: options.failReadsAfterRemove === true,
+      mutateBodyOnSweep: options.mutateBodyOnSweep ?? '',
+      removed: false,
       readsFail: false,
       loadControlModule: pathToFileURL(
         join(REPO_ROOT, 'scripts/github-api-load-control.mjs'),
@@ -2315,6 +2324,31 @@ carrierLintTest(
       assert.equal(run.report.release.failedStep, 'release-preflight');
       assert.equal(
         writeKinds(run.fixture).includes('owner-marker:release'),
+        false,
+      );
+    } finally {
+      run.fixture.restore();
+    }
+  },
+);
+
+carrierLintTest(
+  'CLI: a body edit that lands after the removal is caught by the completion drift check, restores the labels, and reports held',
+  () => {
+    const run = releaseRun({
+      mutateBodyOnSweep: '\nedited after the removal\n',
+    });
+    try {
+      assert.equal(run.status, 0, JSON.stringify(run.report));
+      assert.equal(run.report.release.state, 'held');
+      assert.equal(run.report.release.failedStep, 'release-complete');
+      assert.equal(countOf(writeKinds(run.fixture), 'add-label'), 1);
+      assert.deepEqual([...labelsOf(run.fixture)].sort(), [
+        'status:authoring',
+        'status:authoring-only',
+      ]);
+      assert.equal(
+        writeKinds(run.fixture).includes('owner-marker:release-complete'),
         false,
       );
     } finally {
