@@ -40,11 +40,12 @@ stale-authoring age could not be checked.
 
 ## A0-C — Draft-carrier entry
 
-Before A0-T, A0 and any claim, run `discover-orphan-filter --draft-carriers`
-(not under `instructions-only`). If it exits non-zero or prints no
-`draftCarriers` field, stop the run, report the exit status and stderr, and
-claim nothing. List `draftCarriers.held` carriers whose `stale` is true in
-the run report; releasing them is out of scope.
+Before A0-T, A0 and any claim, run the profile-selected
+`discover-orphan-filter --draft-carriers` (not under `instructions-only`).
+If it exits non-zero or prints no `draftCarriers` field, stop the run,
+report the exit status and stderr, and claim nothing. List
+`draftCarriers.held` carriers whose `stale` is true in the run report;
+releasing them is out of scope.
 
 If `draftCarriers.ready` is non-empty, re-author at most one carrier, the
 lowest number that passes the actor check, by the Re-authoring steps of
