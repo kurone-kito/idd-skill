@@ -3167,9 +3167,10 @@ full two-stage contract. A reviewed draft that cannot be published that way
 is published as a [draft carrier](#draft-carrier) instead, and ends in local
 files only in the two cases that section lists. Removing the authoring label
 and starting the IDD execution loop both require the user's explicit
-hold-release request, except the narrow auto-release exceptions (the
-defer-source exception and the carrier creation-hold exception) documented
-in [Authoring hold and release](#authoring-hold-and-release) above; nothing
-else authorizes either.
+hold-release request, except the narrow defer-source auto-release exception
+documented in [Authoring hold and release](#authoring-hold-and-release)
+above; nothing else authorizes either. The carrier creation-hold exception
+in that section removes only a carrier's creation hold and authorizes no
+execution.
 
 [issue-authoring-review-input-schema]: https://kurone-kito.github.io/idd-skill/schemas/issue-authoring-review-input.schema.json
