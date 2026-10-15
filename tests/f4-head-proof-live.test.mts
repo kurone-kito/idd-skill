@@ -41,7 +41,12 @@ test('classifyClaimAssertResult: exit 0 with an owned keep verdict for this clai
 test('classifyClaimAssertResult: a non-zero exit with a routing verdict is not-owned', () => {
   for (const body of [
     routing({ state: 'owner_evidence_required', action: 'stop' }),
-    routing({ state: 'claim_lost', action: 'stop', active_claim: null }),
+    routing({
+      state: 'local_worktree_occupied',
+      action: 'stop',
+      active_claim: null,
+    }),
+    routing({ state: 'disputed', action: 'stop' }),
   ]) {
     assert.deepEqual(classifyClaimAssertResult(1, body, CLAIM), {
       status: 'not-owned',
@@ -63,6 +68,22 @@ test('classifyClaimAssertResult: output that is not a routing verdict is unreada
       classifyClaimAssertResult(exited, stdout, CLAIM).status,
       'unreadable',
       `${exited} ${stdout}`,
+    );
+  }
+});
+
+test('classifyClaimAssertResult: a non-zero exit with a state or action outside the routing vocabulary is unreadable', () => {
+  // Only the verdicts resume-claim-routing can print prove that the claim is
+  // not this session's; a value it never prints does not, and holds instead.
+  for (const body of [
+    routing({ state: 'future_state', action: 'stop' }),
+    routing({ state: 'disputed', action: 'teleport' }),
+    routing({ state: 42, action: 'stop' }),
+  ]) {
+    assert.equal(
+      classifyClaimAssertResult(1, body, CLAIM).status,
+      'unreadable',
+      body,
     );
   }
 });

@@ -120,6 +120,22 @@ function assertClaim(request, options) {
  * verdict (any `state` and `action`, including `owner_evidence_required`) is
  * `not-owned`. Anything else is `unreadable`.
  */
+/**
+ * The `state` and `action` values `resume-claim-routing` prints (its routing
+ * module assigns each one). A non-zero exit counts as `not-owned` only for a
+ * verdict made of these values; any other value does not prove that the claim
+ * is not this session's, so the classifier reads it as unreadable.
+ */
+const ROUTING_STATES = new Set([
+  'unclaimed',
+  'stale',
+  'non_inheritable',
+  'disputed',
+  'owner_evidence_required',
+  'already_owned',
+  'local_worktree_occupied',
+]);
+const ROUTING_ACTIONS = new Set(['keep', 're_claim', 'stop', 'takeover']);
 export function classifyClaimAssertResult(exited, stdout, claimId) {
   let routing;
   try {
@@ -160,6 +176,15 @@ export function classifyClaimAssertResult(exited, stdout, claimId) {
     return {
       status: 'unreadable',
       detail: `resume-claim-routing --assert exited ${exited} with state ${routing.state} and action ${routing.action}, which does not prove this claim ID`,
+    };
+  }
+  if (
+    !ROUTING_STATES.has(routing.state) ||
+    !ROUTING_ACTIONS.has(routing.action)
+  ) {
+    return {
+      status: 'unreadable',
+      detail: `resume-claim-routing --assert printed an unrecognized verdict (state ${routing.state}, action ${routing.action})`,
     };
   }
   return { status: 'not-owned' };
