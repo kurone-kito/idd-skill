@@ -3304,6 +3304,21 @@ test('the weekly body passes the authoring score-footer audit with the label the
   );
 });
 
+test('the concept ownership matrix reconciles its blocked-by-human rows with the report-issue row (issue #4308)', () => {
+  const rows = readFileSync(CONCEPT_OWNERSHIP_DOC, 'utf8')
+    .split('\n')
+    .filter(
+      (line) =>
+        line.startsWith('| Status / blocker labels') ||
+        line.startsWith('| `status:blocked-by-human` label'),
+    );
+  // Both the label's mutator row and its removal row must carry the exception.
+  assert.equal(rows.length, 2);
+  for (const row of rows) {
+    assert.match(row.replace(/\s+/g, ' '), /recurring report issue/);
+  }
+});
+
 test('the footer comment in the sweep source names the floor and kill-switch conditions and the label guard (issue #4308)', () => {
   const source = readFileSync(
     new URL('../src/scripts/merged-pr-feedback-sweep.mts', import.meta.url),
@@ -3333,6 +3348,10 @@ const AUTONOMY_CONTRACT_DOC = new URL(
 );
 const HELPER_SCRIPTS_DOC = new URL(
   '../idd-template/docs/idd-helper-scripts.md',
+  import.meta.url,
+);
+const CONCEPT_OWNERSHIP_DOC = new URL(
+  '../idd-template/docs/idd-concept-ownership.md',
   import.meta.url,
 );
 
