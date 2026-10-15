@@ -22,9 +22,9 @@
 // was made under, so there the link has to go. A platform without the
 // no-follow opens refuses uninstall too, even when nothing is installed.
 //
-// Above the first declared root the walk also reads every component, and
-// refuses a symbolic link there unless root owns it, so a link a user made
-// (/data/me -> /mnt/disk/me) is refused while the system links
+// Above the first declared root that covers a path the walk also reads every
+// component, and refuses a symbolic link there unless root owns it, so a link
+// a user made (/data/me -> /mnt/disk/me) is refused while the system links
 // /var -> /private/var (macOS) and /home -> /var/home (Fedora Atomic) cannot
 // make an ordinary install fail.
 //

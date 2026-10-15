@@ -5,8 +5,9 @@
 // declared ceiling is trusted when root owns it, and a window remains between a
 // containment check and the act that follows it. The ceiling tests (#4303)
 // cover the chain from a declared root down to the walk root and the
-// components above it. `ownedBy` stands in for the owner of a link, so the
-// tests do not depend on who runs them.
+// components above it. `ownedBy` stands in for the owner of a link, so those
+// tests do not depend on who runs them; one test reads a real owner and skips
+// when that owner is root.
 //
 // Tests that use a real symbolic link or the real no-follow opens skip on
 // Windows, where `constants.O_NOFOLLOW` is undefined and every export refuses
@@ -1102,7 +1103,7 @@ test('an lstat error other than does not exist is refused', () => {
   });
 });
 
-// --- Ceilings: links between a declared root and the walk root (#4303) -------
+// --- Ceilings: links above and below a declared root (#4303) ------------------
 
 /** The real `node:fs` declaring `ceilings`, as the installer declares them. */
 function declaring(...ceilings: string[]): FsOps {
@@ -1419,24 +1420,26 @@ posixTest(
   },
 );
 
-const NEEDS_NON_ROOT =
-  process.platform === 'win32' || process.getuid?.() === 0
-    ? 'needs a POSIX user other than root, whose own link is not root-owned'
-    : false;
-
-test('a link the running user made above the ceiling is refused with its real owner, no stand-in', {
-  skip: NEEDS_NON_ROOT,
-}, () => {
+test('a link the running user made above the ceiling is refused with the owner the filesystem reports, no stand-in', {
+  skip: process.platform === 'win32',
+}, (t) => {
   withBox((box) => {
     const real = join(box.base, 'real-parent');
     nodeFs.mkdirSync(join(real, 'home'), { recursive: true });
     const linked = join(box.base, 'linked-parent');
     nodeFs.symlinkSync(real, linked);
+    const owner = nodeFs.lstatSync(linked).uid;
+    if (owner === 0) {
+      // Running as root, or on a filesystem that reports every file as root's:
+      // the link looks like the system's and is tolerated by design.
+      t.skip('the filesystem reports the new link as root-owned');
+      return;
+    }
     const home = join(linked, 'home');
     assertThrowsMatching(
       () => assertRealChain(join(home, 'x'), declaring(home)),
       new RegExp(
-        `linked-parent is a symbolic link above .*\\(owner uid ${process.getuid?.()}\\)`,
+        `linked-parent is a symbolic link above .*\\(owner uid ${owner}\\)`,
       ),
     );
   });

@@ -19,25 +19,25 @@
 //
 // Ceilings. A ceiling is a qualified root the operator named, such as HOME,
 // XDG_DATA_HOME, or XDG_CONFIG_HOME, or the parent of one it named. When the
-// `fs` handle declares ceilings, every walk first reads the chain from the
-// first declared ceiling that covers its root down to the root, both ends
-// included, with one no-follow `lstat` per component and in that order,
-// top-down. Each existing component must be a real directory. The chain ends
-// at the first absent component, because nothing below an absent one exists,
-// and a dangling link is a link, not an absent component. If ceilings are
-// declared and none covers the root, the walk refuses. Without declared
-// ceilings the walk behaves as before, so only the root and what is below it
-// are inspected.
+// `fs` handle declares ceilings, every walk first reads the components above
+// the first declared ceiling that covers its root (see the last paragraph),
+// then the chain from that ceiling down to the root, both ends included, with
+// one no-follow `lstat` per component and in that order, top-down. Each
+// existing component of the chain must be a real directory. The chain ends at
+// the first absent component, because nothing below an absent one exists, and
+// a dangling link is a link, not an absent component. If ceilings are declared
+// and none covers the root, the walk refuses. Without declared ceilings the
+// walk behaves as before, so only the root and what is below it are inspected.
 //
 // Order matters: declare the primary root (HOME) first. A later ceiling is
 // consulted only for a root the earlier ones do not cover, so a ceiling nested
 // inside the primary root cannot hide a link between the two (exporting
 // XDG_DATA_HOME=$HOME/.local/share changes nothing: a link at ~/.local is
-// refused with or without the variable), and a ceiling above it cannot widen
-// what is inspected for the primary root's own paths. Among the later
-// ceilings the first covering one also wins, so an unrelated ceiling declared
-// earlier can start a chain higher than a nested one would; that refuses more
-// and never less.
+// refused with or without the variable), and a ceiling above it cannot move
+// the start of the strict chain up for the primary root's own paths. Among
+// the later ceilings the first covering one also wins, so an unrelated ceiling
+// declared earlier can start a chain higher than a nested one would; that
+// refuses more and never less.
 //
 // Above a ceiling the walk is more lenient, not blind. It reads those
 // components too, top-down from the filesystem root, and tolerates a symbolic
@@ -52,7 +52,7 @@
 // follows links in the components it passes. The owner is the one the
 // filesystem reports: a mount that reports every file as root's, or a user
 // namespace that maps a user's files to root, makes a user's link look like
-// the system's and the check then degrades to the old behavior, while a
+// the system's and the check then trusts every link above the root, while a
 // system link reported as an unmapped owner is refused, with its uid named. A
 // stat with no numeric owner counts as not root-owned, so the check fails
 // closed.

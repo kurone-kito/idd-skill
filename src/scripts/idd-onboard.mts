@@ -8116,8 +8116,9 @@ down to each install root, any link is refused, whoever owns it. Above that
 root a link is refused unless root owns it, so system links such as /var ->
 /private/var still work; a link root owns is trusted, which is an open risk.
 To continue, replace a refused link with the real directory, or for a new
-install name the real path (HOME, XDG_DATA_HOME). An install made through a
-refused link cannot be uninstalled until the link is gone.
+install name the real path (HOME, XDG_DATA_HOME, CODEX_HOME, XDG_CONFIG_HOME).
+An install made through a refused link cannot be uninstalled until the link is
+replaced by the real directory. Who owns a link is as the filesystem reports.
 
 Exit codes: 0 done (or planned, with --dry-run); 1 the run refused before
 writing anything, or failed after a clean plan (the cause is named on
