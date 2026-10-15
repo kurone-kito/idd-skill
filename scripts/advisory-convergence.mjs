@@ -4281,14 +4281,15 @@ export function collectAssertNextActions(verdict) {
   }
   const itemCount = verdict.review.itemCount;
   // #4306: the generic reply-and-resolve command is the wrong step for a
-  // thread that holds a pending decision. When the pending threads cover every
-  // posted item, the `disposition-threads` item below already says to hold, so
-  // this one is left out; otherwise it names the threads to skip.
+  // thread that holds a pending decision, so the action names the pending
+  // threads to skip. The list is PR-wide on purpose: the command takes any
+  // comment id, and `review.itemCount` covers only the latest review, so no
+  // count of pending threads is compared against it.
   const pendingThreadIds = verdict.threads.pendingDecisionIds;
   if (
     verdict.review.matchesHead &&
     typeof itemCount === 'number' &&
-    itemCount > pendingThreadIds.length
+    itemCount > 0
   ) {
     const pointer = `node scripts/resolve-review-thread.mjs --pr ${pr} --comment-id <id> --body "**Accepted** — …" --claim-issue <n> --claim-id <id> --apply`;
     const skipPending =

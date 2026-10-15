@@ -1306,7 +1306,7 @@ test('#4306: a pending thread and an undecided thread each get their own reason'
   assert.doesNotMatch(verdict.reasons[1] ?? '', /PRRT_undecided_mix/);
 });
 
-test('#4306: the posted-items next action skips a pending thread, and is left out when pending threads cover every posted item', () => {
+test('#4306: the posted-items next action names pending threads to skip, and stays when the new item belongs to another review', () => {
   const stamp = renderReviewReplyStamp();
   const postedItems = (
     itemCount: number,
@@ -1335,7 +1335,7 @@ test('#4306: the posted-items next action skips a pending thread, and is left ou
   assert.match(ordinary?.summary ?? '', /Disposition each thread \(E6\/E13\)/);
   assert.doesNotMatch(ordinary?.summary ?? '', /pending-decision/);
 
-  // One of two posted items is pending: the command stays, with a skip note.
+  // A pending thread is named to skip, and the command stays.
   const partial = postedItems(2, [
     hold(),
     pendingDecisionThread('PRRT_ordinary_posted', []),
@@ -1346,8 +1346,12 @@ test('#4306: the posted-items next action skips a pending thread, and is left ou
     /Do not run it on a pending-decision thread \(PRRT_hold_posted\)/,
   );
 
-  // The only posted item is pending: the generic command is left out.
-  assert.equal(postedItems(1, [hold()]), undefined);
+  // The latest review has one new item and the only pending thread is an older
+  // one: the action is still emitted, because `review.itemCount` covers only
+  // the latest review and no pending count is compared against it.
+  const older = postedItems(1, [hold()]);
+  assert.match(older?.summary ?? '', /--apply/);
+  assert.match(older?.summary ?? '', /\(PRRT_hold_posted\)/);
 });
 
 test('#4306: the disposition-threads next action tells the agent to hold a pending thread, and keeps its wording otherwise', () => {
