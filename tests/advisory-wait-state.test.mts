@@ -1845,3 +1845,59 @@ test('bin/idd-advisory-wait-state.mjs: a failing second read ends with the same 
   assert.equal(waited.stdout, '', 'nothing is printed when a poll fails');
   assert.deepEqual(waited.envelope, control.envelope);
 });
+
+// --- #4378: the instruction sentence and the helper reference ----------------
+
+const ADVISORY_WAIT_DOC_COPIES = [
+  STANDARD_ADVISORY_WAIT_DOC,
+  '.github/instructions/idd-advisory-wait.instructions.md',
+] as const;
+const CALLER_MAPPING_END = '<!-- dprint-ignore-end -->';
+const WAIT_ROW =
+  "| `WAIT` | wait for Copilot's review; rerun `idd-advisory-convergence`; resume D4 | continue polling | poll then restart F2 from top | do not merge; return to F2 |";
+
+for (const path of ADVISORY_WAIT_DOC_COPIES) {
+  test(`${path}: the --wait sentence follows the caller-mapping table and the WAIT row is unchanged`, () => {
+    const doc = readFileSync(join(REPO_ROOT, path), 'utf8');
+    assert.equal(doc.split(WAIT_ROW).length - 1, 1, 'the WAIT row changed');
+    const heading = doc.indexOf('### Caller mapping');
+    assert.notEqual(heading, -1);
+    const tableEnd = doc.indexOf(CALLER_MAPPING_END, heading);
+    assert.notEqual(tableEnd, -1);
+    assert.ok(
+      tableEnd > doc.indexOf(WAIT_ROW),
+      'the sentence is not in the table',
+    );
+    // The first paragraph after the table, with dprint's line wrapping undone.
+    const paragraph = doc
+      .slice(tableEnd + CALLER_MAPPING_END.length)
+      .trim()
+      .split(/\n\s*\n/)[0]
+      .replace(/\s+/g, ' ');
+    assert.ok(
+      Buffer.byteLength(paragraph) <= 300,
+      `${Buffer.byteLength(paragraph)} bytes: ${paragraph}`,
+    );
+    for (const needle of [
+      '`--wait <duration>`',
+      '`bound-elapsed`',
+      'timeout',
+    ]) {
+      assert.ok(paragraph.includes(needle), `missing ${needle}: ${paragraph}`);
+    }
+  });
+}
+
+test('the helper reference documents --wait, --poll-interval, waitedSeconds and waitEnded', () => {
+  const doc = readFileSync(join(REPO_ROOT, HELPER_REFERENCE_DOC), 'utf8');
+  for (const needle of [
+    '`--wait <duration>`',
+    '`--poll-interval <duration>`',
+    '`waitedSeconds`',
+    '`waitEnded`',
+    '`head-changed`',
+    '`bound-elapsed`',
+  ]) {
+    assert.ok(doc.includes(needle), `missing ${needle}`);
+  }
+});
