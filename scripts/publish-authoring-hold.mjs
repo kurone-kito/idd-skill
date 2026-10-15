@@ -2277,13 +2277,20 @@ function runCarrierRelease(input, scratch, ctx) {
   const heartbeatLog = readOwnerLog(input, 'heartbeat');
   replayOrRecover(input, heartbeatLog, 'heartbeat');
   const latest = latestOursMarker(heartbeatLog, input);
-  const coalescedId =
+  // Reuse only a marker whose fields match what a fresh heartbeat would carry:
+  // an acquire marker of this run (supersedes none, snapshot none) or a valid
+  // heartbeat. Anything else is posted fresh and verified like any heartbeat.
+  const reusable =
     latest !== null &&
     COALESCING_MODES.has(latest.parsed.mode) &&
     Date.now() - Date.parse(latest.createdAt) < input.heartbeatWindowMs &&
-    latest.parsed.bodySha256 === heartbeatDigest
-      ? latest.id
-      : null;
+    latest.parsed.bodySha256 === heartbeatDigest &&
+    ((latest.parsed.mode === 'acquire' &&
+      latest.parsed.supersedes === 'none' &&
+      latest.parsed.snapshotSha256 === 'none') ||
+      (latest.parsed.mode === 'heartbeat' &&
+        markerFieldsValid(latest.parsed, input, heartbeatDigest, 'none')));
+  const coalescedId = reusable && latest !== null ? latest.id : null;
   const heartbeatId =
     coalescedId ??
     postCarrierMarker(input, 'heartbeat', heartbeatDigest, 'none', 'heartbeat');
