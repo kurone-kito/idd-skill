@@ -8195,6 +8195,18 @@ same as `AW4`/`AW5`.
   numeric offset, and seconds `00` to `59`, that name a real instant: a day
   that does not exist (`2026-02-30`), hour 24, or an out-of-range offset is
   rejected rather than silently normalized.
+- `workerHandle`: the identifier the harness returned when it started the
+  worker, written by the orchestrator before the append. The dedupe key
+  includes it, so a handle taken from anywhere else can make a retry look like
+  a new record (observed 2026-10-14: the stored handle for a claim of
+  kurone-kito/idd-skill#4187 differed from the value in a roster the session
+  kept; kurone-kito/idd-skill#4066 was closed as not planned, saying the
+  prevention belongs on the orchestrator's roster step). The restart recovery
+  has no start identifier for a worker it did not start, so it records the
+  listed handle for a matched worker, the claim id for a claim with no matched
+  worker and no draft, and a draft's own handle when the draft matches the
+  claim but no worker is listed: see
+  [Orchestrator restart](idd-workflow.md#orchestrator-restart).
 - `scope-stopped`: the run ended at a phase boundary that the operator or
   coordinator scoped it to end at (for example, "stop at F2"), with no gate
   blocking it. `held` stays for a gate hold; before this outcome existed, a
@@ -8243,10 +8255,11 @@ same as `AW4`/`AW5`.
   it is informational.
 
 - Fan-out draft: a worker writes its report without `verifiedAt` and
-  `recordedAt`, because it cannot know them. The orchestrator sets
-  `verifiedAt` to when it checked GitHub and `recordedAt` to when it appends,
-  then runs `append`. The helper stores the file as written and stamps neither
-  field.
+  `recordedAt`, because it cannot know them, and with any non-empty
+  `workerHandle`, which the orchestrator overwrites from its roster entry. The
+  orchestrator sets `verifiedAt` to when it checked GitHub and `recordedAt` to
+  when it appends, then runs `append`. The helper stores the file as written
+  and stamps neither field.
 
 ### F4 branch-failure routes
 
