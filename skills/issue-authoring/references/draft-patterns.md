@@ -198,7 +198,9 @@ the proposed post-change memberships and limits as well as current entries.
 linter cannot run. `instructions-only` is a first-class supported
 fallback, not a waiver — manually re-verify the same checks against
 [contract.md's Mechanical pre-publish gate](contract.md#mechanical-pre-publish-gate)
-before publishing instead.
+before publishing instead. A draft carrier has no manual route: without a
+helper runtime it cannot be published (see
+[Draft carrier](contract.md#draft-carrier)).
 
 ## Hidden human-dependency quick check
 

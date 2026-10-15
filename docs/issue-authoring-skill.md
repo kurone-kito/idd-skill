@@ -1187,7 +1187,8 @@ linter cannot run without Node.js and the vendored `scripts/`
 directory, and `instructions-only` is a first-class supported fallback,
 not a waiver — manually re-verify the same checks against this
 document's prose and the [Draft schemas](#draft-schemas) before
-publishing.
+publishing. A draft carrier has no manual route: without a helper runtime
+it cannot be published (see [Draft carrier](#draft-carrier)).
 
 A `passed: false` report (or non-zero exit, or a failed manual
 re-verification) means the draft is not ready to publish yet. The

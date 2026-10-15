@@ -120,7 +120,8 @@ needs-decision, blocked-by-human, and out-of-scope.
    in the bundled contract, including the manual fallback for
    `instructions-only` installs with no helper runtime. Resolve every
    reported failure before treating the issue as ready; a carrier is
-   never published without that check. Before newly
+   never published without that check, and it has no manual fallback
+   (step 8's second exception applies). Before newly
    publishing a body into the `needs-decision` or `blocked-by-human`
    bucket instead, also run the linter, passing
    `--expect-bucket <needs-decision|blocked-by-human>` (choose the one

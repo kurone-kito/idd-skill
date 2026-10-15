@@ -1672,7 +1672,8 @@ directory, and an `instructions-only` install is a first-class
 supported fallback, not a degraded one. Unavailability is never a
 waiver: manually re-verify the same checks listed above against this
 contract's prose and the [Draft schemas](#required-draft-content)
-before publishing.
+before publishing. A draft carrier has no manual route: without a helper
+runtime it cannot be published (see [Draft carrier](#draft-carrier)).
 
 A `passed: false` report (or non-zero exit, or a failed manual
 re-verification) means the draft is not ready to publish yet,
@@ -3069,8 +3070,8 @@ appears once outside code. The body has the headings `## Release condition`,
 
 `audit-authored-issue --shape carrier` checks this shape and takes no
 `--expect-bucket`. Where it cannot run (no helper runtime, or `markdown-it`
-missing), checking these rules by hand validates a draft but cannot publish
-the carrier, because `publish-authoring-hold --shape carrier` runs the same
+missing), checking these rules by hand validates the drafted carrier but
+cannot publish it, because `publish-authoring-hold --shape carrier` runs the same
 audit or is unavailable: the second exception above applies. The carrier
 body is linted, not reviewed: its drafts are reviewed at re-authoring. When
 the drafts do not fit one issue body (GitHub's limit is 65,536 characters),
