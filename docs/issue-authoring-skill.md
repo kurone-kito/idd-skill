@@ -1174,7 +1174,7 @@ node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child|carrier> \
 `.github/idd/config.json`, as with `--marker-prefix`. The linter reads that
 file from the working directory by default. When the file is absent or
 unreadable, `effortL` falls back to `allow`, so `effort-l-ready` would not
-refuse an `L` body.
+refuse an `L` body (preventive; no observed incident yet).
 
 Omit `--title` when the drafted body already leads with a `# <title>`
 line; for the `orphan` and `child` shapes, at least one of the two is

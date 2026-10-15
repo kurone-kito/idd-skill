@@ -1643,7 +1643,8 @@ node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child|carrier> \
 `.github/idd/config.json`, even when the audit runs from another checkout.
 The linter reads that file from the working directory by default. When the
 file is absent or unreadable, `effortL` falls back to `allow`, so
-`effort-l-ready` would not refuse an `L` body.
+`effort-l-ready` would not refuse an `L` body (preventive; no observed
+incident yet).
 
 Or, for npx/package-manager profiles, the equivalent
 `idd-audit-authored-issue` command. Pass `--stdin` instead of
