@@ -7147,6 +7147,16 @@ such flag is a usage error (exit 2) and nothing is written.
 Install never creates the directory above a root it installs into (for
 example ~/.agents or ~/.local/share), so a missing one is a refusal.
 
+Install and uninstall refuse a symbolic link on the path to a root. From the
+root you name (HOME, XDG_DATA_HOME, the parent of CODEX_HOME, XDG_CONFIG_HOME)
+down to each install root, any link is refused, whoever owns it. Above that
+root a link is refused unless root owns it, so system links such as /var ->
+/private/var still work; a link root owns is trusted, which is an open risk.
+To continue, replace a refused link with the real directory, or for a new
+install name the real path (HOME, XDG_DATA_HOME, CODEX_HOME, XDG_CONFIG_HOME).
+An install made through a refused link cannot be uninstalled until the link is
+replaced by the real directory. Who owns a link is as the filesystem reports.
+
 Exit codes: 0 done (or planned, with --dry-run); 1 the run refused before
 writing anything, or failed after a clean plan (the cause is named on
 stderr; install rolls back what it wrote when it can and names anything it
