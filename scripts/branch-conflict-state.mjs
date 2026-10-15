@@ -339,6 +339,7 @@ function parseSuiteNode(node) {
     // A suite with no App identity is never merged with another one.
     producer:
       appId === null && slug === '' ? null : `${appId ?? slug}|${workflowKey}`,
+    workflow: Boolean(entry.workflowRun),
     status: String(entry.status ?? '').toUpperCase(),
     conclusion: String(entry.conclusion ?? '').toUpperCase(),
     createdAt: String(entry.createdAt ?? ''),
@@ -382,8 +383,9 @@ function latestSuitePerProducer(suites) {
  * #4309: list the head's non-passing check suites that have no check run.
  * A suite with at least one run is judged through that run in the rollup, so
  * it is never listed twice. A completed suite lists its conclusion (a
- * cancelled one is not listed, see below), a waiting one lists `pending`, and
- * any other status lists `unknown`, which never proceeds. Fails closed (no suites plus a note, so the branch holds)
+ * cancelled Actions workflow suite is not listed, see below; an external
+ * app's cancelled suite is), a waiting one lists `pending`, and any other
+ * status lists `unknown`, which never proceeds. Fails closed (no suites plus a note, so the branch holds)
  * on a missing page, an inconsistent count, a page shorter than the head's
  * suites, or an unreadable run count.
  */
@@ -422,11 +424,13 @@ export function parseHeadSuites(object) {
     const { name, appId } = suite;
     if (suite.status === 'COMPLETED') {
       if (PASSING_CHECK_CONCLUSIONS.has(suite.conclusion)) continue;
-      // A run-less cancelled suite is Actions concurrency control, not a check
-      // result: no check is left to read or rerun. Observed 2026-10-15 on four
-      // of fourteen recent merged heads (for example 504f50f7, e85436a9): the
-      // comment-refresh workflow's newest suites were cancelled with no run.
-      if (suite.conclusion === 'CANCELLED') continue;
+      // A run-less cancelled Actions workflow suite is concurrency control,
+      // not a check result: no check is left to read or rerun. Observed
+      // 2026-10-15 on four of fourteen recent merged heads (for example
+      // 504f50f7, e85436a9): the comment-refresh workflow's newest suites were
+      // cancelled with no run. An external app's cancelled suite carries no
+      // such proof and stays listed, so it holds (pull request 4323 review).
+      if (suite.conclusion === 'CANCELLED' && suite.workflow) continue;
       const conclusion = suite.conclusion.toLowerCase();
       suites.push({
         name,

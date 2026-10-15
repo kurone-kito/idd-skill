@@ -1905,7 +1905,7 @@ test('parseHeadSuites: a failed or unfinished-conclusion suite never proceeds', 
 
 // Observed 2026-10-15: the comment-refresh workflow leaves cancelled suites
 // with no run on the head. They are concurrency control, so they list nothing.
-test('parseHeadSuites: a run-less cancelled suite is not a check result', () => {
+test('parseHeadSuites: a run-less cancelled workflow suite is not a check result', () => {
   const result = parseHeadSuites(
     suitesOf([
       suiteNode('github-actions', {
@@ -1917,6 +1917,56 @@ test('parseHeadSuites: a run-less cancelled suite is not a check result', () => 
     ]),
   );
   assert.deepEqual(result, { suites: [], notes: [] });
+});
+
+// Pull request 4323 review: only an Actions workflow suite is concurrency
+// control. A cancelled suite from an external app has no such proof, so it is
+// listed as non-passing and holds the branch beside a waiting suite.
+test('parseHeadSuites: a run-less cancelled external suite stays listed and holds', () => {
+  const sha = 'a13f804ba88e71f2a373c947edbe9d9fc99d2d95';
+  const cancelled = suiteNode('netlify', {
+    appId: 13473,
+    status: 'COMPLETED',
+    conclusion: 'CANCELLED',
+  });
+  assert.deepEqual(parseHeadSuites(suitesOf([cancelled])), {
+    suites: [
+      {
+        name: 'netlify',
+        state: 'cancelled',
+        suiteStatus: 'cancelled',
+        appId: 13473,
+      },
+    ],
+    notes: [],
+  });
+  const result = parseHeadNonPassing(
+    {
+      oid: sha,
+      statusCheckRollup: { contexts: { totalCount: 0, nodes: [] } },
+      ...suitesOf([
+        cancelled,
+        suiteNode('sentry', { appId: 12637 }),
+        // The workflow suite beside it is still skipped.
+        suiteNode('github-actions', {
+          appId: 15368,
+          status: 'COMPLETED',
+          conclusion: 'CANCELLED',
+          workflow: { databaseId: 7, name: 'refresh' },
+        }),
+      ]),
+    },
+    sha,
+    () => new Set<number>(),
+  );
+  assert.deepEqual(
+    result.runs.map((run) => `${run.name}:${run.state}`),
+    ['netlify:cancelled', 'sentry:pending'],
+  );
+  assert.equal(
+    resolveCallSiteRouting('clean', 'UNSTABLE', true, result.runs).f1,
+    'hold',
+  );
 });
 
 test('parseHeadSuites: only the newest suite of each producer governs', () => {

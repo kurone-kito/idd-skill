@@ -7433,11 +7433,12 @@ same as `AW4`/`AW5`.
     Actions workflow, and carries its own status (`queued`, `in_progress`,
     or its conclusion). A waiting suite counts as `pending`, a completed
     `action_required` suite as `action_required`, and any other non-passing
-    conclusion or unrecognized status never proceeds. A cancelled suite with
-    no check run is not listed: it is Actions concurrency control with no
-    check left to read or rerun (observed 2026-10-15 on four of fourteen
-    recent merged heads, where the comment-refresh workflow's newest suites
-    were cancelled).
+    conclusion or unrecognized status never proceeds. A cancelled Actions
+    workflow suite with no check run is not listed: it is concurrency control
+    with no check left to read or rerun (observed 2026-10-15 on four of
+    fourteen recent merged heads, where the comment-refresh workflow's newest
+    suites were cancelled). A cancelled suite from an external app has no such
+    proof, so it is listed as `cancelled` and holds.
   - A suite has no `isRequired`, so it is required when a required check is
     source-pinned to its app (a ruleset `integration_id` or a classic
     protection `app_id`). A suite with no pin is non-required, because GitHub
