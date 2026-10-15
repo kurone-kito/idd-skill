@@ -26,6 +26,11 @@ import {
   resolveInputMode,
   splitLocalDraftTitleAndBody,
 } from '../src/scripts/suitability-triage.mts';
+import {
+  findTrustedSuitabilityRejection,
+  parseSuitabilityTriageVerdictMarker,
+  SUITABILITY_REJECTION_PREFIX,
+} from '../src/scripts/supersession-detection.mts';
 import type { StructuralEvidence } from '../src/scripts/triage-structural-evidence.mts';
 import { pinLoadControlOff, stubExecutable } from './test-utils.mts';
 
@@ -4319,6 +4324,379 @@ test('#2767: checkVerifiability never demotes the escape-hatch either/or fail (d
   } as Context);
   assert.equal(result.pass, false);
   assert.equal(result.demoted, undefined);
+});
+
+// --- #4374: failing evidence quotes the matched text --------------------------
+// Four lexical branches (either/or, coordination, open choice, subjective
+// approval) used to fail with a constant string that did not say what
+// matched. Each now ends with `: "<quoted>".`, built by one formatter that
+// collapses whitespace, makes the text inert for the rejection-comment
+// readers, and only then cuts it to 160 code points. The demoted twins keep
+// quoting raw text on purpose (pinned below).
+
+const ZERO_WIDTH_SPACE = '\u200B';
+const SUBJECTIVE_FAILING_PREFIX =
+  'Issue success depends on subjective approval or judgment';
+const SUBJECTIVE_TRIGGER_WORDS =
+  'Final approval depends on maintainer preference, though tests must also pass';
+
+/** The text between `<prefix>: "` and the closing `".` of a failing evidence. */
+function quotedTextOf(evidence: string, prefix: string): string {
+  assert.ok(evidence.startsWith(`${prefix}: "`), evidence);
+  assert.ok(evidence.endsWith('".'), evidence);
+  return evidence.slice(prefix.length + 3, -2);
+}
+
+/**
+ * Words (so the trimmed line never ends in a space) up to exactly `length`
+ * code points, starting from a BMP-only `start`.
+ */
+function wordsOfLength(start: string, length: number): string {
+  let line = start;
+  while (Array.from(line).length < length) {
+    const remaining = length - Array.from(line).length;
+    line +=
+      remaining === 1
+        ? 's'
+        : ` ${'padding'.slice(0, Math.min(remaining - 1, 7))}`;
+  }
+  assert.equal(Array.from(line).length, length);
+  return line;
+}
+
+function subjectiveFailureEvidence(body: string): string {
+  const result = checkVerifiability({
+    issue: { ...BASE_ISSUE, body },
+  } as Context);
+  assert.equal(result.pass, false);
+  return result.evidence;
+}
+
+function autonomyFailureEvidence(body: string): string {
+  const result = checkAutonomy({ issue: { ...BASE_ISSUE, body } } as Context);
+  assert.equal(result.pass, false);
+  return result.evidence;
+}
+
+test('#4374: the zero-width space under test is the single code point U+200B, which regular-expression whitespace does not match', () => {
+  assert.equal(ZERO_WIDTH_SPACE.length, 1);
+  assert.equal(ZERO_WIDTH_SPACE.codePointAt(0), 0x200b);
+  assert.equal(/\s/.test(ZERO_WIDTH_SPACE), false);
+});
+
+test('#4374: the either/or branch quotes its unresolved-choice marker, not the either/or span', () => {
+  assert.equal(
+    autonomyFailureEvidence(
+      'Either add validation, or TBD -- not yet decided.',
+    ),
+    'Issue presents an unresolved either/or implementation choice: "not yet decided".',
+  );
+});
+
+test('#4374: the coordination branch quotes the matched phrase', () => {
+  assert.equal(
+    autonomyFailureEvidence(
+      'Requires stakeholder sign-off before this can proceed.',
+    ),
+    'Issue explicitly requires external human coordination or approval: "Requires stakeholder sign-off".',
+  );
+});
+
+test('#4374: the coordination branch single-spaces a phrase that only the second pattern reaches across a newline and a tab', () => {
+  assert.equal(
+    autonomyFailureEvidence('The stakeholder\n\tmust give sign-off first.'),
+    'Issue explicitly requires external human coordination or approval: "stakeholder must give sign-off".',
+  );
+});
+
+test('#4374: the open-choice branch quotes its unresolved-choice marker', () => {
+  assert.equal(
+    autonomyFailureEvidence('The exact retry count is TBD.'),
+    'Issue names an unresolved product or design choice: "TBD".',
+  );
+});
+
+test('#4374: the subjective-approval branch quotes the matched line', () => {
+  assert.equal(
+    subjectiveFailureEvidence(`${SUBJECTIVE_TRIGGER_WORDS}.`),
+    `${SUBJECTIVE_FAILING_PREFIX}: "${SUBJECTIVE_TRIGGER_WORDS}.".`,
+  );
+});
+
+test('#4374: the subjective-approval branch quotes the whole-body proximity match with its newline, tab and spaces single-spaced', () => {
+  // No single line holds both a subject word and a gate word, so the
+  // proximity scan (the only path whose match can span lines) reaches it.
+  assert.equal(
+    subjectiveFailureEvidence(
+      'Needs approval from\nthe \t maintainer before it ships, and tests must pass.',
+    ),
+    `${SUBJECTIVE_FAILING_PREFIX}: "approval from the maintainer".`,
+  );
+});
+
+test('#4374: a 200 code point trigger line is cut to 160 code points plus an ellipsis, after whitespace is collapsed', () => {
+  const collapsed = wordsOfLength(SUBJECTIVE_TRIGGER_WORDS, 200);
+  // Runs of spaces must be collapsed before the length is measured (the
+  // branch itself trims the matched line).
+  const evidence = subjectiveFailureEvidence(
+    `  ${collapsed.replace(/ /g, '   ')}   `,
+  );
+  const quoted = quotedTextOf(evidence, SUBJECTIVE_FAILING_PREFIX);
+  assert.equal(Array.from(quoted).length, 163);
+  assert.ok(quoted.endsWith('...'));
+  assert.equal(quoted, `${Array.from(collapsed).slice(0, 160).join('')}...`);
+});
+
+test('#4374: a 160 code point trigger line is quoted whole, and a 161 code point one is cut', () => {
+  const exact = wordsOfLength(SUBJECTIVE_TRIGGER_WORDS, 160);
+  assert.equal(
+    quotedTextOf(subjectiveFailureEvidence(exact), SUBJECTIVE_FAILING_PREFIX),
+    exact,
+  );
+  const over = wordsOfLength(SUBJECTIVE_TRIGGER_WORDS, 161);
+  assert.equal(
+    quotedTextOf(subjectiveFailureEvidence(over), SUBJECTIVE_FAILING_PREFIX),
+    `${Array.from(over).slice(0, 160).join('')}...`,
+  );
+});
+
+test('#4374: an astral character at code point 160 is kept whole and the evidence has no lone surrogate', () => {
+  const bmp = wordsOfLength(SUBJECTIVE_TRIGGER_WORDS, 159);
+  assert.equal(Array.from(bmp).length, 159);
+  const evidence = subjectiveFailureEvidence(
+    `${bmp}\u{1F600} and more words follow here`,
+  );
+  const quoted = quotedTextOf(evidence, SUBJECTIVE_FAILING_PREFIX);
+  assert.equal(quoted, `${bmp}\u{1F600}...`);
+  assert.equal(Array.from(quoted).length, 163);
+  assert.ok(evidence.isWellFormed());
+});
+
+test('#4374: a trigger line of exactly 160 code points that holds an astral character is quoted whole', () => {
+  // 161 UTF-16 units: a length test in units instead of code points would
+  // wrongly cut it.
+  const line = `${wordsOfLength(SUBJECTIVE_TRIGGER_WORDS, 159)}\u{1F600}`;
+  assert.equal(Array.from(line).length, 160);
+  assert.equal(line.length, 161);
+  assert.equal(
+    quotedTextOf(subjectiveFailureEvidence(line), SUBJECTIVE_FAILING_PREFIX),
+    line,
+  );
+});
+
+test('#4374: a cut that lands on a space keeps it, so the ellipsis follows the first 160 code points exactly', () => {
+  const base = wordsOfLength(SUBJECTIVE_TRIGGER_WORDS, 159);
+  const quoted = quotedTextOf(
+    subjectiveFailureEvidence(`${base} tail words follow here`),
+    SUBJECTIVE_FAILING_PREFIX,
+  );
+  assert.equal(quoted, `${base} ...`);
+  assert.equal(Array.from(quoted).length, 163);
+});
+
+test('#4374: the coordination branch makes every marker shape in its quoted phrase inert', () => {
+  // The second coordination pattern is the only free-text path of the
+  // autonomy check, so a quoted phrase can hold any of these shapes. Each
+  // shape appears twice to pin the global flag of its replacement.
+  const phrase =
+    'stakeholder <!-- a --> <!-- b --> @c @d outcome: e OUTCOME: f Check 1 (g) CHECK 2 (h) sign-off';
+  const evidence = autonomyFailureEvidence(`The ${phrase} first.`);
+  assert.equal(
+    quotedTextOf(
+      evidence,
+      'Issue explicitly requires external human coordination or approval',
+    ),
+    `stakeholder <!${ZERO_WIDTH_SPACE}-- a --${ZERO_WIDTH_SPACE}> <!${ZERO_WIDTH_SPACE}-- b --${ZERO_WIDTH_SPACE}> @${ZERO_WIDTH_SPACE}c @${ZERO_WIDTH_SPACE}d outcome${ZERO_WIDTH_SPACE}: e OUTCOME${ZERO_WIDTH_SPACE}: f Check${ZERO_WIDTH_SPACE} 1 (g) CHECK${ZERO_WIDTH_SPACE} 2 (h) sign-off`,
+  );
+});
+
+test('#4374: the zero-width spaces count toward the 160 code points (inert before truncate)', () => {
+  // 160 code points after collapsing, so a truncate-then-inert order would
+  // end at 161 code points with no ellipsis. Inert first grows the text to
+  // 161, and the cut then drops its last code point.
+  const line = wordsOfLength(
+    'Final approval depends on maintainer preference @someone, though tests must also pass',
+    160,
+  );
+  const inertLine = line.replace('@someone', `@${ZERO_WIDTH_SPACE}someone`);
+  assert.equal(Array.from(inertLine).length, 161);
+  const quoted = quotedTextOf(
+    subjectiveFailureEvidence(line),
+    SUBJECTIVE_FAILING_PREFIX,
+  );
+  assert.equal(quoted, `${Array.from(inertLine).slice(0, 160).join('')}...`);
+  assert.equal(Array.from(quoted).length, 163);
+});
+
+test('#4374: a mention in the quoted text is made inert, and other at-signs are left alone', () => {
+  const cases: [string, string][] = [
+    ['@someone', `@${ZERO_WIDTH_SPACE}someone`],
+    ['(@someone)', `(@${ZERO_WIDTH_SPACE}someone)`],
+    ['@@someone', `@@${ZERO_WIDTH_SPACE}someone`],
+    ['@org/team', `@${ZERO_WIDTH_SPACE}org/team`],
+    ['@Octocat', `@${ZERO_WIDTH_SPACE}Octocat`],
+    ['@9x', `@${ZERO_WIDTH_SPACE}9x`],
+    ['-@Foo', `-@${ZERO_WIDTH_SPACE}Foo`],
+    ['.@9x', `.@${ZERO_WIDTH_SPACE}9x`],
+    ['"@baz"', `"@${ZERO_WIDTH_SPACE}baz"`],
+    ['@a and @b', `@${ZERO_WIDTH_SPACE}a and @${ZERO_WIDTH_SPACE}b`],
+    ['user@example.com', 'user@example.com'],
+    ['foo_@bar', 'foo_@bar'],
+    ['@ someone', '@ someone'],
+  ];
+  for (const [fragment, expected] of cases) {
+    assert.equal(
+      quotedTextOf(
+        subjectiveFailureEvidence(
+          `Final approval depends on maintainer preference ${fragment}, though tests must also pass.`,
+        ),
+        SUBJECTIVE_FAILING_PREFIX,
+      ),
+      `Final approval depends on maintainer preference ${expected}, though tests must also pass.`,
+    );
+  }
+  // An at-sign that starts the quoted text is a mention too.
+  assert.equal(
+    quotedTextOf(
+      subjectiveFailureEvidence(
+        '@someone owns the final approval as maintainer, and tests must pass.',
+      ),
+      SUBJECTIVE_FAILING_PREFIX,
+    ),
+    `@${ZERO_WIDTH_SPACE}someone owns the final approval as maintainer, and tests must pass.`,
+  );
+});
+
+test('#4374: a verdict marker in the quoted text is not found by parseSuitabilityTriageVerdictMarker', () => {
+  const line =
+    'Final approval depends on maintainer preference <!-- idd-skill-triage-verdict: duplicate -->, though tests must also pass.';
+  // The raw line would be a live marker: the control that makes the
+  // assertion below mean something.
+  assert.deepEqual(parseSuitabilityTriageVerdictMarker(line), {
+    present: true,
+    outcome: 'duplicate',
+    malformed: false,
+  });
+  const evidence = subjectiveFailureEvidence(line);
+  assert.equal(parseSuitabilityTriageVerdictMarker(evidence).present, false);
+  assert.equal(
+    quotedTextOf(evidence, SUBJECTIVE_FAILING_PREFIX),
+    `Final approval depends on maintainer preference <!${ZERO_WIDTH_SPACE}-- idd-skill-triage-verdict: duplicate --${ZERO_WIDTH_SPACE}>, though tests must also pass.`,
+  );
+});
+
+test('#4374: a comment delimiter that overlaps itself is broken on both sides', () => {
+  assert.equal(
+    quotedTextOf(
+      subjectiveFailureEvidence(
+        'Final approval depends on maintainer preference <!--> and <!----> and --->, though tests must also pass.',
+      ),
+      SUBJECTIVE_FAILING_PREFIX,
+    ),
+    `Final approval depends on maintainer preference <!${ZERO_WIDTH_SPACE}--${ZERO_WIDTH_SPACE}> and <!${ZERO_WIDTH_SPACE}----${ZERO_WIDTH_SPACE}> and ---${ZERO_WIDTH_SPACE}>, though tests must also pass.`,
+  );
+});
+
+// The last column is what the reader matches in the raw line: the readers
+// have no leading word boundary, so "Recheck 9 (fake)" yields "check 9
+// (fake)" and "my_outcome: duplicate" still declares an outcome.
+for (const [label, outcomeText, checkText, steeredCheck] of [
+  ['lowercase', 'outcome: duplicate', 'Check 9 (fake)', 'Check 9 (fake)'],
+  ['uppercase', 'OUTCOME: duplicate', 'CHECK 9 (fake)', 'CHECK 9 (fake)'],
+  ['mixed-case', 'Outcome: duplicate', 'cHeCk   9 (fake)', 'cHeCk   9 (fake)'],
+  ['word-glued', 'my_outcome: duplicate', 'Recheck 9 (fake)', 'check 9 (fake)'],
+] as const) {
+  test(`#4374: a quoted ${label} outcome and check cannot steer findTrustedSuitabilityRejection`, () => {
+    const line = `Final approval depends on maintainer preference, ${outcomeText} and ${checkText}, though tests must also pass.`;
+    // The quoted text comes before the real check and outcome lines, and no
+    // failure verb appears anywhere, so the first matches are the ones read.
+    const commentFor = (evidence: string) => ({
+      body: `${SUITABILITY_REJECTION_PREFIX} — ${evidence}\n\nCheck 7 (Verifiability) applies here.\n\noutcome: invalid`,
+      created_at: '2026-10-15T00:00:00Z',
+      user: { login: 'kurone-kito' },
+      html_url:
+        'https://github.com/kurone-kito/idd-skill/issues/1#issuecomment-1',
+    });
+
+    // Control: the raw line, unformatted, would have steered both readers.
+    const steered = findTrustedSuitabilityRejection(
+      [commentFor(line)],
+      ['kurone-kito'],
+    );
+    assert.equal(steered?.outcome, 'duplicate');
+    assert.equal(steered?.check, steeredCheck);
+
+    const evidence = subjectiveFailureEvidence(line);
+    const read = findTrustedSuitabilityRejection(
+      [commentFor(evidence)],
+      ['kurone-kito'],
+    );
+    assert.equal(read?.outcome, 'invalid');
+    assert.equal(read?.check, 'Check 7 (Verifiability)');
+  });
+}
+
+test('#4374: the outcome and Check words are broken case-insensitively with no word boundary, and only when a colon or a number follows', () => {
+  const cases: [string, string][] = [
+    ['outcome: x', `outcome${ZERO_WIDTH_SPACE}: x`],
+    ['Outcome : x', `Outcome${ZERO_WIDTH_SPACE} : x`],
+    ['my_outcome: x', `my_outcome${ZERO_WIDTH_SPACE}: x`],
+    ['Check 9 (x)', `Check${ZERO_WIDTH_SPACE} 9 (x)`],
+    ['CHECK\t\t12 (x)', `CHECK${ZERO_WIDTH_SPACE} 12 (x)`],
+    ['Recheck 9 (x)', `Recheck${ZERO_WIDTH_SPACE} 9 (x)`],
+    ['the outcome is, check list', 'the outcome is, check list'],
+  ];
+  for (const [fragment, expected] of cases) {
+    assert.equal(
+      quotedTextOf(
+        subjectiveFailureEvidence(
+          `Final approval depends on maintainer preference ${fragment}, though tests must also pass.`,
+        ),
+        SUBJECTIVE_FAILING_PREFIX,
+      ),
+      `Final approval depends on maintainer preference ${expected}, though tests must also pass.`,
+    );
+  }
+});
+
+test('#4374: the demoted twins keep quoting raw text, not the formatted quote', () => {
+  const demoted = (check: typeof checkAutonomy, body: string) => {
+    const result = check({
+      issue: { ...BASE_ISSUE, body },
+      structuralEvidence: ALL_STRUCTURAL_SIGNALS,
+    } as Context);
+    assert.equal(result.pass, true);
+    assert.equal(result.demoted, true);
+    return result.evidence;
+  };
+
+  assert.equal(
+    demoted(checkAutonomy, 'Either add validation, or TBD -- not yet decided.'),
+    'Issue presents an unresolved either/or implementation choice: "not yet decided" (demoted: structural evidence present).',
+  );
+  assert.equal(
+    demoted(checkAutonomy, 'The exact retry count is TBD.'),
+    'Issue names an unresolved product or design choice: "TBD" (demoted: structural evidence present).',
+  );
+
+  // Runs of whitespace and an at-sign that the formatter would change.
+  const coordinationPhrase =
+    'stakeholder   \t  @someone must   give\n\n  sign-off';
+  assert.equal(
+    demoted(checkAutonomy, `The ${coordinationPhrase} first.`),
+    `Issue explicitly requires external human coordination or approval: "${coordinationPhrase}" (demoted: structural evidence present).`,
+  );
+
+  // A line over 160 code points with runs of spaces.
+  const spaced = wordsOfLength(SUBJECTIVE_TRIGGER_WORDS, 200).replace(
+    / /g,
+    '   ',
+  );
+  assert.ok(Array.from(spaced).length > 160);
+  assert.equal(
+    demoted(checkVerifiability, `  ${spaced}  `),
+    `${SUBJECTIVE_FAILING_PREFIX}: "${spaced}" (demoted: structural evidence present).`,
+  );
 });
 
 // #3287: the escape-hatch scan above used to reach only a body's FIRST

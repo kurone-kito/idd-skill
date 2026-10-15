@@ -415,6 +415,13 @@ const SUBJECTIVE_PROXIMITY_PATTERN = new RegExp(
   'i',
 );
 
+// #4374: the longest quoted match a failing evidence string carries, in code
+// points (never UTF-16 units, so a surrogate pair is never split). A longer
+// match is cut to this many code points and followed by `...`, so the quoted
+// text is at most this plus three code points.
+const QUOTED_EVIDENCE_MAX_CODE_POINTS = 160;
+const ZERO_WIDTH_SPACE = '\u200B';
+
 function findRepositoryFitHiddenMetadataRanges(
   text: string,
 ): MarkdownCodeRange[] {
@@ -3610,6 +3617,43 @@ export function checkActionability(context: Context): CheckOutcome {
   };
 }
 
+/**
+ * #4374: formats the matched text a failing Check 6/7 evidence string quotes.
+ * In this order: collapse each whitespace run to one space, trim, make the
+ * text inert, and only then cut it to {@link QUOTED_EVIDENCE_MAX_CODE_POINTS}
+ * code points plus `...` (the zero-width spaces the inert step adds count
+ * toward the cut).
+ *
+ * The rejection comment built from this evidence is posted by a trusted
+ * account and parsed by three unanchored readers in
+ * `supersession-detection.mts`: `parseSuitabilityTriageVerdictMarker`, and
+ * `findTrustedSuitabilityRejection`'s `outcome:` and `Check N (...)`
+ * patterns. The inert step therefore breaks, with a zero-width space (which
+ * JavaScript's `\s` does not match), every shape those readers would
+ * accept: a `<!--` or `-->` delimiter (an overlapping `<!-->` is broken on
+ * both sides), the word `outcome` before its colon, the word `Check` before
+ * its number, and the `@` of a mention. The patterns are case-insensitive and
+ * have no word boundary, exactly like the readers' own, and must not gain the
+ * `u` flag (preventive; no observed incident yet).
+ *
+ * Applied only to the four failing returns of `checkAutonomy` and
+ * `checkVerifiability`: the demoted returns and Check 3 keep quoting raw text.
+ */
+function formatQuotedEvidence(text: string): string {
+  const inert = text
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/<!--/g, `<!${ZERO_WIDTH_SPACE}--`)
+    .replace(/-->/g, `--${ZERO_WIDTH_SPACE}>`)
+    .replace(/(outcome)(\s*:)/gi, `$1${ZERO_WIDTH_SPACE}$2`)
+    .replace(/(check)(\s+\d)/gi, `$1${ZERO_WIDTH_SPACE}$2`)
+    .replace(/(?<!\w)@(?=[A-Za-z0-9])/g, `@${ZERO_WIDTH_SPACE}`);
+  const codePoints = Array.from(inert);
+  return codePoints.length > QUOTED_EVIDENCE_MAX_CODE_POINTS
+    ? `${codePoints.slice(0, QUOTED_EVIDENCE_MAX_CODE_POINTS).join('')}...`
+    : inert;
+}
+
 export function checkAutonomy(context: Context): CheckOutcome {
   const { issue } = context;
   const labels = new Set(issue.labels);
@@ -3787,8 +3831,7 @@ export function checkAutonomy(context: Context): CheckOutcome {
       }
       return {
         pass: false,
-        evidence:
-          'Issue presents an unresolved either/or implementation choice.',
+        evidence: `Issue presents an unresolved either/or implementation choice: "${formatQuotedEvidence(markerText)}".`,
       };
     }
   }
@@ -3821,8 +3864,7 @@ export function checkAutonomy(context: Context): CheckOutcome {
     }
     return {
       pass: false,
-      evidence:
-        'Issue explicitly requires external human coordination or approval.',
+      evidence: `Issue explicitly requires external human coordination or approval: "${formatQuotedEvidence(matchedText)}".`,
     };
   }
 
@@ -3849,7 +3891,7 @@ export function checkAutonomy(context: Context): CheckOutcome {
     }
     return {
       pass: false,
-      evidence: 'Issue names an unresolved product or design choice.',
+      evidence: `Issue names an unresolved product or design choice: "${formatQuotedEvidence(markerText)}".`,
     };
   }
 
@@ -4182,7 +4224,7 @@ export function checkVerifiability(context: Context): CheckOutcome {
     }
     return {
       pass: false,
-      evidence: 'Issue success depends on subjective approval or judgment.',
+      evidence: `Issue success depends on subjective approval or judgment: "${formatQuotedEvidence(subjectiveApprovalMatch)}".`,
     };
   }
 
