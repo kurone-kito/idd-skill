@@ -797,6 +797,15 @@ test('CLI: --type f4-head-proof takes no derived proof flag', () => {
   assert.match(stderr, /--merge, --pr/);
 });
 
+test('CLI: --type f4-head-proof refuses a trusted-login or advisory-bot override', () => {
+  for (const flag of ['--trusted-marker-logins', '--advisory-bot-logins']) {
+    const stderr = runCliWithPathExpectingFailure(
+      f4Argv('issue', F4_CLI_FIELDS, [flag, 'someone']),
+    );
+    assert.match(stderr, new RegExp(`does not take ${flag}`), flag);
+  }
+});
+
 test('CLI: --type f4-head-proof refuses --from-pr', () => {
   const stderr = runCliWithPathExpectingFailure(
     f4Argv('issue', F4_CLI_FIELDS, ['--from-pr', '4390']),

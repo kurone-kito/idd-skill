@@ -4246,7 +4246,10 @@ REST pull request and commit endpoints, the branch tip from `git rev-parse
 --verify refs/heads/<branch>` in `--worktree`, and the `f2` head from the
 latest trusted, unedited `review-watermark` of this claim on the pull request.
 `--worktree` must be a worktree that `git worktree list --porcelain` registers
-for the repository of the current directory. `--target pr` is refused.
+for the repository of the current directory. `--target pr` is refused. So are
+`--trusted-marker-logins` and `--advisory-bot-logins`: the trusted logins come
+from the viewer, `IDD_TRUSTED_MARKER_ACTORS`, and the trusted configuration,
+never a flag.
 
 Before any POST the command reads the stored activation nonce (`claim-lock
 --read-tokens`), runs `resume-claim-routing --assert`, checks that the claim

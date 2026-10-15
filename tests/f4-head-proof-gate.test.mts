@@ -1403,11 +1403,15 @@ test('the command refuses a derived proof flag and a flag it does not take', () 
   assert.deepEqual(h.posts, []);
 });
 
-test('the command refuses --advisory-bot-logins', () => {
-  const h = harness();
-  const { result, err } = runCommand(['--advisory-bot-logins', 'a'], h.deps);
-  assert.equal((result as { kind: string }).kind, 'usage');
-  assert.match(err, /does not take --advisory-bot-logins/);
+test('the command refuses --advisory-bot-logins and --trusted-marker-logins', () => {
+  for (const flag of ['--advisory-bot-logins', '--trusted-marker-logins']) {
+    const h = harness();
+    const { result, out, err } = runCommand([flag, 'someone'], h.deps);
+    assert.equal((result as { kind: string }).kind, 'usage', flag);
+    assert.equal(out, '');
+    assert.match(err, new RegExp(`does not take ${flag}`));
+    assert.deepEqual(h.calls, [], 'no read happens before the refusal');
+  }
 });
 
 test('a bad agent or claim ID fails before any read, with the renderer error', () => {

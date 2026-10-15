@@ -2300,10 +2300,17 @@ export function runF4HeadProofCommand(
   const unexpected = Object.keys(args.fields).filter(
     (flag) => !F4_HEAD_PROOF_FLAGS.includes(flag),
   );
-  if (args.advisoryBotLogins !== '') {
-    const message = '--type f4-head-proof does not take --advisory-bot-logins';
-    process.stderr.write(`${message}\n`);
-    return { exitCode: 1, kind: 'usage', message };
+  // Neither list can widen what the command trusts or reads: the trusted
+  // logins come from the environment and the trusted configuration only.
+  for (const [flag, value] of [
+    ['--trusted-marker-logins', args.trustedMarkerLogins],
+    ['--advisory-bot-logins', args.advisoryBotLogins],
+  ] as const) {
+    if (value !== '') {
+      const message = `--type f4-head-proof does not take ${flag}`;
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, kind: 'usage', message };
+    }
   }
   if (unexpected.length > 0) {
     const message = `--type f4-head-proof takes only --target, --claim-id, --agent-id and --worktree (every proof value is read live); do not pass: ${unexpected
@@ -2328,11 +2335,7 @@ export function runF4HeadProofCommand(
         worktree: args.fields.worktree,
         apply: args.apply,
       },
-      createDeps({
-        owner,
-        repo,
-        trustedMarkerLoginsFlag: args.trustedMarkerLogins,
-      }),
+      createDeps({ owner, repo }),
     );
     if (outcome.kind === 'refused') {
       process.stderr.write(`${outcome.message}\n`);

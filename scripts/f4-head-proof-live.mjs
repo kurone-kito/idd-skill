@@ -90,9 +90,6 @@ function assertClaim(request, options) {
     options.owner,
     '--repo',
     options.repo,
-    ...(options.trustedMarkerLoginsFlag === ''
-      ? []
-      : ['--trusted-marker-logins', options.trustedMarkerLoginsFlag]),
   ];
   let stdout = '';
   let exited = 0;
@@ -218,12 +215,14 @@ export function selectPullRequests(rows, branch) {
     .filter((row) => Number.isSafeInteger(row.number) && row.number > 0);
 }
 /**
- * The production callbacks for one repository. `trustedMarkerLoginsFlag` is
- * the CLI's `--trusted-marker-logins` value (empty when absent): it follows
- * the same flag, environment, then trusted-config ladder as the merge gates.
+ * The production callbacks for one repository. The trusted logins are the
+ * viewer, the trusted configuration (read from the repository's default
+ * branch, never the worktree), `IDD_TRUSTED_MARKER_ACTORS`, and, when
+ * collaborator-marker trust is on, collaborators with write access. No flag
+ * can add to them: this command takes none.
  */
 export function createLiveF4HeadProofDeps(options) {
-  const { owner, repo, trustedMarkerLoginsFlag } = options;
+  const { owner, repo } = options;
   const adapter = createGithubProviderAdapter(owner, repo);
   const permissionCache = new Map();
   let viewerLogin = null;
@@ -232,8 +231,7 @@ export function createLiveF4HeadProofDeps(options) {
     isRegisteredWorktree,
     readTokens: readGeneratedClaimTokens,
     checkLock: checkClaimLock,
-    assertClaim: (request) =>
-      assertClaim(request, { owner, repo, trustedMarkerLoginsFlag }),
+    assertClaim: (request) => assertClaim(request, { owner, repo }),
     resolveTrustedLogins(comments) {
       viewerLogin ??= adapter.resolveViewerLogin();
       if (trustConfig === undefined) {
@@ -255,7 +253,6 @@ export function createLiveF4HeadProofDeps(options) {
         : [];
       return composeGateTrustedMarkerLogins({
         viewerLogin,
-        flagValue: trustedMarkerLoginsFlag,
         envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
         config: trustConfig,
         collaboratorMarkerLogins,

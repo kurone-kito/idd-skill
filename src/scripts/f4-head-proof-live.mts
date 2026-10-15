@@ -94,7 +94,7 @@ function isRegisteredWorktree(worktree: string): boolean | null {
  */
 function assertClaim(
   request: ClaimAssertRequest,
-  options: { owner: string; repo: string; trustedMarkerLoginsFlag: string },
+  options: { owner: string; repo: string },
 ): ClaimAssertOutcome {
   const script = join(
     resolveBundleRoot(import.meta.dirname),
@@ -115,9 +115,6 @@ function assertClaim(
     options.owner,
     '--repo',
     options.repo,
-    ...(options.trustedMarkerLoginsFlag === ''
-      ? []
-      : ['--trusted-marker-logins', options.trustedMarkerLoginsFlag]),
   ];
   let stdout = '';
   let exited = 0;
@@ -266,16 +263,17 @@ export function selectPullRequests(
 }
 
 /**
- * The production callbacks for one repository. `trustedMarkerLoginsFlag` is
- * the CLI's `--trusted-marker-logins` value (empty when absent): it follows
- * the same flag, environment, then trusted-config ladder as the merge gates.
+ * The production callbacks for one repository. The trusted logins are the
+ * viewer, the trusted configuration (read from the repository's default
+ * branch, never the worktree), `IDD_TRUSTED_MARKER_ACTORS`, and, when
+ * collaborator-marker trust is on, collaborators with write access. No flag
+ * can add to them: this command takes none.
  */
 export function createLiveF4HeadProofDeps(options: {
   owner: string;
   repo: string;
-  trustedMarkerLoginsFlag: string;
 }): F4HeadProofGateDeps {
-  const { owner, repo, trustedMarkerLoginsFlag } = options;
+  const { owner, repo } = options;
   const adapter = createGithubProviderAdapter(owner, repo);
   const permissionCache: CollaboratorPermissionCache = new Map();
   let viewerLogin: string | null = null;
@@ -285,8 +283,7 @@ export function createLiveF4HeadProofDeps(options: {
     isRegisteredWorktree,
     readTokens: readGeneratedClaimTokens,
     checkLock: checkClaimLock,
-    assertClaim: (request) =>
-      assertClaim(request, { owner, repo, trustedMarkerLoginsFlag }),
+    assertClaim: (request) => assertClaim(request, { owner, repo }),
     resolveTrustedLogins(comments: readonly ProviderComment[]) {
       viewerLogin ??= adapter.resolveViewerLogin();
       if (trustConfig === undefined) {
@@ -308,7 +305,6 @@ export function createLiveF4HeadProofDeps(options: {
         : [];
       return composeGateTrustedMarkerLogins({
         viewerLogin,
-        flagValue: trustedMarkerLoginsFlag,
         envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
         config: trustConfig,
         collaboratorMarkerLogins,
