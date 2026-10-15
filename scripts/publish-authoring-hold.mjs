@@ -2381,6 +2381,36 @@ function runCarrierRelease(input, scratch, ctx) {
   checkCarrierPreconditions(input, scratch, afterSettle);
   // (5) The single label removal, with its verification.
   ctx.mark('label-removal');
+  // Immediately before the removal the owner log must still be ours, with the
+  // release, guard, and heartbeat markers on it (contract.md, "Stage 2"). No
+  // label has changed yet, so a failed read is held, not recovery-hold.
+  const beforeRemoval = readOwnerLog(input, 'label-removal');
+  replayOrRecover(input, beforeRemoval, 'label-removal');
+  const markersPresent =
+    validOwned(
+      beforeRemoval,
+      input,
+      'release',
+      acquireDigest,
+      'none',
+      'label-removal',
+    ).some((owned) => owned.id === releaseId) &&
+    validOwned(
+      beforeRemoval,
+      input,
+      'release-guard',
+      'none',
+      'none',
+      'label-removal',
+    ).some((owned) => owned.id === guardId) &&
+    markerOnLogModes(beforeRemoval, input, heartbeatId, heartbeatModes);
+  if (!markersPresent) {
+    throw new CarrierReleaseStop(
+      'held',
+      'label-removal',
+      'the release, guard, or heartbeat marker is not on the carrier immediately before the removal',
+    );
+  }
   removeAuthoringLabel(input, releaseId, acquireDigest);
   // (6) release-complete. The sweep and the backlog run first, so the fresh
   // reads below are the last ones before the decision and the post.
