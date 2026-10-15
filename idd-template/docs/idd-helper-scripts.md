@@ -4959,6 +4959,39 @@ still fails closed:
   already find present and matching all leave the existing fail-closed
   stop unchanged -- write nothing.
 
+### Fresh-claim wrapper
+
+Steps 2 to 5 of the fresh claim in
+[`idd-claim.instructions.md`](../.github/instructions/idd-claim.instructions.md)
+run as one fenced `set -euo pipefail` block. The block fails closed. It exits
+non-zero at the first failure, and it prints `verified` only after
+`resume-claim-routing --assert` exits 0. Lost-claim cleanup is not part of the
+block. Run cleanup only at the exits that the claim file's Lost-claim cleanup
+section lists.
+
+Replace each placeholder with its value. Each placeholder already sits inside
+single quotes, so write any `'` in a value as `'\''`, as the cleanup script
+does. `<ts>` is the current UTC time in ISO 8601. `<settle-seconds>` is
+`claim.verifySettleDelay` converted to whole seconds: the distributed default
+`PT5S` is `5`.
+
+```sh
+set -euo pipefail
+w='<path>' a='{agent-id}' c='{claim-id}' n='{nonce}' r='<n>' b='<branch>' t='<ts>'
+g() { node scripts/resume-claim-routing.mjs --issue "$r" "$@"; }
+k() { node scripts/claim-lock.mjs --record-tokens --worktree "$w" --agent-id "$a" --claim-id "$c" "$@"; }
+p() { node scripts/post-idd-marker.mjs --target issue "$r" --agent-id "$a" --claim-id "$c" --timestamp "$t" --apply "$@"; }
+k
+g --fresh-claim-gate --own-worktree "$w" | node -e 'process.exit(JSON.parse(require("fs").readFileSync(0)).fresh_claim_gate.verdict==="claimable"?0:1)'
+p --type claim --supersedes none --branch "$b"
+k --nonce "$n"
+p --type activation-nonce --nonce "$n"
+node scripts/claim-lock.mjs --acquire --worktree "$w" --agent-id "$a" --claim-id "$c"
+sleep <settle-seconds>
+g --assert --claim-id "$c" --nonce "$n" --worktree "$w"
+echo verified
+```
+
 ### Clone-scoped lock
 
 - Source repo / vendored-node commands:

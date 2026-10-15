@@ -136,8 +136,7 @@ test('the lite claim keeps the worktree-first order and the stop sentence', () =
   );
 });
 
-const CLAIM_TEMPLATE =
-  'idd-template/.github/instructions/idd-claim.instructions.md';
+const WRAPPER_DOC = 'idd-template/docs/idd-helper-scripts.md';
 const WRAPPER_SUCCESS = 'verified';
 const WRAPPER_STEPS = [
   'record',
@@ -146,6 +145,7 @@ const WRAPPER_STEPS = [
   'record-nonce',
   'post-nonce',
   'acquire',
+  'sleep:5',
   'assert',
 ];
 
@@ -153,7 +153,7 @@ const WRAPPER_STEPS = [
 function freshClaimWrapper(): string {
   const match =
     /```sh\n(set -euo pipefail\nw='<path>'[^\n]*\n[\s\S]*?)\n```/.exec(
-      readTemplate(CLAIM_TEMPLATE),
+      readTemplate(WRAPPER_DOC),
     );
   assert.ok(match, 'the fresh-claim wrapper is a fenced sh block');
   return match[1];
@@ -166,14 +166,13 @@ function freshClaimWrapper(): string {
 function stubSource(): string {
   return `import { appendFileSync } from 'node:fs';
 const args = process.argv.slice(2);
-const type = args[args.indexOf('--type') + 1];
 const step = args.includes('--record-tokens')
   ? (args.includes('--nonce') ? 'record-nonce' : 'record')
   : args.includes('--acquire') ? 'acquire'
   : args.includes('--fresh-claim-gate') ? 'gate'
   : args.includes('--assert') ? 'assert'
-  : type === 'claim' ? 'post-claim'
-  : type === 'activation-nonce' ? 'post-nonce' : 'unknown';
+  : args[args.indexOf('--type') + 1] === 'claim' ? 'post-claim'
+  : args[args.indexOf('--type') + 1] === 'activation-nonce' ? 'post-nonce' : 'unknown';
 appendFileSync(process.env.TRACE, step + '\\n');
 if (step === 'gate') {
   process.stdout.write(JSON.stringify({ fresh_claim_gate: { verdict: process.env.VERDICT } }));
@@ -182,11 +181,23 @@ process.exit(JSON.parse(process.env.EXITS)[step] ?? 0);
 `;
 }
 
+/** A stub sleep: it logs the seconds it was given, without waiting. */
+const SLEEP_STUB = `#!/bin/sh
+echo "sleep:$1" >> "$TRACE"
+`;
+
+/** A value for a placeholder that already sits inside single quotes. */
+function shellBody(value: string): string {
+  return value.replaceAll("'", "'\\''");
+}
+
 type WrapperRun = { status: number | null; stdout: string; steps: string[] };
 
 /**
- * Runs the extracted wrapper under bash in a sandbox whose scripts/ directory
- * holds stub helpers. The placeholders are filled with fixed test values.
+ * Runs the extracted wrapper under bash in a sandbox. Stub helpers live in
+ * scripts/, a stub sleep shadows the real one, and the worktree path contains
+ * an apostrophe so the escape rule is exercised. The placeholders are filled
+ * with the default-format settle value: PT5S is 5 seconds.
  */
 function runFreshClaimWrapper(
   exits: Record<string, number>,
@@ -195,6 +206,9 @@ function runFreshClaimWrapper(
   const root = mkdtempSync(join(tmpdir(), 'fresh-claim-wrapper-'));
   try {
     mkdirSync(join(root, 'scripts'));
+    mkdirSync(join(root, 'bin'));
+    const worktree = join(root, "work'tree");
+    mkdirSync(worktree);
     for (const script of [
       'claim-lock',
       'resume-claim-routing',
@@ -202,23 +216,28 @@ function runFreshClaimWrapper(
     ]) {
       writeFileSync(join(root, 'scripts', `${script}.mjs`), stubSource());
     }
+    writeFileSync(join(root, 'bin', 'sleep'), SLEEP_STUB, { mode: 0o755 });
     const trace = join(root, 'trace.log');
     writeFileSync(trace, '');
     const block = freshClaimWrapper()
-      .replaceAll('<path>', root)
+      .replaceAll('<path>', shellBody(worktree))
       .replaceAll('{agent-id}', 'claude-test')
       .replaceAll('{claim-id}', 'claim-test')
       .replaceAll('{nonce}', 'nonce-test')
       .replaceAll('<n>', '4315')
       .replaceAll('<branch>', 'issue/4315-test')
       .replaceAll('<ts>', '2026-10-15T00:00:00Z')
-      .replaceAll('<settle>', '0');
-    assert.doesNotMatch(block, /<[a-z]+>|\{[a-z-]+\}/, 'every placeholder');
+      .replaceAll('<settle-seconds>', '5');
+    assert.doesNotMatch(block, /<[a-z-]+>|\{[a-z-]+\}/, 'every placeholder');
     const result = spawnSync('bash', ['-c', block], {
       cwd: root,
       encoding: 'utf8',
       env: {
-        PATH: `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ''}`,
+        PATH: [
+          join(root, 'bin'),
+          dirname(process.execPath),
+          process.env.PATH ?? '',
+        ].join(delimiter),
         TRACE: trace,
         EXITS: JSON.stringify(exits),
         VERDICT: verdict,
@@ -280,4 +299,19 @@ test('a failed claim post, nonce record, or acquire stops the later steps', () =
   ]) {
     assert.equal(run.stdout.includes(WRAPPER_SUCCESS), false);
   }
+});
+
+test('the claim pointer links to the fresh-claim wrapper heading', () => {
+  const pointer = 'docs/idd-helper-scripts.md#fresh-claim-wrapper';
+  assert.ok(
+    readTemplate(
+      'idd-template/.github/instructions/idd-claim.instructions.md',
+    ).includes(pointer),
+    'the claim file points at the wrapper anchor',
+  );
+  assert.match(
+    readTemplate(WRAPPER_DOC),
+    /\n### Fresh-claim wrapper\n/,
+    'the helper doc has the wrapper heading the anchor names',
+  );
 });
