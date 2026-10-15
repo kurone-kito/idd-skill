@@ -4093,6 +4093,62 @@ still fails closed:
   widen eligibility for a cross-repo-only (or all-malformed) closing
   reference -- caught live during this issue's own C1 self-review pass.
 
+### Hold marker contract
+
+Issue `#4310` adds the `idd-hold` marker a delegated worker posts on its
+claimed issue when it stops at a hold under the orchestrator fan-out
+variant. The rule that reads it, including how long a hold lasts, lives in
+`docs/idd-workflow.md` (Hold marker); this section covers only the helper
+side. The body is the token as the literal first bytes of the comment, a
+blank line, then the visible note:
+
+```md
+<!-- idd-hold: {agent-id} {claim-id} {iso8601} -->
+
+_{agent-id}: issue hold — IDD automation marker. Do not edit._
+```
+
+Post it with the profile-selected `post-idd-marker` command -- see
+[Post operational markers](#post-operational-markers-write-side) above
+for the command forms; source-repo example: `node scripts/post-idd-marker.mjs
+--type idd-hold --target issue <n> --agent-id <id> --claim-id <id>
+--timestamp <iso8601> --apply`. `--target pr` is refused, because the
+orchestrator reads the claimed issue's comments and a marker posted on a PR
+would be missed.
+
+The marker is informational and is deliberately **not** a claim-family
+marker: `resolveActiveClaim` never reads it, so it neither starts, ends,
+refreshes, nor transfers a claim, and a hold marker whose edit state is
+unresolved is ignored instead of making claim resolution throw.
+
+- `parseHoldMarker()` (`marker-helpers.mts`) reads one comment body. The
+  token must be the literal first bytes, so a quoted or embedded marker does
+  not parse. It keeps the comment's GitHub `created_at` apart from the
+  timestamp embedded in the body, which is for diagnostics only.
+- `resolveTrustedHoldMarkers()` (`protocol-helpers.mts`) takes an issue's
+  comments plus the claim's agent id, claim id, and the login that posted the
+  claim's `claimed-by`, and returns `{ markers, first, newest }` or `null`.
+  `markers` holds every qualifying marker for that claim, oldest first by
+  GitHub `created_at` (never the embedded timestamp; a same-second tie goes
+  to the numeric comment id, then to the input order), so the whole unbroken
+  run stays readable and not only the newest marker.
+- A marker qualifies only when **all** of these hold: its author login is the
+  login that posted the claim's `claimed-by` and is in the trusted marker
+  login set (the marker's own `{agent-id}` text is never trusted, because the
+  ids are public); its agent id and claim id match the claim; and its edit
+  state is an explicit `lastEditedAt: null` (an edited marker, or an
+  unresolved edit state, is ignored). This mirrors the trust rule in
+  `docs/idd-workflow.md`.
+- The helper encodes no "the hold ended" verdict. Whether a later
+  `claimed-by` ends a hold depends on which renewals the orchestrator itself
+  posted, which only the orchestrator knows, so the caller narrows the result
+  against its own claim timeline.
+
+`MARKER_HIDE_POLICY` (`marker-helpers.mts`) classifies `<!-- idd-hold:`
+`excluded`: the hold start is the earliest marker of the run, so hiding one
+would shift the start of the cap. It is listed in `IDD_AGENT_DERIVED_MARKERS`,
+like `activation-nonce`, because a worker posts it as itself.
+
 ### Provider health helper
 
 - Command: `node scripts/provider-health.mjs [--owner <owner>] [--repo <repo>]`
@@ -5310,14 +5366,14 @@ still fails closed:
 - Write-side companion to `emit-marker`: it renders the canonical body for
   each operational marker `<type>` (`claim`, `unclaim`, `activation-nonce`,
   `watermark`, `baseline`, `advisory`, `advisory-recovery`,
-  `advisory-reroll`) by reusing the single-sourced `protocol-helpers`
+  `advisory-reroll`, `idd-hold`) by reusing the single-sourced `protocol-helpers`
   renderers, then POSTs it as a JSON document (`{"body": …}`) via
   `gh api --method POST .../comments --input -`. The JSON path is
   mandatory because `gh issue comment` / `gh api -f body=` silently
   reject the HTML-comment-first claim-family bodies. `-f` also treats a
   leading `@` as a literal character — only `-F` reads `@file` contents.
-- The `claim` / `unclaim` / `activation-nonce` / `watermark` / `baseline`
-  bodies are HTML-comment-first with a visible "Do not edit" note;
+- The `claim` / `unclaim` / `activation-nonce` / `watermark` / `baseline` /
+  `idd-hold` bodies are HTML-comment-first with a visible "Do not edit" note;
   `advisory` / `advisory-recovery` / `advisory-reroll` are the
   **plain-text** `advisory-wait:` / `advisory-wait-recovery:` /
   `advisory-reroll:` forms (no visible note) so the AW2 / shell-fallback
@@ -5330,7 +5386,9 @@ still fails closed:
   `watermark` takes `--agent-id --claim-id --head-sha --max-activity-at
   --total-item-count --ci-completed-at`; `baseline` takes `--agent-id
   --claim-id --sha`; `advisory` / `advisory-recovery` / `advisory-reroll`
-  take `--agent-id --head-sha --timestamp`.
+  take `--agent-id --head-sha --timestamp`; `idd-hold` takes `--agent-id
+  --claim-id --timestamp` and only `--target issue` (see the
+  [Hold marker contract](#hold-marker-contract)).
 - One-command watermark (`watermark` only): `--from-pr <n>` derives
   `--head-sha` / `--max-activity-at` / `--total-item-count` /
   `--ci-completed-at` from a fresh `review-activity-snapshot` of PR `<n>` and
