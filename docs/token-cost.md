@@ -196,17 +196,22 @@ Grok's `toolCallCount` below) -- keep all three states (real count,
 observed zero:
 
 - **Claude**: `turnCount` counts API requests in the session log. The
-  `type: "assistant"` records of one API request share a `requestId`; a
-  record with none is grouped by its `message.id`, and a record with
-  neither identifier is a request of its own. Each request is one turn,
+  `type: "assistant"` records of one API response share both a `requestId`
+  and a `message.id`, and records are grouped by that pair. Two responses
+  that share a `requestId` (a silent retry) carry different `message.id`
+  values, so they are two requests. A record with only one of the two
+  identifiers is grouped by that one. A record with neither identifier is
+  a request of its own. Each request is one turn,
   including subagent/sidechain turns, matching this adapter's own
   inclusive usage-counting convention. `toolCallCount` sums `tool_use`
   content blocks across all of a request's records. Usage and turn counts
   are per API request within one harvest input: a request split across
   inputs (a cwd change or an event window) counts once per input. Records
-  are joined only when their identifier strings are identical, so records
-  that use different identifier forms for one response are not joined.
-  Both counts are always a real count, never `null` or omitted.
+  are joined only on an identical key: two records join when both carry the
+  same `requestId` and `message.id`, or when each carries only the same single
+  identifier. A record that carries only one identifier is not joined to the
+  records that carry both; none is observed in the local logs. Both counts are
+  always a real count, never `null` or omitted.
 - **Codex**: `turnCount` counts `turn_context` records in the rollout
   log. `toolCallCount` is always `null` (never omitted) -- no fixture in
   this repository names a tool-invocation record type the Codex rollout
@@ -221,8 +226,8 @@ observed zero:
 **Cross-vendor comparability caveat**: Claude's and Codex's `turnCount`
 are not the same unit. A Claude turn is one assistant message, which here
 means one API request and its response: Claude Code logs it as one record
-per content block, and those records share a `requestId`. A Codex turn is
-one `turn_context` record, which can itself span a whole
+per content block, and those records share a `requestId` and a `message.id`.
+A Codex turn is one `turn_context` record, which can itself span a whole
 tool-call loop before the next one starts. Comparing raw `turnCount`
 values across vendors without accounting for this difference will
 overstate how much "chattier" one vendor is relative to the other.
