@@ -2654,13 +2654,16 @@ export function releaseCarrier(
   const sweeps: CarrierSweepRecord[] = [];
   const backlog: CarrierBacklogRecord[] = [];
   const steps: string[] = [];
-  const scratch = mkdtempSync(join(tmpdir(), 'idd-carrier-release-'));
+  let scratch = '';
   let step: string = CARRIER_RELEASE_PLAN[0];
   const mark = (name: string): void => {
     step = name;
     steps.push(name);
   };
   try {
+    // The scratch directory is allocated inside the guard: a failure here is
+    // still reported as a recovery hold, and nothing has been written yet.
+    scratch = mkdtempSync(join(tmpdir(), 'idd-carrier-release-'));
     runCarrierRelease(input, scratch, { sweeps, backlog, mark });
     return {
       state: 'released',
@@ -2689,7 +2692,9 @@ export function releaseCarrier(
       steps,
     };
   } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    if (scratch !== '') {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   }
 }
 
@@ -2880,6 +2885,10 @@ function runCarrierRelease(
       'the body or a release label changed immediately before the removal',
     );
   }
+  // The full precondition pass runs once more here, on this fresh read: the
+  // sole-member result, the carrier audit, the body digest, and both labels
+  // must hold at the removal itself (contract.md, "Carrier creation-hold").
+  checkCarrierPreconditions(input, scratch, edited);
   removeAuthoringLabel(input, releaseId, acquireDigest);
 
   // (6) release-complete. The sweep and the backlog run first, so the fresh
