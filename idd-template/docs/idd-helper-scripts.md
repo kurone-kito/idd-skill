@@ -908,11 +908,11 @@ in this preamble, since the fallback differs per helper.
   lacks or that is not an ancestor of the tip, a directory that is not a
   repository, an invalid `developmentBranch`, or an unresolved base ref),
   `instructionsChanged` is `null` and `slots` and `limitingFactor` are
-  unaffected. A short value that also names a ref is reported as not a
-  commit, so pass the full SHA. The helper reads local refs only and never
-  fetches, reads the policy file from the working directory (run it from the
-  repository root), needs git 2.28 or newer, and without the argument prints
-  none of the three keys.
+  unaffected. A short value that also names a ref for a different commit is
+  reported as not a commit, so pass the full SHA. The helper reads local refs
+  only and never fetches, reads the policy file from the working directory
+  (run it from the repository root), needs git 2.28 or newer, and without the
+  argument prints none of the three keys.
 - `scripts/suitability-triage.mjs` for A4.5 seven-check suitability
   evaluation (referenced in
   [kurone-kito/idd-skill#392](https://github.com/kurone-kito/idd-skill/issues/392)),
