@@ -194,10 +194,16 @@ process.exit(JSON.parse(process.env.EXITS)[step] ?? 0);
 `;
 }
 
-/** A stub sleep: it logs the seconds it was given, without waiting. */
-const SLEEP_STUB = `#!/bin/sh
+/**
+ * A stub sleep: it logs the seconds it was given, without waiting, then exits
+ * with the given code so a failing settle delay can be exercised.
+ */
+function sleepStub(exitCode: number): string {
+  return `#!/bin/sh
 echo "sleep:$1" >> "$TRACE"
+exit ${exitCode}
 `;
+}
 
 /** A value for a placeholder that already sits inside single quotes. */
 function shellBody(value: string): string {
@@ -230,7 +236,9 @@ function runFreshClaimWrapper(
     ]) {
       writeFileSync(join(root, 'scripts', `${script}.mjs`), stubSource());
     }
-    writeFileSync(join(root, 'bin', 'sleep'), SLEEP_STUB, { mode: 0o755 });
+    writeFileSync(join(root, 'bin', 'sleep'), sleepStub(exits.sleep ?? 0), {
+      mode: 0o755,
+    });
     const trace = join(root, 'trace.log');
     writeFileSync(trace, '');
     const block = freshClaimWrapper()
@@ -317,6 +325,15 @@ test('an absent or malformed generated-tokens record stops before the assert', {
     assert.deepEqual(run.steps, WRAPPER_STEPS.slice(0, 7), tokens);
     assert.equal(run.stdout.includes(WRAPPER_SUCCESS), false, tokens);
   }
+});
+
+test('a failed settle sleep stops before the assert and prints no success', {
+  skip: WRAPPER_SKIP,
+}, () => {
+  const run = runFreshClaimWrapper({ sleep: 1 });
+  assert.notEqual(run.status, 0);
+  assert.deepEqual(run.steps, WRAPPER_STEPS.slice(0, 8));
+  assert.equal(run.stdout.includes(WRAPPER_SUCCESS), false);
 });
 
 test('a failed claim post, nonce record, or acquire stops the later steps', {
