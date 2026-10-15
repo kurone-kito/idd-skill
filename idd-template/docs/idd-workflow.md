@@ -1234,7 +1234,9 @@ Running this variant safely requires:
   apart, so it treats any valid `claimed-by` newer than the marker as ending
   the hold and renews nothing.
 - **Held-worker renewal.** A held worker, as the hold marker defines, is
-  renewed at the orchestrator's wake-ups in section 4 of its phase file. At or
+  renewed at the orchestrator's wake-ups in section 4 of its phase file. A
+  worker that completes while held skips the report and disposal of section 5:
+  its entry stays `reporting`, and the renewal runs at those wake-ups. At or
   after 72 h from the hold start, the claim revalidation gate confirms the
   active claim is still this claim; the orchestrator then posts `unclaimed-by`
   for it and records the hold and cap in the run report, and once that

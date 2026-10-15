@@ -90,7 +90,7 @@ Lost on restart: see [recovery](../../docs/idd-workflow.md#orchestrator-restart)
   full Discover run. Otherwise, report the `limitingFactor` and stop.
 - If the graph has nothing startable, re-run Discover on that cadence; stop only
   if it still finds nothing and every roster entry is `disposed`.
-- Held workers: fan-out variant.
+- Held workers skip §5 (variant).
 
 ## 5. Report and disposal
 
