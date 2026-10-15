@@ -65,6 +65,7 @@ import {
   renderAuthoringPublicationIntentMarker,
   renderClaimedByMarker,
   renderCopilotUnavailableMarker,
+  renderHoldMarker,
   renderOutOfLoopMarker,
   renderReviewAckMarker,
   renderReviewBaselineMarker,
@@ -114,6 +115,7 @@ export const MARKER_TYPES = [
   'review-ack',
   'copilot-unavailable',
   'out-of-loop',
+  'idd-hold',
   'authoring-owner',
   'authoring-publication-intent',
 ] as const;
@@ -247,6 +249,9 @@ const REQUIRED_FIELDS_BY_TYPE: Record<MarkerType, readonly string[]> = {
   // {@link renderOutOfLoopMarker}'s own doc comment for why it is a
   // closed one-value enum), never user-supplied.
   'out-of-loop': ['agent-id', 'timestamp'],
+  // kurone-kito/idd-skill#4310: same three fields as `unclaim`. The marker
+  // records a worker's hold only; it carries no claim state of its own.
+  'idd-hold': ['agent-id', 'claim-id', 'timestamp'],
   'authoring-owner': [
     'marker-target',
     'anchor',
@@ -470,6 +475,15 @@ export function buildMarkerBody(type: string, fields: MarkerFields): string {
         prNumber: fields.pr,
         reason: 'bootstrap',
         at: fields.timestamp,
+      });
+    case 'idd-hold':
+      // #4310: the stamped hold marker a delegated worker posts on its
+      // claimed issue (docs/idd-workflow.md, "Hold marker"). Informational:
+      // posting it never starts, ends, or transfers a claim.
+      return renderHoldMarker({
+        agentId: fields['agent-id'],
+        claimId: fields['claim-id'],
+        timestamp: fields.timestamp,
       });
     case 'authoring-owner':
       // #2931: routes through the existing marker-helpers.mts renderer
@@ -1907,6 +1921,9 @@ listed is required for that type):
   copilot-unavailable --agent-id --claim-id --head-sha --attempt --timestamp
   out-of-loop        --agent-id --timestamp --target pr <n> (reason is always
                      bootstrap; pr: is derived from <n>)
+  idd-hold           --agent-id --claim-id --timestamp --target issue <n>
+                     (the hold marker; informational, it never changes who
+                     owns the claim)
   authoring-owner    --marker-target --anchor --mode --marker-owner --set
                      --session --snapshot-sha256 --supersedes [--body-sha256]
                      [--marker-prefix]
@@ -2828,6 +2845,16 @@ function main(): HelperCliResult {
       return { exitCode: 1, kind: 'usage', message };
     }
     args.fields.pr = String(args.number);
+  }
+
+  // #4310: the hold marker is read from the claimed issue's comments (the
+  // orchestrator's held-worker renewal rule, docs/idd-workflow.md), so one
+  // posted on a PR would be silently missed and the held claim would go stale
+  // unrenewed. Refuse it before anything is posted.
+  if (args.type === 'idd-hold' && args.target !== 'issue') {
+    const message = '--type idd-hold requires --target issue';
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
   }
 
   // #2931: --marker-prefix defaults the same way

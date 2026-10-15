@@ -1208,12 +1208,17 @@ Running this variant safely requires:
 - **Hold marker.** A worker that stops at a hold posts, on the claimed issue,
   a comment whose first bytes are `<!-- idd-hold: {agent-id} {claim-id}
   {ISO8601-timestamp} -->`, followed by a short visible note (`_{agent-id}:
-  issue hold — IDD automation marker. Do not edit._`), through the direct JSON
-  `POST` path. `post-idd-marker` has no hold type yet, and the claim parser
-  does not read this marker yet; the orchestrator reads it from the issue
-  comments. The delegation brief must tell the worker to post it when it stops
-  at a hold. A delegated worker posts it after its last `claimed-by` and posts
-  no `claimed-by` while the hold lasts, because the orchestrator owns the hold
+  issue hold — IDD automation marker. Do not edit._`), through
+  `post-idd-marker --type idd-hold --target issue <n> --agent-id <id>
+  --claim-id <id> --timestamp <ISO8601> --apply` or, where no helper runtime
+  exists, the direct JSON `POST` path. Without `--apply` the command only
+  previews the body. The claim parser never reads this marker, so it cannot
+  change who owns the claim; the orchestrator reads it from the issue comments
+  by the trust rule below, which `resolveTrustedHoldMarkers` implements (the
+  Hold marker contract in `idd-helper-scripts.md` covers the helper side). The
+  delegation brief must tell the worker to post it when it stops at a hold. A
+  delegated worker posts it after its last `claimed-by` and posts no
+  `claimed-by` while the hold lasts, because the orchestrator owns the hold
   heartbeat; this is the fan-out exception to the shared Hold / suspend 12 h
   re-post. A hold marker is trusted only when the actor that posted the active
   claim's `claimed-by` also posted it, and its agent id and claim id match
