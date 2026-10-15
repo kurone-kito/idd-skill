@@ -13,9 +13,10 @@
 // Reads Claude Code project JSONL files
 // (`~/.claude/projects/<encoded-cwd>/*.jsonl`), each a newline-delimited
 // stream of records. Claude Code writes one record per content block of an
-// API response, and those records share a `requestId`, so assistant records
-// are grouped into API requests (`groupClaudeRequests`, #4380) before usage
-// and turns are counted. This module documents the specific record
+// API response, and those records share a `requestId` and a `message.id`,
+// so assistant records are grouped into API requests (`groupClaudeRequests`,
+// #4380) before usage and turns are counted. This module documents the
+// specific record
 // shapes it reads (assistant records carrying `message.usage`, and
 // `type: "system", subtype: "compact_boundary"` records) as local
 // structural types; only the fields actually consumed are declared, and
@@ -314,15 +315,21 @@ function addUsage(a, b) {
   };
 }
 /**
- * The request identifier of one assistant record: its top-level `requestId`,
- * else its `message.id`, each taken only when it is a non-empty string.
- * Undefined when neither is present.
+ * The request key of one assistant record: the pair of its top-level
+ * `requestId` and its `message.id`, each taken only when it is a non-empty
+ * string. A response's records share both, so the pair names one response.
+ * Two responses that share a `requestId` (a silent Claude Code retry, see
+ * Claude Code issue #46398) carry different `message.id` values and stay
+ * apart. A record with only one identifier is keyed by that identifier alone,
+ * with the other slot null. Undefined when neither is present.
  */
 function requestIdentifierOf(record) {
-  return (
-    getStringField(record, 'requestId') ??
-    getStringField(getMessage(record), 'id')
-  );
+  const requestId = getStringField(record, 'requestId') ?? null;
+  const messageId = getStringField(getMessage(record), 'id') ?? null;
+  if (requestId === null && messageId === null) {
+    return undefined;
+  }
+  return JSON.stringify([requestId, messageId]);
 }
 function newClaudeRequest() {
   return {
@@ -366,9 +373,11 @@ function addRecordToRequest(request, record) {
 /**
  * Groups the assistant records of `records` into one {@link ClaudeRequest}
  * per API request (#4380). Claude Code writes one record per content block
- * of an API response, and those records share a `requestId`. A record with
- * no `requestId` is grouped by its `message.id`, and a record with neither
- * identifier is a request of its own, counted with its own usage as before.
+ * of an API response, and those records share a `requestId` and a
+ * `message.id`; records are grouped by that pair (see requestIdentifierOf).
+ * A record with only one of the two identifiers is keyed by that identifier
+ * alone, and a record with neither identifier is a request of its own, counted
+ * with its own usage as before.
  *
  * The request's usage is the field-wise maximum across its records (see
  * {@link ClaudeRequest.usage}), so repeated and streaming-snapshot records
@@ -379,9 +388,11 @@ function addRecordToRequest(request, record) {
  *
  * Grouping is within the given `records` array. A request split across cwd
  * segments or event-window groups therefore counts once per group. A
- * response whose records mix the two identifier forms would be split, a
- * known limit of this key rule. Requests come back in first-appearance
- * order.
+ * record that carries only one of the two identifiers is not joined to the
+ * records that carry both, a known limit of this key rule. None is observed
+ * in the local logs: every assistant record that carries a requestId also
+ * carries a message.id (checked: 0 of 83,191). Requests come back in
+ * first-appearance order.
  */
 export function groupClaudeRequests(records) {
   const requests = [];

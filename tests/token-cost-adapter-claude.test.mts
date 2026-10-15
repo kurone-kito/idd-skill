@@ -287,6 +287,67 @@ test('message.id groups records that carry no requestId, and a record with neith
   assert.equal(sample.turnCount, 2);
 });
 
+test('records sharing a requestId but carrying different message.ids are separate requests, as in a silent retry (#4380)', () => {
+  // Two responses under one requestId (Claude Code issue #46398): msg-1
+  // has two records with the same usage, which count once, and msg-2 is its
+  // own request.
+  const usage = { input: 2, output: 7, cacheRead: 100 };
+  const { sample } = claudeAdapter.harvest({
+    records: [
+      assistantRecord({
+        requestId: 'req-R',
+        messageId: 'msg-1',
+        timestamp: '2026-08-20T10:00:01.000Z',
+        usage,
+      }),
+      assistantRecord({
+        requestId: 'req-R',
+        messageId: 'msg-1',
+        timestamp: '2026-08-20T10:00:02.000Z',
+        usage,
+      }),
+      assistantRecord({
+        requestId: 'req-R',
+        messageId: 'msg-2',
+        timestamp: '2026-08-20T10:00:03.000Z',
+        usage,
+      }),
+    ],
+    fileBasename: 'grouping.jsonl',
+  });
+  assert.equal(sample.turnCount, 2);
+  assert.deepEqual(sample.usage, {
+    inputUncached: 4,
+    cacheRead: 200,
+    cacheCreation: 0,
+    output: 14,
+    reasoning: 0,
+  });
+});
+
+test('a record that carries only a requestId is not joined to records that carry both identifiers (a known limit, #4380)', () => {
+  // A known limit, pinned here: none is observed in the local logs.
+  const usage = { input: 2, output: 7, cacheRead: 100 };
+  const { sample } = claudeAdapter.harvest({
+    records: [
+      assistantRecord({
+        requestId: 'req-K',
+        messageId: 'msg-K',
+        timestamp: '2026-08-20T10:00:01.000Z',
+        usage,
+      }),
+      assistantRecord({
+        requestId: 'req-K',
+        timestamp: '2026-08-20T10:00:02.000Z',
+        usage,
+      }),
+    ],
+    fileBasename: 'grouping.jsonl',
+  });
+  assert.equal(sample.turnCount, 2);
+  assert.equal(sample.usage.inputUncached, 4);
+});
+
 test('turnCount counts distinct requests, and toolCallCount sums tool_use blocks across all their records (#4380)', () => {
   const { sample } = claudeAdapter.harvest({
     records: [
