@@ -165,6 +165,26 @@ test('the hold marker is a recognized operational marker that is kept visible', 
     assert.equal(operationalMarkerPrefix(early), null, early);
     assert.equal(detectMalformedOperationalMarker(early), null, early);
   }
+  // A date that cannot exist is not a live operational marker (parseHoldMarker
+  // rejects it too), yet it is still reported as a malformed hold marker, and
+  // the token-only start check is unchanged.
+  for (const impossible of [
+    `<!-- idd-hold: ${AGENT} ${CLAIM} 2026-13-45T99:00:00Z -->`,
+    `<!-- idd-hold: ${AGENT} ${CLAIM} 2026-02-30T00:00:00Z -->`,
+  ]) {
+    assert.equal(operationalMarkerPrefix(impossible), null, impossible);
+    assert.equal(
+      detectMalformedOperationalMarker(impossible),
+      '<!-- idd-hold:',
+      impossible,
+    );
+    assert.equal(
+      operationalMarkerPrefixByStart(impossible),
+      '<!-- idd-hold:',
+      impossible,
+    );
+    assert.equal(parseHoldMarker(impossible, TS), null, impossible);
+  }
   assert.equal(MARKER_HIDE_POLICY.get('<!-- idd-hold:')?.policy, 'excluded');
   // A worker posts it as itself, like activation-nonce, so its author is an
   // IDD agent login.

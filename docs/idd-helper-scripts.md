@@ -4123,7 +4123,10 @@ unresolved is ignored instead of making claim resolution throw.
 
 - `parseHoldMarker()` (`marker-helpers.mts`) reads one comment body. The
   token must be the literal first bytes, so a quoted or embedded marker does
-  not parse. It keeps the comment's GitHub `created_at` apart from the
+  not parse. An identifier that contains a comment delimiter (`<!--` or
+  `-->`) or a date that cannot exist is rejected, and the operational-marker
+  registry applies the same rules, so such a body is not recognized as a live
+  hold marker. It keeps the comment's GitHub `created_at` apart from the
   timestamp embedded in the body, which is for diagnostics only.
 - `resolveTrustedHoldMarkers()` (`protocol-helpers.mts`) takes an issue's
   comments plus the claim's agent id, claim id, and the login that posted the

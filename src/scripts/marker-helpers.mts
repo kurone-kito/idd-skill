@@ -3741,6 +3741,18 @@ export function operationalMarkerPrefix(body: string): string | null {
   ) {
     return null;
   }
+  // kurone-kito/idd-skill#4310: the shape-only pattern accepts a date that
+  // cannot exist (month 13, day 45), which parseHoldMarker rejects. Keep the
+  // two in step so a malformed hold comment is not classified as a live
+  // operational marker; `detectMalformedOperationalMarker` still reports it
+  // through the entry's `malformedPrefixPattern`. The token-only
+  // `operationalMarkerPrefixByStart` is unchanged.
+  if (
+    marker.label === '<!-- idd-hold:' &&
+    !isValidHoldOperationalMarker(normalized)
+  ) {
+    return null;
+  }
   return marker.label;
 }
 
@@ -3909,6 +3921,10 @@ function normalizeLinkedPr(value: unknown): string {
 
 function isValidForcedHandoffOperationalMarker(body: string): boolean {
   return parseForcedHandoffComment(body, '') !== null;
+}
+
+function isValidHoldOperationalMarker(body: string): boolean {
+  return parseHoldMarker(body, '') !== null;
 }
 
 export function isValidIsoTimestamp(value: unknown): value is string {
