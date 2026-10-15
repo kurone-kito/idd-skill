@@ -5002,6 +5002,20 @@ g --assert --claim-id "$c" --nonce "$n" --worktree "$w"
 echo verified
 ```
 
+### Lost-claim triggers
+
+Run this after the step 1 worktree exists, at every exit where this session no
+longer holds the claim: a `--record-tokens` failure (step 2), a failed claim
+post (step 3), a failed second `--record-tokens --nonce` write before the
+activation-nonce post (step 3), a failed activation-nonce post (step 3), a
+`--acquire` collision or other non-success exit (step 4), a failed
+`--read-tokens` check after acquire (step 4), a failed settle `sleep` before the
+assert (step 5), an `--assert` result other than `already_owned`/`keep` (step
+5), or an `unclaimed-by` posted after an authoring hold that followed a
+successful assert (Claim verification step 5). Never use `--takeover`. The
+cleanup script is in
+[`idd-claim.instructions.md`](../.github/instructions/idd-claim.instructions.md#lost-claim-cleanup-lost-claim-cleanup).
+
 ### Clone-scoped lock
 
 - Source repo / vendored-node commands:

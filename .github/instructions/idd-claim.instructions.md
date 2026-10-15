@@ -317,15 +317,8 @@ every fresh `{claim-id}`.
 
 ### Lost-claim cleanup (`lost-claim-cleanup`)
 
-Run this after the step 1 worktree exists, at every exit where this session no
-longer holds the claim: a `--record-tokens` failure (step 2), a failed claim
-post (step 3), a failed second `--record-tokens --nonce` write before the
-activation-nonce post (step 3), a failed activation-nonce post (step 3), a
-`--acquire` collision or other non-success exit (step 4), a failed
-`--read-tokens` check after acquire (step 4), a failed settle `sleep` before
-the assert (step 5), an `--assert` result other than `already_owned`/`keep`
-(step 5), or an `unclaimed-by` posted after an authoring hold that followed a
-successful assert (Claim verification step 5). Never use `--takeover`. Fill in
+Run this at each [trigger list](../../docs/idd-helper-scripts.md#lost-claim-triggers)
+exit. Never use `--takeover`. Fill in
 the placeholders of the script, each as a single-quoted shell word (write a `'`
 as `'\''`), resolve each helper as in A5(a), and run it as one hold of the
 [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock):
