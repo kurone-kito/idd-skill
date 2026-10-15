@@ -86,7 +86,7 @@ matrix's general "who mutates" column above.
 | Concept | Terminal state | Authorized actor / phase |
 | --- | --- | --- |
 | Issue | Closed | GitHub platform via the PR's closing keyword at F3 merge (execution-leaf issues); worker session running the A1.5 roadmap-audit claim (roadmap issues); worker session directly at B2.0 on a verified supersession hit (acceptance criteria already met by a merged sibling PR); human maintainer may also close manually |
-| Claim | Released or superseded | Worker session (`unclaimed-by` on abort); a later worker session via stale takeover (A5, Resume-stall S5); human-gated forced handoff transfers it without a release step |
+| Claim | Released or superseded | Worker session (`unclaimed-by` on abort); the orchestrator session for a held worker under the fan-out variant (`unclaimed-by` at the 72 h cap, `docs/idd-workflow.md`, Hold marker); a later worker session via stale takeover (A5, Resume-stall S5); human-gated forced handoff transfers it without a release step |
 | Roadmap task list / roadmap issue | Closed | Worker session running the A1.5 roadmap-audit claim, only once every child and descendant is closed or otherwise complete |
 | Branch and worktree | Deleted | Worker or merge-capable session, F4 — only after F3 merge succeeds |
 | Review thread | Resolved | Worker session, immediately after posting a disposition reply (E6/E13) — **except** an `**Awaiting maintainer decision**` reply, which leaves the thread unresolved until a maintainer responds (F2's unresolved-threads gate relies on this); or a human reviewer resolving their own thread |
