@@ -1327,8 +1327,8 @@ the repository.
 - `{worktree-path}`: the worktree the orchestrator pre-created for the claim.
 - `{scratchpad-dir}`: an issue-numbered subdirectory of the scratchpad path that
   the harness reports (see the Scratchpad part).
-- `{report-path}`: the worker's report draft, a file named with the issue number
-  directly in the scratchpad path that the harness reports.
+- `{report-path}`: the worker's report draft, a file whose name starts with the
+  issue number, directly in the scratchpad path that the harness reports.
 - `{terminal-phase}`: F4 under `fully_autonomous_merge`, F2.5 otherwise, or
   the earlier phase that the run is scoped to end at (see the Terminal phase
   part).
@@ -1408,7 +1408,7 @@ itself): most briefs drew the worker's span too narrowly, so the orchestrator
 finished the F4 steps by hand for most workers.
 
 **Scratchpad.** Your scratch files go only in `{scratchpad-dir}`, an
-issue-numbered subdirectory of the session scratchpad, with two exceptions: your
+issue-numbered subdirectory of the session scratchpad, with these exceptions: your
 report draft at `{report-path}`, and the critique scratch directory that
 Critique pass invocation names, if you start a critique agent. Never write
 scratch files in `{worktree-path}`, the pre-created worktree that you reuse.
@@ -1453,8 +1453,8 @@ points at, records that fallback's
 [residual role-misread risk](idd-design-rationale.md#context-inheriting-delegation-residual-risk).
 Otherwise replace the body of this part with one line that tells the worker to
 run each critique pass as an inline self-critique, and remove the clause about a
-critique agent from the Role part and the clause about the critique scratch
-directory from the Scratchpad part. The Limits gating is
+critique agent from the Role part and the "and the critique scratch directory"
+exception from the Scratchpad part. The Limits gating is
 preventive; no observed incident yet. Observed in the source repository's
 2026-10-14 to 2026-10-15 orchestrator run (no issue records the incident
 itself): none of about 25 briefs allowed the critique agent, so the workers'
@@ -1478,20 +1478,23 @@ that hands a worker into E10, E13, E14, or E15 has no supported cold-entry route
 yet, so stop and report instead.
 
 **Worker report.** Write your final report as a draft to `{report-path}`,
-outside the worktree. Fill the fields of `schemas/worker-report.schema.json`
-that you own: `schemaVersion`, `issue`, `pullRequest`, `claimId`, `harness`,
+outside the worktree. Fill the fields of `schemas/worker-report.schema.json`:
+`schemaVersion`, `issue`, `pullRequest`, `claimId`, `harness`, `workerHandle`,
 `terminalPhase`, `outcome`, and the optional `reviewRounds`, `stalls`,
-`deviations`, `frictions`, and `followUps`. Leave `workerHandle`, `verifiedAt`,
-and `recordedAt` to the orchestrator, which sets them after it checks the draft
-against live GitHub state, and do not append the draft to the
-[worker final report store](idd-helper-scripts.md#worker-final-report-store).
-The `outcome` that the draft proposes follows
+`deviations`, `frictions`, and `followUps`. Give `workerHandle` any non-empty
+value, such as `{agent-id}`, which the orchestrator overwrites from its roster
+entry, and leave `verifiedAt` and `recordedAt` out, because you cannot know
+them. Do not append the draft to the
+[worker final report store](idd-helper-scripts.md#worker-final-report-store),
+because the orchestrator checks it against live GitHub state first. The
+`outcome` that the draft proposes follows
 [Worker report outcomes](#worker-report-outcomes).
 
-Fill note: set `{report-path}` to a file named with the issue number, directly
-in the scratchpad path that the harness reports, because an orchestrator restart
-looks there for report drafts. The orchestrator completes the draft, as section
-5 of the orchestrator phase file says.
+Fill note: set `{report-path}` to a file whose name starts with the issue number,
+for example `2878-worker-report.json`, directly in the scratchpad path that the
+harness reports, because an orchestrator restart looks there for report drafts.
+The orchestrator completes the draft, as section 5 of the orchestrator phase
+file says.
 
 ### Orchestrator run report
 

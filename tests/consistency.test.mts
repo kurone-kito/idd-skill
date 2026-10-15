@@ -2875,7 +2875,8 @@ const BRIEF_PART_BODY_REQUIREMENTS: Readonly<
   ],
   '**Worker report.**': [
     'schemas/worker-report.schema.json',
-    'Leave `workerHandle`, `verifiedAt`, and `recordedAt` to the orchestrator',
+    'any non-empty value',
+    'leave `verifiedAt` and `recordedAt` out',
     '(#worker-report-outcomes)',
   ],
 };
@@ -2957,6 +2958,12 @@ test('docs idd-workflow fan-out variant carries a delegation brief template for 
       `${path}: the placeholders used must be exactly the defined ones`,
     );
     const definitions = section.slice(0, section.indexOf('\n**Role.** '));
+    assert.ok(
+      normalizeWhitespace(definitions).includes(
+        'whose name starts with the issue number',
+      ),
+      `${path}: {report-path} must be defined as an issue-number prefix`,
+    );
     for (const placeholder of tokens) {
       assert.ok(
         definitions.includes(`\`${placeholder}\``),
