@@ -100,10 +100,10 @@ claim, scoped to the roadmap issue only.
 All rows below run under a `draft-carrier/<number>-<slug>` coordination
 claim, scoped to the carrier issue only. The claim is taken, revalidated
 before each later mutation, and released the way the A1.5 roadmap-audit
-claim is, with no worktree. A Discover pass with the companion installed runs
-this procedure at entry, for at most one carrier per run (A0-C). Publishing
-each draft under the hold is covered by the Stage 1 rows in the follow-up
-authoring section below.
+claim is, with no worktree. A Discover pass runs this procedure at entry, for
+at most one carrier per run (A0-C), only on a helper-enabled profile with the
+companion installed. Publishing each draft under the hold is covered by the
+Stage 1 rows in the follow-up authoring section below.
 
 | Mutation                                                                  | Reversible / Irreversible | Undo path / Governing gate                                                                                                                                        | Source                                                                               |
 | ------------------------------------------------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
