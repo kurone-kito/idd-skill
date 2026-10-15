@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { delimiter, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -126,4 +134,137 @@ test('the lite claim keeps the worktree-first order and the stop sentence', () =
     positions,
     'the lite steps must appear in the documented order',
   );
+});
+
+const CLAIM_TEMPLATE =
+  'idd-template/.github/instructions/idd-claim.instructions.md';
+const WRAPPER_SUCCESS = 'verified';
+const WRAPPER_STEPS = [
+  'record',
+  'gate',
+  'post-claim',
+  'post-nonce',
+  'acquire',
+  'assert',
+];
+
+/** The fenced sh block that runs fresh-claim steps 2 to 5, without fences. */
+function freshClaimWrapper(): string {
+  const match =
+    /```sh\n(set -euo pipefail\nw='<path>'[^\n]*\n[\s\S]*?)\n```/.exec(
+      readTemplate(CLAIM_TEMPLATE),
+    );
+  assert.ok(match, 'the fresh-claim wrapper is a fenced sh block');
+  return match[1];
+}
+
+/**
+ * A stub helper: it logs the fresh-claim step it was asked for, then exits
+ * with the code the EXITS map gives that step (0 when absent).
+ */
+function stubSource(): string {
+  return `import { appendFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+const type = args[args.indexOf('--type') + 1];
+const step = args.includes('--record-tokens') ? 'record'
+  : args.includes('--acquire') ? 'acquire'
+  : args.includes('--fresh-claim-gate') ? 'gate'
+  : args.includes('--assert') ? 'assert'
+  : type === 'claim' ? 'post-claim'
+  : type === 'activation-nonce' ? 'post-nonce' : 'unknown';
+appendFileSync(process.env.TRACE, step + '\\n');
+if (step === 'gate') {
+  process.stdout.write(JSON.stringify({ fresh_claim_gate: { verdict: process.env.VERDICT } }));
+}
+process.exit(JSON.parse(process.env.EXITS)[step] ?? 0);
+`;
+}
+
+type WrapperRun = { status: number | null; stdout: string; steps: string[] };
+
+/**
+ * Runs the extracted wrapper under bash in a sandbox whose scripts/ directory
+ * holds stub helpers. The placeholders are filled with fixed test values.
+ */
+function runFreshClaimWrapper(
+  exits: Record<string, number>,
+  verdict = 'claimable',
+): WrapperRun {
+  const root = mkdtempSync(join(tmpdir(), 'fresh-claim-wrapper-'));
+  try {
+    mkdirSync(join(root, 'scripts'));
+    for (const script of [
+      'claim-lock',
+      'resume-claim-routing',
+      'post-idd-marker',
+    ]) {
+      writeFileSync(join(root, 'scripts', `${script}.mjs`), stubSource());
+    }
+    const trace = join(root, 'trace.log');
+    writeFileSync(trace, '');
+    const block = freshClaimWrapper()
+      .replaceAll('<path>', root)
+      .replaceAll('{agent-id}', 'claude-test')
+      .replaceAll('{claim-id}', 'claim-test')
+      .replaceAll('{nonce}', 'nonce-test')
+      .replaceAll('<n>', '4315')
+      .replaceAll('<branch>', 'issue/4315-test')
+      .replaceAll('<ts>', '2026-10-15T00:00:00Z')
+      .replaceAll('<settle>', '0');
+    assert.doesNotMatch(block, /<[a-z]+>|\{[a-z-]+\}/, 'every placeholder');
+    const result = spawnSync('bash', ['-c', block], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        PATH: `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ''}`,
+        TRACE: trace,
+        EXITS: JSON.stringify(exits),
+        VERDICT: verdict,
+      },
+    });
+    const steps = readFileSync(trace, 'utf8')
+      .split('\n')
+      .filter((line) => line !== '');
+    return { status: result.status, stdout: result.stdout, steps };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('the fresh-claim wrapper reports success only after the assert', () => {
+  const run = runFreshClaimWrapper({});
+  assert.equal(run.status, 0, run.stdout);
+  assert.deepEqual(run.steps, WRAPPER_STEPS);
+  assert.equal(run.stdout.trim(), WRAPPER_SUCCESS);
+});
+
+test('a failed assert runs last and reports no success', () => {
+  const run = runFreshClaimWrapper({ assert: 1 });
+  assert.notEqual(run.status, 0);
+  assert.deepEqual(run.steps, WRAPPER_STEPS);
+  assert.equal(run.stdout.includes(WRAPPER_SUCCESS), false);
+});
+
+test('a failure before the claim marker reports no success and posts nothing', () => {
+  const recordFailed = runFreshClaimWrapper({ record: 1 });
+  assert.notEqual(recordFailed.status, 0);
+  assert.deepEqual(recordFailed.steps, ['record']);
+  const contested = runFreshClaimWrapper({}, 'already-claimed');
+  assert.notEqual(contested.status, 0);
+  assert.deepEqual(contested.steps, ['record', 'gate']);
+  for (const run of [recordFailed, contested]) {
+    assert.equal(run.stdout.includes(WRAPPER_SUCCESS), false);
+  }
+});
+
+test('a failed claim post or acquire stops before the later steps', () => {
+  const postFailed = runFreshClaimWrapper({ 'post-claim': 1 });
+  assert.notEqual(postFailed.status, 0);
+  assert.deepEqual(postFailed.steps, ['record', 'gate', 'post-claim']);
+  const acquireFailed = runFreshClaimWrapper({ acquire: 2 });
+  assert.notEqual(acquireFailed.status, 0);
+  assert.deepEqual(acquireFailed.steps, WRAPPER_STEPS.slice(0, 5));
+  for (const run of [postFailed, acquireFailed]) {
+    assert.equal(run.stdout.includes(WRAPPER_SUCCESS), false);
+  }
 });

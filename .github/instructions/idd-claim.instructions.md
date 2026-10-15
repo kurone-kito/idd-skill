@@ -298,6 +298,24 @@ Resolve the commands as A5(a) does.
 6. Continue B1 in that worktree, from Step 3 (install dependencies) of
    `idd-work.instructions.md`.
 
+Steps 2 to 5 fail closed: success prints only after `--assert`.
+Lost-claim cleanup applies only at its listed exits.
+
+```sh
+set -euo pipefail
+w='<path>' a='{agent-id}' c='{claim-id}' n='{nonce}' r='<n>' b='<branch>' t='<ts>'
+g() { node scripts/resume-claim-routing.mjs --issue "$r" "$@"; }
+p() { node scripts/post-idd-marker.mjs --target issue "$r" --agent-id "$a" --claim-id "$c" --timestamp "$t" --apply "$@"; }
+node scripts/claim-lock.mjs --record-tokens --worktree "$w" --agent-id "$a" --claim-id "$c" --nonce "$n"
+g --fresh-claim-gate --own-worktree "$w" | node -e 'process.exit(JSON.parse(require("fs").readFileSync(0)).fresh_claim_gate.verdict==="claimable"?0:1)'
+p --type claim --supersedes none --branch "$b"
+p --type activation-nonce --nonce "$n"
+node scripts/claim-lock.mjs --acquire --worktree "$w" --agent-id "$a" --claim-id "$c"
+sleep <settle>
+g --assert --claim-id "$c" --nonce "$n" --worktree "$w"
+echo verified
+```
+
 **Nothing appended after the note.** A `claimed-by` / `unclaimed-by`
 marker body must be exactly the HTML comment token, followed by at most
 the single italic note from Claim format above. Trailing content, a
