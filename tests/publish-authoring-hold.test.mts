@@ -2160,7 +2160,7 @@ carrierLintTest(
     try {
       assert.equal(run.status, 1, JSON.stringify(run.report));
       assert.equal(run.report.release.state, 'recovery-hold');
-      assert.equal(run.report.release.failedStep, 'release-complete-reapply');
+      assert.equal(run.report.release.failedStep, 'label-restore');
     } finally {
       run.fixture.restore();
     }

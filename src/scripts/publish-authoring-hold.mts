@@ -2702,7 +2702,6 @@ function runCarrierRelease(
   ctx: CarrierRunContext,
 ): void {
   const { owner, repo, number } = input;
-  const repoRef = `${owner}/${repo}`;
   const bodyFile = join(scratch, 'release-body.md');
 
   // (1) Preflight: replay, sweep, backlog, then reuse or post `release`.
@@ -2838,6 +2837,12 @@ function runCarrierRelease(
   // label has changed yet, so a failed read is held, not recovery-hold.
   const beforeRemoval = readOwnerLog(input, 'label-removal');
   replayOrRecover(input, beforeRemoval, 'label-removal');
+  // The body and both labels, read now: (d) and (e) must hold at the edit.
+  const edited = readCarrierSnapshot(input, 'label-removal');
+  const stateChanged =
+    sha256Hex(edited.body) !== acquireDigest ||
+    !hasLabel(edited.labels, input.authoringLabel) ||
+    !hasLabel(edited.labels, input.authoringOnlyLabel);
   const markersPresent =
     validOwned(
       beforeRemoval,
@@ -2861,6 +2866,13 @@ function runCarrierRelease(
       'held',
       'label-removal',
       'the release, guard, or heartbeat marker is not on the carrier immediately before the removal',
+    );
+  }
+  if (stateChanged) {
+    throw new CarrierReleaseStop(
+      'held',
+      'label-removal',
+      'the body or a release label changed immediately before the removal',
     );
   }
   removeAuthoringLabel(input, releaseId, acquireDigest);
@@ -2976,38 +2988,14 @@ function runCarrierRelease(
     const nothingSent =
       (postError as { nothingSent?: unknown } | null)?.nothingSent === true;
     if (nothingSent && conclusive) {
-      try {
-        ghText([
-          'issue',
-          'edit',
-          String(number),
-          '--repo',
-          repoRef,
-          '--add-label',
-          input.authoringLabel,
-        ]);
-      } catch (error) {
-        throw new CarrierReleaseStop(
-          'recovery-hold',
-          'release-complete-reapply',
-          `the authoring label could not be reapplied: ${messageOf(error)}`,
-        );
-      }
-      const reapplied = readCarrierAfterWrite(
+      // Reapply and verify every release label that is missing, the
+      // authoring-only label included (the same helper as the restores above).
+      const current = readCarrierAfterWrite(input, 'release-complete-reapply');
+      restoreReleaseLabels(
         input,
-        'release-complete-reapply',
-      );
-      if (!hasLabel(reapplied.labels, input.authoringLabel)) {
-        throw new CarrierReleaseStop(
-          'recovery-hold',
-          'release-complete-reapply',
-          'the reapplied authoring label cannot be verified',
-        );
-      }
-      throw new CarrierReleaseStop(
-        'held',
+        current.labels,
+        'the release-complete post reported nothing sent',
         'release-complete',
-        'the release-complete post reported nothing sent; the authoring label was reapplied',
       );
     }
     throw new CarrierReleaseStop(
