@@ -130,8 +130,11 @@ If the run stops partway, it does not roll back. Two rewrite failures need a
 note. If the receipt rewrite fails after a removal, the receipt can still list
 the removed path. A retry reconciles that stale entry, so the receipt does not
 match the disk until a run completes. If the receipt rewrite fails after an
-entry file was rewritten, uninstall restores that file's prior bytes. If no
-receipt exists, the run reports that there is nothing to remove.
+entry file was rewritten, uninstall attempts to restore that file's prior bytes.
+The restore is best-effort. If it also fails, the edited file stays while the
+receipt still lists it, so the entry file and the receipt can disagree until you
+check the file or retry the removal. If no receipt exists, the run reports that
+there is nothing to remove.
 
 ## Failure outcome
 
@@ -214,8 +217,10 @@ legacy root `idd-policy.json`, user-global and override values for these keys
 are dropped. The legacy file blocks them by its presence alone. Without any
 such file they apply as usual. The full list is
 `REPOSITORY_POLICY_FIELDS` in `src/scripts/layered-policy.mts`. One exception
-applies: `issueAuthoring.adversarialReview` still inherits from the user-global
-layer.
+applies to `issueAuthoring.adversarialReview.delegate`. The user-global delegate
+still applies when the repository leaves that delegate entirely absent. A
+repository-local `adversarialReview` object with an unknown key blocks it, and so
+does a present local `delegate`, including `null` or a malformed value.
 
 ## Global-only profile
 
@@ -265,9 +270,11 @@ The gate counts the legacy root `idd-policy.json` as a repository policy signal,
 as the table shows. The effective loader does not read it as policy. The two
 checks are separate.
 
-When a rule would activate but the payload is unavailable, the gate stays
-inactive and reports `payload-root-unresolved` (no qualified data root) or
-`payload-not-installed` (the core file is missing from the payload).
+The two rules that need the installed payload, `repository-policy-minimal-import`
+and `user-global-override-match`, stay inactive when it is unavailable. They
+report `payload-root-unresolved` (no qualified data root) or
+`payload-not-installed` (the core file is missing from the payload). The
+`repository-instruction-files` rule does not check the payload.
 
 ## CI off switches
 
@@ -279,9 +286,11 @@ inactive and reports `payload-root-unresolved` (no qualified data root) or
   `idd-critique-delegate`, and `idd-critique-telemetry-hook`.
 
 The activation gate has neither switch. It reads the user-global file directly.
-A runner without an installed payload gets `payload-not-installed` or
-`payload-root-unresolved`, and stays inactive. The helper behavior is described
-in [IDD helper scripts](idd-helper-scripts.md).
+A runner without an installed payload reports `payload-not-installed` or
+`payload-root-unresolved` only when the repository has a policy file or a
+matching override. Otherwise the gate returns `no-activation-rule`. A repository
+with its own core instruction file stays active without the payload. The helper
+behavior is described in [IDD helper scripts](idd-helper-scripts.md).
 
 ## Deferred harnesses
 
