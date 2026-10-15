@@ -8780,14 +8780,18 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
   gate; a command killed by a signal counts as failed.
 - **Report**: JSON on stdout with `mode`, `pushed`, `issue`, `branch`,
   `worktree`, and `steps`. Every step has an `id`, a `status` (`passed`,
-  `failed`, or `skipped`), and a `reason`. A failed step also carries the
-  `exitStatus` of the command that decided it (the assert, a git read, the
-  gate, or the push), which is `null` when that command ended without one;
-  a refusal decided by a path or claim comparison carries none. Every
-  `failed` step has a non-empty `nextAction`. `pushed` is `true` after a
-  push (the report then adds `pushedSha`, the recorded HEAD, and
-  `pushMessage`), `false` when no push ran or git rejected it, and `null`
-  when the push ended without an exit status and its outcome is unknown.
+  `failed`, or `skipped`), and a `reason`. A failed step carries the
+  `exitStatus` of the command whose result decided it (the assert, a git
+  read, the gate, or the push), which is `null` when that command ended
+  without one; a value that a command printed and the step then rejects
+  (a dirty tree, another branch, a moved HEAD) carries that command's `0`.
+  Four refusals carry none because no command decided them: the branch
+  prefix check, the expected-path comparison, the `github.com` origin
+  shape check, and an unconfigured gate command. Every `failed` step has a
+  non-empty `nextAction`. `pushed` is `true` after a push (the report then
+  adds `pushedSha`, the recorded HEAD, and `pushMessage`), `false` when no
+  push ran or git rejected it, and `null` when the push ended without an
+  exit status and its outcome is unknown.
 - **Exit codes**: `0` when no step refused or failed, `1` for a refusal or
   failure, and `1` with kind `usage` for an argument error.
 - **Limits**: the helper never retries, never passes a force flag, and never
