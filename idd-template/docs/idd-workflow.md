@@ -1212,10 +1212,12 @@ Running this variant safely requires:
   at a hold. A delegated worker posts it after its last `claimed-by` and posts
   no `claimed-by` while the hold lasts, because the orchestrator owns the hold
   heartbeat; this is the fan-out exception to the shared Hold / suspend 12 h
-  re-post. A hold marker is trusted only when a trusted marker actor posted it
-  and its agent id and claim id match the active claim. It also needs an
-  explicit GraphQL `lastEditedAt: null`, resolved for each returned comment by
-  node id; an edited marker, or an edit state that cannot be resolved, is
+  re-post. A hold marker is trusted only when the actor that posted the active
+  claim's `claimed-by` also posted it, and its agent id and claim id match
+  both the active claim and the claim this session recorded for that roster
+  entry in section 3 step 4, because the ids alone are public. It also needs
+  an explicit GraphQL `lastEditedAt: null`, resolved for each returned comment
+  by node id; an edited marker, or an edit state that cannot be resolved, is
   ignored, as the claim-family marker edit-state contract in
   `idd-helper-scripts.md` requires. A held worker is a roster entry that is
   not `disposed` whose claim has a trusted hold marker newer than its latest
