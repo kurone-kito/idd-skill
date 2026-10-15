@@ -6183,6 +6183,26 @@ reflexively as any other CLI option.
   the courtesy-ack convergence rule, not a re-posted reply) and on
   `incomplete-thread-comments`, and it never changes `route`, `reason`, or any
   count. It mirrors `missingRegularComments[].hint`
+- Pending-decision thread (kurone-kito/idd-skill#4306; observed 2026-10-14
+  on kurone-kito/idd-skill#4271, issue #4244): a reply that carries
+  `**Awaiting maintainer decision**` at the start of a line outside a
+  Markdown code region is a pending decision, whether it is the whole reply
+  or a later paragraph of an `**Accepted**` or `**Rejected**` reply. It is
+  not a disposition, so the thread is not settled until a settled reply from
+  a trusted account follows it. A mid-sentence quote of the phrase, or one
+  inside a code span, a fence, or a block quote, does not count. The same
+  rule keeps such a reply from covering a cited Previously missed item. A
+  `missingThreads[]` entry for a thread whose newest IDD reply is pending
+  has `reason: pending-decision` and its own `hint` (keep the hold and wait
+  for the maintainer, do not post `**Accepted**` early), in place of the
+  stale-disposition hint above. `advisory-convergence.mjs` lists the same
+  threads in `threads.pendingDecisionIds`, a subset of `threads.blockingIds`,
+  gives them a `reasons[]` entry that names them, and has the
+  `disposition-threads` next action say to hold them. Clause 2 counts only
+  unresolved threads, so resolving a pending thread still settles it for this
+  gate; leave it unresolved until the decision. `resolve-review-thread
+  --apply` resolves the thread and has no pending mode, so post a pending
+  reply by hand
 - Disposition-evidence `hint` on the `dispositionEvidence` object
   (kurone-kito/idd-skill#4163; observed 2026-10-13 on
   kurone-kito/idd-skill#4153, kurone-kito/idd-skill#4151, and

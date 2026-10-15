@@ -330,6 +330,8 @@ unambiguous:
   (`<!-- {markerPrefix}-review-reply -->`) — same stamp mechanics and
   constraints, applied here to the `**Accepted**`-only prefix this
   phase posts.
+  `**Accepted**` settles the item: if part of it still needs a maintainer,
+  follow E6's partly settled rule instead.
 
 - With `triageRecord` on, the reply also carries the E5 `Triage:` line
   before the stamp: pass the E5 triage flags to `resolve-review-thread`
