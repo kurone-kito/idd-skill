@@ -1,5 +1,8 @@
 import { strict as assert } from 'node:assert';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   buildCiWaitStateSummary,
   ciWaitSummaryIsPreMergeCiPassing,
@@ -12,6 +15,7 @@ import {
 } from '../src/scripts/ci-wait-state.mts';
 import type { ActivationResult } from '../src/scripts/idd-activation.mts';
 import {
+  CHECK_PASS_EQUIVALENT_STATES,
   classifyCiChecks,
   isPreMergeCiAllPassing,
 } from '../src/scripts/protocol-helpers.mts';
@@ -2187,4 +2191,139 @@ test('#4053: the opt-in is read from the trusted base ref only, never a pull-req
 test('#4053: parseArgs reads --global-only and defaults it off', () => {
   assert.equal(parseArgs(['--pr', '42', '--global-only']).globalOnly, true);
   assert.equal(parseArgs(['--pr', '42']).globalOnly, false);
+});
+
+// --- #4401: one shared pass-equivalent state set ---------------------------
+
+const PASS_EQUIVALENT_STATE_NAMES = [
+  'NEUTRAL',
+  'NOT_APPLICABLE',
+  'SKIPPED',
+  'SUCCESS',
+];
+
+/**
+ * Offsets of every `[` in `source` that opens a single-level array whose
+ * entries are only string literals (single, double or back quotes, with
+ * comments allowed between them) and whose member set is exactly the four
+ * pass-equivalent states, compared case-insensitively. Any other token before
+ * the closing `]` (a spread, an identifier, a nested array) disqualifies the
+ * array, so `[...CI_FAILURE_CONCLUSION_STATES, 'CANCELLED']` is never a copy.
+ * Member order and duplicates do not matter. Comments are not stripped, so a
+ * comment that spells the four states as a bracketed list is reported too;
+ * reword such a comment instead of weakening the scan.
+ */
+function findPassEquivalentLiteralArrays(source: string): number[] {
+  const offsets: number[] = [];
+  for (
+    let open = source.indexOf('[');
+    open !== -1;
+    open = source.indexOf('[', open + 1)
+  ) {
+    const members = literalMembers(source, open + 1);
+    if (members === null || members.length === 0) continue;
+    const memberSet = new Set(members.map((name) => name.toUpperCase()));
+    if (
+      memberSet.size === PASS_EQUIVALENT_STATE_NAMES.length &&
+      PASS_EQUIVALENT_STATE_NAMES.every((name) => memberSet.has(name))
+    ) {
+      offsets.push(open);
+    }
+  }
+  return offsets;
+}
+
+/**
+ * The string-literal members of the bracket body that starts at `start`, or
+ * `null` unless the body closes with `]` after only string literals, commas,
+ * whitespace and comments. The sticky regex consumes one token at a time, so
+ * a `]` inside a comment or string never closes the body early, and a `//`
+ * inside a string stays part of that string.
+ */
+function literalMembers(source: string, start: number): string[] | null {
+  const token = /\s+|,|\/\/[^\n]*|\/\*[\s\S]*?\*\/|(['"`])([^'"`\n]*)\1/y;
+  const members: string[] = [];
+  let position = start;
+  while (position < source.length) {
+    if (source[position] === ']') return members;
+    token.lastIndex = position;
+    const found = token.exec(source);
+    if (found === null) return null;
+    if (found[1] !== undefined) members.push(found[2] ?? '');
+    position = token.lastIndex;
+  }
+  return null;
+}
+
+test('#4401: CHECK_PASS_EQUIVALENT_STATES holds exactly the four pass-equivalent states', () => {
+  assert.deepEqual(
+    [...CHECK_PASS_EQUIVALENT_STATES].sort(),
+    PASS_EQUIVALENT_STATE_NAMES,
+  );
+});
+
+test('#4401: the pass-equivalent literal scan flags the shapes it exists to catch', () => {
+  const sample = [
+    "const a = ['SUCCESS', 'SKIPPED', 'NEUTRAL', 'NOT_APPLICABLE'].includes(s);",
+    'const b = new Set(["NOT_APPLICABLE", "NEUTRAL", "SKIPPED", "SUCCESS", ]);',
+    'const c = [',
+    "  'SKIPPED', // legacy copy [see docs]",
+    "  'success',",
+    "  'NEUTRAL',",
+    "  'NOT_APPLICABLE',",
+    '];',
+    "const d = [...CI_FAILURE_CONCLUSION_STATES, 'CANCELLED'];",
+    "const e = ['SUCCESS', 'FAILURE', 'NEUTRAL', 'SKIPPED'];",
+  ].join('\n');
+  const lines = findPassEquivalentLiteralArrays(sample).map(
+    (offset) => sample.slice(0, offset).split('\n').length,
+  );
+  assert.deepEqual(lines, [1, 2, 3]);
+});
+
+test('#4401: protocol-helpers and ci-wait-state declare the pass-equivalent states only in CHECK_PASS_EQUIVALENT_STATES', () => {
+  const sourceDir = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'src',
+    'scripts',
+  );
+  const offenders: string[] = [];
+  let initializers = 0;
+  for (const file of ['ci-wait-state.mts', 'protocol-helpers.mts']) {
+    const source = readFileSync(join(sourceDir, file), 'utf8');
+    for (const offset of findPassEquivalentLiteralArrays(source)) {
+      const isSharedInitializer =
+        file === 'protocol-helpers.mts' &&
+        /\bCHECK_PASS_EQUIVALENT_STATES\s*(?::\s*ReadonlySet<string>\s*)?=\s*new Set\(\s*$/.test(
+          source.slice(Math.max(0, offset - 200), offset),
+        );
+      if (isSharedInitializer) {
+        initializers += 1;
+        continue;
+      }
+      const line = source.slice(0, offset).split('\n').length;
+      offenders.push(`${file}:${line}`);
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    'read the pass-equivalent states from CHECK_PASS_EQUIVALENT_STATES instead of copying them',
+  );
+  assert.equal(
+    initializers,
+    1,
+    'the CHECK_PASS_EQUIVALENT_STATES initializer must be found exactly once',
+  );
+});
+
+test('#4401: latestPassingCompletedAt still uppercases a lowercase state', () => {
+  const completedAt = '2026-10-15T20:00:00Z';
+  const summaryOf = (state: string) =>
+    ({ checks: [{ name: 'ci', state, completedAt }] }) as unknown as Parameters<
+      typeof latestPassingCompletedAt
+    >[0];
+  assert.equal(latestPassingCompletedAt(summaryOf('success')), completedAt);
+  assert.equal(latestPassingCompletedAt(summaryOf('cancelled')), 'none');
 });

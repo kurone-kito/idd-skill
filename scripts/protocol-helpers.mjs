@@ -332,18 +332,17 @@ export function parsePaginatedGhNdjson(raw) {
       return Array.isArray(value) ? value : [value];
     });
 }
-/** Check-run states treated as pass-equivalent for the CI required-check
- * gate: a check in one of these states is never eligible for waiver
- * coverage (already passing, or intentionally not run) and never counts as
- * a genuinely non-passing cause. Hoisted to module scope (#2021) so both
- * {@link summarizeRequiredChecks} and {@link computePreMergeReadinessBlockers}
- * share one definition instead of two independently-maintained copies.
- * Exported (kurone-kito/idd-skill#3256) for a third consumer,
- * `pre-merge-readiness.mts`'s collector, which needs the identical
- * pass-equivalent test to decide whether a resolved `idd-advisory-
- * convergence` check-run instance's SUCCESS-shaped state would otherwise
- * satisfy the required check before it can gate that on the instance's own
- * triggering event. */
+/** Check-run states treated as pass-equivalent, read by protocol-helpers.mts,
+ * ci-wait-state.mts and advisory-convergence-identity.mts. The first two
+ * kept their own copies until kurone-kito/idd-skill#4401 removed them. A
+ * check in one of these states is never eligible for waiver coverage
+ * (already passing, or intentionally not run) and never counts as a
+ * genuinely non-passing cause. Hoisted to module scope (#2021) so both
+ * {@link summarizeRequiredChecks} and
+ * {@link computePreMergeReadinessBlockers} share it, and exported
+ * (kurone-kito/idd-skill#3256) for `pre-merge-readiness.mts`'s collector,
+ * which needs the identical test for a resolved `idd-advisory-convergence`
+ * check-run instance. CANCELLED is deliberately not a member. */
 export const CHECK_PASS_EQUIVALENT_STATES = new Set([
   'SUCCESS',
   'SKIPPED',
@@ -4910,13 +4909,6 @@ export const CI_STATUS_CONTEXT_PENDING_STATES = new Set([
   'EXPECTED',
   'REQUESTED',
 ]);
-/** Check-run states `classifyCiChecks` counts as passing. */
-const CI_PASSING_STATES = new Set([
-  'SUCCESS',
-  'SKIPPED',
-  'NEUTRAL',
-  'NOT_APPLICABLE',
-]);
 /**
  * Failure-family *conclusion* states that must win a same-instant
  * tie-break and classify as a genuine `classifyCiChecks` failure (#1688).
@@ -5142,11 +5134,7 @@ function findDiscardedNonPassingSiblings(checks) {
   for (const group of groupChecksByProducer(checks).values()) {
     if (group.length < 2) continue;
     const selected = selectLatestCheckInstance(group);
-    if (
-      !['SUCCESS', 'SKIPPED', 'NEUTRAL', 'NOT_APPLICABLE'].includes(
-        selected.state,
-      )
-    ) {
+    if (!CHECK_PASS_EQUIVALENT_STATES.has(selected.state)) {
       continue;
     }
     for (const sibling of group) {
@@ -5208,7 +5196,9 @@ export function classifyCiChecks(checks) {
   if (pending.length > 0) {
     return { status: 'pending', pending, discardedNonPassingInstances };
   }
-  const passing = deduped.filter((check) => CI_PASSING_STATES.has(check.state));
+  const passing = deduped.filter((check) =>
+    CHECK_PASS_EQUIVALENT_STATES.has(check.state),
+  );
   return {
     status: passing.length === deduped.length ? 'success' : 'unknown',
     passing,
@@ -6556,12 +6546,11 @@ export function buildActivitySnapshotSummary(
   const latestPassingCiCompletedAt =
     maxIsoTimestamp(
       checks
-        .filter((check) => {
-          const state = String(check.state ?? '').toUpperCase();
-          return ['SUCCESS', 'SKIPPED', 'NEUTRAL', 'NOT_APPLICABLE'].includes(
-            state,
-          );
-        })
+        .filter((check) =>
+          CHECK_PASS_EQUIVALENT_STATES.has(
+            String(check.state ?? '').toUpperCase(),
+          ),
+        )
         .map((check) => check.completedAt)
         .filter(isCompletedCiTimestamp),
     ) ?? 'none';
@@ -8626,7 +8615,7 @@ function classifyPresentRuns(
       !CI_FAILURE_CONCLUSION_STATES.has(check.state) &&
       !CI_PENDING_STATES.has(check.state) &&
       !CI_STATUS_CONTEXT_PENDING_STATES.has(check.state) &&
-      !CI_PASSING_STATES.has(check.state) &&
+      !CHECK_PASS_EQUIVALENT_STATES.has(check.state) &&
       check.state !== 'CANCELLED'
     ) {
       blocking.add(String(check.name ?? ''));
