@@ -354,6 +354,47 @@ export function inspectLocalWorktreeBranch(
       reason: `invalid branch name: ${branchName}`,
     };
   }
+  return inspectLocalWorktreesMatching(
+    {
+      label: requestedBranch,
+      matches: (branch) => branch === requestedBranch,
+    },
+    cwd,
+    environment,
+    execute,
+  );
+}
+/**
+ * Inspect every worktree whose branch starts with `issue/<issueNumber>-`,
+ * whatever the slug (the A5(e) scoped branch pattern check). It applies the
+ * rules of {@link inspectLocalWorktreeBranch} to each record. The prefix ends
+ * with a hyphen, so `issue/<issueNumber>1-x` never matches.
+ */
+export function inspectLocalWorktreeBranchPrefix(
+  issueNumber,
+  cwd = process.cwd(),
+  environment = process.env,
+  execute = execFileSync,
+) {
+  if (!Number.isSafeInteger(issueNumber) || issueNumber <= 0) {
+    return {
+      status: 'unreadable',
+      paths: [],
+      reason: `invalid issue number: ${issueNumber}`,
+    };
+  }
+  const prefix = `issue/${issueNumber}-`;
+  return inspectLocalWorktreesMatching(
+    {
+      label: `${prefix}*`,
+      matches: (branch) => branch.startsWith(prefix),
+    },
+    cwd,
+    environment,
+    execute,
+  );
+}
+function inspectLocalWorktreesMatching(matcher, cwd, environment, execute) {
   const env = sanitizedGitEnvironment(environment);
   let output;
   try {
@@ -418,13 +459,13 @@ export function inspectLocalWorktreeBranch(
         if (
           record.locked ||
           prunableBranch === null ||
-          prunableBranch === requestedBranch
+          matcher.matches(prunableBranch)
         ) {
           unreadablePaths.push(record.path);
         }
         continue;
       }
-      if (prunableBranch !== requestedBranch) {
+      if (prunableBranch === null || !matcher.matches(prunableBranch)) {
         continue;
       }
       unreadablePaths.push(record.path);
@@ -446,7 +487,7 @@ export function inspectLocalWorktreeBranch(
       }
       resolvedBranch = detached.branchName;
     }
-    if (resolvedBranch === requestedBranch) {
+    if (resolvedBranch !== null && matcher.matches(resolvedBranch)) {
       matches.push(record);
     }
   }
@@ -463,6 +504,6 @@ export function inspectLocalWorktreeBranch(
   return {
     status: 'occupied',
     paths: matches.map((record) => record.path),
-    reason: `matching local worktree for ${requestedBranch}`,
+    reason: `matching local worktree for ${matcher.label}`,
   };
 }

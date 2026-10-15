@@ -35,6 +35,7 @@ scripts/check-untracked-artifacts.mjs linguist-generated=true
 scripts/ci-wait-policy.mjs linguist-generated=true
 scripts/ci-wait-state.mjs linguist-generated=true
 scripts/claim-approval-gate.mjs linguist-generated=true
+scripts/claim-issue.mjs linguist-generated=true
 scripts/claim-lock.mjs linguist-generated=true
 scripts/cli-args.mjs linguist-generated=true
 scripts/clone-lock.mjs linguist-generated=true
