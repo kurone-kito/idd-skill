@@ -1035,7 +1035,9 @@ The operating rules for this variant are in the
 reads only when its activation conditions hold or a fan-out session restarts.
 
 The orchestrator's end-of-run report is defined under
-[Orchestrator run report](#orchestrator-run-report).
+[Orchestrator run report](#orchestrator-run-report). The `outcome` that each
+worker's own final report carries for each way a run can end is listed under
+[Worker report outcomes](#worker-report-outcomes).
 
 Running this variant safely requires:
 
@@ -1109,7 +1111,15 @@ Running this variant safely requires:
   under `fully_autonomous_merge`, F2.5 otherwise): the worker reports its final
   result back to the orchestrator instead of
   independently entering F5's Discover step, so Discover/Claim
-  ownership stays with the orchestrator alone.
+  ownership stays with the orchestrator alone. When the run is scoped to end
+  earlier than that terminal phase, whether by the operator or by the
+  orchestrator (for example, "stop at F2"), the brief must name that boundary
+  and say that finishing that phase and stopping there with no gate or unmet
+  condition blocking is a scope stop, not a hold: the worker's report draft
+  carries `scope-stopped` and not `held`. A gate or unmet condition that
+  blocks the run before or at the boundary is a hold, and a scope relayed after
+  dispatch carries the same statement (see
+  [Worker report outcomes](#worker-report-outcomes)).
 - **A delegation brief that requires issue-number-namespaced
   scratchpad filenames.** Concurrently delegated workers share the
   orchestrating session's own scratchpad directory — it is
@@ -1336,6 +1346,62 @@ it leaves no report (preventive; no observed incident yet). A restart that can
 recover (see [Orchestrator restart](#orchestrator-restart)) rebuilds the roster
 from the forge, the worktrees, and the harness's agent listing, never from a run
 report, and the new run writes its own.
+
+### Worker report outcomes
+
+A worker writes its final report as a draft. Once the orchestrator has checked
+the draft, it becomes one record in the
+[worker final report store](idd-helper-scripts.md#worker-final-report-store),
+and its `outcome` says how the run ended; a held worker is the exception, as the
+`held` bullet below says. The report is the worker's own, not the
+orchestrator's [run report](#orchestrator-run-report). The store and
+`schemas/worker-report.schema.json` list the values and define `scope-stopped`.
+This subsection says which value each way of ending a run carries. The draft
+proposes the value, and the orchestrator checks it against live GitHub state
+before it appends the record, as section 5 of the orchestrator phase file and
+the "Independently verify a worker's reported terminal outcome before trusting
+it" bullet of the [fan-out variant](#orchestrator-fan-out-variant) require. For
+`scope-stopped`, live state can only rule out the other values; the paragraph
+after the list says what supplies the rest.
+
+- `merged`: the worker's pull request merged and no trusted handoff summary was
+  posted.
+- `handed-off`: a trusted handoff summary carrying the worker's claim id is on
+  the issue, whatever its pull request has done since.
+- `held`: a gate or an unmet condition stopped the run. A worker held on a
+  trusted hold marker is not reported or disposed of while the hold lasts, so no
+  record is appended then. The Hold marker and Held-worker renewal bullets of
+  the [fan-out variant](#orchestrator-fan-out-variant) say what the
+  orchestrator does instead, and the [run report](#orchestrator-run-report)
+  lists the hold.
+- `scope-stopped`: the run finished the phase it was scoped to end at, earlier
+  than the merge policy's terminal phase, and stopped there with no gate or
+  unmet condition blocking it.
+- `abandoned`: the worker's pull request was closed without merging and no
+  trusted handoff summary was posted.
+- `failed`: none of the above fits.
+
+Live GitHub state cannot confirm a scope stop: all it shows is a claim still
+held with no handoff summary and no trusted hold marker, which a stop at a gate
+can also leave. So the orchestrator checks a `scope-stopped` draft against the
+boundary that the brief, or an instruction the orchestrator later relayed to the
+worker, named. The draft's `terminalPhase` must be that phase, and live state
+must show none of the other values above. When it shows one, that value is
+recorded instead, except that a worker held on a trusted hold marker gets no
+record while the hold lasts, as the `held` bullet says. When the brief is not
+available or names no such boundary, no `scope-stopped` record is appended and
+the claim is reported to the operator. A phase is finished when its normal exit
+is met, so a run still waiting inside it, for example on pending CI, has not
+reached the boundary. Storing a scope stop as `held` inflated the `held` count
+(observed 2026-10-13 on the worker records of kurone-kito/idd-skill#3974,
+decided on kurone-kito/idd-skill#4213, requested in kurone-kito/idd-skill#4348,
+added by kurone-kito/idd-skill#4354).
+
+[Orchestrator restart](#orchestrator-restart) has no `scope-stopped` case: step
+4 maps a claim still held to `held` and appends nothing for it when no draft is
+found, and step 3 sends a finished worker whose claim is still held with no
+handoff summary to worker-death recovery. How a restart treats a scope stop is
+not defined here.
 
 ### Orchestrator restart
 
@@ -1958,7 +2024,7 @@ or the GitHub API quota is unknown or too low.
 | Claude Code                 | `Agent` tool; `Task` still works as an alias. Fresh context: yes. [CC1] 2026-10-08                                                                                                                                                                                                                    | `streaming`: a background result arrives as a completion notification in a later turn; a foreground subagent blocks. [CC1] 2026-10-08                                                                                                                                                                                                                                          | `SendMessage` to the agent ID or name resumes it with its history; Explore and Plan agents cannot be resumed. [CC1] 2026-10-08                       | `TaskStop`, or `x` in `/tasks`; a finished subagent needs no close. [CC2] 2026-10-08                                                                                         | 20 concurrent subagents by default (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`); nesting depth 3; no wall-clock subagent timeout documented. The 2-hour cap covers a background Bash command, not a subagent: 30 minutes by default, 2 hours at most, unattended sessions only. [CC1], [CC2], [CC3] 2026-10-08    | `orchestrator`: start and wait model confirmed, and no subagent lifetime cap documented. [CC1], [CC3] 2026-10-08                           |
 | Codex CLI                   | `spawn_agent` (V1, the default surface); `multi_agent_v2` is off by default. Fresh context: `unverified`; the spec describes both an initial-prompt-only default and a full-history default. [CX1], [CX2] 2026-10-08                                                                                  | `unverified`: the docs say Codex waits until every requested result arrives (`wave`), while the V1 spec describes a timed `wait_agent` plus a completion notification (`streaming`). [CX1], [CX2] 2026-10-08                                                                                                                                                                   | V1 `send_input` (with `interrupt`) and `resume_agent` for a closed agent; V2 `send_message` and `followup_task`. [CX2] 2026-10-08                    | V1 `close_agent`; a completed agent counts toward the concurrency limit until it is closed. V2 has `interrupt_agent` and no close tool in its handler list. [CX2] 2026-10-08 | V1 default of 6 threads (from source; the docs give no number); V2 defaults to 3 spawned children; `max_depth` 1 (V1); `wait_agent` times out after 30 s by default, and V2 allows at most 3600 s, so a multi-hour run needs repeated waits. [CX1], [CX2] 2026-10-08                                          | `one issue per session`: the wait model is contested between the docs and the spec. [CX1], [CX2] 2026-10-08                                |
 | OpenCode                    | `task` tool (the v2 docs call it the subagent tool). Fresh context: yes. [OC1], [OC3] 2026-10-08                                                                                                                                                                                                      | Conditional. Each foreground call blocks the parent until its child returns, which makes parallel calls a `wave`. With `background: true` and `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`, the call returns at once and a completion message reaches the parent (`streaming`). The official docs do not mention that flag; only the source does. [OC2], [OC3] 2026-10-08 | `task_id` resumes the earlier child session (source only; the docs do not describe it). [OC3] 2026-10-08                                             | Aborting the parent cancels the child; a finished child session persists and needs no close. [OC3] 2026-10-08                                                                | Subagent depth 1 (source). Neither the source nor the docs set a concurrency cap or a timeout. Finished background jobs are lost on process restart. [OC3] 2026-10-08                                                                                                                                         | `one issue per session`: the `streaming` mode needs a flag that only the source names. [OC2], [OC3] 2026-10-08                             |
-| Grok Build                  | `spawn_subagent`, confirmed in the xAI source-repo user guide but not on docs.x.ai. Fresh context: yes, its own context window. [GB1] 2026-10-08                                                                                                                                                      | `streaming`: the parent receives the child's output when the child finishes, and a background run appends a completion block to the parent's scrollback. The result can also be pulled with `get_command_or_subagent_output`. [GB1] 2026-10-08                                                                                                                                 | `resume_from` continues a completed child; `send_subagent_message` reaches a running child and is off by default. [GB1] 2026-10-08                   | Ctrl+C cancels that child's turn only, and the tasks pane offers a kill action. No agent-callable stop is documented. [GB1] 2026-10-08                                       | No timeout or concurrency cap documented; nesting is one level. [GB1] 2026-10-08                                                                                                                                                                                                                              | `one issue per session`: this row does not yet name the identifier `spawn_subagent` returns at the start. [GB1] 2026-10-08                 |
+| Grok Build                  | `spawn_subagent`, confirmed in the xAI source-repo user guide but not on docs.x.ai. Fresh context: yes, its own context window. [GB1] 2026-10-08 A background run (default) returns a subagent ID for `resume_from` (section Spawning Subagents); no field name or format is shown. [GB1] 2026-10-15  | `streaming`: the parent receives the child's output when the child finishes, and a background run appends a completion block to the parent's scrollback. The result can also be pulled with `get_command_or_subagent_output`. [GB1] 2026-10-08                                                                                                                                 | `resume_from` continues a completed child; `send_subagent_message` reaches a running child and is off by default. [GB1] 2026-10-08                   | Ctrl+C cancels that child's turn only, and the tasks pane offers a kill action. No agent-callable stop is documented. [GB1] 2026-10-08                                       | No timeout or concurrency cap documented; nesting is one level. [GB1] 2026-10-08                                                                                                                                                                                                                              | `orchestrator`: a background start returns a subagent ID; the wait model is documented; no lifetime cap is documented. [GB1] 2026-10-15    |
 | Cursor CLI                  | The Task tool; its function name and parameters are not documented, and the `generalPurpose` type value is `unverified`. Fresh context: yes ("Subagents start with a clean context"). [CU1] 2026-10-08                                                                                                | `unverified` as `streaming`: a foreground call blocks until the subagent returns; a background call returns at once, and the parent reads progress from `~/.cursor/subagents/`. No completion notification is documented. [CU1] 2026-10-08                                                                                                                                     | Resume with the agent ID that each execution returns, with its context kept. Messaging a running subagent is not documented. [CU1] 2026-10-08        | Not documented. [CU1] 2026-10-08                                                                                                                                             | No numeric concurrency cap; the docs advise 2 to 3 focused subagents. The nesting limit's value and any timeout are not documented. [CU1] 2026-10-08                                                                                                                                                          | `one issue per session`: no completion notification is documented. [CU1] 2026-10-08                                                        |
 | GitHub Copilot CLI          | `/delegate` hands work to the Copilot coding agent, which opens a draft PR. Local subagents start from a model `task` call, or from a custom agent chosen with `/agent`. Fresh context: `unverified`; the docs say only that a subagent has a separate context window. [CP1], [CP2], [CP3] 2026-10-08 | `unverified`: local subagents can run in parallel and return a summary or full output; whether the parent blocks or is notified is not documented. [CP2], [CP4] 2026-10-08                                                                                                                                                                                                     | `unverified`. [CP2] 2026-10-08                                                                                                                       | `unverified`: a `subagentStop` hook runs when a subagent completes, but no cancel is described. [CP3] 2026-10-08                                                             | `unverified`: no timeout or concurrency value is documented. [CP2], [CP3] 2026-10-08                                                                                                                                                                                                                          | `one issue per session`: the wait model, stop, and limits are unverified. [CP2], [CP3] 2026-10-08                                          |
 | GitHub Copilot coding agent | Issue assignment, the agents tab, Copilot Chat, or a scheduled or event-triggered session. Fresh context: `unverified`; a session runs in an ephemeral cloud environment, though it keeps context from earlier sessions on the same pull request. [CA1], [CA2], [CA4] 2026-10-08                      | None: the output arrives as a pull request, and no completion notification to a parent is documented. [CA1], [CA2] 2026-10-08                                                                                                                                                                                                                                                  | Mention `@copilot` in a PR comment (only users with write access get a reply); steering applies after the current tool call. [CA3], [CA4] 2026-10-08 | "Stop session" ends the Actions run and keeps pushed commits. A finished session can be archived but not deleted, and needs no close. [CA3] 2026-10-08                       | A 59-minute maximum session that cannot be extended; `timeout-minutes` in `copilot-setup-steps.yml` can shorten it. [CA1] 2026-10-08                                                                                                                                                                          | `one issue per session`: the 59-minute cap ends before a multi-hour worker run. [CA1] 2026-10-08                                           |
