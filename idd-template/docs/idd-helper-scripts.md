@@ -6839,8 +6839,10 @@ dispositioned.
   disposition only while no unresolved known-bot review thread exists.
   While one does, the summary stays a missing regular comment until it is
   dispositioned or that thread is resolved.
-- Copilot's review-body items fall under the
-  [advisory convergence check (F2)](#advisory-convergence-f2).
+- Copilot's latest review on the current head falls under the
+  [advisory convergence check (F2)](#advisory-convergence-f2). Its cited
+  items need their own stamped dispositions, and a trusted `review-ack`
+  covers only its citation-free items.
 - An embedded CodeRabbit finding in a COMMENTED review body is a PATH B
   snapshot item that the merge gate does not read. A threaded finding is
   gated through its review thread instead.
