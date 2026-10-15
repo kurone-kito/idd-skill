@@ -46,7 +46,11 @@ import {
   namesFileOrLine,
 } from './copilot-review-body.mjs';
 import { loadIddConfig } from './idd-config.mjs';
-import { maskMarkdownForScan } from './markdown-code.mjs';
+import {
+  MARKDOWN_HTML_BLOCK_START_PATTERN,
+  MARKDOWN_THEMATIC_BREAK_PATTERN,
+  maskMarkdownForScan,
+} from './markdown-code.mjs';
 import {
   advisoryWaitFamilyMarkerStart,
   detectMalformedOperationalMarker,
@@ -2902,6 +2906,18 @@ const QUOTE_OR_LIST_ITEM_LINE_RE = /^ {0,3}(?:>|[-+*][ \t]|\d{1,9}[.)][ \t])/u;
 /** A block-quote line with no content (`>`, `> >`): a blank line inside the
  * quote, so it ends the quote's paragraph the way a blank line does. */
 const EMPTY_QUOTE_LINE_RE = /^ {0,3}>[ \t>]*$/u;
+/** An ATX heading line. */
+const ATX_HEADING_LINE_RE = /^ {0,3}#{1,6}(?:[ \t]|$)/u;
+/** A line that opens a block which interrupts a paragraph without a blank
+ * line: a heading, a thematic break, or an HTML block. It is never a lazy
+ * continuation, so it ends a quote's or list item's run. */
+function interruptsParagraph(line) {
+  return (
+    ATX_HEADING_LINE_RE.test(line) ||
+    MARKDOWN_THEMATIC_BREAK_PATTERN.test(line) ||
+    MARKDOWN_HTML_BLOCK_START_PATTERN.test(line)
+  );
+}
 /**
  * Whether a reply body carries the pending-decision marker
  * (`**Awaiting maintainer decision**`) at the start of a top-level line outside
@@ -2912,7 +2928,8 @@ const EMPTY_QUOTE_LINE_RE = /^ {0,3}>[ \t>]*$/u;
  * A marker line that follows a block quote or a list item with no blank line
  * between is a lazy continuation of that container's paragraph, so it is quoted
  * or listed text and does not count. A blank line (or an empty quote line) ends
- * that run, and a marker after one is a top-level paragraph again. The reader
+ * that run, and so does a line that opens a heading, a thematic break, or an
+ * HTML block; a marker after one is a top-level paragraph again. The reader
  * keeps this small run model on purpose rather than a full container parser,
  * as `copilot-review-body.mts`'s remark reader does: it can miss a marker
  * indented into a container or a list item's later paragraph, which reads as
@@ -2928,7 +2945,11 @@ export function hasPendingDecisionMarker(body) {
   }
   let inContainerRun = false;
   for (const line of maskMarkdownForScan(text).split('\n')) {
-    if (line.trim() === '' || EMPTY_QUOTE_LINE_RE.test(line)) {
+    if (
+      line.trim() === '' ||
+      EMPTY_QUOTE_LINE_RE.test(line) ||
+      interruptsParagraph(line)
+    ) {
       inContainerRun = false;
       continue;
     }

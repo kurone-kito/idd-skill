@@ -5236,6 +5236,13 @@ test('hasPendingDecisionMarker reads the marker at a top-level line start outsid
     '> ```\n> code\n> ```\n**Awaiting maintainer decision** — after the quoted fence',
     // An empty quote line ends the quote's paragraph, so nothing is lazy after it.
     '> quoted text\n>\n**Awaiting maintainer decision** — after an empty quote line',
+    // A heading, a thematic break, or an HTML block interrupts the paragraph
+    // with no blank line, so the marker after it is top-level again.
+    '> quoted\n# heading\n**Awaiting maintainer decision** — after a heading',
+    '- item\n## heading\n**Awaiting maintainer decision** — after a heading',
+    '> quoted\n---\n**Awaiting maintainer decision** — after a thematic break',
+    '- item\n* * *\n**Awaiting maintainer decision** — after a spaced break',
+    '- item\n<div>\n**Awaiting maintainer decision** — after an HTML block',
   ];
   for (const body of pending) {
     assert.equal(hasPendingDecisionMarker(body), true, body);
@@ -5259,6 +5266,8 @@ test('hasPendingDecisionMarker reads the marker at a top-level line start outsid
     '+ item\n**Awaiting maintainer decision** — lazy list line',
     '1. item\n**Awaiting maintainer decision** — lazy ordered line',
     '1) item\n**Awaiting maintainer decision** — lazy ordered line',
+    // A heading marker inside the quote is still quote content.
+    '> # heading\n**Awaiting maintainer decision** — lazy line after a quoted heading',
   ];
   for (const body of settled) {
     assert.equal(hasPendingDecisionMarker(body), false, body);
