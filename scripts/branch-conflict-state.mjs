@@ -476,28 +476,63 @@ export function markSuiteRequirement(suites, pinnedAppIds) {
   }));
 }
 /**
+ * The keys under which a rules `parameters` object or a classic
+ * `required_status_checks` object lists required checks, the same set the
+ * shared required-check reader accepts.
+ */
+const REQUIRED_CHECK_LIST_KEYS = [
+  'required_status_checks',
+  'required_checks',
+  'checks',
+  'contexts',
+];
+/**
+ * Append every entry of the check lists in one parameters object. Returns
+ * `false` when the object or one of its lists has a shape this read cannot
+ * trust, so the caller can treat the policy as unresolvable.
+ */
+function appendRequiredCheckEntries(parameters, entries) {
+  if (parameters === null || parameters === undefined) return true;
+  if (typeof parameters !== 'object') return false;
+  for (const key of REQUIRED_CHECK_LIST_KEYS) {
+    const list = parameters[key];
+    if (list === null || list === undefined) continue;
+    if (!Array.isArray(list)) return false;
+    entries.push(...list);
+  }
+  return true;
+}
+/**
  * Collect the GitHub App ids that a required status check is pinned to, from
  * the rules and classic protection payloads. Returns `null` (unresolvable)
- * when a pin cannot be turned into an App id, or when a `workflows` rule
- * requires Actions workflows that no pin names.
+ * when a payload or check list is malformed, when a pin cannot be turned into
+ * an App id, or when a `workflows` rule requires Actions workflows that no
+ * pin names.
  */
 export function collectPinnedRequiredAppIds(rules, protection) {
+  if (rules !== null && rules !== undefined && !Array.isArray(rules)) {
+    return null;
+  }
   const entries = [];
-  for (const rule of Array.isArray(rules) ? rules : []) {
+  for (const rule of rules ?? []) {
     const typed = rule ?? {};
     if (typed.type === 'workflows') return null;
-    const checks = typed.parameters?.required_status_checks;
-    if (typed.type === 'required_status_checks' && Array.isArray(checks)) {
-      entries.push(...checks);
+    if (
+      typed.type === 'required_status_checks' &&
+      !appendRequiredCheckEntries(typed.parameters, entries)
+    ) {
+      return null;
     }
   }
   const classic = protection?.required_status_checks;
-  for (const list of [classic?.checks, classic?.contexts]) {
-    if (Array.isArray(list)) entries.push(...list);
-  }
+  if (!appendRequiredCheckEntries(classic, entries)) return null;
   const appIds = new Set();
   for (const entry of entries) {
-    if (typeof entry !== 'object' || entry === null) continue;
+    // A bare string is a legacy context name, which pins no App.
+    if (typeof entry === 'string' || entry === null || entry === undefined) {
+      continue;
+    }
+    if (typeof entry !== 'object' || Array.isArray(entry)) return null;
     const pin = entry;
     const raw = pin.integration_id ?? pin.app_id;
     if (raw === null || raw === undefined) {

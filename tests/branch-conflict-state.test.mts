@@ -2126,6 +2126,62 @@ test('collectPinnedRequiredAppIds: reads App pins from rules and classic protect
   );
 });
 
+// The shared required-check reader accepts four list keys, in both a rule's
+// parameters and the classic protection object. A pin under any of them counts.
+test('collectPinnedRequiredAppIds: reads every supported check list key', () => {
+  for (const key of [
+    'required_status_checks',
+    'required_checks',
+    'checks',
+    'contexts',
+  ]) {
+    assert.deepEqual(
+      collectPinnedRequiredAppIds(
+        [
+          {
+            type: 'required_status_checks',
+            parameters: { [key]: [{ context: 'a', integration_id: 11 }] },
+          },
+        ],
+        { required_status_checks: { [key]: [{ context: 'b', app_id: 22 }] } },
+      ),
+      new Set([11, 22]),
+      key,
+    );
+  }
+});
+
+// A shape this read cannot trust is unresolvable, never an empty policy.
+test('collectPinnedRequiredAppIds: a malformed payload or list is unresolvable', () => {
+  const rule = (parameters: unknown) => [
+    { type: 'required_status_checks', parameters },
+  ];
+  const cases: [string, unknown, unknown][] = [
+    ['rules not an array', { type: 'required_status_checks' }, {}],
+    ['rule parameters not an object', rule('checks'), {}],
+    ['rule list not an array', rule({ required_status_checks: 'lint' }), {}],
+    ['classic object not an object', [], { required_status_checks: 'lint' }],
+    [
+      'classic list not an array',
+      [],
+      { required_status_checks: { checks: {} } },
+    ],
+    ['entry is a number', rule({ required_status_checks: [7] }), {}],
+    ['entry is a nested array', rule({ required_status_checks: [[1]] }), {}],
+  ];
+  for (const [label, rules, protection] of cases) {
+    assert.equal(collectPinnedRequiredAppIds(rules, protection), null, label);
+  }
+  // Absent policy parts and null or string entries stay readable.
+  assert.deepEqual(collectPinnedRequiredAppIds(null, null), new Set());
+  assert.deepEqual(
+    collectPinnedRequiredAppIds(rule({ contexts: [null, 'lint'] }), {
+      required_status_checks: null,
+    }),
+    new Set(),
+  );
+});
+
 test('resolvePinnedRequiredAppIds: a 404 or a failed read is unreadable', () => {
   const ok = (value: unknown) => ({ outcome: 'ok', value });
   const notFound = { outcome: 'not-found' };

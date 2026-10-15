@@ -7441,12 +7441,13 @@ same as `AW4`/`AW5`.
     proof, so it is listed as `cancelled` and holds.
   - A suite has no `isRequired`, so it is required when a required check is
     source-pinned to its app (a ruleset `integration_id` or a classic
-    protection `app_id`). A suite with no pin is non-required, because GitHub
-    reports `BLOCKED`, never `UNSTABLE`, while a required check is
-    unreported. The policy is read only when a suite is listed, with the
-    same 404 rule as `requiresUpToDateHead`. An unreadable policy, a pin
-    that names no app id, or a `workflows` rule marks every listed suite
-    required, and a note says so.
+    protection `app_id`), read from the same four check-list keys the
+    required-check reader accepts. A suite with no pin is non-required,
+    because GitHub reports `BLOCKED`, never `UNSTABLE`, while a required
+    check is unreported. The policy is read only when a suite is listed, with
+    the same 404 rule as `requiresUpToDateHead`. An unreadable policy, a
+    malformed payload or check list, a pin that names no app id, or a
+    `workflows` rule marks every listed suite required, and a note says so.
   - A head with more than 100 check suites, or a suite page that is missing
     or inconsistent, is unavailable and holds.
   - For each entry that keeps the hold, `diagnostics.notes` carries one
