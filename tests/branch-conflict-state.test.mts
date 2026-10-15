@@ -2168,10 +2168,29 @@ test('collectPinnedRequiredAppIds: a malformed payload or list is unresolvable',
     ],
     ['entry is a number', rule({ required_status_checks: [7] }), {}],
     ['entry is a nested array', rule({ required_status_checks: [[1]] }), {}],
+    ['pin id is an empty string', rule({ checks: [{ app_id: '' }] }), {}],
+    ['pin id is a boolean', rule({ checks: [{ integration_id: true }] }), {}],
+    ['pin id is an array', rule({ checks: [{ integration_id: [7] }] }), {}],
+    ['pin id is fractional', rule({ checks: [{ integration_id: 1.5 }] }), {}],
+    ['rule parameters is an array', rule([]), {}],
+    ['rule is an array', [[]], {}],
+    ['rule is a string', ['required_status_checks'], {}],
+    ['rule is null', [null], {}],
+    ['classic object is an array', [], { required_status_checks: [] }],
+    ['protection is an array', [], []],
+    ['protection is a string', [], 'protected'],
   ];
   for (const [label, rules, protection] of cases) {
     assert.equal(collectPinnedRequiredAppIds(rules, protection), null, label);
   }
+  // A decimal-integer string is an id, and a zero or negative one is any source.
+  assert.deepEqual(
+    collectPinnedRequiredAppIds(
+      rule({ checks: [{ integration_id: '15368' }, { app_id: '-1' }] }),
+      {},
+    ),
+    new Set([15368]),
+  );
   // Absent policy parts and null or string entries stay readable.
   assert.deepEqual(collectPinnedRequiredAppIds(null, null), new Set());
   assert.deepEqual(

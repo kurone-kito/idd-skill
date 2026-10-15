@@ -7435,10 +7435,10 @@ same as `AW4`/`AW5`.
     `action_required` suite as `action_required`, and any other non-passing
     conclusion or unrecognized status never proceeds. A cancelled Actions
     workflow suite with no check run is not listed: it is concurrency control
-    with no check left to read or rerun (observed 2026-10-15 on four of
-    fourteen recent merged heads, where the comment-refresh workflow's newest
-    suites were cancelled). A cancelled suite from an external app has no such
-    proof, so it is listed as `cancelled` and holds.
+    with no check left to read or rerun (observed 2026-10-15 on merged heads
+    such as `504f50f7` and `e85436a9`, where the comment-refresh workflow's
+    newest suites were cancelled). A cancelled suite from an external app has
+    no such proof, so it is listed as `cancelled` and holds.
   - A suite has no `isRequired`, so it is required when a required check is
     source-pinned to its app (a ruleset `integration_id` or a classic
     protection `app_id`), read from the same four check-list keys the
@@ -7446,8 +7446,9 @@ same as `AW4`/`AW5`.
     because GitHub reports `BLOCKED`, never `UNSTABLE`, while a required
     check is unreported. The policy is read only when a suite is listed, with
     the same 404 rule as `requiresUpToDateHead`. An unreadable policy, a
-    malformed payload or check list, a pin that names no app id, or a
-    `workflows` rule marks every listed suite required, and a note says so.
+    malformed payload or check list (an array or a primitive where an object
+    belongs counts), a pin that names no app id, or a `workflows` rule marks
+    every listed suite required, and a note says so.
   - A head with more than 100 check suites, or a suite page that is missing
     or inconsistent, is unavailable and holds.
   - For each entry that keeps the hold, `diagnostics.notes` carries one

@@ -426,10 +426,10 @@ export function parseHeadSuites(object) {
       if (PASSING_CHECK_CONCLUSIONS.has(suite.conclusion)) continue;
       // A run-less cancelled Actions workflow suite is concurrency control,
       // not a check result: no check is left to read or rerun. Observed
-      // 2026-10-15 on four of fourteen recent merged heads (for example
-      // 504f50f7, e85436a9): the comment-refresh workflow's newest suites were
-      // cancelled with no run. An external app's cancelled suite carries no
-      // such proof and stays listed, so it holds (pull request 4323 review).
+      // 2026-10-15 on merged heads such as 504f50f7 and e85436a9, where the
+      // comment-refresh workflow's newest suites were cancelled with no run.
+      // An external app's cancelled suite carries no such proof and stays
+      // listed, so it holds (pull request 4323 review).
       if (suite.conclusion === 'CANCELLED' && suite.workflow) continue;
       const conclusion = suite.conclusion.toLowerCase();
       suites.push({
@@ -486,14 +486,19 @@ const REQUIRED_CHECK_LIST_KEYS = [
   'checks',
   'contexts',
 ];
+/** A JSON object: an array, `null`, and a primitive are not records. */
+function isRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 /**
  * Append every entry of the check lists in one parameters object. Returns
  * `false` when the object or one of its lists has a shape this read cannot
- * trust, so the caller can treat the policy as unresolvable.
+ * trust, so the caller can treat the policy as unresolvable. An array is not
+ * an object here: `parameters: []` must not read as an empty policy.
  */
 function appendRequiredCheckEntries(parameters, entries) {
   if (parameters === null || parameters === undefined) return true;
-  if (typeof parameters !== 'object') return false;
+  if (!isRecord(parameters)) return false;
   for (const key of REQUIRED_CHECK_LIST_KEYS) {
     const list = parameters[key];
     if (list === null || list === undefined) continue;
@@ -515,32 +520,43 @@ export function collectPinnedRequiredAppIds(rules, protection) {
   }
   const entries = [];
   for (const rule of rules ?? []) {
-    const typed = rule ?? {};
-    if (typed.type === 'workflows') return null;
+    if (!isRecord(rule)) return null;
+    if (rule.type === 'workflows') return null;
     if (
-      typed.type === 'required_status_checks' &&
-      !appendRequiredCheckEntries(typed.parameters, entries)
+      rule.type === 'required_status_checks' &&
+      !appendRequiredCheckEntries(rule.parameters, entries)
     ) {
       return null;
     }
   }
-  const classic = protection?.required_status_checks;
-  if (!appendRequiredCheckEntries(classic, entries)) return null;
+  if (protection !== null && protection !== undefined) {
+    if (!isRecord(protection)) return null;
+    if (
+      !appendRequiredCheckEntries(protection.required_status_checks, entries)
+    ) {
+      return null;
+    }
+  }
   const appIds = new Set();
   for (const entry of entries) {
     // A bare string is a legacy context name, which pins no App.
     if (typeof entry === 'string' || entry === null || entry === undefined) {
       continue;
     }
-    if (typeof entry !== 'object' || Array.isArray(entry)) return null;
-    const pin = entry;
-    const raw = pin.integration_id ?? pin.app_id;
+    if (!isRecord(entry)) return null;
+    const raw = entry.integration_id ?? entry.app_id;
     if (raw === null || raw === undefined) {
       // A pin by `source` carries no App id this read could match.
-      if (pin.source) return null;
+      if (entry.source) return null;
       continue;
     }
-    const appId = Number(raw);
+    // Only a number or a decimal-integer string is an id. Coercing a boolean,
+    // an empty string, or an array would read a malformed pin as "any source".
+    const appId =
+      typeof raw === 'number' ||
+      (typeof raw === 'string' && /^-?\d+$/.test(raw))
+        ? Number(raw)
+        : Number.NaN;
     if (!Number.isInteger(appId)) return null;
     // A zero or negative id means "any source", so it pins nothing.
     if (appId > 0) appIds.add(appId);
