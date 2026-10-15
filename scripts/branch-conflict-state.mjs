@@ -544,22 +544,29 @@ export function collectPinnedRequiredAppIds(rules, protection) {
       continue;
     }
     if (!isRecord(entry)) return null;
-    const raw = entry.integration_id ?? entry.app_id;
-    if (raw === null || raw === undefined) {
-      // A pin by `source` carries no App id this read could match.
-      if (entry.source) return null;
-      continue;
+    // Both id fields count on their own, as in the shared required-check
+    // reader: a pin is any positive id or a truthy `source`.
+    let resolved = false;
+    for (const raw of [entry.integration_id, entry.app_id]) {
+      if (raw === null || raw === undefined) continue;
+      // Only a number or a decimal-integer string is an id. Coercing a
+      // boolean, an empty string, or an array would read a malformed pin as
+      // "any source".
+      const appId =
+        typeof raw === 'number' ||
+        (typeof raw === 'string' && /^-?\d+$/.test(raw))
+          ? Number(raw)
+          : Number.NaN;
+      if (!Number.isInteger(appId)) return null;
+      // A zero or negative id means "any source", so it pins nothing alone.
+      if (appId > 0) {
+        appIds.add(appId);
+        resolved = true;
+      }
     }
-    // Only a number or a decimal-integer string is an id. Coercing a boolean,
-    // an empty string, or an array would read a malformed pin as "any source".
-    const appId =
-      typeof raw === 'number' ||
-      (typeof raw === 'string' && /^-?\d+$/.test(raw))
-        ? Number(raw)
-        : Number.NaN;
-    if (!Number.isInteger(appId)) return null;
-    // A zero or negative id means "any source", so it pins nothing.
-    if (appId > 0) appIds.add(appId);
+    // A pin by `source` with no positive App id carries nothing this read
+    // could match, even when a zero or negative id sits beside it.
+    if (entry.source && !resolved) return null;
   }
   return appIds;
 }

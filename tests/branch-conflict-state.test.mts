@@ -2168,6 +2168,16 @@ test('collectPinnedRequiredAppIds: a malformed payload or list is unresolvable',
     ],
     ['entry is a number', rule({ required_status_checks: [7] }), {}],
     ['entry is a nested array', rule({ required_status_checks: [[1]] }), {}],
+    [
+      'source pin beside a zero id',
+      rule({ checks: [{ source: 'app', integration_id: 0 }] }),
+      {},
+    ],
+    [
+      'source pin beside an any-source id',
+      rule({ checks: [{ source: 'app', app_id: -1 }] }),
+      {},
+    ],
     ['pin id is an empty string', rule({ checks: [{ app_id: '' }] }), {}],
     ['pin id is a boolean', rule({ checks: [{ integration_id: true }] }), {}],
     ['pin id is an array', rule({ checks: [{ integration_id: [7] }] }), {}],
@@ -2183,6 +2193,20 @@ test('collectPinnedRequiredAppIds: a malformed payload or list is unresolvable',
   for (const [label, rules, protection] of cases) {
     assert.equal(collectPinnedRequiredAppIds(rules, protection), null, label);
   }
+  // Each id field counts on its own, and a source pin with a positive id stays
+  // readable.
+  assert.deepEqual(
+    collectPinnedRequiredAppIds(
+      rule({
+        checks: [
+          { integration_id: 0, app_id: 55 },
+          { source: 'app', app_id: -1, integration_id: 66 },
+        ],
+      }),
+      {},
+    ),
+    new Set([55, 66]),
+  );
   // A decimal-integer string is an id, and a zero or negative one is any source.
   assert.deepEqual(
     collectPinnedRequiredAppIds(
