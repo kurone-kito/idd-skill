@@ -37,6 +37,7 @@ import {
   resolvePrimaryActivation,
 } from './pre-merge-readiness.mjs';
 import {
+  CHECK_PASS_EQUIVALENT_STATES,
   CI_FAILURE_CONCLUSION_STATES,
   CI_PENDING_STATES,
   CI_STATUS_CONTEXT_PENDING_STATES,
@@ -57,16 +58,11 @@ import {
 } from './provider-adapter-github.mjs';
 
 // Interpretation table this bucketing is based on: idd-ci.instructions.md's
-// "Interpretation" section. Keep these three sets in sync with that table's
-// normalized states, with one deliberate addition: FAILURE_STATES also
-// includes StatusContext-only `ERROR` (see below), which that table does not
-// list because it predates this StatusContext-specific case.
-const SUCCESS_STATES = new Set([
-  'SUCCESS',
-  'NEUTRAL',
-  'SKIPPED',
-  'NOT_APPLICABLE',
-]);
+// "Interpretation" section. Keep the failure and pending sets in sync with
+// that table's normalized states, with one deliberate addition: FAILURE_STATES
+// also includes StatusContext-only `ERROR` (see below), which that table does
+// not list because it predates this StatusContext-specific case. The
+// pass-equivalent set is the shared CHECK_PASS_EQUIVALENT_STATES (#4401).
 // Built from the shared sets in protocol-helpers.mts so the present-run
 // fallback's names (#3670) and this bucketing cannot disagree about which
 // states are still running.
@@ -113,14 +109,6 @@ const CI_WAIT_STATE_FLAG_SPEC = {
   '--global-only': { type: 'boolean', default: false },
   '--help': { type: 'boolean', short: 'h' },
 };
-// Above the CLI entry block: a module-level binding after that block is a
-// top-level-await TDZ risk (tests/cli-entry-smoke.test.mts).
-const PASS_EQUIVALENT_STATES = new Set([
-  'SUCCESS',
-  'SKIPPED',
-  'NEUTRAL',
-  'NOT_APPLICABLE',
-]);
 if (import.meta.main) {
   // #3342: call main() directly when the envelope is disabled -- see
   // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
@@ -444,7 +432,7 @@ function normalizeCheckEntry(entry, requiredCheckNameSet) {
 function bucketState(state) {
   if (FAILURE_STATES.has(state)) return 'failure';
   if (PENDING_STATES.has(state)) return 'pending';
-  if (SUCCESS_STATES.has(state)) return 'success';
+  if (CHECK_PASS_EQUIVALENT_STATES.has(state)) return 'success';
   return 'unknown';
 }
 /**
@@ -848,7 +836,7 @@ export function requiredCiHeadAgreementFromSummary(summary) {
 export function latestPassingCompletedAt(summary) {
   let latest = '';
   for (const check of summary.checks) {
-    if (!PASS_EQUIVALENT_STATES.has(check.state.toUpperCase())) {
+    if (!CHECK_PASS_EQUIVALENT_STATES.has(check.state.toUpperCase())) {
       continue;
     }
     // Same filter and ordering as the snapshot field this value is

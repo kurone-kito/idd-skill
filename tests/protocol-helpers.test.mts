@@ -6352,3 +6352,25 @@ test('an unparseable first-commit time is reported as unknown, like a missing on
     'first-commit-time-unknown',
   );
 });
+
+// --- #4401: the latest-passing completion filter still uppercases its state.
+
+test('#4401: buildActivitySnapshotSummary counts a lowercase passing state and not a lowercase cancelled one', () => {
+  const completedAt = '2026-10-15T20:00:00Z';
+  const options = {
+    trustedMarkerLogins: ['dual-bot'],
+    advisoryBotLogins: ['dual-bot'],
+    advisoryBotLoginsSource: 'config',
+    dispositionAuthorLogins: ['dual-bot'],
+  };
+  const passing = buildActivitySnapshotSummary(
+    { checks: [{ name: 'ci', state: 'success', completedAt }] },
+    options,
+  );
+  assert.equal(passing.latestPassingCiCompletedAt, completedAt);
+  const cancelled = buildActivitySnapshotSummary(
+    { checks: [{ name: 'ci', state: 'cancelled', completedAt }] },
+    options,
+  );
+  assert.equal(cancelled.latestPassingCiCompletedAt, 'none');
+});
