@@ -31,7 +31,12 @@ import type {
   PullRequestSummary,
 } from './f4-head-proof-gate.mts';
 import type { LocalRef } from './f4-head-proof-verdict.mts';
-import { GH_TEXT_LOOP_OPTIONS, ghApiJson, ghText } from './gh-exec.mts';
+import {
+  GH_TEXT_LOOP_OPTIONS,
+  ghApiJson,
+  ghText,
+  resolveGhApiHostname,
+} from './gh-exec.mts';
 import { loadTrustedActorConfig } from './idd-config.mts';
 import {
   parseLocalWorktreeList,
@@ -40,6 +45,7 @@ import {
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
 import { composeGateTrustedMarkerLogins } from './protocol-helpers.mts';
 import {
+  activeGithubHost,
   createGithubProviderAdapter,
   originNamesRepository,
   repositoryFromRemoteUrl,
@@ -328,6 +334,17 @@ export function selectPullRequests(
     .filter((row) => Number.isSafeInteger(row.number) && row.number > 0);
 }
 
+/** Whether `url` has a whitespace, a backslash, or a control character. */
+function hasUnsafeUrlCharacter(url: string): boolean {
+  for (const ch of url) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code <= 0x20 || code === 0x7f || ch === '\\' || /\s/.test(ch)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * The repository the current checkout's origin remote names, read locally with
  * no `gh` call, so an inherited `GH_REPO` cannot change it. Throws when the
@@ -335,8 +352,19 @@ export function selectPullRequests(
  */
 export function resolveCheckoutRepository(): { owner: string; repo: string } {
   const origin = runGit(['remote', 'get-url', 'origin']);
-  const named =
-    origin.status === 0 ? repositoryFromRemoteUrl(origin.stdout) : null;
+  if (origin.status !== 0 || origin.stdout === '') {
+    throw new Error(
+      'the current checkout has no origin remote that names a repository',
+    );
+  }
+  // A whitespace, backslash, or control character can change where a URL
+  // parser reads the host, so such a URL is refused before it is parsed.
+  if (hasUnsafeUrlCharacter(origin.stdout)) {
+    throw new Error(
+      "the checkout's origin URL contains characters that a repository URL does not",
+    );
+  }
+  const named = repositoryFromRemoteUrl(origin.stdout);
   if (named === null) {
     throw new Error(
       'the current checkout has no origin remote that names a repository',
@@ -346,13 +374,37 @@ export function resolveCheckoutRepository(): { owner: string; repo: string } {
 }
 
 /**
+ * Why the origin check refused `owner/repo`. Names the origin's own host when
+ * the host is the cause, so the fix (GH_HOST) is clear.
+ */
+function originMismatchMessage(owner: string, repo: string): string {
+  const origin = runGit(['remote', 'get-url', 'origin']);
+  const named =
+    origin.status === 0 && origin.stdout !== ''
+      ? repositoryFromRemoteUrl(origin.stdout)
+      : null;
+  if (named === null) {
+    return `${owner}/${repo} is not confirmed: the current checkout has no origin remote that names a repository`;
+  }
+  if (
+    named.owner.toLowerCase() !== owner.toLowerCase() ||
+    named.repo.toLowerCase() !== repo.toLowerCase()
+  ) {
+    return `${owner}/${repo} is not the repository the current checkout's origin names (${named.owner}/${named.repo})`;
+  }
+  const active = activeGithubHost() ?? 'an unreadable host';
+  return `the current checkout's origin names ${owner}/${repo} on ${named.host}, but the active GitHub host is ${active}; set GH_HOST to ${named.host} to use it`;
+}
+
+/**
  * The production callbacks for one repository. The trusted logins are the
  * viewer, the trusted configuration (read from the repository's default
  * branch, never the worktree), `IDD_TRUSTED_MARKER_ACTORS`, and, when
  * collaborator-marker trust is on, collaborators with write access. No flag
  * can add to them: this command takes none.
  *
- * The repository is resolved on the first GitHub access, not up front, so a
+ * The repository is resolved from the checkout's origin on the first GitHub
+ * access, not up front, so a
  * refusal that needs no GitHub read (an unregistered worktree) makes no
  * GitHub call. The command passes `resolveCheckoutRepository`, which reads
  * the repository from the checkout's origin without `gh`.
@@ -378,9 +430,7 @@ export function createLiveF4HeadProofDeps(options: {
       // origin does not confirm is refused; the origin host must be the active
       // GitHub host (GH_HOST, else GITHUB_SERVER_URL, else github.com).
       if (!originNamesRepository(owner, repo)) {
-        throw new Error(
-          `${owner}/${repo} is not the repository the current checkout's origin names (the origin host must be the active GitHub host: GH_HOST, else GITHUB_SERVER_URL, else github.com)`,
-        );
+        throw new Error(originMismatchMessage(owner, repo));
       }
       located = {
         owner,
@@ -448,7 +498,11 @@ export function createLiveF4HeadProofDeps(options: {
           'pr',
           'list',
           '--repo',
-          `${owner}/${repo}`,
+          // Pinned to the host the REST calls use (resolveGhApiHostname), so
+          // every read of this command reaches the same host.
+          resolveGhApiHostname()
+            ? `${resolveGhApiHostname()}/${owner}/${repo}`
+            : `${owner}/${repo}`,
           '--head',
           branch,
           '--state',

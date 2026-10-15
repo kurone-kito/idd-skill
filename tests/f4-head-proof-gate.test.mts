@@ -12,7 +12,10 @@ import {
   provesNothingSent,
   runF4HeadProofGate,
 } from '../src/scripts/f4-head-proof-gate.mts';
-import { createLiveF4HeadProofDeps } from '../src/scripts/f4-head-proof-live.mts';
+import {
+  createLiveF4HeadProofDeps,
+  resolveCheckoutRepository,
+} from '../src/scripts/f4-head-proof-live.mts';
 import { createLoadControlRefusal } from '../src/scripts/github-api-refusal.mts';
 import {
   parseArgs,
@@ -1678,4 +1681,26 @@ test('an unregistered worktree is refused before the repository is resolved, so 
     /not a worktree that git worktree list --porcelain registers/,
   );
   assert.equal(resolved, 0);
+});
+
+test('the proof command takes the repository from the checkout origin, not from a gh lookup', () => {
+  let captured: unknown = null;
+  const args = parseArgs([
+    '--type',
+    'f4-head-proof',
+    '--target',
+    'issue',
+    String(ISSUE),
+    '--claim-id',
+    CLAIM,
+    '--agent-id',
+    AGENT,
+    '--worktree',
+    '/not/registered/worktree',
+  ]);
+  runF4HeadProofCommand(args, ISSUE, (options) => {
+    captured = options.resolveRepo;
+    return harness().deps;
+  });
+  assert.equal(captured, resolveCheckoutRepository);
 });

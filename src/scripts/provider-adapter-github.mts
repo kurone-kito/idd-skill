@@ -5032,7 +5032,7 @@ export function repositoryFromRemoteUrl(
  * explicit host takes precedence, as in `gh`), else the Actions server
  * (`GITHUB_SERVER_URL`, `https://github.com` when unset). `null` when that host
  * cannot be parsed. */
-function activeGithubHost(): string | null {
+export function activeGithubHost(): string | null {
   try {
     const explicit = process.env.GH_HOST?.trim();
     if (explicit) return new URL(`https://${explicit}`).host.toLowerCase();

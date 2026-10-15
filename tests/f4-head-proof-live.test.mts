@@ -392,10 +392,7 @@ test('the live deps refuse a repository the checkout origin does not name, and a
       return { owner: 'another-owner', repo: 'another-repo' };
     },
   });
-  assert.match(
-    other.checkoutRepositoryError() ?? '',
-    /is not the repository the current checkout's origin names/,
-  );
+  assert.match(other.checkoutRepositoryError() ?? '', /origin/);
   const empty = createLiveF4HeadProofDeps({
     resolveRepo: () => ({ owner: '', repo: 'idd-skill' }),
   });
@@ -407,10 +404,21 @@ test('the live deps refuse a repository the checkout origin does not name, and a
 
 test('the repository is read from the checkout origin, and an inherited GH_REPO has no effect', () => {
   const root = mkdtempSync(join(tmpdir(), 'f4-head-proof-origin-'));
-  const keys = ['GH_REPO', 'GH_HOST', 'GITHUB_SERVER_URL'] as const;
+  // A user-level insteadOf rule would change the origin URL git reports, so
+  // HOME and XDG_CONFIG_HOME point at an empty directory for this test.
+  const home = mkdtempSync(join(tmpdir(), 'f4-head-proof-home-'));
+  const keys = [
+    'GH_REPO',
+    'GH_HOST',
+    'GITHUB_SERVER_URL',
+    'HOME',
+    'XDG_CONFIG_HOME',
+  ] as const;
   const saved = keys.map((key) => [key, process.env[key]] as const);
   const savedCwd = process.cwd();
   try {
+    process.env.HOME = home;
+    process.env.XDG_CONFIG_HOME = home;
     execFileSync('git', ['init', '-q', '-b', 'main', root], {
       stdio: 'ignore',
     });
@@ -449,6 +457,7 @@ test('the repository is read from the checkout origin, and an inherited GH_REPO 
       }
     }
     rmSync(root, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
   }
 });
 
@@ -460,11 +469,49 @@ test('a checkout without an origin remote cannot resolve a repository locally', 
       stdio: 'ignore',
     });
     process.chdir(root);
+    // The repository must exist, so the refusal below is about the missing
+    // origin and not about a directory that is not a checkout.
+    assert.equal(
+      execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
+        encoding: 'utf8',
+      }).trim(),
+      'true',
+    );
     assert.throws(() => resolveCheckoutRepository(), /no origin remote/);
     const deps = createLiveF4HeadProofDeps({
       resolveRepo: resolveCheckoutRepository,
     });
     assert.match(deps.checkoutRepositoryError() ?? '', /no origin remote/);
+  } finally {
+    process.chdir(savedCwd);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an origin URL with whitespace, a backslash, or a control character is refused before it is parsed', () => {
+  const root = mkdtempSync(join(tmpdir(), 'f4-head-proof-odd-origin-'));
+  const savedCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '-q', '-b', 'main', root], {
+      stdio: 'ignore',
+    });
+    execFileSync(
+      'git',
+      [
+        '-C',
+        root,
+        'remote',
+        'add',
+        'origin',
+        'https://github.com\\@evil.example/o/r',
+      ],
+      { stdio: 'ignore' },
+    );
+    process.chdir(root);
+    assert.throws(
+      () => resolveCheckoutRepository(),
+      /characters that a repository URL does not/,
+    );
   } finally {
     process.chdir(savedCwd);
     rmSync(root, { recursive: true, force: true });
