@@ -8181,7 +8181,8 @@ same as `AW4`/`AW5`.
   `claimId`, `harness` (`claude-code`, `codex-cli`, `opencode`,
   `grok-build`, `cursor-cli`, `copilot-cli`, `antigravity-cli`, or `other`),
   `workerHandle`, `terminalPhase`, `outcome` (`merged`, `handed-off`,
-  `held`, `abandoned`, or `failed`), `verifiedAt`, and `recordedAt`.
+  `held`, `abandoned`, `failed`, or `scope-stopped`), `verifiedAt`, and
+  `recordedAt`.
   Optional are `vendorSessionId`, `reviewRounds`, `stalls`, `deviations`,
   `frictions` (an entry may name the instruction or doc path in `file`),
   and `followUps`. `terminalPhase` and each `phase` take a phase id such as
@@ -8194,6 +8195,14 @@ same as `AW4`/`AW5`.
   numeric offset, and seconds `00` to `59`, that name a real instant: a day
   that does not exist (`2026-02-30`), hour 24, or an out-of-range offset is
   rejected rather than silently normalized.
+- `scope-stopped`: the run ended at a phase boundary that the operator or
+  coordinator scoped it to end at (for example, "stop at F2"), with no gate
+  blocking it. `held` stays for a gate hold; before this outcome existed, a
+  scope stop was stored as `held`, which inflated the `held` count (issue
+  `#3974`). When the worker later continues on the coordinator's word, a
+  further record is appended at a later `terminalPhase`, which the duplicate
+  check below treats as its own record. Stored records are not migrated: a
+  record already stored as `held` stays `held`.
 - `append`: exactly one of `--file <path>` or `--stdin` supplies one JSON
   record. An invalid record exits `1`, writes nothing, and creates no
   directory. A record whose `claimId`, `workerHandle`, and `terminalPhase`
@@ -8202,7 +8211,7 @@ same as `AW4`/`AW5`.
   while a replacement worker on the same claim has its own `workerHandle`
   and gets its own record. A new line prints `{"status":"appended"}`.
 - `summary`: read-only; it takes no lock and creates nothing. It prints
-  JSON with the outcome counts (all five outcomes, zero-filled), the
+  JSON with the outcome counts (every outcome, zero-filled), the
   distribution of `reviewRounds`, the ten most frequent `frictions`
   `file` values, and `invalidLines`, the count of lines that are not valid
   records. `--since <ISO8601>` keeps only records whose `recordedAt` is at

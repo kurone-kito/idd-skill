@@ -76,9 +76,10 @@
         "handed-off",
         "held",
         "abandoned",
-        "failed"
+        "failed",
+        "scope-stopped"
       ],
-      "description": "How the worker's run ended, as verified by the orchestrator."
+      "description": "How the worker's run ended, as verified by the orchestrator. scope-stopped is a stop at a phase boundary that the operator or coordinator scoped the run to end at, with no gate blocking it, so it is not a held outcome."
     },
     "verifiedAt": {
       "type": "string",
