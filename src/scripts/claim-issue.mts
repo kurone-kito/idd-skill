@@ -68,6 +68,15 @@ const FRESH_CLAIM_VERDICTS: readonly string[] = [
   'stale-reclaimable',
 ];
 
+/** The routing states the fresh-claim gate maps onto `already-claimed`. */
+const ALREADY_CLAIMED_STATES: readonly string[] = [
+  'already_owned',
+  'local_worktree_occupied',
+  'non_inheritable',
+  'owner_evidence_required',
+  'disputed',
+];
+
 if (import.meta.main) {
   if (isHelperErrorEnvelopeEnabled()) {
     runHelperCli('claim-issue', runCli);
@@ -256,7 +265,11 @@ export function createDefaultDeps(): ClaimIssueDeps {
 /** Read the title and assignees with one `gh issue view`; `null` when malformed. */
 function parseIssueRead(stdout: string): IssueRead | null {
   const parsed = parseJsonObject(stdout);
-  if (parsed === null || typeof parsed.title !== 'string') {
+  if (
+    parsed === null ||
+    typeof parsed.title !== 'string' ||
+    parsed.title.trim() === ''
+  ) {
     return null;
   }
   if (!Array.isArray(parsed.assignees)) {
@@ -264,12 +277,37 @@ function parseIssueRead(stdout: string): IssueRead | null {
   }
   const assignees: string[] = [];
   for (const assignee of parsed.assignees) {
-    if (!isRecord(assignee) || typeof assignee.login !== 'string') {
+    if (
+      !isRecord(assignee) ||
+      typeof assignee.login !== 'string' ||
+      assignee.login === ''
+    ) {
       return null;
     }
     assignees.push(assignee.login);
   }
   return { title: parsed.title, assignees };
+}
+
+/** True when a child helper's `issue` block names the issue it was asked about. */
+function describesIssue(value: unknown, issueNumber: number): boolean {
+  return isRecord(value) && value.number === issueNumber;
+}
+
+/** A non-empty list of checks, each with a string `id`, `name`, and `result`. */
+function isCheckList(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (check: unknown) =>
+        isRecord(check) &&
+        typeof check.id === 'string' &&
+        check.id !== '' &&
+        typeof check.name === 'string' &&
+        typeof check.result === 'string',
+    )
+  );
 }
 
 /** A5(a): the issue-author approval gate, through `claim-approval-gate`. */
@@ -297,6 +335,7 @@ function checkApproval(
   }
   const policy = evidence.policy;
   if (
+    !describesIssue(evidence.issue, issueNumber) ||
     typeof evidence.approved !== 'boolean' ||
     typeof evidence.reason !== 'string' ||
     evidence.reason === '' ||
@@ -306,8 +345,7 @@ function checkApproval(
     !isRecord(policy.approvalSignals) ||
     typeof policy.approvalSignals.readyLabelName !== 'string' ||
     typeof policy.approvalSignals.labelFreshnessMode !== 'string' ||
-    !Array.isArray(evidence.checks) ||
-    evidence.checks.length === 0
+    !isCheckList(evidence.checks)
   ) {
     return unproven('claim-approval-gate printed incomplete evidence');
   }
@@ -355,6 +393,7 @@ function checkClaimState(
   const gate = routing === null ? null : routing.fresh_claim_gate;
   if (
     routing === null ||
+    !describesIssue(routing.issue, issueNumber) ||
     !isRecord(gate) ||
     typeof gate.verdict !== 'string' ||
     !FRESH_CLAIM_VERDICTS.includes(gate.verdict)
@@ -398,6 +437,15 @@ function checkClaimState(
       'stale-takeover-out-of-scope',
       'This helper checks a fresh claim only. Follow the stale-claim takeover path in idd-claim.instructions.md (A5(c)) by hand.',
       'the active claim is stale and reclaimable; takeover is out of scope',
+    );
+  }
+  if (
+    typeof routing.state !== 'string' ||
+    !ALREADY_CLAIMED_STATES.includes(routing.state)
+  ) {
+    return unavailable(
+      label,
+      'resume-claim-routing printed already-claimed for a state it never pairs with that verdict',
     );
   }
   return stop(
@@ -537,6 +585,13 @@ function parseMatchingRefs(stdout: string): string[] | null {
   return refs;
 }
 
+/** `: a, b` for a non-empty list of path strings, else nothing. */
+function describePaths(paths: unknown): string {
+  return Array.isArray(paths) && paths.length > 0
+    ? `: ${paths.map(String).join(', ')}`
+    : '';
+}
+
 /** A5(e): the local worktree scan, then the scoped remote branch scan. */
 function checkBranchCollision(
   issueNumber: number,
@@ -556,18 +611,25 @@ function checkBranchCollision(
     return stop(
       'local-worktree-occupied',
       collisionPath,
-      `a local worktree holds ${prefix}*: ${local.paths.join(', ')}`,
+      `a local worktree holds ${prefix}*${describePaths(local.paths)}`,
     );
   }
   // Anything that is not a proven absence fails closed, so a malformed
   // inspector result cannot reach the remote scan as "absent".
-  if (local.status !== 'absent') {
+  if (
+    local.status !== 'absent' ||
+    !Array.isArray(local.paths) ||
+    local.paths.length > 0 ||
+    local.reason !== null
+  ) {
     return stop(
       'local-worktree-unreadable',
       collisionPath,
       `a local worktree could not be ruled out${
-        local.reason ? ` (${local.reason})` : ''
-      }${local.paths.length > 0 ? `: ${local.paths.join(', ')}` : ''}`,
+        typeof local.reason === 'string' && local.reason
+          ? ` (${local.reason})`
+          : ''
+      }${describePaths(local.paths)}`,
     );
   }
   // `tojson` prints each page as one compact JSON line, so the scan reads the

@@ -4685,7 +4685,11 @@ like `activation-nonce`, because a worker posts it as itself.
     says to post it
 - A pre-check helper or `gh` call that fails or returns malformed output
   is `precheck-unavailable` with the written path of that check as the
-  next action. This holds for every check except A5(a), which has
+  next action. Malformed covers a required field that is missing or of
+  the wrong type, evidence that names another issue, a verdict paired
+  with a routing state the gate never pairs it with, and a local scan
+  result that calls a worktree absent while still naming a path or a
+  reason. This holds for every check except A5(a), which has
   `approval-unproven`, and the local worktree scan, which has
   `local-worktree-unreadable`
 - Report (JSON on stdout): `issue`, `eligible`, `reason` (the stop

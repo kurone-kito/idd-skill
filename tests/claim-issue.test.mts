@@ -72,6 +72,7 @@ const failed = (status: number | null = 1): CommandResult => ({
 const ISSUE_VIEW = ok(JSON.stringify({ title: TITLE, assignees: [] }));
 const APPROVED = ok(
   JSON.stringify({
+    issue: { number: ISSUE },
     approved: true,
     reason: 'author-self-authorized',
     gateEnabled: true,
@@ -107,6 +108,7 @@ function routingOutput(
   }
   return ok(
     JSON.stringify({
+      issue: { number: ISSUE },
       state:
         options.state ??
         (verdict === 'claimable'
@@ -380,6 +382,14 @@ test('A5(a): invalid or incomplete approval JSON is approval-unproven', () => {
     }),
     approvalOutput({ checks: undefined }),
     approvalOutput({ checks: [] }),
+    approvalOutput({ checks: [null] }),
+    approvalOutput({ checks: [{}] }),
+    approvalOutput({ checks: [{ id: 'gate_enabled', result: 'pass' }] }),
+    approvalOutput({ checks: [{ id: 'gate_enabled', name: 'n', result: 1 }] }),
+    approvalOutput({ checks: [{ id: '', name: 'n', result: 'pass' }] }),
+    approvalOutput({ issue: undefined }),
+    approvalOutput({ issue: { number: ISSUE + 1 } }),
+    approvalOutput({ issue: { number: String(ISSUE) } }),
     approvalOutput({ reason: '' }),
   ];
   for (const approval of broken) {
@@ -479,6 +489,16 @@ test('A5(c): a failed, malformed, or unknown fresh-claim result is precheck-unav
     routingOutput('claimable', { state: 'stale' }),
     routingOutput('claimable', { state: 'non_inheritable' }),
     routingOutput('stale-reclaimable', { state: 'unclaimed' }),
+    routingOutput('already-claimed', { state: 'unclaimed' }),
+    routingOutput('already-claimed', { state: 'stale' }),
+    routingOutput('already-claimed', { state: 'bogus' }),
+    ok(
+      JSON.stringify({
+        ...JSON.parse(CLAIMABLE.stdout),
+        issue: { number: ISSUE + 1 },
+      }),
+    ),
+    ok(JSON.stringify({ ...JSON.parse(CLAIMABLE.stdout), issue: undefined })),
     routingOutput('something-else'),
     routingOutput('already-claimed', { reason: undefined, winning: null }),
     routingOutput('already-claimed', { reason: '', winning: null }),
@@ -928,6 +948,8 @@ test('a failed read of the title and assignees is a transport outcome before any
     ok(JSON.stringify({ title: 7, assignees: [] })),
     ok(JSON.stringify({ title: TITLE, assignees: [{ name: 'x' }] })),
     ok(JSON.stringify({ title: TITLE, assignees: 'none' })),
+    ok(JSON.stringify({ title: '  ', assignees: [] })),
+    ok(JSON.stringify({ title: TITLE, assignees: [{ login: '' }] })),
   ];
   for (const issueView of broken) {
     const record = makeRun({ issueView });
@@ -1217,4 +1239,43 @@ test('A5(d): raw rows through the real adapter, a malformed one fails the lookup
   closing.deps.createPort = () =>
     portWithRawOpenRows([{ ...valid, body: `Closes #${ISSUE}` }]);
   assertStoppedAt(reportOf(closing), 'a5d-open-pr', 'open-pr');
+});
+
+test('A5(c): every routing state the gate pairs with already-claimed is accepted', () => {
+  for (const state of [
+    'already_owned',
+    'local_worktree_occupied',
+    'non_inheritable',
+    'owner_evidence_required',
+    'disputed',
+  ]) {
+    const { report } = run({
+      routing: routingOutput('already-claimed', { state, reason: 'r' }),
+    });
+    assertStoppedAt(report, 'a5c-claim-state', 'already-claimed');
+  }
+});
+
+test('A5(e): a local absent result with paths or a reason is not a proven absence', () => {
+  const shapes: unknown[] = [
+    { status: 'absent', paths: ['/x'], reason: null },
+    { status: 'absent', paths: [], reason: 'something' },
+    { status: 'absent', paths: [], reason: undefined },
+    { status: 'absent', paths: undefined, reason: null },
+    { status: 'absent', paths: 'none', reason: null },
+  ];
+  for (const shape of shapes) {
+    const { report, record } = run({
+      inspectLocalWorktrees: () => shape as LocalWorktreeInspection,
+    });
+    assertStoppedAt(
+      report,
+      'a5e-branch-collision',
+      'local-worktree-unreadable',
+    );
+    assert.equal(
+      record.calls.some((call) => call[1] === 'api'),
+      false,
+    );
+  }
 });
