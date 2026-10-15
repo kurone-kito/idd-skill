@@ -569,26 +569,45 @@ function main() {
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
   const port = createGithubProviderAdapter(owner, repo);
+  const report = readAdvisoryWaitState(port, {
+    prNumber: args.prNumber,
+    owner,
+    repo,
+    trustedMarkerLogins: args.trustedMarkerLogins,
+    claimId: args.claimId,
+    agentId: args.agentId,
+    now: resolvedNow,
+    clock: Date.now,
+  });
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return 0;
+}
+/**
+ * One full read of the advisory-wait state: every provider read the helper
+ * makes, then the summary, the terminal-recovery state and the stale-request
+ * recovery verdict. Read-only; the CLI prints its result once.
+ */
+export function readAdvisoryWaitState(port, input) {
   const viewerLogin = port.resolveViewerLoginSafe().viewerLogin;
   const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } =
     resolveTrustedMarkerActors({
-      flagValue: args.trustedMarkerLogins,
+      flagValue: input.trustedMarkerLogins,
       envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
       config: loadIddConfig(),
     });
-  const prHeadSha = port.getChangeRequestHeadSha(args.prNumber);
-  const reviews = port.listReviews(args.prNumber);
+  const prHeadSha = port.getChangeRequestHeadSha(input.prNumber);
+  const reviews = port.listReviews(input.prNumber);
   const restRequestedReviewers = port
-    .getChangeRequestRequestedReviewerLogins(args.prNumber)
+    .getChangeRequestRequestedReviewerLogins(input.prNumber)
     .map((login) => ({ login }));
-  const timelineEvents = port.getWorkItemTimeline(args.prNumber);
+  const timelineEvents = port.getWorkItemTimeline(input.prNumber);
   // #3249: `includeEditState` resolves each comment's GraphQL `lastEditedAt`
   // -- needed so `summarizeAdvisoryWaitMarkers` and
   // `buildCopilotRecoverySummary` below (fed via `normalizeComment`) can
   // reject a body-edited `advisory-wait:` / `advisory-wait-recovery:`
   // marker. A GraphQL failure now throws where this call previously could
   // not; see this issue's PR description for that tradeoff.
-  const comments = port.listWorkItemComments(args.prNumber, {
+  const comments = port.listWorkItemComments(input.prNumber, {
     includeEditState: true,
   });
   const collaboratorTrustEnabled = isTruthy(
@@ -625,7 +644,7 @@ function main() {
       copilotPendingCoversHeadForGraphqlGate &&
       lastCopilotCommitForGraphqlGate !== prHeadSha
     )
-      ? port.getChangeRequestRequestedReviewerLoginsGraphql(args.prNumber)
+      ? port.getChangeRequestRequestedReviewerLoginsGraphql(input.prNumber)
       : null;
   const summary = buildAdvisoryWaitSummary(
     {
@@ -641,7 +660,9 @@ function main() {
       // AFTER every evidence-collection call above has completed -- not
       // inside resolveNowFlag, which would sample it before collection
       // even starts. See resolveNowFlag's own doc comment for why.
-      now: resolvedNow || new Date().toISOString().replace('.000Z', 'Z'),
+      now:
+        input.now ||
+        new Date(input.clock()).toISOString().replace('.000Z', 'Z'),
       requestCap: advisoryWaitPolicy.requestCap,
       pendingWindowMinutes: advisoryWaitPolicy.pendingWindowMinutes,
       settledWindowMinutes: advisoryWaitPolicy.settledWindowMinutes,
@@ -678,8 +699,8 @@ function main() {
     providerOutageTerminalWindowOverrideMinutes !== null
       ? resolveOutageDeclarationActiveForConvergenceSelector({
           port,
-          owner,
-          repo,
+          owner: input.owner,
+          repo: input.repo,
           iddConfig: iddConfigForTerminalWindow,
           now: summary.now,
         })
@@ -698,8 +719,8 @@ function main() {
     {
       now: summary.now,
       trustedMarkerLogins,
-      claimId: args.claimId,
-      agentId: args.agentId,
+      claimId: input.claimId,
+      agentId: input.agentId,
       recoveryCycleCap: readAdvisoryRecoveryCycleCap(),
       terminalWindowMinutes: resolveEffectiveAdvisoryTerminalWindowMinutes({
         config: validatedAdvisoryWaitConfigForTerminalWindow,
@@ -722,20 +743,13 @@ function main() {
     elapsedMinutes: summary.elapsedMinutes,
     settledWindowMinutes: summary.settledWindowMinutes,
   });
-  process.stdout.write(
-    `${JSON.stringify(
-      {
-        ...summary,
-        trustedMarkerActors: configuredTrustedActors,
-        trustedMarkerActorsSource,
-        copilotRecovery,
-        staleRequestRecovery,
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  return 0;
+  return {
+    ...summary,
+    trustedMarkerActors: configuredTrustedActors,
+    trustedMarkerActorsSource,
+    copilotRecovery,
+    staleRequestRecovery,
+  };
 }
 /**
  * Restores this file's pre-#1450 permissive `Number.parseInt` contract:

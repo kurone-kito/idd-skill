@@ -1,5 +1,6 @@
 import { strict as assert } from 'node:assert';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +18,7 @@ import {
   renderAdvisoryWaitRecoveryMarker,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
-import { spawnHelperBinWithEnvelope } from './test-utils.mts';
+import { spawnHelperBinWithEnvelope, stubExecutable } from './test-utils.mts';
 
 const advisoryWaitStateSchema = loadJson(
   'schemas/advisory-wait-state.schema.json',
@@ -1061,4 +1062,162 @@ test('decline (#4142): a declined head never yields a recovery attempt, while th
     }).action,
     'attempt',
   );
+});
+
+// --- CLI baseline (#4378): the printed state of a run without --wait ---------
+// A stubbed `gh` answers the ten call forms one read makes, so these tests run
+// the real helper binary end to end. The stub counts head-SHA reads in a file
+// (every call is a new process) and fails from the Nth one on.
+
+const CLI_HEAD_SHA = 'a'.repeat(40);
+
+interface GhStubOptions {
+  /** The head-SHA read that fails, and every one after it (1 = the first). */
+  failHeadFrom: number;
+  /** GraphQL comment nodes served for the pull request. */
+  commentNodes: unknown[];
+}
+
+function advisoryWaitGhStubBody(
+  stateDir: string,
+  options: GhStubOptions,
+): string {
+  return `const fs = require('node:fs');
+const CONFIG = ${JSON.stringify({ ...options, stateDir, head: CLI_HEAD_SHA })};
+const args = process.argv.slice(2);
+const include = args.includes('--include');
+const reply = (text) => process.stdout.write(
+  include ? 'HTTP/2.0 200 OK\\r\\nContent-Type: application/json\\r\\n\\r\\n' + text : text,
+);
+const fail = (why) => {
+  process.stderr.write('gh stub: ' + why + '\\n');
+  process.exit(1);
+};
+if (args[0] === 'auth') {
+  process.stdout.write('stub-token\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1] === 'user') {
+  process.stdout.write('viewer\\n');
+  process.exit(0);
+}
+if (args[0] === 'pr' && args[1] === 'view') {
+  const counter = CONFIG.stateDir + '/head-calls';
+  let calls = 0;
+  try { calls = Number(fs.readFileSync(counter, 'utf8')); } catch {}
+  calls += 1;
+  fs.writeFileSync(counter, String(calls));
+  if (calls >= CONFIG.failHeadFrom) fail('HTTP 502 on head read ' + calls);
+  process.stdout.write(CONFIG.head + '\\n');
+  process.exit(0);
+}
+const path = args[0] === 'api' ? String(args[1]) : '';
+if (/\\/pulls\\/\\d+\\/reviews$/.test(path)) process.exit(0);
+if (/\\/issues\\/\\d+\\/timeline$/.test(path)) process.exit(0);
+if (/\\/pulls\\/\\d+\\/requested_reviewers$/.test(path)) {
+  reply(JSON.stringify({ users: [] }));
+  process.exit(0);
+}
+if (path === 'graphql') {
+  const text = args.join('\\n');
+  if (text.includes('comments(first')) {
+    process.stdout.write(JSON.stringify({ data: { repository: { issue: { comments: {
+      nodes: CONFIG.commentNodes,
+      pageInfo: { hasNextPage: false, endCursor: null },
+    } } } } }));
+    process.exit(0);
+  }
+  if (text.includes('reviewRequests')) {
+    process.stdout.write(JSON.stringify({ data: { repository: { pullRequest: {
+      reviewRequests: { nodes: [] },
+    } } } }));
+    process.exit(0);
+  }
+}
+fail('unexpected call: ' + args.join(' ').slice(0, 200));
+`;
+}
+
+/** Run `run` with a stubbed `gh` and an empty working directory (no config). */
+function withAdvisoryWaitGhStub<T>(
+  options: GhStubOptions,
+  run: (cwd: string) => T,
+): T {
+  const root = mkdtempSync(join(tmpdir(), 'idd-aw-cli-'));
+  const restoreGh = stubExecutable('gh', advisoryWaitGhStubBody(root, options));
+  try {
+    return run(root);
+  } finally {
+    restoreGh();
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+const CLI_ARGS = ['--pr', '1', '--owner', 'o', '--repo', 'r'] as const;
+
+test('bin/idd-advisory-wait-state.mjs: a run without --wait prints the state with neither wait field (#4378 baseline)', () => {
+  const result = withAdvisoryWaitGhStub(
+    { failHeadFrom: 99, commentNodes: [] },
+    (cwd) =>
+      spawnHelperBinWithEnvelope('idd-advisory-wait-state.mjs', [...CLI_ARGS], {
+        cwd,
+      }),
+  );
+  assert.equal(result.status, 0, JSON.stringify(result));
+  const printed = JSON.parse(result.stdout) as Record<string, unknown>;
+  const { now, ...rest } = printed;
+  assert.match(String(now), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/);
+  assert.deepEqual(rest, {
+    protocolVersion: '1',
+    prHeadSha: CLI_HEAD_SHA,
+    lastCopilotCommit: '',
+    copilotPending: false,
+    copilotPendingCoversHead: false,
+    outcome: 'REQUEST_NEEDED',
+    f3Outcome: 'SATISFIED',
+    secondaryBotLogin: '',
+    secondaryBotLogins: [],
+    secondaryRequestLogins: [],
+    secondaryRequestNeeded: false,
+    requestCap: 30,
+    pendingWindowMinutes: 30,
+    settledWindowMinutes: 10,
+    pollIntervalMinutes: 2,
+    capExhaustedRoute: 'phase-specific',
+    elapsedMinutes: 0,
+    sameHeadMarkerPresent: false,
+    sameHeadRequestMarkerPresent: false,
+    earliestSameHeadAt: '',
+    sameHeadMarkerCount: 0,
+    requestMarkerCount: 0,
+    trustedMarkerSummary: {
+      viewerLogin: 'viewer',
+      configuredTrustedActors: [],
+      collaboratorTrustEnabled: false,
+      trustedMarkerLogins: ['viewer'],
+      trustedSameHeadMarkerCount: 0,
+      untrustedSameHeadMarkerCount: 0,
+      trustedRequestMarkerCount: 0,
+      untrustedRequestMarkerCount: 0,
+    },
+    trustedMarkerActors: [],
+    trustedMarkerActorsSource: 'none',
+    copilotRecovery: {
+      cap: 2,
+      completedCycleCount: 0,
+      remainingBudget: 2,
+      capExhausted: false,
+      terminalWindowMinutes: 720,
+      clockAnchor: '',
+      elapsedMinutes: 0,
+      windowElapsed: false,
+      activeClaimProvided: false,
+      state: 'NOT_TERMINAL',
+      reason: 'active-claim-not-provided',
+    },
+    staleRequestRecovery: {
+      action: 'not-applicable',
+      reason: 'active-claim-not-provided',
+    },
+  });
 });
