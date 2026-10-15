@@ -1258,9 +1258,13 @@ in this preamble, since the fallback differs per helper.
   shape with `--anchor`, a malformed anchor, and an anchor in another
   repository all exit `2` before anything is created. The anchor must be an
   open issue, not a pull request, that still carries the authoring label,
-  has no active claim, and whose trusted owner-marker log replays to one open
-  generation (the check also runs in a dry run; otherwise the report is a
-  refusal and nothing is written). The child takes the anchor's set ID and
+  has no active claim or open linked pull request, and whose trusted
+  owner-marker log replays to one open generation (every marker follows the
+  field rules of its mode, and a completed set cannot be reopened under its
+  set ID). The journal must also hold the anchor's own trusted
+  `state=member` publication-intent record, which verifies the set's
+  originating hold. The check also runs in a dry run; otherwise the report
+  is a refusal and nothing is written. The child takes the anchor's set ID and
   session, uses the anchor's real reference as `anchor` in its publication
   line, journal records, and owner marker, and appends a same-owner
   heartbeat on the anchor (reusing a fresh matching marker under
