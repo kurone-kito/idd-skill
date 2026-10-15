@@ -4975,6 +4975,11 @@ does. `<ts>` is the current UTC time in ISO 8601. `<settle-seconds>` is
 `claim.verifySettleDelay` converted to whole seconds: the distributed default
 `PT5S` is `5`.
 
+Resolve each helper command as A5(a) does in the claim file. The
+`node scripts/` forms are the source-repository and vendored-node
+commands. Other profiles run the profile-selected command that each
+helper section in this file names.
+
 ```sh
 set -euo pipefail
 w='<path>' a='{agent-id}' c='{claim-id}' n='{nonce}' r='<n>' b='<branch>' t='<ts>'
