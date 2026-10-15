@@ -2757,6 +2757,26 @@ change (the receipt format is version 1):
   it. The path shape keeps a forged record from naming a file anywhere
   else. This risk is accepted with no code change (issue #4319).
 
+A reinstall runs the same comparison. Until issue #4327, a reinstall
+rewrote a `file` record for any of the three entry files after checking
+only the file's SHA-256, so a hand-written record that named a user's
+own `CLAUDE.md` with that file's hash made `--install-user-global`
+replace the file. The worker for issue #4319 found this on 2026-10-15,
+and the body of issue #4327 records it. The forged-record tests written
+for issue #4327 failed for all three entry files on `main` at commit
+`198a62451`. Install now rewrites a whole-file record only when the
+file's bytes equal what install writes for that harness, with the
+`AGENTS.md` comparison taking the same recorded entry texts as
+uninstall, so an upgrade, and an install after one that selected no
+harness, still rewrite an older version's text. A file whose bytes
+already equal the new content is left alone. Any other bytes make the
+plan refuse before any write, name the path, and exit 1. When no
+recorded entry text is left to compare, an `AGENTS.md` rewrite is
+refused too, so the operator restores the version directory's `entry.md`
+or removes the record, then reruns. The residual risk is the one named
+for uninstall: a user-authored file that equals install's output byte
+for byte.
+
 Observed 2026-10-15 on issue #4319, against `main` at commit
 `94d0bb2f2`: a throwaway script installed into a sandbox home, edited
 `receipt.json` by hand, and ran uninstall. An `AGENTS.md` that held the

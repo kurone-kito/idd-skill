@@ -2319,13 +2319,14 @@ SHA-256 and make uninstall delete it. The fix makes uninstall remove a
 whole-file entry record only when its content is what the installer
 writes for that harness, and for `AGENTS.md` it compares the text
 between the markers with the entry text the installer recorded
-(kurone-kito/idd-skill#4319). The receipt still cannot prove who wrote a
-file, so a forged record is not refused for a file that equals the
-installer's own output, for a span delimited by the installer's own
-marker lines, for an `opencode.json` instruction string that equals the
-installer's own entry path, or for a file a user placed in the
-installer's own directories. The maintainer accepted that residual risk
-and documented it (kurone-kito/idd-skill#4305 and
+(kurone-kito/idd-skill#4319), and a reinstall rewrites such a record
+only after the same comparison (kurone-kito/idd-skill#4327). The receipt
+still cannot prove who wrote a file, so a forged record is not refused
+for a file that equals the installer's own output, for a span delimited
+by the installer's own marker lines, for an `opencode.json` instruction
+string that equals the installer's own entry path, or for a file a user
+placed in the installer's own directories. The maintainer accepted that
+residual risk and documented it (kurone-kito/idd-skill#4305 and
 kurone-kito/idd-skill#4319). A new provenance mechanism needs its own
 decision. The source repository's `docs/idd-design-rationale.md` has the
 full entry under the same heading.
