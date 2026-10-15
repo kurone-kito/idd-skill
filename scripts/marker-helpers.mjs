@@ -21,6 +21,7 @@
 // moving them here would force exactly that forbidden back-import. Only the
 // single-marker parse/render primitives move in this wave.
 import { createHash } from 'node:crypto';
+import { parseF4HeadProofBody } from './f4-head-proof.mjs';
 import { createMarkerRegex, escapeRegex } from './marker-regex.mjs';
 
 const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
@@ -2862,6 +2863,17 @@ export function operationalMarkerPrefix(body) {
   ) {
     return null;
   }
+  // kurone-kito/idd-skill#4368: the shape-only pattern is looser than
+  // `parseF4HeadProofBody` (case, spacing, a pr number beyond the safe
+  // integers, a `>` in a value). A body the parser calls malformed is not a
+  // live proof; `detectMalformedOperationalMarker` still reports it through
+  // the entry's `malformedPrefixPattern` when the token shape matches.
+  if (
+    marker.label === '<!-- idd-f4-head-proof:' &&
+    !isValidF4HeadProofOperationalMarker(normalized)
+  ) {
+    return null;
+  }
   return marker.label;
 }
 export function operationalMarkerPrefixByStart(body) {
@@ -3013,6 +3025,9 @@ function isValidForcedHandoffOperationalMarker(body) {
 }
 function isValidHoldOperationalMarker(body) {
   return parseHoldMarker(body, '') !== null;
+}
+function isValidF4HeadProofOperationalMarker(body) {
+  return parseF4HeadProofBody(body).kind === 'proof';
 }
 export function isValidIsoTimestamp(value) {
   if (typeof value !== 'string') return false;

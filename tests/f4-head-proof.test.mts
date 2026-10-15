@@ -320,15 +320,21 @@ describe('the idd-f4-head-proof operational marker entry', () => {
   });
 
   it('agrees with the parser about the tail: extra text after the token is malformed, not a marker', () => {
+    const token = EXPECTED_BODY.split('\n')[0];
     const accepted = [
       EXPECTED_BODY,
-      EXPECTED_BODY.split('\n')[0],
+      token,
       `${EXPECTED_BODY}\n`,
+      `${token}\r\n\r\n_agent-fixture: F4 head-proof marker. Do not edit._\r\n`,
+      `${token}   \n`,
     ];
     const extra = [
       `${EXPECTED_BODY}\n\nextra text`,
       `${EXPECTED_BODY}\n\n_one note_\n_two notes_`,
-      `${EXPECTED_BODY.split('\n')[0]} trailing`,
+      `${token} trailing`,
+      // A note line without the italic underscores, and a note on two lines.
+      `${token}\n\nF4 head-proof marker. Do not edit.`,
+      `${token}\n\n_a note\nthat wraps_`,
     ];
     for (const body of accepted) {
       assert.strictEqual(parseF4HeadProofBody(body).kind, 'proof', body);
@@ -336,6 +342,24 @@ describe('the idd-f4-head-proof operational marker entry', () => {
       assert.strictEqual(detectMalformedOperationalMarker(body), null, body);
     }
     for (const body of extra) {
+      assert.strictEqual(parseF4HeadProofBody(body).kind, 'malformed', body);
+      assert.strictEqual(operationalMarkerPrefix(body), null, body);
+      assert.strictEqual(detectMalformedOperationalMarker(body), LABEL, body);
+    }
+  });
+
+  it('agrees with the parser about the token too: a body the parser calls malformed is not a live marker', () => {
+    // The shape-only pattern is looser than the parser (case, spacing, a pr
+    // beyond the safe integers, a `>` inside a value); the prefix check
+    // still follows the parser, and the malformed check reports the body.
+    const loose = [
+      EXPECTED_BODY.replace(VALID.f2, VALID.f2.replace(/1/g, 'A')),
+      EXPECTED_BODY.replace(' f2=', '  f2='),
+      EXPECTED_BODY.replace('pr=3741', 'pr=9007199254740993'),
+      EXPECTED_BODY.replace('branch=issue/fixture', 'branch=issue/a>b'),
+      EXPECTED_BODY.replace('idd-f4-head-proof:', 'IDD-F4-HEAD-PROOF:'),
+    ];
+    for (const body of loose) {
       assert.strictEqual(parseF4HeadProofBody(body).kind, 'malformed', body);
       assert.strictEqual(operationalMarkerPrefix(body), null, body);
       assert.strictEqual(detectMalformedOperationalMarker(body), LABEL, body);

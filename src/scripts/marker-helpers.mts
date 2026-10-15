@@ -22,6 +22,7 @@
 // single-marker parse/render primitives move in this wave.
 
 import { createHash } from 'node:crypto';
+import { parseF4HeadProofBody } from './f4-head-proof.mts';
 import { createMarkerRegex, escapeRegex } from './marker-regex.mts';
 
 /** Operational marker matcher entry. */
@@ -68,8 +69,9 @@ export interface OperationalMarker {
    *     merely quoted or embedded mid-prose (anti-spoofing: both patterns
    *     require the token to be the literal first bytes of the body, so a
    *     preamble before it defeats both).
-   * Only defined for the note-bearing markers (`claimed-by`, `unclaimed-by`,
-   * `activation-nonce`, `review-watermark`, `review-baseline`,
+   * Defined for the markers that end in a token and an optional single note
+   * (`claimed-by`, `unclaimed-by`, `activation-nonce`, `idd-hold`,
+   * `idd-f4-head-proof`, `review-watermark`, `review-baseline`,
    * `zero-accepted-path-a-gate`); `advisory-wait`, `forced-handoff`, and
    * `idd-external-check-waiver` do not use the shared note-optional grammar
    * this field targets.
@@ -3778,6 +3780,17 @@ export function operationalMarkerPrefix(body: string): string | null {
   ) {
     return null;
   }
+  // kurone-kito/idd-skill#4368: the shape-only pattern is looser than
+  // `parseF4HeadProofBody` (case, spacing, a pr number beyond the safe
+  // integers, a `>` in a value). A body the parser calls malformed is not a
+  // live proof; `detectMalformedOperationalMarker` still reports it through
+  // the entry's `malformedPrefixPattern` when the token shape matches.
+  if (
+    marker.label === '<!-- idd-f4-head-proof:' &&
+    !isValidF4HeadProofOperationalMarker(normalized)
+  ) {
+    return null;
+  }
   return marker.label;
 }
 
@@ -3950,6 +3963,10 @@ function isValidForcedHandoffOperationalMarker(body: string): boolean {
 
 function isValidHoldOperationalMarker(body: string): boolean {
   return parseHoldMarker(body, '') !== null;
+}
+
+function isValidF4HeadProofOperationalMarker(body: string): boolean {
+  return parseF4HeadProofBody(body).kind === 'proof';
 }
 
 export function isValidIsoTimestamp(value: unknown): value is string {
