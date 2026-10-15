@@ -266,10 +266,18 @@ test('a failed claim post, nonce record, or acquire stops the later steps', () =
   const nonceRecordFailed = runFreshClaimWrapper({ 'record-nonce': 1 });
   assert.notEqual(nonceRecordFailed.status, 0);
   assert.deepEqual(nonceRecordFailed.steps, WRAPPER_STEPS.slice(0, 4));
+  const nonceFailed = runFreshClaimWrapper({ 'post-nonce': 1 });
+  assert.notEqual(nonceFailed.status, 0);
+  assert.deepEqual(nonceFailed.steps, WRAPPER_STEPS.slice(0, 5));
   const acquireFailed = runFreshClaimWrapper({ acquire: 2 });
   assert.notEqual(acquireFailed.status, 0);
   assert.deepEqual(acquireFailed.steps, WRAPPER_STEPS.slice(0, 6));
-  for (const run of [postFailed, nonceRecordFailed, acquireFailed]) {
+  for (const run of [
+    postFailed,
+    nonceRecordFailed,
+    nonceFailed,
+    acquireFailed,
+  ]) {
     assert.equal(run.stdout.includes(WRAPPER_SUCCESS), false);
   }
 });
