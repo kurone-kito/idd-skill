@@ -7398,27 +7398,64 @@ same as `AW4`/`AW5`.
         read fails or is unreadable. Otherwise it is `false`.
   3. Route with the table below.
 
-  | `branchState`                                                                  | `requiresUpToDateHead` | `eBranchSync`   | `e11`                      | `f1`                            |
-  | ------------------------------------------------------------------------------ | ---------------------- | --------------- | -------------------------- | ------------------------------- |
-  | `clean` with `mergeStateStatus` `CLEAN`                                        | either                 | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
-  | `clean` with `UNSTABLE`, at least one listed run, all waiting and non-required | either                 | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
-  | `clean` with any other `mergeStateStatus`                                      | either                 | `hold`          | `skip-merge`               | `hold`                          |
-  | `behind-no-conflict`                                                           | `false`                | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
-  | `behind-no-conflict`                                                           | `true`                 | `sync-path`     | `skip-merge`               | `return-to-e-phase-branch-sync` |
-  | `content-conflict`                                                             | either                 | `sync-path`     | `merge-development-branch` | `return-to-e-phase-branch-sync` |
-  | `computing`                                                                    | either                 | `retry`         | `skip-merge`               | `retry`                         |
-  | `dirty`, `unknown`, `force-push-exception`, or any other state                 | either                 | `hold`          | `skip-merge`               | `hold`                          |
+  | `branchState`                                                                           | `requiresUpToDateHead` | `eBranchSync`   | `e11`                      | `f1`                            |
+  | --------------------------------------------------------------------------------------- | ---------------------- | --------------- | -------------------------- | ------------------------------- |
+  | `clean` with `mergeStateStatus` `CLEAN`                                                 | either                 | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
+  | `clean` with `UNSTABLE`, at least one listed run or suite, all waiting and non-required | either                 | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
+  | `clean` with any other `mergeStateStatus`                                               | either                 | `hold`          | `skip-merge`               | `hold`                          |
+  | `behind-no-conflict`                                                                    | `false`                | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
+  | `behind-no-conflict`                                                                    | `true`                 | `sync-path`     | `skip-merge`               | `return-to-e-phase-branch-sync` |
+  | `content-conflict`                                                                      | either                 | `sync-path`     | `merge-development-branch` | `return-to-e-phase-branch-sync` |
+  | `computing`                                                                             | either                 | `retry`         | `skip-merge`               | `retry`                         |
+  | `dirty`, `unknown`, `force-push-exception`, or any other state                          | either                 | `hold`          | `skip-merge`               | `hold`                          |
 
   `clean` proceeds with `mergeStateStatus` `CLEAN`, which is the phase files'
   own definition. An `UNSTABLE` `clean` branch proceeds only when at least one
-  non-passing head run is listed and every such run is non-required and
-  `action_required` or `pending` (issue `#4209`). The helper reads the head's
-  check rollup live for that state alone, so with an empty or unavailable list
-  it holds. A caller without helper runtime cannot collect that list, so an
-  `UNSTABLE` branch holds there. The helper's `clean` alone also covers
-  `BLOCKED`, which holds. A `retry` result is re-polled a small fixed number
-  of times (distributed default: three attempts, a few seconds apart), then
-  routed by the first settled result.
+  non-passing head run or check suite is listed and every such entry is
+  non-required and `action_required` or `pending` (issues `#4209`, `#4309`).
+  The helper reads the head's check rollup and check suites live for that
+  state alone, so with an empty or unavailable list it holds. A caller
+  without helper runtime cannot collect that list, so an `UNSTABLE` branch
+  holds there. The helper's `clean` alone also covers `BLOCKED`, which holds.
+
+  A check suite that never posted a check run is not in the rollup, so the
+  helper lists it from the head's check suites (issue `#4309`). Observed on
+  pull request `#4292` (issue `#4283`): six non-required external suites
+  (netlify, sentry, coderabbitai, codecov, cursor, claude) stayed queued for
+  more than 70 minutes with no check run, the run list was empty, and the
+  hold lasted until GitHub reported `CLEAN` on its own. The suite rules are:
+
+  - A suite that has a check run is judged through that run, so it is never
+    listed twice. Only the newest suite of each producer (its app, and the
+    Actions workflow when there is one) governs, and suites that share the
+    newest timestamp, or lack a valid one, all stay.
+  - A listed suite is named by its app slug, plus the workflow name for an
+    Actions workflow, and carries its own status (`queued`, `in_progress`,
+    or its conclusion). A waiting suite counts as `pending`, a completed
+    `action_required` suite as `action_required`, and any other non-passing
+    conclusion or unrecognized status never proceeds. A cancelled suite with
+    no check run is not listed: it is Actions concurrency control with no
+    check left to read or rerun (observed 2026-10-15 on four of fourteen
+    recent merged heads, where the comment-refresh workflow's newest suites
+    were cancelled).
+  - A suite has no `isRequired`, so it is required when a required check is
+    source-pinned to its app (a ruleset `integration_id` or a classic
+    protection `app_id`). A suite with no pin is non-required, because GitHub
+    reports `BLOCKED`, never `UNSTABLE`, while a required check is
+    unreported. The policy is read only when a suite is listed, with the
+    same 404 rule as `requiresUpToDateHead`. An unreadable policy, a pin
+    that names no app id, or a `workflows` rule marks every listed suite
+    required, and a note says so.
+  - A head with more than 100 check suites, or a suite page that is missing
+    or inconsistent, is unavailable and holds.
+  - For each entry that keeps the hold, `diagnostics.notes` carries one
+    line beginning `UNSTABLE hold:` that names the entry (a suite by its app
+    slug), why it holds, and what resumes F1, so the F1 hold comment can
+    quote it.
+
+  A `retry` result is re-polled a small fixed number of times (distributed
+  default: three attempts, a few seconds apart), then routed by the first
+  settled result.
 - `branchState` values: `clean`, `behind-no-conflict`, `content-conflict`,
   `dirty`, `force-push-exception`, `computing`, `unknown` (`computing` is the
   transient still-computing mergeability that callers re-poll; `unknown` stays
