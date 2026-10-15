@@ -3068,13 +3068,15 @@ appears once outside code. The body has the headings `## Release condition`,
   draft's own markers stay inside its fence.
 
 `audit-authored-issue --shape carrier` checks this shape and takes no
-`--expect-bucket`; where it cannot run (no helper runtime, or `markdown-it`
-missing), check these rules by hand. The carrier body is linted, not
-reviewed: its drafts are reviewed at re-authoring. When the drafts do not fit
-one issue body (GitHub's limit is 65,536 characters), publish several
-carriers with the same release condition, one after another. Each later
-carrier names the earlier ones in its `## Review ledger`, and each earlier
-carrier gets a comment that names the later one.
+`--expect-bucket`. Where it cannot run (no helper runtime, or `markdown-it`
+missing), checking these rules by hand validates a draft but cannot publish
+the carrier, because `publish-authoring-hold --shape carrier` runs the same
+audit or is unavailable: the second exception above applies. The carrier
+body is linted, not reviewed: its drafts are reviewed at re-authoring. When
+the drafts do not fit one issue body (GitHub's limit is 65,536 characters),
+publish several carriers with the same release condition, one after
+another. Each later carrier names the earlier ones in its `## Review
+ledger`, and each earlier carrier gets a comment that names the later one.
 
 **Review ledger.** For each reviewed draft, `## Review ledger` records its
 findings and their dispositions: the `claim`, `draftSection` and
