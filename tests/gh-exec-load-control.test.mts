@@ -15,6 +15,7 @@ import { afterEach, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  GH_TEXT_LOOP_OPTIONS,
   ghApiJson,
   ghApiJsonWithHeaders,
   ghGraphql,
@@ -34,6 +35,7 @@ import {
 import { setGithubApiTelemetryPolicyForTests } from '../src/scripts/github-api-observation.mts';
 import {
   findLoadControlRefusal,
+  findOwnLoadControlRefusal,
   isNotDispatchedRefusal,
 } from '../src/scripts/github-api-refusal.mts';
 import { stubExecutable } from './test-utils.mts';
@@ -243,6 +245,53 @@ function refusalOf(action: () => unknown) {
     return { error: error as Error & { ghCommand?: boolean }, detail };
   }
   assert.fail('expected the call to be refused');
+}
+
+/**
+ * `refusalOf` for a helper write: it reads only the tags the thrown error
+ * carries itself. `findLoadControlRefusal` also walks the `cause` chain, so a
+ * wrapper that kept the refusal only there would still satisfy `refusalOf`
+ * while `findOwnLoadControlRefusal`, which a helper's `nothingSent` verdict
+ * reads, would stop seeing it (issue #4341).
+ */
+function ownRefusalOf(action: () => unknown) {
+  try {
+    action();
+  } catch (error) {
+    const detail = findOwnLoadControlRefusal(error);
+    assert.ok(
+      detail,
+      `expected the error to carry its own refusal tags, got ${String(error)}`,
+    );
+    return { error: error as Error & { ghCommand?: boolean }, detail };
+  }
+  assert.fail('expected the call to be refused');
+}
+
+/**
+ * The cooldown recipe the two helper-write cases further down share (the
+ * older cooldown test keeps its own inline copy): one throttled read starts
+ * the shared cooldown, then the stub turns healthy so a request that wrongly
+ * reached `gh` would visibly succeed. Returns the spawn count taken AFTER
+ * priming, because the priming throttle itself spawns `gh`.
+ */
+function primeCooldown(f: Fixture): number {
+  f.enable({ maxWaitMs: 1_000 });
+  f.mode('secondary');
+  assert.throws(
+    () => ghApiJson('repos/o/r'),
+    (error) => {
+      assert.equal(
+        isNotDispatchedRefusal(error),
+        false,
+        'the priming failure itself is not a refusal',
+      );
+      return true;
+    },
+  );
+  assert.equal(stateFiles(f, 'cooldown').length, 1);
+  f.mode('ok');
+  return f.calls().length;
 }
 
 // -- disabled default ------------------------------------------------------------
@@ -508,6 +557,63 @@ test('a throttle failure starts a shared cooldown that refuses later reads, writ
   const unclassified = refusalOf(() => ghText(['pr', 'merge', '1']));
   assert.equal(unclassified.detail.outcome, 'not-dispatched');
   assert.equal(f.calls().length, spawned, 'no refused request spawned gh');
+});
+
+// A helper's write goes through `ghText`, which rethrows a failed command via
+// `tagGhCommandError`. `findOwnLoadControlRefusal` (the reader behind a
+// helper's "nothing was sent" verdict) sees only the tags on the error
+// itself, so these two cases pin that `ghText` hands the refusal back with
+// its own tags, not wrapped with the refusal left in `cause` (issue #4341).
+// They drive `ghText` directly and do not run `postWorkItemComment`.
+const COOLDOWN_REFUSAL = {
+  outcome: 'not-dispatched',
+  reason: 'cooldown',
+  retryAt: new Date(T0 + 90_000).toISOString(),
+  retryAtSource: 'server',
+};
+
+test('a refused issue close keeps its own refusal tags through ghText', () => {
+  const f = fixture();
+  const spawned = primeCooldown(f);
+  // The argv and options `closeWorkItem` passes in production.
+  const { error, detail } = ownRefusalOf(() =>
+    ghText(
+      ['issue', 'close', '7', '--repo', 'o/r', '--reason', 'completed'],
+      GH_TEXT_LOOP_OPTIONS,
+    ),
+  );
+  assert.deepEqual(detail, COOLDOWN_REFUSAL);
+  assert.equal(isNotDispatchedRefusal(error), true);
+  assert.equal(error.ghCommand, true);
+  assert.deepEqual(
+    f.calls().slice(spawned),
+    [],
+    'the refused close spawned gh',
+  );
+});
+
+test('a refused comment POST keeps its own refusal tags through ghText', () => {
+  const f = fixture();
+  const spawned = primeCooldown(f);
+  // The argv and options the comment POST passes in production.
+  const { error, detail } = ownRefusalOf(() =>
+    ghText(
+      [
+        'api',
+        '--method',
+        'POST',
+        'repos/o/r/issues/7/comments',
+        '--input',
+        '-',
+        '--include',
+      ],
+      { input: JSON.stringify({ body: '<!-- marker -->' }) },
+    ),
+  );
+  assert.deepEqual(detail, COOLDOWN_REFUSAL);
+  assert.equal(isNotDispatchedRefusal(error), true);
+  assert.equal(error.ghCommand, true);
+  assert.deepEqual(f.calls().slice(spawned), [], 'the refused POST spawned gh');
 });
 
 test('a write refused during a cooldown is never dispatched once the cooldown clears', () => {
