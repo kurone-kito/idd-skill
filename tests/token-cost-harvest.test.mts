@@ -91,6 +91,7 @@ function stubGhReturningJson(fixture: unknown): () => void {
 // ---------------------------------------------------------------------------
 
 test('extractClaudeUsageTimeline sums per-request deltas, sorted by timestamp', () => {
+  // No record here carries an identifier, so each one is its own request.
   const records = [
     {
       type: 'assistant',
@@ -2171,6 +2172,7 @@ test('extractCodexUsageTimeline falls back to last_token_usage deltas when no re
 // ---------------------------------------------------------------------------
 
 test('extractClaudeCountTimeline counts each request as a turn and sums its tool_use blocks, sorted by timestamp', () => {
+  // No record here carries an identifier, so each one is its own request.
   const records = [
     {
       type: 'assistant',
@@ -2201,6 +2203,7 @@ test('extractClaudeCountTimeline counts each request as a turn and sums its tool
 });
 
 test('extractClaudeCountTimeline counts a request even with no usage or a plain-string content', () => {
+  // No record here carries an identifier, so the record is its own request.
   const records = [
     {
       type: 'assistant',
