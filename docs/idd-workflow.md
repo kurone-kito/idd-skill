@@ -588,6 +588,11 @@ The normative checklist and disposition rule live in the
 
 ### User-global issue-authoring delegate default
 
+This resolver reads only its own fragment of the user-global file. The
+layered rules for `overrides[]`, the repository-policy field class, and the
+CI off switches are in the
+[user-global installation guide](https://github.com/kurone-kito/idd-skill/blob/main/docs/user-global-install.md).
+
 A local runtime may also inherit `issueAuthoring.adversarialReview.delegate`
 from the same optional user-global file the critique delegate uses when the
 repository leaves the repo-local field genuinely absent. A GitHub-hosted or
@@ -2247,6 +2252,11 @@ a weak model could get wrong.
 
 ### User-global critique delegate default
 
+This resolver reads only its own fragment of the user-global file. The
+layered rules for `overrides[]`, the repository-policy field class, and the
+CI off switches are in the
+[user-global installation guide](https://github.com/kurone-kito/idd-skill/blob/main/docs/user-global-install.md).
+
 A local runtime (one that reads the operator's own `$HOME`) may also
 inherit a `critiqueLoop.delegate` from a user-global file when the
 repository leaves the repo-local field genuinely absent — a
@@ -2366,6 +2376,11 @@ floor and every other C-phase gate apply identically whether the hook
 is configured, missing, or failing.
 
 ### User-global critique telemetry hook default
+
+This resolver reads only its own fragment of the user-global file. The
+layered rules for `overrides[]`, the repository-policy field class, and the
+CI off switches are in the
+[user-global installation guide](https://github.com/kurone-kito/idd-skill/blob/main/docs/user-global-install.md).
 
 A local runtime (one that reads the operator's own `$HOME`) may also
 inherit a `critiqueLoop.telemetryHook` from a user-global file when the
