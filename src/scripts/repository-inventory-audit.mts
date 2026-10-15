@@ -45,6 +45,7 @@ export const COVERED_HELPERS = [
   'ci-wait-policy',
   'ci-wait-state',
   'claim-approval-gate',
+  'claim-issue',
   'claim-lock',
   'clone-lock',
   'copilot-review-wave-audit',

@@ -30,6 +30,7 @@
     "idd-ci-wait-policy": "./bin/idd-ci-wait-policy.mjs",
     "idd-ci-wait-state": "./bin/idd-ci-wait-state.mjs",
     "idd-claim-approval-gate": "./bin/idd-claim-approval-gate.mjs",
+    "idd-claim-issue": "./bin/idd-claim-issue.mjs",
     "idd-claim-lock": "./bin/idd-claim-lock.mjs",
     "idd-clone-lock": "./bin/idd-clone-lock.mjs",
     "idd-critique-delegate": "./bin/idd-critique-delegate.mjs",

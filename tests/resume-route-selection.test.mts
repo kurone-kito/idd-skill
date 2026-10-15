@@ -11,6 +11,7 @@ import {
   classifyBranchState,
   collectRoutingInput,
   countLatestChangesRequestedByReviewer,
+  findIssueRelatedOpenPrs,
   selectResumeRoute,
 } from '../src/scripts/resume-route-selection.mts';
 import { stubExecutable } from './test-utils.mts';
@@ -2663,4 +2664,56 @@ test('--token still sets GH_TOKEN/GITHUB_TOKEN and warns as a deprecated alias',
   } finally {
     fixture.restore();
   }
+});
+
+// Issue 4372: claim-issue reuses the D3.5 body matcher as A5(d) evidence.
+test('findIssueRelatedOpenPrs is exported and applies the D3.5 body matcher to the open list', () => {
+  const locator = {
+    provider: 'github' as const,
+    owner: 'kurone-kito',
+    name: 'idd-skill',
+  };
+  const pr = (number: number, body: string) => ({
+    number,
+    title: `PR ${number}`,
+    body,
+    url: `u${number}`,
+  });
+  const references = [
+    pr(1, 'Closes #4372'),
+    pr(2, 'closes: #4372'),
+    pr(3, 'FIXES kurone-kito/idd-skill#4372'),
+  ];
+  const mentions = [
+    pr(11, 'Closes #43721'),
+    pr(12, 'See #4372'),
+    pr(13, 'Refs #4372'),
+    pr(14, '> Closes #4372'),
+    pr(15, 'Use `Closes #4372` here'),
+    pr(16, 'Closes other/repo#4372'),
+  ];
+  const calls: string[] = [];
+  const inner = createFakeProviderAdapter({
+    locator,
+    openChangeRequests: [...references, ...mentions],
+  });
+  const port = new Proxy(inner, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== 'function') {
+        return value;
+      }
+      return (...args: unknown[]) => {
+        calls.push(String(property));
+        return value.apply(target, args);
+      };
+    },
+  });
+  const found = findIssueRelatedOpenPrs({ port, issueNumber: 4372 });
+  assert.deepEqual(
+    found.map((entry) => entry.number),
+    [1, 2, 3],
+  );
+  assert.ok(calls.includes('listOpenChangeRequests'));
+  assert.deepEqual(findIssueRelatedOpenPrs({ port, issueNumber: null }), []);
 });
