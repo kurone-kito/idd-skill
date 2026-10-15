@@ -1170,7 +1170,9 @@ Running this variant safely requires:
   `holderAlive` is true is expected and is waited for, never removed; a
   present lock whose holder is gone is stale and takes the
   manual-recovery procedure above. A worker that can no longer be
-  messaged keeps the fresh-subagent path above. In a downstream
+  messaged keeps the fresh-subagent path above, and the replacement's own
+  start identifier then replaces the roster entry's handle, which is the
+  `workerHandle` of its report. In a downstream
   adopter's run (reported 2026-09-30, kurone-kito/idd-skill#3677), the
   orchestrator verified claim routing, `git log`, the pull request list,
   and the process table, sent one message to the same worker with those
@@ -1477,9 +1479,11 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    matched worker is still running gets no record and is reported in step 5.
    Look for the worker's report draft in the scratchpad of the same session,
    under the issue-number prefix that the fan-out variant already requires. If a
-   draft is found, check that its `issue` and `claimId` match the claim, and
-   that its `workerHandle` matches the listed handle when the claim has a
-   matched worker. A draft that matches the claim but has no listed worker is
+   draft is found, check that its `issue` and `claimId` match the claim. When
+   the claim has a matched worker, set the draft's `workerHandle` to the listed
+   handle, whatever value the draft holds, as section 5 of the orchestrator
+   phase file does at the append. A draft that matches the claim but has no
+   listed worker is
    appended under its own `workerHandle`, because the store dedupes on that
    handle with the claim id and terminal phase, so a record already appended
    under it is not counted twice. The listing matches workers only and never
