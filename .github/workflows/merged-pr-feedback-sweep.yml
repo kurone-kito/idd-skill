@@ -2,15 +2,15 @@ concurrency:
   cancel-in-progress: false
   group: merged-pr-feedback-sweep
 name: Merged-PR feedback sweep (weekly summary)
-# Manual only (issue #4161). The sweep is read-only. This workflow is its one
-# writer, and it writes only the single open summary issue titled below. The
-# render job runs the sweep and holds only read scopes. The write job holds the
-# one issues write scope, checks out nothing, and runs no repository code, so
-# no branch code can use the write token. The write job refuses to write when
-# the open-issue listing is full, when the listing does not yield a count, or
-# when more than one open issue carries the title. There is deliberately no
-# schedule and no push or pull_request trigger; the schedule is a follow-up
-# after the first successful dispatch run.
+# Weekly and manual (issues #4161 and #4166). The sweep is read-only. This
+# workflow is its one writer, and it writes only the single open summary issue
+# titled below. The render job runs the sweep and holds only read scopes. The
+# write job holds the one issues write scope, checks out nothing, and runs no
+# repository code, so no branch code can use the write token. The write job
+# refuses to write when the open-issue listing is full, when the listing does
+# not yield a count, or when more than one open issue carries the title. The
+# only triggers are the weekly schedule and manual dispatch; there is
+# deliberately no push or pull_request trigger.
 #
 # The render job checks out the dispatched ref, so a dispatch of a pushed branch
 # renders that branch's code and validates the render before its pull request

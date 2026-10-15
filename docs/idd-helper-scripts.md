@@ -7672,9 +7672,10 @@ same as `AW4`/`AW5`.
   helper; not distributed via the package-manager / ephemeral-npx
   profiles (it is a maintainer-run sweep, never an adopter-facing
   step in the phase instructions).
-- A **manually-invoked**, read-only detector (no schedule, no mutation by the
-  helper itself). It scans MERGED PRs and surfaces feedback that was left
-  unattended at merge:
+- A read-only detector that an operator runs by hand and that the weekly
+  summary workflow below also runs on a schedule (the helper itself has no
+  schedule and no mutation). It scans MERGED PRs and surfaces feedback that
+  was left unattended at merge:
   - **Window selector**: `--since <ISO8601>` and/or `--days <N>`, or
     `--pr <n>` (repeatable) / `--prs <n1,n2,...>`; `--limit <N>` caps the
     `--since`/`--days` enumeration. When both `--since` and `--days` are
@@ -7812,21 +7813,37 @@ same as `AW4`/`AW5`.
 - **Weekly summary body** (issue `#4161`): `--issue-body` prints the summary
   issue body as Markdown instead of the JSON, rendered from the same scan by
   `renderWeeklySweepIssueBody`. The body carries only numbers, dates, and
-  counts, never comment text. It names each flagged pull request as `PR <n>`,
-  so it adds no cross-reference event. It states the run date (UTC) and, when
-  nothing is open, how many pull requests were checked. It notes when the
-  enumeration reached its `--limit` cap. The manual workflow
-  `.github/workflows/merged-pr-feedback-sweep.yml` (`workflow_dispatch` only)
-  runs this helper with `--days 7 --limit 500 --issue-body` and creates or
-  edits the one open issue titled `Merged-PR feedback sweep (weekly)`. It
-  refuses to write when the open-issue listing is full or when more than one
-  open issue carries that title. That workflow is the only writer, and it
-  writes only that issue.
+  counts, plus a fixed score footer, never comment text. It names each
+  flagged pull request as `PR <n>`, so it adds no cross-reference event. It
+  states the run date (UTC) and, when nothing is open, how many pull requests
+  were checked. It notes when the enumeration reached its `--limit` cap. The
+  workflow `.github/workflows/merged-pr-feedback-sweep.yml` (weekly schedule
+  and `workflow_dispatch`) runs this helper with
+  `--days 7 --limit 500 --issue-body` and creates or edits the one open issue
+  titled `Merged-PR feedback sweep (weekly)`. It refuses to write when the
+  open-issue listing is full or when more than one open issue carries that
+  title. That workflow is the only writer, and it writes only that issue.
   The weekly body does not include the open-and-ready section; that
   section is in the JSON output only.
-- **Operator runbook**: this helper is a **manual spot-check audit**, not a
-  phase step — its absence from the executable phase instruction files is
-  by design, not an oversight.
+  The report is a status summary, not a work item (issue `#4308`). The body
+  therefore ends with the score footer that the issue-authoring contract
+  defines: the visible autopilot-suitability line and the hidden marker, both
+  carrying a score of 1. The workflow also applies the
+  `status:blocked-by-human` label when it creates the issue and re-adds it on
+  every edit; it uses that default name and does not read the label setting.
+  No human blocker exists, so the label is a standing not-work marker with
+  nothing to clear (see the report row in the
+  [autonomy contract](idd-autonomy-contract.md)). Discover stops claims on the
+  label in every mode, provided the configured label name is that default.
+  The score-1 footer alone skips the report only in
+  autopilot runs where `autopilotSuitability.enabled` is not `false` and
+  `autopilotSuitability.floor` is above 1. Closing the issue retires only
+  that instance: the next run finds no open issue with the title, creates a
+  new one, and labels it.
+- **Operator runbook**: run by hand, this helper is a **spot-check audit**
+  (the weekly summary workflow above also runs it), not a phase step — its
+  absence from the executable phase instruction files is by design, not an
+  oversight.
   - **Intent**: it exists as a spot-check for runs where a lightweight
     model (for example a GPT-5.4-mini or Haiku-class model) has been
     driving the IDD loop and may have left feedback with **no E-phase
@@ -7920,8 +7937,9 @@ same as `AW4`/`AW5`.
   following that recipe's manual fallback instead — see that recipe for
   when each path applies.
   Not a phase step in any
-  `idd-*.instructions.md` file — like the Merged-PR feedback sweep
-  above, this is a manually-invoked, operator-run spot-check, run once
+  `idd-*.instructions.md` file — like the Merged-PR feedback sweep's
+  operator runbook above, this is a manually-invoked, operator-run
+  spot-check, run once
   when first building the reserved-label guard's bot-login list and
   again after enabling new automation or after a long gap (a bot with
   no history yet can still start labeling later).
