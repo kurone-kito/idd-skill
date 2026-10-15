@@ -1164,10 +1164,17 @@ confirm the reference is a mere breadcrumb.
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child|carrier> \
-  --marker-prefix <resolved-target-prefix> --title <drafted-title> \
-  --body-file <path-to-drafted-body> [--label <label>]... \
-  [--expect-bucket <needs-decision|blocked-by-human>]
+  --marker-prefix <resolved-target-prefix> \
+  --config <target-checkout>/.github/idd/config.json \
+  --title <drafted-title> --body-file <path-to-drafted-body> \
+  [--label <label>]... [--expect-bucket <needs-decision|blocked-by-human>]
 ```
+
+**Always pass `--config`** with the target repository's
+`.github/idd/config.json`, as with `--marker-prefix`. The linter reads that
+file from the working directory by default. When the file is absent or
+unreadable, `effortL` falls back to `allow`, so `effort-l-ready` would not
+refuse an `L` body.
 
 Omit `--title` when the drafted body already leads with a `# <title>`
 line; for the `orphan` and `child` shapes, at least one of the two is

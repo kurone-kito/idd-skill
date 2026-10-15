@@ -1633,10 +1633,17 @@ confirm the reference is a mere breadcrumb.
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child|carrier> \
-  --marker-prefix <resolved-target-prefix> --title <drafted-title> \
-  --body-file <path-to-drafted-body> [--label <label>]... \
-  [--expect-bucket <needs-decision|blocked-by-human>]
+  --marker-prefix <resolved-target-prefix> \
+  --config <target-checkout>/.github/idd/config.json \
+  --title <drafted-title> --body-file <path-to-drafted-body> \
+  [--label <label>]... [--expect-bucket <needs-decision|blocked-by-human>]
 ```
+
+**Always pass `--config`** with the target repository's
+`.github/idd/config.json`, even when the audit runs from another checkout.
+The linter reads that file from the working directory by default. When the
+file is absent or unreadable, `effortL` falls back to `allow`, so
+`effort-l-ready` would not refuse an `L` body.
 
 Or, for npx/package-manager profiles, the equivalent
 `idd-audit-authored-issue` command. Pass `--stdin` instead of
