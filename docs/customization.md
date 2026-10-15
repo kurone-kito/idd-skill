@@ -131,6 +131,113 @@ distributed IDD workflow a repository imported.
   merge commit rather than a later default-branch tip. Only maintainers
   push these release tags; this process does not create a GitHub Release
   object or add GitHub Release automation.
+
+  Observed 2026-10-14, issue `#4239`: the `v0.15.0` tag was SSH-signed after
+  the GPG attempt failed at pinentry, and its signature could not be checked
+  locally, because `gpg.ssh.allowedSignersFile` was unset. The error text
+  below was reproduced on 2026-10-15 in the source repository's own checkout.
+  It means the setting is unset, so the snippet's verify line stops with it:
+
+  ```text
+  error: gpg.ssh.allowedSignersFile needs to be configured and exist for ssh signature verification
+  ```
+
+  `git verify-tag` checks an SSH signature only when
+  `gpg.ssh.allowedSignersFile` is set. Three cases follow: when the setting is
+  unset, the error above appears; when it names a path that does not exist,
+  verification prints `Unable to open allowed keys file` and then
+  `No principal matched.`; and when the file does not list the signing key, it
+  prints `No principal matched.`. Create the file outside the repository before
+  running the snippet. Each line holds a principal, the key type, and the
+  public identity:
+
+  ```text
+  <tagger-email> <key-type> <public-identity>
+  ```
+
+  The principal is a label. `git verify-tag` prints it in its
+  `Good "git" signature for <principal>` line and does not check it against
+  the tagger, so the tagger email is a readable choice, not a requirement.
+  Take the key type and public identity from the first two fields of one of
+  these, and never copy private key material into the file:
+
+  - the `ssh-add -L` line for the signing identity;
+  - the matching public file for that key;
+  - when `user.signingkey` names a private key file, the output of
+    `ssh-keygen -y -f <private-key-file>`.
+
+  Point the setting at the file with `git config`, using an absolute path, so
+  that the snippet's own verify line sees it:
+
+  ```sh
+  git config gpg.ssh.allowedSignersFile <allowed-signers-file>
+  ```
+
+  `git config` writes to the repository config, which every worktree of this
+  clone shares, and `git config --unset gpg.ssh.allowedSignersFile` removes
+  the setting. To cover one command only, pass the same setting with `git -c`,
+  which leaves the repository config unchanged:
+
+  ```sh
+  git -c gpg.ssh.allowedSignersFile=<allowed-signers-file> \
+    verify-tag "v${release_version}"
+  ```
+
+  A GPG-signed tag needs no allowed-signers file. Its verifier needs the
+  signer's public key in the GPG keyring instead, imported with
+  `gpg --import <public-key-file>`; without it, verification stops with a
+  `No public key` error from `gpg`.
+
+  When the snippet stops at verify, either at the `gpg.ssh.allowedSignersFile`
+  error above or at either `No principal matched.` case, the local tag
+  `v<version>` exists and nothing was pushed. Do not run `git tag` again while
+  the tag is correct: it fails with `tag 'v<version>' already exists`. Before
+  you continue, check that `RELEASE_CUT_MERGE_SHA` is the merge commit of the
+  bump pull request, and do not continue if it is not: the block below compares
+  the tag with that same value, so it cannot catch a wrong one. Create the
+  allowed-signers file if you have not yet, as described above, and make sure
+  the setting is in place. Run the block below as a script or in a subshell,
+  not in your login shell, because `set -eu` in an interactive shell can end
+  that shell at the first failure. Set `RELEASE_VERSION` and
+  `RELEASE_CUT_MERGE_SHA` in its environment, as for the snippet. A failure
+  stops the block before the push, so a failed verify or peel test never
+  reaches it:
+
+  ```sh
+  set -eu
+  release_version="${RELEASE_VERSION:?set to the iddVersion being released}"
+  release_cut_merge_sha="${RELEASE_CUT_MERGE_SHA:?set to the bump PR merge SHA}"
+  release_commit="$(git rev-parse --verify "${release_cut_merge_sha}^{commit}")"
+  git -c gpg.ssh.allowedSignersFile=<allowed-signers-file> \
+    verify-tag "v${release_version}"
+  test "$(git rev-parse "v${release_version}^{commit}")" = "${release_commit}"
+  git push origin "v${release_version}"
+  ```
+
+  If the primary signing cannot finish without a terminal, such as a pinentry
+  or touch prompt that cannot be answered in this session, stop that attempt.
+  Use the same 2-minute bound for `git tag` that the
+  [signed-commit merge wrapper](idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
+  gives commit, merge, and rebase, and do not rerun until you have confirmed
+  that nothing from the attempt is still running. Never fall back to an
+  unsigned tag, because a release tag must stay signed. Then test whether the
+  tag exists:
+
+  ```sh
+  if git rev-parse -q --verify "refs/tags/v${release_version}" >/dev/null; then
+    echo "tag exists: use the recovery block above"
+  fi
+  ```
+
+  The test is true when the tag exists. It exits 1 when the tag is absent, and
+  the `if` keeps `set -eu` from ending the shell. When the tag does not exist,
+  and this repository configures the fallback signer that the wrapper section
+  describes, run the snippet again from its first line, once the setting is in
+  place, with the wrapper section's `-c` settings for `gpg.format`,
+  `user.signingkey` and `commit.gpgsign` placed before `tag`, and keep `-s`.
+  Without a configured fallback signer, stop there. A signing attempt that
+  fails before the tag is written leaves no tag.
+
 - **Adopters** can compare their `iddVersion` against the source release
   to see whether a re-sync is worthwhile. Because the value only moves
   when maintainers bump it, it is a coarse signal — so `idd-doctor` also
