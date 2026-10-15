@@ -198,15 +198,17 @@ function opencodeFileText(entryPath: string): string {
 /**
  * Whether a whole-file entry holds the content install writes for its harness.
  * Claude and OpenCode write content that depends only on the entry path, so
- * the check is exact. Codex writes the entry text, which can change between
- * versions, so for Codex the check is that one managed block spans every byte.
- * A receipt can list any file by its hash, so uninstall checks this as well.
+ * the check is exact. Codex writes the entry text, which changes between
+ * versions, so the caller passes every entry text that install recorded, one
+ * per version directory, and the check is exact against the span rendered from
+ * any one of them. An empty list matches nothing. A receipt can list any file
+ * by its hash, so uninstall checks this as well.
  */
 export function isInstallerWholeFile(
   harness: EntryHarness,
   entryPath: string,
   bytes: Buffer,
-  path: string,
+  entryTexts: readonly string[],
 ): boolean {
   if (harness === 'opencode') {
     return bytes.equals(Buffer.from(opencodeFileText(entryPath), 'utf8'));
@@ -215,12 +217,15 @@ export function isInstallerWholeFile(
     const span = managedSpan('claude', entryPath, '');
     return bytes.equals(Buffer.from(span, 'utf8'));
   }
-  try {
-    const block = findBlock(bytes, path);
-    return block !== null && block.begin === 0 && block.end === bytes.length;
-  } catch {
-    return false;
-  }
+  return entryTexts.some((text) => {
+    try {
+      const span = managedSpan('codex', entryPath, text);
+      return bytes.equals(Buffer.from(span, 'utf8'));
+    } catch {
+      // An entry text with no final LF is not one install could have written.
+      return false;
+    }
+  });
 }
 
 /** A managed block's byte span, from the begin line through the end LF. */

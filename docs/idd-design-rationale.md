@@ -2699,10 +2699,11 @@ then deleted the whole file after checking only that hash. Commit
 record only when the content is what install writes for that harness.
 For `CLAUDE.md` and `opencode.json` that content depends only on the
 entry path, so the check is exact. For `AGENTS.md` the entry text inside
-the block can change between versions, so the check is that one managed
-block spans every byte, and the text between the markers is not
-compared. A forged record that names an ordinary user file is refused,
-and the file survives.
+the block can change between versions, so that commit checked only that
+one managed block spans every byte, and the text between the markers was
+not compared. Issue #4319 closed that gap on 2026-10-15; see the
+`AGENTS.md` bullet below. A forged record that names an ordinary user
+file is refused, and the file survives.
 
 The fix cannot prove authorship, because the receipt is a plain file in
 the user's data root with no signature, and a path plus a hash cannot
@@ -2722,10 +2723,17 @@ change (the receipt format is version 1):
 - A `file` record for `CLAUDE.md` or `opencode.json`: uninstall removes
   it only when its bytes equal install's own output. The residual risk
   is a user-authored file that equals that output byte for byte.
-- A `file` record for `AGENTS.md`: uninstall removes it when the file is
-  exactly one managed block, from the installer's begin marker line
-  through its end marker line. The residual risk is a user-authored file
-  that is one such block with other text between the markers.
+- A `file` record for `AGENTS.md`: since issue #4319, uninstall removes
+  it only when its bytes equal the managed span rendered from an entry
+  text that the receipt records for a version directory. The receipt
+  lists one such text per installed version, because an install that
+  selected no harness leaves `AGENTS.md` with an older version's text, so
+  uninstall compares with each of them. Each text must hash to its own
+  record, and when none is left uninstall refuses. The residual risk is a
+  user-authored file that equals one of those spans byte for byte. Before
+  issue #4319 the check was only that the file is one managed block, from
+  the installer's begin marker line through its end marker line, with any
+  text between the markers.
 - A `managed-block` record: uninstall removes the span between the
   installer's own begin and end marker lines when the span's SHA-256
   equals the record, and it leaves every byte outside the span. The
@@ -2738,18 +2746,42 @@ change (the receipt format is version 1):
   when the record says install created it. The residual risk is a
   user-authored `instructions` string with that same value, which appears
   exactly once. The value restriction narrows what a forged record can
-  name; it does not prove who added the string.
+  name; it does not prove who added the string. This risk is accepted
+  with no code change (issue #4319).
+- A payload or skill-copy `file` record, which issue #4243 added: uninstall
+  checks the path shape and the SHA-256, and nothing else. The shape is a
+  file under a version directory of the data root, or under the
+  `issue-authoring` or `idd-spec-audit` skill directory of a skill root.
+  The residual risk is a file a user placed in one of the installer's own
+  directories, with a hand-written record of its hash: uninstall removes
+  it. The path shape keeps a forged record from naming a file anywhere
+  else. This risk is accepted with no code change (issue #4319).
 
-This entry covers the entry-file records that issue #4244 added. The
-payload records from issue #4243 are outside the question the
-maintainer decided. No wrongful removal has been seen in use: the
-entry-file code is merged but dormant, because no production path passes
-a harness set until issue #4245 does.
+Observed 2026-10-15 on issue #4319, against `main` at commit
+`94d0bb2f2`: a throwaway script installed into a sandbox home, edited
+`receipt.json` by hand, and ran uninstall. An `AGENTS.md` that held the
+begin line, a line of the script's own text, and the end line was
+removed, which is the case the `AGENTS.md` bullet above now refuses. An
+`opencode.json` whose `instructions` held the script's own copy of the
+entry path lost that string, and the key too, because the record said
+install created the key. A file the script put in the `issue-authoring`
+skill directory was removed on a forged record. Only the `AGENTS.md` case
+changed afterwards; the other two are the accepted risk above.
 
-Read this entry before enabling harness entry edits. A new provenance
-mechanism, for example a signed receipt, needs its own maintainer
-decision, recorded here; this entry does not authorize one. Conditions
-that would revisit this: an observed uninstall that removed
+The maintainer's decision (issue #4305) covered the entry-file records
+that issue #4244 added. Issue #4319 scopes the follow-up: it tightens
+the `AGENTS.md` check and records the accepted risk for the payload and
+skill-copy records, with no code change for those, and the body of that
+issue is the written record of the scope. No wrongful removal has been
+seen in use. The install and uninstall code was dormant when the scope
+was written, and issue #4245 has since exposed it on the onboarding CLI
+as `--install-user-global` and `--uninstall` (merged 2026-10-15), so
+this entry now describes a live path.
+
+Read this entry before changing the entry-file edits or the receipt. A
+new provenance mechanism, for example a signed receipt, needs its own
+maintainer decision, recorded here; this entry does not authorize one.
+Conditions that would revisit this: an observed uninstall that removed
 user-authored content, or a decision to add a provenance mechanism.
 
 ## Helper runtime launchers

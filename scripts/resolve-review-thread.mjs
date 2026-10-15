@@ -54,6 +54,7 @@ import {
 import {
   classifyPrLoopMembership,
   DISPOSITION_ACCEPTED_PREFIX_RE,
+  hasPendingDecisionMarker,
   isCopilotReviewerLogin,
   isDispositionComment,
   isRejectionConfirmedDisposition,
@@ -1239,6 +1240,16 @@ function main() {
       'usage',
       `--apply requires --body to start with one of the accepted disposition markers: ${ACCEPTED_DISPOSITION_MARKERS}`,
     );
+  }
+  // #4306: this helper posts a settled reply and, for a thread, resolves it.
+  // A body that carries the pending-decision marker is an open question: it
+  // settles nothing, and resolving the thread would settle it for the gates
+  // that count a resolved thread as done. Fail closed before any network call.
+  if (args.apply && hasPendingDecisionMarker(args.body)) {
+    const refusal =
+      '--apply refuses a --body that carries "**Awaiting maintainer decision**" at the start of a line: this helper resolves the thread, and a pending decision keeps it open. Post that reply by hand and leave the thread unresolved (E6)';
+    writeStderrSync(`${refusal}\n`);
+    exitClassified(1, 'usage', refusal);
   }
   const pr = args.pr;
   // Loaded once (#3270): both `markerPrefixRaw` below and `staleAgeMs`

@@ -28,6 +28,11 @@
 // /var -> /private/var (macOS) and /home -> /var/home (Fedora Atomic) cannot
 // make an ordinary install fail.
 //
+// An upgrade also prunes (#4302): a listed skill file that the new package no
+// longer ships is removed when it still matches the receipt, and refused
+// before any write when it does not. The prune runs after the new payload is
+// installed and listed, one file at a time, and is never part of a rollback.
+//
 // Open risks, accepted for the operator (see #4242 and #4303):
 // - a symbolic link above a declared root that root owns is trusted;
 // - a window remains between a containment check and the act that follows it.
@@ -108,8 +113,10 @@ function lstatOrNull(path, fs) {
  * Refuse when a crashed run left `<path>.tmp-<digits>` beside `path`. The
  * replacement and repoint primitives refuse that case too, and checking it
  * here keeps the refusal before any write rather than in the middle of a run.
+ * A removal creates no temporary file, but the leftover still marks a crashed
+ * run on that path, so a prune refuses it too (#4302).
  */
-function refuseStaleTemp(path, fs) {
+function refuseStaleTemp(path, fs, action = 'replace') {
   let names;
   try {
     names = fs.readdirSync(dirname(path));
@@ -122,7 +129,7 @@ function refuseStaleTemp(path, fs) {
   const stale = names.find((name) => pattern.test(name));
   if (stale !== undefined) {
     throw new Error(
-      `${join(dirname(path), stale)} exists, so a crashed run left it behind; refusing to replace ${path}; remove it by hand before installing`,
+      `${join(dirname(path), stale)} exists, so a crashed run left it behind; refusing to ${action} ${path}; remove it by hand before installing`,
     );
   }
 }
@@ -326,6 +333,37 @@ function entryHarnessAt(ctx, path) {
   return ENTRY_HARNESSES.find(
     (name) => join(harnessDirOf(ctx, name), ENTRY_FILE_NAME[name]) === path,
   );
+}
+/**
+ * The entry text of every version directory the receipt lists, for the Codex
+ * whole-file check. Install renders the text between the markers from one of
+ * these, and `AGENTS.md` can hold an older version's text after a later
+ * install that selected no harness. A text counts only when its bytes hash to
+ * that record. A file that is gone or changed is skipped here, because its own
+ * entry check refuses the run.
+ */
+function recordedEntryTexts(ctx, entries) {
+  const texts = [];
+  for (const entry of entries.values()) {
+    if (entry.kind !== 'file') continue;
+    const data = segmentsUnder(ctx.dataRoot, entry.path);
+    if (
+      data === null ||
+      data.length !== 3 ||
+      !VERSION_PATTERN.test(data[0]) ||
+      data[1] !== 'user-global' ||
+      data[2] !== 'entry.md'
+    ) {
+      continue;
+    }
+    try {
+      const bytes = readNoFollowBytes(entry.path, ctx.fs);
+      if (sha256Hex(bytes) === entry.sha256) texts.push(bytes.toString('utf8'));
+    } catch {
+      // Skipped; see above.
+    }
+  }
+  return texts;
 }
 /** The harness directory a harness's entry file lives in. */
 function harnessDirOf(ctx, harness) {
@@ -533,13 +571,133 @@ function buildTargets(ctx, sourceRoot, version) {
     const root = rootNamed(ctx, rootName);
     for (const skill of SKILL_NAMES) {
       const skillDir = join(sourceRoot, 'skills', skill);
-      for (const rel of listSourceFiles(skillDir, fs)) {
+      const files = listSourceFiles(skillDir, fs);
+      // A source skill with no SKILL.md is broken. Left alone it would also make
+      // every installed file of that skill look dropped, and the prune would
+      // remove them (#4302).
+      if (!files.includes('SKILL.md')) {
+        throw new Error(
+          `the source skill ${skillDir} has no SKILL.md; refusing; nothing was written`,
+        );
+      }
+      for (const rel of files) {
         const source = readSource(join(skillDir, rel), fs);
         targets.push({ dest: join(root.path, skill, rel), ...source });
       }
     }
   }
   return targets;
+}
+/**
+ * Whether a listed entry is a file install copied into a skill tree, which is
+ * the only kind an upgrade may prune (#4302). Skill files stay discoverable by
+ * the harness until they are removed; a file under an older version directory
+ * does not, so it stays listed. The test goes by the root that `rootFor`
+ * resolved, not by a path prefix: it returns the deepest root, so a data root
+ * or a Codex home placed inside a skill directory is not taken for a skill
+ * tree.
+ */
+function isSkillFileEntry(ctx, entry, root) {
+  if (entry.kind !== 'file' || !SKILL_ROOT_NAMES.includes(root.name)) {
+    return false;
+  }
+  // Belt and braces: the root test above already excludes the harness roots, so
+  // an entry-file path should not reach this line.
+  if (entryFileOwned(ctx, entry)) return false;
+  const below = segmentsUnder(root.path, entry.path);
+  return below !== null && SKILL_NAMES.includes(below[0]) && below.length >= 2;
+}
+/**
+ * The device and inode of a file, or null when the filesystem reports no inode
+ * number (0) and so gives nothing to compare. Two spellings of one file share
+ * it, which a case-insensitive or normalization-insensitive filesystem allows,
+ * and which `nlink` does not show.
+ */
+function identityOf(stat) {
+  return stat.ino === 0n ? null : `${stat.dev}:${stat.ino}`;
+}
+/**
+ * Give each dropped skill file its verdict. Reads only. A refusal is added to
+ * `refusals`, so it stops the install before the first write. `targetFiles`
+ * maps the identity of each existing destination this run ships to its path.
+ * A dropped entry that is the same file as one of them is kept as it was:
+ * removing it under the old spelling would remove the file the new spelling
+ * ships.
+ *
+ * "Dropped" means a skill file that is not a destination of this run. That is
+ * the whole payload today. An install that ships only part of it, for example
+ * one selected skill, must scope this set to what it ships, or it would drop
+ * every other skill file.
+ */
+function planPrunes(ctx, checked, targetFiles, targetDests, refusals) {
+  const fs = ctx.fs;
+  const prunes = [];
+  const lines = [];
+  for (const { entry, root, walk } of checked) {
+    if (
+      entry.kind !== 'file' ||
+      targetDests.has(entry.path) ||
+      !isSkillFileEntry(ctx, entry, root)
+    ) {
+      continue;
+    }
+    try {
+      // First, for every verdict below: a leftover temporary file beside the
+      // path marks a crashed run there, whether or not the file is still present.
+      // An absent parent has nothing to list, so it passes.
+      const gone = walk.missingDirs.length > 0 || walk.finalKind === 'absent';
+      refuseStaleTemp(
+        entry.path,
+        fs,
+        gone ? 'drop the receipt entry for' : 'remove',
+      );
+      if (gone) {
+        prunes.push({
+          path: entry.path,
+          root,
+          sha256: entry.sha256,
+          present: false,
+        });
+        // The same word uninstall uses for a listed path that is already gone.
+        lines.push(`absent ${entry.path}`);
+        continue;
+      }
+      // checkContainment throws only for a link above the final component, so
+      // the final component is checked here.
+      if (walk.finalKind !== 'file') {
+        throw new Error(
+          `${entry.path} is now a ${walk.finalKind}, not a file, and the new version no longer ships it; refusing; leaving it in place; move or delete it, then install again`,
+        );
+      }
+      const stat = fs.lstatSync(entry.path, { bigint: true });
+      if (stat.nlink > 1n) {
+        throw new Error(
+          `${entry.path} has more than one hard link, and the new version no longer ships it; refusing to remove it; leaving it in place; move or delete it, then install again`,
+        );
+      }
+      const identity = identityOf(stat);
+      const same = identity === null ? undefined : targetFiles.get(identity);
+      if (same !== undefined) {
+        lines.push(`keep ${entry.path} (the same file as ${same})`);
+        continue;
+      }
+      if (sha256Hex(readNoFollowBytes(entry.path, fs)) !== entry.sha256) {
+        throw new Error(
+          `${entry.path} was edited after install (its SHA-256 differs from the receipt), and the new version no longer ships it; refusing; leaving it in place; move or delete it, then install again`,
+        );
+      }
+      prunes.push({
+        path: entry.path,
+        root,
+        sha256: entry.sha256,
+        present: true,
+      });
+      lines.push(`remove ${entry.path}`);
+    } catch (error) {
+      refusals.push(describe(error));
+    }
+  }
+  return { prunes, lines };
 }
 /**
  * Check every condition the issue's pre-validation names and collect the
@@ -587,15 +745,20 @@ function buildInstallPlan(ctx, sourceRoot, version, harnesses) {
   const refusals = [];
   // A listed path must sit under exactly one root with no link above it,
   // even when this run writes nothing there.
+  const checked = [];
   for (const entry of entries.values()) {
     try {
       assertOwnedShape(ctx, entry);
-      inspect(ctx, entry.path);
+      const { root, walk } = inspect(ctx, entry.path);
+      checked.push({ entry, root, walk });
     } catch (error) {
       refusals.push(describe(error));
     }
   }
   const targets = buildTargets(ctx, sourceRoot, version);
+  // The identity of each existing destination, so a dropped file that is the
+  // same file under another spelling is kept rather than removed (#4302).
+  const targetFiles = new Map();
   for (const target of targets) {
     try {
       const root = rootFor(ctx, target.dest);
@@ -619,6 +782,10 @@ function buildInstallPlan(ctx, sourceRoot, version, harnesses) {
         writes.push({ ...target, root, priorSha256: null });
         lines.push(`create ${target.dest}`);
       } else if (walk.finalKind === 'file') {
+        const identity = identityOf(
+          fs.lstatSync(target.dest, { bigint: true }),
+        );
+        if (identity !== null) targetFiles.set(identity, target.dest);
         const current = sha256Hex(readNoFollowBytes(target.dest, fs));
         // The verdict table refuses a listed file whose hash differs from the
         // receipt, even when its bytes equal the new source: those bytes could
@@ -655,6 +822,15 @@ function buildInstallPlan(ctx, sourceRoot, version, harnesses) {
       refusals.push(describe(error));
     }
   }
+  // A listed skill file this version no longer ships. It is judged here, before
+  // any write, and removed only after the new payload is installed and listed.
+  const pruned = planPrunes(
+    ctx,
+    checked,
+    targetFiles,
+    new Set(targets.map((target) => target.dest)),
+    refusals,
+  );
   let current;
   try {
     refuseStaleTemp(ctx.currentPath, fs);
@@ -750,8 +926,16 @@ function buildInstallPlan(ctx, sourceRoot, version, harnesses) {
   } else {
     lines.push(`keep ${ctx.currentPath} (already points at ${versionDir})`);
   }
-  lines.push(...entryLines);
-  return { entries, mkdirs, writes, current, lines, entrySteps };
+  lines.push(...entryLines, ...pruned.lines);
+  return {
+    entries,
+    mkdirs,
+    writes,
+    prunes: pruned.prunes,
+    current,
+    lines,
+    entrySteps,
+  };
 }
 /**
  * Write the receipt for `entries`. An empty set removes the receipt instead,
@@ -904,6 +1088,8 @@ function undoStep(ctx, step, entries, fs) {
  * before the next step. A failure before the receipt rewrite rolls back only
  * this run's steps, in reverse order. A failed receipt rewrite does not roll
  * back, because that step is the one that failed; it names the unlisted paths.
+ * Last, the skill files the new version no longer ships are pruned (#4302);
+ * that pass is outside the rollback.
  */
 function applyInstall(ctx, plan, version) {
   const fs = ctx.fs;
@@ -1102,7 +1288,72 @@ function applyInstall(ctx, plan, version) {
       `install failed: ${describe(error)}; the rollback left these paths in place and still listed: ${leftovers.join(', ')}`,
     );
   }
+  pruneDropped(ctx, plan.prunes, entries, version, priorTargetOf(plan), fs);
   return { lines: plan.lines, priorCurrentTarget: priorTargetOf(plan) };
+}
+/**
+ * Remove the skill files the new version no longer ships (#4302), one at a
+ * time, rewriting the receipt after each. This runs after every write has
+ * succeeded and the receipt lists it, and a failure here never rolls anything
+ * back: the new payload is complete, and each file is removed and unlisted,
+ * still present and listed, or (after a crash or a failed rewrite) gone but
+ * still listed. A plain retry finishes every one of those states, except that
+ * a receipt temporary file a failed rewrite could not remove must be deleted
+ * by hand first (the error names it).
+ * Rolling a removal back would need a lossy recreate (mode and time are not
+ * kept) and would undo a finished upgrade over an obsolete file.
+ *
+ * The unlink comes before the receipt rewrite. A crash or a failed rewrite
+ * between them leaves a listed path that is absent, which uninstall reports as
+ * absent and the next install drops it. The other order could leave a file that
+ * nothing lists and nothing cleans up.
+ *
+ * A failure here throws, so the caller never sees the install result. The
+ * messages therefore carry the prior `current` target that a result would have
+ * reported.
+ */
+function pruneDropped(ctx, prunes, entries, version, priorTarget, fs) {
+  const installed = `the ${version} payload is installed${priorTarget === null ? '' : ` (current used to point at ${priorTarget})`}`;
+  const remaining = (from) =>
+    prunes
+      .slice(from)
+      .map((prune) => prune.path)
+      .join(', ');
+  for (const [index, prune] of prunes.entries()) {
+    try {
+      if (prune.present) {
+        // The plan found the file, but it may be gone since. A path that is
+        // absent now is only unlisted; anything else goes through the removal
+        // primitive, which re-walks it and re-checks kind, links, and hash
+        // immediately before the unlink.
+        const walk = checkContainment(prune.root.path, prune.path, fs);
+        if (walk.missingDirs.length === 0 && walk.finalKind !== 'absent') {
+          removeSingleEntry(
+            prune.root.path,
+            prune.path,
+            { kind: 'file', sha256: prune.sha256 },
+            fs,
+          );
+        }
+      }
+    } catch (error) {
+      throw new Error(
+        `${installed}, but removing the files it no longer ships stopped at ${prune.path}: ${describe(error)}; these files were not handled and stay listed: ${remaining(index)}; fix the cause named above (for a file you edited, move or delete it), then install again`,
+      );
+    }
+    // An absent dropped file can be a name this version uses for a directory,
+    // and the mkdir step then listed that directory under the same path. Only a
+    // file entry is this prune's to drop.
+    if (entries.get(prune.path)?.kind !== 'file') continue;
+    entries.delete(prune.path);
+    try {
+      persistEntries(ctx, entries, fs);
+    } catch (error) {
+      throw new Error(
+        `${installed}, but the receipt rewrite failed (${describe(error)}); ${prune.path} is gone from disk but still listed in the receipt, and a later install or uninstall reports it as absent; these files were not yet handled: ${remaining(index + 1) || 'none'}`,
+      );
+    }
+  }
 }
 function priorTargetOf(plan) {
   return plan.current.action === 'repoint' ? plan.current.priorTarget : null;
@@ -1242,7 +1493,7 @@ function buildUninstallPlan(ctx) {
             harness,
             join(ctx.currentPath, 'user-global', 'entry.md'),
             bytes,
-            entry.path,
+            harness === 'codex' ? recordedEntryTexts(ctx, entries) : [],
           )
         ) {
           throw new Error(

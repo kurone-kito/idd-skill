@@ -6183,6 +6183,39 @@ reflexively as any other CLI option.
   the courtesy-ack convergence rule, not a re-posted reply) and on
   `incomplete-thread-comments`, and it never changes `route`, `reason`, or any
   count. It mirrors `missingRegularComments[].hint`
+- Pending-decision thread (kurone-kito/idd-skill#4306; observed 2026-10-14
+  on kurone-kito/idd-skill#4271, issue #4244): a reply that carries
+  `**Awaiting maintainer decision**` at the start of a top-level line
+  (column 0, outside a Markdown code region) is a pending decision, whether
+  it is the whole reply or a later paragraph of an `**Accepted**`,
+  `**Rejected**`, or `**Rejection confirmed by maintainer**` reply. It is not
+  a disposition, so the thread is not settled until a settled reply from a
+  trusted account follows it. A mid-sentence quote of the phrase, an
+  indented line, one inside a code span, a fence, a block quote, or a list
+  item, and a line that continues a quote or list item with no blank line,
+  heading, thematic break, or HTML block before it, does not count. The same
+  rule keeps such a reply from answering a regular comment (a human's
+  included), from advancing the last-reply watermark behind the
+  unreplied-comment count, from covering a cited Previously missed item, and
+  from anchoring an ack-only window. A trusted notice rejection or summary
+  acceptance that carries the marker clears no advisory sticky, a thread
+  whose newest IDD reply is pending is never ack-only, and a trusted pending
+  reply is not presence-only on a human's thread. A `missingThreads[]`
+  entry for a thread whose newest IDD reply is pending has
+  `reason: pending-decision` and its own `hint` (keep the hold and wait for
+  the maintainer, do not post `**Accepted**` early), in place of the
+  stale-disposition hint above.
+  `advisory-convergence.mjs` lists the same threads in
+  `threads.pendingDecisionIds`, a subset of `threads.blockingIds`, and gives
+  them a `reasons[]` entry that names them. The `disposition-threads` next
+  action says to hold them, and the `disposition-posted-items` action names
+  them to skip (the list is PR-wide, and the action stays whenever the latest
+  review has items). Clause 2 counts only unresolved threads, so resolving a
+  pending thread still settles it for this gate; leave it unresolved until
+  the decision.
+  `resolve-review-thread --apply` resolves the thread, so it refuses a
+  `--body` that carries the marker before any network call; post a pending
+  reply by hand and leave the thread open
 - Disposition-evidence `hint` on the `dispositionEvidence` object
   (kurone-kito/idd-skill#4163; observed 2026-10-13 on
   kurone-kito/idd-skill#4153, kurone-kito/idd-skill#4151, and
@@ -7398,27 +7431,67 @@ same as `AW4`/`AW5`.
         read fails or is unreadable. Otherwise it is `false`.
   3. Route with the table below.
 
-  | `branchState`                                                                  | `requiresUpToDateHead` | `eBranchSync`   | `e11`                      | `f1`                            |
-  | ------------------------------------------------------------------------------ | ---------------------- | --------------- | -------------------------- | ------------------------------- |
-  | `clean` with `mergeStateStatus` `CLEAN`                                        | either                 | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
-  | `clean` with `UNSTABLE`, at least one listed run, all waiting and non-required | either                 | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
-  | `clean` with any other `mergeStateStatus`                                      | either                 | `hold`          | `skip-merge`               | `hold`                          |
-  | `behind-no-conflict`                                                           | `false`                | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
-  | `behind-no-conflict`                                                           | `true`                 | `sync-path`     | `skip-merge`               | `return-to-e-phase-branch-sync` |
-  | `content-conflict`                                                             | either                 | `sync-path`     | `merge-development-branch` | `return-to-e-phase-branch-sync` |
-  | `computing`                                                                    | either                 | `retry`         | `skip-merge`               | `retry`                         |
-  | `dirty`, `unknown`, `force-push-exception`, or any other state                 | either                 | `hold`          | `skip-merge`               | `hold`                          |
+  | `branchState`                                                                           | `requiresUpToDateHead` | `eBranchSync`   | `e11`                      | `f1`                            |
+  | --------------------------------------------------------------------------------------- | ---------------------- | --------------- | -------------------------- | ------------------------------- |
+  | `clean` with `mergeStateStatus` `CLEAN`                                                 | either                 | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
+  | `clean` with `UNSTABLE`, at least one listed run or suite, all waiting and non-required | either                 | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
+  | `clean` with any other `mergeStateStatus`                                               | either                 | `hold`          | `skip-merge`               | `hold`                          |
+  | `behind-no-conflict`                                                                    | `false`                | `proceed-to-f1` | `skip-merge`               | `proceed-to-f2`                 |
+  | `behind-no-conflict`                                                                    | `true`                 | `sync-path`     | `skip-merge`               | `return-to-e-phase-branch-sync` |
+  | `content-conflict`                                                                      | either                 | `sync-path`     | `merge-development-branch` | `return-to-e-phase-branch-sync` |
+  | `computing`                                                                             | either                 | `retry`         | `skip-merge`               | `retry`                         |
+  | `dirty`, `unknown`, `force-push-exception`, or any other state                          | either                 | `hold`          | `skip-merge`               | `hold`                          |
 
   `clean` proceeds with `mergeStateStatus` `CLEAN`, which is the phase files'
   own definition. An `UNSTABLE` `clean` branch proceeds only when at least one
-  non-passing head run is listed and every such run is non-required and
-  `action_required` or `pending` (issue `#4209`). The helper reads the head's
-  check rollup live for that state alone, so with an empty or unavailable list
-  it holds. A caller without helper runtime cannot collect that list, so an
-  `UNSTABLE` branch holds there. The helper's `clean` alone also covers
-  `BLOCKED`, which holds. A `retry` result is re-polled a small fixed number
-  of times (distributed default: three attempts, a few seconds apart), then
-  routed by the first settled result.
+  non-passing head run or check suite is listed and every such entry is
+  non-required and `action_required` or `pending` (issues `#4209`, `#4309`).
+  The helper reads the head's check rollup and check suites live for that
+  state alone, so with an empty or unavailable list it holds. A caller
+  without helper runtime cannot collect that list, so an `UNSTABLE` branch
+  holds there. The helper's `clean` alone also covers `BLOCKED`, which holds.
+
+  A check suite that never posted a check run is not in the rollup, so the
+  helper lists it from the head's check suites (issue `#4309`). Observed on
+  pull request `#4292` (issue `#4283`): six non-required external suites
+  (netlify, sentry, coderabbitai, codecov, cursor, claude) stayed queued for
+  more than 70 minutes with no check run, the run list was empty, and the
+  hold lasted until GitHub reported `CLEAN` on its own. The suite rules are:
+
+  - A suite that has a check run is judged through that run, so it is never
+    listed twice. Only the newest suite of each producer (its app, and the
+    Actions workflow when there is one) governs, and suites that share the
+    newest timestamp, or lack a valid one, all stay.
+  - A listed suite is named by its app slug, plus the workflow name for an
+    Actions workflow, and carries its own status (`queued`, `in_progress`,
+    or its conclusion). A waiting suite counts as `pending`, a completed
+    `action_required` suite as `action_required`, and any other non-passing
+    conclusion or unrecognized status never proceeds. A cancelled Actions
+    workflow suite with no check run is not listed: it is concurrency control
+    with no check left to read or rerun (observed 2026-10-15 on merged heads
+    such as `504f50f7` and `e85436a9`, where the comment-refresh workflow's
+    newest suites were cancelled). A cancelled suite from an external app has
+    no such proof, so it is listed as `cancelled` and holds.
+  - A suite has no `isRequired`, so it is required when a required check is
+    source-pinned to its app (a ruleset `integration_id` or a classic
+    protection `app_id`), read from the same four check-list keys the
+    required-check reader accepts. A suite with no pin is non-required,
+    because GitHub reports `BLOCKED`, never `UNSTABLE`, while a required
+    check is unreported. The policy is read only when a suite is listed, with
+    the same 404 rule as `requiresUpToDateHead`. An unreadable policy, a
+    malformed payload or check list (an array or a primitive where an object
+    belongs counts), a pin that names no app id, or a `workflows` rule marks
+    every listed suite required, and a note says so.
+  - A head with more than 100 check suites, or a suite page that is missing
+    or inconsistent, is unavailable and holds.
+  - For each entry that keeps the hold, `diagnostics.notes` carries one
+    line beginning `UNSTABLE hold:` that names the entry (a suite by its app
+    slug), why it holds, and what resumes F1, so the F1 hold comment can
+    quote it.
+
+  A `retry` result is re-polled a small fixed number of times (distributed
+  default: three attempts, a few seconds apart), then routed by the first
+  settled result.
 - `branchState` values: `clean`, `behind-no-conflict`, `content-conflict`,
   `dirty`, `force-push-exception`, `computing`, `unknown` (`computing` is the
   transient still-computing mergeability that callers re-poll; `unknown` stays
@@ -7672,9 +7745,10 @@ same as `AW4`/`AW5`.
   helper; not distributed via the package-manager / ephemeral-npx
   profiles (it is a maintainer-run sweep, never an adopter-facing
   step in the phase instructions).
-- A **manually-invoked**, read-only detector (no schedule, no mutation by the
-  helper itself). It scans MERGED PRs and surfaces feedback that was left
-  unattended at merge:
+- A read-only detector that an operator runs by hand and that the weekly
+  summary workflow below also runs on a schedule (the helper itself has no
+  schedule and no mutation). It scans MERGED PRs and surfaces feedback that
+  was left unattended at merge:
   - **Window selector**: `--since <ISO8601>` and/or `--days <N>`, or
     `--pr <n>` (repeatable) / `--prs <n1,n2,...>`; `--limit <N>` caps the
     `--since`/`--days` enumeration. When both `--since` and `--days` are
@@ -7812,21 +7886,37 @@ same as `AW4`/`AW5`.
 - **Weekly summary body** (issue `#4161`): `--issue-body` prints the summary
   issue body as Markdown instead of the JSON, rendered from the same scan by
   `renderWeeklySweepIssueBody`. The body carries only numbers, dates, and
-  counts, never comment text. It names each flagged pull request as `PR <n>`,
-  so it adds no cross-reference event. It states the run date (UTC) and, when
-  nothing is open, how many pull requests were checked. It notes when the
-  enumeration reached its `--limit` cap. The manual workflow
-  `.github/workflows/merged-pr-feedback-sweep.yml` (`workflow_dispatch` only)
-  runs this helper with `--days 7 --limit 500 --issue-body` and creates or
-  edits the one open issue titled `Merged-PR feedback sweep (weekly)`. It
-  refuses to write when the open-issue listing is full or when more than one
-  open issue carries that title. That workflow is the only writer, and it
-  writes only that issue.
+  counts, plus a fixed score footer, never comment text. It names each
+  flagged pull request as `PR <n>`, so it adds no cross-reference event. It
+  states the run date (UTC) and, when nothing is open, how many pull requests
+  were checked. It notes when the enumeration reached its `--limit` cap. The
+  workflow `.github/workflows/merged-pr-feedback-sweep.yml` (weekly schedule
+  and `workflow_dispatch`) runs this helper with
+  `--days 7 --limit 500 --issue-body` and creates or edits the one open issue
+  titled `Merged-PR feedback sweep (weekly)`. It refuses to write when the
+  open-issue listing is full or when more than one open issue carries that
+  title. That workflow is the only writer, and it writes only that issue.
   The weekly body does not include the open-and-ready section; that
   section is in the JSON output only.
-- **Operator runbook**: this helper is a **manual spot-check audit**, not a
-  phase step — its absence from the executable phase instruction files is
-  by design, not an oversight.
+  The report is a status summary, not a work item (issue `#4308`). The body
+  therefore ends with the score footer that the issue-authoring contract
+  defines: the visible autopilot-suitability line and the hidden marker, both
+  carrying a score of 1. The workflow also applies the
+  `status:blocked-by-human` label when it creates the issue and re-adds it on
+  every edit; it uses that default name and does not read the label setting.
+  No human blocker exists, so the label is a standing not-work marker with
+  nothing to clear (see the report row in the
+  [autonomy contract](idd-autonomy-contract.md)). Discover stops claims on the
+  label in every mode, provided the configured label name is that default.
+  The score-1 footer alone skips the report only in
+  autopilot runs where `autopilotSuitability.enabled` is not `false` and
+  `autopilotSuitability.floor` is above 1. Closing the issue retires only
+  that instance: the next run finds no open issue with the title, creates a
+  new one, and labels it.
+- **Operator runbook**: run by hand, this helper is a **spot-check audit**
+  (the weekly summary workflow above also runs it), not a phase step — its
+  absence from the executable phase instruction files is by design, not an
+  oversight.
   - **Intent**: it exists as a spot-check for runs where a lightweight
     model (for example a GPT-5.4-mini or Haiku-class model) has been
     driving the IDD loop and may have left feedback with **no E-phase
@@ -7920,8 +8010,9 @@ same as `AW4`/`AW5`.
   following that recipe's manual fallback instead — see that recipe for
   when each path applies.
   Not a phase step in any
-  `idd-*.instructions.md` file — like the Merged-PR feedback sweep
-  above, this is a manually-invoked, operator-run spot-check, run once
+  `idd-*.instructions.md` file — like the Merged-PR feedback sweep's
+  operator runbook above, this is a manually-invoked, operator-run
+  spot-check, run once
   when first building the reserved-label guard's bot-login list and
   again after enabling new automation or after a long gap (a bot with
   no history yet can still start labeling later).

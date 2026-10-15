@@ -296,6 +296,8 @@ self-critique and record risk.
    this item in the current round requires it to have already passed the
    file-path-touch check (E9 item 7, or
    `idd-review-snapshot-lite.instructions.md`'s Cold-start edge case 1).
+   If part of the item still needs a maintainer, follow E6's partly
+   settled rule (`idd-review-triage.instructions.md`) instead.
 3. For a review thread, post the reply and resolve it in one call with
    the profile-selected `resolve-review-thread` helper (`--pr`,
    `--comment-id`, `--body`, `--claim-issue`, `--claim-id`, `--apply`;

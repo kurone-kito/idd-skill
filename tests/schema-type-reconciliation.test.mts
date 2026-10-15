@@ -996,6 +996,7 @@ const advisoryConvergenceFixture = {
   threads: {
     copilotThreadCount: 0,
     blockingIds: [],
+    pendingDecisionIds: [],
     blockingCount: 0,
     satisfied: true,
   },

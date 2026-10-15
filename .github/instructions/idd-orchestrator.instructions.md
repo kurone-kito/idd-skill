@@ -12,9 +12,9 @@ and [Orchestrator delegation](idd-claim.instructions.md#orchestrator-delegation)
 
 ## 1. Activation
 
-A restarted session with a unique session-suffixed agent id skips this section
-and goes to section 2. Any other restart neither activates fan-out nor refills:
-it follows [recovery](../../docs/idd-workflow.md#orchestrator-restart).
+A restarted session with a unique session-suffixed agent id skips this section.
+Any other restart neither activates fan-out nor refills: it follows
+[recovery](../../docs/idd-workflow.md#orchestrator-restart).
 
 Activate fan-out only when all conditions hold:
 
@@ -90,6 +90,7 @@ Lost on restart: see [recovery](../../docs/idd-workflow.md#orchestrator-restart)
   full Discover run. Otherwise, report the `limitingFactor` and stop.
 - If the graph has nothing startable, re-run Discover on that cadence; stop only
   if it still finds nothing and every roster entry is `disposed`.
+- Held workers skip §5 (variant).
 
 ## 5. Report and disposal
 
