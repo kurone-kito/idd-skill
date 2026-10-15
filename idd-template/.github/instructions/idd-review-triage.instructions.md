@@ -268,13 +268,14 @@ reviewer feedback:
   **not** merge until the decision appears, and stop. Either way, wait
   for the response in a future E1 pass (see the transitions below).
 - **Partly settled item**: when you fixed part of an item and the rest
-  needs a maintainer, open the reply with the `**Accepted**` part, then put
-  `**Awaiting maintainer decision** — {question}` in its own paragraph
-  before the stamp, and leave the review thread unresolved like any AMD.
-  F2/F3 and `idd-advisory-convergence` then hold the thread as a pending
-  decision until a settled reply follows. A bare `**Accepted**` that states
-  the open part only in prose counts as settled (observed 2026-10-14 on PR
-  `#4271`, issue `#4244`).
+  needs a maintainer, open the reply with
+  `**Awaiting maintainer decision** — {question}`, then state the fixed
+  part and its commit, and leave the review thread unresolved like any
+  AMD. A bare `**Accepted**` that states the open part only in prose
+  counts as settled (observed 2026-10-14 on PR `#4271`, issue `#4244`).
+  The gates also read the marker as pending when it opens a later
+  paragraph of an `**Accepted**` reply, but only the opening form keeps
+  the thread in E1 and F2's AMD handling.
 - **When an `Awaiting maintainer decision` item re-appears in ReviewItems_snapshot**:
   scan the activity universe for a **qualifying response** — a reply on
   this item, or a separate comment/review that clearly references
