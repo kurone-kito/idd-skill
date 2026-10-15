@@ -1229,6 +1229,52 @@ test('a dropped skill file that is already absent is unlisted and not recreated'
   assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
 });
 
+test('a stale temporary file beside an already-absent dropped skill file makes install refuse before any write', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const absent = droppedOf(home, '.claude');
+  nodeFs.rmSync(absent);
+  nodeFs.writeFileSync(`${absent}.tmp-7`, 'stale\n');
+  const before = snapshot(home);
+
+  for (const run of [
+    () => installPayload(upgradeOptions(home, source)),
+    () => planInstall(upgradeOptions(home, source)),
+  ]) {
+    assert.throws(
+      run,
+      (error: Error) =>
+        literal(`${absent}.tmp-7`).test(error.message) &&
+        /crashed run/.test(error.message) &&
+        /nothing was written/.test(error.message),
+    );
+  }
+  assert.deepEqual(snapshot(home), before);
+  assert.ok(isListed(home, absent), 'the entry stays listed');
+});
+
+test('a stale temporary file beside a dropped skill file that is the same file as a shipped one still refuses', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  const shipped = join(dirname(dropped), 'contract.md');
+  nodeFs.writeFileSync(`${dropped}.tmp-7`, 'stale\n');
+  const before = snapshot(home);
+
+  assert.throws(
+    () =>
+      installPayload(
+        upgradeOptions(home, source, {
+          fs: fsReportingIdentity([dropped, shipped], 7n, 7n),
+        }),
+      ),
+    /crashed run/,
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
 test('a file the user added beside a dropped skill file survives the prune', () => {
   const home = makeHome();
   installPayload(optionsFor(home));

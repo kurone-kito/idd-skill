@@ -575,6 +575,10 @@ function planPrunes(ctx, checked, targetFiles, targetDests, refusals) {
       continue;
     }
     try {
+      // First, for every verdict below: a leftover temporary file beside the
+      // path marks a crashed run there, whether or not the file is still present.
+      // An absent parent has nothing to list, so it passes.
+      refuseStaleTemp(entry.path, fs, 'remove');
       if (walk.missingDirs.length > 0 || walk.finalKind === 'absent') {
         prunes.push({
           path: entry.path,
@@ -604,7 +608,6 @@ function planPrunes(ctx, checked, targetFiles, targetDests, refusals) {
         lines.push(`keep ${entry.path} (the same file as ${same})`);
         continue;
       }
-      refuseStaleTemp(entry.path, fs, 'remove');
       if (sha256Hex(readNoFollowBytes(entry.path, fs)) !== entry.sha256) {
         throw new Error(
           `${entry.path} was edited after install (its SHA-256 differs from the receipt), and the new version no longer ships it; refusing; leaving it in place; move or delete it, then install again`,
