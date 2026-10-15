@@ -111,7 +111,7 @@
     },
     "nothingSent": {
       "type": "boolean",
-      "description": "Present only on a failed apply write (the evidence comment, the close, or the claim release): true when that write provably sent nothing (a load-control refusal, or for a comment post an HTTP 401, 404, or 422 on its first attempt), false when it may have landed. Absent on every other verdict."
+      "description": "Present only when an apply step throws (the evidence comment, the claim re-validation read after it, the close, or the claim release). For a write it describes that write's own request: true when the write provably sent nothing (a load-control refusal, or for a comment post an HTTP 401, 404, or 422 on its first attempt), false when it may have landed. For the claim re-validation read between the evidence comment and the close, which is not a write, it is always false, even for a read that was refused and sent nothing itself, because the run has already sent the evidence comment. Absent on every other verdict."
     }
   },
   "additionalProperties": false
