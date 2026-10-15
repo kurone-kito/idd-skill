@@ -946,8 +946,8 @@ do-not-duplicate-native-roots rule.
 ### Optional companion boundary
 
 The issue-authoring companion drafts or refines IDD-ready issues,
-roadmaps, and sub-issues before execution starts. It publishes checked
-drafts under the authoring hold unless a preview is requested. Only
+roadmaps, and sub-issues before execution starts. Checked drafts go under the
+hold; previews or non-final ones go to a draft carrier. Only
 releasing the hold needs an explicit request; Discover skips held
 issues, so no loop starts.
 

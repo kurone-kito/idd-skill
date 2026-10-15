@@ -843,6 +843,55 @@ test('an acquire marker whose anchor differs from its own target reports not-fou
   );
 });
 
+test('a non-anchor child acquire passes only against the anchor it expects (#4251)', () => {
+  // A caller that publishes a child under an existing anchor passes the
+  // anchor's real reference. The acquire's own anchor must then name it; the
+  // default (no expected anchor) keeps the self-anchored requirement above.
+  const anchor = 'kurone-kito/idd-skill#1';
+  const liveBody = '# Child draft\n\nSome content.\n';
+  const comments = [
+    {
+      id: 1,
+      authorLogin: 'kurone-kito',
+      body: acquireMarkerBody(sha256(liveBody), { anchor }),
+      createdAt: '2026-09-10T16:48:44Z',
+      updatedAt: '2026-09-10T16:48:44Z',
+      lastEditedAt: null,
+    },
+  ];
+  const input = {
+    target: TARGET,
+    liveBody,
+    comments,
+    markerPrefix: MARKER_PREFIX,
+    trustedMarkerLogins: TRUSTED_LOGINS,
+  };
+  const passing = evaluateAuthoringOwnerProvenance({
+    ...input,
+    expectedAnchor: anchor.toUpperCase(),
+  });
+  assert.equal(passing.verdict, 'pass');
+  assert.equal(passing.marker?.owner, 'owner-token-1');
+  const other = evaluateAuthoringOwnerProvenance({
+    ...input,
+    expectedAnchor: 'kurone-kito/idd-skill#2',
+  });
+  assert.equal(other.verdict, 'not-found');
+  assert.match(
+    other.checks.find((check) => check.id === 'acquire_marker_found')
+      ?.evidence ?? '',
+    /not the expected set anchor/,
+  );
+  assert.equal(evaluateAuthoringOwnerProvenance(input).verdict, 'not-found');
+  // A self-anchored acquire is not a child's: the expected anchor wins.
+  const selfAnchored = evaluateAuthoringOwnerProvenance({
+    ...input,
+    comments: [{ ...comments[0], body: acquireMarkerBody(sha256(liveBody)) }],
+    expectedAnchor: anchor,
+  });
+  assert.equal(selfAnchored.verdict, 'not-found');
+});
+
 test('an acquire marker with a non-none supersedes reports not-found', () => {
   // contract.md: "supersedes=none for acquire and bootstrap, while
   // resume names the prior owner token." An acquire carrying a non-none

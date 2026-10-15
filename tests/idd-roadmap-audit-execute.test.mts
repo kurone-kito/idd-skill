@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { test } from 'node:test';
@@ -10,6 +16,7 @@ import {
   enumerateRoadmapGraph,
   type RoadmapGraphReport,
 } from '../src/scripts/discover-roadmap-graph.mts';
+import { createLoadControlRefusal } from '../src/scripts/github-api-refusal.mts';
 import {
   buildRoadmapCompletionAuditBody,
   type ConnectedPrEvent,
@@ -103,6 +110,7 @@ function readyReport(): RoadmapGraphReport {
     ],
     roadmapNodes: [],
     executionCandidates: [],
+    pullRequestReferences: [],
     diagnostics: {
       duplicateReferences: [],
       cycles: [],
@@ -467,6 +475,52 @@ test('resolveOpenLinkedPrIssues fails closed on a truncated connected-PR timelin
     },
   });
   assert.deepEqual(resolveOpenLinkedPrIssues(port, [1048]), [1048]);
+});
+
+test('#4281: a closed child citing a merged pull request is not an unresolved blocker', async () => {
+  const issues = new Map<number, unknown>([
+    [
+      ROADMAP,
+      {
+        number: ROADMAP,
+        title: 'roadmap',
+        state: 'open',
+        body: '<!-- idd-skill-roadmap-id: epic -->\n- [x] #996',
+        labels: [{ name: 'roadmap' }],
+      },
+    ],
+    [
+      996,
+      {
+        number: 996,
+        title: 'closed child',
+        state: 'closed',
+        body: 'Refs #997',
+        labels: [],
+      },
+    ],
+    [
+      997,
+      {
+        number: 997,
+        title: 'merged pull request 997',
+        state: 'closed',
+        body: '',
+        labels: [],
+        pull_request: {
+          url: 'https://example.test/pulls/997',
+          merged_at: '2026-10-01T00:00:00Z',
+        },
+      },
+    ],
+  ]);
+
+  const graph = await enumerateRoadmapGraph(ROADMAP, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+  });
+
+  assert.deepEqual(graph.diagnostics.unresolvedReferences, []);
+  assert.deepEqual(evaluateRoadmapAuditGates(graph), []);
 });
 
 test('unresolved, inaccessible, and cycle diagnostics each surface a blocker', () => {
@@ -1414,6 +1468,13 @@ test('(a) --apply reports already-complete: closed roadmap + trusted evidence + 
   assert.equal(verdict.closed, true);
   assert.match(verdict.result, /already-complete/);
   assert.equal(exitCode, 0);
+  // #4275: the closed root is reported as not ready, even on this no-op exit.
+  assert.equal(verdict.ready, false);
+  assert.deepEqual(
+    verdict.blockers.map((blocker) => blocker.kind),
+    ['roadmap-closed'],
+  );
+  assert.equal(verdict.evidenceBody, '');
   // Idempotent no-op: none of the mutating deps ran.
   assert.deepEqual(calls.closed, []);
   assert.deepEqual(calls.comments, []);
@@ -1454,6 +1515,145 @@ test('(c) --apply keeps claim-not-owned when the roadmap is closed but lacks tru
   assert.equal(exitCode, 1);
   assert.deepEqual(calls.closed, []);
   assert.deepEqual(calls.comments, []);
+  // #4275: the same closed-root verdict contract as (a), without the no-op exit.
+  assert.equal(verdict.ready, false);
+  assert.deepEqual(
+    verdict.blockers.map((blocker) => blocker.kind),
+    ['roadmap-closed'],
+  );
+  assert.equal(verdict.evidenceBody, '');
+});
+
+// ---------------------------------------------------------------------------
+// roadmap-closed gate (#4275): a roadmap that is not open is never ready
+// ---------------------------------------------------------------------------
+
+test('a closed roadmap root is not ready: one roadmap-closed blocker, dry-run exit 1 (#4275)', async () => {
+  const closedReport = readyReport();
+  closedReport.root = { ...closedReport.root, state: 'CLOSED' };
+  const { deps, calls } = makeDeps(closedReport);
+  const { verdict, exitCode } = await runRoadmapAuditExecute(
+    ['--roadmap', String(ROADMAP)],
+    deps,
+  );
+
+  assert.equal(verdict.ready, false);
+  assert.equal(exitCode, 1);
+  assert.equal(verdict.blockers.length, 1);
+  assert.equal(verdict.blockers[0]?.kind, 'roadmap-closed');
+  assert.equal(verdict.blockers[0]?.target, ROADMAP);
+  assert.match(verdict.blockers[0]?.detail ?? '', /"CLOSED"/);
+  assert.equal(verdict.evidenceBody, '');
+  assert.match(verdict.result, /not open/);
+  assert.match(verdict.result, /roadmap-closed/);
+  assert.deepEqual(calls.comments, []);
+});
+
+test('an empty root state also reports roadmap-closed, failing closed (#4275)', () => {
+  const report = readyReport();
+  report.root = { ...report.root, state: '' };
+  const blockers = evaluateRoadmapAuditGates(report);
+
+  assert.deepEqual(
+    blockers.map((blocker) => blocker.kind),
+    ['roadmap-closed'],
+  );
+  assert.match(blockers[0]?.detail ?? '', /\(state ""\)/);
+});
+
+test('--apply on a closed roadmap with an owned claim writes nothing and says the claim is still held (#4275)', async () => {
+  const closedReport = readyReport();
+  closedReport.root = { ...closedReport.root, state: 'CLOSED' };
+  const { deps, calls } = makeDeps(closedReport);
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(exitCode, 1);
+  assert.match(verdict.result, /claim is still held/);
+  assert.match(verdict.result, /unclaimed-by/);
+  assert.match(verdict.result, /do not run --apply again/);
+  // Only the early re-validation ran; the owned claim did not reach the
+  // re-fetch, the evidence post, the close or the release.
+  assert.equal(calls.claimChecks, 1);
+  assert.equal(calls.collects, 1);
+  assert.deepEqual(calls.comments, []);
+  assert.deepEqual(calls.closed, []);
+  assert.deepEqual(calls.released, []);
+});
+
+test('--apply on a closed roadmap that also has an open child keeps the not-ready exit before any claim check (#4275)', async () => {
+  const report = readyReport();
+  report.root = { ...report.root, state: 'CLOSED' };
+  report.nodes = report.nodes.map((entry) =>
+    entry.number === 1048 ? { ...entry, state: 'OPEN' } : entry,
+  );
+  report.executionCandidates = [1048];
+  const { deps, calls } = makeDeps(report);
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(exitCode, 1);
+  assert.match(verdict.result, /^not-ready: completion blockers present/);
+  assert.deepEqual(verdict.blockers.map((blocker) => blocker.kind).sort(), [
+    'open-child',
+    'roadmap-closed',
+  ]);
+  assert.equal(calls.claimChecks, 0);
+  assert.deepEqual(calls.comments, []);
+  assert.deepEqual(calls.closed, []);
+  assert.deepEqual(calls.released, []);
+});
+
+test('--apply on a closed roadmap keeps its earlier usage results: claim-id, claim-issue and now (#4275)', async () => {
+  const closedReport = readyReport();
+  closedReport.root = { ...closedReport.root, state: 'CLOSED' };
+
+  const missingClaim = makeDeps(closedReport);
+  const noClaim = await runRoadmapAuditExecute(
+    ['--roadmap', String(ROADMAP), '--apply'],
+    missingClaim.deps,
+  );
+  assert.equal(noClaim.exitCode, 1);
+  assert.match(noClaim.verdict.result, /^not-applied: --claim-id is required/);
+  assert.equal(missingClaim.calls.claimChecks, 0);
+
+  const mismatchedIssue = makeDeps(closedReport);
+  const wrongIssue = await runRoadmapAuditExecute(
+    [...APPLY_ARGS, '--claim-issue', '9999'],
+    mismatchedIssue.deps,
+  );
+  assert.equal(wrongIssue.exitCode, 1);
+  assert.match(wrongIssue.verdict.result, /must equal the roadmap/);
+  assert.equal(mismatchedIssue.calls.claimChecks, 0);
+
+  const badNow = makeDeps(closedReport, { now: () => 'not-a-date' });
+  const invalidNow = await runRoadmapAuditExecute(APPLY_ARGS, badNow.deps);
+  assert.equal(invalidNow.exitCode, 1);
+  assert.match(invalidNow.verdict.result, /invalid "now" value/);
+  assert.equal(badNow.calls.claimChecks, 0);
+});
+
+test('--apply with an owned claim whose root closes before the re-fetch writes nothing (#4275)', async () => {
+  const closedReport = readyReport();
+  closedReport.root = { ...closedReport.root, state: 'CLOSED' };
+  let reads = 0;
+  const { deps, calls } = makeDeps(readyReport(), {
+    collect: async () => {
+      reads += 1;
+      return reads === 1 ? readyReport() : closedReport;
+    },
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(reads, 2);
+  assert.equal(exitCode, 1);
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.evidenceBody, '');
+  assert.ok(
+    verdict.blockers.some((blocker) => blocker.kind === 'roadmap-closed'),
+  );
+  assert.match(verdict.result, /claim is still held/);
+  assert.deepEqual(calls.comments, []);
+  assert.deepEqual(calls.closed, []);
+  assert.deepEqual(calls.released, []);
 });
 
 // ---------------------------------------------------------------------------
@@ -1745,12 +1945,434 @@ test('--apply aborts the CLOSE when the claim is lost in the comment→close gap
   assert.equal(checks, 3);
 });
 
+/** An error shaped like a failed `gh api` call, which `deriveGhHttpStatus` reads. */
+function httpFailure(status: number): Error {
+  return Object.assign(new Error(`gh api request failed (HTTP ${status})`), {
+    stderr: `gh: request failed (HTTP ${status})`,
+  });
+}
+
+/** A partial verdict names the next action and ends with the thrown message. */
+function assertPartialResult(result: string, error: Error): void {
+  assert.match(result, /do not run --apply again/);
+  assert.match(result, /unclaimed-by/);
+  assert.ok(
+    result.endsWith(error.message),
+    `result must end with the thrown message: ${result}`,
+  );
+}
+
+test('--apply: a refused evidence comment stops before the close and the release', async () => {
+  const refusal = createLoadControlRefusal({
+    outcome: 'not-dispatched',
+    reason: 'busy',
+  });
+  let evidenceAttempts = 0;
+  const { deps, calls } = makeDeps(readyReport(), {
+    postEvidenceComment: () => {
+      evidenceAttempts += 1;
+      throw refusal;
+    },
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(evidenceAttempts, 1);
+  assert.equal(exitCode, 1);
+  assert.equal(verdict.closed, false);
+  assert.equal(verdict.claimReleased, false);
+  assert.equal(verdict.nothingSent, true);
+  assert.match(verdict.result, /not posted/);
+  assertPartialResult(verdict.result, refusal);
+  assert.deepEqual(calls.closed, []);
+  assert.deepEqual(calls.released, []);
+});
+
+test('--apply: a rejected evidence comment (HTTP 401, 404, 422) sent nothing', async () => {
+  for (const status of [401, 404, 422]) {
+    const failure = httpFailure(status);
+    let evidenceAttempts = 0;
+    const { deps, calls } = makeDeps(readyReport(), {
+      postEvidenceComment: () => {
+        evidenceAttempts += 1;
+        throw failure;
+      },
+    });
+    const { verdict, exitCode } = await runRoadmapAuditExecute(
+      APPLY_ARGS,
+      deps,
+    );
+
+    assert.equal(evidenceAttempts, 1, `HTTP ${status}`);
+    assert.equal(exitCode, 1, `HTTP ${status}`);
+    assert.equal(verdict.nothingSent, true, `HTTP ${status}`);
+    assert.match(verdict.result, /not posted/, `HTTP ${status}`);
+    assertPartialResult(verdict.result, failure);
+    assert.deepEqual(calls.closed, [], `HTTP ${status}`);
+    assert.deepEqual(calls.released, [], `HTTP ${status}`);
+  }
+});
+
+test('--apply: an evidence comment that may have landed is not reported as nothing sent', async () => {
+  const failures = [httpFailure(502), new Error('socket hang up')];
+  for (const failure of failures) {
+    let evidenceAttempts = 0;
+    const { deps, calls } = makeDeps(readyReport(), {
+      postEvidenceComment: () => {
+        evidenceAttempts += 1;
+        throw failure;
+      },
+    });
+    const { verdict, exitCode } = await runRoadmapAuditExecute(
+      APPLY_ARGS,
+      deps,
+    );
+
+    assert.equal(evidenceAttempts, 1, failure.message);
+    assert.equal(exitCode, 1, failure.message);
+    assert.equal(verdict.nothingSent, false, failure.message);
+    assert.match(verdict.result, /may have been posted/, failure.message);
+    assertPartialResult(verdict.result, failure);
+    assert.equal(verdict.closed, false, failure.message);
+    assert.equal(verdict.claimReleased, false, failure.message);
+    assert.deepEqual(calls.closed, [], failure.message);
+    assert.deepEqual(calls.released, [], failure.message);
+  }
+});
+
+test('--apply: a refused close releases nothing and leaves the roadmap open', async () => {
+  const refusal = createLoadControlRefusal({
+    outcome: 'not-dispatched',
+    reason: 'busy',
+  });
+  let closeAttempts = 0;
+  const { deps, calls } = makeDeps(readyReport(), {
+    closeRoadmap: () => {
+      closeAttempts += 1;
+      throw refusal;
+    },
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(closeAttempts, 1);
+  assert.equal(exitCode, 1);
+  assert.equal(verdict.closed, false);
+  assert.equal(verdict.claimReleased, false);
+  assert.equal(verdict.nothingSent, true);
+  assert.match(verdict.result, /still open/);
+  assertPartialResult(verdict.result, refusal);
+  assert.equal(calls.comments.length, 1);
+  assert.deepEqual(calls.released, []);
+});
+
+test('--apply: a close that may have landed (HTTP 422, 502) is not reported as nothing sent', async () => {
+  for (const status of [422, 502]) {
+    const failure = httpFailure(status);
+    let closeAttempts = 0;
+    const { deps, calls } = makeDeps(readyReport(), {
+      closeRoadmap: () => {
+        closeAttempts += 1;
+        throw failure;
+      },
+    });
+    const { verdict, exitCode } = await runRoadmapAuditExecute(
+      APPLY_ARGS,
+      deps,
+    );
+
+    assert.equal(closeAttempts, 1, `HTTP ${status}`);
+    assert.equal(exitCode, 1, `HTTP ${status}`);
+    assert.equal(verdict.nothingSent, false, `HTTP ${status}`);
+    assert.match(verdict.result, /may have landed/, `HTTP ${status}`);
+    assertPartialResult(verdict.result, failure);
+    assert.equal(verdict.closed, false, `HTTP ${status}`);
+    assert.deepEqual(calls.released, [], `HTTP ${status}`);
+  }
+});
+
+test('--apply: a refused release keeps the roadmap closed and the claim active, with nothing sent', async () => {
+  const refusal = createLoadControlRefusal({
+    outcome: 'not-dispatched',
+    reason: 'busy',
+  });
+  let releaseAttempts = 0;
+  const { deps, calls } = makeDeps(readyReport(), {
+    releaseClaim: () => {
+      releaseAttempts += 1;
+      throw refusal;
+    },
+  });
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(releaseAttempts, 1);
+  assert.equal(exitCode, 1);
+  assert.equal(verdict.closed, true);
+  assert.equal(verdict.claimReleased, false);
+  assert.equal(verdict.nothingSent, true);
+  assert.match(verdict.result, /claim is still active/);
+  assertPartialResult(verdict.result, refusal);
+  assert.deepEqual(calls.closed, [ROADMAP]);
+});
+
+test('--apply: a release that may have landed (HTTP 502, no status) is not reported as nothing sent', async () => {
+  const failures = [httpFailure(502), new Error('socket hang up')];
+  for (const failure of failures) {
+    let releaseAttempts = 0;
+    const { deps, calls } = makeDeps(readyReport(), {
+      releaseClaim: () => {
+        releaseAttempts += 1;
+        throw failure;
+      },
+    });
+    const { verdict, exitCode } = await runRoadmapAuditExecute(
+      APPLY_ARGS,
+      deps,
+    );
+
+    assert.equal(releaseAttempts, 1, failure.message);
+    assert.equal(exitCode, 1, failure.message);
+    assert.equal(verdict.closed, true, failure.message);
+    assert.equal(verdict.claimReleased, false, failure.message);
+    assert.equal(verdict.nothingSent, false, failure.message);
+    assert.match(verdict.result, /may have landed/, failure.message);
+    assertPartialResult(verdict.result, failure);
+    assert.deepEqual(calls.closed, [ROADMAP], failure.message);
+  }
+});
+
+test('--apply: a rejected release comment (HTTP 401, 404, 422) sent nothing', async () => {
+  for (const status of [401, 404, 422]) {
+    const failure = httpFailure(status);
+    let releaseAttempts = 0;
+    const { deps, calls } = makeDeps(readyReport(), {
+      releaseClaim: () => {
+        releaseAttempts += 1;
+        throw failure;
+      },
+    });
+    const { verdict, exitCode } = await runRoadmapAuditExecute(
+      APPLY_ARGS,
+      deps,
+    );
+
+    assert.equal(releaseAttempts, 1, `HTTP ${status}`);
+    assert.equal(exitCode, 1, `HTTP ${status}`);
+    assert.equal(verdict.closed, true, `HTTP ${status}`);
+    assert.equal(verdict.claimReleased, false, `HTTP ${status}`);
+    assert.equal(verdict.nothingSent, true, `HTTP ${status}`);
+    assert.match(verdict.result, /claim is still active/, `HTTP ${status}`);
+    assertPartialResult(verdict.result, failure);
+    assert.deepEqual(calls.closed, [ROADMAP], `HTTP ${status}`);
+  }
+});
+
+test('the successful apply verdict keeps its shape and carries no nothingSent key', async () => {
+  const { deps } = makeDeps(readyReport());
+  const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
+
+  assert.equal(exitCode, 0);
+  assert.equal(verdict.closed, true);
+  assert.equal(verdict.claimReleased, true);
+  assert.equal('nothingSent' in verdict, false);
+});
+
+test('--help names the roadmap-closed blocker in the usage text (#4275)', () => {
+  const result = spawnSync(process.execPath, [CLI_SCRIPT, '--help'], {
+    encoding: 'utf8',
+    env: fixtureEnv(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /roadmap-closed/);
+});
+
+test('--help names nothingSent and unclaimed-by in the usage text', () => {
+  const result = spawnSync(process.execPath, [CLI_SCRIPT, '--help'], {
+    encoding: 'utf8',
+    env: fixtureEnv(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /nothingSent/);
+  assert.match(result.stdout, /unclaimed-by/);
+});
+
 test('missing --roadmap is rejected', async () => {
   const { deps } = makeDeps(readyReport());
   await assert.rejects(
     () => runRoadmapAuditExecute(['--claim-id', CLAIM_ID], deps),
     /missing required --roadmap/,
   );
+});
+
+// ---------------------------------------------------------------------------
+// --apply: the pre-close claim read throws after the evidence comment (#4340)
+// ---------------------------------------------------------------------------
+
+type ApplyOutcome = Awaited<ReturnType<typeof runRoadmapAuditExecute>>;
+
+/**
+ * Deps whose claim re-validation owns the claim on its first two reads (the
+ * early read and the read before the evidence comment) and throws `failure`
+ * on the third: the pre-close read, after the evidence comment was posted.
+ * Also counts the local coordination checks and records how many had run
+ * when the third read threw, so a test can prove the gate that follows a
+ * successful pre-close read never ran.
+ */
+function makePreCloseReadFailureDeps(failure: unknown) {
+  const reads = { claim: 0, coordination: 0, coordinationAtThrow: -1 };
+  const { deps, calls } = makeDeps(readyReport(), {
+    revalidateClaim: () => {
+      reads.claim += 1;
+      if (reads.claim === 3) {
+        reads.coordinationAtThrow = reads.coordination;
+        throw failure;
+      }
+      return {
+        owned: true,
+        reason: 'match',
+        stale: false,
+        activeClaim: {
+          // The early read names another agent, so a result that names the
+          // pre-comment read's claim cannot be mistaken for the early one.
+          agentId: reads.claim === 1 ? 'early-read-agent' : AGENT_ID,
+          claimId: CLAIM_ID,
+          supersedes: 'none',
+          branch: CLAIM_BRANCH,
+          createdAt: '2026-06-26T00:00:00Z',
+        },
+      };
+    },
+    inspectLocalCoordinationState: () => {
+      reads.coordination += 1;
+      return {
+        presence: 'absent',
+        path: null,
+        brokenReasons: [],
+        detachedWorktreePaths: [],
+        unreadable: false,
+        unreadableReason: null,
+      };
+    },
+  });
+  return { deps, calls, reads };
+}
+
+/**
+ * Assert the verdict of a pre-close read failure: a stop with exit 1 and
+ * `nothingSent` false (the evidence comment already landed), one evidence
+ * comment, and no close or release. `expectedMessage` is the message the
+ * result must end with.
+ */
+function assertPreCloseReadFailure(
+  outcome: ApplyOutcome,
+  harness: ReturnType<typeof makePreCloseReadFailureDeps>,
+  expectedMessage: string,
+  label: string,
+): void {
+  const { verdict, exitCode } = outcome;
+  const { calls, reads } = harness;
+
+  assert.equal(exitCode, 1, label);
+  assert.equal(verdict.nothingSent, false, label);
+  assert.equal(verdict.closed, false, label);
+  assert.equal(verdict.claimReleased, false, label);
+  assert.match(verdict.result, /claim's state is unknown/, label);
+  assert.match(verdict.result, /evidence comment was posted/, label);
+  assert.match(verdict.result, /not closed by this run/, label);
+  assert.match(
+    verdict.result,
+    new RegExp(`agent ${AGENT_ID}, claim ${CLAIM_ID}`),
+    label,
+  );
+  assert.doesNotMatch(verdict.result, /early-read-agent/, label);
+  assert.match(verdict.result, /close nothing and post nothing/, label);
+  // The ownership test is the written Claim revalidation gate, which must
+  // exist under the file name the result cites.
+  assert.match(
+    verdict.result,
+    /the Claim revalidation gate in idd-overview-core\.instructions\.md passes for agent /,
+    label,
+  );
+  assert.match(
+    readFileSync(
+      new URL(
+        '../.github/instructions/idd-overview-core.instructions.md',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+    /^## Claim revalidation gate$/m,
+    label,
+  );
+  assertPartialResult(verdict.result, new Error(expectedMessage));
+
+  // The evidence comment went out exactly once; nothing was closed or released.
+  assert.equal(calls.comments.length, 1, label);
+  assert.notEqual(verdict.evidenceBody, '', label);
+  assert.equal(verdict.evidenceBody, calls.comments[0]?.body, label);
+  assert.deepEqual(calls.closed, [], label);
+  assert.deepEqual(calls.released, [], label);
+
+  // Early, pre-comment and pre-close claim reads: the throw hit the third.
+  assert.equal(reads.claim, 3, label);
+  // The local coordination gate that follows a successful read never ran.
+  assert.equal(reads.coordination, reads.coordinationAtThrow, label);
+  assert.ok(reads.coordinationAtThrow > 0, label);
+}
+
+test('--apply: a refused pre-close claim read stops before the close with the evidence comment reported as sent', async () => {
+  const refusal = createLoadControlRefusal({
+    outcome: 'deadline-expired',
+    reason: 'busy',
+  });
+  const harness = makePreCloseReadFailureDeps(refusal);
+  const outcome = await runRoadmapAuditExecute(APPLY_ARGS, harness.deps);
+
+  assertPreCloseReadFailure(outcome, harness, refusal.message, 'refusal');
+});
+
+test('--apply: a pre-close claim read that throws a plain error stops before the close', async () => {
+  const failure = new Error('socket hang up');
+  const harness = makePreCloseReadFailureDeps(failure);
+  const outcome = await runRoadmapAuditExecute(APPLY_ARGS, harness.deps);
+
+  assertPreCloseReadFailure(outcome, harness, failure.message, 'plain error');
+});
+
+test('--apply: a pre-close claim read that fails with an HTTP status always reports nothingSent false', async () => {
+  for (const status of [401, 404, 422, 502]) {
+    const failure = httpFailure(status);
+    const harness = makePreCloseReadFailureDeps(failure);
+    const outcome = await runRoadmapAuditExecute(APPLY_ARGS, harness.deps);
+
+    assertPreCloseReadFailure(
+      outcome,
+      harness,
+      failure.message,
+      `HTTP ${status}`,
+    );
+  }
+});
+
+test('--apply: a pre-close claim read that throws a non-Error value ends the result with its text', async () => {
+  const harness = makePreCloseReadFailureDeps('claim stream closed');
+  const outcome = await runRoadmapAuditExecute(APPLY_ARGS, harness.deps);
+
+  assertPreCloseReadFailure(outcome, harness, 'claim stream closed', 'string');
+});
+
+test('--help names the pre-close read as an outcome of a partial apply (#4340)', () => {
+  const result = spawnSync(process.execPath, [CLI_SCRIPT, '--help'], {
+    encoding: 'utf8',
+    env: fixtureEnv(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const text = result.stdout.replace(/\s+/g, ' ');
+  assert.match(text, /pre-close read/);
 });
 
 /**

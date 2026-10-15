@@ -20,8 +20,11 @@ import {
   EDITED_AFTER_DISPOSITION_HINT,
   explainFreshDisposition,
   hasFreshDisposition,
+  hasPendingDecisionMarker,
+  hasPendingDecisionReply,
   hasTrustedReviewAckAfter,
   isDispositionComment,
+  isSettledDispositionComment,
   isTrustEvidenceComment,
   LIVE_STATUS_DIGEST_MARKER,
   listBlockingPresentRunNames,
@@ -220,6 +223,171 @@ test('reviewCurrency and dispositionEvidence agree a rejection-confirmed-by-main
   assert.equal(
     activitySummary.effective.maxActivityUpdatedAt,
     '2026-05-12T00:30:00Z',
+  );
+});
+
+// #4306: a reply that carries the pending-decision marker anchors no
+// post-disposition window, so a later courtesy ack from an advisory bot stays
+// blocking activity in the snapshot and the disposition evidence names the
+// thread as a pending decision.
+test('a pending-decision reply anchors no ack-only window in the snapshot or the disposition evidence (#4306)', () => {
+  const thread = {
+    id: 'thread-pending-ack',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'PA-1',
+          author: { login: 'reviewer-a' },
+          body: 'please reconsider this',
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+        {
+          id: 'PA-2',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** (part), fixed in abc1234.\n\n**Awaiting maintainer decision** — the rest is open.\n\n<!-- idd-skill-review-reply -->',
+          lastEditedAt: null,
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'PA-3',
+          author: { login: 'coderabbitai[bot]' },
+          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+  const evidence = summarizeDispositionEvidenceForGate(
+    { comments: [], threads: [thread] },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+    },
+  );
+  assert.equal(evidence.route, 'return-to-e1');
+  assert.equal(evidence.missingThreads[0].reason, 'pending-decision');
+  assert.equal(evidence.missingThreads[0].ackOnlyPostDisposition, false);
+  assert.equal(evidence.soleCauseAckOnlyPostDisposition, false);
+
+  const activity = buildActivitySnapshotSummary(
+    { comments: [], reviews: [], threads: [thread], checks: [] },
+    {
+      trustedMarkerLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      advisoryBotLoginsSource: 'config',
+      dispositionAuthorLogins: ['idd-bot'],
+    },
+  );
+  assert.deepEqual(activity.ackOnly.items, []);
+  assert.equal(activity.effective.maxActivityUpdatedAt, '2026-05-12T02:00:00Z');
+});
+
+// #4306: the terminal `**Rejection confirmed by maintainer**` marker is a
+// disposition only on a resolved thread, and not when the same body also
+// carries the pending-decision marker.
+test('a Rejection confirmed reply that carries the pending marker is not a disposition, and a plain one still is (#4306)', () => {
+  const resolvedThread = (replyBody: string) =>
+    ({
+      id: 'T-rejection-confirmed',
+      isResolved: true,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          {
+            author: { login: 'reviewer-a' },
+            body: 'please reconsider',
+            createdAt: '2026-05-12T00:00:00Z',
+            lastEditedAt: null,
+          },
+          {
+            author: { login: 'idd-bot' },
+            body: replyBody,
+            createdAt: '2026-05-12T00:30:00Z',
+            lastEditedAt: null,
+          },
+        ],
+      },
+    }) as ExplainedThread;
+  const options = {
+    isDispositionAuthor: (login: string) => login === 'idd-bot',
+  };
+  const plain = resolvedThread(
+    '**Rejection confirmed by maintainer** — agreed, no action needed.',
+  );
+  assert.equal(hasFreshDisposition(plain, options), true);
+  assert.equal(hasPendingDecisionReply(plain, options), false);
+
+  const contradictory = resolvedThread(
+    '**Rejection confirmed by maintainer** — agreed.\n\n**Awaiting maintainer decision** — one question remains.',
+  );
+  assert.equal(hasFreshDisposition(contradictory, options), false);
+  assert.equal(hasPendingDecisionReply(contradictory, options), true);
+});
+
+test('classifyThreadAckOnlyPostDisposition reads an older settled disposition as no anchor once a newer pending reply exists (#4306)', () => {
+  const thread = (withPending: boolean) =>
+    ({
+      id: 'T-pending-after-settled',
+      isResolved: true,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          {
+            author: { login: 'reviewer-a' },
+            body: 'please reconsider',
+            createdAt: '2026-05-12T00:00:00Z',
+            updatedAt: '2026-05-12T00:00:00Z',
+          },
+          {
+            author: { login: 'idd-bot' },
+            body: '**Accepted** — fixed in abc1234',
+            createdAt: '2026-05-12T00:30:00Z',
+            updatedAt: '2026-05-12T00:30:00Z',
+            lastEditedAt: null,
+          },
+          ...(withPending
+            ? [
+                {
+                  author: { login: 'idd-bot' },
+                  body: '**Awaiting maintainer decision** — a new question',
+                  createdAt: '2026-05-12T01:00:00Z',
+                  updatedAt: '2026-05-12T01:00:00Z',
+                  lastEditedAt: null,
+                },
+              ]
+            : []),
+          {
+            author: { login: 'coderabbitai[bot]' },
+            body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+            createdAt: '2026-05-12T02:00:00Z',
+            updatedAt: '2026-05-12T02:00:00Z',
+          },
+        ],
+      },
+    }) as ExplainedThread;
+  const options = {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  };
+  // Control: with no pending reply the courtesy ack is ack-only.
+  assert.equal(
+    classifyThreadAckOnlyPostDisposition(thread(false), options)
+      .ackOnlyPostDisposition,
+    true,
+  );
+  assert.deepEqual(
+    classifyThreadAckOnlyPostDisposition(thread(true), options),
+    {
+      ackOnlyPostDisposition: false,
+      inPlaceEditOnly: false,
+    },
   );
 });
 
@@ -5148,6 +5316,262 @@ test('explainFreshDisposition agrees with the three existing hasFreshDisposition
   });
 });
 
+// kurone-kito/idd-skill#4306: a reply that leaves a decision open does not
+// settle its thread. The pending-decision marker is the existing
+// `**Awaiting maintainer decision**` prefix, read at the start of any line
+// outside a Markdown code region. Observed 2026-10-14 on PR #4271 (issue
+// #4244): a stamped `**Accepted**` reply left a forged-receipt question open
+// and the advisory gate counted the thread as settled.
+test('hasPendingDecisionMarker reads the marker at a top-level line start outside code (#4306)', () => {
+  const pending = [
+    '**Awaiting maintainer decision** — needs the provenance call.',
+    '**awaiting maintainer decision** — case does not matter',
+    '**Accepted** (defect part), fixed in abc1234.\n\n**Awaiting maintainer decision** — the provenance question is open.',
+    '**Accepted** — fixed in abc1234.\r\n\r\n**Awaiting maintainer decision** — CRLF bodies read the same',
+    // A marker on the next plain line is still the author's own line.
+    '**Accepted** — fixed in abc1234.\n**Awaiting maintainer decision** — no blank line needed',
+    // A blank line ends a quote or a list item, so the marker is top-level again.
+    '> quoted text\n\n**Awaiting maintainer decision** — after the quote',
+    '- item\n\n**Awaiting maintainer decision** — after the list',
+    '1. item\n\n**Awaiting maintainer decision** — after the list',
+    // A closed fence is not a paragraph, so nothing is lazy after it.
+    '> ```\n> code\n> ```\n**Awaiting maintainer decision** — after the quoted fence',
+    // An empty quote line ends the quote's paragraph, so nothing is lazy after it.
+    '> quoted text\n>\n**Awaiting maintainer decision** — after an empty quote line',
+    // A heading, a thematic break, or an HTML block interrupts the paragraph
+    // with no blank line, so the marker after it is top-level again.
+    '> quoted\n# heading\n**Awaiting maintainer decision** — after a heading',
+    '- item\n## heading\n**Awaiting maintainer decision** — after a heading',
+    '> quoted\n---\n**Awaiting maintainer decision** — after a thematic break',
+    '- item\n* * *\n**Awaiting maintainer decision** — after a spaced break',
+    // An HTML block runs to the next blank line, so a marker meant to count
+    // after a `<div>` block follows a blank line (#4332).
+    '- item\n<div>\n\n**Awaiting maintainer decision** — after an HTML block',
+    '- item\n<div>\n</div>\n\n**Awaiting maintainer decision** — after a closed div block',
+    // A one-line comment ends on its own line, so the marker after it is visible.
+    '- item\n<!-- one-line comment -->\n**Awaiting maintainer decision** — after a comment',
+    // A closed multi-line comment hides only its own text (#4332).
+    '**Accepted** — fixed.\n\n<!--\nnote\n-->\n\n**Awaiting maintainer decision** — after a closed comment',
+    // The review-reply stamp is a comment after a visible marker, not a mask over it.
+    '**Accepted** (part).\n\n**Awaiting maintainer decision** — open.\n\n<!-- idd-skill-review-reply -->',
+    '**Accepted** (part).\n\n**Awaiting maintainer decision** — open. <!-- inline note -->',
+  ];
+  for (const body of pending) {
+    assert.equal(hasPendingDecisionMarker(body), true, body);
+  }
+  const settled = [
+    '',
+    '**Accepted** — fixed in abc1234.',
+    '**Accepted** — the earlier **Awaiting maintainer decision** hold is gone.',
+    '**Accepted** — a quote of `**Awaiting maintainer decision**` in a code span.',
+    '**Accepted** — fixed.\n\n```\n**Awaiting maintainer decision** — quoted in a fence\n```',
+    '**Accepted** — fixed.\n\n> **Awaiting maintainer decision** — quoted in a block quote',
+    '**Accepted** — fixed.\n\n    **Awaiting maintainer decision** — an indented code block',
+    '**Accepted** — fixed.\n\n- **Awaiting maintainer decision** — a list item is not a line start',
+    // An indented line may sit inside a list item, so only column 0 counts.
+    '**Accepted** — fixed.\n\n   **Awaiting maintainer decision** — indented',
+    // Lazy continuation: the marker line is part of the quote's or item's paragraph.
+    '> quoted text\n**Awaiting maintainer decision** — lazy quote line',
+    '> quoted\nmore lazy text\n**Awaiting maintainer decision** — a chain of lazy lines',
+    '- item\n**Awaiting maintainer decision** — lazy list line',
+    '* item\n**Awaiting maintainer decision** — lazy list line',
+    '+ item\n**Awaiting maintainer decision** — lazy list line',
+    '1. item\n**Awaiting maintainer decision** — lazy ordered line',
+    '1) item\n**Awaiting maintainer decision** — lazy ordered line',
+    // A heading marker inside the quote is still quote content.
+    '> # heading\n**Awaiting maintainer decision** — lazy line after a quoted heading',
+    // Hidden text is not a visible hold: an HTML comment or block masks it (#4332).
+    '**Accepted** — fixed.\n\n<!--\n**Awaiting maintainer decision** — in a multi-line comment\n-->',
+    '**Accepted** — fixed.\n\n<!-- **Awaiting maintainer decision** — in a one-line comment -->',
+    '**Accepted** — fixed.\n\n<div>\n**Awaiting maintainer decision** — in a multi-line div block\n</div>',
+    '**Accepted** — fixed.\n<div>\n**Awaiting maintainer decision** — in a div block with no blank line before it\n</div>',
+    '- item\n<div>\n**Awaiting maintainer decision** — in a div block after a list item',
+  ];
+  for (const body of settled) {
+    assert.equal(hasPendingDecisionMarker(body), false, body);
+  }
+  assert.equal(hasPendingDecisionMarker(null), false);
+  assert.equal(hasPendingDecisionMarker(undefined), false);
+});
+
+test('isSettledDispositionComment excludes a disposition that carries the pending marker (#4306)', () => {
+  assert.equal(
+    isSettledDispositionComment({ body: '**Accepted** — fixed in abc1234' }),
+    true,
+  );
+  assert.equal(
+    isSettledDispositionComment({
+      body: '**Rejected** — see `src/a.mts:3`, not applicable',
+    }),
+    true,
+  );
+  assert.equal(
+    isSettledDispositionComment({
+      body: '**Accepted** (part)\n\n**Awaiting maintainer decision** — open',
+    }),
+    false,
+  );
+  // Text hidden in an HTML comment or block is not a hold, so the reply is
+  // credited (#4332).
+  for (const hidden of [
+    '**Accepted** — fixed in abc1234\n\n<!--\n**Awaiting maintainer decision** — open\n-->',
+    '**Accepted** — fixed in abc1234\n\n<div>\n**Awaiting maintainer decision** — open\n</div>',
+  ]) {
+    assert.equal(isSettledDispositionComment({ body: hidden }), true, hidden);
+  }
+  // The plain hold was never a disposition, and still is not.
+  assert.equal(
+    isSettledDispositionComment({
+      body: '**Awaiting maintainer decision** — open',
+    }),
+    false,
+  );
+  assert.equal(isDispositionComment({ body: '**Accepted** (part)' }), true);
+});
+
+const pendingRequest = {
+  author: { login: 'reviewer-a' },
+  body: 'please fix',
+  createdAt: '2026-05-12T00:00:00Z',
+  lastEditedAt: null,
+};
+const pendingReply = (overrides: Record<string, unknown> = {}) => ({
+  author: { login: 'idd-bot' },
+  body: '**Accepted** (defect part), fixed in abc1234.\n\n**Awaiting maintainer decision** — the provenance question is open.\n\n<!-- idd-skill-review-reply -->',
+  createdAt: '2026-05-12T00:10:00Z',
+  lastEditedAt: null,
+  ...overrides,
+});
+const pendingOptions = {
+  isDispositionAuthor: (login: string) => login === 'idd-bot',
+};
+
+test('a pending-decision reply is not a fresh disposition and reads as a pending decision (#4306)', () => {
+  const cases: {
+    name: string;
+    nodes: Record<string, unknown>[];
+    fresh: boolean;
+    pending: boolean;
+  }[] = [
+    {
+      name: 'a stamped Accepted reply with a pending paragraph',
+      nodes: [pendingRequest, pendingReply()],
+      fresh: false,
+      pending: true,
+    },
+    {
+      name: 'the plain hold',
+      nodes: [
+        pendingRequest,
+        pendingReply({ body: '**Awaiting maintainer decision** — open' }),
+      ],
+      fresh: false,
+      pending: true,
+    },
+    {
+      name: 'an edited pending reply stays pending',
+      nodes: [
+        pendingRequest,
+        pendingReply({ lastEditedAt: '2026-05-12T00:20:00Z' }),
+      ],
+      fresh: false,
+      pending: true,
+    },
+    {
+      name: 'a settled Accepted posted after the pending reply ends it',
+      nodes: [
+        pendingRequest,
+        pendingReply(),
+        pendingReply({
+          body: '**Accepted** — the maintainer chose option (a): fixed in def5678',
+          createdAt: '2026-05-12T00:30:00Z',
+        }),
+      ],
+      fresh: true,
+      pending: false,
+    },
+    {
+      name: 'a pending reply posted after a settled Accepted reopens it',
+      nodes: [
+        pendingRequest,
+        pendingReply({
+          body: '**Accepted** — fixed in abc1234',
+          createdAt: '2026-05-12T00:05:00Z',
+        }),
+        pendingReply({ createdAt: '2026-05-12T00:10:00Z' }),
+      ],
+      fresh: false,
+      pending: true,
+    },
+    {
+      name: 'a pending marker from an author who is not an IDD disposition author',
+      nodes: [
+        pendingRequest,
+        pendingReply({ author: { login: 'reviewer-a' } }),
+      ],
+      fresh: false,
+      pending: false,
+    },
+    {
+      name: 'an Accepted reply that only quotes the marker in a code span',
+      nodes: [
+        pendingRequest,
+        pendingReply({
+          body: '**Accepted** — dropped the `**Awaiting maintainer decision**` hold: fixed in abc1234',
+        }),
+      ],
+      fresh: true,
+      pending: false,
+    },
+  ];
+  for (const { name, nodes, fresh, pending } of cases) {
+    const thread = explainedThread(nodes);
+    assert.equal(hasFreshDisposition(thread, pendingOptions), fresh, name);
+    assert.equal(
+      hasPendingDecisionReply(thread, pendingOptions),
+      pending,
+      name,
+    );
+  }
+});
+
+test('a pending-decision reply keeps the freshness explanation shape and anchors no ack-only window (#4306)', () => {
+  // The explanation keeps its closed set of causes for the table callers.
+  assert.deepEqual(
+    explainFreshDisposition(
+      explainedThread([pendingRequest, pendingReply()]),
+      pendingOptions,
+    ),
+    { fresh: false, cause: 'no-disposition' },
+  );
+  // A resolved thread whose only reply is pending has no disposition to anchor
+  // the courtesy-ack carve-out, so a later advisory-bot ack cannot clear it.
+  const resolved = {
+    id: 'T-pending-ack',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        { ...pendingRequest, author: { login: 'coderabbitai[bot]' } },
+        pendingReply(),
+        {
+          author: { login: 'coderabbitai[bot]' },
+          body: 'Thanks for the reply, noted.',
+          createdAt: '2026-05-12T00:20:00Z',
+          lastEditedAt: null,
+        },
+      ],
+    },
+  } as ExplainedThread;
+  assert.deepEqual(
+    classifyThreadAckOnlyPostDisposition(resolved, {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    }),
+    { ackOnlyPostDisposition: false, inPlaceEditOnly: false },
+  );
+});
+
 // kurone-kito/idd-skill#3248: an edited trusted activation-nonce marker
 // must never be considered by the activation-nonce-winner check --
 // dropped the same way an edited claimed-by/unclaimed-by is dropped from
@@ -5405,6 +5829,209 @@ test('listBlockingPresentRunNames is non-empty exactly when the present-run conc
       );
     }
   }
+});
+
+// --- #4349: a non-required action_required run does not hold F2 --------------
+
+test('#4349: with every run non-required, an action_required run is ignored, a failure still holds, and a waiting run still waits', () => {
+  const nonRequired = { allRunsNonRequired: true };
+  const scenarios: {
+    label: string;
+    checks: ReturnType<typeof presentRun>[];
+    identityUnresolved?: string[];
+    conclusion: string;
+    names: string[];
+  }[] = [
+    {
+      label: 'a sole action_required run is ignored, leaving no run at all',
+      checks: [presentRun('a', 'ACTION_REQUIRED')],
+      conclusion: 'none',
+      names: [],
+    },
+    {
+      label: 'an action_required run beside a passing run leaves it passing',
+      checks: [presentRun('a', 'ACTION_REQUIRED'), presentRun('b', 'SUCCESS')],
+      conclusion: 'all-passing',
+      names: [],
+    },
+    {
+      label: 'an action_required run beside a still-running run still waits',
+      checks: [presentRun('a', 'ACTION_REQUIRED'), presentRun('b', 'QUEUED')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label:
+        'an action_required run beside a failure still holds on the failure',
+      checks: [presentRun('a', 'ACTION_REQUIRED'), presentRun('b', 'FAILURE')],
+      conclusion: 'some-failing',
+      names: ['b'],
+    },
+    {
+      label: 'a newer action_required run does not hide an older failure',
+      checks: [
+        {
+          ...presentRun('a', 'FAILURE'),
+          completedAt: '2026-06-25T10:00:00Z',
+        },
+        {
+          ...presentRun('a', 'ACTION_REQUIRED'),
+          completedAt: '2026-06-25T11:00:00Z',
+        },
+      ],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'a later passing rerun of an action_required run passes',
+      checks: [
+        {
+          ...presentRun('a', 'ACTION_REQUIRED'),
+          completedAt: '2026-06-25T10:00:00Z',
+        },
+        {
+          ...presentRun('a', 'SUCCESS'),
+          completedAt: '2026-06-25T11:00:00Z',
+        },
+      ],
+      conclusion: 'all-passing',
+      names: [],
+    },
+    {
+      label: 'an identity-unresolved action_required run still fails closed',
+      checks: [presentRun('a', 'ACTION_REQUIRED'), presentRun('b', 'SUCCESS')],
+      identityUnresolved: ['a'],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'a waiver-covered action_required run counts as skipped',
+      checks: [presentRun('a', 'ACTION_REQUIRED', true)],
+      conclusion: 'all-passing',
+      names: [],
+    },
+    {
+      label: 'a sole non-required failure still holds',
+      checks: [presentRun('a', 'FAILURE')],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'a sole timed-out run still holds',
+      checks: [presentRun('a', 'TIMED_OUT')],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'a sole startup failure still holds',
+      checks: [presentRun('a', 'STARTUP_FAILURE')],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'a sole stale run still holds',
+      checks: [presentRun('a', 'STALE')],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'a sole error status still holds',
+      checks: [presentRun('a', 'ERROR')],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'a lone cancelled run with no later run keeps its pending reading',
+      checks: [presentRun('a', 'CANCELLED')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label: 'a sole waiting run waits',
+      checks: [presentRun('a', 'WAITING')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label: 'a sole queued run waits',
+      checks: [presentRun('a', 'QUEUED')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label: 'a sole in-progress run waits',
+      checks: [presentRun('a', 'IN_PROGRESS')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label: 'a sole still-running commit status waits instead of holding',
+      checks: [presentRun('a', 'PENDING')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label: 'an expected or requested status beside a pass waits',
+      checks: [
+        presentRun('a', 'EXPECTED'),
+        presentRun('b', 'REQUESTED'),
+        presentRun('c', 'SUCCESS'),
+      ],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label: 'a still-running commit status beside a failure names the failure',
+      checks: [presentRun('a', 'PENDING'), presentRun('b', 'FAILURE')],
+      conclusion: 'some-failing',
+      names: ['b'],
+    },
+    {
+      label: 'an unrecognized state still holds',
+      checks: [presentRun('a', 'MYSTERY'), presentRun('b', 'SUCCESS')],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+  ];
+  for (const scenario of scenarios) {
+    const unresolved = new Set(scenario.identityUnresolved ?? []);
+    const conclusion = resolvePresentRunConclusion(
+      scenario.checks,
+      unresolved,
+      nonRequired,
+    );
+    const names = listBlockingPresentRunNames(
+      scenario.checks,
+      unresolved,
+      nonRequired,
+    );
+    assert.equal(conclusion, scenario.conclusion, scenario.label);
+    assert.deepEqual(names, scenario.names, scenario.label);
+    assert.equal(
+      names.length > 0,
+      conclusion === 'some-failing',
+      `${scenario.label}: names are non-empty exactly when some-failing`,
+    );
+  }
+});
+
+test('#4349: without the non-required flag an action_required or commit-status run keeps its previous reading', () => {
+  // The default is the required-check reading: a caller that does not say
+  // every run is non-required keeps `ACTION_REQUIRED` in the failure family
+  // and a still-running commit status at `some-failing`.
+  const actionRequired = [presentRun('a', 'ACTION_REQUIRED')];
+  assert.equal(resolvePresentRunConclusion(actionRequired), 'some-failing');
+  assert.deepEqual(listBlockingPresentRunNames(actionRequired), ['a']);
+  assert.equal(
+    resolvePresentRunConclusion(actionRequired, new Set(), {
+      allRunsNonRequired: false,
+    }),
+    'some-failing',
+  );
+  assert.equal(
+    resolvePresentRunConclusion([presentRun('a', 'PENDING')]),
+    'some-failing',
+  );
 });
 
 test('STALE_THREAD_DISPOSITION_HINT names the reply that clears a thread and stays wording-safe (#3670)', () => {

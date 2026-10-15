@@ -9,8 +9,33 @@
 // and what still matches it. Every write and removal goes through the
 // containment primitives in `user-global-paths.mts` (#4242).
 //
-// Open risks, accepted for the operator (see #4242):
-// - a symbolic link above a root is not inspected;
+// Ceilings (#4303). `resolveContext` declares the roots the operator named
+// (HOME first, then XDG_DATA_HOME, the parent of CODEX_HOME and
+// XDG_CONFIG_HOME when those are set) on the `fs` handle every primitive
+// receives, so each walk first reads the chain from the first declared root
+// that covers its root down to its own root and refuses a symbolic link on it.
+// A skill root, which sits under HOME, is therefore refused when HOME, or a
+// directory between HOME and the root, is a link. So is the data root, unless
+// XDG_DATA_HOME names it outside HOME. The refusal says to move the real
+// directory into the link's place. For a new install the operator can instead
+// name the real path with HOME (it moves the skill roots) or XDG_DATA_HOME (it
+// moves only the data root); an existing install's receipt records the path it
+// was made under, so there the link has to go. A platform without the
+// no-follow opens refuses uninstall too, even when nothing is installed.
+//
+// Above the first declared root that covers a path the walk also reads every
+// component, and refuses a symbolic link there unless root owns it, so a link
+// a user made (/data/me -> /mnt/disk/me) is refused while the system links
+// /var -> /private/var (macOS) and /home -> /var/home (Fedora Atomic) cannot
+// make an ordinary install fail.
+//
+// An upgrade also prunes (#4302): a listed skill file that the new package no
+// longer ships is removed when it still matches the receipt, and refused
+// before any write when it does not. The prune runs after the new payload is
+// installed and listed, one file at a time, and is never part of a rollback.
+//
+// Open risks, accepted for the operator (see #4242 and #4303):
+// - a symbolic link above a declared root that root owns is trusted;
 // - a window remains between a containment check and the act that follows it.
 
 import { createHash } from 'node:crypto';
@@ -31,12 +56,24 @@ import { resolveBundleRoot } from './bundle-root.mts';
 import { resolveInstalledPayloadRoot } from './idd-activation.mts';
 import { isQualifiedConfigRoot } from './idd-config.mts';
 import {
+  ENTRY_FILE_NAME,
+  ENTRY_HARNESSES,
+  type EntryHarness,
+  type EntryStep,
+  type EntryTarget,
+  isInstallerWholeFile,
+  planEntryFiles,
+  planEntryRemoval,
+} from './user-global-entry-files.mts';
+import {
+  assertRealChain,
   type ContainmentResult,
   checkContainment,
   type FsOps,
   removeSingleEntry,
   replaceFileByRename,
   repointCurrent,
+  withCeilings,
   writeNewFile,
 } from './user-global-paths.mts';
 import {
@@ -53,12 +90,23 @@ export interface UserGlobalOptions {
   sourceRoot?: string;
   version?: string;
   fs?: FsOps;
+  /** The harnesses whose entry file install edits. Empty edits none. */
+  harnesses?: readonly EntryHarness[];
 }
 
 /** The lines an entry point reports, one per path. */
 export interface UserGlobalResult {
   lines: string[];
   priorCurrentTarget: string | null;
+}
+
+/**
+ * What a plan or an install reports. `version` is the package.json version
+ * the payload was (or would be) installed under, so a caller can name that
+ * exact version without reading package.json a second time (#4245).
+ */
+export interface UserGlobalInstallResult extends UserGlobalResult {
+  version: string;
 }
 
 interface Root {
@@ -71,6 +119,8 @@ interface Context {
   dataRoot: string;
   currentPath: string;
   roots: Root[];
+  /** The containment base each harness directory is walked from. */
+  entryBases: Record<EntryHarness, string>;
 }
 
 interface Target {
@@ -90,6 +140,7 @@ const PAYLOAD_BLOCK_ID = 'idd-template-core-files';
 const PAYLOAD_EXTRA_FILES = ['idd-template/user-global/entry.md'];
 const SKILL_NAMES = ['issue-authoring', 'idd-spec-audit'];
 const SKILL_ROOT_NAMES = ['claude-skills', 'agents-skills'];
+const HARNESS_ROOT_NAMES = ['claude', 'codex', 'opencode'];
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_FS: FsOps = nodeFs;
 
@@ -122,8 +173,14 @@ function lstatOrNull(path: string, fs: FsOps): Stats | null {
  * Refuse when a crashed run left `<path>.tmp-<digits>` beside `path`. The
  * replacement and repoint primitives refuse that case too, and checking it
  * here keeps the refusal before any write rather than in the middle of a run.
+ * A removal creates no temporary file, but the leftover still marks a crashed
+ * run on that path, so a prune refuses it too (#4302).
  */
-function refuseStaleTemp(path: string, fs: FsOps): void {
+function refuseStaleTemp(
+  path: string,
+  fs: FsOps,
+  action: 'replace' | 'remove' | 'drop the receipt entry for' = 'replace',
+): void {
   let names: string[];
   try {
     names = fs.readdirSync(dirname(path));
@@ -136,7 +193,7 @@ function refuseStaleTemp(path: string, fs: FsOps): void {
   const stale = names.find((name) => pattern.test(name));
   if (stale !== undefined) {
     throw new Error(
-      `${join(dirname(path), stale)} exists, so a crashed run left it behind; refusing to replace ${path}; remove it by hand before installing`,
+      `${join(dirname(path), stale)} exists, so a crashed run left it behind; refusing to ${action} ${path}; remove it by hand before installing`,
     );
   }
 }
@@ -220,19 +277,42 @@ function resolveContext(options: UserGlobalOptions): Context {
     typeof options.homedir === 'string' && options.homedir.length > 0
       ? options.homedir
       : (env.HOME ?? '');
-  const home = homeCandidate.trim();
-  if (!isQualifiedConfigRoot(home)) {
+  // Qualified before it is normalized. normalize() folds a leading "//" to "/",
+  // which would let an unqualified HOME through.
+  const trimmedHome = homeCandidate.trim();
+  if (!isQualifiedConfigRoot(trimmedHome)) {
     throw new Error(
       'HOME is not a qualified root, so the skill roots do not resolve; nothing was written',
     );
   }
+  // Normalized, as the environment roots are, so the containment walk and the
+  // harness paths spell the base the same way.
+  const home = normalize(trimmedHome);
   const codexHome = qualifiedValue(env.CODEX_HOME) ?? join(home, '.codex');
   const configHome =
     qualifiedValue(env.XDG_CONFIG_HOME) ?? join(home, '.config');
+  const codexFromEnv = qualifiedValue(env.CODEX_HOME) !== undefined;
+  const configFromEnv = qualifiedValue(env.XDG_CONFIG_HOME) !== undefined;
+  // The roots the operator named, HOME first: the first one that covers a path
+  // is where the strict chain starts, and a link above it is tolerated only
+  // when root owns it. A CODEX_HOME declares its parent, which is the base the
+  // entry-file walk starts from.
+  const dataHome = qualifiedValue(env.XDG_DATA_HOME);
+  const ceilings = [home];
+  if (dataHome !== undefined) ceilings.push(dataHome);
+  if (codexFromEnv) ceilings.push(dirname(codexHome));
+  if (configFromEnv) ceilings.push(configHome);
   return {
-    fs,
+    fs: withCeilings(fs, ceilings),
     dataRoot,
     currentPath: join(dataRoot, CURRENT),
+    entryBases: {
+      claude: home,
+      // A CODEX_HOME names the harness directory itself, so it is walked from
+      // its parent; the default is walked from the home directory.
+      codex: codexFromEnv ? dirname(codexHome) : home,
+      opencode: configFromEnv ? configHome : home,
+    },
     roots: [
       { name: 'data', path: dataRoot },
       { name: 'claude', path: join(home, '.claude') },
@@ -265,6 +345,10 @@ function segmentsUnder(base: string, path: string): string[] | null {
  */
 function ownedShape(ctx: Context, entry: ReceiptEntry): boolean {
   if (entry.kind === 'link') return true;
+  if (entry.kind === 'managed-block' || entry.kind === 'json-instruction') {
+    return entryFileOwned(ctx, entry);
+  }
+  if (entryFileOwned(ctx, entry)) return true;
   const isDir = entry.kind === 'directory';
   if (isDir && entry.path === ctx.dataRoot) return true;
   const data = segmentsUnder(ctx.dataRoot, entry.path);
@@ -284,9 +368,126 @@ function ownedShape(ctx: Context, entry: ReceiptEntry): boolean {
   }
   if (
     isDir &&
-    SKILL_ROOT_NAMES.some((name) => rootNamed(ctx, name).path === entry.path)
+    [...SKILL_ROOT_NAMES, ...HARNESS_ROOT_NAMES].some(
+      (name) => rootNamed(ctx, name).path === entry.path,
+    )
   ) {
     return true;
+  }
+  return false;
+}
+
+/**
+ * Refuse when the chain from the harness's walk base down to its directory is
+ * not all real directories. A rewrite through a link above the directory
+ * would otherwise land outside the harness, so uninstall checks the chain too.
+ */
+function assertHarnessChain(
+  ctx: Context,
+  path: string,
+  present: boolean,
+): void {
+  const harness = ENTRY_HARNESSES.find(
+    (name) => join(harnessDirOf(ctx, name), ENTRY_FILE_NAME[name]) === path,
+  );
+  if (harness === undefined) return;
+  const dir = harnessDirOf(ctx, harness);
+  // checkContainment throws on a link above the directory, so an absent entry
+  // is checked too. A genuinely removed directory still reads as absent.
+  const walk = checkContainment(ctx.entryBases[harness], dir, ctx.fs);
+  if (
+    walk.finalKind === 'symlink' ||
+    walk.finalKind === 'file' ||
+    (present && walk.finalKind !== 'directory')
+  ) {
+    throw new Error(
+      `${dir} is ${walk.finalKind === 'symlink' ? 'a symbolic link' : `not a directory (${walk.finalKind})`} on the path to ${path}; refusing`,
+    );
+  }
+}
+
+/** The harness whose entry file sits at `path`, or undefined. */
+function entryHarnessAt(ctx: Context, path: string): EntryHarness | undefined {
+  return ENTRY_HARNESSES.find(
+    (name) => join(harnessDirOf(ctx, name), ENTRY_FILE_NAME[name]) === path,
+  );
+}
+
+/**
+ * The entry text of every version directory the receipt lists, for the Codex
+ * whole-file check on both install (before a rewrite) and uninstall (before a
+ * removal). Install renders the text between the markers from one of these,
+ * and `AGENTS.md` can hold an older version's text after a later install that
+ * selected no harness. A text counts only when its bytes hash to that record.
+ * A file that is gone or changed is skipped here, so a block that only that
+ * text could vouch for fails the check and the run refuses.
+ */
+function recordedEntryTexts(
+  ctx: Context,
+  entries: ReadonlyMap<string, ReceiptEntry>,
+): string[] {
+  const texts: string[] = [];
+  for (const entry of entries.values()) {
+    if (entry.kind !== 'file') continue;
+    const data = segmentsUnder(ctx.dataRoot, entry.path);
+    if (
+      data === null ||
+      data.length !== 3 ||
+      !VERSION_PATTERN.test(data[0]) ||
+      data[1] !== 'user-global' ||
+      data[2] !== 'entry.md'
+    ) {
+      continue;
+    }
+    try {
+      const bytes = readNoFollowBytes(entry.path, ctx.fs);
+      if (sha256Hex(bytes) === entry.sha256) texts.push(bytes.toString('utf8'));
+    } catch {
+      // Skipped; see above.
+    }
+  }
+  return texts;
+}
+
+/** The harness directory a harness's entry file lives in. */
+function harnessDirOf(ctx: Context, harness: EntryHarness): string {
+  return rootNamed(ctx, harness).path;
+}
+
+/** The entry-file targets for the selected harnesses, in install order. */
+function entryTargetsOf(
+  ctx: Context,
+  harnesses: readonly EntryHarness[],
+): EntryTarget[] {
+  return ENTRY_HARNESSES.filter((harness) => harnesses.includes(harness)).map(
+    (harness) => ({
+      harness,
+      dir: harnessDirOf(ctx, harness),
+      walkBase: ctx.entryBases[harness],
+    }),
+  );
+}
+
+/**
+ * Whether a listed entry file sits at the one path its harness reads. The
+ * kinds it may hold are fixed too: a managed block only in a Markdown file, a
+ * JSON instruction only in opencode.json, and a whole file in any of the three.
+ */
+function entryFileOwned(ctx: Context, entry: ReceiptEntry): boolean {
+  const claude = join(harnessDirOf(ctx, 'claude'), ENTRY_FILE_NAME.claude);
+  const codex = join(harnessDirOf(ctx, 'codex'), ENTRY_FILE_NAME.codex);
+  const opencode = join(
+    harnessDirOf(ctx, 'opencode'),
+    ENTRY_FILE_NAME.opencode,
+  );
+  if (entry.kind === 'managed-block') {
+    return entry.path === claude || entry.path === codex;
+  }
+  if (entry.kind === 'json-instruction') return entry.path === opencode;
+  if (entry.kind === 'file') {
+    return (
+      entry.path === claude || entry.path === codex || entry.path === opencode
+    );
   }
   return false;
 }
@@ -485,7 +686,16 @@ function buildTargets(
     const root = rootNamed(ctx, rootName);
     for (const skill of SKILL_NAMES) {
       const skillDir = join(sourceRoot, 'skills', skill);
-      for (const rel of listSourceFiles(skillDir, fs)) {
+      const files = listSourceFiles(skillDir, fs);
+      // A source skill with no SKILL.md is broken. Left alone it would also make
+      // every installed file of that skill look dropped, and the prune would
+      // remove them (#4302).
+      if (!files.includes('SKILL.md')) {
+        throw new Error(
+          `the source skill ${skillDir} has no SKILL.md; refusing; nothing was written`,
+        );
+      }
+      for (const rel of files) {
         const source = readSource(join(skillDir, rel), fs);
         targets.push({ dest: join(root.path, skill, rel), ...source });
       }
@@ -507,10 +717,23 @@ interface Write {
   priorSha256: string | null;
 }
 
+/**
+ * A listed skill file that the new package no longer ships (#4302). `present`
+ * is false when the plan found the file, or an ancestor of it, already gone:
+ * the prune then only drops its receipt entry.
+ */
+interface Prune {
+  path: string;
+  root: Root;
+  sha256: string;
+  present: boolean;
+}
+
 interface InstallPlan {
   entries: Map<string, ReceiptEntry>;
   mkdirs: Mkdir[];
   writes: Write[];
+  prunes: Prune[];
   current:
     | { action: 'create'; versionDir: string }
     | {
@@ -521,6 +744,138 @@ interface InstallPlan {
       }
     | { action: 'keep'; versionDir: string };
   lines: string[];
+  entrySteps: EntryStep[];
+}
+
+/** A listed entry that passed the ownership and containment checks. */
+interface CheckedEntry {
+  entry: ReceiptEntry;
+  root: Root;
+  walk: ContainmentResult;
+}
+
+/**
+ * Whether a listed entry is a file install copied into a skill tree, which is
+ * the only kind an upgrade may prune (#4302). Skill files stay discoverable by
+ * the harness until they are removed; a file under an older version directory
+ * does not, so it stays listed. The test goes by the root that `rootFor`
+ * resolved, not by a path prefix: it returns the deepest root, so a data root
+ * or a Codex home placed inside a skill directory is not taken for a skill
+ * tree.
+ */
+function isSkillFileEntry(
+  ctx: Context,
+  entry: ReceiptEntry,
+  root: Root,
+): boolean {
+  if (entry.kind !== 'file' || !SKILL_ROOT_NAMES.includes(root.name)) {
+    return false;
+  }
+  // Belt and braces: the root test above already excludes the harness roots, so
+  // an entry-file path should not reach this line.
+  if (entryFileOwned(ctx, entry)) return false;
+  const below = segmentsUnder(root.path, entry.path);
+  return below !== null && SKILL_NAMES.includes(below[0]) && below.length >= 2;
+}
+
+/**
+ * The device and inode of a file, or null when the filesystem reports no inode
+ * number (0) and so gives nothing to compare. Two spellings of one file share
+ * it, which a case-insensitive or normalization-insensitive filesystem allows,
+ * and which `nlink` does not show.
+ */
+function identityOf(stat: { dev: bigint; ino: bigint }): string | null {
+  return stat.ino === 0n ? null : `${stat.dev}:${stat.ino}`;
+}
+
+/**
+ * Give each dropped skill file its verdict. Reads only. A refusal is added to
+ * `refusals`, so it stops the install before the first write. `targetFiles`
+ * maps the identity of each existing destination this run ships to its path.
+ * A dropped entry that is the same file as one of them is kept as it was:
+ * removing it under the old spelling would remove the file the new spelling
+ * ships.
+ *
+ * "Dropped" means a skill file that is not a destination of this run. That is
+ * the whole payload today. An install that ships only part of it, for example
+ * one selected skill, must scope this set to what it ships, or it would drop
+ * every other skill file.
+ */
+function planPrunes(
+  ctx: Context,
+  checked: readonly CheckedEntry[],
+  targetFiles: ReadonlyMap<string, string>,
+  targetDests: ReadonlySet<string>,
+  refusals: string[],
+): { prunes: Prune[]; lines: string[] } {
+  const fs = ctx.fs;
+  const prunes: Prune[] = [];
+  const lines: string[] = [];
+  for (const { entry, root, walk } of checked) {
+    if (
+      entry.kind !== 'file' ||
+      targetDests.has(entry.path) ||
+      !isSkillFileEntry(ctx, entry, root)
+    ) {
+      continue;
+    }
+    try {
+      // First, for every verdict below: a leftover temporary file beside the
+      // path marks a crashed run there, whether or not the file is still present.
+      // An absent parent has nothing to list, so it passes.
+      const gone = walk.missingDirs.length > 0 || walk.finalKind === 'absent';
+      refuseStaleTemp(
+        entry.path,
+        fs,
+        gone ? 'drop the receipt entry for' : 'remove',
+      );
+      if (gone) {
+        prunes.push({
+          path: entry.path,
+          root,
+          sha256: entry.sha256,
+          present: false,
+        });
+        // The same word uninstall uses for a listed path that is already gone.
+        lines.push(`absent ${entry.path}`);
+        continue;
+      }
+      // checkContainment throws only for a link above the final component, so
+      // the final component is checked here.
+      if (walk.finalKind !== 'file') {
+        throw new Error(
+          `${entry.path} is now a ${walk.finalKind}, not a file, and the new version no longer ships it; refusing; leaving it in place; move or delete it, then install again`,
+        );
+      }
+      const stat = fs.lstatSync(entry.path, { bigint: true });
+      if (stat.nlink > 1n) {
+        throw new Error(
+          `${entry.path} has more than one hard link, and the new version no longer ships it; refusing to remove it; leaving it in place; move or delete it, then install again`,
+        );
+      }
+      const identity = identityOf(stat);
+      const same = identity === null ? undefined : targetFiles.get(identity);
+      if (same !== undefined) {
+        lines.push(`keep ${entry.path} (the same file as ${same})`);
+        continue;
+      }
+      if (sha256Hex(readNoFollowBytes(entry.path, fs)) !== entry.sha256) {
+        throw new Error(
+          `${entry.path} was edited after install (its SHA-256 differs from the receipt), and the new version no longer ships it; refusing; leaving it in place; move or delete it, then install again`,
+        );
+      }
+      prunes.push({
+        path: entry.path,
+        root,
+        sha256: entry.sha256,
+        present: true,
+      });
+      lines.push(`remove ${entry.path}`);
+    } catch (error) {
+      refusals.push(describe(error));
+    }
+  }
+  return { prunes, lines };
 }
 
 /**
@@ -532,12 +887,24 @@ function buildInstallPlan(
   ctx: Context,
   sourceRoot: string,
   version: string,
+  harnesses: readonly EntryHarness[],
 ): InstallPlan {
   const fs = ctx.fs;
   if (!VERSION_PATTERN.test(version)) {
     throw new Error(
       `version ${version} does not match the required pattern; nothing was written`,
     );
+  }
+  // Read the chain above each install root before any other plan work. The
+  // first refusal stops the plan, so a link above several roots is one message.
+  for (const name of ['data', ...SKILL_ROOT_NAMES]) {
+    try {
+      assertRealChain(rootNamed(ctx, name).path, fs);
+    } catch (error) {
+      throw new Error(
+        `install refused before any write; nothing was written: ${describe(error)}`,
+      );
+    }
   }
   // The receipt read refuses a symbolic-link data root first. The stale-temp
   // scan lists the data root, which would otherwise follow that link.
@@ -563,16 +930,22 @@ function buildInstallPlan(
 
   // A listed path must sit under exactly one root with no link above it,
   // even when this run writes nothing there.
+  const checked: CheckedEntry[] = [];
   for (const entry of entries.values()) {
     try {
       assertOwnedShape(ctx, entry);
-      inspect(ctx, entry.path);
+      const { root, walk } = inspect(ctx, entry.path);
+      checked.push({ entry, root, walk });
     } catch (error) {
       refusals.push(describe(error));
     }
   }
 
-  for (const target of buildTargets(ctx, sourceRoot, version)) {
+  const targets = buildTargets(ctx, sourceRoot, version);
+  // The identity of each existing destination, so a dropped file that is the
+  // same file under another spelling is kept rather than removed (#4302).
+  const targetFiles = new Map<string, string>();
+  for (const target of targets) {
     try {
       const root = rootFor(ctx, target.dest);
       const walk = checkContainment(root.path, target.dest, fs);
@@ -595,6 +968,10 @@ function buildInstallPlan(
         writes.push({ ...target, root, priorSha256: null });
         lines.push(`create ${target.dest}`);
       } else if (walk.finalKind === 'file') {
+        const identity = identityOf(
+          fs.lstatSync(target.dest, { bigint: true }),
+        );
+        if (identity !== null) targetFiles.set(identity, target.dest);
         const current = sha256Hex(readNoFollowBytes(target.dest, fs));
         // The verdict table refuses a listed file whose hash differs from the
         // receipt, even when its bytes equal the new source: those bytes could
@@ -631,6 +1008,16 @@ function buildInstallPlan(
       refusals.push(describe(error));
     }
   }
+
+  // A listed skill file this version no longer ships. It is judged here, before
+  // any write, and removed only after the new payload is installed and listed.
+  const pruned = planPrunes(
+    ctx,
+    checked,
+    targetFiles,
+    new Set(targets.map((target) => target.dest)),
+    refusals,
+  );
 
   let current: InstallPlan['current'];
   try {
@@ -682,9 +1069,42 @@ function buildInstallPlan(
     refusals.push(describe(error));
     current = { action: 'keep', versionDir };
   }
+  // The entry files are planned after the payload targets. Their harness
+  // directories join the same mkdir list, and their refusals join this list.
+  let entrySteps: EntryStep[] = [];
+  let entryLines: string[] = [];
+  if (harnesses.length > 0) {
+    const entryText = targets.find(
+      (target) => target.dest === join(versionDir, 'user-global', 'entry.md'),
+    );
+    if (entryText === undefined) {
+      throw new Error(
+        'the payload has no user-global entry text; nothing was written',
+      );
+    }
+    const entryPlan = planEntryFiles({
+      fs,
+      targets: entryTargetsOf(ctx, harnesses),
+      entryPath: join(ctx.currentPath, 'user-global', 'entry.md'),
+      entryText: entryText.text,
+      recordedEntryTexts: harnesses.includes('codex')
+        ? recordedEntryTexts(ctx, entries)
+        : [],
+      listed: entries,
+    });
+    refusals.push(...entryPlan.refusals);
+    for (const dir of entryPlan.dirs) {
+      mkdirs.push({
+        path: dir.path,
+        root: { name: 'harness-base', path: dir.base },
+      });
+    }
+    entrySteps = entryPlan.steps;
+    entryLines = entryPlan.lines;
+  }
   if (refusals.length > 0) {
     throw new Error(
-      `install refused before any write; nothing was written: ${refusals.join('; ')}`,
+      `install refused before any write; nothing was written: ${[...new Set(refusals)].join('; ')}`,
     );
   }
 
@@ -698,7 +1118,16 @@ function buildInstallPlan(
   } else {
     lines.push(`keep ${ctx.currentPath} (already points at ${versionDir})`);
   }
-  return { entries, mkdirs, writes, current, lines };
+  lines.push(...entryLines, ...pruned.lines);
+  return {
+    entries,
+    mkdirs,
+    writes,
+    prunes: pruned.prunes,
+    current,
+    lines,
+    entrySteps,
+  };
 }
 
 /**
@@ -727,6 +1156,14 @@ type Applied =
       op: 'link';
       path: string;
       target: string;
+      prior: ReceiptEntry | null;
+    }
+  | {
+      op: 'bytes';
+      path: string;
+      root: Root;
+      priorBytes: Buffer;
+      sha256: string;
       prior: ReceiptEntry | null;
     }
   | { op: 'repoint'; priorTarget: string; listed: boolean };
@@ -861,6 +1298,24 @@ function undoStep(
         sha256: step.priorSha256,
       });
       return;
+    case 'bytes':
+      replaceFileByRename(
+        step.root.path,
+        step.path,
+        step.sha256,
+        step.priorBytes.toString('utf8'),
+        fs,
+      );
+      if (
+        sha256Hex(readNoFollowBytes(step.path, fs)) !==
+        sha256Hex(step.priorBytes)
+      ) {
+        throw new Error(
+          `${step.path} was restored, but its SHA-256 does not match the bytes from before the run; it is not verified`,
+        );
+      }
+      restoreEntry(entries, step.path, step.prior);
+      return;
     case 'link':
       removeSingleEntry(
         ctx.dataRoot,
@@ -888,6 +1343,8 @@ function undoStep(
  * before the next step. A failure before the receipt rewrite rolls back only
  * this run's steps, in reverse order. A failed receipt rewrite does not roll
  * back, because that step is the one that failed; it names the unlisted paths.
+ * Last, the skill files the new version no longer ships are pruned (#4302);
+ * that pass is outside the rollback.
  */
 function applyInstall(
   ctx: Context,
@@ -1028,6 +1485,48 @@ function applyInstall(
         listed: current.listed,
       });
     }
+    for (const step of plan.entrySteps) {
+      const root: Root = { name: 'harness', path: step.dir };
+      if (step.kind === 'create') {
+        writeNewFile(step.dir, step.path, step.text, fs);
+        entries.set(step.path, step.entry);
+        applied.push({
+          op: 'file',
+          path: step.path,
+          root,
+          sha256: sha256Hex(step.text),
+          prior: null,
+        });
+      } else {
+        // The snapshot is the bytes this run replaces. The rename refuses
+        // unless the file still has the hash the plan read.
+        const priorBytes = readNoFollowBytes(step.path, fs);
+        if (sha256Hex(priorBytes) !== step.priorSha256) {
+          throw new Error(
+            `${step.path} changed during the run; refusing to replace it`,
+          );
+        }
+        const prior = entries.get(step.path) ?? null;
+        replaceFileByRename(
+          step.dir,
+          step.path,
+          step.priorSha256,
+          step.text,
+          fs,
+        );
+        entries.set(step.path, step.entry);
+        applied.push({
+          op: 'bytes',
+          path: step.path,
+          root,
+          priorBytes,
+          sha256: sha256Hex(step.text),
+          prior,
+        });
+      }
+      pending.push(step.path);
+      persist();
+    }
   } catch (error) {
     if (receiptFailed) throw error;
     const leftovers: string[] = [];
@@ -1050,7 +1549,82 @@ function applyInstall(
       `install failed: ${describe(error)}; the rollback left these paths in place and still listed: ${leftovers.join(', ')}`,
     );
   }
+  pruneDropped(ctx, plan.prunes, entries, version, priorTargetOf(plan), fs);
   return { lines: plan.lines, priorCurrentTarget: priorTargetOf(plan) };
+}
+
+/**
+ * Remove the skill files the new version no longer ships (#4302), one at a
+ * time, rewriting the receipt after each. This runs after every write has
+ * succeeded and the receipt lists it, and a failure here never rolls anything
+ * back: the new payload is complete, and each file is removed and unlisted,
+ * still present and listed, or (after a crash or a failed rewrite) gone but
+ * still listed. A plain retry finishes every one of those states, except that
+ * a receipt temporary file a failed rewrite could not remove must be deleted
+ * by hand first (the error names it).
+ * Rolling a removal back would need a lossy recreate (mode and time are not
+ * kept) and would undo a finished upgrade over an obsolete file.
+ *
+ * The unlink comes before the receipt rewrite. A crash or a failed rewrite
+ * between them leaves a listed path that is absent, which uninstall reports as
+ * absent and the next install drops it. The other order could leave a file that
+ * nothing lists and nothing cleans up.
+ *
+ * A failure here throws, so the caller never sees the install result. The
+ * messages therefore carry the prior `current` target that a result would have
+ * reported.
+ */
+function pruneDropped(
+  ctx: Context,
+  prunes: readonly Prune[],
+  entries: Map<string, ReceiptEntry>,
+  version: string,
+  priorTarget: string | null,
+  fs: FsOps,
+): void {
+  const installed = `the ${version} payload is installed${
+    priorTarget === null ? '' : ` (current used to point at ${priorTarget})`
+  }`;
+  const remaining = (from: number): string =>
+    prunes
+      .slice(from)
+      .map((prune) => prune.path)
+      .join(', ');
+  for (const [index, prune] of prunes.entries()) {
+    try {
+      if (prune.present) {
+        // The plan found the file, but it may be gone since. A path that is
+        // absent now is only unlisted; anything else goes through the removal
+        // primitive, which re-walks it and re-checks kind, links, and hash
+        // immediately before the unlink.
+        const walk = checkContainment(prune.root.path, prune.path, fs);
+        if (walk.missingDirs.length === 0 && walk.finalKind !== 'absent') {
+          removeSingleEntry(
+            prune.root.path,
+            prune.path,
+            { kind: 'file', sha256: prune.sha256 },
+            fs,
+          );
+        }
+      }
+    } catch (error) {
+      throw new Error(
+        `${installed}, but removing the files it no longer ships stopped at ${prune.path}: ${describe(error)}; these files were not handled and stay listed: ${remaining(index)}; fix the cause named above (for a file you edited, move or delete it), then install again`,
+      );
+    }
+    // An absent dropped file can be a name this version uses for a directory,
+    // and the mkdir step then listed that directory under the same path. Only a
+    // file entry is this prune's to drop.
+    if (entries.get(prune.path)?.kind !== 'file') continue;
+    entries.delete(prune.path);
+    try {
+      persistEntries(ctx, entries, fs);
+    } catch (error) {
+      throw new Error(
+        `${installed}, but the receipt rewrite failed (${describe(error)}); ${prune.path} is gone from disk but still listed in the receipt, and a later install or uninstall reports it as absent; these files were not yet handled: ${remaining(index + 1) || 'none'}`,
+      );
+    }
+  }
 }
 
 function priorTargetOf(plan: InstallPlan): string | null {
@@ -1066,7 +1640,12 @@ function contextAndPlan(options: UserGlobalOptions): {
   const fs = ctx.fs;
   const sourceRoot = options.sourceRoot ?? resolveBundleRoot(HERE);
   const version = options.version ?? readPackageVersion(sourceRoot, fs);
-  const plan = buildInstallPlan(ctx, sourceRoot, version);
+  const plan = buildInstallPlan(
+    ctx,
+    sourceRoot,
+    version,
+    options.harnesses ?? [],
+  );
   return { ctx, plan, version };
 }
 
@@ -1074,26 +1653,30 @@ function contextAndPlan(options: UserGlobalOptions): {
  * Plan an install without writing anything. Runs the same checks and returns
  * one line per path. Creates no directory.
  */
-// audit:ignore-dead-export: consumed by issue #4245
-export function planInstall(options: UserGlobalOptions = {}): UserGlobalResult {
-  const { plan } = contextAndPlan(options);
-  return { lines: plan.lines, priorCurrentTarget: priorTargetOf(plan) };
+export function planInstall(
+  options: UserGlobalOptions = {},
+): UserGlobalInstallResult {
+  const { plan, version } = contextAndPlan(options);
+  return {
+    lines: plan.lines,
+    priorCurrentTarget: priorTargetOf(plan),
+    version,
+  };
 }
 
 /** Install the payload and skills, recording each created path. */
-// audit:ignore-dead-export: consumed by issue #4245
 export function installPayload(
   options: UserGlobalOptions = {},
-): UserGlobalResult {
+): UserGlobalInstallResult {
   const { ctx, plan, version } = contextAndPlan(options);
-  return applyInstall(ctx, plan, version);
+  return { ...applyInstall(ctx, plan, version), version };
 }
 
 // ---------------------------------------------------------------------------
 // Uninstall
 // ---------------------------------------------------------------------------
 
-type Action = 'remove' | 'absent' | 'dir';
+type Action = 'remove' | 'absent' | 'dir' | 'rewrite';
 
 interface Decision {
   path: string;
@@ -1101,6 +1684,8 @@ interface Decision {
   root: Root;
   base: string;
   action: Action;
+  /** The edited file's new bytes, for an action that rewrites it in place. */
+  rewrite?: { text: string; priorSha256: string; priorText: string };
 }
 
 interface UninstallPlan {
@@ -1126,6 +1711,15 @@ function expectedOf(
  */
 function buildUninstallPlan(ctx: Context): UninstallPlan {
   const fs = ctx.fs;
+  // Read the declared chain before the first raw lstat of the data root, which
+  // would otherwise follow a link above it.
+  try {
+    assertRealChain(ctx.dataRoot, fs);
+  } catch (error) {
+    throw new Error(
+      `uninstall refused before any removal; nothing was removed: ${describe(error)}`,
+    );
+  }
   const rootStat = lstatOrNull(ctx.dataRoot, fs);
   if (rootStat === null) {
     return {
@@ -1168,9 +1762,26 @@ function buildUninstallPlan(ctx: Context): UninstallPlan {
     try {
       assertOwnedShape(ctx, entry);
       const { root, base, walk } = inspect(ctx, entry.path);
-      const decide = (action: Action): void => {
-        decisions.push({ path: entry.path, entry, root, base, action });
+      const decide = (
+        action: Action,
+        rewrite?: { text: string; priorSha256: string; priorText: string },
+      ): void => {
+        decisions.push({
+          path: entry.path,
+          entry,
+          root,
+          base,
+          action,
+          rewrite,
+        });
       };
+      if (entryFileOwned(ctx, entry)) {
+        assertHarnessChain(
+          ctx,
+          entry.path,
+          walk.missingDirs.length === 0 && walk.finalKind !== 'absent',
+        );
+      }
       if (walk.missingDirs.length > 0 || walk.finalKind === 'absent') {
         decide('absent');
       } else if (entry.kind === 'file') {
@@ -1185,9 +1796,24 @@ function buildUninstallPlan(ctx: Context): UninstallPlan {
             `${entry.path} has more than one hard link; refusing`,
           );
         }
-        if (sha256Hex(readNoFollowBytes(entry.path, fs)) !== entry.sha256) {
+        const bytes = readNoFollowBytes(entry.path, fs);
+        if (sha256Hex(bytes) !== entry.sha256) {
           throw new Error(
             `${entry.path} was edited after install (its SHA-256 differs); refusing, and it is user-edited`,
+          );
+        }
+        const harness = entryHarnessAt(ctx, entry.path);
+        if (
+          harness !== undefined &&
+          !isInstallerWholeFile(
+            harness,
+            join(ctx.currentPath, 'user-global', 'entry.md'),
+            bytes,
+            harness === 'codex' ? recordedEntryTexts(ctx, entries) : [],
+          )
+        ) {
+          throw new Error(
+            `${entry.path} holds content install does not write, although the receipt lists it as one install created; refusing, and it is user-edited`,
           );
         }
         decide('remove');
@@ -1201,6 +1827,18 @@ function buildUninstallPlan(ctx: Context): UninstallPlan {
           throw new Error(`${entry.path} points somewhere else now; refusing`);
         }
         decide('remove');
+      } else if (
+        entry.kind === 'managed-block' ||
+        entry.kind === 'json-instruction'
+      ) {
+        if (walk.finalKind !== 'file') {
+          throw new Error(
+            `${entry.path} is now a ${walk.finalKind}, not a file; refusing`,
+          );
+        }
+        const removal = planEntryRemoval(fs, entry);
+        if (removal.kind === 'absent') decide('absent');
+        else decide('rewrite', removal);
       } else {
         if (walk.finalKind !== 'directory') {
           throw new Error(
@@ -1215,7 +1853,7 @@ function buildUninstallPlan(ctx: Context): UninstallPlan {
   }
   if (refusals.length > 0) {
     throw new Error(
-      `uninstall refused before any removal; nothing was removed: ${refusals.join('; ')}`,
+      `uninstall refused before any removal; nothing was removed: ${[...new Set(refusals)].join('; ')}`,
     );
   }
   return { reason: null, entries, decisions };
@@ -1225,6 +1863,7 @@ function uninstallLines(plan: UninstallPlan): string[] {
   if (plan.reason !== null) return [plan.reason];
   return plan.decisions.map((decision) => {
     if (decision.action === 'absent') return `absent ${decision.path}`;
+    if (decision.action === 'rewrite') return `edit ${decision.path}`;
     if (decision.action === 'dir')
       return `dir ${decision.path} (removed only when empty)`;
     return `remove ${decision.path}`;
@@ -1232,7 +1871,6 @@ function uninstallLines(plan: UninstallPlan): string[] {
 }
 
 /** Plan an uninstall without removing anything. */
-// audit:ignore-dead-export: consumed by issue #4245
 export function planUninstall(
   options: UserGlobalOptions = {},
 ): UserGlobalResult {
@@ -1248,7 +1886,6 @@ export function planUninstall(
  * its turn stops the run. A directory that is not empty at its turn is kept
  * and named, and the run exits 0.
  */
-// audit:ignore-dead-export: consumed by issue #4245
 export function uninstallPayload(
   options: UserGlobalOptions = {},
 ): UserGlobalResult {
@@ -1272,6 +1909,44 @@ export function uninstallPayload(
       entries.delete(decision.path);
       persist();
       lines.push(`absent ${decision.path}`);
+      continue;
+    }
+    if (decision.action === 'rewrite' && decision.rewrite !== undefined) {
+      try {
+        replaceFileByRename(
+          decision.base,
+          decision.path,
+          decision.rewrite.priorSha256,
+          decision.rewrite.text,
+          fs,
+        );
+      } catch (error) {
+        stopAt(decision.path, error);
+      }
+      const { text, priorText } = decision.rewrite;
+      entries.delete(decision.path);
+      try {
+        persist();
+      } catch (error) {
+        // The receipt still lists the entry, so the file goes back to the bytes
+        // the receipt describes. Otherwise a retry would refuse the edited file.
+        entries.set(decision.path, decision.entry);
+        try {
+          replaceFileByRename(
+            decision.base,
+            decision.path,
+            sha256Hex(text),
+            priorText,
+            fs,
+          );
+        } catch (restoreError) {
+          throw new Error(
+            `${describe(error)}; restoring ${decision.path} also failed (${describe(restoreError)}), so the file keeps its edit while the receipt still lists it`,
+          );
+        }
+        throw error;
+      }
+      lines.push(`edited ${decision.path}`);
       continue;
     }
     try {

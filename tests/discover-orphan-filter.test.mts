@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  buildDraftCarrierOutput,
   buildOrphanClaimState,
   classifyIssue,
   extractBlockedByReferences,
@@ -22,6 +30,7 @@ import {
   renderForcedHandoffComment,
 } from '../src/scripts/marker-helpers.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import { GH_SEARCH_RESULT_CAP } from '../src/scripts/provider-adapter-github.mts';
 import { SUITABILITY_REJECTION_PREFIX } from '../src/scripts/supersession-detection.mts';
 import { spawnHelperBinWithEnvelope, stubExecutable } from './test-utils.mts';
 
@@ -743,6 +752,668 @@ test('filterOrphanIssues resolves a configured authoring-only label name (#4109)
     result.orphans.map((issue) => issue.number),
     [43],
   );
+});
+
+// #4257: a draft carrier is an authoring-only issue whose body carries the
+// carrier marker outside code. Each case below builds its fixtures from this
+// marker, so the release-state bucket is the only thing under test.
+const CARRIER_MARKER = '<!-- idd-skill-draft-carrier: v1 -->';
+
+function carrierIssue(
+  number: number,
+  body: string,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    number,
+    title: `carrier ${number}`,
+    state: 'OPEN',
+    labels: [{ name: 'status:authoring-only' }],
+    body: `${CARRIER_MARKER}\n\n${body}`,
+    url: `https://example.com/${number}`,
+    ...overrides,
+  };
+}
+
+test('draft carriers: ready when no blocker is named or the only blocker is closed (#4257)', async () => {
+  const result = await filterOrphanIssues(
+    [
+      carrierIssue(50, '## Release condition\n\nNo blocker.'),
+      carrierIssue(51, '## Release condition\n\nBlocked by #52'),
+    ],
+    {
+      issueStateByNumber: new Map([[52, 'CLOSED']]),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.deepEqual(
+    result.draftCarriers.ready.map((entry) => entry.number),
+    [50, 51],
+  );
+  assert.deepEqual(result.draftCarriers.waiting, []);
+  assert.deepEqual(result.draftCarriers.held, []);
+});
+
+test('draft carriers: an open blocker waits with reason open, and an unresolvable or cross-repository one waits too (#4257)', async () => {
+  const result = await filterOrphanIssues(
+    [
+      carrierIssue(53, 'Blocked by #54'),
+      carrierIssue(55, 'Blocked by #56\nBlocked by other/repo#7'),
+    ],
+    {
+      issueStateByNumber: new Map([[54, 'OPEN']]),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      currentRepo: 'kurone-kito/idd-skill',
+    },
+  );
+  assert.deepEqual(result.draftCarriers.waiting, [
+    {
+      number: 53,
+      title: 'carrier 53',
+      url: 'https://example.com/53',
+      blockers: [{ reference: 54, reason: 'open' }],
+    },
+    {
+      number: 55,
+      title: 'carrier 55',
+      url: 'https://example.com/55',
+      blockers: [
+        { reference: 56, reason: 'issue-not-found-or-inaccessible' },
+        { reference: 'other/repo#7', reason: 'cross_repository_reference' },
+      ],
+    },
+  ]);
+});
+
+test('draft carriers: a carrier that also carries the authoring label is held, stale only past the authoring stale age (#4257)', async () => {
+  const labeledAt = '2026-10-14T00:00:00Z';
+  const held = carrierIssue(60, 'No blocker.', {
+    labels: [{ name: 'status:authoring-only' }, { name: 'status:authoring' }],
+    labelEvents: [
+      {
+        event: 'labeled',
+        label: { name: 'status:authoring' },
+        created_at: labeledAt,
+      },
+    ],
+  });
+  const options = {
+    issueStateByNumber: new Map<number, string>(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    authoringStaleAgeMs: 4 * 60 * 60 * 1000,
+  };
+  const fresh = await filterOrphanIssues([held], {
+    ...options,
+    now: '2026-10-14T01:00:00Z',
+  });
+  const stale = await filterOrphanIssues([held], {
+    ...options,
+    now: '2026-10-14T05:00:00Z',
+  });
+  assert.deepEqual(fresh.draftCarriers.held, [
+    {
+      number: 60,
+      title: 'carrier 60',
+      url: 'https://example.com/60',
+      heldSince: labeledAt,
+      stale: false,
+    },
+  ]);
+  assert.equal(stale.draftCarriers.held[0]?.stale, true);
+  // The authoring-only label blocks the carrier before the authoring-label
+  // branch runs, so a held carrier never gets the stale-authoring warning.
+  assert.equal(stale.filtered.blocked_label[0]?.number, 60);
+  assert.deepEqual(stale.warnings, []);
+});
+
+test('draft carriers: a held carrier with no labeled event reports no heldSince and is not stale (#4257)', async () => {
+  const result = await filterOrphanIssues(
+    [
+      carrierIssue(63, 'No blocker.', {
+        labels: [
+          { name: 'status:authoring-only' },
+          { name: 'status:authoring' },
+        ],
+      }),
+    ],
+    {
+      issueStateByNumber: new Map<number, string>(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      now: '2026-10-14T05:00:00Z',
+    },
+  );
+  assert.deepEqual(result.draftCarriers.held, [
+    {
+      number: 63,
+      title: 'carrier 63',
+      url: 'https://example.com/63',
+      heldSince: null,
+      stale: false,
+    },
+  ]);
+});
+
+test('draft carriers: an A0-O label-event read that throws keeps the carrier and reports no heldSince (#4257)', async () => {
+  const result = await filterOrphanIssues(
+    [
+      carrierIssue(64, 'No blocker.', {
+        labels: [
+          { name: 'status:authoring-only' },
+          { name: 'status:authoring' },
+        ],
+      }),
+    ],
+    {
+      issueStateByNumber: new Map<number, string>(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      fetchLabelEventsByIssueNumber: () => {
+        throw new Error('timeline unavailable');
+      },
+      now: '2026-10-14T05:00:00Z',
+    },
+  );
+  assert.equal(result.draftCarriers.held[0]?.number, 64);
+  assert.equal(result.draftCarriers.held[0]?.heldSince, null);
+  assert.equal(result.draftCarriers.held[0]?.stale, false);
+});
+
+test('draft carriers: an authoring-only issue without the marker, a marker without the label, and a marker only inside code are in no bucket (#4257)', async () => {
+  const result = await filterOrphanIssues(
+    [
+      {
+        number: 70,
+        title: 'authoring-only, no marker',
+        state: 'OPEN',
+        labels: [{ name: 'status:authoring-only' }],
+        body: 'Plain body.',
+        url: 'https://example.com/70',
+      },
+      {
+        number: 71,
+        title: 'marker, no label',
+        state: 'OPEN',
+        labels: [],
+        body: CARRIER_MARKER,
+        url: 'https://example.com/71',
+      },
+      {
+        number: 72,
+        title: 'marker in a fence',
+        state: 'OPEN',
+        labels: [{ name: 'status:authoring-only' }],
+        body: ['```', CARRIER_MARKER, '```'].join('\n'),
+        url: 'https://example.com/72',
+      },
+      {
+        number: 73,
+        title: 'marker in a code span',
+        state: 'OPEN',
+        labels: [{ name: 'status:authoring-only' }],
+        body: ['Example: `', CARRIER_MARKER, '`'].join(''),
+        url: 'https://example.com/73',
+      },
+    ],
+    {
+      issueStateByNumber: new Map<number, string>(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.deepEqual(result.draftCarriers, { held: [], ready: [], waiting: [] });
+});
+
+test('draft carriers: a carrier that is also the outage or journal target is still filed as blocked_label (#4257)', async () => {
+  const result = await filterOrphanIssues(
+    [carrierIssue(150, 'No blocker.'), carrierIssue(151, 'No blocker.')],
+    {
+      issueStateByNumber: new Map<number, string>(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      providerOutageDeclarationTarget: 150,
+      authoringJournalTarget: 151,
+    },
+  );
+  assert.deepEqual(
+    result.filtered.blocked_label.map((entry) => entry.number),
+    [150, 151],
+  );
+  assert.deepEqual(result.filtered.provider_outage_target, []);
+  assert.deepEqual(result.filtered.authoring_journal_target, []);
+  assert.deepEqual(
+    result.draftCarriers.ready.map((entry) => entry.number),
+    [150, 151],
+  );
+});
+
+test('draft carriers: a Blocked by line inside a fenced draft does not block the carrier (#4257)', async () => {
+  const result = await filterOrphanIssues(
+    [
+      carrierIssue(
+        80,
+        '## Release condition\n\nNo blocker.\n\n## Drafts\n\n```md\nBlocked by #81\n```\n',
+      ),
+    ],
+    {
+      issueStateByNumber: new Map([[81, 'OPEN']]),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.deepEqual(
+    result.draftCarriers.ready.map((entry) => entry.number),
+    [80],
+  );
+  assert.deepEqual(result.draftCarriers.waiting, []);
+});
+
+test('draft carriers: counts equal the bucket lengths, and carriers stay out of orphans and the top-level unresolvable (#4257)', async () => {
+  const result = await filterOrphanIssues(
+    [
+      carrierIssue(90, 'No blocker.'),
+      carrierIssue(91, 'Blocked by #92'),
+      carrierIssue(93, 'Blocked by #94'),
+      carrierIssue(95, 'Blocked by #96', {
+        labels: [
+          { name: 'status:authoring-only' },
+          { name: 'status:authoring' },
+        ],
+      }),
+    ],
+    {
+      issueStateByNumber: new Map([[92, 'OPEN']]),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.equal(result.counts.draftCarriersHeld, 1);
+  assert.equal(result.counts.draftCarriersReady, 1);
+  assert.equal(result.counts.draftCarriersWaiting, 2);
+  assert.equal(
+    result.draftCarriers.held.length,
+    result.counts.draftCarriersHeld,
+  );
+  assert.equal(
+    result.draftCarriers.ready.length,
+    result.counts.draftCarriersReady,
+  );
+  assert.equal(
+    result.draftCarriers.waiting.length,
+    result.counts.draftCarriersWaiting,
+  );
+  assert.deepEqual(result.orphans, []);
+  assert.deepEqual(result.unresolvable, []);
+  assert.deepEqual(
+    result.filtered.blocked_label.map((entry) => entry.number),
+    [90, 91, 93, 95],
+  );
+});
+
+// The `--draft-carriers` listing (#4257). The fake search ignores its label
+// argument, so these cases prove the classifier alone keeps non-carriers out.
+function loadDraftPolicy(): {
+  policy: ReturnType<typeof loadPolicy>;
+  cleanup: () => void;
+} {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-draft-carriers-policy-'));
+  const policyPath = join(dir, 'policy.json');
+  writeFileSync(policyPath, '{}');
+  return {
+    policy: loadPolicy(policyPath),
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
+}
+
+function searchRow(number: number, body: string, labels: string[]) {
+  return {
+    number,
+    title: `row ${number}`,
+    body,
+    state: 'open',
+    labels: labels.map((name) => ({ name })),
+    url: `https://example.com/${number}`,
+  };
+}
+
+test('--draft-carriers listing keeps only carriers and prints the documented fields (#4257)', () => {
+  const { policy, cleanup } = loadDraftPolicy();
+  try {
+    const port = createFakeProviderAdapter({
+      searchResults: [
+        searchRow(100, `${CARRIER_MARKER}\n\nNo blocker.`, [
+          'status:authoring-only',
+        ]),
+        searchRow(101, 'Plain authoring-only issue.', [
+          'status:authoring-only',
+        ]),
+        searchRow(102, CARRIER_MARKER, []),
+      ],
+    });
+    const output = buildDraftCarrierOutput(port, {
+      owner: 'kurone-kito',
+      repo: 'idd-skill',
+      policy,
+      now: '2026-10-14T01:00:00Z',
+    });
+    assert.deepEqual(Object.keys(output).sort(), [
+      'counts',
+      'draftCarriers',
+      'policy',
+      'repository',
+    ]);
+    assert.deepEqual(output.repository, {
+      owner: 'kurone-kito',
+      repo: 'idd-skill',
+    });
+    assert.equal(output.policy.authoringOnlyLabelName, 'status:authoring-only');
+    assert.deepEqual(output.draftCarriers, {
+      held: [],
+      ready: [
+        {
+          number: 100,
+          title: 'row 100',
+          url: 'https://example.com/100',
+        },
+      ],
+      waiting: [],
+    });
+    assert.deepEqual(output.counts, {
+      draftCarriersHeld: 0,
+      draftCarriersReady: 1,
+      draftCarriersWaiting: 0,
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('--draft-carriers listing fails closed when the search reaches the result cap (#4257)', () => {
+  const { policy, cleanup } = loadDraftPolicy();
+  try {
+    const port = createFakeProviderAdapter({
+      searchResults: Array.from({ length: GH_SEARCH_RESULT_CAP }, (_, index) =>
+        searchRow(index + 1, 'Plain body.', []),
+      ),
+    });
+    assert.throws(
+      () =>
+        buildDraftCarrierOutput(port, {
+          owner: 'kurone-kito',
+          repo: 'idd-skill',
+          policy,
+          now: '2026-10-14T01:00:00Z',
+        }),
+      /result cap/,
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('--draft-carriers fails closed when a held carrier timeline cannot be read (#4257)', () => {
+  const { policy, cleanup } = loadDraftPolicy();
+  try {
+    const port = createFakeProviderAdapter({
+      searchResults: [
+        searchRow(120, `${CARRIER_MARKER}\n\nNo blocker.`, [
+          'status:authoring-only',
+          'status:authoring',
+        ]),
+      ],
+    });
+    const unreadable = {
+      ...port,
+      getWorkItemTimeline: () => {
+        throw new Error('timeline unavailable');
+      },
+    };
+    assert.throws(
+      () =>
+        buildDraftCarrierOutput(unreadable, {
+          owner: 'kurone-kito',
+          repo: 'idd-skill',
+          policy,
+          now: '2026-10-14T05:00:00Z',
+        }),
+      /timeline unavailable/,
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('--draft-carriers resolves blockers and held events through the port (#4257)', () => {
+  const { policy, cleanup } = loadDraftPolicy();
+  try {
+    const port = createFakeProviderAdapter({
+      issueStates: { 130: 'OPEN', 131: 'CLOSED' },
+      timelines: {
+        132: [
+          {
+            event: 'labeled',
+            label: { name: 'status:authoring' },
+            created_at: '2026-10-14T00:00:00Z',
+          },
+        ],
+      },
+      searchResults: [
+        searchRow(132, `${CARRIER_MARKER}\n\nNo blocker.`, [
+          'status:authoring-only',
+          'status:authoring',
+        ]),
+        searchRow(133, `${CARRIER_MARKER}\n\nBlocked by #130`, [
+          'status:authoring-only',
+        ]),
+        searchRow(134, `${CARRIER_MARKER}\n\nBlocked by #131`, [
+          'status:authoring-only',
+        ]),
+      ],
+    });
+    const output = buildDraftCarrierOutput(port, {
+      owner: 'kurone-kito',
+      repo: 'idd-skill',
+      policy,
+      now: '2026-10-14T05:00:00Z',
+    });
+    assert.deepEqual(output.draftCarriers, {
+      held: [
+        {
+          number: 132,
+          title: 'row 132',
+          url: 'https://example.com/132',
+          heldSince: '2026-10-14T00:00:00Z',
+          stale: true,
+        },
+      ],
+      ready: [
+        {
+          number: 134,
+          title: 'row 134',
+          url: 'https://example.com/134',
+        },
+      ],
+      waiting: [
+        {
+          number: 133,
+          title: 'row 133',
+          url: 'https://example.com/133',
+          blockers: [{ reference: 130, reason: 'open' }],
+        },
+      ],
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test('draft carriers: a carrier that also names a roadmap or blocked-by marker is still filed as blocked_label (#4257)', async () => {
+  // audit-authored-issue rejects such a carrier, but every carrier must land in
+  // filtered.blocked_label. A marker is not a Blocked by line, so the listing
+  // still reads it as ready.
+  const result = await filterOrphanIssues(
+    [
+      carrierIssue(140, '<!-- idd-skill-blocked-by: #1 -->\n\nNo blocker.'),
+      carrierIssue(141, '<!-- idd-skill-roadmap-id: 1 -->\n\nNo blocker.'),
+    ],
+    {
+      issueStateByNumber: new Map<number, string>(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+  assert.deepEqual(
+    result.filtered.blocked_label.map((entry) => entry.number),
+    [140, 141],
+  );
+  assert.deepEqual(result.filtered.blocked_by_marker, []);
+  assert.deepEqual(result.filtered.roadmap_marker, []);
+  assert.deepEqual(
+    result.draftCarriers.ready.map((entry) => entry.number),
+    [140, 141],
+  );
+});
+
+test('--draft-carriers makes one label-filtered search, prints the listing, and reads no hint cache (#4257)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-draft-carriers-cli-'));
+  const workspace = join(root, 'workspace');
+  const cacheRoot = join(root, 'cache');
+  const argvLog = join(root, 'argv.jsonl');
+  const rows = [
+    searchRow(110, `${CARRIER_MARKER}\n\nNo blocker.`, [
+      'status:authoring-only',
+    ]),
+    searchRow(111, 'Plain authoring-only issue.', ['status:authoring-only']),
+  ];
+  // The read cache is enabled here, so a hint read or write would create files
+  // under XDG_CACHE_HOME; the listing must leave that directory absent.
+  mkdirSync(join(workspace, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(workspace, '.github', 'idd', 'config.json'),
+    JSON.stringify({ githubApi: { readCache: { enabled: true } } }),
+  );
+  const restore = stubExecutable(
+    'gh',
+    `const { appendFileSync } = require('node:fs');
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(argvLog)}, JSON.stringify(args) + '\\n');
+if (args[0] === 'search' && args[1] === 'issues') {
+  process.stdout.write(JSON.stringify(${JSON.stringify(rows)}) + '\\n');
+  process.exit(0);
+}
+process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
+process.exit(1);
+`,
+  );
+  const savedCacheHome = process.env.XDG_CACHE_HOME;
+  process.env.XDG_CACHE_HOME = cacheRoot;
+  try {
+    const result = spawnHelperBinWithEnvelope(
+      'idd-discover-orphan-filter.mjs',
+      ['--owner', 'kurone-kito', '--repo', 'idd-skill', '--draft-carriers'],
+      { cwd: workspace },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.deepEqual(Object.keys(output).sort(), [
+      'counts',
+      'draftCarriers',
+      'policy',
+      'repository',
+    ]);
+    assert.deepEqual(
+      output.draftCarriers.ready.map(
+        (entry: { number: number }) => entry.number,
+      ),
+      [110],
+    );
+    const calls = readFileSync(argvLog, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as string[]);
+    assert.equal(calls.length, 1, JSON.stringify(calls));
+    assert.deepEqual(calls[0]?.slice(0, 2), ['search', 'issues']);
+    assert.equal(
+      calls[0]?.[calls[0].indexOf('--label') + 1],
+      'status:authoring-only',
+    );
+    assert.equal(existsSync(cacheRoot), false);
+  } finally {
+    restore();
+    if (savedCacheHome === undefined) {
+      delete process.env.XDG_CACHE_HOME;
+    } else {
+      process.env.XDG_CACHE_HOME = savedCacheHome;
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('--draft-carriers fails closed when the label search prints no JSON array (#4257)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-draft-carriers-search-'));
+  const workspace = join(root, 'workspace');
+  mkdirSync(workspace, { recursive: true });
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+if (args[0] === 'search' && args[1] === 'issues') {
+  // Exit 0 with no output: the failure shape a non-strict read would take
+  // for zero hits (#3624).
+  process.exit(0);
+}
+process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
+process.exit(1);
+`,
+  );
+  try {
+    const result = spawnHelperBinWithEnvelope(
+      'idd-discover-orphan-filter.mjs',
+      ['--owner', 'kurone-kito', '--repo', 'idd-skill', '--draft-carriers'],
+      { cwd: workspace },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /gh search issues returned no JSON array/);
+    assert.equal(result.stdout.includes('draftCarriers'), false);
+  } finally {
+    restore();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('--help documents --draft-carriers, which help-text-flags does not cover for this helper (#4257)', () => {
+  const result = spawnHelperBinWithEnvelope('idd-discover-orphan-filter.mjs', [
+    '--help',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(
+    result.stdout.includes('discover-orphan-filter.mjs --draft-carriers'),
+    result.stdout,
+  );
+});
+
+test('--draft-carriers rejects the flags that select the orphan path, a cache mode, or a malformed --now (#4257)', () => {
+  for (const extra of [
+    ['--autopilot'],
+    ['--with-claim-state'],
+    ['--current-claim-id', 'abc'],
+    ['--current-claim-id'],
+    ['--pr', '3'],
+    ['--no-cache'],
+    ['--refresh-cache'],
+    ['--purge-cache'],
+    ['--now', 'not-a-date'],
+  ]) {
+    const result = spawnHelperBinWithEnvelope(
+      'idd-discover-orphan-filter.mjs',
+      [
+        '--owner',
+        'kurone-kito',
+        '--repo',
+        'idd-skill',
+        '--draft-carriers',
+        ...extra,
+      ],
+    );
+    assert.notEqual(result.status, 0, `${extra.join(' ')}: ${result.stderr}`);
+    assert.equal(
+      result.envelope?.kind,
+      'usage',
+      `${extra.join(' ')}: ${result.stderr}`,
+    );
+  }
 });
 
 test('filterOrphanIssues excludes custom authoring label and warns when stale', async () => {

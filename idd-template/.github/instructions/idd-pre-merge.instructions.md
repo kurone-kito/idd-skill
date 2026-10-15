@@ -45,14 +45,17 @@ the [helper contract](../../docs/idd-helper-scripts.md#branch-conflict-and-synch
 
 - **`proceed-to-f2`**: proceed to F2. This route means conflict-freeness
   only. An UNSTABLE `clean` branch takes this route only when the helper
-  lists at least one non-passing head run and every such run is non-required
-  and `action_required` or `pending` (issue `#4209`); otherwise it holds, and
-  with helper runtime disabled an UNSTABLE branch always holds. If
-  `baseAdvancedSinceMergeBase: true`,
+  lists at least one non-passing head run or check suite and every such entry
+  is non-required and `action_required` or `pending` (issues `#4209`,
+  `#4309`); otherwise it holds, and with helper runtime disabled an UNSTABLE
+  branch always holds. If `baseAdvancedSinceMergeBase: true`,
   run the profile-selected trial-merge audit command for `--pr {pr-number}`
   (see the trial-merge audit entry in `docs/idd-helper-scripts.md`) for
-  push-free evidence (advisory; this routing does not change). With helper
-  runtime disabled, skip it.
+  push-free evidence (advisory; this routing does not change). A `not-run`
+  verdict with reason `tooling-changed` is the expected result for a pull
+  request that changes tooling, and it does not change this routing; that
+  pull request relies on its own required CI. With helper runtime disabled,
+  skip the audit.
 - **`return-to-e-phase-branch-sync`**: return to the E-phase branch-sync
   check in `idd-review-triage.instructions.md`, first setting
   `Phase: F1 sync-required`, the branch state in `Open blockers`, and
@@ -310,13 +313,25 @@ is diagnostic and never changes the verdict.
   **No required checks configured**: When `pre-merge-readiness` reports
   `ci.noRequiredChecksConfigured: true` (unprotected branch, or no
   required status checks), the CI gate is **not** satisfied vacuously.
+  Every present run is non-required here, and a run still waiting on
+  approval (`action_required`) is ignored as if absent (issue `#4349`).
   Route by `ci.presentRunConclusion` over the actual HEAD runs:
-  - `all-passing` → the CI gate may pass (every present run green).
-  - `pending` → wait per `idd-ci.instructions.md`, then re-evaluate F2.
-  - `some-failing` → **hold**; never merge on a vacuous green.
-  - `none` (no runs at all) → **hold**, unless `ci.allowedByPolicySetting`
-    is set (the global-only opt-in; see
-    [Global-only profile](../../docs/global-only-profile.md)).
+  - `all-passing` → the CI gate may pass (every other present run green,
+    or waiver-covered).
+  - `pending` → wait per `idd-ci.instructions.md`, then re-evaluate F2. A
+    queued, in-progress, or waiting run, a `pending`, `expected`, or
+    `requested` status, and a `cancelled` run with no later run of the
+    same check all wait here; none is a failure.
+  - `some-failing` → **hold**; a non-required `failure`, `timed_out`,
+    `startup_failure`, `stale`, or `error` conclusion, or an unrecognized
+    state, still holds. Never merge on a vacuous green.
+  - `none` (no runs at all, or only `action_required` runs) → **hold**,
+    unless `ci.allowedByPolicySetting` is set (the global-only opt-in;
+    see [Global-only profile](../../docs/global-only-profile.md)).
+
+  The `action_required` carve-out is this path only: with a required
+  check configured, a required `action_required` run is still a failure
+  and holds F2 through `ci.status`.
 
   **External-check waivers**: When `pre-merge-readiness` reports a check
   `coveredByWaiver: true`, a trusted maintainer authorized skipping it

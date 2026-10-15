@@ -30,10 +30,18 @@ jobs:
     # (#3730, run 37040216385) used Ubuntu 24.04.5 and Node v22.23.3; the
     # Node floor assertion passed without setup-node. Its lint job took
     # 171s, including 159s for protocol tests. The slowest pnpm-boundary
-    # job on ubuntu-latest took 271s. The lint job is below the 300s
-    # threshold, and its 10-minute timeout is more than twice that lint
-    # duration. See issue #3728 for source run details.
-    timeout-minutes: 10
+    # job on ubuntu-latest took 271s. That 171s figure is historical (#4333).
+    # Over the 12 most recent completed runs measured on 2026-10-15, the
+    # lint job took 336-525s (about 5.6 to 8.8 minutes); the 95 successful
+    # runs of 2026-10-14 and 2026-10-15 took 326-560s at workflow level.
+    # Two runs (38605475287, and attempt 1 of 38669168163) were cancelled
+    # in the protocol tests step, after 584s and 593s in that step alone,
+    # with "exceeded the maximum execution time of 10m0s", so a 10-minute
+    # limit no longer left a safe margin. 15 minutes is about 1.7 times the
+    # slowest of those 12 runs. It equals, and does not exceed, the
+    # ubuntu-slim cap above; ubuntu-latest has no such cap (GitHub-hosted
+    # jobs may run up to 6 hours). See issue #3728 for source run details.
+    timeout-minutes: 15
     steps:
       # Check the runner Node before checkout or repository scripts execute.
       # The test suite is typed `.mts` executed via Node's native type

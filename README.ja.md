@@ -127,6 +127,20 @@ placeholder、更新する導入先リポジトリの入口ファイルが説明
 コンパニオンドキュメントを手作業でたどる代わりに `idd-onboard --hear`
 の実行を案内します。
 
+### ユーザー単位でのインストール（任意）
+
+Claude Code、Codex CLI、OpenCode で、ユーザーアカウント全体から IDD を使えるように
+するには、このリポジトリのチェックアウトからユーザー単位のインストーラーを実行します:
+
+```sh
+node scripts/idd-onboard.mjs --install-user-global [--harness <list>] [--dry-run]
+```
+
+削除するには `node scripts/idd-onboard.mjs --uninstall` を実行します。インストーラー
+は、書き込み先のルートの親ディレクトリ（例: `~/.local/share` や `~/.agents`）が既に
+存在することを前提とします。書き込まれるファイル、失敗時の挙動、有効化の規則について
+は、[ユーザー単位のインストール](docs/user-global-install.md) を参照してください。
+
 ## 仕組み
 
 各フェーズには名前付きの役割、再開できるマーカー、次の手順があります:

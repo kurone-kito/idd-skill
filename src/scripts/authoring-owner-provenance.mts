@@ -112,6 +112,12 @@ export interface AuthoringOwnerProvenanceInput {
   comments: AuthoringOwnerProvenanceComment[];
   markerPrefix: string;
   trustedMarkerLogins: string[];
+  /**
+   * The set anchor's real `owner/repo#number` reference, for a non-anchor
+   * child (#4251). Omitted, the Stage 1 acquire must be self-anchored (its
+   * `anchor` names `target`), which is every existing caller's behavior.
+   */
+  expectedAnchor?: string;
 }
 
 export interface AuthoringOwnerProvenanceCheck {
@@ -232,7 +238,9 @@ export function inspectLastEditedAt(
  *   anchor" -- a marker with a different anchor is a multi-target set's
  *   non-anchor child, out of scope for this helper's single-target
  *   orphan design (kurone-kito/idd-skill#2891's own acceptance
- *   criteria; kurone-kito/idd-skill#2901 review, Copilot round 5).
+ *   criteria; kurone-kito/idd-skill#2901 review, Copilot round 5). A
+ *   caller that publishes such a child passes `expectedAnchor` (#4251),
+ *   and the marker's `anchor` must then name that anchor instead.
  *
  * The append-only edit check (contract.md: owner comments "must not be
  * edited or deleted") lives in `findStageOneAcquire`'s own pre-pass, not
@@ -246,6 +254,7 @@ export function inspectLastEditedAt(
 function invalidStageOneAcquireReason(
   event: OwnerMarkerEvent,
   target: string,
+  expectedAnchor?: string,
 ): string | null {
   const { parsed } = event;
   if (parsed.mode !== 'acquire') {
@@ -257,7 +266,11 @@ function invalidStageOneAcquireReason(
   if (!REAL_DIGEST_PATTERN.test(parsed.bodySha256)) {
     return `acquire marker's body-sha256 is not a real digest (got ${parsed.bodySha256})`;
   }
-  if (!sameIssueRef(parsed.anchor, target)) {
+  if (expectedAnchor !== undefined) {
+    if (!sameIssueRef(parsed.anchor, expectedAnchor)) {
+      return `acquire marker's anchor (${parsed.anchor}) is not the expected set anchor (${expectedAnchor})`;
+    }
+  } else if (!sameIssueRef(parsed.anchor, target)) {
     return `acquire marker's anchor (${parsed.anchor}) differs from its target -- a multi-target set's non-anchor child is out of scope for this helper`;
   }
   return null;
@@ -379,6 +392,7 @@ function findStageOneAcquire(
   target: string,
   markerPrefix: string,
   trustedMarkerLogins: readonly string[],
+  expectedAnchor?: string,
 ): { event: OwnerMarkerEvent | null; rejectReason: string | null } {
   const trusted = new Set(
     trustedMarkerLogins.map((login) => login.toLowerCase()),
@@ -423,7 +437,11 @@ function findStageOneAcquire(
     };
   }
   const event: OwnerMarkerEvent = { comment: first, parsed };
-  const rejectReason = invalidStageOneAcquireReason(event, target);
+  const rejectReason = invalidStageOneAcquireReason(
+    event,
+    target,
+    expectedAnchor,
+  );
   if (rejectReason) {
     return { event: null, rejectReason };
   }
@@ -454,6 +472,7 @@ export function evaluateAuthoringOwnerProvenance(
     input.target,
     input.markerPrefix,
     input.trustedMarkerLogins ?? [],
+    input.expectedAnchor,
   );
 
   if (!acquire) {

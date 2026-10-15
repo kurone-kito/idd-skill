@@ -6,6 +6,13 @@
 // so no test writes to the real home directory. Tests that use real symbolic
 // links skip on Windows, where the no-follow opens are unavailable and the
 // installer refuses before any write.
+//
+// The "links above the roots" tests (#4303) cover the chain from a declared
+// root (HOME, or an XDG or CODEX root) down to each install root, and the
+// components above that root. A link on the chain is refused by every entry
+// point and changes nothing. A link above the declared root is refused too,
+// unless root owns it: those tests stand in for the system with `ownedBy`, so
+// they do not depend on who runs them.
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -232,6 +239,21 @@ test('a second install of the same version writes no file', () => {
   assert.equal(writes, 0);
   assert.deepEqual(snapshot(home), before);
   assert.ok(result.lines.every((line) => line.startsWith('keep ')));
+});
+
+test('plan and install report the version the payload is installed under (#4245)', () => {
+  const home = makeHome();
+
+  // The default is the package.json version of the bundle being installed.
+  assert.equal(planInstall(optionsFor(home)).version, PACKAGE_VERSION);
+  assert.equal(installPayload(optionsFor(home)).version, PACKAGE_VERSION);
+  assert.ok(nodeFs.existsSync(versionDirOf(home)));
+
+  // An explicit version is what is reported, and what the directory is named.
+  const upgraded = optionsFor(home, { version: UPGRADE_VERSION });
+  assert.equal(planInstall(upgraded).version, UPGRADE_VERSION);
+  assert.equal(installPayload(upgraded).version, UPGRADE_VERSION);
+  assert.ok(nodeFs.existsSync(versionDirOf(home, UPGRADE_VERSION)));
 });
 
 test('plan functions write nothing and create no directory', () => {
@@ -938,7 +960,7 @@ test('a receipt that lists a user symbolic link as a link entry is corrupt for i
 
 test('a receipt that lists a path the installer never creates is refused by install and uninstall', () => {
   const home = makeHome();
-  const userFile = join(home, '.claude', 'CLAUDE.md');
+  const userFile = join(home, '.claude', 'notes.md');
   nodeFs.writeFileSync(userFile, 'mine\n');
   nodeFs.mkdirSync(dataRootOf(home), { recursive: true });
   nodeFs.writeFileSync(
@@ -991,4 +1013,1522 @@ test('every placeholder in the installed payload has a mapping', () => {
       `placeholder ${name} has no mapping`,
     );
   }
+});
+
+// ---------------------------------------------------------------------------
+// An upgrade prunes the skill files the new package no longer ships (#4302)
+// ---------------------------------------------------------------------------
+
+const DROPPED_RELATIVE = 'issue-authoring/references/draft-patterns.md';
+const SPEC_DROPPED_RELATIVE = 'idd-spec-audit/references/report-template.md';
+
+const droppedOf = (home: string, root: '.claude' | '.agents'): string =>
+  join(home, root, 'skills', DROPPED_RELATIVE);
+
+/** A source tree copy that no longer ships the named files under `skills/`. */
+function copySourceWithout(...relatives: string[]): string {
+  const dir = copySourceTree();
+  for (const relative of relatives) {
+    nodeFs.rmSync(join(dir, 'skills', relative));
+  }
+  return dir;
+}
+
+/** Options that install `source` as the upgrade version. */
+function upgradeOptions(
+  home: string,
+  source: string,
+  extra: Partial<UserGlobalOptions> = {},
+): UserGlobalOptions {
+  return optionsFor(home, {
+    sourceRoot: source,
+    version: UPGRADE_VERSION,
+    ...extra,
+  });
+}
+
+type ReceiptRow = { path: string; kind: string; sha256?: string };
+
+const receiptRows = (home: string): ReceiptRow[] =>
+  readReceiptEntries(home) as ReceiptRow[];
+
+const isListed = (home: string, path: string): boolean =>
+  receiptRows(home).some((entry) => entry.path === path);
+
+/** Every listed file exists and still has the hash the receipt records. */
+function assertListedFilesMatchDisk(home: string): void {
+  for (const entry of receiptRows(home)) {
+    if (entry.kind !== 'file') continue;
+    assert.equal(
+      sha256(nodeFs.readFileSync(entry.path)),
+      entry.sha256,
+      `${entry.path} matches the receipt`,
+    );
+  }
+}
+
+/** The path a refusal is expected to name, as a literal pattern. */
+const literal = (value: string): RegExp =>
+  new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
+/**
+ * An fs whose bigint `lstatSync` reports one fixed device and inode for each
+ * named path. A filesystem that folds case or Unicode form reports one file for
+ * two spellings; real inodes cannot show that here, so the fs reports it.
+ */
+function fsReportingIdentity(paths: string[], dev: bigint, ino: bigint): FsOps {
+  const real = nodeFs as unknown as Record<
+    string,
+    (...args: unknown[]) => unknown
+  >;
+  return {
+    ...nodeFs,
+    lstatSync: (path: string, options?: { bigint?: boolean }) => {
+      const stat = real.lstatSync(path, options) as object;
+      return paths.includes(path) && options?.bigint
+        ? Object.create(stat, { dev: { value: dev }, ino: { value: ino } })
+        : stat;
+    },
+  } as unknown as FsOps;
+}
+
+test('an upgrade that drops an unchanged skill file removes it and its receipt entry', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = [droppedOf(home, '.claude'), droppedOf(home, '.agents')];
+  for (const path of dropped) {
+    assert.ok(nodeFs.existsSync(path), 'the file is installed first');
+    assert.ok(isListed(home, path), 'the receipt lists it first');
+  }
+
+  const result = installPayload(upgradeOptions(home, source));
+
+  for (const path of dropped) {
+    assert.equal(nodeFs.existsSync(path), false);
+    assert.equal(isListed(home, path), false);
+    assert.ok(result.lines.includes(`remove ${path}`));
+  }
+  const kept = join(home, '.claude', 'skills', 'issue-authoring', 'references');
+  assert.ok(
+    nodeFs.existsSync(join(kept, 'contract.md')),
+    'a shipped file stays',
+  );
+  assert.ok(isListed(home, join(kept, 'contract.md')));
+  assert.ok(isListed(home, kept), 'the directory stays listed');
+  const olderFile = join(versionDirOf(home), ENTRY_RELATIVE);
+  assert.ok(nodeFs.existsSync(olderFile), 'the older version stays on disk');
+  assert.ok(isListed(home, olderFile), 'the older version stays listed');
+  assertListedFilesMatchDisk(home);
+
+  // The prune is finished, so a repeat install writes nothing at all.
+  let writes = 0;
+  installPayload(
+    upgradeOptions(home, source, {
+      fs: hookedFs((op, args) => {
+        if (isWriteCall(op, args)) writes += 1;
+      }),
+    }),
+  );
+  assert.equal(writes, 0);
+
+  uninstallPayload(upgradeOptions(home, source));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+  assert.equal(nodeFs.existsSync(join(home, '.claude', 'skills')), false);
+  assert.equal(nodeFs.existsSync(join(home, '.agents', 'skills')), false);
+});
+
+test('a dropped skill file that was edited after install is refused, named, and left in place', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const edited = droppedOf(home, '.claude');
+  nodeFs.appendFileSync(edited, 'my own notes\n');
+  const before = snapshot(home);
+
+  for (const run of [
+    () => installPayload(upgradeOptions(home, source)),
+    () => planInstall(upgradeOptions(home, source)),
+  ]) {
+    assert.throws(
+      run,
+      (error: Error) =>
+        literal(edited).test(error.message) &&
+        /edited after install/.test(error.message) &&
+        /nothing was written/.test(error.message),
+    );
+  }
+  assert.deepEqual(snapshot(home), before);
+  assert.ok(nodeFs.readFileSync(edited, 'utf8').endsWith('my own notes\n'));
+  assert.ok(
+    nodeFs.existsSync(droppedOf(home, '.agents')),
+    'the unedited copy is not removed either',
+  );
+  assert.ok(isListed(home, edited));
+});
+
+test('a dropped skill file that is now a symbolic link is refused and nothing is followed', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const sentinel = join(makeSandbox('user-global-sentinel-'), 'sentinel.txt');
+  nodeFs.writeFileSync(sentinel, 'sentinel\n');
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  nodeFs.unlinkSync(dropped);
+  nodeFs.symlinkSync(sentinel, dropped);
+  const before = snapshot(home);
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source)),
+    (error: Error) =>
+      literal(dropped).test(error.message) &&
+      /is now a symlink/.test(error.message) &&
+      /move or delete it, then install again/.test(error.message),
+  );
+  assert.deepEqual(snapshot(home), before);
+  assert.ok(nodeFs.lstatSync(dropped).isSymbolicLink());
+  assert.equal(nodeFs.readFileSync(sentinel, 'utf8'), 'sentinel\n');
+});
+
+test('a dropped skill file that is now a directory is refused and left in place', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  nodeFs.unlinkSync(dropped);
+  nodeFs.mkdirSync(dropped);
+  nodeFs.writeFileSync(join(dropped, 'mine.txt'), 'mine\n');
+  const before = snapshot(home);
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source)),
+    (error: Error) =>
+      literal(dropped).test(error.message) &&
+      /is now a directory/.test(error.message) &&
+      /move or delete it, then install again/.test(error.message),
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
+test('a dropped skill file with a second hard link is refused and left in place', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  nodeFs.linkSync(dropped, join(home, 'alias.md'));
+  const before = snapshot(home);
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source)),
+    (error: Error) =>
+      literal(dropped).test(error.message) &&
+      /more than one hard link/.test(error.message) &&
+      /move or delete it, then install again/.test(error.message),
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
+test('a dropped skill file that is already absent is unlisted and not recreated', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(SPEC_DROPPED_RELATIVE);
+  const claudeCopy = join(home, '.claude', 'skills', SPEC_DROPPED_RELATIVE);
+  const agentsCopy = join(home, '.agents', 'skills', SPEC_DROPPED_RELATIVE);
+  // One copy loses its whole directory, the other only the file.
+  nodeFs.rmSync(dirname(claudeCopy), { recursive: true });
+  nodeFs.rmSync(agentsCopy);
+
+  const result = installPayload(upgradeOptions(home, source));
+
+  for (const path of [claudeCopy, agentsCopy]) {
+    assert.equal(nodeFs.existsSync(path), false, `${path} is not recreated`);
+    assert.equal(isListed(home, path), false);
+    assert.ok(result.lines.includes(`absent ${path}`));
+  }
+
+  uninstallPayload(upgradeOptions(home, source));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+});
+
+test('a stale temporary file beside an already-absent dropped skill file makes install refuse before any write', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const absent = droppedOf(home, '.claude');
+  nodeFs.rmSync(absent);
+  nodeFs.writeFileSync(`${absent}.tmp-7`, 'stale\n');
+  const before = snapshot(home);
+
+  for (const run of [
+    () => installPayload(upgradeOptions(home, source)),
+    () => planInstall(upgradeOptions(home, source)),
+  ]) {
+    assert.throws(
+      run,
+      (error: Error) =>
+        literal(`${absent}.tmp-7`).test(error.message) &&
+        /crashed run/.test(error.message) &&
+        literal(`refusing to drop the receipt entry for ${absent}`).test(
+          error.message,
+        ) &&
+        /nothing was written/.test(error.message),
+    );
+  }
+  assert.deepEqual(snapshot(home), before);
+  assert.ok(isListed(home, absent), 'the entry stays listed');
+});
+
+test('a stale temporary file beside a dropped skill file that is the same file as a shipped one still refuses', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  const shipped = join(dirname(dropped), 'contract.md');
+  nodeFs.writeFileSync(`${dropped}.tmp-7`, 'stale\n');
+  const before = snapshot(home);
+
+  assert.throws(
+    () =>
+      installPayload(
+        upgradeOptions(home, source, {
+          fs: fsReportingIdentity([dropped, shipped], 7n, 7n),
+        }),
+      ),
+    /crashed run/,
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
+test('an edited dropped file of the second shipped skill is refused too', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(SPEC_DROPPED_RELATIVE);
+  const edited = join(home, '.agents', 'skills', SPEC_DROPPED_RELATIVE);
+  nodeFs.appendFileSync(edited, 'my own notes\n');
+  const before = snapshot(home);
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source)),
+    (error: Error) =>
+      literal(edited).test(error.message) &&
+      /edited after install/.test(error.message),
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
+test('a hard link made to a dropped skill file after the plan stops the prune and removes nothing', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  const alias = join(home, 'alias.md');
+  let fired = false;
+  const fs = hookedFs((op, args) => {
+    // The repoint comes after planning and before the prune.
+    if (op === 'renameSync' && String(args[1]) === currentOf(home)) {
+      fired = true;
+      nodeFs.linkSync(dropped, alias);
+    }
+  });
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source, { fs })),
+    (error: Error) =>
+      literal(dropped).test(error.message) &&
+      /more than one hard link/.test(error.message) &&
+      /payload is installed/.test(error.message),
+  );
+  assert.ok(fired);
+  assert.ok(nodeFs.existsSync(dropped));
+  assert.ok(nodeFs.existsSync(alias));
+  assert.ok(isListed(home, dropped));
+  const second = droppedOf(home, '.agents');
+  assert.ok(
+    nodeFs.existsSync(second),
+    'the prune stopped before the second copy',
+  );
+  assert.ok(isListed(home, second));
+});
+
+test('a file the user added beside a dropped skill file survives the prune', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const mine = join(dirname(droppedOf(home, '.claude')), 'mine.md');
+  nodeFs.writeFileSync(mine, 'mine\n');
+
+  installPayload(upgradeOptions(home, source));
+
+  assert.equal(nodeFs.existsSync(droppedOf(home, '.claude')), false);
+  assert.equal(nodeFs.readFileSync(mine, 'utf8'), 'mine\n');
+  assert.equal(isListed(home, mine), false);
+});
+
+test('a receipt entry that is not a path the prune may touch is refused and the file is untouched', () => {
+  const user = 'mine\n';
+  const cases = [
+    {
+      name: 'a path that climbs out of the skill tree',
+      path: (home: string) =>
+        `${home}/.claude/skills/issue-authoring/../../notes.md`,
+      file: (home: string) => join(home, '.claude', 'notes.md'),
+      message: /not a path the installer creates|under no root/,
+    },
+    {
+      name: 'a non-normalized path that stays inside another skill',
+      path: (home: string) =>
+        `${home}/.claude/skills/issue-authoring/../idd-spec-audit/SKILL.md`,
+      file: (home: string) =>
+        join(home, '.claude', 'skills', 'idd-spec-audit', 'SKILL.md'),
+      message: /not in normalized form/,
+    },
+    {
+      name: 'a skill the package does not ship',
+      path: (home: string) =>
+        join(home, '.claude', 'skills', 'my-own-skill', 'SKILL.md'),
+      file: (home: string) =>
+        join(home, '.claude', 'skills', 'my-own-skill', 'SKILL.md'),
+      message: /not a path the installer creates/,
+    },
+  ];
+  for (const { name, path, file, message } of cases) {
+    const home = makeHome();
+    nodeFs.mkdirSync(dirname(file(home)), { recursive: true });
+    nodeFs.writeFileSync(file(home), user);
+    nodeFs.mkdirSync(dataRootOf(home), { recursive: true });
+    nodeFs.writeFileSync(
+      receiptOf(home),
+      JSON.stringify({
+        version: 1,
+        entries: [{ kind: 'file', path: path(home), sha256: sha256(user) }],
+      }),
+    );
+    const before = snapshot(home);
+
+    assert.throws(() => installPayload(optionsFor(home)), message, name);
+    assert.deepEqual(snapshot(home), before, name);
+    assert.equal(nodeFs.readFileSync(file(home), 'utf8'), user, name);
+  }
+});
+
+test('a dropped skill file under a directory that was swapped for a link is refused and nothing is followed', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const references = dirname(droppedOf(home, '.claude'));
+  const outside = join(makeSandbox('user-global-outside-'), 'references');
+  nodeFs.cpSync(references, outside, { recursive: true });
+  nodeFs.rmSync(references, { recursive: true });
+  nodeFs.symlinkSync(outside, references);
+  const outsideBefore = snapshot(outside);
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source)),
+    /symbolic link/,
+  );
+  assert.deepEqual(snapshot(outside), outsideBefore);
+  assert.ok(nodeFs.existsSync(join(outside, 'draft-patterns.md')));
+});
+
+test('a dropped skill file that is the same file as a shipped one is kept, not removed', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  const shipped = join(dirname(dropped), 'contract.md');
+
+  const result = installPayload(
+    upgradeOptions(home, source, {
+      fs: fsReportingIdentity([dropped, shipped], 7n, 7n),
+    }),
+  );
+
+  assert.ok(
+    result.lines.includes(`keep ${dropped} (the same file as ${shipped})`),
+  );
+  assert.ok(nodeFs.existsSync(dropped), 'the aliased file is not removed');
+  assert.ok(isListed(home, dropped), 'its entry stays listed');
+  assert.equal(
+    nodeFs.existsSync(droppedOf(home, '.agents')),
+    false,
+    'the other copy is a different file and is removed',
+  );
+  assertListedFilesMatchDisk(home);
+
+  uninstallPayload(upgradeOptions(home, source));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+  assert.equal(nodeFs.existsSync(join(home, '.claude', 'skills')), false);
+});
+
+test('a filesystem that reports no inode number does not turn every dropped skill file into an alias', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  const shipped = join(dirname(dropped), 'contract.md');
+
+  installPayload(
+    upgradeOptions(home, source, {
+      fs: fsReportingIdentity([dropped, shipped], 0n, 0n),
+    }),
+  );
+
+  assert.equal(nodeFs.existsSync(dropped), false);
+  assert.equal(isListed(home, dropped), false);
+});
+
+test('two skill files with the same inode number on different devices are not the same file', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  const shipped = join(dirname(dropped), 'contract.md');
+  const real = nodeFs as unknown as Record<
+    string,
+    (...args: unknown[]) => unknown
+  >;
+  const fs = {
+    ...nodeFs,
+    lstatSync: (path: string, options?: { bigint?: boolean }) => {
+      const stat = real.lstatSync(path, options) as object;
+      if (!options?.bigint) return stat;
+      if (path === dropped) {
+        return Object.create(stat, { dev: { value: 7n }, ino: { value: 5n } });
+      }
+      if (path === shipped) {
+        return Object.create(stat, { dev: { value: 8n }, ino: { value: 5n } });
+      }
+      return stat;
+    },
+  } as unknown as FsOps;
+
+  installPayload(upgradeOptions(home, source, { fs }));
+
+  assert.equal(nodeFs.existsSync(dropped), false);
+  assert.equal(isListed(home, dropped), false);
+});
+
+test('a byte-identical file that was there before install is never listed, so the prune never touches it', () => {
+  const home = makeHome();
+  for (const root of ['.claude', '.agents'] as const) {
+    const path = droppedOf(home, root);
+    nodeFs.mkdirSync(dirname(path), { recursive: true });
+    nodeFs.copyFileSync(join(REPO, 'skills', DROPPED_RELATIVE), path);
+  }
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+
+  const result = installPayload(upgradeOptions(home, source));
+
+  for (const root of ['.claude', '.agents'] as const) {
+    const path = droppedOf(home, root);
+    assert.ok(nodeFs.existsSync(path), `${path} is left in place`);
+    assert.equal(isListed(home, path), false);
+    assert.equal(result.lines.includes(`remove ${path}`), false);
+  }
+});
+
+test('a stale temporary file beside a dropped skill file makes install refuse before any write', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  nodeFs.writeFileSync(`${droppedOf(home, '.claude')}.tmp-7`, 'stale\n');
+  const before = snapshot(home);
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source)),
+    (error: Error) =>
+      /crashed run/.test(error.message) &&
+      /refusing to remove/.test(error.message),
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
+test('a dropped skill file edited after the plan stops the prune, keeps the edit, and a retry refuses it', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const racing = droppedOf(home, '.claude');
+  let opens = 0;
+  const fs = hookedFs((op, args) => {
+    if (op !== 'openSync' || String(args[0]) !== racing) return;
+    opens += 1;
+    // The first open is the plan's hash read; the second is the removal's.
+    if (opens === 2) nodeFs.appendFileSync(racing, 'edited late\n');
+  });
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source, { fs })),
+    (error: Error) =>
+      literal(racing).test(error.message) &&
+      literal(droppedOf(home, '.agents')).test(error.message) &&
+      /payload is installed/.test(error.message) &&
+      /install again/.test(error.message),
+  );
+  assert.equal(opens, 2, 'the removal opened the file once after the plan');
+  assert.ok(nodeFs.readFileSync(racing, 'utf8').endsWith('edited late\n'));
+  assert.equal(
+    nodeFs.readlinkSync(currentOf(home)),
+    versionDirOf(home, UPGRADE_VERSION),
+    'the new version stays installed',
+  );
+  assert.ok(isListed(home, racing), 'the edited file stays listed');
+  assert.ok(nodeFs.existsSync(droppedOf(home, '.agents')));
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source)),
+    /edited after install/,
+  );
+});
+
+test('a failed removal leaves the new version installed and a consistent receipt, and a retry finishes the prune', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const first = droppedOf(home, '.claude');
+  const second = droppedOf(home, '.agents');
+  const fs = hookedFs((op, args) => {
+    if (op === 'unlinkSync' && String(args[0]) === second) {
+      throw new Error('injected unlink failure');
+    }
+  });
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source, { fs })),
+    (error: Error) =>
+      /payload is installed/.test(error.message) &&
+      /injected unlink failure/.test(error.message) &&
+      literal(second).test(error.message) &&
+      literal(`current used to point at ${versionDirOf(home)}`).test(
+        error.message,
+      ) &&
+      /install again/.test(error.message),
+  );
+  assert.equal(nodeFs.existsSync(first), false);
+  assert.equal(isListed(home, first), false);
+  assert.ok(nodeFs.existsSync(second));
+  assert.ok(isListed(home, second));
+  assert.equal(
+    nodeFs.readlinkSync(currentOf(home)),
+    versionDirOf(home, UPGRADE_VERSION),
+  );
+  assertListedFilesMatchDisk(home);
+
+  installPayload(upgradeOptions(home, source));
+  assert.equal(nodeFs.existsSync(second), false);
+  assert.equal(isListed(home, second), false);
+  assertListedFilesMatchDisk(home);
+});
+
+test('a failed receipt rewrite after a removal names the path, and a retry drops it as absent', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const first = droppedOf(home, '.claude');
+  const second = droppedOf(home, '.agents');
+  let removed = false;
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (op === 'unlinkSync' && String(args[0]) === first) removed = true;
+    if (
+      op === 'renameSync' &&
+      removed &&
+      !failed &&
+      String(args[1]).endsWith('receipt.json')
+    ) {
+      failed = true;
+      throw new Error('injected receipt failure');
+    }
+  });
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source, { fs })),
+    (error: Error) =>
+      /receipt rewrite failed/.test(error.message) &&
+      literal(first).test(error.message) &&
+      /gone from disk but still listed/.test(error.message),
+  );
+  assert.equal(nodeFs.existsSync(first), false);
+  assert.ok(isListed(home, first), 'the receipt still lists the removed file');
+  assert.ok(nodeFs.existsSync(second));
+  assert.equal(
+    nodeFs.readdirSync(dataRootOf(home)).some((name) => name.includes('.tmp-')),
+    false,
+    'the failed rename removes its temporary file',
+  );
+  assert.ok(
+    planUninstall(upgradeOptions(home, source)).lines.includes(
+      `absent ${first}`,
+    ),
+    'uninstall reports the removed file as absent',
+  );
+
+  const retry = installPayload(upgradeOptions(home, source));
+  assert.ok(retry.lines.includes(`absent ${first}`));
+  assert.ok(retry.lines.includes(`remove ${second}`));
+  assert.equal(isListed(home, first), false);
+  assert.equal(isListed(home, second), false);
+  assertListedFilesMatchDisk(home);
+});
+
+test('a failed receipt rewrite after the last removal says that nothing else is left', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const last = droppedOf(home, '.agents');
+  nodeFs.rmSync(droppedOf(home, '.claude'));
+  let removed = false;
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (op === 'unlinkSync' && String(args[0]) === last) removed = true;
+    if (
+      op === 'renameSync' &&
+      removed &&
+      !failed &&
+      String(args[1]).endsWith('receipt.json')
+    ) {
+      failed = true;
+      throw new Error('injected receipt failure');
+    }
+  });
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source, { fs })),
+    (error: Error) =>
+      literal(last).test(error.message) &&
+      /not yet handled: none/.test(error.message),
+  );
+  assert.ok(failed);
+});
+
+test('an absent dropped skill file whose name the new version uses for a directory stays listed as that directory', () => {
+  const home = makeHome();
+  const oldSource = copySourceTree();
+  nodeFs.writeFileSync(
+    join(oldSource, 'skills', 'issue-authoring', 'notes'),
+    'old\n',
+  );
+  installPayload(
+    optionsFor(home, { sourceRoot: oldSource, version: '98.0.0' }),
+  );
+  const names = ['.claude', '.agents'].map((root) =>
+    join(home, root, 'skills', 'issue-authoring', 'notes'),
+  );
+  for (const name of names) {
+    assert.ok(isListed(home, name));
+    nodeFs.rmSync(name);
+  }
+  const source = copySourceTree();
+  nodeFs.mkdirSync(join(source, 'skills', 'issue-authoring', 'notes'));
+  nodeFs.writeFileSync(
+    join(source, 'skills', 'issue-authoring', 'notes', 'x.md'),
+    'new\n',
+  );
+
+  installPayload(upgradeOptions(home, source));
+
+  for (const name of names) {
+    assert.ok(nodeFs.statSync(name).isDirectory());
+    assert.equal(
+      receiptRows(home).find((entry) => entry.path === name)?.kind,
+      'directory',
+      `${name} is listed as the directory it now is`,
+    );
+  }
+  assertListedFilesMatchDisk(home);
+  uninstallPayload(upgradeOptions(home, source));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+  assert.equal(nodeFs.existsSync(join(home, '.claude', 'skills')), false);
+  assert.equal(nodeFs.existsSync(join(home, '.agents', 'skills')), false);
+});
+
+test('an upgrade that replaces one skill file, drops another, and keeps an entry file lists all of it', () => {
+  const home = makeHome();
+  const harnesses = ['claude'] as const;
+  installPayload(optionsFor(home, { harnesses }));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  nodeFs.appendFileSync(join(source, 'skills', SKILL_RELATIVE), '\nupgrade\n');
+  const newBytes = nodeFs.readFileSync(join(source, 'skills', SKILL_RELATIVE));
+  const entryFile = join(home, '.claude', 'CLAUDE.md');
+  const entryBefore = nodeFs.readFileSync(entryFile);
+
+  installPayload(upgradeOptions(home, source, { harnesses }));
+
+  const replaced = skillFileOf(home, '.claude');
+  assert.deepEqual(nodeFs.readFileSync(replaced), newBytes);
+  assert.equal(
+    receiptRows(home).find((entry) => entry.path === replaced)?.sha256,
+    sha256(newBytes),
+  );
+  assert.equal(nodeFs.existsSync(droppedOf(home, '.claude')), false);
+  assert.equal(isListed(home, droppedOf(home, '.claude')), false);
+  assert.deepEqual(nodeFs.readFileSync(entryFile), entryBefore);
+  assert.ok(isListed(home, entryFile));
+  assertListedFilesMatchDisk(home);
+
+  uninstallPayload(upgradeOptions(home, source, { harnesses }));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+  assert.deepEqual(nodeFs.readdirSync(join(home, '.claude')), []);
+});
+
+test('a dropped skill file that vanishes between the plan and the prune is only unlisted', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = [droppedOf(home, '.claude'), droppedOf(home, '.agents')];
+  let fired = false;
+  const fs = hookedFs((op, args) => {
+    // The repoint comes after planning and before the prune.
+    if (op === 'renameSync' && String(args[1]) === currentOf(home)) {
+      fired = true;
+      for (const path of dropped) nodeFs.rmSync(path);
+    }
+  });
+
+  installPayload(upgradeOptions(home, source, { fs }));
+
+  assert.ok(fired, 'the files were removed between the plan and the prune');
+
+  for (const path of dropped) {
+    assert.equal(isListed(home, path), false);
+    assert.equal(nodeFs.existsSync(path), false);
+  }
+  assertListedFilesMatchDisk(home);
+});
+
+test('a dropped skill file swapped for a symbolic link after the plan is not followed', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const sentinel = join(makeSandbox('user-global-sentinel-'), 'sentinel.txt');
+  nodeFs.writeFileSync(sentinel, 'sentinel\n');
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  let fired = false;
+  const fs = hookedFs((op, args) => {
+    // The repoint comes after planning and before the prune.
+    if (op === 'renameSync' && String(args[1]) === currentOf(home)) {
+      fired = true;
+      nodeFs.unlinkSync(dropped);
+      nodeFs.symlinkSync(sentinel, dropped);
+    }
+  });
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source, { fs })),
+    (error: Error) =>
+      literal(dropped).test(error.message) &&
+      /payload is installed/.test(error.message),
+  );
+  assert.ok(fired);
+  assert.ok(nodeFs.lstatSync(dropped).isSymbolicLink());
+  assert.equal(nodeFs.readFileSync(sentinel, 'utf8'), 'sentinel\n');
+  assert.ok(isListed(home, dropped));
+});
+
+test('a skill directory swapped for a symbolic link after the plan is not followed by the prune', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  const references = dirname(dropped);
+  const outside = join(makeSandbox('user-global-outside-'), 'references');
+  nodeFs.cpSync(references, outside, { recursive: true });
+  const outsideBefore = snapshot(outside);
+  let fired = false;
+  const fs = hookedFs((op, args) => {
+    if (op === 'renameSync' && String(args[1]) === currentOf(home)) {
+      fired = true;
+      nodeFs.rmSync(references, { recursive: true });
+      nodeFs.symlinkSync(outside, references);
+    }
+  });
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source, { fs })),
+    (error: Error) =>
+      literal(dropped).test(error.message) &&
+      /symbolic link/.test(error.message) &&
+      /payload is installed/.test(error.message),
+  );
+  assert.ok(fired);
+  assert.deepEqual(snapshot(outside), outsideBefore);
+  assert.ok(nodeFs.existsSync(join(outside, 'draft-patterns.md')));
+});
+
+test('a failure in a late install step leaves the dropped skill files in place and listed', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = [droppedOf(home, '.claude'), droppedOf(home, '.agents')];
+  let fired = false;
+  const fs = hookedFs((op, args) => {
+    if (
+      op === 'openSync' &&
+      isWriteCall(op, args) &&
+      String(args[0]) === join(home, '.claude', 'CLAUDE.md')
+    ) {
+      fired = true;
+      throw new Error('injected entry-file write failure');
+    }
+  });
+
+  assert.throws(
+    () =>
+      installPayload(
+        upgradeOptions(home, source, { fs, harnesses: ['claude'] }),
+      ),
+    /rolled back/,
+  );
+  assert.ok(fired);
+  for (const path of dropped) {
+    assert.ok(nodeFs.existsSync(path), `${path} is untouched`);
+    assert.ok(isListed(home, path), `${path} is still listed`);
+  }
+  assert.equal(nodeFs.readlinkSync(currentOf(home)), versionDirOf(home));
+  assert.equal(nodeFs.existsSync(versionDirOf(home, UPGRADE_VERSION)), false);
+  assertListedFilesMatchDisk(home);
+});
+
+test('an older version directory inside a skill directory is not taken for a skill file', () => {
+  const home = makeHome();
+  const xdg = join(home, '.claude', 'skills', 'issue-authoring', 'xdg');
+  nodeFs.mkdirSync(xdg, { recursive: true });
+  const env = { HOME: home, XDG_DATA_HOME: xdg };
+  installPayload({ env, homedir: home });
+  const olderFile = join(xdg, 'idd-skill', PACKAGE_VERSION, ENTRY_RELATIVE);
+  assert.ok(nodeFs.existsSync(olderFile));
+
+  installPayload({
+    env,
+    homedir: home,
+    sourceRoot: copySourceTree(),
+    version: UPGRADE_VERSION,
+  });
+
+  assert.ok(nodeFs.existsSync(olderFile), 'the older version stays on disk');
+  assert.ok(
+    (
+      JSON.parse(
+        nodeFs.readFileSync(join(xdg, 'idd-skill', 'receipt.json'), 'utf8'),
+      ).entries as ReceiptRow[]
+    ).some((entry) => entry.path === olderFile),
+    'the older version stays listed',
+  );
+});
+
+test('a source skill with no SKILL.md makes install refuse before any write', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout('idd-spec-audit/SKILL.md');
+  const before = snapshot(home);
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source)),
+    /has no SKILL\.md/,
+  );
+  assert.deepEqual(snapshot(home), before);
+  assert.ok(
+    nodeFs.existsSync(
+      join(home, '.claude', 'skills', 'idd-spec-audit', 'SKILL.md'),
+    ),
+  );
+
+  const fresh = makeHome();
+  assert.throws(
+    () => installPayload(upgradeOptions(fresh, source)),
+    /has no SKILL\.md/,
+  );
+  assert.equal(nodeFs.existsSync(dataRootOf(fresh)), false);
+});
+
+test('an upgrade that drops nothing reports no removal and keeps every listed entry', () => {
+  for (const harnesses of [[], ['claude']] as const) {
+    const home = makeHome();
+    installPayload(optionsFor(home, { harnesses }));
+    const before = receiptRows(home);
+    const skillsBefore = [
+      ...snapshot(join(home, '.claude', 'skills')),
+      ...snapshot(join(home, '.agents', 'skills')),
+    ];
+    const source = copySourceTree();
+
+    const result = installPayload(upgradeOptions(home, source, { harnesses }));
+
+    assert.ok(
+      result.lines.every(
+        (line) => !line.startsWith('remove ') && !line.startsWith('absent '),
+      ),
+      'no removal is reported',
+    );
+    const after = receiptRows(home);
+    // The upgrade adds entries for the new version and updates the link, and
+    // keeps every earlier entry listed, in its original order.
+    const earlier = after.filter((entry) =>
+      before.some((prior) => prior.path === entry.path),
+    );
+    assert.deepEqual(
+      earlier.map((entry) => [entry.path, entry.kind, entry.sha256]),
+      before.map((entry) => [entry.path, entry.kind, entry.sha256]),
+    );
+    assert.deepEqual(
+      [
+        ...snapshot(join(home, '.claude', 'skills')),
+        ...snapshot(join(home, '.agents', 'skills')),
+      ],
+      skillsBefore,
+      'the skill trees keep their bytes',
+    );
+  }
+});
+
+test('planInstall reports the removals an upgrade would make and writes nothing', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const before = snapshot(home);
+
+  const plan = planInstall(upgradeOptions(home, source));
+
+  for (const root of ['.claude', '.agents'] as const) {
+    assert.ok(plan.lines.includes(`remove ${droppedOf(home, root)}`));
+  }
+  assert.deepEqual(snapshot(home), before);
+});
+
+// --- Links above the roots (#4303) --------------------------------------------
+
+/**
+ * The real `node:fs` whose lstat reports `uid` as the owner of each listed
+ * path, so a test does not depend on who runs it or who owns a link it made.
+ * Root (uid 0) stands for the system, whose links are tolerated above a root.
+ */
+function ownedBy(uid: number, ...paths: string[]): FsOps {
+  const listed = new Set(paths);
+  return {
+    ...nodeFs,
+    lstatSync: (path: string) => {
+      const stat = nodeFs.lstatSync(path);
+      return listed.has(path)
+        ? Object.create(stat, { uid: { value: uid } })
+        : stat;
+    },
+  } as unknown as FsOps;
+}
+
+/** A directory outside the sandbox HOME, holding one sentinel file. */
+function makeOutside(): string {
+  const outside = makeSandbox('user-global-outside-');
+  nodeFs.writeFileSync(join(outside, 'sentinel.txt'), 'keep\n');
+  return outside;
+}
+
+/** Plan, install, plan an uninstall, and uninstall: each must refuse as a link. */
+function assertRefusedEverywhere(
+  options: UserGlobalOptions,
+  trees: string[],
+): void {
+  const before = trees.map((tree) => snapshot(tree));
+  for (const run of [
+    planInstall,
+    installPayload,
+    planUninstall,
+    uninstallPayload,
+  ]) {
+    assert.throws(() => run(options), /symbolic link/);
+  }
+  assert.deepEqual(
+    trees.map((tree) => snapshot(tree)),
+    before,
+    'a refusal changes neither the home tree nor the directory outside it',
+  );
+}
+
+/** A HOME with the usual directories, inside its own parent directory. */
+function seedHomeIn(parent: string): string {
+  const home = join(parent, 'home');
+  for (const dir of ['.local/share', '.claude', '.agents']) {
+    nodeFs.mkdirSync(join(home, dir), { recursive: true });
+  }
+  return home;
+}
+
+test('a link at HOME/.local with nothing beyond it makes every entry point refuse, with HOME spelled either way', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const outside = makeOutside();
+  nodeFs.rmSync(join(home, '.local'), { recursive: true });
+  nodeFs.symlinkSync(outside, join(home, '.local'));
+
+  assertRefusedEverywhere(optionsFor(home), [home, outside]);
+  assertRefusedEverywhere(optionsFor(`${home}/`), [home, outside]);
+});
+
+test('a link at HOME/.local/share with the data root beyond it makes every entry point refuse', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const outside = makeOutside();
+  nodeFs.mkdirSync(join(outside, 'idd-skill'));
+  nodeFs.rmSync(join(home, '.local', 'share'), { recursive: true });
+  nodeFs.symlinkSync(outside, join(home, '.local', 'share'));
+
+  assertRefusedEverywhere(optionsFor(home), [home, outside]);
+});
+
+test('a link at HOME/.claude or HOME/.agents with the skills directory beyond it makes install and plan refuse', {
+  skip: NO_LINKS,
+}, () => {
+  for (const name of ['.claude', '.agents']) {
+    const home = makeHome();
+    const outside = makeOutside();
+    nodeFs.mkdirSync(join(outside, 'skills'));
+    nodeFs.rmSync(join(home, name), { recursive: true });
+    nodeFs.symlinkSync(outside, join(home, name));
+    const before = [snapshot(home), snapshot(outside)];
+
+    for (const run of [planInstall, installPayload]) {
+      assert.throws(() => run(optionsFor(home)), /symbolic link/);
+    }
+    assert.deepEqual([snapshot(home), snapshot(outside)], before);
+    assert.equal(nodeFs.existsSync(dataRootOf(home)), false, name);
+  }
+});
+
+test('a symbolic-link HOME is refused by every entry point, with HOME spelled either way', {
+  skip: NO_LINKS,
+}, () => {
+  const real = makeHome();
+  const link = join(makeSandbox('user-global-linkparent-'), 'home-link');
+  nodeFs.symlinkSync(real, link);
+
+  assertRefusedEverywhere(optionsFor(link), [real]);
+  assertRefusedEverywhere(optionsFor(`${link}/`), [real]);
+});
+
+test('uninstall refuses a link that appeared above the data root or above a skill root after install', {
+  skip: NO_LINKS,
+}, () => {
+  for (const name of ['.local', '.claude']) {
+    const home = makeHome();
+    installPayload(optionsFor(home));
+    nodeFs.renameSync(join(home, name), join(home, `${name}-real`));
+    nodeFs.symlinkSync(join(home, `${name}-real`), join(home, name));
+    const before = snapshot(home);
+
+    assert.throws(
+      () => uninstallPayload(optionsFor(home)),
+      /symbolic link/,
+      name,
+    );
+    assert.deepEqual(snapshot(home), before, name);
+  }
+});
+
+test('a symbolic-link XDG_DATA_HOME is refused by every entry point', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const real = makeSandbox('user-global-xdg-');
+  nodeFs.mkdirSync(join(real, 'idd-skill'));
+  const link = join(makeSandbox('user-global-linkparent-'), 'xdg-link');
+  nodeFs.symlinkSync(real, link);
+  const options = optionsFor(home, {
+    env: { HOME: home, XDG_DATA_HOME: link },
+  });
+
+  assertRefusedEverywhere(options, [home, real]);
+});
+
+test('a root-owned link above XDG_DATA_HOME is tolerated, and a link at HOME/.local is irrelevant when XDG_DATA_HOME points elsewhere', {
+  skip: NO_LINKS,
+}, () => {
+  const parentReal = makeSandbox('user-global-xdg-parent-');
+  nodeFs.mkdirSync(join(parentReal, 'xdg'));
+  const parentLink = join(makeSandbox('user-global-linkparent-'), 'linked');
+  nodeFs.symlinkSync(parentReal, parentLink);
+  const xdg = join(parentLink, 'xdg');
+  const home = makeHome();
+  const outside = makeOutside();
+  nodeFs.rmSync(join(home, '.local'), { recursive: true });
+  nodeFs.symlinkSync(outside, join(home, '.local'));
+  const before = snapshot(outside);
+  const options = optionsFor(home, {
+    env: { HOME: home, XDG_DATA_HOME: xdg },
+    fs: ownedBy(0, parentLink),
+  });
+
+  installPayload(options);
+  assert.equal(
+    nodeFs.existsSync(join(parentReal, 'xdg', 'idd-skill', 'receipt.json')),
+    true,
+  );
+  uninstallPayload(options);
+  assert.equal(nodeFs.existsSync(join(parentReal, 'xdg', 'idd-skill')), false);
+  assert.deepEqual(snapshot(outside), before);
+});
+
+test('a HOME reached through a root-owned linked parent installs and uninstalls as before', {
+  skip: NO_LINKS,
+}, () => {
+  const parentReal = makeSandbox('user-global-realparent-');
+  seedHomeIn(parentReal);
+  const parentLink = join(makeSandbox('user-global-linkparent-'), 'linked');
+  nodeFs.symlinkSync(parentReal, parentLink);
+  const home = join(parentLink, 'home');
+  const options = optionsFor(home, { fs: ownedBy(0, parentLink) });
+
+  installPayload(options);
+  assert.equal(
+    nodeFs.readFileSync(
+      skillFileOf(join(parentReal, 'home'), '.claude'),
+      'utf8',
+    ),
+    nodeFs.readFileSync(join(REPO, 'skills', SKILL_RELATIVE), 'utf8'),
+  );
+  uninstallPayload(options);
+  assert.equal(nodeFs.existsSync(dataRootOf(join(parentReal, 'home'))), false);
+});
+
+test('a link at HOME/.config does not block an install that edits no opencode file', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const outside = makeOutside();
+  nodeFs.symlinkSync(outside, join(home, '.config'));
+  const before = snapshot(outside);
+
+  installPayload(optionsFor(home, { harnesses: ['claude'] }));
+  assert.deepEqual(snapshot(outside), before);
+  uninstallPayload(optionsFor(home, { harnesses: ['claude'] }));
+});
+
+test('a link planted above the data root during an install makes the next step refuse and no payload lands', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  let planted = false;
+  const fs = hookedFs((op, args) => {
+    if (planted || op !== 'renameSync') return;
+    if (!String(args[1]).endsWith('receipt.json')) return;
+    planted = true;
+    nodeFs.renameSync(join(home, '.local'), join(home, '.local-real'));
+    nodeFs.symlinkSync(join(home, '.local-real'), join(home, '.local'));
+  });
+
+  assert.throws(
+    () => installPayload(optionsFor(home, { fs })),
+    (error: Error) =>
+      /symbolic link/.test(error.message) &&
+      /rollback left these paths in place/.test(error.message),
+    'the rollback refuses through the link too, and names what it left',
+  );
+  assert.equal(planted, true);
+  assert.equal(
+    nodeFs.existsSync(
+      join(home, '.local-real', 'share', 'idd-skill', PACKAGE_VERSION),
+    ),
+    false,
+    'no payload version directory landed after the link appeared',
+  );
+  assert.equal(nodeFs.existsSync(join(home, '.claude', 'skills')), false);
+  assert.equal(nodeFs.existsSync(join(home, '.agents', 'skills')), false);
+});
+
+test('a link planted above the data root during an uninstall stops it and leaves the payload version in place', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  let planted = false;
+  const fs = hookedFs((op) => {
+    if (planted || op !== 'unlinkSync') return;
+    planted = true;
+    nodeFs.renameSync(join(home, '.local'), join(home, '.local-real'));
+    nodeFs.symlinkSync(join(home, '.local-real'), join(home, '.local'));
+  });
+
+  assert.throws(
+    () => uninstallPayload(optionsFor(home, { fs })),
+    /symbolic link/,
+  );
+  assert.equal(planted, true);
+  assert.equal(
+    nodeFs.existsSync(
+      join(home, '.local-real', 'share', 'idd-skill', PACKAGE_VERSION),
+    ),
+    true,
+    'the payload version directory is still in place',
+  );
+});
+
+test('XDG_DATA_HOME exported as the default location does not hide a link above it', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const outside = makeOutside();
+  nodeFs.mkdirSync(join(outside, 'share'));
+  nodeFs.rmSync(join(home, '.local'), { recursive: true });
+  nodeFs.symlinkSync(outside, join(home, '.local'));
+  const options = optionsFor(home, {
+    env: { HOME: home, XDG_DATA_HOME: join(home, '.local', 'share') },
+  });
+
+  assertRefusedEverywhere(options, [home, outside]);
+});
+
+test('a CODEX_HOME outside HOME is declared by its parent: a root-owned link above the parent is tolerated, a link at the parent is refused', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const parentReal = makeSandbox('user-global-codexparent-');
+  nodeFs.mkdirSync(join(parentReal, 'roots', 'codex'), { recursive: true });
+  const parentLink = join(makeSandbox('user-global-linkparent-'), 'linked');
+  nodeFs.symlinkSync(parentReal, parentLink);
+  const options = optionsFor(home, {
+    env: { HOME: home, CODEX_HOME: join(parentLink, 'roots', 'codex') },
+    harnesses: ['codex'],
+    fs: ownedBy(0, parentLink),
+  });
+
+  installPayload(options);
+  const agents = join(parentReal, 'roots', 'codex', 'AGENTS.md');
+  assert.equal(nodeFs.existsSync(agents), true);
+  uninstallPayload(options);
+  assert.equal(nodeFs.existsSync(agents), false);
+
+  const real = makeSandbox('user-global-codexreal-');
+  nodeFs.mkdirSync(join(real, 'codex'));
+  const link = join(makeSandbox('user-global-linkparent-'), 'codex-parent');
+  nodeFs.symlinkSync(real, link);
+  const refused = optionsFor(home, {
+    env: { HOME: home, CODEX_HOME: join(link, 'codex') },
+    harnesses: ['codex'],
+  });
+  assert.throws(() => installPayload(refused), /symbolic link/);
+  assert.deepEqual(nodeFs.readdirSync(join(real, 'codex')), []);
+});
+
+test('an XDG_CONFIG_HOME outside HOME is a declared root: a root-owned link above it is tolerated', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const parentReal = makeSandbox('user-global-cfgparent-');
+  nodeFs.mkdirSync(join(parentReal, 'cfg'));
+  const parentLink = join(makeSandbox('user-global-linkparent-'), 'linked');
+  nodeFs.symlinkSync(parentReal, parentLink);
+  const options = optionsFor(home, {
+    env: { HOME: home, XDG_CONFIG_HOME: join(parentLink, 'cfg') },
+    harnesses: ['opencode'],
+    fs: ownedBy(0, parentLink),
+  });
+
+  installPayload(options);
+  const config = join(parentReal, 'cfg', 'opencode', 'opencode.json');
+  assert.equal(nodeFs.existsSync(config), true);
+  uninstallPayload(options);
+  assert.equal(nodeFs.existsSync(config), false);
+});
+
+test('a link planted above an entry-file directory during an install makes the entry step refuse', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  nodeFs.mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
+  let planted = false;
+  const fs = hookedFs((op, args) => {
+    if (planted || op !== 'renameSync') return;
+    if (!String(args[1]).endsWith('receipt.json')) return;
+    planted = true;
+    nodeFs.renameSync(join(home, '.config'), join(home, '.config-real'));
+    nodeFs.symlinkSync(join(home, '.config-real'), join(home, '.config'));
+  });
+
+  assert.throws(
+    () => installPayload(optionsFor(home, { fs, harnesses: ['opencode'] })),
+    /symbolic link/,
+  );
+  assert.equal(planted, true);
+  assert.equal(
+    nodeFs.existsSync(join(home, '.config-real', 'opencode', 'opencode.json')),
+    false,
+    'the entry file did not land through the link',
+  );
+});
+
+test('a CODEX_HOME beside HOME under a root-owned linked ancestor does not make the other roots stricter', {
+  skip: NO_LINKS,
+}, () => {
+  const parentReal = makeSandbox('user-global-sharedparent-');
+  seedHomeIn(parentReal);
+  nodeFs.mkdirSync(join(parentReal, 'codex'));
+  const parentLink = join(makeSandbox('user-global-linkparent-'), 'linked');
+  nodeFs.symlinkSync(parentReal, parentLink);
+  const home = join(parentLink, 'home');
+  const env = { HOME: home, CODEX_HOME: join(parentLink, 'codex') };
+  const fs = ownedBy(0, parentLink);
+
+  // No codex harness is selected, so the declared parent is never walked.
+  installPayload(optionsFor(home, { env, fs }));
+  uninstallPayload(optionsFor(home, { env, fs }));
+  // The entry-file walk starts at that parent, which must be a real directory.
+  assert.throws(
+    () => installPayload(optionsFor(home, { env, fs, harnesses: ['codex'] })),
+    /symbolic link/,
+  );
+  assert.equal(
+    nodeFs.existsSync(join(parentReal, 'codex', 'AGENTS.md')),
+    false,
+  );
+});
+
+test('a symbolic-link XDG_CONFIG_HOME is refused when the opencode harness is selected', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const real = makeSandbox('user-global-cfgreal-');
+  const link = join(makeSandbox('user-global-linkparent-'), 'cfg-link');
+  nodeFs.symlinkSync(real, link);
+  const options = optionsFor(home, {
+    env: { HOME: home, XDG_CONFIG_HOME: link },
+    harnesses: ['opencode'],
+  });
+  const before = snapshot(real);
+
+  assert.throws(() => installPayload(options), /symbolic link/);
+  assert.deepEqual(snapshot(real), before);
+});
+
+test('a link planted above the data root during an upgrade refuses and keeps the prior current target', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceTree();
+  nodeFs.appendFileSync(join(source, 'skills', SKILL_RELATIVE), '\nupgrade\n');
+  let planted = false;
+  const fs = hookedFs((op, args) => {
+    if (planted || op !== 'renameSync') return;
+    if (!String(args[1]).endsWith('receipt.json')) return;
+    planted = true;
+    nodeFs.renameSync(join(home, '.local'), join(home, '.local-real'));
+    nodeFs.symlinkSync(join(home, '.local-real'), join(home, '.local'));
+  });
+
+  assert.throws(
+    () =>
+      installPayload(
+        optionsFor(home, { sourceRoot: source, version: UPGRADE_VERSION, fs }),
+      ),
+    /symbolic link/,
+  );
+  assert.equal(planted, true);
+  const moved = join(home, '.local-real', 'share', 'idd-skill');
+  assert.equal(nodeFs.readlinkSync(join(moved, 'current')), versionDirOf(home));
+  assert.deepEqual(
+    nodeFs.readdirSync(join(moved, UPGRADE_VERSION)),
+    [],
+    'only the directory made before the link appeared exists, and it is empty',
+  );
+});
+
+test('the refusal for a link above the data root names the remedy and says nothing changed', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  const outside = makeOutside();
+  nodeFs.mkdirSync(join(outside, 'idd-skill'));
+  nodeFs.rmSync(join(home, '.local', 'share'), { recursive: true });
+  nodeFs.symlinkSync(outside, join(home, '.local', 'share'));
+
+  assert.throws(
+    () => installPayload(optionsFor(home)),
+    /nothing was written.*symbolic link.*move the real directory into the link's place/s,
+  );
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /nothing was removed.*symbolic link.*move the real directory into the link's place/s,
+  );
+});
+
+test('a regular file on the chain is refused without the link remedy, once per run', {
+  skip: NO_LINKS,
+}, () => {
+  const home = makeHome();
+  nodeFs.rmSync(join(home, '.local'), { recursive: true });
+  nodeFs.writeFileSync(join(home, '.local'), 'not a directory\n');
+
+  for (const run of [installPayload, uninstallPayload]) {
+    assert.throws(
+      () => run(optionsFor(home)),
+      (error: Error) =>
+        /is not a directory/.test(error.message) &&
+        !/move the real directory/.test(error.message),
+    );
+  }
+});
+
+test('a platform without the no-follow opens is refused once by install and uninstall, writing nothing', () => {
+  const home = makeHome();
+  const noFollow = {
+    ...nodeFs,
+    constants: {
+      ...nodeFs.constants,
+      O_NOFOLLOW: undefined,
+      O_NONBLOCK: undefined,
+    },
+  } as unknown as FsOps;
+  const before = snapshot(home);
+
+  for (const run of [installPayload, uninstallPayload]) {
+    assert.throws(
+      () => run(optionsFor(home, { fs: noFollow })),
+      (error: Error) =>
+        error.message.split('does not support').length === 2 &&
+        !/move the real directory/.test(error.message),
+    );
+  }
+  assert.deepEqual(snapshot(home), before);
+});
+
+test('a HOME reached through a linked parent that root does not own is refused by every entry point, and nothing is written', {
+  skip: NO_LINKS,
+}, () => {
+  const parentReal = makeSandbox('user-global-realparent-');
+  seedHomeIn(parentReal);
+  const parentLink = join(makeSandbox('user-global-linkparent-'), 'linked');
+  nodeFs.symlinkSync(parentReal, parentLink);
+  const home = join(parentLink, 'home');
+  const options = optionsFor(home, { fs: ownedBy(1234, parentLink) });
+
+  assertRefusedEverywhere(options, [parentReal]);
+  assert.throws(
+    () => installPayload(options),
+    /linked is a symbolic link above .* that the system does not own \(owner uid 1234\)/,
+  );
+  assert.equal(nodeFs.existsSync(dataRootOf(join(parentReal, 'home'))), false);
+});
+
+test('a link above XDG_DATA_HOME that a user owns is refused by every entry point', {
+  skip: NO_LINKS,
+}, () => {
+  const parentReal = makeSandbox('user-global-xdg-parent-');
+  nodeFs.mkdirSync(join(parentReal, 'xdg'));
+  const parentLink = join(makeSandbox('user-global-linkparent-'), 'linked');
+  nodeFs.symlinkSync(parentReal, parentLink);
+  const home = makeHome();
+  const options = optionsFor(home, {
+    env: { HOME: home, XDG_DATA_HOME: join(parentLink, 'xdg') },
+    fs: ownedBy(1234, parentLink),
+  });
+
+  assertRefusedEverywhere(options, [home, parentReal]);
 });

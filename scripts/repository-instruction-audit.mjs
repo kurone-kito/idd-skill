@@ -54,6 +54,8 @@ const SPECIFICITY_NEEDLES = {
     'approval-needed hold',
     'it is not yet `ready`',
     'protect autonomous completion and clear verification',
+    'Interactive choice.',
+    'The session asks in one turn, covering every such choice in the current set',
   ],
   '## Hidden human-dependency validation': [
     'routing aid, not a rigid wording linter',

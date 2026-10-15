@@ -1103,6 +1103,312 @@ test('untrusted stamped Accepted: the same stamped Accepted reply from a trusted
   assert.equal(verdict.ready, true);
 });
 
+// --- #4306: a reply on a pending decision does not settle the thread -------
+//
+// Observed 2026-10-14 on PR #4271 (issue #4244): the worker answered a Copilot
+// thread with a stamped `**Accepted**` reply whose body left the forged-receipt
+// question to the maintainer, and this gate counted the thread as settled.
+// Recorded verdicts for the two fixtures below: before the fix, fixture 1
+// read `converged: true, ready: true, reasons: []`; after it, `converged:
+// false, ready: false` with a reason that names the thread.
+
+const PENDING_PARAGRAPH =
+  "**Awaiting maintainer decision** — whether a forged receipt with the installer's own content must be refused needs a provenance mechanism.";
+
+function pendingDecisionThread(
+  id: string,
+  replies: { body: string; createdAt?: string; lastEditedAt?: string | null }[],
+) {
+  return {
+    id,
+    isResolved: false,
+    comments: {
+      nodes: [
+        {
+          author: { login: COPILOT_LOGIN },
+          body: 'A forged file record can name a user-owned file.',
+          createdAt: OLD,
+          updatedAt: OLD,
+        },
+        ...replies.map((reply) => ({
+          author: { login: TRUSTED },
+          body: reply.body,
+          createdAt: reply.createdAt ?? RECENT,
+          updatedAt: reply.createdAt ?? RECENT,
+          lastEditedAt: reply.lastEditedAt ?? null,
+        })),
+      ],
+    },
+  };
+}
+
+function verdictForThreads(
+  threads: ReturnType<typeof pendingDecisionThread>[],
+) {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({ reviews: [copilotReview()], threads }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  return verdict;
+}
+
+test('#4306: a stamped Accepted reply that carries a pending-decision paragraph does not settle the thread, and the reason names it', () => {
+  const stamp = renderReviewReplyStamp();
+  const verdict = verdictForThreads([
+    pendingDecisionThread('PRRT_pending_accepted', [
+      {
+        body: `**Accepted** (defect part), fixed in b7f957284.\n\n${PENDING_PARAGRAPH}\n\n${stamp}`,
+      },
+    ]),
+  ]);
+  assert.equal(verdict.review.satisfied, true);
+  assert.equal(verdict.threads.satisfied, false);
+  assert.deepEqual(verdict.threads.blockingIds, ['PRRT_pending_accepted']);
+  assert.deepEqual(verdict.threads.pendingDecisionIds, [
+    'PRRT_pending_accepted',
+  ]);
+  assert.equal(verdict.converged, false);
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.reasons.length, 1);
+  const [reason] = verdict.reasons;
+  assert.match(reason ?? '', /PRRT_pending_accepted/);
+  assert.match(reason ?? '', /hold a pending decision/);
+  assert.match(reason ?? '', /Awaiting maintainer decision/);
+  assert.doesNotMatch(reason ?? '', /neither resolved nor validly/);
+});
+
+test('#4306: a stamped plain hold reads as the same pending decision', () => {
+  const stamp = renderReviewReplyStamp();
+  const verdict = verdictForThreads([
+    pendingDecisionThread('PRRT_pending_hold', [
+      { body: `${PENDING_PARAGRAPH}\n\n${stamp}` },
+    ]),
+  ]);
+  assert.deepEqual(verdict.threads.pendingDecisionIds, ['PRRT_pending_hold']);
+  assert.equal(verdict.converged, false);
+  assert.match(verdict.reasons.join('\n'), /PRRT_pending_hold/);
+});
+
+test('#4306: an edited pending reply still holds the thread', () => {
+  const verdict = verdictForThreads([
+    pendingDecisionThread('PRRT_pending_edited', [
+      {
+        body: `**Accepted** (part).\n\n${PENDING_PARAGRAPH}`,
+        lastEditedAt: RECENT,
+      },
+    ]),
+  ]);
+  assert.deepEqual(verdict.threads.pendingDecisionIds, ['PRRT_pending_edited']);
+  assert.equal(verdict.converged, false);
+});
+
+test('#4306: an Accepted reply that only quotes the marker as code, mid-sentence, or in hidden HTML stays settled', () => {
+  const stamp = renderReviewReplyStamp();
+  const quoted = [
+    `**Accepted** — dropped the \`**Awaiting maintainer decision**\` hold: fixed in abc1234.\n\n${stamp}`,
+    `**Accepted** — the earlier **Awaiting maintainer decision** hold is gone: fixed in abc1234.\n\n${stamp}`,
+    `**Accepted** — fixed in abc1234.\n\n\`\`\`\n${PENDING_PARAGRAPH}\n\`\`\`\n\n${stamp}`,
+    `**Accepted** — fixed in abc1234.\n\n> ${PENDING_PARAGRAPH}\n\n${stamp}`,
+    // Hidden text is not a hold either (#4332): a multi-line HTML comment or
+    // `<div>` block carries the paragraph out of sight.
+    `**Accepted** — fixed in abc1234.\n\n<!--\n${PENDING_PARAGRAPH}\n-->\n\n${stamp}`,
+    `**Accepted** — fixed in abc1234.\n\n<div>\n${PENDING_PARAGRAPH}\n</div>\n\n${stamp}`,
+  ];
+  for (const body of quoted) {
+    const verdict = verdictForThreads([
+      pendingDecisionThread('PRRT_quoted', [{ body }]),
+    ]);
+    assert.equal(verdict.threads.satisfied, true, body);
+    assert.deepEqual(verdict.threads.pendingDecisionIds, [], body);
+    assert.equal(verdict.converged, true, body);
+  }
+});
+
+test('#4306: the decision ends the hold only when a settled reply follows the pending one', () => {
+  const stamp = renderReviewReplyStamp();
+  const pending = {
+    body: `**Accepted** (defect part).\n\n${PENDING_PARAGRAPH}\n\n${stamp}`,
+    createdAt: '2026-07-11T09:00:00Z',
+  };
+  const decided = {
+    body: `**Accepted** — the maintainer chose to document the residual risk: fixed in def5678.\n\n${stamp}`,
+    createdAt: '2026-07-11T09:30:00Z',
+  };
+  const after = verdictForThreads([
+    pendingDecisionThread('PRRT_decided', [pending, decided]),
+  ]);
+  assert.equal(after.threads.satisfied, true);
+  assert.equal(after.converged, true);
+
+  // A pending reply posted after a settled one reopens the thread.
+  const reopened = verdictForThreads([
+    pendingDecisionThread('PRRT_reopened', [
+      { ...decided, createdAt: '2026-07-11T09:00:00Z' },
+      { ...pending, createdAt: '2026-07-11T09:30:00Z' },
+    ]),
+  ]);
+  assert.deepEqual(reopened.threads.pendingDecisionIds, ['PRRT_reopened']);
+  assert.equal(reopened.converged, false);
+});
+
+test('#4306: a pending marker from an untrusted author is ordinary feedback, not a pending decision', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [copilotReview()],
+      threads: [
+        {
+          id: 'PRRT_untrusted_pending',
+          isResolved: false,
+          comments: {
+            nodes: [
+              {
+                author: { login: COPILOT_LOGIN },
+                body: 'nit',
+                createdAt: OLD,
+                updatedAt: OLD,
+              },
+              {
+                author: { login: 'someone-else' },
+                body: PENDING_PARAGRAPH,
+                createdAt: RECENT,
+                updatedAt: RECENT,
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    baseOptions(),
+  );
+  assertValidVerdict(verdict);
+  assert.deepEqual(verdict.threads.blockingIds, ['PRRT_untrusted_pending']);
+  assert.deepEqual(verdict.threads.pendingDecisionIds, []);
+  assert.match(verdict.reasons.join('\n'), /neither resolved nor validly/);
+});
+
+test('#4306: a pending thread and an undecided thread each get their own reason', () => {
+  const stamp = renderReviewReplyStamp();
+  const verdict = verdictForThreads([
+    pendingDecisionThread('PRRT_pending_mix', [
+      { body: `${PENDING_PARAGRAPH}\n\n${stamp}` },
+    ]),
+    pendingDecisionThread('PRRT_undecided_mix', []),
+  ]);
+  assert.deepEqual(verdict.threads.blockingIds, [
+    'PRRT_pending_mix',
+    'PRRT_undecided_mix',
+  ]);
+  assert.deepEqual(verdict.threads.pendingDecisionIds, ['PRRT_pending_mix']);
+  assert.equal(verdict.threads.blockingCount, 2);
+  assert.equal(verdict.reasons.length, 2);
+  assert.match(
+    verdict.reasons[0] ?? '',
+    /1 copilot-authored review thread\(s\) are neither resolved nor validly dispositioned: PRRT_undecided_mix$/,
+  );
+  assert.match(verdict.reasons[1] ?? '', /PRRT_pending_mix/);
+  assert.doesNotMatch(verdict.reasons[1] ?? '', /PRRT_undecided_mix/);
+});
+
+test('#4306: the posted-items next action names pending threads to skip, and stays when the new item belongs to another review', () => {
+  const stamp = renderReviewReplyStamp();
+  const postedItems = (
+    itemCount: number,
+    threads: ReturnType<typeof pendingDecisionThread>[],
+  ) => {
+    const verdict = computeAdvisoryConvergenceVerdict(
+      baseInputs({ reviews: [copilotReview({ itemCount })], threads }),
+      baseOptions(),
+    );
+    assertValidVerdict(verdict);
+    return collectAssertNextActions(verdict).find(
+      (item) =>
+        item.token ===
+        ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN.DISPOSITION_POSTED_ITEMS,
+    );
+  };
+  const hold = () =>
+    pendingDecisionThread('PRRT_hold_posted', [
+      { body: `${PENDING_PARAGRAPH}\n\n${stamp}` },
+    ]);
+
+  // Control: no pending thread keeps today's text.
+  const ordinary = postedItems(2, [
+    pendingDecisionThread('PRRT_ordinary_posted', []),
+  ]);
+  assert.match(ordinary?.summary ?? '', /Disposition each thread \(E6\/E13\)/);
+  assert.doesNotMatch(ordinary?.summary ?? '', /pending-decision/);
+
+  // A pending thread is named to skip, and the command stays.
+  const partial = postedItems(2, [
+    hold(),
+    pendingDecisionThread('PRRT_ordinary_posted', []),
+  ]);
+  assert.match(partial?.summary ?? '', /--apply/);
+  assert.match(
+    partial?.summary ?? '',
+    /Do not run it on a pending-decision thread \(PRRT_hold_posted\)/,
+  );
+
+  // The latest review has one new item and the only pending thread is an older
+  // one: the action is still emitted, because `review.itemCount` covers only
+  // the latest review and no pending count is compared against it.
+  const older = postedItems(1, [hold()]);
+  assert.match(older?.summary ?? '', /--apply/);
+  assert.match(older?.summary ?? '', /\(PRRT_hold_posted\)/);
+});
+
+test('#4306: the disposition-threads next action tells the agent to hold a pending thread, and keeps its wording otherwise', () => {
+  const stamp = renderReviewReplyStamp();
+  const threadItem = (verdict: ReturnType<typeof verdictForThreads>) =>
+    collectAssertNextActions(verdict).find(
+      (item) =>
+        item.token ===
+        ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN.DISPOSITION_THREADS,
+    );
+
+  const ordinary = threadItem(
+    verdictForThreads([pendingDecisionThread('PRRT_ordinary', [])]),
+  );
+  assert.equal(
+    ordinary?.summary,
+    '1 Copilot thread(s) are unresolved and lack a valid disposition (PRRT_ordinary). Reply with a stamped **Accepted**/**Rejected** and resolve via resolve-review-thread (E6/E13).',
+  );
+
+  const pendingOnly = threadItem(
+    verdictForThreads([
+      pendingDecisionThread('PRRT_hold', [
+        { body: `${PENDING_PARAGRAPH}\n\n${stamp}` },
+      ]),
+    ]),
+  );
+  assert.match(pendingOnly?.summary ?? '', /\(PRRT_hold\)/);
+  assert.match(pendingOnly?.summary ?? '', /hold a pending decision/);
+  assert.match(
+    pendingOnly?.summary ?? '',
+    /do not answer with \*\*Accepted\*\*/,
+  );
+  assert.doesNotMatch(pendingOnly?.summary ?? '', /Reply with a stamped/);
+
+  const mixed = threadItem(
+    verdictForThreads([
+      pendingDecisionThread('PRRT_hold', [
+        { body: `${PENDING_PARAGRAPH}\n\n${stamp}` },
+      ]),
+      pendingDecisionThread('PRRT_ordinary', []),
+    ]),
+  );
+  assert.match(
+    mixed?.summary ?? '',
+    /Reply with a stamped \*\*Accepted\*\*\/\*\*Rejected\*\*/,
+  );
+  assert.match(mixed?.summary ?? '', /\(PRRT_ordinary\)/);
+  assert.match(
+    mixed?.summary ?? '',
+    /1 of them \(PRRT_hold\) hold a pending decision/,
+  );
+});
+
 // --- 6. deadline-passed-with-waiver -------------------------------------------
 
 test('deadline-passed-with-waiver: a valid maintainer waiver flips a stale-pending PR ready', () => {
@@ -9614,6 +9920,14 @@ const PARITY_CASES: {
   {
     label: 'Accepted reply with the review-reply stamp',
     comments: [citedDispositionComment({})],
+  },
+  {
+    label: 'Accepted reply that carries a pending-decision paragraph (#4306)',
+    comments: [
+      citedDispositionComment({
+        body: `**Accepted** (part), fixed in abc1234.\n\n**Awaiting maintainer decision** — the rest is open.\n${STAMP}`,
+      }),
+    ],
   },
   {
     label: 'recorded-deferral reply with the review-reply stamp',

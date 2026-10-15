@@ -469,12 +469,15 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    ```sh
    git fetch origin
    git switch {development-branch} || git switch -c {development-branch} --track origin/{development-branch} \
-     && git merge --ff-only origin/{development-branch}
+     && git -c merge.autoStash=false merge --ff-only origin/{development-branch}
    ```
 
    The switch falls back to a local tracking branch if the primary
    worktree has none yet (non-default `{development-branch}`: B1
-   branches worktrees from origin).
+   branches worktrees from origin). The `-c` override is always
+   passed, even when `merge.autoStash` is already false, so a
+   configured value cannot stash the dirty paths the hold below
+   exists for.
 
    If the switch or fast-forward refuses over dirty primary-worktree
    paths, re-validate the claim, hold per

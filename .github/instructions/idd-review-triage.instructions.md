@@ -210,8 +210,20 @@ Reply
   `; step <k>` above step 0. Read `converged` once per pass; if true,
   add one step ([wave gradient]).
 
+**Triage record.** With `triageRecord` on, before deciding each PATH A
+item run `resolve-review-thread --pr <n>` with `--tier`, `--urgency`,
+and its other [triage flags] (`--lite` on a lite-profile claim), and no
+target, body, or `--apply`; it prints the step and, under
+`severity-tiered`, the verdict. Accepting against `defer` under `enforce`
+needs `--override "<reason>"` (such as `verdict keep at E5` when the step
+moved); `enforce` refuses it without one, while `record` posts it with or
+without one. Reuse the flags on the reply, minus
+`--advisory-converged` after a push; a reply posted without the helper
+puts the same `Triage:` line before the stamp ([audit]).
+
 Bundle one E5 pass's deferred items into one follow-up issue (E6; do
-not append). Each keeps an AC bullet, exactly one
+not append; `idd-review-defer-bundle` renders and lints it). Each keeps
+an AC bullet, exactly one
 `Refs #<originating-issue>` line, and the
 `<!-- idd-skill-authoring-defer-source: review-fix-loop-cutoff -->`
 marker, then issue-authoring's Stage 2 narrow auto-release, not the Stage 1
@@ -260,6 +272,15 @@ reviewer feedback:
   gate structurally — instead post the hold comment stating you will
   **not** merge until the decision appears, and stop. Either way, wait
   for the response in a future E1 pass (see the transitions below).
+- **Partly settled item**: when you fixed part of an item and the rest
+  needs a maintainer, open the reply with
+  `**Awaiting maintainer decision** — {question}`, then state the fixed
+  part and its commit, and leave the review thread unresolved like any
+  AMD. A bare `**Accepted**` that states the open part only in prose
+  counts as settled (observed 2026-10-14 on PR `#4271`, issue `#4244`).
+  The gates also read the marker as pending when it opens a later
+  paragraph of an `**Accepted**` reply, but only the opening form keeps
+  the thread in E1 and F2's AMD handling.
 - **When an `Awaiting maintainer decision` item re-appears in ReviewItems_snapshot**:
   scan the activity universe for a **qualifying response** — a reply on
   this item, or a separate comment/review that clearly references
@@ -361,8 +382,8 @@ PATH B — Advisory items (completed review of current HEAD):
   needed:
   - `**Accepted** — {what the advisory comment confirmed}`
   - `**Rejected** — {why no action is required}`, with evidence if no code changes
-- **Review threads**: resolve immediately after posting. **Regular
-  comments**: reply only.
+- **Review threads**: resolve immediately after posting (helper:
+  `--path-b`). **Regular comments**: reply only.
 - PATH B never enters review-fix — work is complete once the marker
   (and any thread resolution) is posted.
 
@@ -647,3 +668,5 @@ of re-posting the disposition (#3324).
 [needs-decision route]: ../../docs/idd-review-policy-profiles.md#needs-decision-deferral
 [wave gradient]: ../../docs/idd-review-policy-profiles.md#wave-gradient-urgency-defer
 [regression]: ../../docs/idd-review-policy-profiles.md#what-counts-as-a-regression
+[triage flags]: ../../docs/idd-helper-scripts.md#triage-record-flags
+[audit]: ../../docs/idd-design-rationale.md#review-loop-audit-2026-10-13

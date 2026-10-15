@@ -47,6 +47,11 @@ import {
 } from './copilot-review-body.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
+  MARKDOWN_HTML_BLOCK_START_PATTERN,
+  MARKDOWN_THEMATIC_BREAK_PATTERN,
+  maskMarkdownForScan,
+} from './markdown-code.mjs';
+import {
   advisoryWaitFamilyMarkerStart,
   detectMalformedOperationalMarker,
   findActivationNonceWinner,
@@ -60,6 +65,7 @@ import {
   parseClaimComment,
   parseExternalCheckWaiverComment,
   parseForcedHandoffComment,
+  parseHoldMarker,
   parseLegacyClaimComment,
   parseLegacyReleaseComment,
   parseOutOfLoopMarker,
@@ -102,6 +108,9 @@ export const LIVE_STATUS_DIGEST_REPAIR_MARKER =
  * this behavior.
  *  - `<!-- activation-nonce:` is posted only to the claiming ISSUE
  *    (idd-claim.instructions.md), never to a PR.
+ *  - `<!-- idd-hold:` is posted only to the claimed ISSUE
+ *    (`post-idd-marker` refuses `--target pr` for it), never to a PR
+ *    (kurone-kito/idd-skill#4310).
  *  - `<!-- idd-provider-outage-declaration:` and
  *    `<!-- idd-provider-outage-advanced:` are posted to the configured
  *    `providerOutage.declarationTarget` ISSUE, not the PR under review
@@ -564,6 +573,105 @@ export function classifyPrLoopMembership({
     reason:
       'no closing issue has an active claim, and no valid out-of-loop marker was found',
   };
+}
+/**
+ * kurone-kito/idd-skill#4310: the trusted hold markers for one claim, from an
+ * issue's comments. Pure and network-free; the caller supplies comments whose
+ * GraphQL `lastEditedAt` it has already resolved. A marker counts only when
+ * all of these hold, mirroring the "Hold marker" trust rule in
+ * `docs/idd-workflow.md`:
+ *
+ * - its body parses as an `idd-hold` marker (token as the literal first bytes)
+ *   and its agent id and claim id equal the `agentId` and `claimId` passed;
+ * - its comment author is `claimActorLogin` (the actor that posted the active
+ *   claim's `claimed-by`) and is in `trustedMarkerLogins`, compared
+ *   case-insensitively and decided by the GitHub author login, never by the
+ *   marker's own `{agent-id}` text;
+ * - its edit state is a resolved `lastEditedAt: null`. An edited marker, or
+ *   one whose edit state is unresolved, is ignored rather than thrown on, which
+ *   is the difference from the claim-family markers' edit-state contract.
+ *
+ * Deliberately not part of claim resolution: a hold marker never starts, ends,
+ * releases, or transfers a claim, and `resolveActiveClaim` does not read it.
+ * This function also encodes no "the hold ended" verdict. Whether a later
+ * `claimed-by` ends a hold depends on which renewals the orchestrator itself
+ * posted, which only the orchestrator knows, so the caller narrows the result
+ * against its own claim timeline. Returns `null` when no marker qualifies.
+ */
+// audit:ignore-dead-export: no production caller yet -- the orchestrator reads hold markers by instruction (docs/idd-workflow.md, Hold marker); this is the parser it is told to use (kurone-kito/idd-skill#4310)
+export function resolveTrustedHoldMarkers({
+  comments,
+  agentId,
+  claimId,
+  claimActorLogin,
+  trustedMarkerLogins,
+}) {
+  const normalizeLogin = (login) =>
+    String(login ?? '')
+      .trim()
+      .toLowerCase();
+  const trustedLogins = new Set(
+    normalizeTrustedMarkerLogins(trustedMarkerLogins),
+  );
+  const isTrustedAuthor = (login) => trustedLogins.has(normalizeLogin(login));
+  const actorLogin = normalizeLogin(claimActorLogin);
+  if (!actorLogin || !agentId || !claimId) {
+    return null;
+  }
+  const candidates = [];
+  (comments ?? []).forEach((comment, index) => {
+    const marker = parseHoldMarker(
+      String(comment?.body ?? ''),
+      String(comment?.createdAt ?? comment?.created_at ?? ''),
+    );
+    if (
+      !marker ||
+      marker.createdAt === 'none' ||
+      marker.agentId !== agentId ||
+      marker.claimId !== claimId ||
+      normalizeLogin(
+        comment?.author?.login ??
+          comment?.user?.login ??
+          comment?.authorLogin ??
+          '',
+      ) !== actorLogin ||
+      !isTrustEvidenceComment(comment, isTrustedAuthor)
+    ) {
+      return;
+    }
+    const rawId = String(comment?.id ?? '');
+    candidates.push({
+      marker,
+      index,
+      id: /^\d+$/.test(rawId) ? Number(rawId) : Number.NaN,
+    });
+  });
+  // Oldest first by created_at. Within one second the order is a single total
+  // order: comments with a numeric id (GitHub database ids rise with posting
+  // order) come first, ordered by that id, then comments without one in input
+  // order. A rule that compared ids only when both comments had one would not
+  // be transitive for a mix of numeric and node ids, so the result would depend
+  // on the sort algorithm's comparison order.
+  candidates.sort((a, b) => {
+    const byTime =
+      Date.parse(a.marker.createdAt) - Date.parse(b.marker.createdAt);
+    if (byTime !== 0) {
+      return byTime;
+    }
+    const aHasId = Number.isFinite(a.id);
+    const bHasId = Number.isFinite(b.id);
+    if (aHasId !== bHasId) {
+      return aHasId ? -1 : 1;
+    }
+    if (aHasId && a.id !== b.id) {
+      return a.id - b.id;
+    }
+    return a.index - b.index;
+  });
+  const markers = candidates.map((candidate) => candidate.marker);
+  return markers.length === 0
+    ? null
+    : { markers, first: markers[0], newest: markers[markers.length - 1] };
 }
 /**
  * kurone-kito/idd-skill#3328: same-repo positive-integer issue numbers
@@ -2494,8 +2602,11 @@ export function explainFreshDisposition(thread, options = {}) {
   // `**Rejected**` re-post; recognize it as a disposition ONLY when the thread
   // is resolved (an unresolved thread still needs an explicit disposition).
   const threadResolved = Boolean(thread.isResolved);
+  // #4306: a reply that opens with `**Accepted**` or `**Rejected**` but also
+  // carries the pending-decision marker is not a disposition; it falls through
+  // to the feedback side below, so it supersedes any earlier settled reply.
   const isDisposition = (comment) =>
-    isDispositionComment(comment) ||
+    isSettledDispositionComment(comment) ||
     (threadResolved && isRejectionConfirmedDisposition(comment));
   const isIddDisposition = (comment) => {
     if (!isDisposition(comment)) {
@@ -2601,6 +2712,64 @@ export function explainFreshDisposition(thread, options = {}) {
   };
 }
 /**
+ * Whether the newest IDD reply on a thread is a pending decision (#4306): a
+ * reply from a disposition author carries the pending-decision marker
+ * ({@link hasPendingDecisionMarker}), and no settled disposition from such an
+ * author is newer. An edit does not clear it: an edited reply that still
+ * carries the marker is still an open question. A settled disposition posted
+ * after the marker (the maintainer's decision, mirrored onto the thread) ends
+ * it; a tie reads as pending, the fail-closed side.
+ *
+ * This is a sibling of {@link explainFreshDisposition}, not one of its causes:
+ * the freshness explanation keeps its shape for the callers that table it, and
+ * a pending reply still reads there as the ordinary non-fresh outcome.
+ */
+export function hasPendingDecisionReply(thread, options = {}) {
+  const dispositionAuthorPredicate =
+    typeof options.isDispositionAuthor === 'function'
+      ? options.isDispositionAuthor
+      : (login) => !isKnownReviewBot(login);
+  const advisoryBotLogins = new Set(
+    normalizeTrustedMarkerLogins(options.advisoryBotLogins ?? []),
+  );
+  const threadResolved = Boolean(thread.isResolved);
+  const byDispositionAuthor = (comment) =>
+    dispositionAuthorPredicate(
+      String(comment.author?.login ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+  const activityAts = (comments) =>
+    comments
+      .map((comment) =>
+        effectiveThreadCommentActivityAt(comment, advisoryBotLogins),
+      )
+      .filter(isValidIsoTimestamp);
+  const comments = (thread.comments?.nodes ?? []).filter(byDispositionAuthor);
+  const latestPendingAt = maxIsoTimestamp(
+    activityAts(
+      comments.filter((comment) => hasPendingDecisionMarker(comment.body)),
+    ),
+  );
+  if (!latestPendingAt) {
+    return false;
+  }
+  const latestSettledAt = maxIsoTimestamp(
+    activityAts(
+      comments.filter(
+        (comment) =>
+          classifyCommentEditState(comment) === 'unedited' &&
+          (isSettledDispositionComment(comment) ||
+            (threadResolved && isRejectionConfirmedDisposition(comment))),
+      ),
+    ),
+  );
+  return (
+    !latestSettledAt ||
+    compareIsoTimestamps(latestPendingAt, latestSettledAt) >= 0
+  );
+}
+/**
  * #3269: for each thread, finds the maximum content-activity timestamp
  * among comments `hasFreshDisposition` would accept as a disposition on
  * it (the SAME recognition: `isDispositionComment`, or -- only on an
@@ -2652,7 +2821,7 @@ export function selectAdvisoryThreadCommentIdsEditedAfterDisposition(
     const nodes = thread.comments?.nodes ?? [];
     const threadResolved = Boolean(thread.isResolved);
     const isDisposition = (comment) =>
-      isDispositionComment(comment) ||
+      isSettledDispositionComment(comment) ||
       (threadResolved && isRejectionConfirmedDisposition(comment));
     const dispositionAt = maxIsoTimestamp(
       nodes
@@ -2822,6 +2991,108 @@ export function isDispositionComment(comment) {
     DISPOSITION_REJECTED_PREFIX_RE.test(body)
   );
 }
+// #4306: the pending-decision marker is the existing AMD prefix
+// (`AMD_MARKER_PATTERN`), not a second token. A line that opens with it, at the
+// start of the body or of a later top-level paragraph, marks the reply as an
+// undecided question. Requiring column 0 keeps a mid-sentence quote of the
+// phrase, and an indented line that may sit inside a list item, from counting.
+// The code-region mask keeps a quoted example in a code span or fence from
+// counting, the same prose-quoting guard `copilot-review-body.mts` applies.
+// Observed 2026-10-14 on PR #4271 (issue #4244): a stamped `**Accepted**`
+// reply whose body left the forged-receipt question open settled the review
+// thread for the advisory gate.
+const PENDING_DECISION_MARKER_LINE_RE =
+  /^\*\*Awaiting maintainer decision\*\*/iu;
+/** A line that opens a block quote or a list item (at most three spaces of
+ * indent, then `>` or a bullet or ordered-list marker with a space). */
+const QUOTE_OR_LIST_ITEM_LINE_RE = /^ {0,3}(?:>|[-+*][ \t]|\d{1,9}[.)][ \t])/u;
+/** A block-quote line with no content (`>`, `> >`): a blank line inside the
+ * quote, so it ends the quote's paragraph the way a blank line does. */
+const EMPTY_QUOTE_LINE_RE = /^ {0,3}>[ \t>]*$/u;
+/** An ATX heading line. */
+const ATX_HEADING_LINE_RE = /^ {0,3}#{1,6}(?:[ \t]|$)/u;
+/** A line that opens a block which interrupts a paragraph without a blank
+ * line: a heading, a thematic break, or an HTML block. It is never a lazy
+ * continuation, so it ends a quote's or list item's run. The scan masks HTML
+ * blocks first, so the HTML test is a guard for a start line the mask leaves. */
+function interruptsParagraph(line) {
+  return (
+    ATX_HEADING_LINE_RE.test(line) ||
+    MARKDOWN_THEMATIC_BREAK_PATTERN.test(line) ||
+    MARKDOWN_HTML_BLOCK_START_PATTERN.test(line)
+  );
+}
+/**
+ * Whether a reply body carries the pending-decision marker
+ * (`**Awaiting maintainer decision**`) at the start of a top-level line outside
+ * a Markdown code region or an HTML comment or block. A reply that opens with
+ * it is the plain AMD hold; an `**Accepted**` or `**Rejected**` reply that
+ * carries it in a later paragraph is a partial answer whose open part still
+ * waits on the maintainer.
+ *
+ * A marker inside an HTML comment or an HTML block (`<!-- ... -->`, a
+ * multi-line `<div>`) is hidden text, not a visible hold, so the mask below
+ * blanks both regions before the scan (issue `#4332`; the Copilot finding on
+ * PR `#4325`: an `**Accepted**` reply that hid the text in a multi-line
+ * comment or `<div>` was held, which blocked the advisory gate with no visible
+ * reason). A masked line reads as blank, and an HTML block runs to the next
+ * blank line, so a marker meant to count after a `<div>` block needs a blank
+ * line between them.
+ *
+ * A marker line that follows a block quote or a list item with no blank line
+ * between is a lazy continuation of that container's paragraph, so it is quoted
+ * or listed text and does not count. A blank line (or an empty quote line) ends
+ * that run, and so does a heading or a thematic break; a marker after one is a
+ * top-level paragraph again. An HTML block ends the run too, but the mask has
+ * already blanked its lines, so it reads as a blank line; the HTML test in
+ * {@link interruptsParagraph} is kept as a cheap guard only. The reader keeps
+ * this small run model on purpose rather than a full container parser, as
+ * `copilot-review-body.mts`'s remark reader does: it can miss a marker indented
+ * into a container or a list item's later paragraph, which reads as settled, no
+ * worse than before this check existed, and it never counts a plain quoted
+ * example.
+ */
+export function hasPendingDecisionMarker(body) {
+  const text = String(body ?? '');
+  // Cheap pre-check: the mask below walks the whole body, and almost no
+  // reply mentions the phrase at all.
+  if (!/awaiting maintainer decision/i.test(text)) {
+    return false;
+  }
+  let inContainerRun = false;
+  const masked = maskMarkdownForScan(text, {
+    htmlComments: 'mask',
+    htmlBlocks: 'mask',
+  });
+  for (const line of masked.split('\n')) {
+    if (
+      line.trim() === '' ||
+      EMPTY_QUOTE_LINE_RE.test(line) ||
+      interruptsParagraph(line)
+    ) {
+      inContainerRun = false;
+      continue;
+    }
+    if (!inContainerRun && PENDING_DECISION_MARKER_LINE_RE.test(line)) {
+      return true;
+    }
+    if (QUOTE_OR_LIST_ITEM_LINE_RE.test(line)) {
+      inContainerRun = true;
+    }
+  }
+  return false;
+}
+/**
+ * A reply that settles its finding: it opens with `**Accepted**` or
+ * `**Rejected**` and carries no pending-decision marker (#4306). Every gate
+ * that credits such a reply as a disposition reads this, so none of them
+ * counts an open decision as settled.
+ */
+export function isSettledDispositionComment(comment) {
+  return (
+    isDispositionComment(comment) && !hasPendingDecisionMarker(comment.body)
+  );
+}
 // Terminal AMD-rejection marker. When a maintainer agrees with a rejection the
 // agent replies `**Rejection confirmed by maintainer** — {summary}` and resolves
 // the thread, with no separate `**Rejected**` re-post (per
@@ -2830,8 +3101,12 @@ export function isDispositionComment(comment) {
 const REJECTION_CONFIRMED_BY_MAINTAINER_RE =
   /^\*\*Rejection confirmed by maintainer\*\*\s+—/;
 export function isRejectionConfirmedDisposition(comment) {
-  return REJECTION_CONFIRMED_BY_MAINTAINER_RE.test(
-    (comment.body ?? '').trimStart(),
+  // #4306: a body that confirms a rejection and also carries the
+  // pending-decision marker contradicts itself, and the open question wins.
+  return (
+    REJECTION_CONFIRMED_BY_MAINTAINER_RE.test(
+      (comment.body ?? '').trimStart(),
+    ) && !hasPendingDecisionMarker(comment.body)
   );
 }
 // #1018 non-review-notice carry-forward classifiers.
@@ -3918,9 +4193,12 @@ export const BOT_WORDING_CLASSIFIERS = [
 // rejection of reviewer feedback is excluded.
 export function isNonReviewNoticeDisposition(comment) {
   const body = (comment.body ?? '').trimStart();
+  // #4306: a machine disposition that also carries the pending-decision marker
+  // is an open question, not a settled notice rejection.
   return (
     DISPOSITION_REJECTED_PREFIX_RE.test(body) &&
-    /\bdid not review HEAD\b/i.test(body)
+    /\bdid not review HEAD\b/i.test(body) &&
+    !hasPendingDecisionMarker(body)
   );
 }
 const NON_REVIEW_NOTICE_SOURCE_ID_RE = /\(source:\s*#issuecomment-(\d+)\)/i;
@@ -3986,6 +4264,19 @@ export const STALE_THREAD_DISPOSITION_HINT =
   'disposition and does not clear it. If that newest comment is a ' +
   'no-new-content advisory-bot reply that reappears after every reply, post ' +
   'a hold comment instead of another reply';
+// #4306 diagnostic-only hint text for a `pending-decision` thread, single-
+// sourced like the hint above. A new "**Accepted**" reply is the wrong next
+// step here: it is how the open question got counted as settled on PR #4271
+// (issue #4244, 2026-10-14). The thread clears when the maintainer decides and
+// a settled reply follows the pending one. Never consumed by any routing
+// decision.
+export const PENDING_DECISION_THREAD_HINT =
+  'the newest IDD reply on this thread carries "**Awaiting maintainer ' +
+  'decision**", so it is an open question, not a disposition: keep the hold ' +
+  'and wait for the maintainer. After the decision, post a NEW marker-first ' +
+  '"**Accepted**" or "**Rejected**" (or "**Rejection confirmed by ' +
+  'maintainer**") reply and resolve the thread. Do not post "**Accepted**" ' +
+  'to clear it before the decision is made';
 // #1122 CodeRabbit summary-walkthrough auto-disposition classifiers.
 //
 // The CodeRabbit summary walkthrough is a regular comment whose body starts with
@@ -4053,9 +4344,11 @@ export function isReviewSummaryComment(body) {
 // miscredited (which would under-post and strand the gate).
 export function isReviewSummaryDisposition(comment) {
   const body = (comment.body ?? '').trimStart();
+  // #4306: as for a notice disposition, a pending marker makes it not settled.
   return (
     DISPOSITION_ACCEPTED_PREFIX_RE.test(body) &&
-    /\bsummary walkthrough\b/i.test(body)
+    /\bsummary walkthrough\b/i.test(body) &&
+    !hasPendingDecisionMarker(body)
   );
 }
 // The stable identity token of an advisory bot, used to attribute a non-review
@@ -4608,8 +4901,9 @@ export const CI_PENDING_STATES = new Set(['QUEUED', 'IN_PROGRESS', 'WAITING']);
  * `ci-wait-state.mts` buckets them as pending alongside
  * {@link CI_PENDING_STATES}, but `classifyCiChecks` leaves them unrecognized,
  * so the present-run fallback reads them as `some-failing` (when no check-run
- * pending state sits beside them). They are not named as blocking runs
- * (#3670): a still-running status is not a failure.
+ * pending state sits beside them) unless its caller says every run is
+ * non-required (#4349), where they read as pending. They are not named as
+ * blocking runs (#3670): a still-running status is not a failure.
  */
 export const CI_STATUS_CONTEXT_PENDING_STATES = new Set([
   'PENDING',
@@ -5218,6 +5512,10 @@ export function qualifyingCitedDispositionTimes(comments, trustedMarkerLogins) {
         return false;
       }
       if (classifyCommentEditState(comment) !== 'unedited') {
+        return false;
+      }
+      // #4306: a reply that leaves a decision open does not settle the item.
+      if (hasPendingDecisionMarker(body)) {
         return false;
       }
       return (
@@ -6088,10 +6386,13 @@ export function buildActivitySnapshotSummary(
   // place the combined (`isDispositionComment` OR
   // `isRejectionConfirmedDisposition`) recognition applies outside a
   // thread whose `isResolved` is already independently confirmed true.
+  // #4306: a reply that carries the pending-decision marker anchors no
+  // post-disposition window, here or below.
   const isDispositionMarkerComment = (comment) =>
-    isDispositionComment(comment) || isRejectionConfirmedDisposition(comment);
+    isSettledDispositionComment(comment) ||
+    isRejectionConfirmedDisposition(comment);
   const isDispositionMarkerCommentForThread = (comment, threadResolved) =>
-    isDispositionComment(comment) ||
+    isSettledDispositionComment(comment) ||
     (threadResolved && isRejectionConfirmedDisposition(comment));
   // #3194 (round 36 field feedback): a live-status digest edit must never
   // perturb review-currency (idd-overview-appendix.instructions.md's "Live
@@ -6128,7 +6429,7 @@ export function buildActivitySnapshotSummary(
         (comment) =>
           isDispositionAuthor(comment.author?.login) &&
           classifyCommentEditState(comment) === 'unedited' &&
-          isDispositionComment(comment),
+          isSettledDispositionComment(comment),
       )
       .map((comment) => comment.createdAt),
     ...threads.flatMap((thread) =>
@@ -6311,7 +6612,7 @@ export function buildActivitySnapshotSummary(
         !(
           isQuietAnchorTrustedAuthor(comment.author?.login) &&
           classifyCommentEditState(comment) === 'unedited' &&
-          isDispositionComment(comment)
+          isSettledDispositionComment(comment)
         ),
     )
     .map((comment) => comment.updatedAt ?? comment.createdAt)
@@ -6578,6 +6879,11 @@ export function summarizeRegularCommentsForGate(comments, options = {}) {
     ) {
       return latestTimestamp;
     }
+    // #4306: a reply that leaves a decision open answers nothing, so it never
+    // advances the watermark that clears earlier comments.
+    if (hasPendingDecisionMarker(comment.body)) {
+      return latestTimestamp;
+    }
     // #3249: an edited or edit-state-unresolved disposition must remain in
     // the ordinary-feedback path. Letting it advance this watermark would
     // hide earlier human feedback even though the disposition itself cannot
@@ -6801,8 +7107,12 @@ function isIddOriginatedThreadReply(comment, options) {
   ) {
     return false;
   }
+  // #4306: a trusted pending-decision reply is an IDD reply too, so the
+  // presence-only rule for a human's thread does not read past it.
   return (
-    isDispositionComment({ body }) || isRejectionConfirmedDisposition({ body })
+    isDispositionComment({ body }) ||
+    isRejectionConfirmedDisposition({ body }) ||
+    hasPendingDecisionMarker(body)
   );
 }
 // #978 advisory-only diagnostic, extracted from `summarizeDispositionEvidenceForGate`
@@ -6865,6 +7175,17 @@ export function classifyThreadAckOnlyPostDisposition(thread, options = {}) {
     ),
   );
   const nodes = thread.comments?.nodes ?? [];
+  // #4306: a thread whose newest IDD reply is a pending decision is open, so
+  // no courtesy ack can make it ack-only, even when an older settled
+  // disposition still anchors the window below.
+  if (
+    hasPendingDecisionReply(thread, {
+      isDispositionAuthor: (login) => ackAnchorAuthorLogins.has(login),
+      advisoryBotLogins: options.advisoryBotLogins,
+    })
+  ) {
+    return none;
+  }
   // Recognize the same unedited dispositions `hasFreshDisposition` accepts
   // on a resolved thread (the gate that already decided this thread blocks):
   // a `**Accepted**`/`**Rejected**` marker OR the terminal
@@ -6881,7 +7202,8 @@ export function classifyThreadAckOnlyPostDisposition(thread, options = {}) {
               .toLowerCase(),
           ) &&
           classifyCommentEditState(comment) === 'unedited' &&
-          (isDispositionComment({ body: String(comment.body ?? '') }) ||
+          // #4306: a pending-decision reply never anchors the ack-only window.
+          (isSettledDispositionComment({ body: String(comment.body ?? '') }) ||
             isRejectionConfirmedDisposition({
               body: String(comment.body ?? ''),
             })),
@@ -7137,7 +7459,8 @@ export function summarizeDispositionEvidenceForGate(
   const dispositionComments = normalizedComments.filter(
     (comment) =>
       iddAgentLogins.has(comment.authorLogin) &&
-      isDispositionComment({ body: comment.body }) &&
+      // #4306: a reply that leaves a decision open clears no regular comment.
+      isSettledDispositionComment({ body: comment.body }) &&
       classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
         'unedited',
   );
@@ -7276,6 +7599,10 @@ export function summarizeDispositionEvidenceForGate(
         iddAgentLogins.has(comment.authorLogin) &&
         !consumedNoticeDispositionIndexes.has(comment.sortedIndex) &&
         !isCodexNoFindResultDisposition(comment.body) &&
+        // #4306: a reply that leaves a decision open answers no comment, a
+        // human's included; the comment stays outstanding until a settled
+        // reply follows.
+        !hasPendingDecisionMarker(comment.body) &&
         isValidIsoTimestamp(comment.activityAt) &&
         !isIddOperationalComment(comment),
     )
@@ -7318,7 +7645,7 @@ export function summarizeDispositionEvidenceForGate(
       }
       if (
         requiresDispositionPrefix &&
-        !isDispositionComment({ body: candidate.body })
+        !isSettledDispositionComment({ body: candidate.body })
       ) {
         return false;
       }
@@ -7449,26 +7776,25 @@ export function summarizeDispositionEvidenceForGate(
           inPlaceEditOnly: false,
         };
       }
-      if (
-        hasFreshDisposition(thread, {
-          isDispositionAuthor: (login) =>
-            iddAgentLogins.has(
-              String(login ?? '')
-                .trim()
-                .toLowerCase(),
-            ) ||
-            trustedMarkerLogins.has(
-              String(login ?? '')
-                .trim()
-                .toLowerCase(),
-            ),
-          // #3269: threaded through so a verified-cosmetic advisory-bot
-          // edit (e.g. CodeRabbit's own comment-to-reply marker rewrite)
-          // dates by its content activity, not `updatedAt` -- see
-          // `effectiveThreadCommentActivityAt`'s doc comment.
-          advisoryBotLogins: options.advisoryBotLogins,
-        })
-      ) {
+      const freshnessOptions = {
+        isDispositionAuthor: (login) =>
+          iddAgentLogins.has(
+            String(login ?? '')
+              .trim()
+              .toLowerCase(),
+          ) ||
+          trustedMarkerLogins.has(
+            String(login ?? '')
+              .trim()
+              .toLowerCase(),
+          ),
+        // #3269: threaded through so a verified-cosmetic advisory-bot
+        // edit (e.g. CodeRabbit's own comment-to-reply marker rewrite)
+        // dates by its content activity, not `updatedAt` -- see
+        // `effectiveThreadCommentActivityAt`'s doc comment.
+        advisoryBotLogins: options.advisoryBotLogins,
+      };
+      if (hasFreshDisposition(thread, freshnessOptions)) {
         return null;
       }
       // #2139: unmarked later replies on a *human-authored* thread are
@@ -7529,18 +7855,32 @@ export function summarizeDispositionEvidenceForGate(
         prAuthorLogin: options.prAuthorLogin,
         snapshotBoundaryAt: options.snapshotBoundaryAt,
       });
+      // #4306: a thread whose newest IDD reply is a pending decision gets its
+      // own reason and hint, because the stale-disposition hint would steer the
+      // agent to post the `**Accepted**` that settled it too early.
+      const pendingDecision = hasPendingDecisionReply(thread, freshnessOptions);
+      // The classifier above already reads a pending reply as not ack-only for
+      // the IDD authors it knows; this keeps the two in step for the wider
+      // author set the gate uses (IDD agents and trusted marker actors).
+      const ackOnly = !pendingDecision && classification.ackOnlyPostDisposition;
       return {
         id: String(thread.id ?? '') || `thread-${index + 1}`,
         isResolved: Boolean(thread.isResolved),
-        reason: thread.isResolved
-          ? 'missing-fresh-disposition'
-          : 'unresolved-without-fresh-disposition',
-        ackOnlyPostDisposition: classification.ackOnlyPostDisposition,
-        inPlaceEditOnly: classification.inPlaceEditOnly,
+        reason: pendingDecision
+          ? 'pending-decision'
+          : thread.isResolved
+            ? 'missing-fresh-disposition'
+            : 'unresolved-without-fresh-disposition',
+        ackOnlyPostDisposition: ackOnly,
+        inPlaceEditOnly: ackOnly && classification.inPlaceEditOnly,
         // #3670: never on an ack-only entry -- see the field's doc comment.
-        ...(classification.ackOnlyPostDisposition
+        ...(ackOnly
           ? {}
-          : { hint: STALE_THREAD_DISPOSITION_HINT }),
+          : {
+              hint: pendingDecision
+                ? PENDING_DECISION_THREAD_HINT
+                : STALE_THREAD_DISPOSITION_HINT,
+            }),
       };
     })
     .filter(Boolean);
@@ -8127,12 +8467,13 @@ export function summarizeRequiredChecks(
       matchedRequiredChecks,
     );
   }
+  const noRequiredChecksConfigured =
+    !protectionReadsUnreadable &&
+    requiredCheckNames.length === 0 &&
+    !branchReviewRequirements.requiredCheckSourcePinned;
   return {
     status,
-    noRequiredChecksConfigured:
-      !protectionReadsUnreadable &&
-      requiredCheckNames.length === 0 &&
-      !branchReviewRequirements.requiredCheckSourcePinned,
+    noRequiredChecksConfigured,
     // #1377: surfaced separately from `noRequiredChecksConfigured` so a hold
     // message can name the unreadable-read cause specifically instead of a
     // generic "CI is not all-passing".
@@ -8145,6 +8486,10 @@ export function summarizeRequiredChecks(
       // combined set covers both causes without adding a third
       // parameter. See that function's own doc comment.
       new Set([...identityUnresolvedNameSet, ...nonTargetEventNameSet]),
+      // #4349: with no required check configured every present run is
+      // non-required, so F2's fallback ignores an `ACTION_REQUIRED` run. A
+      // required-check report keeps the unchanged reading.
+      { allRunsNonRequired: noRequiredChecksConfigured },
     ),
     requiredCheckCount: requiredCheckNames.length,
     generatedRequiredCheckCount: matchedRequiredChecks.length,
@@ -8194,6 +8539,29 @@ export function summarizeRequiredChecks(
     })),
   };
 }
+/**
+ * The runs {@link classifyPresentRuns} classifies for one present run: a
+ * waiver-covered run counts as skipped, and under
+ * {@link PresentRunOptions.allRunsNonRequired} (#4349) an `ACTION_REQUIRED` run
+ * is dropped and a still-running commit status becomes `QUEUED`. The drop
+ * happens before the per-producer de-duplication, so a newer `ACTION_REQUIRED`
+ * run never hides an older failure of the same producer.
+ */
+function effectivePresentRuns(check, options) {
+  if (check.coveredByWaiver) {
+    return [{ ...check, state: 'SKIPPED' }];
+  }
+  if (options.allRunsNonRequired === true) {
+    const state = String(check.state ?? '').toUpperCase();
+    if (state === 'ACTION_REQUIRED') {
+      return [];
+    }
+    if (CI_STATUS_CONTEXT_PENDING_STATES.has(state)) {
+      return [{ ...check, state: 'QUEUED' }];
+    }
+  }
+  return [check];
+}
 function classifyPresentRuns(
   normalizedChecks,
   // kurone-kito/idd-skill#2919 (round 4 -- Copilot review on PR #2921):
@@ -8210,6 +8578,7 @@ function classifyPresentRuns(
   // required-check gate (`summarizeRequiredChecks`'s own `status`) is
   // already fixed.
   identityUnresolvedCheckNames,
+  options,
 ) {
   if (normalizedChecks.length === 0) {
     return { conclusion: 'none', blockingNames: [] };
@@ -8220,14 +8589,18 @@ function classifyPresentRuns(
           .filter((check) => identityUnresolvedCheckNames.has(check.name))
           .map((check) => check.name)
       : [];
-  const effective = normalizedChecks.map((check) =>
-    check.coveredByWaiver ? { ...check, state: 'SKIPPED' } : check,
+  const effective = normalizedChecks.flatMap((check) =>
+    effectivePresentRuns(check, options),
   );
   const classification = classifyCiChecks(effective);
-  const conclusion = presentRunConclusion(
-    classification,
-    identityBlockedNames.length > 0,
-  );
+  // #4349: every run was an ignored, non-required `ACTION_REQUIRED` run, so no
+  // run evidence is left. That is the `none` reading (the vacuous-green hold),
+  // never `all-passing`, which `classifyCiChecks([])` would otherwise report.
+  // An identity-unresolved name still fails closed below.
+  const conclusion =
+    effective.length === 0 && identityBlockedNames.length === 0
+      ? 'none'
+      : presentRunConclusion(classification, identityBlockedNames.length > 0);
   if (conclusion !== 'some-failing') {
     return { conclusion, blockingNames: [] };
   }
@@ -8308,7 +8681,9 @@ function presentRunConclusion(classification, identityBlocked) {
 // Conclusion over *all* present check runs (waiver-covered runs count as
 // skipped), used for the F2 fallback when no required checks are configured:
 // an unprotected branch must not satisfy CI vacuously, so the gate inspects the
-// real run conclusions instead.
+// real run conclusions instead. With `options.allRunsNonRequired` (#4349) a
+// non-required `ACTION_REQUIRED` run is ignored as if absent and a
+// still-running commit status reads as pending; see {@link PresentRunOptions}.
 export function resolvePresentRunConclusion(
   normalizedChecks,
   // See `classifyPresentRuns` for the `identityUnresolvedCheckNames` rationale
@@ -8316,9 +8691,13 @@ export function resolvePresentRunConclusion(
   // fallback closed. The default empty set keeps every caller that omits it on
   // the unchanged pre-#2919 behavior.
   identityUnresolvedCheckNames = new Set(),
+  options = {},
 ) {
-  return classifyPresentRuns(normalizedChecks, identityUnresolvedCheckNames)
-    .conclusion;
+  return classifyPresentRuns(
+    normalizedChecks,
+    identityUnresolvedCheckNames,
+    options,
+  ).conclusion;
 }
 /**
  * The sorted names of the present runs that make
@@ -8329,14 +8708,19 @@ export function resolvePresentRunConclusion(
  * left out, and so is a still-running status context
  * ({@link CI_STATUS_CONTEXT_PENDING_STATES}), which the fallback can read as
  * `some-failing` but is not a failure. Otherwise the result is non-empty
- * exactly when the conclusion is `some-failing`.
+ * exactly when the conclusion is `some-failing`. `options` is the same as for
+ * {@link resolvePresentRunConclusion}, so the names follow the same reading.
  */
 export function listBlockingPresentRunNames(
   normalizedChecks,
   identityUnresolvedCheckNames = new Set(),
+  options = {},
 ) {
-  return classifyPresentRuns(normalizedChecks, identityUnresolvedCheckNames)
-    .blockingNames;
+  return classifyPresentRuns(
+    normalizedChecks,
+    identityUnresolvedCheckNames,
+    options,
+  ).blockingNames;
 }
 export function resolveCodeownersForFiles(codeownersText, changedFiles = []) {
   const rules = parseCodeownersRules(codeownersText);
@@ -12259,7 +12643,7 @@ function hasExplicitDispositionAfter(targetComment, comments, options = {}) {
       .toLowerCase();
     if (
       !isDispositionAuthor(author) ||
-      !isDispositionComment(comment) ||
+      !isSettledDispositionComment(comment) ||
       // #3249: an edited (or edit-state-unresolved) disposition reply never
       // counts as a completed IDD disposition here either.
       classifyCommentEditState(comment) !== 'unedited'

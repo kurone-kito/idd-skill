@@ -161,6 +161,7 @@
       "required": [
         "copilotThreadCount",
         "blockingIds",
+        "pendingDecisionIds",
         "blockingCount",
         "satisfied"
       ],
@@ -174,6 +175,11 @@
         "blockingIds": {
           "type": "array",
           "description": "IDs of primary-bot-authored threads that are both unresolved and missing a fresh disposition marker.",
+          "items": { "type": "string" }
+        },
+        "pendingDecisionIds": {
+          "type": "array",
+          "description": "The subset of blockingIds whose newest IDD reply is a pending decision: it carries **Awaiting maintainer decision**, alone or in a later paragraph of an **Accepted** reply. Such a thread stays blocking until a settled **Accepted** or **Rejected** reply follows the pending one.",
           "items": { "type": "string" }
         },
         "blockingCount": {

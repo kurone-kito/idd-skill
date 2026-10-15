@@ -280,6 +280,26 @@ export interface ParsedOutOfLoopMarker {
   createdAt: string;
 }
 
+/**
+ * Parsed `<!-- idd-hold: ... -->` marker (kurone-kito/idd-skill#4310): the
+ * stamped record a delegated worker posts on its claimed issue when it stops
+ * at a hold under the orchestrator fan-out variant (`docs/idd-workflow.md`,
+ * "Hold marker"). Informational only: it never starts, ends, releases, or
+ * transfers a claim, so the claim parsers deliberately do not read it.
+ * `createdAt` is the comment's GitHub `created_at`, the clock the hold-start
+ * and ordering rules use. `timestamp` is the poster-supplied value embedded in
+ * the body; it is kept for diagnostics only and must never feed an ordering,
+ * hold-start, or cap decision, since the posting agent's own clock may be
+ * skewed (the same rule {@link ParsedLegacyClaimMarker.embeddedTimestamp}
+ * records for legacy claims).
+ */
+export interface ParsedHoldMarker {
+  agentId: string;
+  claimId: string;
+  timestamp: string;
+  createdAt: string;
+}
+
 /** Parsed `<!-- review-watermark: ... -->` marker. */
 export interface ParsedReviewWatermark {
   agentId: string;
@@ -373,6 +393,21 @@ const OPERATIONAL_MARKER_ENTRIES: OperationalMarker[] = [
     startPattern: /^<!--\s*activation-nonce:/i,
     malformedPrefixPattern:
       /^<!--\s*activation-nonce:\s+\S+\s+\S+\s+\S+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->/i,
+  },
+  {
+    // kurone-kito/idd-skill#4310: held-worker marker (`docs/idd-workflow.md`,
+    // "Hold marker"). Issue-scoped and informational: recognized here so it
+    // reads as IDD automation rather than human discussion, but never part of
+    // claim-family resolution. Both identifiers use the same grammar as
+    // `renderHoldMarker` and `parseHoldMarker` (no whitespace, and no `<!--`
+    // or `-->` inside the token), so a body whose identifier closes the HTML
+    // comment early is not recognized as a hold marker here either.
+    label: '<!-- idd-hold:',
+    pattern:
+      /^<!--\s*idd-hold:\s+(?:(?!<!--|-->)\S)+\s+(?:(?!<!--|-->)\S)+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+    startPattern: /^<!--\s*idd-hold:/i,
+    malformedPrefixPattern:
+      /^<!--\s*idd-hold:\s+(?:(?!<!--|-->)\S)+\s+(?:(?!<!--|-->)\S)+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->/i,
   },
   {
     label: '<!-- review-watermark:',
@@ -642,6 +677,12 @@ const MARKER_HIDE_POLICY_ENTRIES: readonly MarkerHidePolicyEntry[] = [
       'review, second round).',
   },
   {
+    label: '<!-- idd-hold:',
+    policy: 'excluded',
+    reason:
+      "Live hold-state evidence: the orchestrator's held-worker renewal rule (docs/idd-workflow.md, Hold marker) re-reads the hold start from the earliest marker in an unbroken run on every wake-up, so hiding an earlier marker would shift the start of the 72 h cap. Issue-scoped, not PR-scoped, so F4's PR-bound cleanup never reaches it either (kurone-kito/idd-skill#4310).",
+  },
+  {
     label: '<!-- review-watermark:',
     policy: 'wired',
     reason: 'Grouped by same claim-id (idd-review-snapshot.instructions.md).',
@@ -865,6 +906,7 @@ export const IDD_AGENT_DERIVED_MARKERS: ReadonlySet<string> = new Set([
   '<!-- claimed-by:',
   '<!-- unclaimed-by:',
   '<!-- activation-nonce:',
+  '<!-- idd-hold:',
   '<!-- review-watermark:',
   '<!-- review-baseline:',
   '<!-- zero-accepted-path-a-gate:',
@@ -1933,6 +1975,47 @@ export function parseOutOfLoopMarker(
     prNumber,
     reason,
     at,
+    createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
+  };
+}
+
+/**
+ * Parse a `<!-- idd-hold: {agent-id} {claim-id} {ISO8601} -->` marker
+ * (kurone-kito/idd-skill#4310). The token must be the literal first bytes of
+ * `body`, so a marker quoted or embedded after any preamble does not parse
+ * (the same anti-spoofing rule as every other operational marker). Pure
+ * grammar only: trust (author and edit state) and claim binding are the
+ * caller's decisions, made by {@link resolveTrustedHoldMarkers} in
+ * `protocol-helpers.mts`.
+ */
+export function parseHoldMarker(
+  body: string,
+  createdAt: string,
+): ParsedHoldMarker | null {
+  const match = body
+    .trimEnd()
+    .match(
+      new RegExp(
+        `^<!--\\s*idd-hold:\\s+(\\S+)\\s+(\\S+)\\s+(${ISO8601_UTC_PATTERN.source})\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+        'i',
+      ),
+    );
+  if (!match || !isValidIsoTimestamp(match[3])) {
+    return null;
+  }
+  // The renderer refuses an identifier that contains `<!--` or `-->`, so the
+  // read side must too: such a token closes the HTML comment early, and a
+  // body posted through the direct-JSON fallback could otherwise parse as a
+  // hold marker for a claim it only resembles.
+  const agentId = normalizeNonWhitespaceToken(match[1]);
+  const claimId = normalizeNonWhitespaceToken(match[2]);
+  if (!agentId || !claimId) {
+    return null;
+  }
+  return {
+    agentId,
+    claimId,
+    timestamp: match[3],
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
   };
 }
@@ -3024,6 +3107,38 @@ export function renderUnclaimedByMarker(payload: {
   ].join('\n');
 }
 
+/**
+ * Render a `<!-- idd-hold: ... -->` marker (kurone-kito/idd-skill#4310): the
+ * stamped record a delegated worker posts on its claimed issue when it stops
+ * at a hold (`docs/idd-workflow.md`, "Hold marker"). The body is the token as
+ * the literal first bytes, a blank line, then the standard visible note. It
+ * records the hold only; it never changes who owns the claim.
+ */
+export function renderHoldMarker(payload: {
+  agentId?: unknown;
+  claimId?: unknown;
+  timestamp?: unknown;
+}): string {
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const claimId = normalizeNonWhitespaceToken(payload?.claimId);
+  const timestamp = normalizeSecondPrecisionIsoTimestamp(payload?.timestamp);
+  if (!agentId || !claimId || !timestamp) {
+    throw new Error(
+      'invalid idd-hold marker payload' +
+        describeInvalidMarkerFields([
+          { name: 'agentId', raw: payload?.agentId, failed: !agentId },
+          { name: 'claimId', raw: payload?.claimId, failed: !claimId },
+          { name: 'timestamp', raw: payload?.timestamp, failed: !timestamp },
+        ]),
+    );
+  }
+  return [
+    `<!-- idd-hold: ${agentId} ${claimId} ${timestamp} -->`,
+    '',
+    `_${agentId}: issue hold — IDD automation marker. Do not edit._`,
+  ].join('\n');
+}
+
 // advisory-wait / advisory-wait-recovery are PLAIN-TEXT markers (no visible
 // note): the AW2 / shell-fallback recognizers anchor on `-->$` / `\s*$`, so a
 // trailing visible note would break them. They carry the PR HEAD SHA (not a
@@ -3626,6 +3741,18 @@ export function operationalMarkerPrefix(body: string): string | null {
   ) {
     return null;
   }
+  // kurone-kito/idd-skill#4310: the shape-only pattern accepts a date that
+  // cannot exist (month 13, day 45), which parseHoldMarker rejects. Keep the
+  // two in step so a malformed hold comment is not classified as a live
+  // operational marker; `detectMalformedOperationalMarker` still reports it
+  // through the entry's `malformedPrefixPattern`. The token-only
+  // `operationalMarkerPrefixByStart` is unchanged.
+  if (
+    marker.label === '<!-- idd-hold:' &&
+    !isValidHoldOperationalMarker(normalized)
+  ) {
+    return null;
+  }
   return marker.label;
 }
 
@@ -3794,6 +3921,10 @@ function normalizeLinkedPr(value: unknown): string {
 
 function isValidForcedHandoffOperationalMarker(body: string): boolean {
   return parseForcedHandoffComment(body, '') !== null;
+}
+
+function isValidHoldOperationalMarker(body: string): boolean {
+  return parseHoldMarker(body, '') !== null;
 }
 
 export function isValidIsoTimestamp(value: unknown): value is string {

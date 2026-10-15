@@ -61,6 +61,7 @@ import {
 import {
   classifyPrLoopMembership,
   DISPOSITION_ACCEPTED_PREFIX_RE,
+  hasPendingDecisionMarker,
   isCopilotReviewerLogin,
   isDispositionComment,
   isRejectionConfirmedDisposition,
@@ -251,6 +252,23 @@ export const ACCEPTED_BODY_ITEM_DISPOSITION_MARKERS =
  */
 export function hasBodyItemDispositionPrefix(body: string): boolean {
   return isDispositionComment({ body });
+}
+
+/**
+ * The refusal for an `--apply --body` that carries the pending-decision marker
+ * (#4306). Both targets open with the same prefix, so a caller or a test can
+ * match one text for either. The tail differs (#4332): a thread target resolves
+ * the thread, so it is told to post the reply by hand and leave the thread
+ * open, while a body-item target posts a top-level reply and resolves no
+ * thread, so it is told to wait for the maintainer and then post a settled
+ * disposition.
+ */
+function pendingBodyRefusal(bodyItem: boolean): string {
+  const prefix =
+    '--apply refuses a --body that carries "**Awaiting maintainer decision**" at the start of a line: ';
+  return bodyItem
+    ? `${prefix}this helper posts a top-level reply that settles the item, and a pending decision settles nothing. Wait for the maintainer's decision, then post a settled disposition (E6)`
+    : `${prefix}this helper resolves the thread, and a pending decision keeps it open. Post that reply by hand and leave the thread unresolved (E6)`;
 }
 
 /** Where a body item's title was looked for, and what was found. */
@@ -1530,6 +1548,17 @@ function main(): HelperCliResult {
       'usage',
       `--apply requires --body to start with one of the accepted disposition markers: ${ACCEPTED_DISPOSITION_MARKERS}`,
     );
+  }
+  // #4306: this helper posts a settled reply and, for a thread, resolves it.
+  // A body that carries the pending-decision marker is an open question: it
+  // settles nothing, and resolving the thread would settle it for the gates
+  // that count a resolved thread as done. Fail closed before any network call.
+  // #4332: a body item posts a top-level reply and resolves no thread, so its
+  // refusal tells the caller how to finish the item, not to leave a thread open.
+  if (args.apply && hasPendingDecisionMarker(args.body)) {
+    const refusal = pendingBodyRefusal(bodyItem);
+    writeStderrSync(`${refusal}\n`);
+    exitClassified(1, 'usage', refusal);
   }
   const pr = args.pr as number;
   // Loaded once (#3270): both `markerPrefixRaw` below and `staleAgeMs`

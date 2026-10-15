@@ -279,7 +279,11 @@ interface PolicyConfigFile {
     selectionDesync?: 'off' | 'session-offset';
     legacyRoots?: readonly number[];
   };
-  orchestrator?: { maxWorkers?: number };
+  orchestrator?: {
+    maxWorkers?: number;
+    hostLoadClearStreak?: number;
+    hostLoadWaitCeiling?: string;
+  };
   claim?: { verifySettleDelay?: string };
   critiqueLoop?: {
     cPhaseLowSeveritySkipAfter?: number;
@@ -525,6 +529,7 @@ export const iddRoadmapAuditExecuteKeys = [
   'result',
   'viewerLoginUnavailable',
   'localCoordinationNote',
+  'nothingSent',
 ] as const satisfies readonly (keyof IddRoadmapAuditExecuteVerdict)[];
 
 export const forcedHandoffMarkerKeys = [
@@ -991,6 +996,7 @@ const advisoryConvergenceFixture = {
   threads: {
     copilotThreadCount: 0,
     blockingIds: [],
+    pendingDecisionIds: [],
     blockingCount: 0,
     satisfied: true,
   },
