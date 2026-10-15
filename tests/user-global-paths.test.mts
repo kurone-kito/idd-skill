@@ -1419,6 +1419,29 @@ posixTest(
   },
 );
 
+const NEEDS_NON_ROOT =
+  process.platform === 'win32' || process.getuid?.() === 0
+    ? 'needs a POSIX user other than root, whose own link is not root-owned'
+    : false;
+
+test('a link the running user made above the ceiling is refused with its real owner, no stand-in', {
+  skip: NEEDS_NON_ROOT,
+}, () => {
+  withBox((box) => {
+    const real = join(box.base, 'real-parent');
+    nodeFs.mkdirSync(join(real, 'home'), { recursive: true });
+    const linked = join(box.base, 'linked-parent');
+    nodeFs.symlinkSync(real, linked);
+    const home = join(linked, 'home');
+    assertThrowsMatching(
+      () => assertRealChain(join(home, 'x'), declaring(home)),
+      new RegExp(
+        `linked-parent is a symbolic link above .*\\(owner uid ${process.getuid?.()}\\)`,
+      ),
+    );
+  });
+});
+
 posixTest(
   'a dangling or owner-less link above the ceiling is refused, and a file above it too',
   () => {

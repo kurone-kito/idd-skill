@@ -14,8 +14,8 @@
 // The module resolves no root itself: the caller passes the data root and
 // refuses when no root resolves. Each walk export takes an optional `fs`
 // object. Tests inject replacements; the installer also passes
-// `withCeilings(fs, ...)` to declare where the links above a root stop being
-// inspected (#4303).
+// `withCeilings(fs, ...)` to declare where the strict part of the links check
+// begins (#4303).
 //
 // Ceilings. A ceiling is a qualified root the operator named, such as HOME,
 // XDG_DATA_HOME, or XDG_CONFIG_HOME, or the parent of one it named. When the
@@ -47,8 +47,14 @@
 // `/data/me -> /mnt/disk/me` made with `ln -s`, is refused, and the operator
 // names the real path instead. At and below the ceiling a link is refused
 // whoever owns it. A root-owned link is trusted, which stays an open risk: a
-// link planted by root is outside what this check can tell from a system's.
-// A stat with no numeric owner counts as not root-owned, so the check fails
+// link planted by root is outside what this check can tell from a system's,
+// and the trust covers everything that link resolves through, because `lstat`
+// follows links in the components it passes. The owner is the one the
+// filesystem reports: a mount that reports every file as root's, or a user
+// namespace that maps a user's files to root, makes a user's link look like
+// the system's and the check then degrades to the old behavior, while a
+// system link reported as an unmapped owner is refused, with its uid named. A
+// stat with no numeric owner counts as not root-owned, so the check fails
 // closed.
 import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
@@ -200,7 +206,7 @@ function assertAboveCeiling(start, fs) {
       const owner =
         typeof stat.uid === 'number' ? `uid ${stat.uid}` : 'unknown';
       throw new Error(
-        `${current} is a symbolic link above ${start} that the system does not own (owner ${owner}); refusing to write through it; to continue, name the root by its real path instead of one through the link`,
+        `${current} is a symbolic link above ${start} that the system does not own (owner ${owner}); refusing to write through it; to continue, name the root by its real path instead of one through the link (an existing install made through the link needs the link replaced by the real directory instead)`,
       );
     }
     if (!stat.isDirectory()) {
@@ -255,7 +261,8 @@ function assertDeclaredChain(base, fs) {
  * component must be a real directory when it exists. Once a component is
  * absent, everything below it is absent. A missing root and missing
  * intermediates are listed in `missingDirs`, root first. When `fs` declares
- * ceilings, the chain from the covering ceiling down to `root` is read first.
+ * ceilings, the components above the covering ceiling and then the chain from
+ * that ceiling down to `root` are read first.
  */
 function walkTo(root, target, fs) {
   assertSafePaths(root, target);
@@ -415,9 +422,11 @@ function assertRepointable(current, root, stat, fs) {
 /**
  * Return a copy of `fs` that declares `ceilings`: the qualified roots the
  * caller resolved from the environment (see the module header), primary root
- * first. Every walk the returned handle makes first reads the chain from the
- * first declared ceiling that covers its root down to the root. Each ceiling
- * must be absolute and normalized, and at least one must be given.
+ * first. Every walk the returned handle makes first reads the components above
+ * the first declared ceiling that covers its root (a link there is tolerated
+ * only when root owns it), then the chain from that ceiling down to the root
+ * (any link refuses). Each ceiling must be absolute and normalized, and at
+ * least one must be given.
  */
 export function withCeilings(fs, ceilings) {
   if (ceilings.length === 0) {
@@ -427,11 +436,14 @@ export function withCeilings(fs, ceilings) {
   return { ...fs, ceilings: [...ceilings] };
 }
 /**
- * Read the declared chain above `base` without walking anything below it, for
- * a caller that must look at `base` itself before its first walk. Refuses a
- * relative or non-normalized `base`, a symbolic link or a non-directory on the
- * chain, and a `base` that no declared ceiling covers. It also refuses when
- * `fs` declares no ceilings, because this check has no other purpose.
+ * Read everything above and including `base` that a walk of `base` would read
+ * first, without walking anything below it, for a caller that must look at
+ * `base` itself before its first walk: the components above the covering
+ * ceiling, then the chain from the ceiling down to `base`. Refuses a relative
+ * or non-normalized `base`, a symbolic link or a non-directory on the chain, a
+ * symbolic link above the ceiling that root does not own, and a `base` that no
+ * declared ceiling covers. It also refuses when `fs` declares no ceilings,
+ * because this check has no other purpose.
  */
 export function assertRealChain(base, fs = DEFAULT_FS) {
   requirePlatformFlags(fs);

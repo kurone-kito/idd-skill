@@ -218,9 +218,9 @@ function resolveContext(options) {
   const codexFromEnv = qualifiedValue(env.CODEX_HOME) !== undefined;
   const configFromEnv = qualifiedValue(env.XDG_CONFIG_HOME) !== undefined;
   // The roots the operator named, HOME first: the first one that covers a path
-  // is the top of the chain the walks inspect, and nothing above it is. A
-  // CODEX_HOME declares its parent, which is the base the entry-file walk
-  // starts from.
+  // is where the strict chain starts, and a link above it is tolerated only
+  // when root owns it. A CODEX_HOME declares its parent, which is the base the
+  // entry-file walk starts from.
   const dataHome = qualifiedValue(env.XDG_DATA_HOME);
   const ceilings = [home];
   if (dataHome !== undefined) ceilings.push(dataHome);
