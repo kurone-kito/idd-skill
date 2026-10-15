@@ -11,6 +11,7 @@ import {
   classifyLocalRefReads,
   createLiveF4HeadProofDeps,
   matchRegisteredWorktree,
+  resolveCheckoutRepository,
   selectPullRequests,
 } from '../src/scripts/f4-head-proof-live.mts';
 
@@ -402,4 +403,70 @@ test('the live deps refuse a repository the checkout origin does not name, and a
   // The gate asks once and stops at a refusal, so the repository is resolved
   // once for this check.
   assert.equal(resolved, 1);
+});
+
+test('the repository is read from the checkout origin, and an inherited GH_REPO has no effect', () => {
+  const root = mkdtempSync(join(tmpdir(), 'f4-head-proof-origin-'));
+  const keys = ['GH_REPO', 'GH_HOST', 'GITHUB_SERVER_URL'] as const;
+  const saved = keys.map((key) => [key, process.env[key]] as const);
+  const savedCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '-q', '-b', 'main', root], {
+      stdio: 'ignore',
+    });
+    execFileSync(
+      'git',
+      [
+        '-C',
+        root,
+        'remote',
+        'add',
+        'origin',
+        'https://github.com/origin-owner/origin-repo.git',
+      ],
+      { stdio: 'ignore' },
+    );
+    process.chdir(root);
+    delete process.env.GH_HOST;
+    delete process.env.GITHUB_SERVER_URL;
+    process.env.GH_REPO = 'elsewhere/not-this-one';
+    assert.deepEqual(resolveCheckoutRepository(), {
+      owner: 'origin-owner',
+      repo: 'origin-repo',
+    });
+    // The origin confirms the repository, so the live deps accept it.
+    const deps = createLiveF4HeadProofDeps({
+      resolveRepo: resolveCheckoutRepository,
+    });
+    assert.equal(deps.checkoutRepositoryError(), null);
+  } finally {
+    process.chdir(savedCwd);
+    for (const [key, value] of saved) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a checkout without an origin remote cannot resolve a repository locally', () => {
+  const root = mkdtempSync(join(tmpdir(), 'f4-head-proof-no-origin-'));
+  const savedCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '-q', '-b', 'main', root], {
+      stdio: 'ignore',
+    });
+    process.chdir(root);
+    assert.throws(() => resolveCheckoutRepository(), /no origin remote/);
+    const deps = createLiveF4HeadProofDeps({
+      resolveRepo: resolveCheckoutRepository,
+    });
+    assert.match(deps.checkoutRepositoryError() ?? '', /no origin remote/);
+  } finally {
+    process.chdir(savedCwd);
+    rmSync(root, { recursive: true, force: true });
+  }
 });

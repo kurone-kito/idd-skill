@@ -38,7 +38,10 @@ import {
   type F4HeadProofValues,
   runF4HeadProofGate,
 } from './f4-head-proof-gate.mts';
-import { createLiveF4HeadProofDeps } from './f4-head-proof-live.mts';
+import {
+  createLiveF4HeadProofDeps,
+  resolveCheckoutRepository,
+} from './f4-head-proof-live.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -2343,7 +2346,7 @@ export function runF4HeadProofCommand(
         worktree: args.fields.worktree,
         apply: args.apply,
       },
-      createDeps({ resolveRepo: resolveCurrentGithubRepository }),
+      createDeps({ resolveRepo: resolveCheckoutRepository }),
     );
     if (outcome.kind === 'refused') {
       process.stderr.write(`${outcome.message}\n`);

@@ -1672,5 +1672,10 @@ test('an unregistered worktree is refused before the repository is resolved, so 
     }),
   );
   assert.equal((result as { kind: string }).kind, 'usage');
+  // The refusal names the registration failure, not a read or a lookup.
+  assert.match(
+    (result as { message: string }).message,
+    /not a worktree that git worktree list --porcelain registers/,
+  );
   assert.equal(resolved, 0);
 });

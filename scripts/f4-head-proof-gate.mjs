@@ -388,7 +388,8 @@ function readClaim(input, deps, nonce, notes) {
 }
 /**
  * Run the F4 head-proof flow. Returns `refused` for a usage-level refusal
- * (an unregistered `--worktree`); otherwise `verdict` with the exit code and
+ * (an unregistered `--worktree`, or a repository the checkout's origin does
+ * not name); otherwise `verdict` with the exit code and
  * the JSON to print. Throws when the renderer rejects a derived value, with
  * nothing posted.
  */

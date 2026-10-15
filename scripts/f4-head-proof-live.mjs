@@ -25,6 +25,7 @@ import { composeGateTrustedMarkerLogins } from './protocol-helpers.mjs';
 import {
   createGithubProviderAdapter,
   originNamesRepository,
+  repositoryFromRemoteUrl,
 } from './provider-adapter-github.mjs';
 
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -268,6 +269,22 @@ export function selectPullRequests(rows, branch, limit) {
     .filter((row) => Number.isSafeInteger(row.number) && row.number > 0);
 }
 /**
+ * The repository the current checkout's origin remote names, read locally with
+ * no `gh` call, so an inherited `GH_REPO` cannot change it. Throws when the
+ * checkout has no origin or the remote is not a repository URL.
+ */
+export function resolveCheckoutRepository() {
+  const origin = runGit(['remote', 'get-url', 'origin']);
+  const named =
+    origin.status === 0 ? repositoryFromRemoteUrl(origin.stdout) : null;
+  if (named === null) {
+    throw new Error(
+      'the current checkout has no origin remote that names a repository',
+    );
+  }
+  return { owner: named.owner, repo: named.repo };
+}
+/**
  * The production callbacks for one repository. The trusted logins are the
  * viewer, the trusted configuration (read from the repository's default
  * branch, never the worktree), `IDD_TRUSTED_MARKER_ACTORS`, and, when
@@ -276,7 +293,8 @@ export function selectPullRequests(rows, branch, limit) {
  *
  * The repository is resolved on the first GitHub access, not up front, so a
  * refusal that needs no GitHub read (an unregistered worktree) makes no
- * GitHub call.
+ * GitHub call. The command passes `resolveCheckoutRepository`, which reads
+ * the repository from the checkout's origin without `gh`.
  */
 export function createLiveF4HeadProofDeps(options) {
   let located = null;
@@ -288,12 +306,13 @@ export function createLiveF4HeadProofDeps(options) {
           'the repository of the current checkout could not be resolved',
         );
       }
-      // `gh` honors GH_REPO, so the resolved repository can differ from the
-      // checkout that registered --worktree. The proof stays with the
-      // checkout's repository, so a name the origin does not give is refused.
+      // The registration check and this origin check both read the process
+      // working directory, so they describe the same checkout. A name the
+      // origin does not confirm is refused; the origin host must be the active
+      // GitHub host (GH_HOST, else GITHUB_SERVER_URL, else github.com).
       if (!originNamesRepository(owner, repo)) {
         throw new Error(
-          `${owner}/${repo} is not the repository the current checkout's origin names; an inherited GH_REPO or another origin is refused`,
+          `${owner}/${repo} is not the repository the current checkout's origin names (the origin host must be the active GitHub host: GH_HOST, else GITHUB_SERVER_URL, else github.com)`,
         );
       }
       located = {

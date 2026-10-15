@@ -32,7 +32,10 @@ import { requireFlag, stripLeadingArgumentSeparator } from './cli-args.mjs';
 import { invalidateDiscoverHints } from './discover-hint-cache.mjs';
 import { renderF4HeadProofBody } from './f4-head-proof.mjs';
 import { runF4HeadProofGate } from './f4-head-proof-gate.mjs';
-import { createLiveF4HeadProofDeps } from './f4-head-proof-live.mjs';
+import {
+  createLiveF4HeadProofDeps,
+  resolveCheckoutRepository,
+} from './f4-head-proof-live.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   classifyHelperError,
@@ -1992,7 +1995,7 @@ export function runF4HeadProofCommand(
         worktree: args.fields.worktree,
         apply: args.apply,
       },
-      createDeps({ resolveRepo: resolveCurrentGithubRepository }),
+      createDeps({ resolveRepo: resolveCheckoutRepository }),
     );
     if (outcome.kind === 'refused') {
       process.stderr.write(`${outcome.message}\n`);
