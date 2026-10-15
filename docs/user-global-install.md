@@ -9,8 +9,9 @@ tags: [user-global, install, policy, activation]
 
 The user-global installer places the IDD instruction payload and two skill
 bundles, `issue-authoring` and `idd-spec-audit`, into the current user's own
-directories. It also adds a reference to the gated entry text to each selected
-harness's entry file. A separate command removes what its receipt records. Paths
+directories. It also wires the gated entry text into each selected harness's entry
+file. How the text is wired differs by harness, as the What gets written section
+explains. A separate command removes what its receipt records. Paths
 that a failed receipt write leaves unlisted need manual cleanup, as described
 under [Failure outcome](#failure-outcome).
 
