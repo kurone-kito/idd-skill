@@ -6215,9 +6215,11 @@ reflexively as any other CLI option.
   review has items). Clause 2 counts only unresolved threads, so resolving a
   pending thread still settles it for this gate; leave it unresolved until
   the decision.
-  `resolve-review-thread --apply` resolves the thread, so it refuses a
-  `--body` that carries the marker before any network call; post a pending
-  reply by hand and leave the thread open
+  `resolve-review-thread --apply` refuses a `--body` that carries the marker
+  before any network call. A thread target would resolve the thread, so post
+  a pending reply by hand and leave the thread open; a body-item target
+  (`--review-id` with `--item-title`) posts a top-level reply and resolves no
+  thread, so wait for the maintainer and then post a settled disposition
 - Disposition-evidence `hint` on the `dispositionEvidence` object
   (kurone-kito/idd-skill#4163; observed 2026-10-13 on
   kurone-kito/idd-skill#4153, kurone-kito/idd-skill#4151, and
