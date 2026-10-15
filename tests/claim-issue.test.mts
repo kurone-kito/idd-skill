@@ -70,6 +70,11 @@ const failed = (status: number | null = 1): CommandResult => ({
 });
 
 const ISSUE_VIEW = ok(JSON.stringify({ title: TITLE, assignees: [] }));
+const VALID_CHECK = {
+  id: 'gate_enabled',
+  name: 'Issue-author gate enabled',
+  result: 'pass',
+};
 const APPROVED = ok(
   JSON.stringify({
     issue: { number: ISSUE },
@@ -100,6 +105,7 @@ function routingOutput(
     reason?: unknown;
     winning?: string | null | 'absent';
     state?: string;
+    action?: unknown;
   } = {},
 ): CommandResult {
   const gate: Record<string, unknown> = { verdict };
@@ -116,7 +122,7 @@ function routingOutput(
           : verdict === 'stale-reclaimable'
             ? 'stale'
             : 'non_inheritable'),
-      action: 're_claim',
+      action: 'action' in options ? options.action : 're_claim',
       reason: 'reason' in options ? options.reason : 'no-active-claim',
       fresh_claim_gate: gate,
     }),
@@ -391,6 +397,32 @@ test('A5(a): invalid or incomplete approval JSON is approval-unproven', () => {
     approvalOutput({ issue: { number: ISSUE + 1 } }),
     approvalOutput({ issue: { number: String(ISSUE) } }),
     approvalOutput({ reason: '' }),
+    approvalOutput({ reason: '  ' }),
+    approvalOutput({ reason: 'approval-missing' }),
+    approvalOutput({ reason: 'something-else' }),
+    approvalOutput({ checks: [VALID_CHECK, null] }),
+    approvalOutput({ checks: [VALID_CHECK, { id: 'x' }] }),
+    approvalOutput({ checks: [{ ...VALID_CHECK, result: 'x' }] }),
+    approvalOutput({ checks: [{ ...VALID_CHECK, result: '' }] }),
+    approvalOutput({ checks: [{ ...VALID_CHECK, name: ' ' }] }),
+    approvalOutput({
+      policy: {
+        maintainerApprovalActorPolicy: ' ',
+        approvalSignals: {
+          readyLabelName: 'idd:ready',
+          labelFreshnessMode: 'presence-only',
+        },
+      },
+    }),
+    approvalOutput({
+      policy: {
+        maintainerApprovalActorPolicy: 'x',
+        approvalSignals: {
+          readyLabelName: 'idd:ready',
+          labelFreshnessMode: '',
+        },
+      },
+    }),
   ];
   for (const approval of broken) {
     const { report } = run({ approval });
@@ -489,6 +521,12 @@ test('A5(c): a failed, malformed, or unknown fresh-claim result is precheck-unav
     routingOutput('claimable', { state: 'stale' }),
     routingOutput('claimable', { state: 'non_inheritable' }),
     routingOutput('stale-reclaimable', { state: 'unclaimed' }),
+    routingOutput('claimable', { winning: 'claim-1' }),
+    routingOutput('claimable', { action: 'stop' }),
+    routingOutput('claimable', { action: undefined }),
+    routingOutput('claimable', { winning: '' }),
+    routingOutput('claimable', { reason: '  ' }),
+    routingOutput('already-claimed', { winning: '' }),
     routingOutput('already-claimed', { state: 'unclaimed' }),
     routingOutput('already-claimed', { state: 'stale' }),
     routingOutput('already-claimed', { state: 'bogus' }),
@@ -1241,12 +1279,10 @@ test('A5(d): raw rows through the real adapter, a malformed one fails the lookup
   assertStoppedAt(reportOf(closing), 'a5d-open-pr', 'open-pr');
 });
 
-test('A5(c): every routing state the gate pairs with already-claimed is accepted', () => {
+test('A5(c): the routing states the fresh gate pairs with already-claimed are accepted', () => {
   for (const state of [
-    'already_owned',
     'local_worktree_occupied',
     'non_inheritable',
-    'owner_evidence_required',
     'disputed',
   ]) {
     const { report } = run({
@@ -1277,5 +1313,35 @@ test('A5(e): a local absent result with paths or a reason is not a proven absenc
       record.calls.some((call) => call[1] === 'api'),
       false,
     );
+  }
+});
+
+test('A5(e): an occupied local result still stops when its paths are not a list', () => {
+  for (const paths of [undefined, 'x', null]) {
+    const { report, record } = run({
+      inspectLocalWorktrees: () =>
+        ({
+          status: 'occupied',
+          paths,
+          reason: 'r',
+        }) as unknown as LocalWorktreeInspection,
+    });
+    assertStoppedAt(report, 'a5e-branch-collision', 'local-worktree-occupied');
+    assert.equal(
+      record.calls.some((call) => call[1] === 'api'),
+      false,
+    );
+  }
+});
+
+test('A5(a): every approved reason the gate emits is accepted', () => {
+  for (const reason of [
+    'author-self-authorized',
+    'ready-label-present',
+    'ready-comment-fresh',
+    'gate-disabled',
+  ]) {
+    const { report } = run({ approval: approvalOutput({ reason }) });
+    assertEligible(report);
   }
 });

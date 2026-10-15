@@ -70,11 +70,17 @@ const FRESH_CLAIM_VERDICTS: readonly string[] = [
 
 /** The routing states the fresh-claim gate maps onto `already-claimed`. */
 const ALREADY_CLAIMED_STATES: readonly string[] = [
-  'already_owned',
-  'local_worktree_occupied',
   'non_inheritable',
-  'owner_evidence_required',
   'disputed',
+  'local_worktree_occupied',
+];
+
+/** The reasons `claim-approval-gate` pairs with `approved: true`. */
+const APPROVED_REASONS: readonly string[] = [
+  'author-self-authorized',
+  'ready-label-present',
+  'ready-comment-fresh',
+  'gate-disabled',
 ];
 
 if (import.meta.main) {
@@ -305,7 +311,8 @@ function isCheckList(value: unknown): boolean {
         typeof check.id === 'string' &&
         check.id !== '' &&
         typeof check.name === 'string' &&
-        typeof check.result === 'string',
+        check.name.trim() !== '' &&
+        (check.result === 'pass' || check.result === 'fail'),
     )
   );
 }
@@ -338,13 +345,17 @@ function checkApproval(
     !describesIssue(evidence.issue, issueNumber) ||
     typeof evidence.approved !== 'boolean' ||
     typeof evidence.reason !== 'string' ||
-    evidence.reason === '' ||
+    evidence.reason.trim() === '' ||
+    (evidence.approved === true &&
+      !APPROVED_REASONS.includes(evidence.reason)) ||
     typeof evidence.gateEnabled !== 'boolean' ||
     !isRecord(policy) ||
     typeof policy.maintainerApprovalActorPolicy !== 'string' ||
+    policy.maintainerApprovalActorPolicy.trim() === '' ||
     !isRecord(policy.approvalSignals) ||
     typeof policy.approvalSignals.readyLabelName !== 'string' ||
     typeof policy.approvalSignals.labelFreshnessMode !== 'string' ||
+    policy.approvalSignals.labelFreshnessMode.trim() === '' ||
     !isCheckList(evidence.checks)
   ) {
     return unproven('claim-approval-gate printed incomplete evidence');
@@ -408,9 +419,10 @@ function checkClaimState(
   const winningClaimId = gate.winning_claim_id;
   if (
     typeof routing.reason !== 'string' ||
-    routing.reason === '' ||
+    routing.reason.trim() === '' ||
     !Object.hasOwn(gate, 'winning_claim_id') ||
-    (winningClaimId !== null && typeof winningClaimId !== 'string')
+    (winningClaimId !== null &&
+      (typeof winningClaimId !== 'string' || winningClaimId === ''))
   ) {
     return unavailable(
       label,
@@ -419,11 +431,14 @@ function checkClaimState(
   }
   // The gate maps the routing state one to one onto these two verdicts.
   if (gate.verdict === 'claimable') {
-    return routing.state === 'unclaimed'
+    // An unclaimed issue has no winner and routes to a fresh claim.
+    return routing.state === 'unclaimed' &&
+      winningClaimId === null &&
+      routing.action === 're_claim'
       ? pass('claimable')
       : unavailable(
           label,
-          'resume-claim-routing printed claimable for a state other than unclaimed',
+          'resume-claim-routing printed claimable for a state, action, or winner it never pairs with that verdict',
         );
   }
   if (gate.verdict === 'stale-reclaimable') {
