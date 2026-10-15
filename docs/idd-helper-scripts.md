@@ -3179,18 +3179,20 @@ The adopted helper boundaries are intentionally narrow:
   and when `pre-merge-readiness` still lists the comment in
   `dispositionEvidence.missingRegularComments`, a stamped `**Rejected**`
   reply is the route, whereas a `Running` row gets no `**Rejected**`
-  reply because that review can still complete. Build the reply from the
-  canonical body this entry shows for a non-review notice, with
-  `{reason}` set to a note that its review summary
-  reports the code review as failed for this commit, and the source
-  comment id set to the `noticeId` of that comment's entry in `skipped`.
+  reply because that review can still complete. Codex edits its status
+  comment in place, so re-read the comment's row for the current HEAD
+  immediately before each reply and post only while it still reads
+  `Failed`. Build the reply from the canonical body this entry shows for
+  a non-review notice, with `{reason}` set to a note that its review
+  summary reports the code review as failed for this commit, and the
+  source comment id set to the `noticeId` of that comment's entry in
+  `skipped`.
   The helper keeps reporting the comment after the reply. The gate pairs
   a reply with a listed comment by count and age, never by source comment
-  id, and Codex edits its status comment in place, so run this helper's
-  `--apply` first for any coexisting notice from the same bot,
-  then re-read `dispositionEvidence.missingRegularComments` after
-  replying and reply again only while the comment is still listed and its
-  row for the current HEAD still reads `Failed`. Append the stamp as the
+  id, so run this helper's `--apply` first for any coexisting notice from
+  the same bot, then re-read `dispositionEvidence.missingRegularComments`
+  after replying and reply again only while the comment is still listed
+  and its row still reads `Failed`. Append the stamp as the
   [E13 reply-and-resolve](#e13-reply-and-resolve-resolve-review-thread)
   entry describes, since a manual `gh api` JSON body must append the
   stamp itself. Observed 2026-10-15 on kurone-kito/idd-skill#4344,
