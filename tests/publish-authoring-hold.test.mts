@@ -2491,13 +2491,16 @@ function ownerMarkerText(
     set?: string;
     session?: string;
     bodySha256?: string;
+    snapshotSha256?: string;
     supersedes?: string;
     target?: string;
     anchor?: string;
   } = {},
 ): string {
+  // The anchor-only modes carry no body digest (contract.md, mode table).
+  const anchorOnly = mode === 'release-guard' || mode === 'release-complete';
   return [
-    `<!-- idd-skill-authoring-owner: target=${fields.target ?? ANCHOR_REF}; anchor=${fields.anchor ?? ANCHOR_REF}; mode=${mode}; owner=${fields.owner ?? ANCHOR_OWNER}; set=${fields.set ?? ANCHOR_SET}; session=${fields.session ?? ANCHOR_SESSION}; body-sha256=${fields.bodySha256 ?? sha256Of(roadmapDraftBody())}; snapshot-sha256=none; supersedes=${fields.supersedes ?? (mode === 'acquire' || mode === 'bootstrap' ? 'none' : (fields.owner ?? ANCHOR_OWNER))} -->`,
+    `<!-- idd-skill-authoring-owner: target=${fields.target ?? ANCHOR_REF}; anchor=${fields.anchor ?? ANCHOR_REF}; mode=${mode}; owner=${fields.owner ?? ANCHOR_OWNER}; set=${fields.set ?? ANCHOR_SET}; session=${fields.session ?? ANCHOR_SESSION}; body-sha256=${fields.bodySha256 ?? (anchorOnly ? 'none' : sha256Of(roadmapDraftBody()))}; snapshot-sha256=${fields.snapshotSha256 ?? (mode === 'release-complete' ? 'c'.repeat(64) : 'none')}; supersedes=${fields.supersedes ?? (mode === 'acquire' || mode === 'bootstrap' ? 'none' : (fields.owner ?? ANCHOR_OWNER))} -->`,
     '_Issue-authoring ownership marker. Do not edit or delete._',
   ].join('\n');
 }
@@ -2698,6 +2701,48 @@ test('anchor replay: a released set is not joinable, and a new acquire after rel
   assert.ok('generation' in again, JSON.stringify(again));
   assert.equal(again.generation.set, 'set-new');
   assert.equal(again.generation.owner, 'owner-new');
+
+  // A completed set stays closed: a later acquisition needs a fresh set id.
+  for (const mode of ['acquire', 'bootstrap']) {
+    const reopened = replay([
+      provenanceComment(1, 'acquire'),
+      provenanceComment(2, 'release-complete'),
+      provenanceComment(3, mode, { owner: 'owner-new' }),
+    ]);
+    assert.ok('problem' in reopened, `${mode}: ${JSON.stringify(reopened)}`);
+    assert.match(reopened.problem, /reuses set set-anchor/);
+  }
+});
+
+test('anchor replay: a marker that breaks the field rules of its mode is not a valid owner marker', () => {
+  const cases: [string, Parameters<typeof provenanceComment>[2]][] = [
+    ['acquire', { supersedes: 'owner-other' }],
+    ['acquire', { bodySha256: 'none' }],
+    ['bootstrap', { supersedes: 'owner-other' }],
+    ['bootstrap', { bodySha256: 'none' }],
+  ];
+  for (const [mode, fields] of cases) {
+    const result = replay([provenanceComment(1, mode, fields)]);
+    assert.ok('problem' in result, `${mode}: ${JSON.stringify(result)}`);
+    assert.match(result.problem, /is malformed/);
+  }
+  // The same rules bind the markers that extend an open generation.
+  const extending: [string, Parameters<typeof provenanceComment>[2]][] = [
+    ['heartbeat', { supersedes: 'owner-other' }],
+    ['heartbeat', { bodySha256: 'none' }],
+    ['release', { supersedes: 'none' }],
+    ['release-guard', { bodySha256: sha256Of('body') }],
+    ['release-complete', { snapshotSha256: 'none' }],
+    ['resume', { owner: 'owner-next', supersedes: 'owner-next' }],
+  ];
+  for (const [mode, fields] of extending) {
+    const result = replay([
+      provenanceComment(1, 'acquire'),
+      provenanceComment(2, mode, fields),
+    ]);
+    assert.ok('problem' in result, `${mode}: ${JSON.stringify(result)}`);
+    assert.match(result.problem, /is malformed/);
+  }
 });
 
 test('anchor replay: a log that is not exactly one owner generation fails closed', () => {
@@ -3212,6 +3257,25 @@ const ANCHOR_REFUSALS: [string, Parameters<typeof seedAnchor>[1], RegExp][] = [
     'an anchor whose release is in progress',
     { markers: [ownerMarkerText('acquire'), ownerMarkerText('release')] },
     /being released/,
+  ],
+  [
+    'an anchor whose acquire marker breaks the rules of its mode',
+    {
+      createdAt: new Date().toISOString(),
+      markers: [ownerMarkerText('acquire', { supersedes: 'owner-other' })],
+    },
+    /is malformed/,
+  ],
+  [
+    'an anchor that reopens a completed set',
+    {
+      markers: [
+        ownerMarkerText('acquire'),
+        ownerMarkerText('release-complete'),
+        ownerMarkerText('acquire', { owner: 'owner-new' }),
+      ],
+    },
+    /reuses set set-anchor/,
   ],
   [
     'an anchor with an active claim',
