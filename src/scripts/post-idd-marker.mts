@@ -2115,9 +2115,9 @@ claim's branch, the local branch tip, the trusted markers of the issue, and
 the review-watermark of the pull request. It posts only when the verdict table
 says post, and prints the verdict, the reason, and the proof values as JSON.
 The command takes no other field flag, and refuses --owner, --repo,
---trusted-marker-logins, and --advisory-bot-logins (the repository is the
-current checkout's, and the trusted logins come from the viewer, the
-environment, and the trusted configuration). Under --apply it reads the claim
+--trusted-marker-logins, and --advisory-bot-logins (the repository is the one the current checkout's origin names, and the
+trusted logins come from the viewer, the environment, and the trusted
+configuration). Under --apply it reads the claim
 and the lock again right before the POST. Exit 0 is proceed or post; exit 1 is
 hold or stop. An uncertain write is read back exactly three times and never
 posted again. --target pr is refused.
@@ -2290,8 +2290,8 @@ const F4_HEAD_PROOF_FLAGS: readonly string[] =
 /**
  * Run `--type f4-head-proof`: the live reads, the verdict, and (under
  * `--apply`, on a `post` verdict) the POST and its read-back all happen in
- * `runF4HeadProofGate`. This wrapper checks the flags, resolves the
- * repository, prints the JSON envelope, and maps the verdict to the exit
+ * `runF4HeadProofGate`. This wrapper checks the flags, passes the live
+ * dependencies, prints the JSON envelope, and maps the verdict to the exit
  * status (0 for proceed and post, 1 for hold and stop). A renderer or read
  * error exits non-zero with nothing posted. `createDeps` is the seam a test
  * replaces with fake callbacks; production uses the live wiring.

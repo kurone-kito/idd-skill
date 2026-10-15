@@ -22,7 +22,10 @@ import {
 } from './local-worktree-occupancy.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import { composeGateTrustedMarkerLogins } from './protocol-helpers.mjs';
-import { createGithubProviderAdapter } from './provider-adapter-github.mjs';
+import {
+  createGithubProviderAdapter,
+  originNamesRepository,
+} from './provider-adapter-github.mjs';
 
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const CLAIM_ASSERT_TIMEOUT_MS = 120_000;
@@ -280,6 +283,19 @@ export function createLiveF4HeadProofDeps(options) {
   const locate = () => {
     if (located === null) {
       const { owner, repo } = options.resolveRepo();
+      if (!owner || !repo) {
+        throw new Error(
+          'the repository of the current checkout could not be resolved',
+        );
+      }
+      // `gh` honors GH_REPO, so the resolved repository can differ from the
+      // checkout that registered --worktree. The proof stays with the
+      // checkout's repository, so a name the origin does not give is refused.
+      if (!originNamesRepository(owner, repo)) {
+        throw new Error(
+          `${owner}/${repo} is not the repository the current checkout's origin names; an inherited GH_REPO or another origin is refused`,
+        );
+      }
       located = {
         owner,
         repo,
@@ -293,6 +309,14 @@ export function createLiveF4HeadProofDeps(options) {
   let trustConfig;
   return {
     isRegisteredWorktree,
+    checkoutRepositoryError() {
+      try {
+        locate();
+        return null;
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    },
     readTokens: readGeneratedClaimTokens,
     checkLock: checkClaimLock,
     assertClaim: (request) => {

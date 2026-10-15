@@ -416,6 +416,10 @@ export function runF4HeadProofGate(input, deps) {
           : `--worktree ${input.worktree} is not a worktree that git worktree list --porcelain registers for this repository`,
     };
   }
+  const repositoryError = deps.checkoutRepositoryError();
+  if (repositoryError !== null) {
+    return { kind: 'refused', message: repositoryError };
+  }
   const notes = [];
   // The nonce comes from the stored activation record. A read that throws, or
   // is absent, malformed, or has no nonce, is a refusal, not a negative claim

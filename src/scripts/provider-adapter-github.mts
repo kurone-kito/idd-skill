@@ -5061,7 +5061,7 @@ export function gitChildEnvironment(
  * GitHub host (`activeGithubHost`), compared case-insensitively. An unreadable
  * origin, a missing remote, a remote that is not a repository URL, or an
  * unparseable host is false: the caller then uses `gh` (fail closed). */
-function originNamesRepository(owner: string, repo: string): boolean {
+export function originNamesRepository(owner: string, repo: string): boolean {
   const serverHost = activeGithubHost();
   if (serverHost === null) return false;
   let remote: string;

@@ -12,6 +12,7 @@ import {
   provesNothingSent,
   runF4HeadProofGate,
 } from '../src/scripts/f4-head-proof-gate.mts';
+import { createLiveF4HeadProofDeps } from '../src/scripts/f4-head-proof-live.mts';
 import { createLoadControlRefusal } from '../src/scripts/github-api-refusal.mts';
 import {
   parseArgs,
@@ -152,6 +153,7 @@ function harness(overrides: Partial<F4HeadProofGateDeps> = {}): Harness {
     };
   state.deps = {
     isRegisteredWorktree: track('isRegisteredWorktree', () => true),
+    checkoutRepositoryError: () => null,
     readTokens: track('readTokens', () => ({
       status: 'present' as const,
       path: '/tokens',
@@ -1632,4 +1634,43 @@ test('the command refuses --owner and --repo, which must not name another reposi
     assert.match(err, /does not take --owner or --repo/);
     assert.deepEqual(h.calls, [], 'no read happens before the refusal');
   }
+});
+
+test('a checkout whose origin names another repository is refused before any claim read', () => {
+  const h = harness({
+    checkoutRepositoryError: () =>
+      "owner/name is not the repository the current checkout's origin names",
+  });
+  const outcome = runF4HeadProofGate(APPLY, h.deps);
+  assert.equal(outcome.kind, 'refused');
+  assert.match((outcome as { message: string }).message, /origin names/);
+  assert.deepEqual(h.calls, ['isRegisteredWorktree']);
+  assert.deepEqual(h.posts, []);
+});
+
+test('an unregistered worktree is refused before the repository is resolved, so no GitHub call is made', () => {
+  let resolved = 0;
+  const args = parseArgs([
+    '--type',
+    'f4-head-proof',
+    '--target',
+    'issue',
+    String(ISSUE),
+    '--claim-id',
+    CLAIM,
+    '--agent-id',
+    AGENT,
+    '--worktree',
+    '/not/registered/worktree',
+  ]);
+  const result = runF4HeadProofCommand(args, ISSUE, (options) =>
+    createLiveF4HeadProofDeps({
+      resolveRepo: () => {
+        resolved += 1;
+        return options.resolveRepo();
+      },
+    }),
+  );
+  assert.equal((result as { kind: string }).kind, 'usage');
+  assert.equal(resolved, 0);
 });

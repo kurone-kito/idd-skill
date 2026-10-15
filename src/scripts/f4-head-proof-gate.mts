@@ -100,6 +100,12 @@ export interface CommitRead {
 export interface F4HeadProofGateDeps {
   /** `null` when `git worktree list --porcelain` could not be read. */
   isRegisteredWorktree(worktree: string): boolean | null;
+  /**
+   * Null when the repository this command acts on is the one the current
+   * checkout's origin names; otherwise the reason it is not. Called after the
+   * registration check and before any claim read.
+   */
+  checkoutRepositoryError(): string | null;
   readTokens(worktree: string, claimId: string): GeneratedTokensReadResult;
   checkLock(worktree: string): CheckLockOutcome;
   assertClaim(request: ClaimAssertRequest): ClaimAssertOutcome;
@@ -598,6 +604,10 @@ export function runF4HeadProofGate(
           ? 'the registered worktrees of this repository could not be read (git worktree list --porcelain failed)'
           : `--worktree ${input.worktree} is not a worktree that git worktree list --porcelain registers for this repository`,
     };
+  }
+  const repositoryError = deps.checkoutRepositoryError();
+  if (repositoryError !== null) {
+    return { kind: 'refused', message: repositoryError };
   }
   const notes: string[] = [];
 

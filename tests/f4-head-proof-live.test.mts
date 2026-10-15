@@ -382,3 +382,24 @@ test('the claim check runs with the sanitized Git environment, keeping PATH and 
     }
   }
 });
+
+test('the live deps refuse a repository the checkout origin does not name, and an empty one', () => {
+  let resolved = 0;
+  const other = createLiveF4HeadProofDeps({
+    resolveRepo: () => {
+      resolved += 1;
+      return { owner: 'another-owner', repo: 'another-repo' };
+    },
+  });
+  assert.match(
+    other.checkoutRepositoryError() ?? '',
+    /is not the repository the current checkout's origin names/,
+  );
+  const empty = createLiveF4HeadProofDeps({
+    resolveRepo: () => ({ owner: '', repo: 'idd-skill' }),
+  });
+  assert.match(empty.checkoutRepositoryError() ?? '', /could not be resolved/);
+  // The gate asks once and stops at a refusal, so the repository is resolved
+  // once for this check.
+  assert.equal(resolved, 1);
+});
