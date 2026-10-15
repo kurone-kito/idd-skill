@@ -137,6 +137,12 @@ test('the lite claim keeps the worktree-first order and the stop sentence', () =
 });
 
 const WRAPPER_DOC = 'idd-template/docs/idd-helper-scripts.md';
+// The wrapper is a POSIX sh block. On Windows, spawnSync('bash') resolves to
+// System32's WSL bash, which cannot run the stub sleep or the C:\ paths.
+const WRAPPER_SKIP =
+  process.platform === 'win32'
+    ? 'POSIX sh block; bash resolves to WSL on Windows'
+    : false;
 const WRAPPER_SUCCESS = 'verified';
 const WRAPPER_STEPS = [
   'record',
@@ -252,21 +258,27 @@ function runFreshClaimWrapper(
   }
 }
 
-test('the fresh-claim wrapper reports success only after the assert', () => {
+test('the fresh-claim wrapper reports success only after the assert', {
+  skip: WRAPPER_SKIP,
+}, () => {
   const run = runFreshClaimWrapper({});
   assert.equal(run.status, 0, run.stdout);
   assert.deepEqual(run.steps, WRAPPER_STEPS);
   assert.equal(run.stdout.trim(), WRAPPER_SUCCESS);
 });
 
-test('a failed assert runs last and reports no success', () => {
+test('a failed assert runs last and reports no success', {
+  skip: WRAPPER_SKIP,
+}, () => {
   const run = runFreshClaimWrapper({ assert: 1 });
   assert.notEqual(run.status, 0);
   assert.deepEqual(run.steps, WRAPPER_STEPS);
   assert.equal(run.stdout.includes(WRAPPER_SUCCESS), false);
 });
 
-test('a failure before the claim marker reports no success and posts nothing', () => {
+test('a failure before the claim marker reports no success and posts nothing', {
+  skip: WRAPPER_SKIP,
+}, () => {
   const recordFailed = runFreshClaimWrapper({ record: 1 });
   assert.notEqual(recordFailed.status, 0);
   assert.deepEqual(recordFailed.steps, ['record']);
@@ -278,7 +290,9 @@ test('a failure before the claim marker reports no success and posts nothing', (
   }
 });
 
-test('a failed claim post, nonce record, or acquire stops the later steps', () => {
+test('a failed claim post, nonce record, or acquire stops the later steps', {
+  skip: WRAPPER_SKIP,
+}, () => {
   const postFailed = runFreshClaimWrapper({ 'post-claim': 1 });
   assert.notEqual(postFailed.status, 0);
   assert.deepEqual(postFailed.steps, ['record', 'gate', 'post-claim']);
