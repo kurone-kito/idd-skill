@@ -56,8 +56,11 @@ the [helper contract](../../docs/idd-helper-scripts.md#branch-conflict-and-synch
   branch always holds. If `baseAdvancedSinceMergeBase: true`,
   run the profile-selected trial-merge audit command for `--pr {pr-number}`
   (see the trial-merge audit entry in `docs/idd-helper-scripts.md`) for
-  push-free evidence (advisory; this routing does not change). With helper
-  runtime disabled, skip it.
+  push-free evidence (advisory; this routing does not change). A `not-run`
+  verdict with reason `tooling-changed` is the expected result for a pull
+  request that changes tooling, and it does not change this routing; that
+  pull request relies on its own required CI. With helper runtime disabled,
+  skip the audit.
 - **`return-to-e-phase-branch-sync`**: return to the E-phase branch-sync
   check in `idd-review-triage.instructions.md`, first setting
   `Phase: F1 sync-required`, the branch state in `Open blockers`, and
