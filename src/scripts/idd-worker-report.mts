@@ -100,6 +100,7 @@ const OUTCOMES = [
   'held',
   'abandoned',
   'failed',
+  'scope-stopped',
 ] as const;
 
 export type WorkerReportOutcome = (typeof OUTCOMES)[number];
