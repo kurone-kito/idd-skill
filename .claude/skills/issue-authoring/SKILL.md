@@ -419,7 +419,7 @@ needs-decision, blocked-by-human, and out-of-scope.
   those two buckets. Lint every draft carrier with `--shape carrier`; its
   body is linted, not reviewed. Resolve every reported failure before
   publishing. A failed review does not publish the target; its drafts go
-  into a carrier.
+  into a carrier unless an exception in step 8 applies.
 - No reviewed draft ends in local files only, except the two exceptions in
   step 8.
 - Name a concrete surface to edit and an objective verification for
