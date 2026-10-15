@@ -1311,7 +1311,8 @@ the repository.
 - `{worktree-path}`: the worktree the orchestrator pre-created for the claim.
 - `{scratchpad-dir}`: an issue-numbered subdirectory of the scratchpad path that
   the harness reports (see the Scratchpad part).
-- `{report-path}`: the path of the worker's report draft, outside the worktree.
+- `{report-path}`: the worker's report draft, a file named with the issue number
+  directly in the scratchpad path that the harness reports.
 - `{terminal-phase}`: F4 under `fully_autonomous_merge`, F2.5 otherwise, or
   the earlier phase that the run is scoped to end at (see the Terminal phase
   part).
@@ -1353,46 +1354,54 @@ execution-timeout override that the
 names, near the calling tool's own ceiling.
 
 **Terminal phase.** You run your whole span through `{terminal-phase}`, then
-report back to the orchestrator and do not enter F5's Discover step. Under
-`fully_autonomous_merge` that means every step of
+report back to the orchestrator and do not enter F5's Discover step. Your
+worktree was pre-created, so it takes the B1 skip of "Already inside a
+host-isolated worktree" in
+[idd-work.instructions.md](../.github/instructions/idd-work.instructions.md#already-inside-a-host-isolated-worktree).
+
+F4 cleanup, for a run that ends at F4. Under `fully_autonomous_merge` that means
+every step of
 [F4](../.github/instructions/idd-merge.instructions.md#f4--cleanup), with the
 [F4 head proof](idd-resume-detail.md#f4-head-proof) reused or captured before
-step 3, ending with step 7's final `unclaimed-by`. Your worktree was
-pre-created, so it takes the B1 skip of "Already inside a host-isolated
-worktree" in
-[idd-work.instructions.md](../.github/instructions/idd-work.instructions.md#already-inside-a-host-isolated-worktree).
-The F4 skip of that section (skip the primary-worktree steps and the worktree
-removal, and let the harness reclaim the checkout) applies only when the harness
-itself reclaims the worktree. The orchestrator created yours on the shared
-clone, so you run F4 steps 4 and 5 yourself, with step 4's fetch and step 5's
-worktree removal behind the
-[clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock), as the lock
+step 3, ending with step 7's final `unclaimed-by`. The F4 skip of that section
+(skip the primary-worktree steps and the worktree removal, and let the harness
+reclaim the checkout) applies only when the harness itself reclaims the
+worktree. The orchestrator created yours on the shared clone, so you run F4
+steps 4 and 5 yourself, with step 4's fetch and step 5's worktree removal behind
+the [clone-scoped lock](idd-helper-scripts.md#clone-scoped-lock), as the lock
 sentence of F4 step 4 says, and that overrides "let the harness reclaim it".
+Both steps run from the primary worktree, which is the first entry of
+`git worktree list`: change into it before step 4 and stay there for step 5,
+which removes your own worktree and branch. Never remove the checkout that you
+are standing in.
 
 Fill note: when the run is scoped to end before the merge policy's terminal
 phase, name that earlier phase as `{terminal-phase}` and add that finishing it
 and stopping there, with no gate or unmet condition blocking, is a scope stop
 and not a hold: the report draft carries `scope-stopped` and not `held`. When
-`{terminal-phase}` is not F4 (F2.5 or an earlier phase), delete the sentence
-that starts "Under `fully_autonomous_merge`" and the last two sentences of this
-part, which concern F4 cleanup that runs only after a merge. When the worker has
-its own clone, drop the clone-scoped lock clause. A brief line that forbids
-edits in the primary worktree must exempt F4 steps 4 to 6, which run from the
-primary worktree. The shared-clone override and this exemption are preventive;
-no observed incident yet. Observed in the source repository's 2026-10-14 to
-2026-10-15 orchestrator run (no issue records the incident itself): most briefs
-drew the worker's span too narrowly, so the orchestrator finished the F4 steps
-by hand for most workers.
+`{terminal-phase}` is not F4 (F2.5 or an earlier phase), delete the whole
+paragraph that begins "F4 cleanup, for a run that ends at F4" and keep the rest
+of this part, because no cleanup runs before a merge. When the worker has its
+own clone, rewrite the sentence about the shared clone and drop the clone-scoped
+lock clause from that paragraph. A brief line
+that forbids edits in the primary worktree must exempt F4 steps 4 to 6, which
+run from the primary worktree. The shared-clone override and this exemption are
+preventive; no observed incident yet. Observed in the source repository's
+2026-10-14 to 2026-10-15 orchestrator run (no issue records the incident
+itself): most briefs drew the worker's span too narrowly, so the orchestrator
+finished the F4 steps by hand for most workers.
 
 **Scratchpad.** Your scratch files go only in `{scratchpad-dir}`, an
-issue-numbered subdirectory of the session scratchpad, never in
-`{worktree-path}`, the pre-created worktree that you reuse; the one exception is
-the critique scratch directory that Critique pass invocation names, if you start
-a critique agent. Concurrently delegated workers share the scratchpad, so the
-issue-numbered directory keeps your files apart from theirs. Before you create
-it, confirm that its parent path already exists. When the parent path is
-missing, create nothing and end the run as a hold: post the hold marker of the
-Hold marker part, and let your report draft carry `held`, as for any hold.
+issue-numbered subdirectory of the session scratchpad, with two exceptions: your
+report draft at `{report-path}`, and the critique scratch directory that
+Critique pass invocation names, if you start a critique agent. Never write
+scratch files in `{worktree-path}`, the pre-created worktree that you reuse.
+Concurrently delegated workers share the scratchpad, so the issue-numbered
+directory keeps your files apart from theirs. Before you create it, confirm that
+its parent path already exists. When the parent path is missing, create nothing
+and end the run as a hold: post the hold marker of the Hold marker part, and let
+your report draft carry `held`, as for any hold; if `{report-path}` cannot be
+written because the parent path is missing, the hold marker alone is the report.
 Create the directory with a plain mkdir and never use mkdir -p, which would
 build a mistyped parent path instead of failing. If the directory already
 exists, reuse it. If it cannot be created although the parent path exists, fall
@@ -1410,7 +1419,10 @@ worker.
 non-context-inheriting agent, as a carve-out from the Role part. Follow
 [Critique pass invocation](#critique-pass-invocation) in full, including the
 rules that its critique brief states, for the wait ceiling, the stop tool, the
-wake-up, the scratch directory, and the scratch check.
+wake-up, the scratch directory, and the scratch check. If you cannot confirm
+that you can arm a wake-up and stop the agent, as the pre-launch check in that
+section requires, start no agent and run an inline self-critique instead. Never
+end your turn while a critique agent is still running.
 
 Fill note: keep this part only when the Limits column of the
 [Worker delegation](#worker-delegation) table allows it. The worker sits at
@@ -1424,7 +1436,9 @@ Known limitation in `claim-orchestrator.instructions.md`, which
 points at, records that fallback's
 [residual role-misread risk](idd-design-rationale.md#context-inheriting-delegation-residual-risk).
 Otherwise replace the body of this part with one line that tells the worker to
-run each critique pass as an inline self-critique. The Limits gating is
+run each critique pass as an inline self-critique, and remove the clause about a
+critique agent from the Role part and the clause about the critique scratch
+directory from the Scratchpad part. The Limits gating is
 preventive; no observed incident yet. Observed in the source repository's
 2026-10-14 to 2026-10-15 orchestrator run (no issue records the incident
 itself): none of about 25 briefs allowed the critique agent, so the workers'
@@ -1447,17 +1461,21 @@ without a `ReviewItems_snapshot` from the worker's own E1 to E3 pass. A brief
 that hands a worker into E10, E13, E14, or E15 has no supported cold-entry route
 yet, so stop and report instead.
 
-**Worker report.** Write your final report as a draft that matches
-`schemas/worker-report.schema.json` to `{report-path}`, outside the worktree,
-and do not append it to the
-[worker final report store](idd-helper-scripts.md#worker-final-report-store):
-the orchestrator checks the draft against live GitHub state first. The
-`outcome` that the draft proposes follows
+**Worker report.** Write your final report as a draft to `{report-path}`,
+outside the worktree. Fill the fields of `schemas/worker-report.schema.json`
+that you own: `schemaVersion`, `issue`, `pullRequest`, `claimId`, `harness`,
+`terminalPhase`, `outcome`, and the optional `reviewRounds`, `stalls`,
+`deviations`, `frictions`, and `followUps`. Leave `workerHandle`, `verifiedAt`,
+and `recordedAt` to the orchestrator, which sets them after it checks the draft
+against live GitHub state, and do not append the draft to the
+[worker final report store](idd-helper-scripts.md#worker-final-report-store).
+The `outcome` that the draft proposes follows
 [Worker report outcomes](#worker-report-outcomes).
 
-Fill note: give each worker its own issue-numbered `{report-path}`. The
-orchestrator completes the draft, as section 5 of the orchestrator phase file
-says.
+Fill note: set `{report-path}` to a file named with the issue number, directly
+in the scratchpad path that the harness reports, because an orchestrator restart
+looks there for report drafts. The orchestrator completes the draft, as section
+5 of the orchestrator phase file says.
 
 ### Orchestrator run report
 
