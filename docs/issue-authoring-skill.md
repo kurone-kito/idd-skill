@@ -2145,8 +2145,10 @@ section.
 A **draft carrier** is an issue that holds drafts which cannot be published
 as their final issues yet, labelled with the authoring-only label, so that a
 reviewed draft does not end in local files only. Publish one with
-`publish-authoring-hold --shape carrier` after
-`audit-authored-issue --shape carrier` passes. A duplicate search lists open
+`publish-authoring-hold --shape carrier`, giving the required `--title` and
+`--body-file` and running it with `--apply` (without `--apply` it only prints
+its plan and writes nothing), after `audit-authored-issue --shape carrier`
+passes. A duplicate search lists open
 carriers and reads their drafts and comments. The cases that use a carrier,
 the two exceptions that keep drafts local, the exact shape, the review
 ledger, the release condition, the ordered re-authoring procedure with its
