@@ -336,11 +336,12 @@ function entryHarnessAt(ctx, path) {
 }
 /**
  * The entry text of every version directory the receipt lists, for the Codex
- * whole-file check. Install renders the text between the markers from one of
- * these, and `AGENTS.md` can hold an older version's text after a later
- * install that selected no harness. A text counts only when its bytes hash to
- * that record. A file that is gone or changed is skipped here, because its own
- * entry check refuses the run.
+ * whole-file check on both install (before a rewrite) and uninstall (before a
+ * removal). Install renders the text between the markers from one of these,
+ * and `AGENTS.md` can hold an older version's text after a later install that
+ * selected no harness. A text counts only when its bytes hash to that record.
+ * A file that is gone or changed is skipped here, so a block that only that
+ * text could vouch for fails the check and the run refuses.
  */
 function recordedEntryTexts(ctx, entries) {
   const texts = [];
@@ -899,6 +900,9 @@ function buildInstallPlan(ctx, sourceRoot, version, harnesses) {
       targets: entryTargetsOf(ctx, harnesses),
       entryPath: join(ctx.currentPath, 'user-global', 'entry.md'),
       entryText: entryText.text,
+      recordedEntryTexts: harnesses.includes('codex')
+        ? recordedEntryTexts(ctx, entries)
+        : [],
       listed: entries,
     });
     refusals.push(...entryPlan.refusals);

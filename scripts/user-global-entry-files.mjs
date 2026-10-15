@@ -438,8 +438,23 @@ function pushRewrite(input, plan, dir, file, priorSha256, text, entry, prior) {
   });
   plan.lines.push(`edit ${file}`);
 }
-/** A file install created whole: the bytes must still match the receipt. */
-function planWholeFile(input, plan, dir, file, bytes, expected, prior) {
+/**
+ * A file install created whole: the bytes must still match the receipt, and a
+ * rewrite also needs them to be what install wrote for the harness in some
+ * recorded version. A receipt can list any file by its hash, so the hash alone
+ * would let a reinstall replace a file the user wrote. Bytes that already equal
+ * the new content need no such check, because they are install's own output.
+ */
+function planWholeFile(
+  input,
+  plan,
+  harness,
+  dir,
+  file,
+  bytes,
+  expected,
+  prior,
+) {
   if (prior.kind !== 'file' || sha256Of(bytes) !== prior.sha256) {
     throw new Error(
       `${file} was edited after install (its SHA-256 differs from the receipt); refusing, and it is user-edited`,
@@ -449,6 +464,18 @@ function planWholeFile(input, plan, dir, file, bytes, expected, prior) {
   if (bytes.equals(next)) {
     plan.lines.push(`keep ${file}`);
     return;
+  }
+  if (
+    !isInstallerWholeFile(
+      harness,
+      input.entryPath,
+      bytes,
+      input.recordedEntryTexts,
+    )
+  ) {
+    throw new Error(
+      `${file} holds content install does not write, although the receipt lists it as one install created; refusing to rewrite it, and it is user-edited`,
+    );
   }
   pushRewrite(
     input,
@@ -465,7 +492,7 @@ function planMarkdown(input, plan, harness, dir, file, bytes, listed) {
   const expected = managedSpan(harness, input.entryPath, input.entryText);
   const span = Buffer.from(expected, 'utf8');
   if (listed !== null && listed.kind === 'file') {
-    planWholeFile(input, plan, dir, file, bytes, expected, listed);
+    planWholeFile(input, plan, harness, dir, file, bytes, expected, listed);
     return;
   }
   if (listed !== null && listed.kind !== 'managed-block') {
@@ -540,7 +567,7 @@ function planOpenCode(input, plan, dir, file, bytes, listed) {
   const value = input.entryPath;
   const expected = opencodeFileText(value);
   if (listed !== null && listed.kind === 'file') {
-    planWholeFile(input, plan, dir, file, bytes, expected, listed);
+    planWholeFile(input, plan, 'opencode', dir, file, bytes, expected, listed);
     return;
   }
   if (listed !== null && listed.kind !== 'json-instruction') {
