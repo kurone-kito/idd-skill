@@ -5759,9 +5759,10 @@ like `activation-nonce`, because a worker posts it as itself.
   exactly the reads of one run without `--wait`, so one call makes at most
   `1 + ceil(wait / poll-interval)` of them, and no mode posts, writes a
   marker, or requests a review. As in a single run, a failed viewer-login
-  read is swallowed and leaves the viewer out of the trusted marker logins,
-  and a poll does not retry it, so check `trustedMarkerSummary.viewerLogin`
-  before acting on an `outcome` that changed during a wait. Re-issue the
+  read is swallowed and leaves the viewer out of the trusted marker logins
+  (preventive; no observed incident yet), and a poll does not retry it, so
+  check `trustedMarkerSummary.viewerLogin` before acting on an `outcome`
+  that changed during a wait. Re-issue the
   call while `waitEnded` is `bound-elapsed`, with the tool's
   execution-timeout override near its ceiling, as the wake-up discipline in
   `idd-ci.instructions.md` requires.
