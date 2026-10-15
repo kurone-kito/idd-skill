@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -1101,6 +1101,7 @@ function advisoryWaitGhStubBody(
   return `const fs = require('node:fs');
 const CONFIG = ${JSON.stringify({ ...options, stateDir, head: CLI_HEAD_SHA })};
 const args = process.argv.slice(2);
+fs.appendFileSync(CONFIG.stateDir + '/calls', args.join(' ') + '\\n');
 const include = args.includes('--include');
 const reply = (text) => process.stdout.write(
   include ? 'HTTP/2.0 200 OK\\r\\nContent-Type: application/json\\r\\n\\r\\n' + text : text,
@@ -1625,6 +1626,8 @@ test('--wait seam: the read after a clamped last sleep is final even when the cl
     };
   });
   assert.equal(report.waitEnded, 'bound-elapsed');
+  // 479999 ms elapsed: the seconds round down, never up.
+  assert.equal(report.waitedSeconds, 479);
   assert.equal(sleeps.length, 7);
   assert.equal(sleeps.at(-1), 60_006);
   assert.equal(reads, 8 * singleRunReads);
@@ -1760,14 +1763,24 @@ for (const [name, flags] of BAD_WAIT_FLAGS) {
     if (typeof value === 'string') argv.push(flag, value);
   }
   test(`bin/idd-advisory-wait-state.mjs: ${name} classifies as a usage error before any gh call`, () => {
-    const result = spawnHelperBinWithEnvelope(
-      'idd-advisory-wait-state.mjs',
-      argv,
+    const { result, ghCalls } = withAdvisoryWaitGhStub(
+      { failHeadFrom: 99, commentNodes: [] },
+      (cwd) => ({
+        result: spawnHelperBinWithEnvelope(
+          'idd-advisory-wait-state.mjs',
+          argv,
+          { cwd },
+        ),
+        ghCalls: existsSync(join(cwd, 'calls'))
+          ? readFileSync(join(cwd, 'calls'), 'utf8')
+          : '',
+      }),
     );
     assert.equal(result.status, 1, JSON.stringify(result));
     assert.equal(result.stdout, '');
     assert.equal(result.envelope?.kind, 'usage', JSON.stringify(result));
     assert.equal(result.envelope?.exitCode, 1);
+    assert.equal(ghCalls, '', 'a usage error must not reach gh');
   });
 }
 
@@ -1829,21 +1842,26 @@ test('bin/idd-advisory-wait-state.mjs: a failing second read ends with the same 
   // On a host so slow that the first read alone outlasts PT1S the run ends
   // bound-elapsed instead, so retry with a longer bound before failing.
   let waited = control;
+  let headReads = '';
   for (const bound of ['PT1S', 'PT2S', 'PT4S']) {
-    waited = withAdvisoryWaitGhStub(
+    ({ result: waited, headReads } = withAdvisoryWaitGhStub(
       { failHeadFrom: 2, commentNodes: freshWaitComments() },
-      (cwd) =>
-        spawnHelperBinWithEnvelope(
+      (cwd) => ({
+        result: spawnHelperBinWithEnvelope(
           'idd-advisory-wait-state.mjs',
           [...CLI_ARGS, '--wait', bound],
           { cwd },
         ),
-    );
+        headReads: readFileSync(join(cwd, 'head-calls'), 'utf8'),
+      }),
+    ));
     if (waited.status !== 0) break;
   }
   assert.equal(waited.status, control.status, JSON.stringify(waited));
   assert.equal(waited.stdout, '', 'nothing is printed when a poll fails');
   assert.deepEqual(waited.envelope, control.envelope);
+  // One served head read, then the failing one: the failure is the second read.
+  assert.equal(headReads, '2');
 });
 
 // --- #4378: the instruction sentence and the helper reference ----------------
