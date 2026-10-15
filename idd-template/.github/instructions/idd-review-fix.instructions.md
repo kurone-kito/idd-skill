@@ -478,15 +478,16 @@ login).
 
 Unanswered advisory items block merge until each one is dispositioned,
 unless the gate settles it without a disposition, as it does for a
-CodeRabbit no-actionable-comments summary. The disposition check covers
-the regular comments of Copilot, CodeRabbit, Codex, and each login in
-`advisoryBotLogins`. A regular comment from any other bot needs no
-advisory disposition, but it still blocks as an unreplied regular
-comment until a later IDD-agent reply answers it. A reply that starts
-with `**Awaiting maintainer decision**` answers nothing. Copilot's
-review-body items are covered by the advisory-convergence check. An
-embedded finding in a CodeRabbit COMMENTED review body is a PATH B
-snapshot item outside the gate and does not block merge.
+CodeRabbit no-actionable-comments summary while no known-bot review
+thread is unresolved. The disposition check covers the regular comments
+of Copilot, CodeRabbit, Codex, and each login in `advisoryBotLogins`. A
+regular comment from any other bot needs no advisory disposition, but it
+still blocks as an unreplied regular comment until a later IDD-agent
+reply answers it. A reply that starts with `**Awaiting maintainer
+decision**` answers nothing. Copilot's review-body items are covered by
+the advisory-convergence check. An embedded finding in a CodeRabbit
+COMMENTED review body is a PATH B snapshot item that the merge gate does
+not read; a threaded finding is gated through its review thread instead.
 
 Whenever E14 posts a request/recovery marker or hold comment, update
 the digest: the marker/hold as `Authoritative by`, the advisory
