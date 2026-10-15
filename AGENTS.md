@@ -303,7 +303,9 @@ layered on top of the distributed IDD defaults:
   are numbered `#3936` to `#4158`, six
   deferral-form replies appeared on four pull requests, and one of 535
   review-thread replies that begin with `**Accepted**` or `**Rejected**`
-  recorded an urgency. See the
+  recorded an urgency. Two conversation replies, on `#3966` and `#4044`,
+  also recorded urgencies, outside that count (item 2 of the subsection).
+  See the
   [review-loop audit (2026-10-13)](docs/idd-design-rationale.md#review-loop-audit-2026-10-13)
   subsection of the design rationale.
 - **Effort L refusal opt-in**: This source repository also records
@@ -317,8 +319,11 @@ layered on top of the distributed IDD defaults:
   the same 100-pull-request cohort as the bullet above, 6 of the 8 pull
   requests whose issue has effort `L` reached 7 or more Copilot reviews,
   against 2 of the 33 pull requests with effort `S`. The `L` group is only
-  8 pull requests, and the subsection does not separate pull request size
-  from effort (item 5). See the
+  8 pull requests. The subsection does not separate pull request size from
+  effort: changed lines and Copilot review count have a Spearman correlation
+  of 0.57 over the cohort, and the 20 pull requests with 7 or more reviews
+  have a median of 967.5 changed lines, against 122.5 for the 64 with at
+  most 3 (item 5). Item 7 gives the effort groups. See the
   [review-loop audit (2026-10-13)](docs/idd-design-rationale.md#review-loop-audit-2026-10-13)
   subsection of the design rationale.
 - **GitHub API load control**: This source repository also records
