@@ -57,14 +57,15 @@ Every row in this section runs before A5. Claims made before A5 are
 coordination claims: the A0-C `draft-carrier/*` claim (Draft carrier
 re-authoring below), the A1.5 `roadmap-audit/*` claim (Roadmap audit
 (A1.5) below) and the A4.5 `suitability-close/*` claim (Suitability
-coordination close (A4.5) below).
+coordination close (A4.5) below). The A0-C rows exist only on helper-enabled
+profiles: with `instructions-only`, A0-C is skipped.
 
 | Mutation                                                                                        | Reversible / Irreversible | Undo path / Governing gate         | Source                                   |
 | ----------------------------------------------------------------------------------------------- | ------------------------- | ---------------------------------- | ---------------------------------------- |
 | Post "A4.5 suitability gate rejection" diagnostic comment                                       | Reversible                | Ordinary comment; no state to undo | A4.5 (`idd-suitability.instructions.md`) |
 | Apply optional `triage:{outcome}` label                                                         | Reversible                | Remove the label                   | A4.5 (`idd-suitability.instructions.md`) |
 | Post one-line reconciliation comment (Standing-rejection pre-check, kurone-kito/idd-skill#2803) | Reversible                | Ordinary comment; no state to undo | A4.5 (`idd-suitability.instructions.md`) |
-| Read draft carriers with `discover-orphan-filter --draft-carriers`                              | Reversible                | Read-only query; no state to undo  | A0-C (`idd-discover.instructions.md`)    |
+| Read draft carriers with `discover-orphan-filter --draft-carriers` (helper-enabled profiles)    | Reversible                | Read-only query; no state to undo  | A0-C (`idd-discover.instructions.md`)    |
 | Re-author at most one ready carrier per Discover run (report only without the companion)        | Irreversible              | Gate: the carrier-close row below  | A0-C (`idd-discover.instructions.md`)    |
 
 ### Claim & ownership (A5)
