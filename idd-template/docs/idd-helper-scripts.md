@@ -3195,7 +3195,35 @@ The adopted helper boundaries are intentionally narrow:
   row for the current HEAD; the manual E4 `**Rejected**` stays its
   route. The helper does not track that manual reply, so it keeps
   reporting the comment after one is posted: check `pre-merge-readiness`
-  `dispositionEvidence.missingRegularComments` before replying. An
+  `dispositionEvidence.missingRegularComments` before replying. A
+  `codex-review-running` comment whose row for the current HEAD is
+  `Failed` is not a completed review, so the helper does not post for it,
+  and when `pre-merge-readiness` still lists the comment in
+  `dispositionEvidence.missingRegularComments`, a stamped `**Rejected**`
+  reply is the route, whereas a `Running` row gets no `**Rejected**`
+  reply because that review can still complete. Codex edits its status
+  comment in place, so re-read the comment's row for the current HEAD
+  immediately before each reply and post only while it still reads
+  `Failed`. Build the reply from the canonical body this entry shows for
+  a non-review notice, with `{reason}` set to a note that its review
+  summary reports the code review as failed for this commit, and the
+  source comment id set to the `noticeId` of that comment's entry in
+  `skipped`.
+  The helper keeps reporting the comment after the reply. The gate pairs
+  a reply with a listed comment by count and age, never by source comment
+  id, so run this helper's `--apply` first for any coexisting notice from
+  the same bot, then re-read `dispositionEvidence.missingRegularComments`
+  after replying and reply again only while the comment is still listed
+  and its row still reads `Failed`. Append the stamp as the
+  [E13 reply-and-resolve](#e13-reply-and-resolve-resolve-review-thread)
+  entry describes, since a manual `gh api` JSON body must append the
+  stamp itself. Observed 2026-10-15 on kurone-kito/idd-skill#4344,
+  kurone-kito/idd-skill#4352 and kurone-kito/idd-skill#4364: the Codex
+  status table's row for the HEAD read `Failed` (its
+  `codex-review-state:v1` marker also carried `failed`), the helper
+  skipped the comment as `codex-review-running`, and each pull request
+  carries a hand-posted stamped `**Rejected**` reply to it (the reason
+  wording differs). An
   `unrecognized-notice-body` entry for a comment the gate does not list
   (one it already paired through its generic pairing) is expected and
   harmless.
