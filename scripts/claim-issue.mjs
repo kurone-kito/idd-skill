@@ -55,11 +55,23 @@ const FRESH_CLAIM_VERDICTS = [
   'already-claimed',
   'stale-reclaimable',
 ];
-/** The routing states the fresh-claim gate maps onto `already-claimed`. */
-const ALREADY_CLAIMED_STATES = [
-  'non_inheritable',
-  'disputed',
-  'local_worktree_occupied',
+/**
+ * What the fresh-claim gate pairs with each routing state it can emit: the
+ * verdict and the routing action. Anything else is a malformed response.
+ */
+const ROUTING_PAIRS = {
+  unclaimed: { verdict: 'claimable', action: 're_claim' },
+  stale: { verdict: 'stale-reclaimable', action: 'takeover' },
+  non_inheritable: { verdict: 'already-claimed', action: 'stop' },
+  disputed: { verdict: 'already-claimed', action: 'stop' },
+  local_worktree_occupied: { verdict: 'already-claimed', action: 'stop' },
+};
+/** The reasons `claim-approval-gate` pairs with `approved: false`. */
+const REFUSED_REASONS = [
+  'approval-missing',
+  'approval-ambiguous',
+  'approval-comment-stale',
+  'freshness-undetermined',
 ];
 /** The reasons `claim-approval-gate` pairs with `approved: true`. */
 const APPROVED_REASONS = [
@@ -226,14 +238,16 @@ function checkApproval(issueNumber, deps) {
     typeof evidence.approved !== 'boolean' ||
     typeof evidence.reason !== 'string' ||
     evidence.reason.trim() === '' ||
-    (evidence.approved === true &&
-      !APPROVED_REASONS.includes(evidence.reason)) ||
+    !(evidence.approved === true ? APPROVED_REASONS : REFUSED_REASONS).includes(
+      evidence.reason,
+    ) ||
     typeof evidence.gateEnabled !== 'boolean' ||
     !isRecord(policy) ||
     typeof policy.maintainerApprovalActorPolicy !== 'string' ||
     policy.maintainerApprovalActorPolicy.trim() === '' ||
     !isRecord(policy.approvalSignals) ||
     typeof policy.approvalSignals.readyLabelName !== 'string' ||
+    policy.approvalSignals.readyLabelName.trim() === '' ||
     typeof policy.approvalSignals.labelFreshnessMode !== 'string' ||
     policy.approvalSignals.labelFreshnessMode.trim() === '' ||
     !isCheckList(evidence.checks)
@@ -304,38 +318,32 @@ function checkClaimState(issueNumber, deps) {
       'resume-claim-routing printed a verdict without a reason or winning_claim_id',
     );
   }
-  // The gate maps the routing state one to one onto these two verdicts.
+  // The verdict, the routing state and the routing action must be one of the
+  // pairs the gate emits; an unclaimed issue also has no winning claim.
+  const pair =
+    typeof routing.state === 'string' &&
+    Object.hasOwn(ROUTING_PAIRS, routing.state)
+      ? ROUTING_PAIRS[routing.state]
+      : undefined;
+  if (
+    pair === undefined ||
+    pair.verdict !== gate.verdict ||
+    pair.action !== routing.action ||
+    (gate.verdict === 'claimable' && winningClaimId !== null)
+  ) {
+    return unavailable(
+      label,
+      'resume-claim-routing printed a verdict, state, action, or winner it never pairs together',
+    );
+  }
   if (gate.verdict === 'claimable') {
-    // An unclaimed issue has no winner and routes to a fresh claim.
-    return routing.state === 'unclaimed' &&
-      winningClaimId === null &&
-      routing.action === 're_claim'
-      ? pass('claimable')
-      : unavailable(
-          label,
-          'resume-claim-routing printed claimable for a state, action, or winner it never pairs with that verdict',
-        );
+    return pass('claimable');
   }
   if (gate.verdict === 'stale-reclaimable') {
-    if (routing.state !== 'stale') {
-      return unavailable(
-        label,
-        'resume-claim-routing printed stale-reclaimable for a state other than stale',
-      );
-    }
     return stop(
       'stale-takeover-out-of-scope',
       'This helper checks a fresh claim only. Follow the stale-claim takeover path in idd-claim.instructions.md (A5(c)) by hand.',
       'the active claim is stale and reclaimable; takeover is out of scope',
-    );
-  }
-  if (
-    typeof routing.state !== 'string' ||
-    !ALREADY_CLAIMED_STATES.includes(routing.state)
-  ) {
-    return unavailable(
-      label,
-      'resume-claim-routing printed already-claimed for a state it never pairs with that verdict',
     );
   }
   return stop(
@@ -455,7 +463,8 @@ function parseMatchingRefs(stdout) {
       if (
         !isRecord(entry) ||
         typeof entry.ref !== 'string' ||
-        !entry.ref.startsWith('refs/heads/')
+        !entry.ref.startsWith('refs/heads/') ||
+        entry.ref.length === 'refs/heads/'.length
       ) {
         return null;
       }

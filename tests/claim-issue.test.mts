@@ -112,17 +112,24 @@ function routingOutput(
   if (options.winning !== 'absent') {
     gate.winning_claim_id = options.winning ?? null;
   }
+  const state =
+    options.state ??
+    (verdict === 'claimable'
+      ? 'unclaimed'
+      : verdict === 'stale-reclaimable'
+        ? 'stale'
+        : 'non_inheritable');
+  const action =
+    state === 'unclaimed'
+      ? 're_claim'
+      : state === 'stale'
+        ? 'takeover'
+        : 'stop';
   return ok(
     JSON.stringify({
       issue: { number: ISSUE },
-      state:
-        options.state ??
-        (verdict === 'claimable'
-          ? 'unclaimed'
-          : verdict === 'stale-reclaimable'
-            ? 'stale'
-            : 'non_inheritable'),
-      action: 'action' in options ? options.action : 're_claim',
+      state,
+      action: 'action' in options ? options.action : action,
       reason: 'reason' in options ? options.reason : 'no-active-claim',
       fresh_claim_gate: gate,
     }),
@@ -400,6 +407,14 @@ test('A5(a): invalid or incomplete approval JSON is approval-unproven', () => {
     approvalOutput({ reason: '  ' }),
     approvalOutput({ reason: 'approval-missing' }),
     approvalOutput({ reason: 'something-else' }),
+    approvalOutput({ approved: false, reason: 'author-self-authorized' }),
+    approvalOutput({ approved: false, reason: 'gate-disabled' }),
+    approvalOutput({
+      policy: {
+        maintainerApprovalActorPolicy: 'x',
+        approvalSignals: { readyLabelName: ' ', labelFreshnessMode: 'x' },
+      },
+    }),
     approvalOutput({ checks: [VALID_CHECK, null] }),
     approvalOutput({ checks: [VALID_CHECK, { id: 'x' }] }),
     approvalOutput({ checks: [{ ...VALID_CHECK, result: 'x' }] }),
@@ -437,7 +452,7 @@ test('A5(a): a throw from the approval call is approval-unproven, still a report
 
 test('A5(a): a result of not approved is approval-missing', () => {
   const { report } = run({
-    approval: approvalOutput({ approved: false, reason: 'no-approval' }),
+    approval: approvalOutput({ approved: false, reason: 'approval-missing' }),
   });
   assertStoppedAt(report, 'a5a-approval', 'approval-missing');
 });
@@ -521,6 +536,12 @@ test('A5(c): a failed, malformed, or unknown fresh-claim result is precheck-unav
     routingOutput('claimable', { state: 'stale' }),
     routingOutput('claimable', { state: 'non_inheritable' }),
     routingOutput('stale-reclaimable', { state: 'unclaimed' }),
+    routingOutput('stale-reclaimable', { action: 're_claim' }),
+    routingOutput('stale-reclaimable', { action: undefined }),
+    routingOutput('already-claimed', { action: 're_claim' }),
+    routingOutput('already-claimed', { action: 'keep' }),
+    routingOutput('already-claimed', { action: undefined }),
+    routingOutput('already-claimed', { state: 'disputed', action: 'takeover' }),
     routingOutput('claimable', { winning: 'claim-1' }),
     routingOutput('claimable', { action: 'stop' }),
     routingOutput('claimable', { action: undefined }),
@@ -920,6 +941,7 @@ test('A5(e): a malformed matching-refs response is precheck-unavailable, not a c
     ok('[{"name":"x"}]'),
     ok('["refs/heads/x"]'),
     ok('[{"ref":"heads/issue/4372-x"}]'),
+    ok('[{"ref":"refs/heads/"}]'),
     ok(`${pageOf()}\nnot json`),
     ok(`${pageOf()}\n{}`),
   ];
