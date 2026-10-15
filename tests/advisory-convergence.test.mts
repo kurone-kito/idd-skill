@@ -1306,6 +1306,50 @@ test('#4306: a pending thread and an undecided thread each get their own reason'
   assert.doesNotMatch(verdict.reasons[1] ?? '', /PRRT_undecided_mix/);
 });
 
+test('#4306: the posted-items next action skips a pending thread, and is left out when pending threads cover every posted item', () => {
+  const stamp = renderReviewReplyStamp();
+  const postedItems = (
+    itemCount: number,
+    threads: ReturnType<typeof pendingDecisionThread>[],
+  ) => {
+    const verdict = computeAdvisoryConvergenceVerdict(
+      baseInputs({ reviews: [copilotReview({ itemCount })], threads }),
+      baseOptions(),
+    );
+    assertValidVerdict(verdict);
+    return collectAssertNextActions(verdict).find(
+      (item) =>
+        item.token ===
+        ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN.DISPOSITION_POSTED_ITEMS,
+    );
+  };
+  const hold = () =>
+    pendingDecisionThread('PRRT_hold_posted', [
+      { body: `${PENDING_PARAGRAPH}\n\n${stamp}` },
+    ]);
+
+  // Control: no pending thread keeps today's text.
+  const ordinary = postedItems(2, [
+    pendingDecisionThread('PRRT_ordinary_posted', []),
+  ]);
+  assert.match(ordinary?.summary ?? '', /Disposition each thread \(E6\/E13\)/);
+  assert.doesNotMatch(ordinary?.summary ?? '', /pending-decision/);
+
+  // One of two posted items is pending: the command stays, with a skip note.
+  const partial = postedItems(2, [
+    hold(),
+    pendingDecisionThread('PRRT_ordinary_posted', []),
+  ]);
+  assert.match(partial?.summary ?? '', /--apply/);
+  assert.match(
+    partial?.summary ?? '',
+    /Do not run it on a pending-decision thread \(PRRT_hold_posted\)/,
+  );
+
+  // The only posted item is pending: the generic command is left out.
+  assert.equal(postedItems(1, [hold()]), undefined);
+});
+
 test('#4306: the disposition-threads next action tells the agent to hold a pending thread, and keeps its wording otherwise', () => {
   const stamp = renderReviewReplyStamp();
   const threadItem = (verdict: ReturnType<typeof verdictForThreads>) =>

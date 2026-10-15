@@ -5416,15 +5416,24 @@ export function collectAssertNextActions(
   }
 
   const itemCount = verdict.review.itemCount;
+  // #4306: the generic reply-and-resolve command is the wrong step for a
+  // thread that holds a pending decision. When the pending threads cover every
+  // posted item, the `disposition-threads` item below already says to hold, so
+  // this one is left out; otherwise it names the threads to skip.
+  const pendingThreadIds = verdict.threads.pendingDecisionIds;
   if (
     verdict.review.matchesHead &&
     typeof itemCount === 'number' &&
-    itemCount > 0
+    itemCount > pendingThreadIds.length
   ) {
     const pointer = `node scripts/resolve-review-thread.mjs --pr ${pr} --comment-id <id> --body "**Accepted** — …" --claim-issue <n> --claim-id <id> --apply`;
+    const skipPending =
+      pendingThreadIds.length > 0
+        ? ` Do not run it on a pending-decision thread (${pendingThreadIds.join(', ')}); those stay open until the maintainer decides.`
+        : '';
     items.push({
       token: T.DISPOSITION_POSTED_ITEMS,
-      summary: `Latest ${bot} review on HEAD has ${itemCount} posted item(s). Disposition each thread (E6/E13): ${pointer}`,
+      summary: `Latest ${bot} review on HEAD has ${itemCount} posted item(s). Disposition each thread (E6/E13): ${pointer}${skipPending}`,
       pointer,
     });
   }
