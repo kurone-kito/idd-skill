@@ -517,6 +517,56 @@ function refusedClaim(
 }
 
 /**
+ * One reading of the claim: `resume-claim-routing --assert` and the claim
+ * lock of the worktree. `refused` is a reading that could not be obtained (a
+ * throw, an unreadable check, or a malformed lock), with the cause added to
+ * `notes`. Otherwise `claimOk` is true only when the check says the claim is
+ * this session's and the lock carries this claim ID. The flow reads it once
+ * up front and once more right before the POST.
+ */
+function readClaim(
+  input: F4HeadProofGateInput,
+  deps: F4HeadProofGateDeps,
+  nonce: string,
+  notes: string[],
+): { kind: 'refused' } | { kind: 'read'; claimOk: boolean; branch: string } {
+  let assertion: ClaimAssertOutcome;
+  try {
+    assertion = deps.assertClaim({
+      issueNumber: input.issueNumber,
+      claimId: input.claimId,
+      nonce,
+      worktree: input.worktree,
+    });
+  } catch (error) {
+    assertion = { status: 'unreadable', detail: describeError(error) };
+  }
+  if (assertion.status === 'unreadable') {
+    notes.push(`the claim check could not be read: ${assertion.detail}`);
+    return { kind: 'refused' };
+  }
+  let lock: CheckLockOutcome;
+  try {
+    lock = deps.checkLock(input.worktree);
+  } catch (error) {
+    notes.push(`the claim lock read failed: ${describeError(error)}`);
+    return { kind: 'refused' };
+  }
+  if (lock.malformed === true) {
+    notes.push('the claim lock is malformed');
+    return { kind: 'refused' };
+  }
+  return {
+    kind: 'read',
+    claimOk:
+      assertion.status === 'owned' &&
+      lock.present &&
+      lock.holder?.claimId === input.claimId,
+    branch: assertion.status === 'owned' ? assertion.branch : '',
+  };
+}
+
+/**
  * Run the F4 head-proof flow. Returns `refused` for a usage-level refusal
  * (an unregistered `--worktree`); otherwise `verdict` with the exit code and
  * the JSON to print. Throws when the renderer rejects a derived value, with
@@ -573,37 +623,11 @@ export function runF4HeadProofGate(
     return refusedClaim(input, notes);
   }
 
-  let assertion: ClaimAssertOutcome;
-  try {
-    assertion = deps.assertClaim({
-      issueNumber: input.issueNumber,
-      claimId: input.claimId,
-      nonce,
-      worktree: input.worktree,
-    });
-  } catch (error) {
-    assertion = { status: 'unreadable', detail: describeError(error) };
-  }
-  if (assertion.status === 'unreadable') {
-    notes.push(`the claim check could not be read: ${assertion.detail}`);
+  const claim = readClaim(input, deps, nonce, notes);
+  if (claim.kind === 'refused') {
     return refusedClaim(input, notes);
   }
-  let lock: CheckLockOutcome;
-  try {
-    lock = deps.checkLock(input.worktree);
-  } catch (error) {
-    notes.push(`the claim lock read failed: ${describeError(error)}`);
-    return refusedClaim(input, notes);
-  }
-  if (lock.malformed === true) {
-    notes.push('the claim lock is malformed');
-    return refusedClaim(input, notes);
-  }
-  const claimOk =
-    assertion.status === 'owned' &&
-    lock.present &&
-    lock.holder?.claimId === input.claimId;
-  const branch = assertion.status === 'owned' ? assertion.branch : '';
+  const { claimOk, branch } = claim;
 
   let markersRead = true;
   let markers: TrustedMarker[] = [];
@@ -718,6 +742,27 @@ export function runF4HeadProofGate(
   }
 
   const postedIdentity = identityOfPost(proofInput, claimActivatedAt, proof);
+
+  // The claim was read before a series of live reads. Read it again at the
+  // write boundary, so a claim released or a lock replaced meanwhile stops
+  // the post instead of leaving a proof from a session that no longer owns
+  // the claim.
+  const final = readClaim(input, deps, nonce, notes);
+  if (final.kind === 'refused') {
+    return refusedClaim(input, notes);
+  }
+  if (!final.claimOk || final.branch !== branch) {
+    const stopped = decideBeforePost({ ...proofInput, claimOk: false });
+    notes.push('the claim or its lock changed before the post');
+    return describeOutcome(
+      input,
+      stopped.disposition,
+      stopped.reason,
+      proof,
+      {},
+      notes,
+    );
+  }
   let posted: { id: number; htmlUrl: string };
   try {
     posted = deps.postComment(input.issueNumber, body);

@@ -215,6 +215,12 @@ function harness(overrides: Partial<F4HeadProofGateDeps> = {}): Harness {
   return state;
 }
 
+/** A callback that returns each value in turn, then repeats the last. */
+function sequence<T>(values: readonly T[]): () => T {
+  let index = 0;
+  return () => values[Math.min(index++, values.length - 1)] as T;
+}
+
 function verdictOf(outcome: F4HeadProofGateOutcome): {
   exitCode: 0 | 1;
   output: F4HeadProofOutput;
@@ -1448,4 +1454,146 @@ test('a warning is the first line of the error message, cut to 300 characters', 
   assert.ok(warning.includes('x'.repeat(300)));
   assert.ok(!warning.includes('x'.repeat(301)));
   assert.ok(!warning.includes('second line'));
+});
+
+// --- the claim is read again at the write boundary -------------------------
+
+test('under --apply the claim and lock are read again right before the post', () => {
+  let asserts = 0;
+  let locks = 0;
+  const h = harness({
+    assertClaim: () => {
+      asserts += 1;
+      return { status: 'owned', branch: BRANCH };
+    },
+    checkLock: () => {
+      locks += 1;
+      return {
+        path: '/lock',
+        present: true,
+        holder: { agentId: AGENT, claimId: CLAIM, acquiredAt: ACTIVATED },
+      };
+    },
+  });
+  expectVerdict(
+    runF4HeadProofGate(APPLY, h.deps),
+    'proceed',
+    'posted-confirmed',
+    0,
+  );
+  assert.equal(asserts, 2);
+  assert.equal(locks, 2);
+  // A dry run posts nothing, so it reads the claim once.
+  asserts = 0;
+  locks = 0;
+  runF4HeadProofGate(INPUT, h.deps);
+  assert.equal(asserts, 1);
+  assert.equal(locks, 1);
+});
+
+test('a claim lost between the first reads and the post is a stop and posts nothing', () => {
+  const lost: Array<[string, Partial<F4HeadProofGateDeps>]> = [
+    [
+      'the claim check says it is no longer ours',
+      {
+        assertClaim: sequence([
+          { status: 'owned', branch: BRANCH },
+          { status: 'not-owned' },
+        ]),
+      },
+    ],
+    [
+      'the claim moved to another branch',
+      {
+        assertClaim: sequence([
+          { status: 'owned', branch: BRANCH },
+          { status: 'owned', branch: 'issue/9-other' },
+        ]),
+      },
+    ],
+    [
+      'the lock is replaced by another claim',
+      {
+        checkLock: sequence([
+          {
+            path: '/lock',
+            present: true,
+            holder: { agentId: AGENT, claimId: CLAIM, acquiredAt: ACTIVATED },
+          },
+          {
+            path: '/lock',
+            present: true,
+            holder: {
+              agentId: 'other',
+              claimId: 'another-claim',
+              acquiredAt: ACTIVATED,
+            },
+          },
+        ]),
+      },
+    ],
+    [
+      'the lock is gone',
+      {
+        checkLock: sequence([
+          {
+            path: '/lock',
+            present: true,
+            holder: { agentId: AGENT, claimId: CLAIM, acquiredAt: ACTIVATED },
+          },
+          { path: '/lock', present: false },
+        ]),
+      },
+    ],
+  ];
+  for (const [label, override] of lost) {
+    const h = harness(override);
+    const output = expectVerdict(
+      runF4HeadProofGate(APPLY, h.deps),
+      'stop',
+      'claim-or-lock',
+      1,
+    );
+    assert.deepEqual(h.posts, [], label);
+    assert.match(
+      output.warnings?.join('\n') ?? '',
+      /changed before the post/,
+      label,
+    );
+    assert.match(output.nextAction ?? '', /do not continue F4/, label);
+  }
+});
+
+test('a claim that cannot be read again before the post is a hold and posts nothing', () => {
+  const unreadable = harness({
+    assertClaim: sequence([
+      { status: 'owned', branch: BRANCH },
+      { status: 'unreadable', detail: 'timed out' },
+    ]),
+  });
+  expectVerdict(
+    runF4HeadProofGate(APPLY, unreadable.deps),
+    'hold',
+    'claim-or-lock',
+    1,
+  );
+  assert.deepEqual(unreadable.posts, []);
+
+  const malformed = harness({
+    checkLock: sequence([
+      {
+        path: '/lock',
+        present: true,
+        holder: { agentId: AGENT, claimId: CLAIM, acquiredAt: ACTIVATED },
+      },
+      { path: '/lock', present: true, malformed: true },
+    ]),
+  });
+  expectVerdict(
+    runF4HeadProofGate(APPLY, malformed.deps),
+    'hold',
+    'claim-or-lock',
+    1,
+  );
+  assert.deepEqual(malformed.posts, []);
 });
