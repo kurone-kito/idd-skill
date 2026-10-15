@@ -7,6 +7,7 @@
 import { existsSync } from 'node:fs';
 import {
   buildAuthoringLabelWarning,
+  findLatestLabeledAt,
   resolveAuthoringGuardPolicy,
 } from './authoring-label-guard.mjs';
 import {
@@ -53,6 +54,7 @@ import {
 import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
 import {
   createGithubProviderAdapter,
+  GH_SEARCH_RESULT_CAP,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
 import {
@@ -431,24 +433,6 @@ export function getOrphanFirstPolicy(config) {
   return 'none';
 }
 export function classifyIssue(issue, options) {
-  // #2800: checked first, ahead of every marker/label check below — the
-  // declaration target is deliberately marker-less and label-less, so
-  // none of those checks would ever catch it on their own.
-  if (
-    options.providerOutageDeclarationTarget != null &&
-    Number(issue.number) === options.providerOutageDeclarationTarget
-  ) {
-    return { orphan: false, reason: 'provider_outage_target' };
-  }
-  // #4115: the configured authoring journal is checked in the same
-  // number-first position, for the same reason: it carries no markers or
-  // blocking labels of its own.
-  if (
-    options.authoringJournalTarget != null &&
-    Number(issue.number) === options.authoringJournalTarget
-  ) {
-    return { orphan: false, reason: 'authoring_journal_target' };
-  }
   const labels = new Set(normalizeLabels(issue.labels));
   const body = String(issue.body ?? '');
   const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
@@ -464,6 +448,51 @@ export function classifyIssue(issue, options) {
   const authoringOnlyLabelName = normalizeAuthoringOnlyLabelName(
     options.authoringOnlyLabelName,
   );
+  // #3281: the marker tests below run against a masked body, not the raw one:
+  // an issue that only *quotes* a `roadmap-id`/`blocked-by` marker as an
+  // example (inside a code span, fence, or indented code block) is not a real
+  // roadmap node or blocked leaf. Mask first, HTML comments kept (the default):
+  // the markers themselves are HTML comments.
+  const bodyForMarkerTests = maskMarkdownForScan(body);
+  const blockedLabels = new Set([
+    blockedByHumanLabelName,
+    needsDecisionLabelName,
+    authoringOnlyLabelName,
+  ]);
+  const blockedLabel = [...labels].find((label) => blockedLabels.has(label));
+  // #4257: a draft carrier is filed as blocked_label before the number-based
+  // targets below, so every carrier lands there, as the listing's acceptance
+  // criteria require, even when it is also a configured outage or journal
+  // target. The audit does not reject a carrier that is only such a target, so
+  // this changes where such an issue is filed.
+  if (
+    labels.has(authoringOnlyLabelName) &&
+    createMarkerRegex(markerPrefix, 'draft-carrier').test(bodyForMarkerTests)
+  ) {
+    return {
+      orphan: false,
+      reason: 'blocked_label',
+      details: blockedLabel ?? authoringOnlyLabelName,
+    };
+  }
+  // #2800: checked ahead of every marker/label check below — the declaration
+  // target is deliberately marker-less and label-less, so none of those checks
+  // would ever catch it on their own.
+  if (
+    options.providerOutageDeclarationTarget != null &&
+    Number(issue.number) === options.providerOutageDeclarationTarget
+  ) {
+    return { orphan: false, reason: 'provider_outage_target' };
+  }
+  // #4115: the configured authoring journal is checked in the same
+  // number-first position, after the draft-carrier check, for the same reason:
+  // it carries no markers or blocking labels of its own.
+  if (
+    options.authoringJournalTarget != null &&
+    Number(issue.number) === options.authoringJournalTarget
+  ) {
+    return { orphan: false, reason: 'authoring_journal_target' };
+  }
   // #4065 review fix (Codex P2): the same comparison the readiness check uses
   // for needs_decision_label_conflicts_with_authoring_label.
   const labelsCollide =
@@ -471,25 +500,12 @@ export function classifyIssue(issue, options) {
     needsDecisionLabelName.trim().toLowerCase();
   const roadmapMarkerRegex = createMarkerRegex(markerPrefix, 'roadmap-id');
   const blockedMarkerRegex = createMarkerRegex(markerPrefix, 'blocked-by');
-  // #3281: these two marker tests previously ran against the raw body,
-  // unlike the rest of this function's later checks — an issue that only
-  // *quotes* a `roadmap-id`/`blocked-by` marker as an example (inside a
-  // code span, fence, or indented code block) was wrongly classified as
-  // a real roadmap node or blocked leaf. Mask first, HTML comments kept
-  // (the default): the markers themselves are HTML comments.
-  const bodyForMarkerTests = maskMarkdownForScan(body);
   if (roadmapMarkerRegex.test(bodyForMarkerTests)) {
     return { orphan: false, reason: 'roadmap_marker' };
   }
   if (blockedMarkerRegex.test(bodyForMarkerTests)) {
     return { orphan: false, reason: 'blocked_by_marker' };
   }
-  const blockedLabels = new Set([
-    blockedByHumanLabelName,
-    needsDecisionLabelName,
-    authoringOnlyLabelName,
-  ]);
-  const blockedLabel = [...labels].find((label) => blockedLabels.has(label));
   if (blockedLabel) {
     return { orphan: false, reason: 'blocked_label', details: blockedLabel };
   }
@@ -739,6 +755,128 @@ function isDependencyEpicExempt(ref, options) {
     },
     normalizeRoadmapLabelName(options.roadmapLabelName),
   );
+}
+/**
+ * Classify one issue as a draft carrier, or return `null` (#4257). A carrier
+ * carries the authoring-only label and the carrier marker outside code. The
+ * label is checked first, so only labelled issues pay for the masked body
+ * scan. The verdict does not depend on what `classifyIssue` reaches, and
+ * `classifyIssue` files every carrier under `filtered.blocked_label`.
+ */
+function classifyDraftCarrier(issue, options) {
+  const labels = new Set(normalizeLabels(issue.labels));
+  const authoringOnlyLabelName = normalizeAuthoringOnlyLabelName(
+    options.authoringOnlyLabelName,
+  );
+  if (!labels.has(authoringOnlyLabelName)) {
+    return null;
+  }
+  const body = String(issue.body ?? '');
+  const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
+  // The marker value is not checked here; `audit-authored-issue --shape
+  // carrier` owns that. Any carrier-marked issue is listed, so a malformed one
+  // still reaches a human.
+  if (
+    !createMarkerRegex(markerPrefix, 'draft-carrier').test(
+      maskMarkdownForScan(body),
+    )
+  ) {
+    return null;
+  }
+  const number = Number(issue.number);
+  const entry = {
+    number,
+    title: typeof issue.title === 'string' ? issue.title : '',
+    url: typeof issue.url === 'string' ? issue.url : '',
+  };
+  const authoringLabelName = normalizeAuthoringLabelName(
+    options.authoringLabelName,
+  );
+  if (labels.has(authoringLabelName)) {
+    const labelEvents = resolveIssueLabelEvents(
+      issue,
+      options.fetchLabelEventsByIssueNumber,
+      options.strictLabelEvents === true,
+    );
+    const warning = buildAuthoringLabelWarning({
+      issueNumber: number,
+      labelName: authoringLabelName,
+      labelEvents,
+      now: options.now ?? new Date(),
+      staleAgeMs: options.authoringStaleAgeMs ?? 4 * 60 * 60 * 1000,
+    });
+    return {
+      bucket: 'held',
+      entry: {
+        ...entry,
+        heldSince: findLatestLabeledAt(labelEvents, authoringLabelName) || null,
+        stale: warning?.status === 'stale',
+      },
+    };
+  }
+  const blockers = draftCarrierBlockers(body, options);
+  return blockers.length === 0
+    ? { bucket: 'ready', entry }
+    : { bucket: 'waiting', entry: { ...entry, blockers } };
+}
+/**
+ * The `Blocked by` references that keep a draft carrier waiting (#4257): an
+ * open issue, an unresolvable local number, or a cross-repository token.
+ * Closed blockers are dropped. The grammar and lookups are the ones
+ * `classifyIssue` uses, so a carrier and an orphan read the same line alike.
+ */
+function draftCarrierBlockers(body, options) {
+  const blockers = [];
+  const seen = new Set();
+  const add = (blocker) => {
+    const key = `${blocker.reason}:${blocker.reference}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      blockers.push(blocker);
+    }
+  };
+  for (const ref of extractBlockedByReferences(body, options.currentRepo)) {
+    const state = resolveIssueState(
+      ref,
+      options.issueStateByNumber,
+      options.fetchIssueStateByNumber,
+    );
+    if ((state ?? '').toUpperCase() === 'OPEN') {
+      add({ reference: ref, reason: 'open' });
+    } else if (state === 'UNRESOLVABLE') {
+      add({ reference: ref, reason: 'issue-not-found-or-inaccessible' });
+    }
+  }
+  for (const token of extractDependencyReferences(body, 'Blocked by', {
+    currentRepo: options.currentRepo,
+  }).unresolvable) {
+    add({ reference: token.token, reason: 'cross_repository_reference' });
+  }
+  return blockers;
+}
+/**
+ * Group every draft carrier among `issues` by release state (#4257), in issue
+ * number order. The input array is not reordered.
+ */
+function classifyDraftCarriers(issues, options) {
+  const carriers = { held: [], ready: [], waiting: [] };
+  const byNumber = [...issues].sort(
+    (left, right) => Number(left.number) - Number(right.number),
+  );
+  for (const issue of byNumber) {
+    const verdict = classifyDraftCarrier(issue, options);
+    if (verdict === null) {
+      continue;
+    }
+    if (verdict.bucket === 'held') {
+      carriers.held.push(verdict.entry);
+    } else if (verdict.bucket === 'ready') {
+      carriers.ready.push(verdict.entry);
+    } else {
+      carriers.waiting.push(verdict.entry);
+    }
+  }
+  return carriers;
 }
 export async function filterOrphanIssues(issues, options = {}) {
   const issueStateByNumber = new Map(options.issueStateByNumber ?? []);
@@ -1084,6 +1222,20 @@ export async function filterOrphanIssues(issues, options = {}) {
       });
     }
   }
+  // #4257: a carrier is classified from its label and marker alone, so it is
+  // reported here whichever A0-O bucket filed it in. Its blockers stay out of
+  // the top-level `unresolvable` array and its count.
+  const draftCarriers = classifyDraftCarriers(issues, {
+    issueStateByNumber,
+    fetchIssueStateByNumber,
+    fetchLabelEventsByIssueNumber: options.fetchLabelEventsByIssueNumber,
+    markerPrefix: options.markerPrefix,
+    authoringLabelName: options.authoringLabelName,
+    authoringOnlyLabelName: options.authoringOnlyLabelName,
+    authoringStaleAgeMs: options.authoringStaleAgeMs,
+    now: options.now,
+    currentRepo: options.currentRepo,
+  });
   const counts = {
     scanned: issues.length,
     orphans: ranked.length,
@@ -1095,6 +1247,9 @@ export async function filterOrphanIssues(issues, options = {}) {
       ]),
     ),
     unresolvable: unresolvable.length,
+    draftCarriersHeld: draftCarriers.held.length,
+    draftCarriersReady: draftCarriers.ready.length,
+    draftCarriersWaiting: draftCarriers.waiting.length,
   };
   return {
     orphans: ranked,
@@ -1103,6 +1258,7 @@ export async function filterOrphanIssues(issues, options = {}) {
     unresolvable,
     warnings,
     counts,
+    draftCarriers,
   };
 }
 async function runCli() {
@@ -1110,6 +1266,16 @@ async function runCli() {
   if (args.help) {
     printHelp();
     process.exit(0);
+  }
+  // `--draft-carriers` (#4257) is a standalone listing: one label-filtered
+  // search, always live, and it never reads or writes the hint cache.
+  if (args.draftCarriers) {
+    rejectDraftCarrierCombinations(args);
+    const now = resolveDraftCarrierNow(args.now);
+    const policy = loadPolicy(args.policy);
+    const output = produceDraftCarrierOutput(args, policy, now);
+    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+    return 0;
   }
   // `--purge-cache` is a standalone maintenance action: it never enumerates.
   if (args.purgeCache) {
@@ -1201,6 +1367,130 @@ export function hasEligibleOrphan(output) {
     return orphans.some((entry) => entry?.claimEligible !== false);
   }
   return orphans.length > 0;
+}
+/**
+ * The `--draft-carriers` flags that have no meaning for the listing (#4257).
+ * The listing is always live, so a flag that selects the orphan path or a
+ * cache mode is a usage error, not a silent no-op.
+ */
+function rejectDraftCarrierCombinations(args) {
+  const combined = [];
+  if (args.autopilot) {
+    combined.push('--autopilot');
+  }
+  if (args.withClaimState) {
+    combined.push('--with-claim-state');
+  }
+  if (args.currentClaimIdGiven) {
+    combined.push('--current-claim-id');
+  }
+  if (args.pr !== null) {
+    combined.push('--pr');
+  }
+  if (args.noCache) {
+    combined.push('--no-cache');
+  }
+  if (args.refreshCache) {
+    combined.push('--refresh-cache');
+  }
+  if (args.purgeCache) {
+    combined.push('--purge-cache');
+  }
+  if (combined.length > 0) {
+    throw markCliUsageError(
+      new Error(
+        `--draft-carriers cannot be combined with ${combined.join(', ')}`,
+      ),
+    );
+  }
+}
+/**
+ * The clock for the held-staleness check in `--draft-carriers` (#4257): the
+ * current time, or the validated `--now` value. A malformed `--now` is a usage
+ * error, as it is for the claim-state annotation.
+ */
+function resolveDraftCarrierNow(raw) {
+  if (raw === '') {
+    return new Date();
+  }
+  const normalized = normalizeNowFlag(raw);
+  if (normalized === null) {
+    throw markCliUsageError(new Error(NOW_FLAG_USAGE_MESSAGE));
+  }
+  return normalized;
+}
+/** The policy fields both orphan-filter modes print (#4257). */
+function describeOrphanPolicy(policy) {
+  return {
+    source: policy.source,
+    orphanFirstPolicy: policy.orphanFirstPolicy,
+    markerPrefix: policy.markerPrefix,
+    authoringLabelName: policy.authoringLabelName,
+    authoringOnlyLabelName: policy.authoringOnlyLabelName,
+    authoringStaleAge: policy.authoringStaleAge,
+    autopilotSuitabilityFloor: policy.autopilotSuitabilityFloor,
+    autopilotSuitabilityEnabled: policy.autopilotSuitabilityEnabled,
+  };
+}
+/**
+ * Build the `--draft-carriers` listing (#4257) through the provider port: one
+ * label-filtered search, then the same classifier A0-O uses. The search is
+ * strict, so a failed call throws instead of reading as "no carriers". A
+ * result that reaches the search cap may be incomplete, so it is an error.
+ */
+export function buildDraftCarrierOutput(port, input) {
+  const rows = port.searchOpenWorkItems({
+    label: input.policy.authoringOnlyLabelName,
+    fields: ['number', 'title', 'body', 'state', 'labels', 'url'],
+    limit: GH_SEARCH_RESULT_CAP,
+    strict: true,
+  });
+  if (rows.length >= GH_SEARCH_RESULT_CAP) {
+    throw new Error(
+      `the ${input.policy.authoringOnlyLabelName} search reached GitHub's ${GH_SEARCH_RESULT_CAP}-result cap, so the draft-carrier listing may be incomplete`,
+    );
+  }
+  const draftCarriers = classifyDraftCarriers(
+    rows.map((row) => normalizeIssue(row)),
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: (issueNumber) =>
+        fetchIssueState(port, issueNumber),
+      fetchLabelEventsByIssueNumber: (issueNumber) =>
+        fetchIssueLabelEvents(port, issueNumber),
+      strictLabelEvents: true,
+      markerPrefix: input.policy.markerPrefix,
+      authoringLabelName: input.policy.authoringLabelName,
+      authoringOnlyLabelName: input.policy.authoringOnlyLabelName,
+      authoringStaleAgeMs: input.policy.authoringStaleAgeMs,
+      now: input.now,
+      currentRepo:
+        input.owner && input.repo ? `${input.owner}/${input.repo}` : undefined,
+    },
+  );
+  return {
+    repository: { owner: input.owner, repo: input.repo },
+    policy: describeOrphanPolicy(input.policy),
+    draftCarriers,
+    counts: {
+      draftCarriersHeld: draftCarriers.held.length,
+      draftCarriersReady: draftCarriers.ready.length,
+      draftCarriersWaiting: draftCarriers.waiting.length,
+    },
+  };
+}
+/** The `--draft-carriers` CLI entry: the GitHub adapter, then the listing (#4257). */
+function produceDraftCarrierOutput(args, policy, now) {
+  const currentRepo =
+    args.owner && args.repo ? null : resolveCurrentGithubRepository();
+  const owner = args.owner || currentRepo?.owner || '';
+  const repo = args.repo || currentRepo?.repo || '';
+  return buildDraftCarrierOutput(createGithubProviderAdapter(owner, repo), {
+    owner,
+    repo,
+    policy,
+    now,
+  });
 }
 async function produceOutput(args, policy) {
   const currentRepo =
@@ -1297,15 +1587,7 @@ async function produceOutput(args, policy) {
     diagnostics: {
       pr: args.pr,
     },
-    policy: {
-      source: policy.source,
-      orphanFirstPolicy: policy.orphanFirstPolicy,
-      markerPrefix: policy.markerPrefix,
-      authoringLabelName: policy.authoringLabelName,
-      authoringStaleAge: policy.authoringStaleAge,
-      autopilotSuitabilityFloor: policy.autopilotSuitabilityFloor,
-      autopilotSuitabilityEnabled: policy.autopilotSuitabilityEnabled,
-    },
+    policy: describeOrphanPolicy(policy),
     ...result,
   };
   return output;
@@ -1331,9 +1613,11 @@ function parseArgs(rawArgv) {
     autopilot: false,
     withClaimState: false,
     currentClaimId: '',
+    currentClaimIdGiven: false,
     noCache: false,
     refreshCache: false,
     purgeCache: false,
+    draftCarriers: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -1398,6 +1682,7 @@ function parseArgs(rawArgv) {
       continue;
     }
     if (token === '--current-claim-id') {
+      parsed.currentClaimIdGiven = true;
       // Only consume the next token as the id when it exists and is not
       // itself a flag, mirroring discover-roadmap-graph's own parsing, so
       // `--current-claim-id --with-claim-state` does not swallow the
@@ -1408,6 +1693,10 @@ function parseArgs(rawArgv) {
         parsed.currentClaimId = value;
         index += 1;
       }
+      continue;
+    }
+    if (token === '--draft-carriers') {
+      parsed.draftCarriers = true;
       continue;
     }
     if (token === '--help' || token === '-h') {
@@ -1422,6 +1711,7 @@ function printHelp() {
   process.stdout.write(`Usage:
   node scripts/discover-orphan-filter.mjs [--owner <owner>] [--repo <repo>] [--policy <path>] [--pr <number>] [--now <ISO8601>] [--autopilot] [--with-claim-state] [--current-claim-id <id>] [--no-cache | --refresh-cache]
   node scripts/discover-orphan-filter.mjs --purge-cache
+  node scripts/discover-orphan-filter.mjs --draft-carriers [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>]
 
 Hint cache (opt-in via githubApi.readCache.enabled; off by default): the whole
 output is cached as a short-lived HINT, so an unchanged repeat inside
@@ -1429,8 +1719,10 @@ githubApi.readCache.maxAge (default PT5M) makes no discovery request. A hint
 only ranks candidates: the selected candidate's live A3-A5 gates and the claim
 post never read from it. --no-cache computes live and stores nothing;
 --refresh-cache recomputes and stores; --purge-cache removes every cached body
-from the host-local read cache and exits. When the cache is active or a cache
-flag is passed, the output gains an additive "cache" object:
+from the host-local read cache and exits. A hint written under any format
+version below 5 (#4257 set 5, which added draftCarriers) is never served.
+When the cache is active or a cache flag is passed, the output gains
+an additive "cache" object:
   "cache": {"mode": "hint|refresh|off|bypass", "source": "hint|live", "ageMs": 0, "maxAgeMs": 0, "complete": true, "enumerations": 0, "exhaustionRefresh": false}
 An output with no eligible orphan is recomputed once (exhaustionRefresh true).
 
@@ -1438,7 +1730,7 @@ Output schema:
 {
   "repository": {"owner": "...", "repo": "..."},
   "diagnostics": {"pr": 404},
-  "policy": {"source": "...", "orphanFirstPolicy": "none|maintainer-approved|public-disabled", "markerPrefix": "...", "authoringLabelName": "...", "authoringStaleAge": "...", "autopilotSuitabilityFloor": 3, "autopilotSuitabilityEnabled": true},
+  "policy": {"source": "...", "orphanFirstPolicy": "none|maintainer-approved|public-disabled", "markerPrefix": "...", "authoringLabelName": "...", "authoringOnlyLabelName": "...", "authoringStaleAge": "...", "autopilotSuitabilityFloor": 3, "autopilotSuitabilityEnabled": true},
   "orphans": [{"number": 1, "title": "...", "state": "OPEN", "reason": "orphan|references_non_blocking", "url": "...", "autopilotSuitability": 4, "effort": "S|M|L|null", "milestone": "v0.8.0|null"}],
   "routed_to_human": [{"number": 2, "title": "...", "state": "OPEN", "reason": "orphan", "url": "...", "autopilotSuitability": 1, "effort": "S|M|L|null", "milestone": "v0.8.0|null"}],
   "filtered": {
@@ -1457,7 +1749,8 @@ Output schema:
   },
   "unresolvable": [{"issue": 1, "reference": 2, "reason": "issue-not-found-or-inaccessible"}],
   "warnings": [{"issueNumber": 1, "message": "Warning: ..."}],
-  "counts": {"scanned": 0, "orphans": 0, "routed_to_human": 0, "filtered": {...}, "unresolvable": 0}
+  "draftCarriers": {"held": [{"number": 1, "title": "...", "url": "...", "heldSince": "...|null", "stale": false}], "ready": [{"number": 2, "title": "...", "url": "..."}], "waiting": [{"number": 3, "title": "...", "url": "...", "blockers": [{"reference": 4, "reason": "open|issue-not-found-or-inaccessible|cross_repository_reference"}]}]},
+  "counts": {"scanned": 0, "orphans": 0, "routed_to_human": 0, "filtered": {...}, "unresolvable": 0, "draftCarriersHeld": 0, "draftCarriersReady": 0, "draftCarriersWaiting": 0}
 }
 
 "filtered.provider_outage_target" (#2800) excludes the exact issue named by
@@ -1465,7 +1758,8 @@ the configured "providerOutage.declarationTarget" -- a permanent,
 adopter-authored coordination issue documented to stay open indefinitely,
 never claimed, never closed, and carrying no roadmap/blocked marker or
 blocking label of its own. Checked by issue number alone, ahead of every
-marker/label check above, since none of them would otherwise catch it.
+marker/label check above, except that a draft carrier is filed under
+"filtered.blocked_label" first. None of those checks would otherwise catch it.
 Absent config leaves this filter a no-op.
 
 "filtered.authoring_journal_target" (#4115) excludes the issue named by the
@@ -1473,10 +1767,11 @@ configured "issueAuthoring.journalIssue", but only when that reference names
 this repository (owner and repo compared case-insensitively). A journal in
 another repository, a malformed reference, or no reference contributes
 nothing. The journal is durable infrastructure, not work, so it is excluded
-by number ahead of the marker and label checks. Its scan covers open issues
-only, so a closed journal is reported only by the per-issue mode of
-discover-readiness-check. When both numbers are equal, the outage reason
-takes precedence.
+by number ahead of the marker and label checks, except that a draft carrier is
+filed under "filtered.blocked_label" first. Its scan covers open issues only,
+so a closed journal is reported only by the per-issue mode of
+discover-readiness-check. When both numbers are equal, the outage reason takes
+precedence for a non-carrier.
 
 "filtered.runtime_observation_precondition" (#2467) excludes an issue whose
 body names a runtime/production-observation precondition in prose --
@@ -1545,6 +1840,27 @@ being rejected stays selectable -- a title edit is a timeline "renamed"
 event, and a body edit is a GraphQL "userContentEdits.editedAt" value
 (#2762); a failed GraphQL read degrades the anchor to unknown rather than
 falling back to created_at.
+
+"draftCarriers" (#4257) lists every draft carrier: an open issue that carries
+the configured authoring-only label and the carrier marker outside code. The
+marker value is not checked, so a carrier with an unexpected value is still
+listed. A carrier never becomes an orphan, and every carrier stays in
+"filtered.blocked_label", whichever markers it names or configured target
+number it carries.
+Its buckets are "held" (the carrier also carries the authoring label, with
+"heldSince" the latest labeled event (null when none was read) and "stale"
+true once that hold is at
+least issueAuthoring.authoringStaleAge old), "ready" (no "Blocked by" reference
+is open or unresolvable), and "waiting" (each "blockers" entry carries "reason"
+open, issue-not-found-or-inaccessible, or cross_repository_reference). Blockers
+never enter the top-level "unresolvable" array or its count.
+
+--draft-carriers (#4257) prints only that listing, from one label-filtered
+search. It is always live and never reads or writes the hint cache. It prints
+"repository", "policy", "draftCarriers", and "counts" (draftCarriersHeld,
+draftCarriersReady, draftCarriersWaiting). It cannot be combined with
+--autopilot, --with-claim-state, --current-claim-id, --pr, --no-cache,
+--refresh-cache, or --purge-cache. --now sets the clock for the held check.
 
 --with-claim-state (opt-in) annotates each candidate in "orphans" and
 "routed_to_human" with active-claim eligibility, exactly mirroring
@@ -1680,12 +1996,21 @@ function extractOpenMilestoneTitle(milestone) {
     ? record.title
     : null;
 }
-function resolveIssueLabelEvents(issue, fetchLabelEventsByIssueNumber) {
+function resolveIssueLabelEvents(
+  issue,
+  fetchLabelEventsByIssueNumber,
+  strict = false,
+) {
   if (Array.isArray(issue.labelEvents) && issue.labelEvents.length > 0) {
     return issue.labelEvents;
   }
   if (typeof fetchLabelEventsByIssueNumber !== 'function') {
     return [];
+  }
+  // A strict caller (`--draft-carriers`, #4257) must not read an unreadable
+  // timeline as "no labeled event": the error propagates, and the run fails.
+  if (strict) {
+    return fetchLabelEventsByIssueNumber(issue.number);
   }
   try {
     return fetchLabelEventsByIssueNumber(issue.number);
