@@ -1841,6 +1841,76 @@ function latestOursMarker(
   return latest;
 }
 
+/** The field rules post-idd-marker enforces for each mode this run posts (the
+ * contract's mode table). `acquire` and `resume` pass here: provenance and the
+ * acquire-digest check cover them. */
+function markerFieldsValid(
+  parsed: ParsedOwnerMarker,
+  input: CarrierReleaseInput,
+  bodySha256: string,
+  snapshot: string,
+): boolean {
+  const selfSuperseded = parsed.supersedes === input.ids.owner;
+  switch (parsed.mode) {
+    case 'release':
+    case 'heartbeat':
+      return (
+        selfSuperseded &&
+        parsed.bodySha256 === bodySha256 &&
+        parsed.snapshotSha256 === 'none'
+      );
+    case 'release-guard':
+      return (
+        selfSuperseded &&
+        parsed.bodySha256 === 'none' &&
+        parsed.snapshotSha256 === 'none'
+      );
+    case 'release-complete':
+      return (
+        selfSuperseded &&
+        parsed.bodySha256 === 'none' &&
+        parsed.snapshotSha256 === snapshot
+      );
+    default:
+      return true;
+  }
+}
+
+/** The valid markers of this run with `mode`, earliest first. A marker that
+ * matches this run's identity but breaks the mode's field rules is a defect in
+ * an append-only log, so it stops the release with recovery-hold rather than
+ * counting as a match or as absence. */
+function validOwned(
+  log: readonly AuthoringOwnerProvenanceComment[],
+  input: CarrierReleaseInput,
+  mode: string,
+  bodySha256: string,
+  snapshot: string,
+  step: string,
+): { id: number; createdAt: string; parsed: ParsedOwnerMarker }[] {
+  const valid: { id: number; createdAt: string; parsed: ParsedOwnerMarker }[] =
+    [];
+  for (const comment of log) {
+    const owned = oursMatching(
+      [comment],
+      input,
+      (parsed) => parsed.mode === mode,
+    );
+    if (owned === null) {
+      continue;
+    }
+    if (!markerFieldsValid(owned.parsed, input, bodySha256, snapshot)) {
+      throw new CarrierReleaseStop(
+        'recovery-hold',
+        step,
+        `a ${mode} marker of this run (comment ${owned.id}) does not carry the fields of this release`,
+      );
+    }
+    valid.push(owned);
+  }
+  return valid.sort((left, right) => left.id - right.id);
+}
+
 function readOwnerLog(
   input: CarrierReleaseInput,
   step: string,
@@ -1919,15 +1989,6 @@ function readUntil(
     }
   }
   return { found: false, lastError };
-}
-
-function markerOnLog(
-  log: readonly AuthoringOwnerProvenanceComment[],
-  input: CarrierReleaseInput,
-  id: number,
-  mode: string,
-): boolean {
-  return markerOnLogModes(log, input, id, [mode]);
 }
 
 /** True when the comment with this id is an unedited trusted marker of this
@@ -2129,6 +2190,18 @@ function checkCarrierPreconditions(
       `the carrier is not the sole member of its set: issues ${JSON.stringify(members.json.issues ?? null)}`,
     );
   }
+  // A skipped-markers value that is present but not a list, or an entry of a
+  // shape this check does not recognize, makes the result inconclusive.
+  if (
+    members.json.skippedMarkers !== undefined &&
+    !Array.isArray(members.json.skippedMarkers)
+  ) {
+    throw new CarrierReleaseStop(
+      'held',
+      'precondition-sole-member',
+      'the sole-member result carries skippedMarkers that are not a list',
+    );
+  }
   const skipped = Array.isArray(members.json.skippedMarkers)
     ? members.json.skippedMarkers
     : [];
@@ -2138,6 +2211,17 @@ function checkCarrierPreconditions(
       kind?: unknown;
       namesRequestedSet?: unknown;
     };
+    const recognized =
+      record.kind === 'requested-set' ||
+      (record.kind === 'unattributable' &&
+        typeof record.namesRequestedSet === 'boolean');
+    if (!recognized) {
+      throw new CarrierReleaseStop(
+        'held',
+        'precondition-sole-member',
+        'a skipped marker has a shape this check does not recognize, so the sole-member result is inconclusive',
+      );
+    }
     if (
       record.kind === 'requested-set' &&
       record.issueNumber === input.number
@@ -2314,9 +2398,13 @@ function requireMarkerOnLog(
   id: number,
   mode: string,
   step: string,
+  bodySha256: string,
+  snapshot: string,
 ): void {
   const confirmed = readUntil(input, (log) =>
-    markerOnLog(log, input, id, mode),
+    validOwned(log, input, mode, bodySha256, snapshot, step).some(
+      (owned) => owned.id === id,
+    ),
   );
   if (!confirmed.found) {
     const cause = confirmed.lastError === '' ? '' : `: ${confirmed.lastError}`;
@@ -2370,11 +2458,27 @@ function removeAuthoringLabel(
   }
   const log = readOwnerLogAfterWrite(input, 'label-removal-verify');
   replayOrRecover(input, log, 'label-removal-verify');
-  if (!markerOnLog(log, input, releaseId, 'release')) {
+  if (
+    !validOwned(
+      log,
+      input,
+      'release',
+      acquireDigest,
+      'none',
+      'label-removal-verify',
+    ).some((owned) => owned.id === releaseId)
+  ) {
     // A lagging log can miss a landed marker, so confirm the absence with
     // bounded re-reads before a restore. An unreadable log is never absence.
     const confirmed = readUntil(input, (fresh) =>
-      markerOnLog(fresh, input, releaseId, 'release'),
+      validOwned(
+        fresh,
+        input,
+        'release',
+        acquireDigest,
+        'none',
+        'label-removal-verify',
+      ).some((owned) => owned.id === releaseId),
     );
     if (!confirmed.found) {
       if (confirmed.lastError !== '') {
@@ -2561,11 +2665,18 @@ function runCarrierRelease(
   writeFileSync(bodyFile, preflight.body);
   runCarrierBacklog(input, 'preflight', bodyFile, scratch, ctx.backlog);
   const digest = sha256Hex(preflight.body);
-  const existingRelease = oursMatching(
-    readOwnerLog(input, 'release-preflight'),
+  // The reuse decision reads the log after the sweep and backlog, replays it,
+  // and reuses only a release marker whose fields match this release.
+  const preLog = readOwnerLog(input, 'release-preflight');
+  replayOrRecover(input, preLog, 'release-preflight');
+  const existingRelease = validOwned(
+    preLog,
     input,
-    (parsed) => parsed.mode === 'release',
-  );
+    'release',
+    digest,
+    'none',
+    'release-preflight',
+  )[0];
   const releaseId =
     existingRelease?.id ??
     postCarrierMarker(input, 'release', digest, 'none', 'release-preflight');
@@ -2573,15 +2684,25 @@ function runCarrierRelease(
   ctx.mark('release-guard');
   const guardLog = readOwnerLog(input, 'release-guard');
   replayOrRecover(input, guardLog, 'release-guard');
-  const guardExisting = oursMatching(
+  const guardExisting = validOwned(
     guardLog,
     input,
-    (parsed) => parsed.mode === 'release-guard',
-  );
+    'release-guard',
+    'none',
+    'none',
+    'release-guard',
+  )[0];
   const guardId =
     guardExisting?.id ??
     postCarrierMarker(input, 'release-guard', 'none', 'none', 'release-guard');
-  requireMarkerOnLog(input, guardId, 'release-guard', 'release-guard');
+  requireMarkerOnLog(
+    input,
+    guardId,
+    'release-guard',
+    'release-guard',
+    'none',
+    'none',
+  );
   replayOrRecover(input, readOwnerLog(input, 'release-guard'), 'release-guard');
 
   // (3) Preconditions, before the heartbeat.
@@ -2613,7 +2734,16 @@ function runCarrierRelease(
   sleepMs(input.settleMs);
   const replayLog = readOwnerLog(input, 'heartbeat-replay');
   replayOrRecover(input, replayLog, 'heartbeat-replay');
-  if (!markerOnLog(replayLog, input, releaseId, 'release')) {
+  if (
+    !validOwned(
+      replayLog,
+      input,
+      'release',
+      acquireDigest,
+      'none',
+      'heartbeat-replay',
+    ).some((owned) => owned.id === releaseId)
+  ) {
     throw new CarrierReleaseStop(
       'held',
       'heartbeat-replay',
@@ -2645,28 +2775,12 @@ function runCarrierRelease(
   ctx.mark('label-removal');
   removeAuthoringLabel(input, releaseId, acquireDigest);
 
-  // (6) release-complete: sweep and backlog immediately before the decision.
+  // (6) release-complete. The sweep and the backlog run first, so the fresh
+  // reads below are the last ones before the decision and the post.
   ctx.mark('release-complete');
   runCarrierSweep(input, 'pre-release-complete', ctx.sweeps);
-  const beforeComplete = readCarrierAfterWrite(input, 'release-complete');
-  // Drift check right before the decision (contract.md, "Stage 2"): the body,
-  // the absent label, the present authoring-only label and the release marker
-  // must still hold. Any drift is recovery-hold with no completion post.
-  const driftLog = readOwnerLogAfterWrite(input, 'release-complete');
-  replayOrRecover(input, driftLog, 'release-complete');
-  const drifted =
-    sha256Hex(beforeComplete.body) !== acquireDigest ||
-    hasLabel(beforeComplete.labels, input.authoringLabel) ||
-    !hasLabel(beforeComplete.labels, input.authoringOnlyLabel) ||
-    !markerOnLog(driftLog, input, releaseId, 'release');
-  if (drifted) {
-    throw new CarrierReleaseStop(
-      'recovery-hold',
-      'release-complete',
-      'the carrier drifted after the label removal (body, labels or release marker); no completion marker was posted',
-    );
-  }
-  writeFileSync(bodyFile, beforeComplete.body);
+  const beforeBacklog = readCarrierAfterWrite(input, 'release-complete');
+  writeFileSync(bodyFile, beforeBacklog.body);
   runCarrierBacklog(
     input,
     'pre-release-complete',
@@ -2674,13 +2788,49 @@ function runCarrierRelease(
     scratch,
     ctx.backlog,
   );
+  // Drift check right before the decision (contract.md, "Stage 2"): the body,
+  // the absent label, the present authoring-only label, and both release
+  // markers must still hold on reads taken now. Any drift is recovery-hold.
+  const current = readCarrierAfterWrite(input, 'release-complete');
+  const driftLog = readOwnerLogAfterWrite(input, 'release-complete');
+  replayOrRecover(input, driftLog, 'release-complete');
+  const drifted =
+    sha256Hex(current.body) !== acquireDigest ||
+    hasLabel(current.labels, input.authoringLabel) ||
+    !hasLabel(current.labels, input.authoringOnlyLabel) ||
+    validOwned(
+      driftLog,
+      input,
+      'release',
+      acquireDigest,
+      'none',
+      'release-complete',
+    ).every((owned) => owned.id !== releaseId) ||
+    validOwned(
+      driftLog,
+      input,
+      'release-guard',
+      'none',
+      'none',
+      'release-complete',
+    ).every((owned) => owned.id !== guardId);
+  if (drifted) {
+    throw new CarrierReleaseStop(
+      'recovery-hold',
+      'release-complete',
+      'the carrier drifted after the label removal (body, labels, or a release marker); no completion marker was posted',
+    );
+  }
   const snapshot = carrierSetSnapshot(owner, repo, number, acquireDigest);
-  const completeExisting = oursMatching(
-    driftLog,
-    input,
-    (parsed) =>
-      parsed.mode === 'release-complete' && parsed.snapshotSha256 === snapshot,
-  );
+  const completeExisting =
+    validOwned(
+      driftLog,
+      input,
+      'release-complete',
+      'none',
+      snapshot,
+      'release-complete',
+    )[0] ?? null;
   let postError: unknown = null;
   if (completeExisting === null) {
     try {
@@ -2704,13 +2854,14 @@ function runCarrierRelease(
       conclusive = true;
       replayOrRecover(input, log, 'release-complete');
       found =
-        oursMatching(
+        validOwned(
           log,
           input,
-          (parsed) =>
-            parsed.mode === 'release-complete' &&
-            parsed.snapshotSha256 === snapshot,
-        ) !== null;
+          'release-complete',
+          'none',
+          snapshot,
+          'release-complete',
+        ).length > 0;
     } catch (error) {
       if (
         error instanceof CarrierReleaseStop &&

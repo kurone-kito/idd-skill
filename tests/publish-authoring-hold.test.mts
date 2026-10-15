@@ -253,6 +253,12 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
         const setId = /set=([^;]+);/.exec(body)[1];
         state.comments.push({ id: 7200 + state.comments.length, issue: 6001, body: '<!-- idd-skill-authoring-owner: target=o/r#6001; anchor=o/r#6001; mode=acquire; owner=owner-x; set=' + setId + '; session=session-x; body-sha256=' + '0'.repeat(64) + '; snapshot-sha256=none; supersedes=none -->', user, createdAt: '2026-10-13T00:41:00Z' });
       }
+      if (rule.action === 'malformedRelease') {
+        const owner = /owner=([^;]+);/.exec(body)[1];
+        const setId = /set=([^;]+);/.exec(body)[1];
+        const session = /session=([^;]+);/.exec(body)[1];
+        state.comments.push({ id: 7300 + state.comments.length, issue: ${NEW_ISSUE}, body: '<!-- idd-skill-authoring-owner: target=o/r#${NEW_ISSUE}; anchor=o/r#${NEW_ISSUE}; mode=release; owner=' + owner + '; set=' + setId + '; session=' + session + '; body-sha256=' + '0'.repeat(64) + '; snapshot-sha256=none; supersedes=' + owner + ' -->', user, createdAt: '2026-10-13T00:42:00Z' });
+      }
       if (rule.action === 'dropRelease') {
         state.comments = state.comments.filter((c) => !(c.issue === ${NEW_ISSUE} && /mode=release;/.test(c.body)));
       }
@@ -2290,6 +2296,27 @@ carrierLintTest(
       assert.equal(run.report.outcome, 'recovery-hold');
       assert.equal(run.report.release.state, 'recovery-hold');
       assert.equal(run.report.release.failedStep, 'label-removal');
+    } finally {
+      run.fixture.restore();
+    }
+  },
+);
+
+carrierLintTest(
+  'CLI: a release marker of this run with the wrong fields stops the release at recovery-hold before any release write',
+  () => {
+    const run = releaseRun({
+      afterPost: [{ mode: 'acquire', action: 'malformedRelease' }],
+    });
+    try {
+      assert.equal(run.status, 1, JSON.stringify(run.report));
+      assert.equal(run.report.outcome, 'recovery-hold');
+      assert.equal(run.report.release.state, 'recovery-hold');
+      assert.equal(run.report.release.failedStep, 'release-preflight');
+      assert.equal(
+        writeKinds(run.fixture).includes('owner-marker:release'),
+        false,
+      );
     } finally {
       run.fixture.restore();
     }
