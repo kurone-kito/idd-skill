@@ -324,11 +324,36 @@ test('usage on a record without a valid timestamp still counts in the session us
         usage: { input: 2, output: 0 },
       }),
       assistantRecord({ requestId: 'req-W', usage: { input: 3, output: 0 } }),
+      assistantRecord({ requestId: 'req-W', usage: { input: 3, output: 0 } }),
     ],
     fileBasename: 'grouping.jsonl',
   });
+  // req-W's two untimed records carry the same usage, so it counts once.
   assert.equal(sample.usage.inputUncached, 5);
   assert.equal(sample.turnCount, 2);
+});
+
+test('an empty requestId falls back to message.id, so the two records form one request (#4380)', () => {
+  const { sample } = claudeAdapter.harvest({
+    records: [
+      {
+        ...assistantRecord({
+          messageId: 'msg-X',
+          timestamp: '2026-08-20T10:00:01.000Z',
+          usage: { input: 1, output: 1 },
+        }),
+        requestId: '',
+      },
+      assistantRecord({
+        messageId: 'msg-X',
+        timestamp: '2026-08-20T10:00:02.000Z',
+        usage: { input: 1, output: 1 },
+      }),
+    ],
+    fileBasename: 'grouping.jsonl',
+  });
+  assert.equal(sample.turnCount, 1);
+  assert.equal(sample.usage.inputUncached, 1);
 });
 
 test('a non-system record with a compact-shaped subtype is not counted as a compaction', () => {

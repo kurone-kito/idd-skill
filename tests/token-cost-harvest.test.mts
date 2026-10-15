@@ -2335,6 +2335,12 @@ test('a request whose usage sits only on untimed records has no usage point, but
       requestId: 'req-X',
       usage: { input: 6, output: 6 },
     }),
+    // A second untimed record of the same response, with the same usage: the
+    // request still counts that usage once.
+    claudeAssistantRecord({
+      requestId: 'req-X',
+      usage: { input: 6, output: 6 },
+    }),
     claudeAssistantRecord({
       requestId: 'req-Y',
       timestamp: '2026-01-01T00:02:00Z',
@@ -2348,6 +2354,44 @@ test('a request whose usage sits only on untimed records has no usage point, but
     claudeAdapter.harvest({ records, fileBasename: 'grouping.jsonl' }).sample
       .usage.inputUncached,
     8,
+  );
+});
+
+test('a request whose timed record has no usage has no usage point, but its untimed usage still counts in the total (#4380)', () => {
+  const records = [
+    claudeAssistantRecord({
+      requestId: 'req-Z',
+      timestamp: '2026-01-01T00:01:00Z',
+      toolUses: 1,
+    }),
+    claudeAssistantRecord({
+      requestId: 'req-Z',
+      usage: { input: 4, output: 4 },
+    }),
+    claudeAssistantRecord({
+      requestId: 'req-Y',
+      timestamp: '2026-01-01T00:02:00Z',
+      usage: { input: 2, output: 2 },
+    }),
+  ];
+  const { points } = extractClaudeUsageTimeline(records);
+  assert.equal(points.length, 1);
+  assert.equal(points[0].usage.inputUncached, 2);
+  assert.deepEqual(
+    extractClaudeCountTimeline(records).points.map((point) => [
+      point.atMs,
+      point.turnCount,
+      point.toolCallCount,
+    ]),
+    [
+      [ms('2026-01-01T00:01:00Z'), 1, 1],
+      [ms('2026-01-01T00:02:00Z'), 1, 0],
+    ],
+  );
+  assert.equal(
+    claudeAdapter.harvest({ records, fileBasename: 'grouping.jsonl' }).sample
+      .usage.inputUncached,
+    6,
   );
 });
 
