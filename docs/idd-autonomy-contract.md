@@ -65,7 +65,7 @@ coordination close (A4.5) below).
 | Apply optional `triage:{outcome}` label                                                         | Reversible                | Remove the label                   | A4.5 (`idd-suitability.instructions.md`) |
 | Post one-line reconciliation comment (Standing-rejection pre-check, kurone-kito/idd-skill#2803) | Reversible                | Ordinary comment; no state to undo | A4.5 (`idd-suitability.instructions.md`) |
 | Read draft carriers with `discover-orphan-filter --draft-carriers`                              | Reversible                | Read-only query; no state to undo  | A0-C (`idd-discover.instructions.md`)    |
-| Re-author at most one ready draft carrier per Discover run                                      | Per row below             | Draft carrier re-authoring, below  | A0-C (`idd-discover.instructions.md`)    |
+| Re-author one ready draft carrier per Discover run (report only without the companion)          | Irreversible              | Gate: per-step rows below          | A0-C (`idd-discover.instructions.md`)    |
 
 ### Claim & ownership (A5)
 
@@ -100,10 +100,9 @@ claim, scoped to the roadmap issue only.
 All rows below run under a `draft-carrier/<number>-<slug>` coordination
 claim, scoped to the carrier issue only. The claim is taken, revalidated
 before each later mutation, and released the way the A1.5 roadmap-audit
-claim is, with no worktree. A Discover pass runs this procedure at entry, for at
-most one carrier per run (A0-C). Publishing each
-draft under the hold is covered by the Stage 1 rows in the follow-up authoring
-section below.
+claim is, with no worktree. A Discover pass runs this procedure at entry,
+for at most one carrier per run (A0-C). Publishing each draft under the hold
+is covered by the Stage 1 rows in the follow-up authoring section below.
 
 | Mutation                                                                  | Reversible / Irreversible | Undo path / Governing gate                                                                                                                                        | Source                                                                               |
 | ------------------------------------------------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
