@@ -223,9 +223,11 @@ diagnostic. Only one override applies, and its `config` sits above the
 user-global values.
 
 To see which layer supplied a key, run `node scripts/idd-effective-config.mjs
---key <dotted.path>`. That prints the key's value and its source layer. Run it
-without `--key` to also see the selected override index and the layering
-diagnostics. It is read-only.
+--key <dotted.path>` from a checkout of this repository. The installer does not
+copy `scripts/` helpers, so an adopter repository uses the package's
+`idd-effective-config` command instead, once the package is installed. That
+prints the key's value and its source layer. Run it without `--key` to also see
+the selected override index and the layering diagnostics. It is read-only.
 
 ### Repository-policy field class
 
@@ -276,12 +278,12 @@ writing, and each session of an installed harness loads it. The IDD overview and
 the phase files load only after the gate reports `active`. The gate is read-only
 and makes no network calls.
 
-Run `idd-activation` from the repository directory. If it is not on `PATH`, run
-`node "$PAYLOAD/scripts/idd-activation.mjs"` instead. `PAYLOAD` is
-`$XDG_DATA_HOME/idd-skill/current` when `XDG_DATA_HOME` is a qualified root, and
-`~/.local/share/idd-skill/current` otherwise. The command takes `--cwd <path>`
-to classify another directory. From this source checkout, run `node
-scripts/idd-activation.mjs [--cwd <path>]`.
+Run `idd-activation` from the repository directory. The command takes `--cwd
+<path>` to classify another directory. The entry text also names `node
+"$PAYLOAD/scripts/idd-activation.mjs"` as a fallback, but the installer does not
+copy `scripts/` into the payload, so that fallback does not find the helper.
+From a checkout of this repository, run `node scripts/idd-activation.mjs [--cwd
+<path>]`.
 
 The gate checks these rules in order and stops at the first match:
 
