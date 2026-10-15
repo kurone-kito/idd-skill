@@ -29,7 +29,10 @@ import type {
 import type { LocalRef } from './f4-head-proof-verdict.mts';
 import { GH_TEXT_LOOP_OPTIONS, ghApiJson, ghText } from './gh-exec.mts';
 import { loadTrustedActorConfig } from './idd-config.mts';
-import { parseLocalWorktreeList } from './local-worktree-occupancy.mts';
+import {
+  parseLocalWorktreeList,
+  sanitizedGitEnvironment,
+} from './local-worktree-occupancy.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
 import { composeGateTrustedMarkerLogins } from './protocol-helpers.mts';
 import { createGithubProviderAdapter } from './provider-adapter-github.mts';
@@ -80,6 +83,7 @@ export function matchRegisteredWorktree(
 function isRegisteredWorktree(worktree: string): boolean | null {
   const result = spawnSync('git', ['worktree', 'list', '--porcelain', '-z'], {
     encoding: 'utf8',
+    env: sanitizedGitEnvironment(),
   });
   return result.status === 0
     ? matchRegisteredWorktree(result.stdout, worktree)
@@ -193,7 +197,10 @@ export function classifyClaimAssertResult(
 }
 
 function runGit(args: string[]): { status: number | null; stdout: string } {
-  const result = spawnSync('git', args, { encoding: 'utf8' });
+  const result = spawnSync('git', args, {
+    encoding: 'utf8',
+    env: sanitizedGitEnvironment(),
+  });
   return { status: result.status, stdout: (result.stdout ?? '').trim() };
 }
 

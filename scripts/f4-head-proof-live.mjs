@@ -16,7 +16,10 @@ import { checkClaimLock, readGeneratedClaimTokens } from './claim-lock.mjs';
 import { resolveTrustedCollaboratorMarkerLogins } from './collaborator-permission.mjs';
 import { GH_TEXT_LOOP_OPTIONS, ghApiJson, ghText } from './gh-exec.mjs';
 import { loadTrustedActorConfig } from './idd-config.mjs';
-import { parseLocalWorktreeList } from './local-worktree-occupancy.mjs';
+import {
+  parseLocalWorktreeList,
+  sanitizedGitEnvironment,
+} from './local-worktree-occupancy.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import { composeGateTrustedMarkerLogins } from './protocol-helpers.mjs';
 import { createGithubProviderAdapter } from './provider-adapter-github.mjs';
@@ -59,6 +62,7 @@ export function matchRegisteredWorktree(output, worktree) {
 function isRegisteredWorktree(worktree) {
   const result = spawnSync('git', ['worktree', 'list', '--porcelain', '-z'], {
     encoding: 'utf8',
+    env: sanitizedGitEnvironment(),
   });
   return result.status === 0
     ? matchRegisteredWorktree(result.stdout, worktree)
@@ -158,7 +162,10 @@ export function classifyClaimAssertResult(exited, stdout, claimId) {
   return { status: 'not-owned' };
 }
 function runGit(args) {
-  const result = spawnSync('git', args, { encoding: 'utf8' });
+  const result = spawnSync('git', args, {
+    encoding: 'utf8',
+    env: sanitizedGitEnvironment(),
+  });
   return { status: result.status, stdout: (result.stdout ?? '').trim() };
 }
 /**

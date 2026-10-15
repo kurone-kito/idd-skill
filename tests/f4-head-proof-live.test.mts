@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +8,7 @@ import { test } from 'node:test';
 import {
   classifyClaimAssertResult,
   classifyLocalRefReads,
+  createLiveF4HeadProofDeps,
   matchRegisteredWorktree,
   selectPullRequests,
 } from '../src/scripts/f4-head-proof-live.mts';
@@ -220,6 +222,71 @@ test('matchRegisteredWorktree matches a registered worktree by real path and fai
       null,
     );
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the git reads ignore Git environment overrides of the caller', () => {
+  // A caller that exports GIT_DIR or GIT_WORK_TREE would otherwise make the
+  // reads below describe another repository than the supplied worktree.
+  const root = mkdtempSync(join(tmpdir(), 'f4-head-proof-git-env-'));
+  const repo = join(root, 'repo');
+  const decoy = join(root, 'decoy');
+  mkdirSync(repo);
+  mkdirSync(decoy);
+  const git = (cwd: string, ...args: string[]): string =>
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'commit.gpgsign=false',
+        '-c',
+        'user.name=t',
+        '-c',
+        'user.email=t@example.test',
+        ...args,
+      ],
+      {
+        cwd,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined },
+      },
+    ).trim();
+  git(repo, 'init', '-q', '-b', 'work');
+  git(repo, 'commit', '-q', '--allow-empty', '-m', 'x');
+  const tip = git(repo, 'rev-parse', 'refs/heads/work');
+  git(decoy, 'init', '-q', '-b', 'other');
+
+  const savedCwd = process.cwd();
+  const saved = {
+    GIT_DIR: process.env.GIT_DIR,
+    GIT_WORK_TREE: process.env.GIT_WORK_TREE,
+  };
+  try {
+    process.chdir(repo);
+    process.env.GIT_DIR = join(decoy, '.git');
+    process.env.GIT_WORK_TREE = decoy;
+    const deps = createLiveF4HeadProofDeps({ owner: 'o', repo: 'r' });
+    assert.deepEqual(deps.readLocalRef(repo, 'work'), {
+      state: 'present',
+      tip,
+    });
+    assert.deepEqual(deps.readLocalRef(repo, 'other'), {
+      state: 'absent',
+      tip: null,
+    });
+    assert.equal(deps.isRegisteredWorktree(repo), true);
+    assert.equal(deps.isRegisteredWorktree(decoy), false);
+    assert.equal(deps.isValidRefName('work'), true);
+  } finally {
+    process.chdir(savedCwd);
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
     rmSync(root, { recursive: true, force: true });
   }
 });
