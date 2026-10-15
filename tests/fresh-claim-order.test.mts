@@ -151,6 +151,7 @@ const WRAPPER_STEPS = [
   'record-nonce',
   'post-nonce',
   'acquire',
+  'read-tokens',
   'sleep:5',
   'assert',
 ];
@@ -172,7 +173,7 @@ function freshClaimWrapper(): string {
 function stubSource(): string {
   return `import { appendFileSync } from 'node:fs';
 const args = process.argv.slice(2);
-const step = args.includes('--record-tokens')
+const step = args.includes('--read-tokens') ? 'read-tokens' : args.includes('--record-tokens')
   ? (args.includes('--nonce') ? 'record-nonce' : 'record')
   : args.includes('--acquire') ? 'acquire'
   : args.includes('--fresh-claim-gate') ? 'gate'
@@ -180,6 +181,12 @@ const step = args.includes('--record-tokens')
   : args[args.indexOf('--type') + 1] === 'claim' ? 'post-claim'
   : args[args.indexOf('--type') + 1] === 'activation-nonce' ? 'post-nonce' : 'unknown';
 appendFileSync(process.env.TRACE, step + '\\n');
+if (step === 'read-tokens') {
+  const body = process.env.TOKENS === 'absent' ? { path: 'x', present: false }
+    : process.env.TOKENS === 'malformed' ? { path: 'x', present: true, malformed: true }
+    : { path: 'x', present: true, record: {} };
+  process.stdout.write(JSON.stringify(body));
+}
 if (step === 'gate') {
   process.stdout.write(JSON.stringify({ fresh_claim_gate: { verdict: process.env.VERDICT } }));
 }
@@ -208,6 +215,7 @@ type WrapperRun = { status: number | null; stdout: string; steps: string[] };
 function runFreshClaimWrapper(
   exits: Record<string, number>,
   verdict = 'claimable',
+  tokens = 'present',
 ): WrapperRun {
   const root = mkdtempSync(join(tmpdir(), 'fresh-claim-wrapper-'));
   try {
@@ -247,6 +255,7 @@ function runFreshClaimWrapper(
         TRACE: trace,
         EXITS: JSON.stringify(exits),
         VERDICT: verdict,
+        TOKENS: tokens,
       },
     });
     const steps = readFileSync(trace, 'utf8')
@@ -297,6 +306,17 @@ test('a non-zero fresh-claim gate stops before any claim post', {
   assert.notEqual(run.status, 0);
   assert.deepEqual(run.steps, ['record', 'gate']);
   assert.equal(run.stdout.includes(WRAPPER_SUCCESS), false);
+});
+
+test('an absent or malformed generated-tokens record stops before the assert', {
+  skip: WRAPPER_SKIP,
+}, () => {
+  for (const tokens of ['absent', 'malformed']) {
+    const run = runFreshClaimWrapper({}, 'claimable', tokens);
+    assert.notEqual(run.status, 0, tokens);
+    assert.deepEqual(run.steps, WRAPPER_STEPS.slice(0, 7), tokens);
+    assert.equal(run.stdout.includes(WRAPPER_SUCCESS), false, tokens);
+  }
 });
 
 test('a failed claim post, nonce record, or acquire stops the later steps', {

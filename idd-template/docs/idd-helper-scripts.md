@@ -4961,13 +4961,14 @@ still fails closed:
 
 ### Fresh-claim wrapper
 
-Steps 2 to 5 of the fresh claim in
-[`idd-claim.instructions.md`](../.github/instructions/idd-claim.instructions.md)
-run as one fenced `set -euo pipefail` block. The block fails closed. It exits
-non-zero at the first failure, and it prints `verified` only after
-`resume-claim-routing --assert` exits 0. Lost-claim cleanup is not part of the
-block. Run cleanup only at the exits that the claim file's Lost-claim cleanup
-section lists.
+Steps 2 to 5 of the fresh claim in [`idd-
+claim.instructions.md`](../.github/instructions/idd-claim.instructions.md) run
+as one fenced `set -euo pipefail` block. The block fails closed. It exits non-
+zero at the first failure, and it prints `verified` only after `resume-claim-
+routing --assert` exits 0. The read after acquire is the generated-tokens check:
+an absent or malformed record exits non-zero. Lost-claim cleanup is not part of
+the block. Run cleanup only at the exits that the claim file's Lost-claim
+cleanup section lists.
 
 Replace each placeholder with its value. Each placeholder already sits inside
 single quotes, so write any `'` in a value as `'\''`, as the cleanup script
@@ -4995,6 +4996,7 @@ p --type claim --supersedes none --branch "$b"
 k --nonce "$n"
 p --type activation-nonce --nonce "$n"
 node scripts/claim-lock.mjs --acquire --worktree "$w" --agent-id "$a" --claim-id "$c"
+node scripts/claim-lock.mjs --read-tokens --worktree "$w" --claim-id "$c" | node -e 'const o=JSON.parse(require("fs").readFileSync(0));process.exit(o.present&&!o.malformed?0:1)'
 sleep <settle-seconds>
 g --assert --claim-id "$c" --nonce "$n" --worktree "$w"
 echo verified
