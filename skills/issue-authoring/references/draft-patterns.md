@@ -835,8 +835,8 @@ request phrased as "start the IDD execution loop" counts as that same
 release request, not a separate path around it.
 
 A preview request publishes a draft carrier
-(`publish-authoring-hold --shape carrier`) and shows the issue set,
-assumptions, and non-ready buckets in the reply too. A reviewed draft ends
-in local files only when the user explicitly says not to publish or the
-carrier cannot be published either; see
+(`publish-authoring-hold --shape carrier`, run with `--apply`) and shows
+the issue set, assumptions, and non-ready buckets in the reply too. A
+reviewed draft ends in local files only when the user explicitly says not
+to publish or the carrier cannot be published either; see
 [Draft carrier](contract.md#draft-carrier) for both exceptions.
