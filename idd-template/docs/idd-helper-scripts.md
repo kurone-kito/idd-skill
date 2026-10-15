@@ -4224,6 +4224,67 @@ unresolved is ignored instead of making claim resolution throw.
 would shift the start of the cap. It is listed in `IDD_AGENT_DERIVED_MARKERS`,
 like `activation-nonce`, because a worker posts it as itself.
 
+### F4 head-proof marker contract
+
+Issue `#4368` adds the `f4-head-proof` type to `post-idd-marker`. It posts the
+`idd-f4-head-proof` record that `docs/idd-resume-detail.md` (F4 Head Proof)
+requires on the claimed issue before F4 step 3. The record format and the
+rules for reusing it live there; this section covers the command. It reads the
+live state, decides with the verdict table (`f4-head-proof-verdict.mts`),
+posts only when the verdict is `post`, reads the result back, and prints the
+verdict and the proof values as JSON.
+
+```sh
+node scripts/post-idd-marker.mjs --type f4-head-proof --target issue <n> \
+  --claim-id <id> --agent-id <id> --worktree <path> [--apply]
+```
+
+The command takes only those flags. Every proof value is derived: the branch
+from the verified active claim, the pull request from the claim's branch
+(`gh pr list --head <branch> --state all`), the merge commit and head from the
+REST pull request and commit endpoints, the branch tip from `git rev-parse
+--verify refs/heads/<branch>` in `--worktree`, and the `f2` head from the
+latest trusted, unedited `review-watermark` of this claim on the pull request.
+`--worktree` must be a worktree that `git worktree list --porcelain` registers
+for the repository of the current directory. `--target pr` is refused.
+
+Before any POST the command reads the stored activation nonce (`claim-lock
+--read-tokens`), runs `resume-claim-routing --assert`, checks that the claim
+lock of `--worktree` carries this claim ID, and requires `decideBeforePost` to
+return `post`. A merge commit with two parents must have the live head as its
+second parent; one parent (a squash or rebase merge) is accepted, as in the
+written procedure; any other count holds with `pr-state`. So does a branch
+with no merged pull request, or with more than one.
+
+The printed `verdict` is `post` (a dry run that would post), `proceed`, `stop`,
+or `hold`, with a `reason` that is `null` for `post` and otherwise a code of
+the verdict table or `post-rejected`. Exit status is 0 for `post` and
+`proceed` and 1 for `hold` and `stop`.
+
+- A nonce record that is absent, malformed, or has no nonce, a lock that is
+  malformed, a read of either that throws, and a claim check that cannot be
+  read are `hold` on `claim-or-lock`. A claim check that runs and exits
+  non-zero with a routing verdict (including `owner_evidence_required`, where
+  GitHub shows the claim but the local proof failed), and a lock that is
+  absent or held under another claim ID, are `stop` on `claim-or-lock`.
+- A confirmed write needs one re-fetch that matches the posted identity,
+  taken from `classifyReread`; a mismatch holds with `posted-disagreed`.
+- A post error that proves nothing was sent (a host-local load-control refusal,
+  or HTTP 401, 404, or 422) holds with `post-rejected` and posts nothing else;
+  fix the cause and rerun. Any other error is an uncertain write: exactly
+  three re-reads, then `decideAfterPost` decides (`post-unconfirmed`,
+  `reread-failed`, `reread-conflict`, or `reread-reusable`). The command never
+  posts a second time; reconcile by reading the issue comments. One adapter
+  call may already have sent up to three POSTs of the same body.
+- A dry run performs the same live reads and posts nothing. A value the
+  renderer rejects exits non-zero with nothing posted.
+- The `warnings` list names the cause behind a reason code: a read the command
+  swallowed (for example a failed pull request lookup), or the error of a
+  rejected or uncertain post.
+
+`MARKER_HIDE_POLICY` classifies `<!-- idd-f4-head-proof:` `excluded`, as it does
+`<!-- idd-hold:`, and `IDD_AGENT_DERIVED_MARKERS` lists it.
+
 ### Provider health helper
 
 - Command: `node scripts/provider-health.mjs [--owner <owner>] [--repo <repo>]`
@@ -5441,8 +5502,9 @@ like `activation-nonce`, because a worker posts it as itself.
 - Write-side companion to `emit-marker`: it renders the canonical body for
   each operational marker `<type>` (`claim`, `unclaim`, `activation-nonce`,
   `watermark`, `baseline`, `advisory`, `advisory-recovery`,
-  `advisory-reroll`, `idd-hold`) by reusing the single-sourced `protocol-helpers`
-  renderers, then POSTs it as a JSON document (`{"body": …}`) via
+  `advisory-reroll`, `idd-hold`, `f4-head-proof`) by reusing the
+  single-sourced `protocol-helpers` renderers, then POSTs it as a JSON
+  document (`{"body": …}`) via
   `gh api --method POST .../comments --input -`. The JSON path is
   mandatory because `gh issue comment` / `gh api -f body=` silently
   reject the HTML-comment-first claim-family bodies. `-f` also treats a
@@ -5463,7 +5525,10 @@ like `activation-nonce`, because a worker posts it as itself.
   --claim-id --sha`; `advisory` / `advisory-recovery` / `advisory-reroll`
   take `--agent-id --head-sha --timestamp`; `idd-hold` takes `--agent-id
   --claim-id --timestamp` and only `--target issue` (see the
-  [Hold marker contract](#hold-marker-contract)).
+  [Hold marker contract](#hold-marker-contract)); `f4-head-proof` takes
+  `--agent-id --claim-id --worktree` and only `--target issue`, and reads every
+  proof value live (see the
+  [F4 head-proof marker contract](#f4-head-proof-marker-contract)).
 - One-command watermark (`watermark` only): `--from-pr <n>` derives
   `--head-sha` / `--max-activity-at` / `--total-item-count` /
   `--ci-completed-at` from a fresh `review-activity-snapshot` of PR `<n>` and
