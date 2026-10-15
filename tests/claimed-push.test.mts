@@ -299,6 +299,21 @@ test('an unresolvable worktree refuses before the assert', () => {
   noPush(r);
 });
 
+test('the worktree path keeps trailing whitespace and loses only the line break', () => {
+  const spaced = `${WORKTREE} `;
+  for (const terminator of ['\n', '\r\n']) {
+    const r = run({
+      world: { [K.toplevel]: result(0, `${spaced}${terminator}`) },
+      input: { apply: false },
+    });
+    const call = r.calls.find((candidate) => candidate.kind === 'helper');
+    assert.ok(call && call.kind === 'helper');
+    assert.equal(call.cwd, spaced);
+    assert.equal(call.args[call.args.length - 1], spaced);
+    assert.equal(r.report.worktree, spaced);
+  }
+});
+
 test('a claimed branch outside issue/<n>- refuses before any path is computed', () => {
   for (const branch of ['main', 'issue/4376-other-issue', 'issue/4375']) {
     const r = run({ world: { [K.assert]: result(0, claimJson(branch)) } });
@@ -487,6 +502,41 @@ test('a branch tip that differs from the gated commit refuses the push', () => {
   const r = run({ world: { [K.tip]: result(0, `${OTHER_HEAD}\n`) } });
   assertRefused(r, 'reassert', NEXT.rerunForHead);
   noPush(r);
+});
+
+test('a branch-tip read that fails refuses instead of comparing', () => {
+  const r = run({ world: { [K.tip]: result(128, '', 'fatal: bad ref') } });
+  assertRefused(r, 'reassert', NEXT.readGitError, { exitStatus: 0 });
+  noPush(r);
+});
+
+test('a status read that fails after the gate refuses', () => {
+  const r = run({
+    world: {
+      [K.status]: [result(0, ''), result(128, '', 'fatal: index.lock')],
+    },
+  });
+  assertRefused(r, 'gate', NEXT.readGitError);
+  assert.equal(r.count(K.gate), 1);
+  noPush(r);
+});
+
+test('a 64-character object id is accepted as HEAD', () => {
+  const sha256 = 'c'.repeat(64);
+  const r = run({
+    world: {
+      [K.head]: result(0, `${sha256}\n`),
+      [K.tip]: result(0, `${sha256}\n`),
+    },
+  });
+  assert.equal(r.report.pushed, true);
+  assert.equal(r.report.pushedSha, sha256);
+});
+
+test('an object id of the wrong length is not accepted as HEAD', () => {
+  const r = run({ world: { [K.head]: result(0, `${'a'.repeat(41)}\n`) } });
+  assertRefused(r, 'gate', NEXT.readGitError);
+  assert.equal(r.count(K.gate), 0);
 });
 
 test('a second assert that names another branch refuses the push', () => {
@@ -796,6 +846,20 @@ test('a github.com origin without an owner/repository path refuses', () => {
   assert.match(r.report.steps[1]?.reason ?? '', /owner\/repository/u);
 });
 
+test('a refused origin never echoes the credentials in its URL', () => {
+  const token = 'ghp_SECRETTOKENVALUE';
+  const r = run({
+    world: {
+      [K.origin]: result(
+        0,
+        `https://x-access-token:${token}@github.com/just-owner\n`,
+      ),
+    },
+  });
+  assertRefused(r, 'location', NEXT.runFromWorktree);
+  assert.doesNotMatch(JSON.stringify(r.report), new RegExp(token, 'u'));
+});
+
 // ---- Command line ----------------------------------------------------------
 
 test('parseArgs requires --issue and --claim-id and validates --nonce', () => {
@@ -1068,6 +1132,35 @@ test('a broken repository policy never falls through to a user-global command', 
   });
   assert.equal(refusal.ok, false);
   assert.match(refusal.ok ? '' : refusal.reason, /unreadable/u);
+});
+
+test('a minimal repository policy file takes the gate command from the user-global tier', () => {
+  const dir = makeScratch();
+  const configHome = makeScratch();
+  mkdirSync(join(configHome, 'idd-skill'), { recursive: true });
+  writeFileSync(
+    join(configHome, 'idd-skill', 'config.json'),
+    JSON.stringify({ commands: { 'pre-push-validate': 'echo user-global' } }),
+  );
+  const options = { env: { XDG_CONFIG_HOME: configHome }, homedir: configHome };
+  for (const policy of [{}, { commands: { 'fix-validate': 'echo fix' } }]) {
+    writePolicy(dir, JSON.stringify(policy));
+    assert.deepEqual(readEffectiveGateCommand(dir, options), {
+      ok: true,
+      command: 'echo user-global',
+    });
+  }
+  writePolicy(dir, JSON.stringify({ commands: { 'pre-push-validate': 42 } }));
+  assert.equal(readEffectiveGateCommand(dir, options).ok, false);
+
+  // Under GitHub Actions the user-global tier is not read at all.
+  writePolicy(dir, JSON.stringify({}));
+  const ci = readEffectiveGateCommand(dir, {
+    ...options,
+    env: { ...options.env, GITHUB_ACTIONS: 'true' },
+  });
+  assert.equal(ci.ok, false);
+  assert.match(ci.ok ? '' : ci.reason, /not configured/u);
 });
 
 test('a user-global gate command applies when the repository has no policy file', () => {

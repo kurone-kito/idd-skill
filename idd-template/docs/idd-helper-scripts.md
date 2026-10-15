@@ -8770,10 +8770,12 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
   remote, so the primary basename names the repository) and the upstream
   check (no upstream yet, so the push adds `-u`). For those two, only an
   end without an exit status fails the step.
-- **Gate command**: read from the effective policy (the repository file and
-  the layered user-global policy; the user-global tier is not read when
-  `GITHUB_ACTIONS` is `true`) with the working directory set to the
-  worktree. A repository policy file that cannot be read refuses instead of
+- **Gate command**: read from the effective policy with the working
+  directory set to the worktree: the repository policy file wins value by
+  value, and the layered user-global policy supplies a command the file
+  omits, which is how an installed payload serves a repository with a
+  minimal policy file (that tier is not read when `GITHUB_ACTIONS` is
+  `true`). A repository policy file that cannot be read refuses instead of
   falling through to a user-global entry. Only the exit status judges the
   gate; a command killed by a signal counts as failed.
 - **Report**: JSON on stdout with `mode`, `pushed`, `issue`, `branch`,
@@ -8792,6 +8794,14 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
   publication stays a manual route. Adopting the helper in the D2 push step
   and the E-phase push steps is a separate change, because those bundles
   are size-budgeted.
+- **Known limit**: git resolves the branch argument of the push when the
+  push starts, after the `reassert` step has compared HEAD and the branch
+  tip. The helper keeps the branch argument because a SHA source does not
+  set the upstream (`git push -u origin <sha>:refs/heads/<branch>` pushes
+  but sets no upstream on git 2.53.0). In that gap the only expected writer of the
+  claimed branch is the claiming session's own process tree: the claim
+  names one owning session and the `assert` and `reassert` steps check that
+  identity, but nothing locks the worktree between the check and the push.
 
 ## Dead-export audit (kurone-kito/idd-skill#3478)
 

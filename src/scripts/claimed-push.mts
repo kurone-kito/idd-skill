@@ -50,7 +50,7 @@ const MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 /** A dirty-tree reason lists at most this many status lines. */
 const MAX_STATUS_LINES = 20;
 
-const GIT_OBJECT_ID = /^[0-9a-f]{40,64}$/u;
+const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
 
 /** A github.com origin: https, http, git, ssh, or scp-style. */
 const GITHUB_ORIGIN_PATTERN =
@@ -350,7 +350,8 @@ function claimedBranchOf(stdout: string): string | null {
 
 function stepAssert(ctx: Context): StepOutcome {
   const top = readGit(ctx, ['rev-parse', '--show-toplevel'], ctx.input.cwd);
-  const worktree = top.ok ? top.stdout.trim() : '';
+  // Only the line terminator goes; a path may legally end in whitespace.
+  const worktree = top.ok ? top.stdout.replace(/\r?\n$/u, '') : '';
   if (!top.ok || worktree === '') {
     return failed(
       top.ok ? 'git rev-parse --show-toplevel printed nothing' : top.reason,
@@ -375,7 +376,9 @@ function resolveRepoName(
   if (GITHUB_HOST_PATTERN.test(origin)) {
     return {
       ok: false,
-      reason: `the origin URL is on github.com but is not an owner/repository path: ${origin}`,
+      // The URL is left out: it can carry credentials, and the report is pasted.
+      reason:
+        'the origin URL is on github.com but is not an owner/repository path',
     };
   }
   return { ok: true, name: basename(primary) };
@@ -808,8 +811,13 @@ function realpathOrNull(path: string): string | null {
 /**
  * Read the effective `commands.pre-push-validate` for one worktree. The
  * policy loaders resolve `.github/idd/config.json` from the directory they
- * are given, so the worktree path is passed explicitly. A broken repository
- * policy file refuses instead of falling through to a user-global entry.
+ * are given, so the worktree path is passed explicitly. The value is the
+ * layered policy's: the repository file wins leaf by leaf, and the
+ * user-global tier supplies a command the repository omits, which is how an
+ * installed payload serves a repository with a minimal policy file
+ * (`commands` is not a repository-owned field in `layered-policy.mts`). A
+ * repository policy file that cannot be read refuses instead of falling
+ * through to a user-global entry.
  */
 export function readEffectiveGateCommand(
   worktree: string,
