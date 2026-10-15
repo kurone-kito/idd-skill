@@ -1422,7 +1422,7 @@ export function parseOutOfLoopMarker(body, createdAt) {
  * `body`, so a marker quoted or embedded after any preamble does not parse
  * (the same anti-spoofing rule as every other operational marker). Pure
  * grammar only: trust (author and edit state) and claim binding are the
- * caller's decisions, made by {@link resolveHoldMarkerRun} in
+ * caller's decisions, made by {@link resolveTrustedHoldMarkers} in
  * `protocol-helpers.mts`.
  */
 export function parseHoldMarker(body, createdAt) {
