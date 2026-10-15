@@ -284,6 +284,14 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
         const session = /session=([^;]+);/.exec(body)[1];
         state.comments.push({ id: 7500 + state.comments.length, issue: ${NEW_ISSUE}, body: '<!-- idd-skill-authoring-owner: target=o/r#${NEW_ISSUE}; anchor=o/r#9999; mode=heartbeat; owner=' + owner + '; set=' + setId + '; session=' + session + '; body-sha256=' + '0'.repeat(64) + '; snapshot-sha256=none; supersedes=' + owner + ' -->', user, createdAt: '2026-10-13T00:43:00Z' });
       }
+      if (rule.action === 'otherTarget') {
+        // A marker hosted on the child with its owner, set, session and anchor but another target.
+        const owner = /owner=([^;]+);/.exec(body)[1];
+        const setId = /set=([^;]+);/.exec(body)[1];
+        const session = /session=([^;]+);/.exec(body)[1];
+        const anchorRef = /anchor=([^;]+);/.exec(body)[1];
+        state.comments.push({ id: 7600 + state.comments.length, issue: ${NEW_ISSUE}, body: '<!-- idd-skill-authoring-owner: target=o/r#9998; anchor=' + anchorRef + '; mode=heartbeat; owner=' + owner + '; set=' + setId + '; session=' + session + '; body-sha256=' + '0'.repeat(64) + '; snapshot-sha256=none; supersedes=' + owner + ' -->', user, createdAt: '2026-10-13T00:44:00Z' });
+      }
       if (rule.action === 'dropRelease') {
         state.comments = state.comments.filter((c) => !(c.issue === ${NEW_ISSUE} && /mode=release;/.test(c.body)));
       }
@@ -2894,12 +2902,41 @@ test('anchor replay: a log that is not exactly one owner generation fails closed
   assert.ok('problem' in none);
   assert.match(none.problem, /no open owner generation/);
 
-  const second = replay([
+  // The first valid opener wins; a later opener loses and so do its markers.
+  const raced = replay([
     provenanceComment(1, 'acquire'),
     provenanceComment(2, 'acquire', { owner: 'owner-rival', set: 'set-rival' }),
+    provenanceComment(3, 'heartbeat', {
+      owner: 'owner-rival',
+      set: 'set-rival',
+    }),
+    provenanceComment(4, 'resume', {
+      owner: 'owner-rival-next',
+      set: 'set-rival',
+      supersedes: 'owner-rival',
+    }),
+    provenanceComment(5, 'heartbeat'),
   ]);
-  assert.ok('problem' in second);
-  assert.match(second.problem, /second generation/);
+  assert.ok('generation' in raced, JSON.stringify(raced));
+  assert.equal(raced.generation.owner, ANCHOR_OWNER);
+  assert.equal(raced.generation.set, ANCHOR_SET);
+  assert.equal(raced.generation.latest.id, 5);
+
+  // A bootstrap races the same way.
+  const bootRace = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'bootstrap', { owner: 'owner-rival' }),
+  ]);
+  assert.ok('generation' in bootRace, JSON.stringify(bootRace));
+  assert.equal(bootRace.generation.owner, ANCHOR_OWNER);
+
+  // The same owner opening its own generation twice is a malformed log.
+  const twice = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'acquire'),
+  ]);
+  assert.ok('problem' in twice);
+  assert.match(twice.problem, /second time/);
 
   const stranger = replay([
     provenanceComment(1, 'acquire'),
@@ -3130,6 +3167,24 @@ test('hold replay: a missing, repeated or reordered record fails closed', () => 
     ]) ?? '',
     /from member to pending, which is out of order/,
   );
+  // the contract's sequence has one pending record without an issue and one
+  // that attaches it, and no other pending record
+  assert.match(
+    holdReplay([
+      intentComment(1, 'pending', { issue: 'none' }),
+      intentComment(2, 'pending', { issue: 'none' }),
+    ]) ?? '',
+    /repeats a pending record/,
+  );
+  assert.match(
+    holdReplay([
+      intentComment(1, 'pending', { issue: 'none' }),
+      intentComment(2, 'pending'),
+      intentComment(3, 'pending'),
+      intentComment(4, 'member'),
+    ]) ?? '',
+    /repeats a pending record/,
+  );
   // the issue is dropped, or changed, once attached
   assert.match(
     holdReplay([
@@ -3137,7 +3192,7 @@ test('hold replay: a missing, repeated or reordered record fails closed', () => 
       intentComment(2, 'pending'),
       intentComment(3, 'pending', { issue: 'none' }),
     ]) ?? '',
-    /drops the issue/,
+    /repeats a pending record/,
   );
   assert.match(
     holdReplay([
@@ -3999,6 +4054,24 @@ test('CLI: a marker of the child that names another anchor stops before member',
   const fixture = setup({
     labels: ['status:authoring'],
     afterPost: [{ mode: 'acquire', action: 'otherAnchor' }],
+  });
+  try {
+    seedAnchor(fixture);
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.failedStep, 'member');
+    assert.match(report.reason, /owner-marker replay failed/);
+    assert.equal(writeKinds(fixture).includes('member'), false);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a marker hosted on the child that names another target stops before member', () => {
+  const fixture = setup({
+    labels: ['status:authoring'],
+    afterPost: [{ mode: 'acquire', action: 'otherTarget' }],
   });
   try {
     seedAnchor(fixture);

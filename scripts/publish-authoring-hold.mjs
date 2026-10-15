@@ -393,8 +393,9 @@ roadmap's Tracks list stays a separate reviewed edit.
      request, that still has the authoring label, no active claim and no
      open linked pull request, whose trusted unedited owner-marker log
      replays to one open generation (every marker follows the field rules
-     of its mode; no release in progress, no second opener, no reuse of a
-     completed set; a resume keeps a release in progress). The token of
+     of its mode; no release in progress; the first valid opener wins and
+     a later one loses; no reuse of a completed set; a resume keeps a
+     release in progress). The token of
      the anchor's own publication line must also replay to state=member in
      the journal (trusted, unedited records that match the line on target,
      anchor, set, session and token, in order, with a conflicting or
@@ -725,6 +726,7 @@ export function checkOwnerLogStillOurs(input) {
       parsed.owner !== input.ids.owner ||
       parsed.set !== input.ids.set ||
       parsed.session !== input.ids.session ||
+      !sameIssueRef(parsed.target, input.target) ||
       !sameIssueRef(parsed.anchor, input.anchor)
     ) {
       return `owner marker ${comment.id} is not this run's marker`;
@@ -759,12 +761,20 @@ function ownerMarkerFieldProblem(parsed) {
  * free of self-referential narrowing.
  */
 function advanceAnchorGeneration(state, parsed, latest) {
-  const { open, closedSets } = state;
+  const { open, closedSets, losers } = state;
   const malformed = ownerMarkerFieldProblem(parsed);
   if (malformed !== null) {
     return {
       problem: `owner marker ${latest.id} (mode=${parsed.mode}) is malformed: ${malformed}`,
     };
+  }
+  // A session that lost the race for the generation owns nothing, so its
+  // later markers (and a resume that supersedes it) are not evidence.
+  if (
+    losers.has(parsed.owner) ||
+    (parsed.mode === 'resume' && losers.has(parsed.supersedes))
+  ) {
+    return state;
   }
   const mismatch = () => ({
     problem: `owner marker ${latest.id} (mode=${parsed.mode}) does not match the open generation`,
@@ -773,8 +783,18 @@ function advanceAnchorGeneration(state, parsed, latest) {
     case 'acquire':
     case 'bootstrap':
       if (open !== null) {
+        // The first valid opener in comment order wins the generation
+        // (contract.md, "Per-target ownership"); a later one loses. The same
+        // owner opening twice is a malformed log, not a rival.
+        if (parsed.owner === open.owner) {
+          return {
+            problem: `owner marker ${latest.id} (mode=${parsed.mode}) opens the generation of its own owner a second time`,
+          };
+        }
         return {
-          problem: `owner marker ${latest.id} (mode=${parsed.mode}) opens a second generation while set ${open.set} is open`,
+          open,
+          closedSets,
+          losers: new Set([...losers, parsed.owner]),
         };
       }
       // A completed set is closed for good: a later acquisition starts a fresh
@@ -793,6 +813,7 @@ function advanceAnchorGeneration(state, parsed, latest) {
           latest,
         },
         closedSets,
+        losers,
       };
     case 'resume':
       if (
@@ -813,6 +834,7 @@ function advanceAnchorGeneration(state, parsed, latest) {
           latest,
         },
         closedSets,
+        losers,
       };
     case 'heartbeat':
     case 'release':
@@ -843,7 +865,11 @@ function advanceAnchorGeneration(state, parsed, latest) {
             problem: `owner marker ${latest.id} (mode=release-complete) closes a generation with no release in progress`,
           };
         }
-        return { open: null, closedSets: new Set([...closedSets, open.set]) };
+        return {
+          open: null,
+          closedSets: new Set([...closedSets, open.set]),
+          losers,
+        };
       }
       return {
         open: {
@@ -854,6 +880,7 @@ function advanceAnchorGeneration(state, parsed, latest) {
           latest,
         },
         closedSets,
+        losers,
       };
     default:
       return {
@@ -911,7 +938,11 @@ export function resolveAnchorGeneration(input) {
     shaped.push({ comment, time });
   }
   shaped.sort((a, b) => a.time - b.time || a.comment.id - b.comment.id);
-  let state = { open: null, closedSets: new Set() };
+  let state = {
+    open: null,
+    closedSets: new Set(),
+    losers: new Set(),
+  };
   for (const { comment } of shaped) {
     const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
     if (parsed === null) {
@@ -1038,6 +1069,14 @@ export function replayAnchorHold(input) {
       }
     } else if (!(INTENT_TRANSITIONS[state] ?? []).includes(record.state)) {
       return `record ${record.id} moves the token from ${state} to ${record.state}, which is out of order`;
+    } else if (
+      state === 'pending' &&
+      record.state === 'pending' &&
+      (attached !== null || record.issue.toLowerCase() === 'none')
+    ) {
+      // The only pending after a pending is the one record that attaches the
+      // issue: the contract's sequence has no repeated pending record.
+      return `record ${record.id} repeats a pending record of the token`;
     }
     if (record.state === 'member' && attached === null) {
       return `record ${record.id} makes the token a member before any record attached its issue`;
@@ -2197,6 +2236,7 @@ function publish(input) {
       markerPrefix,
       trusted: input.trusted,
       ids,
+      target: issueRef,
       anchor: anchor === null ? issueRef : ids.anchor,
     });
     if (ownerLog !== null) {
@@ -2420,6 +2460,7 @@ function replayOrRecover(input, log, step) {
     markerPrefix: input.markerPrefix,
     trusted: input.trusted,
     ids: input.ids,
+    target: `${input.owner}/${input.repo}#${input.number}`,
     anchor: `${input.owner}/${input.repo}#${input.number}`,
   });
   if (problem !== null) {
