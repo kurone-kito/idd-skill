@@ -110,6 +110,11 @@ outage (e.g. via status page or an org admin surface) before retrying.
 | `HOLD` | post hold and stop | post hold and stop | post hold and stop | post hold and stop |
 <!-- dprint-ignore-end -->
 
+A caller that reads `outcome` may wait inside the helper with
+`--wait <duration>` (at most `PT8M`): set the execution-timeout override near
+the tool's ceiling, not its default (`idd-ci.instructions.md`), and re-issue
+the call while `waitEnded` is `bound-elapsed` or when the tool ended it.
+
 ### Secondary advisory bot supplement (non-gating)
 
 Orthogonal to the table above: changes no `outcome`/`f3Outcome` or

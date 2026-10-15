@@ -429,6 +429,8 @@ export const advisoryWaitStateKeys = [
   'trustedMarkerActorsSource',
   'copilotRecovery',
   'staleRequestRecovery',
+  'waitedSeconds',
+  'waitEnded',
 ] as const satisfies readonly (keyof AdvisoryWaitStateReport)[];
 
 export const branchConflictStateKeys = [

@@ -1,23 +1,40 @@
 import { strict as assert } from 'node:assert';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  type AdvisoryWaitStateReport,
   advisoryMarkerComment,
   buildCopilotRecoverySummary,
   evaluateStaleRequestRecoveryAction,
   parseArgs,
+  readAdvisoryWaitState,
   resolveNowFlag,
+  resolveWaitFlags,
+  waitForAdvisoryWaitState,
 } from '../src/scripts/advisory-wait-state.mts';
-import { NOW_FLAG_USAGE_MESSAGE } from '../src/scripts/marker-helpers.mts';
+import {
+  NOW_FLAG_USAGE_MESSAGE,
+  renderAdvisoryWaitMarker,
+  renderReviewAckMarker,
+} from '../src/scripts/marker-helpers.mts';
 import {
   buildAdvisoryWaitSummary,
   renderAdvisoryWaitRecoveryMarker,
 } from '../src/scripts/protocol-helpers.mts';
+import {
+  createFakeProviderAdapter,
+  type FakeProviderFixture,
+} from '../src/scripts/provider-adapter-fake.mts';
+import type {
+  ProviderComment,
+  ProviderPort,
+} from '../src/scripts/provider-port.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
-import { spawnHelperBinWithEnvelope } from './test-utils.mts';
+import { spawnHelperBinWithEnvelope, stubExecutable } from './test-utils.mts';
 
 const advisoryWaitStateSchema = loadJson(
   'schemas/advisory-wait-state.schema.json',
@@ -1061,4 +1078,844 @@ test('decline (#4142): a declined head never yields a recovery attempt, while th
     }).action,
     'attempt',
   );
+});
+
+// --- CLI baseline (#4378): the printed state of a run without --wait ---------
+// A stubbed `gh` answers the ten call forms one read makes, so these tests run
+// the real helper binary end to end. The stub counts head-SHA reads in a file
+// (every call is a new process) and fails from the Nth one on.
+
+const CLI_HEAD_SHA = 'a'.repeat(40);
+
+interface GhStubOptions {
+  /** The head-SHA read that fails, and every one after it (1 = the first). */
+  failHeadFrom: number;
+  /** GraphQL comment nodes served for the pull request. */
+  commentNodes: unknown[];
+}
+
+function advisoryWaitGhStubBody(
+  stateDir: string,
+  options: GhStubOptions,
+): string {
+  return `const fs = require('node:fs');
+const CONFIG = ${JSON.stringify({ ...options, stateDir, head: CLI_HEAD_SHA })};
+const args = process.argv.slice(2);
+fs.appendFileSync(CONFIG.stateDir + '/calls', args.join(' ') + '\\n');
+const include = args.includes('--include');
+const reply = (text) => process.stdout.write(
+  include ? 'HTTP/2.0 200 OK\\r\\nContent-Type: application/json\\r\\n\\r\\n' + text : text,
+);
+const fail = (why) => {
+  process.stderr.write('gh stub: ' + why + '\\n');
+  process.exit(1);
+};
+if (args[0] === 'auth') {
+  process.stdout.write('stub-token\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1] === 'user') {
+  process.stdout.write('viewer\\n');
+  process.exit(0);
+}
+if (args[0] === 'pr' && args[1] === 'view') {
+  const counter = CONFIG.stateDir + '/head-calls';
+  let calls = 0;
+  try { calls = Number(fs.readFileSync(counter, 'utf8')); } catch {}
+  calls += 1;
+  fs.writeFileSync(counter, String(calls));
+  if (calls >= CONFIG.failHeadFrom) fail('HTTP 502 on a head read');
+  process.stdout.write(CONFIG.head + '\\n');
+  process.exit(0);
+}
+const path = args[0] === 'api' ? String(args[1]) : '';
+if (/\\/pulls\\/\\d+\\/reviews$/.test(path)) process.exit(0);
+if (/\\/issues\\/\\d+\\/timeline$/.test(path)) process.exit(0);
+if (/\\/pulls\\/\\d+\\/requested_reviewers$/.test(path)) {
+  reply(JSON.stringify({ users: [] }));
+  process.exit(0);
+}
+if (path === 'graphql') {
+  const text = args.join('\\n');
+  if (text.includes('comments(first')) {
+    process.stdout.write(JSON.stringify({ data: { repository: { issue: { comments: {
+      nodes: CONFIG.commentNodes,
+      pageInfo: { hasNextPage: false, endCursor: null },
+    } } } } }));
+    process.exit(0);
+  }
+  if (text.includes('reviewRequests')) {
+    process.stdout.write(JSON.stringify({ data: { repository: { pullRequest: {
+      reviewRequests: { nodes: [] },
+    } } } }));
+    process.exit(0);
+  }
+}
+fail('unexpected call: ' + args.join(' ').slice(0, 200));
+`;
+}
+
+/** Run `run` with a stubbed `gh` and an empty working directory (no config). */
+function withAdvisoryWaitGhStub<T>(
+  options: GhStubOptions,
+  run: (cwd: string) => T,
+): T {
+  const root = mkdtempSync(join(tmpdir(), 'idd-aw-cli-'));
+  const restoreGh = stubExecutable('gh', advisoryWaitGhStubBody(root, options));
+  try {
+    return run(root);
+  } finally {
+    restoreGh();
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+const CLI_ARGS = ['--pr', '1', '--owner', 'o', '--repo', 'r'] as const;
+
+test('bin/idd-advisory-wait-state.mjs: a run without --wait prints the state with neither wait field (#4378 baseline)', () => {
+  const result = withAdvisoryWaitGhStub(
+    { failHeadFrom: 99, commentNodes: [] },
+    (cwd) =>
+      spawnHelperBinWithEnvelope('idd-advisory-wait-state.mjs', [...CLI_ARGS], {
+        cwd,
+      }),
+  );
+  assert.equal(result.status, 0, JSON.stringify(result));
+  const printed = JSON.parse(result.stdout) as Record<string, unknown>;
+  const { now, ...rest } = printed;
+  assert.match(String(now), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/);
+  assert.deepEqual(rest, {
+    protocolVersion: '1',
+    prHeadSha: CLI_HEAD_SHA,
+    lastCopilotCommit: '',
+    copilotPending: false,
+    copilotPendingCoversHead: false,
+    outcome: 'REQUEST_NEEDED',
+    f3Outcome: 'SATISFIED',
+    secondaryBotLogin: '',
+    secondaryBotLogins: [],
+    secondaryRequestLogins: [],
+    secondaryRequestNeeded: false,
+    requestCap: 30,
+    pendingWindowMinutes: 30,
+    settledWindowMinutes: 10,
+    pollIntervalMinutes: 2,
+    capExhaustedRoute: 'phase-specific',
+    elapsedMinutes: 0,
+    sameHeadMarkerPresent: false,
+    sameHeadRequestMarkerPresent: false,
+    earliestSameHeadAt: '',
+    sameHeadMarkerCount: 0,
+    requestMarkerCount: 0,
+    trustedMarkerSummary: {
+      viewerLogin: 'viewer',
+      configuredTrustedActors: [],
+      collaboratorTrustEnabled: false,
+      trustedMarkerLogins: ['viewer'],
+      trustedSameHeadMarkerCount: 0,
+      untrustedSameHeadMarkerCount: 0,
+      trustedRequestMarkerCount: 0,
+      untrustedRequestMarkerCount: 0,
+    },
+    trustedMarkerActors: [],
+    trustedMarkerActorsSource: 'none',
+    copilotRecovery: {
+      cap: 2,
+      completedCycleCount: 0,
+      remainingBudget: 2,
+      capExhausted: false,
+      terminalWindowMinutes: 720,
+      clockAnchor: '',
+      elapsedMinutes: 0,
+      windowElapsed: false,
+      activeClaimProvided: false,
+      state: 'NOT_TERMINAL',
+      reason: 'active-claim-not-provided',
+    },
+    staleRequestRecovery: {
+      action: 'not-applicable',
+      reason: 'active-claim-not-provided',
+    },
+  });
+});
+
+// --- #4378: --wait polling at the provider-port seam -----------------------
+// The fake provider adapter sits behind a default-deny wrapper: it counts the
+// read methods this helper calls and throws on any other method (every
+// mutator included), so a row that ever wrote would fail at once. An injected
+// clock and `sleep` stand in for real time; the injected `sleep` is the only
+// thing that advances the clock, and a row may change the fixture there.
+
+const WAIT_PR = 4378;
+const WAIT_SHA = '1'.repeat(40);
+const WAIT_OTHER_SHA = '2'.repeat(40);
+const WAIT_START_MS = Date.parse('2026-10-16T00:00:00Z');
+const MINUTE_MS = 60_000;
+const WAIT_INPUT = {
+  prNumber: WAIT_PR,
+  owner: 'o',
+  repo: 'r',
+  trustedMarkerLogins: '',
+  claimId: '',
+  agentId: '',
+};
+const CLAIMED_WAIT_INPUT = {
+  ...WAIT_INPUT,
+  claimId: 'clm-4378',
+  agentId: 'claude-4378',
+};
+// The provider reads one run of the helper makes. Anything else is refused.
+const WAIT_READ_METHODS = new Set([
+  'resolveViewerLoginSafe',
+  'getChangeRequestHeadSha',
+  'listReviews',
+  'getChangeRequestRequestedReviewerLogins',
+  'getChangeRequestRequestedReviewerLoginsGraphql',
+  'getWorkItemTimeline',
+  'listWorkItemComments',
+  'getCollaboratorPermission',
+]);
+
+const isoSeconds = (ms: number): string =>
+  new Date(ms).toISOString().replace('.000Z', 'Z');
+
+function markerComment(
+  id: number,
+  headSha: string,
+  ageMinutes: number,
+): ProviderComment {
+  const at = isoSeconds(WAIT_START_MS - ageMinutes * MINUTE_MS);
+  return {
+    id,
+    body: renderAdvisoryWaitMarker({
+      agentId: 'agent',
+      headSha,
+      timestamp: at,
+    }),
+    createdAt: at,
+    updatedAt: at,
+    authorLogin: 'idd-bot',
+    lastEditedAt: null,
+  };
+}
+
+/** A fixture whose same-head request marker is `ageMinutes` old at the start. */
+function waitFixture(
+  overrides: {
+    markerAgeMinutes?: number | null;
+    comments?: ProviderComment[];
+    reviews?: unknown[];
+  } = {},
+): FakeProviderFixture {
+  const age =
+    overrides.markerAgeMinutes === undefined ? 0 : overrides.markerAgeMinutes;
+  return {
+    viewerLogin: 'idd-bot',
+    changeRequestHeadShas: { [WAIT_PR]: WAIT_SHA },
+    reviews: { [WAIT_PR]: overrides.reviews ?? [] },
+    comments: {
+      [WAIT_PR]: [
+        ...(age === null ? [] : [markerComment(1, WAIT_SHA, age)]),
+        ...(overrides.comments ?? []),
+      ],
+    },
+  };
+}
+
+interface MeteredPort {
+  port: ProviderPort;
+  /** Every counted read call. */
+  reads: () => number;
+  /** Every refused method name, in call order. */
+  denied: string[];
+}
+
+function meteredPort(fixture: FakeProviderFixture): MeteredPort {
+  const inner = createFakeProviderAdapter(fixture);
+  let reads = 0;
+  const denied: string[] = [];
+  const port = new Proxy(inner, {
+    get(target, name) {
+      const member = Reflect.get(target, name) as unknown;
+      if (typeof member !== 'function') return member;
+      return (...args: unknown[]) => {
+        const method = String(name);
+        if (!WAIT_READ_METHODS.has(method)) {
+          denied.push(method);
+          throw new Error(
+            `provider method refused in a read-only run: ${method}`,
+          );
+        }
+        reads += 1;
+        return member.apply(target, args);
+      };
+    },
+  });
+  return { port, reads: () => reads, denied };
+}
+
+/** Run `run` with the working directory set to an empty directory, so the policy is the distributed default. */
+function withEmptyCwd<T>(run: () => T): T {
+  const previous = process.cwd();
+  const dir = mkdtempSync(join(tmpdir(), 'idd-aw-wait-'));
+  process.chdir(dir);
+  try {
+    return run();
+  } finally {
+    process.chdir(previous);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+interface WaitRun {
+  report: AdvisoryWaitStateReport;
+  /** Every `sleep` argument, in call order. */
+  sleeps: number[];
+  /** Counted read calls over the whole wait. */
+  reads: number;
+  /** Counted read calls of one run without --wait on the starting fixture. */
+  singleRunReads: number;
+  /** The injected clock after the call, in ms since the start. */
+  elapsedMs: number;
+}
+
+function runWait(
+  fixture: FakeProviderFixture,
+  options: {
+    waitMs: number;
+    pollIntervalMs?: number | null;
+    input?: typeof WAIT_INPUT;
+    /** Called inside `sleep` after the clock advances (1-based). */
+    onSleep?: (sleepNumber: number, fixture: FakeProviderFixture) => void;
+  },
+): WaitRun {
+  return withEmptyCwd(() => {
+    const single = meteredPort(fixture);
+    readAdvisoryWaitState(single.port, {
+      ...(options.input ?? WAIT_INPUT),
+      now: '',
+      clock: () => WAIT_START_MS,
+    });
+    assert.deepEqual(single.denied, []);
+    const metered = meteredPort(fixture);
+    let nowMs = WAIT_START_MS;
+    const sleeps: number[] = [];
+    const report = waitForAdvisoryWaitState(
+      metered.port,
+      options.input ?? WAIT_INPUT,
+      {
+        waitMs: options.waitMs,
+        pollIntervalMs: options.pollIntervalMs,
+        sleep: (ms) => {
+          sleeps.push(ms);
+          nowMs += ms;
+          options.onSleep?.(sleeps.length, fixture);
+        },
+        now: () => nowMs,
+      },
+    );
+    assert.deepEqual(metered.denied, [], 'a mutating method was called');
+    return {
+      report,
+      sleeps,
+      reads: metered.reads(),
+      singleRunReads: single.reads(),
+      elapsedMs: nowMs - WAIT_START_MS,
+    };
+  });
+}
+
+const POLICY_INTERVAL_MS = 2 * MINUTE_MS;
+
+test('--wait seam: a first read that is not WAIT returns at once with waitedSeconds 0', () => {
+  const run = runWait(waitFixture({ markerAgeMinutes: null }), {
+    waitMs: 8 * MINUTE_MS,
+  });
+  assert.notEqual(run.report.outcome, 'WAIT');
+  assert.equal(run.report.waitEnded, 'settled');
+  assert.equal(run.report.waitedSeconds, 0);
+  assert.deepEqual(run.sleeps, []);
+  assert.ok(run.singleRunReads > 0);
+  assert.equal(run.reads, run.singleRunReads);
+});
+
+test('--wait seam: WAIT, WAIT, then SATISFIED sleeps two policy intervals and settles', () => {
+  // The marker is 6 minutes old at the start, so the 10-minute settled window
+  // closes at the third read (6, 8, 10 minutes old).
+  const run = runWait(waitFixture({ markerAgeMinutes: 6 }), {
+    waitMs: 8 * MINUTE_MS,
+  });
+  assert.equal(run.report.pollIntervalMinutes * MINUTE_MS, POLICY_INTERVAL_MS);
+  assert.deepEqual(run.sleeps, [POLICY_INTERVAL_MS, POLICY_INTERVAL_MS]);
+  assert.equal(run.report.outcome, 'SATISFIED');
+  assert.equal(run.report.waitEnded, 'settled');
+  assert.equal(run.report.waitedSeconds, run.elapsedMs / 1000);
+  assert.equal(run.report.waitedSeconds, 240);
+  assert.equal(run.reads, 3 * run.singleRunReads);
+});
+
+// A default-bot decline review plus a trusted review-ack keeps `outcome` at
+// WAIT (the marker is fresh) while the head is a terminal Copilot decline.
+const DECLINE_REVIEW = {
+  state: 'COMMENTED',
+  user: { login: 'copilot-pull-request-reviewer[bot]', type: 'Bot' },
+  submitted_at: '2026-10-15T23:59:00Z',
+  commit_id: WAIT_SHA,
+  body: "Copilot wasn't able to review any files in this pull request. Check if the **files changed** in this pull request are included in [default exclusions](https://docs.github.com/en/copilot/reference/review-excluded-files).",
+};
+
+function declinedHeadFixture(): FakeProviderFixture {
+  const ackAt = isoSeconds(WAIT_START_MS - MINUTE_MS / 2);
+  return waitFixture({
+    markerAgeMinutes: 1,
+    reviews: [DECLINE_REVIEW],
+    comments: [
+      {
+        id: 2,
+        body: renderReviewAckMarker({
+          agentId: 'agent',
+          headSha: WAIT_SHA,
+          timestamp: ackAt,
+        }),
+        createdAt: ackAt,
+        updatedAt: ackAt,
+        authorLogin: 'idd-bot',
+        lastEditedAt: null,
+      },
+    ],
+  });
+}
+
+test('--wait seam: WAIT with COPILOT_UNAVAILABLE returns at once when the claim and agent ids are given', () => {
+  const run = runWait(declinedHeadFixture(), {
+    waitMs: 8 * MINUTE_MS,
+    input: CLAIMED_WAIT_INPUT,
+  });
+  assert.equal(run.report.outcome, 'WAIT');
+  assert.equal(run.report.copilotRecovery.state, 'COPILOT_UNAVAILABLE');
+  assert.equal(run.report.waitEnded, 'settled');
+  assert.deepEqual(run.sleeps, []);
+});
+
+test('--wait seam: the same input without the claim and agent ids stays NOT_TERMINAL and keeps waiting, even with f3Outcome SATISFIED', () => {
+  const run = runWait(declinedHeadFixture(), { waitMs: 4 * MINUTE_MS });
+  assert.equal(run.report.outcome, 'WAIT');
+  assert.equal(run.report.f3Outcome, 'SATISFIED');
+  assert.equal(run.report.copilotRecovery.state, 'NOT_TERMINAL');
+  assert.deepEqual(run.sleeps, [POLICY_INTERVAL_MS, POLICY_INTERVAL_MS]);
+  assert.equal(run.report.waitEnded, 'bound-elapsed');
+});
+
+test('--wait seam: PT8M with PT70S reads at 0, 70, ..., 420 and 480 seconds and ends bound-elapsed', () => {
+  // A fresh marker stays WAIT for 10 minutes, so the state never settles.
+  const run = runWait(waitFixture({ markerAgeMinutes: 0 }), {
+    waitMs: 8 * MINUTE_MS,
+    pollIntervalMs: 70_000,
+  });
+  assert.deepEqual(
+    run.sleeps,
+    [70_000, 70_000, 70_000, 70_000, 70_000, 70_000, 60_000],
+  );
+  assert.equal(run.report.waitEnded, 'bound-elapsed');
+  assert.equal(run.report.waitedSeconds, 480);
+  assert.ok(run.singleRunReads > 0);
+  assert.equal(run.reads, 8 * run.singleRunReads);
+  assert.equal(run.reads, run.singleRunReads * (1 + Math.ceil(480 / 70)));
+});
+
+test('--wait seam: WAIT until the deadline and SATISFIED on the final read ends settled, with the final read printed', () => {
+  // 3 minutes old at the start: 3, 5, 7, 9 minutes old at the first four
+  // reads, then the clamped sleep ends at 8 minutes (11 minutes old).
+  const run = runWait(waitFixture({ markerAgeMinutes: 3 }), {
+    waitMs: 8 * MINUTE_MS,
+  });
+  assert.equal(run.report.outcome, 'SATISFIED');
+  assert.equal(run.report.elapsedMinutes, 11);
+  assert.equal(run.report.waitEnded, 'settled');
+  assert.equal(run.report.waitedSeconds, 480);
+  assert.equal(run.sleeps.at(-1), 2 * MINUTE_MS);
+});
+
+test('--wait seam: a default interval longer than --wait collapses to --wait, one sleep and one final read', () => {
+  const run = runWait(waitFixture({ markerAgeMinutes: 0 }), {
+    waitMs: MINUTE_MS,
+  });
+  assert.deepEqual(run.sleeps, [MINUTE_MS]);
+  assert.equal(run.report.waitEnded, 'bound-elapsed');
+  assert.equal(run.reads, 2 * run.singleRunReads);
+});
+
+test('--wait seam: a later head ends the wait at once as head-changed and prints that later read', () => {
+  const run = runWait(waitFixture({ markerAgeMinutes: 0 }), {
+    waitMs: 8 * MINUTE_MS,
+    onSleep: (number, fixture) => {
+      if (number === 1) {
+        // A push: the new head carries no marker, so its state is REQUEST_NEEDED.
+        fixture.changeRequestHeadShas = { [WAIT_PR]: WAIT_OTHER_SHA };
+      }
+    },
+  });
+  assert.equal(run.report.waitEnded, 'head-changed');
+  assert.equal(run.report.prHeadSha, WAIT_OTHER_SHA);
+  assert.equal(run.report.outcome, 'REQUEST_NEEDED');
+  assert.deepEqual(run.sleeps, [POLICY_INTERVAL_MS]);
+});
+
+test('--wait seam: a head change on the read at the deadline is head-changed, not bound-elapsed', () => {
+  // The new head still reads WAIT (it has its own fresh marker), so only the
+  // head rule can end this wait with something other than bound-elapsed.
+  const fixture = waitFixture({
+    markerAgeMinutes: 0,
+    comments: [markerComment(3, WAIT_OTHER_SHA, 0)],
+  });
+  const run = runWait(fixture, {
+    waitMs: 2 * MINUTE_MS,
+    onSleep: (_number, current) => {
+      current.changeRequestHeadShas = { [WAIT_PR]: WAIT_OTHER_SHA };
+    },
+  });
+  assert.equal(run.report.outcome, 'WAIT');
+  assert.equal(run.report.prHeadSha, WAIT_OTHER_SHA);
+  assert.equal(run.report.waitEnded, 'head-changed');
+  assert.equal(run.report.waitedSeconds, 120);
+});
+
+test('--wait seam: a read that throws on a later poll propagates unchanged', () => {
+  assert.throws(
+    () =>
+      runWait(waitFixture({ markerAgeMinutes: 0 }), {
+        waitMs: 8 * MINUTE_MS,
+        onSleep: (number, fixture) => {
+          if (number === 2) fixture.changeRequestHeadShas = {};
+        },
+      }),
+    { message: `fake provider: no head SHA fixture for PR ${WAIT_PR}` },
+  );
+});
+
+test('--wait seam: the read after a clamped last sleep is final even when the clock wakes early', () => {
+  // A clock that runs 1 ms behind every sleep. After six 70-second sleeps the
+  // remaining time is 60006 ms; that clamped sleep ends 1 ms before the
+  // deadline, and without the "final read" rule the loop would sleep and read
+  // once more (a ninth read).
+  const fixture = waitFixture({ markerAgeMinutes: 0 });
+  const { report, sleeps, reads, singleRunReads } = withEmptyCwd(() => {
+    const single = meteredPort(fixture);
+    readAdvisoryWaitState(single.port, {
+      ...WAIT_INPUT,
+      now: '',
+      clock: () => WAIT_START_MS,
+    });
+    const metered = meteredPort(fixture);
+    let nowMs = WAIT_START_MS;
+    const sleepLog: number[] = [];
+    const result = waitForAdvisoryWaitState(metered.port, WAIT_INPUT, {
+      waitMs: 8 * MINUTE_MS,
+      pollIntervalMs: 70_000,
+      sleep: (ms) => {
+        sleepLog.push(ms);
+        nowMs += ms - 1;
+      },
+      now: () => nowMs,
+    });
+    return {
+      report: result,
+      sleeps: sleepLog,
+      reads: metered.reads(),
+      singleRunReads: single.reads(),
+    };
+  });
+  assert.equal(report.waitEnded, 'bound-elapsed');
+  // 479999 ms elapsed: the seconds round down, never up.
+  assert.equal(report.waitedSeconds, 479);
+  assert.equal(sleeps.length, 7);
+  assert.equal(sleeps.at(-1), 60_006);
+  assert.equal(reads, 8 * singleRunReads);
+});
+
+test('--wait seam: every report validates against the schema, with and without --wait', () => {
+  const waited = runWait(waitFixture({ markerAgeMinutes: 6 }), {
+    waitMs: 8 * MINUTE_MS,
+  });
+  assert.deepEqual(validate(waited.report, advisoryWaitStateSchema), []);
+  const single = withEmptyCwd(() =>
+    readAdvisoryWaitState(meteredPort(waitFixture()).port, {
+      ...WAIT_INPUT,
+      now: '',
+      clock: () => WAIT_START_MS,
+    }),
+  );
+  assert.equal('waitedSeconds' in single, false);
+  assert.equal('waitEnded' in single, false);
+  assert.deepEqual(validate(single, advisoryWaitStateSchema), []);
+});
+
+test('--wait seam: the schema keeps waitedSeconds and waitEnded optional', () => {
+  const schema = advisoryWaitStateSchema as {
+    required: string[];
+    properties: Record<string, unknown>;
+  };
+  assert.ok('waitedSeconds' in schema.properties);
+  assert.ok('waitEnded' in schema.properties);
+  assert.equal(schema.required.includes('waitedSeconds'), false);
+  assert.equal(schema.required.includes('waitEnded'), false);
+});
+
+test('--wait seam: a wait bound that is not a positive number is refused', () => {
+  for (const waitMs of [0, -1, Number.NaN]) {
+    assert.throws(
+      () =>
+        waitForAdvisoryWaitState(meteredPort(waitFixture()).port, WAIT_INPUT, {
+          waitMs,
+          sleep: () => undefined,
+          now: () => WAIT_START_MS,
+        }),
+      /waitMs must be a positive number/,
+    );
+  }
+});
+
+// --- #4378: argument handling ------------------------------------------------
+
+test('parseArgs: --wait and --poll-interval are null when absent and kept as typed when given', () => {
+  const absent = parseArgs(['--pr', '1']);
+  assert.equal(absent.wait, null);
+  assert.equal(absent.pollInterval, null);
+  const given = parseArgs([
+    '--pr',
+    '1',
+    '--wait',
+    'PT5M',
+    '--poll-interval',
+    'PT2M',
+  ]);
+  assert.equal(given.wait, 'PT5M');
+  assert.equal(given.pollInterval, 'PT2M');
+});
+
+interface WaitFlagInput {
+  wait: string | null;
+  pollInterval: string | null;
+  now: string;
+}
+
+const noWaitFlags: WaitFlagInput = { wait: null, pollInterval: null, now: '' };
+
+test('resolveWaitFlags: no --wait resolves to a single read', () => {
+  assert.deepEqual(resolveWaitFlags(noWaitFlags), {
+    error: null,
+    waitMs: null,
+    pollIntervalMs: null,
+  });
+});
+
+test('resolveWaitFlags: --wait and --poll-interval resolve to milliseconds', () => {
+  assert.deepEqual(resolveWaitFlags({ ...noWaitFlags, wait: 'PT8M' }), {
+    error: null,
+    waitMs: 480_000,
+    pollIntervalMs: null,
+  });
+  assert.deepEqual(resolveWaitFlags({ ...noWaitFlags, wait: 'PT1S' }), {
+    error: null,
+    waitMs: 1000,
+    pollIntervalMs: null,
+  });
+  assert.deepEqual(
+    resolveWaitFlags({ ...noWaitFlags, wait: 'PT8M', pollInterval: 'PT70S' }),
+    { error: null, waitMs: 480_000, pollIntervalMs: 70_000 },
+  );
+  assert.deepEqual(
+    resolveWaitFlags({ ...noWaitFlags, wait: 'PT60S', pollInterval: 'PT60S' }),
+    { error: null, waitMs: 60_000, pollIntervalMs: 60_000 },
+  );
+});
+
+const BAD_WAIT_FLAGS: readonly [string, Partial<WaitFlagInput>][] = [
+  ['an empty --wait', { wait: '' }],
+  ['a zero --wait', { wait: 'PT0S' }],
+  ['a malformed --wait', { wait: '8m' }],
+  ['a --wait above PT8M', { wait: 'PT8M1S' }],
+  ['a day-sized --wait', { wait: 'P1D' }],
+  ['a --poll-interval below PT60S', { wait: 'PT8M', pollInterval: 'PT59S' }],
+  ['a --poll-interval above --wait', { wait: 'PT2M', pollInterval: 'PT121S' }],
+  ['an empty --poll-interval', { wait: 'PT8M', pollInterval: '' }],
+  ['a malformed --poll-interval', { wait: 'PT8M', pollInterval: 'soon' }],
+  ['a --poll-interval without --wait', { pollInterval: 'PT2M' }],
+  ['--now combined with --wait', { wait: 'PT1M', now: '2026-10-16T00:00:00Z' }],
+];
+
+for (const [name, flags] of BAD_WAIT_FLAGS) {
+  test(`resolveWaitFlags: ${name} is a usage error`, () => {
+    const resolved = resolveWaitFlags({ ...noWaitFlags, ...flags });
+    assert.equal(typeof resolved.error, 'string');
+    assert.notEqual(resolved.error, '');
+  });
+}
+
+for (const [name, flags] of BAD_WAIT_FLAGS) {
+  const argv = ['--pr', '1', '--owner', 'o', '--repo', 'r'];
+  const optional: [string, string | null | undefined][] = [
+    ['--wait', flags.wait],
+    ['--poll-interval', flags.pollInterval],
+    ['--now', flags.now],
+  ];
+  for (const [flag, value] of optional) {
+    if (typeof value === 'string') argv.push(flag, value);
+  }
+  test(`bin/idd-advisory-wait-state.mjs: ${name} classifies as a usage error before any gh call`, () => {
+    const { result, ghCalls } = withAdvisoryWaitGhStub(
+      { failHeadFrom: 99, commentNodes: [] },
+      (cwd) => ({
+        result: spawnHelperBinWithEnvelope(
+          'idd-advisory-wait-state.mjs',
+          argv,
+          { cwd },
+        ),
+        ghCalls: existsSync(join(cwd, 'calls'))
+          ? readFileSync(join(cwd, 'calls'), 'utf8')
+          : '',
+      }),
+    );
+    assert.equal(result.status, 1, JSON.stringify(result));
+    assert.equal(result.stdout, '');
+    assert.equal(result.envelope?.kind, 'usage', JSON.stringify(result));
+    assert.equal(result.envelope?.exitCode, 1);
+    assert.equal(ghCalls, '', 'a usage error must not reach gh');
+  });
+}
+
+// --- #4378: --wait through the real binary -----------------------------------
+// The stubbed `gh` serves a fresh same-head request marker, so every read
+// reports WAIT. With --wait PT1S the default interval (two minutes) collapses
+// to --wait, so these tests sleep one real second.
+
+function freshWaitComments(): unknown[] {
+  const at = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  return [
+    {
+      id: 'IC_1',
+      databaseId: 1,
+      body: renderAdvisoryWaitMarker({
+        agentId: 'agent',
+        headSha: CLI_HEAD_SHA,
+        timestamp: at,
+      }),
+      createdAt: at,
+      updatedAt: at,
+      lastEditedAt: null,
+      author: { login: 'viewer', __typename: 'User' },
+    },
+  ];
+}
+
+test('bin/idd-advisory-wait-state.mjs: --wait PT1S polls once more and ends bound-elapsed while the state stays WAIT', () => {
+  const result = withAdvisoryWaitGhStub(
+    { failHeadFrom: 99, commentNodes: freshWaitComments() },
+    (cwd) =>
+      spawnHelperBinWithEnvelope(
+        'idd-advisory-wait-state.mjs',
+        [...CLI_ARGS, '--wait', 'PT1S'],
+        { cwd },
+      ),
+  );
+  assert.equal(result.status, 0, JSON.stringify(result));
+  const printed = JSON.parse(result.stdout) as AdvisoryWaitStateReport;
+  assert.equal(printed.outcome, 'WAIT');
+  assert.equal(printed.waitEnded, 'bound-elapsed');
+  assert.ok((printed.waitedSeconds ?? 0) >= 1, JSON.stringify(printed));
+  assert.deepEqual(validate(printed, advisoryWaitStateSchema), []);
+});
+
+test('bin/idd-advisory-wait-state.mjs: a failing second read ends with the same status and error envelope as a failing run without --wait', () => {
+  const control = withAdvisoryWaitGhStub(
+    { failHeadFrom: 1, commentNodes: freshWaitComments() },
+    (cwd) =>
+      spawnHelperBinWithEnvelope('idd-advisory-wait-state.mjs', [...CLI_ARGS], {
+        cwd,
+      }),
+  );
+  assert.notEqual(control.status, 0, JSON.stringify(control));
+  assert.equal(control.stdout, '');
+  assert.ok(control.envelope, JSON.stringify(control));
+
+  // The second read only runs when the first one finishes inside the bound.
+  // On a host so slow that the first read alone outlasts PT1S the run ends
+  // bound-elapsed instead, so retry with a longer bound before failing.
+  let waited = control;
+  let headReads = '';
+  for (const bound of ['PT1S', 'PT2S', 'PT4S']) {
+    ({ result: waited, headReads } = withAdvisoryWaitGhStub(
+      { failHeadFrom: 2, commentNodes: freshWaitComments() },
+      (cwd) => ({
+        result: spawnHelperBinWithEnvelope(
+          'idd-advisory-wait-state.mjs',
+          [...CLI_ARGS, '--wait', bound],
+          { cwd },
+        ),
+        headReads: readFileSync(join(cwd, 'head-calls'), 'utf8'),
+      }),
+    ));
+    if (waited.status !== 0) break;
+  }
+  assert.equal(waited.status, control.status, JSON.stringify(waited));
+  assert.equal(waited.stdout, '', 'nothing is printed when a poll fails');
+  assert.deepEqual(waited.envelope, control.envelope);
+  // One served head read, then the failing one: the failure is the second read.
+  assert.equal(headReads, '2');
+});
+
+// --- #4378: the instruction sentence and the helper reference ----------------
+
+const ADVISORY_WAIT_DOC_COPIES = [
+  STANDARD_ADVISORY_WAIT_DOC,
+  '.github/instructions/idd-advisory-wait.instructions.md',
+] as const;
+const CALLER_MAPPING_END = '<!-- dprint-ignore-end -->';
+const WAIT_ROW =
+  "| `WAIT` | wait for Copilot's review; rerun `idd-advisory-convergence`; resume D4 | continue polling | poll then restart F2 from top | do not merge; return to F2 |";
+
+for (const path of ADVISORY_WAIT_DOC_COPIES) {
+  test(`${path}: the --wait sentence follows the caller-mapping table and the WAIT row is unchanged`, () => {
+    const doc = readFileSync(join(REPO_ROOT, path), 'utf8');
+    assert.equal(doc.split(WAIT_ROW).length - 1, 1, 'the WAIT row changed');
+    const heading = doc.indexOf('### Caller mapping');
+    assert.notEqual(heading, -1);
+    const tableEnd = doc.indexOf(CALLER_MAPPING_END, heading);
+    assert.notEqual(tableEnd, -1);
+    assert.ok(
+      tableEnd > doc.indexOf(WAIT_ROW),
+      'the sentence is not in the table',
+    );
+    // The first paragraph after the table, with dprint's line wrapping undone.
+    const paragraph = doc
+      .slice(tableEnd + CALLER_MAPPING_END.length)
+      .trim()
+      .split(/\n\s*\n/)[0]
+      .replace(/\s+/g, ' ');
+    assert.ok(
+      Buffer.byteLength(paragraph) <= 300,
+      `${Buffer.byteLength(paragraph)} bytes: ${paragraph}`,
+    );
+    for (const needle of [
+      '`--wait <duration>`',
+      '`bound-elapsed`',
+      'timeout',
+    ]) {
+      assert.ok(paragraph.includes(needle), `missing ${needle}: ${paragraph}`);
+    }
+  });
+}
+
+test('the helper reference documents --wait, --poll-interval, waitedSeconds and waitEnded', () => {
+  const doc = readFileSync(join(REPO_ROOT, HELPER_REFERENCE_DOC), 'utf8');
+  for (const needle of [
+    '`--wait <duration>`',
+    '`--poll-interval <duration>`',
+    '`waitedSeconds`',
+    '`waitEnded`',
+    '`head-changed`',
+    '`bound-elapsed`',
+  ]) {
+    assert.ok(doc.includes(needle), `missing ${needle}`);
+  }
 });
