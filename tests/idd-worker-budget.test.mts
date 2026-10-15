@@ -595,6 +595,97 @@ test('--instructions-since ignores git variables that change how a pathspec is r
   }
 });
 
+test('--instructions-since answers from the working directory, not from GIT_DIR', () => {
+  const repo = makeTwoCommitFixture();
+  const foreign = makeFixtureRepo();
+  foreign.write('foreign.txt', 'unrelated\n');
+  foreign.commit('foreign');
+  const expected = readInstructionsReport({
+    since: repo.first,
+    policy: null,
+    cwd: repo.dir,
+  });
+  assert.deepEqual(
+    readInstructionsReport({
+      since: repo.first,
+      policy: null,
+      cwd: repo.dir,
+      environment: {
+        ...process.env,
+        GIT_DIR: join(foreign.dir, '.git'),
+        GIT_WORK_TREE: foreign.dir,
+      },
+    }),
+    expected,
+  );
+});
+
+test('--instructions-since reports a failing git diff instead of an empty list', () => {
+  const repo = makeTwoCommitFixture();
+  // Every ref resolves and the ancestor check passes; only the diff fails.
+  repo.git(
+    'config',
+    'diff.orderFile',
+    join(repo.dir, 'missing-order-file.txt'),
+  );
+  const report = readInstructionsReport({
+    since: repo.first,
+    policy: null,
+    cwd: repo.dir,
+  });
+  assert.equal(report.instructionsChanged, null);
+  assert.equal(report.instructionsTip, repo.second);
+  assert.match(report.instructionsChangedError ?? '', /git diff failed/);
+});
+
+test('--instructions-since names the base ref it cannot use', () => {
+  const repo = makeTwoCommitFixture();
+  const missing = readInstructionsReport({
+    since: repo.first,
+    policy: { developmentBranch: 'nope/x' },
+    cwd: repo.dir,
+  });
+  assert.equal(missing.instructionsChanged, null);
+  assert.equal(missing.instructionsTip, null);
+  assert.match(
+    missing.instructionsChangedError ?? '',
+    /origin\/nope\/x does not resolve/,
+  );
+
+  // An origin/HEAD that points outside origin is not a base ref.
+  repo.git('update-ref', 'refs/remotes/upstream/main', repo.second);
+  repo.git(
+    'symbolic-ref',
+    'refs/remotes/origin/HEAD',
+    'refs/remotes/upstream/main',
+  );
+  const foreignHead = readInstructionsReport({
+    since: repo.first,
+    policy: {},
+    cwd: repo.dir,
+  });
+  assert.equal(foreignHead.instructionsChanged, null);
+  assert.match(
+    foreignHead.instructionsChangedError ?? '',
+    /does not name an origin branch/,
+  );
+
+  // A local branch named origin/main does not shadow the remote-tracking ref.
+  repo.git(
+    'symbolic-ref',
+    'refs/remotes/origin/HEAD',
+    'refs/remotes/origin/main',
+  );
+  repo.git('branch', 'origin/main', repo.first);
+  const shadowed = readInstructionsReport({
+    since: repo.first,
+    policy: {},
+    cwd: repo.dir,
+  });
+  assert.equal(shadowed.instructionsTip, repo.second);
+  assert.ok((shadowed.instructionsChanged?.length ?? 0) > 0);
+});
+
 test('--instructions-since reports a change until the tip is passed back', () => {
   const repo = makeTwoCommitFixture();
   const first = runBudget(repo.dir, ['--instructions-since', repo.first]);
@@ -752,7 +843,9 @@ test('--instructions-since reports each git failure and leaves the budget alone'
   for (const run of [missing, notRepository, noOriginHead]) {
     assert.equal(run.output.slots, control.output.slots);
     assert.equal(run.output.maxWorkers, control.output.maxWorkers);
+    assert.equal(run.output.running, control.output.running);
     assert.equal(run.output.startable, control.output.startable);
+    assert.equal(run.output.harnessLimit, control.output.harnessLimit);
     assert.ok(typeof run.output.instructionsChangedError === 'string');
   }
 });
