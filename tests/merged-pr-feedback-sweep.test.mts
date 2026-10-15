@@ -3251,6 +3251,19 @@ function auditFindingResult(
   return `${finding.result}: ${finding.detail}`;
 }
 
+const AUTONOMY_CONTRACT_DOC = new URL(
+  '../idd-template/docs/idd-autonomy-contract.md',
+  import.meta.url,
+);
+const HELPER_SCRIPTS_DOC = new URL(
+  '../idd-template/docs/idd-helper-scripts.md',
+  import.meta.url,
+);
+const CONCEPT_OWNERSHIP_DOC = new URL(
+  '../idd-template/docs/idd-concept-ownership.md',
+  import.meta.url,
+);
+
 test('the weekly body passes the authoring score-footer audit with the label the write step applies (issue #4308)', () => {
   const body = renderWeeklySweepIssueBody(
     { prs: [], summary: { prCount: 3, ...NO_FLAGGED_SUMMARY } },
@@ -3304,18 +3317,40 @@ test('the weekly body passes the authoring score-footer audit with the label the
   );
 });
 
-test('the concept ownership matrix reconciles its blocked-by-human rows with the report-issue row (issue #4308)', () => {
-  const rows = readFileSync(CONCEPT_OWNERSHIP_DOC, 'utf8')
-    .split('\n')
-    .filter(
-      (line) =>
-        line.startsWith('| Status / blocker labels') ||
-        line.startsWith('| `status:blocked-by-human` label'),
+test('the concept ownership matrix carries the report-issue exception in the label rows it conflicts with (issue #4308)', () => {
+  const cellsOf = (line: string): string[] =>
+    line
+      .split('|')
+      .slice(1, -1)
+      .map((cell) => cell.replace(/\s+/g, ' ').trim());
+  const rows = readFileSync(CONCEPT_OWNERSHIP_DOC, 'utf8').split('\n');
+  const labels = rows.find((line) =>
+    line.startsWith('| Status / blocker labels'),
+  );
+  const removal = rows.find((line) =>
+    line.startsWith('| `status:blocked-by-human` label'),
+  );
+  assert.ok(labels, 'the status / blocker labels row exists');
+  assert.ok(removal, 'the blocked-by-human removal row exists');
+  // Creator and mutator of the labels row, and the actor of the removal row,
+  // are separate cells: dropping the exception from any one must fail here.
+  const [, creator, mutator] = cellsOf(labels);
+  const [, , remover] = cellsOf(removal);
+  for (const [name, cell] of [
+    ['creator', creator],
+    ['mutator', mutator],
+    ['remover', remover],
+  ] as const) {
+    assert.match(
+      cell ?? '',
+      /report issue/,
+      `${name} cell names the exception`,
     );
-  // Both the label's mutator row and its removal row must carry the exception.
-  assert.equal(rows.length, 2);
-  for (const row of rows) {
-    assert.match(row.replace(/\s+/g, ' '), /recurring report issue/);
+    assert.match(
+      cell ?? '',
+      /report-issue row|writer/,
+      `${name} cell points at it`,
+    );
   }
 });
 
@@ -3341,19 +3376,6 @@ test('the footer comment in the sweep source names the floor and kill-switch con
   assert.match(comment, /`autopilotSuitability\.enabled` is not `false`/);
   assert.match(comment, /blocked-by-human label/);
 });
-
-const AUTONOMY_CONTRACT_DOC = new URL(
-  '../idd-template/docs/idd-autonomy-contract.md',
-  import.meta.url,
-);
-const HELPER_SCRIPTS_DOC = new URL(
-  '../idd-template/docs/idd-helper-scripts.md',
-  import.meta.url,
-);
-const CONCEPT_OWNERSHIP_DOC = new URL(
-  '../idd-template/docs/idd-concept-ownership.md',
-  import.meta.url,
-);
 
 test('the autonomy contract has one report-issue row that states what the blocked-by-human label means (issue #4308)', () => {
   const rows = readFileSync(AUTONOMY_CONTRACT_DOC, 'utf8')
