@@ -10,7 +10,9 @@ tags: [user-global, install, policy, activation]
 The user-global installer places the IDD instruction payload and two skill
 bundles, `issue-authoring` and `idd-spec-audit`, into the current user's own
 directories. It also adds a reference to the gated entry text to each selected
-harness's entry file. A separate command removes all of it again.
+harness's entry file. A separate command removes what its receipt records. Paths
+that a failed receipt write leaves unlisted need manual cleanup, as described
+under [Failure outcome](#failure-outcome).
 
 The installer supports Claude Code, Codex CLI, and OpenCode. The other
 harnesses are deferred; see [Deferred harnesses](#deferred-harnesses).
@@ -258,9 +260,12 @@ writing, and each session of an installed harness loads it. The IDD overview and
 the phase files load only after the gate reports `active`. The gate is read-only
 and makes no network calls.
 
-```sh
-node scripts/idd-activation.mjs [--cwd <path>]
-```
+Run `idd-activation` from the repository directory. If it is not on `PATH`, run
+`node "$PAYLOAD/scripts/idd-activation.mjs"` instead. `PAYLOAD` is
+`$XDG_DATA_HOME/idd-skill/current` when `XDG_DATA_HOME` is a qualified root, and
+`~/.local/share/idd-skill/current` otherwise. The command takes `--cwd <path>` to
+classify another directory. From this source checkout, run
+`node scripts/idd-activation.mjs [--cwd <path>]`.
 
 The gate checks these rules in order and stops at the first match:
 
