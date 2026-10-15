@@ -1179,7 +1179,15 @@ test('an invalid --project-status or --agent-id is a usage error before any chec
     ],
     [
       ['--issue', String(ISSUE), '--agent-id', 'two words'],
-      '--agent-id must be one token with no whitespace and no -->',
+      '--agent-id must be one token with no whitespace and no <!-- or -->',
+    ],
+    [
+      ['--issue', String(ISSUE), '--agent-id', 'agent<!--x'],
+      '--agent-id must be one token with no whitespace and no <!-- or -->',
+    ],
+    [
+      ['--issue', String(ISSUE), '--agent-id', 'agent-->x'],
+      '--agent-id must be one token with no whitespace and no <!-- or -->',
     ],
   ];
   for (const [argv, message] of cases) {
@@ -1570,6 +1578,8 @@ interface ApplyScenario {
   recordTokensFails?: boolean;
   acquireFails?: boolean;
   lockTimeout?: boolean;
+  /** The approval holds for the pre-check and is refused on the re-check. */
+  approvalRevoked?: boolean;
 }
 
 interface ApplyRun {
@@ -1619,23 +1629,24 @@ function withApplyFixture<T>(
 ): T {
   const parent = realpathSync(mkdtempSync(`${tmpdir()}/idd-claim-apply-`));
   try {
+    // The policy is committed, so a fast-forward can replace it (the write half
+    // reads it after the fast-forward).
     const seed = join(parent, 'seed');
-    mkdirSync(seed);
+    mkdirSync(join(seed, '.github', 'idd'), { recursive: true });
     gitIn(seed, ['init', '--quiet', '-b', 'main']);
     gitIn(seed, ['config', 'user.email', 'test@example.com']);
     gitIn(seed, ['config', 'user.name', 'Test']);
     writeFileSync(join(seed, 'seed.txt'), 'seed\n');
-    gitIn(seed, ['add', 'seed.txt']);
+    writeFileSync(
+      join(seed, '.github', 'idd', 'config.json'),
+      `${JSON.stringify(policy)}\n`,
+    );
+    gitIn(seed, ['add', 'seed.txt', '.github']);
     gitIn(seed, ['commit', '--quiet', '-m', 'seed']);
     const origin = join(parent, 'origin.git');
     gitIn(parent, ['clone', '--quiet', '--bare', seed, origin]);
     const primary = join(parent, 'primary');
     gitIn(parent, ['clone', '--quiet', origin, primary]);
-    mkdirSync(join(primary, '.github', 'idd'), { recursive: true });
-    writeFileSync(
-      join(primary, '.github', 'idd', 'config.json'),
-      `${JSON.stringify(policy)}\n`,
-    );
     return body({
       parent,
       primary,
@@ -1738,9 +1749,13 @@ function runApply(
     };
   };
 
+  let approvalCalls = 0;
   const child = (script: string, rest: string[]): CommandResult => {
     if (script === 'claim-approval-gate.mjs') {
-      return APPROVED;
+      approvalCalls += 1;
+      return scenario.approvalRevoked && approvalCalls > 1
+        ? approvalOutput({ approved: false, reason: 'approval-missing' })
+        : APPROVED;
     }
     if (script === 'resume-claim-routing.mjs') {
       if (rest.includes('--assert')) {
@@ -2106,16 +2121,19 @@ test('worktreePathProblem refuses a link parent and a path that is not a direct 
   });
 });
 
-test('an invalid development branch stops before any fetch with development-branch-unresolved', () => {
+test('an invalid development branch stops with development-branch-unresolved, before any worktree add', () => {
   withApplyFixture(
     (fixture) => {
       const run = runApply(fixture);
-      assertStopped(run, 'development-branch-unresolved');
+      const report = assertStopped(run, 'development-branch-unresolved');
+      // The policy is read after the fast-forward, so the fetch may already have run.
       assert.equal(
-        run.log.some((entry) => entry.includes('fetch origin')),
+        run.log.some((entry) => entry.includes('worktree add')),
         false,
       );
+      assert.equal(report.lostClaimCleanupRequired, false);
       assert.equal(existsSync(fixture.worktree), false);
+      assert.equal(run.log.includes('lock:release'), true);
     },
     { developmentBranch: '-bad', trustedMarkerActors: [OWNER] },
   );
@@ -2327,5 +2345,52 @@ test('a release that cannot be verified is recovery-hold with the release to be 
     const report = assertStopped(run, 'recovery-hold');
     assert.equal(report.claimPosted, true);
     assert.match(report.nextAction ?? '', /by hand/);
+  });
+});
+
+test('an approval revoked while B1 runs stops before the claim marker is posted', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { approvalRevoked: true });
+    const report = assertStopped(run, 'approval-missing');
+    assert.equal(report.claimPosted, false);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.equal(run.posts.length, 0);
+    assert.equal(
+      run.log.some((entry) => entry.includes('--acquire')),
+      false,
+    );
+  });
+});
+
+test('the policy is read after the fast-forward, so a policy change on origin applies to this run', () => {
+  withApplyFixture((fixture) => {
+    const updater = join(fixture.parent, 'updater');
+    gitIn(fixture.parent, [
+      'clone',
+      '--quiet',
+      join(fixture.parent, 'origin.git'),
+      updater,
+    ]);
+    writeFileSync(
+      join(updater, '.github', 'idd', 'config.json'),
+      `${JSON.stringify({ developmentBranch: 'missing', trustedMarkerActors: [OWNER] })}\n`,
+    );
+    gitIn(updater, [
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.com',
+      'commit',
+      '--quiet',
+      '-am',
+      'change policy',
+    ]);
+    gitIn(updater, ['push', '--quiet', 'origin', 'main']);
+    const run = runApply(fixture);
+    const report = assertStopped(run, 'worktree-add-failed');
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(branchExists(fixture.primary), false);
+    assert.equal(run.posts.length, 0);
   });
 });

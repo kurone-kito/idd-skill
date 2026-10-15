@@ -86,8 +86,11 @@ const GIT_TIMEOUT_MS = 300_000;
 const CHILD_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 /** The project-status values `--project-status` accepts (A5(b)). */
 const PROJECT_STATUS_VALUES = ['not-in-use', 'not-started'];
-/** A single token for the agent id: no whitespace, and no `-->` (it would end the marker). */
-const AGENT_ID_PATTERN = /^(?!.*-->)\S+$/;
+/**
+ * A single token for the agent id: no whitespace, and neither comment delimiter,
+ * which the marker grammar (`normalizeNonWhitespaceToken`) refuses to render.
+ */
+const AGENT_ID_PATTERN = /^(?!.*(?:<!--|-->))\S+$/;
 /** Next actions of the write half that the report repeats. */
 const PRIMARY_RETRY_NEXT =
   'Bring the primary checkout to the default branch by hand (B1 step 1 in idd-work.instructions.md), then rerun this helper. This helper removed nothing.';
@@ -1306,7 +1309,8 @@ function addWorktree(state) {
  * B1 step 1 and the worktree, under one hold of the clone-scoped lock. The
  * lock covers the fetch, the fast-forward, and `git worktree add`, and is
  * released before the claim steps, because `claim-lock --acquire` takes the
- * same mutex itself.
+ * same mutex itself. The policy is read after the fast-forward, because the
+ * fast-forward can replace `.github/idd/config.json` in the primary checkout.
  */
 function runUnderCloneLock(state) {
   let handle;
@@ -1327,6 +1331,8 @@ function runUnderCloneLock(state) {
   try {
     failure =
       step(state, 'primary-ready', fastForwardPrimary(state)) ??
+      step(state, 'policy', readPolicy(state)) ??
+      step(state, 'development-branch', resolveDevelopment(state)) ??
       step(state, 'b1-leftovers', checkLeftovers(state)) ??
       step(state, 'worktree-path', checkPathFree(state)) ??
       step(state, 'worktree-add', addWorktree(state));
@@ -1415,6 +1421,30 @@ function checkOwnWorktreeGate(state) {
       gateReason: reading.reason,
       winningClaimId: reading.winningClaimId,
     },
+  );
+}
+/**
+ * A5(a) again, immediately before the claim marker (idd-claim.instructions.md
+ * re-evaluates the approval immediately before claiming). An approval that was
+ * revoked while B1 ran stops the run here, before anything is posted.
+ */
+function recheckApproval(state) {
+  const identity = state.identity;
+  if (identity === null) {
+    return applyFail(
+      'precheck-unavailable',
+      'Inspect the state by hand, then rerun this helper.',
+      'no worktree identity exists',
+    );
+  }
+  const outcome = checkApproval(state.issue, state.deps);
+  if (outcome.ok) {
+    return applyPass(`A5(a) again: ${outcome.detail}`);
+  }
+  return applyFail(
+    outcome.reason,
+    lostClaimNext(identity.claimId),
+    `A5(a) again, before the claim: ${outcome.detail}`,
   );
 }
 /** The first hold check, before the claim marker: a hold or an unreadable label stops the run. */
@@ -1697,6 +1727,7 @@ function runClaimWrites(state) {
     step(state, 'record-tokens', recordTokens(state)) ??
     step(state, 'own-worktree-gate', checkOwnWorktreeGate(state)) ??
     step(state, 'hold-check', checkHoldBeforeClaim(state)) ??
+    step(state, 'approval-recheck', recheckApproval(state)) ??
     step(state, 'claim-post', postClaim(state)) ??
     step(state, 'nonce-post', postNonce(state)) ??
     step(state, 'lock-acquire', acquireLock(state)) ??
@@ -1704,27 +1735,20 @@ function runClaimWrites(state) {
     step(state, 'hold-recheck', recheckHoldAfterVerify(state))
   );
 }
-/** Pre-claim reads that write nothing, then the locked worktree group, then the claim writes. */
+/**
+ * The primary checkout and the default branch are read before the lock (the
+ * default branch is what the fast-forward targets). The policy and the
+ * development branch are read under the lock, after the fast-forward. Then
+ * the locked worktree group, and the claim writes.
+ */
 function runFreshClaimOrder(state) {
   const primary = step(state, 'primary-root', readPrimaryRoot(state));
   if (primary !== null) {
     return primary;
   }
-  const policy = step(state, 'policy', readPolicy(state));
-  if (policy !== null) {
-    return policy;
-  }
   const defaultBranch = step(state, 'default-branch', readDefaultBranch(state));
   if (defaultBranch !== null) {
     return defaultBranch;
-  }
-  const development = step(
-    state,
-    'development-branch',
-    resolveDevelopment(state),
-  );
-  if (development !== null) {
-    return development;
   }
   // The path is `<primary-parent>/<repo>.<normalized-branch>` (REPO_NAME is the repo part of the slug).
   state.path = join(
@@ -1848,7 +1872,7 @@ export function runClaimIssue(argv, deps, io) {
   }
   if (agentId !== undefined && !AGENT_ID_PATTERN.test(agentId)) {
     return usage(
-      '--agent-id must be one token with no whitespace and no -->',
+      '--agent-id must be one token with no whitespace and no <!-- or -->',
       io,
     );
   }

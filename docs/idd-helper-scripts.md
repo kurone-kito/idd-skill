@@ -4780,8 +4780,10 @@ like `activation-nonce`, because a worker posts it as itself.
      `git fetch origin` and a fast-forward (with `merge.autoStash=false`).
      A failure stops with `primary-not-ready`, whose detail names
      `primary-not-on-default-branch`, `unpushed-commits`, or the failing
-     command. A prunable worktree entry or a leftover local branch of the
-     claim's name stops with `b1-cleanup-needed`.
+     command. The policy and the development branch are read after the
+     fast-forward, because it can replace `.github/idd/config.json`. A
+     prunable worktree entry or a leftover local branch of the claim's name
+     stops with `b1-cleanup-needed`.
   2. Still under the lock: the worktree path is
      `<primary-parent>/<repo>.<branch with / replaced by ->`. It must be a
      free direct child of the primary's parent, and that parent must not be
@@ -4795,7 +4797,9 @@ like `activation-nonce`, because a worker posts it as itself.
   3. `claim-lock --record-tokens` for the worktree (`tokens-record-failed`),
      then the fresh-claim gate with `--own-worktree <path>`, which must
      return `claimable`.
-  4. The authoring-label hold check (`hold-active`, or
+  4. Immediately before the claim marker, the issue-author approval gate of
+     A5(a) runs again (`approval-missing` or `approval-unproven` stop the
+     run), then the authoring-label hold check (`hold-active`, or
      `precheck-unavailable` when the read fails). Only the label is read:
      the owner-marker log replay is not done, and the report says so with
      `holdCheck: "label"`.
