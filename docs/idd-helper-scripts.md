@@ -1261,13 +1261,15 @@ in this preamble, since the fallback differs per helper.
   has no active claim or open linked pull request, and whose trusted
   owner-marker log replays to one open generation (every marker follows the
   field rules of its mode, a completed set cannot be reopened under its set
-  ID, and a resume does not end a release in progress). The journal must
-  also hold the anchor's own trusted `state=member` publication-intent
-  record, matching the anchor's publication line on target, anchor, set,
-  session, and token, which verifies the set's originating hold. The check
-  also runs in a dry run; otherwise the report is a refusal and nothing is
-  written. The helper does not serialize concurrent calls of one session, so
-  publish a set's children one call at a time. The child takes the anchor's
+  ID, and a resume does not end a release in progress). The token of the
+  anchor's own publication line must also replay to `state=member` in the
+  journal (trusted, unedited records that match the line on target, anchor,
+  set, session, and token, in order, with a conflicting or out-of-order
+  record failing closed), which verifies the set's originating hold. The
+  check also runs in a dry run; otherwise the report is a refusal and
+  nothing is written. The helper does not serialize concurrent calls of one
+  session, so publish a set's children one call at a time (preventive; no
+  observed incident yet). The child takes the anchor's
   set ID and session, uses the anchor's real reference as `anchor` in its
   publication line, journal records, and owner marker, and appends a same-owner
   heartbeat on the anchor (reusing a fresh matching marker under
