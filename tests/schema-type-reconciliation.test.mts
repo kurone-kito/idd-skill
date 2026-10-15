@@ -1969,6 +1969,10 @@ const postIddMarkerKeys = [
   'url',
   'warnings',
   'operationLocal',
+  'verdict',
+  'reason',
+  'proof',
+  'nextAction',
 ] as const satisfies readonly (keyof PostIddMarkerResult)[];
 
 const postIddMarkerFixture = {

@@ -675,6 +675,206 @@ test('CLI: --type idd-hold with --target pr is rejected', () => {
   assert.match(stderr, /--type idd-hold requires --target issue/);
 });
 
+// --- #4368: f4-head-proof ---------------------------------------------------
+
+const F4_FIELDS = {
+  'agent-id': 'claude-826e09f0',
+  'claim-id': '95ad0071-ebaa-4155-91ac-ceeae7897bf8',
+  pr: '4390',
+  branch: 'issue/4368-feat-post-idd-marker-add-f4-head-proof',
+  f2: '1'.repeat(40),
+  'branch-tip': '2'.repeat(40),
+  merge: '3'.repeat(40),
+  head: '4'.repeat(40),
+};
+
+function f4Argv(
+  target: string,
+  fields: Record<string, string>,
+  extra: string[] = [],
+): string[] {
+  const argv = [
+    join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+    '--type',
+    'f4-head-proof',
+    '--target',
+    target,
+    '4368',
+    '--owner',
+    'example-owner',
+    '--repo',
+    'example-repo',
+  ];
+  for (const [flag, value] of Object.entries(fields)) {
+    argv.push(`--${flag}`, value);
+  }
+  return [...argv, ...extra];
+}
+
+const F4_CLI_FIELDS = {
+  'agent-id': 'claude-826e09f0',
+  'claim-id': '95ad0071-ebaa-4155-91ac-ceeae7897bf8',
+  worktree: '/definitely/not/a/registered/worktree',
+};
+
+function runCliWithPathExpectingFailure(argv: string[]): string {
+  try {
+    execFileSync(process.execPath, argv, {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    assert.equal(failure.status, 1);
+    return failure.stderr ?? '';
+  }
+  throw new Error('expected the CLI to exit non-zero');
+}
+
+test('buildMarkerBody renders the exact f4-head-proof body (reuses renderF4HeadProofBody)', () => {
+  assert.equal(
+    buildMarkerBody('f4-head-proof', F4_FIELDS),
+    `<!-- idd-f4-head-proof: v2 pr=4390 claim=95ad0071-ebaa-4155-91ac-ceeae7897bf8 branch=issue/4368-feat-post-idd-marker-add-f4-head-proof f2=${'1'.repeat(40)} branch-tip=${'2'.repeat(40)} merge=${'3'.repeat(40)} head=${'4'.repeat(40)} -->\n\n` +
+      '_claude-826e09f0: F4 head-proof marker. Do not edit._',
+  );
+});
+
+test('buildMarkerBody throws on an f4-head-proof field the renderer rejects', () => {
+  for (const [field, value] of [
+    ['pr', '0'],
+    ['claim-id', 'a b'],
+    ['branch', 'x-->y'],
+    ['f2', 'abc'],
+    ['branch-tip', '2'.repeat(39)],
+    ['merge', 'G'.repeat(40)],
+    ['head', ''],
+    ['agent-id', 'a\nb'],
+  ] as const) {
+    assert.throws(
+      () => buildMarkerBody('f4-head-proof', { ...F4_FIELDS, [field]: value }),
+      /f4-head-proof: /,
+      `${field}=${JSON.stringify(value)}`,
+    );
+  }
+  const missing: Record<string, string> = { ...F4_FIELDS };
+  delete missing.pr;
+  assert.throws(() => buildMarkerBody('f4-head-proof', missing), /pr must be/);
+});
+
+test('the f4-head-proof body round-trips through the marker registry', () => {
+  const body = buildMarkerBody('f4-head-proof', F4_FIELDS);
+  assert.equal(operationalMarkerPrefix(body), '<!-- idd-f4-head-proof:');
+});
+
+test('CLI: --type f4-head-proof with --target pr is rejected', () => {
+  const stderr = runCliWithPathExpectingFailure(f4Argv('pr', F4_CLI_FIELDS));
+  assert.match(stderr, /--type f4-head-proof requires --target issue/);
+});
+
+test('CLI: --type f4-head-proof names every missing required flag', () => {
+  for (const omitted of Object.keys(F4_CLI_FIELDS)) {
+    const partial = Object.fromEntries(
+      Object.entries(F4_CLI_FIELDS).filter(([flag]) => flag !== omitted),
+    );
+    const stderr = runCliWithPathExpectingFailure(f4Argv('issue', partial));
+    assert.match(
+      stderr,
+      new RegExp(`--${omitted} is required`),
+      `f4-head-proof without --${omitted} should name --${omitted}`,
+    );
+  }
+});
+
+test('CLI: --type f4-head-proof takes no derived proof flag', () => {
+  const stderr = runCliWithPathExpectingFailure(
+    f4Argv('issue', { ...F4_CLI_FIELDS, merge: '3'.repeat(40), pr: '4390' }),
+  );
+  assert.match(
+    stderr,
+    /takes only --target, --claim-id, --agent-id and --worktree/,
+  );
+  assert.match(stderr, /--merge, --pr/);
+});
+
+test('CLI: --type f4-head-proof refuses --from-pr', () => {
+  const stderr = runCliWithPathExpectingFailure(
+    f4Argv('issue', F4_CLI_FIELDS, ['--from-pr', '4390']),
+  );
+  assert.match(stderr, /--from-pr is only valid for --type/);
+});
+
+test('CLI: --type f4-head-proof refuses a worktree this repository does not register, before any claim read', () => {
+  const stderr = runCliWithPathExpectingFailure(f4Argv('issue', F4_CLI_FIELDS));
+  assert.match(
+    stderr,
+    /not a worktree that git worktree list --porcelain registers for this repository/,
+  );
+});
+
+test('--help lists f4-head-proof among the supported --type values and its flags', () => {
+  const output = execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/post-idd-marker.mjs'), '--help'],
+    { encoding: 'utf8' },
+  );
+  assert.match(output, /--type <type>\s+one of:.*\bf4-head-proof\b/);
+  assert.match(output, /f4-head-proof\s+--agent-id --claim-id --worktree/);
+});
+
+test('the f4-head-proof result envelope validates against the output schema', () => {
+  const proof = {
+    pr: 4390,
+    claim: F4_FIELDS['claim-id'],
+    branch: F4_FIELDS.branch,
+    f2: F4_FIELDS.f2,
+    branchTip: F4_FIELDS['branch-tip'],
+    merge: F4_FIELDS.merge,
+    head: F4_FIELDS.head,
+  };
+  const base = {
+    type: 'f4-head-proof',
+    target: 'issue',
+    number: 4368,
+    proof,
+  };
+  for (const envelope of [
+    {
+      ...base,
+      mode: 'dry-run',
+      verdict: 'post',
+      reason: null,
+      body: buildMarkerBody('f4-head-proof', F4_FIELDS),
+      nextAction: 'Rerun with --apply to post this proof.',
+    },
+    {
+      ...base,
+      mode: 'apply',
+      verdict: 'proceed',
+      reason: 'posted-confirmed',
+      commentId: 9001,
+      url: 'https://example.test/9001',
+    },
+    {
+      ...base,
+      mode: 'apply',
+      verdict: 'hold',
+      reason: 'claim-or-lock',
+      proof: { ...proof, pr: null, branch: null, f2: null },
+      nextAction: 'Do not post.',
+    },
+  ]) {
+    assert.deepEqual(validate(envelope, schema), [], JSON.stringify(envelope));
+  }
+  assert.notDeepEqual(
+    validate(
+      { ...base, mode: 'apply', verdict: 'maybe', reason: null },
+      schema,
+    ),
+    [],
+  );
+});
+
 test('--help lists idd-hold among the supported --type values and its flags', () => {
   const output = execFileSync(
     process.execPath,
@@ -867,7 +1067,7 @@ test('buildMarkerBody throws on an invalid field set (renderer validation)', () 
   );
 });
 
-test('MARKER_TYPES lists exactly the fourteen supported types', () => {
+test('MARKER_TYPES lists exactly the fifteen supported types', () => {
   assert.deepEqual(
     [...MARKER_TYPES],
     [
@@ -883,6 +1083,7 @@ test('MARKER_TYPES lists exactly the fourteen supported types', () => {
       'copilot-unavailable',
       'out-of-loop',
       'idd-hold',
+      'f4-head-proof',
       'authoring-owner',
       'authoring-publication-intent',
     ],

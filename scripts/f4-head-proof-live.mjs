@@ -1,0 +1,323 @@
+// idd-generated-from: src/scripts/f4-head-proof-live.mts
+//
+// The scripts/f4-head-proof-live.mjs copy is generated from the .mts source
+// named above by `pnpm run build`. Edit the .mts source, never the generated
+// .mjs. See docs/typescript-sources.md.
+//
+// The production wiring of `f4-head-proof-gate.mts` (#4368): the real `git`,
+// `gh`, claim-lock, and provider-adapter calls behind each callback of
+// {@link F4HeadProofGateDeps}. The flow itself has no I/O and is tested with
+// fake callbacks; this module is the only place the flow touches the host.
+import { execFileSync, spawnSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
+import { join } from 'node:path';
+import { resolveBundleRoot } from './bundle-root.mjs';
+import { checkClaimLock, readGeneratedClaimTokens } from './claim-lock.mjs';
+import { resolveTrustedCollaboratorMarkerLogins } from './collaborator-permission.mjs';
+import { GH_TEXT_LOOP_OPTIONS, ghApiJson, ghText } from './gh-exec.mjs';
+import { loadTrustedActorConfig } from './idd-config.mjs';
+import { parseLocalWorktreeList } from './local-worktree-occupancy.mjs';
+import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
+import { composeGateTrustedMarkerLogins } from './protocol-helpers.mjs';
+import { createGithubProviderAdapter } from './provider-adapter-github.mjs';
+
+const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
+const CLAIM_ASSERT_TIMEOUT_MS = 120_000;
+const PR_LIST_LIMIT = 100;
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function realpathOrNull(path) {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return null;
+  }
+}
+/**
+ * Whether `worktree` is one of the worktrees in `git worktree list
+ * --porcelain -z` output, compared by real path. Output that does not parse
+ * (the strict parser of local-worktree-occupancy.mts fails closed on an
+ * unknown field) is `null`; a worktree path that does not exist, or a record
+ * marked prunable, never matches.
+ */
+export function matchRegisteredWorktree(output, worktree) {
+  let records;
+  try {
+    records = parseLocalWorktreeList(output);
+  } catch {
+    return null;
+  }
+  const target = realpathOrNull(worktree);
+  if (target === null) {
+    return false;
+  }
+  return records.some(
+    (record) => !record.prunable && realpathOrNull(record.path) === target,
+  );
+}
+function isRegisteredWorktree(worktree) {
+  const result = spawnSync('git', ['worktree', 'list', '--porcelain', '-z'], {
+    encoding: 'utf8',
+  });
+  return result.status === 0
+    ? matchRegisteredWorktree(result.stdout, worktree)
+    : null;
+}
+/**
+ * Run `resume-claim-routing --assert` through the compiled sibling script.
+ * Exit 0 is an owned claim. A non-zero exit that still printed a routing
+ * verdict is a claim that is not this session's. Anything else (the script
+ * could not run, or printed nothing readable) is `unreadable`.
+ */
+function assertClaim(request, options) {
+  const script = join(
+    resolveBundleRoot(import.meta.dirname),
+    'scripts/resume-claim-routing.mjs',
+  );
+  const argv = [
+    script,
+    '--issue',
+    String(request.issueNumber),
+    '--assert',
+    '--claim-id',
+    request.claimId,
+    '--nonce',
+    request.nonce,
+    '--worktree',
+    request.worktree,
+    '--owner',
+    options.owner,
+    '--repo',
+    options.repo,
+    ...(options.trustedMarkerLoginsFlag === ''
+      ? []
+      : ['--trusted-marker-logins', options.trustedMarkerLoginsFlag]),
+  ];
+  let stdout = '';
+  let exited = 0;
+  try {
+    stdout = execFileSync(process.execPath, argv, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: CLAIM_ASSERT_TIMEOUT_MS,
+    });
+  } catch (error) {
+    const failure = error;
+    exited = typeof failure.status === 'number' ? failure.status : 1;
+    stdout = typeof failure.stdout === 'string' ? failure.stdout : '';
+  }
+  return classifyClaimAssertResult(exited, stdout, request.claimId);
+}
+/**
+ * Classify one `resume-claim-routing --assert` run from its exit status and
+ * stdout. Exit 0 with an `already_owned` / `keep` verdict naming this claim
+ * ID and a branch is `owned`. A non-zero exit that still printed a routing
+ * verdict (any `state` and `action`, including `owner_evidence_required`) is
+ * `not-owned`. Anything else is `unreadable`.
+ */
+export function classifyClaimAssertResult(exited, stdout, claimId) {
+  let routing;
+  try {
+    routing = JSON.parse(stdout);
+  } catch {
+    return {
+      status: 'unreadable',
+      detail: `resume-claim-routing --assert printed no readable JSON (exit ${exited})`,
+    };
+  }
+  if (
+    routing === null ||
+    typeof routing !== 'object' ||
+    typeof routing.state !== 'string' ||
+    typeof routing.action !== 'string'
+  ) {
+    return {
+      status: 'unreadable',
+      detail: `resume-claim-routing --assert printed no routing verdict (exit ${exited})`,
+    };
+  }
+  const branch = routing.active_claim?.branch;
+  if (
+    exited === 0 &&
+    routing.state === 'already_owned' &&
+    routing.action === 'keep' &&
+    routing.active_claim?.claim_id === claimId &&
+    typeof branch === 'string' &&
+    branch !== ''
+  ) {
+    return { status: 'owned', branch };
+  }
+  // Exit 0 is the only exit that goes with `already_owned` / `keep`, so that
+  // verdict with a non-zero exit means the run was cut short after printing.
+  const ownedVerdict =
+    routing.state === 'already_owned' && routing.action === 'keep';
+  if (exited === 0 || ownedVerdict) {
+    return {
+      status: 'unreadable',
+      detail: `resume-claim-routing --assert exited ${exited} with state ${routing.state} and action ${routing.action}, which does not prove this claim ID`,
+    };
+  }
+  return { status: 'not-owned' };
+}
+function runGit(args) {
+  const result = spawnSync('git', args, { encoding: 'utf8' });
+  return { status: result.status, stdout: (result.stdout ?? '').trim() };
+}
+/**
+ * Classify the git reads behind a local branch ref. `verified` is
+ * `git rev-parse --verify refs/heads/<branch>`: exit 0 with a full SHA is a
+ * present ref. When it fails, `exists` is `git show-ref --verify --quiet` for
+ * the same ref: exit 1 is a ref that does not exist (absent); any other exit,
+ * or no second read, is an error. A broken repository fails `rev-parse` the
+ * same way a missing ref does, which is why the second read decides.
+ */
+export function classifyLocalRefReads(verified, exists) {
+  if (verified.status === 0) {
+    return FULL_SHA_PATTERN.test(verified.stdout)
+      ? { state: 'present', tip: verified.stdout }
+      : { state: 'error', tip: null };
+  }
+  return exists !== null && exists.status === 1
+    ? { state: 'absent', tip: null }
+    : { state: 'error', tip: null };
+}
+function readLocalRef(worktree, branch) {
+  const ref = `refs/heads/${branch}`;
+  const verified = runGit(['-C', worktree, 'rev-parse', '--verify', ref]);
+  if (verified.status === 0) {
+    return classifyLocalRefReads(verified, null);
+  }
+  return classifyLocalRefReads(
+    verified,
+    runGit(['-C', worktree, 'show-ref', '--verify', '--quiet', ref]),
+  );
+}
+function asRecord(value) {
+  return value !== null && typeof value === 'object' ? value : {};
+}
+/**
+ * The pull requests of `gh pr list --head <branch> --json
+ * number,state,headRefName,isCrossRepository` that belong to this repository
+ * and have exactly this head branch, as number and merged flag. A fork's pull
+ * request of the same branch name is dropped.
+ */
+export function selectPullRequests(rows, branch) {
+  if (!Array.isArray(rows)) {
+    throw new Error('gh pr list did not return a JSON array');
+  }
+  return rows
+    .map(asRecord)
+    .filter(
+      (row) => row.headRefName === branch && row.isCrossRepository !== true,
+    )
+    .map((row) => ({
+      number: Number(row.number),
+      merged: row.state === 'MERGED',
+    }))
+    .filter((row) => Number.isSafeInteger(row.number) && row.number > 0);
+}
+/**
+ * The production callbacks for one repository. `trustedMarkerLoginsFlag` is
+ * the CLI's `--trusted-marker-logins` value (empty when absent): it follows
+ * the same flag, environment, then trusted-config ladder as the merge gates.
+ */
+export function createLiveF4HeadProofDeps(options) {
+  const { owner, repo, trustedMarkerLoginsFlag } = options;
+  const adapter = createGithubProviderAdapter(owner, repo);
+  const permissionCache = new Map();
+  let viewerLogin = null;
+  let trustConfig;
+  return {
+    isRegisteredWorktree,
+    readTokens: readGeneratedClaimTokens,
+    checkLock: checkClaimLock,
+    assertClaim: (request) =>
+      assertClaim(request, { owner, repo, trustedMarkerLoginsFlag }),
+    resolveTrustedLogins(comments) {
+      viewerLogin ??= adapter.resolveViewerLogin();
+      if (trustConfig === undefined) {
+        trustConfig = loadTrustedActorConfig({ owner, repo, baseRefName: '' });
+      }
+      const collaboratorMarkerLogins = resolveCollaboratorMarkerTrust(
+        trustConfig,
+        process.env.IDD_TRUST_COLLABORATOR_MARKERS,
+      )
+        ? resolveTrustedCollaboratorMarkerLogins(
+            owner,
+            repo,
+            comments.map((comment) => ({
+              body: comment.body,
+              user: { login: comment.authorLogin },
+            })),
+            { cache: permissionCache },
+          )
+        : [];
+      return composeGateTrustedMarkerLogins({
+        viewerLogin,
+        flagValue: trustedMarkerLoginsFlag,
+        envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+        config: trustConfig,
+        collaboratorMarkerLogins,
+      });
+    },
+    listIssueComments: (issueNumber) =>
+      adapter.listWorkItemComments(issueNumber, { includeEditState: true }),
+    listPullRequests(branch) {
+      const raw = ghText(
+        [
+          'pr',
+          'list',
+          '--repo',
+          `${owner}/${repo}`,
+          '--head',
+          branch,
+          '--state',
+          'all',
+          '--json',
+          'number,state,headRefName,isCrossRepository',
+          '--limit',
+          String(PR_LIST_LIMIT),
+        ],
+        GH_TEXT_LOOP_OPTIONS,
+      );
+      return selectPullRequests(JSON.parse(raw || '[]'), branch);
+    },
+    listPullRequestComments: (prNumber) =>
+      adapter.listWorkItemComments(prNumber, { includeEditState: true }),
+    readPullRequest(prNumber) {
+      const pr = asRecord(
+        ghApiJson(`repos/${owner}/${repo}/pulls/${prNumber}`),
+      );
+      const head = asRecord(pr.head);
+      return {
+        state: String(pr.state ?? ''),
+        merged: pr.merged === true,
+        mergeCommitSha:
+          typeof pr.merge_commit_sha === 'string' ? pr.merge_commit_sha : null,
+        headSha: typeof head.sha === 'string' ? head.sha : null,
+      };
+    },
+    readCommit(sha) {
+      const commit = asRecord(
+        ghApiJson(`repos/${owner}/${repo}/git/commits/${sha}`),
+      );
+      const parents = Array.isArray(commit.parents) ? commit.parents : [];
+      return {
+        sha: typeof commit.sha === 'string' ? commit.sha : null,
+        parents: parents.map((parent) => {
+          const entry = asRecord(parent);
+          return typeof entry.sha === 'string' ? entry.sha : null;
+        }),
+      };
+    },
+    isValidRefName: (branch) =>
+      runGit(['check-ref-format', `refs/heads/${branch}`]).status === 0,
+    readLocalRef,
+    postComment(issueNumber, body) {
+      const posted = adapter.postWorkItemComment(issueNumber, body);
+      return { id: posted.id, htmlUrl: posted.htmlUrl };
+    },
+    sleep: sleepSync,
+  };
+}

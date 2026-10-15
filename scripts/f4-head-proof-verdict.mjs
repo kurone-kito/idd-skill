@@ -112,7 +112,6 @@ function livePrPasses(livePr) {
  * Classify one post-write or pre-write read of the trusted same-claim
  * markers. `null` means the read failed; an empty list means no marker.
  */
-// audit:ignore-dead-export: the caller that wires this verdict table into the F4 cleanup gate is not yet filed; this implements the decision recorded on #4094
 export function classifyReread(readMarkers, input) {
   if (readMarkers === null) {
     return { result: 'failed', identity: null };
@@ -138,7 +137,6 @@ export function classifyReread(readMarkers, input) {
  * matching row wins. Returns `post` only when a marker POST is needed;
  * the caller then reports the result to `decideAfterPost`.
  */
-// audit:ignore-dead-export: the caller that wires this verdict table into the F4 cleanup gate is not yet filed; this implements the decision recorded on #4094
 export function decideBeforePost(input) {
   if (!input.claimOk) {
     return terminal('stop', 'claim-or-lock');
@@ -177,7 +175,6 @@ export function decideBeforePost(input) {
  * exactly three re-reads; this throws when they are missing, and it never
  * reads `rereads` on the success path.
  */
-// audit:ignore-dead-export: the caller that wires this verdict table into the F4 cleanup gate is not yet filed; this implements the decision recorded on #4094
 export function decideAfterPost(postResult) {
   if (postResult.writeOk) {
     const refetch = postResult.refetch ?? null;

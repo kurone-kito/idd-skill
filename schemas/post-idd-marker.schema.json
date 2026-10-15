@@ -25,6 +25,7 @@
         "review-ack",
         "copilot-unavailable",
         "idd-hold",
+        "f4-head-proof",
         "authoring-owner",
         "authoring-publication-intent"
       ],
@@ -53,9 +54,59 @@
       "type": "string",
       "description": "URL of the comment created in apply mode."
     },
+    "verdict": {
+      "type": "string",
+      "enum": ["post", "proceed", "stop", "hold"],
+      "description": "f4-head-proof only: the decision. post means no proof exists yet and a dry run would post one; proceed means a proof is in place (reused, or posted and read back); stop ends quietly because the claim is not this session's; hold ends and reports."
+    },
+    "reason": {
+      "type": ["string", "null"],
+      "description": "f4-head-proof only: the reason code behind verdict. Null for post; the code of the verdict table (for example reusable, pr-state, post-unconfirmed) or post-rejected otherwise."
+    },
+    "proof": {
+      "type": "object",
+      "description": "f4-head-proof only: the proof values derived from the live reads and the claim record. A value is null when its read did not produce one.",
+      "additionalProperties": false,
+      "required": ["pr", "claim", "branch", "f2", "branchTip", "merge", "head"],
+      "properties": {
+        "pr": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "Number of the merged pull request whose head branch is the claim's branch."
+        },
+        "claim": {
+          "type": "string",
+          "description": "The claim ID the proof is for."
+        },
+        "branch": {
+          "type": ["string", "null"],
+          "description": "The branch of the verified active claim."
+        },
+        "f2": {
+          "type": ["string", "null"],
+          "description": "Head SHA of the latest trusted, unedited review-watermark of this claim on the pull request."
+        },
+        "branchTip": {
+          "type": ["string", "null"],
+          "description": "Tip of the local branch ref, read in --worktree."
+        },
+        "merge": {
+          "type": ["string", "null"],
+          "description": "The merge commit SHA of the live pull request."
+        },
+        "head": {
+          "type": ["string", "null"],
+          "description": "The head SHA of the live pull request."
+        }
+      }
+    },
+    "nextAction": {
+      "type": "string",
+      "description": "f4-head-proof only: what to do next after a hold, a stop, or a dry run that would post. After an uncertain write it says not to post again and to reconcile by reading the issue comments."
+    },
     "warnings": {
       "type": "array",
-      "description": "Non-blocking diagnostics reported while preparing or posting the marker.",
+      "description": "Non-blocking diagnostics reported while preparing or posting the marker. For f4-head-proof they are the one-line causes behind reason (a read the command swallowed, or the error of a rejected or uncertain post); they explain the verdict and never change it.",
       "items": {
         "type": "string"
       }

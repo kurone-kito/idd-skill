@@ -404,6 +404,16 @@ const FIELDS_BY_MARKER_TYPE: Record<MarkerType, Record<string, string>> = {
   },
   'out-of-loop': { 'agent-id': TRUSTED_LOGIN, pr: '1', timestamp: TS },
   'idd-hold': { 'agent-id': TRUSTED_LOGIN, 'claim-id': CLAIM, timestamp: TS },
+  'f4-head-proof': {
+    'agent-id': TRUSTED_LOGIN,
+    'claim-id': CLAIM,
+    pr: '1',
+    branch: 'issue/1-test',
+    f2: SHA,
+    'branch-tip': SHA,
+    merge: SHA,
+    head: SHA,
+  },
   'authoring-owner': {
     'agent-id': TRUSTED_LOGIN,
     'marker-prefix': 'idd-skill',
@@ -448,6 +458,8 @@ const EXPECTED_BY_MARKER_TYPE: Record<MarkerType, IddPrCommentClassification> =
     'out-of-loop': 'review',
     // Issue-scoped, like activation-nonce: never posted to a PR.
     'idd-hold': 'review',
+    // Issue-scoped like idd-hold: the proof is read from the claimed issue.
+    'f4-head-proof': 'review',
     // Not part of OPERATIONAL_MARKERS at all (issue-authoring lifecycle
     // markers, contract.md) -- never recognized as PR review-activity.
     'authoring-owner': 'review',
@@ -839,6 +851,7 @@ test('sanity: PR_OPERATIONAL_COMMENT_PREFIXES itself omits the digest, forced-ha
     '<!-- idd-provider-outage-advanced:',
     '<!-- idd-provider-outage-park:',
     '<!-- idd-out-of-loop:',
+    '<!-- idd-f4-head-proof:',
   ]) {
     assert.equal(
       PR_OPERATIONAL_COMMENT_PREFIXES.includes(excluded),

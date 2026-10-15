@@ -30,6 +30,9 @@ import {
 } from './ci-wait-state.mjs';
 import { requireFlag, stripLeadingArgumentSeparator } from './cli-args.mjs';
 import { invalidateDiscoverHints } from './discover-hint-cache.mjs';
+import { renderF4HeadProofBody } from './f4-head-proof.mjs';
+import { runF4HeadProofGate } from './f4-head-proof-gate.mjs';
+import { createLiveF4HeadProofDeps } from './f4-head-proof-live.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   classifyHelperError,
@@ -103,6 +106,7 @@ export const MARKER_TYPES = [
   'copilot-unavailable',
   'out-of-loop',
   'idd-hold',
+  'f4-head-proof',
   'authoring-owner',
   'authoring-publication-intent',
 ];
@@ -213,6 +217,11 @@ const REQUIRED_FIELDS_BY_TYPE = {
   // kurone-kito/idd-skill#4310: same three fields as `unclaim`. The marker
   // records a worker's hold only; it carries no claim state of its own.
   'idd-hold': ['agent-id', 'claim-id', 'timestamp'],
+  // kurone-kito/idd-skill#4368: the only flags the command takes. The seven
+  // proof fields (`pr`, `branch`, `f2`, `branch-tip`, `merge`, `head`, and
+  // the claim) are derived from live reads, never typed, so they are not
+  // listed here; `worktree` is read by the gate and is not a body field.
+  'f4-head-proof': ['agent-id', 'claim-id', 'worktree'],
   'authoring-owner': [
     'marker-target',
     'anchor',
@@ -355,6 +364,25 @@ export function buildMarkerBody(type, fields) {
         agentId: fields['agent-id'],
         claimId: fields['claim-id'],
         timestamp: fields.timestamp,
+      });
+    case 'f4-head-proof':
+      // #4368: the proof a claimed session posts on its issue before F4
+      // step 3 (docs/idd-resume-detail.md, "F4 Head Proof"). The CLI path
+      // never reaches this case: `--type f4-head-proof` is dispatched to
+      // `runF4HeadProofCommand`, which derives every field except the agent
+      // and claim IDs from live reads and renders through the same
+      // `renderF4HeadProofBody`. This case serves programmatic callers and
+      // the marker-type tests; the renderer validates each field and throws
+      // on a value that could break the token.
+      return renderF4HeadProofBody({
+        pr: fields.pr,
+        claim: fields['claim-id'],
+        branch: fields.branch,
+        f2: fields.f2,
+        branchTip: fields['branch-tip'],
+        merge: fields.merge,
+        head: fields.head,
+        agentId: fields['agent-id'],
       });
     case 'authoring-owner':
       // #2931: routes through the existing marker-helpers.mts renderer
@@ -1532,6 +1560,8 @@ reliable JSON path. Default mode is dry-run, which prints a JSON envelope whose
 \`body\` field is the marker; --apply POSTs it and prints the created comment
 id/URL. This helper performs no claim/state gating — the calling phase must run
 its claim-revalidation gate before --apply, as the manual POST path it replaces.
+The one exception is --type f4-head-proof, which checks the claim itself (see
+below).
 
   --type <type>        one of: ${MARKER_TYPES.join(', ')}
   --target <issue|pr>  the comment target kind (both use the issues comments API)
@@ -1609,6 +1639,9 @@ listed is required for that type):
   idd-hold           --agent-id --claim-id --timestamp --target issue <n>
                      (the hold marker; informational, it never changes who
                      owns the claim)
+  f4-head-proof      --agent-id --claim-id --worktree <path> --target issue <n>
+                     (the F4 head proof; every proof field is read live, see
+                     below)
   authoring-owner    --marker-target --anchor --mode --marker-owner --set
                      --session --snapshot-sha256 --supersedes [--body-sha256]
                      [--marker-prefix]
@@ -1739,6 +1772,17 @@ These two types are deliberately NOT OPERATIONAL_MARKERS
 (marker-helpers.mts) and are never subject to this file's own --apply
 hide-at-post-time step or the F4 post-merge cleanup driver -- see
 MARKER_TYPES's own doc comment.
+
+f4-head-proof (#4368) is the F4 head proof of docs/idd-resume-detail.md. It
+reads the live state first, even without --apply: the stored activation
+nonce, \`resume-claim-routing --assert\`, the claim lock of --worktree (which
+must be a worktree this repository registers), the merged pull request of the
+claim's branch, the local branch tip, the trusted markers of the issue, and
+the review-watermark of the pull request. It posts only when the verdict table
+says post, and prints the verdict, the reason, and the proof values as JSON.
+The command takes no other field flag. Exit 0 is proceed or post; exit 1 is
+hold or stop. An uncertain write is read back exactly three times and never
+posted again. --target pr is refused.
 
 --claim-id / --attempt on advisory-recovery are OPTIONAL (#1572): passing
 both binds the marker to the active claim and an attempt number for
@@ -1882,6 +1926,82 @@ function headShaFromPr(prNumber, owner, repo) {
     );
   }
   return headSha;
+}
+// ---------------------------------------------------------------------------
+// F4 head proof (#4368)
+// ---------------------------------------------------------------------------
+/** The field flags `--type f4-head-proof` takes; every other proof value is read live. */
+const F4_HEAD_PROOF_FLAGS = REQUIRED_FIELDS_BY_TYPE['f4-head-proof'];
+/**
+ * Run `--type f4-head-proof`: the live reads, the verdict, and (under
+ * `--apply`, on a `post` verdict) the POST and its read-back all happen in
+ * `runF4HeadProofGate`. This wrapper checks the flags, resolves the
+ * repository, prints the JSON envelope, and maps the verdict to the exit
+ * status (0 for proceed and post, 1 for hold and stop). A renderer or read
+ * error exits non-zero with nothing posted. `createDeps` is the seam a test
+ * replaces with fake callbacks; production uses the live wiring.
+ */
+export function runF4HeadProofCommand(
+  args,
+  number,
+  createDeps = createLiveF4HeadProofDeps,
+) {
+  const unexpected = Object.keys(args.fields).filter(
+    (flag) => !F4_HEAD_PROOF_FLAGS.includes(flag),
+  );
+  if (args.advisoryBotLogins !== '') {
+    const message = '--type f4-head-proof does not take --advisory-bot-logins';
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
+  }
+  if (unexpected.length > 0) {
+    const message = `--type f4-head-proof takes only --target, --claim-id, --agent-id and --worktree (every proof value is read live); do not pass: ${unexpected
+      .map((flag) => `--${flag}`)
+      .join(', ')}`;
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
+  }
+  try {
+    for (const field of F4_HEAD_PROOF_FLAGS) {
+      requireFlag(args.fields[field], `--${field}`);
+    }
+    const currentRepo =
+      args.owner && args.repo ? null : resolveCurrentGithubRepository();
+    const owner = args.owner || currentRepo?.owner || '';
+    const repo = args.repo || currentRepo?.repo || '';
+    const outcome = runF4HeadProofGate(
+      {
+        issueNumber: number,
+        claimId: args.fields['claim-id'],
+        agentId: args.fields['agent-id'],
+        worktree: args.fields.worktree,
+        apply: args.apply,
+      },
+      createDeps({
+        owner,
+        repo,
+        trustedMarkerLoginsFlag: args.trustedMarkerLogins,
+      }),
+    );
+    if (outcome.kind === 'refused') {
+      process.stderr.write(`${outcome.message}\n`);
+      return { exitCode: 1, kind: 'usage', message: outcome.message };
+    }
+    const envelope = outcome.output;
+    process.stdout.write(`${JSON.stringify(envelope, null, 2)}\n`);
+    if (outcome.exitCode === 0) {
+      return 0;
+    }
+    const { verdict, reason, nextAction } = outcome.output;
+    const message =
+      `f4-head-proof: ${verdict} (${reason}). ${nextAction ?? ''}`.trim();
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'gate', message };
+  } catch (error) {
+    const message = error.message;
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, ...classifyHelperError(error), message };
+  }
 }
 /**
  * List every comment on `number` (issue or PR -- same comments endpoint),
@@ -2485,6 +2605,17 @@ function main() {
     const message = '--type idd-hold requires --target issue';
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, kind: 'usage', message };
+  }
+  // #4368: the head proof is an issue comment too (F4 step 7 reads it from the
+  // claimed issue), and a refusal here costs nothing. Everything else about
+  // this type, including the live reads, runs in the dedicated command.
+  if (args.type === 'f4-head-proof') {
+    if (args.target !== 'issue') {
+      const message = '--type f4-head-proof requires --target issue';
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, kind: 'usage', message };
+    }
+    return runF4HeadProofCommand(args, args.number);
   }
   // #2931: --marker-prefix defaults the same way
   // authoring-owner-provenance.mts's own normalizeMarkerPrefix does -- an
