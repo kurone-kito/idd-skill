@@ -177,10 +177,11 @@ Reply
   Factual and correctness findings are not covered by this rule and keep
   their existing handling; adopt-now clause (c) already covers a defect in
   instruction text that changes what an agent does. PATH B, scope-fenced,
-  mid-fix, and CODEOWNER items stay outside this rule. A false finding is
-  Rejected on its merits. Observed 2026-10-15 on PR `#4331` (issue `#3826`):
-  14 Copilot review rounds and 24 inline comments, most of them factual
-  corrections rather than wording, so the rule above does not cover them.
+  mid-fix, CODEOWNER, and required-reviewer items stay outside this rule.
+  A false finding is Rejected on its merits. Observed 2026-10-15 on PR
+  `#4331` (issue `#3826`): 14 Copilot review rounds and 24 inline
+  comments, most of them factual corrections rather than wording, so the
+  rule above does not cover them.
 - **Adopt-now urgency** (`deferByUrgency`, default `off` — E4/E5
   unchanged when off; `low`/`low-and-medium` from round 1).
   Eligibility is the higher of the E4 tier and Copilot's label — the

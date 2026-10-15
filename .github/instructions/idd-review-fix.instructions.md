@@ -419,8 +419,8 @@ overrides adopt-now clause (d) in `idd-review-triage.instructions.md`.
 Factual and correctness findings are not covered by this rule and keep
 their existing handling; adopt-now clause (c) already covers a defect in
 instruction text that changes what an agent does. PATH B, scope-fenced,
-mid-fix, and CODEOWNER items stay outside this rule. A false finding is
-Rejected on its merits.
+mid-fix, CODEOWNER, and required-reviewer items stay outside this rule.
+A false finding is Rejected on its merits.
 
 1. Fetch `PR_HEAD_SHA`:
 
