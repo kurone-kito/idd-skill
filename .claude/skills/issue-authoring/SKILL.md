@@ -91,7 +91,8 @@ needs-decision, blocked-by-human, and out-of-scope.
    the target: do not create it, update its body, change its label, or
    append a marker for it. An existing held issue keeps its label and
    previous body. The drafts go into a carrier marked
-   `Review: not reviewed` (step 8), unless they already sit in one.
+   `Review: not reviewed` (step 8), unless they already sit in one or one
+   of step 8's two exceptions applies.
    The reviewer returns findings only. Prefer a non-context-inheriting
    reviewer; issue #3448 records why a context-inheriting no-mutation
    dispatch can still publish. Bound the wait with

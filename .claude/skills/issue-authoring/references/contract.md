@@ -1295,8 +1295,9 @@ authoring hold keeps that label and its previous body. A failure is never
 a clean review. Remaining held means the candidate does not become a
 released, discoverable issue. The caller, never the reviewer, then
 publishes the target's drafts in a draft carrier marked `Review: not
-reviewed` (see [Draft carrier](#draft-carrier)), unless they already sit in
-one; that carrier is the only issue a failed review may create.
+reviewed`, unless they already sit in one or one of the two local-draft
+exceptions in [Draft carrier](#draft-carrier) applies; that carrier is the
+only issue a failed review may create.
 
 The reviewer must be read-only and review-scoped. It returns a findings
 list only. It must not create or update issues, change labels, or
@@ -3035,8 +3036,9 @@ label and the authoring-only label. That covers:
   is not published, and its drafts go into a carrier whose draft sections say
   `Review: not reviewed`.
 
-A reviewed draft does not end in local files only, with two exceptions. In
-both, the drafts stay local and the final message says so.
+A reviewed draft does not end in local files only, with two exceptions, and
+both apply to every case above, a failed review included. In both, the drafts
+stay local and the final message says so.
 
 - The user explicitly says not to publish (an instruction not to create any
   issue, not a request to see the drafts first). The final message says that

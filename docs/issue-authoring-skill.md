@@ -862,8 +862,9 @@ authoring hold keeps that label and its previous body. A failure is never
 a clean review. Remaining held means the candidate does not become a
 released, discoverable issue. The caller, never the reviewer, then
 publishes the target's drafts in a draft carrier marked `Review: not
-reviewed` (see [Draft carrier](#draft-carrier)), unless they already sit in
-one; that carrier is the only issue a failed review may create.
+reviewed`, unless they already sit in one or one of the two local-draft
+exceptions in [Draft carrier](#draft-carrier) applies; that carrier is the
+only issue a failed review may create.
 
 The reviewer must be read-only and review-scoped. It returns a findings
 list only. It must not create or update issues, change labels, or
@@ -2820,7 +2821,7 @@ Before reporting or publishing issue drafts, the skill should verify:
   create a new issue
 - no reviewed draft ends in local files only, except the two exceptions in
   [Draft carrier](#draft-carrier); a failed review publishes no target, and
-  its drafts go into a carrier
+  its drafts go into a carrier unless an exception applies
 - each draft carrier passes `audit-authored-issue --shape carrier`
 - each drafted roadmap, child, or orphan body passes the
   completed-draft adversarial review and then the

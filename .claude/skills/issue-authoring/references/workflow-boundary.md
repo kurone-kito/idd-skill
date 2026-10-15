@@ -25,8 +25,9 @@ approval boundary that hands off to IDD execution.
   A failed or unreadable review does not publish the target: it does
   not create or update that issue, change its label, or append a marker
   for it, and the target's drafts go into a draft carrier marked
-  `Review: not reviewed`, unless they already sit in one. The reviewer
-  returns findings only. A roadmap
+  `Review: not reviewed`, unless they already sit in one or one of the two
+  local-draft exceptions in [Draft carrier](contract.md#draft-carrier)
+  applies. The reviewer returns findings only. A roadmap
   shell may still have an empty `## Tracks` list; review each child before
   that child is published, and review the parent again before saving real
   child numbers into `## Tracks`
