@@ -4260,8 +4260,9 @@ second parent; one parent (a squash or rebase merge) is accepted, as in the
 written procedure; any other count holds with `pr-state`. So does a branch
 with no merged pull request, or with more than one, and a `gh pr list` result
 that reaches its 100-row cap, which may be truncated. Every git read, and the
-spawned claim check, ignore `GIT_DIR`, `GIT_WORK_TREE`, and `GIT_CONFIG*` of the
-caller. Under `--apply` the claim
+spawned claim check, ignore the caller's `GIT_CONFIG*`, `GIT_DIR`,
+`GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_INDEX_FILE`, and `GIT_OBJECT_DIRECTORY`
+variables. Under `--apply` the claim
 check and the lock are read once more right before the POST, with the same
 nonce: a changed claim or branch, or a replaced or missing lock, is `stop` on
 `claim-or-lock`, and a reading that cannot be obtained is `hold`; nothing is
@@ -4275,9 +4276,11 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
 - A nonce record that is absent, malformed, or has no nonce, a lock that is
   malformed, a read of either that throws, and a claim check that cannot be
   read are `hold` on `claim-or-lock`. A claim check that runs and exits
-  non-zero with a routing verdict (including `owner_evidence_required`, where
-  GitHub shows the claim but the local proof failed), and a lock that is
-  absent or held under another claim ID, are `stop` on `claim-or-lock`.
+  non-zero with a routing verdict whose `state` and `action` the routing
+  module prints (including `owner_evidence_required`, where GitHub shows the
+  claim but the local proof failed), and a lock that is absent or held under
+  another claim ID, are `stop` on `claim-or-lock`. A verdict with any other
+  `state` or `action` is `hold`.
 - A confirmed write needs one re-fetch that matches the posted identity,
   taken from `classifyReread`; a mismatch holds with `posted-disagreed`.
 - A post error that proves nothing was sent (a host-local load-control refusal,
@@ -5513,9 +5516,9 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
 - Write-side companion to `emit-marker`: it renders the canonical body for
   each operational marker `<type>` (`claim`, `unclaim`, `activation-nonce`,
   `watermark`, `baseline`, `advisory`, `advisory-recovery`,
-  `advisory-reroll`, `idd-hold`) by reusing the single-sourced
-  `protocol-helpers` renderers, then POSTs it as a JSON document
-  (`{"body": …}`) via
+  `advisory-reroll`, `idd-hold`, `review-ack`, `copilot-unavailable`,
+  `out-of-loop`) by reusing the single-sourced `protocol-helpers` renderers,
+  then POSTs it as a JSON document (`{"body": …}`) via
   `gh api --method POST .../comments --input -`. The JSON path is
   mandatory because `gh issue comment` / `gh api -f body=` silently
   reject the HTML-comment-first claim-family bodies. `-f` also treats a

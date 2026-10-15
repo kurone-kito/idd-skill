@@ -2894,7 +2894,8 @@ export function operationalMarkerPrefixByStart(body) {
 }
 /**
  * Detects a `claimed-by` / `unclaimed-by` / `activation-nonce` /
- * `review-watermark` / `review-baseline` / `zero-accepted-path-a-gate`
+ * `idd-hold` / `idd-f4-head-proof` / `review-watermark` /
+ * `review-baseline` / `zero-accepted-path-a-gate`
  * comment whose body starts with a structurally valid marker token but
  * whose whole body does not match the canonical, strict
  * `pattern` -- for **any** reason: content appended directly after the
