@@ -1882,6 +1882,18 @@ function checkCarrierPreconditions(input, scratch, snapshot) {
       'the body no longer matches the acquire marker body-sha256',
     );
   }
+  // The acquire marker must carry the fields post-idd-marker enforces for it:
+  // no supersession and no snapshot. A digest match alone is not enough.
+  if (
+    acquire.parsed.supersedes !== 'none' ||
+    acquire.parsed.snapshotSha256 !== 'none'
+  ) {
+    throw new CarrierReleaseStop(
+      'held',
+      'precondition-body-digest',
+      'the acquire marker does not carry supersedes none and snapshot none',
+    );
+  }
   // (e) both labels are present.
   if (
     !hasLabel(labels, input.authoringOnlyLabel) ||
