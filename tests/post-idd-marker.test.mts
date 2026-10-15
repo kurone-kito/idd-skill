@@ -700,10 +700,6 @@ function f4Argv(
     '--target',
     target,
     '4368',
-    '--owner',
-    'example-owner',
-    '--repo',
-    'example-repo',
   ];
   for (const [flag, value] of Object.entries(fields)) {
     argv.push(`--${flag}`, value);
@@ -803,6 +799,15 @@ test('CLI: --type f4-head-proof refuses a trusted-login or advisory-bot override
       f4Argv('issue', F4_CLI_FIELDS, [flag, 'someone']),
     );
     assert.match(stderr, new RegExp(`does not take ${flag}`), flag);
+  }
+});
+
+test('CLI: --type f4-head-proof refuses --owner and --repo', () => {
+  for (const flag of ['--owner', '--repo']) {
+    const stderr = runCliWithPathExpectingFailure(
+      f4Argv('issue', F4_CLI_FIELDS, [flag, 'other']),
+    );
+    assert.match(stderr, /does not take --owner or --repo/, flag);
   }
 });
 

@@ -318,7 +318,9 @@ test('the git reads ignore Git environment overrides of the caller', () => {
     process.chdir(repo);
     process.env.GIT_DIR = join(decoy, '.git');
     process.env.GIT_WORK_TREE = decoy;
-    const deps = createLiveF4HeadProofDeps({ owner: 'o', repo: 'r' });
+    const deps = createLiveF4HeadProofDeps({
+      resolveRepo: () => ({ owner: 'o', repo: 'r' }),
+    });
     assert.deepEqual(deps.readLocalRef(repo, 'work'), {
       state: 'present',
       tip,

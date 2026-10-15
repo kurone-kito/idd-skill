@@ -2114,8 +2114,9 @@ must be a worktree this repository registers), the merged pull request of the
 claim's branch, the local branch tip, the trusted markers of the issue, and
 the review-watermark of the pull request. It posts only when the verdict table
 says post, and prints the verdict, the reason, and the proof values as JSON.
-The command takes no other field flag, and refuses --trusted-marker-logins and
---advisory-bot-logins (the trusted logins come from the viewer, the
+The command takes no other field flag, and refuses --owner, --repo,
+--trusted-marker-logins, and --advisory-bot-logins (the repository is the
+current checkout's, and the trusted logins come from the viewer, the
 environment, and the trusted configuration). Under --apply it reads the claim
 and the lock again right before the POST. Exit 0 is proceed or post; exit 1 is
 hold or stop. An uncertain write is read back exactly three times and never
@@ -2303,8 +2304,16 @@ export function runF4HeadProofCommand(
   const unexpected = Object.keys(args.fields).filter(
     (flag) => !F4_HEAD_PROOF_FLAGS.includes(flag),
   );
-  // Neither list can widen what the command trusts or reads: the trusted
-  // logins come from the environment and the trusted configuration only.
+  // The repository is the current checkout's: the worktree must be registered
+  // there, so a flag that names another repository could only mismatch it.
+  // Neither list can widen what the command trusts or reads either: the
+  // trusted logins come from the environment and the trusted configuration.
+  if (args.owner !== '' || args.repo !== '') {
+    const message =
+      '--type f4-head-proof does not take --owner or --repo: the repository is the current checkout, and --worktree must be registered there';
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
+  }
   for (const [flag, value] of [
     ['--trusted-marker-logins', args.trustedMarkerLogins],
     ['--advisory-bot-logins', args.advisoryBotLogins],
@@ -2326,10 +2335,6 @@ export function runF4HeadProofCommand(
     for (const field of F4_HEAD_PROOF_FLAGS) {
       requireFlag(args.fields[field], `--${field}`);
     }
-    const currentRepo =
-      args.owner && args.repo ? null : resolveCurrentGithubRepository();
-    const owner = args.owner || currentRepo?.owner || '';
-    const repo = args.repo || currentRepo?.repo || '';
     const outcome = runF4HeadProofGate(
       {
         issueNumber: number,
@@ -2338,7 +2343,7 @@ export function runF4HeadProofCommand(
         worktree: args.fields.worktree,
         apply: args.apply,
       },
-      createDeps({ owner, repo }),
+      createDeps({ resolveRepo: resolveCurrentGithubRepository }),
     );
     if (outcome.kind === 'refused') {
       process.stderr.write(`${outcome.message}\n`);

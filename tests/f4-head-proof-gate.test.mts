@@ -1288,10 +1288,6 @@ function runCommand(
     '--target',
     'issue',
     String(ISSUE),
-    '--owner',
-    'example-owner',
-    '--repo',
-    'example-repo',
     '--claim-id',
     CLAIM,
     '--agent-id',
@@ -1622,4 +1618,18 @@ test('a claim that cannot be read again before the post is a hold and posts noth
     1,
   );
   assert.deepEqual(malformed.posts, []);
+});
+
+test('the command refuses --owner and --repo, which must not name another repository', () => {
+  for (const flags of [
+    ['--owner', 'other-owner'],
+    ['--repo', 'other-repo'],
+  ]) {
+    const h = harness();
+    const { result, out, err } = runCommand(flags, h.deps);
+    assert.equal((result as { kind: string }).kind, 'usage', flags.join(' '));
+    assert.equal(out, '');
+    assert.match(err, /does not take --owner or --repo/);
+    assert.deepEqual(h.calls, [], 'no read happens before the refusal');
+  }
 });

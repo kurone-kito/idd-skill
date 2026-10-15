@@ -270,10 +270,24 @@ export function selectPullRequests(rows, branch, limit) {
  * branch, never the worktree), `IDD_TRUSTED_MARKER_ACTORS`, and, when
  * collaborator-marker trust is on, collaborators with write access. No flag
  * can add to them: this command takes none.
+ *
+ * The repository is resolved on the first GitHub access, not up front, so a
+ * refusal that needs no GitHub read (an unregistered worktree) makes no
+ * GitHub call.
  */
 export function createLiveF4HeadProofDeps(options) {
-  const { owner, repo } = options;
-  const adapter = createGithubProviderAdapter(owner, repo);
+  let located = null;
+  const locate = () => {
+    if (located === null) {
+      const { owner, repo } = options.resolveRepo();
+      located = {
+        owner,
+        repo,
+        adapter: createGithubProviderAdapter(owner, repo),
+      };
+    }
+    return located;
+  };
   const permissionCache = new Map();
   let viewerLogin = null;
   let trustConfig;
@@ -281,8 +295,12 @@ export function createLiveF4HeadProofDeps(options) {
     isRegisteredWorktree,
     readTokens: readGeneratedClaimTokens,
     checkLock: checkClaimLock,
-    assertClaim: (request) => assertClaim(request, { owner, repo }),
+    assertClaim: (request) => {
+      const { owner, repo } = locate();
+      return assertClaim(request, { owner, repo });
+    },
     resolveTrustedLogins(comments) {
+      const { owner, repo, adapter } = locate();
       viewerLogin ??= adapter.resolveViewerLogin();
       if (trustConfig === undefined) {
         trustConfig = loadTrustedActorConfig({ owner, repo, baseRefName: '' });
@@ -309,8 +327,11 @@ export function createLiveF4HeadProofDeps(options) {
       });
     },
     listIssueComments: (issueNumber) =>
-      adapter.listWorkItemComments(issueNumber, { includeEditState: true }),
+      locate().adapter.listWorkItemComments(issueNumber, {
+        includeEditState: true,
+      }),
     listPullRequests(branch) {
+      const { owner, repo } = locate();
       const raw = ghText(
         [
           'pr',
@@ -331,8 +352,11 @@ export function createLiveF4HeadProofDeps(options) {
       return selectPullRequests(JSON.parse(raw || '[]'), branch, PR_LIST_LIMIT);
     },
     listPullRequestComments: (prNumber) =>
-      adapter.listWorkItemComments(prNumber, { includeEditState: true }),
+      locate().adapter.listWorkItemComments(prNumber, {
+        includeEditState: true,
+      }),
     readPullRequest(prNumber) {
+      const { owner, repo } = locate();
       const pr = asRecord(
         ghApiJson(`repos/${owner}/${repo}/pulls/${prNumber}`),
       );
@@ -346,6 +370,7 @@ export function createLiveF4HeadProofDeps(options) {
       };
     },
     readCommit(sha) {
+      const { owner, repo } = locate();
       const commit = asRecord(
         ghApiJson(`repos/${owner}/${repo}/git/commits/${sha}`),
       );
@@ -362,7 +387,7 @@ export function createLiveF4HeadProofDeps(options) {
       runGit(['check-ref-format', `refs/heads/${branch}`]).status === 0,
     readLocalRef,
     postComment(issueNumber, body) {
-      const posted = adapter.postWorkItemComment(issueNumber, body);
+      const posted = locate().adapter.postWorkItemComment(issueNumber, body);
       return { id: posted.id, htmlUrl: posted.htmlUrl };
     },
     sleep: sleepSync,
