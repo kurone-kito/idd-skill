@@ -1555,6 +1555,41 @@ test('body-item --apply refuses a non-conforming --body before any gh call (comp
   }
 });
 
+test('--apply refuses a --body that carries the pending-decision marker before any gh call, for a thread and a body item (compiled CLI, #4306)', () => {
+  const pendingBodies = [
+    '**Accepted** (part), fixed in abc1234.\n\n**Awaiting maintainer decision** — the rest is open.',
+    '**Rejected** — see `src/a.mts:3`.\n\n**Awaiting maintainer decision** — one question remains.',
+  ];
+  for (const body of pendingBodies) {
+    for (const target of [
+      ['--comment-id', '1001'],
+      [
+        '--review-id',
+        String(BODY_ITEM_REVIEW_ID),
+        '--item-title',
+        BODY_ITEM_TITLE,
+      ],
+    ]) {
+      const stderr = runCliExpectingUsageFailure([
+        '--pr',
+        '42',
+        ...target,
+        '--claim-issue',
+        '5',
+        '--claim-id',
+        'claim-a',
+        '--apply',
+        '--body',
+        body,
+      ]);
+      assert.match(
+        stderr,
+        /--apply refuses a --body that carries "\*\*Awaiting maintainer decision\*\*"/,
+      );
+    }
+  }
+});
+
 test('--comment-id cannot be combined with the body-item target (compiled CLI, #4012)', () => {
   const stderr = runCliExpectingUsageFailure([
     '--pr',
