@@ -70,6 +70,11 @@ const failed = (status: number | null = 1): CommandResult => ({
 });
 
 const ISSUE_VIEW = ok(JSON.stringify({ title: TITLE, assignees: [] }));
+const CHECK_AUTHOR = {
+  id: 'author_self_authorized',
+  name: 'Issue author self-authorized',
+  result: 'pass',
+};
 const VALID_CHECK = {
   id: 'gate_enabled',
   name: 'Issue-author gate enabled',
@@ -82,6 +87,7 @@ const APPROVED = ok(
     reason: 'author-self-authorized',
     gateEnabled: true,
     policy: {
+      skipIssueAuthorApprovalGate: false,
       maintainerApprovalActorPolicy: 'owners-and-maintainers-only',
       approvalSignals: {
         readyLabelName: 'idd:ready',
@@ -89,10 +95,19 @@ const APPROVED = ok(
       },
     },
     checks: [
-      { id: 'gate_enabled', name: 'Issue-author gate enabled', result: 'pass' },
+      VALID_CHECK,
+      {
+        id: 'author_self_authorized',
+        name: 'Issue author self-authorized',
+        result: 'pass',
+      },
     ],
   }),
 );
+
+const APPROVED_POLICY = (
+  JSON.parse(APPROVED.stdout) as { policy: Record<string, unknown> }
+).policy;
 
 function approvalOutput(overrides: Record<string, unknown>): CommandResult {
   const base = JSON.parse(APPROVED.stdout) as Record<string, unknown>;
@@ -408,6 +423,44 @@ test('A5(a): invalid or incomplete approval JSON is approval-unproven', () => {
     approvalOutput({ reason: 'approval-missing' }),
     approvalOutput({ reason: 'something-else' }),
     approvalOutput({ approved: false, reason: 'author-self-authorized' }),
+    // gateEnabled and the gate_enabled check must agree with the reason.
+    approvalOutput({ reason: 'gate-disabled' }),
+    approvalOutput({ gateEnabled: false }),
+    approvalOutput({
+      reason: 'gate-disabled',
+      gateEnabled: false,
+      checks: [VALID_CHECK],
+    }),
+    approvalOutput({
+      reason: 'gate-disabled',
+      gateEnabled: false,
+      checks: [{ ...VALID_CHECK, result: 'pass' }],
+    }),
+    approvalOutput({
+      checks: [{ ...CHECK_AUTHOR, id: 'other' }],
+    }),
+    approvalOutput({
+      approved: false,
+      reason: 'approval-missing',
+      gateEnabled: false,
+    }),
+    // policy.skipIssueAuthorApprovalGate must be the opposite of gateEnabled.
+    approvalOutput({
+      policy: { ...APPROVED_POLICY, skipIssueAuthorApprovalGate: true },
+    }),
+    approvalOutput({
+      policy: { ...APPROVED_POLICY, skipIssueAuthorApprovalGate: undefined },
+    }),
+    approvalOutput({
+      policy: { ...APPROVED_POLICY, skipIssueAuthorApprovalGate: 'false' },
+    }),
+    // The check behind the approved reason must be present and pass.
+    approvalOutput({ checks: [VALID_CHECK] }),
+    approvalOutput({
+      checks: [VALID_CHECK, { ...CHECK_AUTHOR, result: 'fail' }],
+    }),
+    approvalOutput({ reason: 'ready-label-present' }),
+    approvalOutput({ reason: 'ready-comment-fresh' }),
     approvalOutput({ approved: false, reason: 'gate-disabled' }),
     approvalOutput({
       policy: {
@@ -1356,14 +1409,31 @@ test('A5(e): an occupied local result still stops when its paths are not a list'
   }
 });
 
-test('A5(a): every approved reason the gate emits is accepted', () => {
-  for (const reason of [
-    'author-self-authorized',
-    'ready-label-present',
-    'ready-comment-fresh',
-    'gate-disabled',
-  ]) {
-    const { report } = run({ approval: approvalOutput({ reason }) });
+test('A5(a): every approved reason the gate emits is accepted with its own check', () => {
+  const cases: [string, boolean, string | null][] = [
+    ['author-self-authorized', true, 'author_self_authorized'],
+    ['ready-label-present', true, 'ready_label_present'],
+    ['ready-comment-fresh', true, 'ready_comment_fresh'],
+    ['gate-disabled', false, null],
+  ];
+  for (const [reason, gateEnabled, checkId] of cases) {
+    const checks = [
+      { ...VALID_CHECK, result: gateEnabled ? 'pass' : 'fail' },
+      ...(checkId === null
+        ? []
+        : [{ id: checkId, name: 'a check', result: 'pass' }]),
+    ];
+    const { report } = run({
+      approval: approvalOutput({
+        reason,
+        gateEnabled,
+        checks,
+        policy: {
+          ...APPROVED_POLICY,
+          skipIssueAuthorApprovalGate: !gateEnabled,
+        },
+      }),
+    });
     assertEligible(report);
   }
 });

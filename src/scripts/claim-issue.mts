@@ -98,6 +98,14 @@ const APPROVED_REASONS: readonly string[] = [
   'gate-disabled',
 ];
 
+/** The check that must pass for each approved reason (`null`: none). */
+const APPROVED_REASON_CHECKS: Readonly<Record<string, string | null>> = {
+  'author-self-authorized': 'author_self_authorized',
+  'ready-label-present': 'ready_label_present',
+  'ready-comment-fresh': 'ready_comment_fresh',
+  'gate-disabled': null,
+};
+
 if (import.meta.main) {
   if (isHelperErrorEnvelopeEnabled()) {
     runHelperCli('claim-issue', runCli);
@@ -332,6 +340,34 @@ function isCheckList(value: unknown): boolean {
   );
 }
 
+/**
+ * True when the approval evidence agrees with itself the way the gate emits
+ * it: `gateEnabled` is false only for the `gate-disabled` approval, the
+ * `policy.skipIssueAuthorApprovalGate` flag and the `gate_enabled` check say
+ * the same, and an approved reason has its own check passing. Call it only after the shape checks above passed.
+ */
+function approvalEvidenceAgrees(evidence: Record<string, unknown>): boolean {
+  const checks = evidence.checks as Record<string, unknown>[];
+  const resultOf = (id: string): unknown =>
+    checks.find((check) => check.id === id)?.result;
+  const gateEnabled = evidence.gateEnabled === true;
+  if (gateEnabled !== (evidence.reason !== 'gate-disabled')) {
+    return false;
+  }
+  const policy = evidence.policy as Record<string, unknown>;
+  if (policy.skipIssueAuthorApprovalGate !== !gateEnabled) {
+    return false;
+  }
+  if (resultOf('gate_enabled') !== (gateEnabled ? 'pass' : 'fail')) {
+    return false;
+  }
+  if (evidence.approved !== true) {
+    return gateEnabled;
+  }
+  const reasonCheck = APPROVED_REASON_CHECKS[String(evidence.reason)];
+  return reasonCheck === null || resultOf(reasonCheck) === 'pass';
+}
+
 /** A5(a): the issue-author approval gate, through `claim-approval-gate`. */
 function checkApproval(
   issueNumber: number,
@@ -376,6 +412,9 @@ function checkApproval(
     !isCheckList(evidence.checks)
   ) {
     return unproven('claim-approval-gate printed incomplete evidence');
+  }
+  if (!approvalEvidenceAgrees(evidence)) {
+    return unproven('claim-approval-gate printed contradictory evidence');
   }
   if (!evidence.approved) {
     return stop(
