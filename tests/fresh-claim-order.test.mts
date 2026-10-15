@@ -143,6 +143,7 @@ const WRAPPER_STEPS = [
   'record',
   'gate',
   'post-claim',
+  'record-nonce',
   'post-nonce',
   'acquire',
   'assert',
@@ -166,7 +167,8 @@ function stubSource(): string {
   return `import { appendFileSync } from 'node:fs';
 const args = process.argv.slice(2);
 const type = args[args.indexOf('--type') + 1];
-const step = args.includes('--record-tokens') ? 'record'
+const step = args.includes('--record-tokens')
+  ? (args.includes('--nonce') ? 'record-nonce' : 'record')
   : args.includes('--acquire') ? 'acquire'
   : args.includes('--fresh-claim-gate') ? 'gate'
   : args.includes('--assert') ? 'assert'
@@ -257,14 +259,17 @@ test('a failure before the claim marker reports no success and posts nothing', (
   }
 });
 
-test('a failed claim post or acquire stops before the later steps', () => {
+test('a failed claim post, nonce record, or acquire stops the later steps', () => {
   const postFailed = runFreshClaimWrapper({ 'post-claim': 1 });
   assert.notEqual(postFailed.status, 0);
   assert.deepEqual(postFailed.steps, ['record', 'gate', 'post-claim']);
+  const nonceRecordFailed = runFreshClaimWrapper({ 'record-nonce': 1 });
+  assert.notEqual(nonceRecordFailed.status, 0);
+  assert.deepEqual(nonceRecordFailed.steps, WRAPPER_STEPS.slice(0, 4));
   const acquireFailed = runFreshClaimWrapper({ acquire: 2 });
   assert.notEqual(acquireFailed.status, 0);
-  assert.deepEqual(acquireFailed.steps, WRAPPER_STEPS.slice(0, 5));
-  for (const run of [postFailed, acquireFailed]) {
+  assert.deepEqual(acquireFailed.steps, WRAPPER_STEPS.slice(0, 6));
+  for (const run of [postFailed, nonceRecordFailed, acquireFailed]) {
     assert.equal(run.stdout.includes(WRAPPER_SUCCESS), false);
   }
 });

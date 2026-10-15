@@ -298,17 +298,19 @@ Resolve the commands as A5(a) does.
 6. Continue B1 in that worktree, from Step 3 (install dependencies) of
    `idd-work.instructions.md`.
 
-Steps 2 to 5 fail closed: success prints only after `--assert`.
-Lost-claim cleanup applies only at its listed exits.
+Steps 2 to 5 fail closed: success prints after `--assert`.
+Lost-claim cleanup runs only at its listed exits.
 
 ```sh
 set -euo pipefail
 w='<path>' a='{agent-id}' c='{claim-id}' n='{nonce}' r='<n>' b='<branch>' t='<ts>'
 g() { node scripts/resume-claim-routing.mjs --issue "$r" "$@"; }
+k() { node scripts/claim-lock.mjs --record-tokens --worktree "$w" --agent-id "$a" --claim-id "$c" "$@"; }
 p() { node scripts/post-idd-marker.mjs --target issue "$r" --agent-id "$a" --claim-id "$c" --timestamp "$t" --apply "$@"; }
-node scripts/claim-lock.mjs --record-tokens --worktree "$w" --agent-id "$a" --claim-id "$c" --nonce "$n"
+k
 g --fresh-claim-gate --own-worktree "$w" | node -e 'process.exit(JSON.parse(require("fs").readFileSync(0)).fresh_claim_gate.verdict==="claimable"?0:1)'
 p --type claim --supersedes none --branch "$b"
+k --nonce "$n"
 p --type activation-nonce --nonce "$n"
 node scripts/claim-lock.mjs --acquire --worktree "$w" --agent-id "$a" --claim-id "$c"
 sleep <settle>
