@@ -599,3 +599,8 @@ canonical source. Do not add checked-in `.agents/skills/`,
 `.cursor/skills/`, or `.opencode/skills/` mirrors by default
 (preventive; no observed incident yet),
 and do not assume the source path is automatically discovered by Codex.
+
+The rule against checked-in `.agents/skills/` mirrors covers repository files
+only. An operator's user-global install under `~/.agents/skills/` (see
+[User-global installation](docs/user-global-install.md)) lives outside every
+repository, so it is not a mirror and this rule does not apply to it.
