@@ -947,7 +947,7 @@ do-not-duplicate-native-roots rule.
 
 The issue-authoring companion drafts or refines IDD-ready issues,
 roadmaps, and sub-issues before execution starts. Checked drafts go under the
-hold; a preview or non-final draft, to a draft carrier. Only
+hold; previews or non-final ones go to a draft carrier. Only
 releasing the hold needs an explicit request; Discover skips held
 issues, so no loop starts.
 
