@@ -1082,16 +1082,18 @@ function contextAndPlan(options) {
  * Plan an install without writing anything. Runs the same checks and returns
  * one line per path. Creates no directory.
  */
-// audit:ignore-dead-export: consumed by issue #4245
 export function planInstall(options = {}) {
-  const { plan } = contextAndPlan(options);
-  return { lines: plan.lines, priorCurrentTarget: priorTargetOf(plan) };
+  const { plan, version } = contextAndPlan(options);
+  return {
+    lines: plan.lines,
+    priorCurrentTarget: priorTargetOf(plan),
+    version,
+  };
 }
 /** Install the payload and skills, recording each created path. */
-// audit:ignore-dead-export: consumed by issue #4245
 export function installPayload(options = {}) {
   const { ctx, plan, version } = contextAndPlan(options);
-  return applyInstall(ctx, plan, version);
+  return { ...applyInstall(ctx, plan, version), version };
 }
 function expectedOf(entry) {
   if (entry.kind === 'file') return { kind: 'file', sha256: entry.sha256 };
@@ -1249,7 +1251,6 @@ function uninstallLines(plan) {
   });
 }
 /** Plan an uninstall without removing anything. */
-// audit:ignore-dead-export: consumed by issue #4245
 export function planUninstall(options = {}) {
   const ctx = resolveContext(options);
   const plan = buildUninstallPlan(ctx);
@@ -1262,7 +1263,6 @@ export function planUninstall(options = {}) {
  * its turn stops the run. A directory that is not empty at its turn is kept
  * and named, and the run exits 0.
  */
-// audit:ignore-dead-export: consumed by issue #4245
 export function uninstallPayload(options = {}) {
   const ctx = resolveContext(options);
   const fs = ctx.fs;

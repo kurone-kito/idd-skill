@@ -73,6 +73,15 @@ export interface UserGlobalResult {
   priorCurrentTarget: string | null;
 }
 
+/**
+ * What a plan or an install reports. `version` is the package.json version
+ * the payload was (or would be) installed under, so a caller can name that
+ * exact version without reading package.json a second time (#4245).
+ */
+export interface UserGlobalInstallResult extends UserGlobalResult {
+  version: string;
+}
+
 interface Root {
   name: string;
   path: string;
@@ -1295,19 +1304,23 @@ function contextAndPlan(options: UserGlobalOptions): {
  * Plan an install without writing anything. Runs the same checks and returns
  * one line per path. Creates no directory.
  */
-// audit:ignore-dead-export: consumed by issue #4245
-export function planInstall(options: UserGlobalOptions = {}): UserGlobalResult {
-  const { plan } = contextAndPlan(options);
-  return { lines: plan.lines, priorCurrentTarget: priorTargetOf(plan) };
+export function planInstall(
+  options: UserGlobalOptions = {},
+): UserGlobalInstallResult {
+  const { plan, version } = contextAndPlan(options);
+  return {
+    lines: plan.lines,
+    priorCurrentTarget: priorTargetOf(plan),
+    version,
+  };
 }
 
 /** Install the payload and skills, recording each created path. */
-// audit:ignore-dead-export: consumed by issue #4245
 export function installPayload(
   options: UserGlobalOptions = {},
-): UserGlobalResult {
+): UserGlobalInstallResult {
   const { ctx, plan, version } = contextAndPlan(options);
-  return applyInstall(ctx, plan, version);
+  return { ...applyInstall(ctx, plan, version), version };
 }
 
 // ---------------------------------------------------------------------------
@@ -1500,7 +1513,6 @@ function uninstallLines(plan: UninstallPlan): string[] {
 }
 
 /** Plan an uninstall without removing anything. */
-// audit:ignore-dead-export: consumed by issue #4245
 export function planUninstall(
   options: UserGlobalOptions = {},
 ): UserGlobalResult {
@@ -1516,7 +1528,6 @@ export function planUninstall(
  * its turn stops the run. A directory that is not empty at its turn is kept
  * and named, and the run exits 0.
  */
-// audit:ignore-dead-export: consumed by issue #4245
 export function uninstallPayload(
   options: UserGlobalOptions = {},
 ): UserGlobalResult {

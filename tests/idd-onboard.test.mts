@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   cpSync,
@@ -10,6 +11,8 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -18,7 +21,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   buildCommandCatalog,
   collectVendoredFiles,
@@ -9026,6 +9029,10 @@ test('runRecordPolicyCli uses the injected readRemoteBranchExists reader instead
         overrides: {},
         help: false,
         allowRoots: [tmpdir()],
+        installUserGlobal: false,
+        uninstall: false,
+        harness: undefined,
+        givenFlags: [],
       },
       {
         readRemoteBranchExists: (targetDir, branch) => {
@@ -11254,4 +11261,1134 @@ test('bin/idd-onboard.mjs --help warns that a broad --allow-root removes confine
       /broad value \(e\.g\. a home directory\) substantially widens it instead/,
     );
   }
+});
+
+// ---------------------------------------------------------------------------
+// #4245: --install-user-global and --uninstall through the CLI
+//
+// Every run uses a sandbox HOME with XDG_DATA_HOME, XDG_CONFIG_HOME, and
+// CODEX_HOME set explicitly (or removed), so no test touches the real home
+// directory. The installer refuses on Windows before any write (the no-follow
+// opens it needs are unavailable), so each test that installs skips there;
+// the usage-error tests run everywhere.
+// ---------------------------------------------------------------------------
+
+const NO_USER_GLOBAL_INSTALL =
+  process.platform === 'win32'
+    ? 'the installer refuses on Windows before any write: no-follow opens are unavailable'
+    : false;
+const PACKAGE_JSON = JSON.parse(
+  readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'),
+) as { name: string; version: string };
+const ONBOARD_SCRIPT_PATH = join(REPO_ROOT, 'scripts', 'idd-onboard.mjs');
+const STATUS_WORDS = ['create', 'change', 'keep', 'remove', 'refuse', 'fail'];
+
+interface UserGlobalSandbox {
+  /** The sandbox top directory; the CLI runs with this as its working directory. */
+  root: string;
+  home: string;
+  env: NodeJS.ProcessEnv;
+}
+
+/**
+ * A sandbox HOME with the directories a real user already has: the installer
+ * never creates the parent of a root it installs into.
+ */
+function makeUserGlobalSandbox(): UserGlobalSandbox {
+  const root = realpathSync(trackedMkdtemp('idd-onboard-ug-'));
+  const home = join(root, 'home');
+  for (const dir of ['.local/share', '.config', '.claude', '.agents']) {
+    mkdirSync(join(home, dir), { recursive: true });
+  }
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    XDG_CONFIG_HOME: join(home, '.config'),
+  };
+  delete env.XDG_DATA_HOME;
+  delete env.CODEX_HOME;
+  return { root, home, env };
+}
+
+const dataRootIn = (sandbox: UserGlobalSandbox): string =>
+  join(sandbox.home, '.local', 'share', 'idd-skill');
+const claudeEntryIn = (sandbox: UserGlobalSandbox): string =>
+  join(sandbox.home, '.claude', 'CLAUDE.md');
+const codexEntryIn = (sandbox: UserGlobalSandbox): string =>
+  join(sandbox.home, '.codex', 'AGENTS.md');
+const opencodeEntryIn = (sandbox: UserGlobalSandbox): string =>
+  join(sandbox.home, '.config', 'opencode', 'opencode.json');
+
+interface UserGlobalRun {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * Run the CLI against a sandbox. The default entry point is the shipped
+ * `bin/idd-onboard.mjs`; a test that needs `node --import` runs
+ * `scripts/idd-onboard.mjs` directly. No `--allow-root` is added, because the
+ * user-global modes reject it.
+ */
+function runUserGlobal(
+  sandbox: UserGlobalSandbox,
+  args: string[],
+  options: {
+    env?: NodeJS.ProcessEnv;
+    script?: string;
+    execArgv?: string[];
+  } = {},
+): UserGlobalRun {
+  const env = { ...sandbox.env, ...options.env };
+  for (const name of [
+    'HOME',
+    'XDG_DATA_HOME',
+    'XDG_CONFIG_HOME',
+    'CODEX_HOME',
+  ]) {
+    const value = env[name];
+    assert.ok(
+      value === undefined || value.startsWith(sandbox.root),
+      `${name}=${value} escapes the sandbox ${sandbox.root}`,
+    );
+  }
+  const result = spawnSync(
+    process.execPath,
+    [...(options.execArgv ?? []), options.script ?? BIN_PATH, ...args],
+    { cwd: sandbox.root, env, encoding: 'utf8' },
+  );
+  return {
+    status: result.status,
+    stdout: String(result.stdout),
+    stderr: String(result.stderr),
+  };
+}
+
+/** Every path under `root` with its type, link target, and content hash. */
+function snapshotFull(root: string): string[] {
+  const out: string[] = [];
+  const visit = (dir: string): void => {
+    for (const name of readdirSync(dir).sort()) {
+      const path = join(dir, name);
+      const stat = lstatSync(path);
+      const rel = path.slice(root.length);
+      if (stat.isSymbolicLink()) {
+        out.push(`${rel} -> ${readlinkSync(path)}`);
+      } else if (stat.isDirectory()) {
+        out.push(`${rel}/`);
+        visit(path);
+      } else {
+        out.push(
+          `${rel} ${createHash('sha256').update(readFileSync(path)).digest('hex')}`,
+        );
+      }
+    }
+  };
+  if (existsSync(root)) {
+    visit(root);
+  }
+  return out;
+}
+
+/** The report lines of a run: everything before the first blank line. */
+function reportLines(run: UserGlobalRun): string[] {
+  const lines = run.stdout.split('\n');
+  const blank = lines.indexOf('');
+  return lines.slice(0, blank === -1 ? lines.length : blank);
+}
+
+/** The set of leading status words in a run's report lines. */
+function statusSet(run: UserGlobalRun): string[] {
+  return [
+    ...new Set(reportLines(run).map((line) => line.split(' ')[0])),
+  ].sort();
+}
+
+function install(sandbox: UserGlobalSandbox, ...args: string[]): UserGlobalRun {
+  const run = runUserGlobal(sandbox, ['--install-user-global', ...args]);
+  assert.equal(run.status, 0, run.stderr);
+  return run;
+}
+
+test('bin/idd-onboard.mjs --help documents the user-global modes (#4245)', () => {
+  const help = execFileSync(process.execPath, [BIN_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  assert.match(
+    help,
+    /--install-user-global \[--harness <list>\] \[--dry-run\]/,
+  );
+  assert.match(help, /--uninstall \[--dry-run\]/);
+  assert.match(help, /--harness <list>/);
+  assert.match(help, /never runs them/);
+});
+
+test('a fresh install writes the payload, skills, entry files, and receipt, and prints the two commands without spawning anything', {
+  skip: NO_USER_GLOBAL_INSTALL,
+}, () => {
+  const sandbox = makeUserGlobalSandbox();
+  const scratch = trackedMkdtemp('idd-onboard-spy-');
+  const log = join(scratch, 'spawn.log');
+  const spy = join(scratch, 'spy.mjs');
+  writeFileSync(
+    spy,
+    [
+      "import childProcess from 'node:child_process';",
+      "import { appendFileSync } from 'node:fs';",
+      "import { syncBuiltinESMExports } from 'node:module';",
+      'const log = process.env.IDD_TEST_SPAWN_LOG;',
+      "for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) {",
+      '  childProcess[name] = () => {',
+      '    appendFileSync(log, "call " + name + "\\n");',
+      "    throw new Error('spawn spy: ' + name);",
+      '  };',
+      '}',
+      'syncBuiltinESMExports();',
+      "const namespace = await import('node:child_process');",
+      "appendFileSync(log, namespace.spawnSync === childProcess.spawnSync ? 'armed\\n' : 'not-armed\\n');",
+      '',
+    ].join('\n'),
+  );
+  const control = join(scratch, 'control.mjs');
+  writeFileSync(
+    control,
+    [
+      "import { spawnSync } from 'node:child_process';",
+      'try {',
+      "  spawnSync('true');",
+      '} catch {}',
+      '',
+    ].join('\n'),
+  );
+  const execArgv = ['--import', pathToFileURL(spy).href];
+  const env = { IDD_TEST_SPAWN_LOG: log };
+
+  // Positive control: the same preload records a script that does spawn, so
+  // the empty log below is not a spy that never saw the ESM named imports.
+  const controlRun = spawnSync(process.execPath, [...execArgv, control], {
+    cwd: sandbox.root,
+    env: { ...sandbox.env, ...env },
+    encoding: 'utf8',
+  });
+  assert.equal(controlRun.status, 0, controlRun.stderr);
+  assert.equal(readFileSync(log, 'utf8'), 'armed\ncall spawnSync\n');
+  writeFileSync(log, '');
+
+  const run = runUserGlobal(sandbox, ['--install-user-global'], {
+    env,
+    execArgv,
+    script: ONBOARD_SCRIPT_PATH,
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(
+    readFileSync(log, 'utf8'),
+    'armed\n',
+    'no child process may start',
+  );
+
+  const spec = `${PACKAGE_JSON.name}@${PACKAGE_JSON.version}`;
+  assert.match(run.stdout, new RegExp(`^  npm install -g ${spec}$`, 'mu'));
+  assert.match(run.stdout, new RegExp(`^  pnpm add -g ${spec}$`, 'mu'));
+  assert.ok(
+    run.stdout.indexOf(`npm install -g ${spec}`) >
+      run.stdout.lastIndexOf('create '),
+    'the commands follow the report lines',
+  );
+
+  const dataRoot = dataRootIn(sandbox);
+  const versionDir = join(dataRoot, PACKAGE_JSON.version);
+  assert.equal(readlinkSync(join(dataRoot, 'current')), versionDir);
+  assert.ok(
+    existsSync(
+      join(
+        versionDir,
+        '.github',
+        'instructions',
+        'idd-overview-core.instructions.md',
+      ),
+    ),
+  );
+  assert.ok(existsSync(join(versionDir, 'user-global', 'entry.md')));
+  assert.ok(existsSync(join(dataRoot, 'receipt.json')));
+  for (const root of ['.claude', '.agents']) {
+    for (const skill of ['issue-authoring', 'idd-spec-audit']) {
+      assert.ok(
+        existsSync(join(sandbox.home, root, 'skills', skill, 'SKILL.md')),
+      );
+    }
+  }
+  // With --harness omitted all three entry files are edited.
+  assert.ok(existsSync(claudeEntryIn(sandbox)));
+  assert.ok(existsSync(codexEntryIn(sandbox)));
+  assert.ok(existsSync(opencodeEntryIn(sandbox)));
+  assert.deepEqual(statusSet(run), ['create']);
+});
+
+test('--dry-run installs nothing, prints no commands, and exits 0 when the plan has no refusal; the same for --uninstall --dry-run', {
+  skip: NO_USER_GLOBAL_INSTALL,
+}, () => {
+  const sandbox = makeUserGlobalSandbox();
+  const empty = snapshotFull(sandbox.root);
+
+  const plan = runUserGlobal(sandbox, ['--install-user-global', '--dry-run']);
+  assert.equal(plan.status, 0, plan.stderr);
+  assert.deepEqual(snapshotFull(sandbox.root), empty);
+  assert.deepEqual(statusSet(plan), ['create']);
+  assert.doesNotMatch(plan.stdout, /npm install -g/);
+  assert.equal(plan.stderr, '');
+
+  install(sandbox);
+  const installed = snapshotFull(sandbox.root);
+  const removal = runUserGlobal(sandbox, ['--uninstall', '--dry-run']);
+  assert.equal(removal.status, 0, removal.stderr);
+  assert.deepEqual(snapshotFull(sandbox.root), installed);
+  assert.deepEqual(statusSet(removal), ['remove']);
+
+  // A plan against an installed tree of the same version keeps everything.
+  const again = runUserGlobal(sandbox, ['--install-user-global', '--dry-run']);
+  assert.equal(again.status, 0, again.stderr);
+  assert.deepEqual(statusSet(again), ['keep']);
+  assert.deepEqual(snapshotFull(sandbox.root), installed);
+});
+
+test('--dry-run exits 1 and names the receipt for a corrupt receipt, in both modes, and a real run prints no commands', {
+  skip: NO_USER_GLOBAL_INSTALL,
+}, () => {
+  const sandbox = makeUserGlobalSandbox();
+  mkdirSync(dataRootIn(sandbox));
+  const receipt = join(dataRootIn(sandbox), 'receipt.json');
+  writeFileSync(receipt, '{ not json');
+  const before = snapshotFull(sandbox.root);
+
+  for (const args of [
+    ['--install-user-global', '--dry-run'],
+    ['--uninstall', '--dry-run'],
+    ['--install-user-global'],
+    ['--uninstall'],
+  ]) {
+    const run = runUserGlobal(sandbox, args);
+    assert.equal(run.status, 1, `${args.join(' ')}: ${run.stderr}`);
+    assert.match(run.stderr, /^idd-onboard: refuse: /u);
+    assert.ok(
+      run.stderr.includes(receipt),
+      `${args.join(' ')} names the receipt`,
+    );
+    assert.equal(
+      run.stdout,
+      '',
+      `${args.join(' ')} prints no lines or commands`,
+    );
+    assert.deepEqual(snapshotFull(sandbox.root), before);
+  }
+});
+
+test('S1: --uninstall refuses before any removal when an installed payload file was edited, and leaves the file in place', {
+  skip: NO_USER_GLOBAL_INSTALL,
+}, () => {
+  const sandbox = makeUserGlobalSandbox();
+  install(sandbox);
+  const edited = join(
+    dataRootIn(sandbox),
+    PACKAGE_JSON.version,
+    '.github',
+    'instructions',
+    'idd-overview-core.instructions.md',
+  );
+  writeFileSync(edited, `${readFileSync(edited, 'utf8')}\nuser edit\n`);
+  const before = snapshotFull(sandbox.root);
+
+  const run = runUserGlobal(sandbox, ['--uninstall']);
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /^idd-onboard: refuse: /u);
+  assert.ok(run.stderr.includes(edited), 'the edited path is named');
+  assert.equal(run.stdout, '');
+  assert.deepEqual(snapshotFull(sandbox.root), before);
+  assert.match(readFileSync(edited, 'utf8'), /user edit/);
+});
+
+test('S2: --install-user-global refuses before any write when the data root is a symbolic link out of the sandbox', {
+  skip: NO_USER_GLOBAL_INSTALL,
+}, () => {
+  const sandbox = makeUserGlobalSandbox();
+  const sentinel = realpathSync(trackedMkdtemp('idd-onboard-sentinel-'));
+  writeFileSync(join(sentinel, 'keep.txt'), 'sentinel\n');
+  const xdgData = join(sandbox.root, 'xdg-data');
+  mkdirSync(xdgData);
+  symlinkSync(sentinel, join(xdgData, 'idd-skill'), 'dir');
+  const before = snapshotFull(sandbox.root);
+  const sentinelBefore = snapshotFull(sentinel);
+
+  for (const args of [
+    ['--install-user-global'],
+    ['--install-user-global', '--dry-run'],
+  ]) {
+    const run = runUserGlobal(sandbox, args, {
+      env: { XDG_DATA_HOME: xdgData },
+    });
+    assert.equal(run.status, 1, run.stderr);
+    assert.match(run.stderr, /^idd-onboard: refuse: /u);
+    assert.ok(
+      run.stderr.includes(join(xdgData, 'idd-skill')),
+      'the data root is named',
+    );
+    assert.equal(run.stdout, '');
+    assert.deepEqual(snapshotFull(sandbox.root), before);
+    assert.deepEqual(snapshotFull(sentinel), sentinelBefore);
+  }
+});
+
+test('--harness claude writes the Claude entry file and nothing under the Codex or OpenCode roots; --uninstall then leaves those roots alone', {
+  skip: NO_USER_GLOBAL_INSTALL,
+}, () => {
+  const sandbox = makeUserGlobalSandbox();
+  // The Codex and OpenCode roots hold user files that must come through byte
+  // for byte, with their modification times.
+  const codexRoot = join(sandbox.home, '.codex');
+  const opencodeRoot = join(sandbox.home, '.config', 'opencode');
+  mkdirSync(codexRoot);
+  mkdirSync(opencodeRoot);
+  writeFileSync(join(codexRoot, 'AGENTS.md'), 'my codex notes\n');
+  writeFileSync(join(opencodeRoot, 'opencode.json'), '{"theme":"dark"}\n');
+  const seed = snapshotFull(sandbox.root);
+  const foreignModified = [
+    join(codexRoot, 'AGENTS.md'),
+    join(opencodeRoot, 'opencode.json'),
+  ].map((path) => [path, statSync(path).mtimeMs]);
+
+  const run = install(sandbox, '--harness', 'claude');
+  assert.ok(existsSync(claudeEntryIn(sandbox)));
+  assert.ok(existsSync(join(dataRootIn(sandbox), 'receipt.json')));
+  assert.ok(existsSync(join(dataRootIn(sandbox), PACKAGE_JSON.version)));
+  assert.ok(
+    existsSync(join(sandbox.home, '.agents', 'skills', 'issue-authoring')),
+  );
+  assert.equal(
+    readFileSync(join(codexRoot, 'AGENTS.md'), 'utf8'),
+    'my codex notes\n',
+  );
+  assert.equal(
+    readFileSync(join(opencodeRoot, 'opencode.json'), 'utf8'),
+    '{"theme":"dark"}\n',
+  );
+  const foreignRoots = [codexRoot, opencodeRoot];
+  const underForeignRoot = (text: string): boolean =>
+    foreignRoots.some((root) => text.includes(root));
+  assert.ok(!underForeignRoot(run.stdout), 'install reports no foreign path');
+  const receipt = JSON.parse(
+    readFileSync(join(dataRootIn(sandbox), 'receipt.json'), 'utf8'),
+  ) as { entries: { path: string }[] };
+  assert.ok(
+    !receipt.entries.some((entry) => underForeignRoot(entry.path)),
+    'the receipt lists no foreign path',
+  );
+
+  const removal = runUserGlobal(sandbox, ['--uninstall']);
+  assert.equal(removal.status, 0, removal.stderr);
+  assert.ok(!underForeignRoot(removal.stdout), 'uninstall reports none');
+  assert.deepEqual(snapshotFull(sandbox.root), seed);
+  for (const [path, mtimeMs] of foreignModified) {
+    assert.equal(
+      statSync(String(path)).mtimeMs,
+      mtimeMs,
+      `${path} was not touched`,
+    );
+  }
+});
+
+test('--harness claude into an unseeded sandbox creates no Codex or OpenCode directory', {
+  skip: NO_USER_GLOBAL_INSTALL,
+}, () => {
+  const sandbox = makeUserGlobalSandbox();
+  install(sandbox, '--harness', 'claude');
+  assert.ok(existsSync(claudeEntryIn(sandbox)));
+  assert.equal(existsSync(join(sandbox.home, '.codex')), false);
+  assert.equal(existsSync(join(sandbox.home, '.config', 'opencode')), false);
+
+  const removal = runUserGlobal(sandbox, ['--uninstall']);
+  assert.equal(removal.status, 0, removal.stderr);
+  assert.equal(existsSync(join(sandbox.home, '.codex')), false);
+  assert.equal(existsSync(join(sandbox.home, '.config', 'opencode')), false);
+});
+
+test('--harness accepts a comma-separated list: duplicates collapse and the order is canonical', {
+  skip: NO_USER_GLOBAL_INSTALL,
+}, () => {
+  const sandbox = makeUserGlobalSandbox();
+  const before = snapshotFull(sandbox.root);
+  const run = runUserGlobal(sandbox, [
+    '--install-user-global',
+    '--dry-run',
+    '--harness',
+    'codex,claude,claude',
+  ]);
+  assert.equal(run.status, 0, run.stderr);
+  const lines = reportLines(run);
+  const claude = lines.indexOf(`create ${claudeEntryIn(sandbox)}`);
+  const codex = lines.indexOf(`create ${codexEntryIn(sandbox)}`);
+  assert.ok(claude !== -1 && codex !== -1 && claude < codex);
+  assert.equal(lines.filter((line) => line.endsWith('CLAUDE.md')).length, 1);
+  assert.ok(
+    !lines.some((line) =>
+      line.includes(join(sandbox.home, '.config', 'opencode')),
+    ),
+  );
+  assert.deepEqual(snapshotFull(sandbox.root), before);
+});
+
+test('an unknown or empty --harness name is a usage error and writes nothing', () => {
+  const sandbox = makeUserGlobalSandbox();
+  const before = snapshotFull(sandbox.root);
+  for (const value of [
+    '',
+    'bogus',
+    'claude,',
+    ',claude',
+    'claude,,codex',
+    'Claude',
+    'claude, codex',
+    'claude;codex',
+  ]) {
+    const run = runUserGlobal(sandbox, [
+      '--install-user-global',
+      '--harness',
+      value,
+    ]);
+    assert.equal(
+      run.status,
+      2,
+      `--harness ${JSON.stringify(value)}: ${run.stderr}`,
+    );
+    assert.match(run.stderr, /--harness/u);
+    assert.equal(run.stdout, '');
+    assert.deepEqual(snapshotFull(sandbox.root), before);
+  }
+  const missing = runUserGlobal(sandbox, [
+    '--install-user-global',
+    '--harness',
+  ]);
+  assert.equal(missing.status, 2);
+  assert.match(missing.stderr, /missing value for argument: --harness/u);
+  assert.deepEqual(snapshotFull(sandbox.root), before);
+});
+
+test('the user-global modes reject every other flag and every other stage with exit 2 and write nothing', () => {
+  // An empty sandbox shows that no install happens. A sandbox that already
+  // holds an install shows that no uninstall happens, which an empty one
+  // cannot. The installer refuses on Windows, so only the empty one runs there.
+  const sandboxes = [makeUserGlobalSandbox()];
+  if (!NO_USER_GLOBAL_INSTALL) {
+    const installed = makeUserGlobalSandbox();
+    install(installed);
+    sandboxes.push(installed);
+  }
+  for (const sandbox of sandboxes) {
+    const before = snapshotFull(sandbox.root);
+    const foreign = [
+      ['--force'],
+      ['--apply'],
+      ['--source', sandbox.root],
+      ['--target', sandbox.root],
+      ['--profile', 'vendored-node'],
+      ['--hold', '.cspell.config.yml'],
+      ['--allow-root', sandbox.root],
+      ['--repo-name', 'my-app'],
+      ['--transcript', 'x.json'],
+    ];
+    for (const mode of ['--install-user-global', '--uninstall']) {
+      for (const flags of foreign) {
+        const run = runUserGlobal(sandbox, [mode, ...flags]);
+        assert.equal(
+          run.status,
+          2,
+          `${mode} ${flags.join(' ')}: ${run.stderr}`,
+        );
+        assert.match(
+          run.stderr,
+          new RegExp(`${mode} does not accept flag\\(s\\): ${flags[0]}`, 'u'),
+        );
+        assert.equal(run.stdout, '');
+        assert.deepEqual(snapshotFull(sandbox.root), before);
+      }
+    }
+    const harness = runUserGlobal(sandbox, [
+      '--uninstall',
+      '--harness',
+      'claude',
+    ]);
+    assert.equal(harness.status, 2);
+    assert.match(
+      harness.stderr,
+      /--uninstall does not accept flag\(s\): --harness/u,
+    );
+    assert.deepEqual(snapshotFull(sandbox.root), before);
+
+    const pairs = [
+      ['--install-user-global', '--uninstall'],
+      ['--install-user-global', '--import'],
+      ['--uninstall', '--import'],
+      ['--install-user-global', '--substitute'],
+      ['--uninstall', '--verify'],
+      ['--install-user-global', '--hear'],
+      ['--uninstall', '--record-policy'],
+    ];
+    for (const args of pairs) {
+      const run = runUserGlobal(sandbox, args);
+      assert.equal(run.status, 2, `${args.join(' ')}: ${run.stderr}`);
+      assert.match(run.stderr, /mutually exclusive/u);
+      assert.deepEqual(snapshotFull(sandbox.root), before);
+    }
+  }
+});
+
+test('--harness is a usage error under every other stage, so --import --harness keeps failing', () => {
+  const sandbox = makeUserGlobalSandbox();
+  const before = snapshotFull(sandbox.root);
+  for (const stage of [
+    '--import',
+    '--substitute',
+    '--verify',
+    '--hear',
+    '--record-policy',
+  ]) {
+    const run = runUserGlobal(sandbox, [stage, '--harness', 'claude']);
+    assert.equal(run.status, 2, `${stage}: ${run.stderr}`);
+    assert.match(
+      run.stderr,
+      /--harness is accepted only with --install-user-global/u,
+    );
+  }
+  const alone = runUserGlobal(sandbox, ['--harness', 'claude']);
+  assert.equal(alone.status, 2);
+  assert.match(
+    alone.stderr,
+    /--harness is accepted only with --install-user-global/u,
+  );
+  assert.deepEqual(snapshotFull(sandbox.root), before);
+});
+
+test('cycle: install, a second install, and uninstall leave the user text and every other path as they were', {
+  skip: NO_USER_GLOBAL_INSTALL,
+}, () => {
+  const sandbox = makeUserGlobalSandbox();
+  const claude = claudeEntryIn(sandbox);
+  const unrelated = join(sandbox.home, '.claude', 'settings.json');
+  writeFileSync(claude, '# My Claude notes\n\nKeep me exactly.\n');
+  writeFileSync(unrelated, '{"theme":"light"}\n');
+  const seed = snapshotFull(sandbox.root);
+  const seedClaude = readFileSync(claude);
+
+  const first = install(sandbox);
+  // The existing CLAUDE.md is edited in place; everything else is new.
+  assert.deepEqual(statusSet(first), ['change', 'create']);
+  assert.ok(reportLines(first).includes(`change ${claude}`));
+  assert.ok(readFileSync(claude, 'utf8').startsWith('# My Claude notes'));
+  assert.notDeepEqual(readFileSync(claude), seedClaude);
+  const installed = snapshotFull(sandbox.root);
+
+  const second = install(sandbox);
+  assert.deepEqual(statusSet(second), ['keep']);
+  assert.deepEqual(
+    snapshotFull(sandbox.root),
+    installed,
+    'a second install changes no byte',
+  );
+
+  const removal = runUserGlobal(sandbox, ['--uninstall']);
+  assert.equal(removal.status, 0, removal.stderr);
+  assert.doesNotMatch(removal.stdout, /npm install -g/u);
+  assert.ok(
+    readFileSync(claude).equals(seedClaude),
+    'CLAUDE.md is byte-identical to its seed',
+  );
+  assert.equal(readFileSync(unrelated, 'utf8'), '{"theme":"light"}\n');
+  assert.deepEqual(snapshotFull(sandbox.root), seed);
+});
+
+test('the status words cover repoint, a kept directory, an already absent file, and an uninstall with nothing installed', {
+  skip: NO_USER_GLOBAL_INSTALL,
+}, () => {
+  const sandbox = makeUserGlobalSandbox();
+
+  // Nothing installed: the line is not a per-path line and is printed as is.
+  const nothing = runUserGlobal(sandbox, ['--uninstall']);
+  assert.equal(nothing.status, 0, nothing.stderr);
+  assert.equal(nothing.stdout, 'no data root; nothing to remove\n');
+
+  // A current link that predates the install is repointed, and its prior
+  // target is printed.
+  const dataRoot = dataRootIn(sandbox);
+  const old = join(dataRoot, '0.0.1');
+  mkdirSync(old, { recursive: true });
+  symlinkSync(old, join(dataRoot, 'current'));
+  const repoint = runUserGlobal(sandbox, ['--install-user-global']);
+  assert.equal(repoint.status, 0, repoint.stderr);
+  assert.deepEqual(statusSet(repoint), ['change', 'create']);
+  assert.match(
+    repoint.stdout,
+    new RegExp(
+      `^change ${join(dataRoot, 'current').replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')} .*\\(prior target ${old.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}\\)$`,
+      'mu',
+    ),
+  );
+
+  // A file the user added beside a managed one keeps its directory; a managed
+  // file that is already gone is reported as such.
+  const skillDir = join(sandbox.home, '.claude', 'skills', 'issue-authoring');
+  writeFileSync(join(skillDir, 'user-note.md'), 'mine\n');
+  const gone = join(
+    sandbox.home,
+    '.agents',
+    'skills',
+    'issue-authoring',
+    'SKILL.md',
+  );
+  rmSync(gone);
+  const removal = runUserGlobal(sandbox, ['--uninstall']);
+  assert.equal(removal.status, 0, removal.stderr);
+  assert.deepEqual(statusSet(removal), ['keep', 'remove']);
+  assert.match(
+    removal.stdout,
+    new RegExp(
+      `^keep ${gone.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')} \\(already absent\\)$`,
+      'mu',
+    ),
+  );
+  assert.match(removal.stdout, /^keep .*issue-authoring \(not empty\)$/mu);
+  assert.equal(readFileSync(join(skillDir, 'user-note.md'), 'utf8'), 'mine\n');
+  for (const line of reportLines(removal)) {
+    assert.ok(
+      STATUS_WORDS.includes(line.split(' ')[0]),
+      `unmapped line: ${line}`,
+    );
+  }
+});
+
+test('a write that fails after earlier writes exits 1, names the path on stderr, rolls back, and prints no commands', {
+  skip:
+    NO_USER_GLOBAL_INSTALL ||
+    (typeof process.getuid === 'function' && process.getuid() === 0
+      ? 'permission bits do not stop root'
+      : false),
+}, () => {
+  const sandbox = makeUserGlobalSandbox();
+  const claudeRoot = join(sandbox.home, '.claude');
+  const before = snapshotFull(sandbox.root);
+  // The failing step is not the first write: the directory lines of the plan
+  // are in apply order, and the data root (the payload) comes before the
+  // skills directory, so there is something to roll back.
+  const plan = reportLines(
+    runUserGlobal(sandbox, ['--install-user-global', '--dry-run']),
+  );
+  const dataRootStep = plan.indexOf(`create ${dataRootIn(sandbox)}`);
+  const skillsStep = plan.indexOf(`create ${join(claudeRoot, 'skills')}`);
+  assert.ok(
+    dataRootStep !== -1 && dataRootStep < skillsStep,
+    'the data root is created before the skills directory',
+  );
+  chmodSync(claudeRoot, 0o555);
+  try {
+    const run = runUserGlobal(sandbox, ['--install-user-global']);
+    assert.equal(run.status, 1, run.stderr);
+    assert.match(run.stderr, /^idd-onboard: fail: /u);
+    assert.ok(
+      run.stderr.includes(join(claudeRoot, 'skills')),
+      'the failing path is named',
+    );
+    assert.match(run.stderr, /rolled back/u);
+    assert.equal(
+      run.stdout,
+      '',
+      'no report lines and no commands after a failure',
+    );
+  } finally {
+    chmodSync(claudeRoot, 0o755);
+  }
+  assert.deepEqual(snapshotFull(sandbox.root), before);
+});
+
+test('an uninstall that stops partway exits 1 with fail, keeps the receipt for the rest, and a rerun finishes', {
+  skip:
+    NO_USER_GLOBAL_INSTALL ||
+    (typeof process.getuid === 'function' && process.getuid() === 0
+      ? 'permission bits do not stop root'
+      : false),
+}, () => {
+  const sandbox = makeUserGlobalSandbox();
+  const seed = snapshotFull(sandbox.root);
+  install(sandbox);
+  const skillDir = join(sandbox.home, '.claude', 'skills', 'issue-authoring');
+  chmodSync(skillDir, 0o555);
+  try {
+    const run = runUserGlobal(sandbox, ['--uninstall']);
+    assert.equal(run.status, 1, run.stderr);
+    assert.match(run.stderr, /^idd-onboard: fail: uninstall stopped at /u);
+    assert.ok(run.stderr.includes(skillDir), 'the stopping path is named');
+    assert.equal(run.stdout, '');
+    // Removals before the stop are not rolled back; the receipt lists what
+    // remains.
+    const receipt = JSON.parse(
+      readFileSync(join(dataRootIn(sandbox), 'receipt.json'), 'utf8'),
+    ) as { entries: { path: string }[] };
+    assert.ok(receipt.entries.some((entry) => entry.path.startsWith(skillDir)));
+    assert.ok(
+      !receipt.entries.some((entry) => entry.path === claudeEntryIn(sandbox)),
+      'an earlier removal stays done',
+    );
+  } finally {
+    chmodSync(skillDir, 0o755);
+  }
+  const rerun = runUserGlobal(sandbox, ['--uninstall']);
+  assert.equal(rerun.status, 0, rerun.stderr);
+  assert.deepEqual(snapshotFull(sandbox.root), seed);
+});
+
+test('a missing directory above an install root is a refusal that names it and writes nothing', {
+  skip: NO_USER_GLOBAL_INSTALL,
+}, () => {
+  const sandbox = makeUserGlobalSandbox();
+  const agents = join(sandbox.home, '.agents');
+  rmSync(agents, { recursive: true });
+  const before = snapshotFull(sandbox.root);
+  for (const args of [
+    ['--install-user-global'],
+    ['--install-user-global', '--dry-run'],
+    ['--install-user-global', '--harness', 'claude'],
+  ]) {
+    const run = runUserGlobal(sandbox, args);
+    assert.equal(run.status, 1, `${args.join(' ')}: ${run.stderr}`);
+    assert.match(run.stderr, /^idd-onboard: refuse: /u);
+    assert.ok(run.stderr.includes(agents), `${args.join(' ')} names ${agents}`);
+    assert.equal(run.stdout, '');
+    assert.deepEqual(snapshotFull(sandbox.root), before);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #4245: structural guard. The two user-global modes add no write or removal
+// of their own: the marked block of src/scripts/idd-onboard.mts calls only
+// the install, uninstall, and plan functions of user-global-install.mts.
+// ---------------------------------------------------------------------------
+
+const ONBOARD_SOURCE_PATH = join(
+  REPO_ROOT,
+  'src',
+  'scripts',
+  'idd-onboard.mts',
+);
+const BLOCK_BEGIN = '// user-global modes: begin';
+const BLOCK_END = '// user-global modes: end';
+const MODULE_FUNCTIONS = [
+  'planInstall',
+  'installPayload',
+  'planUninstall',
+  'uninstallPayload',
+];
+/** The names the issue forbids, matched as whole identifiers. */
+const FORBIDDEN_FS_NAMES = [
+  'rm',
+  'rmSync',
+  'rmdir',
+  'rmdirSync',
+  'unlink',
+  'unlinkSync',
+  'rename',
+  'renameSync',
+  'writeFile',
+  'writeFileSync',
+  'appendFile',
+  'appendFileSync',
+  'mkdir',
+  'mkdirSync',
+  'copyFile',
+  'copyFileSync',
+  'cp',
+  'cpSync',
+  'symlink',
+  'symlinkSync',
+  'truncate',
+  'truncateSync',
+  'link',
+  'linkSync',
+];
+/** The child-process names: the printed commands are never run. */
+const FORBIDDEN_SPAWN_NAMES = [
+  'spawn',
+  'spawnSync',
+  'exec',
+  'execSync',
+  'execFile',
+  'execFileSync',
+  'fork',
+];
+/** Dynamic routes to a module the static scan would not see. */
+const FORBIDDEN_LOADERS = ['require', 'createRequire', 'import'];
+/** Call targets the block may use besides its own functions and the four above. */
+const ALLOWED_CALLS = [
+  'markCliUsageError',
+  'Map',
+  'Set',
+  'String',
+  'Error',
+  'if',
+  'for',
+  'while',
+  'switch',
+  'catch',
+  'function',
+  'return',
+];
+
+/**
+ * Replace comments, string literals, and the static text of template literals
+ * with spaces, keeping code (including `${...}` expressions) and every
+ * newline in place.
+ */
+function blankLiteralsAndComments(source: string): string {
+  const blank = (text: string): string => text.replace(/[^\n]/gu, ' ');
+  // A frame is the text of a template literal, or code. A code frame opened by
+  // `${` counts its own unclosed braces so the closing `}` ends it.
+  const frames: { template: boolean; braces: number }[] = [
+    { template: false, braces: 0 },
+  ];
+  let out = '';
+  let index = 0;
+  while (index < source.length) {
+    const frame = frames[frames.length - 1];
+    const char = source[index];
+    const next = source[index + 1];
+    if (frame.template) {
+      if (char === '\\') {
+        out += blank(source.slice(index, index + 2));
+        index += 2;
+      } else if (char === '`') {
+        frames.pop();
+        out += ' ';
+        index += 1;
+      } else if (char === '$' && next === '{') {
+        frames.push({ template: false, braces: 0 });
+        out += '  ';
+        index += 2;
+      } else {
+        out += blank(char);
+        index += 1;
+      }
+    } else if (char === '/' && next === '/') {
+      const end = source.indexOf('\n', index);
+      const stop = end === -1 ? source.length : end;
+      out += blank(source.slice(index, stop));
+      index = stop;
+    } else if (char === '/' && next === '*') {
+      const end = source.indexOf('*/', index + 2);
+      const stop = end === -1 ? source.length : end + 2;
+      out += blank(source.slice(index, stop));
+      index = stop;
+    } else if (char === "'" || char === '"') {
+      let stop = index + 1;
+      while (stop < source.length && source[stop] !== char) {
+        stop += source[stop] === '\\' ? 2 : 1;
+      }
+      out += blank(source.slice(index, stop + 1));
+      index = stop + 1;
+    } else if (char === '`') {
+      frames.push({ template: true, braces: 0 });
+      out += ' ';
+      index += 1;
+    } else if (char === '{') {
+      frame.braces += 1;
+      out += char;
+      index += 1;
+    } else if (char === '}' && frame.braces === 0 && frames.length > 1) {
+      frames.pop();
+      out += ' ';
+      index += 1;
+    } else {
+      if (char === '}') {
+        frame.braces -= 1;
+      }
+      out += char;
+      index += 1;
+    }
+  }
+  return out;
+}
+
+/** The local names every `import { ... } from '<specifier>'` statement binds. */
+function importedNames(source: string, specifier: string): string[] {
+  const statements = source.matchAll(
+    new RegExp(
+      `import\\s*\\{([^}]*)\\}\\s*from\\s*'${specifier.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}'`,
+      'gu',
+    ),
+  );
+  return [...statements].flatMap((match) =>
+    match[1]
+      .split(',')
+      .map((part) => part.trim().replace(/^type\s+/u, ''))
+      .filter((part) => part !== '')
+      .map((part) => part.split(/\s+as\s+/u).pop() ?? part),
+  );
+}
+
+/** What is wrong with a candidate block, as one message per problem. */
+function scanUserGlobalBlock(
+  block: string,
+  importedFromFsAndChildProcess: readonly string[],
+): string[] {
+  const code = blankLiteralsAndComments(block);
+  const problems: string[] = [];
+  const forbidden = new Set([
+    ...FORBIDDEN_FS_NAMES,
+    ...FORBIDDEN_SPAWN_NAMES,
+    ...FORBIDDEN_LOADERS,
+    ...importedFromFsAndChildProcess,
+  ]);
+  for (const match of code.matchAll(/[A-Za-z_$][\w$]*/gu)) {
+    if (forbidden.has(match[0])) {
+      problems.push(`forbidden identifier ${match[0]}`);
+    }
+  }
+  if (block.includes('fs/promises')) {
+    problems.push('fs/promises');
+  }
+  const declared = new Set(
+    [...code.matchAll(/\bfunction\s+([A-Za-z_$][\w$]*)/gu)].map(
+      (match) => match[1],
+    ),
+  );
+  // A generic call such as `helper<string>(x)` has type arguments before `(`.
+  for (const match of code.matchAll(
+    /(?<![.\w$])([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\(/gu,
+  )) {
+    const name = match[1];
+    if (
+      !declared.has(name) &&
+      !MODULE_FUNCTIONS.includes(name) &&
+      !ALLOWED_CALLS.includes(name)
+    ) {
+      problems.push(`call to ${name}`);
+    }
+  }
+  for (const name of MODULE_FUNCTIONS) {
+    if (!new RegExp(`(?<![.\\w$])${name}\\s*\\(`, 'u').test(code)) {
+      problems.push(`${name} is never called`);
+    }
+  }
+  return problems;
+}
+
+/** A template-literal expression, spelled without a literal dollar-brace. */
+const expression = (inner: string): string => `$${'{'}${inner}}`;
+
+test('the scanner blanks comments and literals but keeps template expressions', () => {
+  const source = [
+    '// rmSync(a)',
+    "const a = 'rmSync(b)'; /* rmSync(c) */",
+    `const b = \`rmSync(d) ${expression('call(e)')} \\\` ${expression(`\`x ${expression('nested(f)')}\``)}\`;`,
+    '',
+  ].join('\n');
+  const blanked = blankLiteralsAndComments(source);
+  assert.equal(blanked.length, source.length);
+  assert.equal(blanked.split('\n').length, source.split('\n').length);
+  assert.doesNotMatch(blanked, /rmSync/u);
+  assert.match(blanked, /call\(e\)/u);
+  assert.match(blanked, /nested\(f\)/u);
+});
+
+test('structural guard: the user-global block calls only the install, uninstall, and plan functions and no write, removal, spawn, or fs/promises route', () => {
+  const source = readFileSync(ONBOARD_SOURCE_PATH, 'utf8');
+  assert.equal(source.split(BLOCK_BEGIN).length - 1, 1, 'one begin marker');
+  assert.equal(source.split(BLOCK_END).length - 1, 1, 'one end marker');
+  const begin = source.indexOf(BLOCK_BEGIN);
+  const end = source.indexOf(BLOCK_END);
+  assert.ok(begin !== -1 && end > begin, 'the markers are in order');
+  const block = source.slice(begin, end);
+  assert.ok(block.split('\n').length > 50, 'the block is not empty');
+
+  const imported = [
+    ...importedNames(source, 'node:fs'),
+    ...importedNames(source, 'node:fs/promises'),
+    ...importedNames(source, 'node:child_process'),
+  ];
+  assert.ok(imported.includes('rmSync'), 'the --import code imports rmSync');
+  // A namespace or default import would bind names the list above cannot see.
+  assert.doesNotMatch(
+    source,
+    /import\s+(?:\*\s+as\s+\w+|\w+)(?:\s*,\s*\{[^}]*\})?\s+from\s+'(?:node:)?(?:fs|fs\/promises|child_process)'/u,
+    'no namespace or default import of fs, fs/promises, or child_process',
+  );
+  assert.deepEqual(scanUserGlobalBlock(block, imported), []);
+  // The scanner does not understand regular-expression literals, which could
+  // hide code behind a phantom string. The block has no division and no
+  // literal, so no slash may remain once comments and strings are blanked.
+  assert.doesNotMatch(
+    blankLiteralsAndComments(block),
+    /\//u,
+    'no regular-expression literal in the block',
+  );
+
+  // The scan covers the marked block only. The parseArgs branches and the
+  // runCli dispatch outside it assign fields and call into the block, and the
+  // shape of that dispatch is pinned below. The only names bound from the
+  // install module are the four it exports for this CLI.
+  assert.deepEqual(
+    importedNames(source, './user-global-install.mts').sort(),
+    [...MODULE_FUNCTIONS].sort(),
+  );
+  assert.match(
+    source.slice(0, begin) + source.slice(end),
+    /if \(args\.installUserGlobal \|\| args\.uninstall\) \{\s*return runUserGlobalCli\(args\);/u,
+  );
+});
+
+test('structural guard negative controls: each forbidden shape in a block is flagged', () => {
+  const clean = [
+    'function runIt(): number {',
+    '  planInstall({});',
+    '  installPayload({});',
+    '  planUninstall();',
+    '  uninstallPayload();',
+    "  // rmSync('x') is only a comment, and 'rm (' is only text",
+    '  return 0;',
+    '}',
+  ].join('\n');
+  assert.deepEqual(scanUserGlobalBlock(clean, ['rmSync', 'readFileSync']), []);
+  const mutations: [string, string][] = [
+    ['rmSync(path);', 'forbidden identifier rmSync'],
+    ['fs.rmSync(path);', 'forbidden identifier rmSync'],
+    ['writeFile(path, text);', 'forbidden identifier writeFile'],
+    ['linkSync(a, b);', 'forbidden identifier linkSync'],
+    ['readFileSync(path);', 'forbidden identifier readFileSync'],
+    ["spawnSync('npm', ['install']);", 'forbidden identifier spawnSync'],
+    ["await import('node:fs/promises');", 'forbidden identifier import'],
+    ["require('node:fs');", 'forbidden identifier require'],
+    ['somethingElse();', 'call to somethingElse'],
+    ['somethingElse<string>(x);', 'call to somethingElse'],
+    [`\`${expression('rmSync(path)')}\`;`, 'forbidden identifier rmSync'],
+  ];
+  for (const [line, expected] of mutations) {
+    const mutated = clean.replace('  return 0;', `  ${line}\n  return 0;`);
+    assert.ok(
+      scanUserGlobalBlock(mutated, ['rmSync', 'readFileSync']).includes(
+        expected,
+      ),
+      `${line} should be flagged as ${expected}`,
+    );
+  }
+  assert.ok(
+    scanUserGlobalBlock(
+      clean.replace(
+        '  return 0;',
+        "  const m = 'node:fs/promises';\n  return 0;",
+      ),
+      [],
+    ).includes('fs/promises'),
+  );
+  assert.ok(
+    scanUserGlobalBlock(
+      clean.replace('  uninstallPayload();\n', ''),
+      [],
+    ).includes('uninstallPayload is never called'),
+  );
 });
