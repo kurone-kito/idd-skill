@@ -16,7 +16,7 @@
 // API response, and those records share a `requestId`, so assistant records
 // are grouped into API requests (`groupClaudeRequests`, #4380) before usage
 // and turns are counted. This module documents the specific record
-// shapes it reads (assistant messages carrying `message.usage`, and
+// shapes it reads (assistant records carrying `message.usage`, and
 // `type: "system", subtype: "compact_boundary"` records) as local
 // structural types; only the fields actually consumed are declared, and
 // every extraction degrades gracefully (never throws) except when the
@@ -430,16 +430,15 @@ export interface ClaudeRequest {
   usage: TokenCostUsage;
   /**
    * Epoch ms of the greatest-timestamped record that has both a valid
-   * timestamp and a `usage` object; a tie goes to the later record in the
-   * given array. Undefined when no record has both. Such a request still
-   * counts in `usage` for the session total, but has no per-stage usage
-   * point.
+   * timestamp and a `usage` object. Undefined when no record has both; such
+   * a request still counts in `usage` for the session total, but has no
+   * per-stage usage point.
    */
   usageAtMs: number | undefined;
   /**
-   * Epoch ms of the greatest valid timestamp across the request's records;
-   * a tie goes to the later record. Undefined when none has a valid
-   * timestamp, in which case the request counts in the session totals only.
+   * Epoch ms of the greatest valid timestamp across the request's records.
+   * Undefined when none has a valid timestamp, in which case the request
+   * counts in the session totals only.
    */
   turnAtMs: number | undefined;
   /** `tool_use` content blocks summed across all of the request's records. */
@@ -480,10 +479,7 @@ function maxUsage(a: TokenCostUsage, b: TokenCostUsage): TokenCostUsage {
   };
 }
 
-/**
- * Folds one assistant record into its request. Records arrive in array
- * order, so `>=` lets a later record win a timestamp tie.
- */
+/** Folds one assistant record into its request. */
 function addRecordToRequest(
   request: ClaudeRequest,
   record: Record<string, unknown>,
@@ -497,14 +493,14 @@ function addRecordToRequest(
     );
     if (
       atMs !== undefined &&
-      (request.usageAtMs === undefined || atMs >= request.usageAtMs)
+      (request.usageAtMs === undefined || atMs > request.usageAtMs)
     ) {
       request.usageAtMs = atMs;
     }
   }
   if (
     atMs !== undefined &&
-    (request.turnAtMs === undefined || atMs >= request.turnAtMs)
+    (request.turnAtMs === undefined || atMs > request.turnAtMs)
   ) {
     request.turnAtMs = atMs;
   }
@@ -527,8 +523,8 @@ function addRecordToRequest(
  *
  * Grouping is within the given `records` array. A request split across cwd
  * segments or event-window groups therefore counts once per group. A
- * response whose records mix the two identifier forms would be split; none
- * is observed in the local logs. Requests come back in first-appearance
+ * response whose records mix the two identifier forms would be split, a
+ * known limit of this key rule. Requests come back in first-appearance
  * order.
  */
 export function groupClaudeRequests(

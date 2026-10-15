@@ -16,7 +16,7 @@
 // API response, and those records share a `requestId`, so assistant records
 // are grouped into API requests (`groupClaudeRequests`, #4380) before usage
 // and turns are counted. This module documents the specific record
-// shapes it reads (assistant messages carrying `message.usage`, and
+// shapes it reads (assistant records carrying `message.usage`, and
 // `type: "system", subtype: "compact_boundary"` records) as local
 // structural types; only the fields actually consumed are declared, and
 // every extraction degrades gracefully (never throws) except when the
@@ -342,10 +342,7 @@ function maxUsage(a, b) {
     reasoning: Math.max(a.reasoning, b.reasoning),
   };
 }
-/**
- * Folds one assistant record into its request. Records arrive in array
- * order, so `>=` lets a later record win a timestamp tie.
- */
+/** Folds one assistant record into its request. */
 function addRecordToRequest(request, record) {
   const atMs = extractRecordTimestampMs(record);
   const usage = getUsage(record);
@@ -353,14 +350,14 @@ function addRecordToRequest(request, record) {
     request.usage = maxUsage(request.usage, usageFromFields(usage));
     if (
       atMs !== undefined &&
-      (request.usageAtMs === undefined || atMs >= request.usageAtMs)
+      (request.usageAtMs === undefined || atMs > request.usageAtMs)
     ) {
       request.usageAtMs = atMs;
     }
   }
   if (
     atMs !== undefined &&
-    (request.turnAtMs === undefined || atMs >= request.turnAtMs)
+    (request.turnAtMs === undefined || atMs > request.turnAtMs)
   ) {
     request.turnAtMs = atMs;
   }
@@ -382,8 +379,8 @@ function addRecordToRequest(request, record) {
  *
  * Grouping is within the given `records` array. A request split across cwd
  * segments or event-window groups therefore counts once per group. A
- * response whose records mix the two identifier forms would be split; none
- * is observed in the local logs. Requests come back in first-appearance
+ * response whose records mix the two identifier forms would be split, a
+ * known limit of this key rule. Requests come back in first-appearance
  * order.
  */
 export function groupClaudeRequests(records) {
