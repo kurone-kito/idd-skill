@@ -1244,18 +1244,37 @@ in this preamble, since the fallback differs per helper.
 - `scripts/publish-authoring-hold.mjs` (`idd-publish-authoring-hold`,
   issues #4127 and #4171, and issue `#4253`) publishes one drafted issue
   under the issue-authoring hold, running the authoring contract's
-  New-issue ownership steps in order. The default `--shape orphan`
-  publishes a standalone held orphan. `--shape carrier` publishes a draft
-  carrier, labelled with the authoring label and the authoring-only label,
-  and accepts only `--bucket ready` (exit `2` otherwise). A carrier is
-  linted with `audit-authored-issue.mjs --shape carrier`, which needs
-  markdown-it: without it the lint refuses, and nothing is written. The
-  helper refuses `--shape child` (exit `2`). An orphan requires
-  `--review-result <path>` (a JSON object with `"completed": true`; any
-  `findings` entry must be `fixed` or `rejected`); a carrier's review
-  result is optional, and when given it must be a JSON object whose
-  `completed` is a boolean and whose `findings`, if present, is an array of
-  objects. The helper stops with the `blocked-by-human`
+  New-issue ownership steps in order, one issue per call. The default
+  `--shape orphan` publishes a standalone held orphan. `--shape carrier`
+  publishes a draft carrier, labelled with the authoring label and the
+  authoring-only label, and accepts only `--bucket ready` (exit `2`
+  otherwise). A carrier is linted with
+  `audit-authored-issue.mjs --shape carrier`, which needs markdown-it:
+  without it the lint refuses, and nothing is written. `--shape roadmap`
+  publishes a held roadmap shell, linted as a roadmap; its `## Tracks` list
+  may be empty, and it is its own set anchor, like an orphan. `--shape
+  child` publishes one held child under an existing set and needs
+  `--anchor <owner>/<repo>#<number>`: a child without `--anchor`, any other
+  shape with `--anchor`, a malformed anchor, and an anchor in another
+  repository all exit `2` before anything is created. The anchor must be an
+  open issue, not a pull request, that still carries the authoring label,
+  has no active claim, and whose trusted owner-marker log replays to one open
+  generation (the check also runs in a dry run; otherwise the report is a
+  refusal and nothing is written). The child takes the anchor's set ID and
+  session, uses the anchor's real reference as `anchor` in its publication
+  line, journal records, and owner marker, and appends a same-owner
+  heartbeat on the anchor (reusing a fresh matching marker under
+  `issueAuthoring.heartbeatCoalesceWindow`) after the identity attach and
+  before its own `acquire` marker. Its provenance check runs in process with
+  the anchor expected, and the anchor and child are read again before
+  `state=member`; a changed anchor owner or a failed heartbeat is a
+  recovery hold with the child held. The helper never edits the anchor's
+  body, so the roadmap's `## Tracks` list stays a separate reviewed edit.
+  An orphan, a roadmap, and a child require `--review-result <path>` (a JSON
+  object with `"completed": true`; any `findings` entry must be `fixed` or
+  `rejected`); a carrier's review result is optional, and when given it must
+  be a JSON object whose `completed` is a boolean and whose `findings`, if
+  present, is an array of objects. The helper stops with the `blocked-by-human`
   outcome (exit `2`) when `issueAuthoring.journalIssue` is unset or
   unverifiable. It then puts the `authoring-publication` line first in the
   body, lints that exact body with `audit-authored-issue.mjs --new-issue`

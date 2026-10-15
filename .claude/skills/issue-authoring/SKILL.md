@@ -196,9 +196,12 @@ needs-decision, blocked-by-human, and out-of-scope.
      that applies the authoring label atomically and carries an exact hidden
      publication token for target, anchor, set, and session; if that operation
      is unavailable, stop before creating the issue — never intentionally
-     create an unlabeled issue. For a standalone orphan, that command is
-     `idd-publish-authoring-hold` (`node scripts/publish-authoring-hold.mjs`
-     in this source repository); see its `--help` and the contract's
+     create an unlabeled issue. That command is `idd-publish-authoring-hold`
+     (`node scripts/publish-authoring-hold.mjs` in this source repository).
+     It publishes one issue per call: an orphan (the default), a draft
+     carrier (`--shape carrier`), a roadmap shell (`--shape roadmap`), or a
+     child (`--shape child` with `--anchor` naming the set anchor's
+     `<owner>/<repo>#<number>`); see its `--help` and the contract's
      "New-issue ownership" section
    - the hidden publication token is this exact HTML-first body line.
      `anchor` reuses the opaque `target` value only when this new issue

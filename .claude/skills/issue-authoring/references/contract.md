@@ -1933,15 +1933,43 @@ only approval boundary.
   capability-checked create-with-label operation that creates the issue with
   the authoring label atomically and carries an exact hidden publication token
   for target, anchor, set, and session. If the target runtime cannot provide
-  that operation, stop before creation. For a standalone orphan, the
-  publication capability is `idd-publish-authoring-hold` (`node
-  scripts/publish-authoring-hold.mjs` in this source repository). It runs
-  the steps below in order, from the journal check to `state=member`. For a
-  draft carrier (`--shape carrier`), it then runs the release steps of the
-  carrier creation-hold exception under "Authoring hold and release". It
-  takes `--review-result <path>`: a JSON object with `"completed": true`,
-  whose optional `findings` entries must each be `fixed` or `rejected`. It
-  is a dry run without `--apply`, and it refuses `--shape child` for now.
+  that operation, stop before creation. The publication capability is
+  `idd-publish-authoring-hold` (`node scripts/publish-authoring-hold.mjs`
+  in this source repository). It publishes one issue per call and runs the
+  steps below in order, from the journal check to `state=member`. The
+  shape picks the issue: an orphan (the default), a draft carrier
+  (`--shape carrier`), a held roadmap shell (`--shape roadmap`, where an
+  empty `## Tracks` list is valid), or one child of an existing set:
+
+  ```sh
+  node scripts/publish-authoring-hold.mjs --shape child \
+    --anchor <owner>/<repo>#<number> --title <text> --body-file <path> \
+    --review-result <path> --apply
+  ```
+
+  An orphan, a carrier, and a roadmap are each their own set anchor, so
+  their `anchor` reuses their own opaque `target`, and none of them accepts
+  `--anchor`. A child needs `--anchor` and exits 2 without it, before
+  anything is created. The anchor must be an open issue in the same
+  repository that still carries the authoring label and has no active
+  claim, and its trusted owner-marker log must replay to one open
+  generation with no release in progress. The child then takes the anchor's
+  set ID and owning session, writes the anchor's real reference as `anchor`
+  in its publication line, its journal records, and its owner marker, and
+  generates only its own `target`, token, and owner token. Its journal
+  records go to `issueAuthoring.journalIssue`, as an orphan's do. After the
+  identity attach and before its own `acquire` marker, it appends a
+  same-owner heartbeat on the anchor (or reuses a fresh matching marker
+  under the coalescing rule below), waits `claim.verifySettleDelay`, and
+  replays the anchor's log. After its own marker it re-reads the anchor and
+  the child before `member`, so a changed anchor owner stops it. It never
+  edits the anchor's body: wiring the child's number into the roadmap's
+  `## Tracks` list stays a separate, reviewed edit. For a draft carrier,
+  the command then runs the release steps of the carrier creation-hold
+  exception under "Authoring hold and release". It takes
+  `--review-result <path>`, required for an orphan, a roadmap, and a child:
+  a JSON object with `"completed": true`, whose optional `findings` entries
+  must each be `fixed` or `rejected`. It is a dry run without `--apply`.
   It never retries, closes, or appends `cleanup` or `abandoned`: any failure
   after the create stops at a recovery hold with the record at `pending`, or
   reported as uncertain (replay the journal) when a record may have been
