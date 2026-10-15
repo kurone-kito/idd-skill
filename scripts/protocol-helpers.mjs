@@ -111,6 +111,9 @@ export const LIVE_STATUS_DIGEST_REPAIR_MARKER =
  *  - `<!-- idd-hold:` is posted only to the claimed ISSUE
  *    (`post-idd-marker` refuses `--target pr` for it), never to a PR
  *    (kurone-kito/idd-skill#4310).
+ *  - `<!-- idd-f4-head-proof:` is posted only to the claimed ISSUE
+ *    (`post-idd-marker` refuses `--target pr` for it), never to a PR
+ *    (kurone-kito/idd-skill#4368).
  *  - `<!-- idd-provider-outage-declaration:` and
  *    `<!-- idd-provider-outage-advanced:` are posted to the configured
  *    `providerOutage.declarationTarget` ISSUE, not the PR under review
