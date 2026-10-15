@@ -3065,9 +3065,9 @@ published now. Otherwise publish a carrier with
 audit even when the draft review did not finish, and creates it with the
 authoring label and the authoring-only label. That covers:
 
-- a draft whose final shape the publication command cannot create (it
-  publishes only an orphan or a carrier), or whose final form waits on
-  something else;
+- a draft whose final shape the publication command cannot create yet (such
+  as a child whose set anchor is not published and held), or whose final
+  form waits on something else;
 - a preview request: the carrier is published and the drafts are shown in the
   reply too;
 - a planned stop before the review completes (context pressure, or the user's
@@ -3146,8 +3146,9 @@ comments (preventive; no observed incident yet).
 **Release condition.** `## Release condition` holds `Blocked by` lines. No
 line means nothing blocks the drafts. When a person must choose first, that
 choice is a needs-decision issue named in a `Blocked by` line. In this source
-repository, a carrier for a roadmap set names issue `#4251` until the
-roadmap-set publication route is implemented.
+repository, a carrier for a roadmap set named issue `#4251` until the
+roadmap-set publication route shipped; a roadmap set is now published
+through that route.
 `discover-orphan-filter --draft-carriers` lists the open carriers as `held`
 (the authoring label is still on it), `ready` (no open or unresolvable
 `Blocked by` reference) or `waiting`.
@@ -3183,8 +3184,8 @@ session runs it is decided separately (in this source repository, issue
    issue that covers it.
 7. Release the claim last, whichever way the procedure stops.
 
-When the publication route for a draft's shape is still missing (the
-publication command publishes only an orphan or a carrier, for example),
+When the publication route for a draft's shape is still missing or refuses it
+(a child whose set anchor is not a held set of this repository, for example),
 post a comment that
 names the issue that adds the route (one comment is enough), release the
 claim, and leave the carrier open. A failure partway also leaves the carrier

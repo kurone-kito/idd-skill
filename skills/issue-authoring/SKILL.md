@@ -139,8 +139,9 @@ needs-decision, blocked-by-human, and out-of-scope.
    pass above and does not replace step 6. No separate publish
    approval is needed. A reviewed draft does not end in local files only.
    When its final shape cannot be published under the hold now (the
-   command publishes only an orphan or a carrier, or the final form waits
-   on something else), publish a draft carrier with
+   command cannot create it yet, such as a child whose set anchor is not
+   published and held, or the final form waits on something else), publish
+   a draft carrier with
    `publish-authoring-hold --shape carrier` (run it with `--apply`; the
    default is a dry run), as
    [Draft carrier](references/contract.md#draft-carrier) defines. A
