@@ -65,7 +65,7 @@ coordination close (A4.5) below).
 | Apply optional `triage:{outcome}` label                                                         | Reversible                | Remove the label                   | A4.5 (`idd-suitability.instructions.md`) |
 | Post one-line reconciliation comment (Standing-rejection pre-check, kurone-kito/idd-skill#2803) | Reversible                | Ordinary comment; no state to undo | A4.5 (`idd-suitability.instructions.md`) |
 | Read draft carriers with `discover-orphan-filter --draft-carriers`                              | Reversible                | Read-only query; no state to undo  | A0-C (`idd-discover.instructions.md`)    |
-| Re-author one ready draft carrier per Discover run (report only without the companion)          | Irreversible              | Gate: per-step rows below          | A0-C (`idd-discover.instructions.md`)    |
+| Re-author at most one ready carrier per Discover run (report only without the companion)        | Irreversible              | Gate: the carrier-close row below  | A0-C (`idd-discover.instructions.md`)    |
 
 ### Claim & ownership (A5)
 
