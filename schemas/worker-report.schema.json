@@ -62,7 +62,7 @@
       "type": "string",
       "minLength": 1,
       "pattern": "^[\\s\\S]{1,200}$",
-      "description": "The identifier the harness returned when it started the worker, written by the orchestrator before the append."
+      "description": "The identifier the harness returned when it started the worker, written by the orchestrator before the append; a restart recovery records the listed handle, the claim id, or a matching draft's own handle instead."
     },
     "terminalPhase": {
       "type": "string",

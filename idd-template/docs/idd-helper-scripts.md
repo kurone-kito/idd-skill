@@ -8246,10 +8246,11 @@ same as `AW4`/`AW5`.
   it is informational.
 
 - Fan-out draft: a worker writes its report without `verifiedAt` and
-  `recordedAt`, because it cannot know them. The orchestrator sets
-  `verifiedAt` to when it checked GitHub and `recordedAt` to when it appends,
-  then runs `append`. The helper stores the file as written and stamps neither
-  field.
+  `recordedAt`, because it cannot know them, and with any non-empty
+  `workerHandle`, which the orchestrator overwrites from its roster entry. The
+  orchestrator sets `verifiedAt` to when it checked GitHub and `recordedAt` to
+  when it appends, then runs `append`. The helper stores the file as written
+  and stamps neither field.
 
 ### F4 branch-failure routes
 
