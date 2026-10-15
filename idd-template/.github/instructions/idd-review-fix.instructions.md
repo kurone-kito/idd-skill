@@ -405,16 +405,17 @@ login).
 
 At or above `critiqueLoop.deferAfterRounds` (the PR's Copilot review
 count), a confirmed PATH A Low finding whose change is wording or
-formatting only, changing no behavior (the `very-low` class), is never
-accepted unless adopt-now clause (a) or (b) holds: it is disposed
-`Reject (defer)` in the Defer reply form, with clause
+formatting only, changing no behavior (the `very-low` class), is not
+accepted when neither adopt-now clause (a) nor (b) holds: it is
+disposed `Reject (defer)` in the Defer reply form, with clause
 `round <round>/<threshold>`, and bundled into the pass's one follow-up.
-This overrides adopt-now clause (d) in
-`idd-review-triage.instructions.md`. Factual and correctness findings
-are not covered by this rule and keep their existing handling;
-adopt-now clause (c) already covers a defect in instruction text that
-changes what an agent does. PATH B, scope-fenced, mid-fix, and CODEOWNER
-items stay outside this rule. A false finding is Rejected on its merits.
+Where clause (a) or (b) holds, the finding stays adopt-now. This
+overrides adopt-now clause (d) in `idd-review-triage.instructions.md`.
+Factual and correctness findings are not covered by this rule and keep
+their existing handling; adopt-now clause (c) already covers a defect in
+instruction text that changes what an agent does. PATH B, scope-fenced,
+mid-fix, and CODEOWNER items stay outside this rule. A false finding is
+Rejected on its merits.
 
 1. Fetch `PR_HEAD_SHA`:
 
