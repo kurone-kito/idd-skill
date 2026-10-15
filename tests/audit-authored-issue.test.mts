@@ -2752,6 +2752,67 @@ test('effort-l-ready passes orphan S and M bodies under the refuse policy (#4198
   }
 });
 
+test('effort-l-ready fails an L body when --config could not be read, whatever effortLPolicy holds (#4282)', () => {
+  const unreadablePath = '/repo/config/missing.json';
+  const omitted = effortLReadyResult(orphanBody({ effort: 'L' }), {
+    unreadableConfigPath: unreadablePath,
+  });
+  assert.equal(omitted.result, 'fail');
+  assert.ok(
+    omitted.detail.includes(`--config ${unreadablePath} could not be read`),
+    omitted.detail,
+  );
+  assert.equal(
+    effortLReadyResult(orphanBody({ effort: 'L' }), {
+      effortLPolicy: 'allow',
+      unreadableConfigPath: unreadablePath,
+    }).result,
+    'fail',
+  );
+  assert.equal(
+    effortLReadyResult(orphanBody({ effort: 'L' }), {
+      effortLPolicy: 'refuse',
+      unreadableConfigPath: unreadablePath,
+    }).result,
+    'fail',
+  );
+});
+
+test('effort-l-ready keeps its unreadable-config exemptions for S, M, human-bucket, and no-marker bodies (#4282)', () => {
+  const unreadable = { unreadableConfigPath: '/repo/config/missing.json' };
+  for (const effort of ['S', 'M']) {
+    assert.equal(
+      effortLReadyResult(orphanBody({ effort }), unreadable).result,
+      'pass',
+      `effort ${effort}`,
+    );
+  }
+  assert.equal(
+    effortLReadyResult(
+      childBody({
+        effort: 'L',
+        extraMarkers: '<!-- idd-skill-authoring-bucket: needs-decision -->',
+      }),
+      { ...unreadable, shape: 'child' },
+    ).result,
+    'pass',
+  );
+  assert.equal(
+    effortLReadyResult(orphanBody({ includeEffort: false }), unreadable).result,
+    'pass',
+  );
+});
+
+test('effort-l-ready is unchanged when no --config path was unreadable (#4282)', () => {
+  assert.equal(
+    effortLReadyResult(orphanBody({ effort: 'L' }), {
+      effortLPolicy: 'allow',
+    }).result,
+    'pass',
+  );
+  assert.equal(effortLReadyResult(orphanBody({ effort: 'L' })).result, 'pass');
+});
+
 test('effort-candidate-file-limit values match the contract threshold table (single source)', () => {
   const contract = readFileSync(
     join(REPO_ROOT, 'skills/issue-authoring/references/contract.md'),
@@ -5552,6 +5613,40 @@ test('the compiled CLI reads autopilotSuitability.effortL from --config to gate 
   }
 });
 
+test('the compiled CLI fails effort-l-ready for an L body when --config is missing or malformed (#4282)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-effort-l-unreadable-'));
+  try {
+    const bodyPath = join(tempRoot, 'draft.md');
+    writeFileSync(bodyPath, orphanBody({ effort: 'L' }));
+    const malformedPath = join(tempRoot, 'malformed.json');
+    writeFileSync(malformedPath, '{"autopilotSuitability": ');
+    const missingPath = join(tempRoot, 'missing.json');
+
+    for (const configPath of [missingPath, malformedPath]) {
+      const run = runCliRaw([
+        '--shape',
+        'orphan',
+        '--body-file',
+        bodyPath,
+        '--marker-prefix',
+        'idd-skill',
+        '--config',
+        configPath,
+      ]);
+      assert.equal(run.status, 1, configPath);
+      const finding = (
+        JSON.parse(run.stdout) as {
+          findings: { id: string; result: string; detail: string }[];
+        }
+      ).findings.find((entry) => entry.id === 'effort-l-ready');
+      assert.equal(finding?.result, 'fail', configPath);
+      assert.ok(finding?.detail.includes(configPath), finding?.detail);
+    }
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('the compiled CLI falls back to a leading "# <title>" body line when --title is omitted', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-audit-authored-issue-cli-'));
   try {
@@ -5907,6 +6002,19 @@ const CARRIER_SCAN_SKIP = markdownItAvailable()
 function carrierTest(name: string, fn: () => void): void {
   test(name, { skip: CARRIER_SCAN_SKIP }, fn);
 }
+
+carrierTest(
+  'effort-l-ready leaves a draft carrier out of the unreadable-config failure (#4282)',
+  () => {
+    const carrier = [carrierBody(), effortFooter('L')].join('\n\n');
+    const result = effortLReadyResult(carrier, {
+      shape: 'carrier',
+      unreadableConfigPath: '/repo/config/missing.json',
+    });
+    assert.equal(result.result, 'pass');
+    assert.match(result.detail, /draft carrier/);
+  },
+);
 
 // --- Draft-carrier shape (#4250) -------------------------------------------
 

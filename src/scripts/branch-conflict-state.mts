@@ -86,11 +86,19 @@ export interface CallSiteRouting {
  * UNSTABLE routing decision. `state` is the lowercased conclusion of a
  * completed run (`action_required`, `failure`, ...), or `pending` while the
  * run has not completed. `required` is GitHub's own `isRequired` answer.
+ *
+ * #4309: a check suite that has no check run is not in the rollup at all, so
+ * it is listed here too. Its `name` is the app slug (plus the workflow name
+ * for a workflow suite), `suiteStatus` is its own lowercased status, or its
+ * conclusion once completed, and `required` follows the base branch's
+ * source-pinned required checks (see {@link markSuiteRequirement}) because
+ * a suite has no `isRequired` of its own.
  */
 export interface NonPassingRun {
   name: string;
   state: string;
   required: boolean;
+  suiteStatus?: string;
 }
 
 /**
@@ -98,9 +106,9 @@ export interface NonPassingRun {
  *
  * `clean` proceeds with `mergeStateStatus` CLEAN, which is F1's own
  * definition. UNSTABLE (#4209) also proceeds, but only when every non-passing
- * head run is non-required and still waiting (`action_required` or
- * `pending`); an empty list holds. A BLOCKED or other non-CLEAN status holds,
- * as F1's "any other state" line requires.
+ * head run or run-less check suite (#4309) is non-required and still waiting
+ * (`action_required` or `pending`); an empty list holds. A BLOCKED or other
+ * non-CLEAN status holds, as F1's "any other state" line requires.
  * `requiresUpToDateHead` is always a boolean: an unreadable policy resolves
  * to `true` (see resolveRequiresUpToDateHead).
  */
@@ -200,17 +208,36 @@ const PASSING_CHECK_CONCLUSIONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * #4209: every non-passing head run must be non-required and waiting. An
- * empty list never proceeds, so an UNSTABLE branch with no visible reason
- * still holds.
+ * #4209: every non-passing head run must be non-required and waiting, and
+ * #4309 holds a run-less check suite to the same rule. An empty list never
+ * proceeds, so an UNSTABLE branch with no visible reason still holds.
  */
 export function nonPassingRunsAllowProceed(
   runs: readonly NonPassingRun[],
 ): boolean {
-  return (
-    runs.length > 0 &&
-    runs.every((run) => !run.required && UNSTABLE_PROCEED_STATES.has(run.state))
-  );
+  return runs.length > 0 && !runs.some(runBlocksUnstableProceed);
+}
+
+/** True when this entry alone keeps an UNSTABLE branch at the F1 hold. */
+function runBlocksUnstableProceed(run: NonPassingRun): boolean {
+  return run.required || !UNSTABLE_PROCEED_STATES.has(run.state);
+}
+
+/** Label one list entry for a note; a suite names its own status. */
+function describeNonPassingRun(run: NonPassingRun): string {
+  const state = run.suiteStatus ? `${run.suiteStatus} suite` : run.state;
+  return `${run.name} (${state}, ${run.required ? 'required' : 'non-required'})`;
+}
+
+/**
+ * #4309: the hold note for one entry that blocks the proceed path. It names
+ * the entry (a suite by its app slug), why it holds, and what resumes F1.
+ */
+export function describeUnstableHold(run: NonPassingRun): string {
+  const cause = run.required
+    ? 'it is required and has not passed'
+    : 'it is non-required but neither pending nor action_required';
+  return `UNSTABLE hold: ${describeNonPassingRun(run)} holds F1 because ${cause}; resumes when it passes, or a maintainer clears the hold.`;
 }
 
 /**
@@ -415,6 +442,389 @@ function latestInstancePerName(nodes: readonly unknown[]): unknown[] {
   }
   return latest;
 }
+/**
+ * #4309: one check suite that has no check run and is not passing. Such a
+ * suite is absent from the status check rollup, so a queued external app
+ * (netlify, sentry, ...) that never posted a run leaves GitHub at UNSTABLE
+ * with nothing in the run list. `appId` is the suite's GitHub App id, or
+ * `null` when the payload does not carry one.
+ */
+export interface SuiteCandidate {
+  name: string;
+  state: string;
+  suiteStatus: string;
+  appId: number | null;
+}
+
+interface ParsedSuite {
+  name: string;
+  appId: number | null;
+  /** The producer grouping key, or `null` when the suite cannot be attributed. */
+  producer: string | null;
+  /** True for an Actions workflow suite, which carries a `workflowRun`. */
+  workflow: boolean;
+  status: string;
+  conclusion: string;
+  createdAt: string;
+  runCount: number;
+}
+
+/** Read one `checkSuites` node, or `null` when its run count is unreadable. */
+function parseSuiteNode(node: unknown): ParsedSuite | null {
+  const entry = (node ?? {}) as {
+    status?: unknown;
+    conclusion?: unknown;
+    createdAt?: unknown;
+    app?: { databaseId?: unknown; slug?: unknown } | null;
+    workflowRun?: {
+      workflow?: { databaseId?: unknown; name?: unknown } | null;
+    } | null;
+    checkRuns?: { totalCount?: unknown } | null;
+  };
+  const runCount = entry.checkRuns?.totalCount;
+  if (typeof runCount !== 'number' || !Number.isInteger(runCount)) {
+    return null;
+  }
+  const appId =
+    typeof entry.app?.databaseId === 'number' &&
+    Number.isInteger(entry.app.databaseId)
+      ? entry.app.databaseId
+      : null;
+  const slug = String(entry.app?.slug ?? '');
+  const workflow = entry.workflowRun?.workflow;
+  const workflowName = String(workflow?.name ?? '');
+  const workflowKey = String(workflow?.databaseId ?? workflowName);
+  return {
+    name: `${slug || (appId === null ? 'unknown-app' : `app-${appId}`)}${
+      workflowName ? `/${workflowName}` : ''
+    }`,
+    appId,
+    // A suite with no App identity is never merged with another one.
+    producer:
+      appId === null && slug === '' ? null : `${appId ?? slug}|${workflowKey}`,
+    workflow: Boolean(entry.workflowRun),
+    status: String(entry.status ?? '').toUpperCase(),
+    conclusion: String(entry.conclusion ?? '').toUpperCase(),
+    createdAt: String(entry.createdAt ?? ''),
+    runCount,
+  };
+}
+
+/**
+ * Keep only the newest suite of each producer (its App, and the Actions
+ * workflow when one made it), the same latest-instance rule the run list
+ * applies by name. A cancelled or stale suite that a later suite of the same
+ * producer supersedes must not hold a branch whose current suite passes. A
+ * group whose order cannot be proven keeps every member, and members that
+ * share the newest timestamp all stay, since neither is provably older.
+ */
+function latestSuitePerProducer(suites: readonly ParsedSuite[]): ParsedSuite[] {
+  const groups = new Map<string, ParsedSuite[]>();
+  suites.forEach((suite, index) => {
+    const key = suite.producer ?? `unattributed:${index}`;
+    const group = groups.get(key) ?? [];
+    group.push(suite);
+    groups.set(key, group);
+  });
+  const kept = new Set<ParsedSuite>();
+  for (const group of groups.values()) {
+    const ordered =
+      group.length > 1 &&
+      group.every((suite) => isCompletedCiTimestamp(suite.createdAt));
+    const newest = ordered
+      ? Math.max(...group.map((suite) => Date.parse(suite.createdAt)))
+      : null;
+    for (const suite of group) {
+      if (newest === null || Date.parse(suite.createdAt) === newest) {
+        kept.add(suite);
+      }
+    }
+  }
+  // The page order is kept so the notes read the same as GitHub lists them.
+  return suites.filter((suite) => kept.has(suite));
+}
+
+/**
+ * #4309: list the head's non-passing check suites that have no check run.
+ * A suite with at least one run is judged through that run in the rollup, so
+ * it is never listed twice. A completed suite lists its conclusion (a
+ * cancelled Actions workflow suite is not listed, see below; an external
+ * app's cancelled suite is), a waiting one lists `pending`, and any other
+ * status lists `unknown`, which never proceeds. Fails closed (no suites plus a note, so the branch holds)
+ * on a missing page, an inconsistent count, a page shorter than the head's
+ * suites, or an unreadable run count.
+ */
+export function parseHeadSuites(object: unknown): {
+  suites: SuiteCandidate[];
+  notes: string[];
+} {
+  const failClosed = (reason: string) => ({
+    suites: [] as SuiteCandidate[],
+    notes: [
+      `UNSTABLE check suite list unavailable (${reason}); holding at F1.`,
+    ],
+  });
+  const page = (
+    object as {
+      checkSuites?: { totalCount?: unknown; nodes?: unknown[] | null } | null;
+    } | null
+  )?.checkSuites;
+  if (!page || !Array.isArray(page.nodes)) {
+    return failClosed('no check suites');
+  }
+  const total = page.totalCount;
+  if (typeof total !== 'number' || !Number.isInteger(total)) {
+    return failClosed('suite count is missing');
+  }
+  if (total > page.nodes.length) {
+    return failClosed('head has more check suites than one page');
+  }
+  if (total !== page.nodes.length) {
+    return failClosed('suite count does not match its page');
+  }
+  const parsed: ParsedSuite[] = [];
+  for (const node of page.nodes) {
+    const suite = parseSuiteNode(node);
+    if (!suite) {
+      return failClosed('a suite run count is missing');
+    }
+    parsed.push(suite);
+  }
+  const suites: SuiteCandidate[] = [];
+  for (const suite of latestSuitePerProducer(parsed)) {
+    if (suite.runCount > 0) continue;
+    const { name, appId } = suite;
+    if (suite.status === 'COMPLETED') {
+      if (PASSING_CHECK_CONCLUSIONS.has(suite.conclusion)) continue;
+      // A run-less cancelled Actions workflow suite is concurrency control,
+      // not a check result: no check is left to read or rerun. Observed
+      // 2026-10-15 on merged heads such as 504f50f7 and e85436a9, where the
+      // comment-refresh workflow's newest suites were cancelled with no run.
+      // An external app's cancelled suite carries no such proof and stays
+      // listed, so it holds (pull request 4323 review).
+      if (suite.conclusion === 'CANCELLED' && suite.workflow) continue;
+      const conclusion = suite.conclusion.toLowerCase();
+      suites.push({
+        name,
+        state: conclusion || 'unknown',
+        suiteStatus: conclusion || 'completed',
+        appId,
+      });
+    } else if (CHECK_RUN_WAITING_STATES.has(suite.status)) {
+      suites.push({
+        name,
+        state: 'pending',
+        suiteStatus: suite.status.toLowerCase(),
+        appId,
+      });
+    } else {
+      // An unrecognized status is not evidence of a waiting suite.
+      suites.push({
+        name,
+        state: 'unknown',
+        suiteStatus: suite.status.toLowerCase() || 'unknown',
+        appId,
+      });
+    }
+  }
+  return { suites, notes: [] };
+}
+
+/**
+ * #4309: a check suite has no `isRequired`, so its requirement comes from the
+ * base branch's policy. A suite is required when a required check is
+ * source-pinned to its App. Unlike a run's missing `isRequired`, a suite with
+ * no pin is not required: a required check that has not reported makes GitHub
+ * say BLOCKED, never UNSTABLE, so an unpinned suite cannot be what an
+ * UNSTABLE head still waits on. `pinnedAppIds` is `null` when the policy is
+ * unreadable, which marks every suite required (fail closed).
+ */
+export function markSuiteRequirement(
+  suites: readonly SuiteCandidate[],
+  pinnedAppIds: ReadonlySet<number> | null,
+): NonPassingRun[] {
+  return suites.map(({ name, state, suiteStatus, appId }) => ({
+    name,
+    state,
+    suiteStatus,
+    required:
+      pinnedAppIds === null || appId === null || pinnedAppIds.has(appId),
+  }));
+}
+
+/**
+ * The keys under which a rules `parameters` object or a classic
+ * `required_status_checks` object lists required checks, the same set the
+ * shared required-check reader accepts.
+ */
+const REQUIRED_CHECK_LIST_KEYS = [
+  'required_status_checks',
+  'required_checks',
+  'checks',
+  'contexts',
+] as const;
+
+/** A JSON object: an array, `null`, and a primitive are not records. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Append every entry of the check lists in one parameters object. Returns
+ * `false` when the object or one of its lists has a shape this read cannot
+ * trust, so the caller can treat the policy as unresolvable. An array is not
+ * an object here: `parameters: []` must not read as an empty policy.
+ */
+function appendRequiredCheckEntries(
+  parameters: unknown,
+  entries: unknown[],
+): boolean {
+  if (parameters === null || parameters === undefined) return true;
+  if (!isRecord(parameters)) return false;
+  for (const key of REQUIRED_CHECK_LIST_KEYS) {
+    const list = parameters[key];
+    if (list === null || list === undefined) continue;
+    if (!Array.isArray(list)) return false;
+    entries.push(...list);
+  }
+  return true;
+}
+
+/**
+ * Collect the GitHub App ids that a required status check is pinned to, from
+ * the rules and classic protection payloads. Returns `null` (unresolvable)
+ * when a payload or check list is malformed, when a pin cannot be turned into
+ * an App id, or when a `workflows` rule requires Actions workflows that no
+ * pin names.
+ */
+export function collectPinnedRequiredAppIds(
+  rules: unknown,
+  protection: unknown,
+): Set<number> | null {
+  if (rules !== null && rules !== undefined && !Array.isArray(rules)) {
+    return null;
+  }
+  const entries: unknown[] = [];
+  for (const rule of (rules ?? []) as unknown[]) {
+    if (!isRecord(rule)) return null;
+    if (rule.type === 'workflows') return null;
+    if (
+      rule.type === 'required_status_checks' &&
+      !appendRequiredCheckEntries(rule.parameters, entries)
+    ) {
+      return null;
+    }
+  }
+  if (protection !== null && protection !== undefined) {
+    if (!isRecord(protection)) return null;
+    if (
+      !appendRequiredCheckEntries(protection.required_status_checks, entries)
+    ) {
+      return null;
+    }
+  }
+  const appIds = new Set<number>();
+  for (const entry of entries) {
+    // A bare string is a legacy context name, which pins no App.
+    if (typeof entry === 'string' || entry === null || entry === undefined) {
+      continue;
+    }
+    if (!isRecord(entry)) return null;
+    // Both id fields count on their own, as in the shared required-check
+    // reader: a pin is any positive id or a truthy `source`.
+    let resolved = false;
+    for (const raw of [entry.integration_id, entry.app_id]) {
+      if (raw === null || raw === undefined) continue;
+      // Only a number or a decimal-integer string is an id. Coercing a
+      // boolean, an empty string, or an array would read a malformed pin as
+      // "any source".
+      const appId =
+        typeof raw === 'number' ||
+        (typeof raw === 'string' && /^-?\d+$/.test(raw))
+          ? Number(raw)
+          : Number.NaN;
+      if (!Number.isInteger(appId)) return null;
+      // A zero or negative id means "any source", so it pins nothing alone.
+      if (appId > 0) {
+        appIds.add(appId);
+        resolved = true;
+      }
+    }
+    // A pin by `source` with no positive App id carries nothing this read
+    // could match, even when a zero or negative id sits beside it.
+    if (entry.source && !resolved) return null;
+  }
+  return appIds;
+}
+
+/**
+ * Read the pinned required App ids for the base branch through the same
+ * policy reads and 404 rule as {@link resolveRequiresUpToDateHead}: a 404 is
+ * unreadable unless `ciGate.trustEmptyProtectionReads` is set at the base
+ * ref, and any thrown read is unreadable. Unreadable resolves to `null`.
+ */
+export function resolvePinnedRequiredAppIds(
+  owner: string,
+  repo: string,
+  baseRef: string,
+  port: Pick<
+    ReturnType<typeof createGithubProviderAdapter>,
+    'listBranchRules' | 'getBranchProtection'
+  > = createGithubProviderAdapter(owner, repo),
+  trustEmptyReads: boolean = readTrustEmptyProtectionReads(
+    owner,
+    repo,
+    baseRef,
+  ),
+): Set<number> | null {
+  try {
+    const rulesRead = port.listBranchRules(owner, repo, baseRef);
+    const protectionRead = port.getBranchProtection(owner, repo, baseRef);
+    if (
+      (rulesRead.outcome === 'not-found' ||
+        protectionRead.outcome === 'not-found') &&
+      !trustEmptyReads
+    ) {
+      return null;
+    }
+    return collectPinnedRequiredAppIds(
+      rulesRead.outcome === 'ok' ? rulesRead.value : [],
+      protectionRead.outcome === 'ok' ? protectionRead.value : {},
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * #4309: turn the head commit payload into the full non-passing list, the
+ * rollup's runs plus its run-less check suites. `readPinnedAppIds` is called
+ * only when a suite is listed, so a head with no such suite costs no policy
+ * read. A failed rollup or suite read returns no runs and its note, which
+ * holds.
+ */
+export function parseHeadNonPassing(
+  object: unknown,
+  headSha: string,
+  readPinnedAppIds: () => Set<number> | null,
+): { runs: NonPassingRun[]; notes: string[] } {
+  const rollup = parseHeadRollup(object, headSha);
+  if (rollup.notes.length > 0) return rollup;
+  const { suites, notes } = parseHeadSuites(object);
+  if (notes.length > 0) return { runs: [], notes };
+  if (suites.length === 0) return rollup;
+  const pinnedAppIds = readPinnedAppIds();
+  return {
+    runs: [...rollup.runs, ...markSuiteRequirement(suites, pinnedAppIds)],
+    notes:
+      pinnedAppIds === null
+        ? [
+            'UNSTABLE check suite requirement unavailable (required-check policy unreadable); treating every listed suite as required.',
+          ]
+        : [],
+  };
+}
+
 const HEAD_ROLLUP_QUERY = `query($owner: String!, $repo: String!, $oid: GitObjectID!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     object(oid: $oid) {
@@ -435,19 +845,30 @@ const HEAD_ROLLUP_QUERY = `query($owner: String!, $repo: String!, $oid: GitObjec
             }
           }
         }
+        checkSuites(first: 100) {
+          totalCount
+          nodes {
+            status conclusion createdAt
+            app { databaseId slug }
+            workflowRun { workflow { databaseId name } }
+            checkRuns(first: 1) { totalCount }
+          }
+        }
       }
     }
   }
 }`;
 
 /**
- * Read the head commit's check rollup live, pinned to `headSha`, and return
- * its non-passing runs. Any read or parse failure yields an empty list plus a
- * note, so the UNSTABLE branch holds rather than guessing.
+ * Read the head commit's check rollup and check suites live, pinned to
+ * `headSha`, and return its non-passing runs and run-less suites. Any read or
+ * parse failure yields an empty list plus a note, so the UNSTABLE branch
+ * holds rather than guessing.
  */
 function fetchNonPassingRuns(
   owner: string,
   repo: string,
+  baseRef: string,
   prNumber: unknown,
   headSha: string,
 ): { runs: NonPassingRun[]; notes: string[] } {
@@ -502,7 +923,9 @@ function fetchNonPassingRuns(
       ],
     };
   }
-  return parseHeadRollup(object, headSha);
+  return parseHeadNonPassing(object, headSha, () =>
+    resolvePinnedRequiredAppIds(owner, repo, baseRef),
+  );
 }
 
 /**
@@ -859,6 +1282,7 @@ export async function classifyBranchConflictState(
       const fetched = fetchNonPassingRuns(
         String(owner ?? ''),
         String(repo ?? ''),
+        prBaseRef,
         prNumber,
         prHeadSha,
       );
@@ -874,11 +1298,13 @@ export async function classifyBranchConflictState(
     if (nonPassingRuns.length > 0) {
       notes.push(
         `UNSTABLE clean head: non-passing runs ${nonPassingRuns
-          .map(
-            (run) =>
-              `${run.name} (${run.state}, ${run.required ? 'required' : 'non-required'})`,
-          )
+          .map(describeNonPassingRun)
           .join('; ')}.`,
+      );
+      notes.push(
+        ...nonPassingRuns
+          .filter(runBlocksUnstableProceed)
+          .map(describeUnstableHold),
       );
     }
   }

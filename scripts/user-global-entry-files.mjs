@@ -117,11 +117,13 @@ function opencodeFileText(entryPath) {
 /**
  * Whether a whole-file entry holds the content install writes for its harness.
  * Claude and OpenCode write content that depends only on the entry path, so
- * the check is exact. Codex writes the entry text, which can change between
- * versions, so for Codex the check is that one managed block spans every byte.
- * A receipt can list any file by its hash, so uninstall checks this as well.
+ * the check is exact. Codex writes the entry text, which changes between
+ * versions, so the caller passes every entry text that install recorded, one
+ * per version directory, and the check is exact against the span rendered from
+ * any one of them. An empty list matches nothing. A receipt can list any file
+ * by its hash, so uninstall checks this as well.
  */
-export function isInstallerWholeFile(harness, entryPath, bytes, path) {
+export function isInstallerWholeFile(harness, entryPath, bytes, entryTexts) {
   if (harness === 'opencode') {
     return bytes.equals(Buffer.from(opencodeFileText(entryPath), 'utf8'));
   }
@@ -129,12 +131,15 @@ export function isInstallerWholeFile(harness, entryPath, bytes, path) {
     const span = managedSpan('claude', entryPath, '');
     return bytes.equals(Buffer.from(span, 'utf8'));
   }
-  try {
-    const block = findBlock(bytes, path);
-    return block !== null && block.begin === 0 && block.end === bytes.length;
-  } catch {
-    return false;
-  }
+  return entryTexts.some((text) => {
+    try {
+      const span = managedSpan('codex', entryPath, text);
+      return bytes.equals(Buffer.from(span, 'utf8'));
+    } catch {
+      // An entry text with no final LF is not one install could have written.
+      return false;
+    }
+  });
 }
 /**
  * Find the single managed block in a Markdown file. Markers match whole lines
@@ -433,8 +438,23 @@ function pushRewrite(input, plan, dir, file, priorSha256, text, entry, prior) {
   });
   plan.lines.push(`edit ${file}`);
 }
-/** A file install created whole: the bytes must still match the receipt. */
-function planWholeFile(input, plan, dir, file, bytes, expected, prior) {
+/**
+ * A file install created whole: the bytes must still match the receipt, and a
+ * rewrite also needs them to be what install wrote for the harness in some
+ * recorded version. A receipt can list any file by its hash, so the hash alone
+ * would let a reinstall replace a file the user wrote. Bytes that already equal
+ * the new content need no such check, because they are install's own output.
+ */
+function planWholeFile(
+  input,
+  plan,
+  harness,
+  dir,
+  file,
+  bytes,
+  expected,
+  prior,
+) {
   if (prior.kind !== 'file' || sha256Of(bytes) !== prior.sha256) {
     throw new Error(
       `${file} was edited after install (its SHA-256 differs from the receipt); refusing, and it is user-edited`,
@@ -444,6 +464,18 @@ function planWholeFile(input, plan, dir, file, bytes, expected, prior) {
   if (bytes.equals(next)) {
     plan.lines.push(`keep ${file}`);
     return;
+  }
+  if (
+    !isInstallerWholeFile(
+      harness,
+      input.entryPath,
+      bytes,
+      input.recordedEntryTexts,
+    )
+  ) {
+    throw new Error(
+      `${file} holds content install does not write, although the receipt lists it as one install created; refusing to rewrite it, and it is user-edited`,
+    );
   }
   pushRewrite(
     input,
@@ -460,7 +492,7 @@ function planMarkdown(input, plan, harness, dir, file, bytes, listed) {
   const expected = managedSpan(harness, input.entryPath, input.entryText);
   const span = Buffer.from(expected, 'utf8');
   if (listed !== null && listed.kind === 'file') {
-    planWholeFile(input, plan, dir, file, bytes, expected, listed);
+    planWholeFile(input, plan, harness, dir, file, bytes, expected, listed);
     return;
   }
   if (listed !== null && listed.kind !== 'managed-block') {
@@ -535,7 +567,7 @@ function planOpenCode(input, plan, dir, file, bytes, listed) {
   const value = input.entryPath;
   const expected = opencodeFileText(value);
   if (listed !== null && listed.kind === 'file') {
-    planWholeFile(input, plan, dir, file, bytes, expected, listed);
+    planWholeFile(input, plan, 'opencode', dir, file, bytes, expected, listed);
     return;
   }
   if (listed !== null && listed.kind !== 'json-instruction') {

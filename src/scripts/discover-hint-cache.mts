@@ -38,9 +38,12 @@ import type { WindowsAclReader } from './windows-acl.mts';
  * hint written before the bump must not be served. 4 (#4281): a merged pull
  * request reference now resolves, and the single-root graph report gained
  * `pullRequestReferences`, so a hint written before the bump must not keep
- * serving the old `issue_not_found` answer for that reference.
+ * serving the old `issue_not_found` answer for that reference. 5 (#4257): the
+ * orphan output gained `draftCarriers`, its matching `counts` keys, and the
+ * `policy.authoringOnlyLabelName` key, so a hint written before the bump,
+ * including a version-4 hint, must not be served either.
  */
-const HINT_FORMAT_VERSION = 4;
+const HINT_FORMAT_VERSION = 5;
 
 /** Cache-namespace names; each yields a distinct entry identity. */
 const HINT_UNIT = 'discover-hint';
@@ -94,6 +97,12 @@ export interface DiscoverHintDeps {
   leaseMaxWaitMs?: number;
   /** Forwarded to the read cache; lets tests pin the platform and ACL reader. */
   platform?: NodeJS.Platform;
+  /**
+   * Test seam (#4257): the format version the hint key is built with. Absent
+   * means HINT_FORMAT_VERSION. A test sets the previous version to prove that
+   * a hint written before a bump is never served under the current one.
+   */
+  formatVersion?: number;
   windowsAclReader?: WindowsAclReader;
 }
 
@@ -436,14 +445,17 @@ function hintEnv(env: NodeJS.ProcessEnv): Record<string, string> {
 }
 
 function hintKeyInputs(
-  request: Pick<DiscoverHintRequest<unknown>, 'helper' | 'args' | 'policy'>,
+  request: Pick<
+    DiscoverHintRequest<unknown>,
+    'helper' | 'args' | 'policy' | 'deps'
+  >,
   config: HintConfig,
   generation: string,
   env: NodeJS.ProcessEnv,
 ): unknown {
   return {
     helper: request.helper,
-    formatVersion: HINT_FORMAT_VERSION,
+    formatVersion: request.deps?.formatVersion ?? HINT_FORMAT_VERSION,
     args: request.args,
     policy: request.policy,
     env: hintEnv(env),

@@ -50,6 +50,11 @@
 // pin), and a held-schema drift advisory (#3215: warns, but never
 // blocks, when --hold leaves a src/scripts module behind while a schema
 // or fixture it textually references would be updated).
+//
+// --install-user-global / --uninstall (#4245): expose the user-global
+// install and uninstall of user-global-install.mts on this CLI. They call
+// only that module's install, uninstall, and plan functions, and add no
+// write or removal of their own.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
@@ -96,6 +101,13 @@ import {
   normalizePolicyConfig,
 } from './policy-helpers.mjs';
 import { makeReadlinePrompt } from './readline-prompt.mjs';
+import { ENTRY_HARNESSES } from './user-global-entry-files.mjs';
+import {
+  installPayload,
+  planInstall,
+  planUninstall,
+  uninstallPayload,
+} from './user-global-install.mjs';
 import {
   loadJson,
   validate,
@@ -6040,6 +6052,177 @@ export function runRecordPolicyCli(args, readers = {}) {
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
   process.exit(0);
 }
+// ---------------------------------------------------------------------------
+// user-global modes: begin
+//
+// `--install-user-global` and `--uninstall` (#4245) only call the install,
+// uninstall, and plan functions of `user-global-install.mts`; they add no
+// write or removal of their own. tests/idd-onboard.test.mts scans this block
+// (between the begin and end markers) to keep that true, so keep every
+// user-global-mode helper inside it. The block sits above the entry guard
+// because a module-level constant initialized after it would be unset when
+// `main()` starts running.
+// ---------------------------------------------------------------------------
+/** The flags both user-global modes accept besides their own mode flag. */
+const USER_GLOBAL_COMMON_FLAGS = ['--dry-run'];
+/** The flags only `--install-user-global` accepts. */
+const USER_GLOBAL_INSTALL_ONLY_FLAGS = ['--harness'];
+/**
+ * The leading word of a line the install module reports, mapped to the status
+ * word this CLI prints. A line whose leading word is not listed (for example
+ * `no receipt; nothing to remove`) is printed unchanged.
+ */
+const USER_GLOBAL_STATUS_BY_VERB = new Map([
+  ['create', 'create'],
+  ['replace', 'change'],
+  ['repoint', 'change'],
+  ['edit', 'change'],
+  ['edited', 'change'],
+  ['keep', 'keep'],
+  ['kept', 'keep'],
+  ['left', 'keep'],
+  ['absent', 'keep'],
+  ['remove', 'remove'],
+  ['removed', 'remove'],
+  ['dir', 'remove'],
+]);
+/**
+ * The names `--harness` accepts, in the install module's own order, chosen by
+ * an exact, lowercase match. Duplicates collapse. An empty list or element,
+ * and an unknown name, are usage errors.
+ */
+function parseHarnessSelection(value) {
+  const chosen = new Set();
+  for (const name of value.split(',')) {
+    if (!ENTRY_HARNESSES.some((harness) => harness === name)) {
+      throw markCliUsageError(
+        new Error(
+          name === ''
+            ? '--harness takes a comma-separated list with no empty name'
+            : `unknown --harness name: ${name} (expected one of ${ENTRY_HARNESSES.join(', ')})`,
+        ),
+      );
+    }
+    chosen.add(name);
+  }
+  return ENTRY_HARNESSES.filter((harness) => chosen.has(harness));
+}
+/** One report line in the CLI's status vocabulary. */
+function formatUserGlobalLine(line) {
+  const space = line.indexOf(' ');
+  const verb = space === -1 ? line : line.slice(0, space);
+  const status = USER_GLOBAL_STATUS_BY_VERB.get(verb);
+  if (status === undefined) {
+    return line;
+  }
+  const rest = space === -1 ? '' : line.slice(space);
+  return verb === 'absent'
+    ? `${status}${rest} (already absent)`
+    : `${status}${rest}`;
+}
+/** The two user-level install commands a successful install prints. */
+function userGlobalInstallCommands(version) {
+  const spec = `@kurone-kito/idd-skill@${version}`;
+  return [`npm install -g ${spec}`, `pnpm add -g ${spec}`];
+}
+/** Report a refusal (nothing written) or a failure (after the plan passed). */
+function reportUserGlobalError(label, error) {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`idd-onboard: ${label}: ${message}\n`);
+  return { exitCode: 1, kind: 'gate', message };
+}
+/**
+ * Check the mode and flag combination. Everything outside the mode's own
+ * whitelist is a usage error, so a flag added later is rejected by default.
+ */
+function assertUserGlobalFlags(args) {
+  if (args.installUserGlobal && args.uninstall) {
+    throw markCliUsageError(
+      new Error('--install-user-global and --uninstall are mutually exclusive'),
+    );
+  }
+  const mode = args.installUserGlobal ? '--install-user-global' : '--uninstall';
+  const stages = [
+    args.importMode ? '--import' : '',
+    args.substitute ? '--substitute' : '',
+    args.verify ? '--verify' : '',
+    args.hear ? '--hear' : '',
+    args.recordPolicy ? '--record-policy' : '',
+  ].filter((flag) => flag !== '');
+  if (stages.length > 0) {
+    throw markCliUsageError(
+      new Error(`${mode} is mutually exclusive with ${stages.join(', ')}`),
+    );
+  }
+  const allowed = new Set([
+    mode,
+    ...USER_GLOBAL_COMMON_FLAGS,
+    ...(args.installUserGlobal ? USER_GLOBAL_INSTALL_ONLY_FLAGS : []),
+  ]);
+  const foreign = [...new Set(args.givenFlags)].filter(
+    (flag) => !allowed.has(flag),
+  );
+  if (foreign.length > 0) {
+    throw markCliUsageError(
+      new Error(
+        `${mode} does not accept flag(s): ${foreign.join(', ')} (it accepts ${[...allowed].filter((flag) => flag !== mode).join(', ')})`,
+      ),
+    );
+  }
+}
+/** Print the module's report lines, one per path, in the status vocabulary. */
+function writeUserGlobalLines(lines) {
+  if (lines.length > 0) {
+    process.stdout.write(`${lines.map(formatUserGlobalLine).join('\n')}\n`);
+  }
+}
+/**
+ * Run `--install-user-global` or `--uninstall`. The plan function runs first
+ * in every run, so a throw there is a refusal: nothing was written. A real run
+ * then calls the install or uninstall function, which plans again before it
+ * writes; a throw from that call is reported as a failure after a clean plan,
+ * even when the cause is a refusal from that second plan (the tree changed
+ * between the two calls). Both exit 1 and name the path on stderr.
+ */
+function runUserGlobalCli(args) {
+  assertUserGlobalFlags(args);
+  const install = args.installUserGlobal;
+  // Omitting --harness selects all three; the install module's own default is
+  // to edit none.
+  const harnesses =
+    args.harness === undefined
+      ? [...ENTRY_HARNESSES]
+      : parseHarnessSelection(args.harness);
+  let plan;
+  try {
+    plan = install ? planInstall({ harnesses }) : planUninstall();
+  } catch (error) {
+    return reportUserGlobalError('refuse', error);
+  }
+  if (args.dryRun) {
+    writeUserGlobalLines(plan.lines);
+    return 0;
+  }
+  try {
+    if (install) {
+      const result = installPayload({ harnesses });
+      writeUserGlobalLines(result.lines);
+      process.stdout.write(
+        `\nThis command does not install the helper commands. Run one yourself:\n${userGlobalInstallCommands(
+          result.version,
+        )
+          .map((command) => `  ${command}`)
+          .join('\n')}\n`,
+      );
+    } else {
+      writeUserGlobalLines(uninstallPayload().lines);
+    }
+    return 0;
+  } catch (error) {
+    return reportUserGlobalError('fail', error);
+  }
+}
+// user-global modes: end
 async function main() {
   try {
     return await runCli();
@@ -6094,6 +6277,10 @@ function parseArgs(rawArgv) {
     overrides: {},
     help: false,
     allowRoots: [],
+    installUserGlobal: false,
+    uninstall: false,
+    harness: undefined,
+    givenFlags: [],
   };
   const flagToName = new Map(
     ONBOARDING_PLACEHOLDERS.map((entry) => [entry.flag, entry.name]),
@@ -6109,8 +6296,22 @@ function parseArgs(rawArgv) {
       }
       return value;
     };
+    parsed.givenFlags.push(String(token));
     if (token === '--substitute') {
       parsed.substitute = true;
+      continue;
+    }
+    if (token === '--install-user-global') {
+      parsed.installUserGlobal = true;
+      continue;
+    }
+    if (token === '--uninstall') {
+      parsed.uninstall = true;
+      continue;
+    }
+    if (token === '--harness') {
+      parsed.harness = requireValue();
+      index += 1;
       continue;
     }
     if (token === '--import') {
@@ -6321,6 +6522,16 @@ async function runCli() {
     printHelp();
     return 0;
   }
+  if (args.installUserGlobal || args.uninstall) {
+    return runUserGlobalCli(args);
+  }
+  if (args.harness !== undefined) {
+    // Every other stage rejects --harness the way it rejected any flag it
+    // never reads, before the stage branches below could ignore it.
+    throw markCliUsageError(
+      new Error('--harness is accepted only with --install-user-global'),
+    );
+  }
   const modeCount = [
     args.substitute,
     args.importMode,
@@ -6414,7 +6625,7 @@ async function runCli() {
   if (!args.substitute) {
     throw markCliUsageError(
       new Error(
-        'pass --substitute, --import, --verify, --hear, or --record-policy to select a stage',
+        'pass --substitute, --import, --verify, --hear, --record-policy, --install-user-global, or --uninstall to select a stage',
       ),
     );
   }
@@ -6673,6 +6884,8 @@ function printHelp() {
        node scripts/idd-onboard.mjs --hear --apply --answers <file> --target <dir>
        node scripts/idd-onboard.mjs --hear --target <dir>   (interactive TTY wizard)
        node scripts/idd-onboard.mjs --record-policy --transcript <file> --target <dir> [--issue-mediated] [--apply] [--write-policy-doc <path>] [--force]
+       node scripts/idd-onboard.mjs --install-user-global [--harness <list>] [--dry-run]
+       node scripts/idd-onboard.mjs --uninstall [--dry-run]
 
 Onboarding automation.
 
@@ -6912,5 +7125,52 @@ The same ancestor/leaf check applies to .github/idd/config.json itself.
                                substantially widens it instead.
   --transcript <file>          path to the confirmed --hear transcript
   --help, -h                    show this help
+
+--install-user-global and --uninstall (#4245): put the instruction payload
+and the issue-authoring and idd-spec-audit skills into the current user's
+own directories, and take them out again. They call the install and
+uninstall operations of user-global-install.mts and write nothing else.
+Install records each path it creates in a receipt under the data root
+($XDG_DATA_HOME/idd-skill, else ~/.local/share/idd-skill); uninstall
+removes only what the receipt lists and what still matches it, and refuses
+the whole run before any removal when a listed file was edited. Each path
+is reported on stdout as create, change, keep, or remove. A refusal or a
+failure goes to stderr as "idd-onboard: refuse: ..." or "idd-onboard:
+fail: ..." and names the path (or variable) it stopped at. After a
+successful install the two
+user-level commands that put the helpers on PATH are printed (npm install
+-g and pnpm add -g, at the package version); this CLI never runs them.
+These modes take no --target, --source, --profile, --hold, --force,
+--apply, or --allow-root, and are exclusive with the other stages; any
+such flag is a usage error (exit 2) and nothing is written.
+
+Install never creates the directory above a root it installs into (for
+example ~/.agents or ~/.local/share), so a missing one is a refusal.
+
+Install and uninstall refuse a symbolic link on the path to a root. From the
+root you name (HOME, XDG_DATA_HOME, the parent of CODEX_HOME, XDG_CONFIG_HOME)
+down to each install root, any link is refused, whoever owns it. Above that
+root a link is refused unless root owns it, so system links such as /var ->
+/private/var still work; a link root owns is trusted, which is an open risk.
+To continue, replace a refused link with the real directory, or for a new
+install name the real path (HOME, XDG_DATA_HOME, CODEX_HOME, XDG_CONFIG_HOME).
+An install made through a refused link cannot be uninstalled until the link is
+replaced by the real directory. Who owns a link is as the filesystem reports.
+
+Exit codes: 0 done (or planned, with --dry-run); 1 the run refused before
+writing anything, or failed after a clean plan (the cause is named on
+stderr; install rolls back what it wrote when it can and names anything it
+left behind, and install is idempotent, so fix the named cause and rerun;
+an uninstall that stops partway does not roll back, and the receipt then
+lists what remains for the rerun); 2 usage error.
+
+  --install-user-global             install the payload, skills, and receipt
+  --harness <list>                  comma-separated claude, codex, opencode
+                                     (default: all three); chooses only which
+                                     entry files are edited
+  --uninstall                       remove what the receipt lists; it takes no
+                                     --harness and acts only on that list
+  --dry-run                         print the plan without writing anything
+  --help, -h                        show this help
 `);
 }
