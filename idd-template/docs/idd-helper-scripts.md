@@ -8717,10 +8717,10 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
 1. `assert`: runs `resume-claim-routing` in its assert mode for the given
    identity and the worktree; the claimed branch is `active_claim.branch`
    of its output. It refuses when the assert exits non-zero, ends by signal,
-   or names no claimed branch (the reason carries the exit status and the
-   first stderr line; next action: stop and re-read the claim), and when
-   the assert cannot start (next action: check the helper installation,
-   then rerun).
+   or names no claimed branch (a non-zero exit's reason carries the exit
+   status and the first stderr line; next action: stop and re-read the
+   claim), and when the assert cannot start (next action: check the helper
+   installation, then rerun).
 2. `location`: checks, in order, that the claimed branch starts with
    `issue/<n>-` (this also refuses the development branch; next action:
    stop and report), that the worktree is the expected sibling path or
@@ -8782,16 +8782,16 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
   gate; a command killed by a signal counts as failed.
 - **Report**: JSON on stdout with `mode`, `pushed`, `issue`, `branch`,
   `worktree`, and `steps`. Every step has an `id`, a `status` (`passed`,
-  `failed`, or `skipped`), and a `reason`. A step decided by a command
-  carries that command's `exitStatus`: `0` on a passed assert, location,
-  gate, or push (location decides by its last git read, `git branch
-  --show-current`), and on a failed step the status of the command whose result
-  decided it (the assert, a git read, the gate, or the push), `null` when
-  that command ended without one. A value that a command printed and the
-  step then rejects (a dirty tree, another branch, a moved HEAD) carries
-  that command's `0`. Four refusals carry none because no command decided
-  them: the branch prefix check, the expected-path comparison, the
-  `github.com` origin shape check, and a gate command that is unconfigured
+  `failed`, or `skipped`), and a `reason`. A step that ran a command
+  carries that command's `exitStatus`: `0` on every passed step (assert,
+  location, reassert, gate, and push; location decides by its last git
+  read, `git branch --show-current`). On a failed step the status is that
+  of the command whose result decided it, and `null` when that command
+  ended without one. A refusal that judges a value a command printed
+  (a branch the assert named, a URL or path git printed, a moved HEAD, a
+  dirty tree) carries that command's `0`. Two refusals carry none because
+  no command decided them: a path that cannot be resolved (the expected
+  sibling path or the worktree), and a gate command that is unconfigured
   or whose policy cannot be read. Every `failed` step has a non-empty
   `nextAction`. `pushed` is `true` after a push (the report then adds
   `pushedSha`, the recorded HEAD, and `pushMessage`), `false` when no push

@@ -275,6 +275,7 @@ function stepLocation(ctx) {
     return failed(
       `the claimed branch ${branch} does not start with ${prefix}`,
       NEXT_ACTION.stopAndReport,
+      0,
     );
   }
   const list = readGit(ctx, ['worktree', 'list', '--porcelain', '-z']);
@@ -309,7 +310,7 @@ function stepLocation(ctx) {
   const origin = originEnd.status === 0 ? originRead.stdout.trim() : '';
   const repoName = resolveRepoName(origin, primary);
   if (!repoName.ok) {
-    return failed(repoName.reason, NEXT_ACTION.runFromWorktree);
+    return failed(repoName.reason, NEXT_ACTION.runFromWorktree, 0);
   }
   const expected = join(
     dirname(primary),
@@ -333,6 +334,7 @@ function stepLocation(ctx) {
     return failed(
       `the worktree ${actualReal} is not the sibling path ${expectedReal} of the claimed branch`,
       NEXT_ACTION.runFromWorktree,
+      0,
     );
   }
   const current = readGit(ctx, ['branch', '--show-current']);

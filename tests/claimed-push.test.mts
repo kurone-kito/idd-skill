@@ -187,6 +187,13 @@ function assertReportInvariants(report: ClaimedPushReport): void {
   );
   for (const step of report.steps) {
     assert.ok(step.reason.length > 0, `${step.id} has a reason`);
+    if (step.status === 'passed') {
+      assert.equal(
+        step.exitStatus,
+        0,
+        `${step.id} passed without exit status 0`,
+      );
+    }
     if (step.status === 'failed') {
       assert.ok(
         typeof step.nextAction === 'string' && step.nextAction.length > 0,
@@ -318,7 +325,7 @@ test('the worktree path keeps trailing whitespace and loses only the line break'
 test('a claimed branch outside issue/<n>- refuses before any path is computed', () => {
   for (const branch of ['main', 'issue/4376-other-issue', 'issue/4375']) {
     const r = run({ world: { [K.assert]: result(0, claimJson(branch)) } });
-    assertRefused(r, 'location', NEXT.stopAndReport, { exitStatus: undefined });
+    assertRefused(r, 'location', NEXT.stopAndReport, { exitStatus: 0 });
     assert.equal(r.count(K.worktrees), 0, branch);
     assert.equal(r.count(K.gate), 0);
     noPush(r);
@@ -331,7 +338,7 @@ test('a worktree that is not the sibling path of the claimed branch refuses', ()
     world: { [K.toplevel]: result(0, `${elsewhere}\n`) },
     known: [PRIMARY, WORKTREE, elsewhere],
   });
-  assertRefused(r, 'location', NEXT.runFromWorktree, { exitStatus: undefined });
+  assertRefused(r, 'location', NEXT.runFromWorktree, { exitStatus: 0 });
   assert.equal(r.count(K.gate), 0);
   noPush(r);
 });
@@ -511,7 +518,7 @@ test('a branch-tip read that fails refuses instead of comparing', () => {
   noPush(r);
 });
 
-test('a git read ended by a signal reports a null exit status', () => {
+test('a git read that ends without an exit status reports a null exit status', () => {
   const r = run({ world: { [K.status]: KILLED } });
   assertRefused(r, 'gate', NEXT.readGitError, { exitStatus: null });
   assert.match(r.report.steps[2]?.reason ?? '', /SIGKILL/u);
@@ -577,7 +584,7 @@ test('the path check runs before the current-branch check', () => {
     },
     known: [PRIMARY, WORKTREE, elsewhere],
   });
-  assertRefused(r, 'location', NEXT.runFromWorktree, { exitStatus: undefined });
+  assertRefused(r, 'location', NEXT.runFromWorktree, { exitStatus: 0 });
   assert.equal(r.count(K.current), 0);
 });
 
@@ -712,7 +719,7 @@ test('an upstream check that cannot run refuses before pushing', () => {
   noPush(r);
 });
 
-test('the clean-tree check reads submodule state, so config cannot hide a dirty submodule', () => {
+test('the clean-tree check passes --ignore-submodules=none on both calls', () => {
   const statusCalls = run().calls.filter(
     (call) => call.kind === 'git' && call.args[0] === 'status',
   );
@@ -874,7 +881,7 @@ test('a github.com origin without an owner/repository path refuses', () => {
   const r = run({
     world: { [K.origin]: result(0, 'https://github.com/just-owner\n') },
   });
-  assertRefused(r, 'location', NEXT.runFromWorktree, { exitStatus: undefined });
+  assertRefused(r, 'location', NEXT.runFromWorktree, { exitStatus: 0 });
   assert.match(r.report.steps[1]?.reason ?? '', /owner\/repository/u);
 });
 
@@ -888,7 +895,7 @@ test('a refused origin never echoes the credentials in its URL', () => {
       ),
     },
   });
-  assertRefused(r, 'location', NEXT.runFromWorktree, { exitStatus: undefined });
+  assertRefused(r, 'location', NEXT.runFromWorktree, { exitStatus: 0 });
   assert.doesNotMatch(JSON.stringify(r.report), new RegExp(token, 'u'));
 });
 
