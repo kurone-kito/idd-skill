@@ -92,6 +92,22 @@ claim, scoped to the roadmap issue only.
 | Apply needs-decision / blocked-by-human label (non-autonomous gap)            | Reversible                | Remove the label once the gap is resolved                                                                                                                                | `idd-roadmap-audit.instructions.md` "Non-autonomous gaps found"                                                                                         |
 | Release roadmap-audit claim                                                   | Reversible                | Re-claim if audit resumes                                                                                                                                                | `idd-roadmap-audit.instructions.md`                                                                                                                     |
 
+### Draft carrier re-authoring
+
+All rows below run under a `draft-carrier/<number>-<slug>` coordination
+claim, scoped to the carrier issue only. The claim is taken, revalidated
+before each later mutation, and released the way the A1.5 roadmap-audit
+claim is, with no worktree. When and where a session runs this procedure is
+decided separately. Publishing each draft under the hold is covered by the
+Stage 1 rows in the follow-up authoring section below.
+
+| Mutation                                                                  | Reversible / Irreversible | Undo path / Governing gate                                                                                                                                        | Source                                                                               |
+| ------------------------------------------------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Draft-carrier coordination claim, with its activation-nonce marker        | Reversible                | Same as Claim & ownership above                                                                                                                                   | Optional `issue-authoring` companion contract, "Draft carrier" (re-authoring step 1) |
+| Post a mapping comment on the carrier right after each draft is published | Reversible                | Ordinary comment; post a correcting comment                                                                                                                       | Optional `issue-authoring` companion contract, "Draft carrier" (re-authoring step 5) |
+| Close the carrier as completed                                            | Irreversible              | Gate: every draft is published under the hold, or dropped with a recorded reason that names the issue that covers it; any failure partway leaves the carrier open | Optional `issue-authoring` companion contract, "Draft carrier" (re-authoring step 6) |
+| Release the draft-carrier coordination claim                              | Reversible                | Re-claim if re-authoring resumes                                                                                                                                  | Optional `issue-authoring` companion contract, "Draft carrier" (re-authoring step 7) |
+
 ### Suitability coordination close (A4.5)
 
 These rows exist only on helper-enabled profiles: with
