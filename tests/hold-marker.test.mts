@@ -128,6 +128,10 @@ test('parseHoldMarker rejects anything that is not the literal first-bytes marke
     `<!-- idd-hold: ${AGENT} ${CLAIM} ${TS} extra -->`,
     // Content after the marker other than one IDD note line.
     `${holdBody()}\n\nand some more text`,
+    // An identifier that closes the HTML comment early, which the renderer
+    // also refuses, so a hand-built body cannot parse as a hold marker.
+    `<!-- idd-hold: actor--> ${CLAIM} ${TS} -->`,
+    `<!-- idd-hold: ${AGENT} <!--claim ${TS} -->`,
     // Another marker family.
     renderUnclaimedByMarker({ agentId: AGENT, claimId: CLAIM, timestamp: TS }),
     claimBody(TS),
@@ -351,6 +355,24 @@ test('resolveTrustedHoldMarkers ignores an edited marker and one with an unresol
     resolveTrustedHoldMarkers({
       ...RESOLVE_DEFAULTS,
       comments: [edited, unresolved, missingField],
+    }),
+    null,
+  );
+});
+
+test('resolveTrustedHoldMarkers ignores a hand-built marker whose identifier closes the HTML comment early', () => {
+  // The same claim and agent as the real one, spelled so the token ends the
+  // comment: it must not count as a hold for that claim.
+  const early = comment(
+    78,
+    `<!-- idd-hold: ${AGENT}--> ${CLAIM} ${TS} -->`,
+    TS,
+  );
+  assert.equal(
+    resolveTrustedHoldMarkers({
+      ...RESOLVE_DEFAULTS,
+      agentId: `${AGENT}-->`,
+      comments: [early],
     }),
     null,
   );

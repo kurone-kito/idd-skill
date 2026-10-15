@@ -1434,9 +1434,18 @@ export function parseHoldMarker(body, createdAt) {
   if (!match || !isValidIsoTimestamp(match[3])) {
     return null;
   }
+  // The renderer refuses an identifier that contains `<!--` or `-->`, so the
+  // read side must too: such a token closes the HTML comment early, and a
+  // body posted through the direct-JSON fallback could otherwise parse as a
+  // hold marker for a claim it only resembles.
+  const agentId = normalizeNonWhitespaceToken(match[1]);
+  const claimId = normalizeNonWhitespaceToken(match[2]);
+  if (!agentId || !claimId) {
+    return null;
+  }
   return {
-    agentId: match[1],
-    claimId: match[2],
+    agentId,
+    claimId,
     timestamp: match[3],
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
   };
