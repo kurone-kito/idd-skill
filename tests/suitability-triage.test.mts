@@ -4585,15 +4585,15 @@ test('#4374: a verdict marker in the quoted text is not found by parseSuitabilit
   );
 });
 
-test('#4374: a comment delimiter that overlaps itself is broken on both sides', () => {
+test('#4374: a comment opener or end, including the HTML parser end form, is broken even when the shapes overlap', () => {
   assert.equal(
     quotedTextOf(
       subjectiveFailureEvidence(
-        'Final approval depends on maintainer preference <!--> and <!----> and --->, though tests must also pass.',
+        'Maintainer approval: <!--> <!----> ---> --!> <!--!> ---!> --!!> --!-> and tests.',
       ),
       SUBJECTIVE_FAILING_PREFIX,
     ),
-    `Final approval depends on maintainer preference <!${ZERO_WIDTH_SPACE}--${ZERO_WIDTH_SPACE}> and <!${ZERO_WIDTH_SPACE}----${ZERO_WIDTH_SPACE}> and ---${ZERO_WIDTH_SPACE}>, though tests must also pass.`,
+    `Maintainer approval: <!${ZERO_WIDTH_SPACE}--${ZERO_WIDTH_SPACE}> <!${ZERO_WIDTH_SPACE}----${ZERO_WIDTH_SPACE}> ---${ZERO_WIDTH_SPACE}> --${ZERO_WIDTH_SPACE}!> <!${ZERO_WIDTH_SPACE}--${ZERO_WIDTH_SPACE}!> ---${ZERO_WIDTH_SPACE}!> --!!> --!-> and tests.`,
   );
 });
 

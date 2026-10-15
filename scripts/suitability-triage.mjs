@@ -3326,11 +3326,13 @@ export function checkActionability(context) {
  * `findTrustedSuitabilityRejection`'s `outcome:` and `Check N (...)`
  * patterns. The inert step therefore breaks, with a zero-width space (which
  * JavaScript's `\s` does not match), every shape those readers would
- * accept: a `<!--` or `-->` delimiter (an overlapping `<!-->` is broken on
- * both sides), the word `outcome` before its colon, the word `Check` before
- * its number, and the `@` of a mention. The patterns are case-insensitive and
- * have no word boundary, exactly like the readers' own, and must not gain the
- * `u` flag (preventive; no observed incident yet).
+ * accept: a `<!--` opener or a comment end (`-->`, and also the HTML
+ * parser's `--!>`, which code scanning rule `js/bad-tag-filter` flagged on
+ * pull request `#4397`; an overlapping `<!-->` is broken on both sides), the
+ * word `outcome` before its colon, the word `Check` before its number, and the
+ * `@` of a mention. The patterns are case-insensitive and have no word
+ * boundary, exactly like the readers' own, and must not gain the `u` flag
+ * (preventive; no observed incident yet).
  *
  * Applied only to the four failing returns of `checkAutonomy` and
  * `checkVerifiability`: the demoted returns and Check 3 keep quoting raw text.
@@ -3340,7 +3342,7 @@ function formatQuotedEvidence(text) {
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/<!--/g, `<!${ZERO_WIDTH_SPACE}--`)
-    .replace(/-->/g, `--${ZERO_WIDTH_SPACE}>`)
+    .replace(/--(!?>)/g, `--${ZERO_WIDTH_SPACE}$1`)
     .replace(/(outcome)(\s*:)/gi, `$1${ZERO_WIDTH_SPACE}$2`)
     .replace(/(check)(\s+\d)/gi, `$1${ZERO_WIDTH_SPACE}$2`)
     .replace(/(?<!\w)@(?=[A-Za-z0-9])/g, `@${ZERO_WIDTH_SPACE}`);
