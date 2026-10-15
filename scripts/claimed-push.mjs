@@ -43,7 +43,7 @@ const MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 /** A dirty-tree reason lists at most this many status lines. */
 const MAX_STATUS_LINES = 20;
 const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
-/** A github.com origin: https, http, git, ssh, or scp-style. */
+/** A github.com origin: https, http, git, ssh, git+ssh, ssh+git, or scp-style. */
 const GITHUB_ORIGIN_PATTERN =
   /^(?:(?:https?|ssh|git|git\+ssh|ssh\+git):\/\/(?:[^/@]+@)?github\.com(?::\d+)?\/|(?:[^/@:]+@)?github\.com:)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/*$/iu;
 /** An origin whose host is github.com, however malformed its path. */

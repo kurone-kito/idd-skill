@@ -52,7 +52,7 @@ const MAX_STATUS_LINES = 20;
 
 const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
 
-/** A github.com origin: https, http, git, ssh, or scp-style. */
+/** A github.com origin: https, http, git, ssh, git+ssh, ssh+git, or scp-style. */
 const GITHUB_ORIGIN_PATTERN =
   /^(?:(?:https?|ssh|git|git\+ssh|ssh\+git):\/\/(?:[^/@]+@)?github\.com(?::\d+)?\/|(?:[^/@:]+@)?github\.com:)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/*$/iu;
 

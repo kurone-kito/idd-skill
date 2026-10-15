@@ -317,7 +317,7 @@ test('the worktree path keeps trailing whitespace and loses only the line break'
 test('a claimed branch outside issue/<n>- refuses before any path is computed', () => {
   for (const branch of ['main', 'issue/4376-other-issue', 'issue/4375']) {
     const r = run({ world: { [K.assert]: result(0, claimJson(branch)) } });
-    assertRefused(r, 'location', NEXT.stopAndReport);
+    assertRefused(r, 'location', NEXT.stopAndReport, { exitStatus: undefined });
     assert.equal(r.count(K.worktrees), 0, branch);
     assert.equal(r.count(K.gate), 0);
     noPush(r);
@@ -330,14 +330,14 @@ test('a worktree that is not the sibling path of the claimed branch refuses', ()
     world: { [K.toplevel]: result(0, `${elsewhere}\n`) },
     known: [PRIMARY, WORKTREE, elsewhere],
   });
-  assertRefused(r, 'location', NEXT.runFromWorktree);
+  assertRefused(r, 'location', NEXT.runFromWorktree, { exitStatus: undefined });
   assert.equal(r.count(K.gate), 0);
   noPush(r);
 });
 
 test('an expected sibling path that cannot be resolved refuses', () => {
   const r = run({ known: [PRIMARY] });
-  assertRefused(r, 'location', NEXT.runFromWorktree);
+  assertRefused(r, 'location', NEXT.runFromWorktree, { exitStatus: undefined });
   assert.match(
     r.report.steps[1]?.reason ?? '',
     /does not exist or cannot be resolved/u,
@@ -351,7 +351,7 @@ test('a worktree path that cannot be resolved refuses', () => {
     world: { [K.toplevel]: result(0, `${other}\n`) },
     known: [PRIMARY, WORKTREE],
   });
-  assertRefused(r, 'location', NEXT.runFromWorktree);
+  assertRefused(r, 'location', NEXT.runFromWorktree, { exitStatus: undefined });
   noPush(r);
 });
 
@@ -406,7 +406,7 @@ test('a long dirty-tree listing is capped', () => {
     (_, index) => ` M file-${index}.txt`,
   );
   const r = run({ world: { [K.status]: result(0, `${lines.join('\n')}\n`) } });
-  assertRefused(r, 'gate', NEXT.commitThenRerun);
+  assertRefused(r, 'gate', NEXT.commitThenRerun, { exitStatus: 0 });
   const reason = r.report.steps[2]?.reason ?? '';
   assert.match(reason, /file-19\.txt/u);
   assert.doesNotMatch(reason, /file-20\.txt/u);
@@ -451,7 +451,7 @@ test('a gate command that is not configured is never run', () => {
   const r = run({
     gate: { ok: false, reason: 'commands.pre-push-validate is not configured' },
   });
-  assertRefused(r, 'gate', NEXT.configureGate);
+  assertRefused(r, 'gate', NEXT.configureGate, { exitStatus: undefined });
   assert.match(r.report.steps[2]?.reason ?? '', /not configured/u);
   assert.equal(r.count(K.gate), 0);
   noPush(r);
@@ -508,6 +508,15 @@ test('a branch-tip read that fails refuses instead of comparing', () => {
   const r = run({ world: { [K.tip]: result(128, '', 'fatal: bad ref') } });
   assertRefused(r, 'reassert', NEXT.readGitError, { exitStatus: 128 });
   noPush(r);
+});
+
+test('a git read ended by a signal reports a null exit status', () => {
+  const r = run({ world: { [K.status]: KILLED } });
+  assertRefused(r, 'gate', NEXT.readGitError, { exitStatus: null });
+  assert.match(r.report.steps[2]?.reason ?? '', /SIGKILL/u);
+  assert.equal(r.count(K.gate), 0);
+  const noStart = run({ world: { [K.toplevel]: CANNOT_START } });
+  assertRefused(noStart, 'assert', NEXT.runFromWorktree, { exitStatus: null });
 });
 
 test('a status read that fails after the gate refuses', () => {
@@ -567,7 +576,7 @@ test('the path check runs before the current-branch check', () => {
     },
     known: [PRIMARY, WORKTREE, elsewhere],
   });
-  assertRefused(r, 'location', NEXT.runFromWorktree);
+  assertRefused(r, 'location', NEXT.runFromWorktree, { exitStatus: undefined });
   assert.equal(r.count(K.current), 0);
 });
 
@@ -788,7 +797,9 @@ test('the repository name comes from the origin slug, not the primary basename',
       join(ROOT, 'checkout-dir.issue-4375-feat-push-add-helper'),
     ],
   });
-  assertRefused(byBasename, 'location', NEXT.runFromWorktree);
+  assertRefused(byBasename, 'location', NEXT.runFromWorktree, {
+    exitStatus: undefined,
+  });
 });
 
 test('an origin that is not on github.com builds the name from the primary basename', () => {
@@ -844,7 +855,7 @@ test('a github.com origin without an owner/repository path refuses', () => {
   const r = run({
     world: { [K.origin]: result(0, 'https://github.com/just-owner\n') },
   });
-  assertRefused(r, 'location', NEXT.runFromWorktree);
+  assertRefused(r, 'location', NEXT.runFromWorktree, { exitStatus: undefined });
   assert.match(r.report.steps[1]?.reason ?? '', /owner\/repository/u);
 });
 
@@ -858,7 +869,7 @@ test('a refused origin never echoes the credentials in its URL', () => {
       ),
     },
   });
-  assertRefused(r, 'location', NEXT.runFromWorktree);
+  assertRefused(r, 'location', NEXT.runFromWorktree, { exitStatus: undefined });
   assert.doesNotMatch(JSON.stringify(r.report), new RegExp(token, 'u'));
 });
 
