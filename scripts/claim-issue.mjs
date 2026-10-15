@@ -187,6 +187,8 @@ function checkApproval(issueNumber, deps) {
     !isRecord(policy) ||
     typeof policy.maintainerApprovalActorPolicy !== 'string' ||
     !isRecord(policy.approvalSignals) ||
+    typeof policy.approvalSignals.readyLabelName !== 'string' ||
+    typeof policy.approvalSignals.labelFreshnessMode !== 'string' ||
     !Array.isArray(evidence.checks)
   ) {
     return unproven('claim-approval-gate printed incomplete evidence');
@@ -239,6 +241,20 @@ function checkClaimState(issueNumber, deps) {
       'resume-claim-routing printed no valid fresh_claim_gate verdict',
     );
   }
+  // Every verdict carries a top-level reason and a winning_claim_id (null when
+  // there is no winner), so a truncated response cannot pass as claimable.
+  const winningClaimId = gate.winning_claim_id;
+  if (
+    typeof routing.reason !== 'string' ||
+    routing.reason === '' ||
+    !Object.hasOwn(gate, 'winning_claim_id') ||
+    (winningClaimId !== null && typeof winningClaimId !== 'string')
+  ) {
+    return unavailable(
+      label,
+      'resume-claim-routing printed a verdict without a reason or winning_claim_id',
+    );
+  }
   if (gate.verdict === 'claimable') {
     return pass('claimable');
   }
@@ -249,18 +265,6 @@ function checkClaimState(issueNumber, deps) {
       'the active claim is stale and reclaimable; takeover is out of scope',
     );
   }
-  const winningClaimId = gate.winning_claim_id;
-  if (
-    typeof routing.reason !== 'string' ||
-    routing.reason === '' ||
-    !Object.hasOwn(gate, 'winning_claim_id') ||
-    (winningClaimId !== null && typeof winningClaimId !== 'string')
-  ) {
-    return unavailable(
-      label,
-      'resume-claim-routing printed an already-claimed verdict without a reason or winning_claim_id',
-    );
-  }
   return stop(
     'already-claimed',
     'Do not claim: apply the already-claimed routing in idd-claim.instructions.md (A5(c)).',
@@ -269,12 +273,50 @@ function checkClaimState(issueNumber, deps) {
   );
 }
 /**
+ * Throw unless every open pull request row is usable: a malformed row could
+ * hide the very pull request that closes the issue, so the scan must fail
+ * rather than silently skip it. The GitHub adapter turns a missing body into
+ * the empty string, so an empty body stays valid.
+ */
+function requireWellFormedRows(rows) {
+  if (!Array.isArray(rows)) {
+    throw new Error('the open pull request list is not an array');
+  }
+  for (const row of rows) {
+    if (
+      !isRecord(row) ||
+      typeof row.number !== 'number' ||
+      !Number.isSafeInteger(row.number) ||
+      row.number <= 0 ||
+      typeof row.title !== 'string' ||
+      typeof row.body !== 'string' ||
+      typeof row.url !== 'string'
+    ) {
+      throw new Error('the open pull request list holds a malformed row');
+    }
+  }
+  return rows;
+}
+/** The port with `listOpenChangeRequests` checked row by row. */
+function withWellFormedOpenRows(port) {
+  return new Proxy(port, {
+    get(target, property, receiver) {
+      if (property === 'listOpenChangeRequests') {
+        return () => requireWellFormedRows(target.listOpenChangeRequests());
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+}
+/**
  * A5(d): open pull requests that close or reference the issue. Both signals
  * always run (no short-circuit). A pull request found by either wins, whatever
  * the lookup state; a failed lookup that found nothing is unavailable.
  */
 function checkOpenPullRequests(issueNumber, repository, deps) {
-  const port = deps.createPort(repository.owner, repository.repo);
+  const port = withWellFormedOpenRows(
+    deps.createPort(repository.owner, repository.repo),
+  );
   const found = new Set();
   let lookupFailed = false;
   try {
@@ -315,6 +357,40 @@ function checkOpenPullRequests(issueNumber, repository, deps) {
   }
   return pass('no open pull request closes or references this issue');
 }
+/**
+ * Read the pages of a paginated matching-refs response, one compact JSON array
+ * per line. `null` when there is no page at all (even an empty result prints
+ * `[]`), a page is not an array, or an entry has no `refs/heads/` ref string.
+ */
+function parseMatchingRefs(stdout) {
+  const lines = stdout.split(/\r?\n/).filter((line) => line.trim() !== '');
+  if (lines.length === 0) {
+    return null;
+  }
+  const refs = [];
+  for (const line of lines) {
+    let page;
+    try {
+      page = JSON.parse(line);
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(page)) {
+      return null;
+    }
+    for (const entry of page) {
+      if (
+        !isRecord(entry) ||
+        typeof entry.ref !== 'string' ||
+        !entry.ref.startsWith('refs/heads/')
+      ) {
+        return null;
+      }
+      refs.push(entry.ref);
+    }
+  }
+  return refs;
+}
 /** A5(e): the local worktree scan, then the scoped remote branch scan. */
 function checkBranchCollision(issueNumber, repository, deps) {
   const prefix = `issue/${issueNumber}-`;
@@ -342,12 +418,15 @@ function checkBranchCollision(issueNumber, repository, deps) {
       `a local worktree could not be ruled out${local.reason ? ` (${local.reason})` : ''}${local.paths.length > 0 ? `: ${local.paths.join(', ')}` : ''}`,
     );
   }
+  // `tojson` prints each page as one compact JSON line, so the scan reads the
+  // structured response instead of trusting a projection that prints nothing
+  // for a malformed body.
   const remote = deps.run('gh', [
     'api',
     `repos/${repository.owner}/${repository.repo}/git/matching-refs/heads/${prefix}`,
     '--paginate',
     '--jq',
-    '.[].ref | sub("^refs/heads/"; "")',
+    'tojson',
   ]);
   if (remote.status !== 0) {
     return unavailable(
@@ -355,15 +434,21 @@ function checkBranchCollision(issueNumber, repository, deps) {
       `the remote branch scan ended with ${describeStatus(remote)}`,
     );
   }
-  const refs = remote.stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith(prefix));
-  if (refs.length > 0) {
+  const refs = parseMatchingRefs(remote.stdout);
+  if (refs === null) {
+    return unavailable(
+      'A5(e)',
+      'the remote branch scan printed a malformed matching-refs response',
+    );
+  }
+  const collisions = refs
+    .filter((ref) => ref.startsWith(`refs/heads/${prefix}`))
+    .map((ref) => ref.slice('refs/heads/'.length));
+  if (collisions.length > 0) {
     return stop(
       'branch-collision',
       `Post the A5(e) hold note from idd-claim.instructions.md and stop for operator review; this helper does not post it.`,
-      `remote branch ${refs.join(', ')} already exists`,
+      `remote branch ${collisions.join(', ')} already exists`,
     );
   }
   return pass(`no local worktree or remote branch matches ${prefix}*`);

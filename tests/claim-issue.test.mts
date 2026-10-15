@@ -73,7 +73,10 @@ const APPROVED = ok(
     gateEnabled: true,
     policy: {
       maintainerApprovalActorPolicy: 'owners-and-maintainers-only',
-      approvalSignals: { readyLabelName: 'idd:ready' },
+      approvalSignals: {
+        readyLabelName: 'idd:ready',
+        labelFreshnessMode: 'presence-only',
+      },
     },
     checks: [],
   }),
@@ -106,7 +109,12 @@ function routingOutput(
 }
 
 const CLAIMABLE = routingOutput('claimable');
-const NO_REFS = ok('');
+/** One matching-refs page as `gh api --paginate --jq tojson` prints it. */
+const pageOf = (...branches: string[]): string =>
+  JSON.stringify(branches.map((branch) => ({ ref: `refs/heads/${branch}` })));
+const refPage = (...branches: string[]): CommandResult =>
+  ok(pageOf(...branches));
+const NO_REFS = ok('[]');
 const LOCAL_ABSENT: LocalWorktreeInspection = {
   status: 'absent',
   paths: [],
@@ -342,6 +350,21 @@ test('A5(a): invalid or incomplete approval JSON is approval-unproven', () => {
     approvalOutput({ gateEnabled: undefined }),
     approvalOutput({ policy: {} }),
     approvalOutput({ policy: { maintainerApprovalActorPolicy: 'x' } }),
+    approvalOutput({
+      policy: { maintainerApprovalActorPolicy: 'x', approvalSignals: {} },
+    }),
+    approvalOutput({
+      policy: {
+        maintainerApprovalActorPolicy: 'x',
+        approvalSignals: { readyLabelName: 'idd:ready' },
+      },
+    }),
+    approvalOutput({
+      policy: {
+        maintainerApprovalActorPolicy: 'x',
+        approvalSignals: { readyLabelName: 7, labelFreshnessMode: 'x' },
+      },
+    }),
     approvalOutput({ checks: undefined }),
   ];
   for (const approval of broken) {
@@ -432,6 +455,12 @@ test('A5(c): a failed, malformed, or unknown fresh-claim result is precheck-unav
     failed(null),
     ok('not json'),
     ok(JSON.stringify({ reason: 'x' })),
+    ok(JSON.stringify({ fresh_claim_gate: { verdict: 'claimable' } })),
+    routingOutput('claimable', { reason: undefined }),
+    routingOutput('claimable', { reason: '' }),
+    routingOutput('claimable', { winning: 'absent' }),
+    routingOutput('stale-reclaimable', { reason: undefined }),
+    routingOutput('stale-reclaimable', { winning: 'absent' }),
     routingOutput('something-else'),
     routingOutput('already-claimed', { reason: undefined, winning: null }),
     routingOutput('already-claimed', { reason: '', winning: null }),
@@ -771,7 +800,7 @@ test('A5(e): a failed worktree listing or an unreadable record is local-worktree
 
 test('A5(e): a remote issue/<n>- branch is branch-collision naming the ref, and the hold note is not posted', () => {
   const { report, record } = run({
-    refs: ok(`${PREFIX}other-slug\n`),
+    refs: refPage(`${PREFIX}other-slug`),
   });
   assertStoppedAt(report, 'a5e-branch-collision', 'branch-collision');
   assert.match(
@@ -787,15 +816,12 @@ test('A5(e): a remote issue/<n>- branch is branch-collision naming the ref, and 
   ]);
   // Without --paginate the scan would silently cap at one page of refs.
   assert.ok(scan?.includes('--paginate'));
-  assert.equal(
-    scan?.[scan.indexOf('--jq') + 1],
-    '.[].ref | sub("^refs/heads/"; "")',
-  );
+  assert.equal(scan?.[scan.indexOf('--jq') + 1], 'tojson');
 });
 
 test('A5(e): a remote issue/<n>1- branch does not count', () => {
   const { report } = run({
-    refs: ok(`issue/${ISSUE}1-other-slug\nrefs-noise\n`),
+    refs: refPage(`issue/${ISSUE}1-other-slug`, 'feature/x'),
   });
   assertEligible(report);
 });
@@ -805,6 +831,72 @@ test('A5(e): a failed remote scan is precheck-unavailable', () => {
     const { report } = run({ refs });
     assertStoppedAt(report, 'a5e-branch-collision', 'precheck-unavailable');
   }
+});
+
+test('A5(e): a malformed matching-refs response is precheck-unavailable, not a clean scan', () => {
+  const malformed: CommandResult[] = [
+    ok(''),
+    ok('   \n'),
+    ok('{}'),
+    ok('not json'),
+    ok('null'),
+    ok('[{"ref":7}]'),
+    ok('[{"name":"x"}]'),
+    ok('["refs/heads/x"]'),
+    ok('[{"ref":"heads/issue/4372-x"}]'),
+    ok(`${pageOf()}\nnot json`),
+    ok(`${pageOf()}\n{}`),
+  ];
+  for (const refs of malformed) {
+    const { report } = run({ refs });
+    assertStoppedAt(report, 'a5e-branch-collision', 'precheck-unavailable');
+  }
+});
+
+test('A5(e): every page of a paginated response is read', () => {
+  const { report } = run({
+    refs: ok(`${pageOf()}\n${pageOf(`${PREFIX}second-page`)}`),
+  });
+  assertStoppedAt(report, 'a5e-branch-collision', 'branch-collision');
+  assert.match(
+    report.steps[4]?.detail ?? '',
+    new RegExp(`${PREFIX}second-page`),
+  );
+});
+
+test('A5(d): a malformed open pull request row is precheck-unavailable, not a clean scan', () => {
+  const valid = openPr(55, 'No closing reference here');
+  const rows: unknown[] = [
+    { ...valid, number: Number.NaN },
+    { ...valid, number: 0 },
+    { ...valid, number: -3 },
+    { ...valid, number: 1.5 },
+    { ...valid, number: '55' },
+    { ...valid, body: undefined },
+    { ...valid, body: null },
+    { ...valid, title: 7 },
+    { ...valid, url: undefined },
+    null,
+    'row',
+  ];
+  for (const row of rows) {
+    const { report } = run({
+      fixture: {
+        openChangeRequests: [
+          valid,
+          row,
+        ] as unknown as FakeProviderFixture['openChangeRequests'],
+      },
+    });
+    assertStoppedAt(report, 'a5d-open-pr', 'precheck-unavailable');
+  }
+});
+
+test('A5(d): a valid row with an empty body passes', () => {
+  const { report } = run({
+    fixture: { openChangeRequests: [openPr(55, '')] },
+  });
+  assertEligible(report);
 });
 
 // Failures before any check
@@ -924,7 +1016,7 @@ test('an eligible result exits 0 and prints the report', () => {
 
 test('an ineligible result exits 1 as a gate outcome and still prints the report', () => {
   const { result, stdout } = runCommand(['--issue', String(ISSUE)], {
-    refs: ok(`${PREFIX}other-slug`),
+    refs: refPage(`${PREFIX}other-slug`),
   });
   assert.equal((result as { exitCode: number }).exitCode, 1);
   assert.equal((result as { kind: string }).kind, 'gate');
