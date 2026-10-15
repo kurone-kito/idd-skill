@@ -1011,6 +1011,9 @@ The operating rules for this variant are in the
 which an agent reads only when its activation conditions hold or a fan-out
 session restarts.
 
+The orchestrator's end-of-run report is defined under
+[Orchestrator run report](#orchestrator-run-report).
+
 Running this variant safely requires:
 
 - **A non-context-inheriting delegation mechanism for the full
@@ -1241,10 +1244,11 @@ Running this variant safely requires:
   its entry stays `reporting`, and the renewal runs at those wake-ups. At or
   after 72 h from the hold start, the claim revalidation gate confirms the
   active claim is still this claim; the orchestrator then posts `unclaimed-by`
-  for it and records the hold and cap in the run report. Once that succeeds,
+  for it and records the hold and cap in
+  [the run report](#orchestrator-run-report). Once that post succeeds,
   nothing is appended to the worker report store, because a claim released
   without a merge or handoff has no terminal phase (Orchestrator restart, step
-  4); the release is reported to the operator, and the entry is then marked
+  4); the release goes in the run report, and the entry is then marked
   `disposed`. Before the cap, each `claimed-by` re-post, due every 12 h from
   the latest valid one, first has the claim revalidation gate confirm the
   active claim's agent id and claim id, then copies its `branch` verbatim. A
@@ -1253,6 +1257,57 @@ Running this variant safely requires:
   failed 72-hour `unclaimed-by` leaves the claim in place, and the run report
   records that the cap was reached and the release post failed. In both cases
   the orchestrator posts no second claim id and starts no new claim.
+
+### Orchestrator run report
+
+The **run report** is the orchestrator's end-of-run report to its operator. The
+orchestrator writes it as a message in its session each time it stops
+(including the stops in section 4 of the orchestrator phase file) or pauses to
+wait for the operator (its turn ends awaiting an operator reply), and the
+operator reads it there. Each report lists the whole state, not only what
+changed since the last one. Waiting for a worker's completion, a host-load
+re-check, or a renewal due time is neither a stop nor a pause.
+
+At minimum it lists:
+
+- **Roster.** Each roster entry, with its issue number and its final state, the
+  state it is in when the report is written: `running`, `reporting`,
+  `disposed`, or `stalled`, as section 2 of the orchestrator phase file lists
+  them.
+- **Holds.** Each hold, with its issue number, its start as the hold marker
+  defines it, its cap time (72 h after the start, per the held-worker renewal
+  rule), the GitHub `created_at` of the latest valid `claimed-by` on its claim,
+  and how it stands: still held, released at the cap, or ended by a cause the
+  hold marker defines (the worker's valid `claimed-by` or, after a restart, any
+  valid `claimed-by` newer than the marker, which can be the earlier run's own
+  renewal; a release other than the cap release; a supersession; or the
+  entry's disposal). Once no living orchestrator renews a hold, the stale clock
+  (`claim-stale-age`, 24 h by default) counts from the latest valid
+  `claimed-by`.
+- **Failures.** Each renewal or release that failed since the run began, even
+  if a later wake-up's attempt succeeded, with its issue number, its claim id,
+  and which post failed and when (the 12 h `claimed-by` re-post, once its one
+  retry has also failed, or the 72-hour `unclaimed-by`) and, for the
+  `unclaimed-by`, that the cap was reached. A failed post leaves its entry
+  where it stands, not `disposed`, and the failure stays listed in every later
+  report.
+
+It also carries any gap the Discover pass says to name in "the run report" (for
+example an incomplete parked-issue listing) and the `limitingFactor` that
+section 4 of the orchestrator phase file has the orchestrator report when a
+limit stops it. Any other report to the operator that the IDD instructions or
+this guide require is made at the step that requires it; this report neither
+defers nor replaces it.
+
+The orchestrator notes each item when it happens and writes them out together,
+so an entry can be `disposed` before the report is written. The report is a
+message, not a store: it is not a file, an issue comment, or a record in the
+worker final report store, which holds per-worker records and receives nothing
+from a cap release, and no helper reads it. A session that ends without writing
+it leaves no report (preventive; no observed incident yet). A restart that can
+recover (see [Orchestrator restart](#orchestrator-restart)) rebuilds the roster
+from the forge, the worktrees, and the harness's agent listing, never from a run
+report, and the new run writes its own.
 
 ### Orchestrator restart
 
