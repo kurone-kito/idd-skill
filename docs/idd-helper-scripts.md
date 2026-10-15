@@ -6191,9 +6191,11 @@ reflexively as any other CLI option.
   `**Rejected**`, or `**Rejection confirmed by maintainer**` reply. It is not
   a disposition, so the thread is not settled until a settled reply from a
   trusted account follows it. A mid-sentence quote of the phrase, an
-  indented line, one inside a code span, a fence, a block quote, or a list
-  item, and a line that continues a quote or list item with no blank line,
-  heading, thematic break, or HTML block before it, does not count. The same
+  indented line, one inside a code span, a fence, a block quote, a list
+  item, an HTML comment, or an HTML block, and a line that continues a quote
+  or list item with no blank line, heading, thematic break, or HTML block
+  before it, does not count (kurone-kito/idd-skill#4332: text hidden in a
+  multi-line comment or `<div>` is not a visible hold). The same
   rule keeps such a reply from answering a regular comment (a human's
   included), from advancing the last-reply watermark behind the
   unreplied-comment count, from covering a cited Previously missed item, and
@@ -6213,9 +6215,11 @@ reflexively as any other CLI option.
   review has items). Clause 2 counts only unresolved threads, so resolving a
   pending thread still settles it for this gate; leave it unresolved until
   the decision.
-  `resolve-review-thread --apply` resolves the thread, so it refuses a
-  `--body` that carries the marker before any network call; post a pending
-  reply by hand and leave the thread open
+  `resolve-review-thread --apply` refuses a `--body` that carries the marker
+  before any network call. A thread target would resolve the thread, so post
+  a pending reply by hand and leave the thread open; a body-item target
+  (`--review-id` with `--item-title`) posts a top-level reply and resolves no
+  thread, so wait for the maintainer and then post a settled disposition
 - Disposition-evidence `hint` on the `dispositionEvidence` object
   (kurone-kito/idd-skill#4163; observed 2026-10-13 on
   kurone-kito/idd-skill#4153, kurone-kito/idd-skill#4151, and
