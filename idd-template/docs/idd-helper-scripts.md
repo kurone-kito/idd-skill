@@ -4258,7 +4258,10 @@ lock of `--worktree` carries this claim ID, and requires `decideBeforePost` to
 return `post`. A merge commit with two parents must have the live head as its
 second parent; one parent (a squash or rebase merge) is accepted, as in the
 written procedure; any other count holds with `pr-state`. So does a branch
-with no merged pull request, or with more than one. Under `--apply` the claim
+with no merged pull request, or with more than one, and a `gh pr list` result
+that reaches its 100-row cap, which may be truncated. Every git read, and the
+spawned claim check, ignore `GIT_DIR`, `GIT_WORK_TREE`, and `GIT_CONFIG*` of the
+caller. Under `--apply` the claim
 check and the lock are read once more right before the POST, with the same
 nonce: a changed claim or branch, or a replaced or missing lock, is `stop` on
 `claim-or-lock`, and a reading that cannot be obtained is `hold`; nothing is

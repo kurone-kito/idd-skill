@@ -100,6 +100,9 @@ function assertClaim(request, options) {
   try {
     stdout = execFileSync(process.execPath, argv, {
       encoding: 'utf8',
+      // The child reads git state for the supplied worktree only; a caller's
+      // GIT_DIR or GIT_WORK_TREE must not reach it.
+      env: sanitizedGitEnvironment(),
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: CLAIM_ASSERT_TIMEOUT_MS,
     });
