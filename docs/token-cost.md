@@ -204,9 +204,9 @@ observed zero:
   content blocks across all of a request's records. Usage and turn counts
   are per API request within one harvest input: a request split across
   inputs (a cwd change or an event window) counts once per input. Records
-  that carry only a `message.id` are not joined to records that carry a
-  `requestId`. Both counts are always a real count, never `null` or
-  omitted.
+  are joined only when their identifier strings are identical, so records
+  that use different identifier forms for one response are not joined.
+  Both counts are always a real count, never `null` or omitted.
 - **Codex**: `turnCount` counts `turn_context` records in the rollout
   log. `toolCallCount` is always `null` (never omitted) -- no fixture in
   this repository names a tool-invocation record type the Codex rollout
