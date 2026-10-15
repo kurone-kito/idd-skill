@@ -9,7 +9,7 @@ Read this file to select the next issue, including explicit targets,
 roadmap-audit handoff, and A4.5/Claim routing.
 
 With helpers, run first from `docs/idd-helper-scripts.md` for
-A0-O/A3/A3.5/A4/A4.5; tables win if absent/disagrees.
+A0-C/A0-O/A3/A3.5/A4/A4.5; tables win if absent/disagrees.
 `discover-viability-gate`/`discover-shared-file-overlap`: `--issue`/`--issues`.
 
 **Abort conditions**: A0-T, A1 (`orphan-first`/`roadmap` scope only —
@@ -55,16 +55,17 @@ If `draftCarriers.ready` is non-empty, re-author at most one carrier, the
 lowest number that passes the actor check, by the Re-authoring steps of
 "Draft carrier" in the `issue-authoring` companion's
 `references/contract.md`; without the companion, name the ready carriers in
-the run report. Under `orphan-first-policy` `public-disabled`, read one
-carrier's comments at a time (per the portable owner resolver above; not a
-repo-wide query): a carrier passes only if its earliest trusted
-`mode=acquire` or `mode=bootstrap` authoring-owner marker was written by a
-login in `trustedMarkerActors` (no marker fails); under any other policy
-every ready carrier passes. Name each failing carrier in the run report; if
-all fail, re-author none and continue. If the procedure stops with the
-carrier still open or a published target in a recovery hold, record the
-carrier's number and the stop reason in the run report, continue the pass,
-and never claim the carrier as ordinary work; add no second recovery path.
+the run report. Under `orphan-first-policy` (Project commands table)
+`public-disabled`, read one carrier's comments at a time (per the portable
+owner resolver above; not a repo-wide query): a carrier passes only if its
+earliest trusted `mode=acquire` or `mode=bootstrap` authoring-owner marker
+was written by a login in `trustedMarkerActors` (no marker fails); under any
+other policy every ready carrier passes. Name each failing carrier in the
+run report; if all fail, re-author none and continue. If the procedure stops
+with the carrier still open or a published target in a recovery hold, record
+the carrier's number and the stop reason in the run report, continue the
+pass, and never claim the carrier as ordinary work; add no second recovery
+path.
 
 ## A0-T — Explicit issue target shortcut
 
@@ -273,10 +274,7 @@ deduped against marker roots; invalid fails safe to none). See
 ## A1.5 — Audit completed roadmaps
 
 After A1 selects an open roadmap, read
-`idd-roadmap-audit.instructions.md` before continuing to A2. That file
-owns the full A1.5 completion audit, roadmap-side claim rules, and the
-close/link/stop outcomes that can occur before child-issue enumeration
-resumes here.
+`idd-roadmap-audit.instructions.md` before continuing to A2.
 
 ## A2 — Enumerate sub-issues
 
