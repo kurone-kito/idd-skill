@@ -8780,13 +8780,14 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
   gate; a command killed by a signal counts as failed.
 - **Report**: JSON on stdout with `mode`, `pushed`, `issue`, `branch`,
   `worktree`, and `steps`. Every step has an `id`, a `status` (`passed`,
-  `failed`, or `skipped`), and a `reason`. A step decided by a child
-  process (the assert, the gate, the push) also carries its `exitStatus`,
-  which is `null` when the process ended without one. Every `failed` step
-  has a non-empty `nextAction`. `pushed` is `true` after a push (the report
-  then adds `pushedSha`, the recorded HEAD, and `pushMessage`), `false`
-  when no push ran or git rejected it, and `null` when the push ended
-  without an exit status and its outcome is unknown.
+  `failed`, or `skipped`), and a `reason`. A failed step also carries the
+  `exitStatus` of the command that decided it (the assert, a git read, the
+  gate, or the push), which is `null` when that command ended without one;
+  a refusal decided by a path or claim comparison carries none. Every
+  `failed` step has a non-empty `nextAction`. `pushed` is `true` after a
+  push (the report then adds `pushedSha`, the recorded HEAD, and
+  `pushMessage`), `false` when no push ran or git rejected it, and `null`
+  when the push ended without an exit status and its outcome is unknown.
 - **Exit codes**: `0` when no step refused or failed, `1` for a refusal or
   failure, and `1` with kind `usage` for an argument error.
 - **Limits**: the helper never retries, never passes a force flag, and never
@@ -8798,10 +8799,11 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
   push starts, after the `reassert` step has compared HEAD and the branch
   tip. The helper keeps the branch argument because a SHA source does not
   set the upstream (`git push -u origin <sha>:refs/heads/<branch>` pushes
-  but sets no upstream on git 2.53.0). In that gap the only expected writer of the
-  claimed branch is the claiming session's own process tree: the claim
-  names one owning session and the `assert` and `reassert` steps check that
-  identity, but nothing locks the worktree between the check and the push.
+  but sets no upstream on git 2.53.0). In that gap the only expected
+  writer of the claimed branch is the claiming session's own process tree:
+  the claim names one owning session and the `assert` and `reassert` steps
+  check that identity, but nothing locks the worktree between the check
+  and the push.
 
 ## Dead-export audit (kurone-kito/idd-skill#3478)
 

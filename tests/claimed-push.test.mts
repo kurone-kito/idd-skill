@@ -294,7 +294,7 @@ test('an unresolvable worktree refuses before the assert', () => {
   const r = run({
     world: { [K.toplevel]: result(128, '', 'fatal: not a git repository') },
   });
-  assertRefused(r, 'assert', NEXT.runFromWorktree);
+  assertRefused(r, 'assert', NEXT.runFromWorktree, { exitStatus: 128 });
   assert.equal(r.count(K.assert), 0);
   noPush(r);
 });
@@ -357,34 +357,34 @@ test('a worktree path that cannot be resolved refuses', () => {
 
 test('a primary checkout that git does not list first refuses', () => {
   const r = run({ world: { [K.worktrees]: result(0, '') } });
-  assertRefused(r, 'location', NEXT.runFromWorktree);
+  assertRefused(r, 'location', NEXT.runFromWorktree, { exitStatus: 0 });
   const failed = run({
     world: { [K.worktrees]: result(128, '', 'fatal: nope') },
   });
-  assertRefused(failed, 'location', NEXT.runFromWorktree);
+  assertRefused(failed, 'location', NEXT.runFromWorktree, { exitStatus: 128 });
 });
 
 test('a current branch that differs from the claimed branch refuses', () => {
   const r = run({ world: { [K.current]: result(0, 'issue/4375-another\n') } });
-  assertRefused(r, 'location', NEXT.switchBranch);
+  assertRefused(r, 'location', NEXT.switchBranch, { exitStatus: 0 });
   assert.equal(r.count(K.gate), 0);
   noPush(r);
 });
 
 test('a detached HEAD refuses', () => {
   const r = run({ world: { [K.current]: result(0, '\n') } });
-  assertRefused(r, 'location', NEXT.switchBranch);
+  assertRefused(r, 'location', NEXT.switchBranch, { exitStatus: 0 });
   assert.match(r.report.steps[1]?.reason ?? '', /detached/u);
   noPush(r);
   const failed = run({ world: { [K.current]: result(128, '', 'fatal') } });
-  assertRefused(failed, 'location', NEXT.switchBranch);
+  assertRefused(failed, 'location', NEXT.switchBranch, { exitStatus: 128 });
 });
 
 test('a dirty working tree refuses before the gate runs', () => {
   const r = run({
     world: { [K.status]: result(0, ' M src/file.mts\n?? new.txt\n') },
   });
-  assertRefused(r, 'gate', NEXT.commitThenRerun);
+  assertRefused(r, 'gate', NEXT.commitThenRerun, { exitStatus: 0 });
   assert.match(r.report.steps[2]?.reason ?? '', / M src\/file\.mts/u);
   assert.match(r.report.steps[2]?.reason ?? '', /\?\? new\.txt/u);
   assert.equal(r.count(K.gate), 0);
@@ -395,7 +395,7 @@ test('a status read that fails refuses instead of reading as clean', () => {
   const r = run({
     world: { [K.status]: result(128, '', 'fatal: index.lock exists') },
   });
-  assertRefused(r, 'gate', NEXT.readGitError);
+  assertRefused(r, 'gate', NEXT.readGitError, { exitStatus: 128 });
   assert.equal(r.count(K.gate), 0);
   noPush(r);
 });
@@ -493,20 +493,20 @@ test('a HEAD that moved during the gate refuses the push', () => {
   const r = run({
     world: { [K.head]: [result(0, `${HEAD}\n`), result(0, `${OTHER_HEAD}\n`)] },
   });
-  assertRefused(r, 'reassert', NEXT.rerunForHead);
+  assertRefused(r, 'reassert', NEXT.rerunForHead, { exitStatus: 0 });
   assert.match(r.report.steps[3]?.reason ?? '', new RegExp(OTHER_HEAD, 'u'));
   noPush(r);
 });
 
 test('a branch tip that differs from the gated commit refuses the push', () => {
   const r = run({ world: { [K.tip]: result(0, `${OTHER_HEAD}\n`) } });
-  assertRefused(r, 'reassert', NEXT.rerunForHead);
+  assertRefused(r, 'reassert', NEXT.rerunForHead, { exitStatus: 0 });
   noPush(r);
 });
 
 test('a branch-tip read that fails refuses instead of comparing', () => {
   const r = run({ world: { [K.tip]: result(128, '', 'fatal: bad ref') } });
-  assertRefused(r, 'reassert', NEXT.readGitError, { exitStatus: 0 });
+  assertRefused(r, 'reassert', NEXT.readGitError, { exitStatus: 128 });
   noPush(r);
 });
 
@@ -516,7 +516,7 @@ test('a status read that fails after the gate refuses', () => {
       [K.status]: [result(0, ''), result(128, '', 'fatal: index.lock')],
     },
   });
-  assertRefused(r, 'gate', NEXT.readGitError);
+  assertRefused(r, 'gate', NEXT.readGitError, { exitStatus: 128 });
   assert.equal(r.count(K.gate), 1);
   noPush(r);
 });
@@ -535,7 +535,7 @@ test('a 64-character object id is accepted as HEAD', () => {
 
 test('an object id of the wrong length is not accepted as HEAD', () => {
   const r = run({ world: { [K.head]: result(0, `${'a'.repeat(41)}\n`) } });
-  assertRefused(r, 'gate', NEXT.readGitError);
+  assertRefused(r, 'gate', NEXT.readGitError, { exitStatus: 0 });
   assert.equal(r.count(K.gate), 0);
 });
 
@@ -554,7 +554,7 @@ test('a second assert that names another branch refuses the push', () => {
 
 test('an origin read that ends without an exit status refuses', () => {
   const r = run({ world: { [K.origin]: KILLED } });
-  assertRefused(r, 'location', NEXT.runFromWorktree);
+  assertRefused(r, 'location', NEXT.runFromWorktree, { exitStatus: null });
   assert.match(r.report.steps[1]?.reason ?? '', /SIGKILL/u);
 });
 
@@ -573,14 +573,14 @@ test('the path check runs before the current-branch check', () => {
 
 test('a HEAD read that fails refuses instead of comparing empty values', () => {
   const r = run({ world: { [K.head]: result(128, '', 'fatal: bad object') } });
-  assertRefused(r, 'gate', NEXT.readGitError);
+  assertRefused(r, 'gate', NEXT.readGitError, { exitStatus: 128 });
   assert.equal(r.count(K.gate), 0);
   const malformed = run({ world: { [K.head]: result(0, 'not-a-sha\n') } });
-  assertRefused(malformed, 'gate', NEXT.readGitError);
+  assertRefused(malformed, 'gate', NEXT.readGitError, { exitStatus: 0 });
   const second = run({
     world: { [K.head]: [result(0, `${HEAD}\n`), result(128, '', 'fatal')] },
   });
-  assertRefused(second, 'reassert', NEXT.readGitError);
+  assertRefused(second, 'reassert', NEXT.readGitError, { exitStatus: 128 });
   noPush(second);
 });
 
@@ -728,7 +728,7 @@ test('a dry run still refuses on a failed assert or location', () => {
     input: { apply: false },
     world: { [K.current]: result(0, 'main\n') },
   });
-  assertRefused(wrong, 'location', NEXT.switchBranch);
+  assertRefused(wrong, 'location', NEXT.switchBranch, { exitStatus: 0 });
 });
 
 test('the assert receives the identity, the nonce only when given, and the worktree', () => {
@@ -823,6 +823,8 @@ test('github.com origin forms all yield the case-preserved repository name', () 
     'git@github.com:Owner/MyApp.git',
     'git@github.com:Owner/MyApp',
     'git@github.com:Owner/MyApp.git/',
+    'git+ssh://git@github.com/Owner/MyApp.git',
+    'ssh+git://git@github.com/Owner/MyApp.git',
   ]) {
     const primary = join(ROOT, 'unrelated');
     const worktree = join(ROOT, 'MyApp.issue-4375-feat-push-add-helper');

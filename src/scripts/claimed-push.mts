@@ -54,7 +54,7 @@ const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
 
 /** A github.com origin: https, http, git, ssh, or scp-style. */
 const GITHUB_ORIGIN_PATTERN =
-  /^(?:(?:https?|ssh|git):\/\/(?:[^/@]+@)?github\.com(?::\d+)?\/|(?:[^/@:]+@)?github\.com:)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/*$/iu;
+  /^(?:(?:https?|ssh|git|git\+ssh|ssh\+git):\/\/(?:[^/@]+@)?github\.com(?::\d+)?\/|(?:[^/@:]+@)?github\.com:)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/*$/iu;
 
 /** An origin whose host is github.com, however malformed its path. */
 const GITHUB_HOST_PATTERN =
@@ -215,7 +215,9 @@ function describeEnd(what: string, end: CommandEnd): string {
   return `${what} could not start: ${end.detail}`;
 }
 
-type GitRead = { ok: true; stdout: string } | { ok: false; reason: string };
+type GitRead =
+  | { ok: true; stdout: string }
+  | { ok: false; reason: string; exitStatus: number | null };
 
 /** Run one git read in the worktree; any non-zero end is a failed read. */
 function readGit(
@@ -234,6 +236,7 @@ function readGit(
       describeEnd(`git ${args.join(' ')}`, end),
       end.kind === 'exit' ? firstLine(result.stderr) : '',
     ),
+    exitStatus: end.kind === 'exit' ? end.status : null,
   };
 }
 
@@ -244,7 +247,9 @@ function readHead(
   | { sha?: undefined; failure: StepOutcome } {
   const head = readGit(ctx, ['rev-parse', 'HEAD']);
   if (!head.ok) {
-    return { failure: failed(head.reason, NEXT_ACTION.readGitError) };
+    return {
+      failure: failed(head.reason, NEXT_ACTION.readGitError, head.exitStatus),
+    };
   }
   const sha = head.stdout.trim();
   if (!GIT_OBJECT_ID.test(sha)) {
@@ -252,6 +257,7 @@ function readHead(
       failure: failed(
         'git rev-parse HEAD did not print an object id',
         NEXT_ACTION.readGitError,
+        0,
       ),
     };
   }
@@ -356,6 +362,7 @@ function stepAssert(ctx: Context): StepOutcome {
     return failed(
       top.ok ? 'git rev-parse --show-toplevel printed nothing' : top.reason,
       NEXT_ACTION.runFromWorktree,
+      top.ok ? 0 : top.exitStatus,
     );
   }
   ctx.worktree = worktree;
@@ -405,7 +412,7 @@ function stepLocation(ctx: Context): StepOutcome {
 
   const list = readGit(ctx, ['worktree', 'list', '--porcelain', '-z']);
   if (!list.ok) {
-    return failed(list.reason, NEXT_ACTION.runFromWorktree);
+    return failed(list.reason, NEXT_ACTION.runFromWorktree, list.exitStatus);
   }
   const firstField = list.stdout.split('\0')[0] ?? '';
   const primary = firstField.startsWith('worktree ')
@@ -415,6 +422,7 @@ function stepLocation(ctx: Context): StepOutcome {
     return failed(
       'git worktree list did not name the primary checkout first',
       NEXT_ACTION.runFromWorktree,
+      0,
     );
   }
 
@@ -429,6 +437,7 @@ function stepLocation(ctx: Context): StepOutcome {
     return failed(
       describeEnd(`git remote get-url ${REMOTE_NAME}`, originEnd),
       NEXT_ACTION.runFromWorktree,
+      null,
     );
   }
   const origin = originEnd.status === 0 ? originRead.stdout.trim() : '';
@@ -464,19 +473,21 @@ function stepLocation(ctx: Context): StepOutcome {
 
   const current = readGit(ctx, ['branch', '--show-current']);
   if (!current.ok) {
-    return failed(current.reason, NEXT_ACTION.switchBranch);
+    return failed(current.reason, NEXT_ACTION.switchBranch, current.exitStatus);
   }
   const currentBranch = current.stdout.trim();
   if (currentBranch === '') {
     return failed(
       'HEAD is detached; the worktree is on no branch',
       NEXT_ACTION.switchBranch,
+      0,
     );
   }
   if (currentBranch !== branch) {
     return failed(
       `the worktree is on branch ${currentBranch}, not the claimed branch ${branch}`,
       NEXT_ACTION.switchBranch,
+      0,
     );
   }
   return {
@@ -496,7 +507,7 @@ function checkCleanTree(
     '--untracked-files=all',
   ]);
   if (!status.ok) {
-    return failed(status.reason, NEXT_ACTION.readGitError);
+    return failed(status.reason, NEXT_ACTION.readGitError, status.exitStatus);
   }
   const lines = status.stdout.split(/\r?\n/u).filter((line) => line !== '');
   if (lines.length === 0) {
@@ -512,6 +523,7 @@ function checkCleanTree(
     when === 'before'
       ? NEXT_ACTION.commitThenRerun
       : NEXT_ACTION.commitOrDiscard,
+    0,
   );
 }
 
@@ -548,7 +560,7 @@ function stepGate(ctx: Context): StepOutcome {
   }
   const after = checkCleanTree(ctx, 'after');
   if (after !== null) {
-    return { ...after, exitStatus: 0 };
+    return after;
   }
   return {
     status: 'passed',
@@ -587,7 +599,7 @@ function stepReassert(ctx: Context): StepOutcome {
     `refs/heads/${ctx.branch}`,
   ]);
   if (!tip.ok) {
-    return failed(tip.reason, NEXT_ACTION.readGitError, 0);
+    return failed(tip.reason, NEXT_ACTION.readGitError, tip.exitStatus);
   }
   if (tip.stdout.trim() !== ctx.recordedHead) {
     return failed(
