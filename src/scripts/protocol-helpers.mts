@@ -1562,17 +1562,24 @@ export function resolveTrustedHoldMarkers({
       id: /^\d+$/.test(rawId) ? Number(rawId) : Number.NaN,
     });
   });
-  // Oldest first by created_at. A same-second tie falls back to the numeric
-  // comment id (GitHub database ids rise with posting order) when both
-  // comments carry one, then to the input order, so the result is
-  // deterministic for any input.
+  // Oldest first by created_at. Within one second the order is a single total
+  // order: comments with a numeric id (GitHub database ids rise with posting
+  // order) come first, ordered by that id, then comments without one in input
+  // order. A rule that compared ids only when both comments had one would not
+  // be transitive for a mix of numeric and node ids, so the result would depend
+  // on the sort algorithm's comparison order.
   candidates.sort((a, b) => {
     const byTime =
       Date.parse(a.marker.createdAt) - Date.parse(b.marker.createdAt);
     if (byTime !== 0) {
       return byTime;
     }
-    if (Number.isFinite(a.id) && Number.isFinite(b.id) && a.id !== b.id) {
+    const aHasId = Number.isFinite(a.id);
+    const bHasId = Number.isFinite(b.id);
+    if (aHasId !== bHasId) {
+      return aHasId ? -1 : 1;
+    }
+    if (aHasId && a.id !== b.id) {
       return a.id - b.id;
     }
     return a.index - b.index;

@@ -255,6 +255,29 @@ test('resolveTrustedHoldMarkers breaks a same-second tie by comment id, then inp
     byId?.markers.map((marker) => marker.timestamp),
     ['2026-10-15T03:00:00Z', '2026-10-15T03:00:01Z'],
   );
+  // A mix of numeric and node ids sorts to one total order whatever the input
+  // order: numeric ids first, by id, then the node id.
+  const at = (id: number | string, second: number) =>
+    comment(0, holdBody(AGENT, CLAIM, `2026-10-15T03:00:0${second}Z`), TS, {
+      id,
+    });
+  const [id32, nodeX, id31] = [at(32, 2), at('IC_x', 5), at(31, 1)];
+  for (const input of [
+    [id32, nodeX, id31],
+    [id32, id31, nodeX],
+    [nodeX, id32, id31],
+    [nodeX, id31, id32],
+    [id31, id32, nodeX],
+    [id31, nodeX, id32],
+  ]) {
+    assert.deepEqual(
+      resolveTrustedHoldMarkers({
+        ...RESOLVE_DEFAULTS,
+        comments: input,
+      })?.markers.map((marker) => marker.timestamp),
+      ['2026-10-15T03:00:01Z', '2026-10-15T03:00:02Z', '2026-10-15T03:00:05Z'],
+    );
+  }
   // GraphQL node ids carry no order, so the input order decides.
   const nodeA = comment(0, holdBody(AGENT, CLAIM, '2026-10-15T03:00:00Z'), TS, {
     id: 'IC_a',

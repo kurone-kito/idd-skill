@@ -4172,8 +4172,9 @@ unresolved is ignored instead of making claim resolution throw.
   claim's `claimed-by`, and returns `{ markers, first, newest }` or `null`.
   `markers` holds every qualifying marker for that claim, oldest first by
   GitHub `created_at` (never the embedded timestamp; a same-second tie goes
-  to the numeric comment id, then to the input order), so the whole unbroken
-  run stays readable and not only the newest marker.
+  to the numeric comment id, with comments that have none after those that do,
+  then to the input order), so the whole unbroken run stays readable and not
+  only the newest marker.
 - A marker qualifies only when **all** of these hold: its author login is the
   login that posted the claim's `claimed-by` and is in the trusted marker
   login set (the marker's own `{agent-id}` text is never trusted, because the
