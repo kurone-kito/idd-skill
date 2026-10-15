@@ -1011,6 +1011,9 @@ The operating rules for this variant are in the
 which an agent reads only when its activation conditions hold or a fan-out
 session restarts.
 
+The orchestrator's end-of-run report is defined under
+[Orchestrator run report](#orchestrator-run-report).
+
 Running this variant safely requires:
 
 - **A non-context-inheriting delegation mechanism for the full
@@ -1258,11 +1261,12 @@ Running this variant safely requires:
 ### Orchestrator run report
 
 The **run report** is the orchestrator's end-of-run report to its operator. The
-orchestrator writes it as a message in its session each time it stops (the
-stops in section 4 of the orchestrator phase file) or pauses to wait for the
-operator, and the operator reads it there. Each report lists the whole state,
-not only what changed since the last one. Waiting for a worker's completion, a
-host-load re-check, or a renewal due time is neither a stop nor a pause.
+orchestrator writes it as a message in its session each time it stops
+(including the stops in section 4 of the orchestrator phase file) or pauses to
+wait for the operator (its turn ends awaiting an operator reply), and the
+operator reads it there. Each report lists the whole state, not only what
+changed since the last one. Waiting for a worker's completion, a host-load
+re-check, or a renewal due time is neither a stop nor a pause.
 
 At minimum it lists:
 
@@ -1273,14 +1277,20 @@ At minimum it lists:
 - **Holds.** Each hold, with its issue number, its start as the hold marker
   defines it, its cap time (72 h after the start, per the held-worker renewal
   rule), the GitHub `created_at` of the latest valid `claimed-by` on its claim,
-  and how it stands: still held, ended (by the worker's own `claimed-by`, by a
-  release other than the cap release, or by a supersession), or released at the
-  cap. Renewals stop while the orchestrator is stopped or paused, and the 24 h
-  stale clock counts from that `claimed-by` meanwhile.
-- **Failures.** Each renewal or release that failed, with its issue number, its
-  claim id, and which post failed and when (the 12 h `claimed-by` re-post, once
-  its one retry has also failed, or the 72-hour `unclaimed-by`) and, for the
-  `unclaimed-by`, that the cap was reached.
+  and how it stands: still held, released at the cap, or ended by a cause the
+  hold marker defines (the worker's valid `claimed-by` or, after a restart, any
+  valid `claimed-by` newer than the marker, which can be the earlier run's own
+  renewal; a release other than the cap release; a supersession; or the
+  entry's disposal). Once no living orchestrator renews a hold, the stale clock
+  (`claim-stale-age`, 24 h by default) counts from the latest valid
+  `claimed-by`.
+- **Failures.** Each renewal or release that failed since the run began, even
+  if a later wake-up's attempt succeeded, with its issue number, its claim id,
+  and which post failed and when (the 12 h `claimed-by` re-post, once its one
+  retry has also failed, or the 72-hour `unclaimed-by`) and, for the
+  `unclaimed-by`, that the cap was reached. A failed post leaves its entry
+  where it stands, not `disposed`, and the failure stays listed in every later
+  report.
 
 It also carries any gap the Discover pass says to name in "the run report" (for
 example an incomplete parked-issue listing) and the `limitingFactor` that
@@ -1294,10 +1304,10 @@ so an entry can be `disposed` before the report is written. The report is a
 message, not a store: it is not a file, an issue comment, or a record in the
 worker final report store, which holds per-worker records and receives nothing
 from a cap release, and no helper reads it. A session that ends without writing
-it leaves no report (preventive; no observed incident yet).
-[Orchestrator restart](#orchestrator-restart) rebuilds the roster from the
-forge, the worktrees, and the harness's agent listing, never from a run report,
-and the new run writes its own.
+it leaves no report (preventive; no observed incident yet). A restart that can
+recover (see [Orchestrator restart](#orchestrator-restart)) rebuilds the roster
+from the forge, the worktrees, and the harness's agent listing, never from a run
+report, and the new run writes its own.
 
 ### Orchestrator restart
 
