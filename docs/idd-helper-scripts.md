@@ -8729,8 +8729,10 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
    and HEAD is not detached (next action: switch the worktree to the
    claimed branch).
 3. `gate`: requires a clean tree by `git status --porcelain
-   --untracked-files=all`, so a user-level `status.showUntrackedFiles`
-   setting cannot hide files (next action: stage and commit, then rerun),
+   --untracked-files=all --ignore-submodules=none`, so a user-level
+   `status.showUntrackedFiles` setting cannot hide files and a
+   `diff.ignoreSubmodules` or `submodule.<name>.ignore` setting cannot hide
+   a dirty submodule (next action: stage and commit, then rerun),
    records `git rev-parse HEAD`, runs the effective
    `commands.pre-push-validate` in a shell in the worktree, then requires
    a clean tree again (next action: commit or discard what the gate
@@ -8781,8 +8783,9 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
 - **Report**: JSON on stdout with `mode`, `pushed`, `issue`, `branch`,
   `worktree`, and `steps`. Every step has an `id`, a `status` (`passed`,
   `failed`, or `skipped`), and a `reason`. A step decided by a command
-  carries that command's `exitStatus`: `0` on a passed assert, gate, or
-  push, and on a failed step the status of the command whose result
+  carries that command's `exitStatus`: `0` on a passed assert, location,
+  gate, or push (location decides by its last git read, `git branch
+  --show-current`), and on a failed step the status of the command whose result
   decided it (the assert, a git read, the gate, or the push), `null` when
   that command ended without one. A value that a command printed and the
   step then rejects (a dirty tree, another branch, a moved HEAD) carries

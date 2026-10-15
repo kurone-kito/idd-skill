@@ -65,7 +65,8 @@ const K = {
   worktrees: 'git worktree list --porcelain -z',
   origin: 'git remote get-url origin',
   current: 'git branch --show-current',
-  status: 'git status --porcelain --untracked-files=all',
+  status:
+    'git status --porcelain --untracked-files=all --ignore-submodules=none',
   head: 'git rev-parse HEAD',
   tip: `git rev-parse --verify refs/heads/${BRANCH}`,
   upstream: `git rev-parse --abbrev-ref --symbolic-full-name ${BRANCH}@{upstream}`,
@@ -598,6 +599,7 @@ test('a branch with no upstream is pushed once with -u and no force flag', () =>
   assert.equal(r.report.mode, 'apply');
   assert.equal(r.report.pushed, true);
   assert.equal(r.report.pushedSha, HEAD);
+  assert.equal(r.report.steps[1]?.exitStatus, 0);
   assert.match(r.report.pushMessage ?? '', /To github\.com/u);
   assert.deepEqual(
     r.report.steps.map((step) => step.status),
@@ -708,6 +710,23 @@ test('an upstream check that cannot run refuses before pushing', () => {
     pushed: false,
   });
   noPush(r);
+});
+
+test('the clean-tree check reads submodule state, so config cannot hide a dirty submodule', () => {
+  const statusCalls = run().calls.filter(
+    (call) => call.kind === 'git' && call.args[0] === 'status',
+  );
+  assert.equal(
+    statusCalls.length,
+    2,
+    'one check before and one after the gate',
+  );
+  for (const call of statusCalls) {
+    assert.ok(
+      call.kind === 'git' && call.args.includes('--ignore-submodules=none'),
+      'the status call must override diff.ignoreSubmodules and submodule.<name>.ignore',
+    );
+  }
 });
 
 test('a dry run checks the claim and the location only', () => {

@@ -492,6 +492,7 @@ function stepLocation(ctx: Context): StepOutcome {
   }
   return {
     status: 'passed',
+    exitStatus: 0,
     reason: `the worktree ${actualReal} is the sibling path of ${branch} and is on that branch`,
   };
 }
@@ -501,10 +502,13 @@ function checkCleanTree(
   ctx: Context,
   when: 'before' | 'after',
 ): StepOutcome | null {
+  // --ignore-submodules=none overrides diff.ignoreSubmodules and
+  // submodule.<name>.ignore, which would otherwise hide a dirty submodule.
   const status = readGit(ctx, [
     'status',
     '--porcelain',
     '--untracked-files=all',
+    '--ignore-submodules=none',
   ]);
   if (!status.ok) {
     return failed(status.reason, NEXT_ACTION.readGitError, status.exitStatus);
