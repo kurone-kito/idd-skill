@@ -6,14 +6,19 @@
 // the generated .mjs. See docs/typescript-sources.md.
 //
 // Capability-checked Stage 1 publication of one held issue: a standalone
-// orphan (kurone-kito/idd-skill#4127) or a draft carrier (#4253). The
+// orphan (kurone-kito/idd-skill#4127), a draft carrier (#4253), a roadmap
+// shell, or a child under an existing set anchor (#4251). The
 // issue-authoring skill allows a new issue only through a create-with-label
 // command and stops when none exists. This
 // helper runs the contract's "New-issue ownership" sequence in order: journal
 // check, publication line, lint, labels, pending intent, create, identity
 // attach, owner marker, provenance, member. It spawns the sibling helpers
 // (audit-authored-issue, post-idd-marker, authoring-owner-provenance) rather
-// than reimplementing their checks. It never runs a review or a close. For a
+// than reimplementing their checks. It never runs a review or a close. A
+// roadmap is its own set anchor, like an orphan. A child needs `--anchor`:
+// it joins the anchor's set (the anchor's set id and session, the anchor's
+// real reference in its markers), with a same-owner anchor heartbeat before
+// its own owner marker, and never edits the anchor's body. For a
 // draft carrier it then runs the carrier release (contract.md, "Carrier
 // creation-hold exception"). A failed marker post is uncertain unless the
 // child's error envelope proves that nothing was sent (#4171).
@@ -26,8 +31,13 @@ import { join } from 'node:path';
 
 import {
   type AuthoringOwnerProvenanceComment,
+  evaluateAuthoringOwnerProvenance,
   fetchProvenanceCommentsGraphql,
+  inspectLastEditedAt,
+  looksLikeOwnerMarker,
+  sameIssueRef,
 } from './authoring-owner-provenance.mts';
+import { isOutdatedMinimized } from './authoring-set-members.mts';
 import { resolveBundleRoot } from './bundle-root.mts';
 import { parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
@@ -52,12 +62,17 @@ import {
   normalizeMarkerPrefix,
   parseAuthoringOwnerComment,
   parseAuthoringPublicationComment,
+  parseAuthoringPublicationIntentComment,
 } from './marker-helpers.mts';
 import {
   AUTHORING_JOURNAL_REFERENCE_PATTERN,
   normalizePolicyConfig,
   parseIsoDurationToMs,
 } from './policy-helpers.mts';
+import {
+  validateAuthoringOwnerModeDigestCoupling,
+  validateAuthoringOwnerSupersedesModeCoupling,
+} from './post-idd-marker.mts';
 import {
   readClaimStaleAgeMs,
   resolveActiveClaimForWriteGate,
@@ -75,11 +90,20 @@ export const PUBLISH_BUCKETS = [
 ] as const;
 export type PublishBucket = (typeof PUBLISH_BUCKETS)[number];
 
+/** The shapes this command publishes (#4127, #4253, #4251). */
+const PUBLISH_SHAPES: readonly string[] = [
+  'orphan',
+  'carrier',
+  'roadmap',
+  'child',
+];
+
 const PUBLISH_AUTHORING_HOLD_FLAG_SPEC = {
   '--title': { type: 'string' },
   '--body-file': { type: 'string' },
   '--review-result': { type: 'string' },
   '--shape': { type: 'string', default: 'orphan' },
+  '--anchor': { type: 'string' },
   '--bucket': { type: 'string', default: 'ready' },
   '--apply': { type: 'boolean' },
   '--owner': { type: 'string' },
@@ -90,6 +114,15 @@ const PUBLISH_AUTHORING_HOLD_FLAG_SPEC = {
 } as const;
 
 const REPO_TOKEN_PATTERN = /^[A-Za-z0-9_.-]+$/;
+
+/** The transitions an exact-token publication-intent record may make. Declared
+ * above the entry-point call, so it is initialized when the CLI runs. */
+const INTENT_TRANSITIONS: Readonly<Record<string, readonly string[]>> = {
+  pending: ['pending', 'member', 'cleanup'],
+  member: ['cleanup'],
+  cleanup: ['abandoned'],
+  abandoned: [],
+};
 
 /** A record that may have been posted but could not be verified: replay the
  * journal to learn its state. */
@@ -169,6 +202,27 @@ export function generatePublicationIds(
     anchor: target,
     set: `set-${uuid()}`,
     session: `session-${uuid()}`,
+    token: `token-${uuid()}`,
+    owner: `owner-${uuid()}`,
+  };
+}
+
+/**
+ * The ids of a child published under an existing set anchor (#4251). Its
+ * `target`, token and per-target owner are new. Its `anchor` is the anchor's
+ * real reference, not an opaque id, and its `set` and `session` are the
+ * anchor's, because every marker of a set repeats the same set, anchor and
+ * owning session (contract.md, "Per-target ownership").
+ */
+export function generateChildPublicationIds(
+  anchor: { ref: string; set: string; session: string },
+  uuid: () => string = randomUUID,
+): PublicationIds {
+  return {
+    target: `target-${uuid()}`,
+    anchor: anchor.ref,
+    set: anchor.set,
+    session: anchor.session,
     token: `token-${uuid()}`,
     owner: `owner-${uuid()}`,
   };
@@ -365,7 +419,8 @@ export function resolvePublishLabels(
   return labels;
 }
 
-/** Parse the configured journal reference, or null when unset or malformed. */
+/** Parse an `owner/repo#number` reference (the configured journal, or the
+ * `--anchor` of a child), or null when unset or malformed. */
 export function parseJournalReference(
   value: unknown,
 ): { owner: string; repo: string; number: number; ref: string } | null {
@@ -383,38 +438,50 @@ export function parseJournalReference(
   return { owner: match[1], repo: match[2], number, ref: value };
 }
 
-/** `--shape child` is refused before the strict parse, per #4127. */
-export function requestsChildShape(argv: readonly string[]): boolean {
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === '--shape' && argv[index + 1] === 'child') {
-      return true;
-    }
-    if (arg === '--shape=child') {
-      return true;
-    }
-  }
-  return false;
-}
-
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> [--review-result <path>] [--shape orphan|carrier] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--apply]
+  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> [--review-result <path>] [--shape orphan|carrier|roadmap|child] [--anchor <owner>/<repo>#<number>] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--apply]
 
 Publishes one drafted issue under the issue-authoring hold, running
 contract.md's "New-issue ownership" steps in order. The default shape,
 orphan, publishes one standalone held orphan. --shape carrier publishes a
 draft carrier: an issue that holds drafts which cannot be published as
-their final issues yet.
+their final issues yet. --shape roadmap publishes one held roadmap shell;
+an empty Tracks list is valid, and it is its own set anchor, like an
+orphan. --shape child publishes one held child under an existing set: it
+needs --anchor, the anchor's owner/repo#number, which must be an issue in
+the same repository. Every other shape refuses --anchor (exit 2). One call
+publishes one issue; a child call never edits the anchor's body, so the
+roadmap's Tracks list stays a separate reviewed edit.
 
-  1. refuse --shape child (exit 2, nothing else runs), then check the review
-     result file: required for an orphan, optional for a carrier (when
-     given, it is checked as described below);
+  1. check the usage (a child needs --anchor and no other shape takes it),
+     then check the review result file: required for an orphan, a roadmap
+     and a child, and optional for a carrier (when given, it is checked as
+     described below). An --anchor in another repository exits 2 as soon
+     as the repository is resolved, before anything is written;
   2. check issueAuthoring.journalIssue in the repository policy file: it
      must be set, match owner/repo#N, and name an existing issue (it may be
      closed). Otherwise report the blocked-by-human outcome and exit 2;
   3. generate the opaque target, anchor (= target), set, session, token and
-     owner ids and put the authoring-publication line first in the body;
+     owner ids and put the authoring-publication line first in the body. A
+     child instead takes the anchor's own set and session, uses the
+     anchor's real reference as its anchor, and generates only its own
+     target, token and owner ids. Before that, the anchor must pass a
+     read-only check (a dry run does it too): an open issue, not a pull
+     request, that still has the authoring label, no active claim and no
+     open linked pull request, whose trusted unedited owner-marker log
+     replays to one open generation (every marker follows the field rules
+     of its mode; no release in progress; the first valid opener wins and
+     a later one loses; no reuse of a completed set; a resume keeps a
+     release in progress). The token of
+     the anchor's own publication line must also replay to state=member in
+     the journal (trusted, unedited records that match the line on target,
+     anchor, set, session and token, in order, with a conflicting or
+     out-of-order record failing closed), which is how the set's
+     originating hold is verified. Otherwise the report is a refusal and
+     nothing is written. The command does not serialize concurrent calls
+     of one session, so publish the children of a set one call at a time
+     (preventive; no observed incident yet);
   4. lint that exact body with audit-authored-issue --new-issue (a
      non-ready bucket adds the expected bucket and one label flag per
      configured label; a carrier adds one label flag per configured label
@@ -430,7 +497,15 @@ their final issues yet.
   8. attach the returned identity to the pending record, append the
      mode=acquire owner marker, wait claim.verifySettleDelay, run
      authoring-owner-provenance, re-read labels, body and claim state,
-     and only then append state=member;
+     and only then append state=member. For a child, an anchor heartbeat
+     comes first: a same-owner heartbeat marker on the anchor (a fresh
+     matching marker is reused under issueAuthoring.heartbeatCoalesceWindow),
+     the settle wait, and a replay of the anchor's log that must show the
+     same owner, set and session. The child's owner marker then carries the
+     anchor's reference, provenance runs in process with that anchor
+     expected, and the anchor and the child are read again before member;
+     a changed anchor owner stops there. A failed heartbeat is a recovery
+     hold with the child held;
   9. for --shape carrier only, the carrier release (contract.md, "Carrier
      creation-hold exception"): the release, release-guard, heartbeat,
      release-complete markers, the preconditions, one label removal of the
@@ -454,9 +529,9 @@ are trusted by it later) and, unless it is a bot, hold Write, Maintain or
 Admin permission on the issue's and the journal's repositories. A dry run
 makes neither check.
 
-For an orphan, the review result file is a JSON object with "completed": true.
-An optional "findings" array holds findings-ledger entries, and each needs a
-disposition of fixed or rejected. For a carrier, --review-result is optional.
+For an orphan, a roadmap and a child, the review result file is a JSON object
+with "completed": true. An optional "findings" array holds findings-ledger
+entries, and each needs a disposition of fixed or rejected. For a carrier, --review-result is optional.
 When it is given, the file must be a JSON object whose "completed" is true or
 false, and any "findings" must be an array of objects; the findings are not
 checked, because a carrier holds drafts whose review may be incomplete. The
@@ -488,13 +563,15 @@ A failure after the create prints a recovery-hold JSON object with the
 created issue, the failed step and the last journal state, and exits 1.
 That state is pending, or "uncertain: replay the journal" when a record
 may have been posted but could not be verified. The issue keeps its
-labels and is never closed. An orphan's Stage 2 release stays a separate,
-explicit request; a carrier's release runs after member, as described above.
+labels and is never closed. The Stage 2 release of an orphan, a roadmap or a
+child stays a separate, explicit request; a carrier's release runs after
+member, as described above.
 
 Exit codes: 0 published (or planned; a carrier whose release is held also
 exits 0), 1 refused, failed, or a recovery hold (a carrier release that stops
-at a recovery hold), 2 usage error, --shape child, a carrier with a bucket
-other than ready, or the blocked-by-human journal stop.
+at a recovery hold; an unusable anchor), 2 usage error, a child without a
+valid --anchor in the issue's repository, --anchor on another shape, a
+carrier with a bucket other than ready, or the blocked-by-human journal stop.
 `);
 }
 
@@ -504,6 +581,8 @@ interface ParsedArgs {
   reviewResult: string;
   reviewResultGiven: boolean;
   shape: string;
+  anchor: string;
+  anchorGiven: boolean;
   bucket: string;
   apply: boolean;
   owner: string;
@@ -523,6 +602,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     reviewResult: (values['review-result'] as string | undefined) ?? '',
     reviewResultGiven: values['review-result'] !== undefined,
     shape: text('shape'),
+    anchor: text('anchor'),
+    anchorGiven: values.anchor !== undefined,
     bucket: text('bucket'),
     apply: values.apply === true,
     owner: text('owner'),
@@ -649,6 +730,8 @@ interface IssueSnapshot {
   labels: string[];
   body: string;
   pullRequest: boolean;
+  /** The REST `state` (`open` or `closed`), or an empty string when absent. */
+  state: string;
 }
 
 function readIssue(owner: string, repo: string, number: number): IssueSnapshot {
@@ -656,6 +739,7 @@ function readIssue(owner: string, repo: string, number: number): IssueSnapshot {
     labels?: unknown;
     body?: unknown;
     pull_request?: unknown;
+    state?: unknown;
   } | null;
   if (raw === null || typeof raw !== 'object') {
     throw new Error(`${owner}/${repo}#${number} is not a readable issue`);
@@ -673,6 +757,7 @@ function readIssue(owner: string, repo: string, number: number): IssueSnapshot {
     labels,
     body: typeof raw.body === 'string' ? raw.body : '',
     pullRequest: raw.pull_request != null,
+    state: typeof raw.state === 'string' ? raw.state : '',
   };
 }
 
@@ -784,13 +869,19 @@ function hasForeignOwnerMarker(
 /**
  * Replay the owner-marker log right before `member`: every trusted
  * authoring-owner marker on the issue must be unedited and carry this run's
- * owner, set and session. Returns a refusal reason, or null.
+ * owner, set and session, and the anchor the run posted (the issue itself for
+ * a set anchor, the anchor's real reference for a child). Returns a refusal
+ * reason, or null.
  */
 export function checkOwnerLogStillOurs(input: {
   comments: readonly AuthoringOwnerProvenanceComment[];
   markerPrefix: string;
   trusted: readonly string[];
   ids: Pick<PublicationIds, 'owner' | 'set' | 'session'>;
+  /** The issue whose comments were read: every marker names it as `target`. */
+  target: string;
+  /** The `anchor` every marker of this run carries. */
+  anchor: string;
 }): string | null {
   const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
   const token = `${input.markerPrefix.toLowerCase()}-authoring-owner:`;
@@ -810,13 +901,742 @@ export function checkOwnerLogStillOurs(input: {
       parsed === null ||
       parsed.owner !== input.ids.owner ||
       parsed.set !== input.ids.set ||
-      parsed.session !== input.ids.session
+      parsed.session !== input.ids.session ||
+      !sameIssueRef(parsed.target, input.target) ||
+      !sameIssueRef(parsed.anchor, input.anchor)
     ) {
       return `owner marker ${comment.id} is not this run's marker`;
     }
     ours += 1;
   }
   return ours > 0 ? null : "this run's owner marker is not on the issue";
+}
+
+/** The latest owner marker of an anchor's open generation. */
+export interface AnchorLatestMarker {
+  id: number;
+  mode: string;
+  owner: string;
+  session: string;
+  createdAt: string;
+  bodySha256: string;
+  /** True when the comment is minimized as outdated (a disavowed marker). */
+  outdated: boolean;
+}
+
+/** The generation being replayed: a generation plus whether a release began. */
+interface OpenAnchorGeneration {
+  owner: string;
+  set: string;
+  session: string;
+  releasing: boolean;
+  latest: AnchorLatestMarker;
+}
+
+/** The open owner generation of a set anchor (#4251). */
+export interface AnchorGeneration {
+  owner: string;
+  set: string;
+  session: string;
+  latest: AnchorLatestMarker;
+}
+
+/** What the anchor replay carries between markers. */
+interface AnchorReplayState {
+  open: OpenAnchorGeneration | null;
+  /** The set ids of generations a `release-complete` already closed. */
+  closedSets: ReadonlySet<string>;
+  /**
+   * The owner tokens of openers that lost a race to the first valid opener of
+   * the open generation; a `release-complete` clears them.
+   */
+  losers: ReadonlySet<string>;
+}
+
+/**
+ * The mode-specific field rules `post-idd-marker` enforces before it posts an
+ * owner marker (the digest sentinel and the `supersedes` coupling of the
+ * contract's mode table), checked on a marker already on the log. A trusted
+ * author's marker that breaks them is not a valid owner marker, so it cannot
+ * open or extend a generation. Returns the violated rule, or null.
+ */
+function ownerMarkerFieldProblem(parsed: ParsedOwnerMarker): string | null {
+  const fields = {
+    mode: parsed.mode,
+    'marker-owner': parsed.owner,
+    'body-sha256': parsed.bodySha256,
+    'snapshot-sha256': parsed.snapshotSha256,
+    supersedes: parsed.supersedes,
+  };
+  return (
+    validateAuthoringOwnerModeDigestCoupling(fields) ??
+    validateAuthoringOwnerSupersedesModeCoupling(fields)
+  );
+}
+
+/**
+ * One step of the anchor replay: the state after a marker, or the problem that
+ * marker causes. A pure function over explicit types, so the replay loop stays
+ * free of self-referential narrowing.
+ */
+function advanceAnchorGeneration(
+  state: AnchorReplayState,
+  parsed: ParsedOwnerMarker,
+  latest: AnchorLatestMarker,
+): AnchorReplayState | { problem: string } {
+  const { open, closedSets, losers } = state;
+  const malformed = ownerMarkerFieldProblem(parsed);
+  if (malformed !== null) {
+    return {
+      problem: `owner marker ${latest.id} (mode=${parsed.mode}) is malformed: ${malformed}`,
+    };
+  }
+  // A session that lost the race for the generation owns nothing, so its
+  // later markers (and a resume that supersedes it) are not evidence.
+  if (losers.has(parsed.owner)) {
+    return state;
+  }
+  // A resume of a loser belongs to the loser's chain, so its new owner loses
+  // too and its later markers are ignored the same way.
+  if (parsed.mode === 'resume' && losers.has(parsed.supersedes)) {
+    return { ...state, losers: new Set([...losers, parsed.owner]) };
+  }
+  const mismatch = (): { problem: string } => ({
+    problem: `owner marker ${latest.id} (mode=${parsed.mode}) does not match the open generation`,
+  });
+  switch (parsed.mode) {
+    case 'acquire':
+    case 'bootstrap':
+      if (open !== null) {
+        // The first valid opener in comment order wins the generation
+        // (contract.md, "Per-target ownership"); a later one loses. The same
+        // owner opening twice is a malformed log, not a rival.
+        if (parsed.owner === open.owner) {
+          return {
+            problem: `owner marker ${latest.id} (mode=${parsed.mode}) opens the generation of its own owner a second time`,
+          };
+        }
+        return {
+          open,
+          closedSets,
+          losers: new Set([...losers, parsed.owner]),
+        };
+      }
+      // A completed set is closed for good: a later acquisition starts a fresh
+      // generation under a new set id (contract.md, `release-complete`).
+      if (closedSets.has(parsed.set)) {
+        return {
+          problem: `owner marker ${latest.id} (mode=${parsed.mode}) reuses set ${parsed.set}, which a release-complete marker already closed`,
+        };
+      }
+      return {
+        open: {
+          owner: parsed.owner,
+          set: parsed.set,
+          session: parsed.session,
+          releasing: false,
+          latest,
+        },
+        closedSets,
+        losers,
+      };
+    case 'resume':
+      if (
+        open === null ||
+        parsed.set !== open.set ||
+        parsed.supersedes !== open.owner
+      ) {
+        return mismatch();
+      }
+      return {
+        open: {
+          owner: parsed.owner,
+          set: open.set,
+          session: parsed.session,
+          // A resume recovers the interrupted set; only release-complete ends
+          // a release that began (contract.md, "Per-target ownership").
+          releasing: open.releasing,
+          latest,
+        },
+        closedSets,
+        losers,
+      };
+    case 'heartbeat':
+    case 'release':
+    case 'release-guard':
+    case 'release-complete':
+      if (
+        open === null ||
+        parsed.set !== open.set ||
+        parsed.owner !== open.owner
+      ) {
+        return mismatch();
+      }
+      // The anchor-only terminal modes retain the anchor's current session
+      // (contract.md, `release-guard` and `release-complete`).
+      if (
+        (parsed.mode === 'release-guard' ||
+          parsed.mode === 'release-complete') &&
+        parsed.session !== open.session
+      ) {
+        return {
+          problem: `owner marker ${latest.id} (mode=${parsed.mode}) does not retain the session of the open generation`,
+        };
+      }
+      if (parsed.mode === 'release-complete') {
+        // It is the terminal event of a release, so it closes nothing else.
+        if (!open.releasing) {
+          return {
+            problem: `owner marker ${latest.id} (mode=release-complete) closes a generation with no release in progress`,
+          };
+        }
+        // The losers belonged to the generation that just closed, so a former
+        // loser may open the next one.
+        return {
+          open: null,
+          closedSets: new Set([...closedSets, open.set]),
+          losers: new Set(),
+        };
+      }
+      return {
+        open: {
+          owner: open.owner,
+          set: open.set,
+          session: open.session,
+          releasing: open.releasing || parsed.mode !== 'heartbeat',
+          latest,
+        },
+        closedSets,
+        losers,
+      };
+    default:
+      return {
+        problem: `owner marker ${latest.id} has the unknown mode ${parsed.mode}`,
+      };
+  }
+}
+
+/**
+ * Replay the trusted authoring-owner markers on a set anchor's own comment log
+ * and return its one open generation, or the reason there is none. Fails
+ * closed: an edited or unparseable marker, a marker whose digest or
+ * `supersedes` fields break the rules of its mode, a marker that names another
+ * target or anchor, a second opening marker inside an open generation, a
+ * heartbeat or release from another owner or set, a resume that does not
+ * supersede the current owner, a release in progress, and a log with no open
+ * generation all return a problem instead of a guess. The generation is
+ * closed by `release-complete`, after which a later `acquire` or `bootstrap`
+ * opens a new one, but never under the closed set's id (contract.md,
+ * "Per-target ownership"). `session` is compared only where the contract pins
+ * it: an opening marker sets it, and a heartbeat or release from another
+ * session of the same owner is accepted.
+ */
+export function resolveAnchorGeneration(input: {
+  comments: readonly AuthoringOwnerProvenanceComment[];
+  anchorRef: string;
+  markerPrefix: string;
+  trusted: readonly string[];
+}): { generation: AnchorGeneration } | { problem: string } {
+  const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
+  const shaped: { comment: AuthoringOwnerProvenanceComment; time: number }[] =
+    [];
+  for (const comment of input.comments) {
+    if (
+      !trustedSet.has(comment.authorLogin.trim().toLowerCase()) ||
+      !looksLikeOwnerMarker(comment.body, input.markerPrefix)
+    ) {
+      continue;
+    }
+    const edited = inspectLastEditedAt(comment);
+    if (edited !== null) {
+      return { problem: edited };
+    }
+    // A read that omits the minimization state, or a minimized comment without
+    // its reason, is incomplete evidence and fails closed.
+    if (
+      typeof comment.isMinimized !== 'boolean' ||
+      (comment.isMinimized &&
+        (typeof comment.minimizedReason !== 'string' ||
+          comment.minimizedReason.trim() === ''))
+    ) {
+      return {
+        problem: `owner marker ${comment.id} has no readable minimization state`,
+      };
+    }
+    const time = Date.parse(comment.createdAt);
+    if (!Number.isFinite(time)) {
+      return {
+        problem: `owner marker ${comment.id} has a creation time that cannot be read`,
+      };
+    }
+    shaped.push({ comment, time });
+  }
+  shaped.sort((a, b) => a.time - b.time || a.comment.id - b.comment.id);
+
+  let state: AnchorReplayState = {
+    open: null,
+    closedSets: new Set(),
+    losers: new Set(),
+  };
+  for (const { comment } of shaped) {
+    const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
+    if (parsed === null) {
+      return { problem: `owner marker ${comment.id} does not parse` };
+    }
+    if (
+      !sameIssueRef(parsed.target, input.anchorRef) ||
+      !sameIssueRef(parsed.anchor, input.anchorRef)
+    ) {
+      return {
+        problem: `owner marker ${comment.id} names target ${parsed.target} and anchor ${parsed.anchor}, not the anchor ${input.anchorRef} itself`,
+      };
+    }
+    const next = advanceAnchorGeneration(state, parsed, {
+      id: comment.id,
+      mode: parsed.mode,
+      owner: parsed.owner,
+      session: parsed.session,
+      createdAt: comment.createdAt,
+      bodySha256: parsed.bodySha256,
+      outdated: isOutdatedMinimized(comment),
+    });
+    if ('problem' in next) {
+      return next;
+    }
+    state = next;
+  }
+  const { open } = state;
+  if (open === null) {
+    return {
+      problem: `${input.anchorRef} has no open owner generation: no trusted acquire, bootstrap or resume marker, or its set was released`,
+    };
+  }
+  if (open.releasing) {
+    return {
+      problem: `the set of ${input.anchorRef} is being released, so a child cannot join it`,
+    };
+  }
+  // History that a sweep hid still counts, but the marker that carries the
+  // generation to now is never a hidden one: a latest marker minimized as
+  // outdated was disavowed, so it cannot prove an open generation.
+  if (open.latest.outdated) {
+    return {
+      problem: `the latest owner marker of ${input.anchorRef}, comment ${open.latest.id}, is minimized as outdated, so it cannot prove an open generation`,
+    };
+  }
+  return {
+    generation: {
+      owner: open.owner,
+      set: open.set,
+      session: open.session,
+      latest: open.latest,
+    },
+  };
+}
+
+/**
+ * Replay the journal's records of one publication token (contract.md, "On
+ * resume, paginate the hold log and select the latest valid record for the
+ * exact token tuple; missing, conflicting, or out-of-order records fail
+ * closed"). Every record that carries the token must be written by a trusted
+ * author who is the actor it names, be unedited, and repeat the publication
+ * line's target, anchor, set and session and this journal. The records, in
+ * comment order, must run `pending` (no issue yet), `pending` with the
+ * issue, `member`, and only then `cleanup` and `abandoned`; the issue never
+ * changes once attached. The replay must end at `member` for the anchor.
+ * Returns a problem, or null.
+ */
+export function replayAnchorHold(input: {
+  comments: readonly AuthoringOwnerProvenanceComment[];
+  publication: {
+    target: string;
+    anchor: string;
+    set: string;
+    session: string;
+    token: string;
+  };
+  anchorRef: string;
+  journalRef: string;
+  markerPrefix: string;
+  trusted: readonly string[];
+}): string | null {
+  const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
+  const intentToken = `${input.markerPrefix.toLowerCase()}-authoring-publication-intent:`;
+  const records: {
+    id: number;
+    time: number;
+    state: string;
+    issue: string;
+    outdated: boolean;
+  }[] = [];
+  for (const comment of input.comments) {
+    const lower = comment.body.toLowerCase();
+    // A record that mentions the token anywhere is a candidate, whatever its
+    // spacing, so the token is read from the parsed field, not from bytes.
+    if (
+      !lower.includes(intentToken) ||
+      !comment.body.includes(input.publication.token)
+    ) {
+      continue;
+    }
+    const where = `publication-intent record ${comment.id} of the token`;
+    const intent = parseAuthoringPublicationIntentComment(
+      comment.body,
+      input.markerPrefix,
+    );
+    if (intent === null) {
+      return `${where} does not parse`;
+    }
+    // Another token that only contains this one is not this token's record.
+    if (intent.token !== input.publication.token) {
+      continue;
+    }
+    const author = comment.authorLogin.trim().toLowerCase();
+    if (!trustedSet.has(author)) {
+      return `${where} is written by ${comment.authorLogin}, who is not a trusted marker actor`;
+    }
+    if (inspectLastEditedAt(comment) !== null) {
+      return `${where} was edited after posting, or its edit state is unreadable`;
+    }
+    if (
+      typeof comment.isMinimized !== 'boolean' ||
+      (comment.isMinimized &&
+        (typeof comment.minimizedReason !== 'string' ||
+          comment.minimizedReason.trim() === ''))
+    ) {
+      return `${where} has no readable minimization state`;
+    }
+    if (
+      intent.target !== input.publication.target ||
+      intent.anchor !== input.publication.anchor ||
+      intent.set !== input.publication.set ||
+      intent.session !== input.publication.session ||
+      !sameIssueRef(intent.journal, input.journalRef) ||
+      intent.actor.toLowerCase() !== author
+    ) {
+      return `${where} conflicts with the anchor's publication line, this journal, or its own author`;
+    }
+    const time = Date.parse(comment.createdAt);
+    if (!Number.isFinite(time)) {
+      return `${where} has a creation time that cannot be read`;
+    }
+    records.push({
+      id: comment.id,
+      time,
+      state: intent.state,
+      issue: intent.issue,
+      outdated: isOutdatedMinimized(comment),
+    });
+  }
+  if (records.length === 0) {
+    return `no publication-intent record of the anchor's token is in the journal ${input.journalRef}`;
+  }
+  records.sort((a, b) => a.time - b.time || a.id - b.id);
+  let state: string | null = null;
+  let attached: string | null = null;
+  for (const record of records) {
+    if (state === null) {
+      if (record.state !== 'pending' || record.issue.toLowerCase() !== 'none') {
+        return `the first record of the token, comment ${record.id}, is not the pending record without an issue`;
+      }
+    } else if (!(INTENT_TRANSITIONS[state] ?? []).includes(record.state)) {
+      return `record ${record.id} moves the token from ${state} to ${record.state}, which is out of order`;
+    } else if (
+      state === 'pending' &&
+      record.state === 'pending' &&
+      (attached !== null || record.issue.toLowerCase() === 'none')
+    ) {
+      // The only pending after a pending is the one record that attaches the
+      // issue: the contract's sequence has no repeated pending record.
+      return `record ${record.id} repeats a pending record of the token`;
+    }
+    if (record.state === 'member' && attached === null) {
+      return `record ${record.id} makes the token a member before any record attached its issue`;
+    }
+    if (record.issue.toLowerCase() === 'none') {
+      if (attached !== null || record.state !== 'pending') {
+        return `record ${record.id} drops the issue of the token after it was attached`;
+      }
+    } else if (attached === null) {
+      if (!sameIssueRef(record.issue, input.anchorRef)) {
+        return `record ${record.id} attaches the token to ${record.issue}, not the anchor ${input.anchorRef}`;
+      }
+      attached = record.issue;
+    } else if (!sameIssueRef(record.issue, attached)) {
+      return `record ${record.id} changes the issue of the token from ${attached} to ${record.issue}`;
+    }
+    state = record.state;
+  }
+  if (state !== 'member') {
+    return `the latest record of the anchor's token is ${state}, not member`;
+  }
+  // History that a sweep hid still counts, but the record that ends the log is
+  // never a hidden one: a latest record minimized as outdated was disavowed.
+  const last = records[records.length - 1];
+  if (last?.outdated) {
+    return `the latest record of the anchor's token, comment ${last.id}, is minimized as outdated, so it cannot prove membership`;
+  }
+  return null;
+}
+
+/**
+ * Verify the originating Stage 1 hold of a child's anchor (#4251). This command
+ * records a set in `issueAuthoring.journalIssue`, so an anchor it can extend has
+ * its own publication-intent records there: the replay of the token in the
+ * anchor's own publication line (self-anchored, in the open generation's set)
+ * must end at `state=member` (see {@link replayAnchorHold}). An anchor whose
+ * hold is elsewhere, whose body carries no publication line, or whose records
+ * were never made a member, is refused, so a child's records never land in a
+ * log the set's recovery would not replay. Returns a problem, or null.
+ */
+function checkAnchorHold(input: {
+  journal: { owner: string; repo: string; number: number; ref: string };
+  anchorRef: string;
+  anchorBody: string;
+  set: string;
+  markerPrefix: string;
+  trusted: readonly string[];
+}): string | null {
+  const publication = parseAuthoringPublicationComment(
+    input.anchorBody,
+    input.markerPrefix,
+  );
+  if (publication === null) {
+    return `the body of the anchor ${input.anchorRef} carries no authoring-publication line, so its hold in the journal ${input.journal.ref} cannot be matched`;
+  }
+  if (publication.anchor !== publication.target) {
+    return `the authoring-publication line of ${input.anchorRef} names another anchor (${publication.anchor}), so it is not a set anchor`;
+  }
+  if (publication.set !== input.set) {
+    return `the authoring-publication line of ${input.anchorRef} names set ${publication.set}, not the open generation's set ${input.set}`;
+  }
+  let comments: AuthoringOwnerProvenanceComment[];
+  try {
+    comments = fetchProvenanceCommentsGraphql(
+      input.journal.owner,
+      input.journal.repo,
+      input.journal.number,
+    );
+  } catch (error) {
+    return `the journal ${input.journal.ref} cannot be read, so the hold of the anchor ${input.anchorRef} is not verified: ${messageOf(error)}`;
+  }
+  const problem = replayAnchorHold({
+    comments,
+    publication,
+    anchorRef: input.anchorRef,
+    journalRef: input.journal.ref,
+    markerPrefix: input.markerPrefix,
+    trusted: input.trusted,
+  });
+  return problem === null
+    ? null
+    : `the originating hold of the anchor ${input.anchorRef} is not verified in the journal ${input.journal.ref}: ${problem}`;
+}
+
+/** The verified set anchor of a child (#4251). */
+interface AnchorContext {
+  ref: string;
+  owner: string;
+  repo: string;
+  number: number;
+  generation: AnchorGeneration;
+}
+
+function sameGeneration(a: AnchorGeneration, b: AnchorGeneration): boolean {
+  return a.owner === b.owner && a.set === b.set && a.session === b.session;
+}
+
+/**
+ * Read the anchor of a child and replay its owner log. The anchor must be an
+ * open issue (not a pull request) that still carries the authoring label, has
+ * no active claim, and has one open owner generation. Reads only; the problem
+ * names what makes the anchor unusable.
+ */
+function checkAnchor(input: {
+  owner: string;
+  repo: string;
+  number: number;
+  authoringLabel: string;
+  markerPrefix: string;
+  trusted: readonly string[];
+  claimGate: ClaimGate;
+}):
+  | {
+      generation: AnchorGeneration;
+      snapshot: IssueSnapshot;
+      comments: AuthoringOwnerProvenanceComment[];
+    }
+  | { problem: string } {
+  const ref = `${input.owner}/${input.repo}#${input.number}`;
+  let snapshot: IssueSnapshot;
+  let comments: AuthoringOwnerProvenanceComment[];
+  try {
+    snapshot = readIssue(input.owner, input.repo, input.number);
+    comments = fetchProvenanceCommentsGraphql(
+      input.owner,
+      input.repo,
+      input.number,
+    );
+  } catch (error) {
+    return { problem: `the anchor ${ref} cannot be read: ${messageOf(error)}` };
+  }
+  if (snapshot.pullRequest) {
+    return { problem: `the anchor ${ref} is a pull request, not an issue` };
+  }
+  if (snapshot.state.toLowerCase() !== 'open') {
+    return {
+      problem: `the anchor ${ref} is not open (state ${JSON.stringify(snapshot.state)})`,
+    };
+  }
+  if (!hasLabel(snapshot.labels, input.authoringLabel)) {
+    return {
+      problem: `the anchor ${ref} does not carry the authoring label ${input.authoringLabel}, so its set is not held`,
+    };
+  }
+  let claimed: boolean;
+  try {
+    claimed = hasActiveClaim(comments, input.claimGate);
+  } catch (error) {
+    return {
+      problem: `the claim state of the anchor ${ref} cannot be resolved: ${messageOf(error)}`,
+    };
+  }
+  if (claimed) {
+    return { problem: `the anchor ${ref} has an active claim` };
+  }
+  // An open linked pull request is active execution too (contract.md,
+  // "Conflict check before every edit"), and an unreadable one counts as open.
+  let openPrs: number;
+  try {
+    openPrs = resolveOpenLinkedPrIssues(
+      createGithubProviderAdapter(input.owner, input.repo),
+      [input.number],
+    ).length;
+  } catch (error) {
+    return {
+      problem: `the pull-request state of the anchor ${ref} cannot be read: ${messageOf(error)}`,
+    };
+  }
+  if (openPrs > 0) {
+    return {
+      problem: `the anchor ${ref} has an open linked pull request, or its pull-request state cannot be read`,
+    };
+  }
+  const replay = resolveAnchorGeneration({
+    comments,
+    anchorRef: ref,
+    markerPrefix: input.markerPrefix,
+    trusted: input.trusted,
+  });
+  if ('problem' in replay) {
+    return replay;
+  }
+  return { generation: replay.generation, snapshot, comments };
+}
+
+/**
+ * The anchor heartbeat a child needs before its own owner marker (contract.md,
+ * "Acquire one set anchor before acquiring any other target"): re-read the
+ * anchor, reuse a fresh matching marker under the coalescing rule or post a
+ * same-owner heartbeat carrying a digest of the anchor body just read, wait
+ * the settle delay, and replay the anchor's log. The replay must show the
+ * same owner generation and the heartbeat on the log. Throws when any of that
+ * fails; a marker post error keeps its `posted` / `nothingSent` flags.
+ */
+function heartbeatAnchor(input: {
+  anchor: AnchorContext;
+  markerPrefix: string;
+  trusted: readonly string[];
+  trustedFlag: string[];
+  authoringLabel: string;
+  claimGate: ClaimGate;
+  settleMs: number;
+  heartbeatWindowMs: number;
+  postMarker: (
+    markerArgs: string[],
+    where: { owner: string; repo: string; number: number },
+  ) => number;
+}): { commentId: number; reused: boolean } {
+  const { anchor } = input;
+  const read = (): ReturnType<typeof checkAnchor> =>
+    checkAnchor({
+      owner: anchor.owner,
+      repo: anchor.repo,
+      number: anchor.number,
+      authoringLabel: input.authoringLabel,
+      markerPrefix: input.markerPrefix,
+      trusted: input.trusted,
+      claimGate: input.claimGate,
+    });
+  const fresh = read();
+  if ('problem' in fresh) {
+    throw new Error(fresh.problem);
+  }
+  if (!sameGeneration(fresh.generation, anchor.generation)) {
+    throw new Error(
+      `the owner generation of the anchor ${anchor.ref} changed since it was verified`,
+    );
+  }
+  const digest = sha256Hex(fresh.snapshot.body);
+  const latest = fresh.generation.latest;
+  const reused =
+    COALESCING_MODES.has(latest.mode) &&
+    latest.session === anchor.generation.session &&
+    Date.now() - Date.parse(latest.createdAt) < input.heartbeatWindowMs &&
+    latest.bodySha256 === digest;
+  const commentId = reused
+    ? latest.id
+    : input.postMarker(
+        [
+          '--type',
+          'authoring-owner',
+          '--target',
+          'issue',
+          String(anchor.number),
+          '--owner',
+          anchor.owner,
+          '--repo',
+          anchor.repo,
+          '--marker-target',
+          anchor.ref,
+          '--anchor',
+          anchor.ref,
+          '--mode',
+          'heartbeat',
+          '--marker-owner',
+          anchor.generation.owner,
+          '--set',
+          anchor.generation.set,
+          '--session',
+          anchor.generation.session,
+          '--body-sha256',
+          digest,
+          '--snapshot-sha256',
+          'none',
+          '--supersedes',
+          anchor.generation.owner,
+          '--marker-prefix',
+          input.markerPrefix,
+          ...input.trustedFlag,
+        ],
+        { owner: anchor.owner, repo: anchor.repo, number: anchor.number },
+      );
+  sleepMs(input.settleMs);
+  const replay = read();
+  if ('problem' in replay) {
+    throw new Error(`after the heartbeat: ${replay.problem}`);
+  }
+  if (!sameGeneration(replay.generation, anchor.generation)) {
+    throw new Error(
+      `the owner generation of the anchor ${anchor.ref} changed during the heartbeat`,
+    );
+  }
+  if (!replay.comments.some((comment) => comment.id === commentId)) {
+    throw new Error(
+      `the heartbeat marker ${commentId} is not on the anchor ${anchor.ref} after the settle wait`,
+    );
+  }
+  return { commentId, reused };
 }
 
 /** True when the issue carries a comment with exactly this body by `actor`.
@@ -857,14 +1677,6 @@ interface Step {
 
 function runCli(): HelperCliResult {
   const argv = process.argv.slice(2);
-  if (requestsChildShape(argv)) {
-    const message =
-      '--shape child is not supported yet; for a set whose drafts cannot be published as held issues now, use --shape carrier';
-    process.stdout.write(
-      `${JSON.stringify({ outcome: 'refused', reason: message }, null, 2)}\n`,
-    );
-    return usage(message);
-  }
   let args: ParsedArgs;
   try {
     args = parseArgs(argv);
@@ -875,9 +1687,29 @@ function runCli(): HelperCliResult {
     printHelp();
     return 0;
   }
-  if (args.shape !== 'orphan' && args.shape !== 'carrier') {
+  if (!PUBLISH_SHAPES.includes(args.shape)) {
     return usage(
-      `--shape must be orphan or carrier (got ${JSON.stringify(args.shape)})`,
+      `--shape must be one of ${PUBLISH_SHAPES.join(', ')} (got ${JSON.stringify(args.shape)})`,
+    );
+  }
+  // A child joins an existing set, so it names the set's anchor; every other
+  // shape is its own set anchor and has none to name (#4251).
+  let anchorRef: ReturnType<typeof parseJournalReference> = null;
+  if (args.shape === 'child') {
+    if (args.anchor === '') {
+      return usage(
+        '--anchor <owner>/<repo>#<number> is required for --shape child: a child is published under the anchor of an existing set',
+      );
+    }
+    anchorRef = parseJournalReference(args.anchor);
+    if (anchorRef === null) {
+      return usage(
+        `--anchor must be an owner/repo#number reference (got ${JSON.stringify(args.anchor)})`,
+      );
+    }
+  } else if (args.anchorGiven) {
+    return usage(
+      `--anchor is only valid with --shape child: --shape ${args.shape} is its own set anchor`,
     );
   }
   if (!(PUBLISH_BUCKETS as readonly string[]).includes(args.bucket)) {
@@ -898,9 +1730,9 @@ function runCli(): HelperCliResult {
   if (args.reviewResultGiven && args.reviewResult === '') {
     return usage('--review-result needs a file path');
   }
-  if (args.reviewResult === '' && args.shape === 'orphan') {
+  if (args.reviewResult === '' && args.shape !== 'carrier') {
     return usage(
-      '--review-result is required for --shape orphan: the completed draft adversarial review must be recorded before publication',
+      `--review-result is required for --shape ${args.shape}: the completed draft adversarial review must be recorded before publication`,
     );
   }
   if ((args.owner === '') !== (args.repo === '')) {
@@ -1014,6 +1846,18 @@ function runCli(): HelperCliResult {
   if (!REPO_TOKEN_PATTERN.test(owner) || !REPO_TOKEN_PATTERN.test(repo)) {
     return refuse('could not resolve a repository owner and name');
   }
+  // The child, its journal records and the anchor's heartbeat share one
+  // repository: a set that spans repositories raises marker-prefix and
+  // permission questions this command does not answer (#4251).
+  if (
+    anchorRef !== null &&
+    (anchorRef.owner.toLowerCase() !== owner.toLowerCase() ||
+      anchorRef.repo.toLowerCase() !== repo.toLowerCase())
+  ) {
+    return usage(
+      `--anchor must name an issue in ${owner}/${repo}, the repository of the new issue (got ${anchorRef.ref})`,
+    );
+  }
   // The local policy's prefix is the target's prefix only when the issue and
   // the journal both live in this checkout's repository (contract.md,
   // "Target marker prefix"); otherwise the caller must name it.
@@ -1042,8 +1886,65 @@ function runCli(): HelperCliResult {
     markerPrefix = normalizeMarkerPrefix(config?.markerPrefix);
   }
 
-  // Step 3: ids and the publication line.
-  const ids = generatePublicationIds();
+  const claimGate: ClaimGate = {
+    owner,
+    repo,
+    trusted,
+    policyPath,
+    config,
+  };
+
+  // Step 3: ids and the publication line. A child first verifies its anchor
+  // (read-only, so a dry run does it too), because the anchor's set and
+  // session are part of the child's ids.
+  let anchor: AnchorContext | null = null;
+  if (anchorRef !== null) {
+    const ref = `${owner}/${repo}#${anchorRef.number}`;
+    const checked = checkAnchor({
+      owner,
+      repo,
+      number: anchorRef.number,
+      authoringLabel: resolvePublishLabels(config, bucket, args.shape)[0] ?? '',
+      markerPrefix,
+      trusted,
+      claimGate,
+    });
+    if ('problem' in checked) {
+      return refuse(checked.problem, {
+        repository: { owner, repo },
+        anchor: ref,
+      });
+    }
+    const holdProblem = checkAnchorHold({
+      journal,
+      anchorRef: ref,
+      anchorBody: checked.snapshot.body,
+      set: checked.generation.set,
+      markerPrefix,
+      trusted,
+    });
+    if (holdProblem !== null) {
+      return refuse(holdProblem, {
+        repository: { owner, repo },
+        anchor: ref,
+      });
+    }
+    anchor = {
+      ref,
+      owner,
+      repo,
+      number: anchorRef.number,
+      generation: checked.generation,
+    };
+  }
+  const ids =
+    anchor === null
+      ? generatePublicationIds()
+      : generateChildPublicationIds({
+          ref: anchor.ref,
+          set: anchor.generation.set,
+          session: anchor.generation.session,
+        });
   let injected: string;
   try {
     injected = injectPublicationLine(draft, markerPrefix, ids);
@@ -1071,6 +1972,8 @@ function runCli(): HelperCliResult {
       ids,
       injected,
       bodyPath,
+      claimGate,
+      anchor,
     });
   } finally {
     rmSync(scratch, { recursive: true, force: true });
@@ -1091,22 +1994,46 @@ function publish(input: {
   ids: PublicationIds;
   injected: string;
   bodyPath: string;
+  claimGate: ClaimGate;
+  /** The verified set anchor of a child, or null for any other shape. */
+  anchor: AnchorContext | null;
 }): HelperCliResult {
-  const { args, bucket, journal, owner, repo, markerPrefix, ids } = input;
+  const { args, bucket, journal, owner, repo, markerPrefix, ids, claimGate } =
+    input;
+  const { anchor } = input;
   const repoRef = `${owner}/${repo}`;
   const steps: Step[] = [];
-  const claimGate: ClaimGate = {
-    owner,
-    repo,
-    trusted: input.trusted,
-    policyPath: input.policyPath,
-    config: input.config,
-  };
+  const heartbeatWindowMs =
+    parseIsoDurationToMs(
+      (
+        input.config as {
+          issueAuthoring?: { heartbeatCoalesceWindow?: unknown };
+        } | null
+      )?.issueAuthoring?.heartbeatCoalesceWindow ?? 'PT2M',
+    ) ?? 120_000;
   const base = {
     repository: { owner, repo },
     journal: journal.ref,
     ids,
+    ...(anchor === null
+      ? {}
+      : {
+          anchor: {
+            issue: anchor.ref,
+            owner: anchor.generation.owner,
+            set: anchor.generation.set,
+            session: anchor.generation.session,
+            latestMode: anchor.generation.latest.mode,
+          },
+        }),
   };
+  if (anchor !== null) {
+    steps.push({
+      step: 'anchor-check',
+      status: 'done',
+      detail: base.anchor,
+    });
+  }
 
   // Step 4: lint the exact body that will be created.
   const labels = resolvePublishLabels(input.config, bucket, args.shape);
@@ -1229,8 +2156,14 @@ function publish(input: {
         detail: { title: args.title, labels },
       },
       { step: 'identity-attach', status: 'planned' },
+      ...(anchor === null
+        ? []
+        : [{ step: 'anchor-heartbeat', status: 'planned' } as const]),
       { step: 'owner-marker', status: 'planned' },
       { step: 'provenance', status: 'planned' },
+      ...(anchor === null
+        ? []
+        : [{ step: 'anchor-verify', status: 'planned' } as const]),
       { step: 'member', status: 'planned' },
     );
     if (args.shape === 'carrier') {
@@ -1479,6 +2412,7 @@ function publish(input: {
     return recoveryHold({ ...held, failedStep: 'create-verify', reason });
   }
 
+  let failedStep = 'identity-attach';
   try {
     const attachId = postVerified(
       intentArgs('pending', issueRef),
@@ -1489,6 +2423,29 @@ function publish(input: {
       status: 'done',
       detail: { commentId: attachId },
     });
+
+    // A child renews its anchor before it acquires, so the set's owner sees
+    // a fresh generation first (contract.md, "Acquire one set anchor").
+    if (anchor !== null) {
+      failedStep = 'anchor-heartbeat';
+      const heartbeat = heartbeatAnchor({
+        anchor,
+        markerPrefix,
+        trusted: input.trusted,
+        trustedFlag,
+        authoringLabel,
+        claimGate,
+        settleMs: input.settleMs,
+        heartbeatWindowMs,
+        postMarker: postVerified,
+      });
+      steps.push({
+        step: 'anchor-heartbeat',
+        status: 'done',
+        detail: heartbeat,
+      });
+    }
+    failedStep = 'owner-marker';
 
     const ownerArgs = [
       '--type',
@@ -1503,7 +2460,8 @@ function publish(input: {
       '--marker-target',
       issueRef,
       '--anchor',
-      issueRef,
+      // A set anchor names itself; a child names the anchor's real reference.
+      anchor === null ? issueRef : ids.anchor,
       '--mode',
       'acquire',
       '--marker-owner',
@@ -1531,43 +2489,27 @@ function publish(input: {
     const outcome = postOutcome(error);
     return recoveryHold({
       ...held,
-      failedStep: attached ? 'owner-marker' : 'identity-attach',
+      failedStep: attached ? failedStep : 'identity-attach',
       reason: (error as Error).message,
       ...(attached
-        ? // The owner marker is on the issue, not in the journal, so the
-          // journal stays at the attached pending record and the marker's
-          // own state is reported instead.
+        ? // The owner marker and the anchor heartbeat are on issues, not in
+          // the journal, so the journal stays at the attached pending record
+          // and the marker's own state is reported instead.
           {
             nothingSent: outcome.nothingSent,
-            ...(isPosted(error) ? { ownerMarker: 'uncertain' } : {}),
+            ...(isPosted(error)
+              ? failedStep === 'anchor-heartbeat'
+                ? { anchorHeartbeat: 'uncertain' }
+                : { ownerMarker: 'uncertain' }
+              : {}),
           }
         : outcome),
     });
   }
 
   sleepMs(input.settleMs);
-  const provenanceArgs = [
-    '--issue',
-    String(number),
-    '--owner',
-    owner,
-    '--repo',
-    repo,
-    '--marker-prefix',
-    markerPrefix,
-  ];
-  if (input.policyPath) {
-    provenanceArgs.push('--policy', input.policyPath);
-  }
-  if (input.trusted.length > 0) {
-    provenanceArgs.push('--trusted-marker-logins', input.trusted.join(','));
-  }
-  const provenance = runSiblingHelper(
-    'authoring-owner-provenance.mjs',
-    provenanceArgs,
-  );
-  const verdict = parseJsonOutput(provenance);
-  const marker = verdict?.marker as
+  let verdictName: unknown;
+  let marker:
     | {
         owner?: unknown;
         set?: unknown;
@@ -1576,8 +2518,65 @@ function publish(input: {
       }
     | null
     | undefined;
+  let provenanceFailure: string;
+  let provenanceReport: unknown;
+  if (anchor === null) {
+    const provenanceArgs = [
+      '--issue',
+      String(number),
+      '--owner',
+      owner,
+      '--repo',
+      repo,
+      '--marker-prefix',
+      markerPrefix,
+    ];
+    if (input.policyPath) {
+      provenanceArgs.push('--policy', input.policyPath);
+    }
+    if (input.trusted.length > 0) {
+      provenanceArgs.push('--trusted-marker-logins', input.trusted.join(','));
+    }
+    const provenance = runSiblingHelper(
+      'authoring-owner-provenance.mjs',
+      provenanceArgs,
+    );
+    const verdict = parseJsonOutput(provenance);
+    verdictName = verdict?.verdict;
+    marker = verdict?.marker as typeof marker;
+    provenanceFailure = helperFailure('authoring-owner-provenance', provenance);
+    provenanceReport = verdict ?? provenance.stdout;
+  } else {
+    // The helper's command line refuses a marker whose anchor differs from its
+    // target, which is every child's marker, so a child runs the same check in
+    // process with the anchor it expects (#4251).
+    try {
+      const result = evaluateAuthoringOwnerProvenance({
+        target: issueRef,
+        liveBody: readIssue(owner, repo, number).body,
+        comments: fetchProvenanceCommentsGraphql(owner, repo, number),
+        markerPrefix,
+        trustedMarkerLogins: [...input.trusted],
+        expectedAnchor: ids.anchor,
+      });
+      verdictName = result.verdict;
+      marker = result.marker;
+      provenanceFailure =
+        result.checks
+          .filter((check) => check.result === 'fail')
+          .map((check) => check.evidence)
+          .join(' ') || `the verdict is ${result.verdict}`;
+      provenanceReport = result;
+    } catch (error) {
+      return recoveryHold({
+        ...held,
+        failedStep: 'provenance',
+        reason: `the provenance of the child could not be read: ${messageOf(error)}`,
+      });
+    }
+  }
   if (
-    verdict?.verdict !== 'pass' ||
+    verdictName !== 'pass' ||
     marker?.owner !== ids.owner ||
     marker?.set !== ids.set ||
     marker?.session !== ids.session
@@ -1586,18 +2585,22 @@ function publish(input: {
       ...held,
       failedStep: 'provenance',
       reason:
-        verdict?.verdict === 'pass'
+        verdictName === 'pass'
           ? 'the winning acquire marker is not the one this run posted'
-          : helperFailure('authoring-owner-provenance', provenance),
-      provenance: verdict ?? provenance.stdout,
+          : provenanceFailure,
+      provenance: provenanceReport,
     });
   }
   steps.push({
     step: 'provenance',
     status: 'done',
-    detail: { verdict: 'pass' },
+    detail:
+      anchor === null
+        ? { verdict: 'pass' }
+        : { verdict: 'pass', inProcess: true, expectedAnchor: ids.anchor },
   });
 
+  let finalStep = 'member';
   try {
     const reread = readIssue(owner, repo, number);
     if (!labels.every((name) => hasLabel(reread.labels, name))) {
@@ -1632,9 +2635,39 @@ function publish(input: {
       markerPrefix,
       trusted: input.trusted,
       ids,
+      target: issueRef,
+      anchor: anchor === null ? issueRef : ids.anchor,
     });
     if (ownerLog !== null) {
       throw new Error(`the owner-marker replay failed: ${ownerLog}`);
+    }
+    if (anchor !== null) {
+      // Both the anchor and the child are read again, and a changed anchor
+      // owner stops here rather than forming a split set.
+      finalStep = 'anchor-verify';
+      const again = checkAnchor({
+        owner: anchor.owner,
+        repo: anchor.repo,
+        number: anchor.number,
+        authoringLabel,
+        markerPrefix,
+        trusted: input.trusted,
+        claimGate,
+      });
+      if ('problem' in again) {
+        throw new Error(`the anchor no longer holds the set: ${again.problem}`);
+      }
+      if (!sameGeneration(again.generation, anchor.generation)) {
+        throw new Error(
+          `the owner generation of the anchor ${anchor.ref} changed before member`,
+        );
+      }
+      steps.push({
+        step: 'anchor-verify',
+        status: 'done',
+        detail: { ownerGeneration: 'unchanged' },
+      });
+      finalStep = 'member';
     }
     const memberId = postVerified(intentArgs('member', issueRef), journalWhere);
     steps.push({
@@ -1645,18 +2678,13 @@ function publish(input: {
   } catch (error) {
     return recoveryHold({
       ...held,
-      failedStep: 'member',
+      failedStep: finalStep,
       reason: (error as Error).message,
       ...postOutcome(error),
     });
   }
 
   if (args.shape === 'carrier') {
-    const coalesceWindow = (
-      input.config as {
-        issueAuthoring?: { heartbeatCoalesceWindow?: unknown };
-      } | null
-    )?.issueAuthoring?.heartbeatCoalesceWindow;
     const release = releaseCarrier({
       owner,
       repo,
@@ -1668,8 +2696,7 @@ function publish(input: {
       authoringLabel: labels[0] ?? '',
       authoringOnlyLabel: labels[1] ?? '',
       settleMs: input.settleMs,
-      heartbeatWindowMs:
-        parseIsoDurationToMs(coalesceWindow ?? 'PT2M') ?? 120_000,
+      heartbeatWindowMs,
       policyPath: input.policyPath,
       trustedFlag,
       postMarker: postVerified,
@@ -1941,6 +2968,8 @@ function replayOrRecover(
     markerPrefix: input.markerPrefix,
     trusted: input.trusted,
     ids: input.ids,
+    target: `${input.owner}/${input.repo}#${input.number}`,
+    anchor: `${input.owner}/${input.repo}#${input.number}`,
   });
   if (problem !== null) {
     throw new CarrierReleaseStop('recovery-hold', step, problem);

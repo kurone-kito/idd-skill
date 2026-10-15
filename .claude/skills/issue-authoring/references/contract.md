@@ -1954,19 +1954,61 @@ only approval boundary.
   for target, anchor, set, and session. If the target runtime cannot provide
   that operation, stop before creation. That stop leaves the drafts local, so
   the second exception in [Draft carrier](#draft-carrier) applies, as it does
-  to the journal stop below. For a standalone orphan or a draft carrier
-  (`--shape carrier`), the
-  publication capability is `idd-publish-authoring-hold` (`node
-  scripts/publish-authoring-hold.mjs` in this source repository). It runs
-  the steps below in order, from the journal check to `state=member`. For a
-  draft carrier, it then runs the release steps of the
-  carrier creation-hold exception under "Authoring hold and release". For an
-  orphan it requires `--review-result <path>`: a JSON object with
-  `"completed": true`, whose optional `findings` entries must each be `fixed`
-  or `rejected`. For a carrier the file is optional: its `completed` may be
-  `false` (drafts marked `Review: not reviewed`), and its `findings`, if
-  present, must be an array of objects and are not otherwise checked. It is
-  a dry run without `--apply`, and it refuses `--shape child` for now.
+  to the journal stop below. The publication capability is
+  `idd-publish-authoring-hold` (`node scripts/publish-authoring-hold.mjs`
+  in this source repository). It publishes one issue per call and runs the
+  steps below in order, from the journal check to `state=member`. The
+  shape picks the issue: an orphan (the default), a draft carrier
+  (`--shape carrier`), a held roadmap shell (`--shape roadmap`, where an
+  empty `## Tracks` list is valid), or one child of an existing set:
+
+  ```sh
+  node scripts/publish-authoring-hold.mjs --shape child \
+    --anchor <owner>/<repo>#<number> --title <text> --body-file <path> \
+    --review-result <path> --apply
+  ```
+
+  An orphan, a carrier, and a roadmap are each their own set anchor, so
+  their `anchor` reuses their own opaque `target`, and none of them accepts
+  `--anchor`. A child needs `--anchor` and exits 2 without it, before
+  anything is created. The anchor must be an open issue in the same
+  repository that still carries the authoring label and has no active
+  claim or open linked pull request, and its trusted owner-marker log must
+  replay to one open generation with no release in progress. Every marker
+  of that log must follow the field rules of its mode, the first valid
+  opener wins and a later opener of the same generation loses (its owner's
+  markers are ignored), a completed set stays closed (a later acquisition
+  under the same set ID is refused), and a resume does not end a release in
+  progress. The
+  child then takes the anchor's set ID and owning session, writes the
+  anchor's real reference as `anchor` in its publication line, its journal
+  records, and its owner marker, and generates only its own `target`,
+  token, and owner token. Its journal records go to
+  `issueAuthoring.journalIssue`, where the token of the anchor's own
+  publication line must replay to `state=member`: trusted, unedited records
+  that match the line on target, anchor, set, session, and token, in the
+  order pending without an issue, pending with the issue, member, and only
+  then cleanup and abandoned, with any conflicting or out-of-order record
+  failing closed. That is how this command verifies the set's originating
+  Stage 1 hold, so it cannot extend a set whose hold lives elsewhere. After
+  the identity attach and before its own `acquire` marker, it appends a
+  same-owner heartbeat on the anchor (or reuses a fresh matching marker
+  under the coalescing rule below), waits `claim.verifySettleDelay`, and
+  replays the anchor's log. After its own marker it re-reads the anchor and
+  the child before `member`, so a changed anchor owner stops it. It never
+  edits the anchor's body: wiring the child's number into the roadmap's
+  `## Tracks` list stays a separate, reviewed edit. The command does not
+  serialize concurrent calls of the owning session, so publish the children
+  of a set one call at a time (preventive; no observed incident yet). For a
+  draft carrier,
+  the command then runs the release steps of the carrier creation-hold
+  exception under "Authoring hold and release". It takes
+  `--review-result <path>`, required for an orphan, a roadmap, and a child:
+  a JSON object with `"completed": true`, whose optional `findings` entries
+  must each be `fixed` or `rejected`. For a carrier the file is optional: its
+  `completed` may be `false` (drafts marked `Review: not reviewed`), and its
+  `findings`, if present, must be an array of objects and are not otherwise
+  checked. It is a dry run without `--apply`.
   It never retries, closes, or appends `cleanup` or `abandoned`: any failure
   after the create stops at a recovery hold with the record at `pending`, or
   reported as uncertain (replay the journal) when a record may have been
@@ -2036,7 +2078,11 @@ only approval boundary.
   (an `owner/repo#number` reference to a pre-existing, durable, comment-only
   issue) -- an unset `issueAuthoring.journalIssue` only blocks a standalone
   set; an existing set with a verified Stage 1 hold needs no journal
-  configuration at all. Do not create that journal as part of the same set.
+  configuration at all. The one narrower reader is `publish-authoring-hold`:
+  it resolves the hold as `issueAuthoring.journalIssue` for every shape, so
+  it needs that setting even for a child and verifies the anchor's token
+  there, and it cannot extend a set whose hold lives elsewhere. Do not create
+  that journal as part of the same set.
   If the applicable location cannot be resolved -- no verified Stage 1 hold
   for an existing set, or `issueAuthoring.journalIssue` unset or
   unverifiable for a standalone set -- stop with `blocked-by-human` before
@@ -3029,9 +3075,9 @@ audit even when the draft review did not finish, and creates it with the
 authoring label and the authoring-only label (run it with `--apply`; the
 default is a dry run). That covers:
 
-- a draft whose final shape the publication command cannot create (it
-  publishes only an orphan or a carrier), or whose final form waits on
-  something else;
+- a draft whose final shape the publication command cannot create yet (such
+  as a child whose set anchor is not published and held), or whose final
+  form waits on something else;
 - a preview request: the carrier is published and the drafts are shown in the
   reply too;
 - a planned stop before the review completes (context pressure, or the user's
@@ -3110,8 +3156,9 @@ comments (preventive; no observed incident yet).
 **Release condition.** `## Release condition` holds `Blocked by` lines. No
 line means nothing blocks the drafts. When a person must choose first, that
 choice is a needs-decision issue named in a `Blocked by` line. In this source
-repository, a carrier for a roadmap set names issue `#4251` until the
-roadmap-set publication route is implemented.
+repository, a carrier for a roadmap set named issue `#4251` until the
+roadmap-set publication route shipped; a roadmap set is now published
+through that route.
 `discover-orphan-filter --draft-carriers` lists the open carriers as `held`
 (the authoring label is still on it), `ready` (no open or unresolvable
 `Blocked by` reference) or `waiting`.
@@ -3147,8 +3194,8 @@ session runs it is decided separately (in this source repository, issue
    issue that covers it.
 7. Release the claim last, whichever way the procedure stops.
 
-When the publication route for a draft's shape is still missing (the
-publication command publishes only an orphan or a carrier, for example),
+When the publication route for a draft's shape is still missing or refuses it
+(a child whose set anchor is not a held set of this repository, for example),
 post a comment that
 names the issue that adds the route (one comment is enough), release the
 claim, and leave the carrier open. A failure partway also leaves the carrier

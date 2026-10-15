@@ -139,8 +139,9 @@ needs-decision, blocked-by-human, and out-of-scope.
    pass above and does not replace step 6. No separate publish
    approval is needed. A reviewed draft does not end in local files only.
    When its final shape cannot be published under the hold now (the
-   command publishes only an orphan or a carrier, or the final form waits
-   on something else), publish a draft carrier with
+   command cannot create it yet, such as a child whose set anchor is not
+   published and held, or the final form waits on something else), publish
+   a draft carrier with
    `publish-authoring-hold --shape carrier` (run it with `--apply`; the
    default is a dry run), as
    [Draft carrier](references/contract.md#draft-carrier) defines. A
@@ -218,10 +219,13 @@ needs-decision, blocked-by-human, and out-of-scope.
      publication token for target, anchor, set, and session; if that operation
      is unavailable, stop before creating the issue (a carrier cannot be
      created either, so the second exception above applies) — never
-     intentionally create an unlabeled issue. For a standalone orphan or a
-     draft carrier, that command is `idd-publish-authoring-hold` (`node
-     scripts/publish-authoring-hold.mjs` in this source repository, with
-     `--shape carrier` for a carrier); see its `--help` and the contract's
+     intentionally create an unlabeled issue. That command is
+     `idd-publish-authoring-hold` (`node scripts/publish-authoring-hold.mjs`
+     in this source repository). It publishes one issue per call: an orphan
+     (the default), a draft carrier (`--shape carrier`), a roadmap shell
+     (`--shape roadmap`), or a child (`--shape child` with `--anchor` naming
+     the set anchor's `<owner>/<repo>#<number>`); see its `--help` and the
+     contract's
      "New-issue ownership" section
    - the hidden publication token is this exact HTML-first body line.
      `anchor` reuses the opaque `target` value only when this new issue
