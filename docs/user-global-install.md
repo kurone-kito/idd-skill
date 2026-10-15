@@ -88,8 +88,8 @@ before writing anything, or failed after a clean plan. 2 means a usage error.
 | Item           | Location                                                                          | Written when        |
 | -------------- | --------------------------------------------------------------------------------- | ------------------- |
 | Payload        | `$XDG_DATA_HOME/idd-skill/<version>/`, else `~/.local/share/idd-skill/<version>/` | Always              |
-| Current link   | `idd-skill/current`, pointing at the version directory                            | Always              |
-| Receipt        | `idd-skill/receipt.json` in the data root                                         | Always              |
+| Current link   | `current` in the data root, pointing at the version directory                     | Always              |
+| Receipt        | `receipt.json` in the data root                                                   | Always              |
 | Claude skills  | `~/.claude/skills/issue-authoring/`, `~/.claude/skills/idd-spec-audit/`           | Always              |
 | Agent skills   | `~/.agents/skills/issue-authoring/`, `~/.agents/skills/idd-spec-audit/`           | Always              |
 | Claude entry   | `~/.claude/CLAUDE.md`                                                             | `claude` selected   |
@@ -156,9 +156,11 @@ exactly one of these keys:
 - `path`: safe relative segments, matched as a suffix of the main worktree's
   path. This applies only when the repository has no GitHub origin.
 
-A `repo` match outranks a `path` match. Among `path` matches, the entry with
-more matching segments wins. Two entries tied for the highest rank select
-nothing, and the run records a diagnostic. A malformed entry is ignored with a
+A `repo` entry matches only a repository whose GitHub origin has that slug. A
+`path` entry matches only a repository without a GitHub origin. The two kinds
+therefore never compete. Among `path` entries, the one with more matching
+segments wins. If two or more entries tie for the highest rank, none applies,
+and the run records a diagnostic. A malformed entry is ignored with a
 diagnostic. Only one override applies, and its `config` sits above the
 user-global values.
 
