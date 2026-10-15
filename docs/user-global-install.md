@@ -38,11 +38,12 @@ the rule does not apply to it.
 
 ## Commands
 
-Run the installer with `node scripts/idd-onboard.mjs` from a checkout of this
-repository, or with `idd-onboard` once the package
-`@kurone-kito/idd-skill` is installed globally. After a successful install the
-installer prints the `npm install -g` and `pnpm add -g` commands that put the
-helpers on `PATH`. It never runs them itself.
+Run the installer with `node scripts/idd-onboard.mjs` from a checkout of
+`kurone-kito/idd-skill`. The package `@kurone-kito/idd-skill` is private in this
+checkout, so this page does not assume a registry install. After a successful
+install the installer prints `npm install -g` and `pnpm add -g` commands for the
+package version. It never runs them itself. Use them only when that version is
+published.
 
 ```sh
 node scripts/idd-onboard.mjs --install-user-global [--harness <list>] [--dry-run]
@@ -82,6 +83,8 @@ before writing anything, or failed after a clean plan. 2 means a usage error.
   refuses the whole run before any write, even when `--harness` selects only
   Claude Code. The installer does create a harness directory such as `~/.codex`
   when it is missing.
+- The installer refuses on Windows before any write. It needs no-follow file
+  opens, and the platform does not provide them.
 
 ## What gets written
 
@@ -107,10 +110,16 @@ the `instructions` array. The rest of the file stays as it was.
 ## Uninstall
 
 `--uninstall` removes what the receipt lists and what still matches it. Each
-removal is reported as `remove`. Before any removal, the run refuses as a whole
-when a listed file was edited after install. If the run stops partway, it does
-not roll back. The receipt then lists what remains, and a rerun removes it. If
-no receipt exists, the run reports that there is nothing to remove.
+removal is reported as `remove`. Before any removal, the run refuses the whole
+run when a listed file or link no longer matches its receipt entry, such as a
+skill file edited after install. An entry file is handled differently. The
+installer rewrites it in place, so uninstall removes only the managed block, or
+only the one `opencode.json` string, and keeps the rest of the file. Each such
+file is reported as `edit`.
+
+If the run stops partway, it does not roll back. The receipt then lists what
+remains, and a rerun removes it. If no receipt exists, the run reports that
+there is nothing to remove.
 
 ## Failure outcome
 
@@ -120,18 +129,29 @@ Two failure cases follow from that.
 1. A failure before the receipt rewrite rolls back this run's steps in reverse
    order. If a rollback step itself fails, the message names the path it left in
    place, and that path stays listed.
-2. A failed receipt rewrite does not roll back. The step whose receipt write
-   failed is the one that is not listed, because each earlier step was already
-   recorded. The failure message names every path that the receipt does not
-   list. Those paths stay on disk. Uninstall cannot remove them, because the
-   receipt does not list them. Remove them by hand after you check each one.
+2. A failed receipt rewrite does not roll back. The message names the path of
+   the step whose receipt write failed. Each earlier step was already recorded,
+   so that path is normally the only one the receipt does not list. Uninstall
+   cannot remove an unlisted path, so the paths stay on disk until you handle
+   them. Three cases need more care.
+   - If the run created the named path, check it and remove it by hand.
+   - If the step only edited an entry file, remove only the installer's addition.
+     In a Markdown file that is the managed block between its marker lines. In
+     `opencode.json` it is the one string in the `instructions` array. Keep the
+     rest of the file.
+   - If the step replaced a file, or repointed `current`, that an earlier run had
+     listed, the receipt still holds the old hash or target. Uninstall then
+     refuses that path as edited. This page gives no automated recovery for that
+     case, so check the path by hand before you change anything.
+
+The message says "created" for every path it names. That wording is not accurate
+when the step edited or replaced an existing path. A later failure also does not
+name a `current` link that an earlier run left unlisted. If an earlier run
+left `current` unlisted and a later run repointed it, check that link by hand as
+well.
 
 This is the outcome chosen in issue `#4304`: the installer keeps the current
-behavior, and the documentation states it. The message uses the word "created"
-for every path it names. For a path that the failing step only edited, such as
-an entry file, remove only the managed block between its marker lines and keep
-the rest of the file. For the current link, check where it points before you
-remove it.
+behavior, and the documentation states it.
 
 ## Policy layers and overrides
 
@@ -141,7 +161,8 @@ Policy resolves from four layers, lowest to highest:
 2. The user-global file, `$XDG_CONFIG_HOME/idd-skill/config.json`, or
    `~/.config/idd-skill/config.json` when `XDG_CONFIG_HOME` is not qualified.
 3. The one `overrides[]` entry that matches this repository, if any.
-4. The repository policy file, `.github/idd/config.json`.
+4. The repository policy file, `.github/idd/config.json`. The legacy root
+   `idd-policy.json` is read only when that file is absent.
 
 Resolution works leaf by leaf. A higher layer replaces a lower layer's leaf
 value, and objects merge. A repository-local delegate object, such as
@@ -165,19 +186,22 @@ diagnostic. Only one override applies, and its `config` sits above the
 user-global values.
 
 To see which layer supplied a key, run `node scripts/idd-effective-config.mjs
---key <dotted.path>`. It reports the source layer, the selected override index,
-and any layering diagnostics. It is read-only.
+--key <dotted.path>`. That prints the key's value and its source layer. Run it
+without `--key` to also see the selected override index and the layering
+diagnostics. It is read-only.
 
 ### Repository-policy field class
 
 Some keys belong to the repository itself. They decide merge authority, trusted
 markers, CI and waiver decisions, and handoff. Examples are `mergePolicy`,
 `trustedMarkerActors`, `ciGate`, `advisoryWait`, `helperRuntime`, and
-`forcedHandoff`. When the repository has its own policy file, user-global and
-override values for these keys are dropped. Without that file they apply as
-usual. The full list is `REPOSITORY_POLICY_FIELDS` in
-`src/scripts/layered-policy.mts`. One exception applies:
-`issueAuthoring.adversarialReview` still inherits from the user-global layer.
+`forcedHandoff`. When the repository has its own policy file, that is
+`.github/idd/config.json` or, when that file is absent, the legacy root
+`idd-policy.json`, user-global and override values for these keys are dropped.
+Without such a file they apply as usual. The full list is
+`REPOSITORY_POLICY_FIELDS` in `src/scripts/layered-policy.mts`. One exception
+applies: `issueAuthoring.adversarialReview` still inherits from the user-global
+layer.
 
 ## Global-only profile
 
@@ -242,7 +266,8 @@ in [IDD helper scripts](idd-helper-scripts.md).
 The installer does not install entry wiring for Antigravity or Gemini CLI, GitHub
 Copilot CLI, Cursor CLI, or Grok Build. Issue `#3817` recorded that Cursor CLI
 documents no file-based global instruction file, and that Copilot CLI does not
-load imports from home paths. These four harnesses need their own
-investigation.
+load imports from home paths. These four harnesses need their own investigation.
+
 Selecting the lite instruction bundle per operator through a user-global
-`instructionProfile` is also deferred until the policy schema carries that field.
+`instructionProfile` is also deferred until the policy schema carries that
+field.
