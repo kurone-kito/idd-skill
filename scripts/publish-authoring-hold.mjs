@@ -56,6 +56,7 @@ import {
   normalizeMarkerPrefix,
   parseAuthoringOwnerComment,
   parseAuthoringPublicationComment,
+  parseAuthoringPublicationIntentComment,
 } from './marker-helpers.mjs';
 import {
   AUTHORING_JOURNAL_REFERENCE_PATTERN,
@@ -380,10 +381,14 @@ roadmap's Tracks list stays a separate reviewed edit.
      anchor's real reference as its anchor, and generates only its own
      target, token and owner ids. Before that, the anchor must pass a
      read-only check (a dry run does it too): an open issue, not a pull
-     request, that still has the authoring label and no active claim, whose
-     trusted unedited owner-marker log replays to one open generation (no
-     release in progress, no second opener, no marker naming another
-     target). Otherwise the report is a refusal and nothing is written;
+     request, that still has the authoring label, no active claim and no
+     open linked pull request, whose trusted unedited owner-marker log
+     replays to one open generation (every marker follows the field rules
+     of its mode; no release in progress, no second opener, no reuse of a
+     completed set). The journal must also hold the anchor's own trusted
+     state=member publication-intent record, which is how the set's
+     originating hold is verified. Otherwise the report is a refusal and
+     nothing is written;
   4. lint that exact body with audit-authored-issue --new-issue (a
      non-ready bucket adds the expected bucket and one label flag per
      configured label; a carrier adds one label flag per configured label
@@ -801,7 +806,24 @@ function advanceAnchorGeneration(state, parsed, latest) {
       ) {
         return mismatch();
       }
+      // The anchor-only terminal modes retain the anchor's current session
+      // (contract.md, `release-guard` and `release-complete`).
+      if (
+        (parsed.mode === 'release-guard' ||
+          parsed.mode === 'release-complete') &&
+        parsed.session !== open.session
+      ) {
+        return {
+          problem: `owner marker ${latest.id} (mode=${parsed.mode}) does not retain the session of the open generation`,
+        };
+      }
       if (parsed.mode === 'release-complete') {
+        // It is the terminal event of a release, so it closes nothing else.
+        if (!open.releasing) {
+          return {
+            problem: `owner marker ${latest.id} (mode=release-complete) closes a generation with no release in progress`,
+          };
+        }
         return { open: null, closedSets: new Set([...closedSets, open.set]) };
       }
       return {
@@ -905,6 +927,57 @@ export function resolveAnchorGeneration(input) {
     },
   };
 }
+/**
+ * Verify the originating Stage 1 hold of a child's anchor (#4251). This command
+ * records a set in `issueAuthoring.journalIssue`, so an anchor it can extend has
+ * its own publication-intent record there: trusted, written by the actor it
+ * names, self-anchored, for the anchor's set, and still `state=member` (the
+ * latest record of its token). An anchor whose hold is elsewhere, or whose
+ * record was never made a member, is refused, so a child's records never land
+ * in a log the set's recovery would not replay. Returns a problem, or null.
+ */
+function checkAnchorHold(input) {
+  let rows;
+  try {
+    rows = ghApiJson(
+      `repos/${input.journal.owner}/${input.journal.repo}/issues/${input.journal.number}/comments`,
+      { paginate: true },
+    );
+  } catch (error) {
+    return `the journal ${input.journal.ref} cannot be read, so the hold of the anchor ${input.anchorRef} is not verified: ${messageOf(error)}`;
+  }
+  if (!Array.isArray(rows)) {
+    return `the journal ${input.journal.ref} comments are not readable, so the hold of the anchor ${input.anchorRef} is not verified`;
+  }
+  const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
+  // The latest record of each publication token, in comment order.
+  const latestByToken = new Map();
+  for (const row of rows) {
+    const comment = row;
+    const author = String(comment.user?.login ?? '').toLowerCase();
+    if (!trustedSet.has(author) || typeof comment.body !== 'string') {
+      continue;
+    }
+    const intent = parseAuthoringPublicationIntentComment(
+      comment.body,
+      input.markerPrefix,
+    );
+    if (
+      intent !== null &&
+      intent.set === input.set &&
+      intent.anchor === intent.target &&
+      intent.actor.toLowerCase() === author &&
+      sameIssueRef(intent.issue, input.anchorRef) &&
+      sameIssueRef(intent.journal, input.journal.ref)
+    ) {
+      latestByToken.set(intent.token, intent.state);
+    }
+  }
+  if (![...latestByToken.values()].includes('member')) {
+    return `the originating hold of the anchor ${input.anchorRef} is not in the journal ${input.journal.ref}: no trusted state=member publication-intent record names it under set ${input.set}`;
+  }
+  return null;
+}
 function sameGeneration(a, b) {
   return a.owner === b.owner && a.set === b.set && a.session === b.session;
 }
@@ -951,6 +1024,24 @@ function checkAnchor(input) {
   }
   if (claimed) {
     return { problem: `the anchor ${ref} has an active claim` };
+  }
+  // An open linked pull request is active execution too (contract.md,
+  // "Conflict check before every edit"), and an unreadable one counts as open.
+  let openPrs;
+  try {
+    openPrs = resolveOpenLinkedPrIssues(
+      createGithubProviderAdapter(input.owner, input.repo),
+      [input.number],
+    ).length;
+  } catch (error) {
+    return {
+      problem: `the pull-request state of the anchor ${ref} cannot be read: ${messageOf(error)}`,
+    };
+  }
+  if (openPrs > 0) {
+    return {
+      problem: `the anchor ${ref} has an open linked pull request, or its pull-request state cannot be read`,
+    };
   }
   const replay = resolveAnchorGeneration({
     comments,
@@ -1299,6 +1390,19 @@ function runCli() {
     });
     if ('problem' in checked) {
       return refuse(checked.problem, {
+        repository: { owner, repo },
+        anchor: ref,
+      });
+    }
+    const holdProblem = checkAnchorHold({
+      journal,
+      anchorRef: ref,
+      set: checked.generation.set,
+      markerPrefix,
+      trusted,
+    });
+    if (holdProblem !== null) {
+      return refuse(holdProblem, {
         repository: { owner, repo },
         anchor: ref,
       });

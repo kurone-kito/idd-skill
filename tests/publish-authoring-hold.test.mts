@@ -2509,6 +2509,24 @@ function ownerMarkerText(
  * Seed the set anchor in the stub: an open, labelled roadmap whose log holds
  * the given owner markers (by default one acquire). Returns the anchor body.
  */
+/** A publication-intent record of the anchor, as the helper writes it. */
+function journalIntentText(
+  state: string,
+  fields: {
+    set?: string;
+    issue?: string;
+    actor?: string;
+    token?: string;
+    journal?: string;
+    anchor?: string;
+  } = {},
+): string {
+  return [
+    `<!-- idd-skill-authoring-publication-intent: target=target-anchor; anchor=${fields.anchor ?? 'target-anchor'}; set=${fields.set ?? ANCHOR_SET}; session=${ANCHOR_SESSION}; token=${fields.token ?? 'token-anchor'}; journal=${fields.journal ?? 'o/r#2674'}; issue=${fields.issue ?? ANCHOR_REF}; actor=${fields.actor ?? 'kurone-kito'}; state=${state} -->`,
+    '_Issue-authoring publication-intent record. Do not edit or delete._',
+  ].join('\n');
+}
+
 function seedAnchor(
   fixture: Fixture,
   options: {
@@ -2517,11 +2535,23 @@ function seedAnchor(
     markers?: string[];
     extraComments?: string[];
     createdAt?: string;
+    /** The anchor's records in the journal; by default one member record. */
+    journalRecords?: string[];
   } = {},
 ): string {
   const body = roadmapDraftBody();
   const markers = options.markers ?? [ownerMarkerText('acquire')];
+  const hold = options.journalRecords ?? [journalIntentText('member')];
   fixture.seed((stored) => {
+    for (const [index, text] of hold.entries()) {
+      stored.comments.push({
+        id: 4090 + index,
+        issue: 2674,
+        body: text,
+        user: 'kurone-kito',
+        createdAt: new Date(Date.UTC(2026, 9, 12, 0, 0, index)).toISOString(),
+      });
+    }
     stored.issues[String(ANCHOR)] = {
       body,
       labels: options.labels ?? ['status:authoring'],
@@ -2695,8 +2725,9 @@ test('anchor replay: a released set is not joinable, and a new acquire after rel
 
   const again = replay([
     provenanceComment(1, 'acquire'),
-    provenanceComment(2, 'release-complete'),
-    provenanceComment(3, 'acquire', { owner: 'owner-new', set: 'set-new' }),
+    provenanceComment(2, 'release'),
+    provenanceComment(3, 'release-complete'),
+    provenanceComment(4, 'acquire', { owner: 'owner-new', set: 'set-new' }),
   ]);
   assert.ok('generation' in again, JSON.stringify(again));
   assert.equal(again.generation.set, 'set-new');
@@ -2706,12 +2737,52 @@ test('anchor replay: a released set is not joinable, and a new acquire after rel
   for (const mode of ['acquire', 'bootstrap']) {
     const reopened = replay([
       provenanceComment(1, 'acquire'),
-      provenanceComment(2, 'release-complete'),
-      provenanceComment(3, mode, { owner: 'owner-new' }),
+      provenanceComment(2, 'release'),
+      provenanceComment(3, 'release-complete'),
+      provenanceComment(4, mode, { owner: 'owner-new' }),
     ]);
     assert.ok('problem' in reopened, `${mode}: ${JSON.stringify(reopened)}`);
     assert.match(reopened.problem, /reuses set set-anchor/);
   }
+});
+
+test('anchor replay: the terminal modes retain the session and close only a release in progress', () => {
+  // A release-complete with no release before it closes nothing.
+  const early = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'release-complete'),
+  ]);
+  assert.ok('problem' in early);
+  assert.match(early.problem, /no release in progress/);
+
+  // A heartbeat does not start a release either.
+  const beaten = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'heartbeat'),
+    provenanceComment(3, 'release-complete'),
+  ]);
+  assert.ok('problem' in beaten);
+
+  // The anchor-only terminal markers retain the current session.
+  for (const mode of ['release-guard', 'release-complete']) {
+    const other = replay([
+      provenanceComment(1, 'acquire'),
+      provenanceComment(2, 'release'),
+      provenanceComment(3, mode, { session: 'session-other' }),
+    ]);
+    assert.ok('problem' in other, mode);
+    assert.match(other.problem, /does not retain the session/);
+  }
+
+  // A release-guard after the release, then the matching complete, closes it.
+  const closed = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'release'),
+    provenanceComment(3, 'release-guard'),
+    provenanceComment(4, 'release-complete'),
+  ]);
+  assert.ok('problem' in closed);
+  assert.match(closed.problem, /no open owner generation/);
 });
 
 test('anchor replay: a marker that breaks the field rules of its mode is not a valid owner marker', () => {
@@ -3169,7 +3240,8 @@ test('CLI: a child apply heartbeats the anchor, joins its set and never edits th
       ),
     );
     assert.doesNotMatch(childMarker ?? '', /owner=owner-anchor;/);
-    const records = journalRecords(fixture);
+    // The first journal record is the anchor's own, seeded by the test.
+    const records = journalRecords(fixture).slice(1);
     assert.equal(records.length, 3);
     for (const record of records) {
       assert.match(
@@ -3271,11 +3343,65 @@ const ANCHOR_REFUSALS: [string, Parameters<typeof seedAnchor>[1], RegExp][] = [
     {
       markers: [
         ownerMarkerText('acquire'),
+        ownerMarkerText('release'),
         ownerMarkerText('release-complete'),
         ownerMarkerText('acquire', { owner: 'owner-new' }),
       ],
     },
     /reuses set set-anchor/,
+  ],
+  [
+    'an anchor whose journal holds no member record',
+    { journalRecords: [] },
+    /originating hold of the anchor o\/r#4000 is not in the journal/,
+  ],
+  [
+    'an anchor whose journal record is still pending',
+    { journalRecords: [journalIntentText('pending')] },
+    /originating hold/,
+  ],
+  [
+    'an anchor whose journal record later moved to cleanup',
+    {
+      journalRecords: [
+        journalIntentText('member'),
+        journalIntentText('cleanup'),
+      ],
+    },
+    /originating hold/,
+  ],
+  [
+    'an anchor whose journal record names another set',
+    { journalRecords: [journalIntentText('member', { set: 'set-other' })] },
+    /originating hold/,
+  ],
+  [
+    'an anchor whose journal record names another issue',
+    {
+      journalRecords: [journalIntentText('member', { issue: 'o/r#4001' })],
+    },
+    /originating hold/,
+  ],
+  [
+    'an anchor whose journal record is not self-anchored',
+    {
+      journalRecords: [journalIntentText('member', { anchor: 'o/r#3999' })],
+    },
+    /originating hold/,
+  ],
+  [
+    'an anchor whose journal record names an actor other than its author',
+    {
+      journalRecords: [journalIntentText('member', { actor: 'someone-else' })],
+    },
+    /originating hold/,
+  ],
+  [
+    'an anchor whose journal record names another journal',
+    {
+      journalRecords: [journalIntentText('member', { journal: 'o/r#9999' })],
+    },
+    /originating hold/,
   ],
   [
     'an anchor with an active claim',
@@ -3342,7 +3468,8 @@ test('CLI: a failed anchor heartbeat is a recovery hold on the held, journalled 
       ['status:authoring'],
     );
     // The record is attached but not a member, and no owner marker was posted.
-    const records = journalRecords(fixture);
+    // The first journal record is the anchor's own, seeded by the test.
+    const records = journalRecords(fixture).slice(1);
     assert.equal(records.length, 2);
     assert.match(
       records[1] ?? '',
@@ -3481,6 +3608,45 @@ test('CLI: a child can take a needs-decision bucket like an orphan', () => {
       '--label',
       'status:needs-decision',
     ]);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: an anchor with an open linked pull request refuses a child before any write', () => {
+  const fixture = setup({ labels: ['status:authoring'], openPr: true });
+  try {
+    seedAnchor(fixture);
+    for (const extra of [[], ['--apply']]) {
+      const result = fixture.run([...childArgs(fixture), ...extra]);
+      assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.outcome, 'refused');
+      assert.match(report.reason, /open linked pull request/);
+      assert.deepEqual(writes(fixture.log()), []);
+    }
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a hold record written by an untrusted author does not verify the anchor', () => {
+  const fixture = setup({ labels: ['status:authoring'] });
+  try {
+    seedAnchor(fixture, { journalRecords: [] });
+    fixture.seed((stored) => {
+      stored.comments.push({
+        id: 4090,
+        issue: 2674,
+        body: journalIntentText('member'),
+        user: 'someone-else',
+        createdAt: '2026-10-12T00:00:00Z',
+      });
+    });
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    assert.match(JSON.parse(result.stdout).reason, /originating hold/);
+    assert.deepEqual(writes(fixture.log()), []);
   } finally {
     fixture.restore();
   }
