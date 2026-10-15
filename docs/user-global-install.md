@@ -209,7 +209,8 @@ Each `overrides[]` entry has a `match` and a partial `config`. The `match` holds
 exactly one of these keys:
 
 - `repo`: an `owner/repo` slug, compared case-insensitively with the GitHub
-  origin. - `path`: segments that match the end of the main worktree's path. The
+  origin.
+- `path`: segments that match the end of the main worktree's path. The
   value may be relative or in Windows drive form, such as `C:\...`. This applies
   only when the origin is not `github.com`, so a GitHub Enterprise origin can
   match `path`.
