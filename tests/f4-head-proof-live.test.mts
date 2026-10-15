@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
+  claimCheckSpawnOptions,
   classifyClaimAssertResult,
   classifyLocalRefReads,
   createLiveF4HeadProofDeps,
@@ -36,6 +37,35 @@ test('classifyClaimAssertResult: exit 0 with an owned keep verdict for this clai
     status: 'owned',
     branch: BRANCH,
   });
+});
+
+test('classifyClaimAssertResult: a non-zero exit is not-owned for every routing state and action', () => {
+  for (const state of [
+    'unclaimed',
+    'stale',
+    'non_inheritable',
+    'disputed',
+    'owner_evidence_required',
+    'already_owned',
+    'local_worktree_occupied',
+  ]) {
+    assert.deepEqual(
+      classifyClaimAssertResult(1, routing({ state, action: 'stop' }), CLAIM),
+      { status: 'not-owned' },
+      state,
+    );
+  }
+  for (const action of ['keep', 're_claim', 'stop', 'takeover']) {
+    assert.deepEqual(
+      classifyClaimAssertResult(
+        1,
+        routing({ state: 'disputed', action }),
+        CLAIM,
+      ),
+      { status: 'not-owned' },
+      action,
+    );
+  }
 });
 
 test('classifyClaimAssertResult: a non-zero exit with a routing verdict is not-owned', () => {
@@ -79,6 +109,7 @@ test('classifyClaimAssertResult: a non-zero exit with a state or action outside 
     routing({ state: 'future_state', action: 'stop' }),
     routing({ state: 'disputed', action: 'teleport' }),
     routing({ state: 42, action: 'stop' }),
+    routing({ state: 'disputed', action: 42 }),
   ]) {
     assert.equal(
       classifyClaimAssertResult(1, body, CLAIM).status,
@@ -327,4 +358,25 @@ test('selectPullRequests refuses a list that reached the row cap, even when ever
     () => selectPullRequests([other, other, other], BRANCH, 3),
     /cap of 3/,
   );
+});
+
+test('the claim check runs with the sanitized Git environment, keeping PATH and the GitHub token', () => {
+  const keys = ['GIT_DIR', 'GH_TOKEN', 'PATH'] as const;
+  const saved = keys.map((key) => [key, process.env[key]] as const);
+  try {
+    process.env.GIT_DIR = '/decoy/.git';
+    process.env.GH_TOKEN = 'token-fixture';
+    const env = claimCheckSpawnOptions().env ?? {};
+    assert.equal(env.GIT_DIR, undefined);
+    assert.equal(env.GH_TOKEN, 'token-fixture');
+    assert.equal(env.PATH, process.env.PATH);
+  } finally {
+    for (const [key, value] of saved) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 });

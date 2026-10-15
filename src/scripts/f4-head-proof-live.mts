@@ -9,7 +9,11 @@
 // {@link F4HeadProofGateDeps}. The flow itself has no I/O and is tested with
 // fake callbacks; this module is the only place the flow touches the host.
 
-import { execFileSync, spawnSync } from 'node:child_process';
+import {
+  type ExecFileSyncOptionsWithStringEncoding,
+  execFileSync,
+  spawnSync,
+} from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mts';
@@ -91,10 +95,24 @@ function isRegisteredWorktree(worktree: string): boolean | null {
 }
 
 /**
- * Run `resume-claim-routing --assert` through the compiled sibling script.
- * Exit 0 is an owned claim. A non-zero exit that still printed a routing
- * verdict is a claim that is not this session's. Anything else (the script
- * could not run, or printed nothing readable) is `unreadable`.
+ * The options of the spawned claim check. The child reads git state for the
+ * supplied worktree only, so the caller's Git environment overrides (`GIT_DIR`,
+ * `GIT_WORK_TREE`, and the rest of `sanitizedGitEnvironment`'s list) are
+ * dropped. Everything else passes through, including `PATH` and the GitHub
+ * token variables the check's own GitHub reads need.
+ */
+export function claimCheckSpawnOptions(): ExecFileSyncOptionsWithStringEncoding {
+  return {
+    encoding: 'utf8',
+    env: sanitizedGitEnvironment(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: CLAIM_ASSERT_TIMEOUT_MS,
+  };
+}
+
+/**
+ * Run `resume-claim-routing --assert` through the compiled sibling script and
+ * classify the result (see `classifyClaimAssertResult`).
  */
 function assertClaim(
   request: ClaimAssertRequest,
@@ -123,14 +141,7 @@ function assertClaim(
   let stdout = '';
   let exited = 0;
   try {
-    stdout = execFileSync(process.execPath, argv, {
-      encoding: 'utf8',
-      // The child reads git state for the supplied worktree only; a caller's
-      // GIT_DIR or GIT_WORK_TREE must not reach it.
-      env: sanitizedGitEnvironment(),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: CLAIM_ASSERT_TIMEOUT_MS,
-    });
+    stdout = execFileSync(process.execPath, argv, claimCheckSpawnOptions());
   } catch (error) {
     const failure = error as { status?: unknown; stdout?: unknown };
     exited = typeof failure.status === 'number' ? failure.status : 1;
@@ -140,17 +151,9 @@ function assertClaim(
 }
 
 /**
- * Classify one `resume-claim-routing --assert` run from its exit status and
- * stdout. Exit 0 with an `already_owned` / `keep` verdict naming this claim
- * ID and a branch is `owned`. A non-zero exit that still printed a routing
- * verdict (any `state` and `action`, including `owner_evidence_required`) is
- * `not-owned`. Anything else is `unreadable`.
- */
-/**
  * The `state` and `action` values `resume-claim-routing` prints (its routing
- * module assigns each one). A non-zero exit counts as `not-owned` only for a
- * verdict made of these values; any other value does not prove that the claim
- * is not this session's, so the classifier reads it as unreadable.
+ * module assigns each one). Only a verdict made of these values can be an
+ * answer about the claim.
  */
 const ROUTING_STATES: ReadonlySet<string> = new Set([
   'unclaimed',
@@ -168,6 +171,16 @@ const ROUTING_ACTIONS: ReadonlySet<string> = new Set([
   'takeover',
 ]);
 
+/**
+ * Classify one `resume-claim-routing --assert` run from its exit status and
+ * stdout. Exit 0 with an `already_owned` / `keep` verdict naming this claim
+ * ID and a branch is `owned`. A non-zero exit whose `state` and `action` are
+ * both in the routing vocabulary is `not-owned`: that is the routing answer
+ * that the claim is not held by this session, and `owner_evidence_required` is
+ * one of them (the claim ID matches but the local proof failed). Anything
+ * else, including a verdict outside the vocabulary, is `unreadable`, which
+ * holds the run instead of ending it quietly.
+ */
 export function classifyClaimAssertResult(
   exited: number,
   stdout: string,
