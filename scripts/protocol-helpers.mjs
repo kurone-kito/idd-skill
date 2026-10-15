@@ -3006,7 +3006,8 @@ const EMPTY_QUOTE_LINE_RE = /^ {0,3}>[ \t>]*$/u;
 const ATX_HEADING_LINE_RE = /^ {0,3}#{1,6}(?:[ \t]|$)/u;
 /** A line that opens a block which interrupts a paragraph without a blank
  * line: a heading, a thematic break, or an HTML block. It is never a lazy
- * continuation, so it ends a quote's or list item's run. */
+ * continuation, so it ends a quote's or list item's run. The scan masks HTML
+ * blocks first, so the HTML test is a guard for a start line the mask leaves. */
 function interruptsParagraph(line) {
   return (
     ATX_HEADING_LINE_RE.test(line) ||
@@ -3017,20 +3018,32 @@ function interruptsParagraph(line) {
 /**
  * Whether a reply body carries the pending-decision marker
  * (`**Awaiting maintainer decision**`) at the start of a top-level line outside
- * a Markdown code region. A reply that opens with it is the plain AMD hold; an
- * `**Accepted**` or `**Rejected**` reply that carries it in a later paragraph
- * is a partial answer whose open part still waits on the maintainer.
+ * a Markdown code region or an HTML comment or block. A reply that opens with
+ * it is the plain AMD hold; an `**Accepted**` or `**Rejected**` reply that
+ * carries it in a later paragraph is a partial answer whose open part still
+ * waits on the maintainer.
+ *
+ * A marker inside an HTML comment or an HTML block (`<!-- ... -->`, a
+ * multi-line `<div>`) is hidden text, not a visible hold, so the mask below
+ * blanks both regions before the scan (issue `#4332`; the Copilot finding on
+ * PR `#4325`: an `**Accepted**` reply that hid the text in a multi-line
+ * comment or `<div>` was held, which blocked the advisory gate with no visible
+ * reason). A masked line reads as blank, and an HTML block runs to the next
+ * blank line, so a marker meant to count after a `<div>` block needs a blank
+ * line between them.
  *
  * A marker line that follows a block quote or a list item with no blank line
  * between is a lazy continuation of that container's paragraph, so it is quoted
  * or listed text and does not count. A blank line (or an empty quote line) ends
- * that run, and so does a line that opens a heading, a thematic break, or an
- * HTML block; a marker after one is a top-level paragraph again. The reader
- * keeps this small run model on purpose rather than a full container parser,
- * as `copilot-review-body.mts`'s remark reader does: it can miss a marker
- * indented into a container or a list item's later paragraph, which reads as
- * settled, no worse than before this check existed, and it never counts a
- * plain quoted example.
+ * that run, and so does a heading or a thematic break; a marker after one is a
+ * top-level paragraph again. An HTML block ends the run too, but the mask has
+ * already blanked its lines, so it reads as a blank line; the HTML test in
+ * {@link interruptsParagraph} is kept as a cheap guard only. The reader keeps
+ * this small run model on purpose rather than a full container parser, as
+ * `copilot-review-body.mts`'s remark reader does: it can miss a marker indented
+ * into a container or a list item's later paragraph, which reads as settled, no
+ * worse than before this check existed, and it never counts a plain quoted
+ * example.
  */
 export function hasPendingDecisionMarker(body) {
   const text = String(body ?? '');
@@ -3040,7 +3053,11 @@ export function hasPendingDecisionMarker(body) {
     return false;
   }
   let inContainerRun = false;
-  for (const line of maskMarkdownForScan(text).split('\n')) {
+  const masked = maskMarkdownForScan(text, {
+    htmlComments: 'mask',
+    htmlBlocks: 'mask',
+  });
+  for (const line of masked.split('\n')) {
     if (
       line.trim() === '' ||
       EMPTY_QUOTE_LINE_RE.test(line) ||

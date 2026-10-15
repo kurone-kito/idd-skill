@@ -1590,6 +1590,45 @@ test('--apply refuses a --body that carries the pending-decision marker before a
   }
 });
 
+test('--apply names the next step for each target in its pending-body refusal (compiled CLI, #4332)', () => {
+  const body =
+    '**Accepted** (part), fixed in abc1234.\n\n**Awaiting maintainer decision** — the rest is open.';
+  const sharedPrefix =
+    '--apply refuses a --body that carries "**Awaiting maintainer decision**" at the start of a line: ';
+  const targets = [
+    {
+      // A thread target resolves the thread, so the caller keeps it open.
+      target: ['--comment-id', '1001'],
+      refusal: `${sharedPrefix}this helper resolves the thread, and a pending decision keeps it open. Post that reply by hand and leave the thread unresolved (E6)`,
+    },
+    {
+      // A body-item target resolves no thread: wait, then settle the item.
+      target: [
+        '--review-id',
+        String(BODY_ITEM_REVIEW_ID),
+        '--item-title',
+        BODY_ITEM_TITLE,
+      ],
+      refusal: `${sharedPrefix}this helper posts a top-level reply that settles the item, and a pending decision settles nothing. Wait for the maintainer's decision, then post a settled disposition (E6)`,
+    },
+  ];
+  for (const { target, refusal } of targets) {
+    const stderr = runCliExpectingUsageFailure([
+      '--pr',
+      '42',
+      ...target,
+      '--claim-issue',
+      '5',
+      '--claim-id',
+      'claim-a',
+      '--apply',
+      '--body',
+      body,
+    ]);
+    assert.equal(stderr.trimEnd(), refusal);
+  }
+});
+
 test('--comment-id cannot be combined with the body-item target (compiled CLI, #4012)', () => {
   const stderr = runCliExpectingUsageFailure([
     '--pr',

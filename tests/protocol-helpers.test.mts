@@ -5344,7 +5344,17 @@ test('hasPendingDecisionMarker reads the marker at a top-level line start outsid
     '- item\n## heading\n**Awaiting maintainer decision** — after a heading',
     '> quoted\n---\n**Awaiting maintainer decision** — after a thematic break',
     '- item\n* * *\n**Awaiting maintainer decision** — after a spaced break',
-    '- item\n<div>\n**Awaiting maintainer decision** — after an HTML block',
+    // An HTML block runs to the next blank line, so a marker meant to count
+    // after a `<div>` block follows a blank line (#4332).
+    '- item\n<div>\n\n**Awaiting maintainer decision** — after an HTML block',
+    '- item\n<div>\n</div>\n\n**Awaiting maintainer decision** — after a closed div block',
+    // A one-line comment ends on its own line, so the marker after it is visible.
+    '- item\n<!-- one-line comment -->\n**Awaiting maintainer decision** — after a comment',
+    // A closed multi-line comment hides only its own text (#4332).
+    '**Accepted** — fixed.\n\n<!--\nnote\n-->\n\n**Awaiting maintainer decision** — after a closed comment',
+    // The review-reply stamp is a comment after a visible marker, not a mask over it.
+    '**Accepted** (part).\n\n**Awaiting maintainer decision** — open.\n\n<!-- idd-skill-review-reply -->',
+    '**Accepted** (part).\n\n**Awaiting maintainer decision** — open. <!-- inline note -->',
   ];
   for (const body of pending) {
     assert.equal(hasPendingDecisionMarker(body), true, body);
@@ -5370,6 +5380,12 @@ test('hasPendingDecisionMarker reads the marker at a top-level line start outsid
     '1) item\n**Awaiting maintainer decision** — lazy ordered line',
     // A heading marker inside the quote is still quote content.
     '> # heading\n**Awaiting maintainer decision** — lazy line after a quoted heading',
+    // Hidden text is not a visible hold: an HTML comment or block masks it (#4332).
+    '**Accepted** — fixed.\n\n<!--\n**Awaiting maintainer decision** — in a multi-line comment\n-->',
+    '**Accepted** — fixed.\n\n<!-- **Awaiting maintainer decision** — in a one-line comment -->',
+    '**Accepted** — fixed.\n\n<div>\n**Awaiting maintainer decision** — in a multi-line div block\n</div>',
+    '**Accepted** — fixed.\n<div>\n**Awaiting maintainer decision** — in a div block with no blank line before it\n</div>',
+    '- item\n<div>\n**Awaiting maintainer decision** — in a div block after a list item',
   ];
   for (const body of settled) {
     assert.equal(hasPendingDecisionMarker(body), false, body);
@@ -5395,6 +5411,14 @@ test('isSettledDispositionComment excludes a disposition that carries the pendin
     }),
     false,
   );
+  // Text hidden in an HTML comment or block is not a hold, so the reply is
+  // credited (#4332).
+  for (const hidden of [
+    '**Accepted** — fixed in abc1234\n\n<!--\n**Awaiting maintainer decision** — open\n-->',
+    '**Accepted** — fixed in abc1234\n\n<div>\n**Awaiting maintainer decision** — open\n</div>',
+  ]) {
+    assert.equal(isSettledDispositionComment({ body: hidden }), true, hidden);
+  }
   // The plain hold was never a disposition, and still is not.
   assert.equal(
     isSettledDispositionComment({

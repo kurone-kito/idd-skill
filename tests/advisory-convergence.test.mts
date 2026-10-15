@@ -1203,13 +1203,17 @@ test('#4306: an edited pending reply still holds the thread', () => {
   assert.equal(verdict.converged, false);
 });
 
-test('#4306: an Accepted reply that only quotes the marker as code or mid-sentence stays settled', () => {
+test('#4306: an Accepted reply that only quotes the marker as code, mid-sentence, or in hidden HTML stays settled', () => {
   const stamp = renderReviewReplyStamp();
   const quoted = [
     `**Accepted** — dropped the \`**Awaiting maintainer decision**\` hold: fixed in abc1234.\n\n${stamp}`,
     `**Accepted** — the earlier **Awaiting maintainer decision** hold is gone: fixed in abc1234.\n\n${stamp}`,
     `**Accepted** — fixed in abc1234.\n\n\`\`\`\n${PENDING_PARAGRAPH}\n\`\`\`\n\n${stamp}`,
     `**Accepted** — fixed in abc1234.\n\n> ${PENDING_PARAGRAPH}\n\n${stamp}`,
+    // Hidden text is not a hold either (#4332): a multi-line HTML comment or
+    // `<div>` block carries the paragraph out of sight.
+    `**Accepted** — fixed in abc1234.\n\n<!--\n${PENDING_PARAGRAPH}\n-->\n\n${stamp}`,
+    `**Accepted** — fixed in abc1234.\n\n<div>\n${PENDING_PARAGRAPH}\n</div>\n\n${stamp}`,
   ];
   for (const body of quoted) {
     const verdict = verdictForThreads([
