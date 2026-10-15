@@ -14,6 +14,7 @@ import { test } from 'node:test';
 
 import {
   inspectLocalWorktreeBranch,
+  inspectLocalWorktreeBranchPrefix,
   parseLocalWorktreeList,
 } from '../src/scripts/local-worktree-occupancy.mts';
 import { fixtureEnv } from './test-utils.mts';
@@ -1059,5 +1060,232 @@ test('fails closed for a locked non-prunable detached worktree with a missing pa
     );
   } finally {
     rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+// The A5(e) scoped branch pattern check (issue 4372): every worktree whose
+// branch starts with `issue/<n>-`, whatever the slug.
+function prefixDetachedExecute(
+  worktree: string,
+  gitDirectory: string,
+  recordFlags = '',
+): typeof execFileSync {
+  return ((file: string, args: string[]) => {
+    if (args[0] === 'worktree') {
+      return `worktree ${worktree}\0HEAD abc\0detached\0${recordFlags}\0`;
+    }
+    return stubGitCommands(worktree, {
+      'rebase-merge': join(gitDirectory, 'rebase-merge'),
+      'rebase-apply': join(gitDirectory, 'rebase-apply'),
+      BISECT_START: join(gitDirectory, 'BISECT_START'),
+    })(file, args);
+  }) as typeof execFileSync;
+}
+
+test('prefix scan matches every attached slug of one issue and only that issue', () => {
+  const parent = realpathSync(
+    mkdtempSync(`${tmpdir()}/idd-local-worktree-prefix-`),
+  );
+  const primary = join(parent, 'primary');
+  const slugs = {
+    other: join(parent, 'issue-42-other-slug'),
+    longer: join(parent, 'issue-421-other-slug'),
+    shorter: join(parent, 'issue-4-short'),
+    nested: join(parent, 'feature-issue-42-x'),
+    detached: join(parent, 'detached-pin'),
+  };
+  mkdirSync(primary);
+  try {
+    git(primary, ['init', '--quiet', '-b', 'main']);
+    git(primary, ['config', 'user.email', 'test@example.com']);
+    git(primary, ['config', 'user.name', 'Test']);
+    writeFileSync(join(primary, 'seed.txt'), 'seed\n');
+    git(primary, ['add', 'seed.txt']);
+    git(primary, ['commit', '--quiet', '-m', 'seed']);
+    git(primary, [
+      'worktree',
+      'add',
+      '--quiet',
+      '-b',
+      'issue/42-other-slug',
+      slugs.other,
+    ]);
+    git(primary, [
+      'worktree',
+      'add',
+      '--quiet',
+      '-b',
+      'issue/421-other-slug',
+      slugs.longer,
+    ]);
+    git(primary, [
+      'worktree',
+      'add',
+      '--quiet',
+      '-b',
+      'issue/4-short',
+      slugs.shorter,
+    ]);
+    git(primary, [
+      'worktree',
+      'add',
+      '--quiet',
+      '-b',
+      'feature/issue/42-x',
+      slugs.nested,
+    ]);
+    git(primary, ['worktree', 'add', '--quiet', '--detach', slugs.detached]);
+
+    const posix = (path: string): string => path.split(sep).join('/');
+    assert.deepEqual(inspectLocalWorktreeBranchPrefix(42, primary), {
+      status: 'occupied',
+      paths: [posix(slugs.other)],
+      reason: 'matching local worktree for issue/42-*',
+    });
+    assert.deepEqual(inspectLocalWorktreeBranchPrefix(421, primary).paths, [
+      posix(slugs.longer),
+    ]);
+    assert.deepEqual(inspectLocalWorktreeBranchPrefix(4, primary).paths, [
+      posix(slugs.shorter),
+    ]);
+    assert.deepEqual(inspectLocalWorktreeBranchPrefix(43, primary), {
+      status: 'absent',
+      paths: [],
+      reason: null,
+    });
+  } finally {
+    for (const worktree of Object.values(slugs)) {
+      try {
+        git(primary, ['worktree', 'remove', '--force', worktree]);
+      } catch {
+        // Best-effort cleanup; the recursive removal below is authoritative.
+      }
+    }
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test('prefix scan does not match issue/<n>1- for issue <n>', () => {
+  const result = inspectLocalWorktreeBranchPrefix(
+    42,
+    process.cwd(),
+    process.env,
+    stubWorktreeList(
+      'worktree /repo/a\0HEAD abc\0branch refs/heads/issue/421-other-slug\0\0',
+    ),
+  );
+  assert.deepEqual(result, { status: 'absent', paths: [], reason: null });
+});
+
+test('prefix scan resolves a detached worktree from its rebase head-name', () => {
+  const worktree = mkdtempSync(`${tmpdir()}/idd-local-worktree-prefix-rebase-`);
+  const gitDirectory = mkdtempSync(`${tmpdir()}/idd-local-git-dir-`);
+  try {
+    mkdirSync(join(gitDirectory, 'rebase-merge'));
+    writeFileSync(
+      join(gitDirectory, 'rebase-merge', 'head-name'),
+      'refs/heads/issue/42-other-slug\n',
+    );
+    const execute = prefixDetachedExecute(worktree, gitDirectory);
+    assert.deepEqual(
+      inspectLocalWorktreeBranchPrefix(42, process.cwd(), process.env, execute),
+      {
+        status: 'occupied',
+        paths: [worktree],
+        reason: 'matching local worktree for issue/42-*',
+      },
+    );
+    assert.deepEqual(
+      inspectLocalWorktreeBranchPrefix(43, process.cwd(), process.env, execute),
+      { status: 'absent', paths: [], reason: null },
+    );
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(gitDirectory, { recursive: true, force: true });
+  }
+});
+
+test('prefix scan matches nothing for a plain non-prunable detached worktree', () => {
+  const worktree = mkdtempSync(`${tmpdir()}/idd-local-worktree-prefix-plain-`);
+  const gitDirectory = mkdtempSync(`${tmpdir()}/idd-local-git-dir-`);
+  try {
+    assert.deepEqual(
+      inspectLocalWorktreeBranchPrefix(
+        42,
+        process.cwd(),
+        process.env,
+        prefixDetachedExecute(worktree, gitDirectory),
+      ),
+      { status: 'absent', paths: [], reason: null },
+    );
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(gitDirectory, { recursive: true, force: true });
+  }
+});
+
+test('prefix scan fails closed for a detached worktree with unreadable metadata', () => {
+  const worktree = mkdtempSync(`${tmpdir()}/idd-local-worktree-prefix-bad-`);
+  const gitDirectory = mkdtempSync(`${tmpdir()}/idd-local-git-dir-`);
+  try {
+    mkdirSync(join(gitDirectory, 'rebase-merge'));
+    writeFileSync(join(gitDirectory, 'rebase-merge', 'head-name'), '\n');
+    const result = inspectLocalWorktreeBranchPrefix(
+      42,
+      process.cwd(),
+      process.env,
+      prefixDetachedExecute(worktree, gitDirectory),
+    );
+    assert.equal(result.status, 'unreadable');
+    assert.deepEqual(result.paths, [worktree]);
+  } finally {
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(gitDirectory, { recursive: true, force: true });
+  }
+});
+
+test('prefix scan skips a prunable record proven unrelated and fails closed on a matching or unknown one', () => {
+  const missing = `${tmpdir()}/idd-local-worktree-prefix-missing-${process.pid}`;
+  const scan = (
+    record: string,
+  ): ReturnType<typeof inspectLocalWorktreeBranchPrefix> =>
+    inspectLocalWorktreeBranchPrefix(
+      42,
+      process.cwd(),
+      process.env,
+      stubWorktreeList(record),
+    );
+
+  assert.deepEqual(
+    scan(
+      `worktree ${missing}\0HEAD abc\0branch refs/heads/issue/421-gone\0prunable gitdir file\0\0`,
+    ),
+    { status: 'absent', paths: [], reason: null },
+  );
+  const matching = scan(
+    `worktree ${missing}\0HEAD abc\0branch refs/heads/issue/42-gone\0prunable gitdir file\0\0`,
+  );
+  assert.equal(matching.status, 'unreadable');
+  assert.deepEqual(matching.paths, [missing]);
+  const unknown = scan(
+    `worktree ${missing}\0HEAD abc\0detached\0prunable gitdir file\0\0`,
+  );
+  assert.equal(unknown.status, 'unreadable');
+  assert.deepEqual(unknown.paths, [missing]);
+});
+
+test('prefix scan fails closed when the listing fails or the number is invalid', () => {
+  const directory = mkdtempSync(`${tmpdir()}/idd-local-worktree-prefix-none-`);
+  try {
+    const failed = inspectLocalWorktreeBranchPrefix(42, directory);
+    assert.equal(failed.status, 'unreadable');
+    assert.deepEqual(failed.paths, []);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  for (const invalid of [0, -1, 4.5, Number.NaN]) {
+    const result = inspectLocalWorktreeBranchPrefix(invalid);
+    assert.equal(result.status, 'unreadable');
+    assert.match(result.reason ?? '', /invalid issue number/);
   }
 });
