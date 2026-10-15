@@ -1188,6 +1188,11 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   const threadClause = {
     copilotThreadCount: copilotThreadIds.size,
     blockingIds: copilotBlocking.map((thread) => String(thread.id ?? '')),
+    // #4306: `summarizeDispositionEvidenceForGate` tags a thread whose newest
+    // IDD reply is a pending decision with its own reason.
+    pendingDecisionIds: copilotBlocking
+      .filter((thread) => thread.reason === 'pending-decision')
+      .map((thread) => String(thread.id ?? '')),
     blockingCount: copilotBlocking.length,
     satisfied: copilotBlocking.length === 0,
   };
@@ -1443,9 +1448,22 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
     }
   }
   if (!scopeBlocksConvergenceEval && !threadClause.satisfied) {
-    reasons.push(
-      `${threadClause.blockingCount} ${primaryBotLogin}-authored review thread(s) are neither resolved nor validly dispositioned: ${threadClause.blockingIds.join(', ')}`,
+    // #4306: a pending-decision thread gets its own reason, so the agent does
+    // not answer it with the stamped `**Accepted**` that settled it too early.
+    const pendingDecisionIds = new Set(threadClause.pendingDecisionIds);
+    const undecidedIds = threadClause.blockingIds.filter(
+      (id) => !pendingDecisionIds.has(id),
     );
+    if (undecidedIds.length > 0) {
+      reasons.push(
+        `${undecidedIds.length} ${primaryBotLogin}-authored review thread(s) are neither resolved nor validly dispositioned: ${undecidedIds.join(', ')}`,
+      );
+    }
+    if (pendingDecisionIds.size > 0) {
+      reasons.push(
+        `${pendingDecisionIds.size} ${primaryBotLogin}-authored review thread(s) hold a pending decision, so a stamped **Accepted** does not settle them: ${[...pendingDecisionIds].join(', ')} -- the newest IDD reply carries **Awaiting maintainer decision**; wait for the maintainer, then post a settled reply and resolve`,
+      );
+    }
   }
   // #1719: eligibility-relevant `dispositionEvidence` counters, exposed on
   // the report object -- see `AdvisoryConvergenceDispositionEvidence`'s doc
@@ -4278,9 +4296,30 @@ export function collectAssertNextActions(verdict) {
     const ids =
       verdict.threads.blockingIds.join(', ') || '(see threads.blockingIds)';
     const pointer = 'resolve-review-thread (E6/E13)';
+    // #4306: a pending-decision thread is not answered with `**Accepted**`;
+    // that reply is how the open question got counted as settled. The sentence
+    // for the other threads is unchanged when no thread is pending.
+    const pendingIds = new Set(verdict.threads.pendingDecisionIds);
+    const undecidedIds = verdict.threads.blockingIds.filter(
+      (id) => !pendingIds.has(id),
+    );
+    const pendingSentence =
+      pendingIds.size > 0
+        ? `${pendingIds.size} of them (${[...pendingIds].join(', ')}) hold a pending decision: keep the hold and wait for the maintainer, and do not answer with **Accepted**.`
+        : '';
+    const replySentence =
+      pendingIds.size === 0 || undecidedIds.length > 0
+        ? `Reply with a stamped **Accepted**/**Rejected** and resolve via ${pointer}${pendingIds.size > 0 ? ` (${undecidedIds.join(', ')})` : ''}.`
+        : '';
     items.push({
       token: T.DISPOSITION_THREADS,
-      summary: `${verdict.threads.blockingCount} Copilot thread(s) are unresolved and lack a valid disposition (${ids}). Reply with a stamped **Accepted**/**Rejected** and resolve via ${pointer}.`,
+      summary: [
+        `${verdict.threads.blockingCount} Copilot thread(s) are unresolved and lack a valid disposition (${ids}).`,
+        replySentence,
+        pendingSentence,
+      ]
+        .filter(Boolean)
+        .join(' '),
       pointer,
     });
   }

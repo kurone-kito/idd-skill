@@ -65,6 +65,7 @@ import {
   isNonReviewNoticeDisposition,
   isReviewSummaryComment,
   MISSING_WATERMARK_HINT,
+  PENDING_DECISION_THREAD_HINT,
   readClaimStaleAgeMs,
   resolveActiveClaimForWriteGate as resolveActiveClaimForWriteGateImpl,
   resolveCodeownersForFiles,
@@ -257,6 +258,71 @@ test('the readiness schema accepts the optional missingThreads hint and still re
   const unknownKey = JSON.parse(JSON.stringify(summary));
   unknownKey.dispositionEvidence.missingThreads[0].nextStep = 'post a reply';
   assert.ok(validate(unknownKey, readinessSchema).length > 0);
+});
+
+test('a thread whose newest IDD reply is a pending decision reports reason pending-decision with its own hint, and the schema accepts it (#4306)', () => {
+  const pendingThread = (isResolved: boolean) => ({
+    id: 'thread-4306',
+    isResolved,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'reviewer-a' },
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'a forged receipt can name a user file',
+        },
+        {
+          author: { login: 'idd-bot' },
+          createdAt: '2026-05-12T00:30:00Z',
+          body: '**Accepted** (defect part), fixed in abc1234.\n\n**Awaiting maintainer decision** — the provenance question is open.\n\n<!-- idd-skill-review-reply -->',
+          lastEditedAt: null,
+        },
+      ],
+    },
+  });
+  for (const isResolved of [false, true]) {
+    const summary = summarizeDispositionEvidenceForGate(
+      { comments: [], threads: [pendingThread(isResolved)] },
+      { iddAgentLogins: ['idd-bot'] },
+    );
+    assert.equal(summary.route, 'return-to-e1', `resolved ${isResolved}`);
+    assert.equal(summary.missingThreadCount, 1);
+    assert.equal(summary.missingThreads[0].id, 'thread-4306');
+    assert.equal(summary.missingThreads[0].reason, 'pending-decision');
+    assert.equal(summary.missingThreads[0].hint, PENDING_DECISION_THREAD_HINT);
+    assert.match(
+      summary.missingThreads[0].hint ?? '',
+      /wait for the maintainer/,
+    );
+
+    const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+    const report = JSON.parse(
+      JSON.stringify(
+        buildPreMergeReadinessSummary(fixture.input, {
+          ...fixture.options,
+          includeDispositionEvidence: true,
+        }),
+      ),
+    );
+    report.dispositionEvidence = JSON.parse(JSON.stringify(summary));
+    assert.deepEqual(validate(report, readinessSchema), []);
+  }
+
+  // A settled reply posted after the pending one clears the entry.
+  const decided = pendingThread(false);
+  decided.comments.nodes.push({
+    author: { login: 'idd-bot' },
+    createdAt: '2026-05-12T01:00:00Z',
+    body: '**Accepted** — the maintainer chose to document the residual risk',
+    lastEditedAt: null,
+  });
+  const cleared = summarizeDispositionEvidenceForGate(
+    { comments: [], threads: [decided] },
+    { iddAgentLogins: ['idd-bot'] },
+  );
+  assert.equal(cleared.route, 'proceed');
+  assert.equal(cleared.missingThreadCount, 0);
 });
 
 // #4163: the E6 PATH B hint on dispositionEvidence. The bot bodies mirror the

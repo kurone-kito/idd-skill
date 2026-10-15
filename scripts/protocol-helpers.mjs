@@ -46,6 +46,7 @@ import {
   namesFileOrLine,
 } from './copilot-review-body.mjs';
 import { loadIddConfig } from './idd-config.mjs';
+import { maskMarkdownForScan } from './markdown-code.mjs';
 import {
   advisoryWaitFamilyMarkerStart,
   detectMalformedOperationalMarker,
@@ -2494,8 +2495,11 @@ export function explainFreshDisposition(thread, options = {}) {
   // `**Rejected**` re-post; recognize it as a disposition ONLY when the thread
   // is resolved (an unresolved thread still needs an explicit disposition).
   const threadResolved = Boolean(thread.isResolved);
+  // #4306: a reply that opens with `**Accepted**` or `**Rejected**` but also
+  // carries the pending-decision marker is not a disposition; it falls through
+  // to the feedback side below, so it supersedes any earlier settled reply.
   const isDisposition = (comment) =>
-    isDispositionComment(comment) ||
+    isSettledDispositionComment(comment) ||
     (threadResolved && isRejectionConfirmedDisposition(comment));
   const isIddDisposition = (comment) => {
     if (!isDisposition(comment)) {
@@ -2599,6 +2603,64 @@ export function explainFreshDisposition(thread, options = {}) {
     fresh: false,
     cause: supersededByReply ? 'superseded-by-reply' : 'superseded-by-edit',
   };
+}
+/**
+ * Whether the newest IDD reply on a thread is a pending decision (#4306): a
+ * reply from a disposition author carries the pending-decision marker
+ * ({@link hasPendingDecisionMarker}), and no settled disposition from such an
+ * author is newer. An edit does not clear it: an edited reply that still
+ * carries the marker is still an open question. A settled disposition posted
+ * after the marker (the maintainer's decision, mirrored onto the thread) ends
+ * it; a tie reads as pending, the fail-closed side.
+ *
+ * This is a sibling of {@link explainFreshDisposition}, not one of its causes:
+ * the freshness explanation keeps its shape for the callers that table it, and
+ * a pending reply still reads there as the ordinary non-fresh outcome.
+ */
+export function hasPendingDecisionReply(thread, options = {}) {
+  const dispositionAuthorPredicate =
+    typeof options.isDispositionAuthor === 'function'
+      ? options.isDispositionAuthor
+      : (login) => !isKnownReviewBot(login);
+  const advisoryBotLogins = new Set(
+    normalizeTrustedMarkerLogins(options.advisoryBotLogins ?? []),
+  );
+  const threadResolved = Boolean(thread.isResolved);
+  const byDispositionAuthor = (comment) =>
+    dispositionAuthorPredicate(
+      String(comment.author?.login ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+  const activityAts = (comments) =>
+    comments
+      .map((comment) =>
+        effectiveThreadCommentActivityAt(comment, advisoryBotLogins),
+      )
+      .filter(isValidIsoTimestamp);
+  const comments = (thread.comments?.nodes ?? []).filter(byDispositionAuthor);
+  const latestPendingAt = maxIsoTimestamp(
+    activityAts(
+      comments.filter((comment) => hasPendingDecisionMarker(comment.body)),
+    ),
+  );
+  if (!latestPendingAt) {
+    return false;
+  }
+  const latestSettledAt = maxIsoTimestamp(
+    activityAts(
+      comments.filter(
+        (comment) =>
+          classifyCommentEditState(comment) === 'unedited' &&
+          (isSettledDispositionComment(comment) ||
+            (threadResolved && isRejectionConfirmedDisposition(comment))),
+      ),
+    ),
+  );
+  return (
+    !latestSettledAt ||
+    compareIsoTimestamps(latestPendingAt, latestSettledAt) >= 0
+  );
 }
 /**
  * #3269: for each thread, finds the maximum content-activity timestamp
@@ -2820,6 +2882,44 @@ export function isDispositionComment(comment) {
   return (
     DISPOSITION_ACCEPTED_PREFIX_RE.test(body) ||
     DISPOSITION_REJECTED_PREFIX_RE.test(body)
+  );
+}
+// #4306: the pending-decision marker is the existing AMD prefix
+// (`AMD_MARKER_PATTERN`), not a second token. A line that opens with it, at the
+// start of the body or of a later paragraph, marks the reply as an undecided
+// question. Requiring the line start keeps a mid-sentence quote of the phrase
+// from counting, and the code-region mask keeps a quoted example in a code span
+// or fence from counting, the same prose-quoting guard `copilot-review-body.mts`
+// applies. Observed 2026-10-14 on PR #4271 (issue #4244): a stamped
+// `**Accepted**` reply whose body left the forged-receipt question open
+// settled the review thread for the advisory gate.
+const PENDING_DECISION_MARKER_LINE_RE =
+  /^[ \t]{0,3}\*\*Awaiting maintainer decision\*\*/imu;
+/**
+ * Whether a reply body carries the pending-decision marker
+ * (`**Awaiting maintainer decision**`) at the start of any line outside a
+ * Markdown code region. A reply that opens with it is the plain AMD hold; an
+ * `**Accepted**` or `**Rejected**` reply that carries it in a later paragraph
+ * is a partial answer whose open part still waits on the maintainer.
+ */
+export function hasPendingDecisionMarker(body) {
+  const text = String(body ?? '');
+  // Cheap pre-check: the mask below walks the whole body, and almost no
+  // reply mentions the phrase at all.
+  return (
+    /awaiting maintainer decision/i.test(text) &&
+    PENDING_DECISION_MARKER_LINE_RE.test(maskMarkdownForScan(text))
+  );
+}
+/**
+ * A reply that settles its finding: it opens with `**Accepted**` or
+ * `**Rejected**` and carries no pending-decision marker (#4306). Every gate
+ * that credits such a reply as a disposition reads this, so none of them
+ * counts an open decision as settled.
+ */
+export function isSettledDispositionComment(comment) {
+  return (
+    isDispositionComment(comment) && !hasPendingDecisionMarker(comment.body)
   );
 }
 // Terminal AMD-rejection marker. When a maintainer agrees with a rejection the
@@ -3986,6 +4086,19 @@ export const STALE_THREAD_DISPOSITION_HINT =
   'disposition and does not clear it. If that newest comment is a ' +
   'no-new-content advisory-bot reply that reappears after every reply, post ' +
   'a hold comment instead of another reply';
+// #4306 diagnostic-only hint text for a `pending-decision` thread, single-
+// sourced like the hint above. A new "**Accepted**" reply is the wrong next
+// step here: it is how the open question got counted as settled on PR #4271
+// (issue #4244, 2026-10-14). The thread clears when the maintainer decides and
+// a settled reply follows the pending one. Never consumed by any routing
+// decision.
+export const PENDING_DECISION_THREAD_HINT =
+  'the newest IDD reply on this thread carries "**Awaiting maintainer ' +
+  'decision**", so it is an open question, not a disposition: keep the hold ' +
+  'and wait for the maintainer. After the decision, post a NEW marker-first ' +
+  '"**Accepted**" or "**Rejected**" (or "**Rejection confirmed by ' +
+  'maintainer**") reply and resolve the thread. Do not post "**Accepted**" ' +
+  'to clear it before the decision is made';
 // #1122 CodeRabbit summary-walkthrough auto-disposition classifiers.
 //
 // The CodeRabbit summary walkthrough is a regular comment whose body starts with
@@ -5218,6 +5331,10 @@ export function qualifyingCitedDispositionTimes(comments, trustedMarkerLogins) {
         return false;
       }
       if (classifyCommentEditState(comment) !== 'unedited') {
+        return false;
+      }
+      // #4306: a reply that leaves a decision open does not settle the item.
+      if (hasPendingDecisionMarker(body)) {
         return false;
       }
       return (
@@ -6881,7 +6998,8 @@ export function classifyThreadAckOnlyPostDisposition(thread, options = {}) {
               .toLowerCase(),
           ) &&
           classifyCommentEditState(comment) === 'unedited' &&
-          (isDispositionComment({ body: String(comment.body ?? '') }) ||
+          // #4306: a pending-decision reply never anchors the ack-only window.
+          (isSettledDispositionComment({ body: String(comment.body ?? '') }) ||
             isRejectionConfirmedDisposition({
               body: String(comment.body ?? ''),
             })),
@@ -7449,26 +7567,25 @@ export function summarizeDispositionEvidenceForGate(
           inPlaceEditOnly: false,
         };
       }
-      if (
-        hasFreshDisposition(thread, {
-          isDispositionAuthor: (login) =>
-            iddAgentLogins.has(
-              String(login ?? '')
-                .trim()
-                .toLowerCase(),
-            ) ||
-            trustedMarkerLogins.has(
-              String(login ?? '')
-                .trim()
-                .toLowerCase(),
-            ),
-          // #3269: threaded through so a verified-cosmetic advisory-bot
-          // edit (e.g. CodeRabbit's own comment-to-reply marker rewrite)
-          // dates by its content activity, not `updatedAt` -- see
-          // `effectiveThreadCommentActivityAt`'s doc comment.
-          advisoryBotLogins: options.advisoryBotLogins,
-        })
-      ) {
+      const freshnessOptions = {
+        isDispositionAuthor: (login) =>
+          iddAgentLogins.has(
+            String(login ?? '')
+              .trim()
+              .toLowerCase(),
+          ) ||
+          trustedMarkerLogins.has(
+            String(login ?? '')
+              .trim()
+              .toLowerCase(),
+          ),
+        // #3269: threaded through so a verified-cosmetic advisory-bot
+        // edit (e.g. CodeRabbit's own comment-to-reply marker rewrite)
+        // dates by its content activity, not `updatedAt` -- see
+        // `effectiveThreadCommentActivityAt`'s doc comment.
+        advisoryBotLogins: options.advisoryBotLogins,
+      };
+      if (hasFreshDisposition(thread, freshnessOptions)) {
         return null;
       }
       // #2139: unmarked later replies on a *human-authored* thread are
@@ -7529,18 +7646,28 @@ export function summarizeDispositionEvidenceForGate(
         prAuthorLogin: options.prAuthorLogin,
         snapshotBoundaryAt: options.snapshotBoundaryAt,
       });
+      // #4306: a thread whose newest IDD reply is a pending decision gets its
+      // own reason and hint, because the stale-disposition hint would steer the
+      // agent to post the `**Accepted**` that settled it too early.
+      const pendingDecision = hasPendingDecisionReply(thread, freshnessOptions);
       return {
         id: String(thread.id ?? '') || `thread-${index + 1}`,
         isResolved: Boolean(thread.isResolved),
-        reason: thread.isResolved
-          ? 'missing-fresh-disposition'
-          : 'unresolved-without-fresh-disposition',
+        reason: pendingDecision
+          ? 'pending-decision'
+          : thread.isResolved
+            ? 'missing-fresh-disposition'
+            : 'unresolved-without-fresh-disposition',
         ackOnlyPostDisposition: classification.ackOnlyPostDisposition,
         inPlaceEditOnly: classification.inPlaceEditOnly,
         // #3670: never on an ack-only entry -- see the field's doc comment.
         ...(classification.ackOnlyPostDisposition
           ? {}
-          : { hint: STALE_THREAD_DISPOSITION_HINT }),
+          : {
+              hint: pendingDecision
+                ? PENDING_DECISION_THREAD_HINT
+                : STALE_THREAD_DISPOSITION_HINT,
+            }),
       };
     })
     .filter(Boolean);

@@ -20,8 +20,11 @@ import {
   EDITED_AFTER_DISPOSITION_HINT,
   explainFreshDisposition,
   hasFreshDisposition,
+  hasPendingDecisionMarker,
+  hasPendingDecisionReply,
   hasTrustedReviewAckAfter,
   isDispositionComment,
+  isSettledDispositionComment,
   isTrustEvidenceComment,
   LIVE_STATUS_DIGEST_MARKER,
   listBlockingPresentRunNames,
@@ -5146,6 +5149,210 @@ test('explainFreshDisposition agrees with the three existing hasFreshDisposition
     fresh: true,
     cause: 'fresh',
   });
+});
+
+// kurone-kito/idd-skill#4306: a reply that leaves a decision open does not
+// settle its thread. The pending-decision marker is the existing
+// `**Awaiting maintainer decision**` prefix, read at the start of any line
+// outside a Markdown code region. Observed 2026-10-14 on PR #4271 (issue
+// #4244): a stamped `**Accepted**` reply left a forged-receipt question open
+// and the advisory gate counted the thread as settled.
+test('hasPendingDecisionMarker reads the marker at a line start outside code (#4306)', () => {
+  const pending = [
+    '**Awaiting maintainer decision** — needs the provenance call.',
+    '**awaiting maintainer decision** — case does not matter',
+    '**Accepted** (defect part), fixed in abc1234.\n\n**Awaiting maintainer decision** — the provenance question is open.',
+    '**Accepted** — fixed in abc1234.\n   **Awaiting maintainer decision** — an indent of up to three spaces is a line start',
+    '**Accepted** — fixed in abc1234.\r\n\r\n**Awaiting maintainer decision** — CRLF bodies read the same',
+  ];
+  for (const body of pending) {
+    assert.equal(hasPendingDecisionMarker(body), true, body);
+  }
+  const settled = [
+    '',
+    '**Accepted** — fixed in abc1234.',
+    '**Accepted** — the earlier **Awaiting maintainer decision** hold is gone.',
+    '**Accepted** — a quote of `**Awaiting maintainer decision**` in a code span.',
+    '**Accepted** — fixed.\n\n```\n**Awaiting maintainer decision** — quoted in a fence\n```',
+    '**Accepted** — fixed.\n\n> **Awaiting maintainer decision** — quoted in a block quote',
+    '**Accepted** — fixed.\n\n    **Awaiting maintainer decision** — an indented code block',
+    '**Accepted** — fixed.\n\n- **Awaiting maintainer decision** — a list item is not a line start',
+  ];
+  for (const body of settled) {
+    assert.equal(hasPendingDecisionMarker(body), false, body);
+  }
+  assert.equal(hasPendingDecisionMarker(null), false);
+  assert.equal(hasPendingDecisionMarker(undefined), false);
+});
+
+test('isSettledDispositionComment excludes a disposition that carries the pending marker (#4306)', () => {
+  assert.equal(
+    isSettledDispositionComment({ body: '**Accepted** — fixed in abc1234' }),
+    true,
+  );
+  assert.equal(
+    isSettledDispositionComment({
+      body: '**Rejected** — see `src/a.mts:3`, not applicable',
+    }),
+    true,
+  );
+  assert.equal(
+    isSettledDispositionComment({
+      body: '**Accepted** (part)\n\n**Awaiting maintainer decision** — open',
+    }),
+    false,
+  );
+  // The plain hold was never a disposition, and still is not.
+  assert.equal(
+    isSettledDispositionComment({
+      body: '**Awaiting maintainer decision** — open',
+    }),
+    false,
+  );
+  assert.equal(isDispositionComment({ body: '**Accepted** (part)' }), true);
+});
+
+const pendingRequest = {
+  author: { login: 'reviewer-a' },
+  body: 'please fix',
+  createdAt: '2026-05-12T00:00:00Z',
+  lastEditedAt: null,
+};
+const pendingReply = (overrides: Record<string, unknown> = {}) => ({
+  author: { login: 'idd-bot' },
+  body: '**Accepted** (defect part), fixed in abc1234.\n\n**Awaiting maintainer decision** — the provenance question is open.\n\n<!-- idd-skill-review-reply -->',
+  createdAt: '2026-05-12T00:10:00Z',
+  lastEditedAt: null,
+  ...overrides,
+});
+const pendingOptions = {
+  isDispositionAuthor: (login: string) => login === 'idd-bot',
+};
+
+test('a pending-decision reply is not a fresh disposition and reads as a pending decision (#4306)', () => {
+  const cases: {
+    name: string;
+    nodes: Record<string, unknown>[];
+    fresh: boolean;
+    pending: boolean;
+  }[] = [
+    {
+      name: 'a stamped Accepted reply with a pending paragraph',
+      nodes: [pendingRequest, pendingReply()],
+      fresh: false,
+      pending: true,
+    },
+    {
+      name: 'the plain hold',
+      nodes: [
+        pendingRequest,
+        pendingReply({ body: '**Awaiting maintainer decision** — open' }),
+      ],
+      fresh: false,
+      pending: true,
+    },
+    {
+      name: 'an edited pending reply stays pending',
+      nodes: [
+        pendingRequest,
+        pendingReply({ lastEditedAt: '2026-05-12T00:20:00Z' }),
+      ],
+      fresh: false,
+      pending: true,
+    },
+    {
+      name: 'a settled Accepted posted after the pending reply ends it',
+      nodes: [
+        pendingRequest,
+        pendingReply(),
+        pendingReply({
+          body: '**Accepted** — the maintainer chose option (a): fixed in def5678',
+          createdAt: '2026-05-12T00:30:00Z',
+        }),
+      ],
+      fresh: true,
+      pending: false,
+    },
+    {
+      name: 'a pending reply posted after a settled Accepted reopens it',
+      nodes: [
+        pendingRequest,
+        pendingReply({
+          body: '**Accepted** — fixed in abc1234',
+          createdAt: '2026-05-12T00:05:00Z',
+        }),
+        pendingReply({ createdAt: '2026-05-12T00:10:00Z' }),
+      ],
+      fresh: false,
+      pending: true,
+    },
+    {
+      name: 'a pending marker from an author who is not an IDD disposition author',
+      nodes: [
+        pendingRequest,
+        pendingReply({ author: { login: 'reviewer-a' } }),
+      ],
+      fresh: false,
+      pending: false,
+    },
+    {
+      name: 'an Accepted reply that only quotes the marker in a code span',
+      nodes: [
+        pendingRequest,
+        pendingReply({
+          body: '**Accepted** — dropped the `**Awaiting maintainer decision**` hold: fixed in abc1234',
+        }),
+      ],
+      fresh: true,
+      pending: false,
+    },
+  ];
+  for (const { name, nodes, fresh, pending } of cases) {
+    const thread = explainedThread(nodes);
+    assert.equal(hasFreshDisposition(thread, pendingOptions), fresh, name);
+    assert.equal(
+      hasPendingDecisionReply(thread, pendingOptions),
+      pending,
+      name,
+    );
+  }
+});
+
+test('a pending-decision reply keeps the freshness explanation shape and anchors no ack-only window (#4306)', () => {
+  // The explanation keeps its closed set of causes for the table callers.
+  assert.deepEqual(
+    explainFreshDisposition(
+      explainedThread([pendingRequest, pendingReply()]),
+      pendingOptions,
+    ),
+    { fresh: false, cause: 'no-disposition' },
+  );
+  // A resolved thread whose only reply is pending has no disposition to anchor
+  // the courtesy-ack carve-out, so a later advisory-bot ack cannot clear it.
+  const resolved = {
+    id: 'T-pending-ack',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        { ...pendingRequest, author: { login: 'coderabbitai[bot]' } },
+        pendingReply(),
+        {
+          author: { login: 'coderabbitai[bot]' },
+          body: 'Thanks for the reply, noted.',
+          createdAt: '2026-05-12T00:20:00Z',
+          lastEditedAt: null,
+        },
+      ],
+    },
+  } as ExplainedThread;
+  assert.deepEqual(
+    classifyThreadAckOnlyPostDisposition(resolved, {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+    }),
+    { ackOnlyPostDisposition: false, inPlaceEditOnly: false },
+  );
 });
 
 // kurone-kito/idd-skill#3248: an edited trusted activation-nonce marker
