@@ -3021,10 +3021,12 @@ loop. Observed incidents:
   drafts in ad hoc issues. Issue `#4127` records sessions that published by
   hand through one-off REST exceptions.
 
-**When.** After the review and the lint, publish a draft under the hold when
-its final shape can be published now. Otherwise publish a carrier with
-`publish-authoring-hold --shape carrier`, which creates it with the authoring
-label and the authoring-only label. That covers:
+**When.** The completed-draft review and the target lint gate the final issue
+only. After them, publish a draft under the hold when its final shape can be
+published now. Otherwise publish a carrier with
+`publish-authoring-hold --shape carrier`, which needs only its own carrier
+audit even when the draft review did not finish, and creates it with the
+authoring label and the authoring-only label. That covers:
 
 - a draft whose final shape the publication command cannot create (it
   publishes only an orphan or a carrier), or whose final form waits on
