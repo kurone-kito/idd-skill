@@ -276,6 +276,13 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
         // Another session resumes the anchor's set right after the heartbeat.
         state.comments.push({ id: 7400 + state.comments.length, issue: ${ANCHOR}, body: '<!-- idd-skill-authoring-owner: target=o/r#${ANCHOR}; anchor=o/r#${ANCHOR}; mode=resume; owner=owner-thief; set=set-anchor; session=session-thief; body-sha256=' + '0'.repeat(64) + '; snapshot-sha256=none; supersedes=owner-anchor -->', user, createdAt: '2026-10-13T01:00:00Z' });
       }
+      if (rule.action === 'otherAnchor') {
+        // A marker of the child's own owner, set and session that names another anchor.
+        const owner = /owner=([^;]+);/.exec(body)[1];
+        const setId = /set=([^;]+);/.exec(body)[1];
+        const session = /session=([^;]+);/.exec(body)[1];
+        state.comments.push({ id: 7500 + state.comments.length, issue: ${NEW_ISSUE}, body: '<!-- idd-skill-authoring-owner: target=o/r#${NEW_ISSUE}; anchor=o/r#9999; mode=heartbeat; owner=' + owner + '; set=' + setId + '; session=' + session + '; body-sha256=' + '0'.repeat(64) + '; snapshot-sha256=none; supersedes=' + owner + ' -->', user, createdAt: '2026-10-13T00:43:00Z' });
+      }
       if (rule.action === 'dropRelease') {
         state.comments = state.comments.filter((c) => !(c.issue === ${NEW_ISSUE} && /mode=release;/.test(c.body)));
       }
@@ -2447,6 +2454,14 @@ function sha256Of(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
 
+/** The publication line the anchor's body starts with, as the helper writes it. */
+const ANCHOR_PUBLICATION_LINE = `<!-- idd-skill-authoring-publication: target=target-anchor; anchor=target-anchor; set=${ANCHOR_SET}; session=${ANCHOR_SESSION}; token=token-anchor -->`;
+
+/** The anchor's body: its publication line, then the roadmap shell. */
+function anchorBodyText(): string {
+  return `${ANCHOR_PUBLICATION_LINE}\n\n${roadmapDraftBody()}`;
+}
+
 /** The arguments of a roadmap or child publication; the caller adds the
  * shape and, for a child, the anchor. */
 function shapeFiles(fixture: Fixture, body: string): string[] {
@@ -2500,7 +2515,7 @@ function ownerMarkerText(
   // The anchor-only modes carry no body digest (contract.md, mode table).
   const anchorOnly = mode === 'release-guard' || mode === 'release-complete';
   return [
-    `<!-- idd-skill-authoring-owner: target=${fields.target ?? ANCHOR_REF}; anchor=${fields.anchor ?? ANCHOR_REF}; mode=${mode}; owner=${fields.owner ?? ANCHOR_OWNER}; set=${fields.set ?? ANCHOR_SET}; session=${fields.session ?? ANCHOR_SESSION}; body-sha256=${fields.bodySha256 ?? (anchorOnly ? 'none' : sha256Of(roadmapDraftBody()))}; snapshot-sha256=${fields.snapshotSha256 ?? (mode === 'release-complete' ? 'c'.repeat(64) : 'none')}; supersedes=${fields.supersedes ?? (mode === 'acquire' || mode === 'bootstrap' ? 'none' : (fields.owner ?? ANCHOR_OWNER))} -->`,
+    `<!-- idd-skill-authoring-owner: target=${fields.target ?? ANCHOR_REF}; anchor=${fields.anchor ?? ANCHOR_REF}; mode=${mode}; owner=${fields.owner ?? ANCHOR_OWNER}; set=${fields.set ?? ANCHOR_SET}; session=${fields.session ?? ANCHOR_SESSION}; body-sha256=${fields.bodySha256 ?? (anchorOnly ? 'none' : sha256Of(anchorBodyText()))}; snapshot-sha256=${fields.snapshotSha256 ?? (mode === 'release-complete' ? 'c'.repeat(64) : 'none')}; supersedes=${fields.supersedes ?? (mode === 'acquire' || mode === 'bootstrap' ? 'none' : (fields.owner ?? ANCHOR_OWNER))} -->`,
     '_Issue-authoring ownership marker. Do not edit or delete._',
   ].join('\n');
 }
@@ -2537,9 +2552,11 @@ function seedAnchor(
     createdAt?: string;
     /** The anchor's records in the journal; by default one member record. */
     journalRecords?: string[];
+    /** The anchor's body; by default its publication line and roadmap shell. */
+    body?: string;
   } = {},
 ): string {
-  const body = roadmapDraftBody();
+  const body = options.body ?? anchorBodyText();
   const markers = options.markers ?? [ownerMarkerText('acquire')];
   const hold = options.journalRecords ?? [journalIntentText('member')];
   fixture.seed((stored) => {
@@ -2692,6 +2709,37 @@ test('anchor replay: an acquire opens a generation and heartbeats and resumes ke
   assert.equal(resumed.generation.owner, 'owner-next');
   assert.equal(resumed.generation.session, 'session-next');
   assert.equal(resumed.generation.set, ANCHOR_SET);
+});
+
+test('anchor replay: a resume keeps a release in progress until release-complete closes it', () => {
+  const resumed = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'release'),
+    provenanceComment(3, 'resume', {
+      owner: 'owner-next',
+      session: 'session-next',
+      supersedes: ANCHOR_OWNER,
+    }),
+  ]);
+  assert.ok('problem' in resumed, JSON.stringify(resumed));
+  assert.match(resumed.problem, /being released/);
+
+  // The resumed owner can still finish the release.
+  const finished = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'release'),
+    provenanceComment(3, 'resume', {
+      owner: 'owner-next',
+      session: 'session-next',
+      supersedes: ANCHOR_OWNER,
+    }),
+    provenanceComment(4, 'release-complete', {
+      owner: 'owner-next',
+      session: 'session-next',
+    }),
+  ]);
+  assert.ok('problem' in finished);
+  assert.match(finished.problem, /no open owner generation/);
 });
 
 test('anchor replay: a bootstrap opens a generation too', () => {
@@ -3390,6 +3438,54 @@ const ANCHOR_REFUSALS: [string, Parameters<typeof seedAnchor>[1], RegExp][] = [
     /originating hold/,
   ],
   [
+    'an anchor whose journal record has another session',
+    {
+      journalRecords: [
+        journalIntentText('member').replace(
+          `session=${ANCHOR_SESSION}`,
+          'session=session-other',
+        ),
+      ],
+    },
+    /originating hold/,
+  ],
+  [
+    'an anchor whose journal record has another token',
+    { journalRecords: [journalIntentText('member', { token: 'token-other' })] },
+    /originating hold/,
+  ],
+  [
+    'an anchor whose journal record has another target',
+    {
+      journalRecords: [
+        journalIntentText('member').replace(
+          'target=target-anchor',
+          'target=target-other',
+        ),
+      ],
+    },
+    /originating hold/,
+  ],
+  [
+    'an anchor whose body has no publication line',
+    { body: roadmapDraftBody() },
+    /carries no authoring-publication line/,
+  ],
+  [
+    'an anchor whose publication line names another set',
+    {
+      body: anchorBodyText().replace(`set=${ANCHOR_SET}`, 'set=set-elsewhere'),
+    },
+    /names set set-elsewhere/,
+  ],
+  [
+    'an anchor whose publication line names another anchor',
+    {
+      body: anchorBodyText().replace('anchor=target-anchor', 'anchor=o/r#3999'),
+    },
+    /names another anchor/,
+  ],
+  [
     'an anchor whose journal record names an actor other than its author',
     {
       journalRecords: [journalIntentText('member', { actor: 'someone-else' })],
@@ -3647,6 +3743,24 @@ test('CLI: a hold record written by an untrusted author does not verify the anch
     assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
     assert.match(JSON.parse(result.stdout).reason, /originating hold/);
     assert.deepEqual(writes(fixture.log()), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a marker of the child that names another anchor stops before member', () => {
+  const fixture = setup({
+    labels: ['status:authoring'],
+    afterPost: [{ mode: 'acquire', action: 'otherAnchor' }],
+  });
+  try {
+    seedAnchor(fixture);
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.failedStep, 'member');
+    assert.match(report.reason, /owner-marker replay failed/);
+    assert.equal(writeKinds(fixture).includes('member'), false);
   } finally {
     fixture.restore();
   }

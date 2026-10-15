@@ -462,10 +462,13 @@ roadmap's Tracks list stays a separate reviewed edit.
      open linked pull request, whose trusted unedited owner-marker log
      replays to one open generation (every marker follows the field rules
      of its mode; no release in progress, no second opener, no reuse of a
-     completed set). The journal must also hold the anchor's own trusted
-     state=member publication-intent record, which is how the set's
-     originating hold is verified. Otherwise the report is a refusal and
-     nothing is written;
+     completed set; a resume keeps a release in progress). The journal
+     must also hold the anchor's own trusted state=member publication-intent
+     record, matching the anchor's own publication line on target, anchor,
+     set, session and token, which is how the set's originating hold is
+     verified. Otherwise the report is a refusal and nothing is written.
+     The command does not serialize concurrent calls of one session, so
+     publish the children of a set one call at a time;
   4. lint that exact body with audit-authored-issue --new-issue (a
      non-ready bucket adds the expected bucket and one label flag per
      configured label; a carrier adds one label flag per configured label
@@ -853,13 +856,17 @@ function hasForeignOwnerMarker(
 /**
  * Replay the owner-marker log right before `member`: every trusted
  * authoring-owner marker on the issue must be unedited and carry this run's
- * owner, set and session. Returns a refusal reason, or null.
+ * owner, set and session, and the anchor the run posted (the issue itself for
+ * a set anchor, the anchor's real reference for a child). Returns a refusal
+ * reason, or null.
  */
 export function checkOwnerLogStillOurs(input: {
   comments: readonly AuthoringOwnerProvenanceComment[];
   markerPrefix: string;
   trusted: readonly string[];
   ids: Pick<PublicationIds, 'owner' | 'set' | 'session'>;
+  /** The `anchor` every marker of this run carries. */
+  anchor: string;
 }): string | null {
   const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
   const token = `${input.markerPrefix.toLowerCase()}-authoring-owner:`;
@@ -879,7 +886,8 @@ export function checkOwnerLogStillOurs(input: {
       parsed === null ||
       parsed.owner !== input.ids.owner ||
       parsed.set !== input.ids.set ||
-      parsed.session !== input.ids.session
+      parsed.session !== input.ids.session ||
+      !sameIssueRef(parsed.anchor, input.anchor)
     ) {
       return `owner marker ${comment.id} is not this run's marker`;
     }
@@ -1001,7 +1009,9 @@ function advanceAnchorGeneration(
           owner: parsed.owner,
           set: open.set,
           session: parsed.session,
-          releasing: false,
+          // A resume recovers the interrupted set; only release-complete ends
+          // a release that began (contract.md, "Per-target ownership").
+          releasing: open.releasing,
           latest,
         },
         closedSets,
@@ -1151,18 +1161,35 @@ export function resolveAnchorGeneration(input: {
  * Verify the originating Stage 1 hold of a child's anchor (#4251). This command
  * records a set in `issueAuthoring.journalIssue`, so an anchor it can extend has
  * its own publication-intent record there: trusted, written by the actor it
- * names, self-anchored, for the anchor's set, and still `state=member` (the
- * latest record of its token). An anchor whose hold is elsewhere, or whose
- * record was never made a member, is refused, so a child's records never land
- * in a log the set's recovery would not replay. Returns a problem, or null.
+ * names, naming the anchor and this journal, carrying the same full
+ * target/anchor/set/session/token tuple as the anchor's own publication line
+ * (self-anchored, in the open generation's set), and still `state=member` (the
+ * latest record of its token). An anchor whose hold is elsewhere, whose body
+ * carries no publication line, or whose record was never made a member, is
+ * refused, so a child's records never land in a log the set's recovery would
+ * not replay. Returns a problem, or null.
  */
 function checkAnchorHold(input: {
   journal: { owner: string; repo: string; number: number; ref: string };
   anchorRef: string;
+  anchorBody: string;
   set: string;
   markerPrefix: string;
   trusted: readonly string[];
 }): string | null {
+  const publication = parseAuthoringPublicationComment(
+    input.anchorBody,
+    input.markerPrefix,
+  );
+  if (publication === null) {
+    return `the body of the anchor ${input.anchorRef} carries no authoring-publication line, so its hold in the journal ${input.journal.ref} cannot be matched`;
+  }
+  if (publication.anchor !== publication.target) {
+    return `the authoring-publication line of ${input.anchorRef} names another anchor (${publication.anchor}), so it is not a set anchor`;
+  }
+  if (publication.set !== input.set) {
+    return `the authoring-publication line of ${input.anchorRef} names set ${publication.set}, not the open generation's set ${input.set}`;
+  }
   let rows: unknown;
   try {
     rows = ghApiJson(
@@ -1190,8 +1217,11 @@ function checkAnchorHold(input: {
     );
     if (
       intent !== null &&
-      intent.set === input.set &&
-      intent.anchor === intent.target &&
+      intent.target === publication.target &&
+      intent.anchor === publication.anchor &&
+      intent.set === publication.set &&
+      intent.session === publication.session &&
+      intent.token === publication.token &&
       intent.actor.toLowerCase() === author &&
       sameIssueRef(intent.issue, input.anchorRef) &&
       sameIssueRef(intent.journal, input.journal.ref)
@@ -1690,6 +1720,7 @@ function runCli(): HelperCliResult {
     const holdProblem = checkAnchorHold({
       journal,
       anchorRef: ref,
+      anchorBody: checked.snapshot.body,
       set: checked.generation.set,
       markerPrefix,
       trusted,
@@ -2406,6 +2437,7 @@ function publish(input: {
       markerPrefix,
       trusted: input.trusted,
       ids,
+      anchor: anchor === null ? issueRef : ids.anchor,
     });
     if (ownerLog !== null) {
       throw new Error(`the owner-marker replay failed: ${ownerLog}`);
@@ -2737,6 +2769,7 @@ function replayOrRecover(
     markerPrefix: input.markerPrefix,
     trusted: input.trusted,
     ids: input.ids,
+    anchor: `${input.owner}/${input.repo}#${input.number}`,
   });
   if (problem !== null) {
     throw new CarrierReleaseStop('recovery-hold', step, problem);
