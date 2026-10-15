@@ -297,9 +297,9 @@ layered on top of the distributed IDD defaults:
   `--urgency` flags that `record` requires for an Accepted or Rejected
   reply, so `resolve-review-thread` refuses those pointers. Observed
   2026-10-16 on pull request `#4405` (Copilot discussion `r4288841711`).
-  The opt-in waits for `advisory-convergence` to emit those flags, and a follow-up
-  issue for that fix is being authored. When the fix lands, set the value
-  to `"record"`. With `record`,
+  The opt-in depends on an `advisory-convergence` change that emits those
+  flags. Until that change lands, the value stays `"off"`; after it lands,
+  set the value to `"record"`. With `record`,
   `resolve-review-thread` requires `--tier` and `--urgency` on each
   applied Accepted or Rejected PATH A reply, except a `--path-b` reply or
   a `**Rejection confirmed by maintainer**` reply. The helper writes a
