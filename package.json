@@ -32,6 +32,7 @@
     "idd-claim-approval-gate": "./bin/idd-claim-approval-gate.mjs",
     "idd-claim-issue": "./bin/idd-claim-issue.mjs",
     "idd-claim-lock": "./bin/idd-claim-lock.mjs",
+    "idd-claimed-push": "./bin/idd-claimed-push.mjs",
     "idd-clone-lock": "./bin/idd-clone-lock.mjs",
     "idd-critique-delegate": "./bin/idd-critique-delegate.mjs",
     "idd-critique-telemetry-hook": "./bin/idd-critique-telemetry-hook.mjs",
