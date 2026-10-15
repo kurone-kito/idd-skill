@@ -99,24 +99,24 @@ before writing anything, or failed after a clean plan. 2 means a usage error.
 
 ## What gets written
 
-| Item           | Location                                                                          | Written when        |
-| -------------- | --------------------------------------------------------------------------------- | ------------------- |
-| Payload        | `$XDG_DATA_HOME/idd-skill/<version>/`, else `~/.local/share/idd-skill/<version>/` | Always              |
-| Current link   | `current` in the data root, pointing at the version directory                     | Always              |
-| Receipt        | `receipt.json` in the data root                                                   | Always              |
-| Claude skills  | `~/.claude/skills/issue-authoring/`, `~/.claude/skills/idd-spec-audit/`           | Always              |
-| Agent skills   | `~/.agents/skills/issue-authoring/`, `~/.agents/skills/idd-spec-audit/`           | Always              |
-| Claude entry   | `~/.claude/CLAUDE.md`                                                             | `claude` selected   |
-| Codex entry    | `$CODEX_HOME/AGENTS.md` when `CODEX_HOME` is absolute, else `~/.codex/AGENTS.md`  | `codex` selected    |
-| OpenCode entry | `opencode.json` under `$XDG_CONFIG_HOME/opencode/`, else `~/.config/opencode/`    | `opencode` selected |
+| Item           | Location                                                                                                                   | Written when        |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| Payload        | `$XDG_DATA_HOME/idd-skill/<version>/` when `XDG_DATA_HOME` is a qualified root, else `~/.local/share/idd-skill/<version>/` | Always              |
+| Current link   | `current` in the data root, pointing at the version directory                                                              | Always              |
+| Receipt        | `receipt.json` in the data root                                                                                            | Always              |
+| Claude skills  | `~/.claude/skills/issue-authoring/`, `~/.claude/skills/idd-spec-audit/`                                                    | Always              |
+| Agent skills   | `~/.agents/skills/issue-authoring/`, `~/.agents/skills/idd-spec-audit/`                                                    | Always              |
+| Claude entry   | `~/.claude/CLAUDE.md`                                                                                                      | `claude` selected   |
+| Codex entry    | `$CODEX_HOME/AGENTS.md` when `CODEX_HOME` is a qualified root, else `~/.codex/AGENTS.md`                                   | `codex` selected    |
+| OpenCode entry | `opencode.json` under `$XDG_CONFIG_HOME/opencode/` when `XDG_CONFIG_HOME` is a qualified root, else `~/.config/opencode/`  | `opencode` selected |
 
 The gated entry text lives at `<data root>/current/user-global/entry.md`. Each
 harness reaches it differently. Claude Code's `CLAUDE.md` gets an `@` import of
 that file. `AGENTS.md` for Codex gets the entry text in a managed block between
 two marker lines. `opencode.json` gets one string in its `instructions` array.
 The installer edits an existing entry file in place. For a Markdown file it adds
-or replaces only its own managed block. For `opencode.json` it adds one string to
-the `instructions` array. The rest of the file stays as it was. When an entry
+or replaces only its own managed block. For `opencode.json` it adds one string
+to the `instructions` array. The rest of the file stays as it was. When an entry
 file does not exist, the installer creates it as a whole file that the receipt
 lists.
 
@@ -126,16 +126,18 @@ lists.
 removal is reported as `remove`. Before any removal, the run refuses the whole
 run when a listed file or link no longer matches its receipt entry, such as a
 skill file edited after install. An entry file the installer created is a whole
-file in the receipt. Uninstall removes it when its bytes still match, and refuses
-it as edited when they do not. An entry file that already existed is different.
-The installer rewrites it in place, so uninstall removes only the managed block,
-or only the one `opencode.json` string, and keeps the rest of the file. The CLI
-reports that rewrite as `change`.
+file in the receipt. Uninstall removes it when its bytes still match, and
+refuses it as edited when they do not. An entry file that already existed is
+different. The installer rewrites it in place, so uninstall removes only the
+managed block, or only the one `opencode.json` string, and keeps the rest of the
+file. The CLI reports that rewrite as `change`.
 
-If the run stops partway, it does not roll back. Two rewrite failures need a
-note. If the receipt rewrite fails after a removal, the receipt can still list
-the removed path. A retry reconciles that stale entry, so the receipt does not
-match the disk until a run completes. If the receipt rewrite fails after an
+If the run stops partway, it does not roll back. A receipt-listed directory that
+is not empty at its turn is kept, and the run reports `kept <path> (not empty)`,
+so uninstall can finish with that directory still present. Two rewrite failures
+need a note. If the receipt rewrite fails after a removal, the receipt can still
+list the removed path. A retry reconciles that stale entry, so the receipt does
+not match the disk until a run completes. If the receipt rewrite fails after an
 entry file was rewritten, uninstall attempts to restore that file's prior bytes.
 The restore is best-effort. If it also fails, the edited file stays while the
 receipt still lists it, so the entry file and the receipt can disagree until you
@@ -149,21 +151,24 @@ Two failure cases follow from that.
 
 1. A failure before the receipt rewrite rolls back this run's steps in reverse
    order. If a rollback step itself fails, the message names the path it left in
-   place, and that path stays listed. A later persistence failure can make the
-   message name a path that the undo had already removed. Check both the path
-   and the receipt before you act.
+   place, and that path stays listed. The exception is `current` when an earlier
+   run left it unlisted. A later repoint is not recorded, so a rollback error
+   can name `current` while the receipt still does not list it, and uninstall
+   cannot remove that link. Check it by hand. A later persistence failure can
+   make the message name a path that the undo had already removed. Check both
+   the path and the receipt before you act.
 2. A failed receipt rewrite does not roll back. The message names the path of
    the step whose receipt write failed. Each earlier step was already recorded,
    so that path is normally the only one the receipt does not list. Uninstall
    cannot remove an unlisted path, so the paths stay on disk until you handle
    them. Three cases need more care.
    - If the run created the named path, check it and remove it by hand.
-   - If the step only edited an entry file, remove only the installer's addition.
-     In a Markdown file that is the managed block between its marker lines. In
-     `opencode.json` it is the one string in the `instructions` array. Keep the
-     rest of the file.
-   - If the step replaced a file, or repointed `current`, that an earlier run had
-     listed, the receipt still holds the old hash or target. Uninstall then
+   - If the step only edited an entry file, remove only the installer's
+     addition. In a Markdown file that is the managed block between its marker
+     lines. In `opencode.json` it is the one string in the `instructions` array.
+     Keep the rest of the file.
+   - If the step replaced a file, or repointed `current`, that an earlier run
+     had listed, the receipt still holds the old hash or target. Uninstall then
      refuses that path as edited. This page gives no automated recovery for that
      case, so check the path by hand before you change anything.
 
@@ -199,8 +204,9 @@ exactly one of these keys:
 
 - `repo`: an `owner/repo` slug, compared case-insensitively with the GitHub
   origin.
-- `path`: safe relative segments, matched as a suffix of the main worktree's
-  path. This applies only when the repository has no GitHub origin.
+- `path`: segments that match the end of the main worktree's path. The value may
+  be relative or in Windows drive form, such as `C:\...`. This applies only when
+  the repository has no GitHub origin.
 
 A `repo` entry matches only a repository whose GitHub origin has that slug. A
 `path` entry matches only a repository without a GitHub origin. The two kinds
@@ -222,13 +228,16 @@ markers, CI and waiver decisions, and handoff. Examples are `mergePolicy`,
 `trustedMarkerActors`, `ciGate`, `advisoryWait`, `helperRuntime`, and
 `forcedHandoff`. When the repository has `.github/idd/config.json`, or only the
 legacy root `idd-policy.json`, user-global and override values for these keys
-are dropped. The legacy file blocks them by its presence alone. Without any
-such file they apply as usual. The full list is
-`REPOSITORY_POLICY_FIELDS` in `src/scripts/layered-policy.mts`. One exception
-applies to `issueAuthoring.adversarialReview.delegate`. The user-global delegate
-still applies when the repository leaves that delegate entirely absent. A
-repository-local `adversarialReview` object with an unknown key blocks it, and so
-does a present local `delegate`, including `null` or a malformed value.
+are dropped. The legacy file blocks them by its presence alone. Without any such
+file they apply as usual. The full list is `REPOSITORY_POLICY_FIELDS` in
+`src/scripts/layered-policy.mts`. One exception applies to
+`issueAuthoring.adversarialReview`. The user-global fragment is retained when
+the repository leaves that fragment absent, so its `delegate` and `waitCeiling`
+keys both reach the resolver. Only the issue-authoring delegate reads the
+delegate, and a user-global `waitCeiling` is ignored, as the workflow guide
+states. A repository-local `adversarialReview` object with an unknown key blocks
+the fragment. A present local `delegate`, including `null` or a malformed value,
+blocks the delegate.
 
 ## Global-only profile
 
@@ -245,7 +254,8 @@ The profile has local substitutes. The post-merge cleanup run is replaced by the
 local cleanup path, and the IDD labels are created through the GitHub API, for
 example with `gh label create`, instead of a committed file. The advisory check
 leaves the required list only when `pre-merge-readiness` runs with
-`--global-only` and both conditions hold.
+`--global-only` and both conditions hold on the trusted base ref and the PR
+head. An unavailable read keeps the check required.
 
 ## Activation gate and context cost
 
@@ -263,9 +273,9 @@ and makes no network calls.
 Run `idd-activation` from the repository directory. If it is not on `PATH`, run
 `node "$PAYLOAD/scripts/idd-activation.mjs"` instead. `PAYLOAD` is
 `$XDG_DATA_HOME/idd-skill/current` when `XDG_DATA_HOME` is a qualified root, and
-`~/.local/share/idd-skill/current` otherwise. The command takes `--cwd <path>` to
-classify another directory. From this source checkout, run
-`node scripts/idd-activation.mjs [--cwd <path>]`.
+`~/.local/share/idd-skill/current` otherwise. The command takes `--cwd <path>`
+to classify another directory. From this source checkout, run `node
+scripts/idd-activation.mjs [--cwd <path>]`.
 
 The gate checks these rules in order and stops at the first match:
 
@@ -281,10 +291,11 @@ The gate counts the legacy root `idd-policy.json` as a repository policy signal,
 as the table shows. The effective loader does not read it as policy. The two
 checks are separate.
 
-The two rules that need the installed payload, `repository-policy-minimal-import`
-and `user-global-override-match`, stay inactive when it is unavailable. They
-report `payload-root-unresolved` (no qualified data root) or
-`payload-not-installed` (the core file is missing from the payload). The
+The two rules that need the installed payload,
+`repository-policy-minimal-import` and `user-global-override-match`, stay
+inactive when it is unavailable. They report `payload-root-unresolved` (no
+qualified data root) or `payload-not-installed` (the core instruction file is
+missing from the payload, is not a regular file, or cannot be checked). The
 `repository-instruction-files` rule does not check the payload.
 
 ## CI off switches
@@ -305,10 +316,11 @@ behavior is described in [IDD helper scripts](idd-helper-scripts.md).
 
 ## Deferred harnesses
 
-The installer does not install entry wiring for Antigravity or Gemini CLI, GitHub
-Copilot CLI, Cursor CLI, or Grok Build. Issue `#3817` recorded that Cursor CLI
-documents no file-based global instruction file, and that Copilot CLI does not
-load imports from home paths. These four harnesses need their own investigation.
+The installer does not install entry wiring for Antigravity or Gemini CLI,
+GitHub Copilot CLI, Cursor CLI, or Grok Build. Issue `#3817` recorded that
+Cursor CLI documents no file-based global instruction file, and that Copilot CLI
+does not load imports from home paths. These four harnesses need their own
+investigation.
 
 Selecting the lite instruction bundle per operator through a user-global
 `instructionProfile` is also deferred until the policy schema carries that

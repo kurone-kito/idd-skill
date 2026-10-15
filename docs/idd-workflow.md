@@ -2275,27 +2275,25 @@ missing one — silently falls back to the per-agent mechanism — which
 is distinct from repo-local `null`'s stronger role of actively
 disabling any inherited delegate.
 
-The global file lives at `$XDG_CONFIG_HOME/idd-skill/config.json`,
-falling back to `$HOME/.config/idd-skill/config.json` when
-`XDG_CONFIG_HOME` is unset or not a **qualified root**. A qualified
-root is judged against the **running platform**, not accepted in any
-form: on Windows only a drive-letter root (`C:\…` or `C:/…`) or a UNC
-root (`\\server\…`) qualifies, and on POSIX only a `/…` path does —
-`//…` is excluded there, as is a Windows-shaped value, and a
+The global file lives at `$XDG_CONFIG_HOME/idd-skill/config.json`, falling back
+to `$HOME/.config/idd-skill/config.json` when `XDG_CONFIG_HOME` is unset or not
+a **qualified root**. A qualified root is judged against the **running
+platform**, not accepted in any form: on Windows only a drive-letter root
+(`C:\…` or `C:/…`) or a UNC root (`\\server\…`) qualifies, and on POSIX only a
+`/…` path does — `//…` is excluded there, as is a Windows-shaped value, and a
 current-drive root such as `\config` is excluded on Windows even though
-`path.isAbsolute` calls it absolute. A relative or otherwise unqualified
-value is ignored rather than joined against the process's working
-directory, so the global config can never resolve inside the checkout
-under review. A missing, unreadable,
-invalid-JSON, or non-object global file is silently treated as
-absent — this layer is opt-in and never required for OSS adopters.
-Only the
-`critiqueLoop.delegate` fragment is read by this resolver. The same file
-can also carry `critiqueLoop.telemetryHook` (read only by the telemetry
-hook resolver) and `issueAuthoring.adversarialReview.delegate` (read only
-by the issue-authoring delegate resolver); every other key is ignored by
-all three, and repository-local `.github/idd/config.json` stays the sole
-authority for every other policy surface.
+`path.isAbsolute` calls it absolute. A relative or otherwise unqualified value
+is ignored rather than joined against the process's working directory, so the
+global config can never resolve inside the checkout under review. A missing,
+unreadable, invalid-JSON, or non-object global file is silently treated as
+absent — this layer is opt-in and never required for OSS adopters. Only the
+`critiqueLoop.delegate` fragment is read by this resolver. The same file can
+also carry `critiqueLoop.telemetryHook` (read only by the telemetry hook
+resolver) and `issueAuthoring.adversarialReview.delegate` (read only by the
+issue-authoring delegate resolver); every other key is ignored by all three.
+Other policy fields can still come from the repository-local
+`.github/idd/config.json` or from the user-global layers, under the rules in the
+[user-global installation guide](https://github.com/kurone-kito/idd-skill/blob/main/docs/user-global-install.md).
 
 Example (a generic local reviewer, not a specific product):
 
@@ -2399,16 +2397,16 @@ treated the same as a missing one — silently falls back to "no hook" —
 which is distinct from repo-local `null`'s stronger role of actively
 disabling any inherited hook.
 
-The global file lives at the same path, and under the same
-qualified-root rules, as the critique delegate's own user-global file
-above (`$XDG_CONFIG_HOME/idd-skill/config.json`, falling back to
-`$HOME/.config/idd-skill/config.json`). Only the
-`critiqueLoop.telemetryHook` fragment is read by this resolver. The same
-file can also carry `critiqueLoop.delegate` (read only by the critique
-delegate resolver) and `issueAuthoring.adversarialReview.delegate` (read
-only by the issue-authoring delegate resolver); every other key is
-ignored by all three, and repository-local `.github/idd/config.json`
-stays the sole authority for every other policy surface.
+The global file lives at the same path, and under the same qualified-root rules,
+as the critique delegate's own user-global file above
+(`$XDG_CONFIG_HOME/idd-skill/config.json`, falling back to
+`$HOME/.config/idd-skill/config.json`). Only the `critiqueLoop.telemetryHook`
+fragment is read by this resolver. The same file can also carry
+`critiqueLoop.delegate` (read only by the critique delegate resolver) and
+`issueAuthoring.adversarialReview.delegate` (read only by the issue-authoring
+delegate resolver); every other key is ignored by all three. Other policy fields
+can still come from the repository-local `.github/idd/config.json` or from the
+user-global layers, under the rules in the [user-global installation guide](https://github.com/kurone-kito/idd-skill/blob/main/docs/user-global-install.md).
 
 Example (a generic local notifier, not a specific product):
 
