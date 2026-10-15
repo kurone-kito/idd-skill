@@ -229,9 +229,18 @@ rules.
   that table.
 - In Discover, the hint only reorders candidates **within** one
   suitability-score band (after the score and optional desync rules,
-  before the lowest-issue-number tie-break); it never skips, gates,
-  crosses a score band, or bypasses the A4.5/A5 gates, and a large issue
-  stays claimable when it is the only ready work.
+  before the lowest-issue-number tie-break). It never crosses a score band
+  or bypasses the A4.5/A5 gates. It never skips or gates, and a large issue
+  stays claimable when it is the only ready work. The one exception, which
+  overrides the claims above, is an `L` orphan candidate in an autopilot run
+  under `autopilotSuitability.effortL: refuse`: autopilot Discover routes it
+  to humans, whatever its score.
+- Under `autopilotSuitability.effortL: refuse`, `effort-l-ready` refuses a
+  `ready` orphan or child body with a coherent `L` effort marker at
+  publication. Roadmaps, audits run with `--expect-bucket`, and bodies routed
+  to a human bucket (a coherent `needs-decision` or `blocked-by-human`
+  authoring-bucket marker, or a suitability score of `1`) are exempt. See the
+  [2026-10-13 review-loop audit](https://github.com/kurone-kito/idd-skill/blob/main/docs/idd-design-rationale.md#review-loop-audit-2026-10-13).
 - A missing or invalid hint is **fail-safe**: it sorts as the neutral
   middle, as-if `M`, per `idd-discover.instructions.md` A4 Step 2.
 
@@ -1159,10 +1168,17 @@ confirm the reference is a mere breadcrumb.
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child|carrier> \
-  --marker-prefix <resolved-target-prefix> --title <drafted-title> \
-  --body-file <path-to-drafted-body> [--label <label>]... \
-  [--expect-bucket <needs-decision|blocked-by-human>]
+  --marker-prefix <resolved-target-prefix> \
+  --config <target-checkout>/.github/idd/config.json \
+  --title <drafted-title> --body-file <path-to-drafted-body> \
+  [--label <label>]... [--expect-bucket <needs-decision|blocked-by-human>]
 ```
+
+**Always pass `--config`** with the target repository's
+`.github/idd/config.json`, as with `--marker-prefix`. The linter reads that
+file from the working directory by default. When the file is absent or
+unreadable, `effortL` falls back to `allow`, so `effort-l-ready` would not
+refuse an `L` body (preventive; no observed incident yet).
 
 Omit `--title` when the drafted body already leads with a `# <title>`
 line; for the `orphan` and `child` shapes, at least one of the two is

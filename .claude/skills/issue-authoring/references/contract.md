@@ -1471,7 +1471,12 @@ candidate-file count against the
 [over-scope split threshold](#effort-hint) for its `S`/`M` effort hint
 (`effort-candidate-file-limit`) — so a weak model does
 not have to hold every rule in its head at once while drafting.
-It also checks every live defer-source comment against the shared
+With `autopilotSuitability.effortL: refuse`, `effort-l-ready` also refuses
+a `ready` orphan or child body whose coherent effort marker is `L`. Roadmaps,
+audits run with `--expect-bucket`, and bodies routed to a human bucket (a
+coherent `needs-decision` or `blocked-by-human` authoring-bucket marker, or a
+suitability score of `1`) are exempt.
+The linter also checks every live defer-source comment against the shared
 defined-value set and requires its single `Refs` origin. For
 `review-needs-decision`, pass `--origin-issue <number>` matching that
 `Refs` issue; the check also requires the configured authoring label and
@@ -1645,10 +1650,18 @@ confirm the reference is a mere breadcrumb.
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child|carrier> \
-  --marker-prefix <resolved-target-prefix> --title <drafted-title> \
-  --body-file <path-to-drafted-body> [--label <label>]... \
-  [--expect-bucket <needs-decision|blocked-by-human>]
+  --marker-prefix <resolved-target-prefix> \
+  --config <target-checkout>/.github/idd/config.json \
+  --title <drafted-title> --body-file <path-to-drafted-body> \
+  [--label <label>]... [--expect-bucket <needs-decision|blocked-by-human>]
 ```
+
+**Always pass `--config`** with the target repository's
+`.github/idd/config.json`, even when the audit runs from another checkout.
+The linter reads that file from the working directory by default. When the
+file is absent or unreadable, `effortL` falls back to `allow`, so
+`effort-l-ready` would not refuse an `L` body (preventive; no observed
+incident yet).
 
 Or, for npx/package-manager profiles, the equivalent
 `idd-audit-authored-issue` command. Pass `--stdin` instead of
@@ -1807,6 +1820,19 @@ single source of the values.
 | `M`    | 8                       |
 | `L`    | not checked             |
 
+When the target repository sets `autopilotSuitability.effortL` to
+`refuse` (the default is `allow`), an `L` child or orphan cannot be
+published as `ready`: split the work into `S` or `M` issues (a roadmap
+whose children are each `S` or `M` is also fine, since `effort-l-ready`
+does not check a roadmap), or publish it in the human bucket that matches
+the blocker: `needs-decision` for an open design decision, or
+`blocked-by-human` when a person, credential, asset, or outside system is
+needed.
+`audit-authored-issue`'s `effort-l-ready` check enforces this. Under
+`refuse`, autopilot Discover routes an `L` orphan candidate to humans;
+roadmaps and roadmap children are not routed by this policy. See the
+[2026-10-13 review-loop audit](https://github.com/kurone-kito/idd-skill/blob/main/docs/idd-design-rationale.md#review-loop-audit-2026-10-13).
+
 The hint is recorded as a **footer at the end of the issue body** — a
 visible line paired with a hidden, prefix-aware machine marker, beside
 the autopilot-suitability footer:
@@ -1829,14 +1855,19 @@ Binding rules:
 - **Authoring marker, not operational marker.** Like
   `autopilot-suitability`, it is body content and must never be added to
   `OPERATIONAL_MARKERS` or subjected to F4 minimization.
-- **Soft tie-breaker, never a gate.** Effort only reorders candidates
-  **within** a single suitability-score band, after the score and
-  optional desync rules and **before** the lowest-issue-number tie-break.
-  It never skips, gates, crosses a score band, or bypasses the A4.5/A5
-  gates, and a large (`L`) issue stays fully claimable when it is the only
-  ready work. This applies to Discover selection; the one publish-time
-  exception is the
-  [over-scope split threshold](#effort-hint) lint for `S`/`M` children.
+- **Soft tie-breaker, never a gate** (for Discover selection; see the
+  exception below). Effort only reorders candidates **within** a single
+  suitability-score band, after the score and optional desync rules and
+  **before** the lowest-issue-number tie-break. It never crosses a score
+  band or bypasses the A4.5/A5 gates. Effort never skips or gates, and a
+  large (`L`) issue stays fully claimable when it is the only ready work. The
+  one exception, which overrides the claims above, is an `L` orphan candidate
+  in an autopilot run under `autopilotSuitability.effortL: refuse`, which is
+  routed to humans instead of being selected, whatever its score. At publish
+  time, two lints refuse a body that fails them:
+  the [over-scope split threshold](#effort-hint) for `S`/`M` children, and
+  `effort-l-ready` for `L` under `refuse`. Both run in attended and
+  autopilot sessions alike; neither is Discover selection.
 - **Fail-safe on absence.** A missing, non-`S|M|L`, or conflicting
   marker means "no effort hint": it sorts as the neutral middle, as-if
   `M`, per `idd-discover.instructions.md` A4 Step 2. Pre-existing issues

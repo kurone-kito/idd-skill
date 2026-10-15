@@ -431,6 +431,11 @@ needs-decision, blocked-by-human, and out-of-scope.
   of guessing, and ask first for an interactive choice under
   [Human-dependency isolation](references/contract.md#human-dependency-isolation)
   (the under-clarification stop rule).
+- Split an effort `L` task into `S` or `M` issues (or a roadmap whose
+  children are each `S` or `M`), or publish it as `needs-decision` (an open
+  design decision) or `blocked-by-human` (waiting on a person, credential,
+  asset, or outside system), when the target repository sets
+  `autopilotSuitability.effortL` to `refuse`.
 - Resolve the target repository's marker prefix before emitting any
   authoring marker; never assume this source repository's `idd-skill`
   prefix in an installed bundle (the prefix-first rule).
