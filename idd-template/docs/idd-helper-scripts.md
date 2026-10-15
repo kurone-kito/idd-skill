@@ -4670,7 +4670,10 @@ like `activation-nonce`, because a worker posts it as itself.
     repository, and a closed or merged pull request are not references.
     Both signals always run, and a pull request found by either is
     `open-pr` whatever the lookup state; a failed lookup that found
-    nothing is `precheck-unavailable`. The head-branch exemption of A5(d)
+    nothing is `precheck-unavailable`. The GitHub adapter throws on an
+    open pull request row it cannot trust (a missing or non-string
+    field; a null body stays valid), which fails the lookup rather than
+    reading the row as "no reference". The head-branch exemption of A5(d)
     applies only to an inheritable claim, which is out of scope
   - A5(e) `a5e-branch-collision`: the branch comes from the
     `branch-name` helper code; then a local worktree scan of every

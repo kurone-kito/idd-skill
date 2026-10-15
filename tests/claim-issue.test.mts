@@ -32,6 +32,10 @@ import {
   createFakeProviderAdapter,
   type FakeProviderFixture,
 } from '../src/scripts/provider-adapter-fake.mts';
+import {
+  createGithubProviderAdapter,
+  type GithubProviderAdapterDeps,
+} from '../src/scripts/provider-adapter-github.mts';
 import type { ProviderPort } from '../src/scripts/provider-port.mts';
 import {
   fixtureEnv,
@@ -78,7 +82,9 @@ const APPROVED = ok(
         labelFreshnessMode: 'presence-only',
       },
     },
-    checks: [],
+    checks: [
+      { id: 'gate_enabled', name: 'Issue-author gate enabled', result: 'pass' },
+    ],
   }),
 );
 
@@ -92,6 +98,7 @@ function routingOutput(
   options: {
     reason?: unknown;
     winning?: string | null | 'absent';
+    state?: string;
   } = {},
 ): CommandResult {
   const gate: Record<string, unknown> = { verdict };
@@ -100,7 +107,13 @@ function routingOutput(
   }
   return ok(
     JSON.stringify({
-      state: 'unclaimed',
+      state:
+        options.state ??
+        (verdict === 'claimable'
+          ? 'unclaimed'
+          : verdict === 'stale-reclaimable'
+            ? 'stale'
+            : 'non_inheritable'),
       action: 're_claim',
       reason: 'reason' in options ? options.reason : 'no-active-claim',
       fresh_claim_gate: gate,
@@ -366,6 +379,8 @@ test('A5(a): invalid or incomplete approval JSON is approval-unproven', () => {
       },
     }),
     approvalOutput({ checks: undefined }),
+    approvalOutput({ checks: [] }),
+    approvalOutput({ reason: '' }),
   ];
   for (const approval of broken) {
     const { report } = run({ approval });
@@ -461,6 +476,9 @@ test('A5(c): a failed, malformed, or unknown fresh-claim result is precheck-unav
     routingOutput('claimable', { winning: 'absent' }),
     routingOutput('stale-reclaimable', { reason: undefined }),
     routingOutput('stale-reclaimable', { winning: 'absent' }),
+    routingOutput('claimable', { state: 'stale' }),
+    routingOutput('claimable', { state: 'non_inheritable' }),
+    routingOutput('stale-reclaimable', { state: 'unclaimed' }),
     routingOutput('something-else'),
     routingOutput('already-claimed', { reason: undefined, winning: null }),
     routingOutput('already-claimed', { reason: '', winning: null }),
@@ -1151,4 +1169,52 @@ test('the default runner reports gh output, a gh failure, and a failed spawn', (
     join(tmpdir(), `idd-claim-issue-no-such-script-${process.pid}.mjs`),
   ]);
   assert.notEqual(missing.status, 0);
+});
+
+// Issue 4372 review: the raw open pull request rows reach the helper through the
+// real adapter, which fails the list on a malformed row instead of coercing it.
+function portWithRawOpenRows(rawRows: unknown): ProviderPort {
+  const deps = {
+    ghText: () => {
+      throw new Error('unexpected gh call');
+    },
+    ghApiJson: () => rawRows,
+    resolveViewerLogin: () => 'viewer',
+    ghTextAsync: async () => {
+      throw new Error('unexpected gh call');
+    },
+  } as unknown as GithubProviderAdapterDeps;
+  const real = createGithubProviderAdapter(OWNER, REPO, deps);
+  const empty = createFakeProviderAdapter({
+    locator: { provider: 'github', owner: OWNER, name: REPO },
+  });
+  return { ...empty, listOpenChangeRequests: real.listOpenChangeRequests };
+}
+
+test('A5(d): raw rows through the real adapter, a malformed one fails the lookup and a null body passes', () => {
+  const valid = {
+    number: 5,
+    title: 't',
+    body: 'No closing reference here',
+    html_url: 'https://github.com/o/r/pull/5',
+  };
+  const malformedRows: unknown[] = [
+    { number: 7 },
+    { ...valid, body: undefined },
+    { ...valid, number: '7' },
+    { ...valid, number: true },
+  ];
+  for (const row of malformedRows) {
+    const record = makeRun();
+    record.deps.createPort = () => portWithRawOpenRows([valid, row]);
+    const report = reportOf(record);
+    assertStoppedAt(report, 'a5d-open-pr', 'precheck-unavailable');
+  }
+  const clean = makeRun();
+  clean.deps.createPort = () => portWithRawOpenRows([{ ...valid, body: null }]);
+  assertEligible(reportOf(clean));
+  const closing = makeRun();
+  closing.deps.createPort = () =>
+    portWithRawOpenRows([{ ...valid, body: `Closes #${ISSUE}` }]);
+  assertStoppedAt(reportOf(closing), 'a5d-open-pr', 'open-pr');
 });

@@ -183,13 +183,15 @@ function checkApproval(issueNumber, deps) {
   if (
     typeof evidence.approved !== 'boolean' ||
     typeof evidence.reason !== 'string' ||
+    evidence.reason === '' ||
     typeof evidence.gateEnabled !== 'boolean' ||
     !isRecord(policy) ||
     typeof policy.maintainerApprovalActorPolicy !== 'string' ||
     !isRecord(policy.approvalSignals) ||
     typeof policy.approvalSignals.readyLabelName !== 'string' ||
     typeof policy.approvalSignals.labelFreshnessMode !== 'string' ||
-    !Array.isArray(evidence.checks)
+    !Array.isArray(evidence.checks) ||
+    evidence.checks.length === 0
   ) {
     return unproven('claim-approval-gate printed incomplete evidence');
   }
@@ -255,10 +257,22 @@ function checkClaimState(issueNumber, deps) {
       'resume-claim-routing printed a verdict without a reason or winning_claim_id',
     );
   }
+  // The gate maps the routing state one to one onto these two verdicts.
   if (gate.verdict === 'claimable') {
-    return pass('claimable');
+    return routing.state === 'unclaimed'
+      ? pass('claimable')
+      : unavailable(
+          label,
+          'resume-claim-routing printed claimable for a state other than unclaimed',
+        );
   }
   if (gate.verdict === 'stale-reclaimable') {
+    if (routing.state !== 'stale') {
+      return unavailable(
+        label,
+        'resume-claim-routing printed stale-reclaimable for a state other than stale',
+      );
+    }
     return stop(
       'stale-takeover-out-of-scope',
       'This helper checks a fresh claim only. Follow the stale-claim takeover path in idd-claim.instructions.md (A5(c)) by hand.',
