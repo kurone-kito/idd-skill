@@ -12,17 +12,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import type { AuthoringOwnerProvenanceComment } from '../src/scripts/authoring-owner-provenance.mts';
 import { markdownItAvailable } from '../src/scripts/markdown-structure.mts';
 import {
   buildLintArgs,
   carrierSetSnapshot,
   checkCarrierReviewResult,
   checkReviewResult,
+  generateChildPublicationIds,
   generatePublicationIds,
   injectPublicationLine,
   markerPostSentNothing,
   parseJournalReference,
-  requestsChildShape,
+  resolveAnchorGeneration,
   resolvePublishLabels,
 } from '../src/scripts/publish-authoring-hold.mts';
 import { stubExecutable } from './test-utils.mts';
@@ -31,6 +33,8 @@ const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SCRIPT = join(REPO_ROOT, 'scripts/publish-authoring-hold.mjs');
 const TITLE = 'Add a sample orphan feature';
 const NEW_ISSUE = 5000;
+/** The set anchor a child is published under in the stub. */
+const ANCHOR = 4000;
 
 function draftBody(bucket = 'ready'): string {
   return [
@@ -243,10 +247,13 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
       state.readsFail = true;
       save();
     }
-    const failSpec = number === ${NEW_ISSUE} && state.postFail && state.postFail.mode === mode ? state.postFail : null;
+    const failSpec = number === ${NEW_ISSUE} && state.postFail && state.postFail.mode === mode ? state.postFail : (number === ${ANCHOR} && state.anchorPostFail && state.anchorPostFail.mode === mode ? state.anchorPostFail : null);
     if (failSpec && !failSpec.landed) fail('gh: Validation Failed (HTTP ' + failSpec.status + ')');
     const id = 7000 + state.comments.length;
-    state.comments.push({ id, issue: number, journalIndex: number === 2674 ? state.journalPosts : 0, body, user, createdAt: new Date(Date.UTC(2026, 9, 13, 0, 0, state.comments.length)).toISOString() });
+    // A test that needs a posted anchor marker to sort after a marker seeded at
+    // the real time sets anchorClockNow; every other post keeps the fixed clock.
+    const stamp = state.anchorClockNow && number === ${ANCHOR} ? new Date(Date.now() + 1000 * (state.comments.length + 1)).toISOString() : new Date(Date.UTC(2026, 9, 13, 0, 0, state.comments.length)).toISOString();
+    state.comments.push({ id, issue: number, journalIndex: number === 2674 ? state.journalPosts : 0, body, user, createdAt: stamp });
     save();
     if (failSpec && failSpec.landed) fail('gh: HTTP ' + failSpec.status + ' Bad Gateway');
     for (const rule of (state.afterPost || []).filter((item) => item.mode === mode)) {
@@ -264,6 +271,10 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
         const setId = /set=([^;]+);/.exec(body)[1];
         const session = /session=([^;]+);/.exec(body)[1];
         state.comments.push({ id: 7300 + state.comments.length, issue: ${NEW_ISSUE}, body: '<!-- idd-skill-authoring-owner: target=o/r#${NEW_ISSUE}; anchor=o/r#${NEW_ISSUE}; mode=release; owner=' + owner + '; set=' + setId + '; session=' + session + '; body-sha256=' + '0'.repeat(64) + '; snapshot-sha256=none; supersedes=' + owner + ' -->', user, createdAt: '2026-10-13T00:42:00Z' });
+      }
+      if (rule.action === 'anchorTakeover') {
+        // Another session resumes the anchor's set right after the heartbeat.
+        state.comments.push({ id: 7400 + state.comments.length, issue: ${ANCHOR}, body: '<!-- idd-skill-authoring-owner: target=o/r#${ANCHOR}; anchor=o/r#${ANCHOR}; mode=resume; owner=owner-thief; set=set-anchor; session=session-thief; body-sha256=' + '0'.repeat(64) + '; snapshot-sha256=none; supersedes=owner-anchor -->', user, createdAt: '2026-10-13T01:00:00Z' });
       }
       if (rule.action === 'dropRelease') {
         state.comments = state.comments.filter((c) => !(c.issue === ${NEW_ISSUE} && /mode=release;/.test(c.body)));
@@ -289,7 +300,7 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)$/.exec(path))) {
   if (number === 2674) out({ number, title: 'journal', state: 'closed', body: 'journal', labels: [], html_url: 'https://github.com/o/r/issues/2674' });
   const issue = state.issues[number];
   if (!issue) fail('gh: Not Found (HTTP 404)');
-  out({ number, title: 'x', state: 'open', body: issue.body, labels: issue.labels.map((name) => ({ name })), html_url: 'https://github.com/o/r/issues/' + number });
+  out({ number, title: 'x', state: issue.state || 'open', body: issue.body, labels: issue.labels.map((name) => ({ name })), html_url: 'https://github.com/o/r/issues/' + number });
 }
 if ((match = /^repos\/o\/r\/collaborators\/([^/]+)\/permission$/.exec(path))) {
   const level = state.permission || 'admin';
@@ -302,6 +313,19 @@ if ((match = /^repos\/o\/r\/labels\/(.+)$/.exec(path))) {
 }
 fail('unexpected gh api call: ' + args.join(' '));
 `;
+
+/** The stored state of the stub `gh`, as far as a test changes it. */
+interface StubState {
+  issues: Record<string, unknown>;
+  comments: {
+    id: number;
+    issue: number;
+    body: string;
+    user: string;
+    createdAt: string;
+  }[];
+  [key: string]: unknown;
+}
 
 interface Fixture {
   dir: string;
@@ -318,6 +342,8 @@ interface Fixture {
     comments: { issue: number; body: string }[];
     issues: Record<string, unknown>;
   };
+  /** Change the stub's stored state before a run (issues, comments, flags). */
+  seed: (change: (state: StubState) => void) => void;
   restore: () => void;
 }
 
@@ -342,6 +368,8 @@ function setup(
     throttleOnUserCall?: number;
     ambiguousOwnerPost?: boolean;
     postFail?: { mode: string; status: number; landed: boolean };
+    anchorPostFail?: { mode: string; status: number; landed: boolean };
+    anchorClockNow?: boolean;
     afterPost?: { mode: string; action: string; text?: string }[];
     removeLabelFailure?: 'unchanged' | 'landed';
     keepLabelOnRemove?: boolean;
@@ -401,6 +429,8 @@ function setup(
       throttleOnUserCall: options.throttleOnUserCall ?? 0,
       ambiguousOwnerPost: options.ambiguousOwnerPost === true,
       postFail: options.postFail ?? null,
+      anchorPostFail: options.anchorPostFail ?? null,
+      anchorClockNow: options.anchorClockNow === true,
       afterPost: options.afterPost ?? [],
       removeLabelFailure: options.removeLabelFailure ?? '',
       keepLabelOnRemove: options.keepLabelOnRemove === true,
@@ -461,6 +491,12 @@ function setup(
         .filter(Boolean)
         .map((line) => JSON.parse(line)),
     state: () => JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')),
+    seed: (change) => {
+      const path = join(dir, 'state.json');
+      const stored = JSON.parse(readFileSync(path, 'utf8'));
+      change(stored);
+      writeFileSync(path, JSON.stringify(stored));
+    },
     restore: () => {
       restore();
       rmSync(dir, { recursive: true, force: true });
@@ -529,6 +565,10 @@ function kindOf(entry: { args: string[]; stdin: string }): string | null {
     const body = JSON.parse(entry.stdin).body as string;
     if (body.includes('state=member')) return 'member';
     return body.includes('issue=none') ? 'journal-pending' : 'identity-attach';
+  }
+  if (path === `repos/o/r/issues/${ANCHOR}/comments` && args.includes('POST')) {
+    const posted = JSON.parse(entry.stdin).body as string;
+    return `anchor:${/mode=([a-z-]+);/.exec(posted)?.[1] ?? ''}`;
   }
   if (
     path === `repos/o/r/issues/${NEW_ISSUE}/comments` &&
@@ -612,7 +652,7 @@ test('lint args: a ready publish passes no bucket or label, a needs-decision pub
   ]);
 });
 
-test('journal reference and child shape parsing', () => {
+test('journal and anchor reference parsing', () => {
   assert.deepEqual(parseJournalReference('o/r#2674'), {
     owner: 'o',
     repo: 'r',
@@ -621,20 +661,8 @@ test('journal reference and child shape parsing', () => {
   });
   assert.equal(parseJournalReference(undefined), null);
   assert.equal(parseJournalReference('o/r#0'), null);
-  assert.equal(requestsChildShape(['--shape', 'child']), true);
-  assert.equal(requestsChildShape(['--shape=child']), true);
-  assert.equal(requestsChildShape(['--shape', 'orphan']), false);
-});
-
-test('CLI: --shape child exits 2 and makes no gh call, even with a bad flag', () => {
-  const fixture = setup();
-  try {
-    const result = fixture.run(['--shape', 'child', '--bogus']);
-    assert.equal(result.status, 2);
-    assert.deepEqual(fixture.log(), []);
-  } finally {
-    fixture.restore();
-  }
+  assert.equal(parseJournalReference('o/r#12 '), null);
+  assert.equal(parseJournalReference('#12'), null);
 });
 
 test('CLI: a missing or incomplete review result exits non-zero before any write', () => {
@@ -1658,25 +1686,14 @@ carrierLintTest(
   },
 );
 
-test('CLI: --shape child names --shape carrier as the route and makes no gh call', () => {
-  const fixture = setup();
-  try {
-    const result = fixture.run(['--shape', 'child', '--bogus']);
-    assert.equal(result.status, 2);
-    assert.match(result.stdout, /--shape carrier/);
-    assert.deepEqual(fixture.log(), []);
-  } finally {
-    fixture.restore();
-  }
-});
-
 test('CLI: --help says the review result is optional for a carrier', () => {
   const fixture = setup();
   try {
     const result = fixture.run(['--help']);
     assert.equal(result.status, 0);
     assert.match(result.stdout, /optional for a carrier/);
-    assert.match(result.stdout, /--shape orphan\|carrier/);
+    assert.match(result.stdout, /--shape orphan\|carrier\|roadmap\|child/);
+    assert.match(result.stdout, /--anchor <owner>\/<repo>#<number>/);
   } finally {
     fixture.restore();
   }
@@ -2356,3 +2373,1051 @@ carrierLintTest(
     }
   },
 );
+
+// ---------------------------------------------------------------------------
+// Roadmap and child shapes (#4251). A roadmap is its own set anchor, like an
+// orphan. A child joins the set of an existing anchor.
+// ---------------------------------------------------------------------------
+
+const ANCHOR_REF = `o/r#${ANCHOR}`;
+const ANCHOR_OWNER = 'owner-anchor';
+const ANCHOR_SET = 'set-anchor';
+const ANCHOR_SESSION = 'session-anchor';
+const SUITABILITY_FOOTER = [
+  '---',
+  '',
+  '_Autopilot suitability: 4 / 5 -- higher is more autopilot-suitable;',
+  'below the configured floor is human-oriented._',
+  '',
+  '<!-- idd-skill-autopilot-suitability: 4 -->',
+  '',
+  '_Effort: M -- author-estimated size; a soft autopilot',
+  'selection tie-breaker only._',
+  '',
+  '<!-- idd-skill-effort: M -->',
+];
+
+/** A roadmap shell with an empty Tracks list, which is valid until children
+ * exist. */
+function roadmapDraftBody(): string {
+  return [
+    '## Goal',
+    '',
+    'Ship the sample initiative.',
+    '',
+    '## Background',
+    '',
+    'Some background text.',
+    '',
+    '## Tracks',
+    '',
+    '## Success criteria',
+    '',
+    '- [ ] Every child is merged',
+    '',
+    '<!-- idd-skill-roadmap-id: sample-roadmap -->',
+    '',
+    ...SUITABILITY_FOOTER,
+  ].join('\n');
+}
+
+function childDraftBody(): string {
+  return [
+    '## Background',
+    '',
+    'Some background text.',
+    '',
+    '## Proposed change',
+    '',
+    'Do the thing.',
+    '',
+    '## Acceptance criteria',
+    '',
+    '- [ ] `node --test tests/example.test.mts` passes with the new case covered',
+    '',
+    '## Candidate files',
+    '',
+    '- `tests/example.test.mts`',
+    '',
+    ...SUITABILITY_FOOTER,
+  ].join('\n');
+}
+
+function sha256Of(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+/** The arguments of a roadmap or child publication; the caller adds the
+ * shape and, for a child, the anchor. */
+function shapeFiles(fixture: Fixture, body: string): string[] {
+  const bodyPath = join(fixture.dir, 'shape-body.md');
+  const resultPath = join(fixture.dir, 'shape-review.json');
+  writeFileSync(bodyPath, body);
+  writeFileSync(resultPath, JSON.stringify({ completed: true }));
+  return [
+    '--title',
+    'Add the sample issue',
+    '--body-file',
+    bodyPath,
+    '--review-result',
+    resultPath,
+    '--owner',
+    'o',
+    '--repo',
+    'r',
+    '--marker-prefix',
+    'idd-skill',
+  ];
+}
+
+function roadmapArgs(fixture: Fixture): string[] {
+  return [...shapeFiles(fixture, roadmapDraftBody()), '--shape', 'roadmap'];
+}
+
+function childArgs(fixture: Fixture, anchor = ANCHOR_REF): string[] {
+  return [
+    ...shapeFiles(fixture, childDraftBody()),
+    '--shape',
+    'child',
+    '--anchor',
+    anchor,
+  ];
+}
+
+function ownerMarkerText(
+  mode: string,
+  fields: {
+    owner?: string;
+    set?: string;
+    session?: string;
+    bodySha256?: string;
+    supersedes?: string;
+    target?: string;
+    anchor?: string;
+  } = {},
+): string {
+  return [
+    `<!-- idd-skill-authoring-owner: target=${fields.target ?? ANCHOR_REF}; anchor=${fields.anchor ?? ANCHOR_REF}; mode=${mode}; owner=${fields.owner ?? ANCHOR_OWNER}; set=${fields.set ?? ANCHOR_SET}; session=${fields.session ?? ANCHOR_SESSION}; body-sha256=${fields.bodySha256 ?? sha256Of(roadmapDraftBody())}; snapshot-sha256=none; supersedes=${fields.supersedes ?? (mode === 'acquire' || mode === 'bootstrap' ? 'none' : (fields.owner ?? ANCHOR_OWNER))} -->`,
+    '_Issue-authoring ownership marker. Do not edit or delete._',
+  ].join('\n');
+}
+
+/**
+ * Seed the set anchor in the stub: an open, labelled roadmap whose log holds
+ * the given owner markers (by default one acquire). Returns the anchor body.
+ */
+function seedAnchor(
+  fixture: Fixture,
+  options: {
+    state?: string;
+    labels?: string[];
+    markers?: string[];
+    extraComments?: string[];
+    createdAt?: string;
+  } = {},
+): string {
+  const body = roadmapDraftBody();
+  const markers = options.markers ?? [ownerMarkerText('acquire')];
+  fixture.seed((stored) => {
+    stored.issues[String(ANCHOR)] = {
+      body,
+      labels: options.labels ?? ['status:authoring'],
+      state: options.state ?? 'open',
+    };
+    for (const [index, text] of [
+      ...markers,
+      ...(options.extraComments ?? []),
+    ].entries()) {
+      stored.comments.push({
+        id: 4100 + index,
+        issue: ANCHOR,
+        body: text,
+        user: 'kurone-kito',
+        createdAt:
+          options.createdAt ??
+          new Date(Date.UTC(2026, 9, 12, 0, 0, index)).toISOString(),
+      });
+    }
+  });
+  return body;
+}
+
+function anchorComments(fixture: Fixture): string[] {
+  return fixture
+    .state()
+    .comments.filter((comment) => comment.issue === ANCHOR)
+    .map((comment) => comment.body);
+}
+
+function childComments(fixture: Fixture): string[] {
+  return fixture
+    .state()
+    .comments.filter((comment) => comment.issue === NEW_ISSUE)
+    .map((comment) => comment.body);
+}
+
+function provenanceComment(
+  id: number,
+  mode: string,
+  fields: Parameters<typeof ownerMarkerText>[1] = {},
+  overrides: {
+    authorLogin?: string;
+    lastEditedAt?: string | null;
+    body?: string;
+  } = {},
+): AuthoringOwnerProvenanceComment {
+  const createdAt = new Date(Date.UTC(2026, 9, 12, 0, id)).toISOString();
+  return {
+    id,
+    authorLogin: overrides.authorLogin ?? 'kurone-kito',
+    body: overrides.body ?? ownerMarkerText(mode, fields),
+    createdAt,
+    updatedAt: createdAt,
+    lastEditedAt: overrides.lastEditedAt ?? null,
+  };
+}
+
+function replay(comments: AuthoringOwnerProvenanceComment[]) {
+  return resolveAnchorGeneration({
+    comments,
+    anchorRef: ANCHOR_REF,
+    markerPrefix: 'idd-skill',
+    trusted: ['kurone-kito'],
+  });
+}
+
+test('child ids: the anchor is the real reference and the set and session are the anchor`s', () => {
+  let counter = 0;
+  const ids = generateChildPublicationIds(
+    { ref: ANCHOR_REF, set: ANCHOR_SET, session: ANCHOR_SESSION },
+    () => {
+      counter += 1;
+      return `u${counter}`;
+    },
+  );
+  assert.deepEqual(ids, {
+    target: 'target-u1',
+    anchor: ANCHOR_REF,
+    set: ANCHOR_SET,
+    session: ANCHOR_SESSION,
+    token: 'token-u2',
+    owner: 'owner-u3',
+  });
+  const body = injectPublicationLine('## Background\n', 'idd-skill', ids);
+  assert.equal(
+    body.split('\n')[0],
+    `<!-- idd-skill-authoring-publication: target=target-u1; anchor=${ANCHOR_REF}; set=${ANCHOR_SET}; session=${ANCHOR_SESSION}; token=token-u2 -->`,
+  );
+});
+
+test('lint args: a roadmap and a child pass their own shape', () => {
+  for (const shape of ['roadmap', 'child']) {
+    const args = buildLintArgs({
+      shape,
+      title: 't',
+      bodyFile: 'b.md',
+      markerPrefix: 'idd-skill',
+      currentRepo: 'o/r',
+      bucket: 'ready',
+      labels: resolvePublishLabels({}, 'ready', shape),
+    });
+    assert.deepEqual(args.slice(0, 3), ['--shape', shape, '--new-issue']);
+    assert.ok(!args.includes('--label'));
+    assert.deepEqual(resolvePublishLabels({}, 'ready', shape), [
+      'status:authoring',
+    ]);
+  }
+});
+
+test('anchor replay: an acquire opens a generation and heartbeats and resumes keep it open', () => {
+  const opened = replay([provenanceComment(1, 'acquire')]);
+  assert.ok('generation' in opened, JSON.stringify(opened));
+  assert.equal(opened.generation.owner, ANCHOR_OWNER);
+  assert.equal(opened.generation.set, ANCHOR_SET);
+  assert.equal(opened.generation.session, ANCHOR_SESSION);
+  assert.equal(opened.generation.latest.mode, 'acquire');
+
+  const beaten = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'heartbeat', { session: 'session-other' }),
+  ]);
+  assert.ok('generation' in beaten, JSON.stringify(beaten));
+  assert.equal(beaten.generation.session, ANCHOR_SESSION);
+  assert.equal(beaten.generation.latest.mode, 'heartbeat');
+  assert.equal(beaten.generation.latest.id, 2);
+
+  const resumed = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'resume', {
+      owner: 'owner-next',
+      session: 'session-next',
+      supersedes: ANCHOR_OWNER,
+    }),
+    provenanceComment(3, 'heartbeat', { owner: 'owner-next' }),
+  ]);
+  assert.ok('generation' in resumed, JSON.stringify(resumed));
+  assert.equal(resumed.generation.owner, 'owner-next');
+  assert.equal(resumed.generation.session, 'session-next');
+  assert.equal(resumed.generation.set, ANCHOR_SET);
+});
+
+test('anchor replay: a bootstrap opens a generation too', () => {
+  const result = replay([provenanceComment(1, 'bootstrap')]);
+  assert.ok('generation' in result, JSON.stringify(result));
+});
+
+test('anchor replay: a released set is not joinable, and a new acquire after release-complete opens a fresh one', () => {
+  const releasing = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'release'),
+  ]);
+  assert.ok('problem' in releasing);
+  assert.match(releasing.problem, /being released/);
+
+  const guarded = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'release-guard'),
+    provenanceComment(3, 'heartbeat'),
+  ]);
+  assert.ok('problem' in guarded);
+  assert.match(guarded.problem, /being released/);
+
+  const completed = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'release'),
+    provenanceComment(3, 'release-complete'),
+  ]);
+  assert.ok('problem' in completed);
+  assert.match(completed.problem, /no open owner generation/);
+
+  const again = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'release-complete'),
+    provenanceComment(3, 'acquire', { owner: 'owner-new', set: 'set-new' }),
+  ]);
+  assert.ok('generation' in again, JSON.stringify(again));
+  assert.equal(again.generation.set, 'set-new');
+  assert.equal(again.generation.owner, 'owner-new');
+});
+
+test('anchor replay: a log that is not exactly one owner generation fails closed', () => {
+  const none = replay([]);
+  assert.ok('problem' in none);
+  assert.match(none.problem, /no open owner generation/);
+
+  const second = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'acquire', { owner: 'owner-rival', set: 'set-rival' }),
+  ]);
+  assert.ok('problem' in second);
+  assert.match(second.problem, /second generation/);
+
+  const stranger = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'heartbeat', { owner: 'owner-rival' }),
+  ]);
+  assert.ok('problem' in stranger);
+  assert.match(stranger.problem, /does not match the open generation/);
+
+  const badResume = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'resume', {
+      owner: 'owner-next',
+      supersedes: 'owner-unrelated',
+    }),
+  ]);
+  assert.ok('problem' in badResume);
+
+  const strayHeartbeat = replay([provenanceComment(1, 'heartbeat')]);
+  assert.ok('problem' in strayHeartbeat);
+});
+
+test('anchor replay: an edited, unparseable, untrusted or mistargeted marker is handled without a guess', () => {
+  const edited = replay([
+    provenanceComment(
+      1,
+      'acquire',
+      {},
+      { lastEditedAt: '2026-10-12T01:00:00Z' },
+    ),
+  ]);
+  assert.ok('problem' in edited);
+  assert.match(edited.problem, /edited/);
+
+  const unreadable = replay([
+    provenanceComment(1, 'acquire', {}, { lastEditedAt: '' }),
+  ]);
+  assert.ok('problem' in unreadable);
+
+  const garbled = replay([
+    provenanceComment(
+      1,
+      'acquire',
+      {},
+      {
+        body: '<!-- idd-skill-authoring-owner: target=oops -->',
+      },
+    ),
+  ]);
+  assert.ok('problem' in garbled);
+  assert.match(garbled.problem, /does not parse/);
+
+  const otherTarget = replay([
+    provenanceComment(1, 'acquire', { target: 'o/r#9' }),
+  ]);
+  assert.ok('problem' in otherTarget);
+  assert.match(otherTarget.problem, /not the anchor/);
+
+  const otherAnchor = replay([
+    provenanceComment(1, 'acquire', { anchor: 'o/r#9' }),
+  ]);
+  assert.ok('problem' in otherAnchor);
+
+  // An untrusted author's marker is not evidence, so it is ignored.
+  const untrusted = replay([
+    provenanceComment(1, 'acquire', {}, { authorLogin: 'someone-else' }),
+  ]);
+  assert.ok('problem' in untrusted);
+  assert.match(untrusted.problem, /no open owner generation/);
+
+  // The anchor is compared without regard to case.
+  const mixedCase = replay([
+    provenanceComment(1, 'acquire', {
+      target: ANCHOR_REF.toUpperCase(),
+      anchor: ANCHOR_REF.toUpperCase(),
+    }),
+  ]);
+  assert.ok('generation' in mixedCase, JSON.stringify(mixedCase));
+});
+
+test('CLI: a roadmap or child usage error exits 2 before any gh call', () => {
+  const fixture = setup();
+  try {
+    const cases: { argv: string[]; match: RegExp }[] = [
+      {
+        argv: [...shapeFiles(fixture, childDraftBody()), '--shape', 'child'],
+        match: /--anchor .* is required for --shape child/,
+      },
+      {
+        argv: [
+          ...shapeFiles(fixture, childDraftBody()),
+          '--shape',
+          'child',
+          '--anchor',
+          '',
+        ],
+        match: /--anchor .* is required for --shape child/,
+      },
+      {
+        argv: [
+          ...shapeFiles(fixture, childDraftBody()),
+          '--shape',
+          'child',
+          '--anchor',
+          'not-a-reference',
+        ],
+        match: /--anchor must be an owner\/repo#number reference/,
+      },
+      {
+        argv: [
+          ...shapeFiles(fixture, childDraftBody()),
+          '--shape',
+          'child',
+          '--anchor',
+          'o/r#0',
+        ],
+        match: /--anchor must be an owner\/repo#number reference/,
+      },
+      {
+        argv: [...roadmapArgs(fixture), '--anchor', ANCHOR_REF],
+        match: /--anchor is only valid with --shape child/,
+      },
+      {
+        argv: [...roadmapArgs(fixture), '--anchor', ''],
+        match: /--anchor is only valid with --shape child/,
+      },
+      {
+        argv: [...files(fixture), '--anchor', ANCHOR_REF],
+        match: /--anchor is only valid with --shape child/,
+      },
+      {
+        argv: [...carrierFiles(fixture), '--anchor', ANCHOR_REF],
+        match: /--anchor is only valid with --shape child/,
+      },
+      {
+        argv: [
+          ...shapeFiles(fixture, childDraftBody()),
+          '--shape',
+          'child',
+          '--anchor',
+          ANCHOR_REF,
+          '--bogus',
+        ],
+        match: /bogus/,
+      },
+      {
+        argv: [
+          ...shapeFiles(fixture, childDraftBody()).filter(
+            (arg, index, all) =>
+              arg !== '--review-result' && all[index - 1] !== '--review-result',
+          ),
+          '--shape',
+          'child',
+          '--anchor',
+          ANCHOR_REF,
+        ],
+        match: /--review-result is required for --shape child/,
+      },
+      {
+        argv: [
+          ...shapeFiles(fixture, roadmapDraftBody()).filter(
+            (arg, index, all) =>
+              arg !== '--review-result' && all[index - 1] !== '--review-result',
+          ),
+          '--shape',
+          'roadmap',
+        ],
+        match: /--review-result is required for --shape roadmap/,
+      },
+      {
+        argv: [...shapeFiles(fixture, childDraftBody()), '--shape', 'epic'],
+        match: /--shape must be one of orphan, carrier, roadmap, child/,
+      },
+    ];
+    for (const { argv, match } of cases) {
+      for (const extra of [[], ['--apply']]) {
+        const result = fixture.run([...argv, ...extra]);
+        assert.equal(result.status, 2, `${argv.join(' ')}: ${result.stdout}`);
+        assert.match(result.stderr, match);
+        assert.deepEqual(fixture.log(), []);
+      }
+    }
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: an anchor in another repository exits 2 and writes nothing', () => {
+  const fixture = setup();
+  try {
+    seedAnchor(fixture);
+    const result = fixture.run(childArgs(fixture, `other/repo#${ANCHOR}`));
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /--anchor must name an issue in o\/r/);
+    assert.deepEqual(writes(fixture.log()), []);
+    assert.equal(
+      fixture.log().some((entry) => entry.args.includes('graphql')),
+      false,
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a roadmap dry run is not refused and lints the body as a roadmap', () => {
+  const fixture = setup({ labels: [] });
+  try {
+    const result = fixture.run(roadmapArgs(fixture));
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.mode, 'dry-run');
+    assert.equal(report.outcome, 'planned');
+    assert.equal(report.ids.anchor, report.ids.target);
+    assert.equal(report.anchor, undefined);
+    const lint = report.steps.find((s: { step: string }) => s.step === 'lint');
+    assert.deepEqual(lint.detail.args.slice(0, 3), [
+      '--shape',
+      'roadmap',
+      '--new-issue',
+    ]);
+    assert.deepEqual(
+      report.steps.map((s: { step: string }) => s.step),
+      [
+        'lint',
+        'labels',
+        'journal-pending',
+        'create',
+        'identity-attach',
+        'owner-marker',
+        'provenance',
+        'member',
+      ],
+    );
+    assert.deepEqual(writes(fixture.log()), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a roadmap apply is its own set anchor and makes the orphan writes in order', () => {
+  const fixture = setup({ labels: ['status:authoring'] });
+  try {
+    const result = fixture.run([...roadmapArgs(fixture), '--apply']);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, 'published');
+    assert.equal(report.journalState, 'member');
+    assert.deepEqual(writeKinds(fixture), [
+      'journal-pending',
+      'create status:authoring',
+      'identity-attach',
+      'owner-marker',
+      'member',
+    ]);
+    const created = fixture.state().issues[String(NEW_ISSUE)] as {
+      body: string;
+      labels: string[];
+    };
+    assert.match(
+      created.body,
+      /^<!-- idd-skill-authoring-publication: target=(target-[^;]+); anchor=\1; /,
+    );
+    assert.match(created.body, /## Tracks\n\n## Success criteria/);
+    assert.deepEqual(created.labels, ['status:authoring']);
+    const [marker] = childComments(fixture);
+    assert.match(
+      marker ?? '',
+      new RegExp(
+        `target=o/r#${NEW_ISSUE}; anchor=o/r#${NEW_ISSUE}; mode=acquire;`,
+      ),
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a child dry run checks the anchor, lints the body as a child and writes nothing', () => {
+  const fixture = setup({ labels: [] });
+  try {
+    const anchorBody = seedAnchor(fixture);
+    const result = fixture.run(childArgs(fixture));
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.mode, 'dry-run');
+    assert.equal(report.outcome, 'planned');
+    assert.equal(report.ids.anchor, ANCHOR_REF);
+    assert.equal(report.ids.set, ANCHOR_SET);
+    assert.equal(report.ids.session, ANCHOR_SESSION);
+    assert.notEqual(report.ids.owner, ANCHOR_OWNER);
+    assert.equal(report.anchor.issue, ANCHOR_REF);
+    assert.equal(report.anchor.owner, ANCHOR_OWNER);
+    assert.deepEqual(
+      report.steps.map((s: { step: string }) => s.step),
+      [
+        'anchor-check',
+        'lint',
+        'labels',
+        'journal-pending',
+        'create',
+        'identity-attach',
+        'anchor-heartbeat',
+        'owner-marker',
+        'provenance',
+        'anchor-verify',
+        'member',
+      ],
+    );
+    const lint = report.steps.find((s: { step: string }) => s.step === 'lint');
+    assert.deepEqual(lint.detail.args.slice(0, 3), [
+      '--shape',
+      'child',
+      '--new-issue',
+    ]);
+    const pending = report.steps.find(
+      (s: { step: string }) => s.step === 'journal-pending',
+    );
+    assert.match(
+      pending.detail.record,
+      new RegExp(
+        `anchor=${ANCHOR_REF}; set=${ANCHOR_SET}; session=${ANCHOR_SESSION};`,
+      ),
+    );
+    assert.deepEqual(writes(fixture.log()), []);
+    assert.equal(
+      (fixture.state().issues[String(ANCHOR)] as { body: string }).body,
+      anchorBody,
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a child apply heartbeats the anchor, joins its set and never edits the anchor', () => {
+  const fixture = setup({ labels: ['status:authoring'] });
+  try {
+    const anchorBody = seedAnchor(fixture);
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, 'published');
+    assert.equal(report.journalState, 'member');
+    assert.equal(report.issue, `o/r#${NEW_ISSUE}`);
+    assert.equal(report.ids.anchor, ANCHOR_REF);
+    assert.deepEqual(writeKinds(fixture), [
+      'journal-pending',
+      'create status:authoring',
+      'identity-attach',
+      'anchor:heartbeat',
+      'owner-marker',
+      'member',
+    ]);
+    assert.deepEqual(
+      report.steps.map((s: { step: string }) => s.step),
+      [
+        'anchor-check',
+        'lint',
+        'labels',
+        'journal-pending',
+        'create',
+        'identity-attach',
+        'anchor-heartbeat',
+        'owner-marker',
+        'provenance',
+        'anchor-verify',
+        'member',
+      ],
+    );
+    const provenance = report.steps.find(
+      (s: { step: string }) => s.step === 'provenance',
+    );
+    assert.equal(provenance.detail.inProcess, true);
+
+    // The anchor's body and labels are untouched, and no issue is edited.
+    const state = fixture.state();
+    const anchorIssue = state.issues[String(ANCHOR)] as {
+      body: string;
+      labels: string[];
+    };
+    assert.equal(anchorIssue.body, anchorBody);
+    assert.deepEqual(anchorIssue.labels, ['status:authoring']);
+    assert.equal(
+      fixture
+        .log()
+        .some((entry) => entry.args[0] === 'issue' && entry.args[1] === 'edit'),
+      false,
+    );
+
+    // The heartbeat is a same-owner marker on the anchor.
+    const anchorLog = anchorComments(fixture);
+    assert.equal(anchorLog.length, 2);
+    assert.match(
+      anchorLog[1] ?? '',
+      new RegExp(
+        `target=${ANCHOR_REF}; anchor=${ANCHOR_REF}; mode=heartbeat; owner=${ANCHOR_OWNER}; set=${ANCHOR_SET}; session=${ANCHOR_SESSION}; body-sha256=${sha256Of(anchorBody)}; snapshot-sha256=none; supersedes=${ANCHOR_OWNER}`,
+      ),
+    );
+
+    // The child carries the anchor's real reference, set and session.
+    const created = state.issues[String(NEW_ISSUE)] as { body: string };
+    assert.match(
+      created.body,
+      new RegExp(
+        `^<!-- idd-skill-authoring-publication: target=target-[^;]+; anchor=${ANCHOR_REF}; set=${ANCHOR_SET}; session=${ANCHOR_SESSION}; token=token-`,
+      ),
+    );
+    const [childMarker, ...rest] = childComments(fixture);
+    assert.deepEqual(rest, []);
+    assert.match(
+      childMarker ?? '',
+      new RegExp(
+        `target=o/r#${NEW_ISSUE}; anchor=${ANCHOR_REF}; mode=acquire; owner=owner-[^;]+; set=${ANCHOR_SET}; session=${ANCHOR_SESSION};`,
+      ),
+    );
+    assert.doesNotMatch(childMarker ?? '', /owner=owner-anchor;/);
+    const records = journalRecords(fixture);
+    assert.equal(records.length, 3);
+    for (const record of records) {
+      assert.match(
+        record,
+        new RegExp(
+          `anchor=${ANCHOR_REF}; set=${ANCHOR_SET}; session=${ANCHOR_SESSION}; `,
+        ),
+      );
+    }
+    assert.match(records[2] ?? '', /state=member/);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a fresh matching anchor marker is reused instead of posting a heartbeat', () => {
+  const fixture = setup({ labels: ['status:authoring'] });
+  try {
+    seedAnchor(fixture, { createdAt: new Date().toISOString() });
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.deepEqual(writeKinds(fixture), [
+      'journal-pending',
+      'create status:authoring',
+      'identity-attach',
+      'owner-marker',
+      'member',
+    ]);
+    const heartbeat = report.steps.find(
+      (s: { step: string }) => s.step === 'anchor-heartbeat',
+    );
+    assert.equal(heartbeat.detail.reused, true);
+    assert.equal(heartbeat.detail.commentId, 4100);
+    assert.equal(anchorComments(fixture).length, 1);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a fresh anchor marker with another body digest is not reused', () => {
+  const fixture = setup({
+    labels: ['status:authoring'],
+    anchorClockNow: true,
+  });
+  try {
+    // Fresh, but its body digest is not the anchor body's.
+    seedAnchor(fixture, {
+      createdAt: new Date().toISOString(),
+      markers: [ownerMarkerText('acquire', { bodySha256: 'f'.repeat(64) })],
+    });
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.ok(writeKinds(fixture).includes('anchor:heartbeat'));
+    assert.equal(anchorComments(fixture).length, 2);
+  } finally {
+    fixture.restore();
+  }
+});
+
+const ANCHOR_REFUSALS: [string, Parameters<typeof seedAnchor>[1], RegExp][] = [
+  ['a closed anchor', { state: 'closed' }, /is not open/],
+  [
+    'an unlabelled anchor',
+    { labels: [] },
+    /does not carry the authoring label/,
+  ],
+  [
+    'an anchor with no owner marker',
+    { markers: [] },
+    /no open owner generation/,
+  ],
+  [
+    'an anchor whose set was released',
+    {
+      markers: [
+        ownerMarkerText('acquire'),
+        ownerMarkerText('release'),
+        ownerMarkerText('release-complete'),
+      ],
+    },
+    /no open owner generation/,
+  ],
+  [
+    'an anchor whose release is in progress',
+    { markers: [ownerMarkerText('acquire'), ownerMarkerText('release')] },
+    /being released/,
+  ],
+  [
+    'an anchor with an active claim',
+    {
+      extraComments: [
+        '<!-- claimed-by: claude-other 0f2c9a4e-1b7d-4c3a-9e8f-2d6b5a4c3e21 supersedes: none 2026-10-13T00:00:00Z branch: issue/4000-x -->',
+      ],
+    },
+    /has an active claim/,
+  ],
+];
+
+for (const [name, seed, match] of ANCHOR_REFUSALS) {
+  test(`CLI: ${name} refuses a child before any write`, () => {
+    const fixture = setup({ labels: ['status:authoring'] });
+    try {
+      seedAnchor(fixture, seed);
+      for (const extra of [[], ['--apply']]) {
+        const result = fixture.run([...childArgs(fixture), ...extra]);
+        assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+        const report = JSON.parse(result.stdout);
+        assert.equal(report.outcome, 'refused');
+        assert.match(report.reason, match);
+        assert.deepEqual(writes(fixture.log()), []);
+        assert.deepEqual(childComments(fixture), []);
+        assert.equal(fixture.state().issues[String(NEW_ISSUE)], undefined);
+      }
+    } finally {
+      fixture.restore();
+    }
+  });
+}
+
+test('CLI: an anchor that cannot be read refuses a child before any write', () => {
+  const fixture = setup({ labels: ['status:authoring'] });
+  try {
+    // Nothing is seeded, so the stub answers the anchor read with a 404.
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 1);
+    assert.match(JSON.parse(result.stdout).reason, /cannot be read/);
+    assert.deepEqual(writes(fixture.log()), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a failed anchor heartbeat is a recovery hold on the held, journalled child', () => {
+  const fixture = setup({
+    labels: ['status:authoring'],
+    anchorPostFail: { mode: 'heartbeat', status: 422, landed: false },
+  });
+  try {
+    seedAnchor(fixture);
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, 'recovery-hold');
+    assert.equal(report.failedStep, 'anchor-heartbeat');
+    assert.equal(report.nothingSent, true);
+    assert.equal(report.issue, `o/r#${NEW_ISSUE}`);
+    assert.deepEqual(
+      (fixture.state().issues[String(NEW_ISSUE)] as { labels: string[] })
+        .labels,
+      ['status:authoring'],
+    );
+    // The record is attached but not a member, and no owner marker was posted.
+    const records = journalRecords(fixture);
+    assert.equal(records.length, 2);
+    assert.match(
+      records[1] ?? '',
+      new RegExp(`issue=o/r#${NEW_ISSUE}; .*state=pending`),
+    );
+    assert.deepEqual(childComments(fixture), []);
+    assert.equal(anchorComments(fixture).length, 1);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: an anchor heartbeat that may have landed is reported as uncertain', () => {
+  const fixture = setup({
+    labels: ['status:authoring'],
+    anchorPostFail: { mode: 'heartbeat', status: 502, landed: true },
+  });
+  try {
+    seedAnchor(fixture);
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, 'recovery-hold');
+    assert.equal(report.failedStep, 'anchor-heartbeat');
+    assert.equal(report.nothingSent, false);
+    assert.equal(report.anchorHeartbeat, 'uncertain');
+    assert.deepEqual(childComments(fixture), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: an anchor taken over right after the heartbeat stops before the child acquires', () => {
+  const fixture = setup({
+    labels: ['status:authoring'],
+    afterPost: [{ mode: 'heartbeat', action: 'anchorTakeover' }],
+  });
+  try {
+    seedAnchor(fixture);
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.failedStep, 'anchor-heartbeat');
+    assert.match(report.reason, /changed during the heartbeat/);
+    assert.deepEqual(childComments(fixture), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: an anchor taken over after the child acquires stops before member', () => {
+  const fixture = setup({
+    labels: ['status:authoring'],
+    afterPost: [{ mode: 'acquire', action: 'anchorTakeover' }],
+  });
+  try {
+    seedAnchor(fixture);
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, 'recovery-hold');
+    assert.equal(report.failedStep, 'anchor-verify');
+    assert.match(report.reason, /owner generation of the anchor/);
+    assert.equal(writeKinds(fixture).includes('member'), false);
+    assert.equal(childComments(fixture).length, 1);
+    const records = journalRecords(fixture);
+    assert.doesNotMatch(records.at(-1) ?? '', /state=member/);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a child that gains an active claim during acquisition stops before member', () => {
+  const fixture = setup({
+    labels: ['status:authoring'],
+    claimOnCreate: true,
+  });
+  try {
+    seedAnchor(fixture);
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    assert.equal(JSON.parse(result.stdout).failedStep, 'member');
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a competing owner marker on the child stops before member', () => {
+  const fixture = setup({
+    labels: ['status:authoring'],
+    afterPost: [{ mode: 'acquire', action: 'competing' }],
+  });
+  try {
+    seedAnchor(fixture);
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.failedStep, 'member');
+    assert.match(report.reason, /owner-marker replay failed/);
+    assert.equal(writeKinds(fixture).includes('member'), false);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a child can take a needs-decision bucket like an orphan', () => {
+  const fixture = setup({ labels: ['status:authoring'] });
+  try {
+    seedAnchor(fixture);
+    const body = [
+      '<!-- idd-skill-authoring-bucket: needs-decision -->',
+      '',
+      childDraftBody(),
+    ].join('\n');
+    const result = fixture.run([
+      ...shapeFiles(fixture, body),
+      '--shape',
+      'child',
+      '--anchor',
+      ANCHOR_REF,
+      '--bucket',
+      'needs-decision',
+    ]);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.mode, 'dry-run', result.stdout);
+    assert.deepEqual(report.labels, [
+      'status:authoring',
+      'status:needs-decision',
+    ]);
+    const lint = report.steps.find((s: { step: string }) => s.step === 'lint');
+    assert.deepEqual(lint.detail.args.slice(-6), [
+      '--expect-bucket',
+      'needs-decision',
+      '--label',
+      'status:authoring',
+      '--label',
+      'status:needs-decision',
+    ]);
+  } finally {
+    fixture.restore();
+  }
+});

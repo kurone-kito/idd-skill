@@ -156,7 +156,9 @@ export function inspectLastEditedAt(comment) {
  *   anchor" -- a marker with a different anchor is a multi-target set's
  *   non-anchor child, out of scope for this helper's single-target
  *   orphan design (kurone-kito/idd-skill#2891's own acceptance
- *   criteria; kurone-kito/idd-skill#2901 review, Copilot round 5).
+ *   criteria; kurone-kito/idd-skill#2901 review, Copilot round 5). A
+ *   caller that publishes such a child passes `expectedAnchor` (#4251),
+ *   and the marker's `anchor` must then name that anchor instead.
  *
  * The append-only edit check (contract.md: owner comments "must not be
  * edited or deleted") lives in `findStageOneAcquire`'s own pre-pass, not
@@ -167,7 +169,7 @@ export function inspectLastEditedAt(comment) {
  * Returns `null` when valid, or a short human-readable reason string
  * when not (surfaced in the `acquire_marker_found` check's evidence).
  */
-function invalidStageOneAcquireReason(event, target) {
+function invalidStageOneAcquireReason(event, target, expectedAnchor) {
   const { parsed } = event;
   if (parsed.mode !== 'acquire') {
     return `first trusted marker has mode=${parsed.mode}, not acquire`;
@@ -178,7 +180,11 @@ function invalidStageOneAcquireReason(event, target) {
   if (!REAL_DIGEST_PATTERN.test(parsed.bodySha256)) {
     return `acquire marker's body-sha256 is not a real digest (got ${parsed.bodySha256})`;
   }
-  if (!sameIssueRef(parsed.anchor, target)) {
+  if (expectedAnchor !== undefined) {
+    if (!sameIssueRef(parsed.anchor, expectedAnchor)) {
+      return `acquire marker's anchor (${parsed.anchor}) is not the expected set anchor (${expectedAnchor})`;
+    }
+  } else if (!sameIssueRef(parsed.anchor, target)) {
     return `acquire marker's anchor (${parsed.anchor}) differs from its target -- a multi-target set's non-anchor child is out of scope for this helper`;
   }
   return null;
@@ -295,6 +301,7 @@ function findStageOneAcquire(
   target,
   markerPrefix,
   trustedMarkerLogins,
+  expectedAnchor,
 ) {
   const trusted = new Set(
     trustedMarkerLogins.map((login) => login.toLowerCase()),
@@ -337,7 +344,11 @@ function findStageOneAcquire(
     };
   }
   const event = { comment: first, parsed };
-  const rejectReason = invalidStageOneAcquireReason(event, target);
+  const rejectReason = invalidStageOneAcquireReason(
+    event,
+    target,
+    expectedAnchor,
+  );
   if (rejectReason) {
     return { event: null, rejectReason };
   }
@@ -365,6 +376,7 @@ export function evaluateAuthoringOwnerProvenance(input) {
     input.target,
     input.markerPrefix,
     input.trustedMarkerLogins ?? [],
+    input.expectedAnchor,
   );
   if (!acquire) {
     return {
