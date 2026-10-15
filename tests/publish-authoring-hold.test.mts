@@ -3228,6 +3228,56 @@ test('hold replay: a missing, repeated or reordered record fails closed', () => 
   );
 });
 
+test('hold replay: a respaced record of the token is still read, and minimization is checked', () => {
+  const sequence = [
+    intentComment(1, 'pending', { issue: 'none' }),
+    intentComment(2, 'pending'),
+    intentComment(3, 'member'),
+  ];
+  // A record whose spacing differs from the canonical one is still this
+  // token's record, so an out-of-order state in it cannot hide.
+  const respaced = intentComment(
+    4,
+    'cleanup',
+    {},
+    {
+      body: journalIntentText('cleanup').replace(
+        'token=token-anchor',
+        'token = token-anchor',
+      ),
+    },
+  );
+  assert.match(
+    holdReplay([...sequence, respaced, intentComment(5, 'member')]) ?? '',
+    /out of order/,
+  );
+  // History hidden by a sweep still counts; a hidden latest record does not.
+  const hiddenHistory = sequence.map((comment, index) =>
+    index < 2
+      ? { ...comment, isMinimized: true, minimizedReason: 'OUTDATED' }
+      : comment,
+  );
+  assert.equal(holdReplay(hiddenHistory), null);
+  const hiddenLatest = [
+    ...sequence.slice(0, 2),
+    { ...sequence[2], isMinimized: true, minimizedReason: 'OUTDATED' },
+  ] as AuthoringOwnerProvenanceComment[];
+  assert.match(holdReplay(hiddenLatest) ?? '', /minimized as outdated/);
+  // Unreadable minimization evidence fails closed.
+  for (const broken of [
+    { isMinimized: undefined },
+    { isMinimized: true, minimizedReason: null },
+  ]) {
+    assert.match(
+      holdReplay([
+        ...sequence.slice(0, 2),
+        { ...sequence[2], ...broken } as AuthoringOwnerProvenanceComment,
+      ]) ?? '',
+      /no readable minimization state/,
+    );
+  }
+});
+
 test('hold replay: an edited, untrusted, mismatched or unparseable record of the token fails closed', () => {
   const valid = [
     intentComment(1, 'pending', { issue: 'none' }),

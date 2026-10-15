@@ -1262,27 +1262,24 @@ export function replayAnchorHold(input: {
 }): string | null {
   const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
   const intentToken = `${input.markerPrefix.toLowerCase()}-authoring-publication-intent:`;
-  // The `;` ends the field, so `token=x` cannot match a record of `token=x-2`.
-  const tokenField = `token=${input.publication.token};`;
   const records: {
     id: number;
     time: number;
     state: string;
     issue: string;
+    outdated: boolean;
   }[] = [];
   for (const comment of input.comments) {
     const lower = comment.body.toLowerCase();
-    if (!lower.includes(intentToken) || !comment.body.includes(tokenField)) {
+    // A record that mentions the token anywhere is a candidate, whatever its
+    // spacing, so the token is read from the parsed field, not from bytes.
+    if (
+      !lower.includes(intentToken) ||
+      !comment.body.includes(input.publication.token)
+    ) {
       continue;
     }
     const where = `publication-intent record ${comment.id} of the token`;
-    const author = comment.authorLogin.trim().toLowerCase();
-    if (!trustedSet.has(author)) {
-      return `${where} is written by ${comment.authorLogin}, who is not a trusted marker actor`;
-    }
-    if (inspectLastEditedAt(comment) !== null) {
-      return `${where} was edited after posting, or its edit state is unreadable`;
-    }
     const intent = parseAuthoringPublicationIntentComment(
       comment.body,
       input.markerPrefix,
@@ -1290,8 +1287,24 @@ export function replayAnchorHold(input: {
     if (intent === null) {
       return `${where} does not parse`;
     }
+    // Another token that only contains this one is not this token's record.
     if (intent.token !== input.publication.token) {
       continue;
+    }
+    const author = comment.authorLogin.trim().toLowerCase();
+    if (!trustedSet.has(author)) {
+      return `${where} is written by ${comment.authorLogin}, who is not a trusted marker actor`;
+    }
+    if (inspectLastEditedAt(comment) !== null) {
+      return `${where} was edited after posting, or its edit state is unreadable`;
+    }
+    if (
+      typeof comment.isMinimized !== 'boolean' ||
+      (comment.isMinimized &&
+        (typeof comment.minimizedReason !== 'string' ||
+          comment.minimizedReason.trim() === ''))
+    ) {
+      return `${where} has no readable minimization state`;
     }
     if (
       intent.target !== input.publication.target ||
@@ -1312,6 +1325,7 @@ export function replayAnchorHold(input: {
       time,
       state: intent.state,
       issue: intent.issue,
+      outdated: isOutdatedMinimized(comment),
     });
   }
   if (records.length === 0) {
@@ -1355,6 +1369,12 @@ export function replayAnchorHold(input: {
   }
   if (state !== 'member') {
     return `the latest record of the anchor's token is ${state}, not member`;
+  }
+  // History that a sweep hid still counts, but the record that ends the log is
+  // never a hidden one: a latest record minimized as outdated was disavowed.
+  const last = records[records.length - 1];
+  if (last?.outdated) {
+    return `the latest record of the anchor's token, comment ${last.id}, is minimized as outdated, so it cannot prove membership`;
   }
   return null;
 }
