@@ -388,10 +388,13 @@ approval boundary that hands off to IDD execution.
 ### Stage 2: Release (the single approval boundary)
 
 - The user's explicit hold-release request is the only approval this
-  bundle's workflow requires — except the narrow auto-release exceptions
-  (defer-source and carrier creation-hold) in
+  bundle's workflow requires — except the narrow defer-source auto-release
+  exception in
   [Authoring hold and release](contract.md#authoring-hold-and-release) —
-  and it authorizes IDD execution for the released issues
+  and it authorizes IDD execution for the released issues. The carrier
+  creation-hold exception in the same section removes only a carrier's
+  creation hold and authorizes no execution (see
+  [Handoff to execution](#handoff-to-execution))
 - Before removing the authoring label, bundled skill runs a release
   checklist that absorbs the rigor of the dropped middle step:
   - every child issue is referenced from its parent roadmap's
