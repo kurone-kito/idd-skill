@@ -316,11 +316,12 @@ is diagnostic and never changes the verdict.
   - `all-passing` → the CI gate may pass (every other present run green,
     or waiver-covered).
   - `pending` → wait per `idd-ci.instructions.md`, then re-evaluate F2. A
-    queued or running run, or a pending commit status, waits here; it is
-    not a failure.
+    queued, in-progress, or waiting run, a `pending`, `expected`, or
+    `requested` status, and a `cancelled` run with no later run of the
+    same check all wait here; none is a failure.
   - `some-failing` → **hold**; a non-required `failure`, `timed_out`,
-    `startup_failure`, or unrecognized state still holds. Never merge on
-    a vacuous green.
+    `startup_failure`, `stale`, or `error` conclusion, or an unrecognized
+    state, still holds. Never merge on a vacuous green.
   - `none` (no runs at all, or only `action_required` runs) → **hold**,
     unless `ci.allowedByPolicySetting` is set (the global-only opt-in;
     see [Global-only profile](../../docs/global-only-profile.md)).
