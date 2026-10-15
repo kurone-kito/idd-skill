@@ -2127,6 +2127,9 @@ function removeAuthoringLabel(input, releaseId, acquireDigest) {
  * `recovery-hold` when the restore fails or cannot be verified. */
 function restoreReleaseLabels(input, labels, problem, step) {
   const repoRef = `${input.owner}/${input.repo}`;
+  // Replay the owner log right before any restore: a competing trusted marker
+  // that appeared since the last read stops here with no label write.
+  replayOrRecover(input, readOwnerLogAfterWrite(input, step), step);
   // Every missing release label, the authoring-only label included, so no
   // path leaves the carrier without its exclusion label.
   const restoreNames = [input.authoringLabel, input.authoringOnlyLabel].filter(
@@ -2336,6 +2339,9 @@ function runCarrierRelease(input, scratch, ctx) {
       (latest.parsed.mode === 'heartbeat' &&
         markerFieldsValid(latest.parsed, input, heartbeatDigest, 'none')));
   const coalescedId = reusable && latest !== null ? latest.id : null;
+  // The mode of the reused marker, for its identity check after the settle
+  // wait: the same validated mode, not every coalescing mode.
+  const coalescedMode = reusable && latest !== null ? latest.parsed.mode : '';
   const heartbeatId =
     coalescedId ??
     postCarrierMarker(input, 'heartbeat', heartbeatDigest, 'none', 'heartbeat');
@@ -2360,8 +2366,7 @@ function runCarrierRelease(input, scratch, ctx) {
   }
   // A reused marker is verified exactly as a posted one would be (contract.md,
   // "Heartbeat coalescing"): the reused id must still be an ours marker.
-  const heartbeatModes =
-    coalescedId === null ? ['heartbeat'] : [...COALESCING_MODES];
+  const heartbeatModes = coalescedId === null ? ['heartbeat'] : [coalescedMode];
   if (!markerOnLogModes(replayLog, input, heartbeatId, heartbeatModes)) {
     throw new CarrierReleaseStop(
       'held',
