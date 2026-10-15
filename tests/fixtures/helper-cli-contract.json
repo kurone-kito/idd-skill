@@ -169,6 +169,18 @@
         }
       }
     },
+    "idd-claim-issue.mjs": {
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 2,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 2,
+          "kind": "usage"
+        }
+      }
+    },
     "idd-claim-lock.mjs": {
       "runs": {
         "unknownFlag": {

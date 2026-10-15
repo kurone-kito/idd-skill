@@ -620,7 +620,7 @@ function detectUnpushedCommits(): boolean {
   return runGit(['rev-list', '--count', 'HEAD']).trim() !== '0';
 }
 
-function findIssueRelatedOpenPrs({
+export function findIssueRelatedOpenPrs({
   port,
   issueNumber,
 }: {
