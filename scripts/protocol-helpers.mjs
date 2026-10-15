@@ -2981,8 +2981,12 @@ export function isSettledDispositionComment(comment) {
 const REJECTION_CONFIRMED_BY_MAINTAINER_RE =
   /^\*\*Rejection confirmed by maintainer\*\*\s+—/;
 export function isRejectionConfirmedDisposition(comment) {
-  return REJECTION_CONFIRMED_BY_MAINTAINER_RE.test(
-    (comment.body ?? '').trimStart(),
+  // #4306: a body that confirms a rejection and also carries the
+  // pending-decision marker contradicts itself, and the open question wins.
+  return (
+    REJECTION_CONFIRMED_BY_MAINTAINER_RE.test(
+      (comment.body ?? '').trimStart(),
+    ) && !hasPendingDecisionMarker(comment.body)
   );
 }
 // #1018 non-review-notice carry-forward classifiers.
@@ -7040,6 +7044,17 @@ export function classifyThreadAckOnlyPostDisposition(thread, options = {}) {
     ),
   );
   const nodes = thread.comments?.nodes ?? [];
+  // #4306: a thread whose newest IDD reply is a pending decision is open, so
+  // no courtesy ack can make it ack-only, even when an older settled
+  // disposition still anchors the window below.
+  if (
+    hasPendingDecisionReply(thread, {
+      isDispositionAuthor: (login) => ackAnchorAuthorLogins.has(login),
+      advisoryBotLogins: options.advisoryBotLogins,
+    })
+  ) {
+    return none;
+  }
   // Recognize the same unedited dispositions `hasFreshDisposition` accepts
   // on a resolved thread (the gate that already decided this thread blocks):
   // a `**Accepted**`/`**Rejected**` marker OR the terminal
@@ -7453,6 +7468,10 @@ export function summarizeDispositionEvidenceForGate(
         iddAgentLogins.has(comment.authorLogin) &&
         !consumedNoticeDispositionIndexes.has(comment.sortedIndex) &&
         !isCodexNoFindResultDisposition(comment.body) &&
+        // #4306: a reply that leaves a decision open answers no comment, a
+        // human's included; the comment stays outstanding until a settled
+        // reply follows.
+        !hasPendingDecisionMarker(comment.body) &&
         isValidIsoTimestamp(comment.activityAt) &&
         !isIddOperationalComment(comment),
     )
@@ -7709,6 +7728,10 @@ export function summarizeDispositionEvidenceForGate(
       // own reason and hint, because the stale-disposition hint would steer the
       // agent to post the `**Accepted**` that settled it too early.
       const pendingDecision = hasPendingDecisionReply(thread, freshnessOptions);
+      // The classifier above already reads a pending reply as not ack-only for
+      // the IDD authors it knows; this keeps the two in step for the wider
+      // author set the gate uses (IDD agents and trusted marker actors).
+      const ackOnly = !pendingDecision && classification.ackOnlyPostDisposition;
       return {
         id: String(thread.id ?? '') || `thread-${index + 1}`,
         isResolved: Boolean(thread.isResolved),
@@ -7717,10 +7740,10 @@ export function summarizeDispositionEvidenceForGate(
           : thread.isResolved
             ? 'missing-fresh-disposition'
             : 'unresolved-without-fresh-disposition',
-        ackOnlyPostDisposition: classification.ackOnlyPostDisposition,
-        inPlaceEditOnly: classification.inPlaceEditOnly,
+        ackOnlyPostDisposition: ackOnly,
+        inPlaceEditOnly: ackOnly && classification.inPlaceEditOnly,
         // #3670: never on an ack-only entry -- see the field's doc comment.
-        ...(classification.ackOnlyPostDisposition
+        ...(ackOnly
           ? {}
           : {
               hint: pendingDecision

@@ -289,6 +289,108 @@ test('a pending-decision reply anchors no ack-only window in the snapshot or the
   assert.equal(activity.effective.maxActivityUpdatedAt, '2026-05-12T02:00:00Z');
 });
 
+// #4306: the terminal `**Rejection confirmed by maintainer**` marker is a
+// disposition only on a resolved thread, and not when the same body also
+// carries the pending-decision marker.
+test('a Rejection confirmed reply that carries the pending marker is not a disposition, and a plain one still is (#4306)', () => {
+  const resolvedThread = (replyBody: string) =>
+    ({
+      id: 'T-rejection-confirmed',
+      isResolved: true,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          {
+            author: { login: 'reviewer-a' },
+            body: 'please reconsider',
+            createdAt: '2026-05-12T00:00:00Z',
+            lastEditedAt: null,
+          },
+          {
+            author: { login: 'idd-bot' },
+            body: replyBody,
+            createdAt: '2026-05-12T00:30:00Z',
+            lastEditedAt: null,
+          },
+        ],
+      },
+    }) as ExplainedThread;
+  const options = {
+    isDispositionAuthor: (login: string) => login === 'idd-bot',
+  };
+  const plain = resolvedThread(
+    '**Rejection confirmed by maintainer** — agreed, no action needed.',
+  );
+  assert.equal(hasFreshDisposition(plain, options), true);
+  assert.equal(hasPendingDecisionReply(plain, options), false);
+
+  const contradictory = resolvedThread(
+    '**Rejection confirmed by maintainer** — agreed.\n\n**Awaiting maintainer decision** — one question remains.',
+  );
+  assert.equal(hasFreshDisposition(contradictory, options), false);
+  assert.equal(hasPendingDecisionReply(contradictory, options), true);
+});
+
+test('classifyThreadAckOnlyPostDisposition reads an older settled disposition as no anchor once a newer pending reply exists (#4306)', () => {
+  const thread = (withPending: boolean) =>
+    ({
+      id: 'T-pending-after-settled',
+      isResolved: true,
+      comments: {
+        pageInfo: { hasNextPage: false },
+        nodes: [
+          {
+            author: { login: 'reviewer-a' },
+            body: 'please reconsider',
+            createdAt: '2026-05-12T00:00:00Z',
+            updatedAt: '2026-05-12T00:00:00Z',
+          },
+          {
+            author: { login: 'idd-bot' },
+            body: '**Accepted** — fixed in abc1234',
+            createdAt: '2026-05-12T00:30:00Z',
+            updatedAt: '2026-05-12T00:30:00Z',
+            lastEditedAt: null,
+          },
+          ...(withPending
+            ? [
+                {
+                  author: { login: 'idd-bot' },
+                  body: '**Awaiting maintainer decision** — a new question',
+                  createdAt: '2026-05-12T01:00:00Z',
+                  updatedAt: '2026-05-12T01:00:00Z',
+                  lastEditedAt: null,
+                },
+              ]
+            : []),
+          {
+            author: { login: 'coderabbitai[bot]' },
+            body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+            createdAt: '2026-05-12T02:00:00Z',
+            updatedAt: '2026-05-12T02:00:00Z',
+          },
+        ],
+      },
+    }) as ExplainedThread;
+  const options = {
+    iddAgentLogins: ['idd-bot'],
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  };
+  // Control: with no pending reply the courtesy ack is ack-only.
+  assert.equal(
+    classifyThreadAckOnlyPostDisposition(thread(false), options)
+      .ackOnlyPostDisposition,
+    true,
+  );
+  assert.deepEqual(
+    classifyThreadAckOnlyPostDisposition(thread(true), options),
+    {
+      ackOnlyPostDisposition: false,
+      inPlaceEditOnly: false,
+    },
+  );
+});
+
 // #2696: this gate-level function already read `thread.id` correctly before
 // this issue's fix -- the actual bug was upstream (the provider mapping and
 // both `normalizeThread` call sites dropped `id` before it reached here; see

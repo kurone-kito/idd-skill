@@ -432,6 +432,90 @@ test('a trusted pending reply on a human-authored thread is not presence-only, a
   assert.equal(summarize(thread('thanks, noted')).missingThreadCount, 0);
 });
 
+test('a pending reply after a settled one leaves the thread pending-decision with its hint, never ack-only (#4306)', () => {
+  const thread = {
+    id: 'thread-pending-after-settled',
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'reviewer-a' },
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'please reconsider',
+          lastEditedAt: null,
+        },
+        {
+          author: { login: 'idd-bot' },
+          createdAt: '2026-05-12T00:30:00Z',
+          body: '**Accepted** — fixed in abc1234',
+          lastEditedAt: null,
+        },
+        {
+          author: { login: 'idd-bot' },
+          createdAt: '2026-05-12T01:00:00Z',
+          body: '**Awaiting maintainer decision** — a new question',
+          lastEditedAt: null,
+        },
+        {
+          author: { login: 'coderabbitai[bot]' },
+          createdAt: '2026-05-12T02:00:00Z',
+          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+        },
+      ],
+    },
+  };
+  const summary = summarizeDispositionEvidenceForGate(
+    { comments: [], threads: [thread] },
+    { iddAgentLogins: ['idd-bot'], advisoryBotLogins: ['coderabbitai[bot]'] },
+  );
+  assert.equal(summary.route, 'return-to-e1');
+  assert.equal(summary.missingThreads[0].reason, 'pending-decision');
+  assert.equal(summary.missingThreads[0].ackOnlyPostDisposition, false);
+  assert.equal(summary.missingThreads[0].inPlaceEditOnly, false);
+  assert.equal(summary.missingThreads[0].hint, PENDING_DECISION_THREAD_HINT);
+  assert.equal(summary.soleCauseAckOnlyPostDisposition, false);
+  assert.equal(summary.soleCauseInPlaceEditOnly, false);
+});
+
+test("a reply that carries the pending marker answers no regular comment, a human reviewer's included, and an ordinary reply still does (#4306)", () => {
+  const summarize = (replyBody: string) =>
+    summarizeDispositionEvidenceForGate(
+      {
+        comments: [
+          {
+            author: { login: 'reviewer-a' },
+            createdAt: '2026-05-12T00:00:00Z',
+            body: 'Please address this.',
+            lastEditedAt: null,
+          },
+          {
+            author: { login: 'idd-bot' },
+            createdAt: '2026-05-12T01:00:00Z',
+            body: replyBody,
+            lastEditedAt: null,
+          },
+        ],
+        threads: [],
+      },
+      { iddAgentLogins: ['idd-bot'] },
+    );
+  assert.equal(
+    summarize('**Awaiting maintainer decision** — open')
+      .missingRegularCommentCount,
+    1,
+  );
+  assert.equal(
+    summarize(PENDING_PARTLY_ACCEPTED).missingRegularCommentCount,
+    1,
+  );
+  assert.equal(summarize('thanks, fixed').missingRegularCommentCount, 0);
+  assert.equal(
+    summarize('**Accepted** — fixed in abc1234').missingRegularCommentCount,
+    0,
+  );
+});
+
 test('selectAdvisoryThreadCommentIdsEditedAfterDisposition: a pending reply anchors no disposition (#4306)', () => {
   const thread = (replyBody: string) => ({
     id: 'RT_4306',
