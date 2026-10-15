@@ -255,6 +255,12 @@ const SUBJECTIVE_PROXIMITY_PATTERN = new RegExp(
   `${SUBJECTIVE_GATE_PATTERN.source}[\\s\\S]{0,80}${SUBJECTIVE_SUBJECT_PATTERN.source}`,
   'i',
 );
+// #4374: the longest quoted match a failing evidence string carries, in code
+// points (never UTF-16 units, so a surrogate pair is never split). A longer
+// match is cut to this many code points and followed by `...`, so the quoted
+// text is at most this plus three code points.
+const QUOTED_EVIDENCE_MAX_CODE_POINTS = 160;
+const ZERO_WIDTH_SPACE = '\u200B';
 function findRepositoryFitHiddenMetadataRanges(text) {
   const ranges = [];
   const hasLinkLabel = (closeIndex) => {
@@ -3307,6 +3313,44 @@ export function checkActionability(context) {
     evidence: 'Issue lacks concrete actionable scope or acceptance detail.',
   };
 }
+/**
+ * #4374: formats the matched text a failing Check 6/7 evidence string quotes.
+ * In this order: collapse each whitespace run to one space, trim, make the
+ * text inert, and only then cut it to {@link QUOTED_EVIDENCE_MAX_CODE_POINTS}
+ * code points plus `...` (the zero-width spaces the inert step adds count
+ * toward the cut).
+ *
+ * The rejection comment built from this evidence is posted by a trusted
+ * account and parsed by three unanchored readers in
+ * `supersession-detection.mts`: `parseSuitabilityTriageVerdictMarker`, and
+ * `findTrustedSuitabilityRejection`'s `outcome:` and `Check N (...)`
+ * patterns. The inert step therefore breaks, with a zero-width space (which
+ * JavaScript's `\s` does not match), every shape those readers would
+ * accept: a `<!--` opener or a comment end (`-->`, and also the HTML
+ * parser's `--!>`, which code scanning rule `js/bad-tag-filter` flagged on
+ * pull request `#4397`; an overlapping `<!-->` is broken on both sides), the
+ * word `outcome` before its colon, the word `Check` before its number, and the
+ * `@` of a mention. The patterns are case-insensitive and have no word
+ * boundary, exactly like the readers' own, and must not gain the `u` flag
+ * (preventive; no observed incident yet).
+ *
+ * Applied only to the four failing returns of `checkAutonomy` and
+ * `checkVerifiability`: the demoted returns and Check 3 keep quoting raw text.
+ */
+function formatQuotedEvidence(text) {
+  const inert = text
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/<!--/g, `<!${ZERO_WIDTH_SPACE}--`)
+    .replace(/--(!?>)/g, `--${ZERO_WIDTH_SPACE}$1`)
+    .replace(/(outcome)(\s*:)/gi, `$1${ZERO_WIDTH_SPACE}$2`)
+    .replace(/(check)(\s+\d)/gi, `$1${ZERO_WIDTH_SPACE}$2`)
+    .replace(/(?<!\w)@(?=[A-Za-z0-9])/g, `@${ZERO_WIDTH_SPACE}`);
+  const codePoints = Array.from(inert);
+  return codePoints.length > QUOTED_EVIDENCE_MAX_CODE_POINTS
+    ? `${codePoints.slice(0, QUOTED_EVIDENCE_MAX_CODE_POINTS).join('')}...`
+    : inert;
+}
 export function checkAutonomy(context) {
   const { issue } = context;
   const labels = new Set(issue.labels);
@@ -3477,8 +3521,7 @@ export function checkAutonomy(context) {
       }
       return {
         pass: false,
-        evidence:
-          'Issue presents an unresolved either/or implementation choice.',
+        evidence: `Issue presents an unresolved either/or implementation choice: "${formatQuotedEvidence(markerText)}".`,
       };
     }
   }
@@ -3508,8 +3551,7 @@ export function checkAutonomy(context) {
     }
     return {
       pass: false,
-      evidence:
-        'Issue explicitly requires external human coordination or approval.',
+      evidence: `Issue explicitly requires external human coordination or approval: "${formatQuotedEvidence(matchedText)}".`,
     };
   }
   // #2219: a nearby-word unresolved-choice phrasing beyond the two fixed
@@ -3534,7 +3576,7 @@ export function checkAutonomy(context) {
     }
     return {
       pass: false,
-      evidence: 'Issue names an unresolved product or design choice.',
+      evidence: `Issue names an unresolved product or design choice: "${formatQuotedEvidence(markerText)}".`,
     };
   }
   return {
@@ -3857,7 +3899,7 @@ export function checkVerifiability(context) {
     }
     return {
       pass: false,
-      evidence: 'Issue success depends on subjective approval or judgment.',
+      evidence: `Issue success depends on subjective approval or judgment: "${formatQuotedEvidence(subjectiveApprovalMatch)}".`,
     };
   }
   // #2709 (idd-suitability.instructions.md Edge Cases, #1984): an either/or
