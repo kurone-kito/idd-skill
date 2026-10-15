@@ -1336,7 +1336,8 @@ the repository.
 **Role.** You are the sole worker for issue `{issue-number}`. No peer worker
 exists for it, so there is nobody to coordinate with or to wait on for a reply;
 a critique agent that the Critique allowance part permits is not a peer. Do
-the implementation yourself and do not re-delegate it.
+the implementation yourself and do not re-delegate it. See
+[Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation).
 
 **Claim token.** Your claim token is `{agent-id}` / `{claim-id}` and your
 activation nonce is `{nonce}`. Adopt them verbatim and mint neither a new claim
@@ -1346,9 +1347,10 @@ means the claim is lost. See
 [Orchestrator delegation](../.github/instructions/idd-claim.instructions.md#orchestrator-delegation).
 
 **Branch and worktree.** Your branch is `{branch-name}` and your worktree is
-`{worktree-path}`, already created: reuse it without B1, keeping only the
-dependency install and the branch check that the B1 skip below keeps, and do
-your work there. Before any branch-state action, open D1 in
+`{worktree-path}`, already created: reuse it without B1, running only the
+dependency install and checking that `git rev-parse --abbrev-ref HEAD` returns
+`{branch-name}`, and do your work there. Before any branch-state action, open D1
+in
 [idd-pr-submit.instructions.md](../.github/instructions/idd-pr-submit.instructions.md#d1--sync-development-branch-before-first-push)
 and the "E-phase branch-sync check" section of
 [idd-review-triage.instructions.md](../.github/instructions/idd-review-triage.instructions.md#e-phase-branch-sync-check),
@@ -1408,21 +1410,22 @@ itself): most briefs drew the worker's span too narrowly, so the orchestrator
 finished the F4 steps by hand for most workers.
 
 **Scratchpad.** Your scratch files go only in `{scratchpad-dir}`, an
-issue-numbered subdirectory of the session scratchpad, with these exceptions: your
-report draft at `{report-path}`, and the critique scratch directory that
+issue-numbered subdirectory of the session scratchpad, with these exceptions:
+your report draft at `{report-path}`, and the critique scratch directory that
 Critique pass invocation names, if you start a critique agent. Never write
 scratch files in `{worktree-path}`, the pre-created worktree that you reuse.
 Concurrently delegated workers share the scratchpad, so the issue-numbered
-directory keeps your files apart from theirs. Before you create it, confirm that
-its parent path already exists. When the parent path is missing, create nothing
-and end the run as a hold: post the hold marker of the Hold marker part, and let
-your report draft carry `held`, as for any hold; if `{report-path}` cannot be
-written because the parent path is missing, the hold marker alone is the report.
-Create the directory with a plain mkdir and never use mkdir -p, which would
-build a mistyped parent path instead of failing. If the directory already
-exists, reuse it. If it cannot be created although the parent path exists, fall
-back to prefixing each scratch file you write in that parent path with the issue
-number, for example `2878-pr-body.md`.
+directory keeps your files apart from theirs, as the
+[fan-out variant](#orchestrator-fan-out-variant) requires. Before you create it,
+confirm that its parent path already exists. When the parent path is missing,
+create nothing and end the run as a hold: post the hold marker of the Hold
+marker part, and let your report draft carry `held`, as for any hold; if
+`{report-path}` cannot be written because the parent path is missing, the hold
+marker alone is the report. Create the directory with a plain mkdir and never
+use mkdir -p, which would build a mistyped parent path instead of failing. If
+the directory already exists, reuse it. If it cannot be created although the
+parent path exists, fall back to prefixing each scratch file you write in that
+parent path with the issue number, for example `2878-pr-body.md`.
 
 Fill note: copy the scratchpad path that your harness reports, and hand the
 worker an issue-numbered subdirectory of it as `{scratchpad-dir}`. Never type

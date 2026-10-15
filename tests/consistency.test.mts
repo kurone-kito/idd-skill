@@ -2845,6 +2845,7 @@ const BRIEF_PART_BODY_REQUIREMENTS: Readonly<
     'parent path',
     'held',
     'never use mkdir -p',
+    '(#orchestrator-fan-out-variant)',
   ],
   '**Critique allowance.**': [
     '](#critique-pass-invocation)',
@@ -2854,7 +2855,11 @@ const BRIEF_PART_BODY_REQUIREMENTS: Readonly<
     'execution-timeout',
     'idd-ci.instructions.md#wake-up-discipline',
   ],
-  '**Role.**': ['sole worker', 're-delegate'],
+  '**Role.**': [
+    'sole worker',
+    're-delegate',
+    'idd-claim.instructions.md#orchestrator-delegation',
+  ],
   '**Claim token.**': [
     'recompute the nonce winner',
     'idd-claim.instructions.md#orchestrator-delegation',
@@ -2863,6 +2868,7 @@ const BRIEF_PART_BODY_REQUIREMENTS: Readonly<
     'idd-pr-submit.instructions.md#d1--sync-development-branch-before-first-push',
     'idd-review-triage.instructions.md#e-phase-branch-sync-check',
     'do not paraphrase',
+    'git rev-parse --abbrev-ref HEAD',
   ],
   '**Wake-up discipline.**': [
     'Never end your turn',
