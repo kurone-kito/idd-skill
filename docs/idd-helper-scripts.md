@@ -323,7 +323,7 @@ default run rather than a usage error.
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ---------------------------------------------- | ----------------------- |
 | `advisory-comment-debounce.mjs`      | unknown flag exits `1`; missing `--pr` or `--triggered-at` exits `2`                                                      | a `gh` failure collecting comment events           | —                                              | an unexpected exception |
 | `advisory-convergence.mjs`           | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving review state              | `--assert` when the verdict is not ready       | an unexpected exception |
-| `advisory-wait-state.mjs`            | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving advisory wait state       | —                                              | an unexpected exception |
+| `advisory-wait-state.mjs`            | missing `--pr`, an unknown flag, an invalid `--wait` or `--poll-interval`, or `--now` with `--wait` (exit `1`)            | a `gh` failure resolving advisory wait state       | —                                              | an unexpected exception |
 | `ci-wait-policy.mjs`                 | an unknown flag (exit `1`); no arguments is a successful exit `0`                                                         | a `gh` failure resolving a `--run-id`              | —                                              | an unexpected exception |
 | `rerun-advisory-convergence.mjs`     | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving rerun state               | `--apply` reports a per-instance failure       | an unexpected exception |
 | `review-activity-snapshot.mjs`       | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving review activity           | —                                              | an unexpected exception |
@@ -2932,6 +2932,9 @@ The adopted helper boundaries are intentionally narrow:
   posts markers, or mutates PR state
 - it does not replace the advisory-wait decision table; it only reduces
   command-copy variance when collecting canonical AW evidence
+- with `--wait`, it polls inside the helper until the state settles or a
+  bound of at most `PT8M` elapses, and stays read-only (see Advisory-wait
+  evidence below)
 
 - `ci-wait-policy.mjs` is read-only, resolves `ciWait.*` defaults from
   `.github/idd/config.json`, and can evaluate whether the current rerun
@@ -5835,6 +5838,36 @@ like `activation-nonce`, because a worker posts it as itself.
   the recovery-cycle budget read as the full un-decremented cap — always
   pass both when consulting `staleRequestRecovery` for a mutation
   decision (see `idd-advisory-wait.instructions.md`'s `AW3-S`).
+- Optional `--wait <duration>` and `--poll-interval <duration>`
+  (kurone-kito/idd-skill#4378): `--wait` (at most `PT8M`) makes the helper
+  read the full state and, while `outcome` is `WAIT`, sleep and read again,
+  so a caller that cannot sleep in the foreground blocks inside one tool
+  call, as it does with `gh pr checks --watch`. After every read the loop
+  ends in this precedence: `head-changed` (the read names a different
+  `prHeadSha` than the first; the printed state is that later read), then
+  `settled` (`outcome` is not `WAIT`, or `copilotRecovery.state` is
+  `COPILOT_UNAVAILABLE`, which needs both `--claim-id` and `--agent-id`;
+  `f3Outcome` is not followed), then `bound-elapsed`. The bound is a
+  wall-clock deadline measured from before the first read; before a sleep
+  that would pass it the helper sleeps only the remaining time and takes
+  one last full read, which catches a `WAIT` that time turned into
+  `SATISFIED`. `--poll-interval` (at least `PT60S`, at most `--wait`)
+  defaults to `pollIntervalMinutes`, capped at `--wait`, and needs
+  `--wait`; `--now` cannot be combined with `--wait`. Each poll makes
+  exactly the reads of one run without `--wait`, so one call makes at most
+  `1 + ceil(wait / poll-interval)` of them, and no mode posts, writes a
+  marker, or requests a review. As in a single run, a failed viewer-login
+  read is swallowed and leaves the viewer out of the trusted marker logins
+  (preventive; no observed incident yet), and a poll does not retry it, so
+  check `trustedMarkerSummary.viewerLogin` before acting on an `outcome`
+  that changed during a wait. Re-issue the
+  call while `waitEnded` is `bound-elapsed`, with the tool's
+  execution-timeout override near its ceiling, as the wake-up discipline in
+  `idd-ci.instructions.md` requires.
+- Only with `--wait`, the output gains two optional fields:
+  `waitedSeconds` (an integer, the elapsed time rounded down to whole
+  seconds) and `waitEnded` (`settled`, `bound-elapsed`, or `head-changed`).
+  Neither is in the schema's required list.
 
 **Terminal stall-recovery marker contract** (`#1572`;
 `idd-advisory-wait.instructions.md`'s Terminal Copilot stall-recovery

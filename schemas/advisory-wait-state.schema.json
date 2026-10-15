@@ -311,6 +311,16 @@
         }
       },
       "additionalProperties": false
+    },
+    "waitedSeconds": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Present only when the helper ran with --wait (#4378): the seconds from before the first read to after the last one, rounded down to whole seconds (a first read that settles at once reports 0 unless that read itself took a second or more)."
+    },
+    "waitEnded": {
+      "type": "string",
+      "enum": ["settled", "bound-elapsed", "head-changed"],
+      "description": "Present only when the helper ran with --wait (#4378): why the call returned. The precedence is head-changed (a later read names a different prHeadSha than the first, and the printed state is that later read), then settled (outcome is not WAIT, or copilotRecovery.state is COPILOT_UNAVAILABLE), then bound-elapsed (the --wait bound passed with the state still unsettled and the head unchanged; the caller re-issues the call)."
     }
   },
   "additionalProperties": false

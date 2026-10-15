@@ -31,7 +31,10 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mts';
 import { loadIddConfig } from './idd-config.mts';
-import { normalizePolicyConfig } from './policy-helpers.mts';
+import {
+  normalizePolicyConfig,
+  parseIsoDurationToMs,
+} from './policy-helpers.mts';
 import {
   advisoryWaitFamilyMarkerStart,
   buildAdvisoryWaitSummary,
@@ -176,6 +179,10 @@ interface AdvisoryWaitStateArgs {
   claimId: string;
   agentId: string;
   now: string;
+  /** `--wait` as typed, or `null` when the flag is absent (#4378). */
+  wait: string | null;
+  /** `--poll-interval` as typed, or `null` when the flag is absent. */
+  pollInterval: string | null;
   help: boolean;
 }
 
@@ -756,7 +763,20 @@ export type AdvisoryWaitStateReport = ReturnType<
   trustedMarkerActorsSource: TrustedMarkerActorResolution['source'];
   copilotRecovery: CopilotRecoverySummary;
   staleRequestRecovery: StaleRequestRecoveryAction;
+  /**
+   * `--wait` only (#4378): whole seconds the call spent waiting, rounded
+   * down. Absent without `--wait`.
+   */
+  waitedSeconds?: number;
+  /** `--wait` only: why the wait ended. Absent without `--wait`. */
+  waitEnded?: AdvisoryWaitEnded;
 };
+
+/**
+ * Why a `--wait` call returned. The precedence is `head-changed`, then
+ * `settled`, then `bound-elapsed`.
+ */
+export type AdvisoryWaitEnded = 'settled' | 'bound-elapsed' | 'head-changed';
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
@@ -784,8 +804,28 @@ const ADVISORY_WAIT_STATE_FLAG_SPEC = {
   '--claim-id': { type: 'string', default: '' },
   '--agent-id': { type: 'string', default: '' },
   '--now': { type: 'string', default: '' },
+  // #4378: no `default` on purpose -- an explicit empty value must stay
+  // distinguishable from an absent flag, so `--wait ''` is a malformed
+  // duration (usage error) and not a silent no-wait run.
+  '--wait': { type: 'string' },
+  '--poll-interval': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
+
+// #4378: declared here, above the import.meta.main trigger, for the same
+// temporal-dead-zone reason as the flag spec above -- main() reads both while
+// the module is still being evaluated.
+/**
+ * The longest `--wait`: one call, start-up and the last read included, ends
+ * before the 600000 ms foreground limit of a tool call.
+ */
+const MAX_WAIT_MS = 8 * 60 * 1000;
+/** The shortest explicit `--poll-interval`, and the fallback interval. */
+const MIN_POLL_INTERVAL_MS = 60 * 1000;
+const WAIT_FLAG_USAGE_MESSAGE =
+  '--wait must be an ISO 8601 duration of at least one second and at most PT8M (for example PT5M)';
+const POLL_INTERVAL_FLAG_USAGE_MESSAGE =
+  '--poll-interval must be an ISO 8601 duration of at least PT60S and at most --wait (for example PT2M)';
 
 if (import.meta.main) {
   // #3344: call main() directly when the envelope is disabled -- see
@@ -832,6 +872,52 @@ export function resolveNowFlag(rawNow: string): {
   return { now: normalized, error: null };
 }
 
+/** What {@link resolveWaitFlags} decided about `--wait` and `--poll-interval`. */
+export type WaitFlagsResolution =
+  | { error: string }
+  | { error: null; waitMs: number | null; pollIntervalMs: number | null };
+
+/**
+ * Resolve `--wait` and `--poll-interval` at the argument-handling boundary
+ * (#4378), before any `gh` call, to milliseconds or one usage message. An
+ * absent `--wait` (and no `--poll-interval`) resolves to `null` and leaves the
+ * helper a single read. Each of these is a usage error: a `--wait` that is
+ * empty, malformed, zero, or above `PT8M`; a `--poll-interval` below `PT60S`,
+ * above `--wait`, malformed, or given without `--wait`; and `--now` combined
+ * with `--wait`, because a fixed clock cannot elapse.
+ */
+export function resolveWaitFlags(
+  args: Pick<AdvisoryWaitStateArgs, 'wait' | 'pollInterval' | 'now'>,
+): WaitFlagsResolution {
+  if (args.wait === null) {
+    return args.pollInterval === null
+      ? { error: null, waitMs: null, pollIntervalMs: null }
+      : { error: '--poll-interval requires --wait' };
+  }
+  const waitMs = parseIsoDurationToMs(args.wait);
+  if (waitMs === null || waitMs > MAX_WAIT_MS) {
+    return { error: WAIT_FLAG_USAGE_MESSAGE };
+  }
+  if (args.now !== '') {
+    return {
+      error:
+        '--now cannot be combined with --wait: a fixed clock cannot elapse',
+    };
+  }
+  if (args.pollInterval === null) {
+    return { error: null, waitMs, pollIntervalMs: null };
+  }
+  const pollIntervalMs = parseIsoDurationToMs(args.pollInterval);
+  if (
+    pollIntervalMs === null ||
+    pollIntervalMs < MIN_POLL_INTERVAL_MS ||
+    pollIntervalMs > waitMs
+  ) {
+    return { error: POLL_INTERVAL_FLAG_USAGE_MESSAGE };
+  }
+  return { error: null, waitMs, pollIntervalMs };
+}
+
 // The CLI body. Guarded behind `import.meta.main` so importing this
 // module (for unit tests) does not parse process.argv, fail, or make a
 // `gh` call. Returns 0 or throws -- `runHelperCli` (#3344) classifies a
@@ -852,17 +938,12 @@ function main(): HelperCliResult {
   // any network round-trip first.
   const { now: resolvedNow, error: nowFlagError } = resolveNowFlag(args.now);
   if (nowFlagError) {
-    // Returned as a classified `usage` outcome (Codex review, PR #3551)
-    // rather than a bare `1` -- see advisory-convergence.mts's identical
-    // comment for why a plain number misclassifies as `kind: 'gate'`
-    // under `IDD_HELPER_ERROR_ENVELOPE=1`.
-    process.stderr.write(`${nowFlagError}\n`);
-    return {
-      exitCode: 1,
-      kind: 'usage',
-      message: nowFlagError,
-      httpStatus: null,
-    };
+    return usageFailure(nowFlagError);
+  }
+  // #4378: the same pre-network rule for --wait / --poll-interval.
+  const waitFlags = resolveWaitFlags(args);
+  if (waitFlags.error !== null) {
+    return usageFailure(waitFlags.error);
   }
 
   const currentRepo =
@@ -870,22 +951,86 @@ function main(): HelperCliResult {
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
   const port = createGithubProviderAdapter(owner, repo);
+  const input = {
+    prNumber: args.prNumber,
+    owner,
+    repo,
+    trustedMarkerLogins: args.trustedMarkerLogins,
+    claimId: args.claimId,
+    agentId: args.agentId,
+  };
+  // Without --wait the helper makes one read, exactly as before (#4378).
+  const report =
+    waitFlags.waitMs === null
+      ? readAdvisoryWaitState(port, {
+          ...input,
+          now: resolvedNow,
+          clock: Date.now,
+        })
+      : waitForAdvisoryWaitState(port, input, {
+          waitMs: waitFlags.waitMs,
+          pollIntervalMs: waitFlags.pollIntervalMs,
+          sleep: sleepSync,
+          now: Date.now,
+        });
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return 0;
+}
+
+/**
+ * A classified `usage` outcome (Codex review, PR #3551) rather than a bare
+ * `1` -- see advisory-convergence.mts's identical comment for why a plain
+ * number misclassifies as `kind: 'gate'` under `IDD_HELPER_ERROR_ENVELOPE=1`.
+ * One line on stderr, nothing on stdout.
+ */
+function usageFailure(message: string): HelperCliResult {
+  process.stderr.write(`${message}\n`);
+  return { exitCode: 1, kind: 'usage', message, httpStatus: null };
+}
+
+/** Everything one read of the advisory-wait state needs. */
+export interface AdvisoryWaitStateReadInput {
+  prNumber: number;
+  owner: string;
+  repo: string;
+  /** The `--trusted-marker-logins` flag value (`''` when absent). */
+  trustedMarkerLogins: string;
+  claimId: string;
+  agentId: string;
+  /**
+   * The normalized `--now` value, or `''` to sample the clock after the
+   * evidence is collected (see {@link resolveNowFlag}).
+   */
+  now: string;
+  /** Wall clock in epoch milliseconds; sampled late when `now` is `''`. */
+  clock: () => number;
+}
+
+/**
+ * One full read of the advisory-wait state: every provider read the helper
+ * makes, then the summary, the terminal-recovery state and the stale-request
+ * recovery verdict. Read-only; the CLI prints its result once.
+ */
+export function readAdvisoryWaitState(
+  port: ProviderPort,
+  input: AdvisoryWaitStateReadInput,
+): AdvisoryWaitStateReport {
   const viewerLogin = port.resolveViewerLoginSafe().viewerLogin;
   const { actors: configuredTrustedActors, source: trustedMarkerActorsSource } =
     resolveTrustedMarkerActors({
-      flagValue: args.trustedMarkerLogins,
+      flagValue: input.trustedMarkerLogins,
       envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
       config: loadIddConfig(),
     });
 
-  const prHeadSha = port.getChangeRequestHeadSha(args.prNumber);
+  const prHeadSha = port.getChangeRequestHeadSha(input.prNumber);
 
-  const reviews = port.listReviews(args.prNumber) as ReviewPayload[];
+  const reviews = port.listReviews(input.prNumber) as ReviewPayload[];
   const restRequestedReviewers: GhAuthorPayload[] = port
-    .getChangeRequestRequestedReviewerLogins(args.prNumber)
+    .getChangeRequestRequestedReviewerLogins(input.prNumber)
     .map((login) => ({ login }));
   const timelineEvents = port.getWorkItemTimeline(
-    args.prNumber,
+    input.prNumber,
   ) as TimelineEventPayload[];
   // #3249: `includeEditState` resolves each comment's GraphQL `lastEditedAt`
   // -- needed so `summarizeAdvisoryWaitMarkers` and
@@ -893,7 +1038,7 @@ function main(): HelperCliResult {
   // reject a body-edited `advisory-wait:` / `advisory-wait-recovery:`
   // marker. A GraphQL failure now throws where this call previously could
   // not; see this issue's PR description for that tradeoff.
-  const comments = port.listWorkItemComments(args.prNumber, {
+  const comments = port.listWorkItemComments(input.prNumber, {
     includeEditState: true,
   });
 
@@ -932,7 +1077,7 @@ function main(): HelperCliResult {
       copilotPendingCoversHeadForGraphqlGate &&
       lastCopilotCommitForGraphqlGate !== prHeadSha
     )
-      ? port.getChangeRequestRequestedReviewerLoginsGraphql(args.prNumber)
+      ? port.getChangeRequestRequestedReviewerLoginsGraphql(input.prNumber)
       : null;
 
   const summary = buildAdvisoryWaitSummary(
@@ -949,7 +1094,9 @@ function main(): HelperCliResult {
       // AFTER every evidence-collection call above has completed -- not
       // inside resolveNowFlag, which would sample it before collection
       // even starts. See resolveNowFlag's own doc comment for why.
-      now: resolvedNow || new Date().toISOString().replace('.000Z', 'Z'),
+      now:
+        input.now ||
+        new Date(input.clock()).toISOString().replace('.000Z', 'Z'),
       requestCap: advisoryWaitPolicy.requestCap,
       pendingWindowMinutes: advisoryWaitPolicy.pendingWindowMinutes,
       settledWindowMinutes: advisoryWaitPolicy.settledWindowMinutes,
@@ -987,8 +1134,8 @@ function main(): HelperCliResult {
     providerOutageTerminalWindowOverrideMinutes !== null
       ? resolveOutageDeclarationActiveForConvergenceSelector({
           port,
-          owner,
-          repo,
+          owner: input.owner,
+          repo: input.repo,
           iddConfig: iddConfigForTerminalWindow,
           now: summary.now,
         })
@@ -1008,8 +1155,8 @@ function main(): HelperCliResult {
     {
       now: summary.now,
       trustedMarkerLogins,
-      claimId: args.claimId,
-      agentId: args.agentId,
+      claimId: input.claimId,
+      agentId: input.agentId,
       recoveryCycleCap: readAdvisoryRecoveryCycleCap(),
       terminalWindowMinutes: resolveEffectiveAdvisoryTerminalWindowMinutes({
         config: validatedAdvisoryWaitConfigForTerminalWindow,
@@ -1034,20 +1181,131 @@ function main(): HelperCliResult {
     settledWindowMinutes: summary.settledWindowMinutes,
   });
 
-  process.stdout.write(
-    `${JSON.stringify(
-      {
-        ...summary,
-        trustedMarkerActors: configuredTrustedActors,
-        trustedMarkerActorsSource,
-        copilotRecovery,
-        staleRequestRecovery,
-      },
-      null,
-      2,
-    )}\n`,
+  return {
+    ...summary,
+    trustedMarkerActors: configuredTrustedActors,
+    trustedMarkerActorsSource,
+    copilotRecovery,
+    staleRequestRecovery,
+  };
+}
+
+/**
+ * Options for {@link waitForAdvisoryWaitState}, in the style of
+ * `AdvisoryConvergencePollOptions` (advisory-convergence.mts): `sleep` and
+ * `now` exist so a test can inject a deterministic, instant clock; production
+ * passes the real `sleepSync` and `Date.now`. The injected `sleep` is the only
+ * thing that should advance the injected `now`.
+ */
+export interface AdvisoryWaitStateWaitOptions {
+  /** Wall-clock bound in milliseconds, measured from before the first read. */
+  waitMs: number;
+  /**
+   * An explicit poll interval in milliseconds. Absent or `null`, the interval
+   * is the effective policy interval (`pollIntervalMinutes` of the first
+   * read), and in both cases it is capped at `waitMs`.
+   */
+  pollIntervalMs?: number | null;
+  sleep: (ms: number) => void;
+  now: () => number;
+}
+
+/**
+ * `true` when waiting cannot change the answer: `outcome` is not `WAIT`, or
+ * the terminal Copilot-unavailable state holds (which needs the claim and
+ * agent ids; without them it stays `NOT_TERMINAL`). The loop follows
+ * `outcome` only -- `f3Outcome`, which F3 reads instead, is not consulted.
+ */
+function advisoryWaitStateIsSettled(report: AdvisoryWaitStateReport): boolean {
+  return (
+    report.outcome !== 'WAIT' ||
+    report.copilotRecovery.state === 'COPILOT_UNAVAILABLE'
   );
-  return 0;
+}
+
+/**
+ * `--wait` (#4378): read the full state, and while it is unsettled sleep and
+ * read the full state again, until it settles, the PR head changes, or the
+ * wall-clock bound elapses. Read-only: it makes no POST, writes no marker and
+ * requests no review in any mode, and every poll makes exactly the reads one
+ * run without `--wait` makes, so a call performs at most
+ * `1 + ceil(waitMs / pollIntervalMs)` of them. A read that throws propagates
+ * unchanged.
+ *
+ * The bound is a deadline measured from before the first read. Before a sleep
+ * that would pass it, only the remaining time is slept and one last full read
+ * is taken -- that read is what catches a `WAIT` the passing of time turns
+ * into `SATISFIED`. The read after such a clamped sleep is final whatever the
+ * clock says, so a wake a millisecond early cannot add a read. After every
+ * read the end states apply in this order: `head-changed` (the `prHeadSha`
+ * differs from the first read's, so the caller acts on the new head),
+ * `settled`, then `bound-elapsed`. The returned report is the last read plus
+ * `waitedSeconds` and `waitEnded`.
+ *
+ * The 8-minute cap on `waitMs` and the 60-second floor on an explicit
+ * interval are the CLI's rules, enforced by {@link resolveWaitFlags} before
+ * any provider call; `main()` is this function's only production caller.
+ */
+export function waitForAdvisoryWaitState(
+  port: ProviderPort,
+  input: Omit<AdvisoryWaitStateReadInput, 'now' | 'clock'>,
+  options: AdvisoryWaitStateWaitOptions,
+): AdvisoryWaitStateReport {
+  const { waitMs, sleep, now } = options;
+  if (!Number.isFinite(waitMs) || waitMs <= 0) {
+    throw new Error('waitMs must be a positive number of milliseconds');
+  }
+  // `--now` cannot be combined with `--wait`, so every read samples the
+  // injected clock after its own evidence is collected.
+  const read = (): AdvisoryWaitStateReport =>
+    readAdvisoryWaitState(port, { ...input, now: '', clock: now });
+  const startedAt = now();
+  const deadline = startedAt + waitMs;
+  let report = read();
+  const firstHeadSha = report.prHeadSha;
+  const policyIntervalMs = report.pollIntervalMinutes * 60 * 1000;
+  const requestedIntervalMs = options.pollIntervalMs ?? policyIntervalMs;
+  const intervalMs = Math.min(
+    Number.isFinite(requestedIntervalMs) && requestedIntervalMs > 0
+      ? requestedIntervalMs
+      : MIN_POLL_INTERVAL_MS,
+    waitMs,
+  );
+  let lastReadIsFinal = false;
+  for (;;) {
+    const at = now();
+    let waitEnded: AdvisoryWaitEnded | null = null;
+    if (report.prHeadSha !== firstHeadSha) {
+      waitEnded = 'head-changed';
+    } else if (advisoryWaitStateIsSettled(report)) {
+      waitEnded = 'settled';
+    } else if (lastReadIsFinal || at >= deadline) {
+      waitEnded = 'bound-elapsed';
+    }
+    if (waitEnded !== null) {
+      return {
+        ...report,
+        waitedSeconds: Math.max(0, Math.floor((at - startedAt) / 1000)),
+        waitEnded,
+      };
+    }
+    const remainingMs = deadline - at;
+    const pauseMs = Math.min(intervalMs, remainingMs);
+    lastReadIsFinal = pauseMs >= remainingMs;
+    sleep(pauseMs);
+    report = read();
+  }
+}
+
+/**
+ * Synchronous bounded sleep via `Atomics.wait` on a throwaway
+ * `SharedArrayBuffer`, kept synchronous so `main()` stays a plain
+ * `() => HelperCliResult` (the `import.meta.main` trigger above does not
+ * await it). Duplicated rather than imported, like the same one-line function
+ * in `advisory-convergence.mts` and `clone-lock.mts`.
+ */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /**
@@ -1083,18 +1341,29 @@ export function parseArgs(argv: string[]): AdvisoryWaitStateArgs {
     claimId: values['claim-id'] as string,
     agentId: values['agent-id'] as string,
     now: values.now as string,
+    wait: (values.wait as string | undefined) ?? null,
+    pollInterval: (values['poll-interval'] as string | undefined) ?? null,
     help,
   };
 }
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/advisory-wait-state.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--claim-id <id> --agent-id <id>] [--now <ISO8601>]
+  node scripts/advisory-wait-state.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--claim-id <id> --agent-id <id>] [--now <ISO8601>] [--wait <ISO8601-duration> [--poll-interval <ISO8601-duration>]]
 
 --claim-id / --agent-id are OPTIONAL (#1572): when both are supplied, the
 copilotRecovery section in the output binds recovery-cycle accounting and the
 terminal clock to that active claim. When either is absent, copilotRecovery
 fails closed to NOT_TERMINAL with reason: active-claim-not-provided.
+
+--wait is OPTIONAL (#4378): a duration of at most PT8M. The helper reads the
+state, and while outcome is WAIT it sleeps and reads again, until outcome is
+not WAIT (or copilotRecovery.state is COPILOT_UNAVAILABLE), the PR head
+changes, or the bound elapses. The output then adds waitedSeconds and
+waitEnded (settled, bound-elapsed, or head-changed). --poll-interval is
+OPTIONAL, needs --wait, and is at least PT60S and at most --wait; it defaults
+to the policy poll interval (pollIntervalMinutes). --now cannot be combined
+with --wait. Read-only in every mode.
 `);
 }
 

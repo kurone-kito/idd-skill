@@ -28,7 +28,7 @@ import {
   stripGeneratedFromBanner,
 } from '../src/scripts/consistency-helpers.mts';
 import { findPlaceholders } from '../src/scripts/idd-doctor.mts';
-import { readJson, readText } from './test-utils.mts';
+import { normalizeWhitespace, readJson, readText } from './test-utils.mts';
 
 test('placeholder scenarios detect clean and dirty post-onboarding fixtures', () => {
   const clean = collectPlaceholderHits(
@@ -2594,4 +2594,456 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   );
   assert.match(finalCheck, /stop before issue digest or unclaim/);
   assert.match(finalCheck, /if\s+lost, post no hold/);
+});
+
+// #4377: the fan-out variant's "Delegation brief template" assembles the brief
+// elements that four places state separately. Each row names an element, the
+// file that supplies its single-line anchor, the anchor, and the template label
+// (a bold run-in head) that must carry the element in both docs copies.
+const BRIEF_TEMPLATE_HEADING = '#### Delegation brief template';
+const BRIEF_TEMPLATE_NEXT_HEADING = '### Orchestrator run report';
+const BRIEF_TEMPLATE_DOC_COPIES = [
+  'docs/idd-workflow.md',
+  'idd-template/docs/idd-workflow.md',
+];
+// Each placeholder must appear in the part that uses it, not only in the
+// definitions list at the top of the section.
+const BRIEF_TEMPLATE_PLACEHOLDER_OWNERS: Readonly<Record<string, string>> = {
+  '{issue-number}': '**Role.**',
+  '{agent-id}': '**Claim token.**',
+  '{claim-id}': '**Claim token.**',
+  '{nonce}': '**Claim token.**',
+  '{branch-name}': '**Branch and worktree.**',
+  '{worktree-path}': '**Branch and worktree.**',
+  '{scratchpad-dir}': '**Scratchpad.**',
+  '{report-path}': '**Worker report.**',
+  '{terminal-phase}': '**Terminal phase.**',
+};
+// The observed-incident wording the issue requires for each cited failure.
+const BRIEF_INCIDENT_WORDING = ['no issue records', '2026-10-14 to 2026-10-15'];
+const BRIEF_ELEMENT_ROWS: readonly {
+  element: string;
+  source: string;
+  anchor: string;
+  label: string;
+}[] = [
+  {
+    element: 'topology-safety condition',
+    source: 'idd-template/docs/idd-workflow.md',
+    anchor: '- **A delegation brief that restates the background-wait topology',
+    label: '**Wake-up discipline.**',
+  },
+  {
+    element: 'exit boundary and scope stop',
+    source: 'idd-template/docs/idd-workflow.md',
+    anchor:
+      'carries `scope-stopped` and not `held`. A gate or unmet condition that',
+    label: '**Terminal phase.**',
+  },
+  {
+    element: 'scratchpad rules',
+    source: 'idd-template/docs/idd-workflow.md',
+    anchor: '- **A delegation brief that requires issue-number-namespaced',
+    label: '**Scratchpad.**',
+  },
+  {
+    element: 'claim token and activation nonce',
+    source: 'idd-template/docs/idd-workflow.md',
+    anchor: '- **The delegation brief carries the claim token verbatim, nonce',
+    label: '**Claim token.**',
+  },
+  {
+    element: 'cold-start rule for the review phases',
+    source: 'idd-template/docs/idd-workflow.md',
+    anchor:
+      '- **A delegation brief resuming mid-review at E4 or E9 must run the',
+    label: '**Review cold start.**',
+  },
+  {
+    element: 'hold-marker rule',
+    source: 'idd-template/docs/idd-workflow.md',
+    anchor: '- **Hold marker.**',
+    label: '**Hold marker.**',
+  },
+  {
+    element: 'sole-worker role statement',
+    source:
+      'idd-template/.github/instructions/claim-orchestrator.instructions.md',
+    anchor:
+      '**State the worker role explicitly when the delegate inherits full',
+    label: '**Role.**',
+  },
+  {
+    element: 'branch rules',
+    source:
+      'idd-template/.github/instructions/claim-orchestrator.instructions.md',
+    anchor: '**Cite the branch rules, do not restate them.**',
+    label: '**Branch and worktree.**',
+  },
+  {
+    element: 'execution-timeout override carried by the brief',
+    source:
+      'idd-template/.github/instructions/claim-orchestrator.instructions.md',
+    anchor:
+      'and the execution-timeout override for a heavy or long-running local',
+    label: '**Execution timeout.**',
+  },
+  {
+    element: 'execution-timeout override text',
+    source: 'idd-template/.github/instructions/idd-ci.instructions.md',
+    anchor: '## Wake-up discipline',
+    label: '**Execution timeout.**',
+  },
+  {
+    element: 'hold-marker requirement for the brief',
+    source:
+      'idd-template/.github/instructions/claim-orchestrator.instructions.md',
+    anchor: '**Restate the hold-marker requirement.**',
+    label: '**Hold marker.**',
+  },
+  {
+    element: 'worker report request',
+    source:
+      'idd-template/.github/instructions/idd-orchestrator.instructions.md',
+    anchor:
+      '- The brief asks for a per-worker `schemas/worker-report.schema.json`',
+    label: '**Worker report.**',
+  },
+  {
+    element: 'critique allowance: harness limits',
+    source: 'idd-template/docs/idd-workflow.md',
+    anchor: '## Worker delegation',
+    label: '**Critique allowance.**',
+  },
+  {
+    element: 'critique allowance: invocation',
+    source: 'idd-template/docs/idd-workflow.md',
+    anchor: '## Critique pass invocation',
+    label: '**Critique allowance.**',
+  },
+  {
+    element: 'critique allowance: context-inheriting residual risk',
+    source:
+      'idd-template/.github/instructions/claim-orchestrator.instructions.md',
+    anchor: '**Known limitation.**',
+    label: '**Critique allowance.**',
+  },
+  {
+    element: 'terminal phase: F4 head proof before step 3',
+    source: 'idd-template/.github/instructions/idd-merge.instructions.md',
+    anchor: '2. Re-validate claim; confirm the PR digest',
+    label: '**Terminal phase.**',
+  },
+  {
+    element: 'terminal phase: step 7 digest and unclaimed-by',
+    source: 'idd-template/.github/instructions/idd-merge.instructions.md',
+    anchor: '7. After steps 4–6',
+    label: '**Terminal phase.**',
+  },
+  {
+    element: 'lock sentence of F4 step 4',
+    source: 'idd-template/.github/instructions/idd-merge.instructions.md',
+    anchor: '4. Concurrent workers sharing one clone: serialize this fetch and',
+    label: '**Terminal phase.**',
+  },
+  {
+    element: 'primary-worktree exemption: F4 step 5 runs from the primary',
+    source: 'idd-template/.github/instructions/idd-merge.instructions.md',
+    anchor: '5. Run from the **primary worktree**, not one being removed.',
+    label: '**Terminal phase.**',
+  },
+  {
+    element: 'primary-worktree exemption: F4 step 4 runs from the primary',
+    source: 'idd-template/.github/instructions/idd-merge.instructions.md',
+    anchor: 'From the **primary worktree** (elsewhere would fast-forward the',
+    label: '**Terminal phase.**',
+  },
+  {
+    element: 'primary-worktree exemption: harness reclaim skip',
+    source: 'idd-template/.github/instructions/idd-work.instructions.md',
+    anchor:
+      'remove` steps; let the harness reclaim it and finish the rest (issue',
+    label: '**Terminal phase.**',
+  },
+  {
+    element: 'branch rules: D1 of the PR submit phase',
+    source: 'idd-template/.github/instructions/idd-pr-submit.instructions.md',
+    anchor: '## D1 — Sync {development-branch} before first push',
+    label: '**Branch and worktree.**',
+  },
+  {
+    element: 'branch rules: E-phase branch-sync check',
+    source:
+      'idd-template/.github/instructions/idd-review-triage.instructions.md',
+    anchor: '## E-phase branch-sync check',
+    label: '**Branch and worktree.**',
+  },
+  {
+    element: 'primary-worktree exemption: host-isolated worktree skips',
+    source: 'idd-template/.github/instructions/idd-work.instructions.md',
+    anchor: '### Already inside a host-isolated worktree',
+    label: '**Terminal phase.**',
+  },
+  {
+    element: 'scratchpad part',
+    source:
+      'idd-template/.github/instructions/claim-orchestrator.instructions.md',
+    anchor: '**Restate the scratchpad file-naming requirement.**',
+    label: '**Scratchpad.**',
+  },
+];
+// Strings that must sit inside one labeled part, so a part with the right label
+// and the wrong content fails. Checked on whitespace-collapsed part text.
+const BRIEF_PART_REQUIREMENTS: Readonly<Record<string, readonly string[]>> = {
+  '**Terminal phase.**': [
+    ...BRIEF_INCIDENT_WORDING,
+    '{terminal-phase}',
+    'unclaimed-by',
+    'scope-stopped',
+    'idd-merge.instructions.md#f4--cleanup',
+    'host-isolated',
+    'F4 steps 4 to 6',
+  ],
+  '**Scratchpad.**': [
+    ...BRIEF_INCIDENT_WORDING,
+    'issue-numbered',
+    'parent path',
+    'held',
+    'never use mkdir -p',
+  ],
+  '**Execution timeout.**': [
+    'execution-timeout',
+    'idd-ci.instructions.md#wake-up-discipline',
+  ],
+  '**Critique allowance.**': [
+    ...BRIEF_INCIDENT_WORDING,
+    '](#critique-pass-invocation)',
+    '](#worker-delegation)',
+    'Limits',
+    'depth 2',
+    'context-inheriting fork',
+  ],
+};
+
+// Strings that must sit in the worker-facing text of a part, before its Fill
+// note, so that a string kept only in a note (which is not copied into a brief)
+// does not satisfy the check.
+const BRIEF_PART_BODY_REQUIREMENTS: Readonly<
+  Record<string, readonly string[]>
+> = {
+  '**Terminal phase.**': [
+    '{terminal-phase}',
+    'unclaimed-by',
+    'host-isolated',
+    'idd-merge.instructions.md#f4--cleanup',
+    'idd-resume-detail.md#f4-head-proof',
+    'idd-helper-scripts.md#clone-scoped-lock',
+    'first entry of `git worktree list`',
+  ],
+  '**Scratchpad.**': [
+    'issue-numbered',
+    'parent path',
+    'held',
+    'never use mkdir -p',
+    '(#orchestrator-fan-out-variant)',
+  ],
+  '**Critique allowance.**': [
+    '](#critique-pass-invocation)',
+    'non-context-inheriting',
+  ],
+  '**Execution timeout.**': [
+    'execution-timeout',
+    'idd-ci.instructions.md#wake-up-discipline',
+  ],
+  '**Role.**': [
+    'sole worker',
+    're-delegate',
+    'idd-claim.instructions.md#orchestrator-delegation',
+  ],
+  '**Claim token.**': [
+    'recompute the nonce winner',
+    'idd-claim.instructions.md#orchestrator-delegation',
+  ],
+  '**Branch and worktree.**': [
+    'idd-pr-submit.instructions.md#d1--sync-development-branch-before-first-push',
+    'idd-review-triage.instructions.md#e-phase-branch-sync-check',
+    'do not paraphrase',
+    'git rev-parse --abbrev-ref HEAD',
+  ],
+  '**Wake-up discipline.**': [
+    'Never end your turn',
+    'idd-ci.instructions.md#wake-up-discipline',
+  ],
+  '**Hold marker.**': ['idd-hold', 'after your last `claimed-by`', 'held'],
+  '**Review cold start.**': [
+    'idd-review-snapshot.instructions.md#cold-start-reviewitems_snapshot-reconstruction',
+    '(#reviewitems_snapshot-lifecycle)',
+  ],
+  '**Worker report.**': [
+    'schemas/worker-report.schema.json',
+    'any non-empty value',
+    'leave `verifiedAt` and `recordedAt` out',
+    '(#worker-report-outcomes)',
+  ],
+};
+
+function sliceBriefTemplate(path: string, text: string) {
+  const variantStart = text.indexOf('### Orchestrator fan-out variant\n');
+  const start = text.indexOf(`\n${BRIEF_TEMPLATE_HEADING}\n`, variantStart) + 1;
+  assert.ok(
+    variantStart >= 0 && start > variantStart,
+    `${path}: the template heading must sit inside the fan-out variant`,
+  );
+  assert.equal(
+    text.indexOf(`\n${BRIEF_TEMPLATE_HEADING}\n`, start),
+    -1,
+    `${path}: the template heading must occur once`,
+  );
+  const bodyStart = start + BRIEF_TEMPLATE_HEADING.length;
+  const nextHeading = text.slice(bodyStart).search(/\n#{1,6} /u);
+  assert.ok(nextHeading > 0, `${path}: no heading follows the template`);
+  const end = bodyStart + nextHeading + 1;
+  assert.ok(
+    text.slice(end).startsWith(`${BRIEF_TEMPLATE_NEXT_HEADING}\n`),
+    `${path}: the template must sit directly before ${BRIEF_TEMPLATE_NEXT_HEADING}`,
+  );
+  return { variantStart, start, section: text.slice(start, end) };
+}
+
+test('docs idd-workflow fan-out variant carries a delegation brief template for every brief element (#4377)', () => {
+  const sourceTexts = new Map<string, string>();
+  for (const row of BRIEF_ELEMENT_ROWS) {
+    assert.ok(
+      !row.anchor.includes('\n'),
+      `${row.element}: the anchor must be a single line`,
+    );
+    if (!sourceTexts.has(row.source)) {
+      sourceTexts.set(row.source, readText(row.source));
+    }
+    assert.ok(
+      sourceTexts.get(row.source)?.includes(row.anchor),
+      `${row.element}: anchor not found in ${row.source}: ${row.anchor}`,
+    );
+  }
+  const labels = [...new Set(BRIEF_ELEMENT_ROWS.map((row) => row.label))];
+
+  for (const path of BRIEF_TEMPLATE_DOC_COPIES) {
+    const text = readText(path);
+    const { variantStart, start, section } = sliceBriefTemplate(path, text);
+
+    // The pointer sits in the topology and exit-boundary brief bullet, and
+    // the template follows the variant's last bullet.
+    const bulletStart = text.indexOf(
+      '- **A delegation brief that restates the background-wait topology',
+      variantStart,
+    );
+    const bulletEnd = text.indexOf('\n- **', bulletStart + 1);
+    assert.ok(
+      bulletStart > variantStart &&
+        bulletEnd > bulletStart &&
+        bulletEnd < start,
+      `${path}: topology and exit-boundary bullet not found`,
+    );
+    assert.ok(
+      text
+        .slice(bulletStart, bulletEnd)
+        .includes('](#delegation-brief-template)'),
+      `${path}: the variant's brief bullets must point at the template`,
+    );
+    const renewal = text.indexOf('- **Held-worker renewal.**', variantStart);
+    assert.ok(
+      renewal > variantStart && renewal < start,
+      `${path}: the template must follow the Held-worker renewal bullet`,
+    );
+
+    assert.ok(!section.includes('{{'), `${path}: the template has no {{ token`);
+    const tokens = new Set(section.match(/\{[^}\s]*\}/gu) ?? []);
+    assert.deepEqual(
+      [...tokens].sort(),
+      Object.keys(BRIEF_TEMPLATE_PLACEHOLDER_OWNERS).sort(),
+      `${path}: the placeholders used must be exactly the defined ones`,
+    );
+    const definitions = section.slice(0, section.indexOf('\n**Role.** '));
+    assert.ok(
+      normalizeWhitespace(definitions).includes(
+        'whose name starts with the issue number',
+      ),
+      `${path}: {report-path} must be defined as an issue-number prefix`,
+    );
+    for (const placeholder of tokens) {
+      assert.ok(
+        definitions.includes(`\`${placeholder}\``),
+        `${path}: no definition for ${placeholder}`,
+      );
+    }
+    const flat = normalizeWhitespace(section);
+    for (const wording of BRIEF_INCIDENT_WORDING) {
+      assert.ok(flat.includes(wording), `${path}: missing "${wording}"`);
+    }
+
+    // Split the parts at the exact label literals, never at any bold text.
+    const positions = new Map<string, number>();
+    for (const label of labels) {
+      const position = section.indexOf(`\n${label} `);
+      assert.ok(position >= 0, `${path}: missing template label ${label}`);
+      assert.equal(
+        section.indexOf(`\n${label} `, position + 1),
+        -1,
+        `${path}: duplicate template label ${label}`,
+      );
+      positions.set(label, position);
+    }
+    const partText = (label: string): string => {
+      const position = positions.get(label) ?? -1;
+      const following = [...positions.values()]
+        .filter((other) => other > position)
+        .sort((a, b) => a - b);
+      return normalizeWhitespace(
+        section.slice(position, following[0] ?? section.length),
+      );
+    };
+    for (const [placeholder, label] of Object.entries(
+      BRIEF_TEMPLATE_PLACEHOLDER_OWNERS,
+    )) {
+      assert.ok(
+        partText(label).split(' Fill note: ')[0].includes(placeholder),
+        `${path}: the worker-facing ${label} text must use ${placeholder}`,
+      );
+    }
+    // A Fill note is its own paragraph, and the orchestrator-only incident
+    // wording stays out of the worker-facing text that is copied.
+    for (const match of section.matchAll(/Fill note:/gu)) {
+      assert.equal(
+        section.slice(match.index - 2, match.index),
+        '\n\n',
+        `${path}: a Fill note must start its own paragraph`,
+      );
+    }
+    for (const [label, required] of Object.entries(
+      BRIEF_PART_BODY_REQUIREMENTS,
+    )) {
+      const body = partText(label).split(' Fill note: ')[0];
+      for (const wording of BRIEF_INCIDENT_WORDING) {
+        assert.ok(
+          !body.includes(wording),
+          `${path}: the worker-facing ${label} text must not hold "${wording}"`,
+        );
+      }
+      for (const needle of required) {
+        assert.ok(
+          body.includes(needle),
+          `${path}: the worker-facing ${label} text must hold ${needle}`,
+        );
+      }
+    }
+    for (const [label, required] of Object.entries(BRIEF_PART_REQUIREMENTS)) {
+      const part = partText(label);
+      for (const needle of required) {
+        assert.ok(
+          part.includes(needle),
+          `${path}: the ${label} part must hold ${needle}`,
+        );
+      }
+    }
+  }
 });
