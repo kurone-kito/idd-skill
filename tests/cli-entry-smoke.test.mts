@@ -421,7 +421,7 @@ process.exit(1);
 for (const [binary, helpText] of [
   [
     'advisory-wait-state.mjs',
-    'Usage:\n  node scripts/advisory-wait-state.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--claim-id <id> --agent-id <id>] [--now <ISO8601>]\n\n--claim-id / --agent-id are OPTIONAL (#1572): when both are supplied, the\ncopilotRecovery section in the output binds recovery-cycle accounting and the\nterminal clock to that active claim. When either is absent, copilotRecovery\nfails closed to NOT_TERMINAL with reason: active-claim-not-provided.\n',
+    'Usage:\n  node scripts/advisory-wait-state.mjs --pr <number> [--owner <owner>] [--repo <repo>] [--trusted-marker-logins <login1,login2>] [--claim-id <id> --agent-id <id>] [--now <ISO8601>] [--wait <ISO8601-duration> [--poll-interval <ISO8601-duration>]]\n\n--claim-id / --agent-id are OPTIONAL (#1572): when both are supplied, the\ncopilotRecovery section in the output binds recovery-cycle accounting and the\nterminal clock to that active claim. When either is absent, copilotRecovery\nfails closed to NOT_TERMINAL with reason: active-claim-not-provided.\n\n--wait is OPTIONAL (#4378): a duration of at most PT8M. The helper reads the\nstate, and while outcome is WAIT it sleeps and reads again, until outcome is\nnot WAIT (or copilotRecovery.state is COPILOT_UNAVAILABLE), the PR head\nchanges, or the bound elapses. The output then adds waitedSeconds and\nwaitEnded (settled, bound-elapsed, or head-changed). --poll-interval is\nOPTIONAL, needs --wait, and is at least PT60S and at most --wait; it defaults\nto the policy poll interval (pollIntervalMinutes). --now cannot be combined\nwith --wait. Read-only in every mode.\n',
   ],
   [
     'review-activity-snapshot.mjs',
