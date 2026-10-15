@@ -1954,23 +1954,27 @@ only approval boundary.
   repository that still carries the authoring label and has no active
   claim or open linked pull request, and its trusted owner-marker log must
   replay to one open generation with no release in progress. Every marker
-  of that log must follow the field rules of its mode, and a completed set
-  stays closed: a later acquisition under the same set ID is refused. The
+  of that log must follow the field rules of its mode, a completed set
+  stays closed (a later acquisition under the same set ID is refused), and
+  a resume does not end a release in progress. The
   child then takes the anchor's set ID and owning session, writes the
   anchor's real reference as `anchor` in its publication line, its journal
   records, and its owner marker, and generates only its own `target`,
   token, and owner token. Its journal records go to
   `issueAuthoring.journalIssue`, which must already hold the anchor's own
-  trusted `state=member` publication-intent record. That is how this
-  command verifies the set's originating Stage 1 hold, so it cannot extend
-  a set whose hold lives elsewhere. After the identity attach and before
+  trusted `state=member` publication-intent record, matching the anchor's
+  publication line on target, anchor, set, session, and token. That is how
+  this command verifies the set's originating Stage 1 hold, so it cannot
+  extend a set whose hold lives elsewhere. After the identity attach and before
   its own `acquire` marker, it appends a same-owner heartbeat on the
   anchor (or reuses a fresh matching marker under the coalescing rule
   below), waits `claim.verifySettleDelay`, and replays the anchor's log.
   After its own marker it re-reads the anchor and the child before
   `member`, so a changed anchor owner stops it. It never edits the
   anchor's body: wiring the child's number into the roadmap's
-  `## Tracks` list stays a separate, reviewed edit. For a draft carrier,
+  `## Tracks` list stays a separate, reviewed edit. The command does not
+  serialize concurrent calls of the owning session, so publish the children
+  of a set one call at a time. For a draft carrier,
   the command then runs the release steps of the carrier creation-hold
   exception under "Authoring hold and release". It takes
   `--review-result <path>`, required for an orphan, a roadmap, and a child:

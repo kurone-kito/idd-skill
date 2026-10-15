@@ -1260,13 +1260,16 @@ in this preamble, since the fallback differs per helper.
   open issue, not a pull request, that still carries the authoring label,
   has no active claim or open linked pull request, and whose trusted
   owner-marker log replays to one open generation (every marker follows the
-  field rules of its mode, and a completed set cannot be reopened under its
-  set ID). The journal must also hold the anchor's own trusted
-  `state=member` publication-intent record, which verifies the set's
-  originating hold. The check also runs in a dry run; otherwise the report
-  is a refusal and nothing is written. The child takes the anchor's set ID and
-  session, uses the anchor's real reference as `anchor` in its publication
-  line, journal records, and owner marker, and appends a same-owner
+  field rules of its mode, a completed set cannot be reopened under its set
+  ID, and a resume does not end a release in progress). The journal must
+  also hold the anchor's own trusted `state=member` publication-intent
+  record, matching the anchor's publication line on target, anchor, set,
+  session, and token, which verifies the set's originating hold. The check
+  also runs in a dry run; otherwise the report is a refusal and nothing is
+  written. The helper does not serialize concurrent calls of one session, so
+  publish a set's children one call at a time. The child takes the anchor's
+  set ID and session, uses the anchor's real reference as `anchor` in its
+  publication line, journal records, and owner marker, and appends a same-owner
   heartbeat on the anchor (reusing a fresh matching marker under
   `issueAuthoring.heartbeatCoalesceWindow`) after the identity attach and
   before its own `acquire` marker. Its provenance check runs in process with
