@@ -23,9 +23,14 @@
 // was made under, so there the link has to go. A platform without the
 // no-follow opens refuses uninstall too, even when nothing is installed.
 //
+// Above the first declared root the walk also reads every component, and
+// refuses a symbolic link there unless root owns it, so a link a user made
+// (/data/me -> /mnt/disk/me) is refused while the system links
+// /var -> /private/var (macOS) and /home -> /var/home (Fedora Atomic) cannot
+// make an ordinary install fail.
+//
 // Open risks, accepted for the operator (see #4242 and #4303):
-// - a symbolic link above a declared root is not inspected, so system links
-//   such as /var -> /private/var (macOS) cannot make an ordinary install fail;
+// - a symbolic link above a declared root that root owns is trusted;
 // - a window remains between a containment check and the act that follows it.
 
 import { createHash } from 'node:crypto';

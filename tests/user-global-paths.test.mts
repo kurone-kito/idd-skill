@@ -2,10 +2,11 @@
 // src/scripts/user-global-paths.mts.
 //
 // Open risks, stated here as in the module header: a symbolic link above a
-// declared ceiling is not inspected, and a window remains between a
+// declared ceiling is trusted when root owns it, and a window remains between a
 // containment check and the act that follows it. The ceiling tests (#4303)
-// cover the chain from a declared root down to the walk root, and the cases
-// that stay outside it.
+// cover the chain from a declared root down to the walk root and the
+// components above it. `ownedBy` stands in for the owner of a link, so the
+// tests do not depend on who runs them.
 //
 // Tests that use a real symbolic link or the real no-follow opens skip on
 // Windows, where `constants.O_NOFOLLOW` is undefined and every export refuses
@@ -1121,6 +1122,31 @@ function lstatSpy(calls: string[], ceilings: string[]): FsOps {
   );
 }
 
+/**
+ * The real `node:fs` whose lstat reports `uid` as the owner of each listed
+ * path, so a test does not depend on who runs it or who owns a link it made.
+ */
+function ownedBy(uid: number, ...paths: string[]): FsOps {
+  const listed = new Set(paths);
+  return fsWith({
+    lstatSync: (path: string) => {
+      const stat = nodeFs.lstatSync(path);
+      return listed.has(path)
+        ? Object.create(stat, { uid: { value: uid } })
+        : stat;
+    },
+  });
+}
+
+/** The proper ancestors of `path`, outermost first, without the filesystem root. */
+function ancestorsOf(path: string): string[] {
+  const found: string[] = [];
+  for (let up = dirname(path); up !== dirname(up); up = dirname(up)) {
+    found.unshift(up);
+  }
+  return found;
+}
+
 test('withCeilings returns a copy that declares the ceilings and leaves the original alone', () => {
   withBox((box) => {
     const declared = declaring(box.home);
@@ -1210,17 +1236,22 @@ posixTest(
 );
 
 posixTest(
-  'the chain is read top-down from the ceiling and stops at the first absent component',
+  'the chain is read top-down, the ancestors of the ceiling first, and stops at the first absent component',
   () => {
     withBox((box) => {
       const absent: string[] = [];
       assertRealChain(box.dataRoot, lstatSpy(absent, [box.home]));
-      assert.deepEqual(absent, [box.home, join(box.home, '.local')]);
+      assert.deepEqual(absent, [
+        ...ancestorsOf(box.home),
+        box.home,
+        join(box.home, '.local'),
+      ]);
 
       nodeFs.mkdirSync(join(box.home, '.local', 'share'), { recursive: true });
       const present: string[] = [];
       assertRealChain(box.dataRoot, lstatSpy(present, [box.home]));
       assert.deepEqual(present, [
+        ...ancestorsOf(box.home),
         box.home,
         join(box.home, '.local'),
         join(box.home, '.local', 'share'),
@@ -1329,7 +1360,7 @@ posixTest(
 );
 
 posixTest(
-  'a link above the ceiling is not inspected and the walk behaves as before',
+  'a link above the ceiling that root owns is tolerated and the walk behaves as before',
   () => {
     withBox((box) => {
       const real = join(box.base, 'real-parent');
@@ -1340,7 +1371,8 @@ posixTest(
       nodeFs.symlinkSync(real, linked);
       const home = join(linked, 'home');
       const root = join(home, '.local', 'share', 'idd-skill');
-      const fs = declaring(home);
+      // The macOS shape: a system link such as /var -> /private/var is root-owned.
+      const fs = withCeilings(ownedBy(0, linked), [home]);
 
       assertRealChain(root, fs);
       writeNewFile(root, join(root, 'f.txt'), 'ok', fs);
@@ -1356,7 +1388,94 @@ posixTest(
 );
 
 posixTest(
-  'a custom XDG ceiling is refused when it is a link and accepted below a linked parent',
+  'a link above the ceiling that a user owns is refused and nothing is written',
+  () => {
+    withBox((box) => {
+      const real = join(box.base, 'real-parent');
+      nodeFs.mkdirSync(join(real, 'home', '.local', 'share'), {
+        recursive: true,
+      });
+      const linked = join(box.base, 'linked-parent');
+      nodeFs.symlinkSync(real, linked);
+      const home = join(linked, 'home');
+      const root = join(home, '.local', 'share', 'idd-skill');
+      const before = snapshot(box.base);
+      const fs = withCeilings(ownedBy(1234, linked), [home]);
+
+      assertThrowsMatching(
+        () => assertRealChain(root, fs),
+        /linked-parent is a symbolic link above .* that the system does not own \(owner uid 1234\)/,
+      );
+      assertThrowsMatching(
+        () => checkContainment(root, join(root, 'f.txt'), fs),
+        /symbolic link above/,
+      );
+      assertThrowsMatching(
+        () => writeNewFile(root, join(root, 'f.txt'), 'x', fs),
+        /symbolic link above/,
+      );
+      assert.deepEqual(snapshot(box.base), before);
+    });
+  },
+);
+
+posixTest(
+  'a dangling or owner-less link above the ceiling is refused, and a file above it too',
+  () => {
+    withBox((box) => {
+      const dangling = join(box.base, 'dangling');
+      nodeFs.symlinkSync(join(box.base, 'nowhere'), dangling);
+      const root = join(dangling, 'home');
+      assertThrowsMatching(
+        () =>
+          assertRealChain(root, withCeilings(ownedBy(1234, dangling), [root])),
+        /dangling is a symbolic link above/,
+      );
+
+      const noOwner = lstatReplacing(join(box.base, 'ownerless'), {
+        ...(fakeStat('fifo') as object),
+        isSymbolicLink: () => true,
+      });
+      assertThrowsMatching(
+        () =>
+          assertRealChain(
+            join(box.base, 'ownerless', 'home'),
+            withCeilings(noOwner, [join(box.base, 'ownerless', 'home')]),
+          ),
+        /ownerless is a symbolic link above .*\(owner unknown\)/,
+      );
+
+      writeFile(join(box.base, 'plain-file'), 'x');
+      assertThrowsMatching(
+        () =>
+          assertRealChain(
+            join(box.base, 'plain-file', 'home'),
+            declaring(join(box.base, 'plain-file', 'home')),
+          ),
+        /plain-file is not a directory above/,
+      );
+    });
+  },
+);
+
+posixTest(
+  'an absent component above the ceiling ends the walk without an error',
+  () => {
+    withBox((box) => {
+      const home = join(box.base, 'missing-parent', 'home');
+      const calls: string[] = [];
+      assertRealChain(join(home, '.local'), lstatSpy(calls, [home]));
+      assert.deepEqual(calls, [
+        ...ancestorsOf(box.base),
+        box.base,
+        join(box.base, 'missing-parent'),
+      ]);
+    });
+  },
+);
+
+posixTest(
+  'a custom XDG ceiling is refused when it is a link, and a link above it is refused unless root owns it',
   () => {
     withBox((box) => {
       const real = join(box.base, 'real-xdg');
@@ -1376,36 +1495,43 @@ posixTest(
       const parentLink = join(box.base, 'linked-parent');
       nodeFs.symlinkSync(parentReal, parentLink);
       const xdg = join(parentLink, 'xdg');
-      assertRealChain(join(xdg, 'idd-skill'), declaring(xdg));
+      const root = join(xdg, 'idd-skill');
+      assertRealChain(root, withCeilings(ownedBy(0, parentLink), [xdg]));
+      assertThrowsMatching(
+        () =>
+          assertRealChain(root, withCeilings(ownedBy(1234, parentLink), [xdg])),
+        /linked-parent is a symbolic link above/,
+      );
     });
   },
 );
 
 posixTest(
-  'a base equal to the ceiling reads one component, and the first covering ceiling wins',
+  'a base equal to the ceiling reads its ancestors then one component, and the first covering ceiling wins',
   () => {
     withBox((box) => {
+      const expected = [...ancestorsOf(box.home), box.home];
       const equal: string[] = [];
       assertRealChain(box.home, lstatSpy(equal, [box.home]));
-      assert.deepEqual(equal, [box.home]);
+      assert.deepEqual(equal, expected);
 
       // Order is the contract: the primary root is declared first.
       const primaryFirst: string[] = [];
       assertRealChain(box.home, lstatSpy(primaryFirst, [box.home, '/']));
-      assert.deepEqual(primaryFirst, [box.home]);
+      assert.deepEqual(primaryFirst, expected);
       const outerFirst: string[] = [];
       assertRealChain(box.home, lstatSpy(outerFirst, ['/', box.home]));
       assert.equal(outerFirst[0], '/');
       assert.equal(outerFirst.at(-1), box.home);
 
-      // A ceiling of "/" is a whole path and starts at the filesystem root.
+      // A ceiling of "/" is a whole path with nothing above it.
       assertRealChain(box.home, declaring('/'));
     });
   },
 );
 
 posixTest(
-  'a ceiling above the primary root does not widen what is read for the primary root',
+  'a ceiling above the primary root does not make the primary root stricter',
   () => {
     withBox((box) => {
       const real = join(box.base, 'real-parent');
@@ -1416,11 +1542,13 @@ posixTest(
       nodeFs.symlinkSync(real, linked);
       const home = join(linked, 'home');
       const root = join(home, '.local', 'share', 'idd-skill');
-      const fs = declaring(home, linked);
+      const fs = withCeilings(ownedBy(0, linked), [home, linked]);
 
-      // The primary root covers its own paths, so the link above it is not read.
+      // The primary root covers its own paths, so the link above it is only
+      // the tolerated kind, not a link at or below a ceiling.
       assertRealChain(root, fs);
-      // A path only the outer ceiling covers is read from it.
+      // A path only the outer ceiling covers is read from it, where a link
+      // is refused whoever owns it.
       assertThrowsMatching(() => assertRealChain(linked, fs), /symbolic link/);
     });
   },
@@ -1434,10 +1562,13 @@ posixTest(
       nodeFs.mkdirSync(join(box.outside, 'share'));
       nodeFs.symlinkSync(box.outside, join(box.home, '.local'));
       const inner = join(box.home, '.local', 'share');
-      // The inner ceiling alone starts below the link and does not see it.
-      assertRealChain(box.dataRoot, declaring(inner));
+      const owned = ownedBy(0, join(box.home, '.local'));
+      // The inner ceiling alone sees the link only from above, where a link
+      // that root owns is tolerated.
+      assertRealChain(box.dataRoot, withCeilings(owned, [inner]));
       assertThrowsMatching(
-        () => assertRealChain(box.dataRoot, declaring(box.home, inner)),
+        () =>
+          assertRealChain(box.dataRoot, withCeilings(owned, [box.home, inner])),
         /symbolic link on the path/,
       );
     });

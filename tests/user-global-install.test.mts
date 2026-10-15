@@ -8,9 +8,11 @@
 // installer refuses before any write.
 //
 // The "links above the roots" tests (#4303) cover the chain from a declared
-// root (HOME, or an XDG or CODEX root) down to each install root. A link on
-// that chain is refused by every entry point and changes nothing; a link above
-// the declared root is not inspected, so those tests are regression guards.
+// root (HOME, or an XDG or CODEX root) down to each install root, and the
+// components above that root. A link on the chain is refused by every entry
+// point and changes nothing. A link above the declared root is refused too,
+// unless root owns it: those tests stand in for the system with `ownedBy`, so
+// they do not depend on who runs them.
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -1015,6 +1017,24 @@ test('every placeholder in the installed payload has a mapping', () => {
 
 // --- Links above the roots (#4303) --------------------------------------------
 
+/**
+ * The real `node:fs` whose lstat reports `uid` as the owner of each listed
+ * path, so a test does not depend on who runs it or who owns a link it made.
+ * Root (uid 0) stands for the system, whose links are tolerated above a root.
+ */
+function ownedBy(uid: number, ...paths: string[]): FsOps {
+  const listed = new Set(paths);
+  return {
+    ...nodeFs,
+    lstatSync: (path: string) => {
+      const stat = nodeFs.lstatSync(path);
+      return listed.has(path)
+        ? Object.create(stat, { uid: { value: uid } })
+        : stat;
+    },
+  } as unknown as FsOps;
+}
+
 /** A directory outside the sandbox HOME, holding one sentinel file. */
 function makeOutside(): string {
   const outside = makeSandbox('user-global-outside-');
@@ -1140,7 +1160,7 @@ test('a symbolic-link XDG_DATA_HOME is refused by every entry point', {
   assertRefusedEverywhere(options, [home, real]);
 });
 
-test('a link above XDG_DATA_HOME is not inspected, and a link at HOME/.local is irrelevant when XDG_DATA_HOME points elsewhere', {
+test('a root-owned link above XDG_DATA_HOME is tolerated, and a link at HOME/.local is irrelevant when XDG_DATA_HOME points elsewhere', {
   skip: NO_LINKS,
 }, () => {
   const parentReal = makeSandbox('user-global-xdg-parent-');
@@ -1153,7 +1173,10 @@ test('a link above XDG_DATA_HOME is not inspected, and a link at HOME/.local is 
   nodeFs.rmSync(join(home, '.local'), { recursive: true });
   nodeFs.symlinkSync(outside, join(home, '.local'));
   const before = snapshot(outside);
-  const options = optionsFor(home, { env: { HOME: home, XDG_DATA_HOME: xdg } });
+  const options = optionsFor(home, {
+    env: { HOME: home, XDG_DATA_HOME: xdg },
+    fs: ownedBy(0, parentLink),
+  });
 
   installPayload(options);
   assert.equal(
@@ -1165,7 +1188,7 @@ test('a link above XDG_DATA_HOME is not inspected, and a link at HOME/.local is 
   assert.deepEqual(snapshot(outside), before);
 });
 
-test('a HOME reached through a linked parent installs and uninstalls as before', {
+test('a HOME reached through a root-owned linked parent installs and uninstalls as before', {
   skip: NO_LINKS,
 }, () => {
   const parentReal = makeSandbox('user-global-realparent-');
@@ -1173,7 +1196,7 @@ test('a HOME reached through a linked parent installs and uninstalls as before',
   const parentLink = join(makeSandbox('user-global-linkparent-'), 'linked');
   nodeFs.symlinkSync(parentReal, parentLink);
   const home = join(parentLink, 'home');
-  const options = optionsFor(home);
+  const options = optionsFor(home, { fs: ownedBy(0, parentLink) });
 
   installPayload(options);
   assert.equal(
@@ -1274,7 +1297,7 @@ test('XDG_DATA_HOME exported as the default location does not hide a link above 
   assertRefusedEverywhere(options, [home, outside]);
 });
 
-test('a CODEX_HOME outside HOME is declared by its parent: a link above the parent is not inspected, a link at the parent is refused', {
+test('a CODEX_HOME outside HOME is declared by its parent: a root-owned link above the parent is tolerated, a link at the parent is refused', {
   skip: NO_LINKS,
 }, () => {
   const home = makeHome();
@@ -1285,6 +1308,7 @@ test('a CODEX_HOME outside HOME is declared by its parent: a link above the pare
   const options = optionsFor(home, {
     env: { HOME: home, CODEX_HOME: join(parentLink, 'roots', 'codex') },
     harnesses: ['codex'],
+    fs: ownedBy(0, parentLink),
   });
 
   installPayload(options);
@@ -1305,7 +1329,7 @@ test('a CODEX_HOME outside HOME is declared by its parent: a link above the pare
   assert.deepEqual(nodeFs.readdirSync(join(real, 'codex')), []);
 });
 
-test('an XDG_CONFIG_HOME outside HOME is a declared root: a link above it is not inspected', {
+test('an XDG_CONFIG_HOME outside HOME is a declared root: a root-owned link above it is tolerated', {
   skip: NO_LINKS,
 }, () => {
   const home = makeHome();
@@ -1316,6 +1340,7 @@ test('an XDG_CONFIG_HOME outside HOME is a declared root: a link above it is not
   const options = optionsFor(home, {
     env: { HOME: home, XDG_CONFIG_HOME: join(parentLink, 'cfg') },
     harnesses: ['opencode'],
+    fs: ownedBy(0, parentLink),
   });
 
   installPayload(options);
@@ -1351,7 +1376,7 @@ test('a link planted above an entry-file directory during an install makes the e
   );
 });
 
-test('a CODEX_HOME beside HOME under a linked ancestor does not widen what is read for the other roots', {
+test('a CODEX_HOME beside HOME under a root-owned linked ancestor does not make the other roots stricter', {
   skip: NO_LINKS,
 }, () => {
   const parentReal = makeSandbox('user-global-sharedparent-');
@@ -1361,13 +1386,14 @@ test('a CODEX_HOME beside HOME under a linked ancestor does not widen what is re
   nodeFs.symlinkSync(parentReal, parentLink);
   const home = join(parentLink, 'home');
   const env = { HOME: home, CODEX_HOME: join(parentLink, 'codex') };
+  const fs = ownedBy(0, parentLink);
 
   // No codex harness is selected, so the declared parent is never walked.
-  installPayload(optionsFor(home, { env }));
-  uninstallPayload(optionsFor(home, { env }));
+  installPayload(optionsFor(home, { env, fs }));
+  uninstallPayload(optionsFor(home, { env, fs }));
   // The entry-file walk starts at that parent, which must be a real directory.
   assert.throws(
-    () => installPayload(optionsFor(home, { env, harnesses: ['codex'] })),
+    () => installPayload(optionsFor(home, { env, fs, harnesses: ['codex'] })),
     /symbolic link/,
   );
   assert.equal(
@@ -1483,4 +1509,38 @@ test('a platform without the no-follow opens is refused once by install and unin
     );
   }
   assert.deepEqual(snapshot(home), before);
+});
+
+test('a HOME reached through a linked parent that root does not own is refused by every entry point, and nothing is written', {
+  skip: NO_LINKS,
+}, () => {
+  const parentReal = makeSandbox('user-global-realparent-');
+  seedHomeIn(parentReal);
+  const parentLink = join(makeSandbox('user-global-linkparent-'), 'linked');
+  nodeFs.symlinkSync(parentReal, parentLink);
+  const home = join(parentLink, 'home');
+  const options = optionsFor(home, { fs: ownedBy(1234, parentLink) });
+
+  assertRefusedEverywhere(options, [parentReal]);
+  assert.throws(
+    () => installPayload(options),
+    /linked is a symbolic link above .* that the system does not own \(owner uid 1234\)/,
+  );
+  assert.equal(nodeFs.existsSync(dataRootOf(join(parentReal, 'home'))), false);
+});
+
+test('a link above XDG_DATA_HOME that a user owns is refused by every entry point', {
+  skip: NO_LINKS,
+}, () => {
+  const parentReal = makeSandbox('user-global-xdg-parent-');
+  nodeFs.mkdirSync(join(parentReal, 'xdg'));
+  const parentLink = join(makeSandbox('user-global-linkparent-'), 'linked');
+  nodeFs.symlinkSync(parentReal, parentLink);
+  const home = makeHome();
+  const options = optionsFor(home, {
+    env: { HOME: home, XDG_DATA_HOME: join(parentLink, 'xdg') },
+    fs: ownedBy(1234, parentLink),
+  });
+
+  assertRefusedEverywhere(options, [home, parentReal]);
 });

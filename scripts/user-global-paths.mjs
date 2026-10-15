@@ -7,7 +7,8 @@
 // later write and removal in the installer goes through these exports.
 //
 // Open risks, accepted for the operator:
-// - a symbolic link above a declared ceiling is not inspected (see below);
+// - a symbolic link above a declared ceiling is trusted when root owns it (see
+//   below);
 // - a window remains between a containment check and the act that follows it.
 //
 // The module resolves no root itself: the caller passes the data root and
@@ -38,12 +39,17 @@
 // earlier can start a chain higher than a nested one would; that refuses more
 // and never less.
 //
-// Nothing above a ceiling is inspected. The path to a root the operator named
-// belongs to the operator and the system, and `lstat` follows intermediate
-// links, so system-owned links such as `/var -> /private/var` (macOS) or
-// `/home -> /var/home` (Fedora Atomic) above a ceiling never make an ordinary
-// install fail. An `lstat` walk cannot tell those from a link an attacker
-// planted, so this stays an open risk.
+// Above a ceiling the walk is more lenient, not blind. It reads those
+// components too, top-down from the filesystem root, and tolerates a symbolic
+// link there only when root owns it. System links such as `/var -> /private/var`
+// (macOS) or `/home -> /var/home` (Fedora Atomic) are root-owned, so an
+// ordinary install does not fail on them. A link a user owns, such as
+// `/data/me -> /mnt/disk/me` made with `ln -s`, is refused, and the operator
+// names the real path instead. At and below the ceiling a link is refused
+// whoever owns it. A root-owned link is trusted, which stays an open risk: a
+// link planted by root is outside what this check can tell from a system's.
+// A stat with no numeric owner counts as not root-owned, so the check fails
+// closed.
 import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
 import {
@@ -52,6 +58,7 @@ import {
   isAbsolute,
   join,
   normalize,
+  parse,
   relative,
   resolve,
   sep,
@@ -174,13 +181,44 @@ function ceilingFor(base, fs) {
   return covering;
 }
 /**
- * Read the chain from `ceiling` down to `base`, both ends included, top-down.
- * Each existing component must be a real directory. The walk ends at the first
- * absent component. A trailing separator is stripped first, because
- * `lstat("x/link/")` follows the link and would hide it.
+ * Read the components above `start`, top-down from the filesystem root. A
+ * symbolic link there is tolerated only when root owns it, since system links
+ * such as `/var -> /private/var` are root-owned; any other link, and any
+ * non-directory, refuses. Returns false when a component is absent, because
+ * nothing below an absent one exists.
+ */
+function assertAboveCeiling(start, fs) {
+  const { root } = parse(start);
+  const names = relative(root, start).split(sep).filter(Boolean);
+  let current = root;
+  for (let index = 0; index < names.length - 1; index++) {
+    current = join(current, names[index]);
+    const stat = lstatOrNull(current, fs);
+    if (stat === null) return false;
+    if (stat.isSymbolicLink()) {
+      if (stat.uid === 0) continue;
+      const owner =
+        typeof stat.uid === 'number' ? `uid ${stat.uid}` : 'unknown';
+      throw new Error(
+        `${current} is a symbolic link above ${start} that the system does not own (owner ${owner}); refusing to write through it; to continue, name the root by its real path instead of one through the link`,
+      );
+    }
+    if (!stat.isDirectory()) {
+      throw new Error(`${current} is not a directory above ${start}; refusing`);
+    }
+  }
+  return true;
+}
+/**
+ * Read the chain from `ceiling` down to `base`, both ends included, top-down,
+ * after the components above `ceiling`. Each existing component of the chain
+ * must be a real directory. The walk ends at the first absent component. A
+ * trailing separator is stripped first, because `lstat("x/link/")` follows
+ * the link and would hide it.
  */
 function assertChainFrom(ceiling, base, fs) {
   const start = stripTrailingSeparator(ceiling);
+  if (!assertAboveCeiling(start, fs)) return;
   const rel = relative(start, stripTrailingSeparator(base));
   const parts = rel === '' ? [] : rel.split(sep);
   let current = start;
