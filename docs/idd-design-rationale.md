@@ -2772,10 +2772,11 @@ harness, still rewrite an older version's text. A file whose bytes
 already equal the new content is left alone. Any other bytes make the
 plan refuse before any write, name the path, and exit 1. When no
 recorded entry text is left to compare, an `AGENTS.md` rewrite is
-refused too, so the operator restores the version directory's `entry.md`
-or removes the record, then reruns. The residual risk is the one named
-for uninstall: a user-authored file that equals install's output byte
-for byte.
+refused too. Removing only the record does not clear it, because the
+block then reads as an unrecorded block that differs from the entry text
+and install refuses again; the operator removes the record and the stale
+block, then reruns. The residual risk is the one named for uninstall: a
+user-authored file that equals install's output byte for byte.
 
 Observed 2026-10-15 on issue #4319, against `main` at commit
 `94d0bb2f2`: a throwaway script installed into a sandbox home, edited
