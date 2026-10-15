@@ -66,6 +66,18 @@ function freshHome(
   return dir;
 }
 
+/** A source tree copy, so a test can change the entry text or the version. */
+function copySourceTree(): string {
+  const dir = nodeFs.mkdtempSync(
+    join(nodeFs.realpathSync(tmpdir()), 'user-global-source-'),
+  );
+  sandboxes.push(dir);
+  for (const part of ['audit', 'idd-template', 'skills']) {
+    nodeFs.cpSync(join(REPO, part), join(dir, part), { recursive: true });
+  }
+  return dir;
+}
+
 function optionsFor(
   home: string,
   extra: Partial<UserGlobalOptions> = {},
@@ -872,4 +884,90 @@ test('a forged file record for a user-authored entry file is refused, and the fi
   assert.throws(() => uninstallPayload(optionsFor(home)), /does not write/);
   assert.equal(textOf(filesOf(home).claude), 'mine\n');
   assert.equal(textOf(filesOf(home).codex), 'mine\n');
+});
+
+test('a forged whole-file record for a managed block with other text is refused, and the file survives', () => {
+  const home = freshHome();
+  installPayload(optionsFor(home));
+  const codex = filesOf(home).codex;
+  const forged = `${BEGIN}\nmy own notes\n${END}\n`;
+  nodeFs.writeFileSync(codex, forged);
+  const receipt = receiptOf(home) as ReceiptJson;
+  const recorded = receipt.entries.find((entry) => entry.path === codex);
+  assert.ok(recorded);
+  recorded.sha256 = sha256(forged);
+  writeReceipt(home, receipt);
+  assert.throws(() => uninstallPayload(optionsFor(home)), /does not write/);
+  assert.equal(textOf(codex), forged);
+  assert.equal(listedEntry(home, codex)?.sha256, sha256(forged));
+  assert.ok(nodeFs.existsSync(join(home, '.claude', 'skills')));
+});
+
+test('a whole-file record for a managed block with install text is accepted and removed', () => {
+  const home = freshHome();
+  installPayload(optionsFor(home));
+  const codex = filesOf(home).codex;
+  nodeFs.writeFileSync(codex, codexSpan());
+  const receipt = receiptOf(home) as ReceiptJson;
+  const recorded = receipt.entries.find((entry) => entry.path === codex);
+  assert.ok(recorded);
+  recorded.sha256 = sha256(codexSpan());
+  writeReceipt(home, receipt);
+  uninstallPayload(optionsFor(home));
+  assert.equal(bytesOf(codex), null);
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+});
+
+test('uninstall accepts the AGENTS.md text of an older version after an install that selected no harness', () => {
+  const home = freshHome();
+  const codex = filesOf(home).codex;
+  installPayload(optionsFor(home));
+  const installed = textOf(codex);
+  const source = copySourceTree();
+  nodeFs.appendFileSync(
+    join(source, 'idd-template', 'user-global', 'entry.md'),
+    'A later line.\n',
+  );
+  installPayload(
+    optionsFor(home, {
+      sourceRoot: source,
+      version: '99.0.0',
+      harnesses: [],
+    }),
+  );
+  assert.equal(textOf(codex), installed);
+  uninstallPayload(optionsFor(home));
+  assert.equal(bytesOf(codex), null);
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+});
+
+test('uninstall accepts the AGENTS.md text that a later version rewrote', () => {
+  const home = freshHome();
+  const codex = filesOf(home).codex;
+  installPayload(optionsFor(home));
+  const source = copySourceTree();
+  nodeFs.appendFileSync(
+    join(source, 'idd-template', 'user-global', 'entry.md'),
+    'A later line.\n',
+  );
+  installPayload(optionsFor(home, { sourceRoot: source, version: '99.0.0' }));
+  assert.equal(textOf(codex), `${BEGIN}\n${ENTRY_TEXT}A later line.\n${END}\n`);
+  uninstallPayload(optionsFor(home));
+  assert.equal(bytesOf(codex), null);
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+});
+
+test('uninstall refuses an AGENTS.md block when no recorded entry text is left to compare', () => {
+  const home = freshHome();
+  const codex = filesOf(home).codex;
+  installPayload(optionsFor(home));
+  const entryText = (receiptOf(home) as ReceiptJson).entries.find(
+    (entry) =>
+      entry.kind === 'file' && entry.path.endsWith('/user-global/entry.md'),
+  );
+  assert.ok(entryText);
+  nodeFs.rmSync(entryText.path);
+  assert.throws(() => uninstallPayload(optionsFor(home)), /does not write/);
+  assert.equal(textOf(codex), codexSpan());
+  assert.ok(nodeFs.existsSync(join(home, '.claude', 'skills')));
 });
