@@ -701,8 +701,8 @@ function makeRuleViolation(
       return replaceFixtureText(
         documents,
         'idd-template/.github/instructions/idd-merge.instructions.md',
-        '`development-branch-in-use`',
-        '`development-branch-unknown`',
+        '&& git -c merge.autoStash=false merge --ff-only',
+        '&& git merge --ff-only',
       );
     case 'b1-main-boundary':
       return replaceFixtureText(
@@ -1185,6 +1185,64 @@ test('the F2 local check keeps the shadow-path check before the fast-forward and
     );
     assert.match(violations[0]?.message ?? '', /never reset the worktree/);
   }
+});
+
+const F4_FAST_FORWARD = '&& git -c merge.autoStash=false merge --ff-only';
+
+test('the F4 fast-forward must force merge.autoStash off (#4264)', () => {
+  const ruleId = 'f4-worktree-error-routing';
+  assert.deepEqual(freshnessViolations(readPositiveFixture(), ruleId), []);
+  const plain = withFixtureText(MERGE, (text) =>
+    text.replace(F4_FAST_FORWARD, '&& git merge --ff-only'),
+  );
+  assert.match(
+    freshnessViolations(plain, ruleId)[0]?.message ?? '',
+    /missing fast-forward-only recovery with merge\.autoStash forced off/,
+  );
+  const autoStashOn = withFixtureText(MERGE, (text) =>
+    text.replace(
+      F4_FAST_FORWARD,
+      '&& git -c merge.autoStash=true merge --ff-only',
+    ),
+  );
+  assert.match(
+    freshnessViolations(autoStashOn, ruleId)[0]?.message ?? '',
+    /missing fast-forward-only recovery with merge\.autoStash forced off/,
+  );
+});
+
+test('the F4 fast-forward rejects a second plain command but not prose naming it (#4264)', () => {
+  const ruleId = 'f4-worktree-error-routing';
+  for (const lead of ['', '&& ', '|| ', '; ']) {
+    const bothForms = withFixtureText(MERGE, (text) =>
+      text.replace(
+        '   The switch falls back',
+        `   ${lead}git merge --ff-only origin/{development-branch}\n   The switch falls back`,
+      ),
+    );
+    assert.match(
+      freshnessViolations(bothForms, ruleId)[0]?.message ?? '',
+      /must not run a plain git merge --ff-only/,
+      `a plain form led by "${lead}" must fail`,
+    );
+  }
+  const proseOnly = withFixtureText(MERGE, (text) =>
+    text.replace(
+      'The `-c` override is always',
+      'A plain `git merge --ff-only` is not',
+    ),
+  );
+  assert.deepEqual(freshnessViolations(proseOnly, ruleId), []);
+});
+
+test('the F4 worktree-in-use outcome stays pinned in the same rule', () => {
+  const dropped = withFixtureText(MERGE, (text) =>
+    text.replace('`development-branch-in-use`', '`development-branch-unknown`'),
+  );
+  assert.match(
+    freshnessViolations(dropped, 'f4-worktree-error-routing')[0]?.message ?? '',
+    /missing worktree-in-use outcome/,
+  );
 });
 
 test('F3 points at the F2 sequence and does not restate an ancestry check', () => {

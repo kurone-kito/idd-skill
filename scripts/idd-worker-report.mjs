@@ -88,7 +88,14 @@ const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 /** How many `frictions[].file` values `summary` lists. */
 const FRICTION_FILE_LIMIT = 10;
-const OUTCOMES = ['merged', 'handed-off', 'held', 'abandoned', 'failed'];
+const OUTCOMES = [
+  'merged',
+  'handed-off',
+  'held',
+  'abandoned',
+  'failed',
+  'scope-stopped',
+];
 const DEFAULT_LOCK_OPTIONS = {
   staleMs: LOCK_STALE_MS,
   timeoutMs: LOCK_ACQUIRE_TIMEOUT_MS,

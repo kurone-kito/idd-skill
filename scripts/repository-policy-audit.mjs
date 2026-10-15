@@ -1612,9 +1612,15 @@ const RULES = [
       requirePattern(
         MERGE,
         step4,
-        /&&\s+git\s+merge\s+--ff-only/,
-        'fast-forward-only recovery',
+        /&&\s+git\s+-c\s+merge\.autoStash=false\s+merge\s+--ff-only/,
+        'fast-forward-only recovery with merge.autoStash forced off',
       );
+      // A configured merge.autoStash=true would stash the dirty primary
+      // worktree paths around a plain fast-forward and skip the hold (#4264).
+      // Conservative on purpose: any command-position plain form fails,
+      // including a backticked `&& git merge --ff-only` in prose.
+      if (/(?:^|&&|\|\||;)\s*git\s+merge\s+--ff-only/m.test(step4))
+        fail(MERGE, 'F4 step 4 must not run a plain git merge --ff-only');
       requirePattern(MERGE, step5, /headRefOid/, 'remote head recheck');
       requirePattern(
         MERGE,

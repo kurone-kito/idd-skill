@@ -8181,7 +8181,8 @@ same as `AW4`/`AW5`.
   `claimId`, `harness` (`claude-code`, `codex-cli`, `opencode`,
   `grok-build`, `cursor-cli`, `copilot-cli`, `antigravity-cli`, or `other`),
   `workerHandle`, `terminalPhase`, `outcome` (`merged`, `handed-off`,
-  `held`, `abandoned`, or `failed`), `verifiedAt`, and `recordedAt`.
+  `held`, `abandoned`, `failed`, or `scope-stopped`), `verifiedAt`, and
+  `recordedAt`.
   Optional are `vendorSessionId`, `reviewRounds`, `stalls`, `deviations`,
   `frictions` (an entry may name the instruction or doc path in `file`),
   and `followUps`. `terminalPhase` and each `phase` take a phase id such as
@@ -8206,6 +8207,14 @@ same as `AW4`/`AW5`.
   worker and no draft, and a draft's own handle when the draft matches the
   claim but no worker is listed: see
   [Orchestrator restart](idd-workflow.md#orchestrator-restart).
+- `scope-stopped`: the run ended at a phase boundary that the operator or
+  coordinator scoped it to end at (for example, "stop at F2"), with no gate
+  blocking it. `held` stays for a gate hold; before this outcome existed, a
+  scope stop was stored as `held`, which inflated the `held` count (issue
+  `#3974`). When the worker later continues on the coordinator's word, a
+  further record is appended at a later `terminalPhase`, which the duplicate
+  check below treats as its own record. Stored records are not migrated: a
+  record already stored as `held` stays `held`.
 - `append`: exactly one of `--file <path>` or `--stdin` supplies one JSON
   record. An invalid record exits `1`, writes nothing, and creates no
   directory. A record whose `claimId`, `workerHandle`, and `terminalPhase`
@@ -8214,7 +8223,7 @@ same as `AW4`/`AW5`.
   while a replacement worker on the same claim has its own `workerHandle`
   and gets its own record. A new line prints `{"status":"appended"}`.
 - `summary`: read-only; it takes no lock and creates nothing. It prints
-  JSON with the outcome counts (all five outcomes, zero-filled), the
+  JSON with the outcome counts (every outcome, zero-filled), the
   distribution of `reviewRounds`, the ten most frequent `frictions`
   `file` values, and `invalidLines`, the count of lines that are not valid
   records. `--since <ISO8601>` keeps only records whose `recordedAt` is at
@@ -8303,27 +8312,32 @@ reporting `branch_outcome: retained_unmerged` (issue #2331).
   retry (`idd-merge.instructions.md`).
 - **`merge.autoStash=true` hides a dirty primary worktree** (step 4): F4
   holds a dirty primary worktree as `primary-worktree-dirty` and never
-  stashes, but with `git config merge.autoStash` true the fast-forward
-  stashes for itself. Replayed on git 2.53.0 on 2026-10-01: with an
-  incoming change to a file the primary worktree has modified, `git
-  merge --ff-only` printed `Created autostash`, fast-forwarded, printed
-  `Applying autostash resulted in conflicts`, and left the file in the
-  `UU` state with one stash entry, where the default configuration
-  refuses with `Your local changes ... would be overwritten` (the hold's
-  trigger); for an incoming change to a different file it printed
-  `Created autostash` and `Applied autostash` and restored the file.
-  When `git config merge.autoStash` is true, run the step 4 fast-forward
-  as `git -c merge.autoStash=false merge --ff-only
-  origin/{development-branch}`: an overlapping dirty path then still
-  refuses and holds as `primary-worktree-dirty`, and a non-overlapping
-  dirty file fast-forwards either way. If git already printed `Created
-  autostash`, look for `Applied autostash`. Without it (the `UU` state)
-  the merge still exits 0, so step 4's `&&` chain does not stop on it:
-  treat it as the `primary-worktree-dirty` hold, stop before step 5,
-  leave the conflicted paths and the stash entry (match it by the hash
-  git printed) for the operator, and never pop or drop a stash entry in
-  F4. One report (issue `#3678`) also found a nine-day-old `autostash`
-  entry in a shared clone's stash list that nobody had noticed.
+  stashes, but a plain `git merge --ff-only` stashes for itself when
+  `git config merge.autoStash` is true. Replayed on git 2.53.0 on
+  2026-10-01: with an incoming change to a file the primary worktree has
+  modified, the plain command printed `Created autostash`,
+  fast-forwarded, printed `Applying autostash resulted in conflicts`,
+  and left the file in the `UU` state with one stash entry, where the
+  default configuration refuses with `Your local changes ... would be
+  overwritten` (the hold's trigger); for an incoming change to a
+  different file it printed `Created autostash` and `Applied autostash`
+  and restored the file. Observed again on 2026-10-13 (issue `#4264`):
+  another session's dirty tracked file in the primary worktree was
+  stashed and restored unchanged, so the hold never ran. The step 4
+  command therefore always runs the fast-forward as `git -c
+  merge.autoStash=false merge --ff-only origin/{development-branch}`,
+  also when the config value is already false or unset: an overlapping
+  dirty path then still refuses and holds as `primary-worktree-dirty`,
+  and a non-overlapping dirty file fast-forwards and is left in place.
+  If git already printed `Created autostash` (a plain fast-forward run
+  by hand or from an older copy of the phase file), look for `Applied
+  autostash`. Without it (the `UU` state) the merge still exits 0, so
+  step 4's `&&` chain does not stop on it: treat it as the
+  `primary-worktree-dirty` hold, stop before step 5, leave the
+  conflicted paths and the stash entry (match it by the hash git
+  printed) for the operator, and never pop or drop a stash entry in F4.
+  One report (issue `#3678`) also found a nine-day-old `autostash` entry
+  in a shared clone's stash list that nobody had noticed.
 - **Verified unmerged fallback** (step 4, issue `#3536`): an unmerged
   index can make `stash push` fail even though the working-tree paths
   were copied and verified outside the worktree. If the first removal

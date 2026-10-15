@@ -6437,8 +6437,9 @@ export const CI_PENDING_STATES: ReadonlySet<string> = new Set([
  * `ci-wait-state.mts` buckets them as pending alongside
  * {@link CI_PENDING_STATES}, but `classifyCiChecks` leaves them unrecognized,
  * so the present-run fallback reads them as `some-failing` (when no check-run
- * pending state sits beside them). They are not named as blocking runs
- * (#3670): a still-running status is not a failure.
+ * pending state sits beside them) unless its caller says every run is
+ * non-required (#4349), where they read as pending. They are not named as
+ * blocking runs (#3670): a still-running status is not a failure.
  */
 export const CI_STATUS_CONTEXT_PENDING_STATES: ReadonlySet<string> = new Set([
   'PENDING',
@@ -10526,12 +10527,13 @@ export function summarizeRequiredChecks(
     );
   }
 
+  const noRequiredChecksConfigured =
+    !protectionReadsUnreadable &&
+    requiredCheckNames.length === 0 &&
+    !branchReviewRequirements.requiredCheckSourcePinned;
   return {
     status,
-    noRequiredChecksConfigured:
-      !protectionReadsUnreadable &&
-      requiredCheckNames.length === 0 &&
-      !branchReviewRequirements.requiredCheckSourcePinned,
+    noRequiredChecksConfigured,
     // #1377: surfaced separately from `noRequiredChecksConfigured` so a hold
     // message can name the unreadable-read cause specifically instead of a
     // generic "CI is not all-passing".
@@ -10544,6 +10546,10 @@ export function summarizeRequiredChecks(
       // combined set covers both causes without adding a third
       // parameter. See that function's own doc comment.
       new Set([...identityUnresolvedNameSet, ...nonTargetEventNameSet]),
+      // #4349: with no required check configured every present run is
+      // non-required, so F2's fallback ignores an `ACTION_REQUIRED` run. A
+      // required-check report keeps the unchanged reading.
+      { allRunsNonRequired: noRequiredChecksConfigured },
     ),
     requiredCheckCount: requiredCheckNames.length,
     generatedRequiredCheckCount: matchedRequiredChecks.length,
@@ -10614,6 +10620,53 @@ type NormalizedPresentRun = {
   workflowPath: string;
 };
 
+/**
+ * How the present-run fallback reads the runs it is given (#4349). The default
+ * keeps the required-check reading, so a caller that omits it is unchanged.
+ */
+interface PresentRunOptions {
+  /**
+   * True only when no required check is configured, so every run in the list
+   * is non-required. Then a run waiting on approval (`ACTION_REQUIRED`) is
+   * ignored as if absent, so the other runs decide the conclusion and F2 does
+   * not hold on it, and a still-running commit status
+   * ({@link CI_STATUS_CONTEXT_PENDING_STATES}) reads as pending, the same as a
+   * queued check run, instead of `some-failing`. Every genuine failure
+   * (`FAILURE`, `TIMED_OUT`, `STARTUP_FAILURE`, `STALE`, `ERROR`) and every
+   * unrecognized state still yields `some-failing`. A caller must not set this
+   * while a required check is configured: a required `ACTION_REQUIRED` run
+   * fails the required-check gate, which never reads this fallback.
+   */
+  allRunsNonRequired?: boolean;
+}
+
+/**
+ * The runs {@link classifyPresentRuns} classifies for one present run: a
+ * waiver-covered run counts as skipped, and under
+ * {@link PresentRunOptions.allRunsNonRequired} (#4349) an `ACTION_REQUIRED` run
+ * is dropped and a still-running commit status becomes `QUEUED`. The drop
+ * happens before the per-producer de-duplication, so a newer `ACTION_REQUIRED`
+ * run never hides an older failure of the same producer.
+ */
+function effectivePresentRuns(
+  check: NormalizedPresentRun,
+  options: PresentRunOptions,
+): NormalizedPresentRun[] {
+  if (check.coveredByWaiver) {
+    return [{ ...check, state: 'SKIPPED' }];
+  }
+  if (options.allRunsNonRequired === true) {
+    const state = String(check.state ?? '').toUpperCase();
+    if (state === 'ACTION_REQUIRED') {
+      return [];
+    }
+    if (CI_STATUS_CONTEXT_PENDING_STATES.has(state)) {
+      return [{ ...check, state: 'QUEUED' }];
+    }
+  }
+  return [check];
+}
+
 function classifyPresentRuns(
   normalizedChecks: NormalizedPresentRun[],
   // kurone-kito/idd-skill#2919 (round 4 -- Copilot review on PR #2921):
@@ -10630,6 +10683,7 @@ function classifyPresentRuns(
   // required-check gate (`summarizeRequiredChecks`'s own `status`) is
   // already fixed.
   identityUnresolvedCheckNames: ReadonlySet<string>,
+  options: PresentRunOptions,
 ): PresentRunClassification {
   if (normalizedChecks.length === 0) {
     return { conclusion: 'none', blockingNames: [] };
@@ -10640,14 +10694,18 @@ function classifyPresentRuns(
           .filter((check) => identityUnresolvedCheckNames.has(check.name))
           .map((check) => check.name)
       : [];
-  const effective = normalizedChecks.map((check) =>
-    check.coveredByWaiver ? { ...check, state: 'SKIPPED' } : check,
+  const effective = normalizedChecks.flatMap((check) =>
+    effectivePresentRuns(check, options),
   );
   const classification = classifyCiChecks(effective);
-  const conclusion = presentRunConclusion(
-    classification,
-    identityBlockedNames.length > 0,
-  );
+  // #4349: every run was an ignored, non-required `ACTION_REQUIRED` run, so no
+  // run evidence is left. That is the `none` reading (the vacuous-green hold),
+  // never `all-passing`, which `classifyCiChecks([])` would otherwise report.
+  // An identity-unresolved name still fails closed below.
+  const conclusion =
+    effective.length === 0 && identityBlockedNames.length === 0
+      ? 'none'
+      : presentRunConclusion(classification, identityBlockedNames.length > 0);
   if (conclusion !== 'some-failing') {
     return { conclusion, blockingNames: [] };
   }
@@ -10733,7 +10791,9 @@ function presentRunConclusion(
 // Conclusion over *all* present check runs (waiver-covered runs count as
 // skipped), used for the F2 fallback when no required checks are configured:
 // an unprotected branch must not satisfy CI vacuously, so the gate inspects the
-// real run conclusions instead.
+// real run conclusions instead. With `options.allRunsNonRequired` (#4349) a
+// non-required `ACTION_REQUIRED` run is ignored as if absent and a
+// still-running commit status reads as pending; see {@link PresentRunOptions}.
 export function resolvePresentRunConclusion(
   normalizedChecks: NormalizedPresentRun[],
   // See `classifyPresentRuns` for the `identityUnresolvedCheckNames` rationale
@@ -10741,9 +10801,13 @@ export function resolvePresentRunConclusion(
   // fallback closed. The default empty set keeps every caller that omits it on
   // the unchanged pre-#2919 behavior.
   identityUnresolvedCheckNames: ReadonlySet<string> = new Set(),
+  options: PresentRunOptions = {},
 ): string {
-  return classifyPresentRuns(normalizedChecks, identityUnresolvedCheckNames)
-    .conclusion;
+  return classifyPresentRuns(
+    normalizedChecks,
+    identityUnresolvedCheckNames,
+    options,
+  ).conclusion;
 }
 
 /**
@@ -10755,14 +10819,19 @@ export function resolvePresentRunConclusion(
  * left out, and so is a still-running status context
  * ({@link CI_STATUS_CONTEXT_PENDING_STATES}), which the fallback can read as
  * `some-failing` but is not a failure. Otherwise the result is non-empty
- * exactly when the conclusion is `some-failing`.
+ * exactly when the conclusion is `some-failing`. `options` is the same as for
+ * {@link resolvePresentRunConclusion}, so the names follow the same reading.
  */
 export function listBlockingPresentRunNames(
   normalizedChecks: NormalizedPresentRun[],
   identityUnresolvedCheckNames: ReadonlySet<string> = new Set(),
+  options: PresentRunOptions = {},
 ): string[] {
-  return classifyPresentRuns(normalizedChecks, identityUnresolvedCheckNames)
-    .blockingNames;
+  return classifyPresentRuns(
+    normalizedChecks,
+    identityUnresolvedCheckNames,
+    options,
+  ).blockingNames;
 }
 
 export function resolveCodeownersForFiles(
