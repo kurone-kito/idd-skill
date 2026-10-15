@@ -629,6 +629,10 @@ this manual `OUTDATED` fallback (full reasoning in each entry's own
   Background).
 - `<!-- idd-out-of-loop:` -- live authorization evidence for the
   bootstrap PR, like the waiver marker above (kurone-kito/idd-skill#3328).
+- `<!-- idd-hold:` -- live hold-state evidence on the claimed issue, not
+  the PR: the orchestrator counts a hold from the earliest marker of an
+  unbroken run, so hiding one would shift the start of the 72 h cap
+  (kurone-kito/idd-skill#4310).
 
 Always skip candidates when any of these are true:
 

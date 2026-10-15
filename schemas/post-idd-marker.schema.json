@@ -24,6 +24,7 @@
         "advisory-reroll",
         "review-ack",
         "copilot-unavailable",
+        "idd-hold",
         "authoring-owner",
         "authoring-publication-intent"
       ],

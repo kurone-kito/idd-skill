@@ -45,6 +45,7 @@ import {
   parseAdvisoryRecoveryComment,
   parseClaimComment,
   parseCopilotUnavailableComment,
+  parseHoldMarker,
   parseOutOfLoopMarker,
   parseReleaseComment,
   parseReviewAckComment,
@@ -571,6 +572,119 @@ test('--help lists out-of-loop among the supported --type values', () => {
   assert.match(output, /--type <type>\s+one of:.*\bout-of-loop\b/);
 });
 
+// --- #4310: idd-hold --------------------------------------------------------
+
+const HOLD_FIELDS = {
+  'agent-id': 'claude-23c12b20',
+  'claim-id': 'ecc3a888-5391-4a13-85b3-5c909b7fbcbb',
+  timestamp: TS,
+};
+
+function holdArgv(
+  target: string,
+  fields: Record<string, string> = HOLD_FIELDS,
+): string[] {
+  const argv = [
+    join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
+    '--type',
+    'idd-hold',
+    '--target',
+    target,
+    '4310',
+  ];
+  for (const [flag, value] of Object.entries(fields)) {
+    argv.push(`--${flag}`, value);
+  }
+  return argv;
+}
+
+test('buildMarkerBody renders the exact idd-hold body with the HTML token as the first bytes', () => {
+  const body = buildMarkerBody('idd-hold', HOLD_FIELDS);
+  assert.equal(
+    body,
+    `<!-- idd-hold: claude-23c12b20 ecc3a888-5391-4a13-85b3-5c909b7fbcbb ${TS} -->\n\n` +
+      '_claude-23c12b20: issue hold — IDD automation marker. Do not edit._',
+  );
+  assert.ok(body.startsWith('<!-- idd-hold: '));
+});
+
+test('buildMarkerBody throws on idd-hold with agent-id, claim-id, or timestamp missing', () => {
+  for (const omit of Object.keys(HOLD_FIELDS)) {
+    const fields: Record<string, string> = { ...HOLD_FIELDS };
+    delete fields[omit];
+    assert.throws(
+      () => buildMarkerBody('idd-hold', fields),
+      /invalid idd-hold marker payload/,
+      `omitting ${omit} should throw`,
+    );
+  }
+});
+
+test('the idd-hold body round-trips through parseHoldMarker', () => {
+  const body = buildMarkerBody('idd-hold', HOLD_FIELDS);
+  assert.deepEqual(parseHoldMarker(body, CREATED_AT), {
+    agentId: 'claude-23c12b20',
+    claimId: 'ecc3a888-5391-4a13-85b3-5c909b7fbcbb',
+    timestamp: TS,
+    createdAt: CREATED_AT,
+  });
+  assert.equal(operationalMarkerPrefix(body), '<!-- idd-hold:');
+});
+
+test('CLI: --type idd-hold dry-run prints the exact body and posts nothing', () => {
+  const output = execFileSync(process.execPath, holdArgv('issue'), {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+  });
+  const report = JSON.parse(output) as {
+    mode: string;
+    type: string;
+    target: string;
+    number: number;
+    body: string;
+  };
+  assert.equal(report.mode, 'dry-run');
+  assert.equal(report.type, 'idd-hold');
+  assert.equal(report.target, 'issue');
+  assert.equal(report.number, 4310);
+  assert.equal(
+    report.body,
+    `<!-- idd-hold: claude-23c12b20 ecc3a888-5391-4a13-85b3-5c909b7fbcbb ${TS} -->\n\n` +
+      '_claude-23c12b20: issue hold — IDD automation marker. Do not edit._',
+  );
+  assert.ok(report.body.startsWith('<!-- idd-hold: '));
+  assert.deepEqual(validate(report, schema), []);
+});
+
+test('CLI: --type idd-hold names every missing required flag', () => {
+  for (const omitted of Object.keys(HOLD_FIELDS)) {
+    const partial = Object.fromEntries(
+      Object.entries(HOLD_FIELDS).filter(([flag]) => flag !== omitted),
+    );
+    const stderr = runCliExpectingFailure(holdArgv('issue', partial));
+    assert.match(
+      stderr,
+      new RegExp(`--${omitted} is required`),
+      `idd-hold without --${omitted} should name --${omitted}`,
+    );
+  }
+});
+
+test('CLI: --type idd-hold with --target pr is rejected', () => {
+  const stderr = runCliExpectingFailure(holdArgv('pr'));
+  assert.match(stderr, /--type idd-hold requires --target issue/);
+});
+
+test('--help lists idd-hold among the supported --type values and its flags', () => {
+  const output = execFileSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/post-idd-marker.mjs'), '--help'],
+    { encoding: 'utf8' },
+  );
+  assert.match(output, /--type <type>\s+one of:.*\bidd-hold\b/);
+  assert.match(output, /idd-hold\s+--agent-id --claim-id --timestamp/);
+});
+
 test('--help documents --operation-local and its --prior-* flags (#3592)', () => {
   // post-idd-marker has a hand-rolled parser, so tests/help-text-flags.test.mts
   // excludes it and cannot catch an accepted-but-undocumented flag.
@@ -753,7 +867,7 @@ test('buildMarkerBody throws on an invalid field set (renderer validation)', () 
   );
 });
 
-test('MARKER_TYPES lists exactly the thirteen supported types', () => {
+test('MARKER_TYPES lists exactly the fourteen supported types', () => {
   assert.deepEqual(
     [...MARKER_TYPES],
     [
@@ -768,6 +882,7 @@ test('MARKER_TYPES lists exactly the thirteen supported types', () => {
       'review-ack',
       'copilot-unavailable',
       'out-of-loop',
+      'idd-hold',
       'authoring-owner',
       'authoring-publication-intent',
     ],
@@ -2514,6 +2629,11 @@ const FULL_FIELDS_BY_TYPE: Record<string, Record<string, string>> = {
     attempt: '1',
     timestamp: TS,
   },
+  // #4310: idd-hold is deliberately NOT listed here -- this table drives
+  // every type through postIddMarkerArgv's hardcoded `--target pr 1722`, and
+  // idd-hold refuses `--target pr`. See the dedicated idd-hold CLI tests
+  // above instead.
+  //
   // #2931: authoring-owner is deliberately NOT listed here -- unlike every
   // other type, its body-sha256 is derived/verified via a live `gh` fetch
   // BEFORE this file's REQUIRED_FIELDS_BY_TYPE loop even runs, so it cannot

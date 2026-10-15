@@ -297,6 +297,18 @@ const RENDERER_CASES: Array<{
     expected: 'idd-operational',
   },
   {
+    name: 'renderHoldMarker',
+    render: () =>
+      markerHelpers.renderHoldMarker({
+        agentId: TRUSTED_LOGIN,
+        claimId: CLAIM,
+        timestamp: TS,
+      }),
+    // Posted only to the claimed ISSUE (post-idd-marker refuses --target pr),
+    // never to a PR, so it is not part of PR_OPERATIONAL_COMMENT_PREFIXES.
+    expected: 'review',
+  },
+  {
     name: 'renderOutOfLoopMarker',
     render: () =>
       markerHelpers.renderOutOfLoopMarker({
@@ -391,6 +403,7 @@ const FIELDS_BY_MARKER_TYPE: Record<MarkerType, Record<string, string>> = {
     timestamp: TS,
   },
   'out-of-loop': { 'agent-id': TRUSTED_LOGIN, pr: '1', timestamp: TS },
+  'idd-hold': { 'agent-id': TRUSTED_LOGIN, 'claim-id': CLAIM, timestamp: TS },
   'authoring-owner': {
     'agent-id': TRUSTED_LOGIN,
     'marker-prefix': 'idd-skill',
@@ -433,6 +446,8 @@ const EXPECTED_BY_MARKER_TYPE: Record<MarkerType, IddPrCommentClassification> =
     'review-ack': 'idd-operational',
     'copilot-unavailable': 'idd-operational',
     'out-of-loop': 'review',
+    // Issue-scoped, like activation-nonce: never posted to a PR.
+    'idd-hold': 'review',
     // Not part of OPERATIONAL_MARKERS at all (issue-authoring lifecycle
     // markers, contract.md) -- never recognized as PR review-activity.
     'authoring-owner': 'review',

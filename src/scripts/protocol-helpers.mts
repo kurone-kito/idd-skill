@@ -56,6 +56,7 @@ import {
 import type {
   ParsedClaimMarker,
   ParsedForcedHandoffMarker,
+  ParsedHoldMarker,
   ParsedReviewWatermark,
 } from './marker-helpers.mts';
 import {
@@ -72,6 +73,7 @@ import {
   parseClaimComment,
   parseExternalCheckWaiverComment,
   parseForcedHandoffComment,
+  parseHoldMarker,
   parseLegacyClaimComment,
   parseLegacyReleaseComment,
   parseOutOfLoopMarker,
@@ -869,6 +871,9 @@ export const LIVE_STATUS_DIGEST_REPAIR_MARKER =
  * this behavior.
  *  - `<!-- activation-nonce:` is posted only to the claiming ISSUE
  *    (idd-claim.instructions.md), never to a PR.
+ *  - `<!-- idd-hold:` is posted only to the claimed ISSUE
+ *    (`post-idd-marker` refuses `--target pr` for it), never to a PR
+ *    (kurone-kito/idd-skill#4310).
  *  - `<!-- idd-provider-outage-declaration:` and
  *    `<!-- idd-provider-outage-advanced:` are posted to the configured
  *    `providerOutage.declarationTarget` ISSUE, not the PR under review
@@ -1457,6 +1462,125 @@ export function classifyPrLoopMembership({
     reason:
       'no closing issue has an active claim, and no valid out-of-loop marker was found',
   };
+}
+
+/**
+ * kurone-kito/idd-skill#4310: the trusted `<!-- idd-hold: ... -->` markers
+ * posted for one claim, as {@link resolveTrustedHoldMarkers} returns them.
+ * `markers` is oldest first by the comment's GitHub `created_at` (never the
+ * embedded timestamp), so `first` is where an unbroken run of hold markers
+ * starts and `newest` is the latest of them. Holding the whole ordered list,
+ * not only `newest`, is what lets a later rule count a hold from the first
+ * marker of a run (the renewal refinement recorded on issue `#4310`).
+ */
+export interface TrustedHoldMarkers {
+  markers: ParsedHoldMarker[];
+  first: ParsedHoldMarker;
+  newest: ParsedHoldMarker;
+}
+
+/**
+ * kurone-kito/idd-skill#4310: the trusted hold markers for one claim, from an
+ * issue's comments. Pure and network-free; the caller supplies comments whose
+ * GraphQL `lastEditedAt` it has already resolved. A marker counts only when
+ * all of these hold, mirroring the "Hold marker" trust rule in
+ * `docs/idd-workflow.md`:
+ *
+ * - its body parses as an `idd-hold` marker (token as the literal first bytes)
+ *   and its agent id and claim id equal the `agentId` and `claimId` passed;
+ * - its comment author is `claimActorLogin` (the actor that posted the active
+ *   claim's `claimed-by`) and is in `trustedMarkerLogins`, compared
+ *   case-insensitively and decided by the GitHub author login, never by the
+ *   marker's own `{agent-id}` text;
+ * - its edit state is a resolved `lastEditedAt: null`. An edited marker, or
+ *   one whose edit state is unresolved, is ignored rather than thrown on, which
+ *   is the difference from the claim-family markers' edit-state contract.
+ *
+ * Deliberately not part of claim resolution: a hold marker never starts, ends,
+ * releases, or transfers a claim, and `resolveActiveClaim` does not read it.
+ * This function also encodes no "the hold ended" verdict. Whether a later
+ * `claimed-by` ends a hold depends on which renewals the orchestrator itself
+ * posted, which only the orchestrator knows, so the caller narrows the result
+ * against its own claim timeline. Returns `null` when no marker qualifies.
+ */
+// audit:ignore-dead-export: no production caller yet -- the orchestrator reads hold markers by instruction (docs/idd-workflow.md, Hold marker); this is the parser it is told to use (kurone-kito/idd-skill#4310)
+export function resolveTrustedHoldMarkers({
+  comments,
+  agentId,
+  claimId,
+  claimActorLogin,
+  trustedMarkerLogins,
+}: {
+  comments: CommentLike[] | null | undefined;
+  agentId: string;
+  claimId: string;
+  claimActorLogin: string;
+  trustedMarkerLogins: unknown[] | null | undefined;
+}): TrustedHoldMarkers | null {
+  const normalizeLogin = (login: unknown): string =>
+    String(login ?? '')
+      .trim()
+      .toLowerCase();
+  const trustedLogins = new Set(
+    normalizeTrustedMarkerLogins(trustedMarkerLogins),
+  );
+  const isTrustedAuthor = (login: string): boolean =>
+    trustedLogins.has(normalizeLogin(login));
+  const actorLogin = normalizeLogin(claimActorLogin);
+  if (!actorLogin || !agentId || !claimId) {
+    return null;
+  }
+  const candidates: Array<{
+    marker: ParsedHoldMarker;
+    index: number;
+    id: number;
+  }> = [];
+  (comments ?? []).forEach((comment, index) => {
+    const marker = parseHoldMarker(
+      String(comment?.body ?? ''),
+      String(comment?.createdAt ?? comment?.created_at ?? ''),
+    );
+    if (
+      !marker ||
+      marker.createdAt === 'none' ||
+      marker.agentId !== agentId ||
+      marker.claimId !== claimId ||
+      normalizeLogin(
+        comment?.author?.login ??
+          comment?.user?.login ??
+          comment?.authorLogin ??
+          '',
+      ) !== actorLogin ||
+      !isTrustEvidenceComment(comment, isTrustedAuthor)
+    ) {
+      return;
+    }
+    const rawId = String(comment?.id ?? '');
+    candidates.push({
+      marker,
+      index,
+      id: /^\d+$/.test(rawId) ? Number(rawId) : Number.NaN,
+    });
+  });
+  // Oldest first by created_at. A same-second tie falls back to the numeric
+  // comment id (GitHub database ids rise with posting order) when both
+  // comments carry one, then to the input order, so the result is
+  // deterministic for any input.
+  candidates.sort((a, b) => {
+    const byTime =
+      Date.parse(a.marker.createdAt) - Date.parse(b.marker.createdAt);
+    if (byTime !== 0) {
+      return byTime;
+    }
+    if (Number.isFinite(a.id) && Number.isFinite(b.id) && a.id !== b.id) {
+      return a.id - b.id;
+    }
+    return a.index - b.index;
+  });
+  const markers = candidates.map((candidate) => candidate.marker);
+  return markers.length === 0
+    ? null
+    : { markers, first: markers[0], newest: markers[markers.length - 1] };
 }
 
 /**
