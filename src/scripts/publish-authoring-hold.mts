@@ -2214,15 +2214,23 @@ function checkCarrierPreconditions(
     ? members.json.skippedMarkers
     : [];
   for (const entry of skipped) {
-    const record = entry as {
+    // A non-object entry (null, a number) has no kind, so it is unrecognized.
+    const record = (
+      typeof entry === 'object' && entry !== null ? entry : {}
+    ) as {
       issueNumber?: unknown;
       kind?: unknown;
+      mode?: unknown;
       namesRequestedSet?: unknown;
     };
+    const hasIssue =
+      typeof record.issueNumber === 'number' &&
+      Number.isInteger(record.issueNumber);
     const recognized =
-      record.kind === 'requested-set' ||
-      (record.kind === 'unattributable' &&
-        typeof record.namesRequestedSet === 'boolean');
+      hasIssue &&
+      ((record.kind === 'requested-set' && typeof record.mode === 'string') ||
+        (record.kind === 'unattributable' &&
+          typeof record.namesRequestedSet === 'boolean'));
     if (!recognized) {
       throw new CarrierReleaseStop(
         'held',
@@ -2692,8 +2700,13 @@ export function releaseCarrier(
       steps,
     };
   } finally {
+    // A failed cleanup of the scratch copies never changes the reported result.
     if (scratch !== '') {
-      rmSync(scratch, { recursive: true, force: true });
+      try {
+        rmSync(scratch, { recursive: true, force: true });
+      } catch {
+        // Left for the operator's temporary-directory cleanup.
+      }
     }
   }
 }
