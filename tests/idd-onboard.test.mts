@@ -11608,6 +11608,38 @@ test('S1: --uninstall refuses before any removal when an installed payload file 
   assert.match(readFileSync(edited, 'utf8'), /user edit/);
 });
 
+test('--install-user-global refuses a reinstall over a forged whole-file record for CLAUDE.md, exits 1, and leaves the file as it was (#4327)', {
+  skip: NO_USER_GLOBAL_INSTALL,
+}, () => {
+  const sandbox = makeUserGlobalSandbox();
+  install(sandbox);
+  const claude = claudeEntryIn(sandbox);
+  const mine = '# My own notes\n\nKeep me exactly.\n';
+  writeFileSync(claude, mine);
+  const receiptPath = join(dataRootIn(sandbox), 'receipt.json');
+  const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as {
+    entries: { path: string; sha256?: string }[];
+  };
+  const record = receipt.entries.find((entry) => entry.path === claude);
+  assert.ok(record, 'install lists CLAUDE.md');
+  record.sha256 = createHash('sha256').update(mine).digest('hex');
+  writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+  const before = snapshotFull(sandbox.root);
+
+  for (const args of [
+    ['--install-user-global', '--dry-run'],
+    ['--install-user-global'],
+  ]) {
+    const run = runUserGlobal(sandbox, args);
+    assert.equal(run.status, 1, `${args.join(' ')}: ${run.stderr}`);
+    assert.match(run.stderr, /^idd-onboard: refuse: /u);
+    assert.ok(run.stderr.includes(claude), `${args.join(' ')} names ${claude}`);
+    assert.equal(run.stdout, '');
+    assert.equal(readFileSync(claude, 'utf8'), mine);
+    assert.deepEqual(snapshotFull(sandbox.root), before);
+  }
+});
+
 test('S2: --install-user-global refuses before any write when the data root is a symbolic link out of the sandbox', {
   skip: NO_USER_GLOBAL_INSTALL,
 }, () => {
