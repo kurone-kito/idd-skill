@@ -416,12 +416,16 @@ const OPERATIONAL_MARKER_ENTRIES: OperationalMarker[] = [
     // format that `renderF4HeadProofBody` (f4-head-proof.mts) emits, with no
     // whitespace and no `<!--` or `-->` inside a free-form value. The visible
     // note ("F4 head-proof marker. Do not edit.") carries no `IDD` word, so
-    // this entry uses the open tail of the waiver markers rather than the
-    // shared note grammar, and defines no `malformedPrefixPattern`.
+    // the tail is the one `parseF4HeadProofBody` accepts (nothing, or one
+    // italic note line) rather than the shared IDD-note grammar. A body with
+    // anything else after the token is not recognized here, and
+    // `malformedPrefixPattern` reports it as a malformed marker.
     label: '<!-- idd-f4-head-proof:',
     pattern:
-      /^<!--\s*idd-f4-head-proof:\s+v2\s+pr=[1-9]\d*\s+claim=(?:(?!<!--|-->)\S)+\s+branch=(?:(?!<!--|-->)\S)+\s+f2=[0-9a-f]{40}\s+branch-tip=[0-9a-f]{40}\s+merge=[0-9a-f]{40}\s+head=[0-9a-f]{40}\s*-->[\s\S]*$/i,
+      /^<!--\s*idd-f4-head-proof:\s+v2\s+pr=[1-9]\d*\s+claim=(?:(?!<!--|-->)\S)+\s+branch=(?:(?!<!--|-->)\S)+\s+f2=[0-9a-f]{40}\s+branch-tip=[0-9a-f]{40}\s+merge=[0-9a-f]{40}\s+head=[0-9a-f]{40}\s*-->(?:\s*|\s*\n\s*_[^\n]*_\s*)$/i,
     startPattern: /^<!--\s*idd-f4-head-proof:/i,
+    malformedPrefixPattern:
+      /^<!--\s*idd-f4-head-proof:\s+v2\s+pr=[1-9]\d*\s+claim=(?:(?!<!--|-->)\S)+\s+branch=(?:(?!<!--|-->)\S)+\s+f2=[0-9a-f]{40}\s+branch-tip=[0-9a-f]{40}\s+merge=[0-9a-f]{40}\s+head=[0-9a-f]{40}\s*-->/i,
   },
   {
     label: '<!-- review-watermark:',

@@ -319,6 +319,29 @@ describe('the idd-f4-head-proof operational marker entry', () => {
     );
   });
 
+  it('agrees with the parser about the tail: extra text after the token is malformed, not a marker', () => {
+    const accepted = [
+      EXPECTED_BODY,
+      EXPECTED_BODY.split('\n')[0],
+      `${EXPECTED_BODY}\n`,
+    ];
+    const extra = [
+      `${EXPECTED_BODY}\n\nextra text`,
+      `${EXPECTED_BODY}\n\n_one note_\n_two notes_`,
+      `${EXPECTED_BODY.split('\n')[0]} trailing`,
+    ];
+    for (const body of accepted) {
+      assert.strictEqual(parseF4HeadProofBody(body).kind, 'proof', body);
+      assert.strictEqual(operationalMarkerPrefix(body), LABEL, body);
+      assert.strictEqual(detectMalformedOperationalMarker(body), null, body);
+    }
+    for (const body of extra) {
+      assert.strictEqual(parseF4HeadProofBody(body).kind, 'malformed', body);
+      assert.strictEqual(operationalMarkerPrefix(body), null, body);
+      assert.strictEqual(detectMalformedOperationalMarker(body), LABEL, body);
+    }
+  });
+
   it('is classified excluded from hiding, like the hold marker, and kept as an agent-derived marker', () => {
     assert.strictEqual(MARKER_HIDE_POLICY.get(LABEL)?.policy, 'excluded');
     assert.strictEqual(
