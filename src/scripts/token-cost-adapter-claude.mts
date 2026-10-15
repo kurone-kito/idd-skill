@@ -16,9 +16,9 @@
 // API response, and those records share a `requestId` and a `message.id`,
 // so assistant records are grouped into API requests (`groupClaudeRequests`,
 // #4380) before usage and turns are counted. This module documents the
-// specific record
-// shapes it reads (assistant records carrying `message.usage`, and
-// `type: "system", subtype: "compact_boundary"` records) as local
+// specific record shapes it reads (assistant records carrying
+// `message.usage`, and `type: "system", subtype: "compact_boundary"`
+// records) as local
 // structural types; only the fields actually consumed are declared, and
 // every extraction degrades gracefully (never throws) except when the
 // harvested session has no usable timestamp or no derivable
@@ -534,8 +534,9 @@ function addRecordToRequest(
  * segments or event-window groups therefore counts once per group. A
  * record that carries only one of the two identifiers is not joined to the
  * records that carry both, a known limit of this key rule. None is observed
- * in the local logs: every assistant record that carries a requestId also
- * carries a message.id (checked: 0 of 83,191). Requests come back in
+ * in the local logs (checked 2026-10-15): no assistant record carries a
+ * requestId without a message.id, and no message.id-only record shares its id
+ * with a record that carries a requestId. Requests come back in
  * first-appearance order.
  */
 export function groupClaudeRequests(
