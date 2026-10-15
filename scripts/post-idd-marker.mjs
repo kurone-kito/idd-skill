@@ -1780,7 +1780,10 @@ must be a worktree this repository registers), the merged pull request of the
 claim's branch, the local branch tip, the trusted markers of the issue, and
 the review-watermark of the pull request. It posts only when the verdict table
 says post, and prints the verdict, the reason, and the proof values as JSON.
-The command takes no other field flag. Exit 0 is proceed or post; exit 1 is
+The command takes no other field flag, and refuses --trusted-marker-logins and
+--advisory-bot-logins (the trusted logins come from the viewer, the
+environment, and the trusted configuration). Under --apply it reads the claim
+and the lock again right before the POST. Exit 0 is proceed or post; exit 1 is
 hold or stop. An uncertain write is read back exactly three times and never
 posted again. --target pr is refused.
 

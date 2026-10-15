@@ -4248,8 +4248,9 @@ latest trusted, unedited `review-watermark` of this claim on the pull request.
 `--worktree` must be a worktree that `git worktree list --porcelain` registers
 for the repository of the current directory. `--target pr` is refused. So are
 `--trusted-marker-logins` and `--advisory-bot-logins`: the trusted logins come
-from the viewer, `IDD_TRUSTED_MARKER_ACTORS`, and the trusted configuration,
-never a flag.
+from the viewer, `IDD_TRUSTED_MARKER_ACTORS`, the trusted configuration, and
+(when collaborator-marker trust is on) collaborators with write access, never
+a flag.
 
 Before any POST the command reads the stored activation nonce (`claim-lock
 --read-tokens`), runs `resume-claim-routing --assert`, checks that the claim
@@ -4257,7 +4258,11 @@ lock of `--worktree` carries this claim ID, and requires `decideBeforePost` to
 return `post`. A merge commit with two parents must have the live head as its
 second parent; one parent (a squash or rebase merge) is accepted, as in the
 written procedure; any other count holds with `pr-state`. So does a branch
-with no merged pull request, or with more than one.
+with no merged pull request, or with more than one. Under `--apply` the claim
+check and the lock are read once more right before the POST, with the same
+nonce: a changed claim or branch, or a replaced or missing lock, is `stop` on
+`claim-or-lock`, and a reading that cannot be obtained is `hold`; nothing is
+posted either way.
 
 The printed `verdict` is `post` (a dry run that would post), `proceed`, `stop`,
 or `hold`, with a `reason` that is `null` for `post` and otherwise a code of
@@ -4279,8 +4284,8 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   `reread-failed`, `reread-conflict`, or `reread-reusable`). The command never
   posts a second time; reconcile by reading the issue comments. One adapter
   call may already have sent up to three POSTs of the same body.
-- A dry run performs the same live reads and posts nothing. A value the
-  renderer rejects exits non-zero with nothing posted.
+- A dry run performs the same live reads (the claim once, not twice) and posts
+  nothing. A value the renderer rejects exits non-zero with nothing posted.
 - The `warnings` list names the cause behind a reason code: a read the command
   swallowed (for example a failed pull request lookup), or the error of a
   rejected or uncertain post.
