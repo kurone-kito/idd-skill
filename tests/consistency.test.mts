@@ -2821,7 +2821,7 @@ const BRIEF_PART_REQUIREMENTS: Readonly<Record<string, readonly string[]>> = {
     '](#worker-delegation)',
     'Limits',
     'depth 2',
-    'context-inheriting',
+    'context-inheriting fork',
   ],
 };
 
@@ -2838,6 +2838,7 @@ const BRIEF_PART_BODY_REQUIREMENTS: Readonly<
     'idd-merge.instructions.md#f4--cleanup',
     'idd-resume-detail.md#f4-head-proof',
     'idd-helper-scripts.md#clone-scoped-lock',
+    'first entry of `git worktree list`',
   ],
   '**Scratchpad.**': [
     'issue-numbered',
@@ -2847,11 +2848,35 @@ const BRIEF_PART_BODY_REQUIREMENTS: Readonly<
   ],
   '**Critique allowance.**': [
     '](#critique-pass-invocation)',
-    'context-inheriting',
+    'non-context-inheriting',
   ],
   '**Execution timeout.**': [
     'execution-timeout',
     'idd-ci.instructions.md#wake-up-discipline',
+  ],
+  '**Role.**': ['sole worker', 're-delegate'],
+  '**Claim token.**': [
+    'recompute the nonce winner',
+    'idd-claim.instructions.md#orchestrator-delegation',
+  ],
+  '**Branch and worktree.**': [
+    'idd-pr-submit.instructions.md#d1--sync-development-branch-before-first-push',
+    'idd-review-triage.instructions.md#e-phase-branch-sync-check',
+    'do not paraphrase',
+  ],
+  '**Wake-up discipline.**': [
+    'Never end your turn',
+    'idd-ci.instructions.md#wake-up-discipline',
+  ],
+  '**Hold marker.**': ['idd-hold', 'after your last `claimed-by`', 'held'],
+  '**Review cold start.**': [
+    'idd-review-snapshot.instructions.md#cold-start-reviewitems_snapshot-reconstruction',
+    '(#reviewitems_snapshot-lifecycle)',
+  ],
+  '**Worker report.**': [
+    'schemas/worker-report.schema.json',
+    'Leave `workerHandle`, `verifiedAt`, and `recordedAt` to the orchestrator',
+    '(#worker-report-outcomes)',
   ],
 };
 
@@ -2925,8 +2950,18 @@ test('docs idd-workflow fan-out variant carries a delegation brief template for 
     );
 
     assert.ok(!section.includes('{{'), `${path}: the template has no {{ token`);
-    for (const token of section.match(/\{[^}\s]*\}/gu) ?? []) {
-      assert.match(token, /^\{[a-z]+(?:-[a-z]+)*\}$/u, `${path}: ${token}`);
+    const tokens = new Set(section.match(/\{[^}\s]*\}/gu) ?? []);
+    assert.deepEqual(
+      [...tokens].sort(),
+      Object.keys(BRIEF_TEMPLATE_PLACEHOLDER_OWNERS).sort(),
+      `${path}: the placeholders used must be exactly the defined ones`,
+    );
+    const definitions = section.slice(0, section.indexOf('\n**Role.** '));
+    for (const placeholder of tokens) {
+      assert.ok(
+        definitions.includes(`\`${placeholder}\``),
+        `${path}: no definition for ${placeholder}`,
+      );
     }
     const flat = normalizeWhitespace(section);
     for (const wording of BRIEF_INCIDENT_WORDING) {
@@ -2958,14 +2993,29 @@ test('docs idd-workflow fan-out variant carries a delegation brief template for 
       BRIEF_TEMPLATE_PLACEHOLDER_OWNERS,
     )) {
       assert.ok(
-        partText(label).includes(placeholder),
-        `${path}: the ${label} part must use ${placeholder}`,
+        partText(label).split(' Fill note: ')[0].includes(placeholder),
+        `${path}: the worker-facing ${label} text must use ${placeholder}`,
+      );
+    }
+    // A Fill note is its own paragraph, and the orchestrator-only incident
+    // wording stays out of the worker-facing text that is copied.
+    for (const match of section.matchAll(/Fill note:/gu)) {
+      assert.equal(
+        section.slice(match.index - 2, match.index),
+        '\n\n',
+        `${path}: a Fill note must start its own paragraph`,
       );
     }
     for (const [label, required] of Object.entries(
       BRIEF_PART_BODY_REQUIREMENTS,
     )) {
       const body = partText(label).split(' Fill note: ')[0];
+      for (const wording of BRIEF_INCIDENT_WORDING) {
+        assert.ok(
+          !body.includes(wording),
+          `${path}: the worker-facing ${label} text must not hold "${wording}"`,
+        );
+      }
       for (const needle of required) {
         assert.ok(
           body.includes(needle),
