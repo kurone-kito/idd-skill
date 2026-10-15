@@ -1035,7 +1035,9 @@ The operating rules for this variant are in the
 reads only when its activation conditions hold or a fan-out session restarts.
 
 The orchestrator's end-of-run report is defined under
-[Orchestrator run report](#orchestrator-run-report).
+[Orchestrator run report](#orchestrator-run-report). The `outcome` that each
+worker's own final report carries for each way a run can end is listed under
+[Worker report outcomes](#worker-report-outcomes).
 
 Running this variant safely requires:
 
@@ -1109,7 +1111,15 @@ Running this variant safely requires:
   under `fully_autonomous_merge`, F2.5 otherwise): the worker reports its final
   result back to the orchestrator instead of
   independently entering F5's Discover step, so Discover/Claim
-  ownership stays with the orchestrator alone.
+  ownership stays with the orchestrator alone. When the run is scoped to end
+  earlier than that terminal phase, whether by the operator or by the
+  orchestrator (for example, "stop at F2"), the brief must name that boundary
+  and say that finishing that phase and stopping there with no gate or unmet
+  condition blocking is a scope stop, not a hold: the worker's report draft
+  carries `scope-stopped` and not `held`. A gate or unmet condition that
+  blocks the run before or at the boundary is a hold, and a scope relayed after
+  dispatch carries the same statement (see
+  [Worker report outcomes](#worker-report-outcomes)).
 - **A delegation brief that requires issue-number-namespaced
   scratchpad filenames.** Concurrently delegated workers share the
   orchestrating session's own scratchpad directory — it is
@@ -1336,6 +1346,62 @@ it leaves no report (preventive; no observed incident yet). A restart that can
 recover (see [Orchestrator restart](#orchestrator-restart)) rebuilds the roster
 from the forge, the worktrees, and the harness's agent listing, never from a run
 report, and the new run writes its own.
+
+### Worker report outcomes
+
+A worker writes its final report as a draft. Once the orchestrator has checked
+the draft, it becomes one record in the
+[worker final report store](idd-helper-scripts.md#worker-final-report-store),
+and its `outcome` says how the run ended; a held worker is the exception, as the
+`held` bullet below says. The report is the worker's own, not the
+orchestrator's [run report](#orchestrator-run-report). The store and
+`schemas/worker-report.schema.json` list the values and define `scope-stopped`.
+This subsection says which value each way of ending a run carries. The draft
+proposes the value, and the orchestrator checks it against live GitHub state
+before it appends the record, as section 5 of the orchestrator phase file and
+the "Independently verify a worker's reported terminal outcome before trusting
+it" bullet of the [fan-out variant](#orchestrator-fan-out-variant) require. For
+`scope-stopped`, live state can only rule out the other values; the paragraph
+after the list says what supplies the rest.
+
+- `merged`: the worker's pull request merged and no trusted handoff summary was
+  posted.
+- `handed-off`: a trusted handoff summary carrying the worker's claim id is on
+  the issue, whatever its pull request has done since.
+- `held`: a gate or an unmet condition stopped the run. A worker held on a
+  trusted hold marker is not reported or disposed of while the hold lasts, so no
+  record is appended then. The Hold marker and Held-worker renewal bullets of
+  the [fan-out variant](#orchestrator-fan-out-variant) say what the
+  orchestrator does instead, and the [run report](#orchestrator-run-report)
+  lists the hold.
+- `scope-stopped`: the run finished the phase it was scoped to end at, earlier
+  than the merge policy's terminal phase, and stopped there with no gate or
+  unmet condition blocking it.
+- `abandoned`: the worker's pull request was closed without merging and no
+  trusted handoff summary was posted.
+- `failed`: none of the above fits.
+
+Live GitHub state cannot confirm a scope stop: all it shows is a claim still
+held with no handoff summary and no trusted hold marker, which a stop at a gate
+can also leave. So the orchestrator checks a `scope-stopped` draft against the
+boundary that the brief, or an instruction the orchestrator later relayed to the
+worker, named. The draft's `terminalPhase` must be that phase, and live state
+must show none of the other values above. When it shows one, that value is
+recorded instead, except that a worker held on a trusted hold marker gets no
+record while the hold lasts, as the `held` bullet says. When the brief is not
+available or names no such boundary, no `scope-stopped` record is appended and
+the claim is reported to the operator. A phase is finished when its normal exit
+is met, so a run still waiting inside it, for example on pending CI, has not
+reached the boundary. Storing a scope stop as `held` inflated the `held` count
+(observed 2026-10-13 on the worker records of kurone-kito/idd-skill#3974,
+decided on kurone-kito/idd-skill#4213, requested in kurone-kito/idd-skill#4348,
+added by kurone-kito/idd-skill#4354).
+
+[Orchestrator restart](#orchestrator-restart) has no `scope-stopped` case: step
+4 maps a claim still held to `held` and appends nothing for it when no draft is
+found, and step 3 sends a finished worker whose claim is still held with no
+handoff summary to worker-death recovery. How a restart treats a scope stop is
+not defined here.
 
 ### Orchestrator restart
 
