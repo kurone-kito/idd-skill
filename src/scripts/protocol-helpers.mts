@@ -4283,20 +4283,30 @@ function interruptsParagraph(line: string): boolean {
 /**
  * Whether a reply body carries the pending-decision marker
  * (`**Awaiting maintainer decision**`) at the start of a top-level line outside
- * a Markdown code region. A reply that opens with it is the plain AMD hold; an
+ * a Markdown code region or an HTML comment or block. A reply that opens with it is the plain AMD hold; an
  * `**Accepted**` or `**Rejected**` reply that carries it in a later paragraph
  * is a partial answer whose open part still waits on the maintainer.
+ *
+ * A marker inside an HTML comment or an HTML block (`<!-- ... -->`, a
+ * multi-line `<div>`) is hidden text, not a visible hold, so the mask below
+ * blanks both regions before the scan (issue `#4332`; the Copilot finding on
+ * PR `#4325`: an `**Accepted**` reply that hid the text in a multi-line
+ * comment or `<div>` was held, which blocked the advisory gate with no visible
+ * reason). A masked line reads as blank, and an HTML block runs to the next
+ * blank line, so a marker meant to count after a `<div>` block needs a blank
+ * line between them.
  *
  * A marker line that follows a block quote or a list item with no blank line
  * between is a lazy continuation of that container's paragraph, so it is quoted
  * or listed text and does not count. A blank line (or an empty quote line) ends
  * that run, and so does a line that opens a heading, a thematic break, or an
- * HTML block; a marker after one is a top-level paragraph again. The reader
- * keeps this small run model on purpose rather than a full container parser,
- * as `copilot-review-body.mts`'s remark reader does: it can miss a marker
- * indented into a container or a list item's later paragraph, which reads as
- * settled, no worse than before this check existed, and it never counts a
- * plain quoted example.
+ * HTML block; a marker after one is a top-level paragraph again. The HTML-block
+ * test in {@link interruptsParagraph} stays as a guard for a block-start line
+ * the mask leaves in place. The reader keeps this small run model on purpose
+ * rather than a full container parser, as `copilot-review-body.mts`'s remark
+ * reader does: it can miss a marker indented into a container or a list item's
+ * later paragraph, which reads as settled, no worse than before this check
+ * existed, and it never counts a plain quoted example.
  */
 export function hasPendingDecisionMarker(
   body: string | null | undefined,
@@ -4308,7 +4318,11 @@ export function hasPendingDecisionMarker(
     return false;
   }
   let inContainerRun = false;
-  for (const line of maskMarkdownForScan(text).split('\n')) {
+  const masked = maskMarkdownForScan(text, {
+    htmlComments: 'mask',
+    htmlBlocks: 'mask',
+  });
+  for (const line of masked.split('\n')) {
     if (
       line.trim() === '' ||
       EMPTY_QUOTE_LINE_RE.test(line) ||

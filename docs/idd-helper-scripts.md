@@ -6191,9 +6191,11 @@ reflexively as any other CLI option.
   `**Rejected**`, or `**Rejection confirmed by maintainer**` reply. It is not
   a disposition, so the thread is not settled until a settled reply from a
   trusted account follows it. A mid-sentence quote of the phrase, an
-  indented line, one inside a code span, a fence, a block quote, or a list
-  item, and a line that continues a quote or list item with no blank line,
-  heading, thematic break, or HTML block before it, does not count. The same
+  indented line, one inside a code span, a fence, a block quote, a list
+  item, an HTML comment, or an HTML block, and a line that continues a quote
+  or list item with no blank line, heading, thematic break, or HTML block
+  before it, does not count (kurone-kito/idd-skill#4332: text hidden in a
+  multi-line comment or `<div>` is not a visible hold). The same
   rule keeps such a reply from answering a regular comment (a human's
   included), from advancing the last-reply watermark behind the
   unreplied-comment count, from covering a cited Previously missed item, and

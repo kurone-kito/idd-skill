@@ -304,9 +304,9 @@ warning.
   `ok` does not clear those threads either.
 - **A pending decision is not a disposition.** A reply that carries
   `**Awaiting maintainer decision**` at the start of a top-level line
-  outside a code region does not clear a Copilot or configured-advisory-bot
-  thread,
-  even when it opens with `**Accepted**` or `**Rejected**`. The thread
+  outside a code region or an HTML comment or block does not clear a
+  Copilot or configured-advisory-bot thread, even when it opens with
+  `**Accepted**` or `**Rejected**`. The thread
   stays blocking until a settled reply follows it. Observed 2026-10-14 on
   PR `#4271` (issue `#4244`): a stamped `**Accepted**` reply that left a
   forged-receipt question to the maintainer counted as settled.
