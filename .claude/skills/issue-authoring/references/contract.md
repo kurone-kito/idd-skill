@@ -1975,9 +1975,11 @@ only approval boundary.
   repository that still carries the authoring label and has no active
   claim or open linked pull request, and its trusted owner-marker log must
   replay to one open generation with no release in progress. Every marker
-  of that log must follow the field rules of its mode, a completed set
-  stays closed (a later acquisition under the same set ID is refused), and
-  a resume does not end a release in progress. The
+  of that log must follow the field rules of its mode, the first valid
+  opener wins and a later opener of the same generation loses (its owner's
+  markers are ignored), a completed set stays closed (a later acquisition
+  under the same set ID is refused), and a resume does not end a release in
+  progress. The
   child then takes the anchor's set ID and owning session, writes the
   anchor's real reference as `anchor` in its publication line, its journal
   records, and its owner marker, and generates only its own `target`,
@@ -2076,7 +2078,11 @@ only approval boundary.
   (an `owner/repo#number` reference to a pre-existing, durable, comment-only
   issue) -- an unset `issueAuthoring.journalIssue` only blocks a standalone
   set; an existing set with a verified Stage 1 hold needs no journal
-  configuration at all. Do not create that journal as part of the same set.
+  configuration at all. The one narrower reader is `publish-authoring-hold`:
+  it resolves the hold as `issueAuthoring.journalIssue` for every shape, so
+  it needs that setting even for a child and verifies the anchor's token
+  there, and it cannot extend a set whose hold lives elsewhere. Do not create
+  that journal as part of the same set.
   If the applicable location cannot be resolved -- no verified Stage 1 hold
   for an existing set, or `issueAuthoring.journalIssue` unset or
   unverifiable for a standalone set -- stop with `blocked-by-human` before

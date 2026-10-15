@@ -1260,7 +1260,8 @@ in this preamble, since the fallback differs per helper.
   open issue, not a pull request, that still carries the authoring label,
   has no active claim or open linked pull request, and whose trusted
   owner-marker log replays to one open generation (every marker follows the
-  field rules of its mode, a completed set cannot be reopened under its set
+  field rules of its mode, the first valid opener wins and a later opener of
+  the same generation loses, a completed set cannot be reopened under its set
   ID, and a resume does not end a release in progress). The token of the
   anchor's own publication line must also replay to `state=member` in the
   journal (trusted, unedited records that match the line on target, anchor,
