@@ -400,7 +400,12 @@ function samePath(left: string, right: string): boolean {
 function stepLocation(ctx: Context): StepOutcome {
   const { branch, worktree } = ctx;
   if (branch === null || worktree === null) {
-    return failed('no claimed branch or worktree', NEXT_ACTION.stopAndReport);
+    // Unreachable: runClaimedPush skips this step after any failed step, and
+    // a passed assert sets both values. A missing value is a programming
+    // error, not a refusal of the claim or the tree.
+    throw new Error(
+      'claimed-push: the location step ran without a passed assert',
+    );
   }
   const prefix = `issue/${ctx.input.issue}-`;
   if (!branch.startsWith(prefix)) {

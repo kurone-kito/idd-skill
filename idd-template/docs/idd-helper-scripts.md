@@ -8742,9 +8742,11 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
    action to configure the command or run the written gate by hand.
 4. `reassert`: runs the `assert` step again immediately before the push,
    because the gate can run for minutes (next action: stop and re-read the
-   claim; the assert must also still name the same branch), then requires
-   `git rev-parse HEAD` and the branch tip to equal the recorded value
-   (next action: rerun the helper so the gate sees the new HEAD).
+   claim, or, when the second assert cannot start, check the helper
+   installation, then rerun; the assert must also still name the same
+   branch), then requires `git rev-parse HEAD` and the branch tip to equal
+   the recorded value (next action: rerun the helper so the gate sees the
+   new HEAD).
 5. `push`: runs `git push -u origin <branch>` when the branch has no
    upstream yet, else `git push origin <branch>`, once. A push that git
    rejects (non-fast-forward, hook, missing remote) fails with git's

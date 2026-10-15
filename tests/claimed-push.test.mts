@@ -332,6 +332,13 @@ test('a claimed branch outside issue/<n>- refuses before any path is computed', 
   }
 });
 
+test('an empty worktree path from git refuses at the assert step', () => {
+  const r = run({ world: { [K.toplevel]: result(0, '\n') } });
+  assertRefused(r, 'assert', NEXT.runFromWorktree, { exitStatus: 0 });
+  assert.equal(r.count(K.assert), 0);
+  noPush(r);
+});
+
 test('a worktree that is not the sibling path of the claimed branch refuses', () => {
   const elsewhere = join(ROOT, 'somewhere-else');
   const r = run({
