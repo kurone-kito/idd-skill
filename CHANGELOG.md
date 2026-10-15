@@ -14,6 +14,110 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-15
+
+Release cut after the user-global installer, the draft-carrier publish and
+Discover routes, and the orchestrator host-load wait landed. No setting that
+existed at v0.15.0 changes its default. The behavior changes are listed
+first under Changed so that a re-sync reader sees them before the rest.
+
+### Added
+
+- User-global installer: install edits the harness entry files (`CLAUDE.md`,
+  `AGENTS.md`, `opencode.json`) by changing only a managed block or one
+  `instructions` entry (#4271), `idd-onboard` installs and uninstalls the
+  user-global payload from the command line (#4320), and the installation and
+  layered-policy documentation covers the installer and the layered policy
+  (#4331).
+- Authoring-hold publish routes: `publish-authoring-hold` gains a `--shape
+  carrier` route for a draft carrier (#4298), releases carrier holds
+  automatically (#4317), and publishes roadmap shells and set children (#4357).
+- Discover lists draft carriers by release state, and the internal hint-cache
+  format becomes `5` (#4295). Discover also re-authors one ready draft carrier
+  at entry (#4363).
+- The orchestrator waits for host load to clear before it stops. The two
+  optional settings `orchestrator.hostLoadClearStreak` (default `3`) and
+  `orchestrator.hostLoadWaitCeiling` (default `PT30M`) tune the wait (#4290).
+- The `idd-hold` marker type and its trusted-hold parser let a worker post the
+  hold marker that an orchestrator reads when it renews a held claim (#4337).
+- The worker-report store accepts and counts a `scope-stopped` outcome for a
+  worker that an operator or coordinator told to stop at an earlier phase
+  (#4354).
+
+### Changed
+
+- Default changes, read these before re-syncing. No setting that existed at
+  v0.15.0 changes its default and no key or option is removed, but these
+  behaviors differ:
+  - The orchestrator waits for host load to clear. At v0.15.0 it stopped at the
+    first `host-load` reading with no free slot; now it re-reads
+    `idd-worker-budget` every minute for up to `PT30M` by default (#4290).
+    `orchestrator.hostLoadWaitCeiling` bounds the wait; there is no off switch.
+  - A living orchestrator re-posts the `claimed-by` heartbeat of a worker that
+    posted an `idd-hold` marker every 12 hours for at most 72 hours from the
+    hold start, then posts `unclaimed-by`. A session with no living orchestrator
+    is unchanged (#4285, #4338).
+  - A reply with a top-level `**Awaiting maintainer decision**` keeps its review
+    thread blocking, and `resolve-review-thread --apply` refuses a body that
+    carries it (#4325). A marker hidden in an HTML comment or block does not
+    count (#4342).
+  - F1 holds less often on a queued non-required external app (#4323). F2 holds
+    less often on a non-required `action_required` run when no required check is
+    configured (#4353). F4 fast-forwards with `merge.autoStash` forced off every
+    time (#4355).
+  - A roadmap audit refuses to write to a roadmap that is not open, and a dry
+    run on a closed roadmap exits 1 with a `roadmap-closed` blocker (#4300). A
+    merged pull request reference counts as resolved; an open or closed-unmerged
+    one is reported as `pull_request_not_merged` instead of `issue_not_found`
+    (#4299).
+  - `audit-authored-issue` fails its effort `L` check closed on an unreadable
+    `--config`; its other fallbacks still warn and continue (#4307).
+- The internal discover hint-cache format moves from `3` to `4` (#4299) and then
+  to `5` (#4295). A helper discards a hint cache written under an older format.
+- Helper output schemas gain values that a strict consumer must accept: the
+  `scope-stopped` worker-report outcome (#4354), `pending-decision` and
+  `pendingDecisionIds` in the advisory and readiness output (#4325), the
+  `idd-hold` marker type (#4337), `roadmap-closed` in the roadmap-audit output
+  (#4300), and `nothingSent` on an apply failure (#4289).
+- Orchestrator documentation: the run report that the renewal rule writes to is
+  defined (#4338), the worker handle is the harness start id (#4356), each run
+  end names its worker report outcome (#4360), and the Grok Build worker start
+  identifier is named (#4362).
+- Review, merge and Discover documentation: with `critiqueLoop.triageRecord` on
+  (default `off`), PATH A dispositions record triage (#4297); the `triageRecord`
+  and `effortL` settings are documented (#4294, #4321 and #4296); a tooling
+  change withholds the trial-merge verdict (#4352); F4 posts the head proof
+  before cleanup (#4288); the A4.5 autonomy failure and its triggers are
+  explained (#4343); branch rules are cited instead of restated (#4330); and
+  claim recovery names the default branch by role (#4279).
+- Issue-authoring documentation: ask before parking a choice the operator can
+  answer (#4291), publish every reviewed draft as a held issue or a draft
+  carrier (#4351, #4361, #4364), and a per-target Stage 2 release checklist
+  (#4328).
+- Other documentation: the receipt provenance decision for entry edits (#4311),
+  the weekly feedback footer and label (#4318), the Claude Code subagent wait
+  model (#4293), bundle headroom shown in B1 in the source repository (#4286),
+  and the 2026-10-13 review-loop audit in the design rationale (#4235).
+
+### Fixed
+
+- Installer fixes, which apply to the install and uninstall commands that #4320
+  adds: pull request #4322 removes skill files a newer package no longer
+  ships, #4324 compares the `AGENTS.md` block text on uninstall, #4326 refuses a
+  user-owned symbolic link above the install roots, and #4335 refuses a
+  reinstall rewrite of a whole-file record that is not install output.
+- Advisory, readiness and merge fixes: #4325 stops counting a pending-decision
+  reply as settled and #4342 finishes its reader and refusal follow-ups. #4353
+  makes F2 ignore a non-required `action_required` run when no required check is
+  configured, and read a still-running commit status as pending, #4323 lets F1
+  see a queued non-required external app, and #4355 forces `merge.autoStash` off
+  on the F4 fast-forward.
+- Roadmap and helper fixes: #4289 reports which apply step failed and what was
+  sent, #4300 refuses to audit a roadmap that is not open, #4346 catches
+  pre-close read failures, #4299 treats a merged pull request reference as
+  resolved, #4307 fails the effort `L` check closed on an unreadable `--config`,
+  and #4292 marks the weekly feedback report as not autopilot work.
+
 ## [0.15.0] - 2026-10-14
 
 Release cut after the user-global policy layer, the review-defer route,
