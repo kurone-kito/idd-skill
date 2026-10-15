@@ -719,6 +719,11 @@ function identityOf(stat: { dev: bigint; ino: bigint }): string | null {
  * A dropped entry that is the same file as one of them is kept as it was:
  * removing it under the old spelling would remove the file the new spelling
  * ships.
+ *
+ * "Dropped" means a skill file that is not a destination of this run. That is
+ * the whole payload today. An install that ships only part of it, for example
+ * one selected skill, must scope this set to what it ships, or it would drop
+ * every other skill file.
  */
 function planPrunes(
   ctx: Context,
@@ -750,20 +755,22 @@ function planPrunes(
           sha256: entry.sha256,
           present: false,
         });
-        lines.push(`absent ${entry.path} (listed, no longer shipped)`);
+        lines.push(
+          `remove ${entry.path} (already absent; dropping its receipt entry)`,
+        );
         continue;
       }
       // checkContainment throws only for a link above the final component, so
       // the final component is checked here.
       if (walk.finalKind !== 'file') {
         throw new Error(
-          `${entry.path} is now a ${walk.finalKind}, not a file, and the new version no longer ships it; refusing; leaving it in place`,
+          `${entry.path} is now a ${walk.finalKind}, not a file, and the new version no longer ships it; refusing; leaving it in place; move or delete it, then install again`,
         );
       }
       const stat = fs.lstatSync(entry.path, { bigint: true });
       if (stat.nlink > 1n) {
         throw new Error(
-          `${entry.path} has more than one hard link, and the new version no longer ships it; refusing to remove it; leaving it in place`,
+          `${entry.path} has more than one hard link, and the new version no longer ships it; refusing to remove it; leaving it in place; move or delete it, then install again`,
         );
       }
       const identity = identityOf(stat);
@@ -1458,7 +1465,9 @@ function applyInstall(
  * succeeded and the receipt lists it, and a failure here never rolls anything
  * back: the new payload is complete, and each file is removed and unlisted,
  * still present and listed, or (after a crash or a failed rewrite) gone but
- * still listed. Every one of those states is one a plain retry finishes.
+ * still listed. A plain retry finishes every one of those states, except that
+ * a receipt temporary file a failed rewrite could not remove must be deleted
+ * by hand first (the error names it).
  * Rolling a removal back would need a lossy recreate (mode and time are not
  * kept) and would undo a finished upgrade over an obsolete file.
  *

@@ -1162,7 +1162,8 @@ test('a dropped skill file that is now a symbolic link is refused and nothing is
     () => installPayload(upgradeOptions(home, source)),
     (error: Error) =>
       literal(dropped).test(error.message) &&
-      /is now a symlink/.test(error.message),
+      /is now a symlink/.test(error.message) &&
+      /move or delete it, then install again/.test(error.message),
   );
   assert.deepEqual(snapshot(home), before);
   assert.ok(nodeFs.lstatSync(dropped).isSymbolicLink());
@@ -1183,7 +1184,8 @@ test('a dropped skill file that is now a directory is refused and left in place'
     () => installPayload(upgradeOptions(home, source)),
     (error: Error) =>
       literal(dropped).test(error.message) &&
-      /is now a directory/.test(error.message),
+      /is now a directory/.test(error.message) &&
+      /move or delete it, then install again/.test(error.message),
   );
   assert.deepEqual(snapshot(home), before);
 });
@@ -1200,7 +1202,8 @@ test('a dropped skill file with a second hard link is refused and left in place'
     () => installPayload(upgradeOptions(home, source)),
     (error: Error) =>
       literal(dropped).test(error.message) &&
-      /more than one hard link/.test(error.message),
+      /more than one hard link/.test(error.message) &&
+      /move or delete it, then install again/.test(error.message),
   );
   assert.deepEqual(snapshot(home), before);
 });
@@ -1221,7 +1224,9 @@ test('a dropped skill file that is already absent is unlisted and not recreated'
     assert.equal(nodeFs.existsSync(path), false, `${path} is not recreated`);
     assert.equal(isListed(home, path), false);
     assert.ok(
-      result.lines.includes(`absent ${path} (listed, no longer shipped)`),
+      result.lines.includes(
+        `remove ${path} (already absent; dropping its receipt entry)`,
+      ),
     );
   }
 
@@ -1273,6 +1278,51 @@ test('a stale temporary file beside a dropped skill file that is the same file a
     /crashed run/,
   );
   assert.deepEqual(snapshot(home), before);
+});
+
+test('an edited dropped file of the second shipped skill is refused too', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(SPEC_DROPPED_RELATIVE);
+  const edited = join(home, '.agents', 'skills', SPEC_DROPPED_RELATIVE);
+  nodeFs.appendFileSync(edited, 'my own notes\n');
+  const before = snapshot(home);
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source)),
+    (error: Error) =>
+      literal(edited).test(error.message) &&
+      /edited after install/.test(error.message),
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
+test('a hard link made to a dropped skill file after the plan stops the prune and removes nothing', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const source = copySourceWithout(DROPPED_RELATIVE);
+  const dropped = droppedOf(home, '.claude');
+  const alias = join(home, 'alias.md');
+  let fired = false;
+  const fs = hookedFs((op, args) => {
+    // The repoint comes after planning and before the prune.
+    if (op === 'renameSync' && String(args[1]) === currentOf(home)) {
+      fired = true;
+      nodeFs.linkSync(dropped, alias);
+    }
+  });
+
+  assert.throws(
+    () => installPayload(upgradeOptions(home, source, { fs })),
+    (error: Error) =>
+      literal(dropped).test(error.message) &&
+      /more than one hard link/.test(error.message) &&
+      /payload is installed/.test(error.message),
+  );
+  assert.ok(fired);
+  assert.ok(nodeFs.existsSync(dropped));
+  assert.ok(nodeFs.existsSync(alias));
+  assert.ok(isListed(home, dropped));
 });
 
 test('a file the user added beside a dropped skill file survives the prune', () => {
@@ -1488,6 +1538,7 @@ test('a dropped skill file edited after the plan stops the prune, keeps the edit
     () => installPayload(upgradeOptions(home, source, { fs })),
     (error: Error) =>
       literal(racing).test(error.message) &&
+      literal(droppedOf(home, '.agents')).test(error.message) &&
       /payload is installed/.test(error.message) &&
       /install again/.test(error.message),
   );
@@ -1577,6 +1628,11 @@ test('a failed receipt rewrite after a removal names the path, and a retry drops
   assert.equal(nodeFs.existsSync(first), false);
   assert.ok(isListed(home, first), 'the receipt still lists the removed file');
   assert.ok(nodeFs.existsSync(second));
+  assert.equal(
+    nodeFs.readdirSync(dataRootOf(home)).some((name) => name.includes('.tmp-')),
+    false,
+    'the failed rename removes its temporary file',
+  );
   assert.ok(
     planUninstall(upgradeOptions(home, source)).lines.includes(
       `absent ${first}`,
@@ -1586,7 +1642,9 @@ test('a failed receipt rewrite after a removal names the path, and a retry drops
 
   const retry = installPayload(upgradeOptions(home, source));
   assert.ok(
-    retry.lines.includes(`absent ${first} (listed, no longer shipped)`),
+    retry.lines.includes(
+      `remove ${first} (already absent; dropping its receipt entry)`,
+    ),
   );
   assert.ok(retry.lines.includes(`remove ${second}`));
   assert.equal(isListed(home, first), false);
