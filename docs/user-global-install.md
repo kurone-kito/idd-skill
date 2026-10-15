@@ -66,7 +66,9 @@ nothing is written.
 
 Each path is reported on stdout as `create`, `change`, `keep`, or `remove`. A
 refusal or a failure goes to stderr as `idd-onboard: refuse: ...` or
-`idd-onboard: fail: ...`, and names the path it stopped at.
+`idd-onboard: fail: ...`, and names the path or variable it stopped at. An
+invalid `HOME` or data root can fail before any path exists. The message then
+names the unresolved root or variable instead.
 
 Exit codes: 0 means done, or planned with `--dry-run`. 1 means the run refused
 before writing anything, or failed after a clean plan. 2 means a usage error.
@@ -85,7 +87,8 @@ before writing anything, or failed after a clean plan. 2 means a usage error.
   - `~/.claude` and `~/.agents`, the parents of the two skill roots. Both are
     required even when `--harness` selects only Codex CLI;
   - when OpenCode is selected, `~/.config` or `$XDG_CONFIG_HOME`, the parent of
-    the OpenCode directory.
+    the OpenCode directory;
+  - when `CODEX_HOME` is set to a qualified path, the parent of that path.
 
   The installer creates a harness directory itself, such as `~/.codex` or
   `~/.config/opencode`, when its parent exists and it is missing.
@@ -216,13 +219,14 @@ layer.
 
 ## Global-only profile
 
-The installed payload alone does not activate IDD in a repository. Without a
-repository policy file or a matching user-global override, the gate returns
-`no-activation-rule`. A repository with one of those signals can run IDD from
-the installed payload, without copying the instruction files, when the gate
-reports `repository-policy-minimal-import` or `user-global-override-match`, and
-the repository has neither the advisory workflow nor the cleanup workflow. The
-conditions and the trust rule are in [Global-only profile](global-only-profile.md).
+The installed payload alone does not activate IDD in a repository. Without the
+core instruction file, a repository policy file, or a matching user-global
+override, the gate returns `no-activation-rule`. A repository with a policy file
+or a matching override can run IDD from the installed payload, without copying
+the instruction files, when the gate reports `repository-policy-minimal-import`
+or `user-global-override-match`, and the repository has neither the advisory
+workflow nor the cleanup workflow. The conditions and the trust rule are in
+[Global-only profile](global-only-profile.md).
 
 The profile has local substitutes. The post-merge cleanup run is replaced by the
 local cleanup path, and the IDD labels are created through the GitHub API, for
