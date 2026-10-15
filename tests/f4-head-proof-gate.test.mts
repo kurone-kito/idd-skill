@@ -1463,36 +1463,48 @@ test('a warning is the first line of the error message, cut to 300 characters', 
 // --- the claim is read again at the write boundary -------------------------
 
 test('under --apply the claim and lock are read again right before the post', () => {
-  let asserts = 0;
-  let locks = 0;
-  const h = harness({
-    assertClaim: () => {
-      asserts += 1;
-      return { status: 'owned', branch: BRANCH };
-    },
-    checkLock: () => {
-      locks += 1;
-      return {
-        path: '/lock',
-        present: true,
-        holder: { agentId: AGENT, claimId: CLAIM, acquiredAt: ACTIVATED },
-      };
-    },
-  });
+  const counted = () => {
+    const seen = {
+      requests: [] as ClaimAssertRequest[],
+      locks: 0,
+    };
+    const h = harness({
+      assertClaim: (request) => {
+        seen.requests.push(request);
+        return { status: 'owned', branch: BRANCH };
+      },
+      checkLock: () => {
+        seen.locks += 1;
+        return {
+          path: '/lock',
+          present: true,
+          holder: { agentId: AGENT, claimId: CLAIM, acquiredAt: ACTIVATED },
+        };
+      },
+    });
+    return { h, seen };
+  };
+
+  const applied = counted();
   expectVerdict(
-    runF4HeadProofGate(APPLY, h.deps),
+    runF4HeadProofGate(APPLY, applied.h.deps),
     'proceed',
     'posted-confirmed',
     0,
   );
-  assert.equal(asserts, 2);
-  assert.equal(locks, 2);
-  // A dry run posts nothing, so it reads the claim once.
-  asserts = 0;
-  locks = 0;
-  runF4HeadProofGate(INPUT, h.deps);
-  assert.equal(asserts, 1);
-  assert.equal(locks, 1);
+  assert.equal(applied.seen.requests.length, 2);
+  assert.equal(applied.seen.locks, 2);
+  // Both reads carry the same stored nonce, claim ID, and worktree.
+  assert.deepEqual(applied.seen.requests[0], applied.seen.requests[1]);
+  assert.equal(applied.seen.requests[1]?.nonce, NONCE);
+
+  // A dry run posts nothing, so it reads the claim once. It gets a fresh
+  // harness: a state that already holds the posted proof would end the run
+  // at `proceed`, before the dry-run split.
+  const dry = counted();
+  expectVerdict(runF4HeadProofGate(INPUT, dry.h.deps), 'post', null, 0);
+  assert.equal(dry.seen.requests.length, 1);
+  assert.equal(dry.seen.locks, 1);
 });
 
 test('a claim lost between the first reads and the post is a stop and posts nothing', () => {
@@ -1565,6 +1577,16 @@ test('a claim lost between the first reads and the post is a stop and posts noth
       label,
     );
     assert.match(output.nextAction ?? '', /do not continue F4/, label);
+    // No derived value is offered for a stop: nothing here is usable.
+    assert.deepEqual(output.proof, {
+      pr: null,
+      claim: CLAIM,
+      branch: null,
+      f2: null,
+      branchTip: null,
+      merge: null,
+      head: null,
+    });
   }
 });
 

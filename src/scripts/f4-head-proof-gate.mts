@@ -758,7 +758,7 @@ export function runF4HeadProofGate(
       input,
       stopped.disposition,
       stopped.reason,
-      proof,
+      emptyProof(input.claimId),
       {},
       notes,
     );
