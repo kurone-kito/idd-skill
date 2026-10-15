@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { test } from 'node:test';
@@ -2198,6 +2204,175 @@ test('missing --roadmap is rejected', async () => {
     () => runRoadmapAuditExecute(['--claim-id', CLAIM_ID], deps),
     /missing required --roadmap/,
   );
+});
+
+// ---------------------------------------------------------------------------
+// --apply: the pre-close claim read throws after the evidence comment (#4340)
+// ---------------------------------------------------------------------------
+
+type ApplyOutcome = Awaited<ReturnType<typeof runRoadmapAuditExecute>>;
+
+/**
+ * Deps whose claim re-validation owns the claim on its first two reads (the
+ * early read and the read before the evidence comment) and throws `failure`
+ * on the third: the pre-close read, after the evidence comment was posted.
+ * Also counts the local coordination checks and records how many had run
+ * when the third read threw, so a test can prove the gate that follows a
+ * successful pre-close read never ran.
+ */
+function makePreCloseReadFailureDeps(failure: unknown) {
+  const reads = { claim: 0, coordination: 0, coordinationAtThrow: -1 };
+  const { deps, calls } = makeDeps(readyReport(), {
+    revalidateClaim: () => {
+      reads.claim += 1;
+      if (reads.claim === 3) {
+        reads.coordinationAtThrow = reads.coordination;
+        throw failure;
+      }
+      return {
+        owned: true,
+        reason: 'match',
+        stale: false,
+        activeClaim: {
+          // The early read names another agent, so a result that names the
+          // pre-comment read's claim cannot be mistaken for the early one.
+          agentId: reads.claim === 1 ? 'early-read-agent' : AGENT_ID,
+          claimId: CLAIM_ID,
+          supersedes: 'none',
+          branch: CLAIM_BRANCH,
+          createdAt: '2026-06-26T00:00:00Z',
+        },
+      };
+    },
+    inspectLocalCoordinationState: () => {
+      reads.coordination += 1;
+      return {
+        presence: 'absent',
+        path: null,
+        brokenReasons: [],
+        detachedWorktreePaths: [],
+        unreadable: false,
+        unreadableReason: null,
+      };
+    },
+  });
+  return { deps, calls, reads };
+}
+
+/**
+ * Assert the verdict of a pre-close read failure: a stop with exit 1 and
+ * `nothingSent` false (the evidence comment already landed), one evidence
+ * comment, and no close or release. `expectedMessage` is the message the
+ * result must end with.
+ */
+function assertPreCloseReadFailure(
+  outcome: ApplyOutcome,
+  harness: ReturnType<typeof makePreCloseReadFailureDeps>,
+  expectedMessage: string,
+  label: string,
+): void {
+  const { verdict, exitCode } = outcome;
+  const { calls, reads } = harness;
+
+  assert.equal(exitCode, 1, label);
+  assert.equal(verdict.nothingSent, false, label);
+  assert.equal(verdict.closed, false, label);
+  assert.equal(verdict.claimReleased, false, label);
+  assert.match(verdict.result, /claim's state is unknown/, label);
+  assert.match(verdict.result, /evidence comment was posted/, label);
+  assert.match(verdict.result, /not closed by this run/, label);
+  assert.match(
+    verdict.result,
+    new RegExp(`agent ${AGENT_ID}, claim ${CLAIM_ID}`),
+    label,
+  );
+  assert.doesNotMatch(verdict.result, /early-read-agent/, label);
+  assert.match(verdict.result, /close nothing and post nothing/, label);
+  // The ownership test is the written Claim revalidation gate, which must
+  // exist under the file name the result cites.
+  assert.match(
+    verdict.result,
+    /the Claim revalidation gate in idd-overview-core\.instructions\.md passes for agent /,
+    label,
+  );
+  assert.match(
+    readFileSync(
+      new URL(
+        '../.github/instructions/idd-overview-core.instructions.md',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+    /^## Claim revalidation gate$/m,
+    label,
+  );
+  assertPartialResult(verdict.result, new Error(expectedMessage));
+
+  // The evidence comment went out exactly once; nothing was closed or released.
+  assert.equal(calls.comments.length, 1, label);
+  assert.notEqual(verdict.evidenceBody, '', label);
+  assert.equal(verdict.evidenceBody, calls.comments[0]?.body, label);
+  assert.deepEqual(calls.closed, [], label);
+  assert.deepEqual(calls.released, [], label);
+
+  // Early, pre-comment and pre-close claim reads: the throw hit the third.
+  assert.equal(reads.claim, 3, label);
+  // The local coordination gate that follows a successful read never ran.
+  assert.equal(reads.coordination, reads.coordinationAtThrow, label);
+  assert.ok(reads.coordinationAtThrow > 0, label);
+}
+
+test('--apply: a refused pre-close claim read stops before the close with the evidence comment reported as sent', async () => {
+  const refusal = createLoadControlRefusal({
+    outcome: 'deadline-expired',
+    reason: 'busy',
+  });
+  const harness = makePreCloseReadFailureDeps(refusal);
+  const outcome = await runRoadmapAuditExecute(APPLY_ARGS, harness.deps);
+
+  assertPreCloseReadFailure(outcome, harness, refusal.message, 'refusal');
+});
+
+test('--apply: a pre-close claim read that throws a plain error stops before the close', async () => {
+  const failure = new Error('socket hang up');
+  const harness = makePreCloseReadFailureDeps(failure);
+  const outcome = await runRoadmapAuditExecute(APPLY_ARGS, harness.deps);
+
+  assertPreCloseReadFailure(outcome, harness, failure.message, 'plain error');
+});
+
+test('--apply: a pre-close claim read that fails with an HTTP status always reports nothingSent false', async () => {
+  for (const status of [401, 404, 422, 502]) {
+    const failure = httpFailure(status);
+    const harness = makePreCloseReadFailureDeps(failure);
+    const outcome = await runRoadmapAuditExecute(APPLY_ARGS, harness.deps);
+
+    assertPreCloseReadFailure(
+      outcome,
+      harness,
+      failure.message,
+      `HTTP ${status}`,
+    );
+  }
+});
+
+test('--apply: a pre-close claim read that throws a non-Error value ends the result with its text', async () => {
+  const harness = makePreCloseReadFailureDeps('claim stream closed');
+  const outcome = await runRoadmapAuditExecute(APPLY_ARGS, harness.deps);
+
+  assertPreCloseReadFailure(outcome, harness, 'claim stream closed', 'string');
+});
+
+test('--help names the pre-close read as an outcome of a partial apply (#4340)', () => {
+  const result = spawnSync(process.execPath, [CLI_SCRIPT, '--help'], {
+    encoding: 'utf8',
+    env: fixtureEnv(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const text = result.stdout.replace(/\s+/g, ' ');
+  assert.match(text, /pre-close read/);
 });
 
 /**

@@ -165,10 +165,15 @@ export interface IddRoadmapAuditExecuteVerdict {
    */
   localCoordinationNote?: string;
   /**
-   * Set only on a failed apply write (the evidence comment, the close, or the
-   * claim release): `true` when that write provably sent nothing, `false` when
-   * it may have landed. Absent on every other verdict, so the successful path
-   * keeps its shape.
+   * Set only when an apply step throws (the evidence comment, the claim
+   * re-validation read after it, the close, or the claim release). For a
+   * write it describes that write's own request: `true` when the write
+   * provably sent nothing, `false` when it may have landed. For the
+   * re-validation read between the evidence comment and the close, which is
+   * not a write, it is always `false`, even for a read that was refused and
+   * sent nothing itself, because the run has already sent the evidence
+   * comment. Absent on every other verdict, so the successful path keeps its
+   * shape.
    */
   nothingSent?: boolean;
 }
@@ -1508,6 +1513,12 @@ function thrownMessage(error: unknown): string {
  * the generic claim-not-owned error. Every other claim-loss shape — roadmap
  * still open, closed without trusted evidence — keeps the unchanged
  * fail-closed behavior.
+ *
+ * Four apply steps stop with a verdict instead of a bare thrown error when
+ * they fail: the evidence comment, the claim re-validation read that follows
+ * it (the pre-close read), the close, and the claim release. The two claim
+ * reads before the evidence comment run before any write, so a failure there
+ * is still thrown as is.
  */
 export async function runRoadmapAuditExecute(
   argv: string[],
@@ -1707,6 +1718,9 @@ export async function runRoadmapAuditExecute(
   // comment→close gap must not let us close under a claim we no longer own. An
   // already-posted evidence comment before an aborted close is harmless — the
   // successor session simply re-audits — but a wrongful close is destructive.
+  // The re-validation is a read that can itself throw (for example a
+  // load-control refusal); that throw stops the apply with a verdict too
+  // (#4340).
   const finalEvidenceBody = buildRoadmapCompletionAuditBody(
     revalidated,
     args.criteriaNote,
@@ -1723,13 +1737,26 @@ export async function runRoadmapAuditExecute(
     return { verdict, exitCode: 1 };
   }
 
-  const preCloseClaim = resolvedDeps.revalidateClaim({
-    issueNumber: roadmapNumber,
-    roadmapNumber,
-    expectedClaimId: args.claimId,
-    expectedAgentId: args.agentId,
-    nowIso,
-  });
+  let preCloseClaim: RoadmapClaimVerdict;
+  try {
+    preCloseClaim = resolvedDeps.revalidateClaim({
+      issueNumber: roadmapNumber,
+      roadmapNumber,
+      expectedClaimId: args.claimId,
+      expectedAgentId: args.agentId,
+      nowIso,
+    });
+  } catch (error: unknown) {
+    // The evidence comment above already landed, so something was sent
+    // whatever this read did. Assign `nothingSent` directly: going through
+    // `applyWriteSentNothing` would report true for an own load-control
+    // refusal of this read and make the posted comment look unsent. Whether
+    // the claim is still held is unknown, so the next action is conditional
+    // on ownership (#4340).
+    verdict.nothingSent = false;
+    verdict.result = `claim re-validation after the evidence comment failed, so the roadmap-audit claim's state is unknown; the evidence comment was posted, and roadmap #${roadmapNumber} was not closed by this run; do not run --apply again. Next action: read the roadmap's state and its comments. The claim is still this session's only when the Claim revalidation gate in idd-overview-core.instructions.md passes for agent ${claim.activeClaim.agentId}, claim ${claim.activeClaim.claimId}. If the roadmap is closed and the claim is still this session's, release the claim by posting this claim's unclaimed-by marker with the post-idd-marker helper, using a release timestamp. If it is still open and the claim is still this session's, close it as completed, then release the claim the same way. If the claim is no longer this session's, or you cannot tell the claim's or the roadmap's state, close nothing and post nothing. ${thrownMessage(error)}`;
+    return { verdict, exitCode: 1 };
+  }
   if (!preCloseClaim.owned) {
     verdict.result = `claim lost in the comment→close gap (reason="${preCloseClaim.reason}": ${explainRoadmapClaimReason(preCloseClaim.reason)}); evidence comment posted but roadmap NOT closed${viewerLoginUnavailableCaveat(resolvedDeps.viewerLoginUnavailable)}`;
     return { verdict, exitCode: 1 };
@@ -2237,19 +2264,25 @@ function printHelp(): void {
   together or not at all.
 
   Partial failure under --apply: the helper makes three writes in order (the
-  evidence comment, the close, then the release of the claim), each one time.
-  When a write throws, the helper stops at that step, never retries the write,
-  and prints this verdict with exit 1. The result names the next action and
-  ends with the thrown error's message. nothingSent is true only when that
-  write provably sent nothing: a load-control refusal, or, for a comment post,
-  a first-attempt HTTP 401, 404 or 422. Otherwise nothingSent is false and the
-  write may have landed. The three outcomes are: the evidence comment failed,
-  so the roadmap is not closed and the claim is still held; the close failed,
-  so the roadmap may still be open and the claim is still held; the release
-  failed, so the roadmap is closed and the claim may still be active. In every
-  case, do not run --apply again. Releasing the claim means posting this
-  claim's unclaimed-by marker with the post-idd-marker helper, using the claim's
-  agent id, its claim id, and a release timestamp.
+  evidence comment, the close, then the release of the claim), each one time,
+  and re-validates the claim with one read between the evidence comment and the
+  close (the pre-close read). When a write or the pre-close read throws, the
+  helper stops at that step, never retries the write, and prints this verdict
+  with exit 1. The result names the next action and ends with the thrown
+  error's message. For a write, nothingSent is true only when that write
+  provably sent nothing: a load-control refusal, or, for a comment post, a
+  first-attempt HTTP 401, 404 or 422. Otherwise nothingSent is false and the
+  write may have landed. For the pre-close read, which is not a write,
+  nothingSent is always false, even when the read itself was refused, because
+  the run has already sent the evidence comment. The four outcomes are: the
+  evidence comment failed, so the roadmap is not closed and the claim is still
+  held; the pre-close read failed, so the evidence comment was posted, the
+  roadmap was not closed by this run, and the claim's state is unknown; the
+  close failed, so the roadmap may still be open and the claim is still held;
+  the release failed, so the roadmap is closed and the claim may still be
+  active. In every case, do not run --apply again. Releasing the claim means
+  posting this claim's unclaimed-by marker with the post-idd-marker helper,
+  using the claim's agent id, its claim id, and a release timestamp.
 
   CLAIM REJECTION REASONS: a not-owned result's "reason" code is one of:
     match                 the claim is owned (not a rejection)
