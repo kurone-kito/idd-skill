@@ -1077,11 +1077,47 @@ Running this variant safely requires:
   600s`) while the 1-minute load average read 90.87 on 24 cores and no
   memory was available, and full-suite runs failed on timeouts in
   unrelated specs that all passed alone.
+- **Instruction freshness.** An orchestrator session reads its instruction
+  files once but can run for many hours, so a rule that lands on the base
+  branch mid-run never reaches it. In the 2026-10-14 to 2026-10-15 run, pull
+  request kurone-kito/idd-skill#4290 (merged 2026-10-14T16:36Z) added the
+  host-load wait rule after the session had read its files, and the session
+  kept using a single reading (no issue records the incident). Every
+  `idd-worker-budget` call after the first baseline is set, the host-load
+  re-checks included, therefore passes `--instructions-since` with the
+  baseline, run from the repository root because the helper reads the policy
+  file from the working directory. It reads local refs only and never
+  fetches, so the workers' own `git fetch origin` in B1 and F4 keeps its base
+  ref current, and it needs git 2.28 or newer. Its `instructionsChanged` lists
+  the paths under `.github/instructions/` and `docs/idd-workflow.md` that
+  differ between the baseline and `instructionsTip`, the commit the base ref
+  resolves to. Only a listed file that this session already loaded is re-read.
+  - The first baseline is `git rev-parse HEAD` of the primary checkout when
+    the session reads the orchestrator file; a restarted session takes a new
+    one the same way.
+  - Every later call passes the baseline. The baseline advances to the
+    `instructionsTip` of a call only after every listed file that this session
+    already loaded has been re-read, so a change is reported until it has been
+    read and then not again.
+  - A call that reports an error, including a baseline that is not an
+    ancestor of the tip, leaves the baseline as it is. To recover, when
+    `instructionsTip` is not null, the orchestrator re-reads every file it
+    loaded and then takes that tip as the baseline. If the next call reports
+    an error again, it stops passing `--instructions-since` for the rest of
+    the session and tells the operator once.
+  - A changed file is re-read with `git show <instructionsTip>:<path>`, which
+    does not depend on the state of the checkout; a file the session first
+    loads later is read the same way, because the checkout may lag the tip. A
+    deleted path needs no re-read and counts as removed. `git show` reports
+    such a path as absent from the tip.
 - **Full per-issue gating before every delegation.** The orchestrator
   runs the complete A4.5/A5 suitability and claim gates (and the A4
   viability gate that precedes them) for each issue before handing it to
   a worker; claiming several issues concurrently is never a shortcut
-  around those gates.
+  around those gates. A pick that fails A4.5, or A5 before or after the claim
+  marker is posted, starts no worker and gets no roster entry, and only a later
+  full Discover run reconsiders the pick; a failure after the marker is
+  contested and keeps its claim and worktree.
 - **A delegation brief that restates the background-wait topology
   warning and the worker's exit boundary.** Each worker's brief must
   carry the

@@ -61,8 +61,7 @@ Lost on restart: see [recovery](../../docs/idd-workflow.md#orchestrator-restart)
 5. A pick that fails A4.5, or A5 before the claim marker is posted, has its
    worktree and branch removed (deleting its lock). A failure after the marker
    is contested: follow idd-claim.instructions.md and keep its claim and
-   worktree. Either way no worker starts, so no entry exists, and only a later
-   full Discover run reconsiders the pick.
+   worktree. Either way no worker starts, so no entry exists.
 6. Dispatched and failed picks leave `--issues` before a refill.
 
 ## 4. Waiting and refill
@@ -70,8 +69,8 @@ Lost on restart: see [recovery](../../docs/idd-workflow.md#orchestrator-restart)
 - Streaming harnesses handle each completion on arrival; wave harnesses wait for
   the batch. Set a finished worker's entry to `reporting` before verification.
 - After each completion or wave, process `reporting` entries (§5), then re-run
-  `idd-worker-budget` and refill from the cached graph, on the Discover
-  re-run cadence.
+  `idd-worker-budget` with `--instructions-since`, re-read changed files
+  ([fv]), and refill from the cached graph, on the Discover re-run cadence.
 - When `slots` is `0` but candidates remain: apply stalled recovery to
   `stalled` entries first. If an entry is not `disposed`, wait for a `running`
   completion, or repeat recovery when none is running. Otherwise, if
