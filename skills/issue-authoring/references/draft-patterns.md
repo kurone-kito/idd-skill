@@ -124,8 +124,9 @@ evaluate:
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape orphan \
-  --marker-prefix <resolved-target-prefix> --title "Drafted issue title" \
-  --body-file draft.md
+  --marker-prefix <resolved-target-prefix> \
+  --config <target-checkout>/.github/idd/config.json \
+  --title "Drafted issue title" --body-file draft.md
 ```
 
 Before newly publishing a body into the `needs-decision` or
@@ -141,8 +142,9 @@ instead of a failure, since such a body is meant to be non-ready:
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape orphan \
-  --marker-prefix <resolved-target-prefix> --title "Drafted issue title" \
-  --body-file draft.md \
+  --marker-prefix <resolved-target-prefix> \
+  --config <target-checkout>/.github/idd/config.json \
+  --title "Drafted issue title" --body-file draft.md \
   --expect-bucket needs-decision \
   --label status:authoring \
   --label status:needs-decision
