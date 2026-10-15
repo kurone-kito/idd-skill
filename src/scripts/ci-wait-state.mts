@@ -991,6 +991,13 @@ function presentRunInputs(summary: CiWaitStateSummary) {
     summary.advisoryConvergenceNonTargetEventOnly;
   return {
     advisoryDowngrade,
+    // #4349: with no required check configured every present run is
+    // non-required, so the fallback ignores an `ACTION_REQUIRED` run, the
+    // same reading `summarizeRequiredChecks` gives pre-merge readiness.
+    presentRunOptions: {
+      allRunsNonRequired:
+        summary.requiredChecks.status === 'no-required-checks',
+    },
     downgradeNames: advisoryDowngrade
       ? new Set([DEFAULT_ADVISORY_CONVERGENCE_CHECK_SELECTOR])
       : new Set<string>(),
@@ -1054,6 +1061,7 @@ export function ciWaitSummaryIsPreMergeCiPassing(
   const presentRunConclusion = resolvePresentRunConclusion(
     presentRuns.checks,
     presentRuns.downgradeNames,
+    presentRuns.presentRunOptions,
   );
   const requiredChecksPassing =
     rollup.names.length > 0 &&
@@ -1116,6 +1124,7 @@ function presentRunConclusionOf(summary: CiWaitStateSummary): string {
   return resolvePresentRunConclusion(
     presentRuns.checks,
     presentRuns.downgradeNames,
+    presentRuns.presentRunOptions,
   );
 }
 
@@ -1162,6 +1171,7 @@ export function requiredCiHeadAgreementFromSummary(
       ? listBlockingPresentRunNames(
           presentRuns.checks,
           presentRuns.downgradeNames,
+          presentRuns.presentRunOptions,
         )
       : [],
     latestPassingCompletedAt: latestPassingCompletedAt(summary),

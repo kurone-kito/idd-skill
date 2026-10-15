@@ -76,7 +76,9 @@ only when all of these hold:
 - the global-only profile is active for this run (`--global-only`, with both
   conditions above met);
 - no required check remains after the advisory check is removed;
-- no check run is present on the head (`presentRunConclusion` is `none`).
+- no check run is present on the head (`presentRunConclusion` is `none`); a
+  run waiting on approval (`action_required`) is ignored as if absent, so it
+  does not count as present (issue `#4349`).
 
 A pending or failing check run still holds the gate, and so does a run
 outside the global-only profile, including an unprotected branch with the

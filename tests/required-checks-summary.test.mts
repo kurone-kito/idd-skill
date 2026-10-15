@@ -114,6 +114,75 @@ test('unprotected + pending runs: presentRunConclusion is pending', () => {
   assert.equal(r.presentRunConclusion, 'pending');
 });
 
+// #4349: with no required check configured every present run is non-required,
+// and F2 must not hold on a non-required run that is only waiting for approval
+// (`ACTION_REQUIRED`) or for a runner (a still-running commit status). The
+// run is ignored: the other runs decide, and a repository whose only run is
+// ignored has no run evidence, so the vacuous-green hold (`none`) applies.
+test('#4349: unprotected + a sole ACTION_REQUIRED run: presentRunConclusion is none, not some-failing', () => {
+  const r = summarize([{ name: 'companion', state: 'ACTION_REQUIRED' }], []);
+  assert.equal(r.noRequiredChecksConfigured, true);
+  assert.equal(r.presentRunConclusion, 'none');
+  assert.equal(r.requiredChecksPassing, false);
+});
+
+test('#4349: unprotected + an ACTION_REQUIRED run beside a green run: presentRunConclusion is all-passing', () => {
+  const r = summarize(
+    [
+      { name: 'lint', state: 'SUCCESS' },
+      { name: 'companion', state: 'ACTION_REQUIRED' },
+    ],
+    [],
+  );
+  assert.equal(r.noRequiredChecksConfigured, true);
+  assert.equal(r.presentRunConclusion, 'all-passing');
+});
+
+test('#4349: unprotected + an ACTION_REQUIRED run beside a non-required failure: presentRunConclusion stays some-failing', () => {
+  for (const state of ['FAILURE', 'TIMED_OUT', 'STARTUP_FAILURE', 'STALE']) {
+    const r = summarize(
+      [
+        { name: 'companion', state: 'ACTION_REQUIRED' },
+        { name: 'docs', state },
+      ],
+      [],
+    );
+    assert.equal(r.noRequiredChecksConfigured, true, state);
+    assert.equal(r.presentRunConclusion, 'some-failing', state);
+  }
+});
+
+test('#4349: unprotected + a still-running commit status: presentRunConclusion is pending, not some-failing', () => {
+  for (const state of ['PENDING', 'EXPECTED', 'REQUESTED']) {
+    const r = summarize([{ name: 'ci/ext', state }], []);
+    assert.equal(r.noRequiredChecksConfigured, true, state);
+    assert.equal(r.presentRunConclusion, 'pending', state);
+  }
+});
+
+test('#4349: protected + a required ACTION_REQUIRED run: the required gate still fails and the present-run reading is unchanged', () => {
+  const r = summarize(
+    [{ name: 'lint', state: 'ACTION_REQUIRED' }],
+    protectedRules,
+  );
+  assert.equal(r.noRequiredChecksConfigured, false);
+  assert.equal(r.status, 'failed');
+  assert.equal(r.requiredChecksPassing, false);
+  assert.equal(r.presentRunConclusion, 'some-failing');
+});
+
+test('#4349: protected + a non-required ACTION_REQUIRED run beside a green required check: the required gate passes', () => {
+  const r = summarize(
+    [
+      { name: 'lint', state: 'SUCCESS' },
+      { name: 'companion', state: 'ACTION_REQUIRED' },
+    ],
+    protectedRules,
+  );
+  assert.equal(r.noRequiredChecksConfigured, false);
+  assert.equal(r.requiredChecksPassing, true);
+});
+
 // #2714: a lone CANCELLED instance with no same-producer successor to dedup
 // against is deliberately excluded from both classifyCiChecks's `failed`
 // and `passing` buckets, landing in its residual `unknown` bucket. Before
