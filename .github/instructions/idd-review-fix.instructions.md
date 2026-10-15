@@ -485,9 +485,10 @@ Unanswered advisory items block merge until each one is dispositioned,
 unless the gate settles it without a disposition, as it does for a
 CodeRabbit no-actionable-comments summary. The disposition check covers
 the regular comments of Copilot, CodeRabbit, Codex, and each login in
-`advisoryBotLogins`, so a comment from any other bot needs no
-disposition for it. Copilot's review-body items are covered by the
-advisory-convergence check. An embedded finding in a CodeRabbit
+`advisoryBotLogins`. A regular comment from any other bot needs no
+advisory disposition, but it still blocks as an unreplied regular
+comment until a later IDD-agent reply. Copilot's review-body items
+are covered by the advisory-convergence check. An embedded finding in a CodeRabbit
 COMMENTED review body is a PATH B snapshot item outside the gate and
 does not block merge.
 
