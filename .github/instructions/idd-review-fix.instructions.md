@@ -481,8 +481,10 @@ login).
    only F2's `secondary-quiet-window` blocker
    (`idd-pre-merge.instructions.md`) waits, folded across every login.
 
-Copilot and CI advisory bot comments are advisory; unanswered ones do
-not block merge.
+Unanswered advisory items block merge until each one is dispositioned,
+unless the gate settles it without a disposition, as it does for a
+CodeRabbit no-actionable-comments summary. This applies to Copilot,
+CodeRabbit, Codex, and every other advisory bot alike.
 
 Whenever E14 posts a request/recovery marker or hold comment, update
 the digest: the marker/hold as `Authoritative by`, the advisory

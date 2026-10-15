@@ -1050,6 +1050,12 @@
       "glob": "idd-template/**/*.md",
       "pattern": "\\{\\{[A-Z][A-Z0-9_]*\\}\\}#[0-9]+",
       "message": "Qualify an upstream issue with owner/repo: a marker placeholder followed by an issue number resolves against the adopter repository (#3478)."
+    },
+    {
+      "id": "unanswered-ones-advisory-sentence",
+      "glob": "**/idd-review-fix.instructions.md",
+      "pattern": "unanswered\\s+ones\\s+do\\s+not\\s+block\\s+merge",
+      "message": "Unanswered advisory items block merge until each one is dispositioned; do not restore the old 'do not block merge' sentence."
     }
   ],
   "rootMarkdownAllowlist": {
