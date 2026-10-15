@@ -770,11 +770,13 @@ function advanceAnchorGeneration(state, parsed, latest) {
   }
   // A session that lost the race for the generation owns nothing, so its
   // later markers (and a resume that supersedes it) are not evidence.
-  if (
-    losers.has(parsed.owner) ||
-    (parsed.mode === 'resume' && losers.has(parsed.supersedes))
-  ) {
+  if (losers.has(parsed.owner)) {
     return state;
+  }
+  // A resume of a loser belongs to the loser's chain, so its new owner loses
+  // too and its later markers are ignored the same way.
+  if (parsed.mode === 'resume' && losers.has(parsed.supersedes)) {
+    return { ...state, losers: new Set([...losers, parsed.owner]) };
   }
   const mismatch = () => ({
     problem: `owner marker ${latest.id} (mode=${parsed.mode}) does not match the open generation`,
@@ -865,10 +867,12 @@ function advanceAnchorGeneration(state, parsed, latest) {
             problem: `owner marker ${latest.id} (mode=release-complete) closes a generation with no release in progress`,
           };
         }
+        // The losers belonged to the generation that just closed, so a former
+        // loser may open the next one.
         return {
           open: null,
           closedSets: new Set([...closedSets, open.set]),
-          losers,
+          losers: new Set(),
         };
       }
       return {
@@ -1013,7 +1017,8 @@ export function resolveAnchorGeneration(input) {
 export function replayAnchorHold(input) {
   const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
   const intentToken = `${input.markerPrefix.toLowerCase()}-authoring-publication-intent:`;
-  const tokenField = `token=${input.publication.token}`;
+  // The `;` ends the field, so `token=x` cannot match a record of `token=x-2`.
+  const tokenField = `token=${input.publication.token};`;
   const records = [];
   for (const comment of input.comments) {
     const lower = comment.body.toLowerCase();
@@ -1032,8 +1037,11 @@ export function replayAnchorHold(input) {
       comment.body,
       input.markerPrefix,
     );
-    if (intent === null || intent.token !== input.publication.token) {
+    if (intent === null) {
       return `${where} does not parse`;
+    }
+    if (intent.token !== input.publication.token) {
+      continue;
     }
     if (
       intent.target !== input.publication.target ||

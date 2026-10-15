@@ -2915,12 +2915,16 @@ test('anchor replay: a log that is not exactly one owner generation fails closed
       set: 'set-rival',
       supersedes: 'owner-rival',
     }),
-    provenanceComment(5, 'heartbeat'),
+    provenanceComment(5, 'heartbeat', {
+      owner: 'owner-rival-next',
+      set: 'set-rival',
+    }),
+    provenanceComment(6, 'heartbeat'),
   ]);
   assert.ok('generation' in raced, JSON.stringify(raced));
   assert.equal(raced.generation.owner, ANCHOR_OWNER);
   assert.equal(raced.generation.set, ANCHOR_SET);
-  assert.equal(raced.generation.latest.id, 5);
+  assert.equal(raced.generation.latest.id, 6);
 
   // A bootstrap races the same way.
   const bootRace = replay([
@@ -2929,6 +2933,18 @@ test('anchor replay: a log that is not exactly one owner generation fails closed
   ]);
   assert.ok('generation' in bootRace, JSON.stringify(bootRace));
   assert.equal(bootRace.generation.owner, ANCHOR_OWNER);
+
+  // A loser belonged to the generation that closed: it may open the next one.
+  const nextGeneration = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'acquire', { owner: 'owner-rival', set: 'set-rival' }),
+    provenanceComment(3, 'release'),
+    provenanceComment(4, 'release-complete'),
+    provenanceComment(5, 'acquire', { owner: 'owner-rival', set: 'set-next' }),
+  ]);
+  assert.ok('generation' in nextGeneration, JSON.stringify(nextGeneration));
+  assert.equal(nextGeneration.generation.owner, 'owner-rival');
+  assert.equal(nextGeneration.generation.set, 'set-next');
 
   // The same owner opening its own generation twice is a malformed log.
   const twice = replay([
@@ -3126,6 +3142,14 @@ test('hold replay: the exact token must run pending, attached, member without a 
     /is abandoned, not member/,
   );
   assert.match(holdReplay([]) ?? '', /no publication-intent record/);
+  // A token that only starts with the anchor's token is another token.
+  assert.equal(
+    holdReplay([
+      intentComment(9, 'member', { token: 'token-anchor-2' }),
+      ...sequence,
+    ]),
+    null,
+  );
   assert.match(
     holdReplay(sequence.slice(0, 2)) ?? '',
     /is pending, not member/,
@@ -3250,7 +3274,7 @@ test('hold replay: an edited, untrusted, mismatched or unparseable record of the
         'member',
         {},
         {
-          body: '<!-- idd-skill-authoring-publication-intent: token=token-anchor -->',
+          body: '<!-- idd-skill-authoring-publication-intent: token=token-anchor; nope -->',
         },
       ),
     ]) ?? '',
