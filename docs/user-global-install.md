@@ -78,11 +78,17 @@ before writing anything, or failed after a clean plan. 2 means a usage error.
   `XDG_CONFIG_HOME`, and `CODEX_HOME` are used only when they are qualified
   roots. Otherwise the defaults under `HOME` apply.
 - The installer never creates the directory above a root it installs into.
-  The parent of the data root (for example `~/.local/share`) and the parent of
-  each skill root (for example `~/.agents`) must already exist. A missing one
-  refuses the whole run before any write, even when `--harness` selects only
-  Claude Code. The installer does create a harness directory such as `~/.codex`
-  when it is missing.
+  These parents must already exist, and a missing one refuses the whole run
+  before any write:
+  - the parent of the data root, for example `~/.local/share` or
+    `$XDG_DATA_HOME`;
+  - `~/.claude` and `~/.agents`, the parents of the two skill roots. Both are
+    required even when `--harness` selects only Codex CLI;
+  - when OpenCode is selected, `~/.config` or `$XDG_CONFIG_HOME`, the parent of
+    the OpenCode directory.
+
+  The installer creates a harness directory itself, such as `~/.codex` or
+  `~/.config/opencode`, when its parent exists and it is missing.
 - The installer refuses on Windows before any write. It needs no-follow file
   opens, and the platform does not provide them.
 
@@ -114,12 +120,15 @@ removal is reported as `remove`. Before any removal, the run refuses the whole
 run when a listed file or link no longer matches its receipt entry, such as a
 skill file edited after install. An entry file is handled differently. The
 installer rewrites it in place, so uninstall removes only the managed block, or
-only the one `opencode.json` string, and keeps the rest of the file. Each such
-file is reported as `edit`.
+only the one `opencode.json` string, and keeps the rest of the file. The CLI
+reports such a file as `change`.
 
-If the run stops partway, it does not roll back. The receipt then lists what
-remains, and a rerun removes it. If no receipt exists, the run reports that
-there is nothing to remove.
+If the run stops partway, it does not roll back. Two rewrite failures need a
+note. If the receipt rewrite fails after a removal, the receipt can still list
+the removed path. A retry reconciles that stale entry, so the receipt does not
+match the disk until a run completes. If the receipt rewrite fails after an
+entry file was rewritten, uninstall restores that file's prior bytes. If no
+receipt exists, the run reports that there is nothing to remove.
 
 ## Failure outcome
 
@@ -161,8 +170,10 @@ Policy resolves from four layers, lowest to highest:
 2. The user-global file, `$XDG_CONFIG_HOME/idd-skill/config.json`, or
    `~/.config/idd-skill/config.json` when `XDG_CONFIG_HOME` is not qualified.
 3. The one `overrides[]` entry that matches this repository, if any.
-4. The repository policy file, `.github/idd/config.json`. The legacy root
-   `idd-policy.json` is read only when that file is absent.
+4. The repository policy file, `.github/idd/config.json`. The effective loader
+   never reads the legacy root `idd-policy.json` as policy. When
+   `.github/idd/config.json` is absent, the legacy file's presence alone blocks
+   user-global values for the repository-owned fields described below.
 
 Resolution works leaf by leaf. A higher layer replaces a lower layer's leaf
 value, and objects merge. A repository-local delegate object, such as
@@ -195,17 +206,20 @@ diagnostics. It is read-only.
 Some keys belong to the repository itself. They decide merge authority, trusted
 markers, CI and waiver decisions, and handoff. Examples are `mergePolicy`,
 `trustedMarkerActors`, `ciGate`, `advisoryWait`, `helperRuntime`, and
-`forcedHandoff`. When the repository has its own policy file, that is
-`.github/idd/config.json` or, when that file is absent, the legacy root
-`idd-policy.json`, user-global and override values for these keys are dropped.
-Without such a file they apply as usual. The full list is
+`forcedHandoff`. When the repository has `.github/idd/config.json`, or only the
+legacy root `idd-policy.json`, user-global and override values for these keys
+are dropped. The legacy file blocks them by its presence alone. Without any
+such file they apply as usual. The full list is
 `REPOSITORY_POLICY_FIELDS` in `src/scripts/layered-policy.mts`. One exception
 applies: `issueAuthoring.adversarialReview` still inherits from the user-global
 layer.
 
 ## Global-only profile
 
-A repository can run IDD from the installed payload alone. The activation gate
+The installed payload alone does not activate IDD in a repository. Without a
+repository policy file or a matching user-global override, the gate returns
+`no-activation-rule`. A repository with one of those signals can run IDD from
+the installed payload, without copying the instruction files, when the gate
 reports `repository-policy-minimal-import` or `user-global-override-match`, and
 the repository has neither the advisory workflow nor the cleanup workflow. The
 conditions and the trust rule are in [Global-only profile](global-only-profile.md).
@@ -242,6 +256,10 @@ The gate checks these rules in order and stops at the first match:
 | `repository-policy-minimal-import` | repository-local     | Active. The repository has `.github/idd/config.json` or `idd-policy.json`, and the payload is installed. |
 | `user-global-override-match`       | user-global-override | Active. A user-global override matches, and the payload is installed.                                    |
 | `no-activation-rule`               | none                 | Inactive. No rule matched, so the entry text does nothing.                                               |
+
+The gate counts the legacy root `idd-policy.json` as a repository policy signal,
+as the table shows. The effective loader does not read it as policy. The two
+checks are separate.
 
 When a rule would activate but the payload is unavailable, the gate stays
 inactive and reports `payload-root-unresolved` (no qualified data root) or
