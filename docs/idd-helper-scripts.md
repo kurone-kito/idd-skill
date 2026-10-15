@@ -6195,20 +6195,24 @@ reflexively as any other CLI option.
   item, and a line that continues a quote or list item with no blank line,
   heading, thematic break, or HTML block before it, does not count. The same
   rule keeps such a reply from answering a regular comment (a human's
-  included), from covering a cited Previously missed item, and from
-  anchoring an ack-only window; a thread whose newest IDD reply is pending
-  is never ack-only; and a trusted pending reply is not presence-only on a
-  human's thread. A `missingThreads[]` entry for a thread whose newest IDD
-  reply is pending has `reason: pending-decision` and its own `hint` (keep
-  the hold and wait for the maintainer, do not post `**Accepted**` early),
-  in place of the stale-disposition hint above.
+  included), from advancing the last-reply watermark behind the
+  unreplied-comment count, from covering a cited Previously missed item, and
+  from anchoring an ack-only window. A trusted notice rejection or summary
+  acceptance that carries the marker clears no advisory sticky, a thread
+  whose newest IDD reply is pending is never ack-only, and a trusted pending
+  reply is not presence-only on a human's thread. A `missingThreads[]`
+  entry for a thread whose newest IDD reply is pending has
+  `reason: pending-decision` and its own `hint` (keep the hold and wait for
+  the maintainer, do not post `**Accepted**` early), in place of the
+  stale-disposition hint above.
   `advisory-convergence.mjs` lists the same threads in
   `threads.pendingDecisionIds`, a subset of `threads.blockingIds`, and gives
   them a `reasons[]` entry that names them. The `disposition-threads` next
   action says to hold them, and the `disposition-posted-items` action names
-  them to skip, or is left out when they cover every posted item. Clause 2
-  counts only unresolved threads, so resolving a pending thread still settles
-  it for this gate; leave it unresolved until the decision.
+  them to skip (the list is PR-wide, and the action stays whenever the latest
+  review has items). Clause 2 counts only unresolved threads, so resolving a
+  pending thread still settles it for this gate; leave it unresolved until
+  the decision.
   `resolve-review-thread --apply` resolves the thread and has no pending
   mode, so post a pending reply by hand
 - Disposition-evidence `hint` on the `dispositionEvidence` object
