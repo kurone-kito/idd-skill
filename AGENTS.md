@@ -289,6 +289,38 @@ layered on top of the distributed IDD defaults:
   carries a `round <r>/5` clause. See
   [docs/idd-design-rationale.md](docs/idd-design-rationale.md#e4e5-adopt-now-urgency-defer)
   for the baseline and the severity-tiered matrix.
+- **Triage record opt-in**: This source repository also records
+  `critiqueLoop.triageRecord: "record"` as a local IDD dogfooding policy
+  (applies only to `kurone-kito/idd-skill`); `idd-template/` keeps the
+  distributed default `"off"`, so adopters are unchanged. With `record`,
+  `resolve-review-thread` requires `--tier` and `--urgency` on each
+  applied Accepted or Rejected PATH A reply, except a `--path-b` reply or
+  a `**Rejection confirmed by maintainer**` reply, and writes a `Triage:`
+  line for each reply that carries both. The switch to `"enforce"` waits
+  for the weekly audit data and is decided in issue `#4208`. To turn this
+  off, remove the field or set it to `"off"`. Evidence: among the 100
+  pull requests that were merged at or before 2026-10-13T06:58:55Z and
+  are numbered `#3936` to `#4158`, six
+  deferral-form replies appeared on four pull requests, and one of 535
+  review-thread replies that begin with `**Accepted**` or `**Rejected**`
+  recorded an urgency. See the
+  [review-loop audit (2026-10-13)](docs/idd-design-rationale.md#review-loop-audit-2026-10-13)
+  subsection of the design rationale.
+- **Effort L refusal opt-in**: This source repository also records
+  `autopilotSuitability.effortL: "refuse"` as a local IDD dogfooding
+  policy (applies only to `kurone-kito/idd-skill`); `idd-template/` keeps
+  the distributed default `"allow"`, so adopters are unchanged. With
+  `refuse`, `audit-authored-issue` fails an orphan or child body whose
+  effort is `L` (check `effort-l-ready`) unless it is routed to a human
+  bucket, and autopilot Discover routes an effort `L` orphan to a human.
+  To turn this off, remove the field or set it to `"allow"`. Evidence: in
+  the same 100-pull-request cohort as the bullet above, 6 of the 8 pull
+  requests whose issue has effort `L` reached 7 or more Copilot reviews,
+  against 2 of the 33 pull requests with effort `S`. The `L` group is only
+  8 pull requests, and the subsection does not separate pull request size
+  from effort (item 5). See the
+  [review-loop audit (2026-10-13)](docs/idd-design-rationale.md#review-loop-audit-2026-10-13)
+  subsection of the design rationale.
 - **GitHub API load control**: This source repository also records
   `githubApi.loadControl: { enabled: true, maxConcurrent: 4 }` in
   `.github/idd/config.json` as a local IDD dogfooding policy (applies
