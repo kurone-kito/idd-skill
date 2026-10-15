@@ -529,10 +529,15 @@ C/E delegate:
 Union the findings whenever both mechanisms run. After `usable: true`,
 a missing command, non-zero exit, timeout, cancellation, or unreadable
 findings is a failure. A readable empty list is a clean verdict. If no
-mechanism that ran returns a readable list, do not publish: do not
-create an issue, update a body, change a label, or append a marker. An
-existing held issue keeps its label and previous body. A failure is
-never a clean review.
+mechanism that ran returns a readable list, do not publish the drafted
+issue: do not create it, update its body, change its label, or append a
+marker for it. An existing held issue keeps its label and previous body.
+The drafts go into a draft carrier marked `Review: not reviewed` (see the
+[issue-authoring skill contract](https://github.com/kurone-kito/idd-skill/blob/main/docs/issue-authoring-skill.md#draft-carrier)),
+unless they already sit in one (they stay there), the user said not to
+create any issue, or the carrier cannot be published either (then they stay
+local).
+A failure is never a clean review.
 
 The reviewer must be read-only and returns a findings list only: it must
 not create or update issues, change labels, or append markers. That is a
