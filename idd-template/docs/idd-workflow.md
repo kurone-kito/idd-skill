@@ -535,7 +535,8 @@ marker for it. An existing held issue keeps its label and previous body.
 The drafts go into a draft carrier marked `Review: not reviewed` (see the
 [issue-authoring skill contract](https://github.com/kurone-kito/idd-skill/blob/main/docs/issue-authoring-skill.md#draft-carrier)),
 unless they already sit in one (they stay there), the user said not to
-publish, or the carrier cannot be published either (then they stay local).
+create any issue, or the carrier cannot be published either (then they stay
+local).
 A failure is never a clean review.
 
 The reviewer must be read-only and returns a findings list only: it must
