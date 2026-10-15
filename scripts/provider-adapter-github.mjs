@@ -2663,16 +2663,39 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
     // matching listOpenWorkItems's own `issues?state=open` pagination
     // pattern above. `html_url` (not the REST API `url` field) is the web
     // URL `gh pr list --json url` returned before this change.
+    // A row the API did not fill in cannot be told from a pull request that
+    // does not close the issue, so a malformed raw row throws instead of being
+    // coerced (issue 4372): callers that scan bodies for a closing keyword
+    // would otherwise read a truncated row as "no reference". A pull request
+    // with no description has a null `body`, which stays valid.
     listOpenChangeRequests() {
       const rows = deps.ghApiJson(`${repoPath}/pulls?state=open&per_page=100`, {
         paginate: true,
       });
-      return rows.map((row) => ({
-        number: Number(row.number),
-        title: String(row.title ?? ''),
-        body: String(row.body ?? ''),
-        url: String(row.html_url ?? ''),
-      }));
+      if (!Array.isArray(rows)) {
+        throw new Error('open pull request list is not an array');
+      }
+      return rows.map((row) => {
+        const raw = row;
+        if (
+          raw === null ||
+          typeof raw !== 'object' ||
+          typeof raw.number !== 'number' ||
+          !Number.isSafeInteger(raw.number) ||
+          raw.number <= 0 ||
+          typeof raw.title !== 'string' ||
+          typeof raw.html_url !== 'string' ||
+          (raw.body !== null && typeof raw.body !== 'string')
+        ) {
+          throw new Error('open pull request list holds a malformed row');
+        }
+        return {
+          number: raw.number,
+          title: raw.title,
+          body: raw.body ?? '',
+          url: raw.html_url,
+        };
+      });
     },
     listChangeRequestReviewThreads(number) {
       const query = `query($owner:String!,$repo:String!,$number:Int!,$cursor:String){

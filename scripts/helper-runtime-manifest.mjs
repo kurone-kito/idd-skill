@@ -268,6 +268,15 @@ const HELPER_COMMANDS = [
       'Evaluate the A5(a) issue-author approval gate against issue state.',
   },
   {
+    id: 'claim-issue',
+    scriptName: 'idd:claim-issue',
+    binName: 'idd-claim-issue',
+    entryPath: 'scripts/claim-issue.mjs',
+    vendoredCommand: 'node scripts/claim-issue.mjs',
+    description:
+      'Dry run of the five A5 claim pre-checks for one issue (read-only; reports whether a claim may start).',
+  },
+  {
     id: 'claim-lock',
     scriptName: 'idd:claim-lock',
     binName: 'idd-claim-lock',

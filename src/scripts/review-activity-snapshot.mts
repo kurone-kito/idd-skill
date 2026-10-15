@@ -32,6 +32,7 @@ import {
   buildActivitySnapshotSummary,
   countUncoveredCodeRabbitEmbeddedFindings,
   extractCodeRabbitEmbeddedFindings,
+  isCodeRabbitLogin,
   isCopilotReviewerLogin,
   normalizeTrustedMarkerLogins,
   resolveAdvisoryBotLogins,
@@ -72,13 +73,6 @@ interface ReviewPayload {
   submitted_at?: string | null;
   updated_at?: string | null;
 }
-
-/** REST logins `REVIEW_BOT_LOGINS` lists for CodeRabbit. Codex connector
- * logins in that same set are not CodeRabbit reviews. */
-const CODE_RABBIT_REVIEW_LOGINS = new Set([
-  'coderabbitai',
-  'coderabbitai[bot]',
-]);
 
 export interface CodeRabbitEmbeddedFindingReport {
   reviewId: string;
@@ -511,10 +505,9 @@ export function buildCodeRabbitEmbeddedFindings(
     if (review.state !== 'COMMENTED') {
       return [];
     }
-    const login = String(review.user?.login ?? '')
-      .trim()
-      .toLowerCase();
-    if (!CODE_RABBIT_REVIEW_LOGINS.has(login)) {
+    // Trim first: isCodeRabbitLogin lowercases but does not trim.
+    const login = String(review.user?.login ?? '').trim();
+    if (!isCodeRabbitLogin(login)) {
       return [];
     }
     const reviewId = String(review.node_id ?? '');

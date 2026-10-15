@@ -486,7 +486,7 @@ function detectUnpushedCommits() {
   }
   return runGit(['rev-list', '--count', 'HEAD']).trim() !== '0';
 }
-function findIssueRelatedOpenPrs({ port, issueNumber }) {
+export function findIssueRelatedOpenPrs({ port, issueNumber }) {
   if (!Number.isInteger(issueNumber) || (issueNumber ?? 0) <= 0) {
     return [];
   }

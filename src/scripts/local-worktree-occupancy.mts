@@ -399,6 +399,17 @@ function inspectWorktreePath(
 }
 
 /**
+ * The question one scan asks of every worktree record: which branches count as
+ * a match, and how the occupied reason names them.
+ */
+interface WorktreeBranchMatcher {
+  /** Names the matched branches in the `occupied` reason. */
+  label: string;
+  /** Called only with a resolved branch name, never `null`. */
+  matches: (branch: string) => boolean;
+}
+
+/**
  * Inspect one branch in the current clone. A prunable record is stale git
  * metadata only when its path is absent, its branch metadata is valid and
  * proven unrelated, and it is not locked; a target, malformed, unknown,
@@ -423,6 +434,54 @@ export function inspectLocalWorktreeBranch(
       reason: `invalid branch name: ${branchName}`,
     };
   }
+  return inspectLocalWorktreesMatching(
+    {
+      label: requestedBranch,
+      matches: (branch) => branch === requestedBranch,
+    },
+    cwd,
+    environment,
+    execute,
+  );
+}
+
+/**
+ * Inspect every worktree whose branch starts with `issue/<issueNumber>-`,
+ * whatever the slug (the A5(e) scoped branch pattern check). It applies the
+ * rules of {@link inspectLocalWorktreeBranch} to each record. The prefix ends
+ * with a hyphen, so `issue/<issueNumber>1-x` never matches.
+ */
+export function inspectLocalWorktreeBranchPrefix(
+  issueNumber: number,
+  cwd = process.cwd(),
+  environment: NodeJS.ProcessEnv = process.env,
+  execute: typeof execFileSync = execFileSync,
+): LocalWorktreeInspection {
+  if (!Number.isSafeInteger(issueNumber) || issueNumber <= 0) {
+    return {
+      status: 'unreadable',
+      paths: [],
+      reason: `invalid issue number: ${issueNumber}`,
+    };
+  }
+  const prefix = `issue/${issueNumber}-`;
+  return inspectLocalWorktreesMatching(
+    {
+      label: `${prefix}*`,
+      matches: (branch) => branch.startsWith(prefix),
+    },
+    cwd,
+    environment,
+    execute,
+  );
+}
+
+function inspectLocalWorktreesMatching(
+  matcher: WorktreeBranchMatcher,
+  cwd: string,
+  environment: NodeJS.ProcessEnv,
+  execute: typeof execFileSync,
+): LocalWorktreeInspection {
   const env = sanitizedGitEnvironment(environment);
   let output: string;
   try {
@@ -489,13 +548,13 @@ export function inspectLocalWorktreeBranch(
         if (
           record.locked ||
           prunableBranch === null ||
-          prunableBranch === requestedBranch
+          matcher.matches(prunableBranch)
         ) {
           unreadablePaths.push(record.path);
         }
         continue;
       }
-      if (prunableBranch !== requestedBranch) {
+      if (prunableBranch === null || !matcher.matches(prunableBranch)) {
         continue;
       }
       unreadablePaths.push(record.path);
@@ -517,7 +576,7 @@ export function inspectLocalWorktreeBranch(
       }
       resolvedBranch = detached.branchName;
     }
-    if (resolvedBranch === requestedBranch) {
+    if (resolvedBranch !== null && matcher.matches(resolvedBranch)) {
       matches.push(record);
     }
   }
@@ -534,6 +593,6 @@ export function inspectLocalWorktreeBranch(
   return {
     status: 'occupied',
     paths: matches.map((record) => record.path),
-    reason: `matching local worktree for ${requestedBranch}`,
+    reason: `matching local worktree for ${matcher.label}`,
   };
 }
