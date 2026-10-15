@@ -1961,13 +1961,16 @@ test('--apply: a refused evidence comment stops before the close and the release
     outcome: 'not-dispatched',
     reason: 'busy',
   });
+  let evidenceAttempts = 0;
   const { deps, calls } = makeDeps(readyReport(), {
     postEvidenceComment: () => {
+      evidenceAttempts += 1;
       throw refusal;
     },
   });
   const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
 
+  assert.equal(evidenceAttempts, 1);
   assert.equal(exitCode, 1);
   assert.equal(verdict.closed, false);
   assert.equal(verdict.claimReleased, false);
@@ -1981,8 +1984,10 @@ test('--apply: a refused evidence comment stops before the close and the release
 test('--apply: a rejected evidence comment (HTTP 401, 404, 422) sent nothing', async () => {
   for (const status of [401, 404, 422]) {
     const failure = httpFailure(status);
+    let evidenceAttempts = 0;
     const { deps, calls } = makeDeps(readyReport(), {
       postEvidenceComment: () => {
+        evidenceAttempts += 1;
         throw failure;
       },
     });
@@ -1991,6 +1996,7 @@ test('--apply: a rejected evidence comment (HTTP 401, 404, 422) sent nothing', a
       deps,
     );
 
+    assert.equal(evidenceAttempts, 1, `HTTP ${status}`);
     assert.equal(exitCode, 1, `HTTP ${status}`);
     assert.equal(verdict.nothingSent, true, `HTTP ${status}`);
     assert.match(verdict.result, /not posted/, `HTTP ${status}`);
@@ -2003,8 +2009,10 @@ test('--apply: a rejected evidence comment (HTTP 401, 404, 422) sent nothing', a
 test('--apply: an evidence comment that may have landed is not reported as nothing sent', async () => {
   const failures = [httpFailure(502), new Error('socket hang up')];
   for (const failure of failures) {
+    let evidenceAttempts = 0;
     const { deps, calls } = makeDeps(readyReport(), {
       postEvidenceComment: () => {
+        evidenceAttempts += 1;
         throw failure;
       },
     });
@@ -2013,6 +2021,7 @@ test('--apply: an evidence comment that may have landed is not reported as nothi
       deps,
     );
 
+    assert.equal(evidenceAttempts, 1, failure.message);
     assert.equal(exitCode, 1, failure.message);
     assert.equal(verdict.nothingSent, false, failure.message);
     assert.match(verdict.result, /may have been posted/, failure.message);
@@ -2029,13 +2038,16 @@ test('--apply: a refused close releases nothing and leaves the roadmap open', as
     outcome: 'not-dispatched',
     reason: 'busy',
   });
+  let closeAttempts = 0;
   const { deps, calls } = makeDeps(readyReport(), {
     closeRoadmap: () => {
+      closeAttempts += 1;
       throw refusal;
     },
   });
   const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
 
+  assert.equal(closeAttempts, 1);
   assert.equal(exitCode, 1);
   assert.equal(verdict.closed, false);
   assert.equal(verdict.claimReleased, false);
@@ -2049,8 +2061,10 @@ test('--apply: a refused close releases nothing and leaves the roadmap open', as
 test('--apply: a close that may have landed (HTTP 422, 502) is not reported as nothing sent', async () => {
   for (const status of [422, 502]) {
     const failure = httpFailure(status);
+    let closeAttempts = 0;
     const { deps, calls } = makeDeps(readyReport(), {
       closeRoadmap: () => {
+        closeAttempts += 1;
         throw failure;
       },
     });
@@ -2059,6 +2073,7 @@ test('--apply: a close that may have landed (HTTP 422, 502) is not reported as n
       deps,
     );
 
+    assert.equal(closeAttempts, 1, `HTTP ${status}`);
     assert.equal(exitCode, 1, `HTTP ${status}`);
     assert.equal(verdict.nothingSent, false, `HTTP ${status}`);
     assert.match(verdict.result, /may have landed/, `HTTP ${status}`);
@@ -2073,13 +2088,16 @@ test('--apply: a refused release keeps the roadmap closed and the claim active, 
     outcome: 'not-dispatched',
     reason: 'busy',
   });
+  let releaseAttempts = 0;
   const { deps, calls } = makeDeps(readyReport(), {
     releaseClaim: () => {
+      releaseAttempts += 1;
       throw refusal;
     },
   });
   const { verdict, exitCode } = await runRoadmapAuditExecute(APPLY_ARGS, deps);
 
+  assert.equal(releaseAttempts, 1);
   assert.equal(exitCode, 1);
   assert.equal(verdict.closed, true);
   assert.equal(verdict.claimReleased, false);
@@ -2092,8 +2110,10 @@ test('--apply: a refused release keeps the roadmap closed and the claim active, 
 test('--apply: a release that may have landed (HTTP 502, no status) is not reported as nothing sent', async () => {
   const failures = [httpFailure(502), new Error('socket hang up')];
   for (const failure of failures) {
+    let releaseAttempts = 0;
     const { deps, calls } = makeDeps(readyReport(), {
       releaseClaim: () => {
+        releaseAttempts += 1;
         throw failure;
       },
     });
@@ -2102,6 +2122,7 @@ test('--apply: a release that may have landed (HTTP 502, no status) is not repor
       deps,
     );
 
+    assert.equal(releaseAttempts, 1, failure.message);
     assert.equal(exitCode, 1, failure.message);
     assert.equal(verdict.closed, true, failure.message);
     assert.equal(verdict.claimReleased, false, failure.message);
@@ -2115,8 +2136,10 @@ test('--apply: a release that may have landed (HTTP 502, no status) is not repor
 test('--apply: a rejected release comment (HTTP 401, 404, 422) sent nothing', async () => {
   for (const status of [401, 404, 422]) {
     const failure = httpFailure(status);
+    let releaseAttempts = 0;
     const { deps, calls } = makeDeps(readyReport(), {
       releaseClaim: () => {
+        releaseAttempts += 1;
         throw failure;
       },
     });
@@ -2125,6 +2148,7 @@ test('--apply: a rejected release comment (HTTP 401, 404, 422) sent nothing', as
       deps,
     );
 
+    assert.equal(releaseAttempts, 1, `HTTP ${status}`);
     assert.equal(exitCode, 1, `HTTP ${status}`);
     assert.equal(verdict.closed, true, `HTTP ${status}`);
     assert.equal(verdict.claimReleased, false, `HTTP ${status}`);
