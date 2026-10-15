@@ -226,6 +226,69 @@ test('reviewCurrency and dispositionEvidence agree a rejection-confirmed-by-main
   );
 });
 
+// #4306: a reply that carries the pending-decision marker anchors no
+// post-disposition window, so a later courtesy ack from an advisory bot stays
+// blocking activity in the snapshot and the disposition evidence names the
+// thread as a pending decision.
+test('a pending-decision reply anchors no ack-only window in the snapshot or the disposition evidence (#4306)', () => {
+  const thread = {
+    id: 'thread-pending-ack',
+    isResolved: true,
+    updatedAt: '',
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          id: 'PA-1',
+          author: { login: 'reviewer-a' },
+          body: 'please reconsider this',
+          createdAt: '2026-05-12T00:00:00Z',
+          updatedAt: '2026-05-12T00:00:00Z',
+        },
+        {
+          id: 'PA-2',
+          author: { login: 'idd-bot' },
+          body: '**Accepted** (part), fixed in abc1234.\n\n**Awaiting maintainer decision** — the rest is open.\n\n<!-- idd-skill-review-reply -->',
+          lastEditedAt: null,
+          createdAt: '2026-05-12T00:30:00Z',
+          updatedAt: '2026-05-12T00:30:00Z',
+        },
+        {
+          id: 'PA-3',
+          author: { login: 'coderabbitai[bot]' },
+          body: '`@kurone-kito`, confirmed. Thanks for the fix.\n\n✅ Review thread resolved.\n\n<!-- This is an auto-generated reply by CodeRabbit -->',
+          createdAt: '2026-05-12T02:00:00Z',
+          updatedAt: '2026-05-12T02:00:00Z',
+        },
+      ],
+    },
+  };
+  const evidence = summarizeDispositionEvidenceForGate(
+    { comments: [], threads: [thread] },
+    {
+      iddAgentLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      snapshotBoundaryAt: '2026-05-12T01:00:00Z',
+    },
+  );
+  assert.equal(evidence.route, 'return-to-e1');
+  assert.equal(evidence.missingThreads[0].reason, 'pending-decision');
+  assert.equal(evidence.missingThreads[0].ackOnlyPostDisposition, false);
+  assert.equal(evidence.soleCauseAckOnlyPostDisposition, false);
+
+  const activity = buildActivitySnapshotSummary(
+    { comments: [], reviews: [], threads: [thread], checks: [] },
+    {
+      trustedMarkerLogins: ['idd-bot'],
+      advisoryBotLogins: ['coderabbitai[bot]'],
+      advisoryBotLoginsSource: 'config',
+      dispositionAuthorLogins: ['idd-bot'],
+    },
+  );
+  assert.deepEqual(activity.ackOnly.items, []);
+  assert.equal(activity.effective.maxActivityUpdatedAt, '2026-05-12T02:00:00Z');
+});
+
 // #2696: this gate-level function already read `thread.id` correctly before
 // this issue's fix -- the actual bug was upstream (the provider mapping and
 // both `normalizeThread` call sites dropped `id` before it reached here; see

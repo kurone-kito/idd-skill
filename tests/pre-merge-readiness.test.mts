@@ -325,6 +325,156 @@ test('a thread whose newest IDD reply is a pending decision reports reason pendi
   assert.equal(cleared.missingThreadCount, 0);
 });
 
+const PENDING_PARTLY_ACCEPTED =
+  '**Accepted** (part), fixed in abc1234.\n\n**Awaiting maintainer decision** — the rest is open.\n\n<!-- idd-skill-review-reply -->';
+
+test('a reply that carries the pending marker clears no regular advisory comment, and a settled reply still does (#4306)', () => {
+  const summarize = (replyBody: string) =>
+    summarizeDispositionEvidenceForGate(
+      {
+        comments: [
+          {
+            author: { login: 'coderabbitai[bot]' },
+            createdAt: '2026-05-12T00:00:00Z',
+            body: 'Consider handling the empty case.',
+            lastEditedAt: null,
+          },
+          {
+            author: { login: 'idd-bot' },
+            createdAt: '2026-05-12T00:30:00Z',
+            body: replyBody,
+            lastEditedAt: null,
+          },
+        ],
+        threads: [],
+      },
+      { iddAgentLogins: ['idd-bot'], advisoryBotLogins: ['coderabbitai[bot]'] },
+    );
+  const pending = summarize(PENDING_PARTLY_ACCEPTED);
+  assert.equal(pending.route, 'return-to-e1');
+  assert.equal(pending.missingRegularCommentCount, 1);
+  const settled = summarize(
+    '**Accepted** — fixed in abc1234.\n\n<!-- idd-skill-review-reply -->',
+  );
+  assert.equal(settled.route, 'proceed');
+  assert.equal(settled.missingRegularCommentCount, 0);
+});
+
+test('a trusted pending reply on a human-authored thread is not presence-only, and ordinary replies still are (#4306)', () => {
+  const thread = (
+    replyBody: string,
+    extra: Record<string, unknown>[] = [],
+  ) => ({
+    id: 'thread-human-4306',
+    isResolved: false,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        {
+          author: { login: 'reviewer-a' },
+          createdAt: '2026-05-12T00:00:00Z',
+          body: 'please reconsider this',
+        },
+        {
+          author: { login: 'idd-bot' },
+          createdAt: '2026-05-12T00:30:00Z',
+          body: replyBody,
+          lastEditedAt: null,
+        },
+        ...extra,
+      ],
+    },
+  });
+  const summarize = (candidate: ReturnType<typeof thread>) =>
+    summarizeDispositionEvidenceForGate(
+      { comments: [], threads: [candidate] },
+      { iddAgentLogins: ['idd-bot'] },
+    );
+
+  // An unstamped plain hold from the IDD agent is an IDD reply, not presence.
+  const hold = summarize(thread('**Awaiting maintainer decision** — open'));
+  assert.equal(hold.missingThreadCount, 1);
+  assert.equal(hold.missingThreads[0].reason, 'pending-decision');
+
+  // So is an Accepted reply that carries a pending paragraph.
+  assert.equal(
+    summarize(thread(PENDING_PARTLY_ACCEPTED)).missingThreadCount,
+    1,
+  );
+
+  // A human's reply after the hold does not end it.
+  const answered = summarize(
+    thread('**Awaiting maintainer decision** — open', [
+      {
+        author: { login: 'reviewer-a' },
+        createdAt: '2026-05-12T01:00:00Z',
+        body: 'go ahead',
+        lastEditedAt: null,
+      },
+    ]),
+  );
+  assert.equal(answered.missingThreadCount, 1);
+
+  // A settled reply from the IDD agent after the hold does.
+  const decided = summarize(
+    thread('**Awaiting maintainer decision** — open', [
+      {
+        author: { login: 'idd-bot' },
+        createdAt: '2026-05-12T01:00:00Z',
+        body: '**Accepted** — the maintainer chose (a): fixed in def5678',
+        lastEditedAt: null,
+      },
+    ]),
+  );
+  assert.equal(decided.missingThreadCount, 0);
+
+  // An unmarked ordinary reply stays presence-only on a human's thread.
+  assert.equal(summarize(thread('thanks, noted')).missingThreadCount, 0);
+});
+
+test('selectAdvisoryThreadCommentIdsEditedAfterDisposition: a pending reply anchors no disposition (#4306)', () => {
+  const thread = (replyBody: string) => ({
+    id: 'RT_4306',
+    isResolved: true,
+    comments: {
+      nodes: [
+        {
+          id: 'c-4306',
+          author: { login: 'coderabbitai' },
+          createdAt: '2026-09-20T05:00:00Z',
+          updatedAt: '2026-09-20T09:00:00Z',
+          lastEditedAt: '2026-09-20T08:00:00Z',
+          body: 'finding',
+        },
+        {
+          author: { login: 'kurone-kito' },
+          createdAt: '2026-09-20T07:00:00Z',
+          updatedAt: '2026-09-20T07:00:00Z',
+          body: replyBody,
+        },
+      ],
+    },
+  });
+  const options = {
+    isDispositionAuthor: (login: string) => login === 'kurone-kito',
+    advisoryBotLogins: ['coderabbitai[bot]'],
+  };
+  assert.deepEqual(
+    selectAdvisoryThreadCommentIdsEditedAfterDisposition(
+      [thread('**Accepted** — fixed.')],
+      options,
+    ),
+    ['c-4306'],
+  );
+  assert.deepEqual(
+    selectAdvisoryThreadCommentIdsEditedAfterDisposition(
+      [thread(PENDING_PARTLY_ACCEPTED)],
+      options,
+    ),
+    [],
+  );
+});
+
 // #4163: the E6 PATH B hint on dispositionEvidence. The bot bodies mirror the
 // disposition helper's own fixtures in tests/disposition-non-review-notices.test.mts.
 const HINT_VIEWER = 'kurone-kito';

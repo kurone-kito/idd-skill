@@ -4061,7 +4061,7 @@ export function selectAdvisoryThreadCommentIdsEditedAfterDisposition(
     const nodes = thread.comments?.nodes ?? [];
     const threadResolved = Boolean(thread.isResolved);
     const isDisposition = (comment: { body?: string | null }): boolean =>
-      isDispositionComment(comment) ||
+      isSettledDispositionComment(comment) ||
       (threadResolved && isRejectionConfirmedDisposition(comment));
     const dispositionAt = maxIsoTimestamp(
       nodes
@@ -7972,13 +7972,16 @@ export function buildActivitySnapshotSummary(
   // place the combined (`isDispositionComment` OR
   // `isRejectionConfirmedDisposition`) recognition applies outside a
   // thread whose `isResolved` is already independently confirmed true.
+  // #4306: a reply that carries the pending-decision marker anchors no
+  // post-disposition window, here or below.
   const isDispositionMarkerComment = (comment: { body?: string | null }) =>
-    isDispositionComment(comment) || isRejectionConfirmedDisposition(comment);
+    isSettledDispositionComment(comment) ||
+    isRejectionConfirmedDisposition(comment);
   const isDispositionMarkerCommentForThread = (
     comment: { body?: string | null },
     threadResolved: boolean,
   ) =>
-    isDispositionComment(comment) ||
+    isSettledDispositionComment(comment) ||
     (threadResolved && isRejectionConfirmedDisposition(comment));
 
   // #3194 (round 36 field feedback): a live-status digest edit must never
@@ -8017,7 +8020,7 @@ export function buildActivitySnapshotSummary(
         (comment) =>
           isDispositionAuthor(comment.author?.login) &&
           classifyCommentEditState(comment) === 'unedited' &&
-          isDispositionComment(comment),
+          isSettledDispositionComment(comment),
       )
       .map((comment) => comment.createdAt),
     ...threads.flatMap((thread) =>
@@ -8208,7 +8211,7 @@ export function buildActivitySnapshotSummary(
         !(
           isQuietAnchorTrustedAuthor(comment.author?.login) &&
           classifyCommentEditState(comment) === 'unedited' &&
-          isDispositionComment(comment)
+          isSettledDispositionComment(comment)
         ),
     )
     .map((comment) => comment.updatedAt ?? comment.createdAt)
@@ -8760,8 +8763,12 @@ function isIddOriginatedThreadReply(
   ) {
     return false;
   }
+  // #4306: a trusted pending-decision reply is an IDD reply too, so the
+  // presence-only rule for a human's thread does not read past it.
   return (
-    isDispositionComment({ body }) || isRejectionConfirmedDisposition({ body })
+    isDispositionComment({ body }) ||
+    isRejectionConfirmedDisposition({ body }) ||
+    hasPendingDecisionMarker(body)
   );
 }
 
@@ -9131,7 +9138,8 @@ export function summarizeDispositionEvidenceForGate(
   const dispositionComments = normalizedComments.filter(
     (comment) =>
       iddAgentLogins.has(comment.authorLogin) &&
-      isDispositionComment({ body: comment.body }) &&
+      // #4306: a reply that leaves a decision open clears no regular comment.
+      isSettledDispositionComment({ body: comment.body }) &&
       classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
         'unedited',
   );
@@ -9315,7 +9323,7 @@ export function summarizeDispositionEvidenceForGate(
       }
       if (
         requiresDispositionPrefix &&
-        !isDispositionComment({ body: candidate.body })
+        !isSettledDispositionComment({ body: candidate.body })
       ) {
         return false;
       }
@@ -15300,7 +15308,7 @@ function hasExplicitDispositionAfter(
       .toLowerCase();
     if (
       !isDispositionAuthor(author) ||
-      !isDispositionComment(comment) ||
+      !isSettledDispositionComment(comment) ||
       // #3249: an edited (or edit-state-unresolved) disposition reply never
       // counts as a completed IDD disposition here either.
       classifyCommentEditState(comment) !== 'unedited'
