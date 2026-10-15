@@ -3175,16 +3175,20 @@ The adopted helper boundaries are intentionally narrow:
   reporting the comment after one is posted: check `pre-merge-readiness`
   `dispositionEvidence.missingRegularComments` before replying. A
   `codex-review-running` comment whose row for the current HEAD is
-  `Failed` is not a completed review, and the helper does not post for
-  it: when `pre-merge-readiness` still lists the comment in
+  `Failed` is not a completed review, so the helper does not post for it,
+  and when `pre-merge-readiness` still lists the comment in
   `dispositionEvidence.missingRegularComments`, a stamped `**Rejected**`
   reply is the route, whereas a `Running` row gets no `**Rejected**`
   reply because that review can still complete. Build the reply from the
   canonical body this entry shows for a non-review notice, with
-  `{reason}` set to a note that its review summary reports the code
-  review as failed for this commit and the source comment id set to the
-  status comment's own id; the helper keeps reporting the comment
-  afterwards. Append the stamp as the
+  `{reason}` set to a note that its review summary
+  reports the code review as failed for this commit, and the source
+  comment id set to the `noticeId` of the `codex-review-running` entry in
+  `skipped`. The helper keeps reporting the comment afterwards. Run its
+  `--apply` for any other notice from the same bot first, because a
+  manual reply posted earlier is counted toward that notice, and the
+  status comment then stays listed until a second reply. Append the stamp
+  as the
   [E13 reply-and-resolve](#e13-reply-and-resolve-resolve-review-thread)
   entry describes, since a manual `gh api` JSON body must append the
   stamp itself. Observed 2026-10-15 on kurone-kito/idd-skill#4344,
