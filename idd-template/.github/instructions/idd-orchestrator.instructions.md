@@ -1,9 +1,8 @@
 # IDD — Orchestrator Phase (fan-out)
 
-Read this file only when fan-out activates or a fan-out session restarts.
-Fan-out requirements:
-[Orchestrator fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)
-and [Orchestrator delegation](idd-claim.instructions.md#orchestrator-delegation).
+Read this only when fan-out activates or its session restarts.
+Requirements: [fan-out variant][fv] and
+[delegation](idd-claim.instructions.md#orchestrator-delegation).
 
 ## 1. Activation
 
@@ -36,7 +35,8 @@ Lost on restart: see [recovery](../../docs/idd-workflow.md#orchestrator-restart)
 
 ## 3. Dispatch
 
-1. Run Discover A0 through A4 Step 1.5; its survivors are the startable
+1. Run Discover A0 through A4 Step 1.5 (A0-C runs once per Discover run,
+   before the first dispatch; refills skip it); survivors are the startable
    candidates.
 2. Call the profile-selected `idd-worker-budget` with `--running
    <count not disposed>` and `--startable <candidate count>`. Add
@@ -98,9 +98,11 @@ Lost on restart: see [recovery](../../docs/idd-workflow.md#orchestrator-restart)
   table's row and marks its entry `disposed`.
 - If verification or the append fails, keep the worker addressable, mark it
   `stalled`, and follow the worker-specific recovery in the
-  [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant).
+  [fan-out variant][fv].
 
 ## 6. Worker span
 
 A worker runs from B1 to the merge policy's terminal phase: F4 under
 `fully_autonomous_merge`, else F2.5.
+
+[fv]: ../../docs/idd-workflow.md#orchestrator-fan-out-variant
