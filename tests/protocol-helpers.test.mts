@@ -5929,6 +5929,30 @@ test('#4349: with every run non-required, an action_required run is ignored, a f
       names: ['a'],
     },
     {
+      label: 'a sole stale run still holds',
+      checks: [presentRun('a', 'STALE')],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'a sole error status still holds',
+      checks: [presentRun('a', 'ERROR')],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'a lone cancelled run with no later run keeps its pending reading',
+      checks: [presentRun('a', 'CANCELLED')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label: 'a sole waiting run waits',
+      checks: [presentRun('a', 'WAITING')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
       label: 'a sole queued run waits',
       checks: [presentRun('a', 'QUEUED')],
       conclusion: 'pending',
