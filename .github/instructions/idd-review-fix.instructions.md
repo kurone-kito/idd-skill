@@ -487,10 +487,11 @@ CodeRabbit no-actionable-comments summary. The disposition check covers
 the regular comments of Copilot, CodeRabbit, Codex, and each login in
 `advisoryBotLogins`. A regular comment from any other bot needs no
 advisory disposition, but it still blocks as an unreplied regular
-comment until a later IDD-agent reply. Copilot's review-body items
-are covered by the advisory-convergence check. An embedded finding in a CodeRabbit
-COMMENTED review body is a PATH B snapshot item outside the gate and
-does not block merge.
+comment until a later IDD-agent reply answers it. A reply that starts
+with `**Awaiting maintainer decision**` answers nothing. Copilot's
+review-body items are covered by the advisory-convergence check. An
+embedded finding in a CodeRabbit COMMENTED review body is a PATH B
+snapshot item outside the gate and does not block merge.
 
 Whenever E14 posts a request/recovery marker or hold comment, update
 the digest: the marker/hold as `Authoritative by`, the advisory
