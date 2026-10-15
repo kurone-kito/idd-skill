@@ -114,17 +114,21 @@ that file. `AGENTS.md` for Codex gets the entry text in a managed block between
 two marker lines. `opencode.json` gets one string in its `instructions` array.
 The installer edits an existing entry file in place. For a Markdown file it adds
 or replaces only its own managed block. For `opencode.json` it adds one string to
-the `instructions` array. The rest of the file stays as it was.
+the `instructions` array. The rest of the file stays as it was. When an entry
+file does not exist, the installer creates it as a whole file that the receipt
+lists.
 
 ## Uninstall
 
 `--uninstall` removes what the receipt lists and what still matches it. Each
 removal is reported as `remove`. Before any removal, the run refuses the whole
 run when a listed file or link no longer matches its receipt entry, such as a
-skill file edited after install. An entry file is handled differently. The
-installer rewrites it in place, so uninstall removes only the managed block, or
-only the one `opencode.json` string, and keeps the rest of the file. The CLI
-reports such a file as `change`.
+skill file edited after install. An entry file the installer created is a whole
+file in the receipt. Uninstall removes it when its bytes still match, and refuses
+it as edited when they do not. An entry file that already existed is different.
+The installer rewrites it in place, so uninstall removes only the managed block,
+or only the one `opencode.json` string, and keeps the rest of the file. The CLI
+reports that rewrite as `change`.
 
 If the run stops partway, it does not roll back. Two rewrite failures need a
 note. If the receipt rewrite fails after a removal, the receipt can still list
@@ -143,7 +147,9 @@ Two failure cases follow from that.
 
 1. A failure before the receipt rewrite rolls back this run's steps in reverse
    order. If a rollback step itself fails, the message names the path it left in
-   place, and that path stays listed.
+   place, and that path stays listed. A later persistence failure can make the
+   message name a path that the undo had already removed. Check both the path
+   and the receipt before you act.
 2. A failed receipt rewrite does not roll back. The message names the path of
    the step whose receipt write failed. Each earlier step was already recorded,
    so that path is normally the only one the receipt does not list. Uninstall
