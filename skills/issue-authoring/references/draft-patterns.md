@@ -106,9 +106,10 @@ Before you publish a ready issue, confirm:
 
 ## Mechanical pre-publish gate
 
-Run the completed-draft adversarial review in
-[contract.md](contract.md#completed-draft-adversarial-review) before
-this linter. The linter then runs on the reviewed body.
+For a roadmap, child, or orphan body, run the completed-draft adversarial
+review in [contract.md](contract.md#completed-draft-adversarial-review)
+before this linter. The linter then runs on the reviewed body. A draft
+carrier body is linted, not reviewed.
 
 Before you publish a drafted **ready orphan, roadmap, or child** body,
 run the `audit-authored-issue` linter against it when a helper runtime
