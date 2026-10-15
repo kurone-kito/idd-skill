@@ -289,16 +289,24 @@ layered on top of the distributed IDD defaults:
   carries a `round <r>/5` clause. See
   [docs/idd-design-rationale.md](docs/idd-design-rationale.md#e4e5-adopt-now-urgency-defer)
   for the baseline and the severity-tiered matrix.
-- **Triage record opt-in**: This source repository also records
-  `critiqueLoop.triageRecord: "record"` as a local IDD dogfooding policy
-  (applies only to `kurone-kito/idd-skill`); `idd-template/` keeps the
-  distributed default `"off"`, so adopters are unchanged. With `record`,
+- **Triage record opt-in (deferred)**: This source repository sets
+  `critiqueLoop.triageRecord` to `"off"` explicitly, which is also the
+  distributed default that `idd-template/` keeps. The opt-in to `"record"`
+  is deferred because `advisory-convergence` prints
+  `resolve-review-thread --apply` pointers without the `--tier` and
+  `--urgency` flags that `record` requires for an Accepted or Rejected
+  reply, so `resolve-review-thread` refuses those pointers. Observed
+  2026-10-16 on pull request `#4405` (Copilot discussion `r4288841711`).
+  The opt-in waits for `advisory-convergence` to emit those flags, and a follow-up
+  issue for that fix is being authored. When the fix lands, set the value
+  to `"record"`. With `record`,
   `resolve-review-thread` requires `--tier` and `--urgency` on each
   applied Accepted or Rejected PATH A reply, except a `--path-b` reply or
-  a `**Rejection confirmed by maintainer**` reply, and writes a `Triage:`
-  line for each reply that carries both. The switch to `"enforce"` waits
-  for the weekly audit data and is decided in issue `#4208`. To turn this
-  off, remove the field or set it to `"off"`. Evidence: among the 100
+  a `**Rejection confirmed by maintainer**` reply. The helper writes a
+  `Triage:` line for
+  each reply that carries both flags, in any mode. The switch to
+  `"enforce"` waits for the weekly audit data and is decided in issue
+  `#4208`. Evidence for the later opt-in: among the 100
   pull requests that were merged at or before 2026-10-13T06:58:55Z and
   are numbered `#3936` to `#4158`, six
   deferral-form replies appeared on four pull requests, and one of 535

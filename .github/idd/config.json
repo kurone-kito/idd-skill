@@ -46,7 +46,7 @@
   "critiqueLoop": {
     "deferAfterRounds": 5,
     "deferByUrgency": "severity-tiered",
-    "triageRecord": "record",
+    "triageRecord": "off",
     "deferRelaxAtRounds": [4, 7],
     "telemetryHook": {
       "command": "idd-critique-telemetry"
