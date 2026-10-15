@@ -4977,8 +4977,11 @@ does. `<ts>` is the current UTC time in ISO 8601. `<settle-seconds>` is
 
 Resolve each helper command as A5(a) does in the claim file. The
 `node scripts/` forms are the source-repository and vendored-node
-commands. Other profiles run the profile-selected command that each
-helper section in this file names.
+commands, and other helper profiles use the profile-selected command.
+The wrapper runs only on a profile that has a helper command. The
+`instructions-only` profile has none, because the resolver returns
+`null` for it. That profile makes the claim in the instruction-only form
+that the claim file's Instructions-only paragraph gives, not this block.
 
 ```sh
 set -euo pipefail
