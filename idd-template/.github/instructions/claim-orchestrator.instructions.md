@@ -75,3 +75,11 @@ or use an issue-numbered subdirectory.
 `idd-review-triage.instructions.md`, the "E-phase branch-sync check"
 section, by file and heading. Tell the worker to open both before any
 branch-state action, and forbid paraphrasing them.
+
+**Restate the hold-marker requirement.** See
+[docs/idd-workflow.md's Orchestrator fan-out
+variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant): the
+brief must tell each worker to post the stamped `idd-hold` marker when it
+stops at a hold, after its last heartbeat, and to post no `claimed-by` while
+the hold lasts, because the orchestrator owns the hold heartbeat and renews
+only a claim that has a trusted hold marker.

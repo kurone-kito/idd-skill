@@ -33,8 +33,8 @@ _{agent-id}: issue claim — IDD automation marker. Do not edit._
 
 **Important**: operational marker bodies are HTML comments. `gh issue
 comment` and `gh api -f body=` silently reject HTML-only bodies (and
-mishandle `@`-prefixed values) — always include the visible note and
-post via direct HTTP `POST` with a JSON body; see
+mishandle `@`-prefixed values) — post via direct HTTP `POST` with a JSON
+body; see
 `docs/idd-helper-scripts.md` for the full `gh api` pitfalls. When
 helper runtime is enabled, the `post-idd-marker` helper (`--type claim
 --target issue <number> --apply` plus the claim fields) posts this
@@ -147,7 +147,9 @@ live in `docs/policy-constants.md`.
   comment every 12 h while holding or when any phase is expected to
   exceed 12 h. The latest **valid** `claimed-by` comment for the same
   `{claim-id}` resets the stale clock. Embedded timestamps are ignored;
-  only the comment's GitHub `created_at` counts.
+  only the comment's GitHub `created_at` counts. In a hold, a living
+  orchestrator of the same session may renew it for up to 72 h (fan-out
+  variant); without one, the 24 h stale clock applies.
 - **Heartbeat-overdue**: diagnostic only; see
   `idd-resume-stall.instructions.md` S3.
 
