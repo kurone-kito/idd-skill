@@ -576,6 +576,42 @@ test('embeddedFindings does not treat a missing node_id as covering threads with
   assert.equal(findings[0]?.uncoveredCount, 1);
 });
 
+test('#4402: a chatgpt-codex-connector[bot] COMMENTED review is not a CodeRabbit review', () => {
+  const findings = buildCodeRabbitEmbeddedFindings(
+    [
+      {
+        node_id: 'PRR_codex',
+        user: { login: 'chatgpt-codex-connector[bot]' },
+        body: '',
+        state: 'COMMENTED',
+      },
+    ],
+    [],
+  );
+  assert.deepEqual(findings, []);
+});
+
+test('#4402: a padded CodeRabbit login still counts as CodeRabbit', () => {
+  const findings = buildCodeRabbitEmbeddedFindings(
+    [
+      {
+        node_id: 'PRR_padded',
+        user: { login: '  coderabbitai[bot]  ' },
+        body: '',
+        state: 'COMMENTED',
+      },
+    ],
+    [],
+  );
+  assert.deepEqual(findings, [
+    {
+      reviewId: 'PRR_padded',
+      embeddedFindingCount: 0,
+      uncoveredCount: 0,
+    },
+  ]);
+});
+
 // --- #3672: Copilot review-body remark as non-gating evidence --------------
 
 const REMARK = 'The unbounded read truncates at 1000 rows.';

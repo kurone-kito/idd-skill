@@ -26,6 +26,7 @@ import {
   buildActivitySnapshotSummary,
   countUncoveredCodeRabbitEmbeddedFindings,
   extractCodeRabbitEmbeddedFindings,
+  isCodeRabbitLogin,
   isCopilotReviewerLogin,
   normalizeTrustedMarkerLogins,
   resolveAdvisoryBotLogins,
@@ -42,12 +43,6 @@ import {
 } from './review-clause.mjs';
 import { enrichThreadsWithBotEditHistories } from './review-thread-edit-histories.mjs';
 
-/** REST logins `REVIEW_BOT_LOGINS` lists for CodeRabbit. Codex connector
- * logins in that same set are not CodeRabbit reviews. */
-const CODE_RABBIT_REVIEW_LOGINS = new Set([
-  'coderabbitai',
-  'coderabbitai[bot]',
-]);
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --pr spec key
@@ -376,10 +371,9 @@ export function buildCodeRabbitEmbeddedFindings(reviews, threads) {
     if (review.state !== 'COMMENTED') {
       return [];
     }
-    const login = String(review.user?.login ?? '')
-      .trim()
-      .toLowerCase();
-    if (!CODE_RABBIT_REVIEW_LOGINS.has(login)) {
+    // Trim first: isCodeRabbitLogin lowercases but does not trim.
+    const login = String(review.user?.login ?? '').trim();
+    if (!isCodeRabbitLogin(login)) {
       return [];
     }
     const reviewId = String(review.node_id ?? '');
