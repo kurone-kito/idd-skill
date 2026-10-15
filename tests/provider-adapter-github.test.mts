@@ -5888,6 +5888,44 @@ test('listOpenChangeRequests returns all 101 rows via the paginated REST endpoin
   assert.ok(result.every((pr, index) => pr.url === rows[index].html_url));
 });
 
+// Issue 4372: a malformed raw row must fail the list, not be coerced into a row
+// whose empty body reads as "no closing reference".
+test('listOpenChangeRequests throws on a malformed raw row and keeps a null body valid', () => {
+  const valid = {
+    number: 5,
+    title: 't',
+    body: 'b',
+    html_url: 'https://github.com/o/r/pull/5',
+  };
+  const listFor = (rows: unknown) =>
+    createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({ ghApiJson: () => rows }),
+    ).listOpenChangeRequests();
+
+  assert.deepEqual(listFor([{ ...valid, body: null }]), [
+    { number: 5, title: 't', body: '', url: valid.html_url },
+  ]);
+  const malformed: unknown[] = [
+    { number: 5 },
+    { ...valid, number: '7' },
+    { ...valid, number: true },
+    { ...valid, number: 0 },
+    { ...valid, number: 1.5 },
+    { ...valid, title: undefined },
+    { ...valid, body: undefined },
+    { ...valid, body: 7 },
+    { ...valid, html_url: undefined },
+    null,
+    'row',
+  ];
+  for (const row of malformed) {
+    assert.throws(() => listFor([valid, row]), /malformed row/);
+  }
+  assert.throws(() => listFor({}), /not an array/);
+});
+
 // ---------------------------------------------------------------------------
 // #3598: the discovery loaders rebuild a failed `gh` call as a plain `Error`.
 // The interruption classifier reads a timeout or a rate limit from the
