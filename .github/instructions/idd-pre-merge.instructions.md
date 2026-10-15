@@ -318,13 +318,25 @@ is diagnostic and never changes the verdict.
   **No required checks configured**: When `pre-merge-readiness` reports
   `ci.noRequiredChecksConfigured: true` (unprotected branch, or no
   required status checks), the CI gate is **not** satisfied vacuously.
+  Every present run is non-required here, and a run still waiting on
+  approval (`action_required`) is ignored as if absent (issue `#4349`).
   Route by `ci.presentRunConclusion` over the actual HEAD runs:
-  - `all-passing` → the CI gate may pass (every present run green).
-  - `pending` → wait per `idd-ci.instructions.md`, then re-evaluate F2.
-  - `some-failing` → **hold**; never merge on a vacuous green.
-  - `none` (no runs at all) → **hold**, unless `ci.allowedByPolicySetting`
-    is set (the global-only opt-in; see
-    [Global-only profile](../../docs/global-only-profile.md)).
+  - `all-passing` → the CI gate may pass (every other present run green,
+    or waiver-covered).
+  - `pending` → wait per `idd-ci.instructions.md`, then re-evaluate F2. A
+    queued, in-progress, or waiting run, a `pending`, `expected`, or
+    `requested` status, and a `cancelled` run with no later run of the
+    same check all wait here; none is a failure.
+  - `some-failing` → **hold**; a non-required `failure`, `timed_out`,
+    `startup_failure`, `stale`, or `error` conclusion, or an unrecognized
+    state, still holds. Never merge on a vacuous green.
+  - `none` (no runs at all, or only `action_required` runs) → **hold**,
+    unless `ci.allowedByPolicySetting` is set (the global-only opt-in;
+    see [Global-only profile](../../docs/global-only-profile.md)).
+
+  The `action_required` carve-out is this path only: with a required
+  check configured, a required `action_required` run is still a failure
+  and holds F2 through `ci.status`.
 
   **External-check waivers**: When `pre-merge-readiness` reports a check
   `coveredByWaiver: true`, a trusted maintainer authorized skipping it

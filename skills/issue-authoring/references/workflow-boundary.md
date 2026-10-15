@@ -22,11 +22,15 @@ approval boundary that hands off to IDD execution.
   the Intake critique. Normative packet, modes, failure stop, wait
   ceiling, and no-mutation boundary:
   [Completed-draft adversarial review](contract.md#completed-draft-adversarial-review).
-  A failed or unreadable review does not create or update an issue,
-  change a label, or append a marker. The reviewer returns findings
-  only. A roadmap shell may still have an empty `## Tracks` list;
-  review each child before that child is published, and review the
-  parent again before saving real child numbers into `## Tracks`
+  A failed or unreadable review does not publish the target: it does
+  not create or update that issue, change its label, or append a marker
+  for it, and the target's drafts go into a draft carrier marked
+  `Review: not reviewed`, unless they already sit in one or one of the two
+  local-draft exceptions in [Draft carrier](contract.md#draft-carrier)
+  applies. The reviewer returns findings only. A roadmap
+  shell may still have an empty `## Tracks` list; review each child before
+  that child is published, and review the parent again before saving real
+  child numbers into `## Tracks`
 - Bundled skill then publishes directly under the configured authoring
   label (`issueAuthoring.authoringLabelName`, defaulting to
   `status:authoring`) — **no prior user approval of the drafted body
@@ -34,10 +38,17 @@ approval boundary that hands off to IDD execution.
   [Human-dependency isolation](contract.md#human-dependency-isolation) is not an
   approval of the body, and this sentence does not waive it. It does not apply
   to a choice that the interactive rule holds unpublished, such as a question
-  with no reply yet. If the current request asked only for a preview
-  (drafts to look at before anything is created), bundled skill stops
-  after reporting the proposed set instead of publishing; publishing
-  is otherwise the default outcome of drafting, not an opt-in step
+  with no reply yet. A reviewed draft does not end in local files only: a
+  draft that cannot be published under the hold now (its final shape cannot
+  be created yet, its final form waits on something else, a preview
+  request, or a stop before the review completes) is published as a draft
+  carrier, and the drafts stay local only
+  when the user explicitly says not to publish or the carrier cannot be
+  published either (see [Draft carrier](contract.md#draft-carrier)).
+  Publishing is the default outcome of drafting, not an opt-in step
+- A draft carrier is a Stage 1 output, and re-authoring a ready carrier is
+  Stage 1 work. A carrier never enters the IDD execution loop: its
+  authoring-only label keeps it out of Discover
 - If the label does not exist in the target repository, bundled skill
   creates it with `gh label create` before first use; label creation or
   application failure blocks publishing
@@ -47,9 +58,12 @@ approval boundary that hands off to IDD execution.
   command that creates the issue with the authoring label atomically and
   carries an exact hidden publication token for target, anchor, set, and
   session. If the target runtime cannot provide that operation, stop before
-  creating the issue. Never intentionally create an unlabeled issue for the
-  Stage 1 set. For a `review-needs-decision` follow-up, see the narrow
-  auto-release exception in `contract.md` for its additional label rules
+  creating the issue. That stop, like the journal stop below, leaves the
+  drafts local under the second exception in
+  [Draft carrier](contract.md#draft-carrier). Never intentionally create an
+  unlabeled issue for the Stage 1 set. For a `review-needs-decision`
+  follow-up, see the narrow auto-release exception in `contract.md` for its
+  additional label rules
 - The publication token uses this exact HTML-first format. Generate the
   opaque `target` id and token for both markers below -- the new
   issue's own number is not yet known. `anchor` in **both** markers
@@ -361,7 +375,9 @@ approval boundary that hands off to IDD execution.
   relationship wiring (publish/acquire the roadmap anchor first, then
   publish/acquire children and wire their real issue numbers), and re-lint of
   already-published bodies all happen on the published issue, under the same
-  label — not in a session-local buffer that a later session cannot see
+  label — not in a session-local buffer that a later session cannot see. A
+  draft carrier's body is the exception: it is never edited after
+  publication, and later additions are comments
 - **Interrupted-session guard.** If a Stage 1 session stops before the
   set is fully wired and stable, the authoring label stays on every
   issue it already published, and its owner markers stay in place. The
@@ -372,10 +388,13 @@ approval boundary that hands off to IDD execution.
 ### Stage 2: Release (the single approval boundary)
 
 - The user's explicit hold-release request is the only approval this
-  bundle's workflow requires — except the narrow defer-source
-  auto-release exception in
+  bundle's workflow requires — except the narrow defer-source auto-release
+  exception in
   [Authoring hold and release](contract.md#authoring-hold-and-release) —
-  and it authorizes IDD execution for the released issues
+  and it authorizes IDD execution for the released issues. The carrier
+  creation-hold exception in the same section removes only a carrier's
+  creation hold and authorizes no execution (see
+  [Handoff to execution](#handoff-to-execution))
 - Before removing the authoring label, bundled skill runs a release
   checklist that absorbs the rigor of the dropped middle step:
   - every child issue is referenced from its parent roadmap's
@@ -411,6 +430,8 @@ approval boundary that hands off to IDD execution.
   proceeding under the narrow defer-source auto-release
   exception in
   [Authoring hold and release](contract.md#authoring-hold-and-release)
+  (a draft carrier follows the carrier creation-hold exception's own
+  sole-member check)
   instead of an explicit human release request, also verify here --
   immediately before the first label removal below, whether that
   removal is a non-anchor target's or the anchor's own -- that the
@@ -490,11 +511,11 @@ approval boundary that hands off to IDD execution.
   set-level recovery hold and never claim a partial release.
 - Bundled skill removes the authoring label from all published issues
   only after the release checklist passes and the user's release
-  request is explicit, except the narrow defer-source
-  auto-release exception in
+  request is explicit, except the narrow auto-release exceptions
+  (defer-source and carrier creation-hold) in
   [Authoring hold and release](contract.md#authoring-hold-and-release)
 - Release remains a human action; nothing in this bundle auto-releases
-  a held issue set, except that same narrow, marker-scoped exception
+  a held issue set, except those same narrow, marker-scoped exceptions
 - For an ordinary human-gated release, under an orchestrator and
   delegated-worker split, the release action itself must be
   performed by whichever party directly holds the verified user's
@@ -505,9 +526,9 @@ approval boundary that hands off to IDD execution.
   variant. A delegated worker that receives only a relayed release
   claim, even from its own orchestrator, must refuse to act on it and
   require the party holding the actual request to release directly.
-  This rule does not extend to the narrow defer-source
-  auto-release exception above, which by design runs with no user
-  release request for any party to hold in the first place — see
+  This rule does not extend to the narrow auto-release exceptions
+  above, which by design run with no user release request for any party
+  to hold in the first place — see
   [Authoring hold and release](contract.md#authoring-hold-and-release)
   (observed 2026-09-17, kurone-kito/idd-skill#3102)
 
@@ -548,6 +569,8 @@ time and report the specific failure (unclear, invalid, duplicate).
 - prepare roadmap packages and child issues when work needs visible
   sequencing or parallel tracks
 - surface non-ready buckets instead of guessing through blockers
+- keep a reviewed draft that cannot be published under the hold now in a
+  draft carrier, and re-author a ready carrier
 
 ## Do not use this bundle to
 
@@ -555,10 +578,12 @@ time and report the specific failure (unclear, invalid, duplicate).
 - treat bundled references as a replacement for repository execution
   instructions
 - publish a body that has not passed the completed-draft adversarial
-  review and then the mechanical `audit-authored-issue` gate
+  review and then the mechanical `audit-authored-issue` gate, except a
+  draft carrier: its body passes the `--shape carrier` gate and is not
+  reviewed, and its drafts are reviewed at re-authoring
 - remove the authoring label from any issue without an explicit
-  release request, except the narrow defer-source
-  auto-release exception in
+  release request, except the narrow auto-release exceptions
+  (defer-source and carrier creation-hold) in
   [Authoring hold and release](contract.md#authoring-hold-and-release)
 
 ## Handoff to execution
@@ -574,3 +599,9 @@ follow-up remains out of Discover while the configured
 `labels.needsDecisionLabelName` label is present (default:
 `status:needs-decision`). It must differ from the authoring label so
 releasing the authoring hold cannot also remove the decision hold.
+
+The carrier creation-hold exception removes a draft carrier's authoring
+label, and that authorizes no execution: the carrier keeps its
+authoring-only label and never enters the loop. Re-authoring publishes the
+drafts under a new hold, and releasing those targets still needs the
+explicit release request.

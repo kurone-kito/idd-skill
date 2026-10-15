@@ -512,6 +512,7 @@ test('summary on an empty store reports zero and creates nothing', () => {
       held: 0,
       abandoned: 0,
       failed: 0,
+      'scope-stopped': 0,
     });
     assert.deepEqual(summary.reviewRounds, { recorded: 0, distribution: {} });
     assert.deepEqual(summary.frictionFiles, []);
@@ -572,6 +573,7 @@ test('summary on a store with three records counts outcomes, rounds and friction
       held: 0,
       abandoned: 0,
       failed: 1,
+      'scope-stopped': 0,
     });
     assert.deepEqual(summary.reviewRounds, {
       recorded: 3,
@@ -588,6 +590,166 @@ test('summary on a store with three records counts outcomes, rounds and friction
     assert.equal(since.total, 2);
     assert.equal(since.since, '2026-10-08T11:00:00Z');
     assert.equal(since.outcomes.merged, 0);
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('scope-stopped is accepted and counted without changing how earlier outcomes are counted', () => {
+  const sandbox = makeSandbox();
+  try {
+    // Records shaped like the ones a store already holds from before the
+    // outcome existed: the issue 3974 trio (held at F1, held at F2, merged at
+    // F4) plus one record of each other earlier outcome.
+    const stored: WorkerReport[] = [
+      report({
+        workerHandle: 'w-held',
+        terminalPhase: 'F1',
+        outcome: 'held',
+        pullRequest: null,
+        recordedAt: '2026-10-08T03:46:00Z',
+      }),
+      report({
+        workerHandle: 'w-held',
+        terminalPhase: 'F2',
+        outcome: 'held',
+        recordedAt: '2026-10-08T08:14:00Z',
+      }),
+      report({
+        workerHandle: 'w-held',
+        terminalPhase: 'F4',
+        recordedAt: '2026-10-08T11:21:00Z',
+      }),
+      report({
+        claimId: '0b7ec7ae-2b5d-4d8e-9d0f-4d3b2f2a6a01',
+        workerHandle: 'w-handoff',
+        terminalPhase: 'F2.5',
+        outcome: 'handed-off',
+        recordedAt: '2026-10-08T12:00:00Z',
+      }),
+      report({
+        claimId: '5cb9d0b3-6f0e-4a55-8a62-77d0a9b7c202',
+        workerHandle: 'w-abandoned',
+        terminalPhase: 'E4',
+        outcome: 'abandoned',
+        recordedAt: '2026-10-08T13:00:00Z',
+      }),
+      report({
+        claimId: '9d4a1c6e-3b21-4c0f-b6f4-18a35e6d7303',
+        workerHandle: 'w-failed',
+        terminalPhase: 'D2',
+        outcome: 'failed',
+        pullRequest: null,
+        recordedAt: '2026-10-08T14:00:00Z',
+      }),
+    ];
+    for (const record of stored) {
+      assert.deepEqual(validateWorkerReport(record), []);
+    }
+    mkdirSync(sandbox.storeDirectory, { recursive: true });
+    writeFileSync(
+      sandbox.store,
+      `${stored.map((record) => JSON.stringify(record)).join('\n')}\n`,
+    );
+    const before = JSON.parse(runCli(sandbox, ['summary']).stdout);
+    assert.equal(before.total, 6);
+    assert.equal(before.invalidLines, 0);
+    assert.deepEqual(before.outcomes, {
+      merged: 1,
+      'handed-off': 1,
+      held: 2,
+      abandoned: 1,
+      failed: 1,
+      'scope-stopped': 0,
+    });
+
+    // The same worker is told to stop at F2, so this is its own record.
+    const stopped = report({
+      claimId: 'b1e0f8a2-7c33-4e19-a5d8-2f6c0e9b4404',
+      workerHandle: 'w-stopped',
+      terminalPhase: 'F2',
+      outcome: 'scope-stopped',
+      recordedAt: '2026-10-08T15:00:00Z',
+    });
+    assert.deepEqual(validateWorkerReport(stopped), []);
+    const appended = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(stopped),
+    );
+    assert.equal(appended.status, 0, appended.stderr);
+    assert.equal(JSON.parse(appended.stdout).status, 'appended');
+    const lines = storeLines(sandbox);
+    assert.equal(lines.length, 7);
+    assert.deepEqual(JSON.parse(lines[6]), stopped);
+    // The records stored before the append are untouched, byte for byte.
+    assert.deepEqual(
+      lines.slice(0, 6),
+      stored.map((record) => JSON.stringify(record)),
+    );
+
+    const after = JSON.parse(runCli(sandbox, ['summary']).stdout);
+    assert.equal(after.total, 7);
+    assert.equal(after.invalidLines, 0);
+    assert.deepEqual(after.outcomes, {
+      ...before.outcomes,
+      'scope-stopped': 1,
+    });
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('an unknown outcome is still rejected next to scope-stopped', () => {
+  const sandbox = makeSandbox();
+  try {
+    for (const outcome of [
+      'scope_stopped',
+      'Scope-Stopped',
+      'scope-stopped ',
+      'scope-stop',
+      'stopped',
+    ]) {
+      const invalid = { ...report(), outcome };
+      assert.ok(
+        validateWorkerReport(invalid).some((error) =>
+          error.includes('not in enum'),
+        ),
+        `${JSON.stringify(outcome)} should not be an outcome`,
+      );
+      const result = runCli(
+        sandbox,
+        ['append', '--stdin'],
+        JSON.stringify(invalid),
+      );
+      assert.notEqual(result.status, 0, outcome);
+      assert.match(result.stderr, /record fails schema validation/);
+    }
+    assert.equal(
+      existsSync(join(sandbox.state, 'idd-skill')),
+      false,
+      'a rejected record must not create the directory',
+    );
+  } finally {
+    cleanup(sandbox);
+  }
+});
+
+test('the summary outcome keys and the schema outcome enum list the same outcomes', () => {
+  const sandbox = makeSandbox();
+  try {
+    const schema = JSON.parse(
+      readFileSync(
+        join(REPO_ROOT, 'schemas/worker-report.schema.json'),
+        'utf8',
+      ),
+    ) as { properties: { outcome: { enum: string[] } } };
+    const summary = summarizeWorkerReports(sandbox.store);
+    assert.deepEqual(
+      Object.keys(summary.outcomes).sort(),
+      [...schema.properties.outcome.enum].sort(),
+    );
+    assert.ok(schema.properties.outcome.enum.includes('scope-stopped'));
   } finally {
     cleanup(sandbox);
   }

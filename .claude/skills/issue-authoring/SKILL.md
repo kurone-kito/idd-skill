@@ -87,9 +87,12 @@ needs-decision, blocked-by-human, and out-of-scope.
    `never`; union findings when both mechanisms run. A missing command,
    non-zero exit, timeout, cancellation, or unreadable findings is a
    failure only after `usable: true`. A readable empty list is clean.
-   If no mechanism that ran returns a readable list, do not publish:
-   do not create an issue, update a body, change a label, or append a
-   marker. An existing held issue keeps its label and previous body.
+   If no mechanism that ran returns a readable list, do not publish
+   the target: do not create it, update its body, change its label, or
+   append a marker for it. An existing held issue keeps its label and
+   previous body. The drafts go into a carrier marked
+   `Review: not reviewed` (step 8), unless they already sit in one or one
+   of step 8's two exceptions applies.
    The reviewer returns findings only. Prefer a non-context-inheriting
    reviewer; issue #3448 records why a context-inheriting no-mutation
    dispatch can still publish. Bound the wait with
@@ -111,15 +114,15 @@ needs-decision, blocked-by-human, and out-of-scope.
    before publishing it. Review the parent again when real child
    numbers are written into `## Tracks`, then audit that edit before
    saving it.
-7. Before publishing a ready orphan, roadmap, or child body, run the
-   `audit-authored-issue` linter against it as the mechanical
-   pre-publish gate — see
+7. Before publishing a ready orphan, roadmap, or child body, or a draft
+   carrier (`--shape carrier`), run the `audit-authored-issue` linter
+   against it as the mechanical pre-publish gate — see
    [Mechanical pre-publish gate](references/contract.md#mechanical-pre-publish-gate)
    in the bundled contract, including the manual fallback for
    `instructions-only` installs with no helper runtime. Resolve every
-   reported failure before treating the issue as ready. Before publishing
-   a draft carrier, run the same linter with `--shape carrier`; a carrier
-   is never published without that check. Before newly
+   reported failure before treating the issue as ready; a carrier is
+   never published without that check, and it has no manual fallback
+   (step 8's second exception applies). Before newly
    publishing a body into the `needs-decision` or `blocked-by-human`
    bucket instead, also run the linter, passing
    `--expect-bucket <needs-decision|blocked-by-human>` (choose the one
@@ -134,11 +137,29 @@ needs-decision, blocked-by-human, and out-of-scope.
    (step 6) and then the mechanical gate (step 7) have passed. The
    Intake critique stays the pre-draft
    pass above and does not replace step 6. No separate publish
-   approval is needed. Only skip publishing when the current request
-   explicitly asked for a preview instead, or when the interactive rule in
+   approval is needed. A reviewed draft does not end in local files only.
+   When its final shape cannot be published under the hold now (the
+   command publishes only an orphan or a carrier, or the final form waits
+   on something else), publish a draft carrier with
+   `publish-authoring-hold --shape carrier` (run it with `--apply`; the
+   default is a dry run), as
+   [Draft carrier](references/contract.md#draft-carrier) defines. A
+   preview request also publishes a carrier, and the drafts are shown in
+   the reply too. When authoring stops before the review completes on a
+   planned stop (context pressure, or the user's instruction to stop), or
+   when the review fails or cannot finish, the target is not published;
+   its drafts go into a carrier marked `Review: not reviewed` (drafts
+   already in a carrier stay there). Two
+   exceptions keep the drafts local: the user explicitly says not to
+   publish (an instruction not to create any issue, not a request to see
+   the drafts first; the final message says that the drafts are not durable
+   and gives their local paths), or the carrier cannot be published either
+   (no helper runtime, `issueAuthoring.journalIssue` unset, or a failure
+   before the create; the final message says the same and asks the user
+   where to keep the drafts). A choice that the interactive rule in
    [Human-dependency isolation](references/contract.md#human-dependency-isolation)
-   holds that choice unpublished. Manage the authoring label
-   for each created or updated issue:
+   holds unpublished is a pending question, not a reviewed draft. Manage
+   the authoring label for each created or updated issue:
    - resolve `issueAuthoring.authoringLabelName`, defaulting to
      `status:authoring`
    - create the label with `gh label create` before first use when the
@@ -195,13 +216,15 @@ needs-decision, blocked-by-human, and out-of-scope.
    - create new issues only through a capability-checked publication command
      that applies the authoring label atomically and carries an exact hidden
      publication token for target, anchor, set, and session; if that operation
-     is unavailable, stop before creating the issue — never intentionally
-     create an unlabeled issue. That command is `idd-publish-authoring-hold`
-     (`node scripts/publish-authoring-hold.mjs` in this source repository).
-     It publishes one issue per call: an orphan (the default), a draft
-     carrier (`--shape carrier`), a roadmap shell (`--shape roadmap`), or a
-     child (`--shape child` with `--anchor` naming the set anchor's
-     `<owner>/<repo>#<number>`); see its `--help` and the contract's
+     is unavailable, stop before creating the issue (a carrier cannot be
+     created either, so the second exception above applies) — never
+     intentionally create an unlabeled issue. That command is
+     `idd-publish-authoring-hold` (`node scripts/publish-authoring-hold.mjs`
+     in this source repository). It publishes one issue per call: an orphan
+     (the default), a draft carrier (`--shape carrier`), a roadmap shell
+     (`--shape roadmap`), or a child (`--shape child` with `--anchor` naming
+     the set anchor's `<owner>/<repo>#<number>`); see its `--help` and the
+     contract's
      "New-issue ownership" section
    - the hidden publication token is this exact HTML-first body line.
      `anchor` reuses the opaque `target` value only when this new issue
@@ -295,19 +318,22 @@ needs-decision, blocked-by-human, and out-of-scope.
      Deletion needs admin permission and is not the default recovery path
    - held issues under the label ARE the drafts: do in-place body
      edits, roadmap relationship wiring, and re-lint of already-published
-     bodies on the published issue itself, under the same label
+     bodies on the published issue itself, under the same label (a draft
+     carrier's body is the exception: it is never edited after publication)
    - if a session is interrupted before the set is fully wired, leave the
      label and owner markers in place — the label suppresses Discover and
      the markers preserve the set identity for a later verified resume
    - read every target and anchor owner-marker log with paginated retrieval and
      deterministic comment order; never rely on a single API page
    - after the release checklist passes and the user explicitly requests
-     release — or, for a single target whose body carried the
-     defer-source marker at Stage 1 publication time (never a
-     marker added later), the narrow auto-release exception in
-     [Authoring hold and release](references/contract.md#authoring-hold-and-release)
-     — preflight and verify or reuse a matching `mode=release` marker
-     for every target (with `supersedes` equal to the current owner token)
+     release — or, under the narrow auto-release exceptions in
+     [Authoring hold and release](references/contract.md#authoring-hold-and-release),
+     for a single target whose body carried the defer-source marker at
+     Stage 1 publication time (never a marker added later), or for a draft
+     carrier, whose creation hold `publish-authoring-hold --shape carrier`
+     releases itself — preflight and verify or reuse a matching
+     `mode=release` marker for every target (with `supersedes` equal to the
+     current owner token)
      before removing any label; record its GitHub comment ID, never append a
      duplicate on retry, append and reconcile an anchor-only
      `mode=release-guard` marker before the first label removal, keep the set
@@ -348,7 +374,9 @@ needs-decision, blocked-by-human, and out-of-scope.
    hold does not by itself authorize starting the IDD execution loop —
    only the user's explicit release request does, except the narrow
    defer-source auto-release exception in
-   [Authoring hold and release](references/contract.md#authoring-hold-and-release).
+   [Authoring hold and release](references/contract.md#authoring-hold-and-release);
+   its carrier creation-hold exception releases a carrier, which never
+   enters the loop.
    A released `review-needs-decision` follow-up remains out of Discover
    while the label configured as `labels.needsDecisionLabelName` is
    present (default: `status:needs-decision`).
@@ -389,11 +417,14 @@ needs-decision, blocked-by-human, and out-of-scope.
 - Run the completed-draft adversarial review, then the
   `audit-authored-issue` linter (or its manual fallback in
   `instructions-only` installs), against every drafted roadmap, child,
-  or orphan body and every draft carrier (`--shape carrier`). That
-  includes a body published into
+  or orphan body. That includes a body published into
   `needs-decision` or `blocked-by-human`; pass `--expect-bucket` for
-  those two buckets. Resolve every reported failure before publishing.
-  A failed review does not publish.
+  those two buckets. Lint every draft carrier with `--shape carrier`; its
+  body is linted, not reviewed. Resolve every reported failure before
+  publishing. A failed review does not publish the target; its drafts go
+  into a carrier unless an exception in step 8 applies.
+- No reviewed draft ends in local files only, except the two exceptions in
+  step 8.
 - Name a concrete surface to edit and an objective verification for
   every `ready` candidate; route anything else to `needs-decision` instead
   of guessing, and ask first for an interactive choice under

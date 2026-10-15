@@ -859,7 +859,7 @@
         },
         "presentRunConclusion": {
           "type": "string",
-          "description": "Conclusion across all present check runs, with waiver-covered runs counted as passing; used as the F2 fallback when no required checks are configured.",
+          "description": "Conclusion across all present check runs, with waiver-covered runs counted as passing; used as the F2 fallback when no required checks are configured. With no required check every run is non-required: a run waiting on approval (action_required) is ignored as if absent (so a set of only such runs reads none); a queued, in-progress, or waiting run, a pending, expected, or requested status, and a cancelled run with no later run of the same check read pending; and a failure, timed_out, startup_failure, stale, or error conclusion, or an unrecognized state, reads some-failing (#4349). With a required check configured the field keeps the unchanged reading and the gate reads the required-check status instead.",
           "enum": [
             "all-passing",
             "some-failing",

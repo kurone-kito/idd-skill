@@ -1688,6 +1688,136 @@ test('#3670: a green advisory-convergence run the downgrade blocks is named as b
   ]);
 });
 
+// --- #4349: F2's no-required-checks path ignores a non-required
+// action_required run. The pass predicate, the `ci-wait-state` rollup, and the
+// watermark agreement all reach the same answer. A required action_required
+// run keeps failing on the required-check path, and a non-required failure
+// keeps holding.
+
+test('#4349: with no required checks, a non-required action_required run does not hold the pass predicate', () => {
+  const summaryFor = (
+    statusCheckRollup: ReturnType<typeof checkRun>[],
+    options: Parameters<typeof buildCiWaitStateSummary>[1] = {},
+  ) =>
+    buildCiWaitStateSummary(
+      { headRefOid: HEAD_SHA, statusCheckRollup },
+      options,
+    );
+  const gatedCompanion = checkRun({
+    name: 'idd-advisory-convergence-comment',
+    conclusion: 'ACTION_REQUIRED',
+  });
+
+  // Beside a passing run, the gated companion no longer holds F2.
+  const beside = summaryFor([
+    checkRun({ name: 'lint', conclusion: 'SUCCESS' }),
+    gatedCompanion,
+  ]);
+  assert.equal(beside.requiredChecks.status, 'no-required-checks');
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(beside), true);
+  const besideAgreement = requiredCiHeadAgreementFromSummary(beside);
+  assert.equal(besideAgreement.requiredChecksPassing, true);
+  assert.deepEqual(besideAgreement.blockingPresentRunNames, []);
+
+  // A sole gated run is ignored, so nothing has run: the vacuous-green hold
+  // stays, and the run is not named as a failure.
+  const sole = summaryFor([gatedCompanion]);
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(sole), false);
+  const soleAgreement = requiredCiHeadAgreementFromSummary(sole);
+  assert.equal(soleAgreement.requiredChecksPassing, false);
+  assert.deepEqual(soleAgreement.blockingPresentRunNames, []);
+
+  // A non-required failure still holds, and is the only run named.
+  const failing = summaryFor([
+    gatedCompanion,
+    checkRun({ name: 'docs', conclusion: 'FAILURE' }),
+  ]);
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(failing), false);
+  assert.deepEqual(
+    requiredCiHeadAgreementFromSummary(failing).blockingPresentRunNames,
+    ['docs'],
+  );
+
+  // A sole non-required failure holds.
+  const soleFailure = summaryFor([
+    checkRun({ name: 'docs', conclusion: 'FAILURE' }),
+  ]);
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(soleFailure), false);
+  assert.deepEqual(
+    requiredCiHeadAgreementFromSummary(soleFailure).blockingPresentRunNames,
+    ['docs'],
+  );
+});
+
+test('#4349: with no required checks, a sole waiting run waits and is not named as failing', () => {
+  const agreementFor = (statusCheckRollup: Record<string, unknown>[]) => {
+    const summary = buildCiWaitStateSummary(
+      { headRefOid: HEAD_SHA, statusCheckRollup },
+      {},
+    );
+    assert.equal(summary.requiredChecks.status, 'no-required-checks');
+    return {
+      passing: ciWaitSummaryIsPreMergeCiPassing(summary),
+      names:
+        requiredCiHeadAgreementFromSummary(summary).blockingPresentRunNames,
+    };
+  };
+
+  // A running check run waits (not passing, not named).
+  assert.deepEqual(
+    agreementFor([
+      checkRun({ name: 'ci', status: 'IN_PROGRESS', conclusion: '' }),
+    ]),
+    { passing: false, names: [] },
+  );
+  // A commit status still pending waits too; it is not read as failing.
+  for (const state of ['PENDING', 'EXPECTED', 'REQUESTED']) {
+    assert.deepEqual(
+      agreementFor([{ __typename: 'StatusContext', context: 'ci/ext', state }]),
+      { passing: false, names: [] },
+      state,
+    );
+  }
+  // A pending commit status beside a failing one is held on the failure.
+  assert.deepEqual(
+    agreementFor([
+      { __typename: 'StatusContext', context: 'ci/ext', state: 'PENDING' },
+      { __typename: 'StatusContext', context: 'ci/docs', state: 'FAILURE' },
+    ]),
+    { passing: false, names: ['ci/docs'] },
+  );
+});
+
+test('#4349: a required action_required run still fails on the required-check path', () => {
+  const required = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', conclusion: 'ACTION_REQUIRED' }),
+        checkRun({ name: 'docs', conclusion: 'SUCCESS' }),
+      ],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(required.requiredChecks.status, 'failing');
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(required), false);
+
+  // A non-required action_required run beside a passing required check is not
+  // part of the required-check gate at all.
+  const nonRequired = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({ name: 'lint', conclusion: 'SUCCESS' }),
+        checkRun({ name: 'docs', conclusion: 'ACTION_REQUIRED' }),
+      ],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(nonRequired.requiredChecks.status, 'success');
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(nonRequired), true);
+});
+
 // --- #4053: the zero-check global-only opt-in on the E1 watermark path. The
 // pass predicate, the `ci-wait-state` JSON the E1 precondition reads, and the
 // watermark agreement all reach the same answer. The setting passes only the

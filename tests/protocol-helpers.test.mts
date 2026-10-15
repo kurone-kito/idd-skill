@@ -5831,6 +5831,209 @@ test('listBlockingPresentRunNames is non-empty exactly when the present-run conc
   }
 });
 
+// --- #4349: a non-required action_required run does not hold F2 --------------
+
+test('#4349: with every run non-required, an action_required run is ignored, a failure still holds, and a waiting run still waits', () => {
+  const nonRequired = { allRunsNonRequired: true };
+  const scenarios: {
+    label: string;
+    checks: ReturnType<typeof presentRun>[];
+    identityUnresolved?: string[];
+    conclusion: string;
+    names: string[];
+  }[] = [
+    {
+      label: 'a sole action_required run is ignored, leaving no run at all',
+      checks: [presentRun('a', 'ACTION_REQUIRED')],
+      conclusion: 'none',
+      names: [],
+    },
+    {
+      label: 'an action_required run beside a passing run leaves it passing',
+      checks: [presentRun('a', 'ACTION_REQUIRED'), presentRun('b', 'SUCCESS')],
+      conclusion: 'all-passing',
+      names: [],
+    },
+    {
+      label: 'an action_required run beside a still-running run still waits',
+      checks: [presentRun('a', 'ACTION_REQUIRED'), presentRun('b', 'QUEUED')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label:
+        'an action_required run beside a failure still holds on the failure',
+      checks: [presentRun('a', 'ACTION_REQUIRED'), presentRun('b', 'FAILURE')],
+      conclusion: 'some-failing',
+      names: ['b'],
+    },
+    {
+      label: 'a newer action_required run does not hide an older failure',
+      checks: [
+        {
+          ...presentRun('a', 'FAILURE'),
+          completedAt: '2026-06-25T10:00:00Z',
+        },
+        {
+          ...presentRun('a', 'ACTION_REQUIRED'),
+          completedAt: '2026-06-25T11:00:00Z',
+        },
+      ],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'a later passing rerun of an action_required run passes',
+      checks: [
+        {
+          ...presentRun('a', 'ACTION_REQUIRED'),
+          completedAt: '2026-06-25T10:00:00Z',
+        },
+        {
+          ...presentRun('a', 'SUCCESS'),
+          completedAt: '2026-06-25T11:00:00Z',
+        },
+      ],
+      conclusion: 'all-passing',
+      names: [],
+    },
+    {
+      label: 'an identity-unresolved action_required run still fails closed',
+      checks: [presentRun('a', 'ACTION_REQUIRED'), presentRun('b', 'SUCCESS')],
+      identityUnresolved: ['a'],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'a waiver-covered action_required run counts as skipped',
+      checks: [presentRun('a', 'ACTION_REQUIRED', true)],
+      conclusion: 'all-passing',
+      names: [],
+    },
+    {
+      label: 'a sole non-required failure still holds',
+      checks: [presentRun('a', 'FAILURE')],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'a sole timed-out run still holds',
+      checks: [presentRun('a', 'TIMED_OUT')],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'a sole startup failure still holds',
+      checks: [presentRun('a', 'STARTUP_FAILURE')],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'a sole stale run still holds',
+      checks: [presentRun('a', 'STALE')],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'a sole error status still holds',
+      checks: [presentRun('a', 'ERROR')],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+    {
+      label: 'a lone cancelled run with no later run keeps its pending reading',
+      checks: [presentRun('a', 'CANCELLED')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label: 'a sole waiting run waits',
+      checks: [presentRun('a', 'WAITING')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label: 'a sole queued run waits',
+      checks: [presentRun('a', 'QUEUED')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label: 'a sole in-progress run waits',
+      checks: [presentRun('a', 'IN_PROGRESS')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label: 'a sole still-running commit status waits instead of holding',
+      checks: [presentRun('a', 'PENDING')],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label: 'an expected or requested status beside a pass waits',
+      checks: [
+        presentRun('a', 'EXPECTED'),
+        presentRun('b', 'REQUESTED'),
+        presentRun('c', 'SUCCESS'),
+      ],
+      conclusion: 'pending',
+      names: [],
+    },
+    {
+      label: 'a still-running commit status beside a failure names the failure',
+      checks: [presentRun('a', 'PENDING'), presentRun('b', 'FAILURE')],
+      conclusion: 'some-failing',
+      names: ['b'],
+    },
+    {
+      label: 'an unrecognized state still holds',
+      checks: [presentRun('a', 'MYSTERY'), presentRun('b', 'SUCCESS')],
+      conclusion: 'some-failing',
+      names: ['a'],
+    },
+  ];
+  for (const scenario of scenarios) {
+    const unresolved = new Set(scenario.identityUnresolved ?? []);
+    const conclusion = resolvePresentRunConclusion(
+      scenario.checks,
+      unresolved,
+      nonRequired,
+    );
+    const names = listBlockingPresentRunNames(
+      scenario.checks,
+      unresolved,
+      nonRequired,
+    );
+    assert.equal(conclusion, scenario.conclusion, scenario.label);
+    assert.deepEqual(names, scenario.names, scenario.label);
+    assert.equal(
+      names.length > 0,
+      conclusion === 'some-failing',
+      `${scenario.label}: names are non-empty exactly when some-failing`,
+    );
+  }
+});
+
+test('#4349: without the non-required flag an action_required or commit-status run keeps its previous reading', () => {
+  // The default is the required-check reading: a caller that does not say
+  // every run is non-required keeps `ACTION_REQUIRED` in the failure family
+  // and a still-running commit status at `some-failing`.
+  const actionRequired = [presentRun('a', 'ACTION_REQUIRED')];
+  assert.equal(resolvePresentRunConclusion(actionRequired), 'some-failing');
+  assert.deepEqual(listBlockingPresentRunNames(actionRequired), ['a']);
+  assert.equal(
+    resolvePresentRunConclusion(actionRequired, new Set(), {
+      allRunsNonRequired: false,
+    }),
+    'some-failing',
+  );
+  assert.equal(
+    resolvePresentRunConclusion([presentRun('a', 'PENDING')]),
+    'some-failing',
+  );
+});
+
 test('STALE_THREAD_DISPOSITION_HINT names the reply that clears a thread and stays wording-safe (#3670)', () => {
   // The wording the gate rules support: a NEW marker-first reply, after the
   // newest non-disposition comment; a plain-prose reply or an edited

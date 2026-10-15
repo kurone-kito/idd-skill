@@ -855,12 +855,16 @@ Delegate failure applies only after `usable: true`. It means a missing
 command, a non-zero exit, a timeout, cancellation, or findings that
 cannot be read as a list. A readable empty list is a clean verdict. If
 no mechanism that actually ran returns a readable list, stop
-publication. Do not create an issue, do not update a body, do not apply
-or remove a label, and do not append an authoring marker. An issue that
-already exists under the authoring hold keeps that label and its
-previous body. A failure is never a clean review. Remaining held means
-the candidate does not become a released, discoverable issue. It does
-not mean creating a labeled issue to represent the stop.
+publication of the target. Do not create the target issue, do not update
+its body, do not apply or remove a label on it, and do not append an
+authoring marker for it. An issue that already exists under the
+authoring hold keeps that label and its previous body. A failure is never
+a clean review. Remaining held means the candidate does not become a
+released, discoverable issue. The caller, never the reviewer, then
+publishes the target's drafts in a draft carrier marked `Review: not
+reviewed`, unless they already sit in one or one of the two local-draft
+exceptions in [Draft carrier](#draft-carrier) applies; that carrier is the
+only issue a failed review may create.
 
 The reviewer must be read-only and review-scoped. It returns a findings
 list only. It must not create or update issues, change labels, or
@@ -1184,7 +1188,8 @@ linter cannot run without Node.js and the vendored `scripts/`
 directory, and `instructions-only` is a first-class supported fallback,
 not a waiver — manually re-verify the same checks against this
 document's prose and the [Draft schemas](#draft-schemas) before
-publishing.
+publishing. A draft carrier has no manual route: without a helper runtime
+it cannot be published (see [Draft carrier](#draft-carrier)).
 
 A `passed: false` report (or non-zero exit, or a failed manual
 re-verification) means the draft is not ready to publish yet. The
@@ -1227,6 +1232,8 @@ that creates the issue with the authoring label atomically and carries an
 exact hidden publication token for target, anchor, set, and session, such as
 `gh issue create --label` when the bundled GitHub CLI flow can use it. If the
 target runtime cannot provide that operation, stop before creating the issue.
+That stop leaves the drafts local under the second exception in
+[Draft carrier](#draft-carrier), as the journal stop below does.
 Never intentionally create an unlabeled issue for the
 Stage 1 set. If an allegedly atomic request unexpectedly returns an
 unlabeled issue, re-fetch its labels, body, current `claimed-by` state, and
@@ -1690,8 +1697,9 @@ drafted roadmap, child, or orphan body, including one published into
 `needs-decision` or `blocked-by-human`, passes the completed-draft
 adversarial review and then the mechanical `audit-authored-issue` gate,
 the skill publishes it directly (see
-[Approval boundary](#approval-boundary) below for the one exception).
-The held issue **is** the draft — in-place body edits, roadmap
+[Approval boundary](#approval-boundary) below for the exceptions).
+The held issue **is** the draft (a draft carrier's body is the exception:
+it is never edited after publication) — in-place body edits, roadmap
 relationship wiring (publish/acquire the roadmap anchor first, then
 publish/acquire children and wire their real issue numbers), and re-lint of
 already-published bodies all happen on
@@ -1712,7 +1720,7 @@ body, and the `audit-authored-issue` linter (or its manual fallback) is green
 on every published body in the set — and the user explicitly requests
 release from the authoring hold (see the
 [Narrow auto-release exception](#narrow-auto-release-exception)
-below for the one marker-scoped exception to this precondition). Keep the
+below for the marker-scoped exceptions to this precondition). Keep the
 set anchor held until every other
 target's label removal is verified, and remove the anchor label last. Every
 label removal in this release, the anchor label included, and every restore that
@@ -1810,8 +1818,9 @@ current owner, set, anchor, session, and marker body. If that guard is not
 found conclusively, leave all labels in place and stop. The guard suppresses
 Discover for the whole set during the provisional label-removal window; it
 does not close the set. When this release is proceeding under the narrow
-[defer-source auto-release exception](#narrow-auto-release-exception) instead of
-an explicit human release request, also verify here -- immediately before
+[defer-source auto-release exception](#narrow-auto-release-exception) (a draft
+carrier follows the carrier creation-hold exception's own sole-member check)
+instead of an explicit human release request, also verify here -- immediately before
 the first label removal below, whether that removal is a non-anchor
 target's or the anchor's own -- that the marked target is the sole member
 of its authoring set: it carries no `<marker-prefix>-roadmap-id` marker
@@ -1904,13 +1913,15 @@ state; leave every target generation open and stop. If restoration cannot be
 completed or a newer owner has appeared, record a set-level recovery hold and
 never claim a partial release. This release checklist plus the user's
 explicit request together form the single approval boundary in this
-contract, except for the narrow, marker-scoped exception below.
+contract, except for the narrow, marker-scoped exceptions below.
 
 Removing the authoring label releases the Discover guard and
 authorizes IDD execution for the released issues. Do it only as part
-of that explicit release request, or the narrow auto-release exception
-below; nothing else removes the label or starts Discover, Claim, and
-Work on its own. A released `review-needs-decision` follow-up remains
+of that explicit release request, or one of the narrow auto-release
+exceptions below; nothing else removes the label or starts Discover,
+Claim, and Work on its own. A draft carrier's release authorizes no
+execution: the carrier keeps its authoring-only label and never enters
+the loop. A released `review-needs-decision` follow-up remains
 out of Discover while the label configured as
 `labels.needsDecisionLabelName` is present (default:
 `status:needs-decision`).
@@ -2118,6 +2129,31 @@ true origin apart from an unrelated `Refs` citation that also starts
 its own line, or apart from a second number on the same line, so more
 than one line or more than one number fails closed instead of
 guessing.
+
+**Carrier creation-hold exception.** A draft carrier published by
+`publish-authoring-hold --shape carrier` has its creation hold (the
+authoring label) released by the same command, without a person's release
+request, once the contract's sole-member, roadmap-id, carrier-audit,
+body-digest, and label checks pass. The authoring-only label stays, and a
+failed or inconclusive check leaves both labels for a person's release. The
+preconditions and outcomes are in the contract's
+[Authoring hold and release](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-hold-and-release)
+section.
+
+## Draft carrier
+
+A **draft carrier** is an issue that holds drafts which cannot be published
+as their final issues yet, labelled with the authoring-only label, so that a
+reviewed draft does not end in local files only. Publish one with
+`publish-authoring-hold --shape carrier` after
+`audit-authored-issue --shape carrier` passes. A duplicate search lists open
+carriers and reads their drafts and comments. The cases that use a carrier,
+the two exceptions that keep drafts local, the exact shape, the review
+ledger, the release condition, the ordered re-authoring procedure with its
+keep-open and split rules, and the observed incidents are defined in the
+contract's
+[Draft carrier](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#draft-carrier)
+section.
 
 ## Reuse-first issue policy
 
@@ -2783,6 +2819,10 @@ Before reporting or publishing issue drafts, the skill should verify:
   context
 - reuse or extension decisions are recorded when the skill chose not to
   create a new issue
+- no reviewed draft ends in local files only, except the two exceptions in
+  [Draft carrier](#draft-carrier); a failed review publishes no target, and
+  its drafts go into a carrier unless an exception applies
+- each draft carrier passes `audit-authored-issue --shape carrier`
 - each drafted roadmap, child, or orphan body passes the
   completed-draft adversarial review and then the
   `audit-authored-issue` mechanical pre-publish gate for its declared
@@ -2838,13 +2878,23 @@ Human-dependency isolation is not an approval of the body, and this
 sentence does not waive it. It does not apply to a choice that the
 interactive rule holds unpublished, such as a question with no reply yet.
 
-The one exception: if the current request asks only for a preview
-(drafts to review before anything is created), the skill should honor
-that and stop after reporting, without publishing:
+A draft that cannot be published under the hold now (because of its shape,
+because its final form waits on something else, a planned stop before the
+review completes, or a failed review) is published
+as a draft carrier instead, so a reviewed draft does not end in local files
+only. A preview request also publishes a carrier, and the reply shows:
 
 - the proposed issue set
 - the rationale for the decomposition
 - any assumptions, open questions, or deferred decisions
+
+The drafts stay local in two cases only: the user explicitly says not to
+publish (an instruction not to create any issue, not a request to see the
+drafts first; the final message says that the drafts are not durable and
+gives their local paths), or the carrier cannot be published either (no helper
+runtime, `issueAuthoring.journalIssue` unset, or a failure before the create;
+the final message says the same and asks the user where to keep the drafts).
+See [Draft carrier](#draft-carrier).
 
 Starting the IDD execution loop requires the user's explicit
 hold-release request — the single approval boundary in this contract.
@@ -2864,10 +2914,10 @@ Orchestrator fan-out variant. A delegated worker that receives only a
 relayed release claim must refuse it and require the party holding
 the actual request to act directly, even when that party is its own
 orchestrator. This rule does not extend to the
-[Narrow auto-release exception](#narrow-auto-release-exception),
-which by design runs with no user release request for any party to
-hold in the first place (observed 2026-09-17,
-kurone-kito/idd-skill#3102).
+[Narrow auto-release exception](#narrow-auto-release-exception)
+and the carrier creation-hold exception, which by design run with no user
+release request for any party to hold in the first place (observed
+2026-09-17, kurone-kito/idd-skill#3102).
 
 ## Non-goals
 
