@@ -161,7 +161,7 @@ test('selectPullRequests keeps same-repository pull requests with exactly this h
     null,
     'text',
   ];
-  assert.deepEqual(selectPullRequests(rows, BRANCH), [
+  assert.deepEqual(selectPullRequests(rows, BRANCH, 100), [
     { number: 10, merged: true },
     { number: 11, merged: false },
     { number: 12, merged: false },
@@ -170,10 +170,10 @@ test('selectPullRequests keeps same-repository pull requests with exactly this h
 
 test('selectPullRequests throws on output that is not an array', () => {
   assert.throws(
-    () => selectPullRequests({}, BRANCH),
+    () => selectPullRequests({}, BRANCH, 100),
     /did not return a JSON array/,
   );
-  assert.deepEqual(selectPullRequests([], BRANCH), []);
+  assert.deepEqual(selectPullRequests([], BRANCH, 100), []);
 });
 
 test('matchRegisteredWorktree matches a registered worktree by real path and fails closed otherwise', () => {
@@ -289,4 +289,21 @@ test('the git reads ignore Git environment overrides of the caller', () => {
     }
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('selectPullRequests refuses a list that reached the row cap, even when every row is filtered out', () => {
+  const row = { number: 7, state: 'CLOSED', headRefName: BRANCH };
+  const other = { number: 8, state: 'MERGED', headRefName: 'issue/other' };
+  assert.deepEqual(selectPullRequests([row, row], BRANCH, 3), [
+    { number: 7, merged: false },
+    { number: 7, merged: false },
+  ]);
+  assert.throws(
+    () => selectPullRequests([row, row, row], BRANCH, 3),
+    /may be truncated/,
+  );
+  assert.throws(
+    () => selectPullRequests([other, other, other], BRANCH, 3),
+    /cap of 3/,
+  );
 });

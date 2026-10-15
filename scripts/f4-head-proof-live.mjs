@@ -204,11 +204,18 @@ function asRecord(value) {
  * The pull requests of `gh pr list --head <branch> --json
  * number,state,headRefName,isCrossRepository` that belong to this repository
  * and have exactly this head branch, as number and merged flag. A fork's pull
- * request of the same branch name is dropped.
+ * request of the same branch name is dropped. A list that reached `limit`
+ * rows may be truncated, and the flow proceeds only on exactly one merged pull
+ * request, so a possibly truncated list throws instead of being trusted.
  */
-export function selectPullRequests(rows, branch) {
+export function selectPullRequests(rows, branch, limit) {
   if (!Array.isArray(rows)) {
     throw new Error('gh pr list did not return a JSON array');
+  }
+  if (rows.length >= limit) {
+    throw new Error(
+      `gh pr list returned ${rows.length} rows, the cap of ${limit}, so the list may be truncated and cannot prove that exactly one merged pull request has ${branch} as its head branch`,
+    );
   }
   return rows
     .map(asRecord)
@@ -285,7 +292,7 @@ export function createLiveF4HeadProofDeps(options) {
         ],
         GH_TEXT_LOOP_OPTIONS,
       );
-      return selectPullRequests(JSON.parse(raw || '[]'), branch);
+      return selectPullRequests(JSON.parse(raw || '[]'), branch, PR_LIST_LIMIT);
     },
     listPullRequestComments: (prNumber) =>
       adapter.listWorkItemComments(prNumber, { includeEditState: true }),
