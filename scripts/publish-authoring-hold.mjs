@@ -1638,6 +1638,14 @@ function readUntil(input, check) {
         return { found: true, lastError };
       }
     } catch (error) {
+      // A recovery-hold stop from the check (a malformed marker of this run)
+      // is a defect, not an unreadable read: it propagates, never absence.
+      if (
+        error instanceof CarrierReleaseStop &&
+        error.state === 'recovery-hold'
+      ) {
+        throw error;
+      }
       lastError = messageOf(error);
     }
     if (attempt < CARRIER_READ_ATTEMPTS) {
