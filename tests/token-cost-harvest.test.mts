@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { claudeAdapter } from '../src/scripts/token-cost-adapter-claude.mts';
 import type {
   TokenCostIssueLoopSample,
   TokenCostStageId,
@@ -89,7 +90,7 @@ function stubGhReturningJson(fixture: unknown): () => void {
 // Per-vendor usage timelines
 // ---------------------------------------------------------------------------
 
-test('extractClaudeUsageTimeline sums per-message deltas, sorted by timestamp', () => {
+test('extractClaudeUsageTimeline sums per-request deltas, sorted by timestamp', () => {
   const records = [
     {
       type: 'assistant',
@@ -2169,7 +2170,7 @@ test('extractCodexUsageTimeline falls back to last_token_usage deltas when no re
 // Per-vendor turn/tool-call count timelines (#2769)
 // ---------------------------------------------------------------------------
 
-test('extractClaudeCountTimeline counts every assistant record as a turn and sums tool_use blocks, sorted by timestamp', () => {
+test('extractClaudeCountTimeline counts each request as a turn and sums its tool_use blocks, sorted by timestamp', () => {
   const records = [
     {
       type: 'assistant',
@@ -2199,7 +2200,7 @@ test('extractClaudeCountTimeline counts every assistant record as a turn and sum
   assert.equal(timeline.points[1].toolCallCount, 0);
 });
 
-test('extractClaudeCountTimeline counts an assistant record even with no usage or a plain-string content', () => {
+test('extractClaudeCountTimeline counts a request even with no usage or a plain-string content', () => {
   const records = [
     {
       type: 'assistant',
@@ -2211,6 +2212,217 @@ test('extractClaudeCountTimeline counts an assistant record even with no usage o
   assert.equal(timeline.points.length, 1);
   assert.equal(timeline.points[0].turnCount, 1);
   assert.equal(timeline.points[0].toolCallCount, 0);
+});
+
+/** An inline Claude assistant record for the per-request timeline tests (#4380). */
+function claudeAssistantRecord(options: {
+  timestamp?: string;
+  requestId?: string;
+  usage?: { input: number; output: number; cacheRead?: number };
+  toolUses?: number;
+}): Record<string, unknown> {
+  const message: Record<string, unknown> = {
+    content: Array.from({ length: options.toolUses ?? 0 }, (_, index) => ({
+      type: 'tool_use',
+      id: `tool-${index}`,
+      name: 'Bash',
+    })),
+  };
+  if (options.usage !== undefined) {
+    message.usage = {
+      input_tokens: options.usage.input,
+      output_tokens: options.usage.output,
+      cache_read_input_tokens: options.usage.cacheRead ?? 0,
+      cache_creation_input_tokens: 0,
+    };
+  }
+  const record: Record<string, unknown> = { type: 'assistant', message };
+  if (options.timestamp !== undefined) {
+    record.timestamp = options.timestamp;
+  }
+  if (options.requestId !== undefined) {
+    record.requestId = options.requestId;
+  }
+  return record;
+}
+
+test('extractClaudeUsageTimeline points sum to the adapter usage on duplicated requests (#4380)', () => {
+  const records = [
+    claudeAssistantRecord({
+      requestId: 'req-1',
+      timestamp: '2026-01-01T00:01:00Z',
+      usage: { input: 2, output: 7, cacheRead: 100 },
+    }),
+    claudeAssistantRecord({
+      requestId: 'req-1',
+      timestamp: '2026-01-01T00:01:01Z',
+      usage: { input: 2, output: 7, cacheRead: 100 },
+    }),
+    claudeAssistantRecord({
+      requestId: 'req-1',
+      timestamp: '2026-01-01T00:01:02Z',
+      usage: { input: 4, output: 330, cacheRead: 300 },
+    }),
+    claudeAssistantRecord({
+      requestId: 'req-2',
+      timestamp: '2026-01-01T00:03:00Z',
+      usage: { input: 5, output: 6, cacheRead: 7 },
+    }),
+    claudeAssistantRecord({
+      timestamp: '2026-01-01T00:04:00Z',
+      usage: { input: 1, output: 1 },
+    }),
+  ];
+  const { points } = extractClaudeUsageTimeline(records);
+  const summed = points.reduce(
+    (total, point) => ({
+      inputUncached: total.inputUncached + point.usage.inputUncached,
+      cacheRead: total.cacheRead + point.usage.cacheRead,
+      cacheCreation: total.cacheCreation + point.usage.cacheCreation,
+      output: total.output + point.usage.output,
+      reasoning: total.reasoning + point.usage.reasoning,
+    }),
+    {
+      inputUncached: 0,
+      cacheRead: 0,
+      cacheCreation: 0,
+      output: 0,
+      reasoning: 0,
+    },
+  );
+  assert.equal(points.length, 3);
+  assert.deepEqual(
+    summed,
+    claudeAdapter.harvest({ records, fileBasename: 'grouping.jsonl' }).sample
+      .usage,
+  );
+});
+
+test('extractClaudeUsageTimeline has one point per request, stamped at its greatest-timestamped record with usage (#4380)', () => {
+  const records = [
+    claudeAssistantRecord({
+      requestId: 'req-A',
+      timestamp: '2026-01-01T00:05:00Z',
+      usage: { input: 1, output: 9 },
+    }),
+    claudeAssistantRecord({
+      requestId: 'req-A',
+      timestamp: '2026-01-01T00:01:00Z',
+      usage: { input: 1, output: 5 },
+    }),
+    claudeAssistantRecord({
+      requestId: 'req-A',
+      usage: { input: 1, output: 12 },
+    }),
+    claudeAssistantRecord({
+      requestId: 'req-B',
+      timestamp: '2026-01-01T00:03:00Z',
+      usage: { input: 2, output: 4 },
+    }),
+  ];
+  const { points } = extractClaudeUsageTimeline(records);
+  assert.equal(points.length, 2);
+  assert.equal(points[0].atMs, ms('2026-01-01T00:03:00Z'));
+  assert.equal(points[0].usage.output, 4);
+  assert.equal(points[1].atMs, ms('2026-01-01T00:05:00Z'));
+  assert.equal(points[1].usage.output, 12);
+  assert.equal(points[1].usage.inputUncached, 1);
+});
+
+test('a request whose usage sits only on untimed records has no usage point, but the adapter total still counts it (#4380)', () => {
+  const records = [
+    claudeAssistantRecord({
+      requestId: 'req-X',
+      usage: { input: 6, output: 6 },
+    }),
+    claudeAssistantRecord({
+      requestId: 'req-Y',
+      timestamp: '2026-01-01T00:02:00Z',
+      usage: { input: 2, output: 2 },
+    }),
+  ];
+  const { points } = extractClaudeUsageTimeline(records);
+  assert.equal(points.length, 1);
+  assert.equal(points[0].usage.inputUncached, 2);
+  assert.equal(
+    claudeAdapter.harvest({ records, fileBasename: 'grouping.jsonl' }).sample
+      .usage.inputUncached,
+    8,
+  );
+});
+
+test('extractClaudeCountTimeline has one point per request, carrying its whole tool_use total at its greatest valid timestamp (#4380)', () => {
+  const records = [
+    claudeAssistantRecord({
+      requestId: 'req-A',
+      timestamp: '2026-01-01T00:05:00Z',
+      toolUses: 2,
+    }),
+    claudeAssistantRecord({
+      requestId: 'req-A',
+      timestamp: '2026-01-01T00:01:00Z',
+      toolUses: 1,
+    }),
+    claudeAssistantRecord({
+      requestId: 'req-B',
+      timestamp: '2026-01-01T00:03:00Z',
+    }),
+  ];
+  const { points } = extractClaudeCountTimeline(records);
+  assert.deepEqual(
+    points.map((point) => [point.atMs, point.turnCount, point.toolCallCount]),
+    [
+      [ms('2026-01-01T00:03:00Z'), 1, 0],
+      [ms('2026-01-01T00:05:00Z'), 1, 3],
+    ],
+  );
+});
+
+test('allocateStageUsage places a request turn and its tool calls in the stage of its last record, and counts requests (#4380)', () => {
+  const records = [
+    claudeAssistantRecord({
+      requestId: 'req-S',
+      timestamp: '2026-01-01T00:04:00Z',
+      usage: { input: 1, output: 1 },
+      toolUses: 1,
+    }),
+    claudeAssistantRecord({
+      requestId: 'req-R',
+      timestamp: '2026-01-01T00:02:00Z',
+      usage: { input: 1, output: 1 },
+      toolUses: 1,
+    }),
+    claudeAssistantRecord({
+      requestId: 'req-R',
+      timestamp: '2026-01-01T00:12:00Z',
+      usage: { input: 1, output: 3 },
+      toolUses: 2,
+    }),
+  ];
+  const stages = allocateStageUsage(
+    [
+      {
+        id: 'work' as const,
+        startMs: ms('2026-01-01T00:00:00Z'),
+        endMs: ms('2026-01-01T00:10:00Z'),
+        source: 'marker' as const,
+      },
+      {
+        id: 'review' as const,
+        startMs: ms('2026-01-01T00:10:00Z'),
+        endMs: ms('2026-01-01T00:20:00Z'),
+        source: 'marker' as const,
+      },
+    ],
+    extractClaudeUsageTimeline(records),
+    extractClaudeCountTimeline(records),
+  );
+  const work = stages.find((stage) => stage.id === 'work');
+  const review = stages.find((stage) => stage.id === 'review');
+  assert.equal(work?.usage.turnCount, 1);
+  assert.equal(work?.usage.toolCallCount, 1);
+  assert.equal(review?.usage.turnCount, 1);
+  assert.equal(review?.usage.toolCallCount, 3);
 });
 
 test('extractCodexCountTimeline counts every turn_context record as a turn; supportsToolCallCount is false', () => {

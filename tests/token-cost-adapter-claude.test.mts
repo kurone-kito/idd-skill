@@ -94,15 +94,241 @@ test('three compact_boundary records yield compactionCount 3', () => {
   assert.equal(sample.compactionCount, 3);
 });
 
-test('turnCount counts every assistant record; toolCallCount sums tool_use blocks across them', () => {
+test('turnCount counts requests; toolCallCount sums tool_use blocks across all records', () => {
   const { sample } = harvestFixture('session-tool-calls.jsonl');
-  // 2 assistant records: the first carries 2 tool_use blocks, the second none.
+  // 2 assistant records, each its own request (distinct message.id values):
+  // the first carries 2 tool_use blocks, the second none.
   assert.equal(sample.turnCount, 2);
   assert.equal(sample.toolCallCount, 2);
   assert.deepEqual(
     validate(sample, loadJson('schemas/token-cost-sample.schema.json')),
     [],
   );
+});
+
+/** An inline Claude assistant record for the request-grouping tests (#4380). */
+function assistantRecord(options: {
+  timestamp?: string;
+  requestId?: string;
+  messageId?: string;
+  usage?: { input: number; output: number; cacheRead?: number };
+  toolUses?: number;
+}): Record<string, unknown> {
+  const message: Record<string, unknown> = {
+    role: 'assistant',
+    content: Array.from({ length: options.toolUses ?? 0 }, (_, index) => ({
+      type: 'tool_use',
+      id: `tool-${index}`,
+      name: 'Bash',
+    })),
+  };
+  if (options.messageId !== undefined) {
+    message.id = options.messageId;
+  }
+  if (options.usage !== undefined) {
+    message.usage = {
+      input_tokens: options.usage.input,
+      output_tokens: options.usage.output,
+      cache_read_input_tokens: options.usage.cacheRead ?? 0,
+      cache_creation_input_tokens: 0,
+    };
+  }
+  const record: Record<string, unknown> = { type: 'assistant', message };
+  if (options.timestamp !== undefined) {
+    record.timestamp = options.timestamp;
+  }
+  if (options.requestId !== undefined) {
+    record.requestId = options.requestId;
+  }
+  return record;
+}
+
+test('records sharing a requestId count their usage once and make one turn (#4380)', () => {
+  const usage = { input: 2, output: 7, cacheRead: 100 };
+  const { sample } = claudeAdapter.harvest({
+    records: [
+      assistantRecord({
+        requestId: 'req-A',
+        timestamp: '2026-08-20T10:00:01.000Z',
+        usage,
+      }),
+      assistantRecord({
+        requestId: 'req-A',
+        timestamp: '2026-08-20T10:00:02.000Z',
+        usage,
+      }),
+      assistantRecord({
+        requestId: 'req-A',
+        timestamp: '2026-08-20T10:00:03.000Z',
+        usage,
+      }),
+    ],
+    fileBasename: 'grouping.jsonl',
+  });
+  assert.deepEqual(sample.usage, {
+    inputUncached: 2,
+    cacheRead: 100,
+    cacheCreation: 0,
+    output: 7,
+    reasoning: 0,
+  });
+  assert.equal(sample.turnCount, 1);
+});
+
+test('records with different requestIds count as separate requests that add up (#4380)', () => {
+  const { sample } = claudeAdapter.harvest({
+    records: [
+      assistantRecord({
+        requestId: 'req-A',
+        timestamp: '2026-08-20T10:00:01.000Z',
+        usage: { input: 2, output: 7, cacheRead: 100 },
+      }),
+      assistantRecord({
+        requestId: 'req-B',
+        timestamp: '2026-08-20T10:00:02.000Z',
+        usage: { input: 3, output: 4, cacheRead: 50 },
+      }),
+    ],
+    fileBasename: 'grouping.jsonl',
+  });
+  assert.deepEqual(sample.usage, {
+    inputUncached: 5,
+    cacheRead: 150,
+    cacheCreation: 0,
+    output: 11,
+    reasoning: 0,
+  });
+  assert.equal(sample.turnCount, 2);
+});
+
+test('streaming snapshots of one request take the field-wise maximum (#4380)', () => {
+  const { sample } = claudeAdapter.harvest({
+    records: [
+      assistantRecord({
+        requestId: 'req-S',
+        timestamp: '2026-08-20T10:00:01.000Z',
+        usage: { input: 2, output: 7, cacheRead: 100 },
+      }),
+      assistantRecord({
+        requestId: 'req-S',
+        timestamp: '2026-08-20T10:00:02.000Z',
+        usage: { input: 2, output: 7, cacheRead: 100 },
+      }),
+      assistantRecord({
+        requestId: 'req-S',
+        timestamp: '2026-08-20T10:00:03.000Z',
+        usage: { input: 4, output: 330, cacheRead: 300 },
+      }),
+    ],
+    fileBasename: 'grouping.jsonl',
+  });
+  assert.deepEqual(sample.usage, {
+    inputUncached: 4,
+    cacheRead: 300,
+    cacheCreation: 0,
+    output: 330,
+    reasoning: 0,
+  });
+  assert.equal(sample.turnCount, 1);
+});
+
+test('a non-monotone request takes the field-wise maximum, not its last record (#4380)', () => {
+  const { sample } = claudeAdapter.harvest({
+    records: [
+      assistantRecord({
+        requestId: 'req-M',
+        timestamp: '2026-08-20T10:00:01.000Z',
+        usage: { input: 10, output: 5 },
+      }),
+      assistantRecord({
+        requestId: 'req-M',
+        timestamp: '2026-08-20T10:00:02.000Z',
+        usage: { input: 8, output: 9 },
+      }),
+    ],
+    fileBasename: 'grouping.jsonl',
+  });
+  assert.deepEqual(sample.usage, {
+    inputUncached: 10,
+    cacheRead: 0,
+    cacheCreation: 0,
+    output: 9,
+    reasoning: 0,
+  });
+});
+
+test('message.id groups records that carry no requestId, and a record with neither identifier counts alone (#4380)', () => {
+  const { sample } = claudeAdapter.harvest({
+    records: [
+      assistantRecord({
+        messageId: 'msg-B',
+        timestamp: '2026-08-20T10:00:01.000Z',
+        usage: { input: 1, output: 1 },
+      }),
+      assistantRecord({
+        messageId: 'msg-B',
+        timestamp: '2026-08-20T10:00:02.000Z',
+        usage: { input: 1, output: 2 },
+      }),
+      assistantRecord({
+        timestamp: '2026-08-20T10:00:03.000Z',
+        usage: { input: 1, output: 5 },
+      }),
+    ],
+    fileBasename: 'grouping.jsonl',
+  });
+  assert.deepEqual(sample.usage, {
+    inputUncached: 2,
+    cacheRead: 0,
+    cacheCreation: 0,
+    output: 7,
+    reasoning: 0,
+  });
+  assert.equal(sample.turnCount, 2);
+});
+
+test('turnCount counts distinct requests, and toolCallCount sums tool_use blocks across all their records (#4380)', () => {
+  const { sample } = claudeAdapter.harvest({
+    records: [
+      assistantRecord({
+        requestId: 'req-T',
+        timestamp: '2026-08-20T10:00:01.000Z',
+        usage: { input: 1, output: 1 },
+        toolUses: 2,
+      }),
+      assistantRecord({
+        requestId: 'req-T',
+        timestamp: '2026-08-20T10:00:02.000Z',
+        usage: { input: 1, output: 1 },
+        toolUses: 1,
+      }),
+      assistantRecord({
+        requestId: 'req-U',
+        timestamp: '2026-08-20T10:00:03.000Z',
+        usage: { input: 1, output: 1 },
+        toolUses: 1,
+      }),
+    ],
+    fileBasename: 'grouping.jsonl',
+  });
+  assert.equal(sample.turnCount, 2);
+  assert.equal(sample.toolCallCount, 4);
+});
+
+test('usage on a record without a valid timestamp still counts in the session usage (#4380)', () => {
+  const { sample } = claudeAdapter.harvest({
+    records: [
+      assistantRecord({
+        requestId: 'req-V',
+        timestamp: '2026-08-20T10:00:01.000Z',
+        usage: { input: 2, output: 0 },
+      }),
+      assistantRecord({ requestId: 'req-W', usage: { input: 3, output: 0 } }),
+    ],
+    fileBasename: 'grouping.jsonl',
+  });
+  assert.equal(sample.usage.inputUncached, 5);
+  assert.equal(sample.turnCount, 2);
 });
 
 test('a non-system record with a compact-shaped subtype is not counted as a compaction', () => {
