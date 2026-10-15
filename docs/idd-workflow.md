@@ -1255,16 +1255,18 @@ Running this variant safely requires:
   its entry stays `reporting`, and the renewal runs at those wake-ups. At or
   after 72 h from the hold start, the claim revalidation gate confirms the
   active claim is still this claim; the orchestrator then posts `unclaimed-by`
-  for it and records the hold and cap in the run report, and once that
-  succeeds it marks the entry `disposed`. Before the cap, each `claimed-by`
-  re-post, due every 12 h from the latest valid one, first has the claim
-  revalidation gate confirm the active claim's agent id and claim id, then
-  copies its `branch` verbatim. A failed heartbeat is retried once; if the
-  retry also fails, the run report records the hold and the failed post, and
-  the claim is left untouched. A failed 72-hour `unclaimed-by` leaves the
-  claim in place, and the run report records that the cap was reached and the
-  release post failed. In both cases the orchestrator posts no second claim id
-  and starts no new claim.
+  for it and records the hold and cap in the run report. Once that succeeds,
+  nothing is appended to the worker report store, because a claim released
+  without a merge or handoff has no terminal phase (Orchestrator restart, step
+  4); the release is reported to the operator, and the entry is then marked
+  `disposed`. Before the cap, each `claimed-by` re-post, due every 12 h from
+  the latest valid one, first has the claim revalidation gate confirm the
+  active claim's agent id and claim id, then copies its `branch` verbatim. A
+  failed heartbeat is retried once; if the retry also fails, the run report
+  records the hold and the failed post, and the claim is left untouched. A
+  failed 72-hour `unclaimed-by` leaves the claim in place, and the run report
+  records that the cap was reached and the release post failed. In both cases
+  the orchestrator posts no second claim id and starts no new claim.
 
 ### Orchestrator restart
 
