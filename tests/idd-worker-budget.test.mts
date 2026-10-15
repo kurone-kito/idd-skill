@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -868,4 +868,45 @@ test('instruction paths sort by UTF-8 bytes, not by UTF-16 code units', () => {
     '～',
     '\u{1F600}',
   ]);
+});
+
+/** A repository file with every run of whitespace collapsed to one space. */
+function readNormalized(path: string): string {
+  return readFileSync(join(REPO_ROOT, path), 'utf8').replace(/\s+/g, ' ');
+}
+
+test('the fan-out variant carries the moved clause and the instruction baseline rule', () => {
+  const required = [
+    // Moved from section 3 step 5 of the orchestrator phase file.
+    'and only a later full Discover run reconsiders the pick',
+    '`git rev-parse HEAD` of the primary checkout',
+    'only after every listed file that this session already loaded has been re-read',
+    '`git show <instructionsTip>:<path>`',
+    'A deleted path needs no re-read and counts as removed.',
+  ];
+  for (const path of [
+    'docs/idd-workflow.md',
+    'idd-template/docs/idd-workflow.md',
+  ]) {
+    const text = readNormalized(path);
+    for (const phrase of required) {
+      assert.ok(text.includes(phrase), `${path} lacks: ${phrase}`);
+    }
+  }
+});
+
+test('the orchestrator phase file points at the flag and no longer carries the moved clause', () => {
+  for (const path of [
+    'idd-template/.github/instructions/idd-orchestrator.instructions.md',
+    '.github/instructions/idd-orchestrator.instructions.md',
+  ]) {
+    const text = readNormalized(path);
+    assert.ok(!text.includes('reconsiders the pick'), path);
+    assert.ok(text.includes('`--instructions-since`'), path);
+  }
+  assert.ok(
+    readNormalized('idd-template/docs/idd-helper-scripts.md').includes(
+      '--instructions-since',
+    ),
+  );
 });

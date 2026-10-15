@@ -368,7 +368,7 @@ that is `transport`, carrying `retryAt` when known, never `gate`.
 | `discover-roadmap-graph.mjs`       | a missing `--issue`, a flag-combination error, or an unknown flag                                                                                   | none today (`--with-progress` exit `75` is `transport`)                                                                                                     |
 | `discover-shared-file-overlap.mjs` | missing candidates, an invalid value, a flag-combination error, or an unknown flag                                                                  | none today                                                                                                                                                  |
 | `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                                                                                            | none today                                                                                                                                                  |
-| `idd-worker-budget.mjs`            | a missing or invalid `--running` / `--startable` / `--harness-limit` value, or an unknown flag                                                      | none today                                                                                                                                                  |
+| `idd-worker-budget.mjs`            | a missing or invalid `--running` / `--startable` / `--harness-limit` value, an invalid `--instructions-since` value, or an unknown flag             | none today                                                                                                                                                  |
 | `idd-activation.mjs`               | an unknown flag, or an empty `--cwd` value                                                                                                          | none today                                                                                                                                                  |
 | `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                                                                                             | none today                                                                                                                                                  |
 | `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                                                                                                 | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens`                                     |
@@ -893,7 +893,26 @@ in this preamble, since the fallback differs per helper.
   `--no-network` is set. Missing host signals, failed or incomplete API
   results, and rate-limit headroom below 500 produce zero slots. The
   `--harness-limit` value and `--startable` count constrain the final
-  minimum; the helper never claims a host-wide worker total.
+  minimum; the helper never claims a host-wide worker total. The optional
+  `--instructions-since` argument (issue
+  [kurone-kito/idd-skill#4376](https://github.com/kurone-kito/idd-skill/issues/4376))
+  takes 7 to 40 hexadecimal digits in either case; any other value is a usage
+  error. It adds three keys. `instructionsTip` is the commit that the local
+  base ref resolves to (`origin/<developmentBranch>` when the policy
+  configures one, else the target of `refs/remotes/origin/HEAD`), or `null`.
+  `instructionsChanged` is the repository paths that differ between the given
+  commit and that tip, limited to `.github/instructions/` and
+  `docs/idd-workflow.md` and sorted by bytes; a rename lists both paths, and a
+  deleted path is listed. `instructionsChangedError` is present only on
+  failure. When git cannot compute the difference (a commit the repository
+  lacks or that is not an ancestor of the tip, a directory that is not a
+  repository, an invalid `developmentBranch`, or an unresolved base ref),
+  `instructionsChanged` is `null` and `slots` and `limitingFactor` are
+  unaffected. A short value that also names a ref is reported as not a
+  commit, so pass the full SHA. The helper reads local refs only and never
+  fetches, reads the policy file from the working directory (run it from the
+  repository root), needs git 2.28 or newer, and without the argument prints
+  none of the three keys.
 - `scripts/suitability-triage.mjs` for A4.5 seven-check suitability
   evaluation (referenced in
   [kurone-kito/idd-skill#392](https://github.com/kurone-kito/idd-skill/issues/392)),
