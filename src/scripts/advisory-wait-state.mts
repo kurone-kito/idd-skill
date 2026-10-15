@@ -1241,6 +1241,10 @@ function advisoryWaitStateIsSettled(report: AdvisoryWaitStateReport): boolean {
  * differs from the first read's, so the caller acts on the new head),
  * `settled`, then `bound-elapsed`. The returned report is the last read plus
  * `waitedSeconds` and `waitEnded`.
+ *
+ * The 8-minute cap on `waitMs` and the 60-second floor on an explicit
+ * interval are the CLI's rules, enforced by {@link resolveWaitFlags} before
+ * any provider call; `main()` is this function's only production caller.
  */
 export function waitForAdvisoryWaitState(
   port: ProviderPort,

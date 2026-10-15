@@ -315,7 +315,7 @@
     "waitedSeconds": {
       "type": "integer",
       "minimum": 0,
-      "description": "Present only when the helper ran with --wait (#4378): the seconds the call spent waiting, rounded down to whole seconds. 0 when the first read already settled."
+      "description": "Present only when the helper ran with --wait (#4378): the seconds from before the first read to after the last one, rounded down to whole seconds (a first read that settles at once reports 0 unless that read itself took a second or more)."
     },
     "waitEnded": {
       "type": "string",

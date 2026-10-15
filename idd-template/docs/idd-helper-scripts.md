@@ -323,7 +323,7 @@ default run rather than a usage error.
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ---------------------------------------------- | ----------------------- |
 | `advisory-comment-debounce.mjs`      | unknown flag exits `1`; missing `--pr` or `--triggered-at` exits `2`                                                      | a `gh` failure collecting comment events           | —                                              | an unexpected exception |
 | `advisory-convergence.mjs`           | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving review state              | `--assert` when the verdict is not ready       | an unexpected exception |
-| `advisory-wait-state.mjs`            | missing `--pr`, an unknown flag, or an invalid `--wait` or `--poll-interval` (exit `1`)                                   | a `gh` failure resolving advisory wait state       | —                                              | an unexpected exception |
+| `advisory-wait-state.mjs`            | missing `--pr`, an unknown flag, an invalid `--wait` or `--poll-interval`, or `--now` with `--wait` (exit `1`)            | a `gh` failure resolving advisory wait state       | —                                              | an unexpected exception |
 | `ci-wait-policy.mjs`                 | an unknown flag (exit `1`); no arguments is a successful exit `0`                                                         | a `gh` failure resolving a `--run-id`              | —                                              | an unexpected exception |
 | `rerun-advisory-convergence.mjs`     | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving rerun state               | `--apply` reports a per-instance failure       | an unexpected exception |
 | `review-activity-snapshot.mjs`       | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving review activity           | —                                              | an unexpected exception |
@@ -5758,9 +5758,13 @@ like `activation-nonce`, because a worker posts it as itself.
   `--wait`; `--now` cannot be combined with `--wait`. Each poll makes
   exactly the reads of one run without `--wait`, so one call makes at most
   `1 + ceil(wait / poll-interval)` of them, and no mode posts, writes a
-  marker, or requests a review. Re-issue the call while `waitEnded` is
-  `bound-elapsed`, with the tool's execution-timeout override near its
-  ceiling, as the wake-up discipline in `idd-ci.instructions.md` requires.
+  marker, or requests a review. As in a single run, a failed viewer-login
+  read is swallowed and leaves the viewer out of the trusted marker logins,
+  and a poll does not retry it, so check `trustedMarkerSummary.viewerLogin`
+  before acting on an `outcome` that changed during a wait. Re-issue the
+  call while `waitEnded` is `bound-elapsed`, with the tool's
+  execution-timeout override near its ceiling, as the wake-up discipline in
+  `idd-ci.instructions.md` requires.
 - Only with `--wait`, the output gains two optional fields:
   `waitedSeconds` (an integer, the elapsed time rounded down to whole
   seconds) and `waitEnded` (`settled`, `bound-elapsed`, or `head-changed`).
