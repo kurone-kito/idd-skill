@@ -361,6 +361,9 @@ arguments reaches `gh repo view` and is `transport`, not `usage`.
 `75` after printing an incomplete result (see
 [Discover Roadmap Graph Contract](#discover-roadmap-graph-contract));
 that is `transport`, carrying `retryAt` when known, never `gate`.
+`claim-issue.mjs` (issue `#4372`) exits `1` as `gate` for every
+ineligible result, including a failure inside one of its checks, and as
+`transport` for a failure before any check starts.
 
 | Helper                             | `usage`                                                                                                                                             | `gate`                                                                                                                                                      |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -371,6 +374,7 @@ that is `transport`, carrying `retryAt` when known, never `gate`.
 | `idd-worker-budget.mjs`            | a missing or invalid `--running` / `--startable` / `--harness-limit` value, or an unknown flag                                                      | none today                                                                                                                                                  |
 | `idd-activation.mjs`               | an unknown flag, or an empty `--cwd` value                                                                                                          | none today                                                                                                                                                  |
 | `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                                                                                             | none today                                                                                                                                                  |
+| `claim-issue.mjs`                  | a missing or invalid `--issue`, or an unknown flag (including `--apply`)                                                                            | exit `1` for every ineligible result, including a failed check                                                                                              |
 | `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                                                                                                 | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens`                                     |
 | `clone-lock.mjs`                   | a missing mode, `--agent-id`, or command, or an unknown flag                                                                                        | exit `3` on an acquire timeout; a wrapped command's own non-zero status                                                                                     |
 | `phase-id-resolver.mjs`            | a missing `--phase-id`, or an unknown flag                                                                                                          | none today                                                                                                                                                  |
@@ -946,6 +950,10 @@ in this preamble, since the fallback differs per helper.
   `issue/<number>-<slug>` branch-name slug computation; deterministic and
   network-free (referenced in
   [kurone-kito/idd-skill#901](https://github.com/kurone-kito/idd-skill/issues/901))
+- `scripts/claim-issue.mjs` for a read-only dry run of the five A5
+  pre-checks; see [Claim pre-check helper](#claim-pre-check-helper)
+  (referenced in
+  [kurone-kito/idd-skill#4372](https://github.com/kurone-kito/idd-skill/issues/4372))
 - `scripts/emit-marker.mjs` for emitting the per-cycle `claimed-by` /
   `review-watermark` / `review-baseline` marker bodies (emit-only, no
   network write; referenced in
@@ -4607,6 +4615,89 @@ like `activation-nonce`, because a worker posts it as itself.
   checks stay on the written live GitHub path because inheritable-branch
   and linked-issue exceptions do not yet have a supported helper
   contract
+
+### Claim pre-check helper
+
+- Source repo / vendored-node command:
+  `node scripts/claim-issue.mjs --issue <issue-number>`
+- Package-manager command: run the profile-selected `idd:claim-issue`
+  package script. The example uses `npm`; substitute the repository's
+  configured package manager:
+
+  ```sh
+  npm run idd:claim-issue -- --issue <issue-number>
+  ```
+
+- Ephemeral-npx command: use the profile-selected `idd:claim-issue`
+  command from the helper runtime manifest wiring above; the literal
+  invocation is:
+
+  ```sh
+  npx --yes --package <helper-package-spec> \
+    idd-claim-issue --issue <issue-number>
+  ```
+
+- Read-only dry run of the five A5 pre-checks of
+  `idd-claim.instructions.md`: it posts no marker and creates no
+  worktree, lock file, or git change. It exists because a claim script
+  written by hand in the 2026-10-14 to 2026-10-15 orchestrator run
+  stopped issue `#4251` on a pull request that only mentioned it, which
+  A5(d) does not count. The instruction files still point to the written
+  A5 paths; this helper does not replace them. The write half is a
+  separate change, so `--apply` is not accepted and is a usage error.
+- The checks run in the order of the instruction file and stop at the
+  first one that is not eligible; every later check has the status
+  `not-run`. Each check calls existing code rather than a copy of it:
+  - A5(a) `a5a-approval`: spawns `claim-approval-gate.mjs`. A non-zero
+    exit, invalid JSON, or missing required evidence fields is
+    `approval-unproven` (apply the written A5(a) path by hand); an
+    `approved` of `false` is `approval-missing`
+  - A5(b) `a5b-assignee`: the issue has no assignee, else `assigned`.
+    The project status is not checked, so every report has
+    `projectStatusChecked: false`
+  - A5(c) `a5c-claim-state`: spawns `resume-claim-routing.mjs
+    --fresh-claim-gate`. `claimable` continues; `already-claimed` stops,
+    and the report carries `gateReason` (the CLI's top-level `reason`)
+    and `winningClaimId` (the gate's `winning_claim_id`, `null` when
+    there is no winner); `stale-reclaimable` stops with
+    `stale-takeover-out-of-scope`, because takeover is out of scope
+  - A5(d) `a5d-open-pr`: open pull requests that close or reference the
+    issue. Linked pull requests come from `fetchOpenLinkedPrReferences`;
+    closing keywords in pull request bodies come from the D3.5 body
+    matcher of `findIssueRelatedOpenPrs`, applied to the paginated open
+    pull request list of the provider port. A bare mention, a `Refs`
+    line, a mention in a block quote or code, a reference to another
+    repository, and a closed or merged pull request are not references.
+    Both signals always run, and a pull request found by either is
+    `open-pr` whatever the lookup state; a failed lookup that found
+    nothing is `precheck-unavailable`. The head-branch exemption of A5(d)
+    applies only to an inheritable claim, which is out of scope
+  - A5(e) `a5e-branch-collision`: the branch comes from the
+    `branch-name` helper code; then a local worktree scan of every
+    worktree on `issue/<number>-*` (`local-worktree-occupied`, or
+    `local-worktree-unreadable` when an entry cannot be ruled out or the
+    listing fails); then the scoped remote scan
+    `git/matching-refs/heads/issue/<number>-` (`branch-collision`,
+    naming the ref). The A5(e) hold note is not posted; the next action
+    says to post it
+- A pre-check helper or `gh` call that fails or returns malformed output
+  is `precheck-unavailable` with the written path of that check as the
+  next action. This holds for every check except A5(a), which has
+  `approval-unproven`, and the local worktree scan, which has
+  `local-worktree-unreadable`
+- Report (JSON on stdout): `issue`, `eligible`, `reason` (the stop
+  reason, or `null`), `branch`, `projectStatusChecked`, and `steps`, an
+  array of `id`, `status` (`passed`, `failed`, or `not-run`), `reason`,
+  `nextAction`, and `detail`. The `detail` of a failed step names the
+  pull request numbers of `open-pr`, the paths of a local worktree
+  stop, and the refs of `branch-collision`. `gateReason` and
+  `winningClaimId` appear only for `already-claimed`
+- Exit `0` means eligible. An ineligible result, including every
+  failure inside a check, exits `1` with the envelope kind `gate`. The
+  kind `transport` (exit `1`, nothing on stdout) covers only a failure
+  before any check starts: the repository resolution and the read of the
+  issue's title and assignees. The kind `usage` (exit `2`) covers an
+  argument error
 
 ### Worktree-local claim lock
 
