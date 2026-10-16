@@ -1,0 +1,151 @@
+#!/usr/bin/env node
+// idd-generated-from: src/scripts/idd-load-gate.mts
+//
+// The scripts/idd-load-gate.mjs copy is generated from this file by
+// `pnpm run build`. Edit this source, never the generated copy.
+//
+// Load gate for heavy steps (issue #4441, from #4439).
+//
+// The gate runs no command. It waits until the one-minute load average is
+// below the limit, then exits 0 so a `&&` chain continues. If the timeout ends
+// with the load still at or above the limit, it exits 3 so the chain stops.
+// An unreadable load fails closed, counting as at or above the limit.
+import * as os from 'node:os';
+import { performance } from 'node:perf_hooks';
+import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
+import { readOneMinuteLoad } from './idd-worker-budget.mjs';
+
+const IDD_LOAD_GATE_FLAG_SPEC = {
+  '--max-load': { type: 'string' },
+  '--timeout-ms': { type: 'string' },
+  '--poll-ms': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+};
+export const DEFAULT_TIMEOUT_MS = 600000;
+export const DEFAULT_POLL_MS = 30000;
+const USAGE = `Usage:
+  node scripts/idd-load-gate.mjs [--max-load <n>] [--timeout-ms <ms>] [--poll-ms <ms>]
+
+Wait until the 1-minute load average is below --max-load (default: the CPU
+count). Check it every --poll-ms (default ${DEFAULT_POLL_MS}) until --timeout-ms
+(default ${DEFAULT_TIMEOUT_MS}) elapses.
+
+Exits 0 when the load passes, 3 when the timeout ends at or above the limit,
+and 2 on a usage error. Prints one JSON line on stdout for a pass or a
+timeout. Runs no command itself: place it first in a && chain.
+
+Options:
+  --max-load <n>      positive decimal limit (default: CPU count)
+  --timeout-ms <ms>   non-negative integer (default: ${DEFAULT_TIMEOUT_MS})
+  --poll-ms <ms>      positive integer poll interval (default: ${DEFAULT_POLL_MS})
+  --help, -h          Show this help
+`;
+const DECIMAL_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+function parseMaxLoadOrThrow(token) {
+  if (token === undefined) return undefined;
+  const value = DECIMAL_PATTERN.test(token) ? Number(token) : 0;
+  if (!(value > 0)) {
+    throw markCliUsageError(
+      new Error('invalid value for argument: --max-load'),
+    );
+  }
+  return value;
+}
+/** Parse the gate's argv. A bad value or an unknown flag throws a usage error. */
+export function parseLoadGateArgs(argv) {
+  const { values, help } = parseCliArgs(argv, IDD_LOAD_GATE_FLAG_SPEC);
+  const timeoutToken = values['timeout-ms'];
+  const pollToken = values['poll-ms'];
+  return {
+    maxLoad: parseMaxLoadOrThrow(values['max-load']),
+    timeoutMs:
+      timeoutToken === undefined
+        ? DEFAULT_TIMEOUT_MS
+        : parseCanonicalIntegerOrThrow(timeoutToken, '--timeout-ms', 0),
+    pollMs:
+      pollToken === undefined
+        ? DEFAULT_POLL_MS
+        : parseCanonicalIntegerOrThrow(pollToken, '--poll-ms', 1),
+    help,
+  };
+}
+/**
+ * Wait for the load to fall below the limit, or give up at the timeout.
+ *
+ * Each pass reads the load first. A pass ends the wait; a read at or past the
+ * deadline is the final sample, so the timeout verdict never rests on a stale
+ * reading. Otherwise the loop sleeps the shorter of one poll interval and the
+ * time left before the deadline. A null load never passes (fail closed).
+ */
+export function waitForLoad(args, readers) {
+  const maxLoad = args.maxLoad ?? readers.coreCount();
+  const start = readers.now();
+  for (;;) {
+    const load1m = readers.load1m();
+    const elapsed = readers.now() - start;
+    const waitedMs = Math.max(0, Math.round(elapsed));
+    if (load1m !== null && load1m < maxLoad) {
+      return { load1m, maxLoad, waitedMs, passed: true };
+    }
+    if (elapsed >= args.timeoutMs) {
+      return { load1m, maxLoad, waitedMs, passed: false };
+    }
+    readers.sleep(Math.min(args.pollMs, args.timeoutMs - elapsed));
+  }
+}
+// One shared cell, never notified, so Atomics.wait blocks for the full timeout.
+const SLEEP_CELL = new Int32Array(new SharedArrayBuffer(4));
+/** The production readers; exported so a test can pin the CPU-count default. */
+export const LOAD_GATE_DEFAULT_READERS = {
+  load1m: () => readOneMinuteLoad(os.loadavg()),
+  coreCount: () => os.cpus().length,
+  now: () => performance.now(),
+  sleep: (ms) => {
+    Atomics.wait(SLEEP_CELL, 0, 0, ms);
+  },
+};
+/**
+ * Run the gate. A usage error is returned as exit 2 with the `usage` kind, on
+ * both the envelope and the envelope-unset path, so the exit code is 2 either
+ * way; any other error keeps the shared runner's own handling.
+ */
+function runCli() {
+  let args;
+  try {
+    args = parseLoadGateArgs(process.argv.slice(2));
+  } catch (error) {
+    const classified = classifyHelperError(error);
+    if (classified.kind !== 'usage') throw error;
+    return { exitCode: 2, kind: 'usage', message: classified.message };
+  }
+  if (args.help) {
+    process.stdout.write(USAGE);
+    return 0;
+  }
+  const verdict = waitForLoad(args, LOAD_GATE_DEFAULT_READERS);
+  process.stdout.write(`${JSON.stringify(verdict)}\n`);
+  if (verdict.passed) return 0;
+  return {
+    exitCode: 3,
+    kind: 'gate',
+    message: 'load stayed at or above the limit until the timeout',
+  };
+}
+if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('idd-load-gate', runCli);
+  } else {
+    const outcome = runCli();
+    if (typeof outcome !== 'number' && outcome.kind === 'usage') {
+      process.stderr.write(`idd-load-gate: ${outcome.message ?? 'usage'}\n`);
+    }
+    applyHelperCliOutcomeWhenDisabled(outcome);
+  }
+}

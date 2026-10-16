@@ -576,6 +576,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
     description: 'Render or apply the optional live status digest.',
   },
   {
+    id: 'load-gate',
+    scriptName: 'idd:load-gate',
+    binName: 'idd-load-gate',
+    entryPath: 'scripts/idd-load-gate.mjs',
+    vendoredCommand: 'node scripts/idd-load-gate.mjs',
+    description:
+      'Wait until the one-minute load average is below a limit before a heavy step; exits 3 at the timeout while the load stays at or above it.',
+  },
+  {
     id: 'local-validation-evidence',
     scriptName: 'idd:local-validation-evidence',
     binName: 'idd-local-validation-evidence',

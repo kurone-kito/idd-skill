@@ -373,6 +373,7 @@ for every stop of an `--apply` run after the pre-checks; it exits `1` as
 | `discover-shared-file-overlap.mjs` | missing candidates, an invalid value, a flag-combination error, or an unknown flag                                                                  | none today                                                                                                                                                  |
 | `select-desynced-index.mjs`        | a missing `--token` or `--band-size`, or an unknown flag                                                                                            | none today                                                                                                                                                  |
 | `idd-worker-budget.mjs`            | a missing or invalid `--running` / `--startable` / `--harness-limit` value, an invalid `--instructions-since` value, or an unknown flag             | none today                                                                                                                                                  |
+| `idd-load-gate.mjs`                | an unknown flag, a missing value, a non-positive or malformed `--max-load`, or a malformed `--timeout-ms` or `--poll-ms`                            | exit `3` when the timeout ends with the load still at or above the limit (the JSON line on stdout has `passed` set to `false`)                              |
 | `idd-activation.mjs`               | an unknown flag, or an empty `--cwd` value                                                                                                          | none today                                                                                                                                                  |
 | `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                                                                                             | none today                                                                                                                                                  |
 | `claim-issue.mjs`                  | a missing or invalid `--issue`, `--agent-id`, or `--project-status`, `--apply` without both of the last two, or an unknown flag                     | exit `1` for every ineligible result, including a failed check, and for every stop of an `--apply` run                                                      |
@@ -891,6 +892,14 @@ in this preamble, since the fallback differs per helper.
   desync band-index computation; deterministic and network-free (referenced
   in
   [kurone-kito/idd-skill#1397](https://github.com/kurone-kito/idd-skill/issues/1397))
+- `scripts/idd-load-gate.mjs` as the first step of a `&&` chain in front of
+  a heavy command (issue `#4441`, from `#4439`). It waits until the
+  one-minute load average is below `--max-load` (default: the CPU count),
+  checking every `--poll-ms` until `--timeout-ms`. It exits `0` when the load
+  passes, `3` when the timeout ends at or above the limit, and `2` on a usage
+  error. It prints one JSON line (`load1m`, `maxLoad`, `waitedMs`, `passed`)
+  and runs no command itself. A null load (no load average on this platform)
+  fails closed.
 - `scripts/idd-worker-budget.mjs` for a read-only per-session dispatch
   budget (issue
   [kurone-kito/idd-skill#3835](https://github.com/kurone-kito/idd-skill/issues/3835));

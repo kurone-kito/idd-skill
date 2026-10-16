@@ -86,6 +86,7 @@ scripts/idd-critique-telemetry-hook.mjs linguist-generated=true
 scripts/idd-doctor.mjs linguist-generated=true
 scripts/idd-effective-config.mjs linguist-generated=true
 scripts/idd-issue-authoring-delegate.mjs linguist-generated=true
+scripts/idd-load-gate.mjs linguist-generated=true
 scripts/idd-merge-execute.mjs linguist-generated=true
 scripts/idd-onboard.mjs linguist-generated=true
 scripts/idd-roadmap-audit-execute.mjs linguist-generated=true

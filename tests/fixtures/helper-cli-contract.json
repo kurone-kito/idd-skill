@@ -445,6 +445,18 @@
         }
       }
     },
+    "idd-load-gate.mjs": {
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 2,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 0,
+          "kind": null
+        }
+      }
+    },
     "idd-local-validation-evidence.mjs": {
       "runs": {
         "unknownFlag": {
