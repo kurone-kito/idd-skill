@@ -541,6 +541,30 @@ trusted issue marker and repeats this API validation before repairing the
 PR digest. The local branch ref is checked against `branch-tip-SHA`;
 the PR digest remains display state, never proof.
 
+### Cleanup helper hold codes
+
+`scripts/f4-worktree-branch-cleanup.mjs` (kurone-kito/idd-skill#4370) runs steps
+4 to 6 only after this proof gives `proceed` . It reads the proof with the
+marker command's dry run and never posts one. Each hold prints its reason code
+and the next action below. The codes for steps 4 to 6 are in
+`docs/idd-helper-scripts.md` .
+
+| Reason                      | Next action                                                                                                                                                                                                                                                        |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `claim-lost`                | Stop. The claim is not this session, or it could not be confirmed. Take no further mutation and report the handoff. Do not unclaim.                                                                                                                                |
+| `owner-evidence-required`   | Stop. The claim ID matches, but the independent owner evidence (the claim lock, the generated tokens, and the branch) does not. Restore the claimed worktree lock, or the operator decides.                                                                        |
+| `proof-missing`             | No trusted proof exists yet. Rerun F4 step 3. The step 3 gate or the marker command posts the proof when the local branch ref exists.                                                                                                                              |
+| `proof-unreadable`          | Hold. The output of the marker dry run could not be read as a verdict. Rerun the dry run and inspect its stderr. Do not proceed.                                                                                                                                   |
+| `proof-worktree-missing`    | Hold. The claimed worktree is no longer registered, and the proof dry run needs it, so this run cannot read the proof. This run removed nothing. Read the proof on the claimed issue, and finish step 6 by hand, or restore the worktree registration for a rerun. |
+| `claim-or-lock`             | Stop. The claim or its worktree lock is not this session. Take no further mutation and report the handoff.                                                                                                                                                         |
+| `pr-state`                  | Do not post. The merged pull request could not be read or does not agree with itself. Read it again, then rerun this helper.                                                                                                                                       |
+| `ref-read`                  | Do not post. The local branch ref could not be read. Check the repository state, then rerun.                                                                                                                                                                       |
+| `marker-read-failed`        | Do not post. The trusted markers of the issue could not be read. Rerun once the read succeeds.                                                                                                                                                                     |
+| `branch-absent`             | The local branch ref is absent, and no trusted proof can stand without it. The operator checks the branch. Do not recreate it or guess its tip, and report.                                                                                                        |
+| `conflicting-marker`        | Hold. A trusted proof for this claim conflicts with the live state or with another proof. The operator reviews the markers on the claimed issue. Do not post another proof.                                                                                        |
+| `watermark-unauthenticated` | Hold. The review watermark for this claim cannot be authenticated. Rerun F4 step 2 after the review snapshot is recorded again.                                                                                                                                    |
+| `claim-activation-unknown`  | Hold. The activation time of this claim cannot be read. The operator checks the claim record on the issue.                                                                                                                                                         |
+
 ## §W1 — PR exists (1 match), no worktree
 
 Run `git fetch origin` from the primary worktree (this is a
