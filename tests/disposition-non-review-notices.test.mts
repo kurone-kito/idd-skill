@@ -474,6 +474,47 @@ test('selectDispositionPlan (#4437): a listed notice skipped for another reason,
   ]);
 });
 
+test('selectDispositionPlan (#4437): an already-covered summary acceptance is refused too', () => {
+  // A trusted summary acceptance created at 06 covers summary 602 (activity
+  // 02) first, so the plan skips 602. Selecting it must still be refused.
+  const plan = buildDispositionPlan(
+    {
+      headSha: HEAD_SHA,
+      comments: [
+        notice(
+          601,
+          CODERABBIT,
+          CODERABBIT_COMPLETED_WALKTHROUGH,
+          '2026-05-12T00:00:01Z',
+          '2026-05-12T00:00:05Z',
+        ),
+        notice(
+          602,
+          CODERABBIT,
+          CODERABBIT_COMPLETED_WALKTHROUGH,
+          '2026-05-12T00:00:02Z',
+        ),
+        notice(
+          603,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODERABBIT, HEAD_SHA),
+          '2026-05-12T00:00:06Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    plan.skipped.map((entry) => [entry.noticeId, entry.reason]),
+    [[602, 'already-dispositioned']],
+  );
+  const isSummary = (noticeId: number) => noticeId === 601 || noticeId === 602;
+  assert.deepEqual(
+    selectDispositionPlan(plan, [602], undefined, isSummary).refused,
+    [{ noticeId: 602, reason: 'summary walkthrough', pairedBefore: null }],
+  );
+});
+
 test("buildDispositionPlan (#4437): covers a bot's summaries in activity order, as the gate does", () => {
   // Summary 601 was created first but edited later, so the gate pairs 602
   // first. One trusted summary acceptance, created after both, covers 602.

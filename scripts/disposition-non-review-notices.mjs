@@ -430,10 +430,18 @@ export function buildDispositionPlan(input, options = {}) {
         isReviewSummaryDisposition({ body: comment.body }),
     )
     .map((comment) => ({
+      id: comment.id,
       body: comment.body,
       activityAt: effectiveRegularCommentActivityAt(comment),
       consumed: false,
-    }));
+    }))
+    // The gate consumes these in activity-time order (Copilot review of
+    // kurone-kito/idd-skill#4445), so match them in that order too.
+    .sort(
+      (left, right) =>
+        compareIsoTimestamps(left.activityAt, right.activityAt) ||
+        left.id - right.id,
+    );
   const isCoveredCodexNoFindSource = (source) => {
     const sourceIdentity = advisoryBotIdentityToken(source.login);
     if (
@@ -761,6 +769,7 @@ export function selectDispositionPlan(
   plan,
   commentIds,
   activityAt = () => undefined,
+  isSummaryAt = () => false,
 ) {
   if (commentIds === undefined) {
     return { plan, refused: [] };
@@ -788,6 +797,14 @@ export function selectDispositionPlan(
     }
     const skip = skippedById.get(noticeId);
     if (skip?.reason === 'already-dispositioned') {
+      // An already-covered summary is refused just like a planned one.
+      if (isSummaryAt(noticeId)) {
+        refused.push({
+          noticeId,
+          reason: 'summary walkthrough',
+          pairedBefore: null,
+        });
+      }
       continue;
     }
     refused.push({
@@ -1430,6 +1447,9 @@ function main() {
   // The activity time of each comment as of the latest planNow(), so
   // selectDispositionPlan orders a bot's notices the way the gate does (#4437).
   let activityByNoticeId = new Map();
+  // The summary walkthroughs as of the latest planNow(), so the selection can
+  // refuse one even when the plan already skipped it (#4437).
+  let summaryNoticeIds = new Set();
   const planNow = () => {
     const headSha = ghText([
       'api',
@@ -1459,6 +1479,15 @@ function main() {
       updatedAt: comment.updated_at ?? '',
       lastEditedAt: lastEditedAtByNodeId.get(String(comment.node_id)),
     }));
+    summaryNoticeIds = new Set(
+      comments
+        .filter(
+          (comment) =>
+            isReviewSummaryComment(comment.body) &&
+            !isAdvisoryNonReviewNotice(comment.body),
+        )
+        .map((comment) => comment.id),
+    );
     activityByNoticeId = new Map(
       comments.map((comment) => [
         comment.id,
@@ -1475,8 +1504,11 @@ function main() {
   // is not a planned notice refuses the whole run before any write, in dry run
   // and in apply alike, so a mistyped ID never reads as an empty plan.
   const selectOrRefuse = (plan) => {
-    const selection = selectDispositionPlan(plan, args.commentIds, (noticeId) =>
-      activityByNoticeId.get(noticeId),
+    const selection = selectDispositionPlan(
+      plan,
+      args.commentIds,
+      (noticeId) => activityByNoticeId.get(noticeId),
+      (noticeId) => summaryNoticeIds.has(noticeId),
     );
     if (selection.refused.length === 0) {
       return selection.plan;
