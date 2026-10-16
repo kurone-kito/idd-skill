@@ -4967,8 +4967,8 @@ run as one fenced `set -euo pipefail` block. The block fails closed. It exits
 non-zero at the first failure, and it prints `verified` only after
 `resume-claim-routing --assert` exits 0. The read after acquire is the
 generated-tokens check: an absent or malformed record exits non-zero. Lost-claim
-cleanup is not part of the block. Run cleanup only at the exits that the claim
-file's Lost-claim cleanup section lists.
+cleanup is not part of the block. Run cleanup only at the exits listed in
+[Lost-claim triggers](#lost-claim-triggers).
 
 Replace each placeholder with its value. Each placeholder already sits inside
 single quotes, so write any `'` in a value as `'\''`, as the cleanup script
@@ -4976,13 +4976,27 @@ does. `<ts>` is the current UTC time in ISO 8601. `<settle-seconds>` is
 `claim.verifySettleDelay` converted to whole seconds: the distributed default
 `PT5S` is `5`.
 
-Resolve each helper command as A5(a) does in the claim file. The
-`node scripts/` forms are the source-repository and vendored-node
-commands, and other helper profiles use the profile-selected command.
-The wrapper runs only on a profile that has a helper command. The
-`instructions-only` profile has none, because the resolver returns
-`null` for it. That profile makes the claim in the instruction-only form
-that the claim file's Instructions-only paragraph gives, not this block.
+Resolve each helper command as A5(a) does in the claim file. The `node scripts/`
+forms are the source-repository and vendored-node commands, and other helper
+profiles use the profile-selected command. The wrapper runs only on a profile
+that has a helper command. The `instructions-only` profile has none, because the
+resolver returns `null` for it, so that profile does not run this block. It
+makes the claim step by step through the helper-free rules that each section
+documents, in claim-file step order:
+
+- step 2, token record, write side: [Worktree-local generated-tokens record](#worktree-local-generated-tokens-record)
+- step 3, gate: [Claim-state parsing](../.github/instructions/idd-claim.instructions.md#claim-state-parsing),
+  the A5(c) fallback
+- step 3, claim post: [Claim format](../.github/instructions/idd-overview-core.instructions.md#claim-format)
+- step 3, nonce post: [Activation-nonce format](../.github/instructions/idd-claim.instructions.md#activation-nonce-format),
+  with the second token write before it
+- step 4, lock and token read: [Worktree-local claim lock](#worktree-local-claim-lock),
+  with the read side under [Worktree-local generated-tokens record](#worktree-local-generated-tokens-record)
+- step 5, verification: [Claim verification](../.github/instructions/idd-claim.instructions.md#claim-verification),
+  since `--assert` has no helper-free command
+
+The full sequence is split across these sections, in that order. No single
+section holds all of it.
 
 ```sh
 set -euo pipefail
