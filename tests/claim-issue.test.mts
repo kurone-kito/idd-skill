@@ -1592,6 +1592,10 @@ interface ApplyScenario {
   tokensAbsent?: boolean;
   /** The first `--acquire` succeeds; every later one collides. */
   acquireFailsAfterFirst?: boolean;
+  /** The first `--read-tokens` finds the record; every later one reports it absent. */
+  tokensAbsentAfterFirst?: boolean;
+  /** The first assert verifies the claim; every later one says it is not owned. */
+  assertFailsAfterFirst?: boolean;
   /** The first `--record-tokens` succeeds; the second, with the nonce, fails. */
   recordTokensFailsAfterFirst?: boolean;
   /** A remote branch appears after the pre-check's branch scan (the rescan sees it). */
@@ -1693,6 +1697,8 @@ function runApply(
   let acquireCalls = 0;
   let recordCalls = 0;
   let matchingRefsCalls = 0;
+  let assertCalls = 0;
+  let readTokensCalls = 0;
   const labelReads = [...(scenario.labelReads ?? [])];
   const outcomes = new Map<string, PostOutcome[]>(
     Object.entries(scenario.posts ?? {}).map(([type, list]) => [
@@ -1791,6 +1797,18 @@ function runApply(
     }
     if (script === 'resume-claim-routing.mjs') {
       if (rest.includes('--assert')) {
+        assertCalls += 1;
+        if (scenario.assertFailsAfterFirst && assertCalls > 1) {
+          return {
+            status: 1,
+            stdout: JSON.stringify({
+              state: 'stale',
+              action: 'takeover',
+              reason: 'lease-taken-over',
+            }),
+            stderr: '',
+          };
+        }
         return scenario.assert ?? OWNED;
       }
       if (rest.includes('--own-worktree')) {
@@ -1823,6 +1841,21 @@ function runApply(
         if (scenario.acquireFailsAfterFirst && acquireCalls > 1) {
           return failed(1);
         }
+      }
+      if (rest.includes('--read-tokens')) {
+        readTokensCalls += 1;
+      }
+      if (
+        scenario.tokensAbsentAfterFirst &&
+        rest.includes('--read-tokens') &&
+        readTokensCalls > 1
+      ) {
+        return ok(
+          JSON.stringify({
+            path: join(fixture.primary, 'tokens'),
+            present: false,
+          }),
+        );
       }
       if (scenario.tokensAbsent && rest.includes('--read-tokens')) {
         return ok(
@@ -2751,3 +2784,51 @@ const APPLY_ARGS_FOR_GH_REPO = [
   '--project-status',
   'not-started',
 ];
+
+test('a release re-reads the token record first, and a failed read-back posts no unclaimed-by', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      labelReads: [[], ['status:authoring']],
+      tokensAbsentAfterFirst: true,
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, true);
+    assert.equal(
+      run.posts.some((post) => post.type === 'unclaim'),
+      false,
+    );
+    assert.match(report.steps.at(-1)?.detail ?? '', /read back as present/);
+  });
+});
+
+test('a release re-asserts the claim first, and a claim that no longer verifies posts no unclaimed-by', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      labelReads: [[], ['status:authoring']],
+      assertFailsAfterFirst: true,
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(
+      run.posts.some((post) => post.type === 'unclaim'),
+      false,
+    );
+    assert.match(report.steps.at(-1)?.detail ?? '', /did not verify again/);
+    assert.match(report.nextAction ?? '', /Do not post unclaimed-by/);
+  });
+});
+
+test('a marker token with a timestamp that names no real time is not the claim marker', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      posts: { claim: ['unknown-absent'] },
+      initialComments: [
+        {
+          login: OWNER,
+          body: `<!-- claimed-by: ${AGENT} ${CLAIM_ID} supersedes: none 2026-99-99T99:99:99Z branch: ${BRANCH} -->`,
+        },
+      ],
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, 'unknown');
+  });
+});

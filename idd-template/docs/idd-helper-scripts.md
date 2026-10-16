@@ -4813,7 +4813,8 @@ like `activation-nonce`, because a worker posts it as itself.
      return `claimable`.
   4. Immediately before the claim marker, the issue-author approval gate of
      A5(a) runs again (`approval-missing` or `approval-unproven` stop the
-     run), then the authoring-label hold check (`hold-active`, or
+     run), then the own-worktree fresh-claim gate runs again, then the
+     authoring-label hold check (`hold-active`, or
      `precheck-unavailable` when the read fails). Only the label is read:
      the owner-marker log replay is not done, and the report says so with
      `holdCheck: "label"`.
@@ -4834,8 +4835,9 @@ like `activation-nonce`, because a worker posts it as itself.
      `resume-claim-routing --assert`. Only `already_owned` with `keep`
      verifies the claim (`claim-not-verified`); the verdict is read from
      the output on every exit.
-  7. A second hold check. A hold, or an unreadable label, first acquires
-     the worktree lock again. A collision there posts nothing and stops
+  7. A second hold check. A hold, or an unreadable label, first checks the
+     claim again: the worktree lock is acquired with its tokens read back,
+     and the claim is asserted. Any failure there posts nothing and stops
      with `recovery-hold`. Otherwise the helper posts and verifies
      `unclaimed-by` and stops with `released-after-hold`. A release that
      cannot be verified also stops with `recovery-hold`.

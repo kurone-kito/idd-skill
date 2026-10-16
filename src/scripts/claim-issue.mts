@@ -36,7 +36,7 @@
 import { spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { lstatSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { computeBranchName } from './branch-name.mts';
 import { resolveBundleRoot } from './bundle-root.mts';
@@ -113,7 +113,7 @@ const CLEANUP_NEXT =
 const PATH_NEXT =
   'Inspect the path by hand. This helper never removes it: move or clean it, then rerun this helper.';
 /** The timestamp shape the marker grammar prints (second precision, UTC). */
-const MARKER_TIMESTAMP = '\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z';
+const MARKER_TIMESTAMP = '(?<ts>\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z)';
 /**
  * What may follow a marker token and nothing more: the one italic IDD note line,
  * or nothing. Anything else after the token makes the comment not a marker
@@ -1318,6 +1318,19 @@ function escapeForRegExp(text: string): string {
 }
 
 /**
+ * A timestamp that is a real UTC instant in the marker grammar's own form. The
+ * round trip through Date rejects a shape that names no such time, such as a
+ * month of 99 or a February 30.
+ */
+function isRealTimestamp(text: string): boolean {
+  const date = new Date(text);
+  return (
+    !Number.isNaN(date.getTime()) &&
+    date.toISOString().replace(/\.000Z$/, 'Z') === text
+  );
+}
+
+/**
  * Whether a trusted comment carries the complete marker token `pattern` at the
  * first byte of its body. A comment that only starts with the same words but
  * whose token is malformed is not a marker. `unknown` when the read itself
@@ -1342,11 +1355,18 @@ function findMarker(
   if (comments === null) {
     return 'unknown';
   }
-  return comments.some(
-    (comment) =>
-      state.trustedActors.includes(comment.login.toLowerCase()) &&
-      pattern.test(comment.body),
-  )
+  return comments.some((comment) => {
+    if (!state.trustedActors.includes(comment.login.toLowerCase())) {
+      return false;
+    }
+    const match = pattern.exec(comment.body);
+    if (match === null) {
+      return false;
+    }
+    // The timestamp must be a real instant, not only the grammar's digit shape.
+    const stamp = match.groups?.ts;
+    return stamp === undefined || isRealTimestamp(stamp);
+  })
     ? 'present'
     : 'absent';
 }
@@ -1379,7 +1399,9 @@ function readPrimaryRoot(state: ApplyState): ApplyOutcome {
       'git worktree list names no primary checkout',
     );
   }
-  state.primary = main.path;
+  // git prints forward slashes on Windows; resolve to the platform's own form so
+  // the direct-child check compares like with like.
+  state.primary = resolve(main.path);
   return applyPass(`primary checkout ${main.path}`);
 }
 
@@ -2125,8 +2147,18 @@ function postNonce(state: ApplyState): ApplyOutcome {
   );
 }
 
-/** `claim-lock --acquire` on the linked worktree (it takes the clone mutex itself). */
-function acquireLock(state: ApplyState): ApplyOutcome {
+/**
+ * `claim-lock --acquire` on the linked worktree (it takes the clone mutex
+ * itself), then the generated-tokens record read back. Acquire alone is not
+ * ownership evidence: the record must read back as this claim's own, present
+ * and well-formed, as idd-claim.instructions.md requires. The same check runs
+ * again before any release; `reason` and `next` say how that stop is reported.
+ */
+function acquireWithTokens(
+  state: ApplyState,
+  reason: ClaimStopReason,
+  next: string,
+): ApplyOutcome {
   const identity = state.identity;
   if (identity === null) {
     return applyFail(
@@ -2151,14 +2183,11 @@ function acquireLock(state: ApplyState): ApplyOutcome {
   );
   if (acquire.status !== 0) {
     return applyFail(
-      'lock-acquire-failed',
-      lostClaimNext(identity.claimId),
+      reason,
+      next,
       `claim-lock --acquire ended with ${describeStatus(acquire)}`,
     );
   }
-  // Acquire alone is not ownership evidence: the generated-tokens record must
-  // read back as this claim's own, present and well-formed. An absent or
-  // malformed record fails closed here, as idd-claim.instructions.md requires.
   const tokens = state.deps.run(
     process.execPath,
     [
@@ -2179,8 +2208,8 @@ function acquireLock(state: ApplyState): ApplyOutcome {
     record.malformed === true
   ) {
     return applyFail(
-      'lock-acquire-failed',
-      lostClaimNext(identity.claimId),
+      reason,
+      next,
       `the generated-tokens record does not read back as present for ${identity.claimId}`,
     );
   }
@@ -2189,8 +2218,8 @@ function acquireLock(state: ApplyState): ApplyOutcome {
   );
 }
 
-/** The final assert, after the settle delay. Only `already_owned` with `keep` verifies the claim. */
-function assertClaim(state: ApplyState): ApplyOutcome {
+/** The claim's own acquire, before the final assert. */
+function acquireLock(state: ApplyState): ApplyOutcome {
   const identity = state.identity;
   if (identity === null) {
     return applyFail(
@@ -2199,7 +2228,33 @@ function assertClaim(state: ApplyState): ApplyOutcome {
       'no worktree identity exists',
     );
   }
+  return acquireWithTokens(
+    state,
+    'lock-acquire-failed',
+    lostClaimNext(identity.claimId),
+  );
+}
+
+/** The final assert, after the settle delay. Only `already_owned` with `keep` verifies the claim. */
+function assertClaim(state: ApplyState): ApplyOutcome {
   state.deps.sleepMs(state.settleMs);
+  return checkFinalAssert(state);
+}
+
+/**
+ * `resume-claim-routing --assert` for this claim, without the settle wait. Only
+ * `already_owned` with `keep` verifies the claim; the verdict is read on every
+ * exit. Used after the settle delay, and again before any release.
+ */
+function checkFinalAssert(state: ApplyState): ApplyOutcome {
+  const identity = state.identity;
+  if (identity === null) {
+    return applyFail(
+      'precheck-unavailable',
+      'Inspect the state by hand, then rerun this helper.',
+      'no worktree identity exists',
+    );
+  }
   const assert = state.deps.run(
     process.execPath,
     [
@@ -2274,29 +2329,26 @@ function recheckHoldAfterVerify(state: ApplyState): ApplyOutcome {
     hold.kind === 'held'
       ? `the ${state.authoringLabel} label appeared`
       : `the label read failed (${hold.detail})`;
-  // Before any release is posted, the worktree-local lock is acquired again
-  // (idd-claim.instructions.md: re-run --acquire alongside every later
-  // pre-mutation check). A collision means the lock no longer belongs to this
-  // claim, so nothing is posted.
-  const lock = state.deps.run(
-    process.execPath,
-    [
-      state.deps.childScript('claim-lock.mjs'),
-      '--acquire',
-      '--worktree',
-      identity.worktree,
-      '--agent-id',
-      identity.agentId,
-      '--claim-id',
-      identity.claimId,
-    ],
-    { cwd: state.primary },
-  );
-  if (lock.status !== 0) {
+  // Before any release is posted, this session checks the claim again: the
+  // worktree lock is acquired and its tokens read back, and the claim is
+  // asserted, the way idd-claim.instructions.md asks before each later
+  // pre-mutation step. Any stop posts nothing.
+  const holdStop =
+    'Do not post unclaimed-by: this session no longer verifies the claim. Run lost-claim-cleanup (idd-claim.instructions.md) by hand; it keeps everything when another claim holds the lock.';
+  const relock = acquireWithTokens(state, 'recovery-hold', holdStop);
+  if (!relock.ok) {
     return applyFail(
       'recovery-hold',
-      `Do not post unclaimed-by: the worktree-local claim lock no longer matches claim ${identity.claimId}. Run lost-claim-cleanup (idd-claim.instructions.md) by hand; it keeps everything when another claim holds the lock.`,
-      `${cause}; claim-lock --acquire ended with ${describeStatus(lock)} before the release`,
+      holdStop,
+      `${cause}; ${relock.failure.detail}`,
+    );
+  }
+  const reassert = checkFinalAssert(state);
+  if (!reassert.ok) {
+    return applyFail(
+      'recovery-hold',
+      holdStop,
+      `${cause}; before the release the claim did not verify again: ${reassert.failure.detail}`,
     );
   }
   postMarker(state, [
@@ -2338,10 +2390,12 @@ function recheckHoldAfterVerify(state: ApplyState): ApplyOutcome {
 function runClaimWrites(state: ApplyState): ApplyFailure | null {
   return (
     step(state, 'record-tokens', recordTokens(state)) ??
-    step(state, 'own-worktree-gate', checkOwnWorktreeGate(state)) ??
     // The approval first, then the hold: the label read is the last gate before
     // the claim marker (idd-claim.instructions.md, "Immediately before claim POST").
     step(state, 'approval-recheck', recheckApproval(state)) ??
+    // The claim-state gate and the label read come last, so that the fresh
+    // marker fetch and the hold read are the nearest reads before the claim.
+    step(state, 'own-worktree-gate', checkOwnWorktreeGate(state)) ??
     step(state, 'hold-check', checkHoldBeforeClaim(state)) ??
     step(state, 'claim-post', postClaim(state)) ??
     step(state, 'nonce-post', postNonce(state)) ??
