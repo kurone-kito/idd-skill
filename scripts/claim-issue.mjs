@@ -64,6 +64,7 @@ import {
 } from './protocol-helpers.mjs';
 import {
   createGithubProviderAdapter,
+  fetchLastEditedAtByNodeId,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
 import { markerPostSentNothing } from './publish-authoring-hold.mjs';
@@ -974,11 +975,17 @@ function parseCommentPages(stdout) {
       if (
         !isRecord(entry) ||
         typeof entry.login !== 'string' ||
-        typeof entry.body !== 'string'
+        typeof entry.body !== 'string' ||
+        typeof entry.nodeId !== 'string' ||
+        entry.nodeId === ''
       ) {
         return null;
       }
-      comments.push({ login: entry.login, body: entry.body });
+      comments.push({
+        login: entry.login,
+        body: entry.body,
+        nodeId: entry.nodeId,
+      });
     }
   }
   return comments;
@@ -1004,6 +1011,12 @@ function isRealTimestamp(text) {
  * first byte of its body. A comment that only starts with the same words but
  * whose token is malformed is not a marker. `unknown` when the read itself
  * fails, so a caller can never take an unreadable issue for an absent marker.
+ *
+ * The claim-family edit-state contract (docs/idd-helper-scripts.md) covers
+ * every direct reader: a marker is authority only with an explicit GraphQL
+ * `lastEditedAt: null`. REST rows carry no edit state, so the matching trusted
+ * comments are resolved through GraphQL here. An edited marker is ignored, and
+ * an edit state that cannot be resolved is `unknown`, never an unedited marker.
  */
 function findMarker(state, pattern) {
   const { owner, repo } = state.repository;
@@ -1012,7 +1025,7 @@ function findMarker(state, pattern) {
     `repos/${owner}/${repo}/issues/${state.issue}/comments`,
     '--paginate',
     '--jq',
-    '[.[] | {login: .user.login, body: .body}] | tojson',
+    '[.[] | {login: .user.login, body: .body, nodeId: .node_id}] | tojson',
   ]);
   if (read.status !== 0) {
     return 'unknown';
@@ -1021,7 +1034,7 @@ function findMarker(state, pattern) {
   if (comments === null) {
     return 'unknown';
   }
-  return comments.some((comment) => {
+  const candidates = comments.filter((comment) => {
     if (!state.trustedActors.includes(comment.login.toLowerCase())) {
       return false;
     }
@@ -1032,9 +1045,44 @@ function findMarker(state, pattern) {
     // The timestamp must be a real instant, not only the grammar's digit shape.
     const stamp = match.groups?.ts;
     return stamp === undefined || isRealTimestamp(stamp);
-  })
-    ? 'present'
-    : 'absent';
+  });
+  if (candidates.length === 0) {
+    return 'absent';
+  }
+  let editStates;
+  try {
+    editStates = fetchLastEditedAtByNodeId(
+      ghTextThroughRunner(state),
+      candidates.map((comment) => comment.nodeId),
+    );
+  } catch {
+    return 'unknown';
+  }
+  let unedited = false;
+  for (const candidate of candidates) {
+    if (!editStates.has(candidate.nodeId)) {
+      return 'unknown';
+    }
+    if (editStates.get(candidate.nodeId) === null) {
+      unedited = true;
+    }
+  }
+  return unedited ? 'present' : 'absent';
+}
+/**
+ * The `gh` text reader that `fetchLastEditedAtByNodeId` takes, run through this
+ * helper's own runner, so that every call is one the runner sees.
+ */
+function ghTextThroughRunner(state) {
+  return (args) => {
+    const result = state.deps.run('gh', args);
+    if (result.status !== 0) {
+      throw new Error(
+        `gh ${args.slice(0, 2).join(' ')} ended with ${describeStatus(result)}`,
+      );
+    }
+    return result.stdout;
+  };
 }
 /** The primary checkout: the main worktree, the first record of the listing. */
 function readPrimaryRoot(state) {

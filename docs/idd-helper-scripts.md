@@ -4833,7 +4833,10 @@ like `activation-nonce`, because a worker posts it as itself.
      write is retried once, and only when the comments prove the marker
      absent; an unreadable comment list stops with `recovery-hold` without a
      retry. A nonce still absent after the retry stops with
-     `nonce-post-failed`.
+     `nonce-post-failed`. A marker that this read-back finds counts only with
+     an explicit GraphQL `lastEditedAt: null`, as the claim-family
+     edit-state contract requires: an edited marker is ignored, and an edit
+     state that cannot be read is `unknown`.
   6. The tokens are recorded again with the nonce, at the acquire point
      (`claim-lock --record-tokens --nonce`, as the worktree-lock rule of
      idd-claim.instructions.md requires; `tokens-record-failed` on failure),
@@ -4855,8 +4858,11 @@ like `activation-nonce`, because a worker posts it as itself.
   a `nextAction`. The helper deletes nothing. Once the worktree exists, a
   failure keeps the worktree, its branch, and the worktree-local lock, and
   the next action is `lost-claim-cleanup` from `idd-claim.instructions.md`.
-- The helpers that the write half calls run from the primary checkout, so
-  each one reads the policy that the fast-forward refreshed.
+- The routing and marker helpers that the write half calls run from the
+  primary checkout, so each one reads the policy that the fast-forward
+  refreshed. `claim-lock` runs from the linked worktree, the caller's own
+  working directory, so the evidence it reads for this claim is this
+  claim's own.
 - Stale-claim takeover is out of scope: a stale active claim stops the run
   with `stale-takeover-out-of-scope`.
 

@@ -1565,10 +1565,28 @@ interface ApplyFixture {
   worktree: string;
 }
 
-type PostOutcome = 'ok' | 'nothing-sent' | 'unknown-landed' | 'unknown-absent';
+type PostOutcome =
+  | 'ok'
+  | 'nothing-sent'
+  | 'unknown-landed'
+  | 'unknown-landed-edited'
+  | 'unknown-absent';
+
+/** One issue comment as the stubs keep it: the REST fields plus the GraphQL edit state. */
+interface ApplyComment {
+  login: string;
+  body: string;
+  nodeId: string;
+  lastEditedAt: string | null;
+}
+
+/** A timestamp that marks a comment body as edited (the GraphQL `lastEditedAt`). */
+const EDITED_AT = '2026-10-16T00:00:00Z';
 
 interface ApplyScenario {
   assigned?: boolean;
+  /** Every GraphQL edit-state read fails, so no marker can be verified. */
+  editStateFails?: boolean;
   /** The repository lookup; the default answers with the test repository. */
   resolveRepository?: () => { owner: string; repo: string };
   /** One entry per authoring-label read, in order; `'fail'` makes the read fail. */
@@ -1701,9 +1719,14 @@ function runApply(
 ): ApplyRun {
   const log: string[] = [];
   const posts: { type: string; args: string[] }[] = [];
-  const comments: { login: string; body: string }[] = [
-    ...(scenario.initialComments ?? []),
-  ];
+  let nodeSequence = 0;
+  const nextNodeId = (): string => {
+    nodeSequence += 1;
+    return `IC_${nodeSequence}`;
+  };
+  const comments: ApplyComment[] = (scenario.initialComments ?? []).map(
+    (comment) => ({ ...comment, nodeId: nextNodeId(), lastEditedAt: null }),
+  );
   let acquireCalls = 0;
   let recordCalls = 0;
   const claimLockDirectories: string[] = [];
@@ -1749,7 +1772,28 @@ function runApply(
       if (scenario.commentReadFails) {
         return failed(1);
       }
-      return ok(JSON.stringify(comments));
+      return ok(
+        JSON.stringify(
+          comments.map((entry) => ({
+            login: entry.login,
+            body: entry.body,
+            nodeId: entry.nodeId,
+          })),
+        ),
+      );
+    }
+    if (args[0] === 'api' && args[1] === 'graphql') {
+      if (scenario.editStateFails) {
+        return failed(1);
+      }
+      const nodes = args
+        .filter((arg) => arg.startsWith('ids[]='))
+        .map((arg) => {
+          const id = arg.slice('ids[]='.length);
+          const entry = comments.find((comment) => comment.nodeId === id);
+          return { id, lastEditedAt: entry?.lastEditedAt ?? null };
+        });
+      return ok(JSON.stringify({ data: { nodes } }));
     }
     if (args[0] === 'api' && args[1] === 'user') {
       return ok(`${scenario.viewer ?? OWNER}\n`);
@@ -1778,8 +1822,17 @@ function runApply(
     }
     posts.push({ type, args: rest });
     const outcome = outcomes.get(type)?.shift() ?? 'ok';
-    if (outcome === 'ok' || outcome === 'unknown-landed') {
-      comments.push({ login: OWNER, body: buildMarkerBody(type, fields) });
+    if (
+      outcome === 'ok' ||
+      outcome === 'unknown-landed' ||
+      outcome === 'unknown-landed-edited'
+    ) {
+      comments.push({
+        login: OWNER,
+        body: buildMarkerBody(type, fields),
+        nodeId: nextNodeId(),
+        lastEditedAt: outcome === 'unknown-landed-edited' ? EDITED_AT : null,
+      });
     }
     if (outcome === 'ok') {
       return ok(JSON.stringify({ mode: 'apply', type }));
@@ -2422,6 +2475,35 @@ test('a claim marker whose write landed despite the error continues to the nonce
     assert.equal(
       run.posts.filter((post) => post.type === 'activation-nonce').length,
       1,
+    );
+  });
+});
+
+test('an edited claim marker is not the claim, so the run stops before the nonce', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      posts: { claim: ['unknown-landed-edited'] },
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, 'unknown');
+    assert.equal(
+      run.posts.filter((post) => post.type === 'activation-nonce').length,
+      0,
+    );
+  });
+});
+
+test('a marker whose edit state cannot be read is not counted as landed', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      posts: { claim: ['unknown-landed'] },
+      editStateFails: true,
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, 'unknown');
+    assert.equal(
+      run.posts.filter((post) => post.type === 'activation-nonce').length,
+      0,
     );
   });
 });
