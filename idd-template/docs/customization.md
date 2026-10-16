@@ -167,7 +167,9 @@ distributed IDD workflow a repository imported.
     `ssh-keygen -y -f <private-key-file>`.
 
   Point the setting at the file with `git config`, using an absolute path, so
-  that the snippet's own verify line sees it:
+  that the snippet's own verify line sees it. Replace each angle-bracket
+  placeholder in the commands below with a real value; the brackets are not
+  part of the command:
 
   ```sh
   git config gpg.ssh.allowedSignersFile <allowed-signers-file>
@@ -188,8 +190,8 @@ distributed IDD workflow a repository imported.
   `gpg --import <public-key-file>`; without it, verification stops with a
   `No public key` error from `gpg`.
 
-  When the snippet stops at verify, either at the `gpg.ssh.allowedSignersFile`
-  error above or at either `No principal matched.` case, the local tag
+  When the snippet stops at verify, at the `gpg.ssh.allowedSignersFile` error
+  above or at a `No principal matched.` case, the local tag
   `v<version>` exists and nothing was pushed. Do not run `git tag` again while
   the tag is correct: it fails with `tag 'v<version>' already exists`. Before
   you continue, check that `RELEASE_CUT_MERGE_SHA` is the merge commit of the
@@ -220,8 +222,8 @@ distributed IDD workflow a repository imported.
   [signed-commit merge wrapper](idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
   gives commit, merge, and rebase, and do not rerun until you have confirmed
   that nothing from the attempt is still running. Never fall back to an
-  unsigned tag, because a release tag must stay signed. Then test whether the
-  tag exists:
+  unsigned tag, because a release tag must stay signed. Then set
+  `release_version` from `RELEASE_VERSION` and test whether the tag exists:
 
   ```sh
   if git rev-parse -q --verify "refs/tags/v${release_version}" >/dev/null; then
