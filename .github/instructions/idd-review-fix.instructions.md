@@ -495,8 +495,11 @@ A false finding is Rejected on its merits.
    only F2's `secondary-quiet-window` blocker
    (`idd-pre-merge.instructions.md`) waits, folded across every login.
 
-Copilot and CI advisory bot comments are advisory; unanswered ones do
-not block merge.
+Unanswered advisory items block merge until each one is dispositioned,
+unless the gate settles it without a disposition, as it does for a
+CodeRabbit no-actionable-comments summary while no known-bot review
+thread is unresolved. Which comments and findings the gate reads, and
+which it does not, is in [advisory-item scope](../../docs/idd-helper-scripts.md#advisory-item-scope).
 
 Whenever E14 posts a request/recovery marker or hold comment, update
 the digest: the marker/hold as `Authoritative by`, the advisory
