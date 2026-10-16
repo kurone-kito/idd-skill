@@ -708,9 +708,22 @@ function runPrimaryFastForward(deps, primary, pr) {
     return { hold: target.hold, error: null };
   }
   const base = target.base;
-  const hasLocal =
-    deps.git(['show-ref', '--verify', '--quiet', `refs/heads/${base}`], primary)
-      .status === 0;
+  const probe = deps.git(
+    ['show-ref', '--verify', '--quiet', `refs/heads/${base}`],
+    primary,
+  );
+  // show-ref exits 1 for an absent ref. Any other failure is unreadable, and it
+  // must not read as absent, or the switch would create the branch.
+  if (probe.status !== 0 && probe.status !== 1) {
+    return {
+      hold: {
+        code: 'primary-update-failed',
+        detail: `the development branch ref could not be read: ${probe.stderr.trim()}`,
+      },
+      error: null,
+    };
+  }
+  const hasLocal = probe.status === 0;
   const switched = deps.git(
     hasLocal
       ? ['switch', '--no-overwrite-ignore', base]
@@ -814,9 +827,17 @@ function inspectWorktree(deps, primary, worktree, branchRef, proof) {
   if (!present && record === undefined) {
     // Both absent: skip the removal and check only the branch.
     const tip = readBranchTip(deps, primary, branchRef);
-    const exists =
-      deps.git(['show-ref', '--verify', '--quiet', branchRef], primary)
-        .status === 0;
+    const ref = deps.git(
+      ['show-ref', '--verify', '--quiet', branchRef],
+      primary,
+    );
+    if (ref.status !== 0 && ref.status !== 1) {
+      return none(
+        'inconsistent-worktree-state',
+        `the branch ref could not be read: ${ref.stderr.trim()}`,
+      );
+    }
+    const exists = ref.status === 0;
     if (exists && tip !== proof.branchTip) {
       return none(
         'branch-tip-mismatch',

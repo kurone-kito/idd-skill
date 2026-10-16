@@ -489,6 +489,21 @@ test('an unreadable base ref holds at step 4', () => {
   assert.equal(report.reason, 'base-ref-unreadable');
 });
 
+test('an unreadable development branch ref holds instead of reading as absent', () => {
+  const report = runF4WorktreeBranchSteps(
+    input(),
+    harness({
+      routes: [
+        {
+          match: (a) => a[0] === 'show-ref' && a.includes('refs/heads/main'),
+          result: { status: 128, stdout: '', stderr: 'fatal: bad object' },
+        },
+      ],
+    }).deps,
+  );
+  assert.equal(report.reason, 'primary-update-failed');
+});
+
 test('an unreadable worktree list fails closed as inconsistent-worktree-state', () => {
   const report = runF4WorktreeBranchSteps(
     input(),
