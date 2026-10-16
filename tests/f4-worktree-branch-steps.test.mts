@@ -283,6 +283,34 @@ test('a dry run mutates nothing and reports the steps it would run', () => {
   assert.equal(h.lockCalls.length, 0, 'a dry run takes no clone lock');
 });
 
+test('a dry run holds on a development branch in use, as apply does', () => {
+  const listing = `worktree ${PRIMARY}\0HEAD ${OTHER}\0branch refs/heads/scratch\0\0worktree /work/other-holder\0HEAD ${OTHER}\0branch refs/heads/main\0\0`;
+  const h = harness({
+    autoDelete: false,
+    routes: [
+      {
+        match: (a) => a[0] === 'worktree' && a[1] === 'list',
+        result: ok(listing),
+      },
+    ],
+  });
+  const report = runF4WorktreeBranchSteps(input({ apply: false }), h.deps);
+  assert.equal(report.reason, 'development-branch-in-use');
+  assert.equal(
+    h.gitCalls.some((c) => c.args[0] === 'fetch'),
+    false,
+    'a dry run never fetches',
+  );
+});
+
+test('a dry run reports an unreadable base ref as apply does', () => {
+  const report = runF4WorktreeBranchSteps(
+    input({ apply: false }),
+    harness({ base: null }).deps,
+  );
+  assert.equal(report.reason, 'base-ref-unreadable');
+});
+
 test('the proof dry run is the only proof read, and nothing posts a proof', () => {
   const h = harness();
   runF4WorktreeBranchSteps(input(), h.deps);

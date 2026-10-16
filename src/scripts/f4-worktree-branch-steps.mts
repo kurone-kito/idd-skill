@@ -732,7 +732,15 @@ function runStep4And5(
 ): { hold: Hold | null; error: FlowError | null; at: StepName } {
   // Step 4, primary fast-forward.
   if (!apply) {
-    steps.push(stepRecord('step-4', 'would-run'));
+    const target = readDevelopmentTarget(deps, primary, proof.pr);
+    if (target.base === null) {
+      return { hold: target.hold, error: null, at: 'step-4' };
+    }
+    steps.push(
+      stepRecord('step-4', 'would-run', {
+        detail: `fetch, then fast-forward ${target.base} from origin`,
+      }),
+    );
   } else {
     const step4 = runPrimaryFastForward(deps, primary, proof.pr);
     if (step4.hold !== null || step4.error !== null) {
@@ -826,6 +834,54 @@ function readBranchTip(
   return FULL_SHA.test(tip) ? tip : null;
 }
 
+/**
+ * The development branch, from the pull request base ref, and the holder
+ * check. Both are read-only. A branch another worktree has checked out holds,
+ * so the switch never reaches it.
+ */
+function readDevelopmentTarget(
+  deps: F4WorktreeBranchDeps,
+  primary: string,
+  pr: number,
+): { base: string; hold: null } | { base: null; hold: Hold } {
+  const base = deps.prBaseRef(pr);
+  if (
+    base === null ||
+    deps.git(['check-ref-format', `refs/heads/${base}`], primary).status !== 0
+  ) {
+    return { base: null, hold: { code: 'base-ref-unreadable', detail: null } };
+  }
+  const listing = deps.git(['worktree', 'list', '--porcelain', '-z'], primary);
+  let records: LocalWorktreeRecord[];
+  try {
+    records = parseLocalWorktreeList(listing.stdout);
+  } catch {
+    return {
+      base: null,
+      hold: {
+        code: 'inconsistent-worktree-state',
+        detail: 'git worktree list could not be read',
+      },
+    };
+  }
+  const primaryReal = deps.realpath(primary) ?? resolve(primary);
+  const holder = records.find(
+    (record) =>
+      record.branchRef === `refs/heads/${base}` &&
+      (deps.realpath(record.path) ?? resolve(record.path)) !== primaryReal,
+  );
+  if (holder !== undefined) {
+    return {
+      base: null,
+      hold: {
+        code: 'development-branch-in-use',
+        detail: `${base} is checked out at ${holder.path}`,
+      },
+    };
+  }
+  return { base, hold: null };
+}
+
 /** Step 4: fetch, switch to the development branch, fast-forward. */
 function runPrimaryFastForward(
   deps: F4WorktreeBranchDeps,
@@ -839,41 +895,11 @@ function runPrimaryFastForward(
       error: null,
     };
   }
-  const base = deps.prBaseRef(pr);
-  if (
-    base === null ||
-    deps.git(['check-ref-format', `refs/heads/${base}`], primary).status !== 0
-  ) {
-    return { hold: { code: 'base-ref-unreadable', detail: null }, error: null };
+  const target = readDevelopmentTarget(deps, primary, pr);
+  if (target.base === null) {
+    return { hold: target.hold, error: null };
   }
-  const listing = deps.git(['worktree', 'list', '--porcelain', '-z'], primary);
-  let records: LocalWorktreeRecord[];
-  try {
-    records = parseLocalWorktreeList(listing.stdout);
-  } catch {
-    return {
-      hold: {
-        code: 'inconsistent-worktree-state',
-        detail: 'git worktree list could not be read',
-      },
-      error: null,
-    };
-  }
-  const holder = records.find(
-    (record) =>
-      record.branchRef === `refs/heads/${base}` &&
-      (deps.realpath(record.path) ?? resolve(record.path)) !==
-        (deps.realpath(primary) ?? resolve(primary)),
-  );
-  if (holder !== undefined) {
-    return {
-      hold: {
-        code: 'development-branch-in-use',
-        detail: `${base} is checked out at ${holder.path}`,
-      },
-      error: null,
-    };
-  }
+  const base = target.base;
   const hasLocal =
     deps.git(['show-ref', '--verify', '--quiet', `refs/heads/${base}`], primary)
       .status === 0;

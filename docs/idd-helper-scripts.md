@@ -8200,10 +8200,11 @@ fast-forward of the development branch (the pull request base ref), the worktree
 and local-branch removal under the clone-scoped lock with a second claim check,
 and the remote branch.
 
-Dry-run is the default: it runs every read and reports `would-run` for each
-mutation. `--apply` performs them. `git worktree remove` runs without `--force`
-, and a dirty, ignored, populated-submodule, or symlinked path holds before any
-removal.
+Dry-run is the default. It runs the proof, claim, and read-only
+development-branch checks, and the step 5 inspection, and it reports `would-run`
+for the fetch, the fast-forward, and each removal. `--apply` performs them.
+`git worktree remove` runs without `--force` , and a dirty, ignored,
+populated-submodule, or symlinked path holds before any removal.
 
 Output is one JSON document with `steps[]` , `status` , `failedStep` , and
 `notRunSteps` . Status `dry-run` or `complete` exits `0` ; `hold` or `failed`
