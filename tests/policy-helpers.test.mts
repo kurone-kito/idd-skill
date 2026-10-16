@@ -2790,6 +2790,115 @@ test('githubApi.loadControl opts in only for literal true and validates its boun
   );
 });
 
+test('localExec.admission defaults on with the #4427 values when omitted', () => {
+  const defaults = {
+    enabled: true,
+    maxConcurrent: 1,
+    maxWait: 'PT2H',
+    backend: 'flock',
+    pueueGroup: 'idd-validate',
+  };
+  assert.deepEqual(POLICY_DEFAULTS.localExec.admission, defaults);
+  assert.deepEqual(normalizePolicyConfig({}).localExec.admission, defaults);
+  assert.deepEqual(normalizePolicyConfig(null).localExec.admission, defaults);
+  assert.equal(
+    Object.hasOwn(normalizePolicyConfig({}).localExec.admission, 'testCommand'),
+    false,
+  );
+});
+
+test('localExec.admission turns off only for a literal false (#4427)', () => {
+  assert.equal(
+    normalizePolicyConfig({
+      localExec: { admission: { enabled: false } },
+    }).localExec.admission.enabled,
+    false,
+  );
+  assert.equal(
+    normalizePolicyConfig({
+      localExec: { admission: { enabled: true } },
+    }).localExec.admission.enabled,
+    true,
+  );
+  for (const notFalse of ['false', 0, null]) {
+    assert.equal(
+      normalizePolicyConfig({
+        localExec: { admission: { enabled: notFalse } },
+      }).localExec.admission.enabled,
+      true,
+      `expected enabled ${JSON.stringify(notFalse)} to keep admission on`,
+    );
+  }
+});
+
+test('localExec.admission bounds maxConcurrent to 1..8 and falls back to 1 (#4427)', () => {
+  for (const kept of [1, 8]) {
+    assert.equal(
+      normalizePolicyConfig({
+        localExec: { admission: { maxConcurrent: kept } },
+      }).localExec.admission.maxConcurrent,
+      kept,
+    );
+  }
+  for (const invalid of [0, 9, 1.5, -1, '2', null, Number.NaN]) {
+    assert.equal(
+      normalizePolicyConfig({
+        localExec: { admission: { maxConcurrent: invalid } },
+      }).localExec.admission.maxConcurrent,
+      1,
+      `expected maxConcurrent ${JSON.stringify(invalid)} to normalize to 1`,
+    );
+  }
+});
+
+test('localExec.admission keeps maxWait up to PT6H and falls back to PT2H (#4427)', () => {
+  const wait = (value: unknown) =>
+    normalizePolicyConfig({
+      localExec: { admission: { maxWait: value } },
+    }).localExec.admission.maxWait;
+  assert.equal(wait('PT6H'), 'PT6H');
+  assert.equal(wait('PT5H30M'), 'PT5H30M');
+  assert.equal(wait('PT6H1S'), 'PT2H');
+  assert.equal(wait('P1D'), 'PT2H');
+  assert.equal(wait('nope'), 'PT2H');
+  assert.equal(wait('P0D'), 'PT2H');
+  assert.equal(wait(30), 'PT2H');
+});
+
+test('localExec.admission takes backend, pueueGroup, and testCommand only when valid (#4427)', () => {
+  const admission = normalizePolicyConfig({
+    localExec: {
+      admission: {
+        backend: 'pueue',
+        pueueGroup: '  ',
+        testCommand: '  pnpm run test:scripts  ',
+      },
+    },
+  }).localExec.admission;
+  assert.equal(admission.backend, 'pueue');
+  assert.equal(admission.pueueGroup, 'idd-validate');
+  assert.equal(admission.testCommand, 'pnpm run test:scripts');
+  assert.equal(
+    normalizePolicyConfig({
+      localExec: { admission: { backend: 'docker' } },
+    }).localExec.admission.backend,
+    'flock',
+  );
+  // The parser keeps flock with a cap above 1 as written; the helper rejects it.
+  assert.deepEqual(
+    normalizePolicyConfig({
+      localExec: { admission: { backend: 'flock', maxConcurrent: 2 } },
+    }).localExec.admission,
+    {
+      enabled: true,
+      maxConcurrent: 2,
+      maxWait: 'PT2H',
+      backend: 'flock',
+      pueueGroup: 'idd-validate',
+    },
+  );
+});
+
 test('resolveDurableRecordTargets resolves the same-repository journal number (#4115)', () => {
   assert.deepEqual(
     resolveDurableRecordTargets({

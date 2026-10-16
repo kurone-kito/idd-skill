@@ -1007,6 +1007,15 @@ test('policy normalization provides default-safe values and supports aliases', (
         maxWait: 'PT30S',
       },
     },
+    localExec: {
+      admission: {
+        enabled: true,
+        maxConcurrent: 1,
+        maxWait: 'PT2H',
+        backend: 'flock',
+        pueueGroup: 'idd-validate',
+      },
+    },
   });
 
   const defaultPolicy = normalizePolicyConfig(null);
@@ -1234,6 +1243,15 @@ test('policy normalization provides default-safe values and supports aliases', (
           enabled: false,
           maxConcurrent: 1,
           maxWait: 'PT30S',
+        },
+      },
+      localExec: {
+        admission: {
+          enabled: true,
+          maxConcurrent: 1,
+          maxWait: 'PT2H',
+          backend: 'flock',
+          pueueGroup: 'idd-validate',
         },
       },
     },

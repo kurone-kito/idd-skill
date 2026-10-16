@@ -44,6 +44,7 @@ words:
   - OICIIOID
   - PAIAR
   - pnpmfile
+  - pueue
   - pylint
   - pytest
   - pyproject

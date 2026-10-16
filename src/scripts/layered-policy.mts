@@ -71,6 +71,13 @@ export const REPOSITORY_POLICY_FIELDS = Object.freeze({
   /** `localValidationEvidence` configures the evidence freshness reported by readiness. */
   localValidationEvidence:
     'pre-merge-readiness.mts and local-validation-evidence.mts',
+  /**
+   * `localExec` is read by the local validation admission helper (roadmap
+   * #4426) through the repository-only loader, never the layered merge (#4427).
+   * A user-global `localExec` is dropped whenever a repository document exists,
+   * and the user-global schema rejects the key outright.
+   */
+  localExec: 'local validation admission helper (roadmap #4426)',
 });
 
 /** Local delegate objects are validated as a whole by their consumers. */

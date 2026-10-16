@@ -229,6 +229,11 @@ const SECOND_MS = 1000;
 const MINUTE_MS = 60 * SECOND_MS;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
+/** Largest `localExec.admission.maxConcurrent`; a larger value falls back to serial. */
+export const LOCAL_EXEC_ADMISSION_MAX_CONCURRENT = 8;
+/** Longest `localExec.admission.maxWait`, six hours; a longer value falls back to the default. */
+export const LOCAL_EXEC_ADMISSION_MAX_WAIT_MS = 6 * HOUR_MS;
+const LOCAL_EXEC_BACKENDS = new Set(['flock', 'pueue']);
 export const POLICY_DEFAULTS = Object.freeze({
   issueScope: 'roadmap-first',
   orphanFirstPolicy: 'none',
@@ -413,6 +418,17 @@ export const POLICY_DEFAULTS = Object.freeze({
       enabled: false,
       maxConcurrent: 1,
       maxWait: 'PT30S',
+    }),
+  }),
+  // #4427: on by default, unlike githubApi.loadControl. The test command is
+  // deliberately absent here: it is an own key only when an operator sets one.
+  localExec: Object.freeze({
+    admission: Object.freeze({
+      enabled: true,
+      maxConcurrent: 1,
+      maxWait: 'PT2H',
+      backend: 'flock',
+      pueueGroup: 'idd-validate',
     }),
   }),
 });
@@ -710,6 +726,48 @@ export function normalizePolicyConfig(config) {
         : POLICY_DEFAULTS.githubApi.loadControl.maxWait,
   };
   const githubApi = { telemetry, readCache, loadControl };
+  // #4427: only a literal `false` disables admission; every other value keeps
+  // it on. The helper, not this parser, rejects `flock` with a cap above 1, so
+  // the stored value stays visible here.
+  const localExecRaw = c?.localExec?.admission;
+  const rawLocalExecMaxConcurrent = localExecRaw?.maxConcurrent;
+  const rawLocalExecMaxWait = parsePositiveDuration(
+    localExecRaw?.maxWait,
+    POLICY_DEFAULTS.localExec.admission.maxWait,
+  );
+  const localExecAdmission = {
+    enabled: localExecRaw?.enabled !== false,
+    maxConcurrent:
+      typeof rawLocalExecMaxConcurrent === 'number' &&
+      Number.isInteger(rawLocalExecMaxConcurrent) &&
+      rawLocalExecMaxConcurrent >= 1 &&
+      rawLocalExecMaxConcurrent <= LOCAL_EXEC_ADMISSION_MAX_CONCURRENT
+        ? rawLocalExecMaxConcurrent
+        : POLICY_DEFAULTS.localExec.admission.maxConcurrent,
+    maxWait:
+      (parseIsoDurationToMs(rawLocalExecMaxWait) ?? Number.POSITIVE_INFINITY) <=
+      LOCAL_EXEC_ADMISSION_MAX_WAIT_MS
+        ? rawLocalExecMaxWait
+        : POLICY_DEFAULTS.localExec.admission.maxWait,
+    backend: parseEnum(
+      localExecRaw?.backend,
+      LOCAL_EXEC_BACKENDS,
+      POLICY_DEFAULTS.localExec.admission.backend,
+    ),
+    pueueGroup:
+      typeof localExecRaw?.pueueGroup === 'string' &&
+      localExecRaw.pueueGroup.trim().length > 0
+        ? localExecRaw.pueueGroup.trim()
+        : POLICY_DEFAULTS.localExec.admission.pueueGroup,
+  };
+  const rawLocalExecTestCommand = localExecRaw?.testCommand;
+  if (
+    typeof rawLocalExecTestCommand === 'string' &&
+    rawLocalExecTestCommand.trim().length > 0
+  ) {
+    localExecAdmission.testCommand = rawLocalExecTestCommand.trim();
+  }
+  const localExec = { admission: localExecAdmission };
   // #2271: own-property-omitted on both 'absent' and 'invalid' -- mirrors
   // `providerOutage.declarationTarget` above. Normalization never throws;
   // a caller that must distinguish "no opinion" from "operator configured
@@ -961,6 +1019,7 @@ export function normalizePolicyConfig(config) {
     localValidationEvidence,
     providerHealth,
     githubApi,
+    localExec,
   };
 }
 export function resolveCollaboratorMarkerTrust(config, envValue = '') {
