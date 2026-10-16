@@ -1580,6 +1580,10 @@ interface ApplyScenario {
   lockTimeout?: boolean;
   /** The approval holds for the pre-check and is refused on the re-check. */
   approvalRevoked?: boolean;
+  /** `git worktree add` fails (stubbed: nothing is created). */
+  failWorktreeAdd?: boolean;
+  /** The login `gh api user` reports for this session. */
+  viewer?: string;
 }
 
 interface ApplyRun {
@@ -1704,6 +1708,9 @@ function runApply(
     if (args[0] === 'api' && String(args[1]).endsWith('/comments')) {
       return ok(JSON.stringify(comments));
     }
+    if (args[0] === 'api' && args[1] === 'user') {
+      return ok(`${scenario.viewer ?? OWNER}\n`);
+    }
     if (args[0] === 'repo' && args[1] === 'view') {
       return ok('main\n');
     }
@@ -1802,6 +1809,17 @@ function runApply(
     run: (file, args) => {
       if (file === 'git') {
         log.push(`git ${args.join(' ')}${held()}`);
+        if (
+          scenario.failWorktreeAdd &&
+          args.includes('worktree') &&
+          args.includes('add')
+        ) {
+          return {
+            status: 128,
+            stdout: '',
+            stderr: 'fatal: stubbed worktree add failure',
+          };
+        }
         return gitResult(fixture.primary, args);
       }
       if (file === 'gh') {
@@ -2140,19 +2158,33 @@ test('an invalid development branch stops with development-branch-unresolved, be
 });
 
 test('a worktree add that fails keeps nothing, removes nothing, and releases the lock', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { failWorktreeAdd: true });
+    const report = assertStopped(run, 'worktree-add-failed');
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(report.claimPosted, false);
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(run.log.includes('lock:release'), true);
+    assert.equal(
+      run.log.some((entry) => entry.includes('--record-tokens')),
+      false,
+    );
+    assert.equal(checkCloneLock(fixture.primary).present, false);
+  });
+});
+
+test('a development branch that is configured but missing on origin stops before the worktree add', () => {
   withApplyFixture(
     (fixture) => {
       const run = runApply(fixture);
-      const report = assertStopped(run, 'worktree-add-failed');
+      const report = assertStopped(run, 'development-branch-unresolved');
       assert.equal(report.lostClaimCleanupRequired, false);
-      assert.equal(report.claimPosted, false);
-      assert.equal(existsSync(fixture.worktree), false);
-      assert.equal(branchExists(fixture.primary), false);
-      assert.equal(run.log.includes('lock:release'), true);
+      assert.match(report.steps.at(-1)?.detail ?? '', /origin\/nope/);
       assert.equal(
-        run.log.some((entry) => entry.includes('--record-tokens')),
+        run.log.some((entry) => entry.includes('worktree add')),
         false,
       );
+      assert.equal(existsSync(fixture.worktree), false);
       assert.equal(checkCloneLock(fixture.primary).present, false);
     },
     { developmentBranch: 'nope', trustedMarkerActors: [OWNER] },
@@ -2293,17 +2325,24 @@ test('a failed worktree-local lock acquire stops with lock-acquire-failed', () =
 
 test('a final assert that is not already_owned keep is claim-not-verified and never releases on a nonce mismatch', () => {
   withApplyFixture((fixture) => {
+    // The real helper exits 1 for a non-keep verdict and still prints the verdict.
     const run = runApply(fixture, {
-      assert: ok(
-        JSON.stringify({
+      assert: {
+        status: 1,
+        stdout: JSON.stringify({
           state: 'stale',
           action: 'takeover',
           reason: 'activation-nonce-mismatch',
         }),
-      ),
+        stderr: '',
+      },
     });
     const report = assertStopped(run, 'claim-not-verified');
     assert.match(report.nextAction ?? '', /Never release/);
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /reason activation-nonce-mismatch/,
+    );
     assert.equal(
       run.posts.some((post) => post.type === 'unclaim'),
       false,
@@ -2387,10 +2426,39 @@ test('the policy is read after the fast-forward, so a policy change on origin ap
     ]);
     gitIn(updater, ['push', '--quiet', 'origin', 'main']);
     const run = runApply(fixture);
-    const report = assertStopped(run, 'worktree-add-failed');
+    // The new origin policy names a development branch that origin lacks, so
+    // the run stops on it: which shows the policy was read after the fast-forward.
+    const report = assertStopped(run, 'development-branch-unresolved');
+    assert.match(report.steps.at(-1)?.detail ?? '', /origin\/missing/);
     assert.equal(report.lostClaimCleanupRequired, false);
     assert.equal(existsSync(fixture.worktree), false);
     assert.equal(branchExists(fixture.primary), false);
+    assert.equal(run.posts.length, 0);
+  });
+});
+
+test('the session login is trusted for the markers it posts, even when the policy lists other actors', () => {
+  withApplyFixture(
+    (fixture) => {
+      const run = runApply(fixture, { viewer: OWNER });
+      assert.equal(exitOf(run.result), 0, run.stderr);
+      assert.equal(run.report?.claimPosted, true);
+      assert.equal(run.report?.lostClaimCleanupRequired, false);
+    },
+    { trustedMarkerActors: ['someone-else'] },
+  );
+});
+
+test('a session login that cannot be read stops before any write, as precheck-unavailable', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { viewer: '' });
+    const report = assertStopped(run, 'precheck-unavailable');
+    assert.match(report.steps.at(-1)?.detail ?? '', /viewer login/);
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(
+      run.log.some((entry) => entry.includes('worktree add')),
+      false,
+    );
     assert.equal(run.posts.length, 0);
   });
 });

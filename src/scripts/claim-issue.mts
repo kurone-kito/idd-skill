@@ -35,7 +35,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { existsSync, lstatSync } from 'node:fs';
+import { lstatSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { computeBranchName } from './branch-name.mts';
@@ -53,10 +53,7 @@ import {
   isHelperErrorEnvelopeEnabled,
   runHelperCli,
 } from './helper-cli-runner.mts';
-import {
-  DEFAULT_POLICY_CONFIG_PATH,
-  readRepositoryPolicyFile,
-} from './idd-config.mts';
+import { loadLayeredLocalPolicy } from './idd-config.mts';
 import {
   inspectLocalWorktreeBranchPrefix,
   type LocalWorktreeInspection,
@@ -115,6 +112,9 @@ const CLEANUP_NEXT =
   'Run the B1 cleanup of idd-work.instructions.md by hand: remove the prunable worktree entry, or delete the leftover branch if its commits are confirmed unneeded. Then rerun this helper. This helper removed nothing.';
 const PATH_NEXT =
   'Inspect the path by hand. This helper never removes it: move or clean it, then rerun this helper.';
+/** The next action when the policy or the viewer cannot be read (nothing claimed yet). */
+const POLICY_NEXT =
+  'Fix the policy (the repository config or the user-global policy) or restore access to the viewer login, then rerun this helper. This helper created no worktree or branch.';
 
 const FRESH_CLAIM_VERDICTS: readonly string[] = [
   'claimable',
@@ -230,6 +230,8 @@ export interface CommandResult {
 /** Per-call options: the environment a child process runs with. */
 export interface CommandOptions {
   env?: NodeJS.ProcessEnv;
+  /** The directory a child helper resolves its policy and repository from. */
+  cwd?: string;
 }
 
 /**
@@ -365,6 +367,7 @@ export function createDefaultRunner(): CommandRunner {
       maxBuffer: CHILD_MAX_BUFFER_BYTES,
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: isGit ? GIT_TIMEOUT_MS : CHILD_TIMEOUT_MS,
+      ...(options?.cwd !== undefined ? { cwd: options.cwd } : {}),
       ...(options?.env !== undefined
         ? { env: options.env }
         : isGit
@@ -488,6 +491,7 @@ function approvalEvidenceAgrees(evidence: Record<string, unknown>): boolean {
 function checkApproval(
   issueNumber: number,
   deps: ClaimIssueDeps,
+  cwd?: string,
 ): CheckOutcome {
   const unproven = (detail: string): CheckOutcome =>
     stop(
@@ -495,11 +499,17 @@ function checkApproval(
       'Apply the written A5(a) path in idd-claim.instructions.md by hand; if it cannot prove safe approval, treat approval as missing.',
       detail,
     );
-  const result = deps.run(process.execPath, [
-    deps.childScript('claim-approval-gate.mjs'),
-    '--issue',
-    String(issueNumber),
-  ]);
+  // The gate reads the policy of its working directory, so the write half runs
+  // it from the primary checkout, after the fast-forward has refreshed it.
+  const result = deps.run(
+    process.execPath,
+    [
+      deps.childScript('claim-approval-gate.mjs'),
+      '--issue',
+      String(issueNumber),
+    ],
+    cwd === undefined ? undefined : { cwd },
+  );
   if (result.status !== 0) {
     return unproven(`claim-approval-gate ended with ${describeStatus(result)}`);
   }
@@ -574,14 +584,19 @@ function readFreshClaimGate(
   issueNumber: number,
   extra: readonly string[],
   deps: ClaimIssueDeps,
+  cwd?: string,
 ): FreshGateReading {
-  const result = deps.run(process.execPath, [
-    deps.childScript('resume-claim-routing.mjs'),
-    '--issue',
-    String(issueNumber),
-    '--fresh-claim-gate',
-    ...extra,
-  ]);
+  const result = deps.run(
+    process.execPath,
+    [
+      deps.childScript('resume-claim-routing.mjs'),
+      '--issue',
+      String(issueNumber),
+      '--fresh-claim-gate',
+      ...extra,
+    ],
+    cwd === undefined ? undefined : { cwd },
+  );
   if (result.status !== 0) {
     return {
       ok: false,
@@ -1198,7 +1213,10 @@ function postMarker(state: ApplyState, args: readonly string[]): CommandResult {
       state.repository.repo,
       '--apply',
     ],
-    { env: { ...process.env, IDD_HELPER_ERROR_ENVELOPE: '1' } },
+    {
+      cwd: state.primary,
+      env: { ...process.env, IDD_HELPER_ERROR_ENVELOPE: '1' },
+    },
   );
 }
 
@@ -1348,42 +1366,61 @@ function readPrimaryRoot(state: ApplyState): ApplyOutcome {
 }
 
 /**
- * The policy, read from the primary checkout (not the working directory), with
- * the settle delay, the authoring label, and the trusted marker actors. A
- * missing file is no policy; a malformed one fails closed.
+ * The layered effective policy of the primary checkout, read after the
+ * fast-forward: the loader resume-claim-routing uses, run with the primary as
+ * its directory so that the user-global and the repository layers both apply.
+ * The trusted marker actors are the configured list (through the env and
+ * config ladder) plus this session's own login, which posts every marker this
+ * run writes.
  */
 function readPolicy(state: ApplyState): ApplyOutcome {
-  const path = join(state.primary, DEFAULT_POLICY_CONFIG_PATH);
-  let config: unknown = null;
+  let config: unknown;
   try {
-    config = existsSync(path) ? readRepositoryPolicyFile(path).config : null;
+    const loaded = loadLayeredLocalPolicy({ cwd: state.primary });
+    if (loaded.local.diagnostic !== undefined) {
+      return applyFail(
+        'precheck-unavailable',
+        POLICY_NEXT,
+        `the policy could not be read: ${loaded.local.diagnostic}`,
+      );
+    }
+    config = loaded.config;
     normalizePolicyConfig(config);
   } catch (error) {
     return applyFail(
       'precheck-unavailable',
-      'Read .github/idd/config.json by hand, fix it, then rerun this helper. Nothing was created.',
+      POLICY_NEXT,
       `the policy could not be read: ${errorMessage(error)}`,
     );
   }
+  const viewer = readViewerLogin(state);
+  if (viewer === null) {
+    return applyFail(
+      'precheck-unavailable',
+      POLICY_NEXT,
+      'the viewer login could not be read, so this run cannot recognize the markers it posts',
+    );
+  }
   const normalized = normalizePolicyConfig(config);
-  const trusted = resolveTrustedMarkerActors({
+  const configured = resolveTrustedMarkerActors({
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
     config: isRecord(config)
       ? { trustedMarkerActors: config.trustedMarkerActors }
       : null,
   }).actors;
-  if (trusted.length === 0) {
-    return applyFail(
-      'precheck-unavailable',
-      'Set trustedMarkerActors in .github/idd/config.json, then rerun this helper. Nothing was created.',
-      'no trusted marker actor is configured',
-    );
-  }
   state.config = config;
   state.settleMs =
     parseIsoDurationToMs(normalized.claim.verifySettleDelay) ?? 0;
   state.authoringLabel = normalized.issueAuthoring.authoringLabelName;
-  state.trustedActors = trusted;
-  return applyPass(`policy read from ${path}`);
+  state.trustedActors = [...new Set([...configured, viewer.toLowerCase()])];
+  return applyPass(`effective policy of ${state.primary}; viewer ${viewer}`);
+}
+
+/** The login of the account this session writes as; `null` when it cannot be read. */
+function readViewerLogin(state: ApplyState): string | null {
+  const read = state.deps.run('gh', ['api', 'user', '--jq', '.login']);
+  const login = read.stdout.trim();
+  return read.status === 0 && login !== '' && !/\s/.test(login) ? login : null;
 }
 
 /** The default branch from GitHub, validated the way a development branch is. */
@@ -1428,6 +1465,23 @@ function resolveDevelopment(state: ApplyState): ApplyOutcome {
     (target.status === 'configured' || target.status === 'default') &&
     target.branch !== undefined
   ) {
+    // The branch must exist on origin after the fetch; a configured name that is
+    // missing there would otherwise fail later, inside `git worktree add`.
+    const ref = state.deps.run('git', [
+      '-C',
+      state.primary,
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `refs/remotes/origin/${target.branch}`,
+    ]);
+    if (ref.status !== 0) {
+      return applyFail(
+        'development-branch-unresolved',
+        'Create the development branch on origin, or fix developmentBranch in .github/idd/config.json, then rerun this helper. Nothing was created.',
+        `origin/${target.branch} does not exist (git rev-parse ended with ${describeStatus(ref)})`,
+      );
+    }
     state.developmentBranch = target.branch;
     return applyPass(`development branch ${target.branch} (${target.status})`);
   }
@@ -1711,18 +1765,22 @@ function recordTokens(state: ApplyState): ApplyOutcome {
       'no worktree identity exists',
     );
   }
-  const record = state.deps.run(process.execPath, [
-    state.deps.childScript('claim-lock.mjs'),
-    '--record-tokens',
-    '--worktree',
-    identity.worktree,
-    '--agent-id',
-    identity.agentId,
-    '--claim-id',
-    identity.claimId,
-    '--nonce',
-    identity.nonce,
-  ]);
+  const record = state.deps.run(
+    process.execPath,
+    [
+      state.deps.childScript('claim-lock.mjs'),
+      '--record-tokens',
+      '--worktree',
+      identity.worktree,
+      '--agent-id',
+      identity.agentId,
+      '--claim-id',
+      identity.claimId,
+      '--nonce',
+      identity.nonce,
+    ],
+    { cwd: state.primary },
+  );
   if (record.status !== 0) {
     return applyFail(
       'tokens-record-failed',
@@ -1747,6 +1805,7 @@ function checkOwnWorktreeGate(state: ApplyState): ApplyOutcome {
     state.issue,
     ['--own-worktree', identity.worktree],
     state.deps,
+    state.primary,
   );
   if (!reading.ok) {
     return applyFail(
@@ -1787,7 +1846,7 @@ function recheckApproval(state: ApplyState): ApplyOutcome {
       'no worktree identity exists',
     );
   }
-  const outcome = checkApproval(state.issue, state.deps);
+  const outcome = checkApproval(state.issue, state.deps, state.primary);
   if (outcome.ok) {
     return applyPass(`A5(a) again: ${outcome.detail}`);
   }
@@ -1949,16 +2008,20 @@ function acquireLock(state: ApplyState): ApplyOutcome {
       'no worktree identity exists',
     );
   }
-  const acquire = state.deps.run(process.execPath, [
-    state.deps.childScript('claim-lock.mjs'),
-    '--acquire',
-    '--worktree',
-    identity.worktree,
-    '--agent-id',
-    identity.agentId,
-    '--claim-id',
-    identity.claimId,
-  ]);
+  const acquire = state.deps.run(
+    process.execPath,
+    [
+      state.deps.childScript('claim-lock.mjs'),
+      '--acquire',
+      '--worktree',
+      identity.worktree,
+      '--agent-id',
+      identity.agentId,
+      '--claim-id',
+      identity.claimId,
+    ],
+    { cwd: state.primary },
+  );
   if (acquire.status !== 0) {
     return applyFail(
       'lock-acquire-failed',
@@ -1980,20 +2043,27 @@ function assertClaim(state: ApplyState): ApplyOutcome {
     );
   }
   state.deps.sleepMs(state.settleMs);
-  const assert = state.deps.run(process.execPath, [
-    state.deps.childScript('resume-claim-routing.mjs'),
-    '--issue',
-    String(state.issue),
-    '--assert',
-    '--claim-id',
-    identity.claimId,
-    '--nonce',
-    identity.nonce,
-    '--worktree',
-    identity.worktree,
-  ]);
-  const verdict = assert.status === 0 ? parseJsonObject(assert.stdout) : null;
+  const assert = state.deps.run(
+    process.execPath,
+    [
+      state.deps.childScript('resume-claim-routing.mjs'),
+      '--issue',
+      String(state.issue),
+      '--assert',
+      '--claim-id',
+      identity.claimId,
+      '--nonce',
+      identity.nonce,
+      '--worktree',
+      identity.worktree,
+    ],
+    { cwd: state.primary },
+  );
+  // The helper prints its verdict on every exit; the status only says whether
+  // the claim is verified, so the JSON is read either way.
+  const verdict = parseJsonObject(assert.stdout);
   if (
+    assert.status === 0 &&
     verdict !== null &&
     verdict.state === 'already_owned' &&
     verdict.action === 'keep'
@@ -2085,8 +2155,10 @@ function runClaimWrites(state: ApplyState): ApplyFailure | null {
   return (
     step(state, 'record-tokens', recordTokens(state)) ??
     step(state, 'own-worktree-gate', checkOwnWorktreeGate(state)) ??
-    step(state, 'hold-check', checkHoldBeforeClaim(state)) ??
+    // The approval first, then the hold: the label read is the last gate before
+    // the claim marker (idd-claim.instructions.md, "Immediately before claim POST").
     step(state, 'approval-recheck', recheckApproval(state)) ??
+    step(state, 'hold-check', checkHoldBeforeClaim(state)) ??
     step(state, 'claim-post', postClaim(state)) ??
     step(state, 'nonce-post', postNonce(state)) ??
     step(state, 'lock-acquire', acquireLock(state)) ??

@@ -4780,10 +4780,15 @@ like `activation-nonce`, because a worker posts it as itself.
      `git fetch origin` and a fast-forward (with `merge.autoStash=false`).
      A failure stops with `primary-not-ready`, whose detail names
      `primary-not-on-default-branch`, `unpushed-commits`, or the failing
-     command. The policy and the development branch are read after the
-     fast-forward, because it can replace `.github/idd/config.json`. A
-     prunable worktree entry or a leftover local branch of the claim's name
-     stops with `b1-cleanup-needed`.
+     command. The effective policy of the primary checkout (the layered
+     loader that resume-claim-routing uses) and the development branch are
+     read after the fast-forward, because it can replace
+     `.github/idd/config.json`. The trusted marker actors are the configured
+     list, through `IDD_TRUSTED_MARKER_ACTORS` and the config, plus the
+     session's own login. The development branch must exist on origin, or
+     the run stops with `development-branch-unresolved`. A prunable worktree
+     entry or a leftover local branch of the claim's name stops with
+     `b1-cleanup-needed`.
   2. Still under the lock: the worktree path is
      `<primary-parent>/<repo>.<branch with / replaced by ->`. It must be a
      free direct child of the primary's parent, and that parent must not be
@@ -4821,6 +4826,8 @@ like `activation-nonce`, because a worker posts it as itself.
   a `nextAction`. The helper deletes nothing. Once the worktree exists, a
   failure keeps the worktree, its branch, and the worktree-local lock, and
   the next action is `lost-claim-cleanup` from `idd-claim.instructions.md`.
+- The helpers that the write half calls run from the primary checkout, so
+  each one reads the policy that the fast-forward refreshed.
 - Stale-claim takeover is out of scope: a stale active claim stops the run
   with `stale-takeover-out-of-scope`.
 
