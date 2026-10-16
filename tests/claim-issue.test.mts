@@ -78,7 +78,9 @@ const failed = (status: number | null = 1): CommandResult => ({
   stderr: 'boom',
 });
 
-const ISSUE_VIEW = ok(JSON.stringify({ title: TITLE, assignees: [] }));
+const ISSUE_VIEW = ok(
+  JSON.stringify({ title: TITLE, assignees: [], state: 'OPEN' }),
+);
 const CHECK_AUTHOR = {
   id: 'author_self_authorized',
   name: 'Issue author self-authorized',
@@ -202,7 +204,7 @@ function isReadOnlyCall(call: readonly string[]): boolean {
         args[1] === 'view' &&
         args[2] === String(ISSUE) &&
         args[3] === '--json' &&
-        args[4] === 'title,assignees'
+        args[4] === 'title,assignees,state'
       );
     }
     if (args[0] === 'api') {
@@ -544,7 +546,11 @@ test('A5(a): a result of not approved is approval-missing', () => {
 test('A5(b): an assignee stops the claim', () => {
   const { report, record } = run({
     issueView: ok(
-      JSON.stringify({ title: TITLE, assignees: [{ login: 'someone' }] }),
+      JSON.stringify({
+        title: TITLE,
+        assignees: [{ login: 'someone' }],
+        state: 'OPEN',
+      }),
     ),
   });
   assertStoppedAt(report, 'a5b-assignee', 'assigned');
@@ -1081,17 +1087,35 @@ test('A5(d): a valid row with an empty body passes', () => {
 
 // Failures before any check
 
-test('a failed read of the title and assignees is a transport outcome before any check', () => {
+test('a failed read of the title, assignees, or state is a transport outcome before any check', () => {
   const broken: CommandResult[] = [
     failed(1),
     failed(null),
     ok('not json'),
     ok(JSON.stringify({ title: TITLE })),
-    ok(JSON.stringify({ title: 7, assignees: [] })),
-    ok(JSON.stringify({ title: TITLE, assignees: [{ name: 'x' }] })),
-    ok(JSON.stringify({ title: TITLE, assignees: 'none' })),
-    ok(JSON.stringify({ title: '  ', assignees: [] })),
-    ok(JSON.stringify({ title: TITLE, assignees: [{ login: '' }] })),
+    ok(JSON.stringify({ title: 7, assignees: [], state: 'OPEN' })),
+    ok(
+      JSON.stringify({
+        title: TITLE,
+        assignees: [{ name: 'x' }],
+        state: 'OPEN',
+      }),
+    ),
+    ok(JSON.stringify({ title: TITLE, assignees: 'none', state: 'OPEN' })),
+    ok(JSON.stringify({ title: '  ', assignees: [], state: 'OPEN' })),
+    ok(
+      JSON.stringify({
+        title: TITLE,
+        assignees: [{ login: '' }],
+        state: 'OPEN',
+      }),
+    ),
+    // A missing, lower-case, other, or non-string state is never a read.
+    ok(JSON.stringify({ title: TITLE, assignees: [] })),
+    ok(JSON.stringify({ title: TITLE, assignees: [], state: 'open' })),
+    ok(JSON.stringify({ title: TITLE, assignees: [], state: 'MERGED' })),
+    ok(JSON.stringify({ title: TITLE, assignees: [], state: null })),
+    ok(JSON.stringify({ title: TITLE, assignees: [], state: 1 })),
   ];
   for (const issueView of broken) {
     const record = makeRun({ issueView });
@@ -1103,6 +1127,45 @@ test('a failed read of the title and assignees is a transport outcome before any
     );
     assertReadOnly(record);
   }
+});
+
+test('issue-state: a closed issue is refused before any A5 check, and the state is named', () => {
+  const issueView = ok(
+    JSON.stringify({ title: TITLE, assignees: [], state: 'CLOSED' }),
+  );
+  const { report, record } = run({ issueView });
+  assert.equal(report.eligible, false);
+  assert.equal(report.reason, 'issue-closed');
+  assert.equal(report.branch, BRANCH);
+  assert.equal(report.projectStatusChecked, false);
+  assert.deepEqual(
+    report.steps.map((step) => step.id),
+    ['issue-state', ...CHECK_IDS],
+  );
+  const [guard, ...checks] = report.steps;
+  assert.equal(guard?.status, 'failed');
+  assert.equal(guard?.reason, 'issue-closed');
+  assert.equal(typeof guard?.nextAction, 'string');
+  assert.match(guard?.detail ?? '', /CLOSED/);
+  for (const step of checks) {
+    assert.deepEqual(
+      { status: step.status, reason: step.reason, nextAction: step.nextAction },
+      { status: 'not-run', reason: null, nextAction: null },
+      `${step.id} must be not-run`,
+    );
+  }
+  // Only the issue read ran: no approval, routing, pull request, or branch call.
+  assert.equal(record.calls.length, 1);
+  assert.deepEqual(record.calls[0]?.slice(0, 2), ['gh', 'issue']);
+  assert.deepEqual(record.portCalls, []);
+});
+
+test('issue-state: an OPEN issue adds no step, so the A5 steps keep their positions', () => {
+  const { report } = run();
+  assert.deepEqual(
+    report.steps.map((step) => step.id),
+    CHECK_IDS,
+  );
 });
 
 test('a failed repository resolution is a transport outcome and runs nothing', () => {
@@ -1235,6 +1298,8 @@ test('--help prints usage, exits 0, and runs nothing', () => {
   const { result, stdout, record } = runCommand(['--help']);
   assert.equal(result, 0);
   assert.match(stdout, /^Usage:/);
+  assert.match(stdout, /issue-state/);
+  assert.match(stdout, /issue-closed/);
   assert.deepEqual(record.calls, []);
 });
 
@@ -1585,6 +1650,8 @@ const EDITED_AT = '2026-10-16T00:00:00Z';
 
 interface ApplyScenario {
   assigned?: boolean;
+  /** The issue is closed: the issue-state guard refuses it before any write. */
+  closed?: boolean;
   /** Every GraphQL edit-state read fails, so no marker can be verified. */
   editStateFails?: boolean;
   /** The repository lookup; the default answers with the test repository. */
@@ -1753,11 +1820,17 @@ function runApply(
       return ok(JSON.stringify({ labels: next.map((name) => ({ name })) }));
     }
     if (args[0] === 'issue' && args[1] === 'view') {
+      if (scenario.closed) {
+        return ok(
+          JSON.stringify({ title: TITLE, assignees: [], state: 'CLOSED' }),
+        );
+      }
       return scenario.assigned
         ? ok(
             JSON.stringify({
               title: TITLE,
               assignees: [{ login: 'someone' }],
+              state: 'OPEN',
             }),
           )
         : ISSUE_VIEW;
@@ -2150,6 +2223,25 @@ test('--apply stops before any write when a pre-check is not eligible', () => {
     assert.equal(report.claimPosted, false);
     assert.equal(report.lostClaimCleanupRequired, false);
     assert.equal(report.claim, null);
+    assert.equal(
+      run.log.some(
+        (entry) =>
+          entry.startsWith('git ') || entry.includes('post-idd-marker'),
+      ),
+      false,
+    );
+    assert.equal(existsSync(fixture.worktree), false);
+  });
+});
+
+test('--apply refuses a closed issue as issue-closed, with no write and no claim marker', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { closed: true });
+    const report = assertStopped(run, 'issue-closed');
+    assert.equal(report.claimPosted, false);
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(report.claim, null);
+    assert.equal(report.steps[0]?.id, 'issue-state');
     assert.equal(
       run.log.some(
         (entry) =>
