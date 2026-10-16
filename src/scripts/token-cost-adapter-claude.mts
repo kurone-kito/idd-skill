@@ -77,9 +77,10 @@
 // records count toward `usage`, `turnCount` and `toolCallCount` under the
 // same rules as `records`, and set `includesSubagents`; `model`, timestamps,
 // `compactionCount`, cwd and the join hints still come from `records` alone.
-// Only counts leave this module, never subagent content. Reading the
-// `subagents/` files and routing them to samples is a follow-up, so no
-// production caller passes the field yet.
+// Only counts leave this module, never subagent content. The harvester
+// (`token-cost-harvest.mts`, #4384) reads the `subagents/` files, routes them
+// to cwd segments by timestamp, and passes a `kind: session` segment's routed
+// records here; no other caller passes the field.
 
 import { globSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';

@@ -38,6 +38,7 @@ import {
   filterTrustedClaimFamilyEvents,
 } from './protocol-helpers.mts';
 import {
+  type ClaudeCwdSegment,
   type ClaudeHarvestInput,
   claudeAdapter,
   defaultClaudeProjectDir,
@@ -62,6 +63,7 @@ import {
 } from './token-cost-adapter-grok.mts';
 import {
   assertTokenCostSample,
+  inferIssueNumberFromBasename,
   redactTokenCostRecord,
   TOKEN_COST_STAGE_IDS,
   type TokenCostAdapterResult,
@@ -2173,6 +2175,136 @@ function rangesOverlap(a: RecordTimeRange, b: RecordTimeRange): boolean {
   return a.minMs <= b.maxMs && b.minMs <= a.maxMs;
 }
 
+// #4384: Claude Code writes a subagent's API requests to
+// `<project dir>/<session id>/subagents/agent-<agent id>.jsonl`, beside the
+// session file rather than in it. Each assistant record of such a transcript
+// is routed by its own timestamp to one cwd segment of its session file (see
+// `subagentRoutingWindows`), and that segment's harvest takes the routed
+// records as `subagentRecords` unless the segment's cwd is issue-shaped.
+// Subagent usage is not attributed to an issue, so an event-window sample and
+// a merged-contributor sample never take it either.
+
+/** A cwd segment's routing window: from its start (its first valid timestamp) to the next non-empty window's start. */
+interface SubagentRoutingWindow {
+  segmentIndex: number;
+  startMs: number;
+}
+
+function firstValidTimestampMs(
+  records: readonly unknown[],
+): number | undefined {
+  for (const record of records) {
+    const atMs = extractRecordTimestampMs(record);
+    if (atMs !== undefined) {
+      return atMs;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The routing windows of `segments`, in segment order. A segment whose start
+ * is not later than the largest start of any earlier segment has an empty
+ * window, and a segment with no valid timestamp has no start, so neither is
+ * listed. The starts of the listed windows are strictly increasing.
+ */
+function subagentRoutingWindows(
+  segments: readonly ClaudeCwdSegment[],
+): SubagentRoutingWindow[] {
+  const windows: SubagentRoutingWindow[] = [];
+  let largestStartMs = Number.NEGATIVE_INFINITY;
+  segments.forEach((segment, segmentIndex) => {
+    const startMs = firstValidTimestampMs(segment.records);
+    if (startMs !== undefined && startMs > largestStartMs) {
+      windows.push({ segmentIndex, startMs });
+      largestStartMs = startMs;
+    }
+  });
+  return windows;
+}
+
+/**
+ * The segment a record stamped `atMs` routes to: the last window whose start
+ * is at or before `atMs`, or the first window when `atMs` precedes them all.
+ * A window ends where the next one starts, so a record stamped exactly at a
+ * start goes to that segment. Undefined when there is no window.
+ */
+function routeSubagentRecord(
+  windows: readonly SubagentRoutingWindow[],
+  atMs: number,
+): number | undefined {
+  let chosen = windows[0]?.segmentIndex;
+  for (const window of windows) {
+    if (window.startMs > atMs) {
+      break;
+    }
+    chosen = window.segmentIndex;
+  }
+  return chosen;
+}
+
+/**
+ * The assistant records of one session file's `subagents/` transcripts (#4384),
+ * grouped by the index of the segment each record routes to. Only regular
+ * `agent-*.jsonl` files are read, one at a time, and only their assistant
+ * records are kept. A transcript that cannot be read is skipped with one
+ * stderr line that names its basename, and a malformed line is dropped
+ * silently by `parseClaudeProjectLines`. A record with no valid timestamp
+ * routes nowhere.
+ */
+function routeSubagentTranscripts(
+  projectDir: string,
+  fileBasename: string,
+  segments: readonly ClaudeCwdSegment[],
+): Map<number, unknown[]> {
+  const routed = new Map<number, unknown[]>();
+  const windows = subagentRoutingWindows(segments);
+  const subagentsDir = join(
+    projectDir,
+    fileBasename.replace(/\.jsonl$/, ''),
+    'subagents',
+  );
+  const transcriptNames = globSync('agent-*.jsonl', {
+    cwd: subagentsDir,
+    withFileTypes: true,
+  })
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .sort();
+  for (const name of transcriptNames) {
+    let records: unknown[];
+    try {
+      records = parseClaudeProjectLines(
+        readFileSync(join(subagentsDir, name), 'utf8'),
+      );
+    } catch (error) {
+      const code = (error as { code?: unknown }).code;
+      process.stderr.write(
+        `token-cost-harvest: skipping subagent transcript ${name}: ${typeof code === 'string' ? code : 'unreadable'}\n`,
+      );
+      continue;
+    }
+    for (const record of records) {
+      if (!isPlainObject(record) || record.type !== 'assistant') {
+        continue;
+      }
+      const atMs = extractRecordTimestampMs(record);
+      const segmentIndex =
+        atMs === undefined ? undefined : routeSubagentRecord(windows, atMs);
+      if (segmentIndex === undefined) {
+        continue;
+      }
+      const bucket = routed.get(segmentIndex);
+      if (bucket) {
+        bucket.push(record);
+      } else {
+        routed.set(segmentIndex, [record]);
+      }
+    }
+  }
+  return routed;
+}
+
 /**
  * #2404: a long-lived session's project JSONL file is not necessarily one
  * cwd for its whole lifetime -- `segmentRecordsByCwd` (see
@@ -2397,14 +2529,37 @@ export function scanClaudeVendorSessions(
     const fileBasename = basename(file);
     allRecordsByBasename.set(fileBasename, records);
     const segments = segmentRecordsByCwd(records);
+    // #4384: each segment's routed subagent transcript records, read before any
+    // segment is harvested; see routeSubagentTranscripts.
+    const subagentRecordsBySegment = routeSubagentTranscripts(
+      projectDir,
+      fileBasename,
+      segments,
+    );
     const unattributedRecords: unknown[] = [];
     let anySegmentHadCwdIssueNumber = false;
     segments.forEach((segment, index) => {
+      // #4384: an issue-shaped cwd never takes subagent records (its usage is
+      // not attributed to an issue), so its routed records are dropped here.
+      let subagentRecords: unknown[] | undefined =
+        subagentRecordsBySegment.get(index);
+      subagentRecordsBySegment.delete(index);
+      if (
+        subagentRecords !== undefined &&
+        segment.cwd !== undefined &&
+        inferIssueNumberFromBasename(basename(segment.cwd)) !== undefined
+      ) {
+        process.stderr.write(
+          `token-cost-harvest: dropping ${subagentRecords.length} subagent record(s) of ${fileBasename} segment ${index}: its cwd is issue-shaped, and subagent usage is not attributed to an issue\n`,
+        );
+        subagentRecords = undefined;
+      }
       let adapterResult: TokenCostAdapterResult;
       try {
         adapterResult = claudeAdapter.harvest({
           records: segment.records,
           fileBasename,
+          subagentRecords,
           // Suffix only when the file actually produced more than one
           // segment, so a single-cwd file (the common case) keeps its
           // pre-existing vendorSessionId (no suffix) and stays deduplicated
