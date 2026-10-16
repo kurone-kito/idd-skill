@@ -104,6 +104,17 @@ distributed IDD workflow a repository imported.
   not independently trigger a release, and its changes ship with the
   parent roadmap's release (or the next top-level trigger).
 
+  A change to a default behavior that removes or renames no setting or
+  option, and does not make a previously accepted input fail, is a minor
+  bump. The release notes list such a change first under `Changed` as
+  "Default changes". Observed 2026-10-15 (issue `#4381`): an `iddVersion`
+  bump issue asked the session to stop and report on "a breaking change
+  to a default that existed at v0.15.0" with no test for "breaking". A
+  plan's "Default changes" bullet said no such change existed, and an
+  independent review found that false for pull request `#4290`, which
+  changed the orchestrator's host-load default with no setting removed or
+  renamed.
+
   Capture the merge SHA recorded by GitHub for the bump pull request and
   pass it as `RELEASE_CUT_MERGE_SHA`; do not derive the release target
   from the moving default-branch tip. Tagging a later tip would silently
