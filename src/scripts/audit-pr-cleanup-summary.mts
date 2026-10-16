@@ -45,7 +45,7 @@ export interface CleanupHold {
   code: HoldReasonCode;
   verdict: 'hold' | 'stop';
   nextAction: string;
-  /** The marker command's own reason, kept when it is not `code`. */
+  /** One line of cause: the marker command's warnings, or the read that failed. */
   detail?: string;
 }
 

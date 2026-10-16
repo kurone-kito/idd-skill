@@ -8,6 +8,10 @@ import { fileURLToPath } from 'node:url';
 import type {
   CleanupArgs,
   CleanupAuditReport,
+  F4GateDeps,
+  F4GateScope,
+  F4GateState,
+  MarkerRunOptions,
   MinimizableNodeSnapshot,
   ReviewThreadNode,
 } from '../src/scripts/audit-pr-cleanup.mts';
@@ -15,14 +19,18 @@ import {
   applyCandidatePass,
   assertBatchApplyClaimScope,
   assertBatchTimeBudgetScope,
+  checkF4HeadProofGate,
   createTimeBudget,
+  describeF4HeadProofGate,
   enrichAuditReviewThreads,
   evaluateOperationalComment,
   evaluateReviewComment,
   evaluateReviewParent,
+  f4GateScope,
   fetchReviewThreads,
   parsePrNumbers,
   readActiveClaim,
+  runApplyWithRetry,
   SKIP_REASON_CODES,
 } from '../src/scripts/audit-pr-cleanup.mts';
 import { computeReportSummary } from '../src/scripts/audit-pr-cleanup-summary.mts';
@@ -2539,4 +2547,477 @@ test('every skip reason code is produced by a call site, and every call site use
       `unlisted code ${code}`,
     );
   }
+});
+
+// ---------------------------------------------------------------------------
+// The F4 head-proof gate of a claimed single-PR apply (#4369). Every seam is a
+// fake, so no test reaches git, gh, or the marker command.
+// ---------------------------------------------------------------------------
+
+type FakeClaim = ReturnType<F4GateDeps['assertClaim']>;
+
+const GATE_SHA_A = 'a'.repeat(40);
+const GATE_SHA_B = 'b'.repeat(40);
+const GATE_SCOPE: F4GateScope = {
+  prNumber: 7,
+  claimIssue: '4369',
+  claimId: 'claim-1',
+};
+const GATE_CLAIM: FakeClaim = {
+  agentId: 'agent-1',
+  claimId: 'claim-1',
+  supersedes: 'none',
+  branch: 'issue/4369-feat-audit-pr-cleanup-gate-f4-comment',
+  createdAt: '2026-10-16T19:45:17Z',
+};
+
+function markerJson(fields: Record<string, unknown>): string {
+  return JSON.stringify({
+    mode: 'dry-run',
+    type: 'f4-head-proof',
+    target: 'issue',
+    number: 4369,
+    ...fields,
+  });
+}
+
+interface FakeGateOptions {
+  claim?: () => FakeClaim;
+  worktree?: () => string | null;
+  heads?: string[];
+  /** One entry per marker run, in order: its stdout, null for silence, or an Error to throw. */
+  markers?: (string | Error | null)[];
+}
+
+function fakeGate(options: FakeGateOptions = {}) {
+  const heads = [...(options.heads ?? [GATE_SHA_A])];
+  const markers = [...(options.markers ?? [])];
+  const calls = {
+    claim: 0,
+    head: 0,
+    marker: [] as MarkerRunOptions[],
+  };
+  const deps: F4GateDeps = {
+    assertClaim: () => {
+      calls.claim += 1;
+      return options.claim ? options.claim() : GATE_CLAIM;
+    },
+    findWorktree: () => (options.worktree ? options.worktree() : '/wt/4369'),
+    readHeadSha: () => {
+      calls.head += 1;
+      return heads.length > 1
+        ? (heads.shift() as string)
+        : (heads[0] as string);
+    },
+    runMarker: (run) => {
+      calls.marker.push(run);
+      const next = markers.shift();
+      if (next instanceof Error) {
+        throw next;
+      }
+      return next ?? null;
+    },
+  };
+  return { deps, calls };
+}
+
+function gateMinimizeFake(minimized: string[]) {
+  return (subjectId: string) => {
+    minimized.push(subjectId);
+    return { isMinimized: true, minimizedReason: null };
+  };
+}
+
+test('checkF4HeadProofGate: a proceed dry run passes with no apply run (#4369)', () => {
+  const gate = fakeGate({
+    markers: [markerJson({ verdict: 'proceed', reason: 'reusable' })],
+  });
+  const state: F4GateState = { headSha: null };
+
+  assert.equal(checkF4HeadProofGate(GATE_SCOPE, state, gate.deps), null);
+  assert.deepEqual(gate.calls.marker, [
+    {
+      claimIssue: '4369',
+      claimId: 'claim-1',
+      agentId: 'agent-1',
+      worktree: '/wt/4369',
+      apply: false,
+    },
+  ]);
+  assert.equal(state.headSha, GATE_SHA_A);
+});
+
+test('checkF4HeadProofGate: a hold or stop verdict keeps its reason and next action (#4369)', () => {
+  const hold = fakeGate({
+    markers: [
+      markerJson({
+        verdict: 'hold',
+        reason: 'pr-state',
+        nextAction: 'Do not post. Read it again.',
+      }),
+    ],
+  });
+  assert.deepEqual(
+    checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, hold.deps),
+    {
+      code: 'pr-state',
+      verdict: 'hold',
+      nextAction: 'Do not post. Read it again.',
+    },
+  );
+
+  const stop = fakeGate({
+    markers: [
+      markerJson({
+        verdict: 'stop',
+        reason: 'claim-or-lock',
+        nextAction: 'Do not post and do not continue F4.',
+      }),
+    ],
+  });
+  assert.deepEqual(
+    checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, stop.deps),
+    {
+      code: 'claim-or-lock',
+      verdict: 'stop',
+      nextAction: 'Do not post and do not continue F4.',
+    },
+  );
+});
+
+test('checkF4HeadProofGate: an unlisted marker reason is gate-unreadable with the reason as detail (#4369)', () => {
+  const gate = fakeGate({
+    markers: [markerJson({ verdict: 'hold', reason: 'brand-new-reason' })],
+  });
+  const hold = checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, gate.deps);
+
+  assert.equal(hold?.code, 'gate-unreadable');
+  assert.equal(hold?.verdict, 'hold');
+  assert.match(hold?.detail ?? '', /brand-new-reason/u);
+});
+
+test('checkF4HeadProofGate: output that is not a verdict, or a thrown run, is gate-unreadable (#4369)', () => {
+  const gate = fakeGate({
+    markers: [
+      null,
+      'not json',
+      '{"verdict":"maybe"}',
+      new Error('spawn failed'),
+    ],
+  });
+  const holds = [0, 1, 2, 3].map(() =>
+    checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, gate.deps),
+  );
+
+  assert.deepEqual(
+    holds.map((hold) => hold?.code),
+    [
+      'gate-unreadable',
+      'gate-unreadable',
+      'gate-unreadable',
+      'gate-unreadable',
+    ],
+  );
+  assert.match(holds[3]?.detail ?? '', /spawn failed/u);
+});
+
+test('checkF4HeadProofGate: a post runs one apply, then a dry run that must proceed (#4369)', () => {
+  const gate = fakeGate({
+    markers: [
+      markerJson({ verdict: 'post' }),
+      markerJson({ verdict: 'proceed', reason: 'posted-confirmed' }),
+      markerJson({ verdict: 'proceed', reason: 'reusable' }),
+    ],
+  });
+
+  assert.equal(
+    checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, gate.deps),
+    null,
+  );
+  assert.deepEqual(
+    gate.calls.marker.map((run) => run.apply),
+    [false, true, false],
+  );
+});
+
+test('checkF4HeadProofGate: a rejected post holds with its reason and does not re-read (#4369)', () => {
+  const gate = fakeGate({
+    markers: [
+      markerJson({ verdict: 'post' }),
+      markerJson({
+        verdict: 'hold',
+        reason: 'post-rejected',
+        nextAction: 'Nothing was posted.',
+      }),
+    ],
+  });
+  const hold = checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, gate.deps);
+
+  assert.equal(hold?.code, 'post-rejected');
+  assert.deepEqual(
+    gate.calls.marker.map((run) => run.apply),
+    [false, true],
+  );
+});
+
+test('checkF4HeadProofGate: a post still unconfirmed after the apply holds as post-unconfirmed (#4369)', () => {
+  const gate = fakeGate({
+    markers: [
+      markerJson({ verdict: 'post' }),
+      markerJson({ verdict: 'proceed', reason: 'posted-confirmed' }),
+      markerJson({ verdict: 'post' }),
+    ],
+  });
+  const hold = checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, gate.deps);
+
+  assert.equal(hold?.code, 'post-unconfirmed');
+  assert.equal(gate.calls.marker.length, 3, 'no fourth marker run');
+});
+
+test('checkF4HeadProofGate: a moved head holds the later pass as head-changed (#4369)', () => {
+  const gate = fakeGate({
+    heads: [GATE_SHA_A, GATE_SHA_B],
+    markers: [markerJson({ verdict: 'proceed', reason: 'reusable' })],
+  });
+  const state: F4GateState = { headSha: null };
+
+  assert.equal(checkF4HeadProofGate(GATE_SCOPE, state, gate.deps), null);
+  const hold = checkF4HeadProofGate(GATE_SCOPE, state, gate.deps);
+
+  assert.equal(hold?.code, 'head-changed');
+  assert.equal(hold?.verdict, 'hold');
+  assert.equal(gate.calls.marker.length, 1, 'no marker run after a moved head');
+});
+
+test('checkF4HeadProofGate: a failed head read, a missing worktree, or a failed claim holds before any marker run (#4369)', () => {
+  const headFails = fakeGate();
+  const failingHead: F4GateDeps = {
+    ...headFails.deps,
+    readHeadSha: () => {
+      throw new Error('gh api failed');
+    },
+  };
+  assert.equal(
+    checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, failingHead)?.code,
+    'head-read-failed',
+  );
+
+  const noWorktree = fakeGate({ worktree: () => null });
+  assert.equal(
+    checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, noWorktree.deps)?.code,
+    'worktree-not-found',
+  );
+  assert.equal(noWorktree.calls.marker.length, 0);
+
+  const noClaim = fakeGate({
+    claim: () => {
+      throw new Error('claim check failed for #4369');
+    },
+  });
+  const stop = checkF4HeadProofGate(
+    GATE_SCOPE,
+    { headSha: null },
+    noClaim.deps,
+  );
+  assert.equal(stop?.code, 'claim-or-lock');
+  assert.equal(stop?.verdict, 'stop');
+  assert.equal(noClaim.calls.head, 0, 'no head read after a failed claim');
+  assert.equal(noClaim.calls.marker.length, 0);
+});
+
+test('runApplyWithRetry: a gate hold on the first pass minimizes nothing and reports held (#4369)', async () => {
+  const gate = fakeGate({
+    markers: [
+      markerJson({
+        verdict: 'hold',
+        reason: 'pr-state',
+        nextAction: 'Do not post.',
+      }),
+    ],
+  });
+  const state: F4GateState = { headSha: null };
+  const minimized: string[] = [];
+
+  const result = await runApplyWithRetry(
+    createAuditReport({ candidates: [createRow('c1'), createRow('c2')] }),
+    (pass) =>
+      applyCandidatePass(
+        'o',
+        'r',
+        pass,
+        applyArgs(),
+        {},
+        {
+          fetchNode: () => fakeSnapshot(),
+          minimize: gateMinimizeFake(minimized),
+        },
+      ),
+    async () => {
+      throw new Error('no rescan after a hold');
+    },
+    undefined,
+    noBackoff,
+    undefined,
+    () => checkF4HeadProofGate(GATE_SCOPE, state, gate.deps),
+  );
+
+  assert.deepEqual(minimized, []);
+  assert.equal(result.attempts, 0);
+  computeReportSummary(result.report);
+  assert.equal(result.report.status, 'held');
+  assert.equal(result.report.holds?.[0]?.code, 'pr-state');
+});
+
+test('runApplyWithRetry: a hold after an applied pass reports held, not applied (#4369)', async () => {
+  const gate = fakeGate({
+    markers: [
+      markerJson({ verdict: 'proceed', reason: 'reusable' }),
+      markerJson({
+        verdict: 'hold',
+        reason: 'conflicting-marker',
+        nextAction: 'Reconcile.',
+      }),
+    ],
+  });
+  const state: F4GateState = { headSha: null };
+  const minimized: string[] = [];
+  let rescans = 0;
+
+  const result = await runApplyWithRetry(
+    createAuditReport({ candidates: [createRow('c1'), createRow('c2')] }),
+    (pass) =>
+      applyCandidatePass(
+        'o',
+        'r',
+        pass,
+        applyArgs(),
+        {},
+        {
+          fetchNode: () => fakeSnapshot(),
+          minimize: gateMinimizeFake(minimized),
+        },
+      ),
+    async () => {
+      rescans += 1;
+      return createAuditReport({
+        mode: 'dry-run',
+        candidates: [createRow('c3')],
+      });
+    },
+    undefined,
+    noBackoff,
+    undefined,
+    () => checkF4HeadProofGate(GATE_SCOPE, state, gate.deps),
+  );
+
+  assert.deepEqual(minimized, ['c1', 'c2'], 'only the first pass minimizes');
+  assert.equal(rescans, 1);
+  assert.equal(result.attempts, 1);
+  computeReportSummary(result.report);
+  assert.equal(result.report.status, 'held');
+  assert.equal(result.report.applied.length, 2);
+  assert.equal(result.report.holds?.[0]?.code, 'conflicting-marker');
+});
+
+test('runApplyWithRetry: no candidate means the gate never runs (#4369)', async () => {
+  let gateRuns = 0;
+
+  const result = await runApplyWithRetry(
+    createAuditReport({ candidates: [] }),
+    async () => {},
+    async () => createAuditReport({ mode: 'dry-run', candidates: [] }),
+    undefined,
+    noBackoff,
+    undefined,
+    () => {
+      gateRuns += 1;
+      return null;
+    },
+  );
+
+  assert.equal(gateRuns, 0);
+  assert.equal(result.attempts, 1);
+});
+
+test('describeF4HeadProofGate: a dry run reports the gate verdict or its own hold (#4369)', () => {
+  const proceed = fakeGate({
+    markers: [markerJson({ verdict: 'proceed', reason: 'reusable' })],
+  });
+  assert.deepEqual(describeF4HeadProofGate(GATE_SCOPE, proceed.deps), {
+    gate: 'proceed',
+    gateReason: 'reusable',
+  });
+  assert.equal(proceed.calls.marker[0]?.apply, false);
+
+  const posted = fakeGate({ markers: [markerJson({ verdict: 'post' })] });
+  assert.deepEqual(describeF4HeadProofGate(GATE_SCOPE, posted.deps), {
+    gate: 'post',
+    gateReason: null,
+  });
+  assert.equal(posted.calls.marker.length, 1, 'a dry run never applies');
+
+  const unclaimed = fakeGate({
+    claim: () => {
+      throw new Error('no claim');
+    },
+  });
+  assert.deepEqual(describeF4HeadProofGate(GATE_SCOPE, unclaimed.deps), {
+    gate: 'stop',
+    gateReason: 'claim-or-lock',
+  });
+  assert.equal(unclaimed.calls.head, 0);
+
+  const noWorktree = fakeGate({ worktree: () => null });
+  assert.deepEqual(describeF4HeadProofGate(GATE_SCOPE, noWorktree.deps), {
+    gate: 'hold',
+    gateReason: 'worktree-not-found',
+  });
+
+  const unknown = fakeGate({
+    markers: [markerJson({ verdict: 'hold', reason: 'brand-new' })],
+  });
+  assert.deepEqual(describeF4HeadProofGate(GATE_SCOPE, unknown.deps), {
+    gate: 'hold',
+    gateReason: 'gate-unreadable',
+  });
+});
+
+test('f4GateScope applies only to a claimed single-PR run (#4369)', () => {
+  assert.deepEqual(
+    f4GateScope(
+      cleanupArgs({ apply: true, claimIssue: '4369', claimId: 'claim-1' }),
+      7,
+    ),
+    { prNumber: 7, claimIssue: '4369', claimId: 'claim-1' },
+  );
+  assert.deepEqual(
+    f4GateScope(cleanupArgs({ claimIssue: '4369', claimId: 'claim-1' }), 7),
+    { prNumber: 7, claimIssue: '4369', claimId: 'claim-1' },
+    'a claimed dry run is in scope',
+  );
+  assert.equal(
+    f4GateScope(
+      cleanupArgs({
+        apply: true,
+        claimIssue: '4369',
+        claimId: 'claim-1',
+        skipClaimCheck: true,
+      }),
+      7,
+    ),
+    null,
+  );
+  assert.equal(
+    f4GateScope(
+      cleanupArgs({
+        apply: true,
+        claimIssue: '4369',
+        claimId: 'claim-1',
+        prs: '7,8',
+      }),
+      7,
+    ),
+    null,
+  );
+  assert.equal(f4GateScope(cleanupArgs({ apply: true }), 7), null);
 });

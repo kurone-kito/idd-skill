@@ -4,9 +4,15 @@
 // The scripts/audit-pr-cleanup.mjs copy is generated from the .mts source named
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
+import { spawnSync } from 'node:child_process';
 import { readFileSync, writeSync } from 'node:fs';
+import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { computeReportSummary } from './audit-pr-cleanup-summary.mjs';
+import {
+  computeReportSummary,
+  HOLD_REASON_CODES,
+} from './audit-pr-cleanup-summary.mjs';
+import { resolveBundleRoot } from './bundle-root.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   isAuthorizedForcedHandoffActor,
@@ -16,6 +22,7 @@ import {
 import {
   combineOwnerRepoFlags,
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghApiJson,
   ghText,
 } from './gh-exec.mjs';
 import {
@@ -26,6 +33,7 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
+import { parseLocalWorktreeList } from './local-worktree-occupancy.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   classifyIddPrComment,
@@ -48,6 +56,7 @@ import {
 import {
   fetchLastEditedAtByNodeId,
   fetchReviewThreadCommentUserContentEdits,
+  gitChildEnvironment,
 } from './provider-adapter-github.mjs';
 import { enrichThreadsWithBotEditHistories } from './review-thread-edit-histories.mjs';
 /**
@@ -348,18 +357,32 @@ async function processOnePr(
   args,
   budget = UNBOUNDED_TIME_BUDGET,
 ) {
+  // The claimed single-PR scope of the head-proof gate (#4369), or null.
+  const scope = f4GateScope(args, prNumber);
   const claimContext = {
     expectedLinkedPrs: buildExpectedLinkedPrReferences(owner, repo, prNumber),
     // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
     // a legitimate issue-only handoff that predates the PR is honored even
     // against this PR-backed claim. Resolve it once for both claim asserts.
-    prFirstCommitAt: args.apply
-      ? fetchPrFirstCommitAt(owner, repo, prNumber)
-      : null,
+    // A claimed dry run resolves the same context, so its gate matches apply.
+    prFirstCommitAt:
+      args.apply || scope !== null
+        ? fetchPrFirstCommitAt(owner, repo, prNumber)
+        : null,
   };
   const report = await buildReport(owner, repo, prNumber);
   if (args.apply) {
     report.mode = 'apply';
+    const gateState = { headSha: null };
+    const beforePass =
+      scope === null
+        ? undefined
+        : () =>
+            checkF4HeadProofGate(
+              scope,
+              gateState,
+              createF4GateDeps(owner, repo, args, scope, claimContext),
+            );
     const {
       report: finalReport,
       attempts,
@@ -375,19 +398,39 @@ async function processOnePr(
       undefined,
       undefined,
       budget,
+      beforePass,
     );
     finalReport.retryAttempts = attempts;
     if (boundExhausted) {
       finalReport.retryBoundExhausted = true;
     }
     computeReportSummary(finalReport);
-    if (finalReport.failed.length > 0 || finalReport.rescanError) {
+    // A gate hold (#4369) is a failed run for the exit status, though its
+    // status is `held` and never routes to the failure path.
+    if (
+      finalReport.failed.length > 0 ||
+      finalReport.rescanError ||
+      (finalReport.holds?.length ?? 0) > 0
+    ) {
       writeReport(finalReport, args.format);
       return true;
     }
     computeReportSummary(finalReport);
     writeReport(finalReport, args.format);
     return false;
+  }
+  // A claimed dry run reports the gate verdict (#4369); every other dry run
+  // reports that no gate applies, which is not a verdict.
+  if (scope !== null && report.candidates.length > 0) {
+    const gate = describeF4HeadProofGate(
+      scope,
+      createF4GateDeps(owner, repo, args, scope, claimContext),
+    );
+    report.gate = gate.gate;
+    report.gateReason = gate.gateReason;
+  } else {
+    report.gate = F4_GATE_NOT_APPLICABLE;
+    report.gateReason = null;
   }
   computeReportSummary(report);
   writeReport(report, args.format);
@@ -633,6 +676,7 @@ export async function runApplyWithRetry(
   maxAttempts = DEFAULT_APPLY_RETRY_MAX_ATTEMPTS,
   backoff = defaultApplyRetryBackoff,
   budget = UNBOUNDED_TIME_BUDGET,
+  beforePass,
 ) {
   // A non-finite `maxAttempts` (`Infinity`) would defeat the bounded-retry
   // contract with an unbounded loop; a fractional value (e.g. `2.5`) would
@@ -662,6 +706,17 @@ export async function runApplyWithRetry(
       // counting a pass that never started would misreport one cleanup
       // pass as having run against this HEAD.
       return { report, attempts: attempt - 1, boundExhausted: false };
+    }
+    // The F4 head-proof gate of a claimed single-PR apply (#4369) runs before
+    // every pass that has candidates to apply. A hold records its reason and
+    // returns here, so this pass never runs and no rescan follows. The report
+    // keeps the rows already applied, and the summary reads it as `held`.
+    if (beforePass !== undefined && report.candidates.length > 0) {
+      const hold = beforePass();
+      if (hold !== null) {
+        report.holds = [...(report.holds ?? []), hold];
+        return { report, attempts: attempt - 1, boundExhausted: false };
+      }
     }
     // Captured before `applyPass` mutates `report` (#3321, Codex review
     // PR #3499): once this pass has run, an empty `report.candidates`
@@ -755,6 +810,337 @@ export async function runApplyWithRetry(
   // Unreachable: totalAttempts is normalized to >= 1 above, so the loop
   // always runs at least one attempt and returns from inside it.
   return { report, attempts: 0, boundExhausted: true };
+}
+const F4_GATE_NOT_APPLICABLE = 'gate-not-applicable';
+const F4_MARKER_TIMEOUT_MS = 300_000;
+const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/u;
+const MARKER_VERDICTS = new Set(['proceed', 'hold', 'stop', 'post']);
+/** Next actions of the holds this helper decides itself. */
+const HELPER_NEXT_ACTIONS = {
+  'claim-or-lock':
+    'Do not apply. This session does not hold the claim, so end quietly.',
+  'worktree-not-found':
+    'Do not apply. Git registers no worktree for the claim branch; restore it, then rerun.',
+  'head-changed':
+    'Do not apply. The pull request head moved during the run; read it again, then rerun the cleanup.',
+  'head-read-failed':
+    'Do not apply. The pull request head could not be read; fix the cause, then rerun.',
+  'post-unconfirmed':
+    'Do not post again. The proof was posted but a dry run still finds none; reconcile by reading the issue comments.',
+  'gate-unreadable':
+    'Do not apply. The head-proof check printed no usable verdict; read its output, fix the cause, then rerun.',
+};
+const GENERIC_NEXT_ACTION =
+  'Do not apply. Read the hold reason and the head-proof output, fix the cause, then rerun.';
+function isHoldReasonCode(value) {
+  return value !== null && HOLD_REASON_CODES.includes(value);
+}
+function helperNextAction(code) {
+  return HELPER_NEXT_ACTIONS[code] ?? GENERIC_NEXT_ACTION;
+}
+/** The first line of an error, so one hold line carries its cause. */
+function firstLine(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.split('\n')[0] ?? '';
+}
+function boundedDetail(text) {
+  const flat = text.replace(/\s+/gu, ' ').trim().slice(0, 300);
+  return flat === '' ? null : flat;
+}
+function helperHold(code, verdict, detail) {
+  return {
+    code,
+    verdict,
+    nextAction: helperNextAction(code),
+    ...(detail === null ? {} : { detail }),
+  };
+}
+/**
+ * Read the marker command's stdout as a verdict. Output that is not a JSON
+ * verdict is `gate-unreadable`, a hold, so an unreadable gate never passes.
+ */
+function readMarkerDecision(stdout) {
+  const unreadable = (detail) => ({
+    verdict: 'hold',
+    reason: 'gate-unreadable',
+    nextAction: null,
+    detail,
+  });
+  if (stdout === null || stdout.trim() === '') {
+    return unreadable('the marker command printed no result');
+  }
+  let envelope;
+  try {
+    envelope = JSON.parse(stdout);
+  } catch {
+    return unreadable('the marker command printed no JSON');
+  }
+  if (typeof envelope !== 'object' || envelope === null) {
+    return unreadable('the marker command printed no JSON object');
+  }
+  const fields = envelope;
+  const verdict = fields.verdict;
+  if (typeof verdict !== 'string' || !MARKER_VERDICTS.has(verdict)) {
+    return unreadable('the marker command gave no verdict');
+  }
+  const reason = typeof fields.reason === 'string' ? fields.reason : null;
+  if (verdict !== 'proceed' && verdict !== 'post' && reason === null) {
+    return unreadable(`the marker command gave ${verdict} without a reason`);
+  }
+  const warnings = Array.isArray(fields.warnings)
+    ? fields.warnings.filter((line) => typeof line === 'string')
+    : [];
+  return {
+    verdict: verdict,
+    reason,
+    nextAction:
+      typeof fields.nextAction === 'string' ? fields.nextAction : null,
+    detail: boundedDetail(warnings.join('; ')),
+  };
+}
+/** Run the marker command once and read its verdict. A throw is unreadable. */
+function markerDecision(deps, options) {
+  try {
+    return readMarkerDecision(deps.runMarker(options));
+  } catch (error) {
+    return {
+      verdict: 'hold',
+      reason: 'gate-unreadable',
+      nextAction: null,
+      detail: boundedDetail(firstLine(error)),
+    };
+  }
+}
+/**
+ * The hold a non-proceed decision becomes. A listed reason keeps its code and
+ * verdict; any other reason becomes `gate-unreadable`, with the reason kept
+ * as its detail.
+ */
+function holdFromDecision(decision) {
+  const verdict = decision.verdict === 'stop' ? 'stop' : 'hold';
+  if (isHoldReasonCode(decision.reason)) {
+    return {
+      code: decision.reason,
+      verdict,
+      nextAction: decision.nextAction ?? helperNextAction(decision.reason),
+      ...(decision.detail === null ? {} : { detail: decision.detail }),
+    };
+  }
+  const cause = `marker reason ${decision.reason ?? 'none'}`;
+  const detail = boundedDetail(
+    decision.detail === null ? cause : `${decision.detail}; ${cause}`,
+  );
+  return helperHold('gate-unreadable', 'hold', detail);
+}
+/**
+ * The head-proof gate before one pass (#4369): the claim, the head, the
+ * worktree, then the marker dry run. A `post` verdict gets one `--apply` run
+ * and a dry run that must return `proceed`. Returns the hold that stops the
+ * pass, or null when the pass may run. The head is read once, and each later
+ * pass compares against that first read. Nothing here minimizes a comment.
+ */
+export function checkF4HeadProofGate(scope, state, deps) {
+  let claim;
+  try {
+    claim = deps.assertClaim();
+  } catch (error) {
+    return helperHold('claim-or-lock', 'stop', boundedDetail(firstLine(error)));
+  }
+  let head;
+  try {
+    head = deps.readHeadSha(scope.prNumber);
+  } catch (error) {
+    return helperHold(
+      'head-read-failed',
+      'hold',
+      boundedDetail(firstLine(error)),
+    );
+  }
+  if (state.headSha === null) {
+    state.headSha = head;
+  } else if (state.headSha !== head) {
+    return helperHold(
+      'head-changed',
+      'hold',
+      `the head was ${state.headSha} and is now ${head}`,
+    );
+  }
+  let worktree;
+  try {
+    worktree = deps.findWorktree(claim.branch);
+  } catch (error) {
+    return helperHold(
+      'worktree-not-found',
+      'hold',
+      boundedDetail(firstLine(error)),
+    );
+  }
+  if (worktree === null) {
+    return helperHold(
+      'worktree-not-found',
+      'hold',
+      `git registers no worktree for ${claim.branch}`,
+    );
+  }
+  const run = {
+    claimIssue: scope.claimIssue,
+    claimId: scope.claimId,
+    agentId: claim.agentId,
+    worktree,
+  };
+  const dry = markerDecision(deps, { ...run, apply: false });
+  if (dry.verdict === 'proceed') {
+    return null;
+  }
+  if (dry.verdict !== 'post') {
+    return holdFromDecision(dry);
+  }
+  const posted = markerDecision(deps, { ...run, apply: true });
+  if (posted.verdict !== 'proceed') {
+    return holdFromDecision(posted);
+  }
+  const reread = markerDecision(deps, { ...run, apply: false });
+  if (reread.verdict === 'proceed') {
+    return null;
+  }
+  if (reread.verdict === 'post') {
+    return helperHold(
+      'post-unconfirmed',
+      'hold',
+      'the proof was posted, but a dry run still finds none',
+    );
+  }
+  return holdFromDecision(reread);
+}
+/**
+ * The `gate` and `gateReason` a dry run reports for a claimed single-PR run
+ * (#4369). It makes the same claim, worktree, and marker dry run as the apply
+ * gate, but never reads the head and never runs `--apply`.
+ */
+export function describeF4HeadProofGate(scope, deps) {
+  let claim;
+  try {
+    claim = deps.assertClaim();
+  } catch {
+    return { gate: 'stop', gateReason: 'claim-or-lock' };
+  }
+  let worktree;
+  try {
+    worktree = deps.findWorktree(claim.branch);
+  } catch {
+    worktree = null;
+  }
+  if (worktree === null) {
+    return { gate: 'hold', gateReason: 'worktree-not-found' };
+  }
+  const decision = markerDecision(deps, {
+    claimIssue: scope.claimIssue,
+    claimId: scope.claimId,
+    agentId: claim.agentId,
+    worktree,
+    apply: false,
+  });
+  if (decision.verdict === 'hold' || decision.verdict === 'stop') {
+    const hold = holdFromDecision(decision);
+    return { gate: hold.verdict, gateReason: hold.code };
+  }
+  return { gate: decision.verdict, gateReason: decision.reason };
+}
+/**
+ * The claimed single-PR run the gate applies to: an apply or dry run that
+ * names a claim, without `--prs` (a batch never runs under one claim) and
+ * without `--skip-claim-check`. Null for every other run, which keeps its
+ * behavior.
+ */
+export function f4GateScope(args, prNumber) {
+  if (
+    args.prs !== undefined ||
+    args.skipClaimCheck ||
+    args.claimIssue === undefined ||
+    args.claimId === undefined
+  ) {
+    return null;
+  }
+  return { prNumber, claimIssue: args.claimIssue, claimId: args.claimId };
+}
+/** The registered worktree of `branch`, from `git worktree list --porcelain -z`. */
+function findRegisteredWorktreeForBranch(branch) {
+  const listing = spawnSync('git', ['worktree', 'list', '--porcelain', '-z'], {
+    encoding: 'utf8',
+    env: gitChildEnvironment(),
+  });
+  if (listing.status !== 0) {
+    throw new Error(`git worktree list failed (status ${listing.status})`);
+  }
+  const record = parseLocalWorktreeList(listing.stdout).find(
+    (entry) =>
+      entry.branchRef === `refs/heads/${branch}` &&
+      !entry.prunable &&
+      !entry.bare,
+  );
+  return record?.path ?? null;
+}
+/** The live head SHA of a pull request, from the REST pulls endpoint. */
+function readPullRequestHeadSha(owner, repo, prNumber) {
+  const payload = ghApiJson(`repos/${owner}/${repo}/pulls/${prNumber}`);
+  const sha = payload?.head?.sha;
+  if (typeof sha !== 'string' || !FULL_SHA_PATTERN.test(sha)) {
+    throw new Error(`pull request #${prNumber} has no readable head sha`);
+  }
+  return sha;
+}
+/**
+ * Run the compiled `post-idd-marker` for the head proof and return its stdout.
+ * The child gets the sanitized Git environment, as the claim check does.
+ */
+function runMarkerCommand(options) {
+  const script = join(
+    resolveBundleRoot(import.meta.dirname),
+    'scripts',
+    'post-idd-marker.mjs',
+  );
+  const argv = [
+    script,
+    '--type',
+    'f4-head-proof',
+    '--target',
+    'issue',
+    options.claimIssue,
+    '--claim-id',
+    options.claimId,
+    '--agent-id',
+    options.agentId,
+    '--worktree',
+    options.worktree,
+  ];
+  if (options.apply) {
+    argv.push('--apply');
+  }
+  const result = spawnSync(process.execPath, argv, {
+    encoding: 'utf8',
+    env: gitChildEnvironment(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: F4_MARKER_TIMEOUT_MS,
+  });
+  return typeof result.stdout === 'string' && result.stdout.trim() !== ''
+    ? result.stdout
+    : null;
+}
+function createF4GateDeps(owner, repo, args, scope, claimContext) {
+  return {
+    assertClaim: () =>
+      assertActiveClaim(
+        owner,
+        repo,
+        scope.claimIssue,
+        args.agentId,
+        scope.claimId,
+        claimContext,
+      ),
+    findWorktree: findRegisteredWorktreeForBranch,
+    readHeadSha: (prNumber) => readPullRequestHeadSha(owner, repo, prNumber),
+    runMarker: runMarkerCommand,
+  };
 }
 // Build an IDD-scoped disposition-author predicate from the resolved
 // trusted-marker actors (the accounts the IDD agent posts dispositions under).
@@ -1978,6 +2364,20 @@ function writeReport(report, format) {
     console.log(
       `summary: status=${report.status}, candidates=${report.summary.candidate}, applied=${report.summary.applied}, failed=${report.summary.failed}, skipped=${report.summary.skipped}${retrySuffix}${rescanErrorSuffix}`,
     );
+    console.log('');
+  }
+  if (report.gate !== undefined) {
+    const reason = report.gateReason ? ` (${report.gateReason})` : '';
+    console.log(`gate: ${report.gate}${reason}`);
+  }
+  if (report.holds !== undefined && report.holds.length > 0) {
+    console.log(`holds: ${report.holds.length}`);
+    for (const hold of report.holds) {
+      const detail = hold.detail ? ` (${hold.detail})` : '';
+      console.log(
+        `  ${hold.verdict} ${hold.code}: ${hold.nextAction}${detail}`,
+      );
+    }
     console.log('');
   }
   printRows('candidates', report.candidates);
