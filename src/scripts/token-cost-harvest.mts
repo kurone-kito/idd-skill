@@ -44,6 +44,7 @@ import {
   deriveFallbackSessionId,
   extractRecordTimestampMs,
   extractSessionId,
+  groupClaudeRequests,
   parseClaudeProjectLines,
   segmentRecordsByCwd,
 } from './token-cost-adapter-claude.mts';
@@ -132,11 +133,14 @@ function toNonNegativeInt(value: unknown): number {
 // per-timestamp series, so this module re-derives one locally from the
 // same raw records the adapters already parse (via the already-exported
 // parseClaudeProjectLines / parseCodexRolloutLines), reading each file
-// once and feeding the identical `records` array to both the adapter's
-// own harvest() and the local timeline extractor below -- never two
-// divergent reads. The small per-record field-mapping duplication here
-// is deliberate; each function cites its adapter-module source of truth
-// so drift is visible in review.
+// once and feeding its parsed records to both the adapter's own harvest()
+// and the local timeline extractor below -- never two divergent reads.
+// The Claude timelines do not repeat the adapter's logic: they call
+// groupClaudeRequests (#4380), so for records that all carry valid
+// timestamps their usage points sum to the adapter's total. The Codex
+// extractor keeps a local mirror of its adapter's field mapping; each such
+// function cites its adapter-module source of truth so drift is visible in
+// review.
 // ---------------------------------------------------------------------------
 
 /** One usage observation at a point in session time. */
@@ -145,7 +149,7 @@ interface UsagePoint {
   usage: TokenCostUsage;
 }
 
-/** A vendor's usage timeline is either per-message deltas or cumulative snapshots. */
+/** A vendor's usage timeline is either deltas (one per Claude API request, or per Codex `token_count` record) or cumulative snapshots. */
 export interface UsageTimeline {
   mode: 'delta' | 'cumulative';
   points: readonly UsagePoint[];
@@ -163,39 +167,22 @@ function toValidTimestampMs(value: unknown): number | undefined {
   return Number.isFinite(ms) ? ms : undefined;
 }
 
-/** Mirrors token-cost-adapter-claude.mts's usageFromFields (per-message delta). */
-function claudeUsageFromFields(raw: Record<string, unknown>): TokenCostUsage {
-  const split = raw.cache_creation;
-  const cacheCreation = isPlainObject(split)
-    ? toNonNegativeInt(split.ephemeral_5m_input_tokens) +
-      toNonNegativeInt(split.ephemeral_1h_input_tokens)
-    : toNonNegativeInt(raw.cache_creation_input_tokens);
-  return {
-    inputUncached: toNonNegativeInt(raw.input_tokens),
-    cacheRead: toNonNegativeInt(raw.cache_read_input_tokens),
-    cacheCreation,
-    output: toNonNegativeInt(raw.output_tokens),
-    reasoning: 0,
-  };
-}
-
-/** Mirrors token-cost-adapter-claude.mts's extractUsage's per-record source: assistant records' message.usage. */
+/**
+ * Mirrors token-cost-adapter-claude.mts's extractUsage, one point per API
+ * request (#4380): the request's usage (its field-wise maximum across its
+ * records) stamped at its greatest-timestamped record that has a valid
+ * timestamp and usage. A request with no such record has no point, but its
+ * usage still counts in the adapter's session total. Grouping is within the
+ * given `records` array (see groupClaudeRequests).
+ */
 export function extractClaudeUsageTimeline(
   records: readonly unknown[],
 ): UsageTimeline {
   const points: UsagePoint[] = [];
-  for (const record of records) {
-    if (!isPlainObject(record) || record.type !== 'assistant') {
-      continue;
+  for (const request of groupClaudeRequests(records)) {
+    if (request.usageAtMs !== undefined) {
+      points.push({ atMs: request.usageAtMs, usage: request.usage });
     }
-    const atMs = toValidTimestampMs(record.timestamp);
-    const message = isPlainObject(record.message) ? record.message : undefined;
-    const usageRaw =
-      message && isPlainObject(message.usage) ? message.usage : undefined;
-    if (atMs === undefined || !usageRaw) {
-      continue;
-    }
-    points.push({ atMs, usage: claudeUsageFromFields(usageRaw) });
   }
   points.sort((a, b) => a.atMs - b.atMs);
   return { mode: 'delta', points };
@@ -274,13 +261,14 @@ export function extractCodexUsageTimeline(
 // ---------------------------------------------------------------------------
 // Per-vendor turn/tool-call count timelines (#2769)
 //
-// Mirrors the usage-timeline section above exactly: the adapters
-// intentionally expose only one aggregate turnCount/toolCallCount per
-// session, so this module re-derives a per-record timeline locally from
-// the same raw records, feeding the same window-allocation mechanism
-// below. Unlike token usage, counts are always simple per-record
-// increments -- neither vendor reports a cumulative running total -- so
-// this needs no delta/cumulative mode distinction.
+// Mirrors the usage-timeline section above: the adapters intentionally
+// expose only one aggregate turnCount/toolCallCount per session, so this
+// module re-derives a timeline locally from the same raw records, feeding
+// the same window-allocation mechanism below. Counts are simple increments
+// -- neither vendor reports a cumulative running total -- so this needs no
+// delta/cumulative mode distinction. Claude counts one turn per API request
+// (#4380), grouped by groupClaudeRequests; Codex counts one per turn_context
+// record.
 // ---------------------------------------------------------------------------
 
 /** One count observation at a point in session time. */
@@ -303,30 +291,27 @@ interface CountTimeline {
   supportsToolCallCount: boolean;
 }
 
-/** Mirrors token-cost-adapter-claude.mts's extractTurnCount/extractToolCallCount per-record source: every assistant record is one turn (regardless of whether it carries usage), with tool_use content blocks summed for toolCallCount. */
+/**
+ * Mirrors token-cost-adapter-claude.mts's extractTurnCount and
+ * extractToolCallCount, one point per API request (#4380): turnCount 1 and
+ * the request's whole tool_use total, stamped at its greatest valid
+ * timestamp, so a request's turn and its tool calls land in the same stage.
+ * A request with no valid timestamp has no point and counts in the session
+ * totals only. Grouping is within the given `records` array (see
+ * groupClaudeRequests).
+ */
 export function extractClaudeCountTimeline(
   records: readonly unknown[],
 ): CountTimeline {
   const points: CountPoint[] = [];
-  for (const record of records) {
-    if (!isPlainObject(record) || record.type !== 'assistant') {
-      continue;
+  for (const request of groupClaudeRequests(records)) {
+    if (request.turnAtMs !== undefined) {
+      points.push({
+        atMs: request.turnAtMs,
+        turnCount: 1,
+        toolCallCount: request.toolCallCount,
+      });
     }
-    const atMs = toValidTimestampMs(record.timestamp);
-    if (atMs === undefined) {
-      continue;
-    }
-    const message = isPlainObject(record.message) ? record.message : undefined;
-    const content = message?.content;
-    let toolCallCount = 0;
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        if (isPlainObject(block) && block.type === 'tool_use') {
-          toolCallCount += 1;
-        }
-      }
-    }
-    points.push({ atMs, turnCount: 1, toolCallCount });
   }
   points.sort((a, b) => a.atMs - b.atMs);
   return { points, supportsToolCallCount: true };
@@ -2905,8 +2890,9 @@ function scanCodexVendorSessions(sessionsDir: string): VendorSession[] {
  * signals.json, events.jsonl fallback -- see token-cost-adapter-grok.mts's
  * module doc), so replicating "read once, feed the same records to a
  * local timeline extractor" here would mean re-deriving that whole read,
- * not just one small per-record usage-field mapping the way the
- * claude/codex extractors do. An empty timeline means allocateStageUsage
+ * not just one small per-record usage-field mapping the way the codex
+ * extractor does (the claude extractors reuse the adapter's request
+ * grouping, #4380). An empty timeline means allocateStageUsage
  * omits every stage for a grok issue-loop sample (the session's own
  * aggregate `usage` total is still present and correct); a follow-up
  * issue can add extractGrokUsageTimeline once that read is worth sharing.

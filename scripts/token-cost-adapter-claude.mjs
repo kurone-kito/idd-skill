@@ -12,9 +12,13 @@
 //
 // Reads Claude Code project JSONL files
 // (`~/.claude/projects/<encoded-cwd>/*.jsonl`), each a newline-delimited
-// stream of per-turn records. This module documents the specific record
-// shapes it reads (assistant messages carrying `message.usage`, and
-// `type: "system", subtype: "compact_boundary"` records) as local
+// stream of records. Claude Code writes one record per content block of an
+// API response, and those records share a `requestId` and a `message.id`,
+// so assistant records are grouped into API requests (`groupClaudeRequests`,
+// #4380) before usage and turns are counted. This module documents the
+// specific record shapes it reads (assistant records carrying
+// `message.usage`, and `type: "system", subtype: "compact_boundary"`
+// records) as local
 // structural types; only the fields actually consumed are declared, and
 // every extraction degrades gracefully (never throws) except when the
 // harvested session has no usable timestamp or no derivable
@@ -310,18 +314,114 @@ function addUsage(a, b) {
     reasoning: a.reasoning + b.reasoning,
   };
 }
-/** Sum every assistant message's usage into one session total, including `isSidechain: true` rows. */
-function extractUsage(records) {
-  let summed = ZERO_USAGE;
+/**
+ * The request key of one assistant record: the pair of its top-level
+ * `requestId` and its `message.id`, each taken only when it is a non-empty
+ * string. A response's records share both, so the pair names one response.
+ * Two responses that share a `requestId` (a silent Claude Code retry, see
+ * Claude Code issue #46398) carry different `message.id` values and stay
+ * apart. A record with only one identifier is keyed by that identifier alone,
+ * with the other slot null. Undefined when neither is present.
+ */
+function requestIdentifierOf(record) {
+  const requestId = getStringField(record, 'requestId') ?? null;
+  const messageId = getStringField(getMessage(record), 'id') ?? null;
+  if (requestId === null && messageId === null) {
+    return undefined;
+  }
+  return JSON.stringify([requestId, messageId]);
+}
+function newClaudeRequest() {
+  return {
+    usage: { ...ZERO_USAGE },
+    usageAtMs: undefined,
+    turnAtMs: undefined,
+    toolCallCount: 0,
+  };
+}
+/** Field-wise maximum of two usages. */
+function maxUsage(a, b) {
+  return {
+    inputUncached: Math.max(a.inputUncached, b.inputUncached),
+    cacheRead: Math.max(a.cacheRead, b.cacheRead),
+    cacheCreation: Math.max(a.cacheCreation, b.cacheCreation),
+    output: Math.max(a.output, b.output),
+    reasoning: Math.max(a.reasoning, b.reasoning),
+  };
+}
+/** Folds one assistant record into its request. */
+function addRecordToRequest(request, record) {
+  const atMs = extractRecordTimestampMs(record);
+  const usage = getUsage(record);
+  if (usage) {
+    request.usage = maxUsage(request.usage, usageFromFields(usage));
+    if (
+      atMs !== undefined &&
+      (request.usageAtMs === undefined || atMs > request.usageAtMs)
+    ) {
+      request.usageAtMs = atMs;
+    }
+  }
+  if (
+    atMs !== undefined &&
+    (request.turnAtMs === undefined || atMs > request.turnAtMs)
+  ) {
+    request.turnAtMs = atMs;
+  }
+  request.toolCallCount += countToolUseBlocksInRecord(record);
+}
+/**
+ * Groups the assistant records of `records` into one {@link ClaudeRequest}
+ * per API request (#4380). Claude Code writes one record per content block
+ * of an API response, and those records share a `requestId` and a
+ * `message.id`; records are grouped by that pair (see requestIdentifierOf).
+ * A record with only one of the two identifiers is keyed by that identifier
+ * alone, and a record with neither identifier is a request of its own, counted
+ * with its own usage as before.
+ *
+ * The request's usage is the field-wise maximum across its records (see
+ * {@link ClaudeRequest.usage}), so repeated and streaming-snapshot records
+ * do not inflate the total. Its usage point is stamped at its
+ * greatest-timestamped record that has a valid timestamp and usage. A
+ * request whose records have no such record still counts in the session
+ * totals, with no per-stage point.
+ *
+ * Grouping is within the given `records` array. A request split across cwd
+ * segments or event-window groups therefore counts once per group. A
+ * record that carries only one of the two identifiers is not joined to the
+ * records that carry both, a known limit of this key rule. None is observed
+ * in the local logs (checked 2026-10-15): no assistant record carries a
+ * requestId without a message.id, and no message.id-only record shares its id
+ * with a record that carries a requestId. Requests come back in
+ * first-appearance order.
+ */
+export function groupClaudeRequests(records) {
+  const requests = [];
+  const byIdentifier = new Map();
   for (const record of records) {
     if (!isAssistantRecord(record)) {
       continue;
     }
-    const usage = getUsage(record);
-    if (!usage) {
-      continue;
+    const assistant = record;
+    const identifier = requestIdentifierOf(assistant);
+    const existing =
+      identifier === undefined ? undefined : byIdentifier.get(identifier);
+    const request = existing ?? newClaudeRequest();
+    if (existing === undefined) {
+      requests.push(request);
+      if (identifier !== undefined) {
+        byIdentifier.set(identifier, request);
+      }
     }
-    summed = addUsage(summed, usageFromFields(usage));
+    addRecordToRequest(request, assistant);
+  }
+  return requests;
+}
+/** Sum every API request's usage (see {@link groupClaudeRequests}) into one session total, including `isSidechain: true` rows. */
+function extractUsage(records) {
+  let summed = ZERO_USAGE;
+  for (const request of groupClaudeRequests(records)) {
+    summed = addUsage(summed, request.usage);
   }
   return summed;
 }
@@ -352,15 +452,9 @@ function countToolUseBlocksInRecord(record) {
   }
   return count;
 }
-/** Every `type: "assistant"` record is one turn, matching {@link extractUsage}'s own inclusive convention (sidechain/subagent turns count too). */
+/** Every API request is one turn (see {@link groupClaudeRequests}), matching {@link extractUsage}'s own inclusive convention (sidechain/subagent turns count too). */
 function extractTurnCount(records) {
-  let count = 0;
-  for (const record of records) {
-    if (isAssistantRecord(record)) {
-      count += 1;
-    }
-  }
-  return count;
+  return groupClaudeRequests(records).length;
 }
 /** Sum of `tool_use` blocks across every assistant record. */
 function extractToolCallCount(records) {
