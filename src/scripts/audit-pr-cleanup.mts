@@ -1342,7 +1342,10 @@ export function claimFailureHold(error: unknown): CleanupHold {
  * Read the marker command's stdout as a verdict. Output that is not a JSON
  * verdict is `gate-unreadable`, a hold, so an unreadable gate never passes.
  */
-function readMarkerDecision(run: MarkerRun): F4GateDecision {
+function readMarkerDecision(
+  run: MarkerRun,
+  expected: MarkerRunOptions,
+): F4GateDecision {
   const unreadable = (detail: string): F4GateDecision => ({
     verdict: 'hold',
     reason: 'gate-unreadable',
@@ -1364,6 +1367,17 @@ function readMarkerDecision(run: MarkerRun): F4GateDecision {
     return unreadable('the marker command printed no JSON object');
   }
   const fields = envelope as Record<string, unknown>;
+  // The envelope must answer this invocation: the same type, issue, and mode.
+  // An envelope for another invocation is not a verdict on this one (#4369).
+  const expectedMode = expected.apply ? 'apply' : 'dry-run';
+  if (
+    fields.type !== 'f4-head-proof' ||
+    fields.target !== 'issue' ||
+    fields.number !== Number(expected.claimIssue) ||
+    fields.mode !== expectedMode
+  ) {
+    return unreadable('the marker command answered a different invocation');
+  }
   const verdict = fields.verdict;
   if (typeof verdict !== 'string' || !MARKER_VERDICTS.has(verdict)) {
     return unreadable('the marker command gave no verdict');
@@ -1413,7 +1427,7 @@ function markerDecision(
   options: MarkerRunOptions,
 ): F4GateDecision {
   try {
-    return readMarkerDecision(deps.runMarker(options));
+    return readMarkerDecision(deps.runMarker(options), options);
   } catch (error) {
     return {
       verdict: 'hold',

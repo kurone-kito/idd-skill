@@ -2580,7 +2580,6 @@ const GATE_CLAIM: FakeClaim = {
 // overrides only the identity it exercises.
 function markerJson(fields: Record<string, unknown>): string {
   return JSON.stringify({
-    mode: 'dry-run',
     type: 'f4-head-proof',
     target: 'issue',
     number: 4369,
@@ -2592,6 +2591,19 @@ function markerJson(fields: Record<string, unknown>): string {
     },
     ...fields,
   });
+}
+
+/**
+ * The envelope with the mode of the run that printed it, unless the test set a
+ * mode itself. A test that sets a mode tests that mismatch on purpose (#4369).
+ */
+function withMode(stdout: string, apply: boolean): string {
+  try {
+    const envelope = JSON.parse(stdout) as Record<string, unknown>;
+    return JSON.stringify({ mode: apply ? 'apply' : 'dry-run', ...envelope });
+  } catch {
+    return stdout;
+  }
 }
 
 /** The exit status the marker contract gives its stdout: 0 for proceed and post. */
@@ -2638,7 +2650,9 @@ function fakeGate(options: FakeGateOptions = {}) {
       if (next instanceof Error) {
         throw next;
       }
-      return { stdout: next ?? null, exitCode: exitCodeFor(next) };
+      const stdout =
+        typeof next === 'string' ? withMode(next, run.apply) : null;
+      return { stdout, exitCode: exitCodeFor(stdout) };
     },
   };
   return { deps, calls };
@@ -3154,6 +3168,24 @@ test('claimFailureHold: a mismatch stops, and a read failure holds for a rerun (
   assert.equal(readFailure.verdict, 'hold');
   assert.match(readFailure.nextAction, /rerun/u);
   assert.match(readFailure.detail ?? '', /502/u);
+});
+
+test('checkF4HeadProofGate: an envelope that answers another invocation is unreadable (#4369)', () => {
+  const others = [
+    markerJson({ verdict: 'proceed', reason: 'reusable', type: 'other-type' }),
+    markerJson({ verdict: 'proceed', reason: 'reusable', target: 'pr' }),
+    markerJson({ verdict: 'proceed', reason: 'reusable', number: 99 }),
+    markerJson({ verdict: 'proceed', reason: 'reusable', mode: 'apply' }),
+  ];
+  for (const stdout of others) {
+    const gate = fakeGate({ markers: [stdout] });
+    assert.equal(
+      checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, gate.deps)?.code,
+      'gate-unreadable',
+      stdout.slice(0, 80),
+    );
+    assert.equal(gate.calls.marker.length, 1, 'no apply run follows it');
+  }
 });
 
 test('markerRunOf: a child that timed out, errored, or was killed gives no verdict (#4369)', () => {
