@@ -883,6 +883,25 @@ function inspectWorktree(deps, primary, worktree, branchRef, proof) {
   ) {
     return none('submodule-worktree', null);
   }
+  // git status cannot vouch for an entry marked skip-worktree or
+  // assume-unchanged, so any tag other than a plain cached entry holds.
+  const tagged = deps.git(['-C', worktree, 'ls-files', '-v'], primary);
+  if (tagged.status !== 0) {
+    return none(
+      'inconsistent-worktree-state',
+      `git ls-files -v failed: ${tagged.stderr.trim()}`,
+    );
+  }
+  if (
+    tagged.stdout
+      .split('\n')
+      .some((line) => line.length > 0 && !line.startsWith('H '))
+  ) {
+    return none(
+      'dirty-worktree',
+      'a tracked entry is marked skip-worktree or assume-unchanged',
+    );
+  }
   const tracked = deps.git(['-C', worktree, 'ls-files', '-z'], primary);
   if (tracked.status !== 0) {
     return none(

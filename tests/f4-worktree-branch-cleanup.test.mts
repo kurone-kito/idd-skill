@@ -297,6 +297,18 @@ test('a tracked symlink that stays inside the worktree does not hold', () => {
   assert.equal(report.status, 'complete');
 });
 
+test('a skip-worktree file with local changes holds dirty-worktree', () => {
+  const fx = makeFixture();
+  writeFileSync(join(fx.worktree, 'README.md'), 'hidden change\n');
+  git(fx.worktree, ['update-index', '--skip-worktree', '--', 'README.md']);
+  const { report } = runCleanup(fx);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.equal(
+    readFileSync(join(fx.worktree, 'README.md'), 'utf8'),
+    'hidden change\n',
+  );
+});
+
 test('a symlink chain that climbs out of the worktree holds symlink-path', () => {
   const fx = makeFixture();
   symlinkSync('.', join(fx.worktree, 'q'));

@@ -123,7 +123,7 @@ function healthyRoutes(): Route[] {
       result: ok(''),
     },
     {
-      match: (a) => a[0] === '-C' && a[2] === 'ls-files',
+      match: (a) => a[0] === '-C' && a[2] === 'ls-files' && a.includes('-z'),
       result: ok('README.md\0'),
     },
     { match: (a) => a[0] === 'worktree' && a[1] === 'remove', result: ok() },
@@ -647,6 +647,23 @@ test('an ignored-only file in the worktree still holds dirty-worktree', () => {
   assert.equal(report.reason, 'dirty-worktree');
 });
 
+test('a skip-worktree entry holds dirty-worktree, since git status cannot vouch for it', () => {
+  const report = runF4WorktreeBranchSteps(
+    input(),
+    harness({
+      routes: [
+        ...healthyRoutes().slice(0, 9),
+        {
+          match: (a) =>
+            a[0] === '-C' && a[2] === 'ls-files' && a.includes('-v'),
+          result: ok('S README.md\n'),
+        },
+      ],
+    }).deps,
+  );
+  assert.equal(report.reason, 'dirty-worktree');
+});
+
 test('a populated submodule holds with submodule-worktree and an uninitialized one does not', () => {
   const populated = runF4WorktreeBranchSteps(
     input(),
@@ -681,7 +698,7 @@ test('a tracked symlink whose target leaves the worktree holds symlink-path', ()
     routes: [
       ...healthyRoutes().slice(0, 9),
       {
-        match: (a) => a[0] === '-C' && a[2] === 'ls-files',
+        match: (a) => a[0] === '-C' && a[2] === 'ls-files' && a.includes('-z'),
         result: ok('link\0'),
       },
     ],
@@ -705,7 +722,7 @@ test('a tracked symlink that stays inside the worktree is allowed', () => {
     routes: [
       ...healthyRoutes().slice(0, 9),
       {
-        match: (a) => a[0] === '-C' && a[2] === 'ls-files',
+        match: (a) => a[0] === '-C' && a[2] === 'ls-files' && a.includes('-z'),
         result: ok('alias\0'),
       },
     ],
