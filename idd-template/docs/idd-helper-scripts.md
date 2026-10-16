@@ -4800,9 +4800,9 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   `not-run` with no A5 check call made. An `OPEN` issue adds no step, so
   its steps keep their positions. A state that is neither `OPEN` nor
   `CLOSED` is not a refusal: it is a failed read, as the `transport` rule
-  below says. Observed 2026-10-16 on issue `#4372`: a dry run printed
-  `eligible: true` for that issue after it was closed as completed the
-  same day. This guard prevents that failure (tracked in issue `#4433`).
+  below says. Observed 2026-10-16 on issue `#4372`: a read-only dry run
+  printed `eligible: true` for that issue, which was closed as completed
+  that same day. This guard prevents that result (tracked in issue `#4433`).
 - The checks run in the order of the instruction file and stop at the
   first one that is not eligible; every later check has the status
   `not-run`. Each check calls existing code rather than a copy of it:
