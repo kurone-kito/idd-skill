@@ -48,14 +48,30 @@ Options:
   --help, -h          Show this help
 `;
 const DECIMAL_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+function usageError(flagName) {
+  return markCliUsageError(
+    new Error(`invalid value for argument: ${flagName}`),
+  );
+}
+/**
+ * A positive finite decimal. A token that is syntactically valid but too large
+ * for a JavaScript number parses to Infinity, which must not pass as a limit.
+ */
 function parseMaxLoadOrThrow(token) {
   if (token === undefined) return undefined;
-  const value = DECIMAL_PATTERN.test(token) ? Number(token) : 0;
-  if (!(value > 0)) {
-    throw markCliUsageError(
-      new Error('invalid value for argument: --max-load'),
-    );
+  const value = DECIMAL_PATTERN.test(token) ? Number(token) : Number.NaN;
+  if (!(Number.isFinite(value) && value > 0)) {
+    throw usageError('--max-load');
   }
+  return value;
+}
+/**
+ * A canonical integer within the safe range. Beyond it the parser rounds, so
+ * the wait arithmetic and the Atomics.wait timeout would not match the request.
+ */
+function parseSafeIntegerOrThrow(token, flagName, min) {
+  const value = parseCanonicalIntegerOrThrow(token, flagName, min);
+  if (!Number.isSafeInteger(value)) throw usageError(flagName);
   return value;
 }
 /** Parse the gate's argv. A bad value or an unknown flag throws a usage error. */
@@ -68,11 +84,11 @@ export function parseLoadGateArgs(argv) {
     timeoutMs:
       timeoutToken === undefined
         ? DEFAULT_TIMEOUT_MS
-        : parseCanonicalIntegerOrThrow(timeoutToken, '--timeout-ms', 0),
+        : parseSafeIntegerOrThrow(timeoutToken, '--timeout-ms', 0),
     pollMs:
       pollToken === undefined
         ? DEFAULT_POLL_MS
-        : parseCanonicalIntegerOrThrow(pollToken, '--poll-ms', 1),
+        : parseSafeIntegerOrThrow(pollToken, '--poll-ms', 1),
     help,
   };
 }

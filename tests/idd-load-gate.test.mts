@@ -215,6 +215,25 @@ test('parseLoadGateArgs rejects a non-canonical --timeout-ms or --poll-ms as usa
   }
 });
 
+test('parseLoadGateArgs rejects a value beyond the finite or safe-integer range as usage', () => {
+  const beyondDouble = `1${'0'.repeat(400)}`;
+  for (const args of [
+    ['--max-load', beyondDouble],
+    ['--timeout-ms', '9007199254740993'],
+    ['--poll-ms', '9007199254740993'],
+  ]) {
+    assert.throws(
+      () => parseLoadGateArgs(args),
+      (error: unknown) => isUsageError(error),
+      args.join(' ').slice(0, 60),
+    );
+  }
+  assert.equal(
+    parseLoadGateArgs(['--timeout-ms', '9007199254740991']).timeoutMs,
+    9007199254740991,
+  );
+});
+
 test('parseLoadGateArgs rejects an unknown flag and a positional as usage', () => {
   assert.throws(
     () => parseLoadGateArgs(['--bogus']),
