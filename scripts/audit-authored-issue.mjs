@@ -16,8 +16,9 @@
 // by`/`Depends on` mention and a cross-repository token on an otherwise
 // well-formed dependency line (see checkDependencyLineGrammar, #3285),
 // visible/hidden line agreement for the suitability and effort
-// footers, a child's candidate-file count against its S/M effort
-// threshold (see checkEffortCandidateFileLimit, #4130), an L-effort
+// footers, the candidate-file count of a child or an S/M orphan against
+// its effort threshold (see checkEffortCandidateFileLimit, #4130 and
+// #4434), an L-effort
 // draft refused as ready while the opt-in autopilotSuitability.effortL
 // policy is `refuse` (see checkEffortLReady, #4198), an advisory
 // warning-severity check that flags an issue/PR
@@ -138,8 +139,9 @@ export { normalizeMarkerPrefix, parseAuthoringBucketMarker };
 const NOT_APPLICABLE_BUCKET_AUDIT_DETAIL =
   'not applicable: auditing a needs-decision/blocked-by-human bucket publish (--expect-bucket), not a ready-shape body';
 /**
- * Maximum `## Candidate files` count per effort hint before a child draft
- * counts as over-scope and must be split at authoring time (#4130). The
+ * Maximum `## Candidate files` count per effort hint before an orphan or
+ * child draft counts as over-scope and must be split at authoring time
+ * (#4130, #4434). The
  * single source is the "Over-scope split threshold" table in
  * skills/issue-authoring/references/contract.md's `## Effort hint`
  * section; tests/audit-authored-issue.test.mts asserts these values match
@@ -2725,7 +2727,7 @@ function checkCandidateFilesNotEmpty(
     return pass(
       id,
       name,
-      `not applicable: only the child shape requires ## Candidate files`,
+      `not applicable: this check covers the child shape only; an S or M orphan's section is checked by effort-candidate-file-limit`,
     );
   }
   const routedToHumanBucket =
@@ -2754,17 +2756,20 @@ function checkCandidateFilesNotEmpty(
   );
 }
 /**
- * Child shape only (#4130): an `S` or `M` effort hint whose
+ * Orphan and child shapes (#4130, #4434): an `S` or `M` effort hint whose
  * `## Candidate files` section parses to more distinct paths than
  * {@link EFFORT_CANDIDATE_FILE_LIMITS} allows is over-scope and must be
  * split before publication, unless the body carries a plain-text
  * `Split out of #<n>` provenance line (it is already the product of a
- * split). Not applicable to a bucket audit, a non-child shape, an `L`
- * hint, or a missing/malformed hidden effort marker. Only the hidden
- * marker is read. A malformed or duplicated marker already fails
- * `effort-visible-line-agreement`; a body with no effort footer at all
- * is out of scope, since the rule targets drafts whose author estimated
- * S or M.
+ * split). An S or M orphan must also carry the section with at least one
+ * path (#4434): a missing or zero-path section fails with no exemption,
+ * because the count cannot see the files a body never names. Not
+ * applicable to a bucket audit, a roadmap or carrier shape, an `L` hint,
+ * or a missing/malformed hidden effort marker. Only the hidden marker is
+ * read. A malformed or duplicated marker already fails
+ * `effort-visible-line-agreement`; a body with no effort footer at all is
+ * out of scope, since the rule targets drafts whose author estimated S or
+ * M.
  */
 function checkEffortCandidateFileLimit(
   rawText,
@@ -2773,16 +2778,15 @@ function checkEffortCandidateFileLimit(
   markerPrefix,
 ) {
   const id = 'effort-candidate-file-limit';
-  const name =
-    'Child candidate-file count stays within its effort hint threshold';
+  const name = 'Candidate-file count stays within its effort hint threshold';
   if (isBucketAudit) {
     return pass(id, name, NOT_APPLICABLE_BUCKET_AUDIT_DETAIL);
   }
-  if (shape !== 'child') {
+  if (shape !== 'child' && shape !== 'orphan') {
     return pass(
       id,
       name,
-      'not applicable: only the child shape is checked against the effort threshold',
+      'not applicable: only the orphan and child shapes are checked against the effort threshold',
     );
   }
   // parseEffortMarker masks its own input, so it takes rawText.
@@ -2799,6 +2803,13 @@ function checkEffortCandidateFileLimit(
   }
   const limit = EFFORT_CANDIDATE_FILE_LIMITS[effort.value];
   const count = parseCandidateFiles(rawText).length;
+  if (shape === 'orphan' && count === 0) {
+    return fail(
+      id,
+      name,
+      `effort ${effort.value} orphan has no ## Candidate files paths (section missing, or present with zero paths); an S or M orphan must list its candidate files, and neither a Split out of line nor a human-bucket marker exempts it`,
+    );
+  }
   if (count <= limit) {
     return pass(
       id,
@@ -5033,8 +5044,8 @@ contract.md): the autopilot-suitability marker, its cross-field
 status:blocked-by-human agreement, markerPrefix consistency, required
 section headings for the declared shape, the roadmap-id/blocked-by
 dependency-marker rules, visible/hidden suitability+effort line
-agreement, a child's candidate-file count against its S/M effort
-threshold (effort-candidate-file-limit), an L effort hint against the
+agreement, the candidate-file count of a child or S/M orphan against its
+S/M effort threshold (effort-candidate-file-limit), an L effort hint against the
 opt-in autopilotSuitability.effortL policy (effort-l-ready), the
 defer-source-marker check
 for defined values, a sole

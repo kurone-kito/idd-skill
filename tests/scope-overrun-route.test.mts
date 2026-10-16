@@ -152,16 +152,22 @@ test('an issue within its estimate whose diff is over it is an overrun through t
   assert.equal(isOverrun('M', EFFORT_CANDIDATE_FILE_LIMITS.M + 1), true);
 });
 
-test('an orphan issue is checked only because the route passes --shape child', () => {
-  // The motivating overrun (#4064) was an orphan issue. Audited under its
-  // own shape the threshold is not applicable, so the route must name
-  // the child shape for the check to apply.
+test('an over-limit orphan fails the orphan shape as well, and the route still names the child shape (#4434)', () => {
+  // The motivating overrun (#4064) was an orphan issue. Since #4434 the
+  // orphan shape checks the same count, so this overrun fails under either
+  // shape. The route keeps --shape child because that shape does not add
+  // the orphan-only section requirement, so a legacy S or M orphan with no
+  // section passes the effort-limit finding the route stops on. The child
+  // shape's candidate-files-not-empty finding still reports the missing
+  // section, but the route does not stop on that finding.
   const body = issueWithChangedFiles('M', EFFORT_CANDIDATE_FILE_LIMITS.M + 1);
-  const asOrphan = auditAuthoredIssue(body, { shape: 'orphan' }).findings.find(
-    (entry) => entry.id === 'effort-candidate-file-limit',
-  );
-  assert.equal(asOrphan?.result, 'pass');
-  assert.match(asOrphan?.detail ?? '', /^not applicable:/);
+  const findingFor = (shape: 'orphan' | 'child') =>
+    auditAuthoredIssue(body, { shape }).findings.find(
+      (entry) => entry.id === 'effort-candidate-file-limit',
+    );
+  assert.equal(findingFor('orphan')?.result, 'fail');
+  assert.match(findingFor('orphan')?.detail ?? '', /exceeds the limit of 8/);
+  assert.equal(findingFor('child')?.result, 'fail');
   assert.equal(isOverrun('M', EFFORT_CANDIDATE_FILE_LIMITS.M + 1), true);
 });
 

@@ -220,8 +220,8 @@ rules.
 - An estimate that does not fit even `L`'s scope-and-uncertainty
   definition is a mis-scope smell: return to Decompose and Draft and
   split at intent level instead of publishing one oversized issue.
-- A child draft with an `S` or `M` hint and more candidate files than
-  the contract's
+- An orphan or child draft with an `S` or `M` hint and more candidate
+  files than the contract's
   [over-scope split threshold](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#effort-hint)
   table allows is split into a held roadmap with children before
   publication, unless it carries a plain-text `Split out of #<n>` line;
@@ -2656,7 +2656,9 @@ Required content:
 
 Optional content:
 
-- `## Candidate files`
+- `## Candidate files`: required with at least one path when the effort
+  footer is `S` or `M`; optional for `L`, an absent effort footer, or a
+  malformed one
 - `Blocked by #NNN`
 - `## Notes`
 
