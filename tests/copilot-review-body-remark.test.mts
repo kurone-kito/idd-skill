@@ -920,3 +920,24 @@ test('citationBreakdown: an ordinary dotted identifier is not a file citation (#
   assert.equal(namesFileOrLine('The field is `obj.id`.'), false);
   assert.equal(namesFileOrLine('See `README.ja.md`.'), true);
 });
+
+test('namesFileOrLine: a backticked or bold citation counts, plain text does not (#4438)', () => {
+  assert.equal(
+    namesFileOrLine(
+      '**Rejected** — the claim is contradicted by `src/scripts/copilot-review-body.mts:42`.',
+    ),
+    true,
+  );
+  assert.equal(
+    namesFileOrLine(
+      '**Rejected** — the claim is contradicted by **src/scripts/copilot-review-body.mts:42**.',
+    ),
+    true,
+  );
+  assert.equal(
+    namesFileOrLine(
+      '**Rejected** — the claim is contradicted by src/scripts/copilot-review-body.mts:42.',
+    ),
+    false,
+  );
+});
