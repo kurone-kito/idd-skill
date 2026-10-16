@@ -1138,12 +1138,24 @@ function runMarkerCommand(options) {
   if (options.apply) {
     argv.push('--apply');
   }
-  const result = spawnSync(process.execPath, argv, {
-    encoding: 'utf8',
-    env: gitChildEnvironment(),
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: F4_MARKER_TIMEOUT_MS,
-  });
+  return markerStdout(
+    spawnSync(process.execPath, argv, {
+      encoding: 'utf8',
+      env: gitChildEnvironment(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: F4_MARKER_TIMEOUT_MS,
+    }),
+  );
+}
+/**
+ * The marker command's stdout as a candidate verdict, or null. A child that
+ * failed to start, timed out, or was killed did not finish its proof, so its
+ * stdout is not a verdict even when it holds a complete JSON envelope (#4369).
+ */
+export function markerStdout(result) {
+  if (result.error !== undefined || result.status === null) {
+    return null;
+  }
   return typeof result.stdout === 'string' && result.stdout.trim() !== ''
     ? result.stdout
     : null;

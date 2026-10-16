@@ -28,6 +28,7 @@ import {
   evaluateReviewParent,
   f4GateScope,
   fetchReviewThreads,
+  markerStdout,
   parsePrNumbers,
   readActiveClaim,
   runApplyWithRetry,
@@ -3105,4 +3106,31 @@ test('checkF4HeadProofGate: a proceed without a known reason, or a post with a r
     true,
     'no apply run follows a malformed verdict',
   );
+});
+
+test('markerStdout: a child that timed out, errored, or was killed gives no verdict (#4369)', () => {
+  const envelope = '{"verdict":"proceed","reason":"reusable"}';
+
+  assert.equal(markerStdout({ stdout: envelope, status: 0 }), envelope);
+  assert.equal(
+    markerStdout({ stdout: envelope, status: 1 }),
+    envelope,
+    'a hold exits 1 and still prints its verdict',
+  );
+  assert.equal(
+    markerStdout({
+      stdout: envelope,
+      status: null,
+      error: new Error('spawnSync ETIMEDOUT'),
+    }),
+    null,
+    'a timed-out child with a complete envelope is not a verdict',
+  );
+  assert.equal(
+    markerStdout({ stdout: envelope, status: null }),
+    null,
+    'a child killed by a signal is not a verdict',
+  );
+  assert.equal(markerStdout({ stdout: '  ', status: 0 }), null);
+  assert.equal(markerStdout({ stdout: null, status: 0 }), null);
 });
