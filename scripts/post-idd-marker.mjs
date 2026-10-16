@@ -386,6 +386,11 @@ export function buildMarkerBody(type, fields) {
         merge: fields.merge,
         head: fields.head,
         agentId: fields['agent-id'],
+        // #4442: the optional superseded comment ID, forwarded so that a
+        // programmatic caller gets the same token as the CLI path.
+        ...(fields.supersedes === undefined
+          ? {}
+          : { supersedes: fields.supersedes }),
       });
     case 'authoring-owner':
       // #2931: routes through the existing marker-helpers.mts renderer
@@ -1665,8 +1670,8 @@ listed is required for that type):
                      (the hold marker; informational, it never changes who
                      owns the claim)
   f4-head-proof      --agent-id --claim-id --worktree <path> --target issue <n>
-                     (the F4 head proof; every proof field is read live, see
-                     below)
+                     [--supersedes <comment-id>] (the F4 head proof; every
+                     proof field is read live, see below)
   authoring-owner    --marker-target --anchor --mode --marker-owner --set
                      --session --snapshot-sha256 --supersedes [--body-sha256]
                      [--marker-prefix]
@@ -1805,7 +1810,10 @@ must be a worktree this repository registers), the merged pull request of the
 claim's branch, the local branch tip, the trusted markers of the issue, and
 the review-watermark of the pull request. It posts only when the verdict table
 says post, and prints the verdict, the reason, and the proof values as JSON.
-The command takes no other field flag, and refuses --owner, --repo,
+The command takes no other field flag than the optional --supersedes
+<comment-id> (#4442): the comment ID of a malformed trusted proof of this claim
+that the corrected proof replaces. Any other comment is refused,
+and an unknown ID holds. It refuses --owner, --repo,
 --trusted-marker-logins, and --advisory-bot-logins (the repository is the one the current checkout's origin names, and the
 trusted logins come from the viewer, the environment, and the trusted
 configuration). Under --apply it reads the claim
@@ -1962,6 +1970,11 @@ function headShaFromPr(prNumber, owner, repo) {
 /** The field flags `--type f4-head-proof` takes; every other proof value is read live. */
 const F4_HEAD_PROOF_FLAGS = REQUIRED_FIELDS_BY_TYPE['f4-head-proof'];
 /**
+ * The optional field flag `--type f4-head-proof` takes (#4442): the comment ID
+ * of the malformed proof that a corrected proof replaces.
+ */
+const F4_HEAD_PROOF_OPTIONAL_FLAGS = ['supersedes'];
+/**
  * Run `--type f4-head-proof`: the live reads, the verdict, and (under
  * `--apply`, on a `post` verdict) the POST and its read-back all happen in
  * `runF4HeadProofGate`. This wrapper checks the flags, passes the live
@@ -1976,7 +1989,9 @@ export function runF4HeadProofCommand(
   createDeps = createLiveF4HeadProofDeps,
 ) {
   const unexpected = Object.keys(args.fields).filter(
-    (flag) => !F4_HEAD_PROOF_FLAGS.includes(flag),
+    (flag) =>
+      !F4_HEAD_PROOF_FLAGS.includes(flag) &&
+      !F4_HEAD_PROOF_OPTIONAL_FLAGS.includes(flag),
   );
   // The repository is the current checkout's: the worktree must be registered
   // there, so a flag that names another repository could only mismatch it.
@@ -2005,11 +2020,23 @@ export function runF4HeadProofCommand(
     }
   }
   if (unexpected.length > 0) {
-    const message = `--type f4-head-proof takes only --target, --claim-id, --agent-id and --worktree (every proof value is read live); do not pass: ${unexpected
+    const message = `--type f4-head-proof takes only --target, --claim-id, --agent-id and --worktree, plus --supersedes for a corrected proof (every proof value is read live); do not pass: ${unexpected
       .map((flag) => `--${flag}`)
       .join(', ')}`;
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, kind: 'usage', message };
+  }
+  const supersedesText = args.fields.supersedes;
+  let supersedes;
+  if (supersedesText !== undefined) {
+    const value = Number(supersedesText);
+    if (!/^[1-9][0-9]*$/.test(supersedesText) || !Number.isSafeInteger(value)) {
+      const message =
+        '--supersedes takes a positive decimal comment ID, with no sign and no leading zero';
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, kind: 'usage', message };
+    }
+    supersedes = value;
   }
   try {
     for (const field of F4_HEAD_PROOF_FLAGS) {
@@ -2022,6 +2049,7 @@ export function runF4HeadProofCommand(
         agentId: args.fields['agent-id'],
         worktree: args.fields.worktree,
         apply: args.apply,
+        ...(supersedes === undefined ? {} : { supersedes }),
       },
       createDeps({ resolveRepo: resolveCheckoutRepository }),
     );
