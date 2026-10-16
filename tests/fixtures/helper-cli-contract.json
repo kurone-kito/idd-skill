@@ -385,6 +385,18 @@
         }
       }
     },
+    "idd-f4-worktree-branch-cleanup.mjs": {
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
     "idd-force-handoff.mjs": {
       "runs": {
         "unknownFlag": {
