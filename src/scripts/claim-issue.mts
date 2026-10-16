@@ -1833,6 +1833,7 @@ function runUnderCloneLock(state: ApplyState): ApplyFailure | null {
       step(state, 'policy', readPolicy(state)) ??
       step(state, 'development-branch', resolveDevelopment(state)) ??
       step(state, 'b1-leftovers', checkLeftovers(state)) ??
+      step(state, 'local-rescan', rescanLocalWorktrees(state)) ??
       step(state, 'remote-rescan', rescanRemoteBranches(state)) ??
       step(state, 'worktree-path', checkPathFree(state)) ??
       step(state, 'worktree-add', addWorktree(state));
@@ -1858,6 +1859,44 @@ function runUnderCloneLock(state: ApplyState): ApplyFailure | null {
     }
   }
   return failure;
+}
+
+/**
+ * The scoped local-worktree scan of A5(e), run again under the lock before any
+ * worktree exists. A worktree that another session created since the pre-check
+ * is an occupant, whatever its slug, so the same rule as the pre-check applies.
+ */
+function rescanLocalWorktrees(state: ApplyState): ApplyOutcome {
+  const nextAction =
+    'Follow the A5(e) collision action tree in idd-claim.instructions.md by hand; this helper created nothing.';
+  let local: LocalWorktreeInspection;
+  try {
+    local = state.deps.inspectLocalWorktrees(state.issue);
+  } catch (error) {
+    local = { status: 'unreadable', paths: [], reason: errorMessage(error) };
+  }
+  if (local.status === 'occupied') {
+    return applyFail(
+      'local-worktree-occupied',
+      nextAction,
+      `a local worktree holds issue/${state.issue}-*${describePaths(local.paths)} after the pre-check`,
+    );
+  }
+  if (
+    local.status !== 'absent' ||
+    !Array.isArray(local.paths) ||
+    local.paths.length > 0 ||
+    local.reason !== null
+  ) {
+    return applyFail(
+      'local-worktree-unreadable',
+      nextAction,
+      'a local worktree could not be ruled out after the pre-check',
+    );
+  }
+  return applyPass(
+    `no local worktree matches issue/${state.issue}-* after the fetch`,
+  );
 }
 
 /**
@@ -1903,8 +1942,13 @@ function rescanRemoteBranches(state: ApplyState): ApplyOutcome {
   return applyPass(`no remote branch matches ${prefix}* after the fetch`);
 }
 
-/** `claim-lock --record-tokens`: the generated tokens, in the worktree's own copy. */
-function recordTokens(state: ApplyState): ApplyOutcome {
+/**
+ * `claim-lock --record-tokens`: the generated tokens, in the worktree's own
+ * copy. The call before the claim carries no nonce (fresh-claim order, step 2
+ * of idd-claim.instructions.md). The nonce-bearing calls come right before the
+ * activation-nonce marker posts, and again at the acquire point.
+ */
+function recordTokens(state: ApplyState, withNonce: boolean): ApplyOutcome {
   const identity = state.identity;
   if (identity === null) {
     return applyFail(
@@ -1924,8 +1968,7 @@ function recordTokens(state: ApplyState): ApplyOutcome {
       identity.agentId,
       '--claim-id',
       identity.claimId,
-      '--nonce',
-      identity.nonce,
+      ...(withNonce ? ['--nonce', identity.nonce] : []),
     ],
     { cwd: state.primary },
   );
@@ -2421,7 +2464,9 @@ function recheckHoldAfterVerify(state: ApplyState): ApplyOutcome {
 /** Steps after the worktree lock is released: the claim, the nonce, the lock, the assert, and the second hold check. */
 function runClaimWrites(state: ApplyState): ApplyFailure | null {
   return (
-    step(state, 'record-tokens', recordTokens(state)) ??
+    // idd-claim.instructions.md, fresh-claim order, step 2: the record before the
+    // claim carries no nonce, because the nonce is minted for the claim itself.
+    step(state, 'record-tokens', recordTokens(state, false)) ??
     // The approval first, then the hold: the label read is the last gate before
     // the claim marker (idd-claim.instructions.md, "Immediately before claim POST").
     step(state, 'approval-recheck', recheckApproval(state)) ??
@@ -2430,10 +2475,14 @@ function runClaimWrites(state: ApplyState): ApplyFailure | null {
     step(state, 'own-worktree-gate', checkOwnWorktreeGate(state)) ??
     step(state, 'hold-check', checkHoldBeforeClaim(state)) ??
     step(state, 'claim-post', postClaim(state)) ??
+    // The nonce-bearing record comes right before its marker posts (the
+    // record contract in claim-lock.mts: "again with the nonce right before the
+    // activation-nonce marker posts").
+    step(state, 'nonce-record', recordTokens(state, true)) ??
     step(state, 'nonce-post', postNonce(state)) ??
     // idd-claim.instructions.md (worktree-local lock file): the tokens are
     // recorded again, with the nonce, at the acquire point, before the acquire.
-    step(state, 'lock-record', recordTokens(state)) ??
+    step(state, 'lock-record', recordTokens(state, true)) ??
     step(state, 'lock-acquire', acquireLock(state)) ??
     step(state, 'assert', assertClaim(state)) ??
     step(state, 'hold-recheck', recheckHoldAfterVerify(state))

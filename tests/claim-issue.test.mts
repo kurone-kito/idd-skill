@@ -1596,10 +1596,16 @@ interface ApplyScenario {
   tokensAbsentAfterFirst?: boolean;
   /** The first assert verifies the claim; every later one says it is not owned. */
   assertFailsAfterFirst?: boolean;
-  /** The first `--record-tokens` succeeds; the second, with the nonce, fails. */
-  recordTokensFailsAfterFirst?: boolean;
+  /**
+   * The `--record-tokens` call with this number, and every later one, fails:
+   * 1 is the record before the claim, 2 the nonce-bearing record before the
+   * activation nonce, 3 the record at the acquire point.
+   */
+  recordTokensFailsFromCall?: number;
   /** A remote branch appears after the pre-check's branch scan (the rescan sees it). */
   collisionAfterPrecheck?: boolean;
+  /** A local worktree on issue/<n>-* appears after the pre-check's local scan. */
+  localCollisionAfterPrecheck?: boolean;
   /** The clone lock's release fails. */
   releaseFails?: boolean;
 }
@@ -1697,6 +1703,7 @@ function runApply(
   let acquireCalls = 0;
   let recordCalls = 0;
   let matchingRefsCalls = 0;
+  let localCalls = 0;
   let assertCalls = 0;
   let readTokensCalls = 0;
   const labelReads = [...(scenario.labelReads ?? [])];
@@ -1827,9 +1834,9 @@ function runApply(
         return failed(1);
       }
       if (
-        scenario.recordTokensFailsAfterFirst &&
+        scenario.recordTokensFailsFromCall !== undefined &&
         rest.includes('--record-tokens') &&
-        recordCalls > 1
+        recordCalls >= scenario.recordTokensFailsFromCall
       ) {
         return failed(1);
       }
@@ -1928,6 +1935,16 @@ function runApply(
         }
         releaseCloneLock(handle);
       },
+    },
+    inspectLocalWorktrees: () => {
+      localCalls += 1;
+      return scenario.localCollisionAfterPrecheck && localCalls > 1
+        ? {
+            status: 'occupied',
+            paths: [join(fixture.parent, `${REPO}.issue-${ISSUE}-other-slug`)],
+            reason: null,
+          }
+        : LOCAL_ABSENT;
     },
     sleepMs: () => undefined,
     now: () => NOW,
@@ -2680,7 +2697,7 @@ test('an authoring label that differs only in case is still the hold', () => {
   });
 });
 
-test('the tokens are recorded again, with the nonce, at the acquire point, after the activation-nonce marker', () => {
+test('the first record has no nonce, the nonce is recorded right before its marker, and again at the acquire point', () => {
   withApplyFixture((fixture) => {
     const run = runApply(fixture);
     assert.equal(exitOf(run.result), 0, run.stderr);
@@ -2694,18 +2711,38 @@ test('the tokens are recorded again, with the nonce, at the acquire point, after
       entry.includes('post-idd-marker.mjs --type activation-nonce'),
     )[0];
     const acquire = indexes((entry) => entry.includes('--acquire'))[0];
-    assert.equal(records.length, 2);
+    assert.equal(records.length, 3);
+    assert.doesNotMatch(run.log[records[0] ?? -1] ?? '', /--nonce/);
     assert.ok((records[0] ?? -1) < (claim ?? -1));
-    assert.ok((claim ?? -1) < (nonce ?? -1));
-    assert.ok((nonce ?? -1) < (records[1] ?? -1));
-    assert.ok((records[1] ?? -1) < (acquire ?? -1));
+    assert.ok((claim ?? -1) < (records[1] ?? -1));
     assert.match(run.log[records[1] ?? -1] ?? '', /--nonce/);
+    assert.ok((records[1] ?? -1) < (nonce ?? -1));
+    assert.ok((nonce ?? -1) < (records[2] ?? -1));
+    assert.match(run.log[records[2] ?? -1] ?? '', /--nonce/);
+    assert.ok((records[2] ?? -1) < (acquire ?? -1));
+  });
+});
+
+test('a failed nonce-bearing record stops after the claim, before the activation nonce is posted', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { recordTokensFailsFromCall: 2 });
+    const report = assertStopped(run, 'tokens-record-failed');
+    assert.equal(report.claimPosted, true);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.equal(
+      run.posts.filter((post) => post.type === 'activation-nonce').length,
+      0,
+    );
+    assert.equal(
+      run.log.some((entry) => entry.includes('--acquire')),
+      false,
+    );
   });
 });
 
 test('a failed re-record before the lock acquire stops after the activation nonce, with the lock not taken', () => {
   withApplyFixture((fixture) => {
-    const run = runApply(fixture, { recordTokensFailsAfterFirst: true });
+    const run = runApply(fixture, { recordTokensFailsFromCall: 3 });
     const report = assertStopped(run, 'tokens-record-failed');
     assert.equal(report.claimPosted, true);
     assert.equal(report.lostClaimCleanupRequired, true);
@@ -2935,5 +2972,19 @@ test('the default branch is fetched explicitly, so a narrowed refspec cannot lea
     const run = runApply(fixture);
     assert.equal(exitOf(run.result), 0, run.stderr);
     assert.equal(gitIn(fixture.primary, ['rev-parse', 'main']).trim(), tip);
+  });
+});
+
+test('a local worktree that appears after the pre-check stops the run before any worktree is created', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { localCollisionAfterPrecheck: true });
+    const report = assertStopped(run, 'local-worktree-occupied');
+    assert.match(report.steps.at(-1)?.detail ?? '', /after the pre-check/);
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(
+      run.log.some((entry) => entry.includes('worktree add')),
+      false,
+    );
+    assert.equal(existsSync(fixture.worktree), false);
   });
 });

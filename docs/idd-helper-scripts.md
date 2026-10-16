@@ -4793,9 +4793,10 @@ like `activation-nonce`, because a worker posts it as itself.
      the run stops with `development-branch-unresolved`. A prunable worktree
      entry or a leftover local branch of the claim's name stops with
      `b1-cleanup-needed`.
-  2. Still under the lock, the scoped remote-branch scan of A5(e) runs again
-     after the fetch (`branch-collision` if a branch appeared since the
-     pre-check). The worktree path is
+  2. Still under the lock, the scoped local-worktree and remote-branch scans
+     of A5(e) run again after the fetch (`local-worktree-occupied`,
+     `local-worktree-unreadable`, or `branch-collision` if one appeared since
+     the pre-check). The worktree path is
      `<primary-parent>/<repo>.<branch with / replaced by ->`. It must be a
      free direct child of the primary's parent, and that parent must not be
      a link (`path-occupied`). Then
@@ -4812,7 +4813,9 @@ like `activation-nonce`, because a worker posts it as itself.
      default branch would otherwise base the worktree on a stale tip. The lock
      is released after this step, because `claim-lock --acquire` takes the
      same lock itself.
-  3. `claim-lock --record-tokens` for the worktree (`tokens-record-failed`).
+  3. `claim-lock --record-tokens` for the worktree, with no nonce, as step 2
+     of the fresh-claim order of idd-claim.instructions.md
+     (`tokens-record-failed`).
   4. Immediately before the claim marker, the issue-author approval gate of
      A5(a) runs again (`approval-missing` or `approval-unproven` stop the
      run), then the own-worktree fresh-claim gate runs once, with
@@ -4821,8 +4824,10 @@ like `activation-nonce`, because a worker posts it as itself.
      `precheck-unavailable` when the read fails). Only the label is read:
      the owner-marker log replay is not done, and the report says so with
      `holdCheck: "label"`.
-  5. The claim marker, then the activation nonce. The helper mints the
-     claim id and the nonce, so a rerun is always a new claim attempt. A
+  5. The claim marker. Then `claim-lock --record-tokens --nonce`, right before
+     the activation nonce is posted (`tokens-record-failed` on failure, with
+     the claim already posted), then the activation nonce. The helper mints
+     the claim id and the nonce, so a rerun is always a new claim attempt. A
      refused or unknown claim write is `claim-post-failed` or
      `recovery-hold`, and the claim is never posted twice. A failed nonce
      write is retried once, and only when the comments prove the marker
