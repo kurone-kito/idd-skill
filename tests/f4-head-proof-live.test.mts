@@ -811,7 +811,7 @@ test('the refusal advice keeps an HTTP(S) port and never points GH_HOST at an SS
       'https://ghes.example.com:8443/origin-owner/origin-repo.git',
       'ghes.example.com',
     ),
-    "the current checkout's origin names origin-owner/origin-repo on ghes.example.com:8443, but the active GitHub host is ghes.example.com; set GH_HOST to ghes.example.com:8443 to use it",
+    "the current checkout's origin names origin-owner/origin-repo on ghes.example.com:8443, a host with a port that the origin check does not match to the active GitHub host ghes.example.com; use an origin URL without a port, or set GH_HOST to ghes.example.com:8443 to use it",
   );
   for (const url of [
     'git@ssh.github.com:origin-owner/origin-repo.git',
@@ -823,4 +823,133 @@ test('the refusal advice keeps an HTTP(S) port and never points GH_HOST at an SS
       url,
     );
   }
+});
+
+test('each refusal advice names a fix that passes the origin check once it is applied', () => {
+  const unset = { GH_HOST: undefined, GITHUB_SERVER_URL: undefined };
+  const cases: Array<{
+    name: string;
+    origin: string;
+    env: Record<string, string | undefined>;
+    fixes: Array<{ origin?: string; env?: Record<string, string | undefined> }>;
+  }> = [
+    {
+      name: 'an HTTPS origin on a port that GH_HOST carries',
+      origin: 'https://ghes.example.com:8443/origin-owner/origin-repo.git',
+      env: unset,
+      fixes: [{ env: { GH_HOST: 'ghes.example.com:8443' } }],
+    },
+    {
+      name: 'an HTTP origin on port 443',
+      origin: 'http://ghes.example.com:443/origin-owner/origin-repo.git',
+      env: unset,
+      fixes: [
+        {
+          origin: 'http://ghes.example.com/origin-owner/origin-repo.git',
+          env: { GH_HOST: 'ghes.example.com' },
+        },
+      ],
+    },
+    {
+      name: 'an SSH origin on a port',
+      origin: 'ssh://git@ghes.example.com:2222/origin-owner/origin-repo.git',
+      env: unset,
+      fixes: [
+        {
+          origin: 'ssh://git@ghes.example.com/origin-owner/origin-repo.git',
+          env: { GH_HOST: 'ghes.example.com' },
+        },
+      ],
+    },
+    {
+      name: 'a git+ssh origin on a port',
+      origin:
+        'git+ssh://git@ghes.example.com:2222/origin-owner/origin-repo.git',
+      env: unset,
+      fixes: [
+        {
+          origin: 'git+ssh://git@ghes.example.com/origin-owner/origin-repo.git',
+          env: { GH_HOST: 'ghes.example.com' },
+        },
+      ],
+    },
+    {
+      name: 'a git origin on a port',
+      origin: 'git://ghes.example.com:9419/origin-owner/origin-repo.git',
+      env: unset,
+      fixes: [
+        {
+          origin: 'git://ghes.example.com/origin-owner/origin-repo.git',
+          env: { GH_HOST: 'ghes.example.com' },
+        },
+      ],
+    },
+    {
+      name: 'an HTTPS origin on the active host with a port',
+      origin: 'https://github.com:8443/origin-owner/origin-repo.git',
+      env: unset,
+      fixes: [
+        { env: { GH_HOST: 'github.com:8443' } },
+        { origin: 'https://github.com/origin-owner/origin-repo.git' },
+      ],
+    },
+    {
+      name: 'an SSH origin on the active host with a port',
+      origin: 'ssh://git@github.com:2222/origin-owner/origin-repo.git',
+      env: unset,
+      fixes: [{ origin: 'ssh://git@github.com/origin-owner/origin-repo.git' }],
+    },
+    {
+      name: 'an SSH origin on ssh.github.com with GHES active',
+      origin: 'git@ssh.github.com:origin-owner/origin-repo.git',
+      env: { GH_HOST: 'ghes.example.com', GITHUB_SERVER_URL: undefined },
+      fixes: [
+        { origin: 'https://ghes.example.com/origin-owner/origin-repo.git' },
+      ],
+    },
+  ];
+  for (const item of cases) {
+    inOriginCheckout(item.origin, () => {
+      withEnvironment(item.env, () => {
+        const deps = createLiveF4HeadProofDeps({
+          resolveRepo: resolveCheckoutRepository,
+        });
+        assert.notEqual(deps.checkoutRepositoryError(), null, item.name);
+      });
+    });
+    for (const fix of item.fixes) {
+      inOriginCheckout(fix.origin ?? item.origin, () => {
+        withEnvironment({ ...item.env, ...fix.env }, () => {
+          const deps = createLiveF4HeadProofDeps({
+            resolveRepo: resolveCheckoutRepository,
+          });
+          assert.equal(
+            deps.checkoutRepositoryError(),
+            null,
+            `${item.name}: ${JSON.stringify(fix)}`,
+          );
+        });
+      });
+    }
+  }
+});
+
+test('an HTTP origin on port 443 is not accepted under GH_HOST naming that port, which GH_HOST reads back without it', () => {
+  inOriginCheckout(
+    'http://ghes.example.com:443/origin-owner/origin-repo.git',
+    () => {
+      withEnvironment(
+        { GH_HOST: 'ghes.example.com:443', GITHUB_SERVER_URL: undefined },
+        () => {
+          const deps = createLiveF4HeadProofDeps({
+            resolveRepo: resolveCheckoutRepository,
+          });
+          assert.match(
+            deps.checkoutRepositoryError() ?? '',
+            /use an origin URL without a port/,
+          );
+        },
+      );
+    },
+  );
 });
