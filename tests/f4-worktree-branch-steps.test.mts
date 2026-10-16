@@ -489,6 +489,22 @@ test('an unreadable base ref holds at step 4', () => {
   assert.equal(report.reason, 'base-ref-unreadable');
 });
 
+test('an unreadable worktree list fails closed as inconsistent-worktree-state', () => {
+  const report = runF4WorktreeBranchSteps(
+    input(),
+    harness({
+      routes: [
+        {
+          match: (a) => a[0] === 'worktree' && a[1] === 'list',
+          result: fail('fatal: not a repository'),
+        },
+      ],
+    }).deps,
+  );
+  assert.equal(report.reason, 'inconsistent-worktree-state');
+  assert.equal(report.failedStep, null);
+});
+
 test('a development branch name that starts with a dash holds base-ref-unreadable', () => {
   const report = runF4WorktreeBranchSteps(
     input(),

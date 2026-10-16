@@ -929,6 +929,9 @@ function readDevelopmentTarget(
   const listing = deps.git(['worktree', 'list', '--porcelain', '-z'], primary);
   let records: LocalWorktreeRecord[];
   try {
+    if (listing.status !== 0) {
+      throw new Error('git worktree list failed');
+    }
     records = parseLocalWorktreeList(listing.stdout);
   } catch {
     return {
@@ -1082,6 +1085,9 @@ function inspectWorktree(
   const listing = deps.git(['worktree', 'list', '--porcelain', '-z'], primary);
   let records: LocalWorktreeRecord[];
   try {
+    if (listing.status !== 0) {
+      throw new Error('git worktree list failed');
+    }
     records = parseLocalWorktreeList(listing.stdout);
   } catch {
     return none(
