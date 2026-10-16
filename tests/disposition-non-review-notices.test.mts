@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { after, test } from 'node:test';
 
 import {
   type ApplyDispositionPlanDeps,
@@ -15,6 +18,7 @@ import {
   noticeReason,
   parseArgs,
   resolveClaimStillActive,
+  selectDispositionPlan,
 } from '../src/scripts/disposition-non-review-notices.mts';
 import { classifyHelperError } from '../src/scripts/helper-cli-runner.mts';
 import { hasReviewReplyStamp } from '../src/scripts/marker-helpers.mts';
@@ -36,7 +40,7 @@ import {
   summarizeRegularCommentsForGate,
 } from '../src/scripts/protocol-helpers.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
-import { spawnHelperBinWithEnvelope } from './test-utils.mts';
+import { installFixtureGh, spawnHelperBinWithEnvelope } from './test-utils.mts';
 
 const planSchema = loadJson(
   'schemas/disposition-non-review-notices.schema.json',
@@ -319,6 +323,929 @@ test('--help: says a resolved CodeRabbit summary is skipped without a reply, wit
   assert.match(result.stdout, /summary-resolved-no-actionable-comments/);
   assert.match(result.stdout, /receives no reply/);
   assert.match(result.stdout, /written\s+E6 rule stays authoritative/);
+  assert.match(result.stdout, /--comment-id <id>/);
+});
+
+// --- #4437: --comment-id narrows the dry run and --apply to listed notices ---
+
+// A spawned CLI reads its gh load-control policy from its working directory's
+// config, and a directory without .github/idd/config.json keeps that policy
+// off. These CLI tests therefore run from an empty temp directory, so no
+// load-control slot file lands under the throwaway state root.
+const COMMENT_ID_CLI_CWD = mkdtempSync(join(tmpdir(), 'idd-disposition-cli-'));
+after(() => rmSync(COMMENT_ID_CLI_CWD, { recursive: true, force: true }));
+
+const COMMENT_ID_BIN = 'idd-disposition-non-review-notices.mjs';
+const COMMENT_ID_BASE_ARGS = [
+  '--pr',
+  '9001',
+  '--owner',
+  'kurone-kito',
+  '--repo',
+  'idd-skill',
+];
+const COMMENT_ID_REPO_PATH = 'repos/kurone-kito/idd-skill';
+const COMMENT_ID_CLAIM_ID = 'claim-cli-4437-test';
+
+function spawnCommentIdCli(args: readonly string[]) {
+  return spawnHelperBinWithEnvelope(COMMENT_ID_BIN, args, {
+    cwd: COMMENT_ID_CLI_CWD,
+  });
+}
+
+function prCommentLine(
+  id: number,
+  login: string,
+  body: string,
+  createdAt: string,
+): string {
+  return JSON.stringify({
+    id,
+    user: { login },
+    body,
+    created_at: createdAt,
+    updated_at: createdAt,
+    node_id: `IC_${id}`,
+  });
+}
+
+function editStateStdout(nodeIds: string[]): string {
+  return JSON.stringify({
+    data: { nodes: nodeIds.map((id) => ({ id, lastEditedAt: null })) },
+  });
+}
+
+test('parseArgs (#4437): --comment-id is absent by default, repeatable, and strictly numeric', () => {
+  assert.equal(parseArgs(['--pr', '9001']).commentIds, undefined);
+  assert.deepEqual(
+    parseArgs(['--pr', '9001', '--comment-id', '11', '--comment-id', '12'])
+      .commentIds,
+    [11, 12],
+  );
+  for (const token of ['0', '01', 'abc', '1.5']) {
+    assert.throws(
+      () => parseArgs(['--pr', '9001', '--comment-id', token]),
+      (error: unknown) => classifyHelperError(error).kind === 'usage',
+      `${JSON.stringify(token)} must be refused as a usage error`,
+    );
+  }
+  // The `=` form hands -3 to the parser as the value, so the strict check runs.
+  assert.throws(
+    () => parseArgs(['--pr', '9001', '--comment-id=-3']),
+    (error: unknown) => classifyHelperError(error).kind === 'usage',
+    '-3 must be refused as a usage error',
+  );
+});
+
+test('selectDispositionPlan (#4437): no filter is the identity, and a selected body is byte-identical', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: HEAD_SHA,
+      comments: [
+        notice(501, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:01Z'),
+        notice(502, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:02Z'),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 2);
+  assert.deepEqual(selectDispositionPlan(plan, undefined), {
+    plan,
+    refused: [],
+  });
+  const selection = selectDispositionPlan(plan, [501]);
+  assert.deepEqual(selection.refused, []);
+  assert.deepEqual(
+    selection.plan.planned.map((entry) => entry.noticeId),
+    [501],
+  );
+  assert.equal(
+    selection.plan.planned[0]?.body,
+    plan.planned.find((entry) => entry.noticeId === 501)?.body,
+  );
+});
+
+test('selectDispositionPlan (#4437): a notice that skips an older undispositioned notice of its bot is refused', () => {
+  // Codex P1 on kurone-kito/idd-skill#4445: the gate attaches a posted
+  // disposition to the oldest unanswered notice, so 503 cannot be selected
+  // alone while 501 and 502 still wait.
+  const plan = buildDispositionPlan(
+    {
+      headSha: HEAD_SHA,
+      comments: [
+        notice(501, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:01Z'),
+        notice(502, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:02Z'),
+        notice(503, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:03Z'),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  const skipping = selectDispositionPlan(plan, [503]);
+  assert.deepEqual(skipping.refused, [
+    { noticeId: 503, reason: null, pairedBefore: 501 },
+  ]);
+  const inOrder = selectDispositionPlan(plan, [502, 501]);
+  assert.deepEqual(inOrder.refused, []);
+  assert.deepEqual(
+    inOrder.plan.planned.map((entry) => entry.noticeId),
+    [501, 502],
+  );
+});
+
+test('selectDispositionPlan (#4437): a listed notice skipped for another reason, or absent from the plan, is refused', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: HEAD_SHA,
+      comments: [
+        notice(501, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:01Z'),
+        notice(504, CODEX, CODEX_SUMMARY_RUNNING, '2026-05-12T00:00:04Z'),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  const selection = selectDispositionPlan(plan, [501, 504, 999, 504]);
+  assert.deepEqual(
+    selection.plan.planned.map((entry) => entry.noticeId),
+    [501],
+  );
+  assert.deepEqual(selection.refused, [
+    { noticeId: 504, reason: 'codex-no-result-for-head', pairedBefore: null },
+    { noticeId: 999, reason: null, pairedBefore: null },
+  ]);
+});
+
+test('selectDispositionPlan (#4437): an already-covered summary acceptance is refused too', () => {
+  // A trusted summary acceptance created at 06 covers summary 602 (activity
+  // 02) first, so the plan skips 602. Selecting it must still be refused.
+  const plan = buildDispositionPlan(
+    {
+      headSha: HEAD_SHA,
+      comments: [
+        notice(
+          601,
+          CODERABBIT,
+          CODERABBIT_COMPLETED_WALKTHROUGH,
+          '2026-05-12T00:00:01Z',
+          '2026-05-12T00:00:05Z',
+        ),
+        notice(
+          602,
+          CODERABBIT,
+          CODERABBIT_COMPLETED_WALKTHROUGH,
+          '2026-05-12T00:00:02Z',
+        ),
+        notice(
+          603,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODERABBIT, HEAD_SHA),
+          '2026-05-12T00:00:06Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    plan.skipped.map((entry) => [entry.noticeId, entry.reason]),
+    [[602, 'already-dispositioned']],
+  );
+  const isSummary = (noticeId: number) => noticeId === 601 || noticeId === 602;
+  assert.deepEqual(
+    selectDispositionPlan(plan, [602], undefined, isSummary).refused,
+    [{ noticeId: 602, reason: 'summary walkthrough', pairedBefore: null }],
+  );
+});
+
+test("buildDispositionPlan (#4437): covers a bot's summaries in activity order, as the gate does", () => {
+  // Summary 601 was created first but edited later, so the gate pairs 602
+  // first. One trusted summary acceptance, created after both, covers 602.
+  const plan = buildDispositionPlan(
+    {
+      headSha: HEAD_SHA,
+      comments: [
+        notice(
+          601,
+          CODERABBIT,
+          CODERABBIT_COMPLETED_WALKTHROUGH,
+          '2026-05-12T00:00:01Z',
+          '2026-05-12T00:00:05Z',
+        ),
+        notice(
+          602,
+          CODERABBIT,
+          CODERABBIT_COMPLETED_WALKTHROUGH,
+          '2026-05-12T00:00:02Z',
+        ),
+        notice(
+          603,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODERABBIT, HEAD_SHA),
+          '2026-05-12T00:00:06Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    plan.skipped.map((entry) => [entry.noticeId, entry.reason]),
+    [[602, 'already-dispositioned']],
+  );
+  assert.deepEqual(
+    plan.planned.map((entry) => entry.noticeId),
+    [601],
+  );
+});
+
+test("buildDispositionPlan (#4437): covers a bot's notices in activity order, as the gate does", () => {
+  // Notice 501 was created first but edited later, so the gate counts 502
+  // first. One trusted disposition for 502 covers 502, and 501 stays planned.
+  const plan = buildDispositionPlan(
+    {
+      headSha: HEAD_SHA,
+      comments: [
+        notice(
+          501,
+          CODERABBIT,
+          CODERABBIT_NOTICE,
+          '2026-05-12T00:00:01Z',
+          '2026-05-12T00:00:05Z',
+        ),
+        notice(502, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:02Z'),
+        notice(
+          503,
+          'kurone-kito',
+          buildDispositionBody(
+            CODERABBIT,
+            HEAD_SHA,
+            'review limit reached / rate limited',
+            502,
+          ),
+          '2026-05-12T00:00:06Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    plan.skipped.map((entry) => [entry.noticeId, entry.reason]),
+    [[502, 'already-dispositioned']],
+  );
+  assert.deepEqual(
+    plan.planned.map((entry) => entry.noticeId),
+    [501],
+  );
+});
+
+test('selectDispositionPlan (#4437): a summary acceptance is refused, since it is not a notice', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: HEAD_SHA,
+      comments: [
+        notice(
+          601,
+          CODERABBIT,
+          CODERABBIT_COMPLETED_WALKTHROUGH,
+          '2026-05-12T00:00:01Z',
+        ),
+        notice(
+          602,
+          CODERABBIT,
+          CODERABBIT_COMPLETED_WALKTHROUGH,
+          '2026-05-12T00:00:02Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    plan.planned.map((entry) => [entry.noticeId, entry.reason]),
+    [
+      [601, 'summary walkthrough'],
+      [602, 'summary walkthrough'],
+    ],
+  );
+  assert.deepEqual(selectDispositionPlan(plan, [602]).refused, [
+    { noticeId: 602, reason: 'summary walkthrough', pairedBefore: null },
+  ]);
+});
+
+test("selectDispositionPlan (#4437): a bot's notices are ordered by activity time, as the gate orders them", () => {
+  // Notice 501 was created first but edited later, so the gate pairs 502 first.
+  const comments = [
+    notice(
+      501,
+      CODERABBIT,
+      CODERABBIT_NOTICE,
+      '2026-05-12T00:00:01Z',
+      '2026-05-12T00:00:05Z',
+    ),
+    notice(502, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:02Z'),
+  ];
+  const plan = buildDispositionPlan(
+    { headSha: HEAD_SHA, comments },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 2);
+  const activity = new Map([
+    [501, '2026-05-12T00:00:05Z'],
+    [502, '2026-05-12T00:00:02Z'],
+  ]);
+  const activityAt = (noticeId: number) => activity.get(noticeId);
+  const editedFirst = selectDispositionPlan(plan, [501], activityAt);
+  assert.deepEqual(editedFirst.refused, [
+    { noticeId: 501, reason: null, pairedBefore: 502 },
+  ]);
+  const gateFirst = selectDispositionPlan(plan, [502], activityAt);
+  assert.deepEqual(gateFirst.refused, []);
+  assert.deepEqual(
+    gateFirst.plan.planned.map((entry) => entry.noticeId),
+    [502],
+  );
+});
+
+test('selectDispositionPlan (#4437): the count label reports the older notice as already-dispositioned', () => {
+  // One trusted CodeRabbit disposition names notice 502, but pairing is
+  // count-based and oldest-first, so that disposition covers notice 501.
+  const plan = buildDispositionPlan(
+    {
+      headSha: HEAD_SHA,
+      comments: [
+        notice(501, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:01Z'),
+        notice(502, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:02Z'),
+        notice(
+          503,
+          'kurone-kito',
+          buildDispositionBody(
+            CODERABBIT,
+            HEAD_SHA,
+            'review limit reached / rate limited',
+            502,
+          ),
+          '2026-05-12T00:00:03Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    plan.skipped.map((entry) => [entry.noticeId, entry.reason]),
+    [[501, 'already-dispositioned']],
+  );
+  assert.deepEqual(
+    plan.planned.map((entry) => entry.noticeId),
+    [502],
+  );
+  const older = selectDispositionPlan(plan, [501]);
+  assert.deepEqual(older.refused, []);
+  assert.deepEqual(older.plan.planned, []);
+  assert.deepEqual(older.plan.skipped, [
+    { noticeId: 501, botLogin: CODERABBIT, reason: 'already-dispositioned' },
+  ]);
+});
+
+test('applyDispositionPlan (#4437): a selected plan posts exactly the selected bodies, in plan order', () => {
+  const selection = selectDispositionPlan(
+    fakePlan([101, 102, 103]),
+    [102, 101],
+  );
+  assert.deepEqual(selection.refused, []);
+  const posted: number[] = [];
+  const deps: ApplyDispositionPlanDeps = {
+    revalidateClaim: () => true,
+    postDisposition: (body) => {
+      const noticeId = Number(/issuecomment-(\d+)/.exec(body)?.[1]);
+      posted.push(noticeId);
+      return { id: 9000 + noticeId };
+    },
+    recoverPostedDisposition: () => null,
+    knownViewerCommentIds: new Set(),
+  };
+  const result = applyDispositionPlan(selection.plan, deps);
+  assert.deepEqual(posted, [101, 102]);
+  assert.deepEqual(
+    result.applied.map((entry) => entry.noticeId),
+    [101, 102],
+  );
+  assert.deepEqual(result.failed, []);
+});
+
+test('CLI dry run (#4437): --comment-id lists only the selected body, byte-identical to the unfiltered run', () => {
+  const fixture = installFixtureGh({
+    responses: [
+      {
+        args: ['auth', 'token'],
+        match: 'prefix',
+        stdout: 'fixture-token\n',
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/pulls/9001`],
+        match: 'prefix',
+        stdout: `${HEAD_SHA}\n`,
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/issues/9001/comments`],
+        match: 'prefix',
+        stdout: `${[
+          prCommentLine(
+            501,
+            CODERABBIT,
+            CODERABBIT_NOTICE,
+            '2026-05-12T00:00:01Z',
+          ),
+          prCommentLine(
+            502,
+            CODERABBIT,
+            CODERABBIT_NOTICE,
+            '2026-05-12T00:00:02Z',
+          ),
+        ].join('\n')}\n`,
+      },
+      {
+        args: ['api', 'graphql'],
+        match: 'prefix',
+        includes: ['IC_501', 'IC_502'],
+        stdout: editStateStdout(['IC_501', 'IC_502']),
+      },
+    ],
+  });
+  try {
+    const full = spawnCommentIdCli(COMMENT_ID_BASE_ARGS);
+    assert.equal(full.status, 0, JSON.stringify(full));
+    const only = spawnCommentIdCli([
+      ...COMMENT_ID_BASE_ARGS,
+      '--comment-id',
+      '501',
+    ]);
+    assert.equal(only.status, 0, JSON.stringify(only));
+    const fullPlanned = (
+      JSON.parse(full.stdout) as {
+        planned: { noticeId: number; body: string }[];
+      }
+    ).planned;
+    const onlyPlanned = (
+      JSON.parse(only.stdout) as {
+        planned: { noticeId: number; body: string }[];
+      }
+    ).planned;
+    assert.equal(fullPlanned.length, 2);
+    assert.deepEqual(
+      onlyPlanned,
+      fullPlanned.filter((entry) => entry.noticeId === 501),
+    );
+    assert.deepEqual(fixture.unexpectedCalls(), []);
+    assert.deepEqual(
+      fixture.calls().filter((argv) => argv.includes('POST')),
+      [],
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI dry run (#4437): an unplanned --comment-id exits 1, names the ID, and writes nothing', () => {
+  const fixture = installFixtureGh({
+    responses: [
+      {
+        args: ['auth', 'token'],
+        match: 'prefix',
+        stdout: 'fixture-token\n',
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/pulls/9001`],
+        match: 'prefix',
+        stdout: `${HEAD_SHA}\n`,
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/issues/9001/comments`],
+        match: 'prefix',
+        stdout: '',
+      },
+    ],
+  });
+  try {
+    const result = spawnCommentIdCli([
+      ...COMMENT_ID_BASE_ARGS,
+      '--comment-id',
+      '999',
+    ]);
+    assert.equal(result.status, 1, JSON.stringify(result));
+    assert.match(result.stderr, /999/);
+    assert.equal(result.envelope?.kind, 'gate');
+    assert.deepEqual(fixture.unexpectedCalls(), []);
+    assert.deepEqual(
+      fixture.calls().filter((argv) => argv.includes('POST')),
+      [],
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI apply (#4437): one unplanned --comment-id refuses the whole run before any write', () => {
+  // The claim resolver needs whole-second ISO timestamps, as real markers have.
+  const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const claimLine = JSON.stringify({
+    id: 7001,
+    user: { login: 'kurone-kito' },
+    body: `<!-- claimed-by: claude-826e09f0 ${COMMENT_ID_CLAIM_ID} supersedes: none ${now} branch: issue/4437-feat-non-review-notices-add-comment-id -->\n\n_claude-826e09f0: issue claim — IDD automation marker. Do not edit._`,
+    created_at: now,
+    updated_at: now,
+    node_id: 'IC_claim',
+  });
+  const fixture = installFixtureGh({
+    responses: [
+      {
+        args: ['auth', 'token'],
+        match: 'prefix',
+        stdout: 'fixture-token\n',
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/issues/4437/comments`],
+        match: 'prefix',
+        stdout: `${claimLine}\n`,
+      },
+      {
+        args: ['api', 'graphql'],
+        match: 'prefix',
+        includes: ['IC_claim'],
+        stdout: editStateStdout(['IC_claim']),
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/pulls/9001`],
+        match: 'prefix',
+        stdout: `${HEAD_SHA}\n`,
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/issues/9001/comments`],
+        match: 'prefix',
+        stdout: `${[
+          prCommentLine(
+            501,
+            CODERABBIT,
+            CODERABBIT_NOTICE,
+            '2026-05-12T00:00:01Z',
+          ),
+          prCommentLine(
+            502,
+            CODERABBIT,
+            CODERABBIT_NOTICE,
+            '2026-05-12T00:00:02Z',
+          ),
+        ].join('\n')}\n`,
+      },
+      {
+        args: ['api', 'graphql'],
+        match: 'prefix',
+        includes: ['IC_501', 'IC_502'],
+        stdout: editStateStdout(['IC_501', 'IC_502']),
+      },
+    ],
+  });
+  try {
+    const result = spawnCommentIdCli([
+      ...COMMENT_ID_BASE_ARGS,
+      '--apply',
+      '--claim-issue',
+      '4437',
+      '--claim-id',
+      COMMENT_ID_CLAIM_ID,
+      '--comment-id',
+      '501',
+      '--comment-id',
+      '999',
+    ]);
+    assert.equal(result.status, 1, JSON.stringify(result));
+    assert.match(result.stderr, /999/);
+    assert.doesNotMatch(result.stderr, /claim revalidation/);
+    assert.equal(result.envelope?.kind, 'gate');
+    assert.deepEqual(
+      fixture.calls().filter((argv) => argv.includes('POST')),
+      [],
+    );
+    assert.deepEqual(fixture.unexpectedCalls(), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI apply (#4437): a selected --comment-id posts only that planned notice', () => {
+  // The same claim and PR fixture as the refusal test above, with the POST
+  // answering with a new comment id. Notice 501 is planned but not selected.
+  const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const claimLine = JSON.stringify({
+    id: 7001,
+    user: { login: 'kurone-kito' },
+    body: `<!-- claimed-by: claude-826e09f0 ${COMMENT_ID_CLAIM_ID} supersedes: none ${now} branch: issue/4437-feat-non-review-notices-add-comment-id -->\n\n_claude-826e09f0: issue claim — IDD automation marker. Do not edit._`,
+    created_at: now,
+    updated_at: now,
+    node_id: 'IC_claim',
+  });
+  const prNotices = `${[
+    prCommentLine(501, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:01Z'),
+    prCommentLine(502, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:02Z'),
+  ].join('\n')}\n`;
+  const fixture = installFixtureGh({
+    responses: [
+      {
+        args: ['auth', 'token'],
+        match: 'prefix',
+        stdout: 'fixture-token\n',
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/issues/4437/comments`],
+        match: 'prefix',
+        stdout: `${claimLine}\n`,
+      },
+      {
+        args: ['api', 'graphql'],
+        match: 'prefix',
+        includes: ['IC_claim'],
+        stdout: editStateStdout(['IC_claim']),
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/pulls/9001`],
+        match: 'prefix',
+        stdout: `${HEAD_SHA}\n`,
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/issues/9001/comments`],
+        match: 'prefix',
+        stdout: prNotices,
+      },
+      {
+        args: ['api', 'graphql'],
+        match: 'prefix',
+        includes: ['IC_501', 'IC_502'],
+        stdout: editStateStdout(['IC_501', 'IC_502']),
+      },
+      {
+        args: [
+          'api',
+          '--method',
+          'POST',
+          `${COMMENT_ID_REPO_PATH}/issues/9001/comments`,
+        ],
+        match: 'prefix',
+        stdout: '{"id":9502}\n',
+      },
+    ],
+  });
+  try {
+    const result = spawnCommentIdCli([
+      ...COMMENT_ID_BASE_ARGS,
+      '--apply',
+      '--claim-issue',
+      '4437',
+      '--claim-id',
+      COMMENT_ID_CLAIM_ID,
+      '--comment-id',
+      '501',
+    ]);
+    assert.equal(result.status, 0, JSON.stringify(result));
+    const output = JSON.parse(result.stdout) as {
+      status: string;
+      applied: { noticeId: number; commentId: number }[];
+      failed: unknown[];
+    };
+    assert.equal(output.status, 'applied');
+    assert.deepEqual(output.applied, [{ noticeId: 501, commentId: 9502 }]);
+    assert.deepEqual(output.failed, []);
+    assert.equal(
+      fixture.calls().filter((argv) => argv.includes('POST')).length,
+      1,
+    );
+    assert.deepEqual(fixture.unexpectedCalls(), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+// The claim and PR fixture shared by the CLI apply tests. Each POST answers
+// with a fixed id, so the tests assert notice ids and POST counts only.
+function commentIdApplyFixture(prCommentLines: string[], prNodeIds: string[]) {
+  // The claim resolver needs whole-second ISO timestamps, as real markers have.
+  const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const claimLine = JSON.stringify({
+    id: 7001,
+    user: { login: 'kurone-kito' },
+    body: `<!-- claimed-by: claude-826e09f0 ${COMMENT_ID_CLAIM_ID} supersedes: none ${now} branch: issue/4437-feat-non-review-notices-add-comment-id -->\n\n_claude-826e09f0: issue claim — IDD automation marker. Do not edit._`,
+    created_at: now,
+    updated_at: now,
+    node_id: 'IC_claim',
+  });
+  return installFixtureGh({
+    responses: [
+      {
+        args: ['auth', 'token'],
+        match: 'prefix',
+        stdout: 'fixture-token\n',
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/issues/4437/comments`],
+        match: 'prefix',
+        stdout: `${claimLine}\n`,
+      },
+      {
+        args: ['api', 'graphql'],
+        match: 'prefix',
+        includes: ['IC_claim'],
+        stdout: editStateStdout(['IC_claim']),
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/pulls/9001`],
+        match: 'prefix',
+        stdout: `${HEAD_SHA}\n`,
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/issues/9001/comments`],
+        match: 'prefix',
+        stdout: `${prCommentLines.join('\n')}\n`,
+      },
+      {
+        args: ['api', 'graphql'],
+        match: 'prefix',
+        includes: prNodeIds,
+        stdout: editStateStdout(prNodeIds),
+      },
+      {
+        args: [
+          'api',
+          '--method',
+          'POST',
+          `${COMMENT_ID_REPO_PATH}/issues/9001/comments`,
+        ],
+        match: 'prefix',
+        stdout: '{"id":9502}\n',
+      },
+    ],
+  });
+}
+
+const COMMENT_ID_THREE_NOTICES = [
+  prCommentLine(501, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:01Z'),
+  prCommentLine(502, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:02Z'),
+  prCommentLine(503, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:03Z'),
+];
+
+const COMMENT_ID_APPLY_ARGS = [
+  ...COMMENT_ID_BASE_ARGS,
+  '--apply',
+  '--claim-issue',
+  '4437',
+  '--claim-id',
+  COMMENT_ID_CLAIM_ID,
+];
+
+test('CLI apply (#4437): with no --comment-id, --apply posts every planned notice, as before', () => {
+  const fixture = commentIdApplyFixture(COMMENT_ID_THREE_NOTICES, [
+    'IC_501',
+    'IC_502',
+    'IC_503',
+  ]);
+  try {
+    const result = spawnCommentIdCli(COMMENT_ID_APPLY_ARGS);
+    assert.equal(result.status, 0, JSON.stringify(result));
+    const output = JSON.parse(result.stdout) as {
+      status: string;
+      applied: { noticeId: number }[];
+    };
+    assert.equal(output.status, 'applied');
+    assert.deepEqual(
+      output.applied.map((entry) => entry.noticeId),
+      [501, 502, 503],
+    );
+    assert.equal(
+      fixture.calls().filter((argv) => argv.includes('POST')).length,
+      3,
+    );
+    assert.deepEqual(fixture.unexpectedCalls(), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI apply (#4437): two --comment-id values post exactly those two notices', () => {
+  const fixture = commentIdApplyFixture(COMMENT_ID_THREE_NOTICES, [
+    'IC_501',
+    'IC_502',
+    'IC_503',
+  ]);
+  try {
+    const result = spawnCommentIdCli([
+      ...COMMENT_ID_APPLY_ARGS,
+      '--comment-id',
+      '501',
+      '--comment-id',
+      '502',
+    ]);
+    assert.equal(result.status, 0, JSON.stringify(result));
+    const output = JSON.parse(result.stdout) as {
+      status: string;
+      applied: { noticeId: number }[];
+    };
+    assert.equal(output.status, 'applied');
+    assert.deepEqual(
+      output.applied.map((entry) => entry.noticeId),
+      [501, 502],
+    );
+    assert.equal(
+      fixture.calls().filter((argv) => argv.includes('POST')).length,
+      2,
+    );
+    assert.deepEqual(fixture.unexpectedCalls(), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI apply (#4437): a notice that skips an older one of its bot is refused before any write', () => {
+  const fixture = commentIdApplyFixture(COMMENT_ID_THREE_NOTICES, [
+    'IC_501',
+    'IC_502',
+    'IC_503',
+  ]);
+  try {
+    const result = spawnCommentIdCli([
+      ...COMMENT_ID_APPLY_ARGS,
+      '--comment-id',
+      '503',
+    ]);
+    assert.equal(result.status, 1, JSON.stringify(result));
+    assert.match(result.stderr, /503/);
+    assert.match(result.stderr, /needs older notice 501 listed too/);
+    assert.equal(result.envelope?.kind, 'gate');
+    assert.equal(
+      fixture.calls().filter((argv) => argv.includes('POST')).length,
+      0,
+    );
+    assert.deepEqual(fixture.unexpectedCalls(), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI apply (#4437): a listed notice that a disposition already covers is skipped, not posted', () => {
+  // Pairing is count-based and oldest first: the trusted disposition names
+  // notice 502 but covers notice 501, so 501 is the already-dispositioned one.
+  const fixture = commentIdApplyFixture(
+    [
+      prCommentLine(501, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:01Z'),
+      prCommentLine(502, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:02Z'),
+      prCommentLine(
+        503,
+        'kurone-kito',
+        buildDispositionBody(
+          CODERABBIT,
+          HEAD_SHA,
+          'review limit reached / rate limited',
+          502,
+        ),
+        '2026-05-12T00:00:03Z',
+      ),
+    ],
+    ['IC_501', 'IC_502', 'IC_503'],
+  );
+  try {
+    const result = spawnCommentIdCli([
+      ...COMMENT_ID_APPLY_ARGS,
+      '--comment-id',
+      '501',
+    ]);
+    assert.equal(result.status, 0, JSON.stringify(result));
+    const output = JSON.parse(result.stdout) as {
+      status: string;
+      applied: unknown[];
+      skipped: { noticeId: number; reason: string }[];
+    };
+    assert.equal(output.status, 'applied');
+    assert.deepEqual(output.applied, []);
+    assert.deepEqual(
+      output.skipped.map((entry) => [entry.noticeId, entry.reason]),
+      [[501, 'already-dispositioned']],
+    );
+    assert.equal(
+      fixture.calls().filter((argv) => argv.includes('POST')).length,
+      0,
+    );
+    assert.deepEqual(fixture.unexpectedCalls(), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI (#4437): a malformed --comment-id is a usage error before any gh call', () => {
+  const fixture = installFixtureGh({});
+  try {
+    const result = spawnCommentIdCli([
+      ...COMMENT_ID_BASE_ARGS,
+      '--comment-id',
+      'abc',
+    ]);
+    assert.equal(result.status, 1, JSON.stringify(result));
+    assert.equal(result.envelope?.kind, 'usage');
+    assert.deepEqual(fixture.calls(), []);
+  } finally {
+    fixture.restore();
+  }
 });
 
 test('parseArgs: --help is recognized without requiring --pr', () => {
