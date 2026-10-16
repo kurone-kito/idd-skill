@@ -443,6 +443,28 @@ test('a lock that another session holds stops the run with lock-busy', () => {
   );
 });
 
+test('an exception from a dependency reports a failed step, not a throw', () => {
+  const h = harness();
+  const deps: F4WorktreeBranchDeps = {
+    ...h.deps,
+    git: (args, cwd) => {
+      if (args[0] === 'fetch') {
+        throw new Error('network reset during fetch');
+      }
+      return h.deps.git(args, cwd);
+    },
+  };
+  const report = runF4WorktreeBranchSteps(input(), deps);
+  assert.equal(report.status, 'failed');
+  assert.equal(report.failedStep, 'step-4');
+  assert.deepEqual(report.notRunSteps, [
+    'step-5',
+    'claim-check (before-step-6)',
+    'step-6',
+  ]);
+  assert.match(report.nextAction ?? '', /network reset/u);
+});
+
 test('a failed fetch holds at step 4 and changes nothing', () => {
   const report = runF4WorktreeBranchSteps(
     input(),

@@ -180,6 +180,17 @@ const PLAN_ORDER: readonly string[] = [
   'step-6',
 ];
 
+/** The step each PLAN_ORDER entry belongs to, index for index. */
+const PLAN_STEP_NAMES: readonly StepName[] = [
+  'path-check',
+  'claim-check',
+  'proof-check',
+  'step-4',
+  'step-5',
+  'claim-check',
+  'step-6',
+];
+
 const DECIDE_BEFORE_POST_HOLDS: readonly string[] = [
   'claim-or-lock',
   'pr-state',
@@ -503,17 +514,74 @@ function nextActionFor(hold: Hold): string {
 }
 
 /**
- * Run F4 steps 4 to 6 in order, stopping at the first hold or failure. In a
- * dry run (`apply` false) the proof check, the step 5 inspection, and the
- * step 6 dry run run, and nothing mutates: step 4 and the removals report
- * `would-run`.
+ * Run F4 steps 4 to 6 in order, stopping at the first hold or failure. An
+ * exception from a dependency is not thrown: it becomes a failed report that
+ * names the step it interrupted and the steps not yet run.
  */
 export function runF4WorktreeBranchSteps(
   input: F4WorktreeBranchInput,
   deps: F4WorktreeBranchDeps,
 ): F4WorktreeBranchReport {
-  const mode = input.apply ? 'apply' : 'dry-run';
   const steps: F4StepRecord[] = [];
+  try {
+    return runPlan(input, deps, steps);
+  } catch (error) {
+    const completed = Math.max(-1, ...steps.map(planIndexOf));
+    const failing = Math.min(completed + 1, PLAN_STEP_NAMES.length - 1);
+    const failedStep = PLAN_STEP_NAMES[failing] as StepName;
+    const detail = error instanceof Error ? error.message : String(error);
+    steps.push(
+      stepRecord(failedStep, 'failed', {
+        reason: 'failed',
+        nextAction:
+          'Failed. Inspect the state named in the detail. Nothing else ran, and a rerun reads the proof again and posts nothing.',
+        detail,
+      }),
+    );
+    return {
+      protocolVersion: '1',
+      issueNumber: input.issueNumber,
+      mode: input.apply ? 'apply' : 'dry-run',
+      status: 'failed',
+      steps,
+      reason: 'failed',
+      nextAction: detail,
+      failedStep,
+      notRunSteps: PLAN_ORDER.slice(failing + 1),
+    };
+  }
+}
+
+/** The plan index that a completed step record stands for. */
+function planIndexOf(entry: F4StepRecord): number {
+  switch (entry.step) {
+    case 'path-check':
+      return 0;
+    case 'claim-check':
+      return entry.phase === 'before-step-6' ? 5 : 1;
+    case 'proof-check':
+      return 2;
+    case 'step-4':
+      return 3;
+    case 'step-5':
+      return 4;
+    case 'step-6':
+      return 6;
+  }
+}
+
+/**
+ * Run F4 steps 4 to 6 in order, stopping at the first hold or failure. In a
+ * dry run (`apply` false) the proof check, the step 5 inspection, and the
+ * step 6 dry run run, and nothing mutates: step 4 and the removals report
+ * `would-run`.
+ */
+function runPlan(
+  input: F4WorktreeBranchInput,
+  deps: F4WorktreeBranchDeps,
+  steps: F4StepRecord[],
+): F4WorktreeBranchReport {
+  const mode = input.apply ? 'apply' : 'dry-run';
   const primary = input.primaryRoot;
   const worktree = resolve(input.worktree);
 
