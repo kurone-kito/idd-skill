@@ -16,15 +16,13 @@ import { checkClaimLock, readGeneratedClaimTokens } from './claim-lock.mjs';
 import { resolveTrustedCollaboratorMarkerLogins } from './collaborator-permission.mjs';
 import { GH_TEXT_LOOP_OPTIONS, ghApiJson, ghText } from './gh-exec.mjs';
 import { loadTrustedActorConfig } from './idd-config.mjs';
-import {
-  parseLocalWorktreeList,
-  sanitizedGitEnvironment,
-} from './local-worktree-occupancy.mjs';
+import { parseLocalWorktreeList } from './local-worktree-occupancy.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import { composeGateTrustedMarkerLogins } from './protocol-helpers.mjs';
 import {
   activeGithubHost,
   createGithubProviderAdapter,
+  gitChildEnvironment,
   isPlainRemoteUrl,
   originNamesRepository,
   repositoryFromRemoteUrl,
@@ -68,7 +66,7 @@ export function matchRegisteredWorktree(output, worktree) {
 function isRegisteredWorktree(worktree) {
   const result = spawnSync('git', ['worktree', 'list', '--porcelain', '-z'], {
     encoding: 'utf8',
-    env: sanitizedGitEnvironment(),
+    env: gitChildEnvironment(),
   });
   return result.status === 0
     ? matchRegisteredWorktree(result.stdout, worktree)
@@ -76,15 +74,15 @@ function isRegisteredWorktree(worktree) {
 }
 /**
  * The options of the spawned claim check. The child reads git state for the
- * supplied worktree only, so the caller's Git environment overrides (`GIT_DIR`,
- * `GIT_WORK_TREE`, and the rest of `sanitizedGitEnvironment`'s list) are
- * dropped. Everything else passes through, including `PATH` and the GitHub
- * token variables the check's own GitHub reads need.
+ * supplied worktree only, so the caller's Git environment overrides (every
+ * `GIT_` name, in any case) are dropped. Everything else passes through,
+ * including `PATH` and the GitHub token variables the check's own GitHub reads
+ * need.
  */
 export function claimCheckSpawnOptions() {
   return {
     encoding: 'utf8',
-    env: sanitizedGitEnvironment(),
+    env: gitChildEnvironment(),
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: CLAIM_ASSERT_TIMEOUT_MS,
   };
@@ -206,7 +204,7 @@ export function classifyClaimAssertResult(exited, stdout, claimId) {
 function runGit(args) {
   const result = spawnSync('git', args, {
     encoding: 'utf8',
-    env: sanitizedGitEnvironment(),
+    env: gitChildEnvironment(),
   });
   return { status: result.status, stdout: (result.stdout ?? '').trim() };
 }
@@ -271,25 +269,37 @@ export function selectPullRequests(rows, branch, limit) {
     .filter((row) => Number.isSafeInteger(row.number) && row.number > 0);
 }
 /**
+ * The origin remote's URL as git reports it, raw but for its final newline;
+ * null when the checkout has no origin or git cannot read it.
+ */
+function readOriginUrl() {
+  const result = spawnSync('git', ['remote', 'get-url', 'origin'], {
+    encoding: 'utf8',
+    env: gitChildEnvironment(),
+  });
+  if (result.status !== 0) return null;
+  const url = (result.stdout ?? '').replace(/\n$/, '');
+  return url === '' ? null : url;
+}
+/**
  * The repository the current checkout's origin remote names, read locally with
  * no `gh` call, so an inherited `GH_REPO` cannot change it. Throws when the
- * checkout has no origin or the remote is not a repository URL.
+ * checkout has no origin or the remote is not a repository URL. The URL is
+ * checked raw, the same way the origin check checks it, before it is parsed.
  */
 export function resolveCheckoutRepository() {
-  const origin = runGit(['remote', 'get-url', 'origin']);
-  if (origin.status !== 0 || origin.stdout === '') {
+  const url = readOriginUrl();
+  if (url === null) {
     throw new Error(
       'the current checkout has no origin remote that names a repository',
     );
   }
-  // A whitespace, backslash, or control character can change where a URL
-  // parser reads the host, so such a URL is refused before it is parsed.
-  if (!isPlainRemoteUrl(origin.stdout)) {
+  if (!isPlainRemoteUrl(url)) {
     throw new Error(
       "the checkout's origin URL contains characters that a repository URL does not",
     );
   }
-  const named = repositoryFromRemoteUrl(origin.stdout);
+  const named = repositoryFromRemoteUrl(url);
   if (named === null) {
     throw new Error(
       'the current checkout has no origin remote that names a repository',
@@ -298,15 +308,15 @@ export function resolveCheckoutRepository() {
   return { owner: named.owner, repo: named.repo };
 }
 /**
- * Why the origin check refused `owner/repo`. Names the origin's own host when
- * the host is the cause, so the fix (GH_HOST) is clear.
+ * Why the origin check refused `owner/repo`, given the origin URL and the
+ * active GitHub host as the caller read them (null when unread). Names the
+ * origin's own host when the host is the cause, so the fix is clear.
  */
-function originMismatchMessage(owner, repo) {
-  const origin = runGit(['remote', 'get-url', 'origin']);
-  const named =
-    origin.status === 0 && origin.stdout !== ''
-      ? repositoryFromRemoteUrl(origin.stdout)
-      : null;
+export function originMismatchMessage(owner, repo, originUrl, active) {
+  if (originUrl !== null && !isPlainRemoteUrl(originUrl)) {
+    return `${owner}/${repo} is not confirmed: the checkout's origin URL contains characters that a repository URL does not`;
+  }
+  const named = originUrl === null ? null : repositoryFromRemoteUrl(originUrl);
   if (named === null) {
     return `${owner}/${repo} is not confirmed: the current checkout has no origin remote that names a repository`;
   }
@@ -316,11 +326,19 @@ function originMismatchMessage(owner, repo) {
   ) {
     return `${owner}/${repo} is not the repository the current checkout's origin names (${named.owner}/${named.repo})`;
   }
-  const active = activeGithubHost() ?? 'an unreadable host';
-  if (named.host.toLowerCase() === active.toLowerCase()) {
+  const host = named.host.toLowerCase();
+  if (active !== null && host === active) {
+    // The name and the host agree with the active host, so only a read that
+    // failed or changed between the two checks can refuse it: a retry is the fix.
     return `the current checkout's origin names ${owner}/${repo} on ${active}, but the origin could not be confirmed; retry, or check the origin remote`;
   }
-  return `the current checkout's origin names ${owner}/${repo} on ${named.host}, but the active GitHub host is ${active}; set GH_HOST to ${named.host} to use it`;
+  const hostOnly = host.replace(/:\d+$/, '');
+  if (active !== null && hostOnly === active) {
+    // The origin check compares the port too, so a non-default port on the
+    // origin URL (an SSH port, for example) keeps the origin from matching.
+    return `the current checkout's origin names ${owner}/${repo} on ${host}, a host with a port that the origin check does not match to the active GitHub host ${active}; use an origin URL without a port`;
+  }
+  return `the current checkout's origin names ${owner}/${repo} on ${host}, but the active GitHub host is ${active ?? 'an unreadable host'}; set GH_HOST to ${hostOnly} to use it`;
 }
 /**
  * The production callbacks for one repository. The trusted logins are the
@@ -350,15 +368,23 @@ export function createLiveF4HeadProofDeps(options) {
       // origin does not confirm is refused; the origin host must be the active
       // GitHub host (GH_HOST, else GITHUB_SERVER_URL, else github.com).
       if (!originNamesRepository(owner, repo)) {
-        throw new Error(originMismatchMessage(owner, repo));
+        throw new Error(
+          originMismatchMessage(
+            owner,
+            repo,
+            readOriginUrl(),
+            activeGithubHost(),
+          ),
+        );
       }
-      // Every gh call of this process goes to the origin's host from here on.
-      // With GH_HOST unset, gh would use its own default host, which can be
-      // another server with a same-named repository. The origin check above has
-      // confirmed that the origin's host is the active host.
-      if (!process.env.GH_HOST?.trim()) {
-        process.env.GH_HOST = activeGithubHost() ?? 'github.com';
+      // Every gh call of this process goes to the host the check just confirmed,
+      // in its normalized form. With GH_HOST unset, gh would use its own default
+      // host, which can be another server with a same-named repository.
+      const confirmedHost = activeGithubHost();
+      if (confirmedHost === null) {
+        throw new Error('the active GitHub host could not be read');
       }
+      process.env.GH_HOST = confirmedHost;
       located = {
         owner,
         repo,

@@ -11,6 +11,7 @@ import {
   classifyLocalRefReads,
   createLiveF4HeadProofDeps,
   matchRegisteredWorktree,
+  originMismatchMessage,
   resolveCheckoutRepository,
   selectPullRequests,
 } from '../src/scripts/f4-head-proof-live.mts';
@@ -431,6 +432,66 @@ test('the live deps refuse a repository the checkout origin does not name, and a
   }
 });
 
+/**
+ * Run `run` with the environment overrides applied (undefined removes a
+ * variable), then put back every variable the overrides touched.
+ */
+function withEnvironment(
+  overrides: Record<string, string | undefined>,
+  run: () => void,
+): void {
+  const saved = Object.keys(overrides).map(
+    (key) => [key, process.env[key]] as const,
+  );
+  try {
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+    run();
+  } finally {
+    for (const [key, value] of saved) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+/**
+ * Run `run` in a fresh checkout whose origin is `url` (no origin when null).
+ * HOME and XDG_CONFIG_HOME point at an empty directory, so a user-level rule
+ * (an insteadOf, for example) cannot rewrite the URL git reports.
+ */
+function inOriginCheckout(url: string | null, run: () => void): void {
+  const root = mkdtempSync(join(tmpdir(), 'f4-head-proof-checkout-'));
+  const home = mkdtempSync(join(tmpdir(), 'f4-head-proof-home-'));
+  const savedCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '-q', '-b', 'main', root], {
+      stdio: 'ignore',
+    });
+    if (url !== null) {
+      execFileSync('git', ['-C', root, 'remote', 'add', 'origin', url], {
+        stdio: 'ignore',
+      });
+    }
+    withEnvironment({ HOME: home, XDG_CONFIG_HOME: home }, () => {
+      process.chdir(root);
+      run();
+    });
+  } finally {
+    process.chdir(savedCwd);
+    rmSync(root, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
 test('the repository is read from the checkout origin, and an inherited GH_REPO has no effect', () => {
   const root = mkdtempSync(join(tmpdir(), 'f4-head-proof-origin-'));
   // A user-level insteadOf rule would change the origin URL git reports, so
@@ -523,8 +584,9 @@ test('a checkout without an origin remote cannot resolve a repository locally', 
 test('an origin URL with whitespace, a backslash, or a character outside printable ASCII is refused before it is parsed', () => {
   const root = mkdtempSync(join(tmpdir(), 'f4-head-proof-odd-origin-'));
   const savedCwd = process.cwd();
-  // Interior characters only: the command trims the edges of git's output, so
-  // an edge character is removed before the check and is not parsed either.
+  // git stores each URL as set (`git remote get-url` returns it intact), and
+  // the check reads the URL raw, so an edge character such as a trailing
+  // space, tab, or carriage return is refused like an interior one.
   const odd = [
     'https://github.com\\@evil.example/o/r',
     'https://github.com/o r',
@@ -534,6 +596,10 @@ test('an origin URL with whitespace, a backslash, or a character outside printab
     'https://github.com/o\u2028r',
     'https://gith\u200bub.com/o/r',
     'https://github.com/o\u00adr',
+    'https://github.com/o/r ',
+    'https://github.com/o/r\t',
+    'https://github.com/o/r\r',
+    ' https://github.com/o/r',
   ];
   try {
     execFileSync('git', ['init', '-q', '-b', 'main', root], {
@@ -562,47 +628,125 @@ test('an origin URL with whitespace, a backslash, or a character outside printab
 });
 
 test('a matching origin on another active host is refused with the GH_HOST fix, and nothing is pinned', () => {
-  const root = mkdtempSync(join(tmpdir(), 'f4-head-proof-host-'));
-  const keys = ['GH_HOST', 'GITHUB_SERVER_URL'] as const;
-  const saved = keys.map((key) => [key, process.env[key]] as const);
-  const savedCwd = process.cwd();
-  try {
-    execFileSync('git', ['init', '-q', '-b', 'main', root], {
-      stdio: 'ignore',
-    });
-    execFileSync(
-      'git',
-      [
-        '-C',
-        root,
-        'remote',
-        'add',
-        'origin',
-        'https://github.com/origin-owner/origin-repo.git',
-      ],
-      { stdio: 'ignore' },
+  inOriginCheckout('https://github.com/origin-owner/origin-repo.git', () => {
+    withEnvironment(
+      { GH_HOST: undefined, GITHUB_SERVER_URL: 'https://ghe.example.com' },
+      () => {
+        const deps = createLiveF4HeadProofDeps({
+          resolveRepo: () => ({ owner: 'origin-owner', repo: 'origin-repo' }),
+        });
+        assert.equal(
+          deps.checkoutRepositoryError(),
+          "the current checkout's origin names origin-owner/origin-repo on github.com, but the active GitHub host is ghe.example.com; set GH_HOST to github.com to use it",
+        );
+        // A refusal pins nothing: the process keeps its own gh host.
+        assert.equal(process.env.GH_HOST, undefined);
+      },
     );
-    process.chdir(root);
-    delete process.env.GH_HOST;
-    process.env.GITHUB_SERVER_URL = 'https://ghe.example.com';
-    const deps = createLiveF4HeadProofDeps({
-      resolveRepo: () => ({ owner: 'origin-owner', repo: 'origin-repo' }),
+  });
+});
+
+test('a GHES origin on the GITHUB_SERVER_URL host is accepted, and gh is pinned to that host', () => {
+  inOriginCheckout(
+    'https://ghe.example.com/origin-owner/origin-repo.git',
+    () => {
+      withEnvironment(
+        { GH_HOST: undefined, GITHUB_SERVER_URL: 'https://ghe.example.com' },
+        () => {
+          const deps = createLiveF4HeadProofDeps({
+            resolveRepo: resolveCheckoutRepository,
+          });
+          assert.equal(deps.checkoutRepositoryError(), null);
+          assert.equal(process.env.GH_HOST, 'ghe.example.com');
+        },
+      );
+    },
+  );
+});
+
+test('a blank GH_HOST counts as unset, and a GH_HOST in another case is pinned in its normalized form', () => {
+  inOriginCheckout('https://github.com/origin-owner/origin-repo.git', () => {
+    withEnvironment({ GH_HOST: '  ', GITHUB_SERVER_URL: undefined }, () => {
+      const deps = createLiveF4HeadProofDeps({
+        resolveRepo: resolveCheckoutRepository,
+      });
+      assert.equal(deps.checkoutRepositoryError(), null);
+      assert.equal(process.env.GH_HOST, 'github.com');
     });
-    assert.equal(
-      deps.checkoutRepositoryError(),
-      "the current checkout's origin names origin-owner/origin-repo on github.com, but the active GitHub host is ghe.example.com; set GH_HOST to github.com to use it",
+    withEnvironment(
+      { GH_HOST: 'GitHub.com', GITHUB_SERVER_URL: undefined },
+      () => {
+        const deps = createLiveF4HeadProofDeps({
+          resolveRepo: resolveCheckoutRepository,
+        });
+        assert.equal(deps.checkoutRepositoryError(), null);
+        assert.equal(process.env.GH_HOST, 'github.com');
+      },
     );
-    // A refusal pins nothing: the process keeps its own gh host.
-    assert.equal(process.env.GH_HOST, undefined);
-  } finally {
-    process.chdir(savedCwd);
-    for (const [key, value] of saved) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-    rmSync(root, { recursive: true, force: true });
-  }
+  });
+});
+
+test('an unreadable GITHUB_SERVER_URL refuses the origin, names the unreadable host, and pins nothing', () => {
+  inOriginCheckout('https://github.com/origin-owner/origin-repo.git', () => {
+    withEnvironment(
+      { GH_HOST: undefined, GITHUB_SERVER_URL: 'not a url' },
+      () => {
+        const deps = createLiveF4HeadProofDeps({
+          resolveRepo: resolveCheckoutRepository,
+        });
+        assert.equal(
+          deps.checkoutRepositoryError(),
+          "the current checkout's origin names origin-owner/origin-repo on github.com, but the active GitHub host is an unreadable host; set GH_HOST to github.com to use it",
+        );
+        assert.equal(process.env.GH_HOST, undefined);
+      },
+    );
+  });
+});
+
+test('the origin refusal names its cause for each case, from the origin URL and the active host', () => {
+  const origin = 'https://github.com/origin-owner/origin-repo.git';
+  assert.equal(
+    originMismatchMessage('origin-owner', 'origin-repo', null, 'github.com'),
+    'origin-owner/origin-repo is not confirmed: the current checkout has no origin remote that names a repository',
+  );
+  assert.equal(
+    originMismatchMessage(
+      'origin-owner',
+      'origin-repo',
+      `${origin} `,
+      'github.com',
+    ),
+    "origin-owner/origin-repo is not confirmed: the checkout's origin URL contains characters that a repository URL does not",
+  );
+  assert.equal(
+    originMismatchMessage('other-owner', 'origin-repo', origin, 'github.com'),
+    "other-owner/origin-repo is not the repository the current checkout's origin names (origin-owner/origin-repo)",
+  );
+  assert.equal(
+    originMismatchMessage('origin-owner', 'origin-repo', origin, 'github.com'),
+    "the current checkout's origin names origin-owner/origin-repo on github.com, but the origin could not be confirmed; retry, or check the origin remote",
+  );
+  assert.equal(
+    originMismatchMessage(
+      'origin-owner',
+      'origin-repo',
+      'ssh://git@github.com:2222/origin-owner/origin-repo.git',
+      'github.com',
+    ),
+    "the current checkout's origin names origin-owner/origin-repo on github.com:2222, a host with a port that the origin check does not match to the active GitHub host github.com; use an origin URL without a port",
+  );
+  assert.equal(
+    originMismatchMessage(
+      'origin-owner',
+      'origin-repo',
+      origin,
+      'ghe.example.com',
+    ),
+    "the current checkout's origin names origin-owner/origin-repo on github.com, but the active GitHub host is ghe.example.com; set GH_HOST to github.com to use it",
+  );
+  assert.equal(
+    originMismatchMessage('origin-owner', 'origin-repo', origin, null),
+    "the current checkout's origin names origin-owner/origin-repo on github.com, but the active GitHub host is an unreadable host; set GH_HOST to github.com to use it",
+  );
 });

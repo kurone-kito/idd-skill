@@ -4050,7 +4050,7 @@ export function activeGithubHost() {
     const explicit = process.env.GH_HOST?.trim();
     if (explicit) return new URL(`https://${explicit}`).host.toLowerCase();
     return new URL(
-      process.env.GITHUB_SERVER_URL ?? 'https://github.com',
+      process.env.GITHUB_SERVER_URL?.trim() || 'https://github.com',
     ).host.toLowerCase();
   } catch {
     return null;
