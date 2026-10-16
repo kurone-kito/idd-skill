@@ -4808,12 +4808,11 @@ like `activation-nonce`, because a worker posts it as itself.
      origin does not list stops the same way. The lock
      is released after this step, because `claim-lock --acquire` takes the
      same lock itself.
-  3. `claim-lock --record-tokens` for the worktree (`tokens-record-failed`),
-     then the fresh-claim gate with `--own-worktree <path>`, which must
-     return `claimable`.
+  3. `claim-lock --record-tokens` for the worktree (`tokens-record-failed`).
   4. Immediately before the claim marker, the issue-author approval gate of
      A5(a) runs again (`approval-missing` or `approval-unproven` stop the
-     run), then the own-worktree fresh-claim gate runs again, then the
+     run), then the own-worktree fresh-claim gate runs once, with
+     `--own-worktree <path>`, and must return `claimable`, then the
      authoring-label hold check (`hold-active`, or
      `precheck-unavailable` when the read fails). Only the label is read:
      the owner-marker log replay is not done, and the report says so with
