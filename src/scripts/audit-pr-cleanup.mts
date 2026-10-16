@@ -416,6 +416,36 @@ const MAX_REVIEW_THREAD_COMMENT_PAGES = 50;
 // and TypeScript resolves an interface regardless of declaration order).
 const UNBOUNDED_TIME_BUDGET: TimeBudget = { exhausted: () => false };
 
+// The F4 head-proof gate's constants (#4369). Declared above the CLI entry
+// block for the same module-eval-order reason as UNBOUNDED_TIME_BUDGET.
+const F4_GATE_NOT_APPLICABLE = 'gate-not-applicable';
+const F4_MARKER_TIMEOUT_MS = 300_000;
+const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/u;
+const MARKER_VERDICTS: ReadonlySet<string> = new Set([
+  'proceed',
+  'hold',
+  'stop',
+  'post',
+]);
+
+/** Next actions of the holds this helper decides itself. */
+const HELPER_NEXT_ACTIONS: Readonly<Partial<Record<HoldReasonCode, string>>> = {
+  'claim-or-lock':
+    'Do not apply. This session does not hold the claim, so end quietly.',
+  'worktree-not-found':
+    'Do not apply. Git registers no worktree for the claim branch; restore it, then rerun.',
+  'head-changed':
+    'Do not apply. The pull request head moved during the run; read it again, then rerun the cleanup.',
+  'head-read-failed':
+    'Do not apply. The pull request head could not be read; fix the cause, then rerun.',
+  'post-unconfirmed':
+    'Do not post again. The proof was posted but a dry run still finds none; reconcile by reading the issue comments.',
+  'gate-unreadable':
+    'Do not apply. The head-proof check printed no usable verdict; read its output, fix the cause, then rerun.',
+};
+const GENERIC_NEXT_ACTION =
+  'Do not apply. Read the hold reason and the head-proof output, fix the cause, then rerun.';
+
 if (import.meta.main) {
   if (isHelperErrorEnvelopeEnabled()) {
     runHelperCli('audit-pr-cleanup', main);
@@ -1171,34 +1201,6 @@ export interface F4GateDeps {
 export interface F4GateState {
   headSha: string | null;
 }
-
-const F4_GATE_NOT_APPLICABLE = 'gate-not-applicable';
-const F4_MARKER_TIMEOUT_MS = 300_000;
-const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/u;
-const MARKER_VERDICTS: ReadonlySet<string> = new Set([
-  'proceed',
-  'hold',
-  'stop',
-  'post',
-]);
-
-/** Next actions of the holds this helper decides itself. */
-const HELPER_NEXT_ACTIONS: Readonly<Partial<Record<HoldReasonCode, string>>> = {
-  'claim-or-lock':
-    'Do not apply. This session does not hold the claim, so end quietly.',
-  'worktree-not-found':
-    'Do not apply. Git registers no worktree for the claim branch; restore it, then rerun.',
-  'head-changed':
-    'Do not apply. The pull request head moved during the run; read it again, then rerun the cleanup.',
-  'head-read-failed':
-    'Do not apply. The pull request head could not be read; fix the cause, then rerun.',
-  'post-unconfirmed':
-    'Do not post again. The proof was posted but a dry run still finds none; reconcile by reading the issue comments.',
-  'gate-unreadable':
-    'Do not apply. The head-proof check printed no usable verdict; read its output, fix the cause, then rerun.',
-};
-const GENERIC_NEXT_ACTION =
-  'Do not apply. Read the hold reason and the head-proof output, fix the cause, then rerun.';
 
 function isHoldReasonCode(value: string | null): value is HoldReasonCode {
   return (
