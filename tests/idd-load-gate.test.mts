@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import * as os from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -236,6 +237,21 @@ test('the bin exits 2 on an unknown option with the envelope unset', () => {
   assert.equal(result.status, 2);
   assert.match(result.stderr, /idd-load-gate: .*--bogus/u);
   assert.equal(result.stdout, '');
+});
+
+test('the validation chains begin with the load gate and keep their other steps', () => {
+  const config = JSON.parse(
+    readFileSync(join(REPO_ROOT, '.github', 'idd', 'config.json'), 'utf8'),
+  ) as { commands: Record<string, string> };
+  const gate = 'node scripts/idd-load-gate.mjs && ';
+  assert.equal(
+    config.commands['pre-push-validate'],
+    `${gate}pnpm run check && pnpm run doctor:github && node scripts/token-cost-report.mjs --check && node scripts/check-stray-commit-closes.mjs && node scripts/pre-push-trial-budget.mjs`,
+  );
+  assert.equal(
+    config.commands['post-fix-validate'],
+    `${gate}npx biome check --write --error-on-warnings && npx dprint fmt "**/*.md" && npx markdownlint-cli2 --fix "**/*.md" && npx markdownlint-cli2 "**/*.md" && npx cspell lint "**" --no-progress && node scripts/audit-docs.mjs --check && node scripts/audit-code-span-wrap.mjs && pnpm typecheck`,
+  );
 });
 
 test('the bin prints usage and exits 0 for --help without reading load', () => {
