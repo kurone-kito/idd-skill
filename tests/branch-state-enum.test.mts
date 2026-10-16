@@ -125,7 +125,7 @@ function helperBulletNames(doc: string, field: SchemaField): string[] {
   const bullet = [lines[start]];
   for (let index = start + 1; index < lines.length; index += 1) {
     const line = lines[index];
-    if (line.trim() === '' || line.startsWith('- ')) {
+    if (line.trim() === '' || /^\s*- /.test(line)) {
       break;
     }
     bullet.push(line);
@@ -334,6 +334,22 @@ test('a gloss that repeats a schema name does not count as a name', () => {
     enumDrift(
       schemaNames('syncRecommendation'),
       helperBulletNames(SYNC_BULLET, 'syncRecommendation'),
+    ),
+    [],
+  );
+});
+
+test('an indented nested bullet ends a helper bullet and adds no names', () => {
+  const nested = [
+    '- `syncRecommendation` values: `none`, `merge-base`, `policy-required-update`,',
+    '  `force-push-exception`, `recheck`, `hold-unknown`',
+    '  - `nested-name` is not part of the list',
+    '',
+  ].join('\n');
+  assert.deepEqual(
+    enumDrift(
+      schemaNames('syncRecommendation'),
+      helperBulletNames(nested, 'syncRecommendation'),
     ),
     [],
   );
