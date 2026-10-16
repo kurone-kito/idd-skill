@@ -2245,7 +2245,7 @@ function assertActiveClaim(
     expectedLinkedPrs?: string[];
     prFirstCommitAt?: string | null;
   } = {},
-): void {
+): ActiveClaim {
   const active = readActiveClaim(owner, repo, issueNumber, options);
   if (
     !active ||
@@ -2257,6 +2257,9 @@ function assertActiveClaim(
       `claim check failed for #${issueNumber}: active claim is ${activeLabel}`,
     );
   }
+  // Returned so a caller that needs the claim's agent ID or branch (the F4
+  // head-proof gate, #4369) reads the claim once, not a second time.
+  return active;
 }
 
 export function readActiveClaim(
