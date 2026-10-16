@@ -303,8 +303,8 @@ Other `advisoryBotLogins` stay on the E1 watermark. **#2544**: once the
 secondary bot has already posted a genuine (non-notice) review for the
 current HEAD, the gate no longer requires the full configured duration --
 only a short, fixed confirmation buffer applies from that review's own
-timestamp, so the wait stays a fallback for a genuinely unreviewed HEAD
-rather than a fixed tax on every merge. **#2547**: a rate-limit /
+timestamp, so the window stays a rescue for late arrivals and is never a wait
+for a review, rather than a fixed tax on every merge. **#2547**: a rate-limit /
 skip-review notice for the current HEAD, with no later genuine comment, is
 a third, distinct outcome from `#2544`'s two-way pending/settled split -- a
 definitive decline, not "might still be reviewing." The gate skips the wait
