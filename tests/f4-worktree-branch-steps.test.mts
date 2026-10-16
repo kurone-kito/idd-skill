@@ -738,6 +738,77 @@ test('a tracked symlink that stays inside the worktree is allowed', () => {
   );
 });
 
+test('both absent with a branch tip that differs from the proof holds branch-tip-mismatch', () => {
+  const listing = `worktree ${PRIMARY}\0HEAD ${OTHER}\0branch refs/heads/main\0\0`;
+  const h = harness({
+    lstat: (path) => (path === WORKTREE ? 'absent' : 'directory'),
+    routes: [
+      {
+        match: (a) => a[0] === 'worktree' && a[1] === 'list',
+        result: ok(listing),
+      },
+      {
+        match: (a) => a[0] === 'show-ref' && a.includes(`refs/heads/${BRANCH}`),
+        result: ok(),
+      },
+      { match: (a) => a[0] === 'rev-parse', result: ok(`${OTHER}\n`) },
+    ],
+  });
+  assert.equal(
+    runF4WorktreeBranchSteps(input(), h.deps).reason,
+    'branch-tip-mismatch',
+  );
+});
+
+test('a worktree whose branch ref is missing holds branch-tip-mismatch', () => {
+  const h = harness({
+    routes: [
+      {
+        match: (a) => a[0] === 'worktree' && a[1] === 'list',
+        result: ok(worktreeListing()),
+      },
+      { match: (a) => a[0] === 'rev-parse', result: fail('') },
+    ],
+  });
+  assert.equal(
+    runF4WorktreeBranchSteps(input(), h.deps).reason,
+    'branch-tip-mismatch',
+  );
+});
+
+test('a worktree registered on another branch holds inconsistent-worktree-state', () => {
+  const listing = `worktree ${PRIMARY}\0HEAD ${OTHER}\0branch refs/heads/main\0\0worktree ${WORKTREE}\0HEAD ${OTHER}\0branch refs/heads/issue/other\0\0`;
+  const h = harness({
+    routes: [
+      {
+        match: (a) => a[0] === 'worktree' && a[1] === 'list',
+        result: ok(listing),
+      },
+    ],
+  });
+  assert.equal(
+    runF4WorktreeBranchSteps(input(), h.deps).reason,
+    'inconsistent-worktree-state',
+  );
+});
+
+test('a registration marked prunable while its path is missing holds inconsistent-worktree-state', () => {
+  const listing = `worktree ${PRIMARY}\0HEAD ${OTHER}\0branch refs/heads/main\0\0worktree ${WORKTREE}\0HEAD ${OTHER}\0branch refs/heads/${BRANCH}\0prunable gitdir file points to non-existent location\0\0`;
+  const h = harness({
+    lstat: (path) => (path === WORKTREE ? 'absent' : 'directory'),
+    routes: [
+      {
+        match: (a) => a[0] === 'worktree' && a[1] === 'list',
+        result: ok(listing),
+      },
+    ],
+  });
+  assert.equal(
+    runF4WorktreeBranchSteps(input(), h.deps).reason,
+    'inconsistent-worktree-state',
+  );
+});
+
 test('a branch tip that differs from the proof holds with branch-tip-mismatch', () => {
   const report = runF4WorktreeBranchSteps(
     input(),
