@@ -939,6 +939,50 @@ test('each refusal advice names a fix that passes the origin check once it is ap
         },
       ],
     },
+    {
+      name: 'an SSH origin on ssh.github.com with an unreadable GH_HOST',
+      origin: 'git@ssh.github.com:origin-owner/origin-repo.git',
+      env: { GH_HOST: 'bad host', GITHUB_SERVER_URL: undefined },
+      fixes: [
+        {
+          expect:
+            'set GH_HOST to a readable host, or unset it and set GITHUB_SERVER_URL to its https:// URL',
+          origin: 'https://ghes.example.com/origin-owner/origin-repo.git',
+          env: { GH_HOST: 'ghes.example.com' },
+        },
+        {
+          expect:
+            'set GH_HOST to a readable host, or unset it and set GITHUB_SERVER_URL to its https:// URL',
+          origin: 'https://ghes.example.com/origin-owner/origin-repo.git',
+          env: {
+            GH_HOST: undefined,
+            GITHUB_SERVER_URL: 'https://ghes.example.com',
+          },
+        },
+      ],
+    },
+    {
+      name: 'a host GH_HOST cannot name, with an unreadable GH_HOST',
+      origin: 'git@ho#st:origin-owner/origin-repo.git',
+      env: { GH_HOST: 'bad host', GITHUB_SERVER_URL: undefined },
+      fixes: [
+        {
+          expect:
+            'set GH_HOST to a readable host, or unset it and set GITHUB_SERVER_URL to its https:// URL',
+          origin: 'https://ghes.example.com/origin-owner/origin-repo.git',
+          env: { GH_HOST: 'ghes.example.com' },
+        },
+        {
+          expect:
+            'set GH_HOST to a readable host, or unset it and set GITHUB_SERVER_URL to its https:// URL',
+          origin: 'https://ghes.example.com/origin-owner/origin-repo.git',
+          env: {
+            GH_HOST: undefined,
+            GITHUB_SERVER_URL: 'https://ghes.example.com',
+          },
+        },
+      ],
+    },
   ];
   for (const item of cases) {
     let refusal = '';
@@ -1004,11 +1048,11 @@ test('the refusal advice for ssh.github.com names the active host, or the settin
   );
   assert.equal(
     originMismatchMessage('origin-owner', 'origin-repo', origin, null),
-    "the current checkout's origin names origin-owner/origin-repo on ssh.github.com, GitHub's SSH endpoint and not an API host; the active GitHub host cannot be read, so set GH_HOST to a readable host, or unset it and set GITHUB_SERVER_URL, and then use an origin URL on that host",
+    "the current checkout's origin names origin-owner/origin-repo on ssh.github.com, GitHub's SSH endpoint and not an API host; the active GitHub host cannot be read, so set GH_HOST to a readable host, or unset it and set GITHUB_SERVER_URL to its https:// URL, and then use an origin URL on that host",
   );
 });
 
-test('a host that GH_HOST cannot name gets advice to use the active host, with an example', () => {
+test('a host that GH_HOST cannot name gets advice to use the active host, or the setting to fix first', () => {
   assert.equal(
     originMismatchMessage(
       'origin-owner',
@@ -1025,6 +1069,6 @@ test('a host that GH_HOST cannot name gets advice to use the active host, with a
       'git@ho#st:origin-owner/origin-repo.git',
       null,
     ),
-    "the current checkout's origin names origin-owner/origin-repo on ho#st, which GH_HOST cannot name, and the active GitHub host cannot be read either; set GH_HOST to a readable host, or unset it and set GITHUB_SERVER_URL, and then use an origin URL on that host",
+    "the current checkout's origin names origin-owner/origin-repo on ho#st, which GH_HOST cannot name, and the active GitHub host cannot be read either; set GH_HOST to a readable host, or unset it and set GITHUB_SERVER_URL to its https:// URL, and then use an origin URL on that host",
   );
 });
