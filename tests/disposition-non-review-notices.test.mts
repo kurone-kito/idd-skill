@@ -389,7 +389,12 @@ test('parseArgs (#4437): --comment-id is absent by default, repeatable, and stri
       `${JSON.stringify(token)} must be refused as a usage error`,
     );
   }
-  assert.throws(() => parseArgs(['--pr', '9001', '--comment-id', '-3']));
+  // The `=` form hands -3 to the parser as the value, so the strict check runs.
+  assert.throws(
+    () => parseArgs(['--pr', '9001', '--comment-id=-3']),
+    (error: unknown) => classifyHelperError(error).kind === 'usage',
+    '-3 must be refused as a usage error',
+  );
 });
 
 test('selectDispositionPlan (#4437): no filter is the identity, and a selected body is byte-identical', () => {
@@ -792,6 +797,193 @@ test('CLI apply (#4437): a selected --comment-id posts only that planned notice'
     assert.equal(
       fixture.calls().filter((argv) => argv.includes('POST')).length,
       1,
+    );
+    assert.deepEqual(fixture.unexpectedCalls(), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+// The claim and PR fixture shared by the CLI apply tests. Each POST answers
+// with a fixed id, so the tests assert notice ids and POST counts only.
+function commentIdApplyFixture(prCommentLines: string[], prNodeIds: string[]) {
+  // The claim resolver needs whole-second ISO timestamps, as real markers have.
+  const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const claimLine = JSON.stringify({
+    id: 7001,
+    user: { login: 'kurone-kito' },
+    body: `<!-- claimed-by: claude-826e09f0 ${COMMENT_ID_CLAIM_ID} supersedes: none ${now} branch: issue/4437-feat-non-review-notices-add-comment-id -->\n\n_claude-826e09f0: issue claim — IDD automation marker. Do not edit._`,
+    created_at: now,
+    updated_at: now,
+    node_id: 'IC_claim',
+  });
+  return installFixtureGh({
+    responses: [
+      {
+        args: ['auth', 'token'],
+        match: 'prefix',
+        stdout: 'fixture-token\n',
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/issues/4437/comments`],
+        match: 'prefix',
+        stdout: `${claimLine}\n`,
+      },
+      {
+        args: ['api', 'graphql'],
+        match: 'prefix',
+        includes: ['IC_claim'],
+        stdout: editStateStdout(['IC_claim']),
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/pulls/9001`],
+        match: 'prefix',
+        stdout: `${HEAD_SHA}\n`,
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/issues/9001/comments`],
+        match: 'prefix',
+        stdout: `${prCommentLines.join('\n')}\n`,
+      },
+      {
+        args: ['api', 'graphql'],
+        match: 'prefix',
+        includes: prNodeIds,
+        stdout: editStateStdout(prNodeIds),
+      },
+      {
+        args: [
+          'api',
+          '--method',
+          'POST',
+          `${COMMENT_ID_REPO_PATH}/issues/9001/comments`,
+        ],
+        match: 'prefix',
+        stdout: '{"id":9502}\n',
+      },
+    ],
+  });
+}
+
+const COMMENT_ID_THREE_NOTICES = [
+  prCommentLine(501, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:01Z'),
+  prCommentLine(502, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:02Z'),
+  prCommentLine(503, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:03Z'),
+];
+
+const COMMENT_ID_APPLY_ARGS = [
+  ...COMMENT_ID_BASE_ARGS,
+  '--apply',
+  '--claim-issue',
+  '4437',
+  '--claim-id',
+  COMMENT_ID_CLAIM_ID,
+];
+
+test('CLI apply (#4437): with no --comment-id, --apply posts every planned notice, as before', () => {
+  const fixture = commentIdApplyFixture(COMMENT_ID_THREE_NOTICES, [
+    'IC_501',
+    'IC_502',
+    'IC_503',
+  ]);
+  try {
+    const result = spawnCommentIdCli(COMMENT_ID_APPLY_ARGS);
+    assert.equal(result.status, 0, JSON.stringify(result));
+    const output = JSON.parse(result.stdout) as {
+      status: string;
+      applied: { noticeId: number }[];
+    };
+    assert.equal(output.status, 'applied');
+    assert.deepEqual(
+      output.applied.map((entry) => entry.noticeId),
+      [501, 502, 503],
+    );
+    assert.equal(
+      fixture.calls().filter((argv) => argv.includes('POST')).length,
+      3,
+    );
+    assert.deepEqual(fixture.unexpectedCalls(), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI apply (#4437): two --comment-id values post exactly those two notices', () => {
+  const fixture = commentIdApplyFixture(COMMENT_ID_THREE_NOTICES, [
+    'IC_501',
+    'IC_502',
+    'IC_503',
+  ]);
+  try {
+    const result = spawnCommentIdCli([
+      ...COMMENT_ID_APPLY_ARGS,
+      '--comment-id',
+      '501',
+      '--comment-id',
+      '503',
+    ]);
+    assert.equal(result.status, 0, JSON.stringify(result));
+    const output = JSON.parse(result.stdout) as {
+      status: string;
+      applied: { noticeId: number }[];
+    };
+    assert.equal(output.status, 'applied');
+    assert.deepEqual(
+      output.applied.map((entry) => entry.noticeId),
+      [501, 503],
+    );
+    assert.equal(
+      fixture.calls().filter((argv) => argv.includes('POST')).length,
+      2,
+    );
+    assert.deepEqual(fixture.unexpectedCalls(), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI apply (#4437): a listed notice that a disposition already covers is skipped, not posted', () => {
+  // Pairing is count-based and oldest first: the trusted disposition names
+  // notice 502 but covers notice 501, so 501 is the already-dispositioned one.
+  const fixture = commentIdApplyFixture(
+    [
+      prCommentLine(501, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:01Z'),
+      prCommentLine(502, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:02Z'),
+      prCommentLine(
+        503,
+        'kurone-kito',
+        buildDispositionBody(
+          CODERABBIT,
+          HEAD_SHA,
+          'review limit reached / rate limited',
+          502,
+        ),
+        '2026-05-12T00:00:03Z',
+      ),
+    ],
+    ['IC_501', 'IC_502', 'IC_503'],
+  );
+  try {
+    const result = spawnCommentIdCli([
+      ...COMMENT_ID_APPLY_ARGS,
+      '--comment-id',
+      '501',
+    ]);
+    assert.equal(result.status, 0, JSON.stringify(result));
+    const output = JSON.parse(result.stdout) as {
+      status: string;
+      applied: unknown[];
+      skipped: { noticeId: number; reason: string }[];
+    };
+    assert.equal(output.status, 'applied');
+    assert.deepEqual(output.applied, []);
+    assert.deepEqual(
+      output.skipped.map((entry) => [entry.noticeId, entry.reason]),
+      [[501, 'already-dispositioned']],
+    );
+    assert.equal(
+      fixture.calls().filter((argv) => argv.includes('POST')).length,
+      0,
     );
     assert.deepEqual(fixture.unexpectedCalls(), []);
   } finally {
