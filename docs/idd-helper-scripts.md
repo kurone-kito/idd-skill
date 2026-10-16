@@ -4796,7 +4796,10 @@ like `activation-nonce`, because a worker posts it as itself.
      `git worktree add --no-track <path> -b <branch> origin/<development-branch>`
      (`worktree-add-failed` on failure). The development branch comes from
      `developmentBranch` or else the default branch; an invalid or
-     unavailable value stops with `development-branch-unresolved`. The lock
+     unavailable value stops with `development-branch-unresolved`. The name
+     must be listed by origin itself (`git ls-remote`), because a plain fetch
+     keeps the remote-tracking ref of a branch that was deleted; a name that
+     origin does not list stops the same way. The lock
      is released after this step, because `claim-lock --acquire` takes the
      same lock itself.
   3. `claim-lock --record-tokens` for the worktree (`tokens-record-failed`),
@@ -4812,7 +4815,10 @@ like `activation-nonce`, because a worker posts it as itself.
      claim id and the nonce, so a rerun is always a new claim attempt. A
      refused or unknown claim write is `claim-post-failed` or
      `recovery-hold`, and the claim is never posted twice. A failed nonce
-     write is retried once, then stops with `nonce-post-failed`.
+     write is retried once, and only when the comments prove the marker
+     absent; an unreadable comment list stops with `recovery-hold` without a
+     retry. A nonce still absent after the retry stops with
+     `nonce-post-failed`.
   6. `claim-lock --acquire` on the worktree (`lock-acquire-failed`), then,
      after `claim.verifySettleDelay`, `resume-claim-routing --assert`. Only
      `already_owned` with `keep` verifies the claim

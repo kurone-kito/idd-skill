@@ -1127,21 +1127,26 @@ function resolveDevelopment(state) {
     (target.status === 'configured' || target.status === 'default') &&
     target.branch !== undefined
   ) {
-    // The branch must exist on origin after the fetch; a configured name that is
-    // missing there would otherwise fail later, inside `git worktree add`.
-    const ref = state.deps.run('git', [
+    // The branch must exist on origin itself. A plain fetch keeps the remote-
+    // tracking ref of a branch deleted remotely, so the local ref proves nothing.
+    const live = state.deps.run('git', [
       '-C',
       state.primary,
-      'rev-parse',
-      '--verify',
-      '--quiet',
-      `refs/remotes/origin/${target.branch}`,
+      'ls-remote',
+      '--heads',
+      'origin',
+      target.branch,
     ]);
-    if (ref.status !== 0) {
+    const listed = live.stdout
+      .split(/\r?\n/)
+      .some((line) => line.trim().endsWith(`\trefs/heads/${target.branch}`));
+    if (live.status !== 0 || !listed) {
       return applyFail(
         'development-branch-unresolved',
         'Create the development branch on origin, or fix developmentBranch in .github/idd/config.json, then rerun this helper. Nothing was created.',
-        `origin/${target.branch} does not exist (git rev-parse ended with ${describeStatus(ref)})`,
+        live.status !== 0
+          ? `git ls-remote ended with ${describeStatus(live)}`
+          : `origin has no branch ${target.branch}`,
       );
     }
     state.developmentBranch = target.branch;
@@ -1615,12 +1620,28 @@ function postNonce(state) {
     '--timestamp',
     timestampOf(state),
   ];
+  // A retry is allowed only when the comments prove the marker absent. An
+  // unreadable comment list is `unknown`, which stops here: a second write could
+  // duplicate a marker that already landed.
+  const unreadable = (detail) =>
+    applyFail(
+      'recovery-hold',
+      `Re-read the issue comments after claim.verifySettleDelay. If the activation nonce ${identity.nonce} for claim ${identity.claimId} is on the issue, continue by hand from the assert; if it is not, run lost-claim-cleanup. This helper did not retry the nonce write.`,
+      detail,
+      { lost: false },
+    );
   if (postMarker(state, args).status === 0) {
     return applyPass('activation nonce posted');
   }
-  if (findMarker(state, prefix) === 'present') {
+  const first = findMarker(state, prefix);
+  if (first === 'present') {
     return applyPass(
       'the activation nonce is on the issue after a write that did not report success',
+    );
+  }
+  if (first === 'unknown') {
+    return unreadable(
+      'the nonce write did not report success and the comments cannot be read, so absence is not proven',
     );
   }
   state.deps.sleepMs(state.settleMs);
@@ -1628,8 +1649,14 @@ function postNonce(state) {
   if (retry.status === 0) {
     return applyPass('activation nonce posted on the retry');
   }
-  if (findMarker(state, prefix) === 'present') {
+  const second = findMarker(state, prefix);
+  if (second === 'present') {
     return applyPass('activation nonce is on the issue after the retry');
+  }
+  if (second === 'unknown') {
+    return unreadable(
+      'the retry did not report success and the comments cannot be read, so absence is not proven',
+    );
   }
   return applyFail(
     'nonce-post-failed',

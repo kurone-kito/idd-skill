@@ -1584,6 +1584,8 @@ interface ApplyScenario {
   failWorktreeAdd?: boolean;
   /** The login `gh api user` reports for this session. */
   viewer?: string;
+  /** The issue comments cannot be read (every comment read fails). */
+  commentReadFails?: boolean;
 }
 
 interface ApplyRun {
@@ -1706,6 +1708,9 @@ function runApply(
       return NO_REFS;
     }
     if (args[0] === 'api' && String(args[1]).endsWith('/comments')) {
+      if (scenario.commentReadFails) {
+        return failed(1);
+      }
       return ok(JSON.stringify(comments));
     }
     if (args[0] === 'api' && args[1] === 'user') {
@@ -2179,7 +2184,10 @@ test('a development branch that is configured but missing on origin stops before
       const run = runApply(fixture);
       const report = assertStopped(run, 'development-branch-unresolved');
       assert.equal(report.lostClaimCleanupRequired, false);
-      assert.match(report.steps.at(-1)?.detail ?? '', /origin\/nope/);
+      assert.match(
+        report.steps.at(-1)?.detail ?? '',
+        /origin has no branch nope/,
+      );
       assert.equal(
         run.log.some((entry) => entry.includes('worktree add')),
         false,
@@ -2429,7 +2437,10 @@ test('the policy is read after the fast-forward, so a policy change on origin ap
     // The new origin policy names a development branch that origin lacks, so
     // the run stops on it: which shows the policy was read after the fast-forward.
     const report = assertStopped(run, 'development-branch-unresolved');
-    assert.match(report.steps.at(-1)?.detail ?? '', /origin\/missing/);
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /origin has no branch missing/,
+    );
     assert.equal(report.lostClaimCleanupRequired, false);
     assert.equal(existsSync(fixture.worktree), false);
     assert.equal(branchExists(fixture.primary), false);
@@ -2461,4 +2472,54 @@ test('a session login that cannot be read stops before any write, as precheck-un
     );
     assert.equal(run.posts.length, 0);
   });
+});
+
+test('an activation nonce whose write failed while the comments cannot be read is never retried', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      commentReadFails: true,
+      posts: { 'activation-nonce': ['unknown-absent', 'unknown-absent'] },
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, true);
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(
+      run.posts.filter((post) => post.type === 'activation-nonce').length,
+      1,
+    );
+    assert.equal(
+      run.log.some((entry) => entry.includes('--acquire')),
+      false,
+    );
+    assert.match(report.nextAction ?? '', /did not retry the nonce write/);
+  });
+});
+
+test('a development branch that origin deleted, but a stale remote-tracking ref still holds, stops as unresolved', () => {
+  withApplyFixture(
+    (fixture) => {
+      const updater = join(fixture.parent, 'updater');
+      gitIn(fixture.parent, [
+        'clone',
+        '--quiet',
+        join(fixture.parent, 'origin.git'),
+        updater,
+      ]);
+      gitIn(updater, ['push', '--quiet', 'origin', 'main:stale']);
+      gitIn(fixture.primary, ['fetch', '--quiet', 'origin']);
+      gitIn(updater, ['push', '--quiet', 'origin', '--delete', 'stale']);
+      const run = runApply(fixture);
+      const report = assertStopped(run, 'development-branch-unresolved');
+      assert.match(
+        report.steps.at(-1)?.detail ?? '',
+        /origin has no branch stale/,
+      );
+      assert.equal(
+        run.log.some((entry) => entry.includes('worktree add')),
+        false,
+      );
+      assert.equal(existsSync(fixture.worktree), false);
+    },
+    { developmentBranch: 'stale', trustedMarkerActors: [OWNER] },
+  );
 });
