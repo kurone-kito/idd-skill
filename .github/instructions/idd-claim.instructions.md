@@ -298,6 +298,9 @@ Resolve the commands as A5(a) does.
 6. Continue B1 in that worktree, from Step 3 (install dependencies) of
    `idd-work.instructions.md`.
 
+Steps 2 to 5 are one fail-closed block in
+[fresh-claim wrapper](../../docs/idd-helper-scripts.md#fresh-claim-wrapper).
+
 **Nothing appended after the note.** A `claimed-by` / `unclaimed-by`
 marker body must be exactly the HTML comment token, followed by at most
 the single italic note from Claim format above. Trailing content, a
@@ -314,12 +317,8 @@ every fresh `{claim-id}`.
 
 ### Lost-claim cleanup (`lost-claim-cleanup`)
 
-Run this after the step 1 worktree exists, at every exit where this session no
-longer holds the claim: a `--record-tokens` failure (step 2), a failed claim or
-activation-nonce post (step 3), a `--acquire` collision or other non-success
-exit (step 4), an `--assert` result other than `already_owned`/`keep` (step
-5), or an `unclaimed-by` posted after an authoring hold that followed a
-successful assert (Claim verification step 5). Never use `--takeover`. Fill in
+Run this at each [trigger list](../../docs/idd-helper-scripts.md#lost-claim-triggers)
+exit. Never use `--takeover`. Fill in
 the placeholders of the script, each as a single-quoted shell word (write a `'`
 as `'\''`), resolve each helper as in A5(a), and run it as one hold of the
 [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock):

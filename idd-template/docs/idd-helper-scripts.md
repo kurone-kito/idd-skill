@@ -5439,6 +5439,77 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   already find present and matching all leave the existing fail-closed
   stop unchanged -- write nothing.
 
+### Fresh-claim wrapper
+
+Steps 2 to 5 of the fresh claim in
+[`idd-claim.instructions.md`](../.github/instructions/idd-claim.instructions.md)
+run as one fenced `set -euo pipefail` block. The block fails closed. It exits
+non-zero at the first failure, and it prints `verified` only after
+`resume-claim-routing --assert` exits 0. The read after acquire is the
+generated-tokens check: an absent or malformed record exits non-zero. Lost-claim
+cleanup is not part of the block. Run cleanup only at the exits listed in
+[Lost-claim triggers](#lost-claim-triggers).
+
+Replace each placeholder with its value. Each placeholder already sits inside
+single quotes, so write any `'` in a value as `'\''`, as the cleanup script
+does. `<ts>` is the current UTC time in ISO 8601. `<settle-seconds>` is
+`claim.verifySettleDelay` converted to whole seconds: the distributed default
+`PT5S` is `5`.
+
+Resolve each helper command as A5(a) does in the claim file. The `node scripts/`
+forms are the source-repository and vendored-node commands, and other helper
+profiles use the profile-selected command. The wrapper runs only on a profile
+that has a helper command. The `instructions-only` profile has none, because the
+resolver returns `null` for it, so that profile does not run this block. It
+makes the claim step by step through the helper-free rules that each section
+documents, in claim-file step order:
+
+- step 2, token record, write side: [Worktree-local generated-tokens record](#worktree-local-generated-tokens-record)
+- step 3, gate: [Claim-state parsing](../.github/instructions/idd-claim.instructions.md#claim-state-parsing),
+  the A5(c) fallback
+- step 3, claim post: [Claim format](../.github/instructions/idd-overview-core.instructions.md#claim-format)
+- step 3, nonce post: [Activation-nonce format](../.github/instructions/idd-claim.instructions.md#activation-nonce-format),
+  with the second token write before it
+- step 4, lock and token read: [Worktree-local claim lock](#worktree-local-claim-lock),
+  with the read side under [Worktree-local generated-tokens record](#worktree-local-generated-tokens-record)
+- step 5, verification: [Claim verification](../.github/instructions/idd-claim.instructions.md#claim-verification),
+  since `--assert` has no helper-free command
+
+The full sequence is split across these sections, in that order. No single
+section holds all of it.
+
+```sh
+set -euo pipefail
+w='<path>' a='{agent-id}' c='{claim-id}' n='{nonce}' r='<n>' b='<branch>' t='<ts>'
+g() { node scripts/resume-claim-routing.mjs --issue "$r" "$@"; }
+k() { node scripts/claim-lock.mjs --record-tokens --worktree "$w" --agent-id "$a" --claim-id "$c" "$@"; }
+p() { node scripts/post-idd-marker.mjs --target issue "$r" --agent-id "$a" --claim-id "$c" --timestamp "$t" --apply "$@"; }
+k
+g --fresh-claim-gate --own-worktree "$w" | node -e 'process.exit(JSON.parse(require("fs").readFileSync(0)).fresh_claim_gate.verdict==="claimable"?0:1)'
+p --type claim --supersedes none --branch "$b"
+k --nonce "$n"
+p --type activation-nonce --nonce "$n"
+node scripts/claim-lock.mjs --acquire --worktree "$w" --agent-id "$a" --claim-id "$c"
+node scripts/claim-lock.mjs --read-tokens --worktree "$w" --claim-id "$c" | node -e 'const o=JSON.parse(require("fs").readFileSync(0));process.exit(o.present&&!o.malformed?0:1)'
+sleep <settle-seconds>
+g --assert --claim-id "$c" --nonce "$n" --worktree "$w"
+echo verified
+```
+
+### Lost-claim triggers
+
+Run this after the step 1 worktree exists, at every exit where this session no
+longer holds the claim: a `--record-tokens` failure (step 2), a failed claim
+post (step 3), a failed second `--record-tokens --nonce` write before the
+activation-nonce post (step 3), a failed activation-nonce post (step 3), a
+`--acquire` collision or other non-success exit (step 4), a failed
+`--read-tokens` check after acquire (step 4), a failed settle `sleep` before the
+assert (step 5), an `--assert` result other than `already_owned`/`keep` (step
+5), or an `unclaimed-by` posted after an authoring hold that followed a
+successful assert (Claim verification step 5). Never use `--takeover`. The
+cleanup script is in
+[`idd-claim.instructions.md`](../.github/instructions/idd-claim.instructions.md#lost-claim-cleanup-lost-claim-cleanup).
+
 ### Clone-scoped lock
 
 - Source repo / vendored-node commands:
