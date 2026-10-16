@@ -810,13 +810,30 @@ export function buildDispositionPlan(
 /** A listed `--comment-id` the selection refuses (#4437). */
 export interface RefusedCommentId {
   noticeId: number;
-  /** The plan's skip reason, or `null` when the ID is not in the plan at all. */
+  /** The plan's skip reason, or `null` for a planned ID or one absent from the plan. */
   reason: string | null;
+  /**
+   * The older undispositioned notice of the same bot that the count-based
+   * pairing needs listed first, when this ID would skip it; otherwise `null`.
+   */
+  pairedBefore: number | null;
 }
 
 export interface CommentIdSelection {
   plan: DispositionPlan;
   refused: RefusedCommentId[];
+}
+
+/**
+ * A notice paired by count: a trusted disposition covers a bot's notices
+ * oldest first. The summary-walkthrough and Codex no-find items pair by
+ * timestamp instead, so they stay outside that pool.
+ */
+function isCountPairedNotice(entry: PlannedDisposition): boolean {
+  return (
+    entry.reason !== 'summary walkthrough' &&
+    entry.reason !== 'Codex no-find result'
+  );
 }
 
 /**
@@ -828,12 +845,20 @@ export interface CommentIdSelection {
  * `undefined` means no filter, and the plan comes back unchanged. A listed ID
  * is accepted when it is a planned notice, or when the plan skipped it as
  * `already-dispositioned` (reported as skipped, never posted again). Any other
- * listed ID is refused, with the plan's skip reason when it has one. Repeated
- * IDs collapse, and the selected plan keeps the plan's own order.
+ * listed ID is refused, with the plan's skip reason when it has one.
+ *
+ * Within one bot's count-paired notices, a selection must name the oldest
+ * undispositioned notices in order (Codex P1 on kurone-kito/idd-skill#4445).
+ * The gate attaches a posted disposition to the oldest unanswered notice
+ * first, so a newer notice selected while an older one is skipped would stay
+ * outstanding although the helper reports it applied. Such a notice is
+ * refused, naming the older notice it would have to wait behind. Repeated IDs
+ * collapse, and the selected plan keeps the plan's own order.
  */
 export function selectDispositionPlan(
   plan: DispositionPlan,
   commentIds: readonly number[] | undefined,
+  activityAt: (noticeId: number) => string | undefined = () => undefined,
 ): CommentIdSelection {
   if (commentIds === undefined) {
     return { plan, refused: [] };
@@ -852,7 +877,45 @@ export function selectDispositionPlan(
     if (skip?.reason === 'already-dispositioned') {
       continue;
     }
-    refused.push({ noticeId, reason: skip?.reason ?? null });
+    refused.push({
+      noticeId,
+      reason: skip?.reason ?? null,
+      pairedBefore: null,
+    });
+  }
+  const countPools = new Map<string, PlannedDisposition[]>();
+  for (const entry of plan.planned) {
+    if (!isCountPairedNotice(entry)) {
+      continue;
+    }
+    const identity = advisoryBotIdentityToken(entry.botLogin);
+    countPools.set(identity, [...(countPools.get(identity) ?? []), entry]);
+  }
+  for (const pool of countPools.values()) {
+    // The gate orders a bot's notices by activity time, not by creation, so an
+    // edited notice moves later there (Codex/E10 review of kurone-kito/idd-skill#4445).
+    const ordered = [...pool].sort((left, right) => {
+      const leftAt = activityAt(left.noticeId);
+      const rightAt = activityAt(right.noticeId);
+      if (leftAt === undefined || rightAt === undefined) {
+        return 0;
+      }
+      return (
+        compareIsoTimestamps(leftAt, rightAt) || left.noticeId - right.noticeId
+      );
+    });
+    let firstUnlisted: number | null = null;
+    for (const entry of ordered) {
+      if (!listed.has(entry.noticeId)) {
+        firstUnlisted ??= entry.noticeId;
+      } else if (firstUnlisted !== null) {
+        refused.push({
+          noticeId: entry.noticeId,
+          reason: null,
+          pairedBefore: firstUnlisted,
+        });
+      }
+    }
   }
   return {
     plan: {
@@ -1602,6 +1665,9 @@ function main(): HelperCliResult {
   // for dry-run and again immediately before --apply posts, so a HEAD advance or
   // a disposition another session raced in is reflected just-in-time (the apply
   // path never reuses the dry-run snapshot).
+  // The activity time of each comment as of the latest planNow(), so
+  // selectDispositionPlan orders a bot's notices the way the gate does (#4437).
+  let activityByNoticeId = new Map<number, string>();
   const planNow = (): DispositionPlan => {
     const headSha = ghText([
       'api',
@@ -1639,6 +1705,12 @@ function main(): HelperCliResult {
       updatedAt: comment.updated_at ?? '',
       lastEditedAt: lastEditedAtByNodeId.get(String(comment.node_id)),
     }));
+    activityByNoticeId = new Map(
+      comments.map((comment) => [
+        comment.id,
+        effectiveRegularCommentActivityAt(comment),
+      ]),
+    );
     const markerPrefix = resolveConfiguredMarkerPrefix();
     return buildDispositionPlan(
       { headSha, comments },
@@ -1650,18 +1722,24 @@ function main(): HelperCliResult {
   // is not a planned notice refuses the whole run before any write, in dry run
   // and in apply alike, so a mistyped ID never reads as an empty plan.
   const selectOrRefuse = (plan: DispositionPlan): DispositionPlan => {
-    const selection = selectDispositionPlan(plan, args.commentIds);
+    const selection = selectDispositionPlan(plan, args.commentIds, (noticeId) =>
+      activityByNoticeId.get(noticeId),
+    );
     if (selection.refused.length === 0) {
       return selection.plan;
     }
     const detail = selection.refused
-      .map((entry) =>
-        entry.reason === null
-          ? `${entry.noticeId} (not a notice on PR #${pr})`
-          : `${entry.noticeId} (skipped: ${entry.reason})`,
-      )
+      .map((entry) => {
+        if (entry.pairedBefore !== null) {
+          return `${entry.noticeId} (count-based pairing needs older notice ${entry.pairedBefore} listed too)`;
+        }
+        if (entry.reason !== null) {
+          return `${entry.noticeId} (skipped: ${entry.reason})`;
+        }
+        return `${entry.noticeId} (not a notice on PR #${pr})`;
+      })
       .join(', ');
-    const message = `disposition-non-review-notices: --comment-id is not a planned notice: ${detail}; refused before any write`;
+    const message = `disposition-non-review-notices: --comment-id cannot be applied as selected: ${detail}; refused before any write`;
     writeStderrSync(`${message}\n`);
     exitClassified(1, 'gate', message);
   };

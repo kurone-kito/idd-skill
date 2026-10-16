@@ -413,15 +413,42 @@ test('selectDispositionPlan (#4437): no filter is the identity, and a selected b
     plan,
     refused: [],
   });
-  const selection = selectDispositionPlan(plan, [502]);
+  const selection = selectDispositionPlan(plan, [501]);
   assert.deepEqual(selection.refused, []);
   assert.deepEqual(
     selection.plan.planned.map((entry) => entry.noticeId),
-    [502],
+    [501],
   );
   assert.equal(
     selection.plan.planned[0]?.body,
-    plan.planned.find((entry) => entry.noticeId === 502)?.body,
+    plan.planned.find((entry) => entry.noticeId === 501)?.body,
+  );
+});
+
+test('selectDispositionPlan (#4437): a notice that skips an older undispositioned notice of its bot is refused', () => {
+  // Codex P1 on kurone-kito/idd-skill#4445: the gate attaches a posted
+  // disposition to the oldest unanswered notice, so 503 cannot be selected
+  // alone while 501 and 502 still wait.
+  const plan = buildDispositionPlan(
+    {
+      headSha: HEAD_SHA,
+      comments: [
+        notice(501, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:01Z'),
+        notice(502, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:02Z'),
+        notice(503, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:03Z'),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  const skipping = selectDispositionPlan(plan, [503]);
+  assert.deepEqual(skipping.refused, [
+    { noticeId: 503, reason: null, pairedBefore: 501 },
+  ]);
+  const inOrder = selectDispositionPlan(plan, [502, 501]);
+  assert.deepEqual(inOrder.refused, []);
+  assert.deepEqual(
+    inOrder.plan.planned.map((entry) => entry.noticeId),
+    [501, 502],
   );
 });
 
@@ -442,9 +469,43 @@ test('selectDispositionPlan (#4437): a listed notice skipped for another reason,
     [501],
   );
   assert.deepEqual(selection.refused, [
-    { noticeId: 504, reason: 'codex-no-result-for-head' },
-    { noticeId: 999, reason: null },
+    { noticeId: 504, reason: 'codex-no-result-for-head', pairedBefore: null },
+    { noticeId: 999, reason: null, pairedBefore: null },
   ]);
+});
+
+test("selectDispositionPlan (#4437): a bot's notices are ordered by activity time, as the gate orders them", () => {
+  // Notice 501 was created first but edited later, so the gate pairs 502 first.
+  const comments = [
+    notice(
+      501,
+      CODERABBIT,
+      CODERABBIT_NOTICE,
+      '2026-05-12T00:00:01Z',
+      '2026-05-12T00:00:05Z',
+    ),
+    notice(502, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:02Z'),
+  ];
+  const plan = buildDispositionPlan(
+    { headSha: HEAD_SHA, comments },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 2);
+  const activity = new Map([
+    [501, '2026-05-12T00:00:05Z'],
+    [502, '2026-05-12T00:00:02Z'],
+  ]);
+  const activityAt = (noticeId: number) => activity.get(noticeId);
+  const editedFirst = selectDispositionPlan(plan, [501], activityAt);
+  assert.deepEqual(editedFirst.refused, [
+    { noticeId: 501, reason: null, pairedBefore: 502 },
+  ]);
+  const gateFirst = selectDispositionPlan(plan, [502], activityAt);
+  assert.deepEqual(gateFirst.refused, []);
+  assert.deepEqual(
+    gateFirst.plan.planned.map((entry) => entry.noticeId),
+    [502],
+  );
 });
 
 test('selectDispositionPlan (#4437): the count label reports the older notice as already-dispositioned', () => {
@@ -490,7 +551,7 @@ test('selectDispositionPlan (#4437): the count label reports the older notice as
 test('applyDispositionPlan (#4437): a selected plan posts exactly the selected bodies, in plan order', () => {
   const selection = selectDispositionPlan(
     fakePlan([101, 102, 103]),
-    [103, 101],
+    [102, 101],
   );
   assert.deepEqual(selection.refused, []);
   const posted: number[] = [];
@@ -505,10 +566,10 @@ test('applyDispositionPlan (#4437): a selected plan posts exactly the selected b
     knownViewerCommentIds: new Set(),
   };
   const result = applyDispositionPlan(selection.plan, deps);
-  assert.deepEqual(posted, [101, 103]);
+  assert.deepEqual(posted, [101, 102]);
   assert.deepEqual(
     result.applied.map((entry) => entry.noticeId),
-    [101, 103],
+    [101, 102],
   );
   assert.deepEqual(result.failed, []);
 });
@@ -558,7 +619,7 @@ test('CLI dry run (#4437): --comment-id lists only the selected body, byte-ident
     const only = spawnCommentIdCli([
       ...COMMENT_ID_BASE_ARGS,
       '--comment-id',
-      '502',
+      '501',
     ]);
     assert.equal(only.status, 0, JSON.stringify(only));
     const fullPlanned = (
@@ -574,7 +635,7 @@ test('CLI dry run (#4437): --comment-id lists only the selected body, byte-ident
     assert.equal(fullPlanned.length, 2);
     assert.deepEqual(
       onlyPlanned,
-      fullPlanned.filter((entry) => entry.noticeId === 502),
+      fullPlanned.filter((entry) => entry.noticeId === 501),
     );
     assert.deepEqual(fixture.unexpectedCalls(), []);
     assert.deepEqual(
@@ -694,7 +755,7 @@ test('CLI apply (#4437): one unplanned --comment-id refuses the whole run before
       '--claim-id',
       COMMENT_ID_CLAIM_ID,
       '--comment-id',
-      '502',
+      '501',
       '--comment-id',
       '999',
     ]);
@@ -783,7 +844,7 @@ test('CLI apply (#4437): a selected --comment-id posts only that planned notice'
       '--claim-id',
       COMMENT_ID_CLAIM_ID,
       '--comment-id',
-      '502',
+      '501',
     ]);
     assert.equal(result.status, 0, JSON.stringify(result));
     const output = JSON.parse(result.stdout) as {
@@ -792,7 +853,7 @@ test('CLI apply (#4437): a selected --comment-id posts only that planned notice'
       failed: unknown[];
     };
     assert.equal(output.status, 'applied');
-    assert.deepEqual(output.applied, [{ noticeId: 502, commentId: 9502 }]);
+    assert.deepEqual(output.applied, [{ noticeId: 501, commentId: 9502 }]);
     assert.deepEqual(output.failed, []);
     assert.equal(
       fixture.calls().filter((argv) => argv.includes('POST')).length,
@@ -920,7 +981,7 @@ test('CLI apply (#4437): two --comment-id values post exactly those two notices'
       '--comment-id',
       '501',
       '--comment-id',
-      '503',
+      '502',
     ]);
     assert.equal(result.status, 0, JSON.stringify(result));
     const output = JSON.parse(result.stdout) as {
@@ -930,11 +991,37 @@ test('CLI apply (#4437): two --comment-id values post exactly those two notices'
     assert.equal(output.status, 'applied');
     assert.deepEqual(
       output.applied.map((entry) => entry.noticeId),
-      [501, 503],
+      [501, 502],
     );
     assert.equal(
       fixture.calls().filter((argv) => argv.includes('POST')).length,
       2,
+    );
+    assert.deepEqual(fixture.unexpectedCalls(), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI apply (#4437): a notice that skips an older one of its bot is refused before any write', () => {
+  const fixture = commentIdApplyFixture(COMMENT_ID_THREE_NOTICES, [
+    'IC_501',
+    'IC_502',
+    'IC_503',
+  ]);
+  try {
+    const result = spawnCommentIdCli([
+      ...COMMENT_ID_APPLY_ARGS,
+      '--comment-id',
+      '503',
+    ]);
+    assert.equal(result.status, 1, JSON.stringify(result));
+    assert.match(result.stderr, /503/);
+    assert.match(result.stderr, /needs older notice 501 listed too/);
+    assert.equal(result.envelope?.kind, 'gate');
+    assert.equal(
+      fixture.calls().filter((argv) => argv.includes('POST')).length,
+      0,
     );
     assert.deepEqual(fixture.unexpectedCalls(), []);
   } finally {
