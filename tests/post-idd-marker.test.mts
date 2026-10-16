@@ -69,8 +69,14 @@ const TS = '2026-06-17T09:47:08Z';
 // fixture's one plain, never-dispositioned comment (`body: 'hi'`).
 const NO_DISPOSITION_EVIDENCE_WARNING_ONE_COMMENT =
   '1 comment has no disposition evidence as of this watermark, but its ' +
-  'max-activity-at/total-item-count already cover it -- dispose it ' +
-  '(or re-run --from-pr after doing so) before relying on this watermark.';
+  'max-activity-at/total-item-count already cover it. ' +
+  'On a standalone --from-pr post this warning is diagnostic and does not ' +
+  'block the post. ' +
+  'Ack-only replies to a disposition are acceptable evidence: when every ' +
+  'remaining cause is one, re-run --from-pr to refresh the watermark first, ' +
+  'then evaluate the ack-only override on that refreshed snapshot. ' +
+  'A plain comment with no disposition still needs its own disposition; ' +
+  'the ack-only override does not cover it.';
 
 const schema = loadJson('schemas/post-idd-marker.schema.json');
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -1330,7 +1336,10 @@ test('describeUnaddressedActivity warns (singular) for exactly one missing comme
   assert.match(warnings[0], /^1 comment has no disposition evidence/);
   // #1833: pronoun must agree with the singular count too (Copilot review on
   // PR #1848 caught the original "cover them -- dispose them" mismatch).
-  assert.match(warnings[0], /cover it -- dispose it\b/);
+  assert.match(
+    warnings[0],
+    /cover it\. On a standalone --from-pr post this warning is diagnostic/,
+  );
   assert.doesNotMatch(warnings[0], /cover them|dispose them/);
 });
 
@@ -1357,8 +1366,13 @@ test('describeUnaddressedActivity reports both comments and threads together', (
     warnings[0],
     '2 comments and 1 thread have no disposition evidence as of this ' +
       'watermark, but its max-activity-at/total-item-count already cover ' +
-      'them -- dispose them (or re-run --from-pr after doing so) before ' +
-      'relying on this watermark.',
+      'them. On a standalone --from-pr post this warning is diagnostic and ' +
+      'does not block the post. Ack-only replies to a disposition are ' +
+      'acceptable evidence: ' +
+      'when every remaining cause is one, re-run --from-pr to refresh the ' +
+      'watermark first, then evaluate the ack-only override on that ' +
+      'refreshed snapshot. A plain comment with no disposition still needs ' +
+      'its own disposition; the ack-only override does not cover it.',
   );
 });
 
@@ -1371,7 +1385,12 @@ test('describeUnaddressedActivity reports threads alone (singular)', () => {
   });
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /^1 thread has no disposition evidence/);
-  assert.match(warnings[0], /cover it -- dispose it\b/);
+  assert.match(
+    warnings[0],
+    /cover it\. On a standalone --from-pr post this warning is diagnostic/,
+  );
+  // #4366: a threads-only warning never claims a plain comment is pending.
+  assert.doesNotMatch(warnings[0], /plain comment/);
 });
 
 test('describeUnaddressedActivity stays silent for a courtesy-ack-only thread set (#3482)', () => {
