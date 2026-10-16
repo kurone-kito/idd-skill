@@ -1922,3 +1922,41 @@ test('--supersedes on the only malformed proof posts a proof that names it, conf
     JSON.stringify(output.warnings),
   );
 });
+
+test('an edited malformed proof is never superseded, and the write naming it is refused', () => {
+  const dry = harness();
+  dry.issueComments.push(
+    comment(110, malformedProof(), {
+      createdAt: ACTIVATED,
+      updatedAt: ACTIVATED,
+      lastEditedAt: '2026-10-16T02:00:00Z',
+    }),
+    comment(111, proofBody({ supersedes: '110' })),
+  );
+  const output = expectVerdict(
+    runF4HeadProofGate(INPUT, dry.deps),
+    'hold',
+    'conflicting-marker',
+    1,
+  );
+  assert.ok(
+    !output.warnings?.some((line) => line.includes('set aside')),
+    JSON.stringify(output.warnings),
+  );
+
+  const h = harness();
+  h.issueComments.push(
+    comment(112, malformedProof(), {
+      createdAt: ACTIVATED,
+      updatedAt: ACTIVATED,
+      lastEditedAt: '2026-10-16T02:00:00Z',
+    }),
+  );
+  expectVerdict(
+    runF4HeadProofGate({ ...APPLY, supersedes: 112 }, h.deps),
+    'hold',
+    'supersede-refused',
+    1,
+  );
+  assert.deepEqual(h.posts, []);
+});

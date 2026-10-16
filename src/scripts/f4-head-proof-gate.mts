@@ -302,7 +302,11 @@ export function collectTrustedMarkers(
           commentId: comment.id,
           createdAt: comment.createdAt,
           entry: { unparseable: true },
-          supersedable: parsed.claimId === claimId,
+          // An edited body that no longer parses is not a malformed proof to
+          // supersede: an edit fails closed, as for every other proof (#4442).
+          supersedable:
+            parsed.claimId === claimId &&
+            classifyCommentEditState(comment) === 'unedited',
           supersedes: null,
         });
       }
