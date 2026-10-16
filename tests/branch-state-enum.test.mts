@@ -62,15 +62,15 @@ type DerivedSyncRecommendationIsUnion = AssertTrue<
 >;
 // The arrays must stay `as const`. Without it both element types widen to
 // `string`, so the two guards above still pass while the narrowing is lost.
+type BranchStateValue =
+  (typeof branchConflictState.DERIVED_BRANCH_STATES)[number];
+type SyncRecommendationValue =
+  (typeof branchConflictState.DERIVED_SYNC_RECOMMENDATIONS)[number];
 type BranchStatesAreLiteral = AssertTrue<
-  string extends (typeof branchConflictState.DERIVED_BRANCH_STATES)[number]
-    ? false
-    : true
+  string extends BranchStateValue ? false : true
 >;
 type SyncRecommendationsAreLiteral = AssertTrue<
-  string extends (typeof branchConflictState.DERIVED_SYNC_RECOMMENDATIONS)[number]
-    ? false
-    : true
+  string extends SyncRecommendationValue ? false : true
 >;
 
 const schema = JSON.parse(
@@ -221,7 +221,7 @@ test('the taxonomy row and the helper bullets name the schema enums, in order', 
 
 // Compile-time check: the annotations below fail typecheck unless each
 // BranchStateDerivation field is exactly the union of its derived array, and
-// each array stays a literal tuple. The runtime body is trivially true and
+// each array keeps literal element types. The runtime body is trivially true and
 // adds no coverage of its own.
 test('compile-time: each BranchStateDerivation field is the closed union of its derived array', () => {
   const proofs: [
@@ -349,6 +349,9 @@ test('an indented nested bullet ends a helper bullet and adds no names', () => {
     '  - `nested-name` is not part of the list',
     '',
   ].join('\n');
+  // No gloss: an open parenthesis would cut the nested name away, and the
+  // test would then pass without exercising the bullet end.
+  assert.ok(!nested.includes('('));
   assert.deepEqual(
     enumDrift(
       schemaNames('syncRecommendation'),
