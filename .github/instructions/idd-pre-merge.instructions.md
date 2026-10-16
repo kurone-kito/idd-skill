@@ -82,7 +82,8 @@ Do not treat "one bot says clean" as sufficient evidence — checks must
 cover the full activity universe (human reviewers plus advisory bot
 surfaces such as Copilot, CodeRabbit, Codex connectors, and CI bots).
 Here "cover" means reading each item actually posted and dispositioning
-it, not waiting for a review that has not been posted.
+it. For a non-primary advisory bot, it never means waiting for a review
+that has not been posted.
 
 The advisory-wait window is Copilot-only
 (`idd-advisory-wait.instructions.md`) and does not cover non-Copilot
