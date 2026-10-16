@@ -458,14 +458,14 @@ export function buildDispositionPlan(
   // The gate pairs a bot's notices in activity-time order (an edited notice
   // counts as later), so cover and plan them in that order too, not in
   // creation order (Copilot and CodeRabbit review of kurone-kito/idd-skill#4445).
-  const noticesInGateOrder = [...comments].sort(
+  const commentsInGateOrder = [...comments].sort(
     (left, right) =>
       compareIsoTimestamps(
         effectiveRegularCommentActivityAt(left),
         effectiveRegularCommentActivityAt(right),
       ) || left.id - right.id,
   );
-  for (const comment of noticesInGateOrder) {
+  for (const comment of commentsInGateOrder) {
     const identity = advisoryBotIdentityToken(comment.login);
     if (
       !isHandledBot(comment.login) ||
@@ -600,7 +600,7 @@ export function buildDispositionPlan(
           dispositionActivityAt,
         ) < 0,
     );
-  for (const comment of comments) {
+  for (const comment of commentsInGateOrder) {
     const identity = advisoryBotIdentityToken(comment.login);
     if (
       !isHandledBot(comment.login) ||
@@ -712,7 +712,7 @@ export function buildDispositionPlan(
         trustedMarkerLogins.has(entry.comment.login) && entry.parsed !== null,
     )
     .filter((entry) => classifyCommentEditState(entry.comment) === 'unedited');
-  for (const comment of comments) {
+  for (const comment of commentsInGateOrder) {
     if (
       advisoryBotIdentityToken(comment.login) !== 'chatgpt-codex-connector' ||
       !isHandledBot(comment.login) ||
@@ -835,18 +835,20 @@ export interface CommentIdSelection {
 }
 
 /**
- * The pairing pool a planned disposition belongs to, or `null` for none. The
- * gate pairs a bot's notices and its summary acceptances as two activity-
- * ordered pools. A Codex no-find result names its source comment instead, so
- * it has no pool.
+ * The pairing pool a planned notice belongs to, or `null` for none. The gate
+ * pairs a bot's notices in activity order, and the notice carry takes them
+ * before any generic comment. A summary acceptance is refused on its own
+ * (see selectDispositionPlan), because the gate pools it with older generic
+ * comments. A Codex no-find result names its source comment instead.
  */
-function pairingPoolKind(
-  entry: PlannedDisposition,
-): 'notice' | 'summary' | null {
-  if (entry.reason === 'Codex no-find result') {
+function pairingPoolKind(entry: PlannedDisposition): 'notice' | null {
+  if (
+    entry.reason === 'Codex no-find result' ||
+    entry.reason === 'summary walkthrough'
+  ) {
     return null;
   }
-  return entry.reason === 'summary walkthrough' ? 'summary' : 'notice';
+  return 'notice';
 }
 
 /**
@@ -877,13 +879,24 @@ export function selectDispositionPlan(
     return { plan, refused: [] };
   }
   const listed = new Set(commentIds);
-  const planned = new Set(plan.planned.map((entry) => entry.noticeId));
+  const plannedById = new Map(
+    plan.planned.map((entry) => [entry.noticeId, entry]),
+  );
   const skippedById = new Map(
     plan.skipped.map((entry) => [entry.noticeId, entry]),
   );
   const refused: RefusedCommentId[] = [];
   for (const noticeId of listed) {
-    if (planned.has(noticeId)) {
+    const plannedEntry = plannedById.get(noticeId);
+    if (plannedEntry !== undefined) {
+      // A summary acceptance is not a notice: it stays with the unfiltered run.
+      if (plannedEntry.reason === 'summary walkthrough') {
+        refused.push({
+          noticeId,
+          reason: plannedEntry.reason,
+          pairedBefore: null,
+        });
+      }
       continue;
     }
     const skip = skippedById.get(noticeId);
@@ -1746,6 +1759,9 @@ function main(): HelperCliResult {
       .map((entry) => {
         if (entry.pairedBefore !== null) {
           return `${entry.noticeId} (count-based pairing needs older notice ${entry.pairedBefore} listed too)`;
+        }
+        if (entry.reason === 'summary walkthrough') {
+          return `${entry.noticeId} (a summary acceptance is not a notice; run without --comment-id for it)`;
         }
         if (entry.reason !== null) {
           return `${entry.noticeId} (skipped: ${entry.reason})`;

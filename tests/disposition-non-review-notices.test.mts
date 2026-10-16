@@ -474,6 +474,46 @@ test('selectDispositionPlan (#4437): a listed notice skipped for another reason,
   ]);
 });
 
+test("buildDispositionPlan (#4437): covers a bot's summaries in activity order, as the gate does", () => {
+  // Summary 601 was created first but edited later, so the gate pairs 602
+  // first. One trusted summary acceptance, created after both, covers 602.
+  const plan = buildDispositionPlan(
+    {
+      headSha: HEAD_SHA,
+      comments: [
+        notice(
+          601,
+          CODERABBIT,
+          CODERABBIT_COMPLETED_WALKTHROUGH,
+          '2026-05-12T00:00:01Z',
+          '2026-05-12T00:00:05Z',
+        ),
+        notice(
+          602,
+          CODERABBIT,
+          CODERABBIT_COMPLETED_WALKTHROUGH,
+          '2026-05-12T00:00:02Z',
+        ),
+        notice(
+          603,
+          'kurone-kito',
+          buildSummaryDispositionBody(CODERABBIT, HEAD_SHA),
+          '2026-05-12T00:00:06Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    plan.skipped.map((entry) => [entry.noticeId, entry.reason]),
+    [[602, 'already-dispositioned']],
+  );
+  assert.deepEqual(
+    plan.planned.map((entry) => entry.noticeId),
+    [601],
+  );
+});
+
 test("buildDispositionPlan (#4437): covers a bot's notices in activity order, as the gate does", () => {
   // Notice 501 was created first but edited later, so the gate counts 502
   // first. One trusted disposition for 502 covers 502, and 501 stays planned.
@@ -514,7 +554,7 @@ test("buildDispositionPlan (#4437): covers a bot's notices in activity order, as
   );
 });
 
-test('selectDispositionPlan (#4437): a summary acceptance that skips an older summary of its bot is refused', () => {
+test('selectDispositionPlan (#4437): a summary acceptance is refused, since it is not a notice', () => {
   const plan = buildDispositionPlan(
     {
       headSha: HEAD_SHA,
@@ -543,9 +583,8 @@ test('selectDispositionPlan (#4437): a summary acceptance that skips an older su
     ],
   );
   assert.deepEqual(selectDispositionPlan(plan, [602]).refused, [
-    { noticeId: 602, reason: null, pairedBefore: 601 },
+    { noticeId: 602, reason: 'summary walkthrough', pairedBefore: null },
   ]);
-  assert.deepEqual(selectDispositionPlan(plan, [601, 602]).refused, []);
 });
 
 test("selectDispositionPlan (#4437): a bot's notices are ordered by activity time, as the gate orders them", () => {
