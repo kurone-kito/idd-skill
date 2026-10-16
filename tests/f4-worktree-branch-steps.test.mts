@@ -467,6 +467,14 @@ test('an unreadable base ref holds at step 4', () => {
   assert.equal(report.reason, 'base-ref-unreadable');
 });
 
+test('a development branch name that starts with a dash holds base-ref-unreadable', () => {
+  const report = runF4WorktreeBranchSteps(
+    input(),
+    harness({ base: '-x' }).deps,
+  );
+  assert.equal(report.reason, 'base-ref-unreadable');
+});
+
 test('a development branch checked out elsewhere holds before the switch', () => {
   const listing = `worktree ${PRIMARY}\0HEAD ${OTHER}\0branch refs/heads/scratch\0\0worktree /work/other-holder\0HEAD ${OTHER}\0branch refs/heads/main\0\0`;
   const h = harness({

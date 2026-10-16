@@ -846,6 +846,7 @@ function readDevelopmentTarget(
   const base = deps.prBaseRef(pr);
   if (
     base === null ||
+    base.startsWith('-') ||
     deps.git(['check-ref-format', `refs/heads/${base}`], primary).status !== 0
   ) {
     return { base: null, hold: { code: 'base-ref-unreadable', detail: null } };
