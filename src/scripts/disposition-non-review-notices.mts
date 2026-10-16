@@ -64,6 +64,7 @@ import {
   buildHelperErrorEnvelope,
   classifyHelperError,
   isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
 import { loadIddConfig } from './idd-config.mts';
@@ -806,6 +807,63 @@ export function buildDispositionPlan(
   return { headSha, planned, skipped };
 }
 
+/** A listed `--comment-id` the selection refuses (#4437). */
+export interface RefusedCommentId {
+  noticeId: number;
+  /** The plan's skip reason, or `null` when the ID is not in the plan at all. */
+  reason: string | null;
+}
+
+export interface CommentIdSelection {
+  plan: DispositionPlan;
+  refused: RefusedCommentId[];
+}
+
+/**
+ * Narrow a plan to the listed `--comment-id` values (#4437). Pure: planning
+ * itself never changes. The count-based, oldest-first pairing still runs over
+ * every comment, so a selected body is byte-identical to the body the
+ * unfiltered plan produces for the same comment.
+ *
+ * `undefined` means no filter, and the plan comes back unchanged. A listed ID
+ * is accepted when it is a planned notice, or when the plan skipped it as
+ * `already-dispositioned` (reported as skipped, never posted again). Any other
+ * listed ID is refused, with the plan's skip reason when it has one. Repeated
+ * IDs collapse, and the selected plan keeps the plan's own order.
+ */
+export function selectDispositionPlan(
+  plan: DispositionPlan,
+  commentIds: readonly number[] | undefined,
+): CommentIdSelection {
+  if (commentIds === undefined) {
+    return { plan, refused: [] };
+  }
+  const listed = new Set(commentIds);
+  const planned = new Set(plan.planned.map((entry) => entry.noticeId));
+  const skippedById = new Map(
+    plan.skipped.map((entry) => [entry.noticeId, entry]),
+  );
+  const refused: RefusedCommentId[] = [];
+  for (const noticeId of listed) {
+    if (planned.has(noticeId)) {
+      continue;
+    }
+    const skip = skippedById.get(noticeId);
+    if (skip?.reason === 'already-dispositioned') {
+      continue;
+    }
+    refused.push({ noticeId, reason: skip?.reason ?? null });
+  }
+  return {
+    plan: {
+      headSha: plan.headSha,
+      planned: plan.planned.filter((entry) => listed.has(entry.noticeId)),
+      skipped: plan.skipped.filter((entry) => listed.has(entry.noticeId)),
+    },
+    refused,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
@@ -818,6 +876,8 @@ interface CliArgs {
   agentId: string;
   trustedMarkerLogins: string[];
   advisoryBotLogins: string[];
+  /** `--comment-id` values (#4437); `undefined` means no filter. */
+  commentIds: number[] | undefined;
   apply: boolean;
   help: boolean;
 }
@@ -838,6 +898,7 @@ const DISPOSITION_NON_REVIEW_NOTICES_FLAG_SPEC = {
   '--agent-id': { type: 'string', default: '' },
   '--trusted-marker-logins': { type: 'string', default: '' },
   '--advisory-bot-logins': { type: 'string', default: '' },
+  '--comment-id': { type: 'string', multiple: true },
   '--apply': { type: 'boolean', default: false },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
@@ -870,6 +931,27 @@ function parseLenientIntegerOrNull(token: string | undefined): number | null {
   return token === undefined ? null : Number.parseInt(token, 10);
 }
 
+/**
+ * `--comment-id` values (#4437). Each must be a positive decimal integer, so
+ * `0`, `01`, `1.5`, `-3`, and `abc` are usage errors (exit 1, no gh call).
+ * Absent gives `undefined`, meaning no filter. Repeats are kept here and
+ * collapse in {@link selectDispositionPlan}.
+ */
+function parseCommentIds(values: string[] | undefined): number[] | undefined {
+  if (values === undefined) {
+    return undefined;
+  }
+  return values.map((token) => {
+    const value = Number(token);
+    if (!/^[1-9][0-9]*$/.test(token) || !Number.isSafeInteger(value)) {
+      throw markCliUsageError(
+        new Error(`--comment-id expects a positive integer, got "${token}"`),
+      );
+    }
+    return value;
+  });
+}
+
 export function parseArgs(argv: string[]): CliArgs {
   const { values, help } = parseCliArgs(
     argv,
@@ -886,6 +968,7 @@ export function parseArgs(argv: string[]): CliArgs {
     agentId: values['agent-id'] as string,
     trustedMarkerLogins: splitList(values['trusted-marker-logins'] as string),
     advisoryBotLogins: splitList(values['advisory-bot-logins'] as string),
+    commentIds: parseCommentIds(values['comment-id'] as string[] | undefined),
     apply: values.apply as boolean,
     help,
   };
@@ -938,6 +1021,7 @@ comment it does not plan is listed in \`skipped\` with a reason, for example
                                  (default: your gh login, so re-runs are idempotent)
   --advisory-bot-logins a,b      advisory bot logins (default: flag > IDD_ADVISORY_BOT_LOGINS
                                  > .github/idd/config.json > coderabbit + codex)
+  --comment-id <id>              limit the dry run or --apply to this planned notice (repeatable)
   --apply                        post the dispositions (default: dry-run)
   -h, --help                     show this help
 `;
@@ -1562,9 +1646,29 @@ function main(): HelperCliResult {
     );
   };
 
+  // #4437: --comment-id narrows the plan to the listed notices. A listed ID that
+  // is not a planned notice refuses the whole run before any write, in dry run
+  // and in apply alike, so a mistyped ID never reads as an empty plan.
+  const selectOrRefuse = (plan: DispositionPlan): DispositionPlan => {
+    const selection = selectDispositionPlan(plan, args.commentIds);
+    if (selection.refused.length === 0) {
+      return selection.plan;
+    }
+    const detail = selection.refused
+      .map((entry) =>
+        entry.reason === null
+          ? `${entry.noticeId} (not a notice on PR #${pr})`
+          : `${entry.noticeId} (skipped: ${entry.reason})`,
+      )
+      .join(', ');
+    const message = `disposition-non-review-notices: --comment-id is not a planned notice: ${detail}; refused before any write`;
+    writeStderrSync(`${message}\n`);
+    exitClassified(1, 'gate', message);
+  };
+
   if (!args.apply) {
     process.stdout.write(
-      `${JSON.stringify({ mode: 'dry-run', prNumber: pr, ...planNow() }, null, 2)}\n`,
+      `${JSON.stringify({ mode: 'dry-run', prNumber: pr, ...selectOrRefuse(planNow()) }, null, 2)}\n`,
     );
     process.exit(0);
   }
@@ -1627,7 +1731,7 @@ function main(): HelperCliResult {
 
   // Re-plan from a fresh read AFTER claim revalidation, so the post loop never
   // re-posts a disposition that raced in since the dry-run.
-  const plan = planNow();
+  const plan = selectOrRefuse(planNow());
   // Seed the viewer-authored comment ids known before this run (pre-existing
   // plus, once applyDispositionPlan runs, the ones it posts), so a
   // post-failure recovery attributes a NEW comment to the current notice's
