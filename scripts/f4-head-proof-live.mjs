@@ -319,9 +319,10 @@ function readBackAsGhHost(host) {
 /**
  * Why the origin check refused `owner/repo`, given the origin URL and the
  * active GitHub host as the caller read them (null when unread). Each message
- * names a fix that passes the check once it is applied. The check compares the
- * origin host, port included, with the active host that `GH_HOST` (or
- * `GITHUB_SERVER_URL`) names after it is read back.
+ * names a fix that passes the check once it is applied, or the setting to
+ * correct first. The check compares the origin host, port included, with the
+ * active host that `GH_HOST` (or `GITHUB_SERVER_URL`) names after it is read
+ * back.
  */
 export function originMismatchMessage(owner, repo, originUrl, active) {
   if (originUrl !== null && !isPlainRemoteUrl(originUrl)) {
@@ -347,8 +348,9 @@ export function originMismatchMessage(owner, repo, originUrl, active) {
   const hostOnly = host.replace(/:\d+$/, '');
   const hasPort = hostOnly !== host;
   // An HTTP(S) origin's port is part of its host, so GH_HOST carries it, unless
-  // GH_HOST reads it back differently (port 443 is the https default). An SSH
-  // transport port is never part of the host.
+  // GH_HOST reads it back differently (port 443 is the https default). An SSH or
+  // git:// port is compared with the host too, but GH_HOST cannot name it, so
+  // the origin URL must drop it.
   const portCarried = hasPort && httpOrigin && readBackAsGhHost(host) === host;
   const activeText = active ?? 'an unreadable host';
   if (active !== null && hostOnly === active) {
@@ -360,7 +362,16 @@ export function originMismatchMessage(owner, repo, originUrl, active) {
   if (!httpOrigin && hostOnly === 'ssh.github.com') {
     // GitHub's SSH-over-443 endpoint names the repository too, but it is not an
     // API host, so GH_HOST must not be pointed at it.
-    return `the current checkout's origin names ${owner}/${repo} on ssh.github.com, GitHub's SSH endpoint and not an API host; use an origin URL on the API host, for example https://${active ?? 'github.com'}/${owner}/${repo}.git`;
+    if (active === null) {
+      return `the current checkout's origin names ${owner}/${repo} on ssh.github.com, GitHub's SSH endpoint and not an API host; the active GitHub host cannot be read, so set GH_HOST or GITHUB_SERVER_URL to a readable host first, and then use an origin URL on that host`;
+    }
+    // An https URL keeps the active host's port unless it is 443, which https
+    // treats as the default; an http URL keeps 443 and drops 80.
+    const scheme = readBackAsGhHost(active) === active ? 'https' : 'http';
+    return `the current checkout's origin names ${owner}/${repo} on ssh.github.com, GitHub's SSH endpoint and not an API host; use an origin URL on the API host, for example ${scheme}://${active}/${owner}/${repo}.git`;
+  }
+  if (readBackAsGhHost(hostOnly) !== hostOnly) {
+    return `the current checkout's origin names ${owner}/${repo} on ${host}, which GH_HOST cannot name; use an origin URL on a host that it can name`;
   }
   if (!hasPort || portCarried) {
     return `the current checkout's origin names ${owner}/${repo} on ${host}, but the active GitHub host is ${activeText}; set GH_HOST to ${host} to use it`;
