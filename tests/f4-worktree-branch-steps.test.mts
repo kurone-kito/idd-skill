@@ -966,6 +966,20 @@ test('a refused worktree removal fails at step 5 and names the steps not yet run
   ]);
 });
 
+test('a claim lost while waiting for the clone lock holds before the fetch', () => {
+  const lost = {
+    exitCode: 1,
+    stdout: JSON.stringify({ state: 'non_inheritable', action: 'stop' }),
+  };
+  const h = harness({ claims: [claimOk(), lost] });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'claim-lost');
+  assert.equal(
+    h.gitCalls.some((c) => c.args[0] === 'fetch'),
+    false,
+  );
+});
+
 test('a lost claim before removal stops before the worktree is removed', () => {
   const h = harness({
     claims: [
@@ -987,6 +1001,7 @@ test('a lost claim before removal stops before the worktree is removed', () => {
 test('a claim lost before step 6 holds and makes no remote call', () => {
   const h = harness({
     claims: [
+      claimOk(),
       claimOk(),
       claimOk(),
       {

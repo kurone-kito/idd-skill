@@ -566,6 +566,23 @@ function runStep4And5(
       }),
     );
   } else {
+    // The claim may have changed while the lock was waited for, so it is
+    // checked again under the lock, before the first mutation.
+    const claimLocked = classifyClaimAssert(
+      deps.assertClaim(worktree),
+      input.claimId,
+      input.agentId,
+    );
+    if (!claimLocked.ok) {
+      return {
+        hold: {
+          code: claimLocked.code,
+          detail: 'lost while waiting for the clone lock',
+        },
+        error: null,
+        at: 'step-4',
+      };
+    }
     const step4 = runPrimaryFastForward(deps, primary, proof.pr);
     if (step4.hold !== null || step4.error !== null) {
       return { ...step4, at: 'step-4' };
