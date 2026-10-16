@@ -452,6 +452,10 @@ const HELPER_NEXT_ACTIONS: Readonly<Partial<Record<HoldReasonCode, string>>> = {
 };
 const GENERIC_NEXT_ACTION =
   'Do not apply. Read the hold reason and the head-proof output, fix the cause, then rerun.';
+/** The message `assertActiveClaim` throws when another session holds the claim. */
+const CLAIM_MISMATCH_PREFIX = 'claim check failed for #';
+const CLAIM_READ_NEXT_ACTION =
+  'Do not apply. The claim could not be read; fix the cause, then rerun.';
 
 if (import.meta.main) {
   if (isHelperErrorEnvelopeEnabled()) {
@@ -1244,6 +1248,25 @@ function helperHold(
 }
 
 /**
+ * The hold for a failed claim check (#4369). A mismatch means another session
+ * holds the claim, so the run stops quietly. Any other failure is a read error:
+ * the claim may still be this session's, so the run holds for a rerun.
+ */
+export function claimFailureHold(error: unknown): CleanupHold {
+  const message = firstLine(error);
+  const detail = boundedDetail(message);
+  if (message.startsWith(CLAIM_MISMATCH_PREFIX)) {
+    return helperHold('claim-or-lock', 'stop', detail);
+  }
+  return {
+    code: 'claim-or-lock',
+    verdict: 'hold',
+    nextAction: CLAIM_READ_NEXT_ACTION,
+    ...(detail === null ? {} : { detail }),
+  };
+}
+
+/**
  * Read the marker command's stdout as a verdict. Output that is not a JSON
  * verdict is `gate-unreadable`, a hold, so an unreadable gate never passes.
  */
@@ -1356,7 +1379,7 @@ export function checkF4HeadProofGate(
   try {
     claim = deps.assertClaim();
   } catch (error) {
-    return helperHold('claim-or-lock', 'stop', boundedDetail(firstLine(error)));
+    return claimFailureHold(error);
   }
   let head: string;
   try {
@@ -1437,8 +1460,9 @@ export function describeF4HeadProofGate(
   let claim: ActiveClaim;
   try {
     claim = deps.assertClaim();
-  } catch {
-    return { gate: 'stop', gateReason: 'claim-or-lock' };
+  } catch (error) {
+    const hold = claimFailureHold(error);
+    return { gate: hold.verdict, gateReason: hold.code };
   }
   let worktree: string | null;
   try {

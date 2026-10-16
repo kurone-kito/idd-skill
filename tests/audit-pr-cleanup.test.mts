@@ -20,6 +20,7 @@ import {
   assertBatchApplyClaimScope,
   assertBatchTimeBudgetScope,
   checkF4HeadProofGate,
+  claimFailureHold,
   createTimeBudget,
   describeF4HeadProofGate,
   enrichAuditReviewThreads,
@@ -2959,7 +2960,9 @@ test('describeF4HeadProofGate: a dry run reports the gate verdict or its own hol
 
   const unclaimed = fakeGate({
     claim: () => {
-      throw new Error('no claim');
+      throw new Error(
+        'claim check failed for #4369: active claim is agent-2 claim-2',
+      );
     },
   });
   assert.deepEqual(describeF4HeadProofGate(GATE_SCOPE, unclaimed.deps), {
@@ -2967,6 +2970,16 @@ test('describeF4HeadProofGate: a dry run reports the gate verdict or its own hol
     gateReason: 'claim-or-lock',
   });
   assert.equal(unclaimed.calls.head, 0);
+
+  const unreadable = fakeGate({
+    claim: () => {
+      throw new Error('gh api failed: rate limited');
+    },
+  });
+  assert.deepEqual(describeF4HeadProofGate(GATE_SCOPE, unreadable.deps), {
+    gate: 'hold',
+    gateReason: 'claim-or-lock',
+  });
 
   const noWorktree = fakeGate({ worktree: () => null });
   assert.deepEqual(describeF4HeadProofGate(GATE_SCOPE, noWorktree.deps), {
@@ -3106,6 +3119,20 @@ test('checkF4HeadProofGate: a proceed without a known reason, or a post with a r
     true,
     'no apply run follows a malformed verdict',
   );
+});
+
+test('claimFailureHold: a mismatch stops, and a read failure holds for a rerun (#4369)', () => {
+  const mismatch = claimFailureHold(
+    new Error('claim check failed for #4369: active claim is agent-2 claim-2'),
+  );
+  assert.equal(mismatch.code, 'claim-or-lock');
+  assert.equal(mismatch.verdict, 'stop');
+
+  const readFailure = claimFailureHold(new Error('gh api failed: 502'));
+  assert.equal(readFailure.code, 'claim-or-lock');
+  assert.equal(readFailure.verdict, 'hold');
+  assert.match(readFailure.nextAction, /rerun/u);
+  assert.match(readFailure.detail ?? '', /502/u);
 });
 
 test('markerStdout: a child that timed out, errored, or was killed gives no verdict (#4369)', () => {
