@@ -1021,7 +1021,7 @@ comment it does not plan is listed in \`skipped\` with a reason, for example
                                  (default: your gh login, so re-runs are idempotent)
   --advisory-bot-logins a,b      advisory bot logins (default: flag > IDD_ADVISORY_BOT_LOGINS
                                  > .github/idd/config.json > coderabbit + codex)
-  --comment-id <id>              limit the dry run or --apply to this planned notice (repeatable)
+  --comment-id <id>              limit the dry run or --apply to the listed notices (repeatable)
   --apply                        post the dispositions (default: dry-run)
   -h, --help                     show this help
 `;
