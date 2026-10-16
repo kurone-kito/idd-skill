@@ -268,6 +268,7 @@ export function provesNothingSent(error: unknown): boolean {
  */
 interface IdentifiedMarker {
   readonly commentId: number;
+  readonly createdAt: string;
   readonly entry: TrustedMarker;
   readonly supersedable: boolean;
   readonly supersedes: number | null;
@@ -299,6 +300,7 @@ export function collectTrustedMarkers(
       if (parsed.claimId === null || parsed.claimId === claimId) {
         entries.push({
           commentId: comment.id,
+          createdAt: comment.createdAt,
           entry: { unparseable: true },
           supersedable: parsed.claimId === claimId,
           supersedes: null,
@@ -312,6 +314,7 @@ export function collectTrustedMarkers(
     if (classifyCommentEditState(comment) !== 'unedited') {
       entries.push({
         commentId: comment.id,
+        createdAt: comment.createdAt,
         entry: { unparseable: true },
         supersedable: false,
         supersedes: null,
@@ -320,6 +323,7 @@ export function collectTrustedMarkers(
     }
     entries.push({
       commentId: comment.id,
+      createdAt: comment.createdAt,
       entry: {
         claimId: parsed.proof.claimId,
         prNumber: parsed.proof.prNumber,
@@ -339,30 +343,42 @@ export function collectTrustedMarkers(
 }
 
 /**
- * Set aside each malformed proof of this claim that a well-formed, unedited,
- * trusted proof of this claim names by comment ID (#4442). The superseding
- * proof is kept and judged by the verdict table on its own, so a superseding
- * proof that is not reusable, or that conflicts with another proof, still
- * holds F4. Returns the markers the verdict table reads and, for each set-aside
- * comment, the comment that names it, in comment order.
+ * Set aside each malformed proof of this claim that a superseding proof names
+ * by comment ID (#4442). A superseding proof sets one aside only when it is a
+ * well-formed, unedited, trusted proof of this claim, when it was created after
+ * the comment it names, and when it is reusable under `input`'s live values
+ * (the same check the verdict table applies). A superseding proof that fails
+ * any of these is kept and judged on its own, so it still holds F4. Returns the
+ * markers the verdict table reads and, for each set-aside comment, the comment
+ * that names it, in comment order.
  */
-function applySupersession(entries: readonly IdentifiedMarker[]): {
+function applySupersession(
+  entries: readonly IdentifiedMarker[],
+  input: ProofInput,
+): {
   markers: TrustedMarker[];
   supersededBy: ReadonlyMap<number, number>;
 } {
-  const supersedable = new Set(
-    entries.filter((entry) => entry.supersedable).map((e) => e.commentId),
+  const supersedable = new Map(
+    entries
+      .filter((entry) => entry.supersedable)
+      .map((entry) => [entry.commentId, entry] as const),
   );
   const supersededBy = new Map<number, number>();
   for (const entry of entries) {
+    const target =
+      entry.supersedes === null
+        ? undefined
+        : supersedable.get(entry.supersedes);
     if (
-      entry.supersedes === null ||
-      !supersedable.has(entry.supersedes) ||
-      supersededBy.has(entry.supersedes)
+      target === undefined ||
+      supersededBy.has(target.commentId) ||
+      !(Date.parse(entry.createdAt) > Date.parse(target.createdAt)) ||
+      classifyReread([entry.entry], input).result !== 'reusable'
     ) {
       continue;
     }
-    supersededBy.set(entry.supersedes, entry.commentId);
+    supersededBy.set(target.commentId, entry.commentId);
   }
   return {
     markers: entries
@@ -370,6 +386,16 @@ function applySupersession(entries: readonly IdentifiedMarker[]): {
       .map((entry) => entry.entry),
     supersededBy,
   };
+}
+
+/** The warning lines that report each set-aside comment (`docs/idd-resume-detail.md`). */
+function supersessionNotes(
+  supersededBy: ReadonlyMap<number, number>,
+): string[] {
+  return [...supersededBy].map(
+    ([malformedId, supersederId]) =>
+      `reported: malformed f4 head-proof comment ${malformedId} is set aside by superseding proof comment ${supersederId}; the superseding proof is judged on its own`,
+  );
 }
 
 /**
@@ -791,13 +817,6 @@ export function runF4HeadProofGate(
       );
     }
   }
-  const superseding = applySupersession(entries);
-  for (const [malformedId, supersederId] of superseding.supersededBy) {
-    notes.push(
-      `reported: malformed f4 head-proof comment ${malformedId} is set aside by superseding proof comment ${supersederId}; the superseding proof is judged on its own`,
-    );
-  }
-
   let refNameValid = false;
   if (claimOk) {
     try {
@@ -820,7 +839,7 @@ export function runF4HeadProofGate(
       ? null
       : readWatermarkHead(deps, prNumber, input.claimId, notes);
 
-  const proofInput: ProofInput = {
+  const reusabilityInput: ProofInput = {
     claimId: input.claimId,
     prNumber: prNumber ?? 0,
     branch,
@@ -829,9 +848,17 @@ export function runF4HeadProofGate(
     refNameValid,
     localRef,
     claimActivatedAt,
-    markers: superseding.markers,
+    markers: [],
     markersRead,
     watermarkAuthenticated: f2 !== null,
+  };
+  // A superseding proof is judged against the same live values the verdict
+  // table reads, so a stale one sets nothing aside (#4442).
+  const superseding = applySupersession(entries, reusabilityInput);
+  notes.push(...supersessionNotes(superseding.supersededBy));
+  const proofInput: ProofInput = {
+    ...reusabilityInput,
+    markers: superseding.markers,
   };
   const proof: F4HeadProofValues = {
     pr: prNumber,
@@ -1004,7 +1031,15 @@ function readBack(
       input.issueNumber,
       input.claimId,
     );
-    return classifyReread(applySupersession(entries).markers, proofInput);
+    const superseding = applySupersession(entries, proofInput);
+    // A supersession that appears only on the read-back is reported too
+    // (#4442): the warning must reach the confirmed write's output.
+    for (const note of supersessionNotes(superseding.supersededBy)) {
+      if (!notes.includes(note)) {
+        notes.push(note);
+      }
+    }
+    return classifyReread(superseding.markers, proofInput);
   } catch (error) {
     notes.push(
       `a re-read of the issue comments failed: ${describeError(error)}`,
