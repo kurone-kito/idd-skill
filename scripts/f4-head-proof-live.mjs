@@ -332,13 +332,22 @@ export function originMismatchMessage(owner, repo, originUrl, active) {
     // failed or changed between the two checks can refuse it: a retry is the fix.
     return `the current checkout's origin names ${owner}/${repo} on ${active}, but the origin could not be confirmed; retry, or check the origin remote`;
   }
+  // An HTTP(S) origin's port belongs to its host: the origin check compares it,
+  // and GH_HOST can name it. An SSH transport port does not belong to the host.
+  const httpOrigin = /^https?:\/\//i.test(originUrl ?? '');
   const hostOnly = host.replace(/:\d+$/, '');
-  if (active !== null && hostOnly === active) {
-    // The origin check compares the port too, so a non-default port on the
-    // origin URL (an SSH port, for example) keeps the origin from matching.
+  if (!httpOrigin && active !== null && hostOnly === active) {
+    // The origin check compares the port too, so a non-default SSH port on the
+    // origin URL (ssh://host:2222, for example) keeps the origin from matching.
     return `the current checkout's origin names ${owner}/${repo} on ${host}, a host with a port that the origin check does not match to the active GitHub host ${active}; use an origin URL without a port`;
   }
-  return `the current checkout's origin names ${owner}/${repo} on ${host}, but the active GitHub host is ${active ?? 'an unreadable host'}; set GH_HOST to ${hostOnly} to use it`;
+  if (!httpOrigin && hostOnly === 'ssh.github.com') {
+    // GitHub's SSH-over-443 endpoint names the repository too, but it is not an
+    // API host, so GH_HOST must not be pointed at it.
+    return `the current checkout's origin names ${owner}/${repo} on ssh.github.com, GitHub's SSH endpoint and not an API host; use an origin URL on the API host, for example https://github.com/${owner}/${repo}.git`;
+  }
+  const advised = httpOrigin ? host : hostOnly;
+  return `the current checkout's origin names ${owner}/${repo} on ${host}, but the active GitHub host is ${active ?? 'an unreadable host'}; set GH_HOST to ${advised} to use it`;
 }
 /**
  * The production callbacks for one repository. The trusted logins are the

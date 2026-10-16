@@ -750,3 +750,77 @@ test('the origin refusal names its cause for each case, from the origin URL and 
     "the current checkout's origin names origin-owner/origin-repo on github.com, but the active GitHub host is an unreadable host; set GH_HOST to github.com to use it",
   );
 });
+
+test('an HTTPS origin with a port is refused with GH_HOST naming that port, and accepted once GH_HOST names it', () => {
+  inOriginCheckout(
+    'https://ghes.example.com:8443/origin-owner/origin-repo.git',
+    () => {
+      withEnvironment(
+        { GH_HOST: undefined, GITHUB_SERVER_URL: undefined },
+        () => {
+          const deps = createLiveF4HeadProofDeps({
+            resolveRepo: resolveCheckoutRepository,
+          });
+          assert.equal(
+            deps.checkoutRepositoryError(),
+            "the current checkout's origin names origin-owner/origin-repo on ghes.example.com:8443, but the active GitHub host is github.com; set GH_HOST to ghes.example.com:8443 to use it",
+          );
+          assert.equal(process.env.GH_HOST, undefined);
+        },
+      );
+      withEnvironment(
+        { GH_HOST: 'ghes.example.com:8443', GITHUB_SERVER_URL: undefined },
+        () => {
+          const deps = createLiveF4HeadProofDeps({
+            resolveRepo: resolveCheckoutRepository,
+          });
+          assert.equal(deps.checkoutRepositoryError(), null);
+          assert.equal(process.env.GH_HOST, 'ghes.example.com:8443');
+        },
+      );
+    },
+  );
+});
+
+test('a blank GITHUB_SERVER_URL counts as unset, and the pin names github.com', () => {
+  inOriginCheckout('https://github.com/origin-owner/origin-repo.git', () => {
+    withEnvironment({ GH_HOST: undefined, GITHUB_SERVER_URL: '   ' }, () => {
+      const deps = createLiveF4HeadProofDeps({
+        resolveRepo: resolveCheckoutRepository,
+      });
+      assert.equal(deps.checkoutRepositoryError(), null);
+      assert.equal(process.env.GH_HOST, 'github.com');
+    });
+  });
+});
+
+test('the refusal advice keeps an HTTP(S) port and never points GH_HOST at an SSH endpoint', () => {
+  assert.equal(
+    originMismatchMessage(
+      'origin-owner',
+      'origin-repo',
+      'https://ghes.example.com:8443/origin-owner/origin-repo.git',
+      'github.com',
+    ),
+    "the current checkout's origin names origin-owner/origin-repo on ghes.example.com:8443, but the active GitHub host is github.com; set GH_HOST to ghes.example.com:8443 to use it",
+  );
+  assert.equal(
+    originMismatchMessage(
+      'origin-owner',
+      'origin-repo',
+      'https://ghes.example.com:8443/origin-owner/origin-repo.git',
+      'ghes.example.com',
+    ),
+    "the current checkout's origin names origin-owner/origin-repo on ghes.example.com:8443, but the active GitHub host is ghes.example.com; set GH_HOST to ghes.example.com:8443 to use it",
+  );
+  for (const url of [
+    'git@ssh.github.com:origin-owner/origin-repo.git',
+    'ssh://git@ssh.github.com:443/origin-owner/origin-repo.git',
+  ]) {
+    assert.equal(
+      originMismatchMessage('origin-owner', 'origin-repo', url, 'github.com'),
+      "the current checkout's origin names origin-owner/origin-repo on ssh.github.com, GitHub's SSH endpoint and not an API host; use an origin URL on the API host, for example https://github.com/origin-owner/origin-repo.git",
+      url,
+    );
+  }
+});
