@@ -16,7 +16,9 @@ const SCHEMA_PATH = 'schemas/branch-conflict-state.schema.json';
 const POLICY_CONSTANTS_DOC = 'idd-template/docs/policy-constants.md';
 const HELPER_REFERENCE_DOC = 'idd-template/docs/idd-helper-scripts.md';
 
-// Schema names the classifier never returns. Recorded on purpose (#2458).
+// Schema names the classifier never returns. #2458 recorded
+// force-push-exception as a policy hold name on purpose; policy-required-update
+// is the other syncRecommendation name the classifier never returns.
 const BRANCH_STATE_REMAINDER = ['force-push-exception'];
 const SYNC_RECOMMENDATION_REMAINDER = [
   'policy-required-update',
@@ -250,9 +252,10 @@ test('the derived arrays are schema names, and the schema names they omit are th
   );
 });
 
-// One classifier input per branch of deriveBranchState, plus the missing-SHA
-// early return of classifyBranchConflictState. The offline seams (_testPrData
-// and _skipGitProbe) keep these hermetic: no git and no gh call is made.
+// One classifier input per returned name, plus the missing-SHA early return of
+// classifyBranchConflictState. The offline seams (_testPrData and _skipGitProbe)
+// keep these hermetic: no git or gh call is made. Not every branch is reached,
+// only every returned name.
 const SHA = 'a'.repeat(40);
 const CLASSIFIER_INPUTS = [
   { mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' },
@@ -291,7 +294,7 @@ test('the derived arrays hold exactly the names the classifier returns', async (
   );
 });
 
-test('a taxonomy row that omits computing fails the comparison', () => {
+test('a taxonomy row that omits computing is reported as drift', () => {
   const mutated = TAXONOMY_ROW.replace('`computing`, ', '');
   assert.notEqual(mutated, TAXONOMY_ROW, 'the mutation did not apply');
   assert.deepEqual(
@@ -304,7 +307,7 @@ test('a taxonomy row that omits computing fails the comparison', () => {
   );
 });
 
-test('a syncRecommendation bullet without hold-unknown before the gloss fails', () => {
+test('a syncRecommendation bullet without hold-unknown before the gloss is reported as drift', () => {
   const mutated = SYNC_BULLET.replace(
     '`recheck`, `hold-unknown` (`recheck` pairs with',
     '`recheck` (`recheck` pairs with',
@@ -355,7 +358,7 @@ test('an indented nested bullet ends a helper bullet and adds no names', () => {
   );
 });
 
-test('a synthetic schema enum that adds a name fails both checks', () => {
+test('a synthetic schema enum that adds a name is reported as drift by both checks', () => {
   const synthetic = structuredClone(schema);
   synthetic.properties.branchState.enum.push('not-a-state');
   const names = [...synthetic.properties.branchState.enum];
