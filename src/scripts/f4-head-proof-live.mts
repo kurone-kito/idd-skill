@@ -177,8 +177,8 @@ const ROUTING_ACTIONS: ReadonlySet<string> = new Set([
 
 /**
  * Classify one `resume-claim-routing --assert` run from its exit status and
- * stdout. Exit 0 with an `already_owned` / `keep` verdict naming this claim
- * ID and a branch is `owned`. A non-zero exit whose `state` and `action` are
+ * stdout. Exit 0 with an `already_owned` / `keep` verdict whose reason is
+ * `claim-id-match`, naming this claim ID and a branch, is `owned`. A non-zero exit whose `state` and `action` are
  * both in the routing vocabulary is `not-owned`: that is the routing answer
  * that the claim is not held by this session, and `owner_evidence_required` is
  * one of them (the claim ID matches but the local proof failed). Anything
@@ -193,6 +193,7 @@ export function classifyClaimAssertResult(
   let routing: {
     state?: unknown;
     action?: unknown;
+    reason?: unknown;
     active_claim?: { claim_id?: unknown; branch?: unknown } | null;
   };
   try {
@@ -219,6 +220,7 @@ export function classifyClaimAssertResult(
     exited === 0 &&
     routing.state === 'already_owned' &&
     routing.action === 'keep' &&
+    routing.reason === 'claim-id-match' &&
     routing.active_claim?.claim_id === claimId &&
     typeof branch === 'string' &&
     branch !== ''

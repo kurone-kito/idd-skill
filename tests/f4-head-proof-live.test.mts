@@ -1072,3 +1072,27 @@ test('a host that GH_HOST cannot name gets advice to use the active host, or the
     "the current checkout's origin names origin-owner/origin-repo on ho#st, which GH_HOST cannot name, and the active GitHub host cannot be read either; set GH_HOST to a readable host, or unset it and set GITHUB_SERVER_URL to its https:// URL, and then use an origin URL on that host",
   );
 });
+
+test('an owned verdict is accepted only with the claim-id-match reason, and any other reason is unreadable', () => {
+  assert.equal(classifyClaimAssertResult(0, routing(), CLAIM).status, 'owned');
+  assert.equal(
+    classifyClaimAssertResult(0, routing({ reason: undefined }), CLAIM).status,
+    'unreadable',
+  );
+  assert.equal(
+    classifyClaimAssertResult(
+      0,
+      routing({ reason: 'claim-id-match-without-independent-owner-evidence' }),
+      CLAIM,
+    ).status,
+    'unreadable',
+  );
+  assert.equal(
+    classifyClaimAssertResult(
+      0,
+      routing({ reason: 'some-other-reason' }),
+      CLAIM,
+    ).status,
+    'unreadable',
+  );
+});
