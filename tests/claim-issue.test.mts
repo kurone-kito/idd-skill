@@ -2613,3 +2613,12 @@ test('a valid claim token followed by edited text after the note is not the clai
     assert.equal(report.claimPosted, 'unknown');
   });
 });
+
+test('an authoring label that differs only in case is still the hold', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { labelReads: [['STATUS:AUTHORING']] });
+    const report = assertStopped(run, 'hold-active');
+    assert.equal(report.claimPosted, false);
+    assert.equal(run.posts.length, 0);
+  });
+});

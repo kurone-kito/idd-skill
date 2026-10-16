@@ -944,7 +944,11 @@ function readHold(state) {
       detail: 'gh issue view printed no valid labels',
     };
   }
-  return labels.includes(state.authoringLabel)
+  // GitHub label names are case-insensitive, so the comparison is too (the same
+  // rule as publish-authoring-hold's hasLabel).
+  return labels.some(
+    (name) => name.toLowerCase() === state.authoringLabel.toLowerCase(),
+  )
     ? { kind: 'held' }
     : { kind: 'clear' };
 }
@@ -1670,6 +1674,10 @@ function postNonce(state) {
   if (postMarker(state, args).status === 0) {
     return applyPass('activation nonce posted');
   }
+  // The write may have landed without being visible yet: wait the settle delay
+  // before the first read, as the claim path does, so that "absent" means
+  // something before a retry.
+  state.deps.sleepMs(state.settleMs);
   const first = findMarker(state, prefix);
   if (first === 'present') {
     return applyPass(
