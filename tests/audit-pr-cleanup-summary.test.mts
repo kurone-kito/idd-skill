@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { SKIP_REASON_CODES } from '../src/scripts/audit-pr-cleanup.mts';
@@ -529,5 +529,48 @@ test('HOLD_REASON_CODES is a closed list of unique kebab-case codes (#4369)', ()
   assert.equal(HOLD_REASON_CODES.length, 17);
   for (const code of HOLD_REASON_CODES) {
     assert.match(code, /^[a-z0-9]+(?:-[a-z0-9]+)*$/u, code);
+  }
+});
+
+// kurone-kito/idd-skill#4369: the hold-reason table lists each code once, the
+// table and the exported list agree both ways, and each code has a producer.
+// The summary module defines the list, so it is excluded from the producer scan.
+test('the minimization doc lists each hold reason code once, and each has a producer (#4369)', () => {
+  const doc = readFileSync(
+    new URL('../docs/idd-comment-minimization.md', import.meta.url),
+    'utf8',
+  );
+  const heading = '### Hold reason codes';
+  const start = doc.indexOf(heading);
+  assert.notStrictEqual(
+    start,
+    -1,
+    'the doc must have a Hold reason codes section',
+  );
+  const rest = doc.slice(start + heading.length);
+  const nextHeading = rest.search(/\n#{1,3} /u);
+  const section = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
+  const documented = [...section.matchAll(/^\| `([a-z0-9-]+)`\s*\|/gmu)].map(
+    (match) => match[1] ?? '',
+  );
+  assert.equal(
+    new Set(documented).size,
+    documented.length,
+    'no code is documented twice',
+  );
+  assert.deepEqual(
+    [...documented].sort(),
+    [...HOLD_REASON_CODES].sort(),
+    'the doc table and HOLD_REASON_CODES list the same codes',
+  );
+
+  const sourceDir = new URL('../src/scripts/', import.meta.url);
+  const producers = readdirSync(sourceDir)
+    .filter((name) => name.endsWith('.mts'))
+    .filter((name) => name !== 'audit-pr-cleanup-summary.mts')
+    .map((name) => readFileSync(new URL(name, sourceDir), 'utf8'))
+    .join('\n');
+  for (const code of HOLD_REASON_CODES) {
+    assert.ok(producers.includes(`'${code}'`), `no source produces ${code}`);
   }
 });
