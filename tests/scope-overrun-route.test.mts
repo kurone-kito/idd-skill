@@ -157,7 +157,9 @@ test('an over-limit orphan fails the orphan shape as well, and the route still n
   // orphan shape checks the same count, so this overrun fails under either
   // shape. The route keeps --shape child because that shape does not add
   // the orphan-only section requirement, so a legacy S or M orphan with no
-  // section does not stop the route.
+  // section passes the effort-limit finding the route stops on. The child
+  // shape's candidate-files-not-empty finding still reports the missing
+  // section, but the route does not stop on that finding.
   const body = issueWithChangedFiles('M', EFFORT_CANDIDATE_FILE_LIMITS.M + 1);
   const findingFor = (shape: 'orphan' | 'child') =>
     auditAuthoredIssue(body, { shape }).findings.find(
