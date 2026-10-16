@@ -1065,7 +1065,7 @@ whole step under the workflow's own `bash -eo pipefail` before any
 comment is attempted, rather than reaching a posting decision at all:
 
 ```markdown
-<!-- idd-cleanup-evidence: recheck-failed apply-status:{applied|clean|failed|incomplete|rescan-failed|held} applied:{N} failed:{N} skipped:{N} viewer-cannot-minimize:{N} -->
+<!-- idd-cleanup-evidence: recheck-failed apply-status:{applied|clean|failed|incomplete|rescan-failed} applied:{N} failed:{N} skipped:{N} viewer-cannot-minimize:{N} -->
 
 **F4 Re-check Fetch Failure**
 
@@ -1075,7 +1075,7 @@ posting; the apply outcome below may still be fully converged.
 | Field                 | Value                                                                |
 | --------------------- | -------------------------------------------------------------------- |
 | Status                | recheck-failed                                                       |
-| Apply status (actual) | applied / clean / failed / incomplete / rescan-failed / held         |
+| Apply status (actual) | applied / clean / failed / incomplete / rescan-failed                |
 | Applied               | N                                                                    |
 | Failed                | N                                                                    |
 | Skipped               | N                                                                    |
