@@ -47,6 +47,8 @@ const F4_CLEANUP_FLAG_SPEC = {
 };
 /** Largest stdout the helper accepts from one git call (`ls-files` on a big tree). */
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
+/** Upper bound on one git call, so a stalled remote cannot hang the helper. */
+const GIT_TIMEOUT_MS = 600_000;
 export function parseArgs(argv) {
   const { values, help } = parseCliArgs(argv, F4_CLEANUP_FLAG_SPEC);
   if (help) {
@@ -107,8 +109,16 @@ export function runGit(args, cwd) {
   const result = spawnSync('git', [...args], {
     cwd,
     encoding: 'utf8',
-    env: { ...gitChildEnvironment(), LANG: 'C', LC_ALL: 'C' },
+    env: {
+      ...gitChildEnvironment(),
+      LANG: 'C',
+      LC_ALL: 'C',
+      // A helper run must not stop at a credential prompt.
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_ASKPASS: '',
+    },
     maxBuffer: GIT_MAX_BUFFER,
+    timeout: GIT_TIMEOUT_MS,
   });
   return {
     status: result.status,
