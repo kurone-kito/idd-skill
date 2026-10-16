@@ -159,7 +159,9 @@ distributed IDD workflow a repository imported.
   `Good "git" signature for <principal>` line and does not check it against
   the tagger, so the tagger email is a readable choice, not a requirement.
   Take the key type and public identity from the first two fields of one of
-  these, and never copy private key material into the file:
+  these, and never copy private key material into the file. In each command
+  in this passage, replace each angle-bracket placeholder with a real value;
+  the brackets are not part of the command:
 
   - the `ssh-add -L` line for the signing identity;
   - the matching public file for that key;
@@ -167,9 +169,7 @@ distributed IDD workflow a repository imported.
     `ssh-keygen -y -f <private-key-file>`.
 
   Point the setting at the file with `git config`, using an absolute path, so
-  that the snippet's own verify line sees it. Replace each angle-bracket
-  placeholder in the commands below with a real value; the brackets are not
-  part of the command:
+  that the snippet's own verify line sees it:
 
   ```sh
   git config gpg.ssh.allowedSignersFile <allowed-signers-file>
@@ -190,9 +190,10 @@ distributed IDD workflow a repository imported.
   `gpg --import <public-key-file>`; without it, verification stops with a
   `No public key` error from `gpg`.
 
-  When the snippet stops at verify, at the `gpg.ssh.allowedSignersFile` error
-  above or at a `No principal matched.` case, the local tag
-  `v<version>` exists and nothing was pushed. Do not run `git tag` again while
+  When the snippet stops at verify, for any of the reasons above (the
+  `gpg.ssh.allowedSignersFile` error, a `No principal matched.` case, or the
+  `No public key` error from `gpg`), the local tag `v<version>` exists and
+  nothing was pushed. Do not run `git tag` again while
   the tag is correct: it fails with `tag 'v<version>' already exists`. Before
   you continue, check that `RELEASE_CUT_MERGE_SHA` is the merge commit of the
   bump pull request, and do not continue if it is not: the block below compares
@@ -222,17 +223,20 @@ distributed IDD workflow a repository imported.
   [signed-commit merge wrapper](idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
   gives commit, merge, and rebase, and do not rerun until you have confirmed
   that nothing from the attempt is still running. Never fall back to an
-  unsigned tag, because a release tag must stay signed. Then set
-  `release_version` from `RELEASE_VERSION` and test whether the tag exists:
+  unsigned tag, because a release tag must stay signed. Then test whether the
+  tag exists with this block, run as a script or in a subshell, as for the
+  recovery block above:
 
   ```sh
+  release_version="${RELEASE_VERSION:?set to the iddVersion being released}"
   if git rev-parse -q --verify "refs/tags/v${release_version}" >/dev/null; then
     echo "tag exists: use the recovery block above"
   fi
   ```
 
-  The test is true when the tag exists. It exits 1 when the tag is absent, and
-  the `if` keeps `set -eu` from ending the shell. When the tag does not exist,
+  The test is true when the tag exists. It exits 1 when the tag is absent,
+  which an `if` condition tolerates even under `set -e`. When the tag does not
+  exist,
   and this repository configures the fallback signer that the wrapper section
   describes, run the snippet again from its first line, once the setting is in
   place, with the wrapper section's `-c` settings for `gpg.format`,
