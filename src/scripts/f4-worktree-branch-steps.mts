@@ -115,7 +115,7 @@ export type StepStatus =
 
 export interface F4StepRecord {
   readonly step: StepName;
-  /** For `claim-check` only: `before-step-4`, `before-removal`, or `before-step-6`. */
+  /** For `claim-check` only: `before-step-4` or `before-step-6`. */
   readonly phase: string | null;
   readonly status: StepStatus;
   readonly reason: string | null;
@@ -882,7 +882,7 @@ function runStep4And5(
       steps.push(
         stepRecord('step-5', 'done', {
           detail:
-            'the worktree was removed; git branch -d kept the branch, whose tip equals the proof head',
+            'git branch -d kept the branch, whose tip equals the proof head. Comment on the issue before any git branch -D, as merge doc F4 step 5 asks',
         }),
       );
       return { hold: null, error: null, at: 'step-5' };

@@ -627,7 +627,7 @@ function runStep4And5(
       steps.push(
         stepRecord('step-5', 'done', {
           detail:
-            'the worktree was removed; git branch -d kept the branch, whose tip equals the proof head',
+            'git branch -d kept the branch, whose tip equals the proof head. Comment on the issue before any git branch -D, as merge doc F4 step 5 asks',
         }),
       );
       return { hold: null, error: null, at: 'step-5' };
