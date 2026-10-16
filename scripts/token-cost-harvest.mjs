@@ -43,6 +43,7 @@ import {
   extractSessionId,
   groupClaudeRequests,
   parseClaudeProjectLines,
+  projectSubagentAssistantRecord,
   segmentRecordsByCwd,
 } from './token-cost-adapter-claude.mjs';
 import {
@@ -1820,11 +1821,12 @@ function routeSubagentRecord(windows, atMs) {
 /**
  * The assistant records of one session file's `subagents/` transcripts (#4384),
  * grouped by the index of the segment each record routes to. Only regular
- * `agent-*.jsonl` files are read, one at a time, and only their assistant
- * records are kept. A transcript that cannot be read is skipped with one
- * stderr line that names its basename, and a malformed line is dropped
- * silently by `parseClaudeProjectLines`. A record with no valid timestamp
- * routes nowhere.
+ * `agent-*.jsonl` files are read, one at a time, and of their assistant
+ * records only the fields the adapter reads are kept (see
+ * `projectSubagentAssistantRecord`). A transcript that cannot be read is
+ * skipped with one stderr line that names its basename, and a malformed line
+ * is dropped silently by `parseClaudeProjectLines`. A record with no valid
+ * timestamp routes nowhere.
  */
 function routeSubagentTranscripts(projectDir, fileBasename, segments) {
   const routed = new Map();
@@ -1855,10 +1857,13 @@ function routeSubagentTranscripts(projectDir, fileBasename, segments) {
       continue;
     }
     for (const record of records) {
-      if (!isPlainObject(record) || record.type !== 'assistant') {
+      // Only the fields the adapter reads are kept, so the prompt and
+      // tool-input text of a transcript is released with this file.
+      const projected = projectSubagentAssistantRecord(record);
+      if (projected === undefined) {
         continue;
       }
-      const atMs = extractRecordTimestampMs(record);
+      const atMs = extractRecordTimestampMs(projected);
       const segmentIndex =
         atMs === undefined ? undefined : routeSubagentRecord(windows, atMs);
       if (segmentIndex === undefined) {
@@ -1866,9 +1871,9 @@ function routeSubagentTranscripts(projectDir, fileBasename, segments) {
       }
       const bucket = routed.get(segmentIndex);
       if (bucket) {
-        bucket.push(record);
+        bucket.push(projected);
       } else {
-        routed.set(segmentIndex, [record]);
+        routed.set(segmentIndex, [projected]);
       }
     }
   }

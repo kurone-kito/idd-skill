@@ -11,6 +11,7 @@ import {
   encodeClaudeProjectDirName,
   extractRecordTimestampMs,
   parseClaudeProjectLines,
+  projectSubagentAssistantRecord,
   scanClaudeSessions,
   segmentRecordsByCwd,
 } from '../src/scripts/token-cost-adapter-claude.mts';
@@ -1326,4 +1327,75 @@ test('harvest fails closed when no vendorSessionId is derivable', () => {
       }),
     /vendorSessionId/,
   );
+});
+
+test('projectSubagentAssistantRecord keeps only the fields the adapter reads, and a projected subagent record harvests exactly like the full one (#4384)', () => {
+  const full = {
+    type: 'assistant',
+    timestamp: '2026-08-20T10:00:02.000Z',
+    requestId: 'req-T',
+    sessionId: 'sess-T',
+    message: {
+      id: 'msg-T',
+      role: 'assistant',
+      model: 'm',
+      content: [
+        { type: 'text', text: 'a secret prompt' },
+        {
+          type: 'tool_use',
+          id: 'tool-T1',
+          name: 'Edit',
+          input: { file_path: '/private/path.ts', content: 'secret body' },
+        },
+        { type: 'tool_use', name: 'Bash' },
+      ],
+      usage: {
+        input_tokens: 4,
+        output_tokens: 5,
+        cache_read_input_tokens: 6,
+        cache_creation_input_tokens: 0,
+      },
+    },
+  };
+  const projected = projectSubagentAssistantRecord(full);
+  assert.notEqual(projected, undefined);
+  const serialized = JSON.stringify(projected);
+  assert.equal(serialized.includes('secret'), false);
+  assert.equal(serialized.includes('/private/path.ts'), false);
+  assert.deepEqual(projected, {
+    type: 'assistant',
+    timestamp: '2026-08-20T10:00:02.000Z',
+    requestId: 'req-T',
+    message: {
+      id: 'msg-T',
+      usage: {
+        input_tokens: 4,
+        output_tokens: 5,
+        cache_read_input_tokens: 6,
+        cache_creation_input_tokens: 0,
+      },
+      content: [{ type: 'tool_use', id: 'tool-T1' }, { type: 'tool_use' }],
+    },
+  });
+  assert.equal(
+    projectSubagentAssistantRecord({ type: 'user', message: {} }),
+    undefined,
+  );
+
+  const records = [userRecord('2026-08-20T10:00:00.000Z')];
+  const fromFull = claudeAdapter.harvest({
+    records,
+    subagentRecords: [full],
+    fileBasename: 'session-proj.jsonl',
+  }).sample;
+  const fromProjected = claudeAdapter.harvest({
+    records,
+    subagentRecords: [projected],
+    fileBasename: 'session-proj.jsonl',
+  }).sample;
+  assert.deepEqual(fromProjected, fromFull);
+  assert.equal(fromFull.includesSubagents, true);
+  assert.equal(fromFull.turnCount, 1);
+  // tool-T1 counts once; the block with no id counts on its own.
+  assert.equal(fromFull.toolCallCount, 2);
 });
