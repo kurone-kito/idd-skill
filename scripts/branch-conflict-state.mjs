@@ -21,6 +21,29 @@ import {
 } from './protocol-helpers.mjs';
 import { createGithubProviderAdapter } from './provider-adapter-github.mjs';
 /**
+ * Every `branchState` that `deriveBranchState` returns. The schema enum also
+ * names `force-push-exception`, which this classifier never returns.
+ */
+export const DERIVED_BRANCH_STATES = [
+  'clean',
+  'behind-no-conflict',
+  'content-conflict',
+  'dirty',
+  'computing',
+  'unknown',
+];
+/**
+ * Every `syncRecommendation` that `deriveBranchState` returns. The schema enum
+ * also names `policy-required-update` and `force-push-exception`, which this
+ * classifier never returns.
+ */
+export const DERIVED_SYNC_RECOMMENDATIONS = [
+  'none',
+  'merge-base',
+  'recheck',
+  'hold-unknown',
+];
+/**
  * Map a classified branch state to each call site's next step.
  *
  * `clean` proceeds with `mergeStateStatus` CLEAN, which is F1's own
