@@ -1188,8 +1188,9 @@ export function describeF4HeadProofGate(scope, deps) {
     worktree,
     apply: false,
   });
-  if (decision.verdict === 'proceed') {
-    // A dry run reads no head, so only the pull request binds here.
+  if (decision.verdict === 'proceed' || decision.verdict === 'post') {
+    // A dry run reads no head, so only the pull request binds here. The gate
+    // binds a post the same way before it posts, so the report must match it.
     const bound = proofBindingHold(decision, scope.prNumber, null);
     if (bound !== null) {
       return { gate: bound.verdict, gateReason: bound.code };

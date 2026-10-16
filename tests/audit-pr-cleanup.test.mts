@@ -3320,4 +3320,15 @@ test('checkF4HeadProofGate: a proof that names another pull request or head, or 
     gate: 'hold',
     gateReason: 'conflicting-marker',
   });
+
+  // The gate binds a post before it posts, so the dry-run report binds it too.
+  const describedPost = fakeGate({
+    markers: [
+      markerJson({ verdict: 'post', proof: { pr: 8, head: GATE_SHA_A } }),
+    ],
+  });
+  assert.deepEqual(describeF4HeadProofGate(GATE_SCOPE, describedPost.deps), {
+    gate: 'hold',
+    gateReason: 'conflicting-marker',
+  });
 });
