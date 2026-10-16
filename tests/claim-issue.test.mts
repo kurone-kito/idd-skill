@@ -2585,7 +2585,9 @@ test('the state re-read comes before the authoring-label read, which is the last
   withApplyFixture((fixture) => {
     const run = runApply(fixture);
     assert.equal(exitOf(run.result), 0, run.stderr);
-    const claimAt = run.log.findIndex((entry) => entry.includes('--type claim'));
+    const claimAt = run.log.findIndex((entry) =>
+      entry.includes('--type claim'),
+    );
     assert.ok(claimAt > 0, 'the claim marker is posted');
     const reads = run.log
       .slice(0, claimAt)
