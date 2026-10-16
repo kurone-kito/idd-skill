@@ -95,6 +95,8 @@ const CLEANUP_NEXT =
   'Run the B1 cleanup of idd-work.instructions.md by hand: remove the prunable worktree entry, or delete the leftover branch if its commits are confirmed unneeded. Then rerun this helper. This helper removed nothing.';
 const PATH_NEXT =
   'Inspect the path by hand. This helper never removes it: move or clean it, then rerun this helper.';
+/** The timestamp shape the marker grammar prints (second precision, UTC). */
+const MARKER_TIMESTAMP = '\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z';
 /** The next action when the policy or the viewer cannot be read (nothing claimed yet). */
 const POLICY_NEXT =
   'Fix the policy (the repository config or the user-global policy) or restore access to the viewer login, then rerun this helper. This helper created no worktree or branch.';
@@ -970,12 +972,17 @@ function parseCommentPages(stdout) {
   }
   return comments;
 }
+/** Escape text for use inside a regular expression. */
+function escapeForRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 /**
- * Whether a trusted comment starts with `prefix` (the marker token, which must
- * be the first bytes of the body). `unknown` when the read itself fails, so a
- * caller can never take an unreadable issue for an absent marker.
+ * Whether a trusted comment carries the complete marker token `pattern` at the
+ * first byte of its body. A comment that only starts with the same words but
+ * whose token is malformed is not a marker. `unknown` when the read itself
+ * fails, so a caller can never take an unreadable issue for an absent marker.
  */
-function findMarker(state, prefix) {
+function findMarker(state, pattern) {
   const { owner, repo } = state.repository;
   const read = state.deps.run('gh', [
     'api',
@@ -994,7 +1001,7 @@ function findMarker(state, prefix) {
   return comments.some(
     (comment) =>
       state.trustedActors.includes(comment.login.toLowerCase()) &&
-      comment.body.startsWith(prefix),
+      pattern.test(comment.body),
   )
     ? 'present'
     : 'absent';
@@ -1323,6 +1330,23 @@ function checkPathFree(state) {
     ? applyPass(`${state.path} is free`)
     : applyFail('path-occupied', PATH_NEXT, problem);
 }
+/** Whether the claim's branch exists after a failed add: the report's own words. */
+function branchLeftBehind(state) {
+  const ref = `refs/heads/${state.branch}`;
+  const refs = state.deps.run('git', [
+    '-C',
+    state.primary,
+    'for-each-ref',
+    '--format=%(refname)',
+    ref,
+  ]);
+  if (refs.status !== 0) {
+    return 'could not be read';
+  }
+  return refs.stdout.split(/\r?\n/).some((line) => line.trim() === ref)
+    ? 'exists'
+    : 'does not exist';
+}
 /**
  * The fresh-claim row of B1 step 2: `git worktree add --no-track` from the
  * development branch. Mints the claim id and the nonce first, so the identity
@@ -1346,7 +1370,10 @@ function addWorktree(state) {
     return applyFail(
       'worktree-add-failed',
       'Inspect the path and the branch by hand, then rerun this helper. This helper removed nothing.',
-      `git worktree add ended with ${describeStatus(add)}; the path ${entryState(state.path) === 'present' ? 'now exists' : 'does not exist'}`,
+      // A failed add is not atomic: it can leave the path, the worktree entry,
+      // or the branch behind. The report names each of them, so the next step
+      // inspects the real state.
+      `git worktree add ended with ${describeStatus(add)}; the path ${entryState(state.path) === 'present' ? 'now exists' : 'does not exist'}, and the branch ${branchLeftBehind(state)}`,
     );
   }
   state.worktreeCreated = true;
@@ -1578,7 +1605,9 @@ function postClaim(state) {
   state.deps.sleepMs(state.settleMs);
   const landed = findMarker(
     state,
-    `<!-- claimed-by: ${identity.agentId} ${identity.claimId} `,
+    new RegExp(
+      `^<!-- claimed-by: ${escapeForRegExp(identity.agentId)} ${escapeForRegExp(identity.claimId)} supersedes: \\S+ ${MARKER_TIMESTAMP} branch: ${escapeForRegExp(identity.branch)} -->`,
+    ),
   );
   if (landed === 'present') {
     state.claimPosted = true;
@@ -1604,7 +1633,9 @@ function postNonce(state) {
       'no worktree identity exists',
     );
   }
-  const prefix = `<!-- activation-nonce: ${identity.agentId} ${identity.claimId} ${identity.nonce} `;
+  const prefix = new RegExp(
+    `^<!-- activation-nonce: ${escapeForRegExp(identity.agentId)} ${escapeForRegExp(identity.claimId)} ${escapeForRegExp(identity.nonce)} ${MARKER_TIMESTAMP} -->`,
+  );
   const args = [
     '--type',
     'activation-nonce',
@@ -1695,7 +1726,37 @@ function acquireLock(state) {
       `claim-lock --acquire ended with ${describeStatus(acquire)}`,
     );
   }
-  return applyPass('worktree-local claim lock acquired');
+  // Acquire alone is not ownership evidence: the generated-tokens record must
+  // read back as this claim's own, present and well-formed. An absent or
+  // malformed record fails closed here, as idd-claim.instructions.md requires.
+  const tokens = state.deps.run(
+    process.execPath,
+    [
+      state.deps.childScript('claim-lock.mjs'),
+      '--read-tokens',
+      '--worktree',
+      identity.worktree,
+      '--claim-id',
+      identity.claimId,
+    ],
+    { cwd: state.primary },
+  );
+  const record = parseJsonObject(tokens.stdout);
+  if (
+    tokens.status !== 0 ||
+    record === null ||
+    record.present !== true ||
+    record.malformed === true
+  ) {
+    return applyFail(
+      'lock-acquire-failed',
+      lostClaimNext(identity.claimId),
+      `the generated-tokens record does not read back as present for ${identity.claimId}`,
+    );
+  }
+  return applyPass(
+    'worktree-local claim lock acquired; generated tokens read back',
+  );
 }
 /** The final assert, after the settle delay. Only `already_owned` with `keep` verifies the claim. */
 function assertClaim(state) {
@@ -1781,6 +1842,31 @@ function recheckHoldAfterVerify(state) {
     hold.kind === 'held'
       ? `the ${state.authoringLabel} label appeared`
       : `the label read failed (${hold.detail})`;
+  // Before any release is posted, the worktree-local lock is acquired again
+  // (idd-claim.instructions.md: re-run --acquire alongside every later
+  // pre-mutation check). A collision means the lock no longer belongs to this
+  // claim, so nothing is posted.
+  const lock = state.deps.run(
+    process.execPath,
+    [
+      state.deps.childScript('claim-lock.mjs'),
+      '--acquire',
+      '--worktree',
+      identity.worktree,
+      '--agent-id',
+      identity.agentId,
+      '--claim-id',
+      identity.claimId,
+    ],
+    { cwd: state.primary },
+  );
+  if (lock.status !== 0) {
+    return applyFail(
+      'recovery-hold',
+      `Do not post unclaimed-by: the worktree-local claim lock no longer matches claim ${identity.claimId}. Run lost-claim-cleanup (idd-claim.instructions.md) by hand; it keeps everything when another claim holds the lock.`,
+      `${cause}; claim-lock --acquire ended with ${describeStatus(lock)} before the release`,
+    );
+  }
   postMarker(state, [
     '--type',
     'unclaim',
@@ -1798,7 +1884,9 @@ function recheckHoldAfterVerify(state) {
   if (
     findMarker(
       state,
-      `<!-- unclaimed-by: ${identity.agentId} ${identity.claimId} `,
+      new RegExp(
+        `^<!-- unclaimed-by: ${escapeForRegExp(identity.agentId)} ${escapeForRegExp(identity.claimId)} ${MARKER_TIMESTAMP} -->`,
+      ),
     ) === 'present'
   ) {
     return applyFail(

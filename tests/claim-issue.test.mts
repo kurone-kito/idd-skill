@@ -1586,6 +1586,12 @@ interface ApplyScenario {
   viewer?: string;
   /** The issue comments cannot be read (every comment read fails). */
   commentReadFails?: boolean;
+  /** Comments already on the issue before the run. */
+  initialComments?: { login: string; body: string }[];
+  /** `--read-tokens` reports the generated-tokens record absent. */
+  tokensAbsent?: boolean;
+  /** The first `--acquire` succeeds; every later one collides. */
+  acquireFailsAfterFirst?: boolean;
 }
 
 interface ApplyRun {
@@ -1675,7 +1681,10 @@ function runApply(
 ): ApplyRun {
   const log: string[] = [];
   const posts: { type: string; args: string[] }[] = [];
-  const comments: { login: string; body: string }[] = [];
+  const comments: { login: string; body: string }[] = [
+    ...(scenario.initialComments ?? []),
+  ];
+  let acquireCalls = 0;
   const labelReads = [...(scenario.labelReads ?? [])];
   const outcomes = new Map<string, PostOutcome[]>(
     Object.entries(scenario.posts ?? {}).map(([type, list]) => [
@@ -1787,6 +1796,20 @@ function runApply(
       }
       if (scenario.acquireFails && rest.includes('--acquire')) {
         return failed(1);
+      }
+      if (rest.includes('--acquire')) {
+        acquireCalls += 1;
+        if (scenario.acquireFailsAfterFirst && acquireCalls > 1) {
+          return failed(1);
+        }
+      }
+      if (scenario.tokensAbsent && rest.includes('--read-tokens')) {
+        return ok(
+          JSON.stringify({
+            path: join(fixture.primary, 'tokens'),
+            present: false,
+          }),
+        );
       }
       const real = spawnSync(
         process.execPath,
@@ -2166,6 +2189,10 @@ test('a worktree add that fails keeps nothing, removes nothing, and releases the
   withApplyFixture((fixture) => {
     const run = runApply(fixture, { failWorktreeAdd: true });
     const report = assertStopped(run, 'worktree-add-failed');
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /the branch does not exist/,
+    );
     assert.equal(report.lostClaimCleanupRequired, false);
     assert.equal(report.claimPosted, false);
     assert.equal(existsSync(fixture.worktree), false);
@@ -2522,4 +2549,51 @@ test('a development branch that origin deleted, but a stale remote-tracking ref 
     },
     { developmentBranch: 'stale', trustedMarkerActors: [OWNER] },
   );
+});
+
+test('a claim comment that only starts with the marker words, with a malformed token, is not the claim marker', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      posts: { claim: ['unknown-absent'] },
+      initialComments: [
+        {
+          login: OWNER,
+          body: `<!-- claimed-by: ${AGENT} ${CLAIM_ID} supersedes: none not-a-time branch: ${BRANCH} -->`,
+        },
+      ],
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, 'unknown');
+    assert.equal(run.posts.filter((post) => post.type === 'claim').length, 1);
+  });
+});
+
+test('a generated-tokens record that does not read back as present fails the lock step', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { tokensAbsent: true });
+    const report = assertStopped(run, 'lock-acquire-failed');
+    assert.equal(report.claimPosted, true);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.match(report.steps.at(-1)?.detail ?? '', /read back as present/);
+    assert.equal(
+      run.log.some((entry) => entry.includes('--assert')),
+      false,
+    );
+  });
+});
+
+test('the worktree lock is acquired again before a release, and a collision posts no unclaimed-by', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      labelReads: [[], ['status:authoring']],
+      acquireFailsAfterFirst: true,
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, true);
+    assert.equal(
+      run.posts.some((post) => post.type === 'unclaim'),
+      false,
+    );
+    assert.match(report.nextAction ?? '', /Do not post unclaimed-by/);
+  });
 });

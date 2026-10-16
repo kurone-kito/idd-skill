@@ -4794,7 +4794,9 @@ like `activation-nonce`, because a worker posts it as itself.
      free direct child of the primary's parent, and that parent must not be
      a link (`path-occupied`). Then
      `git worktree add --no-track <path> -b <branch> origin/<development-branch>`
-     (`worktree-add-failed` on failure). The development branch comes from
+     (`worktree-add-failed` on failure; the report says whether the path and
+     the branch now exist, since a failed add is not atomic). The development
+     branch comes from
      `developmentBranch` or else the default branch; an invalid or
      unavailable value stops with `development-branch-unresolved`. The name
      must be listed by origin itself (`git ls-remote`), because a plain fetch
@@ -4819,13 +4821,17 @@ like `activation-nonce`, because a worker posts it as itself.
      absent; an unreadable comment list stops with `recovery-hold` without a
      retry. A nonce still absent after the retry stops with
      `nonce-post-failed`.
-  6. `claim-lock --acquire` on the worktree (`lock-acquire-failed`), then,
-     after `claim.verifySettleDelay`, `resume-claim-routing --assert`. Only
-     `already_owned` with `keep` verifies the claim
-     (`claim-not-verified`).
-  7. A second hold check. A hold, or an unreadable label, posts and
-     verifies `unclaimed-by` and stops with `released-after-hold`. A
-     release that cannot be verified stops with `recovery-hold`.
+  6. `claim-lock --acquire` on the worktree (`lock-acquire-failed`), then
+     `claim-lock --read-tokens`, which must read back as present and not
+     malformed for this claim. Then, after `claim.verifySettleDelay`,
+     `resume-claim-routing --assert`. Only `already_owned` with `keep`
+     verifies the claim (`claim-not-verified`); the verdict is read from
+     the output on every exit.
+  7. A second hold check. A hold, or an unreadable label, first acquires
+     the worktree lock again. A collision there posts nothing and stops
+     with `recovery-hold`. Otherwise the helper posts and verifies
+     `unclaimed-by` and stops with `released-after-hold`. A release that
+     cannot be verified also stops with `recovery-hold`.
 - Exit `0` means the claim is verified. Every stop exits `1` with the
   envelope kind `gate`. The report carries `claimPosted` (`true`, `false`
   when nothing was sent, or `"unknown"`), `lostClaimCleanupRequired`, and
