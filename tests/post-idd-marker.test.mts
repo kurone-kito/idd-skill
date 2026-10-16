@@ -811,6 +811,21 @@ test('CLI: --type f4-head-proof refuses --owner and --repo', () => {
   }
 });
 
+test('CLI: --type f4-head-proof refuses an empty --owner, --repo, or trust override, by presence', () => {
+  for (const flag of ['--owner', '--repo']) {
+    const stderr = runCliWithPathExpectingFailure(
+      f4Argv('issue', F4_CLI_FIELDS, [flag, '']),
+    );
+    assert.match(stderr, /does not take --owner or --repo/, flag);
+  }
+  for (const flag of ['--trusted-marker-logins', '--advisory-bot-logins']) {
+    const stderr = runCliWithPathExpectingFailure(
+      f4Argv('issue', F4_CLI_FIELDS, [flag, '']),
+    );
+    assert.match(stderr, new RegExp(`does not take ${flag}`), flag);
+  }
+});
+
 test('CLI: --type f4-head-proof refuses --from-pr', () => {
   const stderr = runCliWithPathExpectingFailure(
     f4Argv('issue', F4_CLI_FIELDS, ['--from-pr', '4390']),

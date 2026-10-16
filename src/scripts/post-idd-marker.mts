@@ -1053,6 +1053,9 @@ interface CliArgs {
   trustedMarkerLogins: string;
   /** Forwarded to the `--from-pr` activity capture (snapshot input, not a field). */
   advisoryBotLogins: string;
+  /** The value flags the caller passed, even with an empty value, so a refusal
+   * by presence sees `--owner ''`. */
+  suppliedFlags?: string[];
   help: boolean;
   fields: MarkerFields;
 }
@@ -1819,6 +1822,7 @@ export function parseArgs(rawArgv: string[]): CliArgs {
     repo: '',
     trustedMarkerLogins: '',
     advisoryBotLogins: '',
+    suppliedFlags: [],
     help: false,
     fields: {},
   };
@@ -1874,12 +1878,16 @@ export function parseArgs(rawArgv: string[]): CliArgs {
     } else if (token === '--prior-max-activity-at') {
       args.priorMaxActivityAt = value;
     } else if (token === '--owner') {
+      args.suppliedFlags?.push(token);
       args.owner = value;
     } else if (token === '--repo') {
+      args.suppliedFlags?.push(token);
       args.repo = value;
     } else if (token === '--trusted-marker-logins') {
+      args.suppliedFlags?.push(token);
       args.trustedMarkerLogins = value;
     } else if (token === '--advisory-bot-logins') {
+      args.suppliedFlags?.push(token);
       args.advisoryBotLogins = value;
     } else {
       // Any other --flag is a renderer field, stored under its kebab name.
@@ -2311,7 +2319,13 @@ export function runF4HeadProofCommand(
   // there, so a flag that names another repository could only mismatch it.
   // Neither list can widen what the command trusts or reads either: the
   // trusted logins come from the environment and the trusted configuration.
-  if (args.owner !== '' || args.repo !== '') {
+  const supplied = args.suppliedFlags ?? [];
+  if (
+    args.owner !== '' ||
+    args.repo !== '' ||
+    supplied.includes('--owner') ||
+    supplied.includes('--repo')
+  ) {
     const message =
       '--type f4-head-proof does not take --owner or --repo: the repository is the current checkout, and --worktree must be registered there';
     process.stderr.write(`${message}\n`);
@@ -2321,7 +2335,7 @@ export function runF4HeadProofCommand(
     ['--trusted-marker-logins', args.trustedMarkerLogins],
     ['--advisory-bot-logins', args.advisoryBotLogins],
   ] as const) {
-    if (value !== '') {
+    if (value !== '' || supplied.includes(flag)) {
       const message = `--type f4-head-proof does not take ${flag}`;
       process.stderr.write(`${message}\n`);
       return { exitCode: 1, kind: 'usage', message };
