@@ -4793,6 +4793,12 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   A5(d) does not count. The instruction files still point to the written
   A5 paths; this helper does not replace them. With `--apply` it also
   runs the fresh-claim order; see the Claim write section below.
+- Before the five A5 checks, the `issue-state` guard reads the issue's
+  `state` in the same `gh issue view` call and runs right after that read.
+  A closed issue, meaning any `state` other than `OPEN`, is refused as
+  `issue-closed`: its one `issue-state` step is `failed`, its `detail`
+  names the state, and every A5 check is `not-run` with no A5 check call
+  made. An `OPEN` issue adds no step, so its steps keep their positions.
 - The checks run in the order of the instruction file and stop at the
   first one that is not eligible; every later check has the status
   `not-run`. Each check calls existing code rather than a copy of it:
@@ -4846,7 +4852,8 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   array of `id`, `status` (`passed`, `failed`, or `not-run`), `reason`,
   `nextAction`, and `detail`. The `detail` of a failed step names the
   pull request numbers of `open-pr`, the paths of a local worktree
-  stop, and the refs of `branch-collision`. `gateReason` and
+  stop, the refs of `branch-collision`, and the state of an
+  `issue-closed` stop. `gateReason` and
   `winningClaimId` appear only for `already-claimed`. With `--apply` the
   report also has `mode`, `projectStatus`, `holdCheck` (always `label`),
   `claimPosted`, `lostClaimCleanupRequired`, `nextAction`, and `claim`
@@ -4854,9 +4861,10 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   failure inside a check, exits `1` with the envelope kind `gate`. The
   kind `transport` (exit `1`, nothing on stdout) covers only a failure
   before any check starts: the repository resolution and the read of the
-  issue's title and assignees. The kind `usage` (exit `2`) covers an
-  argument error, including `--apply` without `--agent-id` or
-  `--project-status`
+  issue's title, assignees, and `state`. A missing or unrecognized `state`
+  (any value other than `OPEN` or `CLOSED`) is also `transport`. The kind
+  `usage` (exit `2`) covers an argument error, including `--apply` without
+  `--agent-id` or `--project-status`
 
 ### Claim write (`--apply`)
 

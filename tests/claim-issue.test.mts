@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -12,6 +13,7 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { computeBranchName } from '../src/scripts/branch-name.mts';
 import {
@@ -1301,6 +1303,32 @@ test('--help prints usage, exits 0, and runs nothing', () => {
   assert.match(stdout, /issue-state/);
   assert.match(stdout, /issue-closed/);
   assert.deepEqual(record.calls, []);
+});
+
+// The helper reference is a generated mirror of its template. The content check
+// reads the mirror after the sync, so a sync that drops the guard fails here.
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+test('the helper reference names the issue-state guard, issue-closed, and the widened transport read', () => {
+  // Collapse the line wraps, so a sentence split across lines still matches.
+  const doc = readFileSync(
+    join(REPO_ROOT, 'docs', 'idd-helper-scripts.md'),
+    'utf8',
+  ).replace(/\s+/g, ' ');
+  assert.ok(
+    doc.includes("reads the issue's `state` in the same `gh issue view` call"),
+    'the issue-state guard reads the state in the same read',
+  );
+  assert.ok(
+    doc.includes('is refused as `issue-closed`'),
+    'the guard names the issue-closed refusal',
+  );
+  assert.ok(
+    doc.includes(
+      "the read of the issue's title, assignees, and `state`. A missing or unrecognized `state`",
+    ),
+    'the transport scope covers a missing or unrecognized state',
+  );
 });
 
 test('an eligible result exits 0 and prints the report', () => {
