@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -2125,6 +2125,797 @@ test('scanClaudeVendorSessions: an event window is ignored when the segment alre
 
   assert.equal(sessions.length, 1);
   assert.deepEqual(sessions[0].adapterResult.joinHints, { issueNumber: 777 });
+});
+
+// --- #4384: subagent transcripts under <session id>/subagents/ --------------
+
+/**
+ * One raw Claude Code assistant JSONL line. `requestId` and `messageId`
+ * identify the API request, `output` sets `usage.output_tokens` (every
+ * request carries one input token), and each `toolUseIds` entry is a
+ * `tool_use` block. Omitting `timestamp` or `cwd` leaves that field out.
+ */
+function transcriptAssistant(options: {
+  sessionId: string;
+  requestId: string;
+  messageId: string;
+  output: number;
+  timestamp?: string;
+  cwd?: string;
+  toolUseIds?: readonly string[];
+}): string {
+  return JSON.stringify({
+    type: 'assistant',
+    sessionId: options.sessionId,
+    ...(options.timestamp !== undefined
+      ? { timestamp: options.timestamp }
+      : {}),
+    ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+    requestId: options.requestId,
+    message: {
+      id: options.messageId,
+      role: 'assistant',
+      model: 'm',
+      content: (options.toolUseIds ?? []).map((id) => ({
+        type: 'tool_use',
+        id,
+        name: 'Bash',
+      })),
+      usage: {
+        input_tokens: 1,
+        output_tokens: options.output,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
+    },
+  });
+}
+
+function transcriptUser(
+  sessionId: string,
+  timestamp: string | undefined,
+  cwd: string,
+): string {
+  return JSON.stringify({
+    type: 'user',
+    sessionId,
+    ...(timestamp !== undefined ? { timestamp } : {}),
+    cwd,
+    message: { role: 'user', content: 'hello' },
+  });
+}
+
+/** Writes `<projectDir>/<sessionId>/subagents/<name>`, one JSON line per entry of `lines`. */
+function writeSubagentTranscript(
+  projectDir: string,
+  sessionId: string,
+  name: string,
+  lines: readonly string[],
+): void {
+  const dir = join(projectDir, sessionId, 'subagents');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, name), `${lines.join('\n')}\n`);
+}
+
+function stderrMessages(stderrWrite: {
+  mock: { calls: { arguments: unknown[] }[] };
+}): string[] {
+  return stderrWrite.mock.calls.map((call) => String(call.arguments[0]));
+}
+
+test("scanClaudeVendorSessions adds a session's subagents/ transcripts to its usage, turns and tool calls, counting each request once (#4384)", () => {
+  const projectDir = makeTempDir(
+    join(tmpdir(), 'idd-token-cost-harvest-subagents-'),
+  );
+  const sessionId = 'sess-sub-0001';
+  writeFileSync(
+    join(projectDir, `${sessionId}.jsonl`),
+    `${[
+      transcriptUser(sessionId, '2026-03-01T10:00:00.000Z', '/work/plain'),
+      transcriptAssistant({
+        sessionId,
+        timestamp: '2026-03-01T10:00:01.000Z',
+        cwd: '/work/plain',
+        requestId: 'req-P',
+        messageId: 'msg-P',
+        output: 2,
+        toolUseIds: ['tool-P'],
+      }),
+    ].join('\n')}\n`,
+  );
+  // agent-a1 is a fork transcript: its first line is a fork-context-ref row,
+  // and its first assistant record repeats the parent's request and tool_use.
+  writeSubagentTranscript(projectDir, sessionId, 'agent-a1.jsonl', [
+    JSON.stringify({ type: 'fork-context-ref', sessionId }),
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-01T10:00:02.000Z',
+      requestId: 'req-P',
+      messageId: 'msg-P',
+      output: 2,
+      toolUseIds: ['tool-P'],
+    }),
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-01T10:00:03.000Z',
+      requestId: 'req-A',
+      messageId: 'msg-A',
+      output: 20,
+      toolUseIds: ['tool-A'],
+    }),
+  ]);
+  writeSubagentTranscript(projectDir, sessionId, 'agent-a2.jsonl', [
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-01T10:00:04.000Z',
+      requestId: 'req-B',
+      messageId: 'msg-B',
+      output: 200,
+      toolUseIds: ['tool-B1', 'tool-B2'],
+    }),
+  ]);
+  for (const name of ['agent-a1', 'agent-a2']) {
+    writeFileSync(
+      join(projectDir, sessionId, 'subagents', `${name}.meta.json`),
+      '{"agentType":"general-purpose"}\n',
+    );
+  }
+
+  const sessions = scanClaudeVendorSessions(projectDir);
+
+  // The transcripts are never sessions of their own.
+  assert.equal(sessions.length, 1);
+  const { sample } = sessions[0].adapterResult;
+  assert.equal(sample.vendorSessionId, sessionId);
+  assert.equal(sample.includesSubagents, true);
+  // P is counted once although the fork repeats it; A and B add to it.
+  assert.deepEqual(sample.usage, {
+    inputUncached: 3,
+    cacheRead: 0,
+    cacheCreation: 0,
+    output: 222,
+    reasoning: 0,
+  });
+  assert.equal(sample.turnCount, 3);
+  // tool-P is counted once; tool-A, tool-B1 and tool-B2 add to it.
+  assert.equal(sample.toolCallCount, 4);
+});
+
+test('scanClaudeVendorSessions routes each subagent record to the cwd segment whose window holds its timestamp: before the first start to the first, exactly at a start to the later segment, after the last start to the last (#4384)', () => {
+  const projectDir = makeTempDir(
+    join(tmpdir(), 'idd-token-cost-harvest-subagents-'),
+  );
+  const sessionId = 'sess-route-0001';
+  writeFileSync(
+    join(projectDir, `${sessionId}.jsonl`),
+    `${[
+      transcriptUser(sessionId, '2026-03-02T09:00:00.000Z', '/work/alpha'),
+      transcriptAssistant({
+        sessionId,
+        timestamp: '2026-03-02T09:00:05.000Z',
+        cwd: '/work/alpha',
+        requestId: 'req-S0',
+        messageId: 'msg-S0',
+        output: 10,
+      }),
+      transcriptAssistant({
+        sessionId,
+        timestamp: '2026-03-02T09:05:00.000Z',
+        cwd: '/work/beta',
+        requestId: 'req-S1',
+        messageId: 'msg-S1',
+        output: 100,
+      }),
+      transcriptAssistant({
+        sessionId,
+        timestamp: '2026-03-02T09:10:00.000Z',
+        cwd: '/work/gamma',
+        requestId: 'req-S2',
+        messageId: 'msg-S2',
+        output: 1000,
+      }),
+    ].join('\n')}\n`,
+  );
+  writeSubagentTranscript(projectDir, sessionId, 'agent-r1.jsonl', [
+    // Before the first segment's start: goes to segment 0.
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-02T08:59:30.000Z',
+      requestId: 'req-R0',
+      messageId: 'msg-R0',
+      output: 1,
+    }),
+    // Exactly at segment 1's start: goes to segment 1.
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-02T09:05:00.000Z',
+      requestId: 'req-R1',
+      messageId: 'msg-R1',
+      output: 2,
+    }),
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-02T09:07:00.000Z',
+      requestId: 'req-R2',
+      messageId: 'msg-R2',
+      output: 4,
+    }),
+    // After the last start: goes to segment 2.
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-02T09:30:00.000Z',
+      requestId: 'req-R3',
+      messageId: 'msg-R3',
+      output: 8,
+    }),
+    // No valid timestamp: reaches no sample.
+    transcriptAssistant({
+      sessionId,
+      requestId: 'req-R4',
+      messageId: 'msg-R4',
+      output: 16,
+    }),
+  ]);
+  writeSubagentTranscript(projectDir, sessionId, 'agent-r2.jsonl', [
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-02T09:09:59.000Z',
+      requestId: 'req-R5',
+      messageId: 'msg-R5',
+      output: 32,
+    }),
+    // Exactly at segment 2's start: goes to segment 2.
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-02T09:10:00.000Z',
+      requestId: 'req-R6',
+      messageId: 'msg-R6',
+      output: 64,
+    }),
+  ]);
+
+  const sessions = scanClaudeVendorSessions(projectDir);
+
+  const byId = new Map(
+    sessions.map((s) => [s.adapterResult.sample.vendorSessionId, s]),
+  );
+  assert.equal(sessions.length, 3);
+  // segment 0: 10 + R0; segment 1: 100 + R1 + R2 + R5; segment 2: 1000 + R3 + R6
+  assert.equal(
+    byId.get(`${sessionId}#0`)?.adapterResult.sample.usage.output,
+    11,
+  );
+  assert.equal(
+    byId.get(`${sessionId}#1`)?.adapterResult.sample.usage.output,
+    138,
+  );
+  assert.equal(
+    byId.get(`${sessionId}#2`)?.adapterResult.sample.usage.output,
+    1072,
+  );
+  assert.equal(byId.get(`${sessionId}#1`)?.adapterResult.sample.turnCount, 4);
+  assert.equal(
+    byId.get(`${sessionId}#1`)?.adapterResult.sample.includesSubagents,
+    true,
+  );
+  // No request straddles a boundary, so the segments add up to every request
+  // with a valid timestamp (all but R4's 16 tokens).
+  const routedOutput = sessions.reduce(
+    (sum, s) => sum + s.adapterResult.sample.usage.output,
+    0,
+  );
+  assert.equal(routedOutput, 1221);
+});
+
+test('scanClaudeVendorSessions gives no subagent record to a segment with no valid timestamp, to a segment whose start is not later than its predecessor, or to a segment whose harvest fails, and its surviving sibling keeps exactly its own routed records (#4384)', (t) => {
+  const stderrWrite = t.mock.method(process.stderr, 'write', () => true);
+  const projectDir = makeTempDir(
+    join(tmpdir(), 'idd-token-cost-harvest-subagents-'),
+  );
+  const sessionId = 'sess-skip-0001';
+  writeFileSync(
+    join(projectDir, `${sessionId}.jsonl`),
+    `${[
+      // Segment 0: no valid timestamp, so no window and no sample.
+      transcriptAssistant({
+        sessionId,
+        cwd: '/work/nots',
+        requestId: 'req-N',
+        messageId: 'msg-N',
+        output: 5,
+      }),
+      // Segment 1, the surviving sibling: its window runs from 10:00 to the
+      // next non-empty start, 10:30. Its own record carries no usage.
+      transcriptUser(sessionId, '2026-03-02T10:00:00.000Z', '/work/sibling'),
+      // Segment 2: start 09:00 is not later than segment 1's 10:00, so its
+      // window is empty.
+      transcriptAssistant({
+        sessionId,
+        timestamp: '2026-03-02T09:00:00.000Z',
+        cwd: '/work/late',
+        requestId: 'req-L',
+        messageId: 'msg-L',
+        output: 70,
+      }),
+      // Segment 3: its first valid timestamp (10:30) is later than its last
+      // (10:25), so the adapter rejects its sample.
+      transcriptUser(sessionId, '2026-03-02T10:30:00.000Z', '/work/bad'),
+      transcriptUser(sessionId, '2026-03-02T10:25:00.000Z', '/work/bad'),
+    ].join('\n')}\n`,
+  );
+  writeSubagentTranscript(projectDir, sessionId, 'agent-s1.jsonl', [
+    // Before every start: goes to the first non-empty window, segment 1.
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-02T09:00:00.000Z',
+      requestId: 'req-X1',
+      messageId: 'msg-X1',
+      output: 1,
+    }),
+    // Exactly at segment 1's start.
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-02T10:00:00.000Z',
+      requestId: 'req-X2',
+      messageId: 'msg-X2',
+      output: 2,
+    }),
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-02T10:20:00.000Z',
+      requestId: 'req-X3',
+      messageId: 'msg-X3',
+      output: 4,
+    }),
+    // Inside segment 3's window, whose harvest fails: dropped.
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-02T10:40:00.000Z',
+      requestId: 'req-X4',
+      messageId: 'msg-X4',
+      output: 8,
+    }),
+    // No valid timestamp: reaches no sample.
+    transcriptAssistant({
+      sessionId,
+      requestId: 'req-X5',
+      messageId: 'msg-X5',
+      output: 16,
+    }),
+  ]);
+
+  const sessions = scanClaudeVendorSessions(projectDir);
+
+  assert.deepEqual(
+    sessions.map((s) => s.adapterResult.sample.vendorSessionId).sort(),
+    [`${sessionId}#1`, `${sessionId}#2`],
+  );
+  const byId = new Map(
+    sessions.map((s) => [s.adapterResult.sample.vendorSessionId, s]),
+  );
+  // The sibling holds exactly its routed records: 1 + 2 + 4.
+  assert.equal(
+    byId.get(`${sessionId}#1`)?.adapterResult.sample.usage.output,
+    7,
+  );
+  // The empty-window segment keeps its own usage and no subagent record.
+  assert.equal(
+    byId.get(`${sessionId}#2`)?.adapterResult.sample.usage.output,
+    70,
+  );
+  assert.equal(
+    byId.get(`${sessionId}#2`)?.adapterResult.sample.includesSubagents,
+    false,
+  );
+  // The failing segment prints its usual stderr line and produces no sample.
+  assert.ok(
+    stderrMessages(stderrWrite).some((m) =>
+      m.includes(`${sessionId}.jsonl segment 3:`),
+    ),
+  );
+});
+
+test('scanClaudeVendorSessions drops the subagent records of an issue-shaped segment, reporting the dropped count on one stderr line, and prints no such line when nothing is dropped (#4384)', (t) => {
+  const stderrWrite = t.mock.method(process.stderr, 'write', () => true);
+  const projectDir = makeTempDir(
+    join(tmpdir(), 'idd-token-cost-harvest-subagents-'),
+  );
+  const sessionId = 'sess-iss-0001';
+  writeFileSync(
+    join(projectDir, `${sessionId}.jsonl`),
+    `${transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-03T11:00:00.000Z',
+      cwd: '/home/x/idd-skill.issue-4500-fix-y',
+      requestId: 'req-I',
+      messageId: 'msg-I',
+      output: 3,
+    })}\n`,
+  );
+  writeSubagentTranscript(projectDir, sessionId, 'agent-i1.jsonl', [
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-03T11:00:05.000Z',
+      requestId: 'req-IS1',
+      messageId: 'msg-IS1',
+      output: 50,
+    }),
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-03T11:00:06.000Z',
+      requestId: 'req-IS2',
+      messageId: 'msg-IS2',
+      output: 60,
+    }),
+  ]);
+
+  const sessions = scanClaudeVendorSessions(projectDir);
+
+  assert.equal(sessions.length, 1);
+  assert.deepEqual(sessions[0].adapterResult.joinHints, { issueNumber: 4500 });
+  assert.equal(sessions[0].adapterResult.sample.usage.output, 3);
+  assert.equal(sessions[0].adapterResult.sample.includesSubagents, false);
+  const dropLines = stderrMessages(stderrWrite).filter((m) =>
+    m.includes('subagent record'),
+  );
+  assert.equal(dropLines.length, 1);
+  assert.match(dropLines[0], /sess-iss-0001\.jsonl/);
+  assert.match(dropLines[0], /segment 0/);
+  assert.match(dropLines[0], /dropping 2 subagent record/);
+
+  // The same issue-shaped segment with no subagents/ directory drops nothing,
+  // so it prints no such line.
+  stderrWrite.mock.resetCalls();
+  const quietDir = makeTempDir(
+    join(tmpdir(), 'idd-token-cost-harvest-subagents-'),
+  );
+  writeFileSync(
+    join(quietDir, `${sessionId}.jsonl`),
+    `${transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-03T11:00:00.000Z',
+      cwd: '/home/x/idd-skill.issue-4500-fix-y',
+      requestId: 'req-I',
+      messageId: 'msg-I',
+      output: 3,
+    })}\n`,
+  );
+  scanClaudeVendorSessions(quietDir);
+  assert.equal(
+    stderrMessages(stderrWrite).filter((m) => m.includes('subagent')).length,
+    0,
+  );
+});
+
+test('scanClaudeVendorSessions never reads a directory named like a transcript, and a file under subagents/ is never a session of its own (#4384 regression guard)', (t) => {
+  const stderrWrite = t.mock.method(process.stderr, 'write', () => true);
+  const projectDir = makeTempDir(
+    join(tmpdir(), 'idd-token-cost-harvest-subagents-'),
+  );
+  const sessionId = 'sess-guard-0001';
+  writeFileSync(
+    join(projectDir, `${sessionId}.jsonl`),
+    `${transcriptUser(sessionId, '2026-03-04T10:00:00.000Z', '/work/plain')}\n`,
+  );
+  writeSubagentTranscript(projectDir, sessionId, 'agent-g1.jsonl', [
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-04T10:00:02.000Z',
+      requestId: 'req-G1',
+      messageId: 'msg-G1',
+      output: 5,
+    }),
+  ]);
+  mkdirSync(join(projectDir, sessionId, 'subagents', 'agent-dir.jsonl'));
+
+  const sessions = scanClaudeVendorSessions(projectDir);
+
+  assert.equal(sessions.length, 1);
+  assert.equal(
+    stderrMessages(stderrWrite).filter((m) => m.includes('agent-dir.jsonl'))
+      .length,
+    0,
+  );
+});
+
+test('scanClaudeVendorSessions drops a malformed subagent line silently and keeps the rest of its transcript (#4384)', () => {
+  const projectDir = makeTempDir(
+    join(tmpdir(), 'idd-token-cost-harvest-subagents-'),
+  );
+  const sessionId = 'sess-mal-0001';
+  writeFileSync(
+    join(projectDir, `${sessionId}.jsonl`),
+    `${transcriptUser(sessionId, '2026-03-04T10:00:00.000Z', '/work/plain')}\n`,
+  );
+  writeSubagentTranscript(projectDir, sessionId, 'agent-m1.jsonl', [
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-04T10:00:02.000Z',
+      requestId: 'req-M1',
+      messageId: 'msg-M1',
+      output: 11,
+    }),
+    '{"type":"assistant","timestamp":',
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-04T10:00:03.000Z',
+      requestId: 'req-M2',
+      messageId: 'msg-M2',
+      output: 22,
+    }),
+  ]);
+  // A second, clean transcript: it still counts beside the damaged one.
+  writeSubagentTranscript(projectDir, sessionId, 'agent-m2.jsonl', [
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-04T10:00:04.000Z',
+      requestId: 'req-M3',
+      messageId: 'msg-M3',
+      output: 44,
+    }),
+  ]);
+
+  const sessions = scanClaudeVendorSessions(projectDir);
+
+  assert.equal(sessions.length, 1);
+  // 11 + 22 from agent-m1 (its malformed line dropped), and 44 from agent-m2.
+  assert.equal(sessions[0].adapterResult.sample.usage.output, 77);
+});
+
+test('scanClaudeVendorSessions keeps the other subagent transcripts when one cannot be read, naming the unreadable one by basename (#4384)', {
+  // Skipped on Windows, as in tests/token-cost-adapter-grok.test.mts (#2580):
+  // chmodSync(file, 0o000) does not block a read there.
+  skip: process.platform === 'win32',
+}, (t) => {
+  const stderrWrite = t.mock.method(process.stderr, 'write', () => true);
+  const projectDir = makeTempDir(
+    join(tmpdir(), 'idd-token-cost-harvest-subagents-'),
+  );
+  const sessionId = 'sess-unread-0001';
+  writeFileSync(
+    join(projectDir, `${sessionId}.jsonl`),
+    `${transcriptUser(sessionId, '2026-03-04T10:00:00.000Z', '/work/plain')}\n`,
+  );
+  writeSubagentTranscript(projectDir, sessionId, 'agent-readable.jsonl', [
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-04T10:00:02.000Z',
+      requestId: 'req-U1',
+      messageId: 'msg-U1',
+      output: 11,
+    }),
+  ]);
+  writeSubagentTranscript(projectDir, sessionId, 'agent-locked.jsonl', [
+    transcriptAssistant({
+      sessionId,
+      timestamp: '2026-03-04T10:00:03.000Z',
+      requestId: 'req-U2',
+      messageId: 'msg-U2',
+      output: 999,
+    }),
+  ]);
+  const locked = join(projectDir, sessionId, 'subagents', 'agent-locked.jsonl');
+  chmodSync(locked, 0o000);
+  try {
+    const sessions = scanClaudeVendorSessions(projectDir);
+
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0].adapterResult.sample.usage.output, 11);
+    const skipLines = stderrMessages(stderrWrite).filter((m) =>
+      m.includes('agent-locked.jsonl'),
+    );
+    assert.equal(skipLines.length, 1);
+    assert.match(skipLines[0], /skipping subagent transcript/);
+  } finally {
+    chmodSync(locked, 0o644);
+  }
+});
+
+test('scanClaudeVendorSessions leaves an event-window sample unchanged by the subagent transcripts beside its file, while a second kind: session file keeps its own (#4384)', () => {
+  const projectDir = makeTempDir(
+    join(tmpdir(), 'idd-token-cost-harvest-subagents-'),
+  );
+  const first = 'sess-ew-sub-0001';
+  const second = 'sess-ew-other-0001';
+  writeFileSync(
+    join(projectDir, `${first}.jsonl`),
+    `${[
+      transcriptAssistant({
+        sessionId: first,
+        timestamp: '2026-01-01T00:01:00.000Z',
+        cwd: '/repo',
+        requestId: 'req-E0',
+        messageId: 'msg-E0',
+        output: 1,
+      }),
+      transcriptAssistant({
+        sessionId: first,
+        timestamp: '2026-01-01T00:20:00.000Z',
+        cwd: '/repo',
+        requestId: 'req-E1',
+        messageId: 'msg-E1',
+        output: 5,
+      }),
+    ].join('\n')}\n`,
+  );
+  // One transcript inside issue 501's completed window and one outside it.
+  writeSubagentTranscript(projectDir, first, 'agent-e1.jsonl', [
+    transcriptAssistant({
+      sessionId: first,
+      timestamp: '2026-01-01T00:21:00.000Z',
+      requestId: 'req-EW1',
+      messageId: 'msg-EW1',
+      output: 100,
+    }),
+    transcriptAssistant({
+      sessionId: first,
+      timestamp: '2026-01-01T00:02:00.000Z',
+      requestId: 'req-EW2',
+      messageId: 'msg-EW2',
+      output: 200,
+    }),
+  ]);
+  // The second file lies outside every completed window, so only its own
+  // kind: session sample exists for it.
+  writeFileSync(
+    join(projectDir, `${second}.jsonl`),
+    `${transcriptAssistant({
+      sessionId: second,
+      timestamp: '2026-01-02T00:00:00.000Z',
+      cwd: '/other',
+      requestId: 'req-O1',
+      messageId: 'msg-O1',
+      output: 3,
+    })}\n`,
+  );
+  writeSubagentTranscript(projectDir, second, 'agent-o1.jsonl', [
+    transcriptAssistant({
+      sessionId: second,
+      timestamp: '2026-01-02T00:00:01.000Z',
+      requestId: 'req-OS1',
+      messageId: 'msg-OS1',
+      output: 30,
+    }),
+  ]);
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow('2026-01-01T00:10:00Z', '2026-01-01T00:25:00Z'),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow('2026-01-01T00:26:00Z', '2026-01-01T00:30:00Z'),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(projectDir, eventWindowsAll);
+
+  assert.equal(sessions.length, 3);
+  const byId = new Map(
+    sessions.map((s) => [s.adapterResult.sample.vendorSessionId, s]),
+  );
+  const eventWindow = byId.get(`${first}#ew501`);
+  assert.equal(eventWindow?.adapterResult.sample.usage.output, 5);
+  assert.deepEqual(eventWindow?.adapterResult.joinHints, { issueNumber: 501 });
+  assert.deepEqual(
+    eventWindow?.timeline.points.map((point) => point.atMs),
+    [ms('2026-01-01T00:20:00.000Z')],
+  );
+  // The file's own kind: session sample routes both transcripts to itself.
+  assert.equal(byId.get(first)?.adapterResult.sample.usage.output, 306);
+  assert.equal(byId.get(second)?.adapterResult.sample.usage.output, 33);
+  assert.equal(byId.get(second)?.adapterResult.sample.includesSubagents, true);
+});
+
+test('scanClaudeVendorSessions leaves a merged-contributor sample unchanged by the subagent transcripts of its contributing and primary files, while a second kind: session file keeps its own (#4384)', () => {
+  const projectDir = makeTempDir(
+    join(tmpdir(), 'idd-token-cost-harvest-subagents-'),
+  );
+  const contrib = 'sess-contrib-0001';
+  const primary = 'sess-primary-0001';
+  const other = 'sess-other-0001';
+  writeFileSync(
+    join(projectDir, `${contrib}.jsonl`),
+    `${transcriptAssistant({
+      sessionId: contrib,
+      timestamp: '2026-01-01T00:01:00.000Z',
+      cwd: '/repo',
+      requestId: 'req-C',
+      messageId: 'msg-C',
+      output: 3,
+    })}\n`,
+  );
+  writeFileSync(
+    join(projectDir, `${primary}.jsonl`),
+    `${transcriptAssistant({
+      sessionId: primary,
+      timestamp: '2026-01-01T00:24:00.000Z',
+      cwd: '/repo',
+      requestId: 'req-PR',
+      messageId: 'msg-PR',
+      output: 7,
+    })}\n`,
+  );
+  // Each transcript falls inside the window of the file it belongs to.
+  writeSubagentTranscript(projectDir, contrib, 'agent-c1.jsonl', [
+    transcriptAssistant({
+      sessionId: contrib,
+      timestamp: '2026-01-01T00:02:00.000Z',
+      requestId: 'req-CS',
+      messageId: 'msg-CS',
+      output: 100,
+    }),
+  ]);
+  writeSubagentTranscript(projectDir, primary, 'agent-p1.jsonl', [
+    transcriptAssistant({
+      sessionId: primary,
+      timestamp: '2026-01-01T00:22:00.000Z',
+      requestId: 'req-PS',
+      messageId: 'msg-PS',
+      output: 200,
+    }),
+  ]);
+  writeFileSync(
+    join(projectDir, `${other}.jsonl`),
+    `${transcriptAssistant({
+      sessionId: other,
+      timestamp: '2026-01-02T00:00:00.000Z',
+      cwd: '/other',
+      requestId: 'req-OT',
+      messageId: 'msg-OT',
+      output: 3,
+    })}\n`,
+  );
+  writeSubagentTranscript(projectDir, other, 'agent-o1.jsonl', [
+    transcriptAssistant({
+      sessionId: other,
+      timestamp: '2026-01-02T00:00:01.000Z',
+      requestId: 'req-OS',
+      messageId: 'msg-OS',
+      output: 30,
+    }),
+  ]);
+  const eventWindowsAll = new Map<string, StageEventWindow>([
+    [
+      '501:claude:work',
+      stageWindow(
+        '2026-01-01T00:00:00Z',
+        '2026-01-01T00:05:00Z',
+        contrib,
+        'claim-shared',
+      ),
+    ],
+    [
+      '501:claude:cleanup',
+      stageWindow(
+        '2026-01-01T00:20:00Z',
+        '2026-01-01T00:25:00Z',
+        primary,
+        'claim-shared',
+      ),
+    ],
+  ]);
+
+  const sessions = scanClaudeVendorSessions(projectDir, eventWindowsAll);
+
+  assert.equal(sessions.length, 4);
+  const merged = sessions.filter((s) =>
+    s.adapterResult.sample.vendorSessionId.includes('#ew'),
+  );
+  assert.equal(merged.length, 1);
+  assert.equal(
+    merged[0].adapterResult.sample.vendorSessionId,
+    `${primary}#ew501`,
+  );
+  assert.equal(merged[0].adapterResult.sample.usage.output, 10);
+  assert.deepEqual(
+    merged[0].timeline.points.map((point) => point.atMs),
+    [ms('2026-01-01T00:01:00.000Z'), ms('2026-01-01T00:24:00.000Z')],
+  );
+  const otherSession = sessions.find(
+    (s) => s.adapterResult.sample.vendorSessionId === other,
+  );
+  assert.equal(otherSession?.adapterResult.sample.usage.output, 33);
 });
 
 test('extractCodexUsageTimeline prefers cumulative total_token_usage when any record has one', () => {

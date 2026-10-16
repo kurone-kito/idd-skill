@@ -90,6 +90,46 @@ directory of its own; running the harvest CLI from one now prints a
 warning naming the missing directory instead of silently reporting a
 misleading zero-sample result (`#2439`).
 
+Claude Code also writes a subagent's requests beside its session file, in
+`<project dir>/<session id>/subagents/agent-<agent id>.jsonl`, not in the
+session file itself. That is the layout observed with Claude Code 2.1.291
+to 2.1.296 (issue `#4384`). The inline layout, where a session file carries
+its own `isSidechain: true` rows, is an unobserved case kept for
+compatibility. The harvester reads each session file's `subagents/`
+transcripts one file at a time and keeps only their assistant records. Each
+record joins the cwd segment of its session file whose time window holds its
+timestamp. A segment's window starts at its first valid timestamp and ends
+where the next non-empty window starts, so a segment that starts no later
+than an earlier segment has no window of its own. A record before the first
+start joins the first window, a record stamped exactly at a start joins the
+segment that starts there, and a record without a valid timestamp joins no
+segment.
+
+Only `kind: session` samples change. A segment with an issue-shaped cwd never
+takes subagent records, and neither does an event-window or merged-contributor
+sample, so a multi-cwd session's subagent usage is split across its segment
+samples by time. Per-issue attribution of subagent usage is not provided: it
+is a different problem, no issue tracks it, and this scope limit is a choice
+a maintainer may reverse. No in-repo consumer reads `kind: session` samples,
+and `docs/token-cost-snapshot.json` aggregates issue-loop samples only, so no
+published figure moves. A request whose records fall in two segments, as a
+fork transcript's repeated request can when it lands in another segment, is
+counted in both segment samples, so its tokens are counted twice; that is
+accepted. The straddle case was observed on 2026-10-15: of about 18,600
+distinct requests that this routing places in this repository's 12 multi-cwd
+session files, one straddles a segment boundary (a session of 2026-10-12,
+with no issue or pull request).
+
+A sample harvested earlier keeps its old total. The harvester skips a session
+whose `vendor:vendorSessionId` pair already exists in the output file, the
+freeze-at-first-harvest behaviour of issue `#2432`. A session that gained a
+second cwd after its first harvest is harvested again under suffixed sample
+ids, and its subagent usage then repeats the usage already recorded under the
+id without a suffix, just as its own usage does. The adapter has documented
+that one-time migration edge since issue `#2404`. A transcript that cannot be
+read is skipped with a stderr line that names its basename, which leaves a
+partial total for its session (preventive; no observed incident yet).
+
 `token-cost-event.mjs` also auto-derives each event's `vendorSessionId`
 from a vendor-specific env var, with no flag needed.
 `$CLAUDE_CODE_SESSION_ID` supplies it for `--vendor claude`.

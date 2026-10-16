@@ -77,9 +77,11 @@
 // records count toward `usage`, `turnCount` and `toolCallCount` under the
 // same rules as `records`, and set `includesSubagents`; `model`, timestamps,
 // `compactionCount`, cwd and the join hints still come from `records` alone.
-// Only counts leave this module, never subagent content. Reading the
-// `subagents/` files and routing them to samples is a follow-up, so no
-// production caller passes the field yet.
+// Only counts leave this module, never subagent content. The harvester
+// (`token-cost-harvest.mts`, #4384) reads the `subagents/` files, routes them
+// to cwd segments by timestamp, and passes a `kind: session` segment's routed
+// records here, each as `projectSubagentAssistantRecord` keeps it; no other
+// caller passes the field.
 
 import { globSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -690,6 +692,53 @@ function extractToolCallCount(records: readonly unknown[]): number {
     }
   }
   return toolUseIds.size + blocksWithoutId;
+}
+
+/**
+ * The fields of one `subagents/` assistant record that this adapter reads
+ * (#4384), with its content payload dropped: the top-level `requestId` and
+ * `timestamp`, `message.id`, `message.usage`, and each `tool_use` block's
+ * `id`. The harvester keeps this projection rather than the whole record, so
+ * a transcript's prompt and tool-input text is never held in memory, and
+ * `claudeAdapter.harvest` gives the same result for either form. Undefined
+ * for a record that is not an assistant record.
+ */
+export function projectSubagentAssistantRecord(
+  record: unknown,
+): Record<string, unknown> | undefined {
+  if (!isAssistantRecord(record)) {
+    return undefined;
+  }
+  const assistant = record as Record<string, unknown>;
+  const message = getMessage(assistant);
+  const projected: Record<string, unknown> = { type: 'assistant' };
+  if (typeof assistant.timestamp === 'string') {
+    projected.timestamp = assistant.timestamp;
+  }
+  if (typeof assistant.requestId === 'string') {
+    projected.requestId = assistant.requestId;
+  }
+  const projectedMessage: Record<string, unknown> = {};
+  if (message !== undefined) {
+    if (typeof message.id === 'string') {
+      projectedMessage.id = message.id;
+    }
+    if (isPlainObject(message.usage)) {
+      projectedMessage.usage = message.usage;
+    }
+  }
+  projectedMessage.content = getContentBlocks(assistant).flatMap((block) => {
+    if (!isPlainObject(block) || block.type !== 'tool_use') {
+      return [];
+    }
+    return [
+      typeof block.id === 'string'
+        ? { type: 'tool_use', id: block.id }
+        : { type: 'tool_use' },
+    ];
+  });
+  projected.message = projectedMessage;
+  return projected;
 }
 
 function asClaudeHarvestInput(input: unknown): ClaudeHarvestInput {
