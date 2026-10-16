@@ -114,8 +114,9 @@ function taxonomyRowNames(row: string): string[] {
 }
 
 // A helper bullet starts at "- `<field>` values:" and runs to the next line
-// that starts a new bullet or is blank. Its names come before the first "(";
-// the gloss after that parenthesis repeats names and is not part of the list.
+// that starts a new bullet, indented or not, or is blank. Its names come
+// before the first "("; the gloss after that parenthesis repeats names and is
+// not part of the list.
 function helperBulletNames(doc: string, field: SchemaField): string[] {
   const lines = doc.split('\n');
   const label = `- \`${field}\` values:`;
@@ -221,8 +222,8 @@ test('the taxonomy row and the helper bullets name the schema enums, in order', 
 
 // Compile-time check: the annotations below fail typecheck unless each
 // BranchStateDerivation field is exactly the union of its derived array, and
-// each array keeps literal element types. The runtime body is trivially true and
-// adds no coverage of its own.
+// each array keeps literal element types. The runtime body is trivially true
+// and adds no coverage of its own.
 test('compile-time: each BranchStateDerivation field is the closed union of its derived array', () => {
   const proofs: [
     DerivedBranchStateIsUnion,
@@ -252,10 +253,11 @@ test('the derived arrays are schema names, and the schema names they omit are th
   );
 });
 
-// One classifier input per returned name, plus the missing-SHA early return of
-// classifyBranchConflictState. The offline seams (_testPrData and _skipGitProbe)
-// keep these hermetic: no git or gh call is made. Not every branch is reached,
-// only every returned name.
+// Inputs reach every returned branchState value and every returned
+// syncRecommendation value, plus the missing-SHA early return of
+// classifyBranchConflictState. The offline seams (_testPrData and
+// _skipGitProbe) keep these hermetic: no git or gh call is made. Not every
+// branch is reached, only every returned name.
 const SHA = 'a'.repeat(40);
 const CLASSIFIER_INPUTS = [
   { mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' },
