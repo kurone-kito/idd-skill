@@ -1425,24 +1425,73 @@ function runUnderCloneLock(state) {
       step(state, 'policy', readPolicy(state)) ??
       step(state, 'development-branch', resolveDevelopment(state)) ??
       step(state, 'b1-leftovers', checkLeftovers(state)) ??
+      step(state, 'remote-rescan', rescanRemoteBranches(state)) ??
       step(state, 'worktree-path', checkPathFree(state)) ??
       step(state, 'worktree-add', addWorktree(state));
   } finally {
     try {
       state.deps.cloneLock.release(handle);
     } catch (error) {
-      failure ??= step(
+      // A lock left behind blocks every later run, so this failure is the one
+      // the report names; an earlier stop is kept as context.
+      const earlier =
+        failure === null
+          ? ''
+          : `; the earlier stop was ${failure.reason} (${failure.detail})`;
+      failure = step(
         state,
         'clone-lock-release',
         applyFail(
           'primary-not-ready',
           'Inspect the clone lock file named in the detail by hand; remove it only when no other process holds it, then rerun this helper.',
-          `the clone lock was not released: ${errorMessage(error)}`,
+          `the clone lock was not released: ${errorMessage(error)}${earlier}`,
         ),
       );
     }
   }
   return failure;
+}
+/**
+ * The scoped remote-branch scan of A5(e), run again under the lock after the
+ * fetch and before any worktree exists: a branch that another clone pushed
+ * since the pre-check is a collision, not a branch to build on.
+ */
+function rescanRemoteBranches(state) {
+  const { owner, repo } = state.repository;
+  const prefix = `issue/${state.issue}-`;
+  const remote = state.deps.run('gh', [
+    'api',
+    `repos/${owner}/${repo}/git/matching-refs/heads/${prefix}`,
+    '--paginate',
+    '--jq',
+    'tojson',
+  ]);
+  if (remote.status !== 0) {
+    return applyFail(
+      'precheck-unavailable',
+      'Re-run the A5(e) remote branch scan by hand (idd-claim.instructions.md), then rerun this helper. Nothing was created.',
+      `the remote branch rescan ended with ${describeStatus(remote)}`,
+    );
+  }
+  const refs = parseMatchingRefs(remote.stdout);
+  if (refs === null) {
+    return applyFail(
+      'precheck-unavailable',
+      'Re-run the A5(e) remote branch scan by hand (idd-claim.instructions.md), then rerun this helper. Nothing was created.',
+      'the remote branch rescan printed a malformed matching-refs response',
+    );
+  }
+  const collisions = refs
+    .filter((ref) => ref.startsWith(`refs/heads/${prefix}`))
+    .map((ref) => ref.slice('refs/heads/'.length));
+  if (collisions.length > 0) {
+    return applyFail(
+      'branch-collision',
+      'Post the A5(e) hold note from idd-claim.instructions.md and stop for operator review; this helper does not post it.',
+      `remote branch ${collisions.join(', ')} appeared after the pre-check`,
+    );
+  }
+  return applyPass(`no remote branch matches ${prefix}* after the fetch`);
 }
 /** `claim-lock --record-tokens`: the generated tokens, in the worktree's own copy. */
 function recordTokens(state) {
@@ -1928,10 +1977,10 @@ function runClaimWrites(state) {
     step(state, 'approval-recheck', recheckApproval(state)) ??
     step(state, 'hold-check', checkHoldBeforeClaim(state)) ??
     step(state, 'claim-post', postClaim(state)) ??
-    // claim-lock's contract: the tokens are recorded again, with the nonce, right
-    // before the activation-nonce marker. A failed re-record stops the run.
-    step(state, 'nonce-record', recordTokens(state)) ??
     step(state, 'nonce-post', postNonce(state)) ??
+    // idd-claim.instructions.md (worktree-local lock file): the tokens are
+    // recorded again, with the nonce, at the acquire point, before the acquire.
+    step(state, 'lock-record', recordTokens(state)) ??
     step(state, 'lock-acquire', acquireLock(state)) ??
     step(state, 'assert', assertClaim(state)) ??
     step(state, 'hold-recheck', recheckHoldAfterVerify(state))

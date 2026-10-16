@@ -1594,6 +1594,10 @@ interface ApplyScenario {
   acquireFailsAfterFirst?: boolean;
   /** The first `--record-tokens` succeeds; the second, with the nonce, fails. */
   recordTokensFailsAfterFirst?: boolean;
+  /** A remote branch appears after the pre-check's branch scan (the rescan sees it). */
+  collisionAfterPrecheck?: boolean;
+  /** The clone lock's release fails. */
+  releaseFails?: boolean;
 }
 
 interface ApplyRun {
@@ -1688,6 +1692,7 @@ function runApply(
   ];
   let acquireCalls = 0;
   let recordCalls = 0;
+  let matchingRefsCalls = 0;
   const labelReads = [...(scenario.labelReads ?? [])];
   const outcomes = new Map<string, PostOutcome[]>(
     Object.entries(scenario.posts ?? {}).map(([type, list]) => [
@@ -1717,7 +1722,10 @@ function runApply(
         : ISSUE_VIEW;
     }
     if (args[0] === 'api' && String(args[1]).includes('/git/matching-refs/')) {
-      return NO_REFS;
+      matchingRefsCalls += 1;
+      return scenario.collisionAfterPrecheck && matchingRefsCalls > 1
+        ? refPage(`${PREFIX}other-slug`)
+        : NO_REFS;
     }
     if (args[0] === 'api' && String(args[1]).endsWith('/comments')) {
       if (scenario.commentReadFails) {
@@ -1881,8 +1889,11 @@ function runApply(
         return acquireCloneLock(repoPath, agentId);
       },
       release: (handle) => {
-        releaseCloneLock(handle);
         log.push('lock:release');
+        if (scenario.releaseFails) {
+          throw new Error('stubbed release failure');
+        }
+        releaseCloneLock(handle);
       },
     },
     sleepMs: () => undefined,
@@ -2636,7 +2647,7 @@ test('an authoring label that differs only in case is still the hold', () => {
   });
 });
 
-test('the tokens are recorded again, with the nonce, right before the activation-nonce marker', () => {
+test('the tokens are recorded again, with the nonce, at the acquire point, after the activation-nonce marker', () => {
   withApplyFixture((fixture) => {
     const run = runApply(fixture);
     assert.equal(exitOf(run.result), 0, run.stderr);
@@ -2649,23 +2660,62 @@ test('the tokens are recorded again, with the nonce, right before the activation
     const nonce = indexes((entry) =>
       entry.includes('post-idd-marker.mjs --type activation-nonce'),
     )[0];
+    const acquire = indexes((entry) => entry.includes('--acquire'))[0];
     assert.equal(records.length, 2);
     assert.ok((records[0] ?? -1) < (claim ?? -1));
-    assert.ok((claim ?? -1) < (records[1] ?? -1));
-    assert.ok((records[1] ?? -1) < (nonce ?? -1));
+    assert.ok((claim ?? -1) < (nonce ?? -1));
+    assert.ok((nonce ?? -1) < (records[1] ?? -1));
+    assert.ok((records[1] ?? -1) < (acquire ?? -1));
     assert.match(run.log[records[1] ?? -1] ?? '', /--nonce/);
   });
 });
 
-test('a failed re-record before the activation nonce stops after the claim marker, with no nonce written', () => {
+test('a failed re-record before the lock acquire stops after the activation nonce, with the lock not taken', () => {
   withApplyFixture((fixture) => {
     const run = runApply(fixture, { recordTokensFailsAfterFirst: true });
     const report = assertStopped(run, 'tokens-record-failed');
     assert.equal(report.claimPosted, true);
     assert.equal(report.lostClaimCleanupRequired, true);
     assert.equal(
-      run.posts.some((post) => post.type === 'activation-nonce'),
+      run.posts.filter((post) => post.type === 'activation-nonce').length,
+      1,
+    );
+    assert.equal(
+      run.log.some((entry) => entry.includes('--acquire')),
       false,
+    );
+  });
+});
+
+test('a remote branch pushed after the pre-check stops the run before any worktree exists', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { collisionAfterPrecheck: true });
+    const report = assertStopped(run, 'branch-collision');
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /appeared after the pre-check/,
+    );
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(
+      run.log.some((entry) => entry.includes('worktree add')),
+      false,
+    );
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(branchExists(fixture.primary), false);
+  });
+});
+
+test('a clone lock that is not released after an earlier stop is the failure the report names', () => {
+  withApplyFixture((fixture) => {
+    gitIn(fixture.primary, ['checkout', '--quiet', '-b', 'topic']);
+    const run = runApply(fixture, { releaseFails: true });
+    const report = assertStopped(run, 'primary-not-ready');
+    const detail = report.steps.at(-1)?.detail ?? '';
+    assert.match(detail, /was not released/);
+    assert.match(detail, /primary-not-on-default-branch/);
+    assert.match(
+      report.nextAction ?? '',
+      /remove it only when no other process holds it/,
     );
   });
 });

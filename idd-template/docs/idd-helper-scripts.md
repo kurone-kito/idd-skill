@@ -4791,7 +4791,9 @@ like `activation-nonce`, because a worker posts it as itself.
      the run stops with `development-branch-unresolved`. A prunable worktree
      entry or a leftover local branch of the claim's name stops with
      `b1-cleanup-needed`.
-  2. Still under the lock: the worktree path is
+  2. Still under the lock, the scoped remote-branch scan of A5(e) runs again
+     after the fetch (`branch-collision` if a branch appeared since the
+     pre-check). The worktree path is
      `<primary-parent>/<repo>.<branch with / replaced by ->`. It must be a
      free direct child of the primary's parent, and that parent must not be
      a link (`path-occupied`). Then
@@ -4815,10 +4817,7 @@ like `activation-nonce`, because a worker posts it as itself.
      `precheck-unavailable` when the read fails). Only the label is read:
      the owner-marker log replay is not done, and the report says so with
      `holdCheck: "label"`.
-  5. The claim marker, then the tokens are recorded again with the nonce
-     (`claim-lock --record-tokens --nonce`, as the claim-lock contract
-     requires; `tokens-record-failed` on failure), then the activation nonce.
-     The helper mints the
+  5. The claim marker, then the activation nonce. The helper mints the
      claim id and the nonce, so a rerun is always a new claim attempt. A
      refused or unknown claim write is `claim-post-failed` or
      `recovery-hold`, and the claim is never posted twice. A failed nonce
@@ -4826,8 +4825,11 @@ like `activation-nonce`, because a worker posts it as itself.
      absent; an unreadable comment list stops with `recovery-hold` without a
      retry. A nonce still absent after the retry stops with
      `nonce-post-failed`.
-  6. `claim-lock --acquire` on the worktree (`lock-acquire-failed`), then
-     `claim-lock --read-tokens`, which must read back as present and not
+  6. The tokens are recorded again with the nonce, at the acquire point
+     (`claim-lock --record-tokens --nonce`, as the worktree-lock rule of
+     idd-claim.instructions.md requires; `tokens-record-failed` on failure),
+     then `claim-lock --acquire` on the worktree (`lock-acquire-failed`),
+     then `claim-lock --read-tokens`, which must read back as present and not
      malformed for this claim. Then, after `claim.verifySettleDelay`,
      `resume-claim-routing --assert`. Only `already_owned` with `keep`
      verifies the claim (`claim-not-verified`); the verdict is read from
