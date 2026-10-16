@@ -2581,6 +2581,32 @@ test('an issue closed after the pre-check is refused before the claim marker, an
   });
 });
 
+test('the state re-read comes before the authoring-label read, which is the last gh read before the claim marker', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    const claimAt = run.log.findIndex((entry) => entry.includes('--type claim'));
+    assert.ok(claimAt > 0, 'the claim marker is posted');
+    const reads = run.log
+      .slice(0, claimAt)
+      .map((entry, index) => ({ entry, index }))
+      .filter(({ entry }) => entry.startsWith('gh '));
+    const stateRead = reads
+      .filter(({ entry }) => entry.endsWith('--json state'))
+      .at(-1);
+    const labelRead = reads
+      .filter(({ entry }) => entry.includes('--json labels'))
+      .at(-1);
+    assert.ok(stateRead && labelRead, 'both reads run before the claim marker');
+    assert.ok(stateRead.index < labelRead.index, 'the state read comes first');
+    assert.deepEqual(
+      reads.filter(({ index }) => index > labelRead.index),
+      [],
+      'no gh read runs between the label read and the claim marker',
+    );
+  });
+});
+
 test('a state re-read that fails before the claim marker is precheck-unavailable and posts nothing', () => {
   withApplyFixture((fixture) => {
     const run = runApply(fixture, { stateRecheckFails: true });

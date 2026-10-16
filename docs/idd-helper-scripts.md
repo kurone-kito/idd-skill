@@ -4925,16 +4925,16 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   4. Immediately before the claim marker, the issue-author approval gate of
      A5(a) runs again (`approval-missing` or `approval-unproven` stop the
      run), then the own-worktree fresh-claim gate runs once, with
-     `--own-worktree <path>`, and must return `claimable`, then the
-     authoring-label hold check (`hold-active`, or
-     `precheck-unavailable` when the read fails). Only the label is read:
-     the owner-marker log replay is not done, and the report says so with
-     `holdCheck: "label"`. Then the issue state is read again, with
-     `gh issue view --json state`, one call before the claim marker. A
-     `CLOSED` state stops the run as `issue-closed`, and a read that fails or
-     names neither `OPEN` nor `CLOSED` stops it as `precheck-unavailable`.
-     Each refusal adds one failed `issue-state-recheck` step; an `OPEN` issue
-     adds no step. A close that lands after this read, before the claim
+     `--own-worktree <path>`, and must return `claimable`. Then the issue
+     state is read again, with `gh issue view --json state`: a `CLOSED`
+     state stops the run as `issue-closed`, and a read that fails or names
+     neither `OPEN` nor `CLOSED` stops it as `precheck-unavailable`. Each
+     refusal adds one failed `issue-state-recheck` step; an `OPEN` issue
+     adds no step. Last, the authoring-label hold check runs (`hold-active`,
+     or `precheck-unavailable` when the read fails), so the label is the
+     final read before the marker. Only the label is read: the owner-marker
+     log replay is not done, and the report says so with `holdCheck:
+     "label"`. A close that lands after the state read, before the claim
      marker posts, is not seen: the read narrows that window to one call but
      cannot close it.
   5. The claim marker. Then `claim-lock --record-tokens --nonce`, right before

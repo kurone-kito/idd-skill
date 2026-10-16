@@ -38,8 +38,8 @@
 // one failed `issue-state` step, and the A5 checks are then `not-run`. An
 // `OPEN` issue adds no step, so its report is unchanged. A state that is
 // neither is a failed read, not a refusal. With `--apply`, the state is read
-// again right before the claim marker, and a closed issue stops the run there
-// as `issue-closed` (one failed `issue-state-recheck` step).
+// again before the final hold check, and a closed issue stops the run there as
+// `issue-closed` (one failed `issue-state-recheck` step).
 import { spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { lstatSync } from 'node:fs';
@@ -2242,12 +2242,12 @@ function runClaimWrites(state) {
     // The claim-state gate and the label read come last, so that the fresh
     // marker fetch and the hold read are the nearest reads before the claim.
     step(state, 'own-worktree-gate', checkOwnWorktreeGate(state)) ??
-    step(state, 'hold-check', checkHoldBeforeClaim(state)) ??
-    // The issue state is read last, right before the claim marker: an issue
-    // that is already closed here is refused, even though the pre-check read
-    // it as open. A close that lands after this one call is not seen, because
-    // the claim marker is the next write.
+    // The issue state is read before the hold check, so that the authoring
+    // label stays the last read before the claim marker. An issue that is
+    // already closed here is refused, even though the pre-check read it as
+    // open. A close that lands after this read is not seen.
     recheckIssueState(state) ??
+    step(state, 'hold-check', checkHoldBeforeClaim(state)) ??
     step(state, 'claim-post', postClaim(state)) ??
     // The nonce-bearing record comes right before its marker posts (the
     // record contract in claim-lock.mts: "again with the nonce right before the
@@ -2504,7 +2504,7 @@ for the local scan) with the written path as the next action.
 With --apply, when every pre-check passes, the helper runs the fresh-claim
 order of idd-claim.instructions.md: B1 step 1 and the worktree (under the
 clone-scoped lock), the generated tokens, the own-worktree gate, the
-authoring-label hold check, the issue-state re-read (issue-closed), the claim
+issue-state re-read (issue-closed), the authoring-label hold check, the claim
 marker, the activation nonce,
 the worktree-local claim lock, the final assert, and a second hold check. It mints the
 claim id and the nonce itself. --agent-id is the agent id the claim is made
