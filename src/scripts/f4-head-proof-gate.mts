@@ -45,16 +45,29 @@ import {
 } from './protocol-helpers.mts';
 import type { ProviderComment } from './provider-port.mts';
 
-/** Reason codes of the verdict table plus the one this command adds. */
-export type F4HeadProofGateReason = Reason | 'post-rejected';
+/**
+ * Reason codes of the verdict table plus the ones this command adds: a write
+ * the host refused before it was sent, and the two refusals of `--supersedes`
+ * (#4442).
+ */
+export type F4HeadProofGateReason =
+  | Reason
+  | 'post-rejected'
+  | 'supersede-refused'
+  | 'supersede-target-unknown';
 
-/** The four flags the command takes, plus whether `--apply` was given. */
+/**
+ * The four flags the command takes, plus whether `--apply` was given. The
+ * optional `supersedes` is the comment ID of the malformed proof a corrected
+ * proof replaces (`--supersedes`, #4442).
+ */
 export interface F4HeadProofGateInput {
   issueNumber: number;
   claimId: string;
   agentId: string;
   worktree: string;
   apply: boolean;
+  supersedes?: number;
 }
 
 export interface ClaimAssertRequest {
@@ -202,6 +215,10 @@ const NEXT_ACTION: Readonly<Record<string, string>> = {
     'Do not post again. Three re-reads found no proof; reconcile by reading the issue comments before any further action.',
   'post-rejected':
     'Nothing was posted. Fix the cause of the rejection, then rerun the command.',
+  'supersede-refused':
+    'Nothing was posted. The named comment is a well-formed or edited proof, and only a malformed proof can be superseded; read the issue comments, then rerun without --supersedes.',
+  'supersede-target-unknown':
+    'Nothing was posted. No trusted proof of this claim with that comment ID is malformed; check the comment ID, then rerun.',
 };
 
 function isFullSha(value: unknown): value is string {
@@ -242,12 +259,34 @@ export function provesNothingSent(error: unknown): boolean {
  * that does not parse (and does not name another claim), or that was edited,
  * is `unparseable`, which is never reusable.
  */
+/**
+ * One trusted same-claim entry of the issue, with the comment it came from.
+ * `supersedable` marks a proof that does not parse but belongs to this claim:
+ * the only kind a corrected proof may name (#4442). An edited proof that still
+ * parses is never superseded. `supersedes` is the comment a well-formed,
+ * unedited proof names, else null.
+ */
+interface IdentifiedMarker {
+  readonly commentId: number;
+  readonly entry: TrustedMarker;
+  readonly supersedable: boolean;
+  readonly supersedes: number | null;
+}
+
+/**
+ * The trusted same-claim `idd-f4-head-proof` entries in `comments`, in comment
+ * order, each with the ID of the comment it came from, as the verdict table
+ * reads them. An untrusted author's marker is ignored, never a conflict. A
+ * trusted marker for another claim is ignored. A trusted marker that does not
+ * parse (and does not name another claim), or that was edited, is
+ * `unparseable`, which is never reusable.
+ */
 export function collectTrustedMarkers(
   comments: readonly ProviderComment[],
   claimId: string,
   trustedLogins: ReadonlySet<string>,
-): TrustedMarker[] {
-  const markers: TrustedMarker[] = [];
+): IdentifiedMarker[] {
+  const entries: IdentifiedMarker[] = [];
   for (const comment of comments) {
     const parsed = parseF4HeadProofBody(comment.body);
     if (
@@ -258,7 +297,12 @@ export function collectTrustedMarkers(
     }
     if (parsed.kind === 'malformed') {
       if (parsed.claimId === null || parsed.claimId === claimId) {
-        markers.push({ unparseable: true });
+        entries.push({
+          commentId: comment.id,
+          entry: { unparseable: true },
+          supersedable: parsed.claimId === claimId,
+          supersedes: null,
+        });
       }
       continue;
     }
@@ -266,22 +310,109 @@ export function collectTrustedMarkers(
       continue;
     }
     if (classifyCommentEditState(comment) !== 'unedited') {
-      markers.push({ unparseable: true });
+      entries.push({
+        commentId: comment.id,
+        entry: { unparseable: true },
+        supersedable: false,
+        supersedes: null,
+      });
       continue;
     }
-    markers.push({
-      claimId: parsed.proof.claimId,
-      prNumber: parsed.proof.prNumber,
-      branch: parsed.proof.branch,
-      merge: parsed.proof.merge,
-      head: parsed.proof.head,
-      f2: parsed.proof.f2,
-      branchTip: parsed.proof.branchTip,
-      createdAt: comment.createdAt,
-      updatedAt: comment.updatedAt,
+    entries.push({
+      commentId: comment.id,
+      entry: {
+        claimId: parsed.proof.claimId,
+        prNumber: parsed.proof.prNumber,
+        branch: parsed.proof.branch,
+        merge: parsed.proof.merge,
+        head: parsed.proof.head,
+        f2: parsed.proof.f2,
+        branchTip: parsed.proof.branchTip,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+      },
+      supersedable: false,
+      supersedes: parsed.proof.supersedes ?? null,
     });
   }
-  return markers;
+  return entries;
+}
+
+/**
+ * Set aside each malformed proof of this claim that a well-formed, unedited,
+ * trusted proof of this claim names by comment ID (#4442). The superseding
+ * proof is kept and judged by the verdict table on its own, so a superseding
+ * proof that is not reusable, or that conflicts with another proof, still
+ * holds F4. Returns the markers the verdict table reads and, for each set-aside
+ * comment, the comment that names it, in comment order.
+ */
+function applySupersession(entries: readonly IdentifiedMarker[]): {
+  markers: TrustedMarker[];
+  supersededBy: ReadonlyMap<number, number>;
+} {
+  const supersedable = new Set(
+    entries.filter((entry) => entry.supersedable).map((e) => e.commentId),
+  );
+  const supersededBy = new Map<number, number>();
+  for (const entry of entries) {
+    if (
+      entry.supersedes === null ||
+      !supersedable.has(entry.supersedes) ||
+      supersededBy.has(entry.supersedes)
+    ) {
+      continue;
+    }
+    supersededBy.set(entry.supersedes, entry.commentId);
+  }
+  return {
+    markers: entries
+      .filter((entry) => !supersededBy.has(entry.commentId))
+      .map((entry) => entry.entry),
+    supersededBy,
+  };
+}
+
+/**
+ * The reason a `--supersedes` request is refused, or `null` when the request
+ * may go on. A target that is absent, or that is not a malformed proof of this
+ * claim, is refused whatever the other proofs say. A malformed target that is
+ * already set aside needs no write, so it is not refused. Another trusted
+ * proof of this claim that remains blocks the write.
+ */
+function supersedeRefusal(
+  supersedes: number,
+  entries: readonly IdentifiedMarker[],
+  supersededBy: ReadonlyMap<number, number>,
+): { reason: F4HeadProofGateReason; note: string } | null {
+  const target = entries.find((entry) => entry.commentId === supersedes);
+  if (target === undefined) {
+    return {
+      reason: 'supersede-target-unknown',
+      note: `no trusted proof of this claim has comment ID ${supersedes}, so nothing was superseded`,
+    };
+  }
+  if (!target.supersedable) {
+    return {
+      reason: 'supersede-refused',
+      note: `comment ${supersedes} is a well-formed or edited proof of this claim; only a malformed proof is superseded, so nothing was posted`,
+    };
+  }
+  if (supersededBy.has(supersedes)) {
+    return null;
+  }
+  const others = entries.filter(
+    (entry) =>
+      entry.commentId !== supersedes && !supersededBy.has(entry.commentId),
+  );
+  if (others.length > 0) {
+    return {
+      reason: 'conflicting-marker',
+      note: `other trusted proofs of this claim remain (comment IDs ${others
+        .map((entry) => entry.commentId)
+        .join(', ')}), so the superseding proof was not posted`,
+    };
+  }
+  return null;
 }
 
 /**
@@ -422,7 +553,7 @@ function readIssueMarkers(
 ): {
   comments: readonly ProviderComment[];
   trusted: ReadonlySet<string>;
-  markers: TrustedMarker[];
+  entries: IdentifiedMarker[];
 } {
   const comments = deps.listIssueComments(issueNumber);
   const trusted = new Set(
@@ -431,7 +562,7 @@ function readIssueMarkers(
   return {
     comments,
     trusted,
-    markers: collectTrustedMarkers(comments, claimId, trusted),
+    entries: collectTrustedMarkers(comments, claimId, trusted),
   };
 }
 
@@ -641,12 +772,12 @@ export function runF4HeadProofGate(
   const { claimOk, branch } = claim;
 
   let markersRead = true;
-  let markers: TrustedMarker[] = [];
+  let entries: IdentifiedMarker[] = [];
   let claimActivatedAt: string | null = null;
   if (claimOk) {
     try {
       const issue = readIssueMarkers(deps, input.issueNumber, input.claimId);
-      markers = issue.markers;
+      entries = issue.entries;
       claimActivatedAt = findClaimActivationTime(
         issue.comments,
         input.claimId,
@@ -659,6 +790,12 @@ export function runF4HeadProofGate(
         `the comments of issue ${input.issueNumber} could not be read: ${describeError(error)}`,
       );
     }
+  }
+  const superseding = applySupersession(entries);
+  for (const [malformedId, supersederId] of superseding.supersededBy) {
+    notes.push(
+      `reported: malformed f4 head-proof comment ${malformedId} is set aside by superseding proof comment ${supersederId}; the superseding proof is judged on its own`,
+    );
   }
 
   let refNameValid = false;
@@ -692,7 +829,7 @@ export function runF4HeadProofGate(
     refNameValid,
     localRef,
     claimActivatedAt,
-    markers,
+    markers: superseding.markers,
     markersRead,
     watermarkAuthenticated: f2 !== null,
   };
@@ -706,7 +843,34 @@ export function runF4HeadProofGate(
     head: livePr.headSha,
   };
 
-  const before = decideBeforePost(proofInput);
+  let before = decideBeforePost(proofInput);
+  const supersedes = input.supersedes;
+  if (
+    supersedes !== undefined &&
+    (before.disposition === 'proceed' ||
+      before.disposition === 'post' ||
+      before.reason === 'conflicting-marker')
+  ) {
+    const refusal = supersedeRefusal(
+      supersedes,
+      entries,
+      superseding.supersededBy,
+    );
+    if (refusal !== null) {
+      return describeOutcome(input, 'hold', refusal.reason, proof, {}, [
+        ...notes,
+        refusal.note,
+      ]);
+    }
+    if (
+      before.disposition !== 'proceed' &&
+      !superseding.supersededBy.has(supersedes)
+    ) {
+      // The target is the only proof left to set aside, so the post is judged
+      // with no marker in the way: the watermark and the activation remain.
+      before = decideBeforePost({ ...proofInput, markers: [] });
+    }
+  }
   if (before.disposition === 'proceed') {
     return describeOutcome(
       input,
@@ -740,6 +904,7 @@ export function runF4HeadProofGate(
     merge: livePr.mergeCommitSha ?? '',
     head: livePr.headSha ?? '',
     agentId: input.agentId,
+    ...(supersedes === undefined ? {} : { supersedes: String(supersedes) }),
   });
   if (!input.apply) {
     return describeOutcome(
@@ -834,12 +999,12 @@ function readBack(
   notes: string[],
 ): Reread {
   try {
-    const { markers } = readIssueMarkers(
+    const { entries } = readIssueMarkers(
       deps,
       input.issueNumber,
       input.claimId,
     );
-    return classifyReread(markers, proofInput);
+    return classifyReread(applySupersession(entries).markers, proofInput);
   } catch (error) {
     notes.push(
       `a re-read of the issue comments failed: ${describeError(error)}`,

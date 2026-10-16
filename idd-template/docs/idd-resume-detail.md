@@ -397,8 +397,23 @@ precede the initial trusted claim activation for this claim ID and branch
 (not a later heartbeat of the same claim), and `updated_at` must equal
 `created_at`. Identical duplicate markers carry the same proof. A trusted
 marker for this claim with conflicting values, malformed fields, or any
-edit is ambiguous and holds F4. Do not treat an untrusted marker as a
-conflict or as proof.
+edit is ambiguous and holds F4, unless a superseding proof sets it aside
+(below). Do not treat an untrusted marker as a conflict or as proof.
+
+**Superseding a malformed proof.** A corrected proof may carry one optional
+field, `supersedes=<comment-id>`, after `head=` and before `-->`. Its value
+is the comment ID of the malformed trusted proof that the corrected proof
+replaces. Post the corrected proof with the `--supersedes` flag of the
+`post-idd-marker` helper (`--type f4-head-proof`, in the profile-selected
+form), and never delete or edit the malformed comment: the corrected proof
+is the correction. Only a parse-malformed trusted proof of this claim is set
+aside, and only when a well-formed, unedited, trusted proof of this claim
+names its comment ID and that proof is itself reusable under the rules above.
+Set-aside comments are reported in the helper's `warnings`, and F4 does not
+hold on them. A malformed proof with no such superseding proof still holds
+F4, and an edited proof that still parses is never set aside. The helper
+refuses `--supersedes` for a well-formed or edited proof, and it holds when
+other trusted proofs of this claim remain.
 
 If no trusted marker exists, revalidate the claim and local lock before
 posting. First run the REST and commit-object validation below and set

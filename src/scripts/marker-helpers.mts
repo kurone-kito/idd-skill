@@ -424,10 +424,10 @@ const OPERATIONAL_MARKER_ENTRIES: OperationalMarker[] = [
     // `malformedPrefixPattern` reports it as a malformed marker.
     label: '<!-- idd-f4-head-proof:',
     pattern:
-      /^<!--\s*idd-f4-head-proof:\s+v2\s+pr=[1-9]\d*\s+claim=(?:(?!<!--|-->)\S)+\s+branch=(?:(?!<!--|-->)\S)+\s+f2=[0-9a-f]{40}\s+branch-tip=[0-9a-f]{40}\s+merge=[0-9a-f]{40}\s+head=[0-9a-f]{40}\s*-->(?:\s*|\s*\n\s*_[^\n]*_\s*)$/i,
+      /^<!--\s*idd-f4-head-proof:\s+v2\s+pr=[1-9]\d*\s+claim=(?:(?!<!--|-->)\S)+\s+branch=(?:(?!<!--|-->)\S)+\s+f2=[0-9a-f]{40}\s+branch-tip=[0-9a-f]{40}\s+merge=[0-9a-f]{40}\s+head=[0-9a-f]{40}(?:\s+supersedes=[1-9]\d*)?\s*-->(?:\s*|\s*\n\s*_[^\n]*_\s*)$/i,
     startPattern: /^<!--\s*idd-f4-head-proof:/i,
     malformedPrefixPattern:
-      /^<!--\s*idd-f4-head-proof:\s+v2\s+pr=[1-9]\d*\s+claim=(?:(?!<!--|-->)\S)+\s+branch=(?:(?!<!--|-->)\S)+\s+f2=[0-9a-f]{40}\s+branch-tip=[0-9a-f]{40}\s+merge=[0-9a-f]{40}\s+head=[0-9a-f]{40}\s*-->/i,
+      /^<!--\s*idd-f4-head-proof:\s+v2\s+pr=[1-9]\d*\s+claim=(?:(?!<!--|-->)\S)+\s+branch=(?:(?!<!--|-->)\S)+\s+f2=[0-9a-f]{40}\s+branch-tip=[0-9a-f]{40}\s+merge=[0-9a-f]{40}\s+head=[0-9a-f]{40}(?:\s+supersedes=[1-9]\d*)?\s*-->/i,
   },
   {
     label: '<!-- review-watermark:',
