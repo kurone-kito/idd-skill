@@ -195,7 +195,12 @@ test('selectPullRequests keeps same-repository pull requests with exactly this h
       headRefName: BRANCH,
       isCrossRepository: false,
     },
-    { number: 12, state: 'OPEN', headRefName: BRANCH },
+    {
+      number: 12,
+      state: 'OPEN',
+      headRefName: BRANCH,
+      isCrossRepository: false,
+    },
     // A fork's pull request that happens to use the same branch name.
     {
       number: 13,
@@ -348,7 +353,12 @@ test('the git reads ignore Git environment overrides of the caller', () => {
 });
 
 test('selectPullRequests refuses a list that reached the row cap, even when every row is filtered out', () => {
-  const row = { number: 7, state: 'CLOSED', headRefName: BRANCH };
+  const row = {
+    number: 7,
+    state: 'CLOSED',
+    headRefName: BRANCH,
+    isCrossRepository: false,
+  };
   const other = { number: 8, state: 'MERGED', headRefName: 'issue/other' };
   assert.deepEqual(selectPullRequests([row, row], BRANCH, 3), [
     { number: 7, merged: false },
@@ -1120,4 +1130,31 @@ test('a bare repository record is not a registered worktree, and a linked worktr
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('a pull request row is selected only with an explicit same-repository flag', () => {
+  const rows = [
+    { number: 31, state: 'MERGED', headRefName: BRANCH },
+    {
+      number: 32,
+      state: 'MERGED',
+      headRefName: BRANCH,
+      isCrossRepository: 'false',
+    },
+    {
+      number: 33,
+      state: 'MERGED',
+      headRefName: BRANCH,
+      isCrossRepository: true,
+    },
+    {
+      number: 34,
+      state: 'MERGED',
+      headRefName: BRANCH,
+      isCrossRepository: false,
+    },
+  ];
+  assert.deepEqual(selectPullRequests(rows, BRANCH, 100), [
+    { number: 34, merged: true },
+  ]);
 });

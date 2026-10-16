@@ -324,7 +324,7 @@ export function selectPullRequests(
   return rows
     .map(asRecord)
     .filter(
-      (row) => row.headRefName === branch && row.isCrossRepository !== true,
+      (row) => row.headRefName === branch && row.isCrossRepository === false,
     )
     .map((row) => ({
       number: Number(row.number),
