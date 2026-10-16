@@ -1055,7 +1055,7 @@
       "id": "unanswered-ones-advisory-sentence",
       "glob": "**/idd-review-fix.instructions.md",
       "pattern": "unanswered\\s+ones\\s+do\\s+not\\s+block\\s+merge",
-      "message": "Unanswered advisory items block merge until each one is dispositioned; do not restore the old 'do not block merge' sentence."
+      "message": "Unanswered advisory items block merge until each one is dispositioned, within the advisory-item scope in docs/idd-helper-scripts.md; do not restore the old 'do not block merge' sentence."
     }
   ],
   "rootMarkdownAllowlist": {
