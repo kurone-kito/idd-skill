@@ -207,6 +207,10 @@ export function classifyProofEnvelope(raw, claimId) {
     return { ok: false, code: 'proof-missing' };
   }
   if (envelope.verdict === 'proceed') {
+    // The marker contract exits 0 for proceed. Any other status is untrusted.
+    if (raw.exitCode !== 0) {
+      return { ok: false, code: 'proof-unreadable', detail: firstStderrLine };
+    }
     const proof = envelope.proof;
     if (
       envelope.reason !== 'reusable' ||

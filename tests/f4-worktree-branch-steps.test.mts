@@ -402,6 +402,12 @@ test('a missing proof holds with proof-missing and points at step 3', () => {
   assert.match(report.nextAction ?? '', /step 3/u);
 });
 
+test('a proceed verdict with a non-zero exit is not trusted', () => {
+  const proof = { exitCode: 1, stdout: proofProceed().stdout };
+  const report = runF4WorktreeBranchSteps(input(), harness({ proof }).deps);
+  assert.equal(report.reason, 'proof-unreadable');
+});
+
 test('an unregistered claimed worktree holds with proof-worktree-missing and its cause', () => {
   const proof = {
     exitCode: 1,
