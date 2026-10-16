@@ -106,24 +106,43 @@ test('turnCount counts requests; toolCallCount sums tool_use blocks across all r
   );
 });
 
-/** An inline Claude assistant record for the request-grouping tests (#4380). */
+/** Counter that keeps the `tool_use` ids the helper mints unique across records (#4383). */
+let mintedToolUseIds = 0;
+
+/**
+ * An inline Claude assistant record for the request-grouping tests (#4380).
+ * Without `toolUseIds`, `toolUses` blocks get ids no other record reuses
+ * (#4383). With it (#4383), each entry sets one block's id, and `null` or
+ * `''` leaves that block without a usable id.
+ */
 function assistantRecord(options: {
   timestamp?: string;
   requestId?: string;
   messageId?: string;
+  model?: string;
   usage?: { input: number; output: number; cacheRead?: number };
   toolUses?: number;
+  toolUseIds?: readonly (string | null)[];
 }): Record<string, unknown> {
+  const toolUseIds =
+    options.toolUseIds ??
+    Array.from({ length: options.toolUses ?? 0 }, () => {
+      mintedToolUseIds += 1;
+      return `tool-${mintedToolUseIds}`;
+    });
   const message: Record<string, unknown> = {
     role: 'assistant',
-    content: Array.from({ length: options.toolUses ?? 0 }, (_, index) => ({
-      type: 'tool_use',
-      id: `tool-${index}`,
-      name: 'Bash',
-    })),
+    content: toolUseIds.map((id) =>
+      id === null
+        ? { type: 'tool_use', name: 'Bash' }
+        : { type: 'tool_use', id, name: 'Bash' },
+    ),
   };
   if (options.messageId !== undefined) {
     message.id = options.messageId;
+  }
+  if (options.model !== undefined) {
+    message.model = options.model;
   }
   if (options.usage !== undefined) {
     message.usage = {
@@ -415,6 +434,407 @@ test('an empty requestId falls back to message.id, so the two records form one r
   });
   assert.equal(sample.turnCount, 1);
   assert.equal(sample.usage.inputUncached, 1);
+});
+
+/** A timestamped user row: the session file's own record when its subagents carry the requests (#4383). */
+function userRecord(timestamp: string): Record<string, unknown> {
+  return {
+    type: 'user',
+    timestamp,
+    message: { role: 'user', content: 'hello' },
+  };
+}
+
+test('subagentRecords from two agents add their distinct requests to usage, turnCount and toolCallCount (#4383)', () => {
+  // The flat subagentRecords array holds the lines of both agents' transcripts.
+  const { sample } = claudeAdapter.harvest({
+    records: [
+      userRecord('2026-08-20T10:00:00.000Z'),
+      assistantRecord({
+        requestId: 'req-P',
+        timestamp: '2026-08-20T10:00:01.000Z',
+        usage: { input: 1, output: 2, cacheRead: 3 },
+        toolUses: 1,
+      }),
+    ],
+    subagentRecords: [
+      assistantRecord({
+        requestId: 'req-A',
+        timestamp: '2026-08-20T10:00:02.000Z',
+        usage: { input: 10, output: 20, cacheRead: 30 },
+        toolUses: 2,
+      }),
+      assistantRecord({
+        requestId: 'req-B',
+        timestamp: '2026-08-20T10:00:03.000Z',
+        usage: { input: 100, output: 200, cacheRead: 300 },
+        toolUses: 1,
+      }),
+    ],
+    fileBasename: 'session-4383.jsonl',
+  });
+  assert.deepEqual(sample.usage, {
+    inputUncached: 111,
+    cacheRead: 333,
+    cacheCreation: 0,
+    output: 222,
+    reasoning: 0,
+  });
+  assert.equal(sample.turnCount, 3);
+  assert.equal(sample.toolCallCount, 4);
+  assert.equal(sample.includesSubagents, true);
+});
+
+test('streaming snapshots inside subagentRecords take the field-wise maximum and make one turn (#4383)', () => {
+  const { sample } = claudeAdapter.harvest({
+    records: [userRecord('2026-08-20T10:00:00.000Z')],
+    subagentRecords: [
+      assistantRecord({
+        requestId: 'req-SS',
+        timestamp: '2026-08-20T10:00:01.000Z',
+        usage: { input: 2, output: 7, cacheRead: 100 },
+      }),
+      assistantRecord({
+        requestId: 'req-SS',
+        timestamp: '2026-08-20T10:00:02.000Z',
+        usage: { input: 2, output: 7, cacheRead: 100 },
+      }),
+      assistantRecord({
+        requestId: 'req-SS',
+        timestamp: '2026-08-20T10:00:03.000Z',
+        usage: { input: 4, output: 330, cacheRead: 300 },
+      }),
+    ],
+    fileBasename: 'session-4383.jsonl',
+  });
+  assert.deepEqual(sample.usage, {
+    inputUncached: 4,
+    cacheRead: 300,
+    cacheCreation: 0,
+    output: 330,
+    reasoning: 0,
+  });
+  assert.equal(sample.turnCount, 1);
+  assert.equal(sample.includesSubagents, true);
+});
+
+test('a fork transcript repeats its parent request: the per-field maximum counts once and a repeated tool_use id counts once (#4383)', () => {
+  const { sample } = claudeAdapter.harvest({
+    records: [
+      assistantRecord({
+        requestId: 'req-F',
+        timestamp: '2026-08-20T10:00:01.000Z',
+        usage: { input: 5, output: 3, cacheRead: 10 },
+        toolUseIds: ['tool-shared'],
+      }),
+    ],
+    subagentRecords: [
+      {
+        ...assistantRecord({
+          requestId: 'req-F',
+          timestamp: '2026-08-20T10:00:02.000Z',
+          usage: { input: 2, output: 9, cacheRead: 10 },
+          toolUseIds: ['tool-shared'],
+        }),
+        isSidechain: true,
+      },
+    ],
+    fileBasename: 'session-4383.jsonl',
+  });
+  // Input is higher in the parent record and output in the fork record.
+  assert.deepEqual(sample.usage, {
+    inputUncached: 5,
+    cacheRead: 10,
+    cacheCreation: 0,
+    output: 9,
+    reasoning: 0,
+  });
+  assert.equal(sample.turnCount, 1);
+  assert.equal(sample.toolCallCount, 1);
+  assert.equal(sample.includesSubagents, true);
+});
+
+test('two subagents repeating one request with different tool_use ids count those ids apart, and blocks without a usable id count on their own (#4383)', () => {
+  const { sample } = claudeAdapter.harvest({
+    records: [userRecord('2026-08-20T10:00:00.000Z')],
+    subagentRecords: [
+      assistantRecord({
+        requestId: 'req-G',
+        timestamp: '2026-08-20T10:00:01.000Z',
+        usage: { input: 1, output: 1 },
+        toolUseIds: ['tool-a1'],
+      }),
+      assistantRecord({
+        requestId: 'req-G',
+        timestamp: '2026-08-20T10:00:02.000Z',
+        usage: { input: 1, output: 1 },
+        toolUseIds: ['tool-a2', null, ''],
+      }),
+    ],
+    fileBasename: 'session-4383.jsonl',
+  });
+  assert.equal(sample.turnCount, 1);
+  assert.equal(sample.usage.inputUncached, 1);
+  // tool-a1 and tool-a2 are two distinct ids; the null and empty ids each
+  // count on their own.
+  assert.equal(sample.toolCallCount, 4);
+});
+
+test('non-assistant and non-object subagentRecords entries are ignored beside a valid subagent request (#4383)', () => {
+  const { sample } = claudeAdapter.harvest({
+    records: [userRecord('2026-08-20T10:00:00.000Z')],
+    subagentRecords: [
+      { type: 'fork-context-ref' },
+      {
+        type: 'user',
+        timestamp: '2026-08-20T10:00:01.000Z',
+        message: { role: 'user', content: 'SUBAGENT-USER-TEXT-4383' },
+      },
+      null,
+      42,
+      'a string entry',
+      [
+        assistantRecord({
+          requestId: 'req-N',
+          timestamp: '2026-08-20T10:00:02.000Z',
+          usage: { input: 900, output: 900 },
+        }),
+      ],
+      assistantRecord({
+        requestId: 'req-V',
+        timestamp: '2026-08-20T10:00:03.000Z',
+        usage: { input: 6, output: 7 },
+      }),
+    ],
+    fileBasename: 'session-4383.jsonl',
+  });
+  assert.deepEqual(sample.usage, {
+    inputUncached: 6,
+    cacheRead: 0,
+    cacheCreation: 0,
+    output: 7,
+    reasoning: 0,
+  });
+  assert.equal(sample.turnCount, 1);
+  assert.equal(sample.includesSubagents, true);
+  assert.doesNotMatch(JSON.stringify(sample), /SUBAGENT-USER-TEXT-4383/);
+});
+
+test('subagent records leave model, timestamps, compactionCount, cwd and join hints to the session file (#4383)', () => {
+  const sessionRecords = [
+    {
+      type: 'user',
+      sessionId: 'sess-meta-4383',
+      cwd: '/work/idd-skill.issue-4001-session',
+      timestamp: '2026-08-20T10:00:00.000Z',
+      message: { role: 'user', content: 'hello' },
+    },
+    assistantRecord({
+      requestId: 'req-M1',
+      timestamp: '2026-08-20T10:00:01.000Z',
+      usage: { input: 1, output: 1 },
+      model: 'claude-sonnet-5',
+    }),
+    {
+      type: 'system',
+      subtype: 'compact_boundary',
+      timestamp: '2026-08-20T10:00:02.000Z',
+    },
+  ];
+  const subagentRecords = [
+    {
+      ...assistantRecord({
+        requestId: 'req-SM',
+        timestamp: '2026-08-19T09:00:00.000Z',
+        usage: { input: 50, output: 60 },
+        model: 'claude-haiku-5-5',
+      }),
+      isSidechain: true,
+      cwd: '/work/idd-skill.issue-4383-other',
+    },
+    {
+      ...assistantRecord({
+        requestId: 'req-SN',
+        timestamp: '2026-08-21T11:00:00.000Z',
+        usage: { input: 7, output: 8 },
+        model: 'claude-haiku-5-5',
+      }),
+      isSidechain: true,
+      cwd: '/work/idd-skill.issue-4383-other',
+    },
+    {
+      type: 'system',
+      subtype: 'compact_boundary',
+      timestamp: '2026-08-21T12:00:00.000Z',
+    },
+  ];
+  const without = claudeAdapter.harvest({
+    records: sessionRecords,
+    fileBasename: 'session-4383.jsonl',
+  });
+  const withSubagents = claudeAdapter.harvest({
+    records: sessionRecords,
+    subagentRecords,
+    fileBasename: 'session-4383.jsonl',
+  });
+  assert.equal(withSubagents.sample.model, 'claude-sonnet-5');
+  assert.equal(withSubagents.sample.model, without.sample.model);
+  assert.equal(withSubagents.sample.startedAt, without.sample.startedAt);
+  assert.equal(withSubagents.sample.endedAt, without.sample.endedAt);
+  assert.equal(withSubagents.sample.compactionCount, 1);
+  assert.equal(
+    withSubagents.sample.compactionCount,
+    without.sample.compactionCount,
+  );
+  assert.equal(
+    withSubagents.sample.vendorSessionId,
+    without.sample.vendorSessionId,
+  );
+  assert.deepEqual(withSubagents.joinHints, { issueNumber: 4001 });
+  assert.deepEqual(withSubagents.joinHints, without.joinHints);
+  // The subagent requests are counted on top of the session's own.
+  assert.equal(
+    withSubagents.sample.usage.inputUncached,
+    without.sample.usage.inputUncached + 57,
+  );
+  assert.equal(
+    withSubagents.sample.usage.output,
+    without.sample.usage.output + 68,
+  );
+  assert.equal(without.sample.turnCount, 1);
+  assert.equal(withSubagents.sample.turnCount, 3);
+  assert.equal(withSubagents.sample.includesSubagents, true);
+  assert.equal(without.sample.includesSubagents, false);
+});
+
+test('a subagent record holding prompt text and a file path leaves neither in the sample (#4383)', () => {
+  const { sample } = claudeAdapter.harvest({
+    records: [userRecord('2026-08-20T10:00:00.000Z')],
+    subagentRecords: [
+      {
+        type: 'assistant',
+        isSidechain: true,
+        requestId: 'req-PT',
+        timestamp: '2026-08-20T10:00:02.000Z',
+        message: {
+          id: 'msg-PT',
+          role: 'assistant',
+          model: 'claude-haiku-5-5',
+          content: [
+            { type: 'text', text: 'PROMPT-MARKER-4383 rewrite the adapter' },
+            {
+              type: 'tool_use',
+              id: 'tool-pt',
+              name: 'Read',
+              input: { file_path: '/home/someone/secret-dir-4383/notes.md' },
+            },
+          ],
+          usage: {
+            input_tokens: 3,
+            output_tokens: 4,
+            cache_read_input_tokens: 5,
+            cache_creation_input_tokens: 0,
+          },
+        },
+      },
+    ],
+    fileBasename: 'session-4383.jsonl',
+  });
+  assert.doesNotMatch(
+    JSON.stringify(sample),
+    /PROMPT-MARKER-4383|secret-dir-4383|notes\.md|\/home\//,
+  );
+  assert.deepEqual(sample.usage, {
+    inputUncached: 3,
+    cacheRead: 5,
+    cacheCreation: 0,
+    output: 4,
+    reasoning: 0,
+  });
+  assert.equal(sample.turnCount, 1);
+  assert.equal(sample.toolCallCount, 1);
+  assert.equal(sample.includesSubagents, true);
+});
+
+test('subagentRecords holding only non-assistant rows leaves includesSubagents false and the session result unchanged (#4383)', () => {
+  const records = readFixtureRecords('session-no-sidechain.jsonl');
+  const baseline = claudeAdapter.harvest({
+    records,
+    fileBasename: 'session-no-sidechain.jsonl',
+  });
+  const result = claudeAdapter.harvest({
+    records,
+    fileBasename: 'session-no-sidechain.jsonl',
+    subagentRecords: [
+      { type: 'fork-context-ref' },
+      {
+        type: 'user',
+        timestamp: '2026-08-20T10:00:05.000Z',
+        message: { role: 'user', content: 'x' },
+      },
+      {
+        type: 'system',
+        subtype: 'compact_boundary',
+        timestamp: '2026-08-20T10:00:06.000Z',
+      },
+    ],
+  });
+  assert.equal(result.sample.includesSubagents, false);
+  assert.deepEqual(result, baseline);
+});
+
+test('an absent, empty, or non-array subagentRecords returns the same harvest result as before (#4383)', () => {
+  const records = readFixtureRecords('session-basic.jsonl');
+  const baseline = claudeAdapter.harvest({
+    records,
+    fileBasename: 'session-basic.jsonl',
+  });
+  const variants: unknown[] = [
+    undefined,
+    [],
+    null,
+    'not-an-array',
+    7,
+    {
+      0: assistantRecord({
+        requestId: 'req-O',
+        timestamp: '2026-08-20T10:00:05.000Z',
+        usage: { input: 99, output: 99 },
+      }),
+    },
+  ];
+  for (const subagentRecords of variants) {
+    assert.deepEqual(
+      claudeAdapter.harvest({
+        records,
+        fileBasename: 'session-basic.jsonl',
+        subagentRecords,
+      }),
+      baseline,
+    );
+  }
+});
+
+test('a tool_use id repeated within records counts once in toolCallCount (#4383)', () => {
+  const { sample } = claudeAdapter.harvest({
+    records: [
+      assistantRecord({
+        requestId: 'req-RD',
+        timestamp: '2026-08-20T10:00:01.000Z',
+        usage: { input: 1, output: 1 },
+        toolUseIds: ['tool-dup'],
+      }),
+      assistantRecord({
+        requestId: 'req-RD',
+        timestamp: '2026-08-20T10:00:02.000Z',
+        usage: { input: 1, output: 1 },
+        toolUseIds: ['tool-dup'],
+      }),
+    ],
+    fileBasename: 'session-4383.jsonl',
+  });
+  assert.equal(sample.turnCount, 1);
+  assert.equal(sample.toolCallCount, 1);
 });
 
 test('a non-system record with a compact-shaped subtype is not counted as a compaction', () => {

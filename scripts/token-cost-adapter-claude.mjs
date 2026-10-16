@@ -60,6 +60,26 @@
 // module stays cwd-only otherwise; `scanClaudeSessions` below never sets
 // `issueNumberOverride` (it has no events.jsonl input to derive one
 // from) and keeps its documented cwd-only contract.
+//
+// #4383: Claude Code writes a subagent's records to
+// `<project dir>/<session id>/subagents/agent-<agent id>.jsonl`, not into the
+// session file this module is handed, so a session file alone misses every
+// subagent API request. Each assistant record there carries
+// `isSidechain: true`, the subagent's `agentId`, and the parent's `sessionId`;
+// the other lines are user, attachment and system rows, and the first line of
+// a fork transcript is a `fork-context-ref` row. That first assistant record
+// repeats a request and a `tool_use` id of the parent file (observed
+// 2026-10-15 on this machine: 17 fork transcripts repeat 13 parent requests).
+// No session file here carries an inline `isSidechain: true` row, so the
+// inline layout that the session-sidechain fixture describes is unobserved.
+// `ClaudeHarvestInput.subagentRecords` takes those parsed lines as one flat
+// array, so a request repeated across agents counts once. Its assistant
+// records count toward `usage`, `turnCount` and `toolCallCount` under the
+// same rules as `records`, and set `includesSubagents`; `model`, timestamps,
+// `compactionCount`, cwd and the join hints still come from `records` alone.
+// Only counts leave this module, never subagent content. Reading the
+// `subagents/` files and routing them to samples is a follow-up, so no
+// production caller passes the field yet.
 import { globSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -417,7 +437,13 @@ export function groupClaudeRequests(records) {
   }
   return requests;
 }
-/** Sum every API request's usage (see {@link groupClaudeRequests}) into one session total, including `isSidechain: true` rows. */
+/**
+ * Sum every API request's usage (see {@link groupClaudeRequests}) into one
+ * session total. The caller passes `records` and `subagentRecords` together
+ * (#4383), so the inline `isSidechain: true` rows of `records` and the
+ * subagent requests both count, and a request repeated across the two
+ * counts once.
+ */
 function extractUsage(records) {
   let summed = ZERO_USAGE;
   for (const request of groupClaudeRequests(records)) {
@@ -434,8 +460,18 @@ function countCompactions(records) {
   }
   return count;
 }
-function extractIncludesSubagents(records) {
-  return records.some((record) => isSidechainRecord(record));
+/**
+ * True when `records` holds an inline `isSidechain: true` row, or when
+ * `subagentRecords` (the `subagents/` transcripts, #4383) holds at least one
+ * assistant record. Only assistant records count on the subagent side, so a
+ * subagent input of non-assistant rows alone (a fork's `fork-context-ref`
+ * row, for example) leaves this false.
+ */
+function extractIncludesSubagents(records, subagentRecords) {
+  return (
+    records.some((record) => isSidechainRecord(record)) ||
+    (subagentRecords ?? []).some((record) => isAssistantRecord(record))
+  );
 }
 /** An assistant message's `message.content`, when it is an array of content blocks (tool calls, text, etc.); `[]` for a plain-string `content` or a missing message. */
 function getContentBlocks(record) {
@@ -452,19 +488,41 @@ function countToolUseBlocksInRecord(record) {
   }
   return count;
 }
-/** Every API request is one turn (see {@link groupClaudeRequests}), matching {@link extractUsage}'s own inclusive convention (sidechain/subagent turns count too). */
+/**
+ * Every API request is one turn (see {@link groupClaudeRequests}), matching
+ * {@link extractUsage}'s own inclusive convention: the sidechain rows of
+ * `records` and the subagent requests of `subagentRecords` (#4383) both count.
+ */
 function extractTurnCount(records) {
   return groupClaudeRequests(records).length;
 }
-/** Sum of `tool_use` blocks across every assistant record. */
+/**
+ * Distinct `tool_use` ids across every assistant record of the caller's
+ * inputs (`records` and `subagentRecords`, #4383), plus one for each block
+ * with no usable id. A fork transcript repeats its parent's `tool_use`
+ * blocks (observed 2026-10-15), so a repeated id counts once. A block whose
+ * `id` is missing, not a string, or empty counts on its own.
+ */
 function extractToolCallCount(records) {
-  let count = 0;
+  const toolUseIds = new Set();
+  let blocksWithoutId = 0;
   for (const record of records) {
-    if (isAssistantRecord(record)) {
-      count += countToolUseBlocksInRecord(record);
+    if (!isAssistantRecord(record)) {
+      continue;
+    }
+    for (const block of getContentBlocks(record)) {
+      if (!isPlainObject(block) || block.type !== 'tool_use') {
+        continue;
+      }
+      const id = getStringField(block, 'id');
+      if (id === undefined) {
+        blocksWithoutId += 1;
+      } else {
+        toolUseIds.add(id);
+      }
     }
   }
-  return count;
+  return toolUseIds.size + blocksWithoutId;
 }
 function asClaudeHarvestInput(input) {
   if (!isPlainObject(input) || !Array.isArray(input.records)) {
@@ -485,12 +543,16 @@ function asClaudeHarvestInput(input) {
     input.vendorSessionIdOverride.length > 0
       ? input.vendorSessionIdOverride
       : undefined;
+  const subagentRecords = Array.isArray(input.subagentRecords)
+    ? input.subagentRecords
+    : undefined;
   return {
     records: input.records,
     fileBasename,
     segmentIndex,
     issueNumberOverride,
     vendorSessionIdOverride,
+    subagentRecords,
   };
 }
 /** Claude Code vendor adapter. `input` must satisfy {@link ClaudeHarvestInput}. */
@@ -502,7 +564,14 @@ export const claudeAdapter = {
       segmentIndex,
       issueNumberOverride,
       vendorSessionIdOverride,
+      subagentRecords,
     } = asClaudeHarvestInput(input);
+    // #4383: subagent records count toward usage, turns and tool calls. The
+    // identity and metadata fields below read `records` alone.
+    const countedRecords =
+      subagentRecords === undefined
+        ? records
+        : [...records, ...subagentRecords];
     const vendorSessionId = deriveVendorSessionId(
       vendorSessionIdOverride ??
         extractSessionId(records) ??
@@ -532,14 +601,14 @@ export const claudeAdapter = {
       model: extractModel(records) ?? 'unknown',
       attribution: 'session-unscoped',
       outcome: 'unknown',
-      usage: extractUsage(records),
+      usage: extractUsage(countedRecords),
       compactionCount: countCompactions(records),
       startedAt: timestamps.startedAt,
       endedAt: timestamps.endedAt,
       vendorSessionId,
-      includesSubagents: extractIncludesSubagents(records),
-      turnCount: extractTurnCount(records),
-      toolCallCount: extractToolCallCount(records),
+      includesSubagents: extractIncludesSubagents(records, subagentRecords),
+      turnCount: extractTurnCount(countedRecords),
+      toolCallCount: extractToolCallCount(countedRecords),
     };
     const redacted = redactTokenCostRecord(sample);
     assertTokenCostSample(redacted);
