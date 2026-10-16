@@ -4260,10 +4260,10 @@ github.com), and `--worktree` must be registered in that checkout; otherwise the
 run is refused before any claim read. An HTTP(S) origin's port is part of its
 host, so `GH_HOST` names it too, except port 443, which `GH_HOST` cannot name:
 drop that port from the origin URL. An SSH or `git://` origin's port is compared
-with the host too, and `GH_HOST` cannot name it, so its URL must drop it. The
-command then sets `GH_HOST`, for its own process, to the normalized active host,
-so every `gh` call the command makes goes to the origin's host and not to gh's
-own default host.
+with the host too. `GH_HOST` could carry it, but every `gh` call would then go
+to that port, so its URL must drop it. The command then sets `GH_HOST`, for its
+own process, to the normalized active host, so every `gh` call the command makes
+goes to the origin's host and not to gh's own default host.
 
 Before any POST the command reads the stored activation nonce (`claim-lock
 --read-tokens`), runs `resume-claim-routing --assert`, checks that the claim
