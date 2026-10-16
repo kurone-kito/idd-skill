@@ -37,7 +37,9 @@
 // check. A closed issue (`state` is `CLOSED`) is refused as `issue-closed` with
 // one failed `issue-state` step, and the A5 checks are then `not-run`. An
 // `OPEN` issue adds no step, so its report is unchanged. A state that is
-// neither is a failed read, not a refusal.
+// neither is a failed read, not a refusal. With `--apply`, the state is read
+// again right before the claim marker, and a closed issue stops the run there
+// as `issue-closed` (one failed `issue-state-recheck` step).
 import { spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { lstatSync } from 'node:fs';
@@ -1795,6 +1797,65 @@ function checkHoldBeforeClaim(state) {
   return applyPass(`no ${state.authoringLabel} label (holdCheck: label)`);
 }
 /**
+ * The issue state, read again right before the claim marker. The pre-check
+ * reads it once, so an issue closed during the write half would still get a
+ * claim marker. Like the pre-check guard, this adds a step only when it
+ * refuses: a closed issue (`issue-closed`), or a state that cannot be read or
+ * is not `OPEN` or `CLOSED` (`precheck-unavailable`). Nothing is sent before it.
+ */
+function recheckIssueState(state) {
+  const next =
+    state.identity === null
+      ? 'Inspect the issue state by hand.'
+      : lostClaimNext(state.identity.claimId);
+  let current = null;
+  let readFailure = '';
+  try {
+    const read = state.deps.run('gh', [
+      'issue',
+      'view',
+      String(state.issue),
+      '--json',
+      'state',
+    ]);
+    if (read.status !== 0) {
+      readFailure = `gh issue view ended with ${describeStatus(read)}`;
+    } else {
+      const value = parseJsonObject(read.stdout)?.state;
+      if (value === 'OPEN' || value === 'CLOSED') {
+        current = value;
+      } else {
+        readFailure = 'gh issue view printed no valid state';
+      }
+    }
+  } catch (error) {
+    readFailure = errorMessage(error);
+  }
+  if (current === 'OPEN') {
+    return null;
+  }
+  const failure =
+    current === null
+      ? {
+          reason: 'precheck-unavailable',
+          nextAction: next,
+          detail: `the issue state re-read failed: ${readFailure}`,
+        }
+      : {
+          reason: 'issue-closed',
+          nextAction: next,
+          detail: `the issue state is ${current}, not OPEN, before the claim marker`,
+        };
+  state.steps.push({
+    id: 'issue-state-recheck',
+    status: 'failed',
+    reason: failure.reason,
+    nextAction: failure.nextAction,
+    detail: failure.detail,
+  });
+  return failure;
+}
+/**
  * The claim marker. A failed write is `claimPosted: false` only when nothing
  * was sent; otherwise the comments are read, and the claim is never posted twice.
  */
@@ -2182,6 +2243,10 @@ function runClaimWrites(state) {
     // marker fetch and the hold read are the nearest reads before the claim.
     step(state, 'own-worktree-gate', checkOwnWorktreeGate(state)) ??
     step(state, 'hold-check', checkHoldBeforeClaim(state)) ??
+    // The issue state is read last, right before the claim marker: an issue
+    // closed during this run is refused here, even though the pre-check read
+    // it as open.
+    recheckIssueState(state) ??
     step(state, 'claim-post', postClaim(state)) ??
     // The nonce-bearing record comes right before its marker posts (the
     // record contract in claim-lock.mts: "again with the nonce right before the
@@ -2438,7 +2503,8 @@ for the local scan) with the written path as the next action.
 With --apply, when every pre-check passes, the helper runs the fresh-claim
 order of idd-claim.instructions.md: B1 step 1 and the worktree (under the
 clone-scoped lock), the generated tokens, the own-worktree gate, the
-authoring-label hold check, the claim marker, the activation nonce,
+authoring-label hold check, the issue-state re-read (issue-closed), the claim
+marker, the activation nonce,
 the worktree-local claim lock, the final assert, and a second hold check. It mints the
 claim id and the nonce itself. --agent-id is the agent id the claim is made
 under. --project-status is your statement of the project status part of A5(b),

@@ -1680,6 +1680,10 @@ interface ApplyScenario {
   assigned?: boolean;
   /** The issue is closed: the issue-state guard refuses it before any write. */
   closed?: boolean;
+  /** The issue is open at the pre-check and closed when the state is re-read before the claim. */
+  closeBeforeClaim?: boolean;
+  /** The state re-read before the claim marker fails. */
+  stateRecheckFails?: boolean;
   /** Every GraphQL edit-state read fails, so no marker can be verified. */
   editStateFails?: boolean;
   /** The repository lookup; the default answers with the test repository. */
@@ -1848,7 +1852,12 @@ function runApply(
       return ok(JSON.stringify({ labels: next.map((name) => ({ name })) }));
     }
     if (args[0] === 'issue' && args[1] === 'view') {
-      if (scenario.closed) {
+      // The state re-read before the claim marker asks for `state` alone.
+      const recheck = args[4] === 'state';
+      if (recheck && scenario.stateRecheckFails) {
+        return failed(1);
+      }
+      if (scenario.closed || (recheck && scenario.closeBeforeClaim)) {
         return ok(
           JSON.stringify({ title: TITLE, assignees: [], state: 'CLOSED' }),
         );
@@ -2548,6 +2557,29 @@ test('a hold before the claim write stops with hold-active and posts no marker',
     const report = assertStopped(run, 'hold-active');
     assert.equal(report.claimPosted, false);
     assert.equal(report.lostClaimCleanupRequired, true);
+    assert.equal(run.posts.length, 0);
+  });
+});
+
+test('an issue closed after the pre-check is refused before the claim marker, and nothing is posted', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { closeBeforeClaim: true });
+    const report = assertStopped(run, 'issue-closed');
+    assert.equal(report.claimPosted, false);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.equal(run.posts.length, 0);
+    const recheck = report.steps.find(
+      (step) => step.id === 'issue-state-recheck',
+    );
+    assert.equal(recheck?.status, 'failed');
+    assert.equal(recheck?.reason, 'issue-closed');
+  });
+});
+
+test('a state re-read that fails before the claim marker is precheck-unavailable and posts nothing', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { stateRecheckFails: true });
+    assertStopped(run, 'precheck-unavailable');
     assert.equal(run.posts.length, 0);
   });
 });
