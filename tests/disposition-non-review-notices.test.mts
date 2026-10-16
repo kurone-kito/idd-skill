@@ -707,6 +707,98 @@ test('CLI apply (#4437): one unplanned --comment-id refuses the whole run before
   }
 });
 
+test('CLI apply (#4437): a selected --comment-id posts only that planned notice', () => {
+  // The same claim and PR fixture as the refusal test above, with the POST
+  // answering with a new comment id. Notice 501 is planned but not selected.
+  const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const claimLine = JSON.stringify({
+    id: 7001,
+    user: { login: 'kurone-kito' },
+    body: `<!-- claimed-by: claude-826e09f0 ${COMMENT_ID_CLAIM_ID} supersedes: none ${now} branch: issue/4437-feat-non-review-notices-add-comment-id -->\n\n_claude-826e09f0: issue claim — IDD automation marker. Do not edit._`,
+    created_at: now,
+    updated_at: now,
+    node_id: 'IC_claim',
+  });
+  const prNotices = `${[
+    prCommentLine(501, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:01Z'),
+    prCommentLine(502, CODERABBIT, CODERABBIT_NOTICE, '2026-05-12T00:00:02Z'),
+  ].join('\n')}\n`;
+  const fixture = installFixtureGh({
+    responses: [
+      {
+        args: ['auth', 'token'],
+        match: 'prefix',
+        stdout: 'fixture-token\n',
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/issues/4437/comments`],
+        match: 'prefix',
+        stdout: `${claimLine}\n`,
+      },
+      {
+        args: ['api', 'graphql'],
+        match: 'prefix',
+        includes: ['IC_claim'],
+        stdout: editStateStdout(['IC_claim']),
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/pulls/9001`],
+        match: 'prefix',
+        stdout: `${HEAD_SHA}\n`,
+      },
+      {
+        args: ['api', `${COMMENT_ID_REPO_PATH}/issues/9001/comments`],
+        match: 'prefix',
+        stdout: prNotices,
+      },
+      {
+        args: ['api', 'graphql'],
+        match: 'prefix',
+        includes: ['IC_501', 'IC_502'],
+        stdout: editStateStdout(['IC_501', 'IC_502']),
+      },
+      {
+        args: [
+          'api',
+          '--method',
+          'POST',
+          `${COMMENT_ID_REPO_PATH}/issues/9001/comments`,
+        ],
+        match: 'prefix',
+        stdout: '{"id":9502}\n',
+      },
+    ],
+  });
+  try {
+    const result = spawnCommentIdCli([
+      ...COMMENT_ID_BASE_ARGS,
+      '--apply',
+      '--claim-issue',
+      '4437',
+      '--claim-id',
+      COMMENT_ID_CLAIM_ID,
+      '--comment-id',
+      '502',
+    ]);
+    assert.equal(result.status, 0, JSON.stringify(result));
+    const output = JSON.parse(result.stdout) as {
+      status: string;
+      applied: { noticeId: number; commentId: number }[];
+      failed: unknown[];
+    };
+    assert.equal(output.status, 'applied');
+    assert.deepEqual(output.applied, [{ noticeId: 502, commentId: 9502 }]);
+    assert.deepEqual(output.failed, []);
+    assert.equal(
+      fixture.calls().filter((argv) => argv.includes('POST')).length,
+      1,
+    );
+    assert.deepEqual(fixture.unexpectedCalls(), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
 test('CLI (#4437): a malformed --comment-id is a usage error before any gh call', () => {
   const fixture = installFixtureGh({});
   try {
