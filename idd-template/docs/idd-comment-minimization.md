@@ -938,7 +938,11 @@ corresponding path:
 | `permission-blocked` | Re-check, then post cleanup-permission-blocked, then F4      |
 |                      | step 3.                                                      |
 
-After apply, if `status` is `failed`, `incomplete`, or `rescan-failed`,
+After apply, if `status` is `held`, the head-proof gate stopped the run
+before its next pass. Post the hold note from `idd-merge.instructions.md`
+(see [Hold reason codes](#hold-reason-codes)), and post neither an
+evidence comment nor a cleanup-failure comment. After apply, if `status`
+is `failed`, `incomplete`, or `rescan-failed`,
 run the same pre-POST re-check and act on `RECHECK_RESULT`:
 `FETCH_FAILED` → post `recheck-failed`, `POST` → post a cleanup-failure
 comment, `SKIP` → do not post. A cleanup failure after a successful F3
