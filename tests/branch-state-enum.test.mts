@@ -58,6 +58,18 @@ type DerivedSyncRecommendationIsUnion = AssertTrue<
     (typeof branchConflictState.DERIVED_SYNC_RECOMMENDATIONS)[number]
   >
 >;
+// The arrays must stay `as const`. Without it both element types widen to
+// `string`, so the two guards above still pass while the narrowing is lost.
+type BranchStatesAreLiteral = AssertTrue<
+  string extends (typeof branchConflictState.DERIVED_BRANCH_STATES)[number]
+    ? false
+    : true
+>;
+type SyncRecommendationsAreLiteral = AssertTrue<
+  string extends (typeof branchConflictState.DERIVED_SYNC_RECOMMENDATIONS)[number]
+    ? false
+    : true
+>;
 
 const schema = JSON.parse(
   readFileSync(join(REPO_ROOT, SCHEMA_PATH), 'utf8'),
@@ -206,12 +218,17 @@ test('the taxonomy row and the helper bullets name the schema enums, in order', 
 });
 
 // Compile-time check: the annotations below fail typecheck unless each
-// BranchStateDerivation field is exactly the union of its derived array. The
-// runtime body is trivially true and adds no coverage of its own.
+// BranchStateDerivation field is exactly the union of its derived array, and
+// each array stays a literal tuple. The runtime body is trivially true and
+// adds no coverage of its own.
 test('compile-time: each BranchStateDerivation field is the closed union of its derived array', () => {
-  const proofs: [DerivedBranchStateIsUnion, DerivedSyncRecommendationIsUnion] =
-    [true, true];
-  assert.deepEqual(proofs, [true, true]);
+  const proofs: [
+    DerivedBranchStateIsUnion,
+    DerivedSyncRecommendationIsUnion,
+    BranchStatesAreLiteral,
+    SyncRecommendationsAreLiteral,
+  ] = [true, true, true, true];
+  assert.deepEqual(proofs, [true, true, true, true]);
 });
 
 test('the derived arrays are schema names, and the schema names they omit are the recorded remainder', () => {
