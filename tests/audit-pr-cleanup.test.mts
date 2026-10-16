@@ -3021,3 +3021,65 @@ test('f4GateScope applies only to a claimed single-PR run (#4369)', () => {
   );
   assert.equal(f4GateScope(cleanupArgs({ apply: true }), 7), null);
 });
+
+test('runApplyWithRetry: a gate stop also runs no minimize call and reports held (#4369)', async () => {
+  const gate = fakeGate({
+    markers: [
+      markerJson({
+        verdict: 'stop',
+        reason: 'claim-or-lock',
+        nextAction: 'Do not post and do not continue F4.',
+      }),
+    ],
+  });
+  const minimized: string[] = [];
+
+  const result = await runApplyWithRetry(
+    createAuditReport({ candidates: [createRow('c1')] }),
+    (pass) =>
+      applyCandidatePass(
+        'o',
+        'r',
+        pass,
+        applyArgs(),
+        {},
+        {
+          fetchNode: () => fakeSnapshot(),
+          minimize: gateMinimizeFake(minimized),
+        },
+      ),
+    async () => {
+      throw new Error('no rescan after a stop');
+    },
+    undefined,
+    noBackoff,
+    undefined,
+    () => checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, gate.deps),
+  );
+
+  assert.deepEqual(minimized, []);
+  computeReportSummary(result.report);
+  assert.equal(result.report.status, 'held');
+  assert.equal(result.report.holds?.[0]?.verdict, 'stop');
+});
+
+test('checkF4HeadProofGate: a dry run that is not proceed after a posted proof holds with its reason (#4369)', () => {
+  const gate = fakeGate({
+    markers: [
+      markerJson({ verdict: 'post' }),
+      markerJson({ verdict: 'proceed', reason: 'posted-confirmed' }),
+      markerJson({
+        verdict: 'hold',
+        reason: 'conflicting-marker',
+        nextAction: 'Reconcile by reading the issue comments.',
+      }),
+    ],
+  });
+  const hold = checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, gate.deps);
+
+  assert.equal(hold?.code, 'conflicting-marker');
+  assert.deepEqual(
+    gate.calls.marker.map((run) => run.apply),
+    [false, true, false],
+  );
+});
