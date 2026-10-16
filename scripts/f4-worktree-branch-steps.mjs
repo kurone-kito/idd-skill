@@ -335,12 +335,16 @@ export function runF4WorktreeBranchSteps(input, deps) {
     );
   };
   const failAt = (index, step, phase, error) => {
+    const code = error.code ?? null;
+    const nextAction =
+      code !== null
+        ? NEXT_ACTIONS[code]
+        : 'Failed. Inspect the state named in the detail. Nothing else ran, and a rerun reads the proof again and posts nothing.';
     steps.push(
       stepRecord(step, 'failed', {
         phase,
-        reason: 'failed',
-        nextAction:
-          'Failed. Inspect the state named in the detail. Nothing else ran, and a rerun reads the proof again and posts nothing.',
+        reason: code ?? 'failed',
+        nextAction,
         detail: error.detail,
       }),
     );
@@ -348,8 +352,8 @@ export function runF4WorktreeBranchSteps(input, deps) {
       'failed',
       { index, step },
       {
-        reason: 'failed',
-        nextAction: error.detail,
+        reason: code ?? 'failed',
+        nextAction: code !== null ? nextAction : error.detail,
       },
     );
   };
@@ -538,6 +542,7 @@ function runStep4And5(
         hold: null,
         error: {
           kind: 'failed',
+          code: 'worktree-remove-refused',
           detail: `git worktree remove refused: ${removed.stderr.trim()}`,
         },
         at: 'step-5',

@@ -812,6 +812,7 @@ test('a refused worktree removal fails at step 5 and names the steps not yet run
   );
   assert.equal(report.status, 'failed');
   assert.equal(report.failedStep, 'step-5');
+  assert.equal(report.reason, 'worktree-remove-refused');
   assert.deepEqual(report.notRunSteps, [
     'claim-check (before-step-6)',
     'step-6',
