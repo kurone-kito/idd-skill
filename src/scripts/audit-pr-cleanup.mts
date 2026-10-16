@@ -428,6 +428,13 @@ const MARKER_VERDICTS: ReadonlySet<string> = new Set([
   'post',
 ]);
 
+/** The reasons a `proceed` verdict carries for a validated proof (#4369). */
+const F4_PROCEED_REASONS: ReadonlySet<string> = new Set([
+  'reusable',
+  'posted-confirmed',
+  'reread-reusable',
+]);
+
 /** Next actions of the holds this helper decides itself. */
 const HELPER_NEXT_ACTIONS: Readonly<Partial<Record<HoldReasonCode, string>>> = {
   'claim-or-lock':
@@ -1267,6 +1274,20 @@ function readMarkerDecision(stdout: string | null): F4GateDecision {
   const reason = typeof fields.reason === 'string' ? fields.reason : null;
   if (verdict !== 'proceed' && verdict !== 'post' && reason === null) {
     return unreadable(`the marker command gave ${verdict} without a reason`);
+  }
+  // A proceed verdict lets a pass run, so only a reason the marker command
+  // gives for a validated proof counts. A post verdict carries no reason.
+  // Anything else fails closed as unreadable (kurone-kito/idd-skill#4369).
+  if (
+    verdict === 'proceed' &&
+    (reason === null || !F4_PROCEED_REASONS.has(reason))
+  ) {
+    return unreadable(
+      `the marker command gave proceed with reason ${reason ?? 'none'}`,
+    );
+  }
+  if (verdict === 'post' && reason !== null) {
+    return unreadable(`the marker command gave post with reason ${reason}`);
   }
   const warnings = Array.isArray(fields.warnings)
     ? fields.warnings.filter((line): line is string => typeof line === 'string')

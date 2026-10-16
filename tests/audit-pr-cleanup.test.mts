@@ -3083,3 +3083,26 @@ test('checkF4HeadProofGate: a dry run that is not proceed after a posted proof h
     [false, true, false],
   );
 });
+
+test('checkF4HeadProofGate: a proceed without a known reason, or a post with a reason, fails closed (#4369)', () => {
+  const gate = fakeGate({
+    markers: [
+      markerJson({ verdict: 'proceed' }),
+      markerJson({ verdict: 'proceed', reason: 'made-up-reason' }),
+      markerJson({ verdict: 'post', reason: 'reusable' }),
+    ],
+  });
+  const holds = [0, 1, 2].map(() =>
+    checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, gate.deps),
+  );
+
+  assert.deepEqual(
+    holds.map((hold) => hold?.code),
+    ['gate-unreadable', 'gate-unreadable', 'gate-unreadable'],
+  );
+  assert.equal(
+    gate.calls.marker.every((run) => run.apply === false),
+    true,
+    'no apply run follows a malformed verdict',
+  );
+});
