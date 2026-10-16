@@ -511,12 +511,28 @@ export function describeUnaddressedActivity(snapshot) {
   const itemTotal = commentCount + threadCount;
   const verb = itemTotal === 1 ? 'has' : 'have';
   const pronoun = itemTotal === 1 ? 'it' : 'them';
-  return [
+  // #4366: the warning names the refresh sequence rather than "before relying
+  // on this watermark", which read as a stop. It stays diagnostic (it never
+  // blocks the post). Ack-only replies are acceptable evidence: the watermark
+  // refresh runs first, then F2's ack-only override is evaluated on that
+  // refreshed snapshot. A plain comment is never ack-only, so the override
+  // cannot clear one.
+  const sentences = [
     `${parts.join(' and ')} ${verb} no disposition evidence as of this ` +
       `watermark, but its max-activity-at/total-item-count already cover ` +
-      `${pronoun} -- dispose ${pronoun} (or re-run --from-pr after doing ` +
-      'so) before relying on this watermark.',
+      `${pronoun}.`,
+    'This warning is diagnostic and does not block the watermark post.',
+    'Ack-only replies to a disposition are acceptable evidence: when every ' +
+      'remaining cause is one, re-run --from-pr to refresh the watermark ' +
+      'first, then evaluate the ack-only override on that refreshed snapshot.',
   ];
+  if (commentCount > 0) {
+    sentences.push(
+      'A plain comment with no disposition still needs its own disposition; ' +
+        'the ack-only override does not cover it.',
+    );
+  }
+  return [sentences.join(' ')];
 }
 /**
  * Findings a review carries only in its body, with no thread of their own
