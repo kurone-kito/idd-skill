@@ -32,6 +32,7 @@ import {
   markerStdout,
   parsePrNumbers,
   readActiveClaim,
+  repositoryBindingHold,
   runApplyWithRetry,
   SKIP_REASON_CODES,
 } from '../src/scripts/audit-pr-cleanup.mts';
@@ -3160,4 +3161,32 @@ test('markerStdout: a child that timed out, errored, or was killed gives no verd
   );
   assert.equal(markerStdout({ stdout: '  ', status: 0 }), null);
   assert.equal(markerStdout({ stdout: null, status: 0 }), null);
+});
+
+test('repositoryBindingHold: a cleanup of another repository than the checkout holds (#4369)', () => {
+  assert.equal(
+    repositoryBindingHold('kurone-kito', 'idd-skill', 'kurone-kito/idd-skill'),
+    null,
+  );
+  assert.equal(
+    repositoryBindingHold('Kurone-Kito', 'IDD-skill', 'kurone-kito/idd-skill'),
+    null,
+    'GitHub names compare without case',
+  );
+
+  const other = repositoryBindingHold(
+    'someone',
+    'elsewhere',
+    'kurone-kito/idd-skill',
+  );
+  assert.equal(other?.code, 'repo-mismatch');
+  assert.equal(other?.verdict, 'hold');
+  assert.match(
+    other?.detail ?? '',
+    /kurone-kito\/idd-skill, not someone\/elsewhere/u,
+  );
+
+  const unreadable = repositoryBindingHold('kurone-kito', 'idd-skill', null);
+  assert.equal(unreadable?.code, 'repo-mismatch');
+  assert.match(unreadable?.detail ?? '', /could not be read/u);
 });

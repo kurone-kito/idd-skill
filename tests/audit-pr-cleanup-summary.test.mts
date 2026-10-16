@@ -526,7 +526,7 @@ test('computeReportSummary: an empty hold list leaves the apply status unchanged
 
 test('HOLD_REASON_CODES is a closed list of unique kebab-case codes (#4369)', () => {
   assert.equal(new Set(HOLD_REASON_CODES).size, HOLD_REASON_CODES.length);
-  assert.equal(HOLD_REASON_CODES.length, 17);
+  assert.equal(HOLD_REASON_CODES.length, 18);
   for (const code of HOLD_REASON_CODES) {
     assert.match(code, /^[a-z0-9]+(?:-[a-z0-9]+)*$/u, code);
   }

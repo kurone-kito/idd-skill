@@ -865,25 +865,26 @@ note, as `idd-merge.instructions.md` describes, and never a cleanup-failure
 comment, so `held` is not an evidence outcome. Each code has a producer
 and exactly one row in this table, and the repository tests check both.
 
-| Code                        | Produced by                 | Meaning and next action                                                                                                              |
-| --------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `claim-or-lock`             | verdict table; audit helper | Stop. This session does not hold the claim or its lock, so end quietly. A hold when the claim could not be read.                     |
-| `pr-state`                  | verdict table               | Hold. The merged pull request could not be read or does not agree with itself. Read it again, then rerun.                            |
-| `ref-read`                  | verdict table               | Hold. The branch name or the local branch ref could not be read. Fix the cause, then rerun.                                          |
-| `marker-read-failed`        | verdict table               | Hold. The comments of the issue could not be read. Fix the cause, then rerun.                                                        |
-| `branch-absent`             | verdict table               | Hold. The local branch is gone and no reusable proof exists, so the branch tip cannot be proven.                                     |
-| `conflicting-marker`        | verdict table               | Hold. A trusted proof for this claim conflicts with the live state or is malformed. Reconcile by reading the issue comments.         |
-| `watermark-unauthenticated` | verdict table               | Hold. No trusted, unedited review watermark of this claim is on the pull request.                                                    |
-| `claim-activation-unknown`  | verdict table               | Hold. The first trusted claimed-by marker of this claim and branch could not be found.                                               |
-| `posted-disagreed`          | verdict table               | Hold. The proof read back after posting does not match what was posted, or could not be read. Do not post again.                     |
-| `post-unconfirmed`          | verdict table; audit helper | Hold. The proof was posted, but later reads still find none. Reconcile by reading the comments, and do not post again.               |
-| `reread-failed`             | verdict table               | Hold. A re-read of the issue comments failed after an ambiguous post. Do not post again.                                             |
-| `reread-conflict`           | verdict table               | Hold. The re-reads after an ambiguous post disagree or find a conflicting proof. Do not post again.                                  |
-| `post-rejected`             | marker post                 | Hold. GitHub refused the proof before anything was sent, so nothing was posted. Fix the cause, then rerun.                           |
-| `gate-unreadable`           | audit helper                | Hold. The marker command printed no usable verdict, or gave a reason outside this table. Read its output, fix the cause, then rerun. |
-| `worktree-not-found`        | audit helper                | Hold. Git registers no worktree for the claim's branch. Restore the worktree, then rerun.                                            |
-| `head-changed`              | audit helper                | Hold. The pull request head moved between passes. Read it again, then rerun the cleanup.                                             |
-| `head-read-failed`          | audit helper                | Hold. The pull request head could not be read. Fix the cause, then rerun.                                                            |
+| Code                        | Produced by                 | Meaning and next action                                                                                                               |
+| --------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `claim-or-lock`             | verdict table; audit helper | Stop. This session does not hold the claim or its lock, so end quietly. A hold when the claim could not be read.                      |
+| `pr-state`                  | verdict table               | Hold. The merged pull request could not be read or does not agree with itself. Read it again, then rerun.                             |
+| `ref-read`                  | verdict table               | Hold. The branch name or the local branch ref could not be read. Fix the cause, then rerun.                                           |
+| `marker-read-failed`        | verdict table               | Hold. The comments of the issue could not be read. Fix the cause, then rerun.                                                         |
+| `branch-absent`             | verdict table               | Hold. The local branch is gone and no reusable proof exists, so the branch tip cannot be proven.                                      |
+| `conflicting-marker`        | verdict table               | Hold. A trusted proof for this claim conflicts with the live state or is malformed. Reconcile by reading the issue comments.          |
+| `watermark-unauthenticated` | verdict table               | Hold. No trusted, unedited review watermark of this claim is on the pull request.                                                     |
+| `claim-activation-unknown`  | verdict table               | Hold. The first trusted claimed-by marker of this claim and branch could not be found.                                                |
+| `posted-disagreed`          | verdict table               | Hold. The proof read back after posting does not match what was posted, or could not be read. Do not post again.                      |
+| `post-unconfirmed`          | verdict table; audit helper | Hold. The proof was posted, but later reads still find none. Reconcile by reading the comments, and do not post again.                |
+| `reread-failed`             | verdict table               | Hold. A re-read of the issue comments failed after an ambiguous post. Do not post again.                                              |
+| `reread-conflict`           | verdict table               | Hold. The re-reads after an ambiguous post disagree or find a conflicting proof. Do not post again.                                   |
+| `post-rejected`             | marker post                 | Hold. GitHub refused the proof before anything was sent, so nothing was posted. Fix the cause, then rerun.                            |
+| `gate-unreadable`           | audit helper                | Hold. The marker command printed no usable verdict, or gave a reason outside this table. Read its output, fix the cause, then rerun.  |
+| `worktree-not-found`        | audit helper                | Hold. Git registers no worktree for the claim's branch. Restore the worktree, then rerun.                                             |
+| `head-changed`              | audit helper                | Hold. The pull request head moved between passes. Read it again, then rerun the cleanup.                                              |
+| `head-read-failed`          | audit helper                | Hold. The pull request head could not be read. Fix the cause, then rerun.                                                             |
+| `repo-mismatch`             | audit helper                | Hold. The checkout names a different repository than this cleanup targets. Run it from that checkout, or drop `--repo` and `--owner`. |
 
 ## Apply Shape
 

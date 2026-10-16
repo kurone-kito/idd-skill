@@ -24,6 +24,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
+import { resolveCheckoutRepository } from './f4-head-proof-live.mts';
 import {
   combineOwnerRepoFlags,
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
@@ -449,6 +450,8 @@ const HELPER_NEXT_ACTIONS: Readonly<Partial<Record<HoldReasonCode, string>>> = {
     'Do not post again. The proof was posted but a dry run still finds none; reconcile by reading the issue comments.',
   'gate-unreadable':
     'Do not apply. The head-proof check printed no usable verdict; read its output, fix the cause, then rerun.',
+  'repo-mismatch':
+    'Do not apply. The checkout names a different repository than this cleanup targets; run it from that checkout, or drop --repo and --owner, then rerun.',
 };
 const GENERIC_NEXT_ACTION =
   'Do not apply. Read the hold reason and the head-proof output, fix the cause, then rerun.';
@@ -654,6 +657,10 @@ async function processOnePr(
 ): Promise<boolean> {
   // The claimed single-PR scope of the head-proof gate (#4369), or null.
   const scope = f4GateScope(args, prNumber);
+  const repositoryHold =
+    scope === null
+      ? null
+      : repositoryBindingHold(owner, repo, checkoutRepositoryOrNull());
   const claimContext: ClaimContext = {
     expectedLinkedPrs: buildExpectedLinkedPrReferences(owner, repo, prNumber),
     // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
@@ -671,10 +678,13 @@ async function processOnePr(
   if (args.apply) {
     report.mode = 'apply';
     const gateState: F4GateState = { headSha: null };
+    // A cleanup that targets another repository than the checkout holds before
+    // any pass (#4369). The proof gate runs only when the repositories match.
     const beforePass =
       scope === null
         ? undefined
         : (): CleanupHold | null =>
+            repositoryHold ??
             checkF4HeadProofGate(
               scope,
               gateState,
@@ -722,10 +732,13 @@ async function processOnePr(
   // A claimed dry run reports the gate verdict (#4369); every other dry run
   // reports that no gate applies, which is not a verdict.
   if (scope !== null && report.candidates.length > 0) {
-    const gate = describeF4HeadProofGate(
-      scope,
-      createF4GateDeps(owner, repo, args, scope, claimContext),
-    );
+    const gate =
+      repositoryHold === null
+        ? describeF4HeadProofGate(
+            scope,
+            createF4GateDeps(owner, repo, args, scope, claimContext),
+          )
+        : { gate: repositoryHold.verdict, gateReason: repositoryHold.code };
     report.gate = gate.gate;
     report.gateReason = gate.gateReason;
   } else {
@@ -1221,6 +1234,42 @@ function isHoldReasonCode(value: string | null): value is HoldReasonCode {
 
 function helperNextAction(code: HoldReasonCode): string {
   return HELPER_NEXT_ACTIONS[code] ?? GENERIC_NEXT_ACTION;
+}
+
+/**
+ * The `owner/repo` of the current checkout, as the marker command reads it, or
+ * null when the origin does not name one (#4369).
+ */
+function checkoutRepositoryOrNull(): string | null {
+  try {
+    const named = resolveCheckoutRepository();
+    return `${named.owner}/${named.repo}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The hold for a cleanup whose target repository is not the checkout's (#4369).
+ * The marker command reads the checkout's repository and takes no repository
+ * flag, so a proof read there cannot bind a cleanup of another repository.
+ */
+export function repositoryBindingHold(
+  owner: string,
+  repo: string,
+  checkout: string | null,
+): CleanupHold | null {
+  const target = `${owner}/${repo}`;
+  if (checkout !== null && checkout.toLowerCase() === target.toLowerCase()) {
+    return null;
+  }
+  return helperHold(
+    'repo-mismatch',
+    'hold',
+    checkout === null
+      ? 'the checkout repository could not be read'
+      : `the checkout is ${checkout}, not ${target}`,
+  );
 }
 
 /** The first line of an error, so one hold line carries its cause. */

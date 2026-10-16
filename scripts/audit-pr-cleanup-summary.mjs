@@ -9,7 +9,7 @@
  * hold-reason table of idd-template/docs/idd-comment-minimization.md. The
  * first twelve come from the verdict table, `post-rejected` from the marker
  * command's post, `gate-unreadable` from a marker child that printed no
- * result, and the last three from the audit helper's own gate reads.
+ * result, and the last four from the audit helper's own gate reads.
  */
 export const HOLD_REASON_CODES = [
   'claim-or-lock',
@@ -29,6 +29,7 @@ export const HOLD_REASON_CODES = [
   'worktree-not-found',
   'head-changed',
   'head-read-failed',
+  'repo-mismatch',
 ];
 const SKIP_REASON_CODE_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /**
