@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,6 +15,7 @@ import { test } from 'node:test';
 
 import { computeBranchName } from '../src/scripts/branch-name.mts';
 import {
+  type ClaimApplyReport,
   type ClaimIssueDeps,
   type ClaimIssueReport,
   type ClaimStopReason,
@@ -22,12 +24,19 @@ import {
   createDefaultRunner,
   runClaimIssue,
   runClaimPrechecks,
+  worktreePathProblem,
 } from '../src/scripts/claim-issue.mts';
+import {
+  acquireCloneLock,
+  checkCloneLock,
+  releaseCloneLock,
+} from '../src/scripts/clone-lock.mts';
 import type { HelperCliResult } from '../src/scripts/helper-cli-runner.mts';
 import {
   inspectLocalWorktreeBranchPrefix,
   type LocalWorktreeInspection,
 } from '../src/scripts/local-worktree-occupancy.mts';
+import { buildMarkerBody } from '../src/scripts/post-idd-marker.mts';
 import {
   createFakeProviderAdapter,
   type FakeProviderFixture,
@@ -301,6 +310,26 @@ function makeRun(scenario: Scenario = {}): RunRecord {
     inspectLocalWorktrees:
       scenario.inspectLocalWorktrees ?? (() => LOCAL_ABSENT),
     childScript: (name) => join('/bundle/scripts', name),
+    cloneLock: {
+      acquire: () => {
+        throw new Error('a dry run takes no clone lock');
+      },
+      release: () => {
+        throw new Error('a dry run takes no clone lock');
+      },
+    },
+    sleepMs: () => {
+      throw new Error('a dry run has no settle wait');
+    },
+    now: () => {
+      throw new Error('a dry run reads no clock');
+    },
+    mintClaimId: () => {
+      throw new Error('a dry run mints no claim id');
+    },
+    mintNonce: () => {
+      throw new Error('a dry run mints no nonce');
+    },
   };
   return { calls, portCalls, fixture, deps };
 }
@@ -1118,21 +1147,71 @@ function runCommand(
   return { result, stdout, stderr, record };
 }
 
-test('--apply is a usage error with nothing on stdout and no command run', () => {
-  for (const argv of [
-    ['--issue', String(ISSUE), '--apply'],
-    ['--apply', '--issue', String(ISSUE)],
-  ]) {
+test('--apply without --agent-id or --project-status is a usage error that names the flag', () => {
+  const cases: [string[], string][] = [
+    [
+      ['--issue', String(ISSUE), '--apply'],
+      '--apply requires --agent-id and --project-status',
+    ],
+    [
+      ['--apply', '--issue', String(ISSUE), '--agent-id', 'claude-test'],
+      '--apply requires --project-status',
+    ],
+    [
+      ['--issue', String(ISSUE), '--apply', '--project-status', 'not-started'],
+      '--apply requires --agent-id',
+    ],
+  ];
+  for (const [argv, message] of cases) {
     const { result, stdout, stderr, record } = runCommand(argv);
-    assert.deepEqual(result, {
-      exitCode: 2,
-      kind: 'usage',
-      message: 'unknown argument: --apply',
-    });
+    assert.deepEqual(result, { exitCode: 2, kind: 'usage', message });
     assert.equal(stdout, '');
-    assert.match(stderr, /unknown argument: --apply/);
+    assert.equal(stderr, `claim-issue: ${message}\n`);
     assert.deepEqual(record.calls, []);
   }
+});
+
+test('an invalid --project-status or --agent-id is a usage error before any check', () => {
+  const cases: [string[], string][] = [
+    [
+      ['--issue', String(ISSUE), '--project-status', 'done'],
+      '--project-status must be not-in-use or not-started',
+    ],
+    [
+      ['--issue', String(ISSUE), '--agent-id', 'two words'],
+      '--agent-id must be one token with no whitespace and no <!-- or -->',
+    ],
+    [
+      ['--issue', String(ISSUE), '--agent-id', 'agent<!--x'],
+      '--agent-id must be one token with no whitespace and no <!-- or -->',
+    ],
+    [
+      ['--issue', String(ISSUE), '--agent-id', 'agent-->x'],
+      '--agent-id must be one token with no whitespace and no <!-- or -->',
+    ],
+  ];
+  for (const [argv, message] of cases) {
+    const { result, stdout, record } = runCommand(argv);
+    assert.deepEqual(result, { exitCode: 2, kind: 'usage', message });
+    assert.equal(stdout, '');
+    assert.deepEqual(record.calls, []);
+  }
+});
+
+test('without --apply, --agent-id and --project-status are accepted and the dry run is unchanged', () => {
+  const { result, stdout, record } = runCommand([
+    '--issue',
+    String(ISSUE),
+    '--agent-id',
+    'claude-test',
+    '--project-status',
+    'not-started',
+  ]);
+  assert.equal(result, 0);
+  const report = JSON.parse(stdout) as Record<string, unknown>;
+  assert.equal(report.eligible, true);
+  assert.equal(Object.hasOwn(report, 'mode'), false);
+  assert.equal(record.calls.length > 0, true);
 });
 
 test('a missing or invalid --issue is a usage error', () => {
@@ -1436,4 +1515,1597 @@ test('A5(a): every approved reason the gate emits is accepted with its own check
     });
     assertEligible(report);
   }
+});
+
+// ---------------------------------------------------------------------------
+// --apply (issue 4373). Real git runs in a temporary clone of a bare origin,
+// and the clone lock and claim-lock run for real. gh, the marker posts, and
+// the routing gates are stubbed, so no test posts to GitHub.
+// ---------------------------------------------------------------------------
+
+const CLAIM_ID = '11111111-2222-4333-8444-555555555555';
+const NONCE = '0123456789abcdef0123456789abcdef';
+const AGENT = 'claude-test';
+const NOW = new Date('2026-10-16T01:02:03.456Z');
+const TIMESTAMP = '2026-10-16T01:02:03Z';
+const SCRIPTS = join(import.meta.dirname, '..', 'scripts');
+const APPLY_ARGS = [
+  '--issue',
+  String(ISSUE),
+  '--apply',
+  '--agent-id',
+  AGENT,
+  '--project-status',
+  'not-started',
+];
+const OWNED = ok(
+  JSON.stringify({
+    state: 'already_owned',
+    action: 'keep',
+    reason: 'claim-id-match',
+  }),
+);
+const OWN_GATE_CLAIMED = ok(
+  JSON.stringify({
+    issue: { number: ISSUE },
+    reason: 'released-claim-local-worktree-occupied',
+    state: 'local_worktree_occupied',
+    action: 'stop',
+    fresh_claim_gate: {
+      verdict: 'already-claimed',
+      winning_claim_id: 'other-claim',
+    },
+  }),
+);
+const DESTRUCTIVE = /worktree (remove|prune)|branch -[dD]\b/;
+
+interface ApplyFixture {
+  parent: string;
+  primary: string;
+  worktree: string;
+}
+
+type PostOutcome =
+  | 'ok'
+  | 'nothing-sent'
+  | 'unknown-landed'
+  | 'unknown-landed-edited'
+  | 'unknown-absent';
+
+/** One issue comment as the stubs keep it: the REST fields plus the GraphQL edit state. */
+interface ApplyComment {
+  login: string;
+  body: string;
+  nodeId: string;
+  lastEditedAt: string | null;
+}
+
+/** A timestamp that marks a comment body as edited (the GraphQL `lastEditedAt`). */
+const EDITED_AT = '2026-10-16T00:00:00Z';
+
+interface ApplyScenario {
+  assigned?: boolean;
+  /** Every GraphQL edit-state read fails, so no marker can be verified. */
+  editStateFails?: boolean;
+  /** The repository lookup; the default answers with the test repository. */
+  resolveRepository?: () => { owner: string; repo: string };
+  /** One entry per authoring-label read, in order; `'fail'` makes the read fail. */
+  labelReads?: (string[] | 'fail')[];
+  /** Per marker type, the outcome of each post in order; `ok` once exhausted. */
+  posts?: Record<string, PostOutcome[]>;
+  ownGate?: CommandResult;
+  assert?: CommandResult;
+  recordTokensFails?: boolean;
+  acquireFails?: boolean;
+  lockTimeout?: boolean;
+  /** The approval holds for the pre-check and is refused on the re-check. */
+  approvalRevoked?: boolean;
+  /** `git worktree add` fails (stubbed: nothing is created). */
+  failWorktreeAdd?: boolean;
+  /** The login `gh api user` reports for this session. */
+  viewer?: string;
+  /** The issue comments cannot be read (every comment read fails). */
+  commentReadFails?: boolean;
+  /** Comments already on the issue before the run. */
+  initialComments?: { login: string; body: string }[];
+  /** `--read-tokens` reports the generated-tokens record absent. */
+  tokensAbsent?: boolean;
+  /** The first `--acquire` succeeds; every later one collides. */
+  acquireFailsAfterFirst?: boolean;
+  /** The first `--read-tokens` finds the record; every later one reports it absent. */
+  tokensAbsentAfterFirst?: boolean;
+  /** The first assert verifies the claim; every later one says it is not owned. */
+  assertFailsAfterFirst?: boolean;
+  /**
+   * The `--record-tokens` call with this number, and every later one, fails:
+   * 1 is the record before the claim, 2 the nonce-bearing record before the
+   * activation nonce, 3 the record at the acquire point.
+   */
+  recordTokensFailsFromCall?: number;
+  /** A remote branch appears after the pre-check's branch scan (the rescan sees it). */
+  collisionAfterPrecheck?: boolean;
+  /** A local worktree on issue/<n>-* appears after the pre-check's local scan. */
+  localCollisionAfterPrecheck?: boolean;
+  /** The clone lock's release fails. */
+  releaseFails?: boolean;
+}
+
+interface ApplyRun {
+  result: HelperCliResult;
+  stdout: string;
+  stderr: string;
+  report: ClaimApplyReport | null;
+  /** Every command in call order, with the clone-lock events and `[lock held]` marks. */
+  log: string[];
+  /** The `post-idd-marker` calls. */
+  posts: { type: string; args: string[] }[];
+  /** The issue comments at the end: the markers the stubs accepted. */
+  comments: { login: string; body: string }[];
+  /** The working directory of each `claim-lock` call, in call order. */
+  claimLockDirectories: string[];
+}
+
+function exitOf(result: HelperCliResult): number {
+  return typeof result === 'number' ? result : result.exitCode;
+}
+
+function gitIn(cwd: string, args: readonly string[]): string {
+  return execFileSync('git', [...args], {
+    cwd,
+    env: fixtureEnv(),
+    stdio: 'pipe',
+    encoding: 'utf8',
+  });
+}
+
+function gitResult(cwd: string, args: readonly string[]): CommandResult {
+  const result = spawnSync('git', [...args], {
+    cwd,
+    env: fixtureEnv(),
+    encoding: 'utf8',
+    stdio: 'pipe',
+  });
+  return {
+    status: result.status,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+  };
+}
+
+/** A clone of a bare origin whose `main` holds one commit, with a policy file. */
+function withApplyFixture<T>(
+  body: (fixture: ApplyFixture) => T,
+  policy: Record<string, unknown> = { trustedMarkerActors: [OWNER] },
+): T {
+  const parent = realpathSync(mkdtempSync(`${tmpdir()}/idd-claim-apply-`));
+  try {
+    // The policy is committed, so a fast-forward can replace it (the write half
+    // reads it after the fast-forward).
+    const seed = join(parent, 'seed');
+    mkdirSync(join(seed, '.github', 'idd'), { recursive: true });
+    gitIn(seed, ['init', '--quiet', '-b', 'main']);
+    gitIn(seed, ['config', 'user.email', 'test@example.com']);
+    gitIn(seed, ['config', 'user.name', 'Test']);
+    writeFileSync(join(seed, 'seed.txt'), 'seed\n');
+    writeFileSync(
+      join(seed, '.github', 'idd', 'config.json'),
+      `${JSON.stringify(policy)}\n`,
+    );
+    gitIn(seed, ['add', 'seed.txt', '.github']);
+    gitIn(seed, ['commit', '--quiet', '-m', 'seed']);
+    const origin = join(parent, 'origin.git');
+    gitIn(parent, ['clone', '--quiet', '--bare', seed, origin]);
+    const primary = join(parent, 'primary');
+    gitIn(parent, ['clone', '--quiet', origin, primary]);
+    return body({
+      parent,
+      primary,
+      worktree: join(parent, `${REPO}.${BRANCH.replace(/\//g, '-')}`),
+    });
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+}
+
+function valueAfter(args: readonly string[], flag: string): string | undefined {
+  const index = args.indexOf(flag);
+  return index === -1 ? undefined : args[index + 1];
+}
+
+function runApply(
+  fixture: ApplyFixture,
+  scenario: ApplyScenario = {},
+  argv: readonly string[] = APPLY_ARGS,
+): ApplyRun {
+  const log: string[] = [];
+  const posts: { type: string; args: string[] }[] = [];
+  let nodeSequence = 0;
+  const nextNodeId = (): string => {
+    nodeSequence += 1;
+    return `IC_${nodeSequence}`;
+  };
+  const comments: ApplyComment[] = (scenario.initialComments ?? []).map(
+    (comment) => ({ ...comment, nodeId: nextNodeId(), lastEditedAt: null }),
+  );
+  let acquireCalls = 0;
+  let recordCalls = 0;
+  const claimLockDirectories: string[] = [];
+  let matchingRefsCalls = 0;
+  let localCalls = 0;
+  let assertCalls = 0;
+  let readTokensCalls = 0;
+  const labelReads = [...(scenario.labelReads ?? [])];
+  const outcomes = new Map<string, PostOutcome[]>(
+    Object.entries(scenario.posts ?? {}).map(([type, list]) => [
+      type,
+      [...list],
+    ]),
+  );
+  const held = (): string =>
+    checkCloneLock(fixture.primary).present ? ' [lock held]' : ' [no lock]';
+
+  const gh = (args: readonly string[]): CommandResult => {
+    if (args[0] === 'issue' && args[1] === 'view' && args[4] === 'labels') {
+      const next = labelReads.shift() ?? [];
+      if (next === 'fail') {
+        return failed(1);
+      }
+      return ok(JSON.stringify({ labels: next.map((name) => ({ name })) }));
+    }
+    if (args[0] === 'issue' && args[1] === 'view') {
+      return scenario.assigned
+        ? ok(
+            JSON.stringify({
+              title: TITLE,
+              assignees: [{ login: 'someone' }],
+            }),
+          )
+        : ISSUE_VIEW;
+    }
+    if (args[0] === 'api' && String(args[1]).includes('/git/matching-refs/')) {
+      matchingRefsCalls += 1;
+      return scenario.collisionAfterPrecheck && matchingRefsCalls > 1
+        ? refPage(`${PREFIX}other-slug`)
+        : NO_REFS;
+    }
+    if (args[0] === 'api' && String(args[1]).endsWith('/comments')) {
+      if (scenario.commentReadFails) {
+        return failed(1);
+      }
+      return ok(
+        JSON.stringify(
+          comments.map((entry) => ({
+            login: entry.login,
+            body: entry.body,
+            nodeId: entry.nodeId,
+          })),
+        ),
+      );
+    }
+    if (args[0] === 'api' && args[1] === 'graphql') {
+      if (scenario.editStateFails) {
+        return failed(1);
+      }
+      const nodes = args
+        .filter((arg) => arg.startsWith('ids[]='))
+        .map((arg) => {
+          const id = arg.slice('ids[]='.length);
+          const entry = comments.find((comment) => comment.nodeId === id);
+          return { id, lastEditedAt: entry?.lastEditedAt ?? null };
+        });
+      return ok(JSON.stringify({ data: { nodes } }));
+    }
+    if (args[0] === 'api' && args[1] === 'user') {
+      return ok(`${scenario.viewer ?? OWNER}\n`);
+    }
+    if (args[0] === 'repo' && args[1] === 'view') {
+      return ok('main\n');
+    }
+    throw new Error(`unexpected gh call: ${args.join(' ')}`);
+  };
+
+  const postStub = (rest: string[]): CommandResult => {
+    const type = valueAfter(rest, '--type') ?? '';
+    const fields: Record<string, string> = {};
+    for (const key of [
+      'agent-id',
+      'claim-id',
+      'supersedes',
+      'timestamp',
+      'branch',
+      'nonce',
+    ]) {
+      const value = valueAfter(rest, `--${key}`);
+      if (value !== undefined) {
+        fields[key] = value;
+      }
+    }
+    posts.push({ type, args: rest });
+    const outcome = outcomes.get(type)?.shift() ?? 'ok';
+    if (
+      outcome === 'ok' ||
+      outcome === 'unknown-landed' ||
+      outcome === 'unknown-landed-edited'
+    ) {
+      comments.push({
+        login: OWNER,
+        body: buildMarkerBody(type, fields),
+        nodeId: nextNodeId(),
+        lastEditedAt: outcome === 'unknown-landed-edited' ? EDITED_AT : null,
+      });
+    }
+    if (outcome === 'ok') {
+      return ok(JSON.stringify({ mode: 'apply', type }));
+    }
+    const envelope =
+      outcome === 'nothing-sent'
+        ? {
+            helper: 'post-idd-marker',
+            notDispatched: true,
+            message: 'refused by load control',
+          }
+        : { helper: 'post-idd-marker', message: 'socket hang up' };
+    return {
+      status: 1,
+      stdout: '',
+      stderr: `post-idd-marker failed\n${JSON.stringify({ iddHelperError: envelope })}\n`,
+    };
+  };
+
+  let approvalCalls = 0;
+  const child = (script: string, rest: string[]): CommandResult => {
+    if (script === 'claim-approval-gate.mjs') {
+      approvalCalls += 1;
+      return scenario.approvalRevoked && approvalCalls > 1
+        ? approvalOutput({ approved: false, reason: 'approval-missing' })
+        : APPROVED;
+    }
+    if (script === 'resume-claim-routing.mjs') {
+      if (rest.includes('--assert')) {
+        assertCalls += 1;
+        if (scenario.assertFailsAfterFirst && assertCalls > 1) {
+          return {
+            status: 1,
+            stdout: JSON.stringify({
+              state: 'stale',
+              action: 'takeover',
+              reason: 'lease-taken-over',
+            }),
+            stderr: '',
+          };
+        }
+        return scenario.assert ?? OWNED;
+      }
+      if (rest.includes('--own-worktree')) {
+        return scenario.ownGate ?? CLAIMABLE;
+      }
+      return CLAIMABLE;
+    }
+    if (script === 'post-idd-marker.mjs') {
+      return postStub(rest);
+    }
+    if (script === 'claim-lock.mjs') {
+      if (rest.includes('--record-tokens')) {
+        recordCalls += 1;
+      }
+      if (scenario.recordTokensFails && rest.includes('--record-tokens')) {
+        return failed(1);
+      }
+      if (
+        scenario.recordTokensFailsFromCall !== undefined &&
+        rest.includes('--record-tokens') &&
+        recordCalls >= scenario.recordTokensFailsFromCall
+      ) {
+        return failed(1);
+      }
+      if (scenario.acquireFails && rest.includes('--acquire')) {
+        return failed(1);
+      }
+      if (rest.includes('--acquire')) {
+        acquireCalls += 1;
+        if (scenario.acquireFailsAfterFirst && acquireCalls > 1) {
+          return failed(1);
+        }
+      }
+      if (rest.includes('--read-tokens')) {
+        readTokensCalls += 1;
+      }
+      if (
+        scenario.tokensAbsentAfterFirst &&
+        rest.includes('--read-tokens') &&
+        readTokensCalls > 1
+      ) {
+        return ok(
+          JSON.stringify({
+            path: join(fixture.primary, 'tokens'),
+            present: false,
+          }),
+        );
+      }
+      if (scenario.tokensAbsent && rest.includes('--read-tokens')) {
+        return ok(
+          JSON.stringify({
+            path: join(fixture.primary, 'tokens'),
+            present: false,
+          }),
+        );
+      }
+      const real = spawnSync(
+        process.execPath,
+        [join(SCRIPTS, script), ...rest],
+        {
+          cwd: fixture.primary,
+          env: fixtureEnv(),
+          encoding: 'utf8',
+          stdio: 'pipe',
+        },
+      );
+      return {
+        status: real.status,
+        stdout: real.stdout ?? '',
+        stderr: real.stderr ?? '',
+      };
+    }
+    throw new Error(`unexpected child helper: ${script}`);
+  };
+
+  const base = makeRun({ resolveRepository: scenario.resolveRepository });
+  const deps: ClaimIssueDeps = {
+    ...base.deps,
+    childScript: (name) => join(SCRIPTS, name),
+    run: (file, args, options) => {
+      if (file === 'git') {
+        log.push(`git ${args.join(' ')}${held()}`);
+        if (
+          scenario.failWorktreeAdd &&
+          args.includes('worktree') &&
+          args.includes('add')
+        ) {
+          return {
+            status: 128,
+            stdout: '',
+            stderr: 'fatal: stubbed worktree add failure',
+          };
+        }
+        return gitResult(fixture.primary, args);
+      }
+      if (file === 'gh') {
+        log.push(`gh ${args.join(' ')}`);
+        return gh(args);
+      }
+      const script = basename(String(args[0] ?? ''));
+      const rest = args.slice(1);
+      log.push(`${script} ${rest.join(' ')}`);
+      if (script === 'claim-lock.mjs') {
+        claimLockDirectories.push(options?.cwd ?? '');
+      }
+      return child(script, rest);
+    },
+    cloneLock: {
+      acquire: (repoPath, agentId) => {
+        log.push('lock:acquire');
+        if (scenario.lockTimeout) {
+          throw new Error('timed out waiting for clone lock');
+        }
+        return acquireCloneLock(repoPath, agentId);
+      },
+      release: (handle) => {
+        log.push('lock:release');
+        if (scenario.releaseFails) {
+          throw new Error('stubbed release failure');
+        }
+        releaseCloneLock(handle);
+      },
+    },
+    inspectLocalWorktrees: () => {
+      localCalls += 1;
+      return scenario.localCollisionAfterPrecheck && localCalls > 1
+        ? {
+            status: 'occupied',
+            paths: [join(fixture.parent, `${REPO}.issue-${ISSUE}-other-slug`)],
+            reason: null,
+          }
+        : LOCAL_ABSENT;
+    },
+    sleepMs: () => undefined,
+    now: () => NOW,
+    mintClaimId: () => CLAIM_ID,
+    mintNonce: () => NONCE,
+  };
+  let stdout = '';
+  let stderr = '';
+  const result = runClaimIssue([...argv], deps, {
+    stdout: (text) => {
+      stdout += text;
+    },
+    stderr: (text) => {
+      stderr += text;
+    },
+  });
+  return {
+    result,
+    stdout,
+    stderr,
+    report: stdout === '' ? null : (JSON.parse(stdout) as ClaimApplyReport),
+    log,
+    posts,
+    comments,
+    claimLockDirectories,
+  };
+}
+
+/** The report of a run that stopped at `reason`, with the shared invariants checked. */
+function assertStopped(
+  run: ApplyRun,
+  reason: ClaimStopReason,
+): ClaimApplyReport {
+  assert.equal(exitOf(run.result), 1, run.stderr);
+  const report = run.report;
+  assert.ok(report !== null);
+  assert.equal(report.eligible, false);
+  assert.equal(report.reason, reason);
+  assert.equal(report.mode, 'apply');
+  assert.equal(report.holdCheck, 'label');
+  assert.equal(typeof report.lostClaimCleanupRequired, 'boolean');
+  assert.ok(report.nextAction !== null && report.nextAction !== '');
+  assert.equal(run.stderr.startsWith('claim-issue: '), true);
+  for (const entry of run.log) {
+    assert.doesNotMatch(entry, DESTRUCTIVE, entry);
+  }
+  return report;
+}
+
+function branchExists(primary: string): boolean {
+  return gitIn(primary, ['branch', '--list', BRANCH]).includes(BRANCH);
+}
+
+test('--apply runs the fresh-claim order, with the clone lock held over the worktree add', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    const report = run.report;
+    assert.ok(report !== null);
+    assert.equal(report.eligible, true);
+    assert.equal(report.reason, null);
+    assert.equal(report.claimPosted, true);
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(report.holdCheck, 'label');
+    assert.equal(report.projectStatus, 'not-started');
+    assert.equal(report.projectStatusChecked, false);
+    assert.deepEqual(report.claim, {
+      agentId: AGENT,
+      claimId: CLAIM_ID,
+      nonce: NONCE,
+      branch: BRANCH,
+      worktree: fixture.worktree,
+    });
+    assert.equal(existsSync(fixture.worktree), true);
+    assert.equal(branchExists(fixture.primary), true);
+    assertNoDestructive(run.log);
+
+    const at = (needle: string): number =>
+      run.log.findIndex((entry) => entry.includes(needle));
+    const order = [
+      'lock:acquire',
+      'fetch origin',
+      'worktree add --no-track',
+      'lock:release',
+      '--record-tokens',
+      '--own-worktree',
+      'post-idd-marker.mjs --type claim',
+      'post-idd-marker.mjs --type activation-nonce',
+      '--acquire',
+      '--assert',
+    ].map(at);
+    for (const position of order) {
+      assert.notEqual(position, -1);
+    }
+    assert.deepEqual(
+      order,
+      [...order].sort((left, right) => left - right),
+    );
+    for (const needle of [
+      'fetch origin',
+      'merge.autoStash=false',
+      'worktree add',
+    ]) {
+      assert.match(run.log[at(needle)] ?? '', /\[lock held\]/, needle);
+    }
+    assert.equal(
+      run.log.filter(
+        (entry) =>
+          entry.startsWith('gh issue view') && entry.endsWith('labels'),
+      ).length,
+      2,
+    );
+    assert.equal(run.posts.filter((post) => post.type === 'claim').length, 1);
+    assert.ok(
+      run.comments.some((comment) =>
+        comment.body.startsWith(
+          `<!-- claimed-by: ${AGENT} ${CLAIM_ID} supersedes: none ${TIMESTAMP} branch: ${BRANCH} -->`,
+        ),
+      ),
+    );
+    assert.ok(
+      run.comments.some((comment) =>
+        comment.body.startsWith(
+          `<!-- activation-nonce: ${AGENT} ${CLAIM_ID} ${NONCE} ${TIMESTAMP} -->`,
+        ),
+      ),
+    );
+    assert.equal(checkCloneLock(fixture.primary).present, false);
+  });
+});
+
+function assertNoDestructive(log: readonly string[]): void {
+  for (const entry of log) {
+    assert.doesNotMatch(entry, DESTRUCTIVE, entry);
+  }
+}
+
+test('--apply stops before any write when a pre-check is not eligible', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { assigned: true });
+    const report = assertStopped(run, 'assigned');
+    assert.equal(report.claimPosted, false);
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(report.claim, null);
+    assert.equal(
+      run.log.some(
+        (entry) =>
+          entry.startsWith('git ') || entry.includes('post-idd-marker'),
+      ),
+      false,
+    );
+    assert.equal(existsSync(fixture.worktree), false);
+  });
+});
+
+test('an ineligible apply run prints its gate result even when a second repository lookup would fail', () => {
+  let lookups = 0;
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      assigned: true,
+      resolveRepository: () => {
+        lookups += 1;
+        if (lookups > 1) {
+          throw new Error('gh repo view failed transiently');
+        }
+        return { owner: OWNER, repo: REPO };
+      },
+    });
+    const report = assertStopped(run, 'assigned');
+    assert.equal(report.claimPosted, false);
+    assert.equal(lookups, 1);
+  });
+});
+
+test('the claim-lock evidence calls run with the worktree as their cwd', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    assert.ok(run.claimLockDirectories.length > 0);
+    for (const cwd of run.claimLockDirectories) {
+      assert.equal(cwd, fixture.worktree);
+    }
+  });
+});
+
+test('a clone lock that is not acquired stops with primary-not-ready and nothing created', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { lockTimeout: true });
+    const report = assertStopped(run, 'primary-not-ready');
+    assert.match(report.steps.at(-1)?.detail ?? '', /clone lock/);
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(report.claimPosted, false);
+    // The primary lookup is read-only and runs before the lock; no write does.
+    assert.equal(
+      run.log.some((entry) => /fetch origin|merge|worktree add/.test(entry)),
+      false,
+    );
+    assert.equal(run.log.includes('lock:release'), false);
+    assert.equal(existsSync(fixture.worktree), false);
+  });
+});
+
+test('a primary checkout that is not on the default branch stops before any fetch', () => {
+  withApplyFixture((fixture) => {
+    gitIn(fixture.primary, ['checkout', '--quiet', '-b', 'topic']);
+    const run = runApply(fixture);
+    const report = assertStopped(run, 'primary-not-ready');
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /primary-not-on-default-branch/,
+    );
+    assert.equal(
+      run.log.some((entry) => entry.includes('fetch origin')),
+      false,
+    );
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(checkCloneLock(fixture.primary).present, false);
+  });
+});
+
+test('unpushed commits on the default branch stop with primary-not-ready and nothing created', () => {
+  withApplyFixture((fixture) => {
+    gitIn(fixture.primary, [
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.com',
+      'commit',
+      '--quiet',
+      '--allow-empty',
+      '-m',
+      'local',
+    ]);
+    const run = runApply(fixture);
+    const report = assertStopped(run, 'primary-not-ready');
+    assert.match(report.steps.at(-1)?.detail ?? '', /unpushed-commits/);
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(branchExists(fixture.primary), false);
+  });
+});
+
+test('a failed fetch stops with the failing command named, and nothing created', () => {
+  withApplyFixture((fixture) => {
+    gitIn(fixture.primary, ['remote', 'remove', 'origin']);
+    const run = runApply(fixture);
+    const report = assertStopped(run, 'primary-not-ready');
+    assert.match(report.steps.at(-1)?.detail ?? '', /git fetch origin/);
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(report.claimPosted, false);
+  });
+});
+
+test('a leftover local branch stops with b1-cleanup-needed and removes nothing', () => {
+  withApplyFixture((fixture) => {
+    gitIn(fixture.primary, ['branch', BRANCH, 'main']);
+    const run = runApply(fixture);
+    assertStopped(run, 'b1-cleanup-needed');
+    assert.equal(branchExists(fixture.primary), true);
+    assert.equal(
+      run.log.some((entry) => entry.includes('worktree add')),
+      false,
+    );
+  });
+});
+
+test('a prunable worktree entry on the branch stops with b1-cleanup-needed and is not pruned', () => {
+  withApplyFixture((fixture) => {
+    const stale = join(fixture.parent, 'stale');
+    gitIn(fixture.primary, [
+      'worktree',
+      'add',
+      '--quiet',
+      '-b',
+      BRANCH,
+      stale,
+      'main',
+    ]);
+    rmSync(stale, { recursive: true, force: true });
+    const run = runApply(fixture);
+    const report = assertStopped(run, 'b1-cleanup-needed');
+    assert.match(report.steps.at(-1)?.detail ?? '', /prunable/);
+    assert.match(
+      gitIn(fixture.primary, ['worktree', 'list', '--porcelain']),
+      /prunable/,
+    );
+  });
+});
+
+test('a file or a link at the worktree path stops with path-occupied and no worktree add', () => {
+  withApplyFixture((fixture) => {
+    writeFileSync(fixture.worktree, 'occupied\n');
+    const file = runApply(fixture);
+    assertStopped(file, 'path-occupied');
+    assert.equal(
+      file.log.some((entry) => entry.includes('worktree add')),
+      false,
+    );
+    rmSync(fixture.worktree, { force: true });
+    symlinkSync(join(fixture.parent, 'nowhere'), fixture.worktree);
+    const link = runApply(fixture);
+    assertStopped(link, 'path-occupied');
+    assert.equal(
+      link.log.some((entry) => entry.includes('worktree add')),
+      false,
+    );
+    assert.equal(checkCloneLock(fixture.primary).present, false);
+  });
+});
+
+test('worktreePathProblem refuses a link parent and a path that is not a direct child', () => {
+  withApplyFixture((fixture) => {
+    const linkParent = join(fixture.parent, 'link');
+    symlinkSync(fixture.parent, linkParent);
+    assert.equal(worktreePathProblem(fixture.primary, fixture.worktree), null);
+    assert.match(
+      worktreePathProblem(join(linkParent, 'primary'), join(linkParent, 'x')) ??
+        '',
+      /is a link/,
+    );
+    assert.match(
+      worktreePathProblem(fixture.primary, join(fixture.parent, 'sub', 'x')) ??
+        '',
+      /not a direct child/,
+    );
+  });
+});
+
+test('an invalid development branch stops with development-branch-unresolved, before any worktree add', () => {
+  withApplyFixture(
+    (fixture) => {
+      const run = runApply(fixture);
+      const report = assertStopped(run, 'development-branch-unresolved');
+      // The policy is read after the fast-forward, so the fetch may already have run.
+      assert.equal(
+        run.log.some((entry) => entry.includes('worktree add')),
+        false,
+      );
+      assert.equal(report.lostClaimCleanupRequired, false);
+      assert.equal(existsSync(fixture.worktree), false);
+      assert.equal(run.log.includes('lock:release'), true);
+    },
+    { developmentBranch: '-bad', trustedMarkerActors: [OWNER] },
+  );
+});
+
+test('a worktree add that fails keeps nothing, removes nothing, and releases the lock', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { failWorktreeAdd: true });
+    const report = assertStopped(run, 'worktree-add-failed');
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /the branch does not exist/,
+    );
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(report.claimPosted, false);
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(run.log.includes('lock:release'), true);
+    assert.equal(
+      run.log.some((entry) => entry.includes('--record-tokens')),
+      false,
+    );
+    assert.equal(checkCloneLock(fixture.primary).present, false);
+  });
+});
+
+test('a development branch that is configured but missing on origin stops before the worktree add', () => {
+  withApplyFixture(
+    (fixture) => {
+      const run = runApply(fixture);
+      const report = assertStopped(run, 'development-branch-unresolved');
+      assert.equal(report.lostClaimCleanupRequired, false);
+      assert.match(
+        report.steps.at(-1)?.detail ?? '',
+        /origin has no branch nope/,
+      );
+      assert.equal(
+        run.log.some((entry) => entry.includes('worktree add')),
+        false,
+      );
+      assert.equal(existsSync(fixture.worktree), false);
+      assert.equal(checkCloneLock(fixture.primary).present, false);
+    },
+    { developmentBranch: 'nope', trustedMarkerActors: [OWNER] },
+  );
+});
+
+test('a failed token record keeps the worktree and the branch, and posts nothing', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { recordTokensFails: true });
+    const report = assertStopped(run, 'tokens-record-failed');
+    assert.equal(report.claimPosted, false);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.equal(existsSync(fixture.worktree), true);
+    assert.equal(branchExists(fixture.primary), true);
+    assert.equal(run.posts.length, 0);
+    const release = run.log.indexOf('lock:release');
+    assert.ok(
+      release !== -1 &&
+        release <
+          run.log.findIndex((entry) => entry.includes('--record-tokens')),
+    );
+  });
+});
+
+test('an own-worktree gate that is not claimable stops before the claim write', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { ownGate: OWN_GATE_CLAIMED });
+    const report = assertStopped(run, 'already-claimed');
+    assert.equal(report.gateReason, 'released-claim-local-worktree-occupied');
+    assert.equal(report.winningClaimId, 'other-claim');
+    assert.equal(report.claimPosted, false);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.equal(run.posts.length, 0);
+  });
+});
+
+test('a hold before the claim write stops with hold-active and posts no marker', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { labelReads: [['status:authoring']] });
+    const report = assertStopped(run, 'hold-active');
+    assert.equal(report.claimPosted, false);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.equal(run.posts.length, 0);
+  });
+});
+
+test('an unreadable authoring label before the claim write is precheck-unavailable', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { labelReads: ['fail'] });
+    const report = assertStopped(run, 'precheck-unavailable');
+    assert.equal(report.claimPosted, false);
+    assert.equal(run.posts.length, 0);
+  });
+});
+
+test('a claim marker refused with nothing sent is claim-post-failed and never retried', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { posts: { claim: ['nothing-sent'] } });
+    const report = assertStopped(run, 'claim-post-failed');
+    assert.equal(report.claimPosted, false);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.equal(run.posts.filter((post) => post.type === 'claim').length, 1);
+    assert.equal(
+      run.posts.some((post) => post.type === 'activation-nonce'),
+      false,
+    );
+  });
+});
+
+test('a claim marker with an unknown outcome and no marker on the issue is recovery-hold', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { posts: { claim: ['unknown-absent'] } });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, 'unknown');
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(run.posts.filter((post) => post.type === 'claim').length, 1);
+    assert.match(report.nextAction ?? '', /never posted twice/);
+  });
+});
+
+test('a claim marker whose write landed despite the error continues to the nonce', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { posts: { claim: ['unknown-landed'] } });
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    assert.equal(run.report?.claimPosted, true);
+    assert.equal(run.posts.filter((post) => post.type === 'claim').length, 1);
+    assert.equal(
+      run.posts.filter((post) => post.type === 'activation-nonce').length,
+      1,
+    );
+  });
+});
+
+test('an edited claim marker is not the claim, so the run stops before the nonce', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      posts: { claim: ['unknown-landed-edited'] },
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, 'unknown');
+    assert.equal(
+      run.posts.filter((post) => post.type === 'activation-nonce').length,
+      0,
+    );
+  });
+});
+
+test('a marker whose edit state cannot be read is not counted as landed', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      posts: { claim: ['unknown-landed'] },
+      editStateFails: true,
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, 'unknown');
+    assert.equal(
+      run.posts.filter((post) => post.type === 'activation-nonce').length,
+      0,
+    );
+  });
+});
+
+test('an activation nonce absent after one retry stops with nonce-post-failed', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      posts: { 'activation-nonce': ['unknown-absent', 'unknown-absent'] },
+    });
+    const report = assertStopped(run, 'nonce-post-failed');
+    assert.equal(report.claimPosted, true);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.equal(
+      run.posts.filter((post) => post.type === 'activation-nonce').length,
+      2,
+    );
+    assert.equal(
+      run.log.some((entry) => entry.includes('--acquire')),
+      false,
+    );
+  });
+});
+
+test('an activation nonce that landed on the first write needs no retry', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      posts: { 'activation-nonce': ['unknown-landed'] },
+    });
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    assert.equal(
+      run.posts.filter((post) => post.type === 'activation-nonce').length,
+      1,
+    );
+  });
+});
+
+test('a failed worktree-local lock acquire stops with lock-acquire-failed', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { acquireFails: true });
+    const report = assertStopped(run, 'lock-acquire-failed');
+    assert.equal(report.claimPosted, true);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.equal(
+      run.log.some((entry) => entry.includes('--assert')),
+      false,
+    );
+  });
+});
+
+test('a final assert that is not already_owned keep is claim-not-verified and never releases on a nonce mismatch', () => {
+  withApplyFixture((fixture) => {
+    // The real helper exits 1 for a non-keep verdict and still prints the verdict.
+    const run = runApply(fixture, {
+      assert: {
+        status: 1,
+        stdout: JSON.stringify({
+          state: 'stale',
+          action: 'takeover',
+          reason: 'activation-nonce-mismatch',
+        }),
+        stderr: '',
+      },
+    });
+    const report = assertStopped(run, 'claim-not-verified');
+    assert.match(report.nextAction ?? '', /Never release/);
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /reason activation-nonce-mismatch/,
+    );
+    assert.equal(
+      run.posts.some((post) => post.type === 'unclaim'),
+      false,
+    );
+    assert.equal(report.lostClaimCleanupRequired, true);
+  });
+});
+
+test('a hold that appears after the verify releases the claim, and the release is verified', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { labelReads: [[], ['status:authoring']] });
+    const report = assertStopped(run, 'released-after-hold');
+    assert.equal(report.claimPosted, true);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.equal(run.posts.filter((post) => post.type === 'unclaim').length, 1);
+    assert.ok(
+      run.comments.some((comment) =>
+        comment.body.startsWith(`<!-- unclaimed-by: ${AGENT} ${CLAIM_ID} `),
+      ),
+    );
+    assert.match(report.nextAction ?? '', /already released/);
+  });
+});
+
+test('a label read that fails after the verify also releases the claim', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { labelReads: [[], 'fail'] });
+    assertStopped(run, 'released-after-hold');
+    assert.equal(run.posts.filter((post) => post.type === 'unclaim').length, 1);
+  });
+});
+
+test('a release that cannot be verified is recovery-hold with the release to be posted by hand', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      labelReads: [[], ['status:authoring']],
+      posts: { unclaim: ['unknown-absent'] },
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, true);
+    assert.match(report.nextAction ?? '', /by hand/);
+  });
+});
+
+test('an approval revoked while B1 runs stops before the claim marker is posted', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { approvalRevoked: true });
+    const report = assertStopped(run, 'approval-missing');
+    assert.equal(report.claimPosted, false);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.equal(run.posts.length, 0);
+    assert.equal(
+      run.log.some((entry) => entry.includes('--acquire')),
+      false,
+    );
+  });
+});
+
+test('the policy is read after the fast-forward, so a policy change on origin applies to this run', () => {
+  withApplyFixture((fixture) => {
+    const updater = join(fixture.parent, 'updater');
+    gitIn(fixture.parent, [
+      'clone',
+      '--quiet',
+      join(fixture.parent, 'origin.git'),
+      updater,
+    ]);
+    writeFileSync(
+      join(updater, '.github', 'idd', 'config.json'),
+      `${JSON.stringify({ developmentBranch: 'missing', trustedMarkerActors: [OWNER] })}\n`,
+    );
+    gitIn(updater, [
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.com',
+      'commit',
+      '--quiet',
+      '-am',
+      'change policy',
+    ]);
+    gitIn(updater, ['push', '--quiet', 'origin', 'main']);
+    const run = runApply(fixture);
+    // The new origin policy names a development branch that origin lacks, so
+    // the run stops on it: which shows the policy was read after the fast-forward.
+    const report = assertStopped(run, 'development-branch-unresolved');
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /origin has no branch missing/,
+    );
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(branchExists(fixture.primary), false);
+    assert.equal(run.posts.length, 0);
+  });
+});
+
+test('the session login is trusted for the markers it posts, even when the policy lists other actors', () => {
+  withApplyFixture(
+    (fixture) => {
+      const run = runApply(fixture, { viewer: OWNER });
+      assert.equal(exitOf(run.result), 0, run.stderr);
+      assert.equal(run.report?.claimPosted, true);
+      assert.equal(run.report?.lostClaimCleanupRequired, false);
+    },
+    { trustedMarkerActors: ['someone-else'] },
+  );
+});
+
+test('a session login that cannot be read stops before any write, as precheck-unavailable', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { viewer: '' });
+    const report = assertStopped(run, 'precheck-unavailable');
+    assert.match(report.steps.at(-1)?.detail ?? '', /viewer login/);
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(
+      run.log.some((entry) => entry.includes('worktree add')),
+      false,
+    );
+    assert.equal(run.posts.length, 0);
+  });
+});
+
+test('an activation nonce whose write failed while the comments cannot be read is never retried', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      commentReadFails: true,
+      posts: { 'activation-nonce': ['unknown-absent', 'unknown-absent'] },
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, true);
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(
+      run.posts.filter((post) => post.type === 'activation-nonce').length,
+      1,
+    );
+    assert.equal(
+      run.log.some((entry) => entry.includes('--acquire')),
+      false,
+    );
+    assert.match(report.nextAction ?? '', /did not retry the nonce write/);
+  });
+});
+
+test('a development branch that origin deleted, but a stale remote-tracking ref still holds, stops as unresolved', () => {
+  withApplyFixture(
+    (fixture) => {
+      const updater = join(fixture.parent, 'updater');
+      gitIn(fixture.parent, [
+        'clone',
+        '--quiet',
+        join(fixture.parent, 'origin.git'),
+        updater,
+      ]);
+      gitIn(updater, ['push', '--quiet', 'origin', 'main:stale']);
+      gitIn(fixture.primary, ['fetch', '--quiet', 'origin']);
+      gitIn(updater, ['push', '--quiet', 'origin', '--delete', 'stale']);
+      const run = runApply(fixture);
+      const report = assertStopped(run, 'development-branch-unresolved');
+      assert.match(
+        report.steps.at(-1)?.detail ?? '',
+        /origin has no branch stale/,
+      );
+      assert.equal(
+        run.log.some((entry) => entry.includes('worktree add')),
+        false,
+      );
+      assert.equal(existsSync(fixture.worktree), false);
+    },
+    { developmentBranch: 'stale', trustedMarkerActors: [OWNER] },
+  );
+});
+
+test('a claim comment that only starts with the marker words, with a malformed token, is not the claim marker', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      posts: { claim: ['unknown-absent'] },
+      initialComments: [
+        {
+          login: OWNER,
+          body: `<!-- claimed-by: ${AGENT} ${CLAIM_ID} supersedes: none not-a-time branch: ${BRANCH} -->`,
+        },
+      ],
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, 'unknown');
+    assert.equal(run.posts.filter((post) => post.type === 'claim').length, 1);
+  });
+});
+
+test('a generated-tokens record that does not read back as present fails the lock step', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { tokensAbsent: true });
+    const report = assertStopped(run, 'lock-acquire-failed');
+    assert.equal(report.claimPosted, true);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.match(report.steps.at(-1)?.detail ?? '', /read back as present/);
+    assert.equal(
+      run.log.some((entry) => entry.includes('--assert')),
+      false,
+    );
+  });
+});
+
+test('the worktree lock is acquired again before a release, and a collision posts no unclaimed-by', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      labelReads: [[], ['status:authoring']],
+      acquireFailsAfterFirst: true,
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, true);
+    assert.equal(
+      run.posts.some((post) => post.type === 'unclaim'),
+      false,
+    );
+    assert.match(report.nextAction ?? '', /Do not post unclaimed-by/);
+  });
+});
+
+test('a valid claim token followed by edited text after the note is not the claim marker', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      posts: { claim: ['unknown-absent'] },
+      initialComments: [
+        {
+          login: OWNER,
+          body: `<!-- claimed-by: ${AGENT} ${CLAIM_ID} supersedes: none ${TIMESTAMP} branch: ${BRANCH} -->\n\n_${AGENT}: issue claim — IDD automation marker. Do not edit._\n\nedited by hand`,
+        },
+      ],
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, 'unknown');
+  });
+});
+
+test('an authoring label that differs only in case is still the hold', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { labelReads: [['STATUS:AUTHORING']] });
+    const report = assertStopped(run, 'hold-active');
+    assert.equal(report.claimPosted, false);
+    assert.equal(run.posts.length, 0);
+  });
+});
+
+test('the first record has no nonce, the nonce is recorded right before its marker, and again at the acquire point', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    const indexes = (predicate: (entry: string) => boolean): number[] =>
+      run.log.flatMap((entry, index) => (predicate(entry) ? [index] : []));
+    const records = indexes((entry) => entry.includes('--record-tokens'));
+    const claim = indexes((entry) =>
+      entry.includes('post-idd-marker.mjs --type claim'),
+    )[0];
+    const nonce = indexes((entry) =>
+      entry.includes('post-idd-marker.mjs --type activation-nonce'),
+    )[0];
+    const acquire = indexes((entry) => entry.includes('--acquire'))[0];
+    assert.equal(records.length, 3);
+    assert.doesNotMatch(run.log[records[0] ?? -1] ?? '', /--nonce/);
+    assert.ok((records[0] ?? -1) < (claim ?? -1));
+    assert.ok((claim ?? -1) < (records[1] ?? -1));
+    assert.match(run.log[records[1] ?? -1] ?? '', /--nonce/);
+    assert.ok((records[1] ?? -1) < (nonce ?? -1));
+    assert.ok((nonce ?? -1) < (records[2] ?? -1));
+    assert.match(run.log[records[2] ?? -1] ?? '', /--nonce/);
+    assert.ok((records[2] ?? -1) < (acquire ?? -1));
+  });
+});
+
+test('a failed nonce-bearing record stops after the claim, before the activation nonce is posted', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { recordTokensFailsFromCall: 2 });
+    const report = assertStopped(run, 'tokens-record-failed');
+    assert.equal(report.claimPosted, true);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.equal(
+      run.posts.filter((post) => post.type === 'activation-nonce').length,
+      0,
+    );
+    assert.equal(
+      run.log.some((entry) => entry.includes('--acquire')),
+      false,
+    );
+  });
+});
+
+test('a failed re-record before the lock acquire stops after the activation nonce, with the lock not taken', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { recordTokensFailsFromCall: 3 });
+    const report = assertStopped(run, 'tokens-record-failed');
+    assert.equal(report.claimPosted, true);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.equal(
+      run.posts.filter((post) => post.type === 'activation-nonce').length,
+      1,
+    );
+    assert.equal(
+      run.log.some((entry) => entry.includes('--acquire')),
+      false,
+    );
+  });
+});
+
+test('a remote branch pushed after the pre-check stops the run before any worktree exists', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { collisionAfterPrecheck: true });
+    const report = assertStopped(run, 'branch-collision');
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /appeared after the pre-check/,
+    );
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(
+      run.log.some((entry) => entry.includes('worktree add')),
+      false,
+    );
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(branchExists(fixture.primary), false);
+  });
+});
+
+test('a clone lock that is not released after an earlier stop is the failure the report names', () => {
+  withApplyFixture((fixture) => {
+    gitIn(fixture.primary, ['checkout', '--quiet', '-b', 'topic']);
+    const run = runApply(fixture, { releaseFails: true });
+    const report = assertStopped(run, 'primary-not-ready');
+    const detail = report.steps.at(-1)?.detail ?? '';
+    assert.match(detail, /was not released/);
+    assert.match(detail, /primary-not-on-default-branch/);
+    assert.match(
+      report.nextAction ?? '',
+      /remove it only when no other process holds it/,
+    );
+  });
+});
+
+test('--apply refuses to run with GH_REPO set, before any check', () => {
+  const previous = process.env.GH_REPO;
+  process.env.GH_REPO = 'someone/else';
+  try {
+    const { result, stdout, record } = runCommand(APPLY_ARGS_FOR_GH_REPO);
+    assert.deepEqual(result, {
+      exitCode: 2,
+      kind: 'usage',
+      message:
+        '--apply refuses to run with GH_REPO set, because gh would name a repository other than this clone; unset GH_REPO',
+    });
+    assert.equal(stdout, '');
+    assert.deepEqual(record.calls, []);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.GH_REPO;
+    } else {
+      process.env.GH_REPO = previous;
+    }
+  }
+});
+
+const APPLY_ARGS_FOR_GH_REPO = [
+  '--issue',
+  String(ISSUE),
+  '--apply',
+  '--agent-id',
+  'claude-test',
+  '--project-status',
+  'not-started',
+];
+
+test('a release re-reads the token record first, and a failed read-back posts no unclaimed-by', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      labelReads: [[], ['status:authoring']],
+      tokensAbsentAfterFirst: true,
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, true);
+    assert.equal(
+      run.posts.some((post) => post.type === 'unclaim'),
+      false,
+    );
+    assert.match(report.steps.at(-1)?.detail ?? '', /read back as present/);
+  });
+});
+
+test('a release re-asserts the claim first, and a claim that no longer verifies posts no unclaimed-by', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      labelReads: [[], ['status:authoring']],
+      assertFailsAfterFirst: true,
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(
+      run.posts.some((post) => post.type === 'unclaim'),
+      false,
+    );
+    assert.match(report.steps.at(-1)?.detail ?? '', /did not verify again/);
+    assert.match(report.nextAction ?? '', /Do not post unclaimed-by/);
+  });
+});
+
+test('a marker token with a timestamp that names no real time is not the claim marker', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      posts: { claim: ['unknown-absent'] },
+      initialComments: [
+        {
+          login: OWNER,
+          body: `<!-- claimed-by: ${AGENT} ${CLAIM_ID} supersedes: none 2026-99-99T99:99:99Z branch: ${BRANCH} -->`,
+        },
+      ],
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, 'unknown');
+  });
+});
+
+test('a development branch the clone does not fetch by default is fetched explicitly, so the worktree starts from its live tip', () => {
+  withApplyFixture(
+    (fixture) => {
+      const updater = join(fixture.parent, 'updater');
+      gitIn(fixture.parent, [
+        'clone',
+        '--quiet',
+        join(fixture.parent, 'origin.git'),
+        updater,
+      ]);
+      gitIn(updater, ['checkout', '--quiet', '-b', 'feat']);
+      writeFileSync(join(updater, 'feat.txt'), 'feat\n');
+      gitIn(updater, ['add', 'feat.txt']);
+      gitIn(updater, [
+        '-c',
+        'user.name=Test',
+        '-c',
+        'user.email=test@example.com',
+        'commit',
+        '--quiet',
+        '-m',
+        'feat',
+      ]);
+      const tip = gitIn(updater, ['rev-parse', 'HEAD']).trim();
+      gitIn(updater, ['push', '--quiet', 'origin', 'feat']);
+      // A narrow refspec: a plain fetch no longer refreshes origin/feat.
+      gitIn(fixture.primary, [
+        'config',
+        'remote.origin.fetch',
+        '+refs/heads/main:refs/remotes/origin/main',
+      ]);
+      const run = runApply(fixture);
+      assert.equal(exitOf(run.result), 0, run.stderr);
+      assert.equal(gitIn(fixture.worktree, ['rev-parse', 'HEAD']).trim(), tip);
+    },
+    { developmentBranch: 'feat', trustedMarkerActors: [OWNER] },
+  );
+});
+
+test('the stderr summary names the release failure that the report names', () => {
+  withApplyFixture((fixture) => {
+    gitIn(fixture.primary, ['checkout', '--quiet', '-b', 'topic']);
+    const run = runApply(fixture, { releaseFails: true });
+    assertStopped(run, 'primary-not-ready');
+    // The summary leads with the release failure; the earlier stop is context.
+    assert.match(
+      run.stderr,
+      /primary-not-ready \(the clone lock was not released/,
+    );
+    assert.match(run.stderr, /the earlier stop was primary-not-ready/);
+  });
+});
+
+test('a claim comment whose supersedes field is not none is not the claim marker', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      posts: { claim: ['unknown-absent'] },
+      initialComments: [
+        {
+          login: OWNER,
+          body: `<!-- claimed-by: ${AGENT} ${CLAIM_ID} supersedes: other-claim ${TIMESTAMP} branch: ${BRANCH} -->`,
+        },
+      ],
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, 'unknown');
+  });
+});
+
+test('the default branch is fetched explicitly, so a narrowed refspec cannot leave the fast-forward on a stale tip', () => {
+  withApplyFixture((fixture) => {
+    const updater = join(fixture.parent, 'updater');
+    gitIn(fixture.parent, [
+      'clone',
+      '--quiet',
+      join(fixture.parent, 'origin.git'),
+      updater,
+    ]);
+    gitIn(updater, ['push', '--quiet', 'origin', 'main:feat']);
+    writeFileSync(join(updater, 'next.txt'), 'next\n');
+    gitIn(updater, ['add', 'next.txt']);
+    gitIn(updater, [
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.com',
+      'commit',
+      '--quiet',
+      '-m',
+      'next',
+    ]);
+    const tip = gitIn(updater, ['rev-parse', 'HEAD']).trim();
+    gitIn(updater, ['push', '--quiet', 'origin', 'main']);
+    // A narrow refspec: a plain fetch no longer refreshes origin/main.
+    gitIn(fixture.primary, [
+      'config',
+      'remote.origin.fetch',
+      '+refs/heads/feat:refs/remotes/origin/feat',
+    ]);
+    const run = runApply(fixture);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    assert.equal(gitIn(fixture.primary, ['rev-parse', 'main']).trim(), tip);
+  });
+});
+
+test('a local worktree that appears after the pre-check stops the run before any worktree is created', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { localCollisionAfterPrecheck: true });
+    const report = assertStopped(run, 'local-worktree-occupied');
+    assert.match(report.steps.at(-1)?.detail ?? '', /after the pre-check/);
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(
+      run.log.some((entry) => entry.includes('worktree add')),
+      false,
+    );
+    assert.equal(existsSync(fixture.worktree), false);
+  });
 });

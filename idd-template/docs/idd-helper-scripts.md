@@ -361,8 +361,9 @@ arguments reaches `gh repo view` and is `transport`, not `usage`.
 `75` after printing an incomplete result (see
 [Discover Roadmap Graph Contract](#discover-roadmap-graph-contract));
 that is `transport`, carrying `retryAt` when known, never `gate`.
-`claim-issue.mjs` (issue `#4372`) exits `1` as `gate` for every
-ineligible result, including a failure inside one of its checks, and as
+`claim-issue.mjs` (issues `#4372` and `#4373`) exits `1` as `gate` for
+every ineligible result, including a failure inside one of its checks, and
+for every stop of an `--apply` run after the pre-checks; it exits `1` as
 `transport` for a failure before any check starts.
 
 | Helper                             | `usage`                                                                                                                                             | `gate`                                                                                                                                                      |
@@ -374,7 +375,7 @@ ineligible result, including a failure inside one of its checks, and as
 | `idd-worker-budget.mjs`            | a missing or invalid `--running` / `--startable` / `--harness-limit` value, an invalid `--instructions-since` value, or an unknown flag             | none today                                                                                                                                                  |
 | `idd-activation.mjs`               | an unknown flag, or an empty `--cwd` value                                                                                                          | none today                                                                                                                                                  |
 | `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                                                                                             | none today                                                                                                                                                  |
-| `claim-issue.mjs`                  | a missing or invalid `--issue`, or an unknown flag (including `--apply`)                                                                            | exit `1` for every ineligible result, including a failed check                                                                                              |
+| `claim-issue.mjs`                  | a missing or invalid `--issue`, `--agent-id`, or `--project-status`, `--apply` without both of the last two, or an unknown flag                     | exit `1` for every ineligible result, including a failed check, and for every stop of an `--apply` run                                                      |
 | `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                                                                                                 | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens`                                     |
 | `clone-lock.mjs`                   | a missing mode, `--agent-id`, or command, or an unknown flag                                                                                        | exit `3` on an acquire timeout; a wrapped command's own non-zero status                                                                                     |
 | `phase-id-resolver.mjs`            | a missing `--phase-id`, or an unknown flag                                                                                                          | none today                                                                                                                                                  |
@@ -970,8 +971,9 @@ in this preamble, since the fallback differs per helper.
   `issue/<number>-<slug>` branch-name slug computation; deterministic and
   network-free (referenced in
   [kurone-kito/idd-skill#901](https://github.com/kurone-kito/idd-skill/issues/901))
-- `scripts/claim-issue.mjs` for a read-only dry run of the five A5
-  pre-checks; see [Claim pre-check helper](#claim-pre-check-helper)
+- `scripts/claim-issue.mjs` for the five A5 pre-checks and, with
+  `--apply`, the fresh-claim order of `idd-claim.instructions.md`; see
+  [Claim pre-check helper](#claim-pre-check-helper)
   (referenced in
   [kurone-kito/idd-skill#4372](https://github.com/kurone-kito/idd-skill/issues/4372))
 - `scripts/emit-marker.mjs` for emitting the per-cycle `claimed-by` /
@@ -4670,7 +4672,9 @@ like `activation-nonce`, because a worker posts it as itself.
 ### Claim pre-check helper
 
 - Source repo / vendored-node command:
-  `node scripts/claim-issue.mjs --issue <issue-number>`
+  `node scripts/claim-issue.mjs --issue <issue-number>`; with `--apply`,
+  add `--agent-id <id>` and `--project-status <not-in-use|not-started>`
+  (see the Claim write section below)
 - Package-manager command: run the profile-selected `idd:claim-issue`
   package script. The example uses `npm`; substitute the repository's
   configured package manager:
@@ -4688,14 +4692,14 @@ like `activation-nonce`, because a worker posts it as itself.
     idd-claim-issue --issue <issue-number>
   ```
 
-- Read-only dry run of the five A5 pre-checks of
+- Without `--apply`, a read-only dry run of the five A5 pre-checks of
   `idd-claim.instructions.md`: it posts no marker and creates no
   worktree, lock file, or git change. It exists because a claim script
   written by hand in the 2026-10-14 to 2026-10-15 orchestrator run
   stopped issue `#4251` on a pull request that only mentioned it, which
   A5(d) does not count. The instruction files still point to the written
-  A5 paths; this helper does not replace them. The write half is a
-  separate change, so `--apply` is not accepted and is a usage error.
+  A5 paths; this helper does not replace them. With `--apply` it also
+  runs the fresh-claim order; see the Claim write section below.
 - The checks run in the order of the instruction file and stop at the
   first one that is not eligible; every later check has the status
   `not-run`. Each check calls existing code rather than a copy of it:
@@ -4750,13 +4754,118 @@ like `activation-nonce`, because a worker posts it as itself.
   `nextAction`, and `detail`. The `detail` of a failed step names the
   pull request numbers of `open-pr`, the paths of a local worktree
   stop, and the refs of `branch-collision`. `gateReason` and
-  `winningClaimId` appear only for `already-claimed`
+  `winningClaimId` appear only for `already-claimed`. With `--apply` the
+  report also has `mode`, `projectStatus`, `holdCheck` (always `label`),
+  `claimPosted`, `lostClaimCleanupRequired`, `nextAction`, and `claim`
 - Exit `0` means eligible. An ineligible result, including every
   failure inside a check, exits `1` with the envelope kind `gate`. The
   kind `transport` (exit `1`, nothing on stdout) covers only a failure
   before any check starts: the repository resolution and the read of the
   issue's title and assignees. The kind `usage` (exit `2`) covers an
-  argument error
+  argument error, including `--apply` without `--agent-id` or
+  `--project-status`
+
+### Claim write (`--apply`)
+
+- Command: `node scripts/claim-issue.mjs --issue <issue-number> --apply
+  --agent-id <id> --project-status <not-in-use|not-started>`. Both
+  `--agent-id` and `--project-status` are required with `--apply`; a
+  missing one is a usage error that names it. `--apply` also refuses to run
+  while the `GH_REPO` environment variable is set, because gh would then name
+  a repository other than this clone (a usage error, before any check).
+  `--agent-id` is the agent id the claim is made under. `--project-status`
+  is the caller's statement of the project status part of A5(b), which the
+  helper cannot read.
+- The pre-checks run first, and nothing is written unless they all pass.
+  Then the helper runs the fresh-claim order of `idd-claim.instructions.md`:
+  1. B1 step 1, under one hold of the clone-scoped lock: the primary
+     checkout must be on the default branch with no unpushed commits, then
+     `git fetch origin`, the default branch fetched into its own tracking
+     ref (a narrowed refspec cannot leave it stale), and a fast-forward (with
+     `merge.autoStash=false`).
+     A failure stops with `primary-not-ready`, whose detail names
+     `primary-not-on-default-branch`, `unpushed-commits`, or the failing
+     command. The effective policy of the primary checkout (the layered
+     loader that resume-claim-routing uses) and the development branch are
+     read after the fast-forward, because it can replace
+     `.github/idd/config.json`. The trusted marker actors are the configured
+     list, through `IDD_TRUSTED_MARKER_ACTORS` and the config, plus the
+     session's own login. The development branch must exist on origin, or
+     the run stops with `development-branch-unresolved`. A prunable worktree
+     entry or a leftover local branch of the claim's name stops with
+     `b1-cleanup-needed`.
+  2. Still under the lock, the scoped local-worktree and remote-branch scans
+     of A5(e) run again after the fetch (`local-worktree-occupied`,
+     `local-worktree-unreadable`, or `branch-collision` if one appeared since
+     the pre-check). The worktree path is
+     `<primary-parent>/<repo>.<branch with / replaced by ->`. It must be a
+     free direct child of the primary's parent, and that parent must not be
+     a link (`path-occupied`). Then
+     `git worktree add --no-track <path> -b <branch> origin/<development-branch>`
+     (`worktree-add-failed` on failure; the report says whether the path and
+     the branch now exist, since a failed add is not atomic). The development
+     branch comes from
+     `developmentBranch` or else the default branch; an invalid or
+     unavailable value stops with `development-branch-unresolved`. The name
+     must be listed by origin itself (`git ls-remote`), because a plain fetch
+     keeps the remote-tracking ref of a branch that was deleted; a name that
+     origin does not list stops the same way. The branch is then fetched into
+     its own remote-tracking ref, because a clone whose refspec maps only the
+     default branch would otherwise base the worktree on a stale tip. The lock
+     is released after this step, because `claim-lock --acquire` takes the
+     same lock itself.
+  3. `claim-lock --record-tokens` for the worktree, with no nonce, as step 2
+     of the fresh-claim order of idd-claim.instructions.md
+     (`tokens-record-failed`).
+  4. Immediately before the claim marker, the issue-author approval gate of
+     A5(a) runs again (`approval-missing` or `approval-unproven` stop the
+     run), then the own-worktree fresh-claim gate runs once, with
+     `--own-worktree <path>`, and must return `claimable`, then the
+     authoring-label hold check (`hold-active`, or
+     `precheck-unavailable` when the read fails). Only the label is read:
+     the owner-marker log replay is not done, and the report says so with
+     `holdCheck: "label"`.
+  5. The claim marker. Then `claim-lock --record-tokens --nonce`, right before
+     the activation nonce is posted (`tokens-record-failed` on failure, with
+     the claim already posted), then the activation nonce. The helper mints
+     the claim id and the nonce, so a rerun is always a new claim attempt. A
+     refused or unknown claim write is `claim-post-failed` or
+     `recovery-hold`, and the claim is never posted twice. A failed nonce
+     write is retried once, and only when the comments prove the marker
+     absent; an unreadable comment list stops with `recovery-hold` without a
+     retry. A nonce still absent after the retry stops with
+     `nonce-post-failed`. A marker that this read-back finds counts only with
+     an explicit GraphQL `lastEditedAt: null`, as the claim-family
+     edit-state contract requires: an edited marker is ignored, and an edit
+     state that cannot be read is `unknown`.
+  6. The tokens are recorded again with the nonce, at the acquire point
+     (`claim-lock --record-tokens --nonce`, as the worktree-lock rule of
+     idd-claim.instructions.md requires; `tokens-record-failed` on failure),
+     then `claim-lock --acquire` on the worktree (`lock-acquire-failed`),
+     then `claim-lock --read-tokens`, which must read back as present and not
+     malformed for this claim. Then, after `claim.verifySettleDelay`,
+     `resume-claim-routing --assert`. Only `already_owned` with `keep`
+     verifies the claim (`claim-not-verified`); the verdict is read from
+     the output on every exit.
+  7. A second hold check. A hold, or an unreadable label, first checks the
+     claim again: the worktree lock is acquired with its tokens read back,
+     and the claim is asserted. Any failure there posts nothing and stops
+     with `recovery-hold`. Otherwise the helper posts and verifies
+     `unclaimed-by` and stops with `released-after-hold`. A release that
+     cannot be verified also stops with `recovery-hold`.
+- Exit `0` means the claim is verified. Every stop exits `1` with the
+  envelope kind `gate`. The report carries `claimPosted` (`true`, `false`
+  when nothing was sent, or `"unknown"`), `lostClaimCleanupRequired`, and
+  a `nextAction`. The helper deletes nothing. Once the worktree exists, a
+  failure keeps the worktree, its branch, and the worktree-local lock, and
+  the next action is `lost-claim-cleanup` from `idd-claim.instructions.md`.
+- The routing and marker helpers that the write half calls run from the
+  primary checkout, so each one reads the policy that the fast-forward
+  refreshed. `claim-lock` runs from the linked worktree, the caller's own
+  working directory, so the evidence it reads for this claim is this
+  claim's own.
+- Stale-claim takeover is out of scope: a stale active claim stops the run
+  with `stale-takeover-out-of-scope`.
 
 ### Worktree-local claim lock
 
