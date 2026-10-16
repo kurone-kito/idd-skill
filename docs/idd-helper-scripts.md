@@ -4805,7 +4805,9 @@ like `activation-nonce`, because a worker posts it as itself.
      unavailable value stops with `development-branch-unresolved`. The name
      must be listed by origin itself (`git ls-remote`), because a plain fetch
      keeps the remote-tracking ref of a branch that was deleted; a name that
-     origin does not list stops the same way. The lock
+     origin does not list stops the same way. The branch is then fetched into
+     its own remote-tracking ref, because a clone whose refspec maps only the
+     default branch would otherwise base the worktree on a stale tip. The lock
      is released after this step, because `claim-lock --acquire` takes the
      same lock itself.
   3. `claim-lock --record-tokens` for the worktree (`tokens-record-failed`).

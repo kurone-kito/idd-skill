@@ -2832,3 +2832,72 @@ test('a marker token with a timestamp that names no real time is not the claim m
     assert.equal(report.claimPosted, 'unknown');
   });
 });
+
+test('a development branch the clone does not fetch by default is fetched explicitly, so the worktree starts from its live tip', () => {
+  withApplyFixture(
+    (fixture) => {
+      const updater = join(fixture.parent, 'updater');
+      gitIn(fixture.parent, [
+        'clone',
+        '--quiet',
+        join(fixture.parent, 'origin.git'),
+        updater,
+      ]);
+      gitIn(updater, ['checkout', '--quiet', '-b', 'feat']);
+      writeFileSync(join(updater, 'feat.txt'), 'feat\n');
+      gitIn(updater, ['add', 'feat.txt']);
+      gitIn(updater, [
+        '-c',
+        'user.name=Test',
+        '-c',
+        'user.email=test@example.com',
+        'commit',
+        '--quiet',
+        '-m',
+        'feat',
+      ]);
+      const tip = gitIn(updater, ['rev-parse', 'HEAD']).trim();
+      gitIn(updater, ['push', '--quiet', 'origin', 'feat']);
+      // A narrow refspec: a plain fetch no longer refreshes origin/feat.
+      gitIn(fixture.primary, [
+        'config',
+        'remote.origin.fetch',
+        '+refs/heads/main:refs/remotes/origin/main',
+      ]);
+      const run = runApply(fixture);
+      assert.equal(exitOf(run.result), 0, run.stderr);
+      assert.equal(gitIn(fixture.worktree, ['rev-parse', 'HEAD']).trim(), tip);
+    },
+    { developmentBranch: 'feat', trustedMarkerActors: [OWNER] },
+  );
+});
+
+test('the stderr summary names the release failure that the report names', () => {
+  withApplyFixture((fixture) => {
+    gitIn(fixture.primary, ['checkout', '--quiet', '-b', 'topic']);
+    const run = runApply(fixture, { releaseFails: true });
+    assertStopped(run, 'primary-not-ready');
+    // The summary leads with the release failure; the earlier stop is context.
+    assert.match(
+      run.stderr,
+      /primary-not-ready \(the clone lock was not released/,
+    );
+    assert.match(run.stderr, /the earlier stop was primary-not-ready/);
+  });
+});
+
+test('a claim comment whose supersedes field is not none is not the claim marker', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      posts: { claim: ['unknown-absent'] },
+      initialComments: [
+        {
+          login: OWNER,
+          body: `<!-- claimed-by: ${AGENT} ${CLAIM_ID} supersedes: other-claim ${TIMESTAMP} branch: ${BRANCH} -->`,
+        },
+      ],
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, 'unknown');
+  });
+});

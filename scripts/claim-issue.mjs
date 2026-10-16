@@ -1187,6 +1187,23 @@ function resolveDevelopment(state) {
           : `origin has no branch ${target.branch}`,
       );
     }
+    // A plain fetch only refreshes the refs the clone's refspec maps, so the
+    // development branch is fetched into its own remote-tracking ref explicitly.
+    // The worktree is based on that ref, so it must hold the live tip.
+    const refresh = state.deps.run('git', [
+      '-C',
+      state.primary,
+      'fetch',
+      'origin',
+      `+refs/heads/${target.branch}:refs/remotes/origin/${target.branch}`,
+    ]);
+    if (refresh.status !== 0) {
+      return applyFail(
+        'development-branch-unresolved',
+        'Fetch the development branch from origin by hand, or fix developmentBranch in .github/idd/config.json, then rerun this helper. Nothing was created.',
+        `git fetch of origin/${target.branch} ended with ${describeStatus(refresh)}`,
+      );
+    }
     state.developmentBranch = target.branch;
     return applyPass(`development branch ${target.branch} (${target.status})`);
   }
@@ -1686,7 +1703,7 @@ function postClaim(state) {
   const landed = findMarker(
     state,
     new RegExp(
-      `^<!-- claimed-by: ${escapeForRegExp(identity.agentId)} ${escapeForRegExp(identity.claimId)} supersedes: \\S+ ${MARKER_TIMESTAMP} branch: ${escapeForRegExp(identity.branch)} -->${MARKER_NOTE_SUFFIX}`,
+      `^<!-- claimed-by: ${escapeForRegExp(identity.agentId)} ${escapeForRegExp(identity.claimId)} supersedes: none ${MARKER_TIMESTAMP} branch: ${escapeForRegExp(identity.branch)} -->${MARKER_NOTE_SUFFIX}`,
     ),
   );
   if (landed === 'present') {
@@ -2233,7 +2250,11 @@ export function runClaimIssue(argv, deps, io) {
   if (applied.eligible) {
     return 0;
   }
-  const failed = applied.steps.find((step) => step.status === 'failed');
+  // The last failed step is the one the report names: a failed release comes
+  // after the stop that preceded it.
+  const failed = applied.steps
+    .filter((step) => step.status === 'failed')
+    .at(-1);
   const message = `issue ${issueNumber} was not claimed: ${applied.reason}${failed?.detail ? ` (${failed.detail})` : ''}`;
   io.stderr(`claim-issue: ${message}\n`);
   return { exitCode: 1, kind: 'gate', message };
