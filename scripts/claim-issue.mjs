@@ -34,9 +34,10 @@
 // state) is a `transport` error rather than a report.
 //
 // The `issue-state` guard runs right after that read and before the first A5
-// check. A closed issue (a `state` other than `OPEN`) is refused as
-// `issue-closed` with one failed `issue-state` step, and the A5 checks are then
-// `not-run`. An `OPEN` issue adds no step, so its report is unchanged.
+// check. A closed issue (`state` is `CLOSED`) is refused as `issue-closed` with
+// one failed `issue-state` step, and the A5 checks are then `not-run`. An
+// `OPEN` issue adds no step, so its report is unchanged. A state that is
+// neither is a failed read, not a refusal.
 import { spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { lstatSync } from 'node:fs';

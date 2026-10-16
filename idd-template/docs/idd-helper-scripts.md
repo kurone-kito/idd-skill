@@ -4795,10 +4795,12 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   runs the fresh-claim order; see the Claim write section below.
 - Before the five A5 checks, the `issue-state` guard reads the issue's
   `state` in the same `gh issue view` call and runs right after that read.
-  A closed issue, meaning any `state` other than `OPEN`, is refused as
-  `issue-closed`: its one `issue-state` step is `failed`, its `detail`
-  names the state, and every A5 check is `not-run` with no A5 check call
-  made. An `OPEN` issue adds no step, so its steps keep their positions.
+  A `CLOSED` issue is refused as `issue-closed`: its one `issue-state` step
+  is `failed`, its `detail` names the state, and every A5 check is
+  `not-run` with no A5 check call made. An `OPEN` issue adds no step, so
+  its steps keep their positions. A state that is neither `OPEN` nor
+  `CLOSED` is not a refusal: it is a failed read, as the `transport` rule
+  below says.
 - The checks run in the order of the instruction file and stop at the
   first one that is not eligible; every later check has the status
   `not-run`. Each check calls existing code rather than a copy of it:
