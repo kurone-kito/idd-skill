@@ -81,6 +81,8 @@ activity-universe values the handoff phase consumes.
 Do not treat "one bot says clean" as sufficient evidence — checks must
 cover the full activity universe (human reviewers plus advisory bot
 surfaces such as Copilot, CodeRabbit, Codex connectors, and CI bots).
+Here "cover" means reading each item actually posted and dispositioning
+it, not waiting for a review that has not been posted.
 
 The advisory-wait window is Copilot-only
 (`idd-advisory-wait.instructions.md`) and does not cover non-Copilot
@@ -299,9 +301,12 @@ is diagnostic and never changes the verdict.
   `secondaryQuietWindow.elapsed` must be `true`. A
   `secondary-quiet-window` blocker means that window has not elapsed
   since the last substantive review activity; wait (poll per
-  `advisoryWait.pollInterval`), then re-evaluate F2. When issue
-  `#2544`'s settled buffer clamps the wait, the blocker names that
-  buffer apart from the configured window.
+  `advisoryWait.pollInterval`), then re-evaluate F2. The only wait for a
+  non-primary advisory bot is this `secondary-quiet-window` blocker, and
+  it never waits for any bot to review; `advisoryWait.primaryBotLogin`
+  (default Copilot) is the only primary. When issue `#2544`'s settled
+  buffer clamps the wait, the blocker names that buffer apart from the
+  configured window.
 - **CI**: Current PR head SHA has all required CI checks generated and
   all passing (→ run CI wait per `idd-ci.instructions.md` using the
   same resolved `ciWait.runningTimeout`, `ciWait.generationTimeout`, and

@@ -491,9 +491,13 @@ A false finding is Rejected on its merits.
    `1`/`2` record/skip, `3` stops. No primary marker.
    Each review is ordinary
    advisory input, picked up by E1 if it lands before merge; skipped
-   when unconfigured. Never poll/wait for any of them here, E1, or E2;
-   only F2's `secondary-quiet-window` blocker
-   (`idd-pre-merge.instructions.md`) waits, folded across every login.
+   when unconfigured. Never poll or wait for a secondary bot's review
+   here, at E1, or at E2. Your primary bot is
+   `advisoryWait.primaryBotLogin` (default Copilot); every other advisory
+   bot, such as `chatgpt-codex-connector[bot]`, is secondary. Only F2's
+   `secondary-quiet-window` blocker (`idd-pre-merge.instructions.md`)
+   waits, as a rescue for late arrivals and never as a wait for a review;
+   it folds across every configured secondary login.
 
 Unanswered advisory items block merge until each one is dispositioned,
 unless the gate settles it without a disposition, as it does for a

@@ -441,8 +441,9 @@ self-critique and record risk.
     snapshot if it lands before merge. Skip this step entirely when
     `secondaryRequestNeeded` is `false`.
 11. Advisory feedback is advisory: you are not obligated to accept
-    every suggestion, but you must still wait for a review you
-    explicitly requested. A human `CHANGES_REQUESTED` reviewer is not
+    every suggestion, but you must still wait for a primary-bot review
+    you explicitly requested; a secondary bot requested in step 10 is
+    never waited for. A human `CHANGES_REQUESTED` reviewer is not
     advisory and stays under the hold/escalation path in the standard
     file.
 
