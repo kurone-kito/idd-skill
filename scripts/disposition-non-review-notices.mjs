@@ -367,7 +367,17 @@ export function buildDispositionPlan(input, options = {}) {
   const planned = [];
   const skipped = [];
   const coveredByBot = new Map();
-  for (const comment of comments) {
+  // The gate pairs a bot's notices in activity-time order (an edited notice
+  // counts as later), so cover and plan them in that order too, not in
+  // creation order (Copilot and CodeRabbit review of kurone-kito/idd-skill#4445).
+  const noticesInGateOrder = [...comments].sort(
+    (left, right) =>
+      compareIsoTimestamps(
+        effectiveRegularCommentActivityAt(left),
+        effectiveRegularCommentActivityAt(right),
+      ) || left.id - right.id,
+  );
+  for (const comment of noticesInGateOrder) {
     const identity = advisoryBotIdentityToken(comment.login);
     if (
       !isHandledBot(comment.login) ||
@@ -713,15 +723,16 @@ export function buildDispositionPlan(input, options = {}) {
   return { headSha, planned, skipped };
 }
 /**
- * A notice paired by count: a trusted disposition covers a bot's notices
- * oldest first. The summary-walkthrough and Codex no-find items pair by
- * timestamp instead, so they stay outside that pool.
+ * The pairing pool a planned disposition belongs to, or `null` for none. The
+ * gate pairs a bot's notices and its summary acceptances as two activity-
+ * ordered pools. A Codex no-find result names its source comment instead, so
+ * it has no pool.
  */
-function isCountPairedNotice(entry) {
-  return (
-    entry.reason !== 'summary walkthrough' &&
-    entry.reason !== 'Codex no-find result'
-  );
+function pairingPoolKind(entry) {
+  if (entry.reason === 'Codex no-find result') {
+    return null;
+  }
+  return entry.reason === 'summary walkthrough' ? 'summary' : 'notice';
 }
 /**
  * Narrow a plan to the listed `--comment-id` values (#4437). Pure: planning
@@ -772,11 +783,12 @@ export function selectDispositionPlan(
   }
   const countPools = new Map();
   for (const entry of plan.planned) {
-    if (!isCountPairedNotice(entry)) {
+    const kind = pairingPoolKind(entry);
+    if (kind === null) {
       continue;
     }
-    const identity = advisoryBotIdentityToken(entry.botLogin);
-    countPools.set(identity, [...(countPools.get(identity) ?? []), entry]);
+    const key = `${advisoryBotIdentityToken(entry.botLogin)}|${kind}`;
+    countPools.set(key, [...(countPools.get(key) ?? []), entry]);
   }
   for (const pool of countPools.values()) {
     // The gate orders a bot's notices by activity time, not by creation, so an
