@@ -4068,12 +4068,12 @@ export function repositoryFromRemoteUrl(remote) {
  * explicit host takes precedence, as in `gh`), else the Actions server
  * (`GITHUB_SERVER_URL`, `https://github.com` when unset). `null` when that host
  * cannot be parsed. */
-function activeGithubHost() {
+export function activeGithubHost() {
   try {
     const explicit = process.env.GH_HOST?.trim();
     if (explicit) return new URL(`https://${explicit}`).host.toLowerCase();
     return new URL(
-      process.env.GITHUB_SERVER_URL ?? 'https://github.com',
+      process.env.GITHUB_SERVER_URL?.trim() || 'https://github.com',
     ).host.toLowerCase();
   } catch {
     return null;
@@ -4093,7 +4093,7 @@ export function gitChildEnvironment(source = process.env) {
  * GitHub host (`activeGithubHost`), compared case-insensitively. An unreadable
  * origin, a missing remote, a remote that is not a repository URL, or an
  * unparseable host is false: the caller then uses `gh` (fail closed). */
-function originNamesRepository(owner, repo) {
+export function originNamesRepository(owner, repo) {
   const serverHost = activeGithubHost();
   if (serverHost === null) return false;
   let remote;
@@ -4109,6 +4109,7 @@ function originNamesRepository(owner, repo) {
   } catch {
     return false;
   }
+  if (!isPlainRemoteUrl(remote.replace(/\n$/, ''))) return false;
   const origin = repositoryFromRemoteUrl(remote);
   if (origin !== null && origin.host !== serverHost.toLowerCase()) return false;
   return (
@@ -4146,4 +4147,13 @@ export function resolveCurrentGithubRepository() {
     return { owner: match[1] ?? '', repo: match[2] ?? '' };
   }
   return resolveGhOwnerRepo({}, GH_TEXT_LOOP_OPTIONS);
+}
+/**
+ * Whether `url` is printable ASCII with no space and no backslash. A URL parser
+ * can drop or reinterpret whitespace, control characters, and a backslash, and
+ * it can ignore a format character such as U+200B inside a host, so a URL with
+ * any of them is refused before it is parsed.
+ */
+export function isPlainRemoteUrl(url) {
+  return /^[\x21-\x5b\x5d-\x7e]+$/.test(url);
 }

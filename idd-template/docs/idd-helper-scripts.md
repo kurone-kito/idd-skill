@@ -4282,6 +4282,99 @@ unresolved is ignored instead of making claim resolution throw.
 would shift the start of the cap. It is listed in `IDD_AGENT_DERIVED_MARKERS`,
 like `activation-nonce`, because a worker posts it as itself.
 
+### F4 head-proof marker contract
+
+Issue `#4368` adds the `f4-head-proof` type to `post-idd-marker`. It posts the
+`idd-f4-head-proof` record that `docs/idd-resume-detail.md` (F4 Head Proof)
+requires on the claimed issue before F4 step 3. The record format and the
+rules for reusing it live there; this section covers the command. It reads the
+live state, decides with the verdict table (`f4-head-proof-verdict.mts`),
+posts only when the verdict is `post`, reads the result back, and prints the
+verdict and the proof values as JSON.
+
+```sh
+node scripts/post-idd-marker.mjs --type f4-head-proof --target issue <n> \
+  --claim-id <id> --agent-id <id> --worktree <path> [--apply]
+```
+
+The command takes only those flags. Every proof value is derived: the branch
+from the verified active claim, the pull request from the claim's branch
+(`gh pr list --head <branch> --state all`), the merge commit and head from the
+REST pull request and commit endpoints, the branch tip from `git rev-parse
+--verify refs/heads/<branch>` in `--worktree`, and the `f2` head from the
+latest trusted, unedited `review-watermark` of this claim on the pull request.
+`--worktree` must be a worktree that `git worktree list --porcelain` registers
+for the repository of the current directory. `--target pr` is refused. So are
+`--trusted-marker-logins` and `--advisory-bot-logins`: the trusted logins come
+from the viewer, `IDD_TRUSTED_MARKER_ACTORS`, the trusted configuration, and
+(when collaborator-marker trust is on) collaborators with write access, never
+a flag. `--owner` and `--repo` are refused too. The repository is read from the
+current checkout's origin remote (its effective URL, as `git remote get-url`
+reports it), locally and with no `gh` call, so an inherited `GH_REPO` has no
+effect. The URL is read raw: whitespace anywhere, a backslash, or a character
+outside printable ASCII is refused before it is parsed. The origin must name the
+repository on the active GitHub host (`GH_HOST`, else `GITHUB_SERVER_URL`, else
+github.com), and `--worktree` must be registered in that checkout; otherwise the
+run is refused before any claim read. An HTTP(S) origin's port is part of its
+host, so `GH_HOST` names it too, except port 443, which `GH_HOST` cannot name:
+drop that port from the origin URL. An SSH or `git://` origin's port is compared
+with the host too. A matching `GH_HOST` passes that comparison, but every `gh`
+call would then go to that port, so the origin URL should drop it. For an SSH
+origin, dropping the port makes git connect on port 22 unless `~/.ssh/config`
+maps the host. The command then sets `GH_HOST`, for its own process, to the
+normalized active host, so every `gh` call the command makes goes to the
+origin's host and not to gh's own default host.
+
+Before any POST the command reads the stored activation nonce (`claim-lock
+--read-tokens`), runs `resume-claim-routing --assert` and accepts only its
+`already_owned` / `keep` verdict with reason `claim-id-match` for this claim ID,
+checks that the claim lock of `--worktree` carries this claim ID, and requires
+`decideBeforePost` to return `post`. A merge commit with two parents must have
+the live head as its second parent; one parent (a squash or rebase merge) is
+accepted, as in the written procedure; any other count holds with `pr-state`. So
+does a branch with no merged pull request, or with more than one, and a `gh pr
+list` result that reaches its 100-row cap, which may be truncated (preventive;
+no observed incident yet). The origin, worktree, and ref reads, and the spawned
+claim check, ignore every caller variable whose name starts with `GIT_`, in any
+letter case (preventive; no observed incident yet). The claim-lock read keeps
+its narrower filter, which drops only `GIT_CONFIG*`, `GIT_DIR`, `GIT_WORK_TREE`,
+`GIT_COMMON_DIR`, `GIT_INDEX_FILE`, and `GIT_OBJECT_DIRECTORY`. Under `--apply`
+the claim check and the lock are read once more right before the POST, with the
+same nonce: a changed claim or branch, or a replaced or missing lock, is `stop`
+on `claim-or-lock`, and a reading that cannot be obtained is `hold`; nothing is
+posted either way.
+
+The printed `verdict` is `post` (a dry run that would post), `proceed`, `stop`,
+or `hold`, with a `reason` that is `null` for `post` and otherwise a code of
+the verdict table or `post-rejected`. Exit status is 0 for `post` and
+`proceed` and 1 for `hold` and `stop`.
+
+- A nonce record that is absent, malformed, or has no nonce, a lock that is
+  malformed, a read of either that throws, and a claim check that cannot be
+  read are `hold` on `claim-or-lock`. A claim check that runs and exits
+  non-zero with a routing verdict whose `state` and `action` the routing
+  module prints (including `owner_evidence_required`, where GitHub shows the
+  claim but the local proof failed), and a lock that is absent or held under
+  another claim ID, are `stop` on `claim-or-lock`. A verdict with any other
+  `state` or `action` is `hold`.
+- A confirmed write needs one re-fetch that matches the posted identity,
+  taken from `classifyReread`; a mismatch holds with `posted-disagreed`.
+- A post error that proves nothing was sent (a host-local load-control refusal,
+  or HTTP 401, 404, or 422) holds with `post-rejected` and posts nothing else;
+  fix the cause and rerun. Any other error is an uncertain write: exactly
+  three re-reads, then `decideAfterPost` decides (`post-unconfirmed`,
+  `reread-failed`, `reread-conflict`, or `reread-reusable`). The command never
+  posts a second time; reconcile by reading the issue comments. One adapter
+  call may already have sent up to three POSTs of the same body.
+- A dry run performs the same live reads (the claim once, not twice) and posts
+  nothing. A value the renderer rejects exits non-zero with nothing posted.
+- The `warnings` list names the cause behind a reason code: a read the command
+  swallowed (for example a failed pull request lookup), or the error of a
+  rejected or uncertain post.
+
+`MARKER_HIDE_POLICY` classifies `<!-- idd-f4-head-proof:` `excluded`, as it does
+`<!-- idd-hold:`, and `IDD_AGENT_DERIVED_MARKERS` lists it.
+
 ### Provider health helper
 
 - Command: `node scripts/provider-health.mjs [--owner <owner>] [--repo <repo>]`
@@ -5697,12 +5790,17 @@ like `activation-nonce`, because a worker posts it as itself.
 - Write-side companion to `emit-marker`: it renders the canonical body for
   each operational marker `<type>` (`claim`, `unclaim`, `activation-nonce`,
   `watermark`, `baseline`, `advisory`, `advisory-recovery`,
-  `advisory-reroll`, `idd-hold`) by reusing the single-sourced `protocol-helpers`
-  renderers, then POSTs it as a JSON document (`{"body": …}`) via
+  `advisory-reroll`, `idd-hold`, `review-ack`, `copilot-unavailable`,
+  `out-of-loop`) by reusing the single-sourced `protocol-helpers` renderers,
+  then POSTs it as a JSON document (`{"body": …}`) via
   `gh api --method POST .../comments --input -`. The JSON path is
   mandatory because `gh issue comment` / `gh api -f body=` silently
   reject the HTML-comment-first claim-family bodies. `-f` also treats a
   leading `@` as a literal character — only `-F` reads `@file` contents.
+  `f4-head-proof` is not in that list: its body comes from
+  `renderF4HeadProofBody` (`f4-head-proof.mts`), and its command reads the
+  live state before it renders (see the
+  [F4 head-proof marker contract](#f4-head-proof-marker-contract)).
 - The `claim` / `unclaim` / `activation-nonce` / `watermark` / `baseline` /
   `idd-hold` bodies are HTML-comment-first with a visible "Do not edit" note;
   `advisory` / `advisory-recovery` / `advisory-reroll` are the
@@ -5719,7 +5817,10 @@ like `activation-nonce`, because a worker posts it as itself.
   --claim-id --sha`; `advisory` / `advisory-recovery` / `advisory-reroll`
   take `--agent-id --head-sha --timestamp`; `idd-hold` takes `--agent-id
   --claim-id --timestamp` and only `--target issue` (see the
-  [Hold marker contract](#hold-marker-contract)).
+  [Hold marker contract](#hold-marker-contract)); `f4-head-proof` takes
+  `--agent-id --claim-id --worktree` and only `--target issue`, and reads every
+  proof value live (see the
+  [F4 head-proof marker contract](#f4-head-proof-marker-contract)).
 - One-command watermark (`watermark` only): `--from-pr <n>` derives
   `--head-sha` / `--max-activity-at` / `--total-item-count` /
   `--ci-completed-at` from a fresh `review-activity-snapshot` of PR `<n>` and

@@ -3,7 +3,18 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { renderF4HeadProofBody } from '../src/scripts/f4-head-proof.mts';
+import {
+  parseF4HeadProofBody,
+  renderF4HeadProofBody,
+} from '../src/scripts/f4-head-proof.mts';
+import {
+  detectMalformedOperationalMarker,
+  IDD_AGENT_DERIVED_MARKERS,
+  MARKER_HIDE_POLICY,
+  OPERATIONAL_MARKERS,
+  operationalMarkerPrefix,
+  operationalMarkerPrefixByStart,
+} from '../src/scripts/protocol-helpers.mts';
 
 type Fields = Parameters<typeof renderF4HeadProofBody>[0];
 
@@ -200,4 +211,168 @@ describe('renderF4HeadProofBody', () => {
       });
     });
   }
+});
+
+// kurone-kito/idd-skill#4368: the v2 parser, and the marker's place in the
+// operational-marker registry.
+describe('parseF4HeadProofBody', () => {
+  const PARSED = {
+    prNumber: 3741,
+    claimId: 'claim-fixture',
+    branch: 'issue/fixture',
+    f2: '1111111111111111111111111111111111111111',
+    branchTip: '2222222222222222222222222222222222222222',
+    merge: '3333333333333333333333333333333333333333',
+    head: '4444444444444444444444444444444444444444',
+  };
+
+  it('round-trips the rendered body', () => {
+    assert.deepStrictEqual(parseF4HeadProofBody(EXPECTED_BODY), {
+      kind: 'proof',
+      proof: PARSED,
+    });
+  });
+
+  it('accepts the bare token and a trailing newline', () => {
+    const token = EXPECTED_BODY.split('\n')[0];
+
+    assert.strictEqual(parseF4HeadProofBody(token).kind, 'proof');
+    assert.strictEqual(
+      parseF4HeadProofBody(`${EXPECTED_BODY}\n`).kind,
+      'proof',
+    );
+  });
+
+  it('reports a body that is not the marker as none', () => {
+    for (const body of [
+      '',
+      'looks good',
+      ` ${EXPECTED_BODY}`,
+      `quoted: ${EXPECTED_BODY}`,
+      '<!-- idd-hold: agent claim 2026-10-15T00:00:00Z -->',
+    ]) {
+      assert.deepStrictEqual(
+        parseF4HeadProofBody(body),
+        { kind: 'none' },
+        body,
+      );
+    }
+  });
+
+  it('reports a marker-shaped body that breaks the grammar as malformed', () => {
+    const malformed = [
+      EXPECTED_BODY.replace('v2', 'v1'),
+      EXPECTED_BODY.replace('pr=3741', 'pr=0'),
+      EXPECTED_BODY.replace('pr=3741', 'pr=03741'),
+      EXPECTED_BODY.replace('pr=3741', 'pr=9007199254740993'),
+      EXPECTED_BODY.replace(
+        VALID.f2,
+        VALID.f2.toUpperCase().replace(/1/g, 'A'),
+      ),
+      EXPECTED_BODY.replace(VALID.f2, VALID.f2.slice(1)),
+      EXPECTED_BODY.replace(' f2=', '  f2='),
+      EXPECTED_BODY.replace('branch-tip=', 'tip='),
+      EXPECTED_BODY.replace(' -->', ''),
+      `${EXPECTED_BODY}\n\nextra text`,
+      `${EXPECTED_BODY}\n\n_one note_\n_two notes_`,
+      '<!-- idd-f4-head-proof: v2 -->',
+    ];
+    for (const body of malformed) {
+      assert.strictEqual(parseF4HeadProofBody(body).kind, 'malformed', body);
+    }
+  });
+
+  it('reads the claim of a malformed body when it can', () => {
+    assert.deepStrictEqual(
+      parseF4HeadProofBody(EXPECTED_BODY.replace('v2', 'v1')),
+      { kind: 'malformed', claimId: 'claim-fixture' },
+    );
+    assert.deepStrictEqual(
+      parseF4HeadProofBody('<!-- idd-f4-head-proof: v2 -->'),
+      { kind: 'malformed', claimId: null },
+    );
+  });
+});
+
+describe('the idd-f4-head-proof operational marker entry', () => {
+  const LABEL = '<!-- idd-f4-head-proof:';
+
+  it('recognizes the rendered body as an operational marker', () => {
+    assert.strictEqual(operationalMarkerPrefix(EXPECTED_BODY), LABEL);
+    assert.strictEqual(operationalMarkerPrefixByStart(EXPECTED_BODY), LABEL);
+    assert.strictEqual(detectMalformedOperationalMarker(EXPECTED_BODY), null);
+  });
+
+  it('does not recognize a body whose token breaks the grammar', () => {
+    for (const body of [
+      EXPECTED_BODY.replace('v2', 'v1'),
+      EXPECTED_BODY.replace(VALID.merge, 'abc'),
+      EXPECTED_BODY.replace('claim=claim-fixture', 'claim=a-->b'),
+      `preamble ${EXPECTED_BODY}`,
+    ]) {
+      assert.strictEqual(operationalMarkerPrefix(body), null, body);
+    }
+    // The token-only start check still matches, as for every other entry.
+    assert.strictEqual(
+      operationalMarkerPrefixByStart(EXPECTED_BODY.replace('v2', 'v1')),
+      LABEL,
+    );
+  });
+
+  it('agrees with the parser about the tail: extra text after the token is malformed, not a marker', () => {
+    const token = EXPECTED_BODY.split('\n')[0];
+    const accepted = [
+      EXPECTED_BODY,
+      token,
+      `${EXPECTED_BODY}\n`,
+      `${token}\r\n\r\n_agent-fixture: F4 head-proof marker. Do not edit._\r\n`,
+      `${token}   \n`,
+    ];
+    const extra = [
+      `${EXPECTED_BODY}\n\nextra text`,
+      `${EXPECTED_BODY}\n\n_one note_\n_two notes_`,
+      `${token} trailing`,
+      // A note line without the italic underscores, and a note on two lines.
+      `${token}\n\nF4 head-proof marker. Do not edit.`,
+      `${token}\n\n_a note\nthat wraps_`,
+    ];
+    for (const body of accepted) {
+      assert.strictEqual(parseF4HeadProofBody(body).kind, 'proof', body);
+      assert.strictEqual(operationalMarkerPrefix(body), LABEL, body);
+      assert.strictEqual(detectMalformedOperationalMarker(body), null, body);
+    }
+    for (const body of extra) {
+      assert.strictEqual(parseF4HeadProofBody(body).kind, 'malformed', body);
+      assert.strictEqual(operationalMarkerPrefix(body), null, body);
+      assert.strictEqual(detectMalformedOperationalMarker(body), LABEL, body);
+    }
+  });
+
+  it('agrees with the parser about the token too: a body the parser calls malformed is not a live marker', () => {
+    // The shape-only pattern is looser than the parser (case, spacing, a pr
+    // beyond the safe integers, a `>` inside a value); the prefix check
+    // still follows the parser, and the malformed check reports the body.
+    const loose = [
+      EXPECTED_BODY.replace(VALID.f2, VALID.f2.replace(/1/g, 'A')),
+      EXPECTED_BODY.replace(' f2=', '  f2='),
+      EXPECTED_BODY.replace('pr=3741', 'pr=9007199254740993'),
+      EXPECTED_BODY.replace('branch=issue/fixture', 'branch=issue/a>b'),
+      EXPECTED_BODY.replace('idd-f4-head-proof:', 'IDD-F4-HEAD-PROOF:'),
+    ];
+    for (const body of loose) {
+      assert.strictEqual(parseF4HeadProofBody(body).kind, 'malformed', body);
+      assert.strictEqual(operationalMarkerPrefix(body), null, body);
+      assert.strictEqual(detectMalformedOperationalMarker(body), LABEL, body);
+    }
+  });
+
+  it('is classified excluded from hiding, like the hold marker, and kept as an agent-derived marker', () => {
+    assert.strictEqual(MARKER_HIDE_POLICY.get(LABEL)?.policy, 'excluded');
+    assert.strictEqual(
+      MARKER_HIDE_POLICY.get(LABEL)?.policy,
+      MARKER_HIDE_POLICY.get('<!-- idd-hold:')?.policy,
+    );
+    assert.ok(IDD_AGENT_DERIVED_MARKERS.has(LABEL));
+    assert.ok(OPERATIONAL_MARKERS.some((marker) => marker.label === LABEL));
+  });
 });

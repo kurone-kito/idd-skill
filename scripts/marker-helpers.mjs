@@ -21,6 +21,7 @@
 // moving them here would force exactly that forbidden back-import. Only the
 // single-marker parse/render primitives move in this wave.
 import { createHash } from 'node:crypto';
+import { parseF4HeadProofBody } from './f4-head-proof.mjs';
 import { createMarkerRegex, escapeRegex } from './marker-regex.mjs';
 
 const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
@@ -68,6 +69,24 @@ const OPERATIONAL_MARKER_ENTRIES = [
     startPattern: /^<!--\s*idd-hold:/i,
     malformedPrefixPattern:
       /^<!--\s*idd-hold:\s+(?:(?!<!--|-->)\S)+\s+(?:(?!<!--|-->)\S)+\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*-->/i,
+  },
+  {
+    // kurone-kito/idd-skill#4368: the F4 head-proof record a claimed session
+    // posts on its issue before F4 step 3 (docs/idd-resume-detail.md, "F4
+    // Head Proof"). Issue-scoped and durable. The token grammar is the v2
+    // format that `renderF4HeadProofBody` (f4-head-proof.mts) emits, with no
+    // whitespace and no `<!--` or `-->` inside a free-form value. The visible
+    // note ("F4 head-proof marker. Do not edit.") carries no `IDD` word, so
+    // the tail is the one `parseF4HeadProofBody` accepts (nothing, or one
+    // italic note line) rather than the shared IDD-note grammar. A body with
+    // anything else after the token is not recognized here, and
+    // `malformedPrefixPattern` reports it as a malformed marker.
+    label: '<!-- idd-f4-head-proof:',
+    pattern:
+      /^<!--\s*idd-f4-head-proof:\s+v2\s+pr=[1-9]\d*\s+claim=(?:(?!<!--|-->)\S)+\s+branch=(?:(?!<!--|-->)\S)+\s+f2=[0-9a-f]{40}\s+branch-tip=[0-9a-f]{40}\s+merge=[0-9a-f]{40}\s+head=[0-9a-f]{40}\s*-->(?:\s*|\s*\n\s*_[^\n]*_\s*)$/i,
+    startPattern: /^<!--\s*idd-f4-head-proof:/i,
+    malformedPrefixPattern:
+      /^<!--\s*idd-f4-head-proof:\s+v2\s+pr=[1-9]\d*\s+claim=(?:(?!<!--|-->)\S)+\s+branch=(?:(?!<!--|-->)\S)+\s+f2=[0-9a-f]{40}\s+branch-tip=[0-9a-f]{40}\s+merge=[0-9a-f]{40}\s+head=[0-9a-f]{40}\s*-->/i,
   },
   {
     label: '<!-- review-watermark:',
@@ -298,6 +317,12 @@ const MARKER_HIDE_POLICY_ENTRIES = [
       "Live hold-state evidence: the orchestrator's held-worker renewal rule (docs/idd-workflow.md, Hold marker) re-reads the hold start from the earliest marker in an unbroken run on every wake-up, so hiding an earlier marker would shift the start of the 72 h cap. Issue-scoped, not PR-scoped, so F4's PR-bound cleanup never reaches it either (kurone-kito/idd-skill#4310).",
   },
   {
+    label: '<!-- idd-f4-head-proof:',
+    policy: 'excluded',
+    reason:
+      "Durable F4 cleanup evidence: the proof pins the merged PR's SHAs and the local branch tip after the PR comments and the branch are gone, and F4 step 7 reads it again after cleanup, so hiding it would remove the only record. Issue-scoped, not PR-scoped, so F4's PR-bound cleanup never reaches it either (kurone-kito/idd-skill#4368).",
+  },
+  {
     label: '<!-- review-watermark:',
     policy: 'wired',
     reason: 'Grouped by same claim-id (idd-review-snapshot.instructions.md).',
@@ -517,6 +542,7 @@ export const IDD_AGENT_DERIVED_MARKERS = new Set([
   '<!-- unclaimed-by:',
   '<!-- activation-nonce:',
   '<!-- idd-hold:',
+  '<!-- idd-f4-head-proof:',
   '<!-- review-watermark:',
   '<!-- review-baseline:',
   '<!-- zero-accepted-path-a-gate:',
@@ -2837,6 +2863,17 @@ export function operationalMarkerPrefix(body) {
   ) {
     return null;
   }
+  // kurone-kito/idd-skill#4368: the shape-only pattern is looser than
+  // `parseF4HeadProofBody` (case, spacing, a pr number beyond the safe
+  // integers, a `>` in a value). A body the parser calls malformed is not a
+  // live proof; `detectMalformedOperationalMarker` still reports it through
+  // the entry's `malformedPrefixPattern` when the token shape matches.
+  if (
+    marker.label === '<!-- idd-f4-head-proof:' &&
+    !isValidF4HeadProofOperationalMarker(normalized)
+  ) {
+    return null;
+  }
   return marker.label;
 }
 export function operationalMarkerPrefixByStart(body) {
@@ -2857,7 +2894,8 @@ export function operationalMarkerPrefixByStart(body) {
 }
 /**
  * Detects a `claimed-by` / `unclaimed-by` / `activation-nonce` /
- * `review-watermark` / `review-baseline` / `zero-accepted-path-a-gate`
+ * `idd-hold` / `idd-f4-head-proof` / `review-watermark` /
+ * `review-baseline` / `zero-accepted-path-a-gate`
  * comment whose body starts with a structurally valid marker token but
  * whose whole body does not match the canonical, strict
  * `pattern` -- for **any** reason: content appended directly after the
@@ -2988,6 +3026,9 @@ function isValidForcedHandoffOperationalMarker(body) {
 }
 function isValidHoldOperationalMarker(body) {
   return parseHoldMarker(body, '') !== null;
+}
+function isValidF4HeadProofOperationalMarker(body) {
+  return parseF4HeadProofBody(body).kind === 'proof';
 }
 export function isValidIsoTimestamp(value) {
   if (typeof value !== 'string') return false;

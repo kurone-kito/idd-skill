@@ -633,6 +633,11 @@ this manual `OUTDATED` fallback (full reasoning in each entry's own
   the PR: the orchestrator counts a hold from the earliest marker of an
   unbroken run, so hiding one would shift the start of the 72 h cap
   (kurone-kito/idd-skill#4310).
+- `<!-- idd-f4-head-proof:` -- durable F4 cleanup evidence on the claimed
+  issue, not the PR: it pins the merged SHAs and the local branch tip after
+  the PR comments and the branch are gone, and F4 step 7 reads it again
+  after cleanup, so hiding it would remove the only record
+  (kurone-kito/idd-skill#4368).
 
 Always skip candidates when any of these are true:
 

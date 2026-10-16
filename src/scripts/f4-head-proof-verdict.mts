@@ -17,9 +17,9 @@
 
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 
-type Disposition = 'proceed' | 'stop' | 'hold' | 'post';
+export type Disposition = 'proceed' | 'stop' | 'hold' | 'post';
 
-type Reason =
+export type Reason =
   | 'claim-or-lock'
   | 'pr-state'
   | 'ref-read'
@@ -36,13 +36,13 @@ type Reason =
   | 'reread-reusable'
   | 'post-unconfirmed';
 
-interface Verdict {
+export interface Verdict {
   readonly disposition: Disposition;
   readonly exitCode: 0 | 1 | null;
   readonly reason: Reason | null;
 }
 
-interface LivePr {
+export interface LivePr {
   readonly merged: boolean;
   readonly readable: boolean;
   readonly mergeCommitSha: string | null;
@@ -50,12 +50,12 @@ interface LivePr {
   readonly mergeParentHeadSha: string | null;
 }
 
-interface LocalRef {
+export interface LocalRef {
   readonly state: 'present' | 'absent' | 'error';
   readonly tip: string | null;
 }
 
-interface Marker {
+export interface Marker {
   readonly claimId: string;
   readonly prNumber: number;
   readonly branch: string;
@@ -68,9 +68,9 @@ interface Marker {
 }
 
 /** A trusted same-claim marker entry; `unparseable` entries are never reusable. */
-type TrustedMarker = Marker | { readonly unparseable: true };
+export type TrustedMarker = Marker | { readonly unparseable: true };
 
-interface ProofInput {
+export interface ProofInput {
   readonly claimId: string;
   readonly prNumber: number;
   readonly branch: string;
@@ -84,12 +84,12 @@ interface ProofInput {
   readonly watermarkAuthenticated: boolean;
 }
 
-interface Reread {
+export interface Reread {
   readonly result: 'reusable' | 'trusted-not-reusable' | 'none' | 'failed';
   readonly identity: string | null;
 }
 
-interface PostResult {
+export interface PostResult {
   readonly writeOk: boolean;
   readonly postedIdentity: string | null;
   /** Read only when `writeOk` is true. */
@@ -210,7 +210,6 @@ function livePrPasses(livePr: LivePr): boolean {
  * Classify one post-write or pre-write read of the trusted same-claim
  * markers. `null` means the read failed; an empty list means no marker.
  */
-// audit:ignore-dead-export: the caller that wires this verdict table into the F4 cleanup gate is not yet filed; this implements the decision recorded on #4094
 export function classifyReread(
   readMarkers: readonly TrustedMarker[] | null,
   input: ProofInput,
@@ -240,7 +239,6 @@ export function classifyReread(
  * matching row wins. Returns `post` only when a marker POST is needed;
  * the caller then reports the result to `decideAfterPost`.
  */
-// audit:ignore-dead-export: the caller that wires this verdict table into the F4 cleanup gate is not yet filed; this implements the decision recorded on #4094
 export function decideBeforePost(input: ProofInput): Verdict {
   if (!input.claimOk) {
     return terminal('stop', 'claim-or-lock');
@@ -280,7 +278,6 @@ export function decideBeforePost(input: ProofInput): Verdict {
  * exactly three re-reads; this throws when they are missing, and it never
  * reads `rereads` on the success path.
  */
-// audit:ignore-dead-export: the caller that wires this verdict table into the F4 cleanup gate is not yet filed; this implements the decision recorded on #4094
 export function decideAfterPost(postResult: PostResult): Verdict {
   if (postResult.writeOk) {
     const refetch = postResult.refetch ?? null;
