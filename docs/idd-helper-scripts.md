@@ -4294,10 +4294,13 @@ verdict and the proof values as JSON.
 
 ```sh
 node scripts/post-idd-marker.mjs --type f4-head-proof --target issue <n> \
-  --claim-id <id> --agent-id <id> --worktree <path> [--apply]
+  --claim-id <id> --agent-id <id> --worktree <path> [--supersedes <comment-id>] [--apply]
 ```
 
-The command takes only those flags. Every proof value is derived: the branch
+The command takes only those flags. The optional `--supersedes <comment-id>`
+(#4442) names the malformed trusted proof of this claim that a corrected proof
+replaces; a comment that is not such a proof is refused, and an unknown ID
+holds, so nothing is posted in either case. Every proof value is derived: the branch
 from the verified active claim, the pull request from the claim's branch
 (`gh pr list --head <branch> --state all`), the merge commit and head from the
 REST pull request and commit endpoints, the branch tip from `git rev-parse

@@ -14,8 +14,15 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { AuthoringOwnerProvenanceComment } from '../src/scripts/authoring-owner-provenance.mts';
+import {
+  parseF4HeadProofBody,
+  renderF4HeadProofBody,
+} from '../src/scripts/f4-head-proof.mts';
 import type { ActivationResult } from '../src/scripts/idd-activation.mts';
-import { parseAuthoringOwnerComment } from '../src/scripts/marker-helpers.mts';
+import {
+  detectMalformedOperationalMarker,
+  parseAuthoringOwnerComment,
+} from '../src/scripts/marker-helpers.mts';
 import {
   buildMarkerBody,
   describeUnaddressedActivity,
@@ -8760,5 +8767,106 @@ test('post-idd-marker --help describes the authoring-owner identity check (#3910
   assert.match(
     help,
     /latest\s+trusted owner marker on\s+--marker-target \(#3899\)/,
+  );
+});
+
+// --- #4442: the optional supersedes field of f4-head-proof -------------------
+
+const F4_RENDER_FIELDS = {
+  pr: '4390',
+  claim: F4_FIELDS['claim-id'],
+  branch: F4_FIELDS.branch,
+  f2: F4_FIELDS.f2,
+  branchTip: F4_FIELDS['branch-tip'],
+  merge: F4_FIELDS.merge,
+  head: F4_FIELDS.head,
+  agentId: F4_FIELDS['agent-id'],
+};
+
+const SUPERSEDING_F4_BODY = renderF4HeadProofBody({
+  ...F4_RENDER_FIELDS,
+  supersedes: '1234',
+});
+
+test('renderF4HeadProofBody puts the supersedes field after head, and parse reads it back', () => {
+  assert.equal(
+    SUPERSEDING_F4_BODY.split('\n')[0],
+    `<!-- idd-f4-head-proof: v2 pr=4390 claim=${F4_FIELDS['claim-id']} branch=${F4_FIELDS.branch} f2=${'1'.repeat(40)} branch-tip=${'2'.repeat(40)} merge=${'3'.repeat(40)} head=${'4'.repeat(40)} supersedes=1234 -->`,
+  );
+  const parsed = parseF4HeadProofBody(SUPERSEDING_F4_BODY);
+  if (parsed.kind !== 'proof') {
+    throw new Error('expected a well-formed proof');
+  }
+  assert.equal(parsed.proof.supersedes, 1234);
+  const plain = parseF4HeadProofBody(renderF4HeadProofBody(F4_RENDER_FIELDS));
+  if (plain.kind !== 'proof') {
+    throw new Error('expected a well-formed proof');
+  }
+  assert.equal('supersedes' in plain.proof, false);
+});
+
+test('renderF4HeadProofBody refuses a supersedes value that is not a positive decimal comment ID', () => {
+  for (const value of ['0', '012', '-3', '1x', '', '9007199254740993']) {
+    assert.throws(
+      () => renderF4HeadProofBody({ ...F4_RENDER_FIELDS, supersedes: value }),
+      RangeError,
+      `supersedes=${value}`,
+    );
+  }
+});
+
+test('the parser reads supersedes only as a positive decimal comment ID', () => {
+  const token = SUPERSEDING_F4_BODY.split('\n')[0];
+  for (const value of ['0', '01234', '9007199254740993', '', '12x']) {
+    const bad = token.replace('supersedes=1234', `supersedes=${value}`);
+    assert.equal(parseF4HeadProofBody(bad).kind, 'malformed', bad);
+  }
+});
+
+test('the registry recognizes a superseding proof body as the F4 head-proof marker', () => {
+  assert.equal(
+    operationalMarkerPrefix(SUPERSEDING_F4_BODY),
+    '<!-- idd-f4-head-proof:',
+  );
+  assert.equal(detectMalformedOperationalMarker(SUPERSEDING_F4_BODY), null);
+});
+
+test('the registry flags a supersedes token with an invalid value as a malformed F4 head-proof marker', () => {
+  const token = SUPERSEDING_F4_BODY.split('\n')[0];
+  for (const value of ['0', '012', 'x', '']) {
+    const body = `${token.replace('supersedes=1234', `supersedes=${value}`)}\n\n_claude-826e09f0: F4 head-proof marker. Do not edit._`;
+    assert.equal(operationalMarkerPrefix(body), null, body);
+    assert.notEqual(detectMalformedOperationalMarker(body), null, body);
+  }
+});
+
+test('CLI: --type f4-head-proof rejects a --supersedes value that is not a positive decimal comment ID', () => {
+  for (const value of ['0', '01', 'x']) {
+    const stderr = runCliWithPathExpectingFailure(
+      f4Argv('issue', { ...F4_CLI_FIELDS, supersedes: value }),
+    );
+    assert.match(
+      stderr,
+      /--supersedes takes a positive decimal comment ID/,
+      `--supersedes ${value}`,
+    );
+  }
+});
+
+test('CLI: --type f4-head-proof accepts --supersedes, then refuses the unregistered worktree', () => {
+  const stderr = runCliWithPathExpectingFailure(
+    f4Argv('issue', { ...F4_CLI_FIELDS, supersedes: '1234' }),
+  );
+  assert.match(
+    stderr,
+    /not a worktree that git worktree list --porcelain registers/,
+  );
+  assert.doesNotMatch(stderr, /takes only/);
+});
+
+test('buildMarkerBody forwards supersedes, so a programmatic caller gets the superseding token', () => {
+  assert.equal(
+    buildMarkerBody('f4-head-proof', { ...F4_FIELDS, supersedes: '1234' }),
+    SUPERSEDING_F4_BODY,
   );
 });

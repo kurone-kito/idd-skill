@@ -6,10 +6,12 @@
 //
 // Renders and parses the body of the `idd-f4-head-proof` marker in the v2
 // format that the F4 Head Proof section of docs/idd-resume-detail.md defines
-// (#4064, #4368). This module imports nothing and performs no I/O: no `gh`
-// call, no claim lock, and no POST. The caller owns those steps.
+// (#4064, #4368), with the optional `supersedes=` field of #4442. This module
+// imports nothing and performs no I/O: no `gh` call, no claim lock, and no
+// POST. The caller owns those steps.
 
 const PR_NUMBER_PATTERN = /^[1-9][0-9]*$/;
+const COMMENT_ID_PATTERN = /^[1-9][0-9]*$/;
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const WHITESPACE_PATTERN = /\s/;
 const CONTROL_CHARACTER_PATTERN = /\p{Cc}/u;
@@ -39,6 +41,16 @@ function requireFullSha(field: string, value: unknown): string {
     );
   }
   return sha;
+}
+
+function requireCommentId(field: string, value: unknown): string {
+  const id = requireString(field, value);
+  if (!COMMENT_ID_PATTERN.test(id) || Number(id) > Number.MAX_SAFE_INTEGER) {
+    throw new RangeError(
+      `f4-head-proof: ${field} must be a positive decimal comment ID no larger than Number.MAX_SAFE_INTEGER, with no sign and no leading zero`,
+    );
+  }
+  return id;
 }
 
 function requireToken(field: string, value: unknown): string {
@@ -76,6 +88,8 @@ export function renderF4HeadProofBody(fields: {
   merge: string;
   head: string;
   agentId: string;
+  /** The comment ID of the malformed proof this corrected proof replaces. */
+  supersedes?: string;
 }): string {
   const pr = requirePrNumber(fields.pr);
   const claim = requireToken('claim', fields.claim);
@@ -85,11 +99,19 @@ export function renderF4HeadProofBody(fields: {
   const merge = requireFullSha('merge', fields.merge);
   const head = requireFullSha('head', fields.head);
   const agentId = requireToken('agentId', fields.agentId);
-  const token = `<!-- idd-f4-head-proof: v2 pr=${pr} claim=${claim} branch=${branch} f2=${f2} branch-tip=${branchTip} merge=${merge} head=${head} -->`;
+  const supersedes =
+    fields.supersedes === undefined
+      ? ''
+      : ` supersedes=${requireCommentId('supersedes', fields.supersedes)}`;
+  const token = `<!-- idd-f4-head-proof: v2 pr=${pr} claim=${claim} branch=${branch} f2=${f2} branch-tip=${branchTip} merge=${merge} head=${head}${supersedes} -->`;
   return `${token}\n\n_${agentId}: F4 head-proof marker. Do not edit._`;
 }
 
-/** The seven token fields of a well-formed `idd-f4-head-proof` v2 marker. */
+/**
+ * The seven token fields of a well-formed `idd-f4-head-proof` v2 marker, and
+ * the `supersedes=` comment ID when the marker carries one. The field is
+ * absent, not undefined, when the token has none.
+ */
 export interface ParsedF4HeadProof {
   prNumber: number;
   claimId: string;
@@ -98,6 +120,7 @@ export interface ParsedF4HeadProof {
   branchTip: string;
   merge: string;
   head: string;
+  supersedes?: number;
 }
 
 /**
@@ -120,7 +143,7 @@ const START_PATTERN = /^<!--\s*idd-f4-head-proof:/i;
 const LENIENT_CLAIM_PATTERN = /^<!--[^\n]*?\sclaim=((?:(?!<!--)[^\s>])+)/i;
 const TOKEN_VALUE = String.raw`((?:(?!<!--)[^\s>])+)`;
 const TOKEN_PATTERN = new RegExp(
-  `^<!-- idd-f4-head-proof: v2 pr=([1-9][0-9]*) claim=${TOKEN_VALUE} branch=${TOKEN_VALUE} f2=([0-9a-f]{40}) branch-tip=([0-9a-f]{40}) merge=([0-9a-f]{40}) head=([0-9a-f]{40}) -->`,
+  `^<!-- idd-f4-head-proof: v2 pr=([1-9][0-9]*) claim=${TOKEN_VALUE} branch=${TOKEN_VALUE} f2=([0-9a-f]{40}) branch-tip=([0-9a-f]{40}) merge=([0-9a-f]{40}) head=([0-9a-f]{40})(?: supersedes=([1-9][0-9]*))? -->`,
 );
 /** Nothing after the token, or one blank-line-separated italic note line. */
 const TRAILING_NOTE_PATTERN = /^(?:\s*|\s*\n\s*_[^\n]*_\s*)$/;
@@ -139,24 +162,28 @@ export function parseF4HeadProofBody(body: string): F4HeadProofParseResult {
   }
   const match = TOKEN_PATTERN.exec(body);
   const prNumber = match === null ? Number.NaN : Number(match[1]);
+  const supersedes =
+    match === null || match[8] === undefined ? undefined : Number(match[8]);
   if (
     match === null ||
     !Number.isSafeInteger(prNumber) ||
+    (supersedes !== undefined && !Number.isSafeInteger(supersedes)) ||
     !TRAILING_NOTE_PATTERN.test(body.slice(match[0].length))
   ) {
     const claim = LENIENT_CLAIM_PATTERN.exec(body);
     return { kind: 'malformed', claimId: claim === null ? null : claim[1] };
   }
-  return {
-    kind: 'proof',
-    proof: {
-      prNumber,
-      claimId: match[2],
-      branch: match[3],
-      f2: match[4],
-      branchTip: match[5],
-      merge: match[6],
-      head: match[7],
-    },
+  const proof: ParsedF4HeadProof = {
+    prNumber,
+    claimId: match[2],
+    branch: match[3],
+    f2: match[4],
+    branchTip: match[5],
+    merge: match[6],
+    head: match[7],
   };
+  if (supersedes !== undefined) {
+    proof.supersedes = supersedes;
+  }
+  return { kind: 'proof', proof };
 }
