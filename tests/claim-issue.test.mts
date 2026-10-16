@@ -1623,6 +1623,8 @@ interface ApplyRun {
   posts: { type: string; args: string[] }[];
   /** The issue comments at the end: the markers the stubs accepted. */
   comments: { login: string; body: string }[];
+  /** The working directory of each `claim-lock` call, in call order. */
+  claimLockDirectories: string[];
 }
 
 function exitOf(result: HelperCliResult): number {
@@ -1704,6 +1706,7 @@ function runApply(
   ];
   let acquireCalls = 0;
   let recordCalls = 0;
+  const claimLockDirectories: string[] = [];
   let matchingRefsCalls = 0;
   let localCalls = 0;
   let assertCalls = 0;
@@ -1897,7 +1900,7 @@ function runApply(
   const deps: ClaimIssueDeps = {
     ...base.deps,
     childScript: (name) => join(SCRIPTS, name),
-    run: (file, args) => {
+    run: (file, args, options) => {
       if (file === 'git') {
         log.push(`git ${args.join(' ')}${held()}`);
         if (
@@ -1920,6 +1923,9 @@ function runApply(
       const script = basename(String(args[0] ?? ''));
       const rest = args.slice(1);
       log.push(`${script} ${rest.join(' ')}`);
+      if (script === 'claim-lock.mjs') {
+        claimLockDirectories.push(options?.cwd ?? '');
+      }
       return child(script, rest);
     },
     cloneLock: {
@@ -1971,6 +1977,7 @@ function runApply(
     log,
     posts,
     comments,
+    claimLockDirectories,
   };
 }
 
@@ -2117,6 +2124,17 @@ test('an ineligible apply run prints its gate result even when a second reposito
     const report = assertStopped(run, 'assigned');
     assert.equal(report.claimPosted, false);
     assert.equal(lookups, 1);
+  });
+});
+
+test('the claim-lock evidence calls run with the worktree as their cwd', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    assert.ok(run.claimLockDirectories.length > 0);
+    for (const cwd of run.claimLockDirectories) {
+      assert.equal(cwd, fixture.worktree);
+    }
   });
 });
 

@@ -1589,7 +1589,9 @@ function rescanRemoteBranches(state) {
  * `claim-lock --record-tokens`: the generated tokens, in the worktree's own
  * copy. The call before the claim carries no nonce (fresh-claim order, step 2
  * of idd-claim.instructions.md). The nonce-bearing calls come right before the
- * activation-nonce marker posts, and again at the acquire point.
+ * activation-nonce marker posts, and again at the acquire point. The child runs
+ * with the worktree as its cwd, because claim-lock asks each caller to resolve
+ * this evidence from its own cwd (the scope of the ownership proof).
  */
 function recordTokens(state, withNonce) {
   const identity = state.identity;
@@ -1613,7 +1615,7 @@ function recordTokens(state, withNonce) {
       identity.claimId,
       ...(withNonce ? ['--nonce', identity.nonce] : []),
     ],
-    { cwd: state.primary },
+    { cwd: identity.worktree },
   );
   if (record.status !== 0) {
     return applyFail(
@@ -1885,7 +1887,7 @@ function acquireWithTokens(state, reason, next) {
       '--claim-id',
       identity.claimId,
     ],
-    { cwd: state.primary },
+    { cwd: identity.worktree },
   );
   if (acquire.status !== 0) {
     return applyFail(
@@ -1904,7 +1906,7 @@ function acquireWithTokens(state, reason, next) {
       '--claim-id',
       identity.claimId,
     ],
-    { cwd: state.primary },
+    { cwd: identity.worktree },
   );
   const record = parseJsonObject(tokens.stdout);
   if (
