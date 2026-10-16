@@ -16,7 +16,11 @@ import { lstatSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mts';
 import { parseCliArgs } from './cli-args.mts';
-import { acquireCloneLock, releaseCloneLock } from './clone-lock.mts';
+import {
+  acquireCloneLock,
+  CloneLockTimeoutError,
+  releaseCloneLock,
+} from './clone-lock.mts';
 import {
   type GitCommandResult,
   runRemoteBranchDelete,
@@ -286,8 +290,13 @@ export function createLiveDeps(
       let handle: ReturnType<typeof acquireCloneLock>;
       try {
         handle = acquireCloneLock(options.primaryRoot, options.agentId);
-      } catch {
-        return { acquired: false };
+      } catch (error) {
+        // Only a timeout means another session holds the lock. Any other
+        // failure is an error, not a busy lock, and nothing has changed yet.
+        if (error instanceof CloneLockTimeoutError) {
+          return { acquired: false };
+        }
+        throw error;
       }
       try {
         return { acquired: true, value: run() };

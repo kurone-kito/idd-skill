@@ -15,7 +15,11 @@ import { lstatSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mjs';
 import { parseCliArgs } from './cli-args.mjs';
-import { acquireCloneLock, releaseCloneLock } from './clone-lock.mjs';
+import {
+  acquireCloneLock,
+  CloneLockTimeoutError,
+  releaseCloneLock,
+} from './clone-lock.mjs';
 import { runRemoteBranchDelete } from './delete-remote-branch.mjs';
 import {
   claimCheckSpawnOptions,
@@ -242,8 +246,13 @@ export function createLiveDeps(options) {
       let handle;
       try {
         handle = acquireCloneLock(options.primaryRoot, options.agentId);
-      } catch {
-        return { acquired: false };
+      } catch (error) {
+        // Only a timeout means another session holds the lock. Any other
+        // failure is an error, not a busy lock, and nothing has changed yet.
+        if (error instanceof CloneLockTimeoutError) {
+          return { acquired: false };
+        }
+        throw error;
       }
       try {
         return { acquired: true, value: run() };
