@@ -11,6 +11,7 @@ import type {
   F4GateDeps,
   F4GateScope,
   F4GateState,
+  MarkerRun,
   MarkerRunOptions,
   MinimizableNodeSnapshot,
   ReviewThreadNode,
@@ -29,7 +30,7 @@ import {
   evaluateReviewParent,
   f4GateScope,
   fetchReviewThreads,
-  markerStdout,
+  markerRunOf,
   parsePrNumbers,
   readActiveClaim,
   repositoryBindingHold,
@@ -2593,6 +2594,16 @@ function markerJson(fields: Record<string, unknown>): string {
   });
 }
 
+/** The exit status the marker contract gives its stdout: 0 for proceed and post. */
+function exitCodeFor(stdout: string | null | undefined): number {
+  try {
+    const verdict = (JSON.parse(stdout ?? '') as { verdict?: unknown }).verdict;
+    return verdict === 'proceed' || verdict === 'post' ? 0 : 1;
+  } catch {
+    return 1;
+  }
+}
+
 interface FakeGateOptions {
   claim?: () => FakeClaim;
   worktree?: () => string | null;
@@ -2627,7 +2638,7 @@ function fakeGate(options: FakeGateOptions = {}) {
       if (next instanceof Error) {
         throw next;
       }
-      return next ?? null;
+      return { stdout: next ?? null, exitCode: exitCodeFor(next) };
     },
   };
   return { deps, calls };
@@ -3145,31 +3156,82 @@ test('claimFailureHold: a mismatch stops, and a read failure holds for a rerun (
   assert.match(readFailure.detail ?? '', /502/u);
 });
 
-test('markerStdout: a child that timed out, errored, or was killed gives no verdict (#4369)', () => {
+test('markerRunOf: a child that timed out, errored, or was killed gives no verdict (#4369)', () => {
   const envelope = '{"verdict":"proceed","reason":"reusable"}';
 
-  assert.equal(markerStdout({ stdout: envelope, status: 0 }), envelope);
-  assert.equal(
-    markerStdout({ stdout: envelope, status: 1 }),
-    envelope,
+  assert.deepEqual(markerRunOf({ stdout: envelope, status: 0 }), {
+    stdout: envelope,
+    exitCode: 0,
+  });
+  assert.deepEqual(
+    markerRunOf({ stdout: envelope, status: 1 }),
+    { stdout: envelope, exitCode: 1 },
     'a hold exits 1 and still prints its verdict',
   );
-  assert.equal(
-    markerStdout({
+  assert.deepEqual(
+    markerRunOf({
       stdout: envelope,
       status: null,
       error: new Error('spawnSync ETIMEDOUT'),
     }),
-    null,
+    { stdout: null, exitCode: null },
     'a timed-out child with a complete envelope is not a verdict',
   );
-  assert.equal(
-    markerStdout({ stdout: envelope, status: null }),
-    null,
+  assert.deepEqual(
+    markerRunOf({ stdout: envelope, status: null }),
+    { stdout: null, exitCode: null },
     'a child killed by a signal is not a verdict',
   );
-  assert.equal(markerStdout({ stdout: '  ', status: 0 }), null);
-  assert.equal(markerStdout({ stdout: null, status: 0 }), null);
+  assert.deepEqual(markerRunOf({ stdout: '  ', status: 0 }), {
+    stdout: null,
+    exitCode: 0,
+  });
+});
+
+test('checkF4HeadProofGate: an exit status that disagrees with the verdict is unreadable (#4369)', () => {
+  const proceedEnvelope = markerJson({
+    verdict: 'proceed',
+    reason: 'reusable',
+  });
+  const holdEnvelope = markerJson({
+    verdict: 'hold',
+    reason: 'pr-state',
+    nextAction: 'Read it again.',
+  });
+  const cases: [string, MarkerRun][] = [
+    ['proceed with exit 1', { stdout: proceedEnvelope, exitCode: 1 }],
+    ['hold with exit 0', { stdout: holdEnvelope, exitCode: 0 }],
+    ['proceed with exit 2', { stdout: proceedEnvelope, exitCode: 2 }],
+    ['proceed killed by a signal', { stdout: proceedEnvelope, exitCode: null }],
+  ];
+  for (const [name, run] of cases) {
+    const gate = fakeGate();
+    const deps: F4GateDeps = { ...gate.deps, runMarker: () => run };
+    assert.equal(
+      checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, deps)?.code,
+      'gate-unreadable',
+      name,
+    );
+  }
+});
+
+test('checkF4HeadProofGate: a post naming another pull request holds before any apply run (#4369)', () => {
+  const gate = fakeGate({
+    markers: [
+      markerJson({
+        verdict: 'post',
+        proof: { pr: 8, head: GATE_SHA_A },
+      }),
+    ],
+  });
+  const hold = checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, gate.deps);
+
+  assert.equal(hold?.code, 'conflicting-marker');
+  assert.equal(gate.calls.marker.length, 1, 'the apply run never starts');
+  assert.equal(
+    gate.calls.marker.every((run) => run.apply === false),
+    true,
+  );
 });
 
 test('repositoryBindingHold: a cleanup of another repository than the checkout holds (#4369)', () => {
@@ -3258,23 +3320,4 @@ test('checkF4HeadProofGate: a proof that names another pull request or head, or 
     gate: 'hold',
     gateReason: 'conflicting-marker',
   });
-});
-
-test('checkF4HeadProofGate: a post naming another pull request holds before any apply run (#4369)', () => {
-  const gate = fakeGate({
-    markers: [
-      markerJson({
-        verdict: 'post',
-        proof: { pr: 8, head: GATE_SHA_A },
-      }),
-    ],
-  });
-  const hold = checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, gate.deps);
-
-  assert.equal(hold?.code, 'conflicting-marker');
-  assert.equal(gate.calls.marker.length, 1, 'the apply run never starts');
-  assert.equal(
-    gate.calls.marker.every((run) => run.apply === false),
-    true,
-  );
 });

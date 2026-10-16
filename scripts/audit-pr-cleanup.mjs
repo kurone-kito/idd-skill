@@ -943,7 +943,7 @@ export function claimFailureHold(error) {
  * Read the marker command's stdout as a verdict. Output that is not a JSON
  * verdict is `gate-unreadable`, a hold, so an unreadable gate never passes.
  */
-function readMarkerDecision(stdout) {
+function readMarkerDecision(run) {
   const unreadable = (detail) => ({
     verdict: 'hold',
     reason: 'gate-unreadable',
@@ -951,6 +951,7 @@ function readMarkerDecision(stdout) {
     detail,
     proof: null,
   });
+  const stdout = run.stdout;
   if (stdout === null || stdout.trim() === '') {
     return unreadable('the marker command printed no result');
   }
@@ -969,6 +970,14 @@ function readMarkerDecision(stdout) {
     return unreadable('the marker command gave no verdict');
   }
   const reason = typeof fields.reason === 'string' ? fields.reason : null;
+  // The marker contract: exit 0 for proceed and post, exit 1 for hold and stop.
+  // An exit that disagrees with the verdict is not a verdict (#4369).
+  const expectedExit = verdict === 'proceed' || verdict === 'post' ? 0 : 1;
+  if (run.exitCode !== expectedExit) {
+    return unreadable(
+      `the marker command exited ${run.exitCode ?? 'without a status'} for ${verdict}`,
+    );
+  }
   if (verdict !== 'proceed' && verdict !== 'post' && reason === null) {
     return unreadable(`the marker command gave ${verdict} without a reason`);
   }
@@ -1262,7 +1271,7 @@ function runMarkerCommand(options) {
   if (options.apply) {
     argv.push('--apply');
   }
-  return markerStdout(
+  return markerRunOf(
     spawnSync(process.execPath, argv, {
       encoding: 'utf8',
       env: gitChildEnvironment(),
@@ -1272,17 +1281,21 @@ function runMarkerCommand(options) {
   );
 }
 /**
- * The marker command's stdout as a candidate verdict, or null. A child that
- * failed to start, timed out, or was killed did not finish its proof, so its
- * stdout is not a verdict even when it holds a complete JSON envelope (#4369).
+ * One marker run from its spawn result. A child that failed to start, timed
+ * out, or was killed did not finish its proof, so it has no stdout and no exit
+ * status, even when its stdout holds a complete JSON envelope (#4369).
  */
-export function markerStdout(result) {
+export function markerRunOf(result) {
   if (result.error !== undefined || result.status === null) {
-    return null;
+    return { stdout: null, exitCode: null };
   }
-  return typeof result.stdout === 'string' && result.stdout.trim() !== ''
-    ? result.stdout
-    : null;
+  return {
+    stdout:
+      typeof result.stdout === 'string' && result.stdout.trim() !== ''
+        ? result.stdout
+        : null,
+    exitCode: result.status,
+  };
 }
 function createF4GateDeps(owner, repo, args, scope, claimContext) {
   return {

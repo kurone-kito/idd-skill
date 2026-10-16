@@ -1211,6 +1211,15 @@ export interface F4GateScope {
   claimId: string;
 }
 
+/**
+ * One marker run: its stdout, and its exit status. A run that failed to start,
+ * timed out, or was killed has null for both, so it gives no verdict (#4369).
+ */
+export interface MarkerRun {
+  stdout: string | null;
+  exitCode: number | null;
+}
+
 /** The arguments of one `post-idd-marker --type f4-head-proof` run. */
 export interface MarkerRunOptions {
   claimIssue: string;
@@ -1231,8 +1240,8 @@ export interface F4GateDeps {
   findWorktree(branch: string): string | null;
   /** The live head SHA of the pull request. Throws on a failed read. */
   readHeadSha(prNumber: number): string;
-  /** The marker command's stdout, or null when it printed nothing. */
-  runMarker(options: MarkerRunOptions): string | null;
+  /** One marker run: its stdout and exit status, each null when it did not finish. */
+  runMarker(options: MarkerRunOptions): MarkerRun;
 }
 
 /** The head SHA the first gated pass read. Later passes compare against it. */
@@ -1333,7 +1342,7 @@ export function claimFailureHold(error: unknown): CleanupHold {
  * Read the marker command's stdout as a verdict. Output that is not a JSON
  * verdict is `gate-unreadable`, a hold, so an unreadable gate never passes.
  */
-function readMarkerDecision(stdout: string | null): F4GateDecision {
+function readMarkerDecision(run: MarkerRun): F4GateDecision {
   const unreadable = (detail: string): F4GateDecision => ({
     verdict: 'hold',
     reason: 'gate-unreadable',
@@ -1341,6 +1350,7 @@ function readMarkerDecision(stdout: string | null): F4GateDecision {
     detail,
     proof: null,
   });
+  const stdout = run.stdout;
   if (stdout === null || stdout.trim() === '') {
     return unreadable('the marker command printed no result');
   }
@@ -1359,6 +1369,14 @@ function readMarkerDecision(stdout: string | null): F4GateDecision {
     return unreadable('the marker command gave no verdict');
   }
   const reason = typeof fields.reason === 'string' ? fields.reason : null;
+  // The marker contract: exit 0 for proceed and post, exit 1 for hold and stop.
+  // An exit that disagrees with the verdict is not a verdict (#4369).
+  const expectedExit = verdict === 'proceed' || verdict === 'post' ? 0 : 1;
+  if (run.exitCode !== expectedExit) {
+    return unreadable(
+      `the marker command exited ${run.exitCode ?? 'without a status'} for ${verdict}`,
+    );
+  }
   if (verdict !== 'proceed' && verdict !== 'post' && reason === null) {
     return unreadable(`the marker command gave ${verdict} without a reason`);
   }
@@ -1661,7 +1679,7 @@ function readPullRequestHeadSha(
  * Run the compiled `post-idd-marker` for the head proof and return its stdout.
  * The child gets the sanitized Git environment, as the claim check does.
  */
-function runMarkerCommand(options: MarkerRunOptions): string | null {
+function runMarkerCommand(options: MarkerRunOptions): MarkerRun {
   const script = join(
     resolveBundleRoot(import.meta.dirname),
     'scripts',
@@ -1684,7 +1702,7 @@ function runMarkerCommand(options: MarkerRunOptions): string | null {
   if (options.apply) {
     argv.push('--apply');
   }
-  return markerStdout(
+  return markerRunOf(
     spawnSync(process.execPath, argv, {
       encoding: 'utf8',
       env: gitChildEnvironment(),
@@ -1695,21 +1713,25 @@ function runMarkerCommand(options: MarkerRunOptions): string | null {
 }
 
 /**
- * The marker command's stdout as a candidate verdict, or null. A child that
- * failed to start, timed out, or was killed did not finish its proof, so its
- * stdout is not a verdict even when it holds a complete JSON envelope (#4369).
+ * One marker run from its spawn result. A child that failed to start, timed
+ * out, or was killed did not finish its proof, so it has no stdout and no exit
+ * status, even when its stdout holds a complete JSON envelope (#4369).
  */
-export function markerStdout(result: {
+export function markerRunOf(result: {
   stdout: string | null;
   status: number | null;
   error?: unknown;
-}): string | null {
+}): MarkerRun {
   if (result.error !== undefined || result.status === null) {
-    return null;
+    return { stdout: null, exitCode: null };
   }
-  return typeof result.stdout === 'string' && result.stdout.trim() !== ''
-    ? result.stdout
-    : null;
+  return {
+    stdout:
+      typeof result.stdout === 'string' && result.stdout.trim() !== ''
+        ? result.stdout
+        : null,
+    exitCode: result.status,
+  };
 }
 
 function createF4GateDeps(
