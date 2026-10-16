@@ -2832,11 +2832,9 @@ test('effort-candidate-file-limit is not applicable to an orphan with no coheren
   );
 });
 
-test('effort-candidate-file-limit is not applicable to a roadmap or carrier body at any count (#4434)', () => {
+test('effort-candidate-file-limit is not applicable to a roadmap body at any count (#4434)', () => {
   const body = `${roadmapBody()}\n\n${effortFooter('S')}`;
-  for (const shape of ['roadmap', 'carrier'] as const) {
-    assert.equal(effortLimitResult(body, { shape }), 'pass', shape);
-  }
+  assert.equal(effortLimitResult(body, { shape: 'roadmap' }), 'pass');
 });
 
 test('effort-candidate-file-limit passes a child with S or M and no section or zero paths, as candidate-files-not-empty fails it (#4434)', () => {
@@ -6230,6 +6228,14 @@ const CARRIER_SCAN_SKIP = markdownItAvailable()
 function carrierTest(name: string, fn: () => void): void {
   test(name, { skip: CARRIER_SCAN_SKIP }, fn);
 }
+
+carrierTest(
+  'effort-candidate-file-limit is not applicable to a draft carrier body at any count (#4434)',
+  () => {
+    const body = `${roadmapBody()}\n\n${effortFooter('S')}`;
+    assert.equal(effortLimitResult(body, { shape: 'carrier' }), 'pass');
+  },
+);
 
 carrierTest(
   'effort-l-ready leaves a draft carrier out of the unreadable-config failure (#4282)',
