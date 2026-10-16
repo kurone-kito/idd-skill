@@ -4253,13 +4253,15 @@ from the viewer, `IDD_TRUSTED_MARKER_ACTORS`, the trusted configuration, and
 a flag. `--owner` and `--repo` are refused too. The repository is read from the
 current checkout's origin remote (its effective URL, as `git remote get-url`
 reports it), locally and with no `gh` call, so an inherited `GH_REPO` has no
-effect. A URL with whitespace, a backslash, or a character outside printable
-ASCII is refused before it is parsed. The origin must name the repository on
-the active GitHub host (`GH_HOST`, else `GITHUB_SERVER_URL`, else github.com),
-and `--worktree` must be registered in that checkout; otherwise the run is
-refused before any claim read. When `GH_HOST` is unset, the command sets it,
-for its own process, to that host, so every `gh` call the command makes goes
-to the origin's host and not to gh's own default host.
+effect. The URL is read raw: whitespace at either end, a backslash, or a
+character outside printable ASCII is refused before it is parsed. The origin
+must name the repository on the active GitHub host (`GH_HOST`, else
+`GITHUB_SERVER_URL`, else github.com), and `--worktree` must be registered in
+that checkout; otherwise the run is refused before any claim read. An origin
+URL with a non-default port does not match, so use a URL without one. When
+`GH_HOST` is unset or blank, the command sets it, for its own process, to the
+normalized active host, so every `gh` call the command makes goes to the
+origin's host and not to gh's own default host.
 
 Before any POST the command reads the stored activation nonce (`claim-lock
 --read-tokens`), runs `resume-claim-routing --assert`, checks that the claim
