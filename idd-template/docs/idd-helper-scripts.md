@@ -4793,6 +4793,16 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   A5(d) does not count. The instruction files still point to the written
   A5 paths; this helper does not replace them. With `--apply` it also
   runs the fresh-claim order; see the Claim write section below.
+- Before the five A5 checks, the `issue-state` guard reads the issue's
+  `state` in the same `gh issue view` call and runs right after that read.
+  A `CLOSED` issue is refused as `issue-closed`: its one `issue-state` step
+  is `failed`, its `detail` names the state, and every A5 check is
+  `not-run` with no A5 check call made. An `OPEN` issue adds no step, so
+  its steps keep their positions. A state that is neither `OPEN` nor
+  `CLOSED` is not a refusal: it is a failed read, as the `transport` rule
+  below says. Observed 2026-10-16 on issue `#4372`: a read-only dry run
+  printed `eligible: true` for that issue, which was closed as completed
+  that same day. This guard prevents that result (tracked in issue `#4433`).
 - The checks run in the order of the instruction file and stop at the
   first one that is not eligible; every later check has the status
   `not-run`. Each check calls existing code rather than a copy of it:
@@ -4846,7 +4856,8 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   array of `id`, `status` (`passed`, `failed`, or `not-run`), `reason`,
   `nextAction`, and `detail`. The `detail` of a failed step names the
   pull request numbers of `open-pr`, the paths of a local worktree
-  stop, and the refs of `branch-collision`. `gateReason` and
+  stop, the refs of `branch-collision`, and the state of an
+  `issue-closed` stop. `gateReason` and
   `winningClaimId` appear only for `already-claimed`. With `--apply` the
   report also has `mode`, `projectStatus`, `holdCheck` (always `label`),
   `claimPosted`, `lostClaimCleanupRequired`, `nextAction`, and `claim`
@@ -4854,9 +4865,10 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   failure inside a check, exits `1` with the envelope kind `gate`. The
   kind `transport` (exit `1`, nothing on stdout) covers only a failure
   before any check starts: the repository resolution and the read of the
-  issue's title and assignees. The kind `usage` (exit `2`) covers an
-  argument error, including `--apply` without `--agent-id` or
-  `--project-status`
+  issue's title, assignees, and `state`. A missing or unrecognized `state`
+  (any value other than `OPEN` or `CLOSED`) is also `transport`. The kind
+  `usage` (exit `2`) covers an argument error, including `--apply` without
+  `--agent-id` or `--project-status`
 
 ### Claim write (`--apply`)
 
@@ -4913,11 +4925,18 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   4. Immediately before the claim marker, the issue-author approval gate of
      A5(a) runs again (`approval-missing` or `approval-unproven` stop the
      run), then the own-worktree fresh-claim gate runs once, with
-     `--own-worktree <path>`, and must return `claimable`, then the
-     authoring-label hold check (`hold-active`, or
-     `precheck-unavailable` when the read fails). Only the label is read:
-     the owner-marker log replay is not done, and the report says so with
-     `holdCheck: "label"`.
+     `--own-worktree <path>`, and must return `claimable`. Then the issue
+     state is read again, with `gh issue view --json state`: a `CLOSED`
+     state stops the run as `issue-closed`, and a read that fails or names
+     neither `OPEN` nor `CLOSED` stops it as `precheck-unavailable`. Each
+     refusal adds one failed `issue-state-recheck` step; an `OPEN` issue
+     adds no step. Last, the authoring-label hold check runs (`hold-active`,
+     or `precheck-unavailable` when the read fails), so the label is the
+     final read before the marker. Only the label is read: the owner-marker
+     log replay is not done, and the report says so with `holdCheck:
+     "label"`. A close that lands after the state read, before the claim
+     marker posts, is not seen: the read narrows that window to one call but
+     cannot close it.
   5. The claim marker. Then `claim-lock --record-tokens --nonce`, right before
      the activation nonce is posted (`tokens-record-failed` on failure, with
      the claim already posted), then the activation nonce. The helper mints
