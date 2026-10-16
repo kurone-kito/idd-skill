@@ -97,6 +97,12 @@ const PATH_NEXT =
   'Inspect the path by hand. This helper never removes it: move or clean it, then rerun this helper.';
 /** The timestamp shape the marker grammar prints (second precision, UTC). */
 const MARKER_TIMESTAMP = '\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z';
+/**
+ * What may follow a marker token and nothing more: the one italic IDD note line,
+ * or nothing. Anything else after the token makes the comment not a marker
+ * (the grammar anchors the whole body).
+ */
+const MARKER_NOTE_SUFFIX = '(?:\\r?\\n\\r?\\n_[^\\n]*\\bIDD\\b[^\\n]*_)?\\s*$';
 /** The next action when the policy or the viewer cannot be read (nothing claimed yet). */
 const POLICY_NEXT =
   'Fix the policy (the repository config or the user-global policy) or restore access to the viewer login, then rerun this helper. This helper created no worktree or branch.';
@@ -1606,7 +1612,7 @@ function postClaim(state) {
   const landed = findMarker(
     state,
     new RegExp(
-      `^<!-- claimed-by: ${escapeForRegExp(identity.agentId)} ${escapeForRegExp(identity.claimId)} supersedes: \\S+ ${MARKER_TIMESTAMP} branch: ${escapeForRegExp(identity.branch)} -->`,
+      `^<!-- claimed-by: ${escapeForRegExp(identity.agentId)} ${escapeForRegExp(identity.claimId)} supersedes: \\S+ ${MARKER_TIMESTAMP} branch: ${escapeForRegExp(identity.branch)} -->${MARKER_NOTE_SUFFIX}`,
     ),
   );
   if (landed === 'present') {
@@ -1634,7 +1640,7 @@ function postNonce(state) {
     );
   }
   const prefix = new RegExp(
-    `^<!-- activation-nonce: ${escapeForRegExp(identity.agentId)} ${escapeForRegExp(identity.claimId)} ${escapeForRegExp(identity.nonce)} ${MARKER_TIMESTAMP} -->`,
+    `^<!-- activation-nonce: ${escapeForRegExp(identity.agentId)} ${escapeForRegExp(identity.claimId)} ${escapeForRegExp(identity.nonce)} ${MARKER_TIMESTAMP} -->${MARKER_NOTE_SUFFIX}`,
   );
   const args = [
     '--type',
@@ -1885,7 +1891,7 @@ function recheckHoldAfterVerify(state) {
     findMarker(
       state,
       new RegExp(
-        `^<!-- unclaimed-by: ${escapeForRegExp(identity.agentId)} ${escapeForRegExp(identity.claimId)} ${MARKER_TIMESTAMP} -->`,
+        `^<!-- unclaimed-by: ${escapeForRegExp(identity.agentId)} ${escapeForRegExp(identity.claimId)} ${MARKER_TIMESTAMP} -->${MARKER_NOTE_SUFFIX}`,
       ),
     ) === 'present'
   ) {

@@ -2597,3 +2597,19 @@ test('the worktree lock is acquired again before a release, and a collision post
     assert.match(report.nextAction ?? '', /Do not post unclaimed-by/);
   });
 });
+
+test('a valid claim token followed by edited text after the note is not the claim marker', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      posts: { claim: ['unknown-absent'] },
+      initialComments: [
+        {
+          login: OWNER,
+          body: `<!-- claimed-by: ${AGENT} ${CLAIM_ID} supersedes: none ${TIMESTAMP} branch: ${BRANCH} -->\n\n_${AGENT}: issue claim — IDD automation marker. Do not edit._\n\nedited by hand`,
+        },
+      ],
+    });
+    const report = assertStopped(run, 'recovery-hold');
+    assert.equal(report.claimPosted, 'unknown');
+  });
+});
