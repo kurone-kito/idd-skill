@@ -730,8 +730,15 @@ function runPrimaryFastForward(deps, primary, pr) {
   const hasLocal = probe.status === 0;
   const switched = deps.git(
     hasLocal
-      ? ['switch', base]
-      : ['switch', '-c', base, '--track', `origin/${base}`],
+      ? ['switch', '--no-overwrite-ignore', base]
+      : [
+          'switch',
+          '--no-overwrite-ignore',
+          '-c',
+          base,
+          '--track',
+          `origin/${base}`,
+        ],
     primary,
   );
   if (switched.status !== 0) {

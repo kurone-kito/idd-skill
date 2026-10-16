@@ -317,6 +317,28 @@ test('a skip-worktree file with local changes holds dirty-worktree', () => {
   );
 });
 
+test('a switch never overwrites an ignored file that the development branch tracks', () => {
+  const fx = makeFixture();
+  // The development branch gains a tracked ign.txt upstream.
+  writeFileSync(join(fx.seed, 'ign.txt'), 'tracked upstream\n');
+  git(fx.seed, ['add', '--', 'ign.txt']);
+  git(fx.seed, ['commit', '-q', '-m', 'track ign.txt']);
+  git(fx.seed, ['push', '-q', 'origin', 'HEAD:main']);
+  // The local development branch must track the file, so the switch is the
+  // step that would overwrite it. The scratch branch predates the file.
+  git(fx.primary, ['pull', '-q', '--ff-only', 'origin', 'main']);
+  git(fx.primary, ['switch', '-q', '-c', 'scratch', 'HEAD~1']);
+  writeFileSync(join(fx.primary, '.git', 'info', 'exclude'), 'ign.txt\n');
+  writeFileSync(join(fx.primary, 'ign.txt'), 'local ignored\n');
+  const { report } = runCleanup(fx);
+  assert.equal(report.reason, 'primary-ignored-overwrite');
+  assert.equal(
+    readFileSync(join(fx.primary, 'ign.txt'), 'utf8'),
+    'local ignored\n',
+  );
+  assert.equal(existsSync(fx.worktree), true);
+});
+
 test('a symlink chain that climbs out of the worktree holds symlink-path', () => {
   const fx = makeFixture();
   symlinkSync('.', join(fx.worktree, 'q'));
