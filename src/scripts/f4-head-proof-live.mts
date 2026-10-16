@@ -31,12 +31,7 @@ import type {
   PullRequestSummary,
 } from './f4-head-proof-gate.mts';
 import type { LocalRef } from './f4-head-proof-verdict.mts';
-import {
-  GH_TEXT_LOOP_OPTIONS,
-  ghApiJson,
-  ghText,
-  resolveGhApiHostname,
-} from './gh-exec.mts';
+import { GH_TEXT_LOOP_OPTIONS, ghApiJson, ghText } from './gh-exec.mts';
 import { loadTrustedActorConfig } from './idd-config.mts';
 import {
   parseLocalWorktreeList,
@@ -47,6 +42,7 @@ import { composeGateTrustedMarkerLogins } from './protocol-helpers.mts';
 import {
   activeGithubHost,
   createGithubProviderAdapter,
+  isPlainRemoteUrl,
   originNamesRepository,
   repositoryFromRemoteUrl,
 } from './provider-adapter-github.mts';
@@ -334,17 +330,6 @@ export function selectPullRequests(
     .filter((row) => Number.isSafeInteger(row.number) && row.number > 0);
 }
 
-/** Whether `url` has a whitespace, a backslash, or a control character. */
-function hasUnsafeUrlCharacter(url: string): boolean {
-  for (const ch of url) {
-    const code = ch.codePointAt(0) ?? 0;
-    if (code <= 0x20 || code === 0x7f || ch === '\\' || /\s/.test(ch)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /**
  * The repository the current checkout's origin remote names, read locally with
  * no `gh` call, so an inherited `GH_REPO` cannot change it. Throws when the
@@ -359,7 +344,7 @@ export function resolveCheckoutRepository(): { owner: string; repo: string } {
   }
   // A whitespace, backslash, or control character can change where a URL
   // parser reads the host, so such a URL is refused before it is parsed.
-  if (hasUnsafeUrlCharacter(origin.stdout)) {
+  if (!isPlainRemoteUrl(origin.stdout)) {
     throw new Error(
       "the checkout's origin URL contains characters that a repository URL does not",
     );
@@ -393,6 +378,9 @@ function originMismatchMessage(owner: string, repo: string): string {
     return `${owner}/${repo} is not the repository the current checkout's origin names (${named.owner}/${named.repo})`;
   }
   const active = activeGithubHost() ?? 'an unreadable host';
+  if (named.host.toLowerCase() === active.toLowerCase()) {
+    return `the current checkout's origin names ${owner}/${repo} on ${active}, but the origin could not be confirmed; retry, or check the origin remote`;
+  }
   return `the current checkout's origin names ${owner}/${repo} on ${named.host}, but the active GitHub host is ${active}; set GH_HOST to ${named.host} to use it`;
 }
 
@@ -431,6 +419,13 @@ export function createLiveF4HeadProofDeps(options: {
       // GitHub host (GH_HOST, else GITHUB_SERVER_URL, else github.com).
       if (!originNamesRepository(owner, repo)) {
         throw new Error(originMismatchMessage(owner, repo));
+      }
+      // Every gh call of this process goes to the origin's host from here on.
+      // With GH_HOST unset, gh would use its own default host, which can be
+      // another server with a same-named repository. The origin check above has
+      // confirmed that the origin's host is the active host.
+      if (!process.env.GH_HOST?.trim()) {
+        process.env.GH_HOST = activeGithubHost() ?? 'github.com';
       }
       located = {
         owner,
@@ -498,11 +493,7 @@ export function createLiveF4HeadProofDeps(options: {
           'pr',
           'list',
           '--repo',
-          // Pinned to the host the REST calls use (resolveGhApiHostname), so
-          // every read of this command reaches the same host.
-          resolveGhApiHostname()
-            ? `${resolveGhApiHostname()}/${owner}/${repo}`
-            : `${owner}/${repo}`,
+          `${owner}/${repo}`,
           '--head',
           branch,
           '--state',

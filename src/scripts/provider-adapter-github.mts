@@ -5077,6 +5077,7 @@ export function originNamesRepository(owner: string, repo: string): boolean {
   } catch {
     return false;
   }
+  if (!isPlainRemoteUrl(remote.replace(/\n$/, ''))) return false;
   const origin = repositoryFromRemoteUrl(remote);
   if (origin !== null && origin.host !== serverHost.toLowerCase()) return false;
   return (
@@ -5118,4 +5119,14 @@ export function resolveCurrentGithubRepository(): {
     return { owner: match[1] ?? '', repo: match[2] ?? '' };
   }
   return resolveGhOwnerRepo({}, GH_TEXT_LOOP_OPTIONS);
+}
+
+/**
+ * Whether `url` is printable ASCII with no space and no backslash. A URL parser
+ * can drop or reinterpret whitespace, control characters, and a backslash, and
+ * it can ignore a format character such as U+200B inside a host, so a URL with
+ * any of them is refused before it is parsed.
+ */
+export function isPlainRemoteUrl(url: string): boolean {
+  return /^[\x21-\x5b\x5d-\x7e]+$/.test(url);
 }

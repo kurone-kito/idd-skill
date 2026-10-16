@@ -385,21 +385,50 @@ test('the claim check runs with the sanitized Git environment, keeping PATH and 
 });
 
 test('the live deps refuse a repository the checkout origin does not name, and an empty one', () => {
-  let resolved = 0;
-  const other = createLiveF4HeadProofDeps({
-    resolveRepo: () => {
-      resolved += 1;
-      return { owner: 'another-owner', repo: 'another-repo' };
-    },
-  });
-  assert.match(other.checkoutRepositoryError() ?? '', /origin/);
-  const empty = createLiveF4HeadProofDeps({
-    resolveRepo: () => ({ owner: '', repo: 'idd-skill' }),
-  });
-  assert.match(empty.checkoutRepositoryError() ?? '', /could not be resolved/);
-  // The gate asks once and stops at a refusal, so the repository is resolved
-  // once for this check.
-  assert.equal(resolved, 1);
+  const root = mkdtempSync(join(tmpdir(), 'f4-head-proof-mismatch-'));
+  const savedCwd = process.cwd();
+  try {
+    execFileSync('git', ['init', '-q', '-b', 'main', root], {
+      stdio: 'ignore',
+    });
+    execFileSync(
+      'git',
+      [
+        '-C',
+        root,
+        'remote',
+        'add',
+        'origin',
+        'https://github.com/origin-owner/origin-repo.git',
+      ],
+      { stdio: 'ignore' },
+    );
+    process.chdir(root);
+    let resolved = 0;
+    const other = createLiveF4HeadProofDeps({
+      resolveRepo: () => {
+        resolved += 1;
+        return { owner: 'another-owner', repo: 'another-repo' };
+      },
+    });
+    assert.equal(
+      other.checkoutRepositoryError(),
+      "another-owner/another-repo is not the repository the current checkout's origin names (origin-owner/origin-repo)",
+    );
+    // The gate asks once and stops at a refusal, so the repository is resolved
+    // once for this check.
+    assert.equal(resolved, 1);
+    const empty = createLiveF4HeadProofDeps({
+      resolveRepo: () => ({ owner: '', repo: 'idd-skill' }),
+    });
+    assert.equal(
+      empty.checkoutRepositoryError(),
+      'the repository of the current checkout could not be resolved',
+    );
+  } finally {
+    process.chdir(savedCwd);
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('the repository is read from the checkout origin, and an inherited GH_REPO has no effect', () => {
@@ -447,6 +476,9 @@ test('the repository is read from the checkout origin, and an inherited GH_REPO 
       resolveRepo: resolveCheckoutRepository,
     });
     assert.equal(deps.checkoutRepositoryError(), null);
+    // The origin's host is now the process's gh host, so every gh call of the
+    // command goes there.
+    assert.equal(process.env.GH_HOST, 'github.com');
   } finally {
     process.chdir(savedCwd);
     for (const [key, value] of saved) {
@@ -488,8 +520,51 @@ test('a checkout without an origin remote cannot resolve a repository locally', 
   }
 });
 
-test('an origin URL with whitespace, a backslash, or a control character is refused before it is parsed', () => {
+test('an origin URL with whitespace, a backslash, or a character outside printable ASCII is refused before it is parsed', () => {
   const root = mkdtempSync(join(tmpdir(), 'f4-head-proof-odd-origin-'));
+  const savedCwd = process.cwd();
+  // Interior characters only: the command trims the edges of git's output, so
+  // an edge character is removed before the check and is not parsed either.
+  const odd = [
+    'https://github.com\\@evil.example/o/r',
+    'https://github.com/o r',
+    'https://github.com/o\tr',
+    'https://github.com/o\u0001r',
+    'https://github.com/o\u0085r',
+    'https://github.com/o\u2028r',
+    'https://gith\u200bub.com/o/r',
+    'https://github.com/o\u00adr',
+  ];
+  try {
+    execFileSync('git', ['init', '-q', '-b', 'main', root], {
+      stdio: 'ignore',
+    });
+    execFileSync(
+      'git',
+      ['-C', root, 'remote', 'add', 'origin', 'https://github.com/o/r'],
+      { stdio: 'ignore' },
+    );
+    process.chdir(root);
+    for (const url of odd) {
+      execFileSync('git', ['-C', root, 'remote', 'set-url', 'origin', url], {
+        stdio: 'ignore',
+      });
+      assert.throws(
+        () => resolveCheckoutRepository(),
+        /characters that a repository URL does not/,
+        JSON.stringify(url),
+      );
+    }
+  } finally {
+    process.chdir(savedCwd);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a matching origin on another active host is refused with the GH_HOST fix, and nothing is pinned', () => {
+  const root = mkdtempSync(join(tmpdir(), 'f4-head-proof-host-'));
+  const keys = ['GH_HOST', 'GITHUB_SERVER_URL'] as const;
+  const saved = keys.map((key) => [key, process.env[key]] as const);
   const savedCwd = process.cwd();
   try {
     execFileSync('git', ['init', '-q', '-b', 'main', root], {
@@ -503,17 +578,31 @@ test('an origin URL with whitespace, a backslash, or a control character is refu
         'remote',
         'add',
         'origin',
-        'https://github.com\\@evil.example/o/r',
+        'https://github.com/origin-owner/origin-repo.git',
       ],
       { stdio: 'ignore' },
     );
     process.chdir(root);
-    assert.throws(
-      () => resolveCheckoutRepository(),
-      /characters that a repository URL does not/,
+    delete process.env.GH_HOST;
+    process.env.GITHUB_SERVER_URL = 'https://ghe.example.com';
+    const deps = createLiveF4HeadProofDeps({
+      resolveRepo: () => ({ owner: 'origin-owner', repo: 'origin-repo' }),
+    });
+    assert.equal(
+      deps.checkoutRepositoryError(),
+      "the current checkout's origin names origin-owner/origin-repo on github.com, but the active GitHub host is ghe.example.com; set GH_HOST to github.com to use it",
     );
+    // A refusal pins nothing: the process keeps its own gh host.
+    assert.equal(process.env.GH_HOST, undefined);
   } finally {
     process.chdir(savedCwd);
+    for (const [key, value] of saved) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
     rmSync(root, { recursive: true, force: true });
   }
 });
