@@ -228,6 +228,16 @@ is diagnostic and never changes the verdict.
   no reviewer finding or actionable content, a return-to-E1 triggered
   solely by that notice refreshes the watermark directly instead; a
   mixed-cause trigger still returns to E1 normally.
+
+  Missing-watermark sequence (PR `#4331`, issue `#4366`): when
+  `review-currency` returns `missing-watermark` and every blocking
+  disposition-evidence item is an ack-only reply to a disposition, clear
+  the missing watermark first. Refresh it directly, as the carve-outs above
+  do, then re-run `pre-merge-readiness` on the refreshed snapshot. Apply the
+  ack-only override only if that re-run reports
+  `dispositionEvidence.soleCauseAckOnlyPostDisposition` as `true`. A refresh
+  adds no disposition, so a `missingRegularComments` entry still blocks: a
+  plain comment is not ack-only and needs its own disposition.
 - **Advisory bot wait** (restart-safe enforcement): schedule a wake, or
   background only if the topology-safety condition holds (confirmed to
   route completion back to this turn) — otherwise wait synchronously:
@@ -457,7 +467,9 @@ is diagnostic and never changes the verdict.
   applied by the agent, not `pre-merge-readiness`'s own rollup. The
   signal never changes `route` itself; any other blocking cause makes it
   `false`, and the gate still routes to E1/E4. Fails closed: an unusable
-  check makes this condition unmet.
+  check makes this condition unmet. When the return-to-e1 also carried
+  `missing-watermark`, evaluate this override only on the snapshot the
+  missing-watermark sequence above refreshed.
 - **Closing-set and impact-checklist re-verification**:
   `closingSet`/`closing-set` evidences this section's re-run of
   D3.5 steps 6-7 only; re-derive D3.7 below locally.
