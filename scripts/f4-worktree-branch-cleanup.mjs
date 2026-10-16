@@ -11,7 +11,7 @@
 // reads, the clone-scoped lock, and delete-remote-branch. Run it from the
 // primary worktree. A dry run is the default; `--apply` mutates.
 import { spawnSync } from 'node:child_process';
-import { lstatSync, readlinkSync, realpathSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mjs';
 import { parseCliArgs } from './cli-args.mjs';
@@ -160,7 +160,6 @@ export function createLiveDeps(options) {
   const repoPath = `repos/${owner}/${repo}`;
   return {
     lstat: lstatKind,
-    readlink: (path) => readlinkSync(path),
     realpath: realpathOrNull,
     git: (args, cwd) => runGit(args, cwd),
     assertClaim: (worktree) => {

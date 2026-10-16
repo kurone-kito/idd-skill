@@ -12,7 +12,7 @@
 // primary worktree. A dry run is the default; `--apply` mutates.
 
 import { spawnSync } from 'node:child_process';
-import { lstatSync, readlinkSync, realpathSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mts';
 import { parseCliArgs } from './cli-args.mts';
@@ -200,7 +200,6 @@ export function createLiveDeps(
   const repoPath = `repos/${owner}/${repo}`;
   return {
     lstat: lstatKind,
-    readlink: (path) => readlinkSync(path),
     realpath: realpathOrNull,
     git: (args, cwd) => runGit(args, cwd),
     assertClaim: (worktree) => {

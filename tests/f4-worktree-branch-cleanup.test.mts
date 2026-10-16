@@ -297,6 +297,18 @@ test('a tracked symlink that stays inside the worktree does not hold', () => {
   assert.equal(report.status, 'complete');
 });
 
+test('a symlink chain that climbs out of the worktree holds symlink-path', () => {
+  const fx = makeFixture();
+  symlinkSync('.', join(fx.worktree, 'q'));
+  mkdirSync(join(fx.worktree, 'p'));
+  symlinkSync('../q/..', join(fx.worktree, 'p', 's'));
+  git(fx.worktree, ['add', '--', 'q', 'p/s']);
+  git(fx.worktree, ['commit', '-q', '-m', 'track a climbing symlink chain']);
+  const { report } = runCleanup(fx, { branchTip: tipOf(fx.worktree, BRANCH) });
+  assert.equal(report.reason, 'symlink-path');
+  assert.equal(existsSync(fx.worktree), true);
+});
+
 test('the real-git flow removes the worktree and branch, and fast-forwards the primary', () => {
   const fx = makeFixture();
   const other = join(fx.root, 'issue-9999-other');

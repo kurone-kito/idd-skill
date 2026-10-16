@@ -862,12 +862,15 @@ function findLinkedEntry(deps, worktree, entries) {
       }
     }
   }
+  // Judge each symlink by the real path it resolves to, so a chain of links
+  // that climbs out of the worktree is caught, not only a direct target.
+  const rootReal = deps.realpath(root) ?? root;
   for (const entry of entries) {
     const full = resolve(root, entry);
     if (kindOf(full) === 'symlink') {
-      const target = resolve(dirname(full), deps.readlink(full));
-      if (!isWithinRoot(root, target)) {
-        return `${entry} is a symlink to ${target}, outside the worktree`;
+      const real = deps.realpath(full);
+      if (real === null || !isWithinRoot(rootReal, real)) {
+        return `${entry} is a symlink that resolves outside the worktree, or does not resolve`;
       }
     }
   }

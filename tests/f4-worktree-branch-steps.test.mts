@@ -190,7 +190,6 @@ function harness(options: HarnessOptions = {}): Harness {
   const lstat = options.lstat ?? ((): LstatKind => 'directory');
   const deps: F4WorktreeBranchDeps = {
     lstat,
-    readlink: () => '',
     realpath: (path) => path,
     git: (args, cwd) => {
       gitCalls.push({ args: [...args], cwd });
@@ -658,10 +657,10 @@ test('a tracked symlink whose target leaves the worktree holds symlink-path', ()
     ],
     lstat: (path) => (path === `${WORKTREE}/link` ? 'symlink' : 'directory'),
   });
-  // The fake readlink points outside the worktree.
+  // The fake realpath resolves the link outside the worktree.
   const withTarget: F4WorktreeBranchDeps = {
     ...h.deps,
-    readlink: () => '/outside/dir',
+    realpath: (p) => (p === `${WORKTREE}/link` ? '/outside/dir' : p),
   };
   const report = runF4WorktreeBranchSteps(input(), withTarget);
   assert.equal(report.reason, 'symlink-path');
@@ -684,7 +683,7 @@ test('a tracked symlink that stays inside the worktree is allowed', () => {
   });
   const withTarget: F4WorktreeBranchDeps = {
     ...h.deps,
-    readlink: () => 'README.md',
+    realpath: (p) => (p === `${WORKTREE}/alias` ? `${WORKTREE}/README.md` : p),
   };
   assert.equal(
     runF4WorktreeBranchSteps(input(), withTarget).status,
