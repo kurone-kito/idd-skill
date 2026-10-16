@@ -193,8 +193,13 @@ export function lstatKind(path: string): LstatKind {
 function realpathOrNull(path: string): string | null {
   try {
     return realpathSync.native(path);
-  } catch {
-    return null;
+  } catch (error) {
+    // Only a missing path is null. Any other failure is raised, so an
+    // unreadable path can never match another one.
+    if (isMissingPathError(error)) {
+      return null;
+    }
+    throw error;
   }
 }
 
@@ -342,6 +347,8 @@ function main(): HelperCliResult {
   const top = runGit(['rev-parse', '--show-toplevel'], cwd);
   if (
     top.status !== 0 ||
+    realpathOrNull(top.stdout.trim()) === null ||
+    realpathOrNull(primaryRoot) === null ||
     realpathOrNull(top.stdout.trim()) !== realpathOrNull(primaryRoot)
   ) {
     throw markCliUsageError(
