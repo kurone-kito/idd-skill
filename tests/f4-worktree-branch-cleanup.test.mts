@@ -13,10 +13,17 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
+import {
+  acquireCloneLock,
+  releaseCloneLock,
+} from '../src/scripts/clone-lock.mts';
 import type { RemoteBranchDeleteVerdict } from '../src/scripts/delete-remote-branch.mts';
 import {
+  claimCheckArgv,
   createLiveDeps,
   lstatKind,
+  parseArgs,
+  proofDryRunArgv,
 } from '../src/scripts/f4-worktree-branch-cleanup.mts';
 import {
   type F4WorktreeBranchDeps,
@@ -492,4 +499,104 @@ test('lstatKind reads a symlink without following it', () => {
   assert.equal(lstatKind(fx.worktree), 'directory');
   assert.equal(lstatKind(join(fx.root, 'missing')), 'absent');
   assert.equal(lstatSync(link).isSymbolicLink(), true);
+});
+
+test('the proof dry run never carries --apply, so the helper never posts a proof', () => {
+  const argv = proofDryRunArgv(
+    { issueNumber: ISSUE, claimId: CLAIM, agentId: AGENT },
+    '/work/wt',
+    '/root',
+  );
+  assert.equal(argv.includes('--apply'), false);
+  assert.deepEqual(argv.slice(1, 9), [
+    '--type',
+    'f4-head-proof',
+    '--target',
+    'issue',
+    String(ISSUE),
+    '--agent-id',
+    AGENT,
+    '--claim-id',
+  ]);
+});
+
+test('the claim check asserts with the nonce and the claimed worktree', () => {
+  const argv = claimCheckArgv(
+    { issueNumber: ISSUE, claimId: CLAIM, nonce: 'nonce-x' },
+    '/work/wt',
+    'owner',
+    'repo',
+    '/root',
+  );
+  assert.ok(argv.includes('--assert'));
+  assert.equal(argv[argv.indexOf('--nonce') + 1], 'nonce-x');
+  assert.equal(argv[argv.indexOf('--worktree') + 1], '/work/wt');
+  assert.equal(argv.includes('--apply'), false);
+});
+
+test('parseArgs takes the flags and refuses a relative worktree, a bad issue, or no nonce', () => {
+  const base = [
+    '--issue',
+    String(ISSUE),
+    '--claim-id',
+    CLAIM,
+    '--nonce',
+    'n',
+    '--agent-id',
+    AGENT,
+    '--worktree',
+    '/work/wt',
+  ];
+  assert.equal(parseArgs(base).apply, false);
+  assert.equal(parseArgs([...base, '--apply']).apply, true);
+  assert.equal(parseArgs(['--help']).help, true);
+  assert.throws(() =>
+    parseArgs([
+      '--issue',
+      String(ISSUE),
+      '--claim-id',
+      CLAIM,
+      '--nonce',
+      'n',
+      '--agent-id',
+      AGENT,
+      '--worktree',
+      'relative/wt',
+    ]),
+  );
+  assert.throws(() =>
+    parseArgs([
+      '--issue',
+      '0',
+      '--claim-id',
+      CLAIM,
+      '--nonce',
+      'n',
+      '--agent-id',
+      AGENT,
+      '--worktree',
+      '/work/wt',
+    ]),
+  );
+  assert.throws(() =>
+    parseArgs([
+      '--issue',
+      String(ISSUE),
+      '--claim-id',
+      CLAIM,
+      '--agent-id',
+      AGENT,
+      '--worktree',
+      '/work/wt',
+    ]),
+  );
+});
+
+test('the clone lock is released after a run that holds at step 5', () => {
+  const fx = makeFixture();
+  writeFileSync(join(fx.worktree, 'scratch.txt'), 'local\n');
+  const { report } = runCleanup(fx);
+  assert.equal(report.reason, 'dirty-worktree');
+  const handle = acquireCloneLock(fx.primary, 'release-probe', 5000);
+  releaseCloneLock(handle);
 });

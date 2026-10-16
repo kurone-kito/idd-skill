@@ -33,6 +33,7 @@ import type {
   F4WorktreeBranchDeps,
   GitResult,
   LstatKind,
+  SpawnedResult,
 } from './f4-worktree-branch-steps.mts';
 import { runF4WorktreeBranchSteps } from './f4-worktree-branch-steps.mts';
 import { ghApiJson } from './gh-exec.mts';
@@ -195,6 +196,67 @@ export interface LiveCleanupOptions {
   readonly primaryRoot: string;
 }
 
+/** The argv of `resume-claim-routing --assert` for the claimed worktree. */
+export function claimCheckArgv(
+  options: Pick<LiveCleanupOptions, 'issueNumber' | 'claimId' | 'nonce'>,
+  worktree: string,
+  owner: string,
+  repo: string,
+  root: string,
+): string[] {
+  return [
+    join(root, 'scripts', 'resume-claim-routing.mjs'),
+    '--issue',
+    String(options.issueNumber),
+    '--assert',
+    '--claim-id',
+    options.claimId,
+    '--nonce',
+    options.nonce,
+    '--worktree',
+    worktree,
+    '--owner',
+    owner,
+    '--repo',
+    repo,
+  ];
+}
+
+/**
+ * The argv of the marker command's dry run. It never carries `--apply`:
+ * this helper reads the proof and never posts one.
+ */
+export function proofDryRunArgv(
+  options: Pick<LiveCleanupOptions, 'issueNumber' | 'claimId' | 'agentId'>,
+  worktree: string,
+  root: string,
+): string[] {
+  return [
+    join(root, 'scripts', 'post-idd-marker.mjs'),
+    '--type',
+    'f4-head-proof',
+    '--target',
+    'issue',
+    String(options.issueNumber),
+    '--agent-id',
+    options.agentId,
+    '--claim-id',
+    options.claimId,
+    '--worktree',
+    worktree,
+  ];
+}
+
+/** Run one spawned helper and keep its exit status, stdout, and stderr. */
+function runSpawned(argv: string[]): SpawnedResult {
+  const result = spawnSync(process.execPath, argv, claimCheckSpawnOptions());
+  return {
+    exitCode: result.status,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+  };
+}
+
 /** The production dependencies of the flow, bound to this checkout. */
 export function createLiveDeps(
   options: LiveCleanupOptions,
@@ -206,59 +268,10 @@ export function createLiveDeps(
     lstat: lstatKind,
     realpath: realpathOrNull,
     git: (args, cwd) => runGit(args, cwd),
-    assertClaim: (worktree) => {
-      const result = spawnSync(
-        process.execPath,
-        [
-          join(root, 'scripts', 'resume-claim-routing.mjs'),
-          '--issue',
-          String(options.issueNumber),
-          '--assert',
-          '--claim-id',
-          options.claimId,
-          '--nonce',
-          options.nonce,
-          '--worktree',
-          worktree,
-          '--owner',
-          owner,
-          '--repo',
-          repo,
-        ],
-        claimCheckSpawnOptions(),
-      );
-      return {
-        exitCode: result.status,
-        stdout: result.stdout ?? '',
-        stderr: result.stderr ?? '',
-      };
-    },
-    proofDryRun: () => {
-      // Never `--apply`: this helper reads the proof and never posts one.
-      const result = spawnSync(
-        process.execPath,
-        [
-          join(root, 'scripts', 'post-idd-marker.mjs'),
-          '--type',
-          'f4-head-proof',
-          '--target',
-          'issue',
-          String(options.issueNumber),
-          '--agent-id',
-          options.agentId,
-          '--claim-id',
-          options.claimId,
-          '--worktree',
-          options.worktree,
-        ],
-        claimCheckSpawnOptions(),
-      );
-      return {
-        exitCode: result.status,
-        stdout: result.stdout ?? '',
-        stderr: result.stderr ?? '',
-      };
-    },
+    assertClaim: (worktree) =>
+      runSpawned(claimCheckArgv(options, worktree, owner, repo, root)),
+    proofDryRun: () =>
+      runSpawned(proofDryRunArgv(options, options.worktree, root)),
     prBaseRef: (pr) => {
       try {
         const data = ghApiJson(`${repoPath}/pulls/${pr}`) as {

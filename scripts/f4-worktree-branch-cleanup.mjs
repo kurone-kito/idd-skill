@@ -157,6 +157,54 @@ function realpathOrNull(path) {
     return null;
   }
 }
+/** The argv of `resume-claim-routing --assert` for the claimed worktree. */
+export function claimCheckArgv(options, worktree, owner, repo, root) {
+  return [
+    join(root, 'scripts', 'resume-claim-routing.mjs'),
+    '--issue',
+    String(options.issueNumber),
+    '--assert',
+    '--claim-id',
+    options.claimId,
+    '--nonce',
+    options.nonce,
+    '--worktree',
+    worktree,
+    '--owner',
+    owner,
+    '--repo',
+    repo,
+  ];
+}
+/**
+ * The argv of the marker command's dry run. It never carries `--apply`:
+ * this helper reads the proof and never posts one.
+ */
+export function proofDryRunArgv(options, worktree, root) {
+  return [
+    join(root, 'scripts', 'post-idd-marker.mjs'),
+    '--type',
+    'f4-head-proof',
+    '--target',
+    'issue',
+    String(options.issueNumber),
+    '--agent-id',
+    options.agentId,
+    '--claim-id',
+    options.claimId,
+    '--worktree',
+    worktree,
+  ];
+}
+/** Run one spawned helper and keep its exit status, stdout, and stderr. */
+function runSpawned(argv) {
+  const result = spawnSync(process.execPath, argv, claimCheckSpawnOptions());
+  return {
+    exitCode: result.status,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+  };
+}
 /** The production dependencies of the flow, bound to this checkout. */
 export function createLiveDeps(options) {
   const root = resolveBundleRoot(import.meta.dirname);
@@ -166,59 +214,10 @@ export function createLiveDeps(options) {
     lstat: lstatKind,
     realpath: realpathOrNull,
     git: (args, cwd) => runGit(args, cwd),
-    assertClaim: (worktree) => {
-      const result = spawnSync(
-        process.execPath,
-        [
-          join(root, 'scripts', 'resume-claim-routing.mjs'),
-          '--issue',
-          String(options.issueNumber),
-          '--assert',
-          '--claim-id',
-          options.claimId,
-          '--nonce',
-          options.nonce,
-          '--worktree',
-          worktree,
-          '--owner',
-          owner,
-          '--repo',
-          repo,
-        ],
-        claimCheckSpawnOptions(),
-      );
-      return {
-        exitCode: result.status,
-        stdout: result.stdout ?? '',
-        stderr: result.stderr ?? '',
-      };
-    },
-    proofDryRun: () => {
-      // Never `--apply`: this helper reads the proof and never posts one.
-      const result = spawnSync(
-        process.execPath,
-        [
-          join(root, 'scripts', 'post-idd-marker.mjs'),
-          '--type',
-          'f4-head-proof',
-          '--target',
-          'issue',
-          String(options.issueNumber),
-          '--agent-id',
-          options.agentId,
-          '--claim-id',
-          options.claimId,
-          '--worktree',
-          options.worktree,
-        ],
-        claimCheckSpawnOptions(),
-      );
-      return {
-        exitCode: result.status,
-        stdout: result.stdout ?? '',
-        stderr: result.stderr ?? '',
-      };
-    },
+    assertClaim: (worktree) =>
+      runSpawned(claimCheckArgv(options, worktree, owner, repo, root)),
+    proofDryRun: () =>
+      runSpawned(proofDryRunArgv(options, options.worktree, root)),
     prBaseRef: (pr) => {
       try {
         const data = ghApiJson(`${repoPath}/pulls/${pr}`);
