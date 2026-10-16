@@ -4257,26 +4257,28 @@ effect. The URL is read raw: whitespace anywhere, a backslash, or a character
 outside printable ASCII is refused before it is parsed. The origin must name
 the repository on the active GitHub host (`GH_HOST`, else `GITHUB_SERVER_URL`,
 else github.com), and `--worktree` must be registered in that checkout;
-otherwise the run is refused before any claim read. An SSH origin URL with a
-non-default port does not match, so use a URL without one; an HTTP(S) origin
-keeps its port, and `GH_HOST` names that port too. The command then sets
-`GH_HOST`, for its own process, to the normalized active host, so every `gh`
-call the command makes goes to the origin's host and not to gh's own default
-host.
+otherwise the run is refused before any claim read. An HTTP(S) origin's port is
+part of its host, so `GH_HOST` names it too, except port 443, which `GH_HOST`
+cannot name: drop that port from the origin URL. An SSH origin's port is not
+part of the host, so its URL has none. The command then sets `GH_HOST`, for its
+own process, to the normalized active host, so every `gh` call the command makes
+goes to the origin's host and not to gh's own default host.
 
 Before any POST the command reads the stored activation nonce (`claim-lock
 --read-tokens`), runs `resume-claim-routing --assert`, checks that the claim
 lock of `--worktree` carries this claim ID, and requires `decideBeforePost` to
 return `post`. A merge commit with two parents must have the live head as its
 second parent; one parent (a squash or rebase merge) is accepted, as in the
-written procedure; any other count holds with `pr-state`. So does a branch
-with no merged pull request, or with more than one, and a `gh pr list` result
-that reaches its 100-row cap, which may be truncated. Every git read, and the
-spawned claim check, ignore every caller variable whose name starts with
-`GIT_`, in any letter case. Under `--apply` the claim
-check and the lock are read once more right before the POST, with the same
-nonce: a changed claim or branch, or a replaced or missing lock, is `stop` on
-`claim-or-lock`, and a reading that cannot be obtained is `hold`; nothing is
+written procedure; any other count holds with `pr-state`. So does a branch with
+no merged pull request, or with more than one, and a `gh pr list` result that
+reaches its 100-row cap, which may be truncated. The origin, worktree, and ref
+reads, and the spawned claim check, ignore every caller variable whose name
+starts with `GIT_`, in any letter case. The claim-lock read keeps its narrower
+filter, which drops only `GIT_CONFIG*`, `GIT_DIR`, `GIT_WORK_TREE`,
+`GIT_COMMON_DIR`, `GIT_INDEX_FILE`, and `GIT_OBJECT_DIRECTORY`. Under `--apply`
+the claim check and the lock are read once more right before the POST, with the
+same nonce: a changed claim or branch, or a replaced or missing lock, is `stop`
+on `claim-or-lock`, and a reading that cannot be obtained is `hold`; nothing is
 posted either way.
 
 The printed `verdict` is `post` (a dry run that would post), `proceed`, `stop`,
