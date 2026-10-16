@@ -124,7 +124,6 @@ export function collectTrustedMarkers(comments, claimId, trustedLogins) {
       if (parsed.claimId === null || parsed.claimId === claimId) {
         entries.push({
           commentId: comment.id,
-          createdAt: comment.createdAt,
           entry: { unparseable: true },
           // An edited body that no longer parses is not a malformed proof to
           // supersede: an edit fails closed, as for every other proof (#4442).
@@ -142,7 +141,6 @@ export function collectTrustedMarkers(comments, claimId, trustedLogins) {
     if (classifyCommentEditState(comment) !== 'unedited') {
       entries.push({
         commentId: comment.id,
-        createdAt: comment.createdAt,
         entry: { unparseable: true },
         supersedable: false,
         supersedes: null,
@@ -151,7 +149,6 @@ export function collectTrustedMarkers(comments, claimId, trustedLogins) {
     }
     entries.push({
       commentId: comment.id,
-      createdAt: comment.createdAt,
       entry: {
         claimId: parsed.proof.claimId,
         prNumber: parsed.proof.prNumber,
@@ -172,8 +169,10 @@ export function collectTrustedMarkers(comments, claimId, trustedLogins) {
 /**
  * Set aside each malformed proof of this claim that a superseding proof names
  * by comment ID (#4442). A superseding proof sets one aside only when it is a
- * well-formed, unedited, trusted proof of this claim, when it was created after
- * the comment it names, and when it is reusable under `input`'s live values
+ * well-formed, unedited, trusted proof of this claim, when its comment ID is
+ * higher than the ID of the comment it names (GitHub numbers comments in posting
+ * order, and timestamps are only one second apart), and when it is reusable
+ * under `input`'s live values
  * (the same check the verdict table applies). A superseding proof that fails
  * any of these is kept and judged on its own, so it still holds F4. Returns the
  * markers the verdict table reads and, for each set-aside comment, the comment
@@ -194,7 +193,7 @@ function applySupersession(entries, input) {
     if (
       target === undefined ||
       supersededBy.has(target.commentId) ||
-      !(Date.parse(entry.createdAt) > Date.parse(target.createdAt)) ||
+      entry.commentId <= target.commentId ||
       classifyReread([entry.entry], input).result !== 'reusable'
     ) {
       continue;

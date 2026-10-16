@@ -386,6 +386,11 @@ export function buildMarkerBody(type, fields) {
         merge: fields.merge,
         head: fields.head,
         agentId: fields['agent-id'],
+        // #4442: the optional superseded comment ID, forwarded so that a
+        // programmatic caller gets the same token as the CLI path.
+        ...(fields.supersedes === undefined
+          ? {}
+          : { supersedes: fields.supersedes }),
       });
     case 'authoring-owner':
       // #2931: routes through the existing marker-helpers.mts renderer

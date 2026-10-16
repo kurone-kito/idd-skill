@@ -1978,3 +1978,25 @@ test('--supersedes on a malformed proof with no readable claim is refused, not c
   );
   assert.deepEqual(h.posts, []);
 });
+
+test('a superseding proof posted in the same second as the malformed proof it names still sets it aside', () => {
+  const h = harness();
+  h.issueComments.push(
+    comment(80, malformedProof()),
+    comment(81, proofBody({ supersedes: '80' })),
+  );
+  const output = expectVerdict(
+    runF4HeadProofGate(INPUT, h.deps),
+    'proceed',
+    'reusable',
+    0,
+  );
+  assert.ok(
+    output.warnings?.some((line) =>
+      line.includes(
+        'malformed f4 head-proof comment 80 is set aside by superseding proof comment 81',
+      ),
+    ),
+    JSON.stringify(output.warnings),
+  );
+});

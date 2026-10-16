@@ -8863,3 +8863,10 @@ test('CLI: --type f4-head-proof accepts --supersedes, then refuses the unregiste
   );
   assert.doesNotMatch(stderr, /takes only/);
 });
+
+test('buildMarkerBody forwards supersedes, so a programmatic caller gets the superseding token', () => {
+  assert.equal(
+    buildMarkerBody('f4-head-proof', { ...F4_FIELDS, supersedes: '1234' }),
+    SUPERSEDING_F4_BODY,
+  );
+});
