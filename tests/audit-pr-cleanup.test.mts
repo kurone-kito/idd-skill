@@ -2574,12 +2574,21 @@ const GATE_CLAIM: FakeClaim = {
   createdAt: '2026-10-16T19:45:17Z',
 };
 
+// A marker envelope names the pull request and head it proves. The default
+// names the scope's pull request at the head the fake reads, so each test
+// overrides only the identity it exercises.
 function markerJson(fields: Record<string, unknown>): string {
   return JSON.stringify({
     mode: 'dry-run',
     type: 'f4-head-proof',
     target: 'issue',
     number: 4369,
+    proof: {
+      pr: GATE_SCOPE.prNumber,
+      head: GATE_SHA_A,
+      claim: 'claim-1',
+      branch: GATE_CLAIM.branch,
+    },
     ...fields,
   });
 }
@@ -3189,4 +3198,64 @@ test('repositoryBindingHold: a cleanup of another repository than the checkout h
   const unreadable = repositoryBindingHold('kurone-kito', 'idd-skill', null);
   assert.equal(unreadable?.code, 'repo-mismatch');
   assert.match(unreadable?.detail ?? '', /could not be read/u);
+});
+
+test('checkF4HeadProofGate: a proof that names another pull request or head, or none, is not a verdict (#4369)', () => {
+  const otherPr = fakeGate({
+    markers: [
+      markerJson({
+        verdict: 'proceed',
+        reason: 'reusable',
+        proof: { pr: 8, head: GATE_SHA_A },
+      }),
+    ],
+  });
+  const otherPrHold = checkF4HeadProofGate(
+    GATE_SCOPE,
+    { headSha: null },
+    otherPr.deps,
+  );
+  assert.equal(otherPrHold?.code, 'conflicting-marker');
+  assert.equal(otherPrHold?.verdict, 'hold');
+  assert.equal(otherPr.calls.marker.length, 1, 'no apply run after it');
+  assert.equal(
+    otherPr.calls.marker.every((run) => run.apply === false),
+    true,
+  );
+
+  const otherHead = fakeGate({
+    markers: [
+      markerJson({
+        verdict: 'proceed',
+        reason: 'reusable',
+        proof: { pr: 7, head: GATE_SHA_B },
+      }),
+    ],
+  });
+  assert.equal(
+    checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, otherHead.deps)?.code,
+    'conflicting-marker',
+  );
+
+  const noIdentity = fakeGate({
+    markers: [JSON.stringify({ verdict: 'proceed', reason: 'reusable' })],
+  });
+  assert.equal(
+    checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, noIdentity.deps)?.code,
+    'gate-unreadable',
+  );
+
+  const described = fakeGate({
+    markers: [
+      markerJson({
+        verdict: 'proceed',
+        reason: 'reusable',
+        proof: { pr: 8, head: GATE_SHA_A },
+      }),
+    ],
+  });
+  assert.deepEqual(describeF4HeadProofGate(GATE_SCOPE, described.deps), {
+    gate: 'hold',
+    gateReason: 'conflicting-marker',
+  });
 });

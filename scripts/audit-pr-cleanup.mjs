@@ -857,6 +857,17 @@ export async function runApplyWithRetry(
   // always runs at least one attempt and returns from inside it.
   return { report, attempts: 0, boundExhausted: true };
 }
+/** The proof identity of a marker envelope (#4369). */
+function readProofIdentity(value) {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+  const fields = value;
+  return {
+    pr: typeof fields.pr === 'number' ? fields.pr : null,
+    head: typeof fields.head === 'string' ? fields.head.toLowerCase() : null,
+  };
+}
 function isHoldReasonCode(value) {
   return value !== null && HOLD_REASON_CODES.includes(value);
 }
@@ -938,6 +949,7 @@ function readMarkerDecision(stdout) {
     reason: 'gate-unreadable',
     nextAction: null,
     detail,
+    proof: null,
   });
   if (stdout === null || stdout.trim() === '') {
     return unreadable('the marker command printed no result');
@@ -983,6 +995,7 @@ function readMarkerDecision(stdout) {
     nextAction:
       typeof fields.nextAction === 'string' ? fields.nextAction : null,
     detail: boundedDetail(warnings.join('; ')),
+    proof: readProofIdentity(fields.proof),
   };
 }
 /** Run the marker command once and read its verdict. A throw is unreadable. */
@@ -995,6 +1008,7 @@ function markerDecision(deps, options) {
       reason: 'gate-unreadable',
       nextAction: null,
       detail: boundedDetail(firstLine(error)),
+      proof: null,
     };
   }
 }
@@ -1018,6 +1032,37 @@ function holdFromDecision(decision) {
     decision.detail === null ? cause : `${decision.detail}; ${cause}`,
   );
   return helperHold('gate-unreadable', 'hold', detail);
+}
+/**
+ * The hold for a proceed verdict whose proof names another pull request, or
+ * another head than this pass read (#4369). The marker command derives its
+ * pull request from the claimed branch, which the claim check does not bind
+ * to the pull request being cleaned. A proof without an identity is unreadable.
+ * `head` is null for a dry run, which reads no head.
+ */
+function proofBindingHold(decision, prNumber, head) {
+  if (decision.proof === null) {
+    return helperHold(
+      'gate-unreadable',
+      'hold',
+      'the proceed verdict names no proof identity',
+    );
+  }
+  if (decision.proof.pr !== prNumber) {
+    return helperHold(
+      'conflicting-marker',
+      'hold',
+      `the proof names pull request ${decision.proof.pr ?? 'none'}, not ${prNumber}`,
+    );
+  }
+  if (head !== null && decision.proof.head !== head.toLowerCase()) {
+    return helperHold(
+      'conflicting-marker',
+      'hold',
+      `the proof names head ${decision.proof.head ?? 'none'}, not ${head}`,
+    );
+  }
+  return null;
 }
 /**
  * The head-proof gate before one pass (#4369): the claim, the head, the
@@ -1077,7 +1122,7 @@ export function checkF4HeadProofGate(scope, state, deps) {
   };
   const dry = markerDecision(deps, { ...run, apply: false });
   if (dry.verdict === 'proceed') {
-    return null;
+    return proofBindingHold(dry, scope.prNumber, head);
   }
   if (dry.verdict !== 'post') {
     return holdFromDecision(dry);
@@ -1088,7 +1133,7 @@ export function checkF4HeadProofGate(scope, state, deps) {
   }
   const reread = markerDecision(deps, { ...run, apply: false });
   if (reread.verdict === 'proceed') {
-    return null;
+    return proofBindingHold(reread, scope.prNumber, head);
   }
   if (reread.verdict === 'post') {
     return helperHold(
@@ -1128,6 +1173,13 @@ export function describeF4HeadProofGate(scope, deps) {
     worktree,
     apply: false,
   });
+  if (decision.verdict === 'proceed') {
+    // A dry run reads no head, so only the pull request binds here.
+    const bound = proofBindingHold(decision, scope.prNumber, null);
+    if (bound !== null) {
+      return { gate: bound.verdict, gateReason: bound.code };
+    }
+  }
   if (decision.verdict === 'hold' || decision.verdict === 'stop') {
     const hold = holdFromDecision(decision);
     return { gate: hold.verdict, gateReason: hold.code };
