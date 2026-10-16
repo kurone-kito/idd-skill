@@ -658,7 +658,8 @@ export function describeUnaddressedActivity(snapshot: unknown): string[] {
     `${parts.join(' and ')} ${verb} no disposition evidence as of this ` +
       `watermark, but its max-activity-at/total-item-count already cover ` +
       `${pronoun}.`,
-    'This warning is diagnostic and does not block the watermark post.',
+    'On a standalone --from-pr post this warning is diagnostic and does not ' +
+      'block the post.',
     'Ack-only replies to a disposition are acceptable evidence: when every ' +
       'remaining cause is one, re-run --from-pr to refresh the watermark ' +
       'first, then evaluate the ack-only override on that refreshed snapshot.',
