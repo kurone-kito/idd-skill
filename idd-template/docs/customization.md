@@ -187,10 +187,13 @@ distributed IDD workflow a repository imported.
     verify-tag "v${release_version}"
   ```
 
-  A GPG-signed tag needs no allowed-signers file. Its verifier needs the
-  signer's public key in the GPG keyring instead, imported with
-  `gpg --import <public-key-file>`; without it, verification stops with a
-  `No public key` error from `gpg`.
+  A GPG-signed tag needs no allowed-signers file, so drop the `-c` option for
+  it. Its verifier needs the signer's public key in the GPG keyring instead,
+  imported with `gpg --import <public-key-file>`; without it, verification
+  stops with a `No public key` error from `gpg`. The signer can write the
+  public-key file with `gpg --armor --output <public-key-file> --export
+  <key-id>`, and a verifier whose keyring already holds the key needs no
+  import.
 
   When the snippet stops at verify, for any of the reasons above (the
   `gpg.ssh.allowedSignersFile` error, a `No principal matched.` case, or the
@@ -202,13 +205,16 @@ distributed IDD workflow a repository imported.
   the tag with that same value, so it cannot catch a wrong one. Create the
   allowed-signers file if you have not yet, as described above, and make sure
   the setting is in place. For a GPG-signed tag, import the signer's public
-  key with `gpg --import` instead, as described above. Run the block below as
+  key with `gpg --import <public-key-file>` instead, as described above. Run
+  the block below as
   a script or in a subshell, not in your login shell, because `set -eu` in an
   interactive shell can end that shell at the first failure. Set
   `RELEASE_VERSION` and
-  `RELEASE_CUT_MERGE_SHA` in its environment, as for the snippet. A failure
-  stops the block before the push, so a failed verify or peel test never
-  reaches it:
+  `RELEASE_CUT_MERGE_SHA` in its environment, as for the snippet. For a
+  GPG-signed tag, replace the verify command in the block (its `git -c` line
+  and the `verify-tag` line after it) with
+  `git verify-tag "v${release_version}"`. A failure stops the block before the
+  push, so a failed verify or peel test never reaches it:
 
   ```sh
   set -eu
@@ -239,14 +245,17 @@ distributed IDD workflow a repository imported.
   ```
 
   The test is true when the tag exists. The if condition exits 1 when the tag
-  is absent, which an `if` condition tolerates even under `set -e`. The block
-  exits 0 either way, so read its output: the echo line means the tag exists.
-  When the tag does not exist, and this repository configures the fallback
-  signer that the wrapper section describes, run the snippet again from its
-  first line, once the setting is in place, with the wrapper section's `-c`
-  settings for `gpg.format`, `user.signingkey` (set to the absolute path of the
-  fallback key file in place of its placeholder) and `commit.gpgsign` placed
-  before `tag`, and keep `-s`.
+  is absent, which an `if` condition tolerates even under `set -e`. Once
+  `RELEASE_VERSION` is set to a non-empty value, the block exits 0 whether or
+  not the tag exists, so read its output: the echo line means the tag exists.
+  When the tag does not
+  exist, and this repository configures the fallback signer that the
+  [signed-commit merge wrapper](idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
+  describes, run the snippet again from its first line, once the setting is in
+  place, with that wrapper's `-c` settings for `gpg.format`, `user.signingkey`
+  (set to the absolute path of the fallback key file in place of the wrapper's
+  `<abs-path>` placeholder) and `commit.gpgsign` placed before `tag`, and keep
+  `-s`.
   Without a configured fallback signer, stop there. A signing attempt that
   fails before the tag is written leaves no tag.
 
