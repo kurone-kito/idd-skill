@@ -1218,6 +1218,8 @@ export interface F4GateScope {
 export interface MarkerRun {
   stdout: string | null;
   exitCode: number | null;
+  /** The child's stderr, kept so an unreadable hold can name its cause (#4369). */
+  stderr?: string | null;
 }
 
 /** The arguments of one `post-idd-marker --type f4-head-proof` run. */
@@ -1346,11 +1348,13 @@ function readMarkerDecision(
   run: MarkerRun,
   expected: MarkerRunOptions,
 ): F4GateDecision {
+  // The first stderr line names the cause of a child that printed no verdict.
+  const stderrCause = boundedDetail(firstLine(run.stderr ?? ''));
   const unreadable = (detail: string): F4GateDecision => ({
     verdict: 'hold',
     reason: 'gate-unreadable',
     nextAction: null,
-    detail,
+    detail: stderrCause === null ? detail : `${detail}; stderr: ${stderrCause}`,
     proof: null,
   });
   const stdout = run.stdout;
@@ -1736,9 +1740,13 @@ export function markerRunOf(result: {
   stdout: string | null;
   status: number | null;
   error?: unknown;
+  stderr?: string | null;
 }): MarkerRun {
+  // The stderr is kept on every outcome, because a crash names its cause there.
+  const stderr =
+    typeof result.stderr === 'string' ? { stderr: result.stderr } : {};
   if (result.error !== undefined || result.status === null) {
-    return { stdout: null, exitCode: null };
+    return { stdout: null, exitCode: null, ...stderr };
   }
   return {
     stdout:
@@ -1746,6 +1754,7 @@ export function markerRunOf(result: {
         ? result.stdout
         : null,
     exitCode: result.status,
+    ...stderr,
   };
 }
 

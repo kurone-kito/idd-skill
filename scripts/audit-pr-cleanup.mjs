@@ -944,11 +944,13 @@ export function claimFailureHold(error) {
  * verdict is `gate-unreadable`, a hold, so an unreadable gate never passes.
  */
 function readMarkerDecision(run, expected) {
+  // The first stderr line names the cause of a child that printed no verdict.
+  const stderrCause = boundedDetail(firstLine(run.stderr ?? ''));
   const unreadable = (detail) => ({
     verdict: 'hold',
     reason: 'gate-unreadable',
     nextAction: null,
-    detail,
+    detail: stderrCause === null ? detail : `${detail}; stderr: ${stderrCause}`,
     proof: null,
   });
   const stdout = run.stdout;
@@ -1298,8 +1300,11 @@ function runMarkerCommand(options) {
  * status, even when its stdout holds a complete JSON envelope (#4369).
  */
 export function markerRunOf(result) {
+  // The stderr is kept on every outcome, because a crash names its cause there.
+  const stderr =
+    typeof result.stderr === 'string' ? { stderr: result.stderr } : {};
   if (result.error !== undefined || result.status === null) {
-    return { stdout: null, exitCode: null };
+    return { stdout: null, exitCode: null, ...stderr };
   }
   return {
     stdout:
@@ -1307,6 +1312,7 @@ export function markerRunOf(result) {
         ? result.stdout
         : null,
     exitCode: result.status,
+    ...stderr,
   };
 }
 function createF4GateDeps(owner, repo, args, scope, claimContext) {

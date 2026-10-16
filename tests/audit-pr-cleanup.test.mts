@@ -3188,6 +3188,23 @@ test('checkF4HeadProofGate: an envelope that answers another invocation is unrea
   }
 });
 
+test('checkF4HeadProofGate: an unreadable marker run names the first line of its stderr (#4369)', () => {
+  const gate = fakeGate();
+  const deps: F4GateDeps = {
+    ...gate.deps,
+    runMarker: () => ({
+      stdout: null,
+      exitCode: 1,
+      stderr: 'Error: bad flag\nat line 3',
+    }),
+  };
+  const hold = checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, deps);
+
+  assert.equal(hold?.code, 'gate-unreadable');
+  assert.match(hold?.detail ?? '', /stderr: Error: bad flag/u);
+  assert.doesNotMatch(hold?.detail ?? '', /at line 3/u);
+});
+
 test('markerRunOf: a child that timed out, errored, or was killed gives no verdict (#4369)', () => {
   const envelope = '{"verdict":"proceed","reason":"reusable"}';
 
