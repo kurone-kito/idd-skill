@@ -224,7 +224,11 @@ export function createLiveDeps(
         ],
         claimCheckSpawnOptions(),
       );
-      return { exitCode: result.status, stdout: result.stdout ?? '' };
+      return {
+        exitCode: result.status,
+        stdout: result.stdout ?? '',
+        stderr: result.stderr ?? '',
+      };
     },
     proofDryRun: () => {
       // Never `--apply`: this helper reads the proof and never posts one.
@@ -246,7 +250,11 @@ export function createLiveDeps(
         ],
         claimCheckSpawnOptions(),
       );
-      return { exitCode: result.status, stdout: result.stdout ?? '' };
+      return {
+        exitCode: result.status,
+        stdout: result.stdout ?? '',
+        stderr: result.stderr ?? '',
+      };
     },
     prBaseRef: (pr) => {
       try {

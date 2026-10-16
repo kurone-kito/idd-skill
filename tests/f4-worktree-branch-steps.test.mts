@@ -375,6 +375,19 @@ test('a missing proof holds with proof-missing and points at step 3', () => {
   assert.match(report.nextAction ?? '', /step 3/u);
 });
 
+test('an unregistered claimed worktree holds with proof-worktree-missing and its cause', () => {
+  const proof = {
+    exitCode: 1,
+    stdout: '',
+    stderr:
+      '--worktree /work/gone is not a worktree that git worktree list --porcelain registers for this repository\n',
+  };
+  const report = runF4WorktreeBranchSteps(input(), harness({ proof }).deps);
+  assert.equal(report.reason, 'proof-worktree-missing');
+  assert.equal(report.nextAction, NEXT_ACTIONS['proof-worktree-missing']);
+  assert.match(report.steps[2]?.detail ?? '', /registers for this repository/u);
+});
+
 test('an unreadable proof envelope holds with proof-unreadable', () => {
   const report = runF4WorktreeBranchSteps(
     input(),

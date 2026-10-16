@@ -69,6 +69,8 @@ export const NEXT_ACTIONS = {
     'No trusted proof exists yet. Rerun F4 step 3. The step 3 gate or the marker command posts the proof when the local branch ref exists.',
   'proof-unreadable':
     'Hold. The output of the marker dry run could not be read as a verdict. Rerun the dry run and inspect its stderr. Do not proceed.',
+  'proof-worktree-missing':
+    'Hold. The claimed worktree is no longer registered, and the proof dry run needs it, so this run cannot read the proof. This run removed nothing. Read the proof on the claimed issue, and finish step 6 by hand, or restore the worktree registration for a rerun.',
   'symlink-path':
     'Hold. A path in the worktree or above it is a symlink, or a tracked entry resolves outside the worktree. Nothing ran in that path. The operator inspects the symlink, then fixes or removes it.',
   'fetch-failed':
@@ -172,11 +174,23 @@ export function classifyClaimAssert(raw, claimId, agentId) {
  * one the dry run can return. Anything else is unreadable.
  */
 export function classifyProofEnvelope(raw, claimId) {
+  const firstStderrLine = (raw.stderr ?? '').trim().split('\n')[0] || null;
+  // The dry run refuses an unregistered worktree on stderr, with no stdout.
+  if (
+    raw.stdout.trim() === '' &&
+    /registers for this repository/u.test(raw.stderr ?? '')
+  ) {
+    return {
+      ok: false,
+      code: 'proof-worktree-missing',
+      detail: firstStderrLine,
+    };
+  }
   let parsed;
   try {
     parsed = JSON.parse(raw.stdout);
   } catch {
-    return { ok: false, code: 'proof-unreadable' };
+    return { ok: false, code: 'proof-unreadable', detail: firstStderrLine };
   }
   const envelope = parsed;
   if (envelope.verdict === 'post') {
@@ -384,7 +398,7 @@ export function runF4WorktreeBranchSteps(input, deps) {
   if (!proofCheck.ok) {
     return holdAt(2, 'proof-check', null, {
       code: proofCheck.code,
-      detail: null,
+      detail: proofCheck.detail ?? null,
     });
   }
   const proof = proofCheck.values;
