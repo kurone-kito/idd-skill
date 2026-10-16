@@ -3259,3 +3259,22 @@ test('checkF4HeadProofGate: a proof that names another pull request or head, or 
     gateReason: 'conflicting-marker',
   });
 });
+
+test('checkF4HeadProofGate: a post naming another pull request holds before any apply run (#4369)', () => {
+  const gate = fakeGate({
+    markers: [
+      markerJson({
+        verdict: 'post',
+        proof: { pr: 8, head: GATE_SHA_A },
+      }),
+    ],
+  });
+  const hold = checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, gate.deps);
+
+  assert.equal(hold?.code, 'conflicting-marker');
+  assert.equal(gate.calls.marker.length, 1, 'the apply run never starts');
+  assert.equal(
+    gate.calls.marker.every((run) => run.apply === false),
+    true,
+  );
+});

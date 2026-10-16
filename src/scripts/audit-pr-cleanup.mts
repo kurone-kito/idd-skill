@@ -1532,6 +1532,12 @@ export function checkF4HeadProofGate(
   if (dry.verdict !== 'post') {
     return holdFromDecision(dry);
   }
+  // A post names the pull request it would prove. Bind it before any apply run,
+  // so a proof for another pull request is never posted (#4369).
+  const postBound = proofBindingHold(dry, scope.prNumber, head);
+  if (postBound !== null) {
+    return postBound;
+  }
   const posted = markerDecision(deps, { ...run, apply: true });
   if (posted.verdict !== 'proceed') {
     return holdFromDecision(posted);
