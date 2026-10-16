@@ -340,16 +340,24 @@ function effortFooter(hint: string): string {
 // Verified empirically (suitability-triage.mjs --body-file --verbose and
 // a standalone evaluateA4Viability probe) that this body cleanly passes
 // all 3 A4 criteria and all 6 evaluated A4.5 checks.
+/**
+ * `candidateFiles` defaults to one backtick-quoted path, the same default as
+ * `childBody`, so an orphan fixture carries the `## Candidate files` section
+ * that an S or M orphan must have. Pass `null` to omit the heading, or `[]`
+ * for a present heading with no parseable path (the zero-path case).
+ */
 function orphanBody({
   score = 4,
   effort = 'M',
   includeEffort = true,
   proposedChange = true,
+  candidateFiles = ['`src/scripts/example.mts`'],
 }: {
   score?: number;
   effort?: string;
   includeEffort?: boolean;
   proposedChange?: boolean;
+  candidateFiles?: readonly string[] | null;
 } = {}): string {
   return [
     '# Add a sample orphan feature',
@@ -363,6 +371,14 @@ function orphanBody({
     '',
     '- [ ] `node --test tests/example.test.mts` passes with the new case covered',
     '',
+    ...(candidateFiles === null
+      ? []
+      : [
+          '## Candidate files',
+          '',
+          ...candidateFiles.map((path) => `- ${path}`),
+          '',
+        ]),
     suitabilityFooter(score),
     ...(includeEffort ? ['', effortFooter(effort)] : []),
   ].join('\n');
@@ -2457,7 +2473,9 @@ test('candidate-files-not-empty passes for a child issue with at least one real 
 });
 
 test('candidate-files-not-empty is not applicable to the orphan shape, even with zero candidate files', () => {
-  const report = auditAuthoredIssue(orphanBody(), { shape: 'orphan' });
+  const report = auditAuthoredIssue(orphanBody({ candidateFiles: [] }), {
+    shape: 'orphan',
+  });
   assert.equal(findingResult(report, 'candidate-files-not-empty'), 'pass');
 });
 
