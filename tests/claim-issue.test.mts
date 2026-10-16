@@ -2901,3 +2901,39 @@ test('a claim comment whose supersedes field is not none is not the claim marker
     assert.equal(report.claimPosted, 'unknown');
   });
 });
+
+test('the default branch is fetched explicitly, so a narrowed refspec cannot leave the fast-forward on a stale tip', () => {
+  withApplyFixture((fixture) => {
+    const updater = join(fixture.parent, 'updater');
+    gitIn(fixture.parent, [
+      'clone',
+      '--quiet',
+      join(fixture.parent, 'origin.git'),
+      updater,
+    ]);
+    gitIn(updater, ['push', '--quiet', 'origin', 'main:feat']);
+    writeFileSync(join(updater, 'next.txt'), 'next\n');
+    gitIn(updater, ['add', 'next.txt']);
+    gitIn(updater, [
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.com',
+      'commit',
+      '--quiet',
+      '-m',
+      'next',
+    ]);
+    const tip = gitIn(updater, ['rev-parse', 'HEAD']).trim();
+    gitIn(updater, ['push', '--quiet', 'origin', 'main']);
+    // A narrow refspec: a plain fetch no longer refreshes origin/main.
+    gitIn(fixture.primary, [
+      'config',
+      'remote.origin.fetch',
+      '+refs/heads/feat:refs/remotes/origin/feat',
+    ]);
+    const run = runApply(fixture);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    assert.equal(gitIn(fixture.primary, ['rev-parse', 'main']).trim(), tip);
+  });
+});

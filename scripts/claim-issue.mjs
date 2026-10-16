@@ -1241,6 +1241,21 @@ function fastForwardPrimary(state) {
   if (fetch.status !== 0) {
     return notReady(`git fetch origin ended with ${describeStatus(fetch)}`);
   }
+  // A plain fetch refreshes only the refs the clone's refspec maps. The default
+  // branch is fetched into its own tracking ref, so the ahead check, the
+  // fast-forward, and the policy read see its live tip.
+  const tip = state.deps.run('git', [
+    '-C',
+    state.primary,
+    'fetch',
+    'origin',
+    `+refs/heads/${base}:refs/remotes/origin/${base}`,
+  ]);
+  if (tip.status !== 0) {
+    return notReady(
+      `git fetch of origin/${base} ended with ${describeStatus(tip)}`,
+    );
+  }
   const ahead = state.deps.run('git', [
     '-C',
     state.primary,

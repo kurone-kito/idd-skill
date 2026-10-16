@@ -4779,7 +4779,9 @@ like `activation-nonce`, because a worker posts it as itself.
   Then the helper runs the fresh-claim order of `idd-claim.instructions.md`:
   1. B1 step 1, under one hold of the clone-scoped lock: the primary
      checkout must be on the default branch with no unpushed commits, then
-     `git fetch origin` and a fast-forward (with `merge.autoStash=false`).
+     `git fetch origin`, the default branch fetched into its own tracking
+     ref (a narrowed refspec cannot leave it stale), and a fast-forward (with
+     `merge.autoStash=false`).
      A failure stops with `primary-not-ready`, whose detail names
      `primary-not-on-default-branch`, `unpushed-commits`, or the failing
      command. The effective policy of the primary checkout (the layered
