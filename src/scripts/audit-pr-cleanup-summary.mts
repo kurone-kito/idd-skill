@@ -90,7 +90,10 @@ export interface CleanupReport {
    * claimed run, or `gate-not-applicable` when no gate ran (#4369).
    */
   gate?: string;
-  /** The reason code behind `gate`; null for `proceed` and `post`. */
+  /**
+   * The reason behind `gate`: a hold's code, or the validated reason of a
+   * `proceed`. Null for `post` and for `gate-not-applicable`.
+   */
   gateReason?: string | null;
 }
 
