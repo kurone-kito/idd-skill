@@ -33,9 +33,34 @@ interface PrData {
   mergeStateStatus?: unknown;
 }
 
-interface BranchStateDerivation {
-  branchState: string;
-  syncRecommendation: string;
+/**
+ * Every `branchState` that `deriveBranchState` returns. The schema enum also
+ * names `force-push-exception`, which this classifier never returns.
+ */
+export const DERIVED_BRANCH_STATES = [
+  'clean',
+  'behind-no-conflict',
+  'content-conflict',
+  'dirty',
+  'computing',
+  'unknown',
+] as const;
+
+/**
+ * Every `syncRecommendation` that `deriveBranchState` returns. The schema enum
+ * also names `policy-required-update` and `force-push-exception`, which this
+ * classifier never returns.
+ */
+export const DERIVED_SYNC_RECOMMENDATIONS = [
+  'none',
+  'merge-base',
+  'recheck',
+  'hold-unknown',
+] as const;
+
+export interface BranchStateDerivation {
+  branchState: (typeof DERIVED_BRANCH_STATES)[number];
+  syncRecommendation: (typeof DERIVED_SYNC_RECOMMENDATIONS)[number];
   conflictFiles: string[];
   mergeableSource: string;
   baseAdvancedSinceMergeBase: boolean;
