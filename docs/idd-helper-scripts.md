@@ -4769,10 +4769,12 @@ like `activation-nonce`, because a worker posts it as itself.
 - Command: `node scripts/claim-issue.mjs --issue <issue-number> --apply
   --agent-id <id> --project-status <not-in-use|not-started>`. Both
   `--agent-id` and `--project-status` are required with `--apply`; a
-  missing one is a usage error that names it. `--agent-id` is the agent
-  id the claim is made under. `--project-status` is the caller's
-  statement of the project status part of A5(b), which the helper cannot
-  read.
+  missing one is a usage error that names it. `--apply` also refuses to run
+  while the `GH_REPO` environment variable is set, because gh would then name
+  a repository other than this clone (a usage error, before any check).
+  `--agent-id` is the agent id the claim is made under. `--project-status`
+  is the caller's statement of the project status part of A5(b), which the
+  helper cannot read.
 - The pre-checks run first, and nothing is written unless they all pass.
   Then the helper runs the fresh-claim order of `idd-claim.instructions.md`:
   1. B1 step 1, under one hold of the clone-scoped lock: the primary
@@ -4813,7 +4815,10 @@ like `activation-nonce`, because a worker posts it as itself.
      `precheck-unavailable` when the read fails). Only the label is read:
      the owner-marker log replay is not done, and the report says so with
      `holdCheck: "label"`.
-  5. The claim marker, then the activation nonce. The helper mints the
+  5. The claim marker, then the tokens are recorded again with the nonce
+     (`claim-lock --record-tokens --nonce`, as the claim-lock contract
+     requires; `tokens-record-failed` on failure), then the activation nonce.
+     The helper mints the
      claim id and the nonce, so a rerun is always a new claim attempt. A
      refused or unknown claim write is `claim-post-failed` or
      `recovery-hold`, and the claim is never posted twice. A failed nonce

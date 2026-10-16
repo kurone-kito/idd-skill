@@ -1592,6 +1592,8 @@ interface ApplyScenario {
   tokensAbsent?: boolean;
   /** The first `--acquire` succeeds; every later one collides. */
   acquireFailsAfterFirst?: boolean;
+  /** The first `--record-tokens` succeeds; the second, with the nonce, fails. */
+  recordTokensFailsAfterFirst?: boolean;
 }
 
 interface ApplyRun {
@@ -1685,6 +1687,7 @@ function runApply(
     ...(scenario.initialComments ?? []),
   ];
   let acquireCalls = 0;
+  let recordCalls = 0;
   const labelReads = [...(scenario.labelReads ?? [])];
   const outcomes = new Map<string, PostOutcome[]>(
     Object.entries(scenario.posts ?? {}).map(([type, list]) => [
@@ -1791,7 +1794,17 @@ function runApply(
       return postStub(rest);
     }
     if (script === 'claim-lock.mjs') {
+      if (rest.includes('--record-tokens')) {
+        recordCalls += 1;
+      }
       if (scenario.recordTokensFails && rest.includes('--record-tokens')) {
+        return failed(1);
+      }
+      if (
+        scenario.recordTokensFailsAfterFirst &&
+        rest.includes('--record-tokens') &&
+        recordCalls > 1
+      ) {
         return failed(1);
       }
       if (scenario.acquireFails && rest.includes('--acquire')) {
@@ -2622,3 +2635,69 @@ test('an authoring label that differs only in case is still the hold', () => {
     assert.equal(run.posts.length, 0);
   });
 });
+
+test('the tokens are recorded again, with the nonce, right before the activation-nonce marker', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    const indexes = (predicate: (entry: string) => boolean): number[] =>
+      run.log.flatMap((entry, index) => (predicate(entry) ? [index] : []));
+    const records = indexes((entry) => entry.includes('--record-tokens'));
+    const claim = indexes((entry) =>
+      entry.includes('post-idd-marker.mjs --type claim'),
+    )[0];
+    const nonce = indexes((entry) =>
+      entry.includes('post-idd-marker.mjs --type activation-nonce'),
+    )[0];
+    assert.equal(records.length, 2);
+    assert.ok((records[0] ?? -1) < (claim ?? -1));
+    assert.ok((claim ?? -1) < (records[1] ?? -1));
+    assert.ok((records[1] ?? -1) < (nonce ?? -1));
+    assert.match(run.log[records[1] ?? -1] ?? '', /--nonce/);
+  });
+});
+
+test('a failed re-record before the activation nonce stops after the claim marker, with no nonce written', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { recordTokensFailsAfterFirst: true });
+    const report = assertStopped(run, 'tokens-record-failed');
+    assert.equal(report.claimPosted, true);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.equal(
+      run.posts.some((post) => post.type === 'activation-nonce'),
+      false,
+    );
+  });
+});
+
+test('--apply refuses to run with GH_REPO set, before any check', () => {
+  const previous = process.env.GH_REPO;
+  process.env.GH_REPO = 'someone/else';
+  try {
+    const { result, stdout, record } = runCommand(APPLY_ARGS_FOR_GH_REPO);
+    assert.deepEqual(result, {
+      exitCode: 2,
+      kind: 'usage',
+      message:
+        '--apply refuses to run with GH_REPO set, because gh would name a repository other than this clone; unset GH_REPO',
+    });
+    assert.equal(stdout, '');
+    assert.deepEqual(record.calls, []);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.GH_REPO;
+    } else {
+      process.env.GH_REPO = previous;
+    }
+  }
+});
+
+const APPLY_ARGS_FOR_GH_REPO = [
+  '--issue',
+  String(ISSUE),
+  '--apply',
+  '--agent-id',
+  'claude-test',
+  '--project-status',
+  'not-started',
+];

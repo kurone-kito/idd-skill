@@ -2051,11 +2051,14 @@ function postNonce(state: ApplyState): ApplyOutcome {
       'the nonce write did not report success and the comments cannot be read, so absence is not proven',
     );
   }
-  state.deps.sleepMs(state.settleMs);
+  // Absence was proven just above: retry at once, so no other write can land
+  // between that read and this retry.
   const retry = postMarker(state, args);
   if (retry.status === 0) {
     return applyPass('activation nonce posted on the retry');
   }
+  // An ambiguous retry may become visible after a moment: settle before the read.
+  state.deps.sleepMs(state.settleMs);
   const second = findMarker(state, prefix);
   if (second === 'present') {
     return applyPass('activation nonce is on the issue after the retry');
@@ -2291,6 +2294,9 @@ function runClaimWrites(state: ApplyState): ApplyFailure | null {
     step(state, 'approval-recheck', recheckApproval(state)) ??
     step(state, 'hold-check', checkHoldBeforeClaim(state)) ??
     step(state, 'claim-post', postClaim(state)) ??
+    // claim-lock's contract: the tokens are recorded again, with the nonce, right
+    // before the activation-nonce marker. A failed re-record stops the run.
+    step(state, 'nonce-record', recordTokens(state)) ??
     step(state, 'nonce-post', postNonce(state)) ??
     step(state, 'lock-acquire', acquireLock(state)) ??
     step(state, 'assert', assertClaim(state)) ??
@@ -2487,6 +2493,14 @@ export function runClaimIssue(
       agentId: agentId as string,
       projectStatus: projectStatus as ClaimProjectStatus,
     };
+    // gh honors GH_REPO and would name another repository than the clone whose
+    // worktree this run creates, so the write half refuses to run with it set.
+    if (process.env.GH_REPO) {
+      return usage(
+        '--apply refuses to run with GH_REPO set, because gh would name a repository other than this clone; unset GH_REPO',
+        io,
+      );
+    }
   }
   const outcome = runClaimPrechecks(issueNumber, deps);
   if (outcome.kind === 'transport') {
