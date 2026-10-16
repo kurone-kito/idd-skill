@@ -4930,11 +4930,13 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
      `precheck-unavailable` when the read fails). Only the label is read:
      the owner-marker log replay is not done, and the report says so with
      `holdCheck: "label"`. Then the issue state is read again, with
-     `gh issue view --json state`, so an issue closed during this run is
-     not claimed: a `CLOSED` state stops the run as `issue-closed`, and a
-     read that fails or names neither `OPEN` nor `CLOSED` stops it as
-     `precheck-unavailable`. Each refusal adds one failed
-     `issue-state-recheck` step; an `OPEN` issue adds no step.
+     `gh issue view --json state`, one call before the claim marker. A
+     `CLOSED` state stops the run as `issue-closed`, and a read that fails or
+     names neither `OPEN` nor `CLOSED` stops it as `precheck-unavailable`.
+     Each refusal adds one failed `issue-state-recheck` step; an `OPEN` issue
+     adds no step. A close that lands after this read, before the claim
+     marker posts, is not seen: the read narrows that window to one call but
+     cannot close it.
   5. The claim marker. Then `claim-lock --record-tokens --nonce`, right before
      the activation nonce is posted (`tokens-record-failed` on failure, with
      the claim already posted), then the activation nonce. The helper mints

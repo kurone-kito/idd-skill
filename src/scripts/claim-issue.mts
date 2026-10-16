@@ -2634,8 +2634,9 @@ function runClaimWrites(state: ApplyState): ApplyFailure | null {
     step(state, 'own-worktree-gate', checkOwnWorktreeGate(state)) ??
     step(state, 'hold-check', checkHoldBeforeClaim(state)) ??
     // The issue state is read last, right before the claim marker: an issue
-    // closed during this run is refused here, even though the pre-check read
-    // it as open.
+    // that is already closed here is refused, even though the pre-check read
+    // it as open. A close that lands after this one call is not seen, because
+    // the claim marker is the next write.
     recheckIssueState(state) ??
     step(state, 'claim-post', postClaim(state)) ??
     // The nonce-bearing record comes right before its marker posts (the
