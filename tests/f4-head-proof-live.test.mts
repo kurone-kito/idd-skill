@@ -1004,11 +1004,11 @@ test('the refusal advice for ssh.github.com names the active host, or the settin
   );
   assert.equal(
     originMismatchMessage('origin-owner', 'origin-repo', origin, null),
-    "the current checkout's origin names origin-owner/origin-repo on ssh.github.com, GitHub's SSH endpoint and not an API host; the active GitHub host cannot be read, so set GH_HOST or GITHUB_SERVER_URL to a readable host first, and then use an origin URL on that host",
+    "the current checkout's origin names origin-owner/origin-repo on ssh.github.com, GitHub's SSH endpoint and not an API host; the active GitHub host cannot be read, so set GH_HOST to a readable host, or unset it and set GITHUB_SERVER_URL, and then use an origin URL on that host",
   );
 });
 
-test('a host that GH_HOST cannot name gets advice to use a host it can name', () => {
+test('a host that GH_HOST cannot name gets advice to use the active host, with an example', () => {
   assert.equal(
     originMismatchMessage(
       'origin-owner',
@@ -1016,6 +1016,15 @@ test('a host that GH_HOST cannot name gets advice to use a host it can name', ()
       'git@ho#st:origin-owner/origin-repo.git',
       'github.com',
     ),
-    "the current checkout's origin names origin-owner/origin-repo on ho#st, which GH_HOST cannot name; use an origin URL on a host that it can name",
+    "the current checkout's origin names origin-owner/origin-repo on ho#st, which GH_HOST cannot name; use an origin URL on github.com, for example https://github.com/origin-owner/origin-repo.git",
+  );
+  assert.equal(
+    originMismatchMessage(
+      'origin-owner',
+      'origin-repo',
+      'git@ho#st:origin-owner/origin-repo.git',
+      null,
+    ),
+    "the current checkout's origin names origin-owner/origin-repo on ho#st, which GH_HOST cannot name, and the active GitHub host cannot be read either; set GH_HOST to a readable host, or unset it and set GITHUB_SERVER_URL, and then use an origin URL on that host",
   );
 });
