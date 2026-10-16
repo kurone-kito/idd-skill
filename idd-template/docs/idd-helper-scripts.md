@@ -4275,15 +4275,16 @@ checks that the claim lock of `--worktree` carries this claim ID, and requires
 the live head as its second parent; one parent (a squash or rebase merge) is
 accepted, as in the written procedure; any other count holds with `pr-state`. So
 does a branch with no merged pull request, or with more than one, and a `gh pr
-list` result that reaches its 100-row cap, which may be truncated. The origin,
-worktree, and ref reads, and the spawned claim check, ignore every caller
-variable whose name starts with `GIT_`, in any letter case. The claim-lock read
-keeps its narrower filter, which drops only `GIT_CONFIG*`, `GIT_DIR`,
-`GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_INDEX_FILE`, and `GIT_OBJECT_DIRECTORY`.
-Under `--apply` the claim check and the lock are read once more right before the
-POST, with the same nonce: a changed claim or branch, or a replaced or missing
-lock, is `stop` on `claim-or-lock`, and a reading that cannot be obtained is
-`hold`; nothing is posted either way.
+list` result that reaches its 100-row cap, which may be truncated (preventive;
+no observed incident yet). The origin, worktree, and ref reads, and the spawned
+claim check, ignore every caller variable whose name starts with `GIT_`, in any
+letter case (preventive; no observed incident yet). The claim-lock read keeps
+its narrower filter, which drops only `GIT_CONFIG*`, `GIT_DIR`, `GIT_WORK_TREE`,
+`GIT_COMMON_DIR`, `GIT_INDEX_FILE`, and `GIT_OBJECT_DIRECTORY`. Under `--apply`
+the claim check and the lock are read once more right before the POST, with the
+same nonce: a changed claim or branch, or a replaced or missing lock, is `stop`
+on `claim-or-lock`, and a reading that cannot be obtained is `hold`; nothing is
+posted either way.
 
 The printed `verdict` is `post` (a dry run that would post), `proceed`, `stop`,
 or `hold`, with a `reason` that is `null` for `post` and otherwise a code of
