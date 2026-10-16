@@ -216,7 +216,7 @@ const NEXT_ACTION: Readonly<Record<string, string>> = {
   'post-rejected':
     'Nothing was posted. Fix the cause of the rejection, then rerun the command.',
   'supersede-refused':
-    'Nothing was posted. The named comment is a well-formed or edited proof, and only a malformed proof can be superseded; read the issue comments, then rerun without --supersedes.',
+    'Nothing was posted. The named comment is not a malformed proof of this claim that can be superseded; read the issue comments, then rerun without --supersedes.',
   'supersede-target-unknown':
     'Nothing was posted. No trusted proof of this claim with that comment ID is malformed; check the comment ID, then rerun.',
 };
@@ -424,7 +424,7 @@ function supersedeRefusal(
   if (!target.supersedable) {
     return {
       reason: 'supersede-refused',
-      note: `comment ${supersedes} is a well-formed or edited proof of this claim; only a malformed proof is superseded, so nothing was posted`,
+      note: `comment ${supersedes} is not a malformed proof of this claim that can be superseded, so nothing was posted`,
     };
   }
   if (supersededBy.has(supersedes)) {

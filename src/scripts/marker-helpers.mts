@@ -427,7 +427,7 @@ const OPERATIONAL_MARKER_ENTRIES: OperationalMarker[] = [
       /^<!--\s*idd-f4-head-proof:\s+v2\s+pr=[1-9]\d*\s+claim=(?:(?!<!--|-->)\S)+\s+branch=(?:(?!<!--|-->)\S)+\s+f2=[0-9a-f]{40}\s+branch-tip=[0-9a-f]{40}\s+merge=[0-9a-f]{40}\s+head=[0-9a-f]{40}(?:\s+supersedes=[1-9]\d*)?\s*-->(?:\s*|\s*\n\s*_[^\n]*_\s*)$/i,
     startPattern: /^<!--\s*idd-f4-head-proof:/i,
     malformedPrefixPattern:
-      /^<!--\s*idd-f4-head-proof:\s+v2\s+pr=[1-9]\d*\s+claim=(?:(?!<!--|-->)\S)+\s+branch=(?:(?!<!--|-->)\S)+\s+f2=[0-9a-f]{40}\s+branch-tip=[0-9a-f]{40}\s+merge=[0-9a-f]{40}\s+head=[0-9a-f]{40}(?:\s+supersedes=[1-9]\d*)?\s*-->/i,
+      /^<!--\s*idd-f4-head-proof:\s+v2\s+pr=[1-9]\d*\s+claim=(?:(?!<!--|-->)\S)+\s+branch=(?:(?!<!--|-->)\S)+\s+f2=[0-9a-f]{40}\s+branch-tip=[0-9a-f]{40}\s+merge=[0-9a-f]{40}\s+head=[0-9a-f]{40}(?:\s+supersedes=\S*)?\s*-->/i,
   },
   {
     label: '<!-- review-watermark:',

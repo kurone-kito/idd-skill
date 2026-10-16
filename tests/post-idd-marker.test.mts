@@ -8831,6 +8831,15 @@ test('the registry recognizes a superseding proof body as the F4 head-proof mark
   assert.equal(detectMalformedOperationalMarker(SUPERSEDING_F4_BODY), null);
 });
 
+test('the registry flags a supersedes token with an invalid value as a malformed F4 head-proof marker', () => {
+  const token = SUPERSEDING_F4_BODY.split('\n')[0];
+  for (const value of ['0', '012', 'x', '']) {
+    const body = `${token.replace('supersedes=1234', `supersedes=${value}`)}\n\n_claude-826e09f0: F4 head-proof marker. Do not edit._`;
+    assert.equal(operationalMarkerPrefix(body), null, body);
+    assert.notEqual(detectMalformedOperationalMarker(body), null, body);
+  }
+});
+
 test('CLI: --type f4-head-proof rejects a --supersedes value that is not a positive decimal comment ID', () => {
   for (const value of ['0', '01', 'x']) {
     const stderr = runCliWithPathExpectingFailure(

@@ -412,8 +412,9 @@ names its comment ID and that proof is itself reusable under the rules above.
 Set-aside comments are reported in the helper's `warnings`, and F4 does not
 hold on them. A malformed proof with no such superseding proof still holds
 F4, and an edited proof that still parses is never set aside. The helper
-refuses `--supersedes` for a well-formed or edited proof, and it holds when
-other trusted proofs of this claim remain.
+refuses `--supersedes` for any comment that is not a malformed proof of this
+claim that can be superseded, and it holds when other trusted proofs of this
+claim remain.
 
 If no trusted marker exists, revalidate the claim and local lock before
 posting. First run the REST and commit-object validation below and set

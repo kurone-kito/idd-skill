@@ -1807,7 +1807,7 @@ the review-watermark of the pull request. It posts only when the verdict table
 says post, and prints the verdict, the reason, and the proof values as JSON.
 The command takes no other field flag than the optional --supersedes
 <comment-id> (#4442): the comment ID of a malformed trusted proof of this claim
-that the corrected proof replaces. A well-formed or edited proof is refused,
+that the corrected proof replaces. Any other comment is refused,
 and an unknown ID holds. It refuses --owner, --repo,
 --trusted-marker-logins, and --advisory-bot-logins (the repository is the one the current checkout's origin names, and the
 trusted logins come from the viewer, the environment, and the trusted

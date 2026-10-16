@@ -1833,7 +1833,7 @@ test('--supersedes refuses a well-formed proof, names it, and posts nothing', ()
   );
   assert.ok(
     output.warnings?.some((line) =>
-      line.includes('comment 87 is a well-formed or edited proof'),
+      line.includes('comment 87 is not a malformed proof of this claim'),
     ),
     JSON.stringify(output.warnings),
   );
@@ -1957,6 +1957,24 @@ test('an edited malformed proof is never superseded, and the write naming it is 
     'hold',
     'supersede-refused',
     1,
+  );
+  assert.deepEqual(h.posts, []);
+});
+
+test('--supersedes on a malformed proof with no readable claim is refused, not called well-formed', () => {
+  const h = harness();
+  h.issueComments.push(comment(113, '<!-- idd-f4-head-proof: v2 pr=oops -->'));
+  const output = expectVerdict(
+    runF4HeadProofGate({ ...APPLY, supersedes: 113 }, h.deps),
+    'hold',
+    'supersede-refused',
+    1,
+  );
+  assert.ok(
+    output.warnings?.some((line) =>
+      line.includes('comment 113 is not a malformed proof of this claim'),
+    ),
+    JSON.stringify(output.warnings),
   );
   assert.deepEqual(h.posts, []);
 });
