@@ -960,9 +960,11 @@ This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
   The route passes `--shape child` for every issue. The child shape
   counts paths the same way the orphan shape does, but it does not add
   the orphan-only section requirement (#4434), so a legacy S or M orphan
-  without a `## Candidate files` section does not stop the route. #4064,
-  the motivating overrun, was an orphan issue, and an over-limit orphan
-  still fails under `--shape child`. The route applies only
+  without a `## Candidate files` section passes the effort-limit finding
+  that the route stops on. The child shape's `candidate-files-not-empty`
+  finding still reports that missing section, but the route does not stop
+  on it. #4064, the motivating overrun, was an orphan issue, and an
+  over-limit orphan still fails under `--shape child`. The route applies only
   with a helper runtime. An `instructions-only` installation has no
   helper to measure with, and a manual count would copy the threshold
   values out of their single source, so a session there continues as
