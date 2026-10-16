@@ -1096,3 +1096,28 @@ test('an owned verdict is accepted only with the claim-id-match reason, and any 
     'unreadable',
   );
 });
+
+test('a bare repository record is not a registered worktree, and a linked worktree beside it is', () => {
+  const root = mkdtempSync(join(tmpdir(), 'f4-head-proof-bare-'));
+  try {
+    const bareDir = join(root, 'primary.git');
+    const linked = join(root, 'linked');
+    mkdirSync(bareDir);
+    mkdirSync(linked);
+    const listing = [
+      `worktree ${bareDir}`,
+      'bare',
+      '',
+      '',
+      `worktree ${linked}`,
+      `HEAD ${'1'.repeat(40)}`,
+      `branch refs/heads/${BRANCH}`,
+      '',
+      '',
+    ].join('\0');
+    assert.equal(matchRegisteredWorktree(listing, bareDir), false);
+    assert.equal(matchRegisteredWorktree(listing, linked), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

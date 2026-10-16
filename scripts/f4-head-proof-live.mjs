@@ -60,7 +60,10 @@ export function matchRegisteredWorktree(output, worktree) {
     return false;
   }
   return records.some(
-    (record) => !record.prunable && realpathOrNull(record.path) === target,
+    (record) =>
+      !record.prunable &&
+      !record.bare &&
+      realpathOrNull(record.path) === target,
   );
 }
 function isRegisteredWorktree(worktree) {

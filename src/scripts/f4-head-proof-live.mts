@@ -84,7 +84,10 @@ export function matchRegisteredWorktree(
     return false;
   }
   return records.some(
-    (record) => !record.prunable && realpathOrNull(record.path) === target,
+    (record) =>
+      !record.prunable &&
+      !record.bare &&
+      realpathOrNull(record.path) === target,
   );
 }
 
