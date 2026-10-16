@@ -668,9 +668,10 @@ disposition-evidence or unreplied-comment backstops.
 **Disposition-evidence parity:** F2 in
 `idd-pre-merge.instructions.md` defines
 `soleCauseAckOnlyPostDisposition` and the ack-only override. A missing
-watermark with ack-only evidence follows F2's missing-watermark sequence
-there: refresh the watermark first, then evaluate the override on the
-refreshed snapshot.
+watermark follows F2's missing-watermark sequence there, but only when
+every disposition-evidence blocker is an ack-only thread: refresh the
+watermark first, then evaluate the override on the refreshed snapshot. A
+mixed cause stays on the normal E1 path.
 (`inPlaceEditOnly`/`soleCauseInPlaceEditOnly`, #1313, is a
 stricter subset — not an override path of its own.) A
 verify-then-confirm reply (analysis before the confirmation verb)

@@ -227,8 +227,12 @@ is diagnostic and never changes the verdict.
   Missing-watermark sequence (PR `#4331`, issue `#4366`): when
   `review-currency` returns `missing-watermark` and every blocking
   disposition-evidence item is an ack-only reply to a disposition, clear
-  the missing watermark first. Refresh it directly, as the carve-outs above
-  do, then re-run `pre-merge-readiness` on the refreshed snapshot. Apply the
+  the missing watermark first. Check the full E1 Step 1 snapshot before
+  refreshing: if any `embeddedFindings` entry has `uncoveredCount` above
+  zero, return to E1 instead, because `embeddedFindings` is excluded from
+  `dispositionEvidence` and the refresh would mark that finding handled.
+  Otherwise refresh it directly, as the carve-outs above do, then re-run
+  `pre-merge-readiness` on the refreshed snapshot. Apply the
   ack-only override only if that re-run reports
   `dispositionEvidence.soleCauseAckOnlyPostDisposition` as `true`. A refresh
   adds no disposition, so a `missingRegularComments` entry still blocks: a
