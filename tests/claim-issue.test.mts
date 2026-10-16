@@ -1569,6 +1569,8 @@ type PostOutcome = 'ok' | 'nothing-sent' | 'unknown-landed' | 'unknown-absent';
 
 interface ApplyScenario {
   assigned?: boolean;
+  /** The repository lookup; the default answers with the test repository. */
+  resolveRepository?: () => { owner: string; repo: string };
   /** One entry per authoring-label read, in order; `'fail'` makes the read fail. */
   labelReads?: (string[] | 'fail')[];
   /** Per marker type, the outcome of each post in order; `ok` once exhausted. */
@@ -1891,7 +1893,7 @@ function runApply(
     throw new Error(`unexpected child helper: ${script}`);
   };
 
-  const base = makeRun();
+  const base = makeRun({ resolveRepository: scenario.resolveRepository });
   const deps: ClaimIssueDeps = {
     ...base.deps,
     childScript: (name) => join(SCRIPTS, name),
@@ -2096,6 +2098,25 @@ test('--apply stops before any write when a pre-check is not eligible', () => {
       false,
     );
     assert.equal(existsSync(fixture.worktree), false);
+  });
+});
+
+test('an ineligible apply run prints its gate result even when a second repository lookup would fail', () => {
+  let lookups = 0;
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {
+      assigned: true,
+      resolveRepository: () => {
+        lookups += 1;
+        if (lookups > 1) {
+          throw new Error('gh repo view failed transiently');
+        }
+        return { owner: OWNER, repo: REPO };
+      },
+    });
+    const report = assertStopped(run, 'assigned');
+    assert.equal(report.claimPosted, false);
+    assert.equal(lookups, 1);
   });
 });
 

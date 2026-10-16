@@ -829,6 +829,7 @@ export function runClaimPrechecks(issueNumber, deps) {
   }
   return {
     kind: 'report',
+    repository,
     report: {
       issue: issueNumber,
       eligible: !stopped,
@@ -2287,7 +2288,7 @@ export function runClaimIssue(argv, deps, io) {
     io.stderr(`claim-issue: ${outcome.message}\n`);
     return { exitCode: 1, kind: 'transport', message: outcome.message };
   }
-  const { report } = outcome;
+  const { report, repository } = outcome;
   if (applyInput === null) {
     io.stdout(`${JSON.stringify(report, null, 2)}\n`);
     if (report.eligible) {
@@ -2297,14 +2298,6 @@ export function runClaimIssue(argv, deps, io) {
     const message = `issue ${issueNumber} is not eligible to claim: ${report.reason}${failed?.detail ? ` (${failed.detail})` : ''}`;
     io.stderr(`claim-issue: ${message}\n`);
     return { exitCode: 1, kind: 'gate', message };
-  }
-  let repository;
-  try {
-    repository = deps.resolveRepository();
-  } catch (error) {
-    const message = `could not resolve the repository: ${errorMessage(error)}`;
-    io.stderr(`claim-issue: ${message}\n`);
-    return { exitCode: 1, kind: 'transport', message };
   }
   const applied = report.eligible
     ? runClaimApply(issueNumber, report, repository, applyInput, deps)

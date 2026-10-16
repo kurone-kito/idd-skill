@@ -278,9 +278,17 @@ export interface ClaimIssueDeps {
   mintNonce: () => string;
 }
 
-/** What one run produced: a report, or a failure before any check started. */
+/**
+ * What one run produced: a report with the repository it was read from, or a
+ * failure before any check started. The apply path takes the repository from
+ * here, so it never looks the repository up again after the checks.
+ */
 export type ClaimPrecheckOutcome =
-  | { kind: 'report'; report: ClaimIssueReport }
+  | {
+      kind: 'report';
+      report: ClaimIssueReport;
+      repository: { owner: string; repo: string };
+    }
   | { kind: 'transport'; message: string };
 
 type CheckOutcome =
@@ -1055,6 +1063,7 @@ export function runClaimPrechecks(
   }
   return {
     kind: 'report',
+    repository,
     report: {
       issue: issueNumber,
       eligible: !stopped,
@@ -2692,7 +2701,7 @@ export function runClaimIssue(
     io.stderr(`claim-issue: ${outcome.message}\n`);
     return { exitCode: 1, kind: 'transport', message: outcome.message };
   }
-  const { report } = outcome;
+  const { report, repository } = outcome;
   if (applyInput === null) {
     io.stdout(`${JSON.stringify(report, null, 2)}\n`);
     if (report.eligible) {
@@ -2704,14 +2713,6 @@ export function runClaimIssue(
     }`;
     io.stderr(`claim-issue: ${message}\n`);
     return { exitCode: 1, kind: 'gate', message };
-  }
-  let repository: { owner: string; repo: string };
-  try {
-    repository = deps.resolveRepository();
-  } catch (error) {
-    const message = `could not resolve the repository: ${errorMessage(error)}`;
-    io.stderr(`claim-issue: ${message}\n`);
-    return { exitCode: 1, kind: 'transport', message };
   }
   const applied = report.eligible
     ? runClaimApply(issueNumber, report, repository, applyInput, deps)
