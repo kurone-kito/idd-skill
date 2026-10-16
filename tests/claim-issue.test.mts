@@ -1684,6 +1684,8 @@ interface ApplyScenario {
   closeBeforeClaim?: boolean;
   /** The state re-read before the claim marker fails. */
   stateRecheckFails?: boolean;
+  /** The state re-read before the claim marker answers a state other than OPEN or CLOSED. */
+  stateRecheckMalformed?: boolean;
   /** Every GraphQL edit-state read fails, so no marker can be verified. */
   editStateFails?: boolean;
   /** The repository lookup; the default answers with the test repository. */
@@ -1856,6 +1858,9 @@ function runApply(
       const recheck = args[4] === 'state';
       if (recheck && scenario.stateRecheckFails) {
         return failed(1);
+      }
+      if (recheck && scenario.stateRecheckMalformed) {
+        return ok(JSON.stringify({ state: 'MERGED' }));
       }
       if (scenario.closed || (recheck && scenario.closeBeforeClaim)) {
         return ok(
@@ -2579,7 +2584,23 @@ test('an issue closed after the pre-check is refused before the claim marker, an
 test('a state re-read that fails before the claim marker is precheck-unavailable and posts nothing', () => {
   withApplyFixture((fixture) => {
     const run = runApply(fixture, { stateRecheckFails: true });
-    assertStopped(run, 'precheck-unavailable');
+    const report = assertStopped(run, 'precheck-unavailable');
+    assert.equal(report.claimPosted, false);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.equal(run.posts.length, 0);
+    const recheck = report.steps.find(
+      (step) => step.id === 'issue-state-recheck',
+    );
+    assert.equal(recheck?.status, 'failed');
+    assert.equal(recheck?.reason, 'precheck-unavailable');
+  });
+});
+
+test('a state re-read that names neither OPEN nor CLOSED is precheck-unavailable and posts nothing', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { stateRecheckMalformed: true });
+    const report = assertStopped(run, 'precheck-unavailable');
+    assert.equal(report.claimPosted, false);
     assert.equal(run.posts.length, 0);
   });
 });
