@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -93,7 +94,7 @@ interface Fixture {
  * on `BRANCH` created from `main`, as B1 would leave it.
  */
 function makeFixture(): Fixture {
-  const root = mkdtempSync(join(tmpdir(), 'f4-cleanup-'));
+  const root = mkdtempSync(join(realpathSync.native(tmpdir()), 'f4-cleanup-'));
   tempRoots.push(root);
   const origin = join(root, 'origin.git');
   const seed = join(root, 'seed');
