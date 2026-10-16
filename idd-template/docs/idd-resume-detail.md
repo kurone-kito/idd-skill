@@ -543,11 +543,11 @@ the PR digest remains display state, never proof.
 
 ### Cleanup helper hold codes
 
-`scripts/f4-worktree-branch-cleanup.mjs` (#4370) runs steps 4 to 6 only
-after this proof gives `proceed`. It reads the proof with the marker
-command's dry run and never posts one. Each hold prints its reason code
+`scripts/f4-worktree-branch-cleanup.mjs` (kurone-kito/idd-skill#4370) runs steps
+4 to 6 only after this proof gives `proceed` . It reads the proof with the
+marker command's dry run and never posts one. Each hold prints its reason code
 and the next action below. The codes for steps 4 to 6 are in
-`docs/idd-helper-scripts.md`.
+`docs/idd-helper-scripts.md` .
 
 | Reason                      | Next action                                                                                                                                                                                                                                                        |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
