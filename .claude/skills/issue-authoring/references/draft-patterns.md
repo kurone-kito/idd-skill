@@ -316,7 +316,9 @@ with no observed incident is marked preventive:
 - `## Background` or `## Goal`
 - `## Proposed change`
 - `## Acceptance criteria`
-- optional `## Candidate files` — see
+- `## Candidate files` with at least one path when the effort footer is
+  `S` or `M` (optional for `L`, an absent effort footer, or a malformed
+  one) — see
   [contract.md's Candidate files format](contract.md#candidate-files-format)
   for the exact parse contract before populating it
 - an autopilot-suitability footer at the end of the body (visible

@@ -278,10 +278,11 @@ export function renderDeferBundle(input: DeferBundleInput): DeferBundle {
 
 /**
  * Lint a rendered bundle with the orphan-shape authored-issue audit.
- * `failures` lists `<id>: <detail>` for every failing check. The lint does
- * not apply the effort candidate-file cap; renderDeferBundle enforces it. A
- * markerPrefix that fails the same rule as renderDeferBundle throws a
- * TypeError naming markerPrefix.
+ * `failures` lists `<id>: <detail>` for every failing check. The lint also
+ * applies the orphan effort candidate-file cap (#4434); renderDeferBundle
+ * enforces the same cap and always names at least one path, so a rendered
+ * bundle passes it. A markerPrefix that fails the same rule as
+ * renderDeferBundle throws a TypeError naming markerPrefix.
  */
 export function lintDeferBundle(
   rendered: DeferBundle,
