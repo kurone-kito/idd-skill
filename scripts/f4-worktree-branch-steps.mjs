@@ -76,7 +76,7 @@ export const NEXT_ACTIONS = {
   'claim-activation-unknown':
     'Hold. The activation time of this claim cannot be read. The operator checks the claim record on the issue.',
   'proof-missing':
-    'No trusted proof exists yet. If cleanup had candidates, rerun F4 step 3, whose gate posts the proof. Otherwise run the marker command as a dry run, then with --apply on a post verdict, and rerun this helper.',
+    'No trusted proof exists yet. If cleanup had candidates, rerun F4 step 3, whose gate posts the proof. Otherwise run post-idd-marker --type f4-head-proof as a dry run, then with --apply on a post verdict, and rerun this helper.',
   'proof-unreadable':
     'Hold. The output of the marker dry run could not be read as a verdict. Rerun the dry run and inspect its stderr. Do not proceed.',
   'proof-worktree-missing':
