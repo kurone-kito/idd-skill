@@ -578,8 +578,9 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    removes that content itself, and a backup ref alone does not clear the
    check. The [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof)
    section has the full steps. For a populated submodule, the operator runs
-   `git submodule deinit` after preservation, with the worktree still
-   registered, and the helper is rerun; otherwise the session holds. Before
+   `git -C <path> submodule deinit --all` after preservation, with the
+   worktree still registered, and the helper is rerun; otherwise the session
+   holds. Before
    removal, `cd` to primary; stay; revalidate:
 
    ```sh
@@ -618,8 +619,10 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 6. If GitHub auto-delete is disabled (`delete_branch_on_merge` is false),
    the removal helper deletes the remote branch in its apply run, through
    `delete-remote-branch`, with the verified `PR_HEAD_SHA_F3` as the expected
-   SHA. If that step does not complete, the operator completes it by hand:
-   delete the remote branch per
+   SHA. If that step does not complete, the operator completes it by hand.
+   When the setting could not be read, first confirm it with `gh api
+   repos/{owner}/{repo} --jq .delete_branch_on_merge`; when it is true, step 6
+   is skipped. Then delete the remote branch per
    [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof), with
    `delete-remote-branch`, a dry run first and `--apply` only for
    `would-delete`. Do not rerun the removal helper for step 6, because its
