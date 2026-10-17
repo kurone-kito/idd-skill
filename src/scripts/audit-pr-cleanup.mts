@@ -1189,7 +1189,11 @@ export interface F4GateDecision {
   nextAction: string | null;
   detail: string | null;
   /** The pull request and head the proof names, or null when it names none. */
-  proof: { pr: number | null; head: string | null } | null;
+  proof: {
+    pr: number | null;
+    head: string | null;
+    claim: string | null;
+  } | null;
 }
 
 /** The proof identity of a marker envelope (#4369). */
@@ -1201,6 +1205,7 @@ function readProofIdentity(value: unknown): F4GateDecision['proof'] {
   return {
     pr: typeof fields.pr === 'number' ? fields.pr : null,
     head: typeof fields.head === 'string' ? fields.head.toLowerCase() : null,
+    claim: typeof fields.claim === 'string' ? fields.claim : null,
   };
 }
 
@@ -1474,7 +1479,7 @@ function holdFromDecision(decision: F4GateDecision): CleanupHold {
  */
 function proofBindingHold(
   decision: F4GateDecision,
-  prNumber: number,
+  scope: F4GateScope,
   head: string | null,
 ): CleanupHold | null {
   if (decision.proof === null) {
@@ -1484,11 +1489,18 @@ function proofBindingHold(
       'the proceed verdict names no proof identity',
     );
   }
-  if (decision.proof.pr !== prNumber) {
+  if (decision.proof.pr !== scope.prNumber) {
     return helperHold(
       'conflicting-marker',
       'hold',
-      `the proof names pull request ${decision.proof.pr ?? 'none'}, not ${prNumber}`,
+      `the proof names pull request ${decision.proof.pr ?? 'none'}, not ${scope.prNumber}`,
+    );
+  }
+  if (decision.proof.claim !== scope.claimId) {
+    return helperHold(
+      'conflicting-marker',
+      'hold',
+      `the proof names claim ${decision.proof.claim ?? 'none'}, not ${scope.claimId}`,
     );
   }
   if (head !== null && decision.proof.head !== head.toLowerCase()) {
@@ -1563,14 +1575,14 @@ export function checkF4HeadProofGate(
   };
   const dry = markerDecision(deps, { ...run, apply: false });
   if (dry.verdict === 'proceed') {
-    return proofBindingHold(dry, scope.prNumber, head);
+    return proofBindingHold(dry, scope, head);
   }
   if (dry.verdict !== 'post') {
     return holdFromDecision(dry);
   }
   // A post names the pull request it would prove. Bind it before any apply run,
   // so a proof for another pull request is never posted (#4369).
-  const postBound = proofBindingHold(dry, scope.prNumber, head);
+  const postBound = proofBindingHold(dry, scope, head);
   if (postBound !== null) {
     return postBound;
   }
@@ -1579,13 +1591,13 @@ export function checkF4HeadProofGate(
     return holdFromDecision(posted);
   }
   // The posted proof is bound too, before the re-read may accept it (#4369).
-  const postedBound = proofBindingHold(posted, scope.prNumber, head);
+  const postedBound = proofBindingHold(posted, scope, head);
   if (postedBound !== null) {
     return postedBound;
   }
   const reread = markerDecision(deps, { ...run, apply: false });
   if (reread.verdict === 'proceed') {
-    return proofBindingHold(reread, scope.prNumber, head);
+    return proofBindingHold(reread, scope, head);
   }
   if (reread.verdict === 'post') {
     return helperHold(
@@ -1632,7 +1644,7 @@ export function describeF4HeadProofGate(
   if (decision.verdict === 'proceed' || decision.verdict === 'post') {
     // A dry run reads no head, so only the pull request binds here. The gate
     // binds a post the same way before it posts, so the report must match it.
-    const bound = proofBindingHold(decision, scope.prNumber, null);
+    const bound = proofBindingHold(decision, scope, null);
     if (bound !== null) {
       return { gate: bound.verdict, gateReason: bound.code };
     }

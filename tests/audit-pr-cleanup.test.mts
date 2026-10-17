@@ -3264,6 +3264,22 @@ test('checkF4HeadProofGate: an exit status that disagrees with the verdict is un
   }
 });
 
+test('checkF4HeadProofGate: a proof that names another claim holds as conflicting-marker (#4369)', () => {
+  const gate = fakeGate({
+    markers: [
+      markerJson({
+        verdict: 'proceed',
+        reason: 'reusable',
+        proof: { pr: 7, head: GATE_SHA_A, claim: 'other-claim' },
+      }),
+    ],
+  });
+  const hold = checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, gate.deps);
+
+  assert.equal(hold?.code, 'conflicting-marker');
+  assert.match(hold?.detail ?? '', /claim other-claim, not claim-1/u);
+});
+
 test('checkF4HeadProofGate: a posted proof naming another pull request is never accepted by the re-read (#4369)', () => {
   const gate = fakeGate({
     markers: [
