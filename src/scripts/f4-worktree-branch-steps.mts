@@ -233,11 +233,11 @@ export const NEXT_ACTIONS: Readonly<
   'claim-activation-unknown':
     'Hold. The activation time of this claim cannot be read. The operator checks the claim record on the issue.',
   'proof-missing':
-    'No trusted proof exists yet. If cleanup had candidates, rerun F4 step 3, whose gate posts the proof. Otherwise run post-idd-marker --type f4-head-proof --target issue <issue-number> --claim-id <claim-id> --agent-id <agent-id> --worktree <issue-worktree-path> as a dry run, then add --apply on a post verdict, and rerun this helper.',
+    'No trusted proof exists yet. If cleanup had candidates, rerun F4 step 3, whose gate posts the proof. Otherwise run the profile-selected post-idd-marker --type f4-head-proof command (see docs/idd-helper-scripts.md) with --target issue <issue-number>, --claim-id <claim-id>, --agent-id <agent-id>, and --worktree <issue-worktree-path> as a dry run, then add --apply on a post verdict, and rerun this helper.',
   'proof-unreadable':
     'Hold. The output of the marker dry run could not be read as a verdict. Rerun the dry run and inspect its stderr. Do not proceed.',
   'proof-worktree-missing':
-    'Hold. The claimed worktree is no longer registered, so the proof dry run cannot read the proof. This run removed nothing. If step 5 already removed the worktree, the operator completes step 6 by hand with delete-remote-branch and the expected SHA, and the session continues from step 7 after the operator confirms. Otherwise restore the worktree registration and rerun the removal helper.',
+    'Hold. The claimed worktree is no longer registered, so the proof dry run cannot read the proof. This run removed nothing. If step 5 already removed the worktree, the operator completes step 6 by hand with delete-remote-branch and the expected SHA when delete_branch_on_merge is false, and the session continues from step 7 after the operator confirms. Otherwise restore the worktree registration and rerun the removal helper.',
   'symlink-path':
     'Hold. A path in the worktree or above it is a symlink, or a tracked entry resolves outside the worktree. Nothing ran in that path. The operator inspects the symlink, then fixes or removes it.',
   'fetch-failed':
@@ -261,7 +261,7 @@ export const NEXT_ACTIONS: Readonly<
   'dirty-worktree':
     'Hold. The worktree holds untracked, modified, or ignored files. Nothing was removed. The F4 session preserves that content outside the worktree by hand, including every reproducible configured-command output, then reruns.',
   'submodule-worktree':
-    'Hold. The worktree holds a populated submodule. Nothing was removed. The F4 session preserves that content outside the worktree by hand, then reruns.',
+    'Hold. The worktree holds a populated submodule. Nothing was removed. The F4 session preserves that content outside the worktree by hand. The operator then runs git -C <issue-worktree-path> submodule deinit --all with the worktree still registered, and the helper is rerun.',
   'branch-tip-mismatch':
     'Hold. The local branch tip does not equal the proof branch tip, or the ref is missing while its worktree exists. Nothing was removed. The operator checks the branch state.',
   'local-branch-unmerged-commits':
@@ -269,9 +269,9 @@ export const NEXT_ACTIONS: Readonly<
   'worktree-remove-refused':
     'Failed. git worktree remove refused after the checks passed, so the worktree may be partly changed. The operator inspects it. A rerun reads the proof again and posts nothing.',
   'delete-setting-unreadable':
-    'Hold at step 6. delete_branch_on_merge could not be read as a boolean, and nothing remote was deleted. In a dry run nothing has changed, so rerun it once the setting is readable. In an applied run, steps 4 and 5 have already run, so the operator completes step 6 by hand with delete-remote-branch and the expected SHA, and the session continues from step 7 after the operator confirms. Do not rerun an applied run.',
+    'Hold at step 6. delete_branch_on_merge could not be read as a boolean, and nothing remote was deleted. In a dry run nothing has changed, so rerun it once the setting is readable. In an applied run, steps 4 and 5 have already run. The operator first confirms by hand that delete_branch_on_merge is false: when it is true, step 6 is skipped, because GitHub deletes the branch on merge. Only when it is false does the operator complete step 6 by hand with delete-remote-branch and the expected SHA, and the session continues from step 7 after the operator confirms. Do not rerun an applied run.',
   'remote-delete-unreadable':
-    'Hold at step 6. The output of the remote branch helper could not be read, and nothing remote was deleted. In a dry run nothing has changed, so rerun it. In an applied run, steps 4 and 5 have already run, so the operator completes step 6 by hand with delete-remote-branch and the expected SHA, after reading its output, and the session continues from step 7 after the operator confirms. Do not rerun an applied run.',
+    'Hold at step 6. The output of the remote branch helper could not be read, and nothing remote was deleted. In a dry run nothing has changed, so rerun it. In an applied run, steps 4 and 5 have already run. The operator first confirms by hand that delete_branch_on_merge is false: when it is true, step 6 is skipped, because GitHub deletes the branch on merge. Only when it is false does the operator complete step 6 by hand with delete-remote-branch and the expected SHA, after reading its output, and the session continues from step 7 after the operator confirms. Do not rerun an applied run.',
 };
 
 /** True when `target` is `root` or lies inside it, with no `..` escape. */
