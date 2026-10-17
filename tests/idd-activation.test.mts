@@ -326,13 +326,16 @@ test('activation runs with HOME unset and writes nothing', () => {
   }
 });
 
-test('the user-global entry text stays within its byte limit and names the helper', () => {
+test('the user-global entry names installed activation fallbacks', () => {
   const text = readFileSync(ENTRY_PATH, 'utf8');
   assert.ok(
     Buffer.byteLength(text, 'utf8') <= ENTRY_LIMIT_BYTES,
     `entry text must stay within ${ENTRY_LIMIT_BYTES} bytes`,
   );
   assert.match(text, /idd-activation/);
+  assert.match(text, /~\/\.local\/bin\/idd-activation/);
+  assert.match(text, /~\/\.local\/bin\/idd-activation\.cmd/);
+  assert.doesNotMatch(text, /\$PAYLOAD\/scripts\/idd-activation\.mjs/);
 });
 
 test('the activation CLI prints the JSON verdict for a directory', () => {
