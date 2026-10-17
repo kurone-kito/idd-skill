@@ -2641,15 +2641,16 @@ Behavior:
 
 Use this only when helper runtime is absent. Set `shell` and `command` to the
 exact child argv that would follow `--`; keep the complete command string in
-one value. If `IDD_LOCAL_ADMISSION` is already present, run the child with
-`exec "$shell" -c "$command"` and return its status without taking a lock; the
-helper sets it for admitted children so a nested call uses this same bypass.
-Read `enabled`, `backend`, and raw `maxConcurrent` from
+one value. If `IDD_LOCAL_ADMISSION` is already present, supervise the child
+without taking a lock; the helper sets it for admitted children so a nested
+call uses this same bypass. Direct paths forward signals and reap the child,
+using an isolated process group when the host has the required tools. Both
+failures were reproduced during issue `#4430` review. Read
+`enabled`, `backend`, and raw `maxConcurrent` from
 `localExec.admission` in the repository's `.github/idd/config.json` (defaults:
 `true`, `flock`, and `1`). If repo
-policy sets `enabled: false`, run the command the same way. These direct paths
-replace the fallback shell with the child, so a signal sent to its PID reaches
-the command. Set `wait_seconds` from repository `maxWait` (ISO duration, rounded
+policy sets `enabled: false`, run the command the same way. Set `wait_seconds`
+from repository `maxWait` (ISO duration, rounded
 up to seconds).
 Omitted, invalid, or above-maximum values use the default 7200 seconds
 (`PT2H`); the maximum valid value is 21600 seconds (`PT6H`). If `backend` is
@@ -2666,22 +2667,116 @@ exit `2` if that option is unavailable. Otherwise resolve
 `state` to absolute `XDG_STATE_HOME`, or
 `$HOME/.local/state` when that variable is relative or unset; if neither gives
 an absolute path, refuse with exit `2`. The following Bash-compatible shell
-fragment opens the same per-user lock file as the helper. It disables job
-control before starting `setsid`, so that command can create a new session
-without forking; if the running shell cannot disable job control, the fragment
-refuses before starting the command. It resets the child's SIGINT and SIGTERM
+fragment opens the same per-user lock file as the helper. It installs signal
+handlers before waiting for the lock, then terminates and reaps the active
+`flock` waiter or validation child when cancelled. The locked path disables
+job control before starting `setsid`, so that command can create a new session
+without forking; if the running shell cannot disable job control, it refuses
+before starting the command. It resets the admitted child's SIGINT and SIGTERM
 dispositions before `setsid` so the child does not inherit the background
-shell's ignored SIGINT. The admitted child has its own process group and
-session, with no controlling terminal.
+shell's ignored SIGINT. Direct paths use the same supervisor and isolate the
+process group when the shell can disable job control and `setsid` is available.
 
 ```sh
-run_direct() {
-  exec "$shell" -c "$command"
-  exit $?
+child_pid=
+child_group=false
+child_reset_signals=false
+flock_pid=
+pending_signal=
+lock_fd_open=false
+forward_signal() {
+  signal=$1
+  case $signal in
+    INT) signal_status=130 ;;
+    TERM) signal_status=143 ;;
+  esac
+  trap '' INT TERM
+  if [ -n "$flock_pid" ]; then
+    kill -TERM -- "$flock_pid" 2>/dev/null || :
+    wait "$flock_pid" 2>/dev/null || :
+    flock_pid=
+  fi
+  if [ -n "$child_pid" ]; then
+    child_signal=$signal
+    if [ "$signal" = INT ] && [ "$child_reset_signals" != true ]; then
+      child_signal=TERM
+    fi
+    if [ "$child_group" = true ]; then
+      kill -"$child_signal" -- "-$child_pid" 2>/dev/null || :
+    else
+      kill -"$child_signal" -- "$child_pid" 2>/dev/null || :
+    fi
+    wait "$child_pid" 2>/dev/null || :
+    if [ "$child_group" = true ]; then
+      while kill -0 -- "-$child_pid" 2>/dev/null; do sleep 1; done
+    fi
+    child_pid=
+  fi
+  if [ "$lock_fd_open" = true ]; then
+    flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
+  fi
+  exit "$signal_status"
 }
-if [ "${IDD_LOCAL_ADMISSION+x}" = x ]; then
-  run_direct
-fi
+handle_signal() {
+  signal=$1
+  if [ -n "$flock_pid" ] || [ -n "$child_pid" ]; then
+    forward_signal "$signal"
+  else
+    pending_signal=$signal
+  fi
+}
+trap 'handle_signal INT' INT
+trap 'handle_signal TERM' TERM
+run_child() {
+  run_mode=$1
+  if [ -n "$pending_signal" ]; then forward_signal "$pending_signal"; fi
+  child_pid=
+  child_group=false
+  child_reset_signals=false
+  if [ "$run_mode" = admitted ]; then
+    child_group=true
+    child_reset_signals=true
+    IDD_LOCAL_ADMISSION=1 env --default-signal=INT --default-signal=TERM setsid "$shell" -c "$command" &
+  elif command -v setsid >/dev/null 2>&1; then
+    group_ready=false
+    if set +m 2>/dev/null; then
+      case $- in *m*) ;; *) group_ready=true ;; esac
+    fi
+    if [ "$group_ready" = true ]; then
+      child_group=true
+      if command -v env >/dev/null 2>&1 &&
+         env --default-signal=INT --default-signal=TERM >/dev/null 2>&1; then
+        child_reset_signals=true
+        env --default-signal=INT --default-signal=TERM setsid "$shell" -c "$command" &
+      else
+        setsid "$shell" -c "$command" &
+      fi
+    elif command -v env >/dev/null 2>&1 &&
+         env --default-signal=INT --default-signal=TERM >/dev/null 2>&1; then
+      child_reset_signals=true
+      env --default-signal=INT --default-signal=TERM "$shell" -c "$command" &
+    else
+      "$shell" -c "$command" &
+    fi
+  elif command -v env >/dev/null 2>&1 &&
+       env --default-signal=INT --default-signal=TERM >/dev/null 2>&1; then
+    child_reset_signals=true
+    env --default-signal=INT --default-signal=TERM "$shell" -c "$command" &
+  else
+    "$shell" -c "$command" &
+  fi
+  child_pid=$!
+  if [ -n "$pending_signal" ]; then forward_signal "$pending_signal"; fi
+  if wait "$child_pid"; then status=0; else status=$?; fi
+  child_pid=
+  return "$status"
+}
+run_direct() {
+  run_child direct
+  status=$?
+  exit "$status"
+}
+if [ "${IDD_LOCAL_ADMISSION+x}" = x ]; then run_direct; fi
 # Set these to the values read from repository localExec.admission.
 enabled=true
 backend=flock
@@ -2766,34 +2861,8 @@ if [ -L "$lock" ] || [ ! -f "$lock" ]; then
   exit 2
 fi
 exec 9<"$lock" || { printf 'local-admission: cannot open lock; command not started\n' >&2; exit 2; }
+lock_fd_open=true
 umask "$original_umask" || { printf 'local-admission: cannot restore umask; command not started\n' >&2; exit 2; }
-waited_seconds=0
-while :; do
-  remaining_seconds=$((wait_seconds - waited_seconds))
-  if [ "$remaining_seconds" -le 0 ]; then
-    printf 'local-admission: expired (waited %s seconds); command not started\n' "$wait_seconds" >&2
-    exit 75
-  fi
-  interval_seconds=60
-  if [ "$remaining_seconds" -lt "$interval_seconds" ]; then
-    interval_seconds=$remaining_seconds
-  fi
-  if flock --timeout "$interval_seconds" --conflict-exit-code 75 9; then
-    break
-  else
-    status=$?
-  fi
-  if [ "$status" -ne 75 ]; then
-    printf 'local-admission: flock stopped with status %s before acquiring the lock; command not started\n' "$status" >&2
-    exit 2
-  fi
-  waited_seconds=$((waited_seconds + interval_seconds))
-  if [ "$waited_seconds" -ge "$wait_seconds" ]; then
-    printf 'local-admission: expired (waited %s seconds); command not started\n' "$wait_seconds" >&2
-    exit 75
-  fi
-  printf 'local-admission: waiting (waited %s of %s seconds)\n' "$waited_seconds" "$wait_seconds" >&2
-done
 if ! set +m 2>/dev/null; then
   printf 'local-admission: this shell cannot disable job control; command not started\n' >&2
   flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
@@ -2808,40 +2877,44 @@ case $- in
   *)
     ;;
 esac
-child_pid=
-pending_signal=
-forward_signal() {
-  signal=$1
-  case $signal in
-    INT) signal_status=130 ;;
-    TERM) signal_status=143 ;;
-  esac
-  trap '' INT TERM
-  if [ -n "$child_pid" ]; then
-    kill -"$signal" -- "-$child_pid" 2>/dev/null || :
-    wait "$child_pid" 2>/dev/null || :
-    while kill -0 -- "-$child_pid" 2>/dev/null; do sleep 1; done
-  fi
-  flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
-  exit "$signal_status"
-}
-handle_signal() {
-  signal=$1
-  if [ -n "$child_pid" ]; then
-    forward_signal "$signal"
-  else
-    pending_signal=$signal
-  fi
-}
-trap 'handle_signal INT' INT
-trap 'handle_signal TERM' TERM
-IDD_LOCAL_ADMISSION=1 env --default-signal=INT --default-signal=TERM setsid "$shell" -c "$command" &
-child_pid=$!
 if [ -n "$pending_signal" ]; then forward_signal "$pending_signal"; fi
-if wait "$child_pid"; then status=0; else status=$?; fi
-trap - INT TERM
-child_pid=
+waited_seconds=0
+while :; do
+  remaining_seconds=$((wait_seconds - waited_seconds))
+  if [ "$remaining_seconds" -le 0 ]; then
+    printf 'local-admission: expired (waited %s seconds); command not started\n' "$wait_seconds" >&2
+    exit 75
+  fi
+  interval_seconds=60
+  if [ "$remaining_seconds" -lt "$interval_seconds" ]; then
+    interval_seconds=$remaining_seconds
+  fi
+  flock --timeout "$interval_seconds" --conflict-exit-code 75 9 &
+  flock_pid=$!
+  if [ -n "$pending_signal" ]; then forward_signal "$pending_signal"; fi
+  if wait "$flock_pid"; then
+    flock_pid=
+    break
+  else
+    status=$?
+  fi
+  flock_pid=
+  if [ -n "$pending_signal" ]; then forward_signal "$pending_signal"; fi
+  if [ "$status" -ne 75 ]; then
+    printf 'local-admission: flock stopped with status %s before acquiring the lock; command not started\n' "$status" >&2
+    exit 2
+  fi
+  waited_seconds=$((waited_seconds + interval_seconds))
+  if [ "$waited_seconds" -ge "$wait_seconds" ]; then
+    printf 'local-admission: expired (waited %s seconds); command not started\n' "$wait_seconds" >&2
+    exit 75
+  fi
+  printf 'local-admission: waiting (waited %s of %s seconds)\n' "$waited_seconds" "$wait_seconds" >&2
+done
+run_child admitted
+status=$?
 flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
+lock_fd_open=false
 exit "$status"
 ```
 

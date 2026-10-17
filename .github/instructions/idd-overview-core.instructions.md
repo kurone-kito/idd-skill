@@ -261,13 +261,12 @@ which still stop child selection in Discover.
 
 ## Project commands
 
-**Policy.** Effective keys use profile-selected
-`idd-effective-config --key <path>`; otherwise read only repo
-`.github/idd/config.json`. Repo-only keys: `commands`, `localExec`,
-`skipIssueAuthorApprovalGate`, `maintainerApprovalActorPolicy`,
-`upstreamEscalation`, `forcedHandoff`. Read `mergeGate`, `ciGate`, and
-trusted-base values from PR base. Repo config must pass canonical schema;
-else stop.
+**Policy.** Use profile-selected `idd-effective-config --key <path>`;
+otherwise read repo `.github/idd/config.json`. Repo-only:
+`commands`, `localExec`, `skipIssueAuthorApprovalGate`,
+`maintainerApprovalActorPolicy`, `upstreamEscalation`, `forcedHandoff`.
+Read `mergeGate`, `ciGate`, and trusted-base from PR base; stop if the
+repo config fails canonical schema.
 
 <!-- dprint-ignore -->
 Absent values keep the gate enabled and default approval actors to `owners-and-maintainers-only`.
@@ -286,29 +285,29 @@ Absent values keep the gate enabled and default approval actors to `owners-and-m
 | **orphan-first-policy** | `none` |
 <!-- dprint-ignore-end -->
 
-**Full-profile validation.** Read
-`localExec.admission.testCommand` and `commands` from
-`.github/idd/config.json`; blank/absent is unset. Route all B3/C5, E9, and
-code-caused recovery `fix-validate` runs, D2 `pre-push-validate`, E12
-`post-fix-validate`, and one nonblank `testCommand` through profile-selected
-`idd-local-admission -- <shell> -c <string>`. Do not split or substitute.
+**Full-profile validation.** Read `commands` and
+`localExec.admission.testCommand` from repo `.github/idd/config.json`;
+blank/absent `testCommand` is unset. Route each full `commands.<gate>`
+value intact in one profile-selected
+`idd-local-admission -- <shell> -c <string>` call: `fix-validate`
+(B3/C5, E9, D1 conflict fix, code-caused recovery), D2
+`pre-push-validate`, and E12/Esync `post-fix-validate`. Run nonblank
+`testCommand` as a second admitted call immediately after each suite; use
+no other string for it.
 
-With helper runtime, use only the helper. Without it, `enabled: false`
-runs directly; otherwise use the
-[helper-free fallback](../../docs/idd-helper-scripts.md#helper-free-fallback)
+With helper runtime, use only it. Otherwise `enabled: false` runs directly;
+use the [helper-free fallback](../../docs/idd-helper-scripts.md#helper-free-fallback)
 with `flock` on `PATH`, or run directly with one notice.
 
 **Admission expiry.** Only exit `75` plus stderr
-`local-admission: expired` means no command started. Report; never
-rerun or pass it. Do not apply issue `#1391`'s flakiness rerun or Discover's
+`local-admission: expired` means no command started. Report; never rerun or
+pass it. Do not use issue `#1391`'s flakiness rerun or Discover's
 incomplete-result retry. Bare `75` is command status.
 
-`pre-push-validate` omits auto-fix; on lint failure, run and commit
-`fix-validate`, then rerun it. Commit fix/post-fix edits before push,
-rebase, or clean-tree steps.
+`pre-push-validate` does not auto-fix. On lint failure, run and commit
+`fix-validate`, then rerun it. Commit fixes before push, rebase, or cleanup.
 
-`install-deps` must work in fresh/reused/recreated worktrees without cleanup
-or tracked changes.
+`install-deps` must not add tracked changes.
 
 Judge a command-set run by exit status; in pipes check `${PIPESTATUS[0]}` or
 `pipefail` (#3139).
@@ -316,7 +315,7 @@ Judge a command-set run by exit status; in pipes check `${PIPESTATUS[0]}` or
 **Tool availability:** Prefer Node.js project scripts; else
 `npx <tool>` if Node.js and `npx` are available.
 `npx <tool>` only when `npx` is available and no relevant script exists;
-else `true`. Others absent: `true`.
+else `true`. Others: `true`.
 
 ## Phase routing table
 
