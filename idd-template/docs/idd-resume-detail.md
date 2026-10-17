@@ -475,7 +475,8 @@ hold as an inconsistent worktree state. If both are absent, skip
 inspection/removal; the local branch may also be absent, and if it still
 exists its tip must equal `{branch-tip-SHA}`. If both are present, require
 the local branch to exist and its tip to equal `{branch-tip-SHA}`, then
-run the normal safety inspection. Delete the local branch with
+run the normal safety inspection. The removal helper, not the session,
+performs this next step. Delete the local branch with
 `git branch -d -- "$BRANCH_NAME"` only when it exists; absence is
 already complete. Keep
 the existing unmerged-branch hold path.
