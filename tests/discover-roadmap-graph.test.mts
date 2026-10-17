@@ -751,41 +751,90 @@ test('extractKeywordReferences recognizes a negation term glued to preceding pun
   assert.deepEqual(extractKeywordReferences('per the note,not close #9'), []);
 });
 
-test('extractKeywordReferences stays linear-time and correct on a large keyword-dense standalone line (#1970)', () => {
-  // #1970: `extractKeywordReferences` was quadratic in the number of keyword
-  // occurrences on one line. A standalone declaration of 20,000 clauses is the
-  // dense case that must yield one reference per clause, and it must stay
-  // inside a generous ceiling. Testing once per match would blow far past it.
-  // (#3876: a dense line of prose-separated clauses is a non-standalone line,
-  // so it is covered by the next test.)
-  const clauses = Array.from({ length: 20000 }, (_, i) => `closes #${i + 1}`);
-  const line = clauses.join(', ');
-  const start = performance.now();
-  const refs = extractKeywordReferences(line);
-  const elapsed = performance.now() - start;
-  assert.equal(refs.length, 20000);
-  assert.ok(
-    elapsed < 1000,
-    `expected linear-time completion well under 1000ms, got ${elapsed.toFixed(2)}ms`,
-  );
+function assertKeywordReferenceScaling({
+  name,
+  inputForSize,
+  smallerSize,
+  expectedReferenceCount,
+}: {
+  name: string;
+  inputForSize: (size: number) => string;
+  smallerSize: number;
+  expectedReferenceCount: (size: number) => number;
+}): void {
+  const largerSize = smallerSize * 2;
+  const smallerInput = inputForSize(smallerSize);
+  const largerInput = inputForSize(largerSize);
+  const smallerSamples: number[] = [];
+  const largerSamples: number[] = [];
+
+  const measure = (input: string, size: number, samples: number[]) => {
+    const start = process.cpuUsage();
+    const references = extractKeywordReferences(input);
+    const elapsed = process.cpuUsage(start);
+    samples.push((elapsed.user + elapsed.system) / 1000);
+    assert.equal(references.length, expectedReferenceCount(size));
+  };
+
+  // Measure process CPU time so other test files' CPU load does not skew a
+  // sample. Alternate the order to avoid a consistent run-order effect.
+  // Each size still gets five measurements.
+  for (let sample = 0; sample < 5; sample += 1) {
+    if (sample % 2 === 0) {
+      measure(smallerInput, smallerSize, smallerSamples);
+      measure(largerInput, largerSize, largerSamples);
+    } else {
+      measure(largerInput, largerSize, largerSamples);
+      measure(smallerInput, smallerSize, smallerSamples);
+    }
+  }
+
+  const median = (samples: number[]) => {
+    const value = [...samples].sort((left, right) => left - right)[
+      Math.floor(samples.length / 2)
+    ];
+    if (value === undefined) {
+      throw new Error('expected five timing samples');
+    }
+    return value;
+  };
+  const smallerMedian = median(smallerSamples);
+  const largerMedian = median(largerSamples);
+  const ratio = largerMedian / smallerMedian;
+  const message = [
+    `expected ${name} to scale below 3.0x for sizes ${smallerSize} and ${largerSize}`,
+    `CPU-time medians: ${smallerMedian.toFixed(2)}ms and ${largerMedian.toFixed(2)}ms`,
+    `ratio: ${ratio.toFixed(2)}`,
+  ].join('; ');
+
+  assert.ok(ratio < 3.0, message);
+}
+
+test('extractKeywordReferences scales on a keyword-dense standalone line (#1970)', () => {
+  // A standalone declaration of 20,000 clauses is the dense case that must
+  // yield one reference per clause. (#3876: prose-separated clauses are
+  // covered by the next test.)
+  assertKeywordReferenceScaling({
+    name: 'the keyword-dense standalone line',
+    inputForSize: (size) =>
+      Array.from({ length: size }, (_, i) => `closes #${i + 1}`).join(', '),
+    smallerSize: 10000,
+    expectedReferenceCount: (size) => size,
+  });
 });
 
-test('extractKeywordReferences stays linear-time on a dense non-standalone line (#1970, #3876)', () => {
-  // Eight thousand closing keywords with no separators are prose, not a
-  // standalone declaration, so the line yields no closing edge. The scan must
-  // still finish inside the same ceiling.
-  const line = 'Closes #1 '.repeat(8000);
-  const start = performance.now();
-  const refs = extractKeywordReferences(line);
-  const elapsed = performance.now() - start;
-  assert.equal(refs.length, 0);
-  assert.ok(
-    elapsed < 1000,
-    `expected linear-time completion well under 1000ms, got ${elapsed.toFixed(2)}ms`,
-  );
+test('extractKeywordReferences scales on a dense non-standalone line (#1970, #3876)', () => {
+  // Repeated closing keywords with no separators are prose, not a standalone
+  // declaration, so the line yields no closing edge.
+  assertKeywordReferenceScaling({
+    name: 'the dense non-standalone line',
+    inputForSize: (size) => 'Closes #1 '.repeat(size),
+    smallerSize: 4000,
+    expectedReferenceCount: () => 0,
+  });
 });
 
-test('extractKeywordReferences stays linear-time on keyword matches glued by non-whitespace separators (#1970)', () => {
+test('extractKeywordReferences scales on keyword matches glued by non-whitespace separators (#1970)', () => {
   // #1970 critique pass: the token-window bound alone does not help when
   // many keyword matches are joined by a separator that is not whitespace
   // (e.g. commas) — `/\S+/gu` treats the whole comma-joined run as a
@@ -796,17 +845,12 @@ test('extractKeywordReferences stays linear-time on keyword matches glued by non
   // alternative requires whitespace immediately before the match) closes
   // this specific gap by skipping the slice+test entirely whenever the
   // character right before a keyword isn't whitespace.
-  const line = 'Closes,'.repeat(8000);
-  const start = performance.now();
-  const refs = extractKeywordReferences(line);
-  const elapsed = performance.now() - start;
-  // No "#N" targets follow any "Closes," occurrence, so no references are
-  // produced — this test is about cost, not reference count.
-  assert.equal(refs.length, 0);
-  assert.ok(
-    elapsed < 1000,
-    `expected linear-time completion well under 1000ms, got ${elapsed.toFixed(2)}ms`,
-  );
+  assertKeywordReferenceScaling({
+    name: 'keyword matches glued by non-whitespace separators',
+    inputForSize: (size) => 'Closes,'.repeat(size),
+    smallerSize: 4000,
+    expectedReferenceCount: () => 0,
+  });
 });
 
 test('extractTaskListReferences ignores a checkbox quoted inside a fence (#1204)', () => {
