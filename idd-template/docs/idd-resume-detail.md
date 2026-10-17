@@ -431,7 +431,9 @@ values as well as the F2 watermark and local branch tip. The comment body
 must start with the marker token and include a visible note after it;
 `gh issue comment` and `gh api -f body=` silently
 reject HTML-only operational markers (PR `#3741` review comment
-`#4173965040`). POST a JSON document instead:
+`#4173965040`). POST a JSON document instead. This block is reference only:
+a claimed run posts the proof through the marker command, and without that
+helper the run holds rather than posting by hand:
 
 ```sh
 F4_MARKER_TOKEN=$(printf \
