@@ -616,13 +616,17 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      `local-branch-unmerged-commits`, stop before step 7, keep claim.
 
 6. If GitHub auto-delete is disabled (`delete_branch_on_merge` is false),
+   the removal helper deletes the remote branch in its apply run, through
+   `delete-remote-branch`, with the verified `PR_HEAD_SHA_F3` as the expected
+   SHA. If that step does not complete, the operator completes it by hand:
    delete the remote branch per
-   [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof), by
-   reusing the `delete-remote-branch` helper through the removal helper. Its
-   dry run must report `would-delete` or `already-absent`, and only
-   `would-delete` leads to the deletion. Any other result holds F4. Steps 4
-   to 6 run only through the removal helper; no other tool, WorkTrunk
-   included, runs any of them.
+   [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof), with
+   `delete-remote-branch`, a dry run first and `--apply` only for
+   `would-delete`. Do not rerun the removal helper for step 6, because its
+   proof dry run needs the worktree that step 5 already removed. The session
+   continues from step 7 after the operator confirms. Steps 4 to 6 run only
+   through the removal helper, WorkTrunk included; the session never runs the
+   step 6 command by hand.
 7. After steps 4–6, follow the
    [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof)
    to verify/repair the PR digest before the issue digest. Hold on failed
