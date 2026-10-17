@@ -286,9 +286,8 @@ blank/absent `testCommand` is unset. Route each full `commands.<gate>`
 value intact in one profile-selected
 `idd-local-admission -- <shell> -c <string>` call: `fix-validate`
 (B3/C5, E9, D1 conflict fix, code-caused recovery), D2
-`pre-push-validate`, E12/Esync `post-fix-validate`. Admit
-`testCommand` separately only when a phase invokes it; never append it to a
-named command set or use another string.
+`pre-push-validate`, E12/Esync `post-fix-validate`. Admit it separately
+after each listed command at B3/C5, D2, and E12; skip if included.
 
 With helper runtime, use only it. Otherwise `enabled: false` runs directly;
 use the [helper-free fallback](../../docs/idd-helper-scripts.md#helper-free-fallback)
@@ -299,8 +298,9 @@ with `flock` on `PATH`, or run directly with one notice.
 pass it. Do not use issue `#1391`'s flakiness rerun or Discover's
 incomplete-result retry. Bare `75` is command status.
 
-`pre-push-validate` does not auto-fix. On lint failure, run and commit
-`fix-validate`, then rerun it. Commit fixes before push, rebase, or cleanup.
+`pre-push-validate` does not auto-fix. After lint failure, run
+`fix-validate`, then rerun it. Inspect, stage, and commit its or
+`post-fix-validate`'s formatter output before push.
 
 `install-deps` must not add tracked changes.
 

@@ -2637,6 +2637,15 @@ Behavior:
   through `run-helper`, which forwards no signals. A SIGTERM sent to the
   registered command therefore reaches the admitted command.
 
+### Full-profile validation command order
+
+The full-profile instructions in `idd-overview-core.instructions.md` map
+`commands.fix-validate` to B3/C5, `commands.pre-push-validate` to D2, and
+`commands.post-fix-validate` to E12/Esync. If nonblank
+`localExec.admission.testCommand` is not already run by a named command, admit
+it separately after that command. Inspect, stage, and commit formatter changes
+from `fix-validate` or `post-fix-validate` before publishing the branch.
+
 ### Helper-free fallback
 
 Use this only when helper runtime is absent. Set `shell` and `command` to the
