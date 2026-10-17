@@ -2650,22 +2650,26 @@ policy sets `enabled: false`, run `"$shell" -c "$command"` directly. Set
 `wait_seconds` from repository `maxWait` (ISO duration, rounded up to seconds).
 Omitted, invalid, or above-maximum values use the default 7200 seconds
 (`PT2H`); the maximum valid value is 21600 seconds (`PT6H`). If `backend` is
-`flock` and the stored raw `maxConcurrent` is above `1`, refuse with exit `2`
-before starting the command; the normalizer's clamp does not apply. The raw-cap
-check requires `awk`; if it is unavailable or returns an unexpected status,
-refuse with exit `2` before starting the command. If `backend` is `pueue`, print
-the helper's one notice that it is not implemented and continue with the
-one-slot `flock` path. If `flock` is absent, print the helper's notice and run
-directly before resolving the state root. If `flock` is present but `setsid`
-is not, refuse with exit `2` before starting the command. Otherwise resolve
+`pueue`, print the helper's one notice that it is not implemented and continue
+with the one-slot `flock` path. If `flock` is absent, print the helper's notice
+and run directly before checking the raw cap or resolving the state root. If
+`flock` is present and `backend` is `flock`, refuse with exit `2` when the
+stored raw `maxConcurrent` is above `1`; the normalizer's clamp does not apply.
+This raw-cap check requires `awk`; if it is unavailable or returns an
+unexpected status, refuse with exit `2` before starting the command. If
+`flock` is present but `setsid` is not, refuse with exit `2` before starting
+the command. The fallback also requires `env --default-signal`; refuse with
+exit `2` if that option is unavailable. Otherwise resolve
 `state` to absolute `XDG_STATE_HOME`, or
 `$HOME/.local/state` when that variable is relative or unset; if neither gives
 an absolute path, refuse with exit `2`. The following Bash-compatible shell
 fragment opens the same per-user lock file as the helper. It disables job
 control before starting `setsid`, so that command can create a new session
 without forking; if the running shell cannot disable job control, the fragment
-refuses before starting the command. The admitted child has its own process
-group and session, with no controlling terminal.
+refuses before starting the command. It resets the child's SIGINT and SIGTERM
+dispositions before `setsid` so the child does not inherit the background
+shell's ignored SIGINT. The admitted child has its own process group and
+session, with no controlling terminal.
 
 ```sh
 if [ "${IDD_LOCAL_ADMISSION+x}" = x ]; then
@@ -2678,6 +2682,11 @@ raw_max_concurrent=1
 wait_seconds=7200 # Replace with the validated repository maxWait when set.
 if [ "$backend" = pueue ]; then
   printf 'local-admission: backend "pueue" is not implemented yet; this run takes the flock path with one slot\n' >&2
+fi
+if ! command -v flock >/dev/null 2>&1; then
+  printf 'local-admission: flock is not available on this host; running the command without admission\n' >&2
+  "$shell" -c "$command"
+  exit $?
 fi
 if [ "$backend" = flock ]; then
   if ! command -v awk >/dev/null 2>&1; then
@@ -2695,13 +2704,13 @@ if [ "$backend" = flock ]; then
     fi
   fi
 fi
-if ! command -v flock >/dev/null 2>&1; then
-  printf 'local-admission: flock is not available on this host; running the command without admission\n' >&2
-  "$shell" -c "$command"
-  exit $?
-fi
 if ! command -v setsid >/dev/null 2>&1; then
   printf 'local-admission: setsid is not available on this host; command not started\n' >&2
+  exit 2
+fi
+if ! command -v env >/dev/null 2>&1 ||
+   ! env --default-signal=INT --default-signal=TERM >/dev/null 2>&1; then
+  printf 'local-admission: env cannot reset child signal dispositions; command not started\n' >&2
   exit 2
 fi
 case ${XDG_STATE_HOME:-} in
@@ -2749,65 +2758,82 @@ if [ -L "$lock" ] || [ ! -f "$lock" ]; then
 fi
 exec 9<"$lock" || { printf 'local-admission: cannot open lock; command not started\n' >&2; exit 2; }
 umask "$original_umask" || { printf 'local-admission: cannot restore umask; command not started\n' >&2; exit 2; }
-if flock --timeout "$wait_seconds" --conflict-exit-code 75 9; then
-  if ! set +m 2>/dev/null; then
-    printf 'local-admission: this shell cannot disable job control; command not started\n' >&2
-    flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
-    exit 2
-  fi
-  case $- in
-    *m*)
-      printf 'local-admission: job control remains enabled; command not started\n' >&2
-      flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
-      exit 2
-      ;;
-    *)
-      ;;
-  esac
-  child_pid=
-  pending_signal=
-  forward_signal() {
-    signal=$1
-    case $signal in
-      INT) signal_status=130 ;;
-      TERM) signal_status=143 ;;
-    esac
-    trap '' INT TERM
-    if [ -n "$child_pid" ]; then
-      kill -"$signal" -- "-$child_pid" 2>/dev/null || :
-      wait "$child_pid" 2>/dev/null || :
-      while kill -0 -- "-$child_pid" 2>/dev/null; do sleep 1; done
-    fi
-    flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
-    exit "$signal_status"
-  }
-  handle_signal() {
-    signal=$1
-    if [ -n "$child_pid" ]; then
-      forward_signal "$signal"
-    else
-      pending_signal=$signal
-    fi
-  }
-  trap 'handle_signal INT' INT
-  trap 'handle_signal TERM' TERM
-  IDD_LOCAL_ADMISSION=1 command setsid "$shell" -c "$command" &
-  child_pid=$!
-  if [ -n "$pending_signal" ]; then forward_signal "$pending_signal"; fi
-  if wait "$child_pid"; then status=0; else status=$?; fi
-  trap - INT TERM
-  child_pid=
-  flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
-  exit "$status"
-else
-  status=$?
-  if [ "$status" -eq 75 ]; then
+waited_seconds=0
+while :; do
+  remaining_seconds=$((wait_seconds - waited_seconds))
+  if [ "$remaining_seconds" -le 0 ]; then
     printf 'local-admission: expired (waited %s seconds); command not started\n' "$wait_seconds" >&2
     exit 75
   fi
-  printf 'local-admission: flock stopped with status %s before acquiring the lock; command not started\n' "$status" >&2
+  interval_seconds=60
+  if [ "$remaining_seconds" -lt "$interval_seconds" ]; then
+    interval_seconds=$remaining_seconds
+  fi
+  if flock --timeout "$interval_seconds" --conflict-exit-code 75 9; then
+    break
+  else
+    status=$?
+  fi
+  if [ "$status" -ne 75 ]; then
+    printf 'local-admission: flock stopped with status %s before acquiring the lock; command not started\n' "$status" >&2
+    exit 2
+  fi
+  waited_seconds=$((waited_seconds + interval_seconds))
+  if [ "$waited_seconds" -ge "$wait_seconds" ]; then
+    printf 'local-admission: expired (waited %s seconds); command not started\n' "$wait_seconds" >&2
+    exit 75
+  fi
+  printf 'local-admission: waiting (waited %s of %s seconds)\n' "$waited_seconds" "$wait_seconds" >&2
+done
+if ! set +m 2>/dev/null; then
+  printf 'local-admission: this shell cannot disable job control; command not started\n' >&2
+  flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
   exit 2
 fi
+case $- in
+  *m*)
+    printf 'local-admission: job control remains enabled; command not started\n' >&2
+    flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
+    exit 2
+    ;;
+  *)
+    ;;
+esac
+child_pid=
+pending_signal=
+forward_signal() {
+  signal=$1
+  case $signal in
+    INT) signal_status=130 ;;
+    TERM) signal_status=143 ;;
+  esac
+  trap '' INT TERM
+  if [ -n "$child_pid" ]; then
+    kill -"$signal" -- "-$child_pid" 2>/dev/null || :
+    wait "$child_pid" 2>/dev/null || :
+    while kill -0 -- "-$child_pid" 2>/dev/null; do sleep 1; done
+  fi
+  flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
+  exit "$signal_status"
+}
+handle_signal() {
+  signal=$1
+  if [ -n "$child_pid" ]; then
+    forward_signal "$signal"
+  else
+    pending_signal=$signal
+  fi
+}
+trap 'handle_signal INT' INT
+trap 'handle_signal TERM' TERM
+IDD_LOCAL_ADMISSION=1 env --default-signal=INT --default-signal=TERM setsid "$shell" -c "$command" &
+child_pid=$!
+if [ -n "$pending_signal" ]; then forward_signal "$pending_signal"; fi
+if wait "$child_pid"; then status=0; else status=$?; fi
+trap - INT TERM
+child_pid=
+flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
+exit "$status"
 ```
 
 The timeout branch prints the same expiry line and exits `75` before the child
@@ -2815,7 +2841,8 @@ starts. A child exit `75` is returned without that line. Other `flock` failures
 before acquisition print a diagnostic and exit `2` without starting the child.
 
 Refusals before the command starts exit `2`: a policy file that fails to parse,
-a raw cap above 1 under `flock`, a symlink at `idd-skill` or `local-admission`,
+a raw cap above 1 under `flock`, unavailable signal-reset support, a symlink at
+`idd-skill` or `local-admission`,
 a lock file that is a symlink or not a regular file, or a `flock` that fails
 before it takes the lock.
 
@@ -2826,8 +2853,9 @@ them:
 - A rename over the lock path after the open, or a parent-path swap between the
   directory check and the open. A later caller that opens the path then locks a
   different file, while the held inode stays locked.
-- A process group that does not exit after SIGINT or SIGTERM keeps its
-  admission slot held while the helper or fallback waits for the group to end.
+- Preventive; no observed incident yet. A process group that does not exit
+  after SIGINT or SIGTERM keeps its admission slot held while the helper or
+  fallback waits for the group to end.
 - `IDD_LOCAL_ADMISSION` already set in the environment skips admission. A
   session must not set the variable itself.
 - The slot covers one OS user. A second OS user has another slot, and a run from
