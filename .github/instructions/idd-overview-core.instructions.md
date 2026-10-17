@@ -286,11 +286,11 @@ Absent values keep the gate enabled and default approval actors to `owners-and-m
 | **orphan-first-policy** | `none` |
 <!-- dprint-ignore-end -->
 
-**Full-profile validation.** Read optional
-`localExec.admission.testCommand` from the same
-`.github/idd/config.json` as `commands`; blank/absent is unset. Run complete
-B3/C5 `fix-validate`, D2 `pre-push-validate`, E12 `post-fix-validate`, and
-nonblank `testCommand` strings once via profile-selected
+**Full-profile validation.** Read
+`localExec.admission.testCommand` and `commands` from
+`.github/idd/config.json`; blank/absent is unset. Route all B3/C5, E9, and
+code-caused recovery `fix-validate` runs, D2 `pre-push-validate`, E12
+`post-fix-validate`, and one nonblank `testCommand` through profile-selected
 `idd-local-admission -- <shell> -c <string>`. Do not split or substitute.
 
 With helper runtime, use only the helper. Without it, `enabled: false`

@@ -2612,7 +2612,8 @@ Behavior:
   names the backend, and leaves the stored cap unchanged. The pueue child issue
   replaces this rule when it lands.
 - Where `flock` is not on `PATH` (Windows, and macOS unless it is installed),
-  the command runs directly with one notice. Admission is off on that host.
+  the command runs directly with one notice before the fallback resolves its
+  state root. Admission is off on that host.
 - The lock is `<state>/idd-skill/local-admission/validate.lock`. `<state>` is an
   absolute `XDG_STATE_HOME`, else `~/.local/state`; on Windows, an absolute
   `LOCALAPPDATA`, else `~/AppData/Local`. The directory is a sibling of
@@ -2654,26 +2655,22 @@ before starting the command; the normalizer's clamp does not apply. If
 `backend` is `pueue`, print
 the helper's one notice that it is not implemented and continue with the
 one-slot `flock` path. If `flock` is absent, print the helper's notice and run
-directly. Otherwise resolve `state` to absolute `XDG_STATE_HOME`, or
+directly before resolving the state root. If `flock` is present but `setsid`
+is not, refuse with exit `2` before starting the command. Otherwise resolve
+`state` to absolute `XDG_STATE_HOME`, or
 `$HOME/.local/state` when that variable is relative or unset; if neither gives
 an absolute path, refuse with exit `2`. The following Bash-compatible shell
-fragment opens the same per-user lock file as the helper. It enables
-noninteractive job control to give the admitted child its own process group;
-if the running shell cannot enable job control, the fragment refuses before
-starting the command:
+fragment opens the same per-user lock file as the helper. It disables job
+control before starting `setsid`, so that command can create a new session
+without forking; if the running shell cannot disable job control, the fragment
+refuses before starting the command. The admitted child has its own process
+group and session, with no controlling terminal.
 
 ```sh
 if [ "${IDD_LOCAL_ADMISSION+x}" = x ]; then
   "$shell" -c "$command"
   exit $?
 fi
-case ${XDG_STATE_HOME:-} in
-  /*) state=$XDG_STATE_HOME ;;
-  *) case ${HOME:-} in
-       /*) state=$HOME/.local/state ;;
-       *) printf 'local-admission: no absolute state root; command not started\n' >&2; exit 2 ;;
-     esac ;;
-esac
 # Set these to the values read from repository localExec.admission.
 backend=flock
 raw_max_concurrent=1
@@ -2690,6 +2687,17 @@ if ! command -v flock >/dev/null 2>&1; then
   "$shell" -c "$command"
   exit $?
 fi
+if ! command -v setsid >/dev/null 2>&1; then
+  printf 'local-admission: setsid is not available on this host; command not started\n' >&2
+  exit 2
+fi
+case ${XDG_STATE_HOME:-} in
+  /*) state=$XDG_STATE_HOME ;;
+  *) case ${HOME:-} in
+       /*) state=$HOME/.local/state ;;
+       *) printf 'local-admission: no absolute state root; command not started\n' >&2; exit 2 ;;
+     esac ;;
+esac
 original_umask=$(umask)
 umask 077
 lock_dir="$state/idd-skill/local-admission"
@@ -2729,17 +2737,18 @@ fi
 exec 9<"$lock" || { printf 'local-admission: cannot open lock; command not started\n' >&2; exit 2; }
 umask "$original_umask" || { printf 'local-admission: cannot restore umask; command not started\n' >&2; exit 2; }
 if flock --timeout "$wait_seconds" --conflict-exit-code 75 9; then
-  if ! set -m 2>/dev/null; then
-    printf 'local-admission: this shell cannot enable job control; command not started\n' >&2
+  if ! set +m 2>/dev/null; then
+    printf 'local-admission: this shell cannot disable job control; command not started\n' >&2
     flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
     exit 2
   fi
   case $- in
-    *m*) ;;
-    *)
-      printf 'local-admission: job control is unavailable; command not started\n' >&2
+    *m*)
+      printf 'local-admission: job control remains enabled; command not started\n' >&2
       flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
       exit 2
+      ;;
+    *)
       ;;
   esac
   child_pid=
@@ -2769,7 +2778,7 @@ if flock --timeout "$wait_seconds" --conflict-exit-code 75 9; then
   }
   trap 'handle_signal INT' INT
   trap 'handle_signal TERM' TERM
-  IDD_LOCAL_ADMISSION=1 "$shell" -c "$command" &
+  IDD_LOCAL_ADMISSION=1 command setsid "$shell" -c "$command" &
   child_pid=$!
   if [ -n "$pending_signal" ]; then forward_signal "$pending_signal"; fi
   if wait "$child_pid"; then status=0; else status=$?; fi
