@@ -348,8 +348,8 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    may exit without a recorded reason when cleanup candidates exist. In
    the idd-skill source repository, run the profile-selected helper form
    from `docs/idd-helper-scripts.md` in dry-run mode first; in adopter
-   repositories, skip to the GraphQL fallback below unless the helper
-   scripts were installed.
+   repositories, the GraphQL fallback below serves claim-less runs only. A
+   claimed F4 run without the helper scripts holds F4 instead.
 
    ```sh
    node scripts/audit-pr-cleanup.mjs --pr <pr-number> --dry-run --format table
@@ -475,7 +475,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      `recheck-failed`) listing the blocked candidates and the count,
      then proceed to step 4.
 
-   For the GraphQL fallback (helper unavailable): check
+   For the GraphQL fallback (helper unavailable; claim-less runs only): check
    `viewerCanMinimize` and `isMinimized` before minimizing; skip
    already-minimized comments and ones the viewer cannot minimize.
    Re-validate the active claim before each mutation. Before every
