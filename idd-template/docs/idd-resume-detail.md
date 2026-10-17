@@ -490,8 +490,10 @@ them. Save uncommitted tracked edits as a patch outside the repository, then
 revert those paths. A backup ref holds commits only, so it does not clear the
 check. Make the helper's own `git status` check print nothing, then rerun.
 The helper never removes preserved content itself. For a populated submodule,
-the operator runs `git submodule deinit` or performs the forced removal
-after preservation; the F4 session never runs `git worktree remove --force`. These
+the operator runs `git submodule deinit` after preservation, with the worktree
+still registered, and then the helper is rerun. A forced removal is not an F4
+route: it unregisters the path, so the proof dry run and this helper cannot
+finish afterward. The F4 session never runs `git worktree remove --force`. These
 content refusals are preventive; no observed incident yet.
 
 For step 6, use the profile-selected `delete-remote-branch` helper with

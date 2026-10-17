@@ -573,9 +573,9 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    removes that content itself, and a backup ref alone does not clear the
    check. The [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof)
    section has the full steps. For a populated submodule, the operator runs
-   `git submodule deinit` or performs the forced removal below after
-   preservation; otherwise the session holds. Before removal, `cd` to
-   primary; stay; revalidate:
+   `git submodule deinit` after preservation, with the worktree still
+   registered, and the helper is rerun; otherwise the session holds. Before
+   removal, `cd` to primary; stay; revalidate:
 
    ```sh
    node scripts/resume-claim-routing.mjs --issue <issue-number> \
@@ -588,9 +588,9 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    `claim-id-match-without-independent-owner-evidence`) is incomplete:
    re-run with the flag. A remaining `stop` means do
    not remove the worktree. The helper never passes `--force`, and the F4
-   session never runs `git worktree remove --force`. That forced removal of
-   a submodule leftover is a manual operator action only, taken after the
-   operator preserves the content.
+   session never runs `git worktree remove --force`. A forced removal of a
+   submodule leftover is a manual operator action only, outside F4: it
+   unregisters the path, so this helper cannot finish steps 4 to 6 after it.
    [Removed-cwd](../../docs/idd-helper-scripts.md#f4-branch-failure-routes).
    Resume-safe absence checks and the pre-removal branch-tip check are in
    [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof).
