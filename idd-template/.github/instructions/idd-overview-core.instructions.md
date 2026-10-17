@@ -259,27 +259,18 @@ which still stop child selection in Discover.
 
 ## Project commands
 
-When a phase names a command set, run the corresponding commands.
-**Adapt this section for other projects.**
-
-**Policy and helper spelling.** Read policy keys from the effective policy
-(profile-selected `idd-effective-config --key <path>`; without helper output,
-the repository-local `.github/idd/config.json`, with no user-global layers),
-except `commands`,
+**Policy.** Effective keys: profile-selected
+`idd-effective-config --key <path>`; if unavailable, use only repo
+`.github/idd/config.json`. Repo keys:
+`commands`,
 `skipIssueAuthorApprovalGate`, `maintainerApprovalActorPolicy`,
-`upstreamEscalation`, and `forcedHandoff`, which stay repository-local.
-Merge-gate reads (`mergeGate`, `ciGate`) and trusted-base reads stay on
-the PR's base ref. The command entries below (`install-deps` and the three
-validation entries) are read from the `commands` object of
-`.github/idd/config.json`, which must validate against
-the canonical schema at
-<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>. If it is
-missing or invalid, stop and report. Absent values keep the gate
-enabled and default approval actors to
+`upstreamEscalation`, and `forcedHandoff`. Read `mergeGate`, `ciGate`, and
+trusted-base values from PR base. `commands` must pass the canonical
+schema; missing/invalid config stops.
+Absent values keep the gate enabled and default approval actors to
 `owners-and-maintainers-only`.
-`node scripts/<name>.mjs` examples are the `vendored-node` spelling; other
-profiles use the forms in `docs/idd-helper-scripts.md`
-(Helper Runtime Profiles and Profile Wiring Surface).
+`node scripts/<name>.mjs` means `vendored-node`; other profiles:
+`docs/idd-helper-scripts.md`.
 
 <!-- dprint-ignore-start -->
 | Name | Entries |
@@ -292,24 +283,35 @@ profiles use the forms in `docs/idd-helper-scripts.md`
 | **orphan-first-policy** | `none` |
 <!-- dprint-ignore-end -->
 
-`pre-push-validate` omits auto-fix. If lint fails, run
-**fix-validate**, commit, then re-run **pre-push-validate**.
+**Full-profile validation.** Once via profile-selected
+`idd-local-admission -- <shell> -c <string>`, run the complete B3/C5
+`fix-validate`, D2 `pre-push-validate`, E12 `post-fix-validate`, and
+nonblank repo `localExec.admission.testCommand` strings. Blank/absent is
+unset; do not substitute a suite command.
 
-If **fix-validate**/**post-fix-validate** changes files, stage and
-commit before any push, rebase, or clean-tree step.
+Helper off: use the documented per-user `flock` lock if `flock` is on
+`PATH`; otherwise run and print one notice. Helper on: use helper only.
 
-`install-deps` must be idempotent: re-running it in fresh, reused, or
-recreated worktrees must not need manual cleanup or leave unexpected
-tracked changes.
+**Admission expiry.** Only exit `75` plus stderr
+`local-admission: expired` means no start. Report; do not rerun or pass it.
+No Issue `#1391` flakiness rerun or Discover incomplete-result retry.
+Bare `75` is command status.
 
-Judge a command-set run by exit status; when piping, check
-`${PIPESTATUS[0]}` or `pipefail` because filters can't prove success
-(#3139).
+`pre-push-validate` omits auto-fix: on lint failure run `fix-validate`,
+commit, then rerun it. Stage and commit fix/post-fix changes before push,
+rebase, or clean-tree steps.
 
-**Tool availability**: run commands only when tools exist. For Node.js,
-prefer project scripts; use `npx <tool>` if Node.js and `npx` are available
-and no relevant script exists; else use `true`. For other tools, use
-`true` when absent.
+`install-deps` must work in fresh, reused, and recreated worktrees without
+manual cleanup or unexpected tracked changes.
+
+Judge a command-set run by exit status; in pipes check `${PIPESTATUS[0]}`
+or `pipefail` (#3139).
+
+**Tool availability:** Prefer Node.js project scripts; else
+`npx <tool>` if Node.js and `npx` are available.
+
+`npx <tool>` only when `npx` is available and no relevant script exists;
+otherwise `true`. Other absent tools: `true`.
 
 ## Phase routing table
 
