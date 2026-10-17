@@ -776,8 +776,13 @@ function assertKeywordReferenceScaling({
     assert.equal(references.length, expectedReferenceCount(size));
   };
 
+  // Warm both input sizes before recording timings so V8's first-use work
+  // does not disproportionately affect the smaller median.
+  measure(smallerInput, smallerSize, []);
+  measure(largerInput, largerSize, []);
+
   // Measure process CPU time so other test files' CPU load does not skew a
-  // sample. Alternate the order to avoid a consistent run-order effect.
+  // sample. Alternate order to avoid a consistent run-order effect.
   // Each size still gets five measurements.
   for (let sample = 0; sample < 5; sample += 1) {
     if (sample % 2 === 0) {
@@ -818,18 +823,18 @@ test('extractKeywordReferences scales on a keyword-dense standalone line (#1970)
     name: 'the keyword-dense standalone line',
     inputForSize: (size) =>
       Array.from({ length: size }, (_, i) => `closes #${i + 1}`).join(', '),
-    smallerSize: 10000,
+    smallerSize: 20000,
     expectedReferenceCount: (size) => size,
   });
 });
 
 test('extractKeywordReferences scales on a dense non-standalone line (#1970, #3876)', () => {
-  // Repeated closing keywords with no separators are prose, not a standalone
-  // declaration, so the line yields no closing edge.
+  // A leading prose prefix and repeated closing keywords without separators
+  // make this prose, not a standalone declaration, so it yields no edge.
   assertKeywordReferenceScaling({
     name: 'the dense non-standalone line',
-    inputForSize: (size) => 'Closes #1 '.repeat(size),
-    smallerSize: 4000,
+    inputForSize: (size) => `Context: ${'Closes #1 '.repeat(size)}`,
+    smallerSize: 32000,
     expectedReferenceCount: () => 0,
   });
 });
@@ -848,7 +853,7 @@ test('extractKeywordReferences scales on keyword matches glued by non-whitespace
   assertKeywordReferenceScaling({
     name: 'keyword matches glued by non-whitespace separators',
     inputForSize: (size) => 'Closes,'.repeat(size),
-    smallerSize: 4000,
+    smallerSize: 8000,
     expectedReferenceCount: () => 0,
   });
 });
