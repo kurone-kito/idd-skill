@@ -2651,8 +2651,9 @@ policy sets `enabled: false`, run `"$shell" -c "$command"` directly. Set
 Omitted, invalid, or above-maximum values use the default 7200 seconds
 (`PT2H`); the maximum valid value is 21600 seconds (`PT6H`). If `backend` is
 `flock` and the stored raw `maxConcurrent` is above `1`, refuse with exit `2`
-before starting the command; the normalizer's clamp does not apply. If
-`backend` is `pueue`, print
+before starting the command; the normalizer's clamp does not apply. The raw-cap
+check requires `awk`; if it is unavailable or returns an unexpected status,
+refuse with exit `2` before starting the command. If `backend` is `pueue`, print
 the helper's one notice that it is not implemented and continue with the
 one-slot `flock` path. If `flock` is absent, print the helper's notice and run
 directly before resolving the state root. If `flock` is present but `setsid`
@@ -2678,9 +2679,21 @@ wait_seconds=7200 # Replace with the validated repository maxWait when set.
 if [ "$backend" = pueue ]; then
   printf 'local-admission: backend "pueue" is not implemented yet; this run takes the flock path with one slot\n' >&2
 fi
-if [ "$backend" = flock ] && awk -v cap="$raw_max_concurrent" 'BEGIN { exit !(cap + 0 > 1) }'; then
-  printf 'local-admission: the flock backend admits one command at a time, but localExec.admission.maxConcurrent is %s; command not started\n' "$raw_max_concurrent" >&2
-  exit 2
+if [ "$backend" = flock ]; then
+  if ! command -v awk >/dev/null 2>&1; then
+    printf 'local-admission: awk is not available for the raw maxConcurrent check; command not started\n' >&2
+    exit 2
+  fi
+  if awk -v cap="$raw_max_concurrent" 'BEGIN { exit !(cap + 0 > 1) }'; then
+    printf 'local-admission: the flock backend admits one command at a time, but localExec.admission.maxConcurrent is %s; command not started\n' "$raw_max_concurrent" >&2
+    exit 2
+  else
+    cap_check_status=$?
+    if [ "$cap_check_status" -ne 1 ]; then
+      printf 'local-admission: could not verify raw maxConcurrent; command not started\n' >&2
+      exit 2
+    fi
+  fi
 fi
 if ! command -v flock >/dev/null 2>&1; then
   printf 'local-admission: flock is not available on this host; running the command without admission\n' >&2
