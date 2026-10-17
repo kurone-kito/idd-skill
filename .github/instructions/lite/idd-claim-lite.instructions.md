@@ -282,10 +282,9 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
    after the note, or a malformed note grammar makes the whole comment
    unrecognized as a live claim event.
 
-5. **Every fresh activation** (fresh claim, takeover, legacy migration,
-   or forced-handoff adopt-verbatim) also posts an activation-nonce —
-   never for a plain heartbeat. Record it with the same
-   `--record-tokens` invocation as step 2 plus `--nonce <nonce>`
+5. **Every fresh activation** (fresh claim, takeover, legacy migration, or
+   forced-handoff adopt-verbatim) posts an activation-nonce; heartbeats
+   skip it. Record it with `claim-lock --record-tokens --nonce <nonce>`
    (same `<path>`) first:
 
    ```sh
@@ -304,14 +303,14 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
    winner is the lexicographically earliest `{nonce}`.
 
 6. **Fresh claim with no inheritable branch: lock and assert before
-   verification.** On the linked worktree only, run the lock acquire and
-   `--read-tokens` (`instructions-only`: written checks replace these
-   helpers). After
-   `claim.verifySettleDelay`, run
+   verification.** On the linked worktree, repeat
+   `claim-lock --record-tokens --nonce` for the same path and nonce,
+   then acquire and `--read-tokens` (`instructions-only`: written
+   checks). After `claim.verifySettleDelay`, run
    `resume-claim-routing.mjs` with `--assert`, `--issue`, `--claim-id`,
    `--nonce`, and `--worktree`; it must return `already_owned`/`keep`, and
-   that post-acquire result alone counts. Any other result: claim contested;
-   apply Claim verification step 5, then STOP before the digest.
+   that post-acquire result alone counts. Any other result: claim
+   contested; follow Claim verification step 5; STOP before digest.
 
 ## Lost-claim cleanup (`lost-claim-cleanup`)
 
