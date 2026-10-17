@@ -4020,7 +4020,7 @@ test("actionability passes when a fenced example's bullets are path-like (not ob
   assert.equal(result.pass, true);
 });
 
-test('actionability is unaffected when ## Candidate files is absent entirely (legitimate orphan omission)', () => {
+test('actionability is unaffected when ## Candidate files is absent entirely (the audit checks an S or M orphan section)', () => {
   const result = checkActionability({
     issue: {
       ...BASE_ISSUE,

@@ -48,6 +48,7 @@
     "idd-effective-config": "./bin/idd-effective-config.mjs",
     "idd-emit-marker": "./bin/idd-emit-marker.mjs",
     "idd-external-check-waiver": "./bin/idd-external-check-waiver.mjs",
+    "idd-f4-worktree-branch-cleanup": "./bin/idd-f4-worktree-branch-cleanup.mjs",
     "idd-force-handoff": "./bin/idd-force-handoff.mjs",
     "idd-forced-handoff-marker": "./bin/idd-forced-handoff-marker.mjs",
     "idd-helper-bundle-manifest": "./bin/idd-helper-bundle-manifest.mjs",

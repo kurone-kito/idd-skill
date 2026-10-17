@@ -1056,6 +1056,18 @@
       "glob": "**/idd-review-fix.instructions.md",
       "pattern": "unanswered\\s+ones\\s+do\\s+not\\s+block\\s+merge",
       "message": "Unanswered advisory items block merge until each one is dispositioned, within the advisory-item scope in docs/idd-helper-scripts.md; do not restore the old 'do not block merge' sentence."
+    },
+    {
+      "id": "orphan-candidate-files-child-only-wording",
+      "glob": "**/*.md",
+      "pattern": "checks only the child shape",
+      "message": "The effort candidate-file limit checks the child and orphan shapes (issue #4434); do not restate it as child-only."
+    },
+    {
+      "id": "route-other-shape-not-applicable-wording",
+      "glob": "**/*.md",
+      "pattern": "reports any other shape as not applicable",
+      "message": "The effort candidate-file check no longer reports every shape other than child as not applicable (issue #4434); restate the route rationale instead."
     }
   ],
   "rootMarkdownAllowlist": {

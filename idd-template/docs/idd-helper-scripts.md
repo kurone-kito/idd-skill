@@ -319,24 +319,24 @@ and `review-comment-origin.mjs` also exit `0` with no envelope when
 invoked with no arguments, because that invocation is a successful
 default run rather than a usage error.
 
-| Helper                               | `usage`                                                                                                                   | `not-found` / `transport`                          | `gate`                                         | `internal`              |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ---------------------------------------------- | ----------------------- |
-| `advisory-comment-debounce.mjs`      | unknown flag exits `1`; missing `--pr` or `--triggered-at` exits `2`                                                      | a `gh` failure collecting comment events           | —                                              | an unexpected exception |
-| `advisory-convergence.mjs`           | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving review state              | `--assert` when the verdict is not ready       | an unexpected exception |
-| `advisory-wait-state.mjs`            | missing `--pr`, an unknown flag, an invalid `--wait` or `--poll-interval`, or `--now` with `--wait` (exit `1`)            | a `gh` failure resolving advisory wait state       | —                                              | an unexpected exception |
-| `ci-wait-policy.mjs`                 | an unknown flag (exit `1`); no arguments is a successful exit `0`                                                         | a `gh` failure resolving a `--run-id`              | —                                              | an unexpected exception |
-| `rerun-advisory-convergence.mjs`     | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving rerun state               | `--apply` reports a per-instance failure       | an unexpected exception |
-| `review-activity-snapshot.mjs`       | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving review activity           | —                                              | an unexpected exception |
-| `review-comment-origin.mjs`          | an unknown flag (exit `1`); no arguments is a successful exit `0`                                                         | —                                                  | —                                              | an unexpected exception |
-| `review-disposition-verify.mjs`      | missing or invalid `--items`, or an unknown flag (exit `1`)                                                               | —                                                  | —                                              | an unexpected exception |
-| `resolve-review-thread.mjs`          | missing `--pr` or a target (`--comment-id`, or `--review-id` with `--item-title`), or an unknown flag (exit `1`)          | a `gh` failure resolving the review thread         | `--apply` cannot complete the mutation         | an unexpected exception |
-| `disposition-non-review-notices.mjs` | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving notices                   | `--apply` posts nothing or loses the claim     | an unexpected exception |
-| `branch-conflict-state.mjs`          | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving the pull request          | —                                              | an unexpected exception |
-| `idd-merge-execute.mjs`              | missing `--pr` or `--claim-id` (exit `1`); an unrecognized flag is ignored and that same missing-`--pr` check still fires | a `gh` failure during collection or merge          | a gate refuses the merge                       | an unexpected exception |
-| `audit-pr-cleanup.mjs`               | an unknown flag or a bad flag combination (exit `2`)                                                                      | a `gh` failure resolving the repository (exit `2`) | a batch report contains a failed PR (exit `1`) | an unexpected exception |
-| `merged-pr-feedback-sweep.mjs`       | an unknown flag (exit `1`)                                                                                                | a `gh` failure resolving the repository            | —                                              | an unexpected exception |
-| `external-check-waiver.mjs`          | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving waiver state              | the waiver verdict is not applicable           | an unexpected exception |
-| `local-validation-evidence.mjs`      | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving evidence                  | the evidence verdict is not applicable         | an unexpected exception |
+| Helper                               | `usage`                                                                                                                   | `not-found` / `transport`                          | `gate`                                                                                                                                                                                                                  | `internal`              |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `advisory-comment-debounce.mjs`      | unknown flag exits `1`; missing `--pr` or `--triggered-at` exits `2`                                                      | a `gh` failure collecting comment events           | —                                                                                                                                                                                                                       | an unexpected exception |
+| `advisory-convergence.mjs`           | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving review state              | `--assert` when the verdict is not ready                                                                                                                                                                                | an unexpected exception |
+| `advisory-wait-state.mjs`            | missing `--pr`, an unknown flag, an invalid `--wait` or `--poll-interval`, or `--now` with `--wait` (exit `1`)            | a `gh` failure resolving advisory wait state       | —                                                                                                                                                                                                                       | an unexpected exception |
+| `ci-wait-policy.mjs`                 | an unknown flag (exit `1`); no arguments is a successful exit `0`                                                         | a `gh` failure resolving a `--run-id`              | —                                                                                                                                                                                                                       | an unexpected exception |
+| `rerun-advisory-convergence.mjs`     | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving rerun state               | `--apply` reports a per-instance failure                                                                                                                                                                                | an unexpected exception |
+| `review-activity-snapshot.mjs`       | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving review activity           | —                                                                                                                                                                                                                       | an unexpected exception |
+| `review-comment-origin.mjs`          | an unknown flag (exit `1`); no arguments is a successful exit `0`                                                         | —                                                  | —                                                                                                                                                                                                                       | an unexpected exception |
+| `review-disposition-verify.mjs`      | missing or invalid `--items`, or an unknown flag (exit `1`)                                                               | —                                                  | —                                                                                                                                                                                                                       | an unexpected exception |
+| `resolve-review-thread.mjs`          | missing `--pr` or a target (`--comment-id`, or `--review-id` with `--item-title`), or an unknown flag (exit `1`)          | a `gh` failure resolving the review thread         | `--apply` cannot complete the mutation                                                                                                                                                                                  | an unexpected exception |
+| `disposition-non-review-notices.mjs` | missing `--pr`, an unknown flag, or a malformed `--comment-id` (exit `1`)                                                 | a `gh` failure resolving notices                   | `--apply` posts nothing or loses the claim; a `--comment-id` that is not a planned notice, names a summary acceptance, or skips an older undispositioned notice of its bot, refuses the run before any write (exit `1`) | an unexpected exception |
+| `branch-conflict-state.mjs`          | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving the pull request          | —                                                                                                                                                                                                                       | an unexpected exception |
+| `idd-merge-execute.mjs`              | missing `--pr` or `--claim-id` (exit `1`); an unrecognized flag is ignored and that same missing-`--pr` check still fires | a `gh` failure during collection or merge          | a gate refuses the merge                                                                                                                                                                                                | an unexpected exception |
+| `audit-pr-cleanup.mjs`               | an unknown flag or a bad flag combination (exit `2`)                                                                      | a `gh` failure resolving the repository (exit `2`) | a report contains a failed or held PR (exit `1`)                                                                                                                                                                        | an unexpected exception |
+| `merged-pr-feedback-sweep.mjs`       | an unknown flag (exit `1`)                                                                                                | a `gh` failure resolving the repository            | —                                                                                                                                                                                                                       | an unexpected exception |
+| `external-check-waiver.mjs`          | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving waiver state              | the waiver verdict is not applicable                                                                                                                                                                                    | an unexpected exception |
+| `local-validation-evidence.mjs`      | missing `--pr`, or an unknown flag (exit `1`)                                                                             | a `gh` failure resolving evidence                  | the evidence verdict is not applicable                                                                                                                                                                                  | an unexpected exception |
 
 ### Migrated helpers (discover and claim batch)
 
@@ -443,6 +443,7 @@ outcome path.
 | `provider-outage-park.mjs`           | missing `--service`/`--agent-id`/`--claim-id`, an invalid `--pr`/`--issue`, `--park` and `--parked-issues` together, or an unknown flag (exit `1`)                                                                                                                                                          | a `gh` failure resolving the repository                                                                                                                                                 | `--park` reports an ineligible park (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | an unexpected exception                                                                                                                                                                                                     |
 | `idd-doctor.mjs`                     | an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                  | a `gh` failure reached during a live check                                                                                                                                              | the report contains at least one error (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception                                                                                                                                                                                                     |
 | `idd-delete-remote-branch.mjs`       | missing/empty `--branch`, missing/invalid `--expected-sha`, or an unknown flag (exit `1`)                                                                                                                                                                                                                   | —                                                                                                                                                                                       | invalid ref, unreadable remote/default-branch state, expected-SHA mismatch, refused default branch, failed delete, or unconfirmed deletion (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | an unexpected exception                                                                                                                                                                                                     |
+| `idd-f4-worktree-branch-cleanup.mjs` | missing `--issue`, `--claim-id`, `--nonce`, or `--agent-id`, a relative `--worktree`, a run outside the primary worktree, or an unknown flag (exit `1`)                                                                                                                                                     | a failed `gh` read, reported as a hold (exit `1`)                                                                                                                                       | a hold or failed verdict (exit `1`), such as `claim-lost`, `proof-missing`, or `dirty-worktree`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | an exception from a dependency, reported as a failed step (exit `1`)                                                                                                                                                        |
 | `idd-claimed-push.mjs`               | missing or invalid `--issue`, missing `--claim-id`, an empty `--nonce`, or an unknown flag (exit `1`)                                                                                                                                                                                                       | —                                                                                                                                                                                       | a refused or failed step: the claim assert, the location check, a dirty tree, the gate, the second assert, or the push (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception                                                                                                                                                                                                     |
 | `idd-onboard.mjs`                    | missing/conflicting mode flags, a stage-foreign flag, `--import`/`--verify` missing `--source`, `--record-policy` missing `--transcript`, `--install-user-global`/`--uninstall` with a flag outside their whitelist or an invalid `--harness` list, an unknown argument, or a missing flag value (exit `2`) | a `gh` failure reached during any stage (exit `2`)                                                                                                                                      | `--substitute`/`--import`/`--verify` report a blocking verdict, `--hear`/`--record-policy` report a schema-invalid transcript, or `--install-user-global`/`--uninstall` refuse or fail (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                | an environment/config issue (e.g. `--substitute`'s own core file set resolution, path confinement) or any other unexpected exception (exit `2`)                                                                             |
 | `helper-runtime-manifest.mjs`        | an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                  | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception                                                                                                                                                                                                     |
@@ -3177,6 +3178,22 @@ The adopted helper boundaries are intentionally narrow:
   (dry-run); add `--apply --claim-issue <n> --claim-id <id>` to post.
   Pass `--advisory-bot-logins` / `--trusted-marker-logins` to override the
   defaults.
+- `--comment-id <id>` (repeatable; kurone-kito/idd-skill#4437) limits the
+  dry run or `--apply` to the listed planned notices, and the output keeps
+  only their entries. A listed notice that is already dispositioned is
+  reported as skipped and never posted again. Any other listed ID refuses
+  the whole run before any write, with exit `1`, and the message names the
+  ID. A summary walkthrough acceptance is not a notice, so a listed one is
+  refused the same way and is left to the unfiltered run. Pairing is
+  count-based and oldest first by activity time, so when a bot has
+  undispositioned notices, every older one must be listed too: a listed notice
+  that would leave an older undispositioned notice of the same bot unlisted is
+  refused, and the message names that older notice. Otherwise the gate would
+  attach the posted disposition to the older notice and leave the selected one
+  outstanding. The order of the flags does not matter. Pairing counts by
+  position, not by source id, and the unfiltered plan covers a bot's notices
+  and summaries in activity time too, so an edited comment counts as later
+  there as well (found in review of kurone-kito/idd-skill#4445).
 - A rate-limit/usage-limit notice this helper dispositions can coexist
   with a passing GitHub _check_ from the same bot -- the check is a
   liveness signal only, not confirmation of a genuine review against
@@ -4303,10 +4320,13 @@ verdict and the proof values as JSON.
 
 ```sh
 node scripts/post-idd-marker.mjs --type f4-head-proof --target issue <n> \
-  --claim-id <id> --agent-id <id> --worktree <path> [--apply]
+  --claim-id <id> --agent-id <id> --worktree <path> [--supersedes <comment-id>] [--apply]
 ```
 
-The command takes only those flags. Every proof value is derived: the branch
+The command takes only those flags. The optional `--supersedes <comment-id>`
+(#4442) names the malformed trusted proof of this claim that a corrected proof
+replaces; a comment that is not such a proof is refused, and an unknown ID
+holds, so nothing is posted in either case. Every proof value is derived: the branch
 from the verified active claim, the pull request from the claim's branch
 (`gh pr list --head <branch> --state all`), the merge commit and head from the
 REST pull request and commit endpoints, the branch tip from `git rev-parse
@@ -4802,6 +4822,16 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   A5(d) does not count. The instruction files still point to the written
   A5 paths; this helper does not replace them. With `--apply` it also
   runs the fresh-claim order; see the Claim write section below.
+- Before the five A5 checks, the `issue-state` guard reads the issue's
+  `state` in the same `gh issue view` call and runs right after that read.
+  A `CLOSED` issue is refused as `issue-closed`: its one `issue-state` step
+  is `failed`, its `detail` names the state, and every A5 check is
+  `not-run` with no A5 check call made. An `OPEN` issue adds no step, so
+  its steps keep their positions. A state that is neither `OPEN` nor
+  `CLOSED` is not a refusal: it is a failed read, as the `transport` rule
+  below says. Observed 2026-10-16 on issue `#4372`: a read-only dry run
+  printed `eligible: true` for that issue, which was closed as completed
+  that same day. This guard prevents that result (tracked in issue `#4433`).
 - The checks run in the order of the instruction file and stop at the
   first one that is not eligible; every later check has the status
   `not-run`. Each check calls existing code rather than a copy of it:
@@ -4855,7 +4885,8 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   array of `id`, `status` (`passed`, `failed`, or `not-run`), `reason`,
   `nextAction`, and `detail`. The `detail` of a failed step names the
   pull request numbers of `open-pr`, the paths of a local worktree
-  stop, and the refs of `branch-collision`. `gateReason` and
+  stop, the refs of `branch-collision`, and the state of an
+  `issue-closed` stop. `gateReason` and
   `winningClaimId` appear only for `already-claimed`. With `--apply` the
   report also has `mode`, `projectStatus`, `holdCheck` (always `label`),
   `claimPosted`, `lostClaimCleanupRequired`, `nextAction`, and `claim`
@@ -4863,9 +4894,10 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   failure inside a check, exits `1` with the envelope kind `gate`. The
   kind `transport` (exit `1`, nothing on stdout) covers only a failure
   before any check starts: the repository resolution and the read of the
-  issue's title and assignees. The kind `usage` (exit `2`) covers an
-  argument error, including `--apply` without `--agent-id` or
-  `--project-status`
+  issue's title, assignees, and `state`. A missing or unrecognized `state`
+  (any value other than `OPEN` or `CLOSED`) is also `transport`. The kind
+  `usage` (exit `2`) covers an argument error, including `--apply` without
+  `--agent-id` or `--project-status`
 
 ### Claim write (`--apply`)
 
@@ -4922,11 +4954,18 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   4. Immediately before the claim marker, the issue-author approval gate of
      A5(a) runs again (`approval-missing` or `approval-unproven` stop the
      run), then the own-worktree fresh-claim gate runs once, with
-     `--own-worktree <path>`, and must return `claimable`, then the
-     authoring-label hold check (`hold-active`, or
-     `precheck-unavailable` when the read fails). Only the label is read:
-     the owner-marker log replay is not done, and the report says so with
-     `holdCheck: "label"`.
+     `--own-worktree <path>`, and must return `claimable`. Then the issue
+     state is read again, with `gh issue view --json state`: a `CLOSED`
+     state stops the run as `issue-closed`, and a read that fails or names
+     neither `OPEN` nor `CLOSED` stops it as `precheck-unavailable`. Each
+     refusal adds one failed `issue-state-recheck` step; an `OPEN` issue
+     adds no step. Last, the authoring-label hold check runs (`hold-active`,
+     or `precheck-unavailable` when the read fails), so the label is the
+     final read before the marker. Only the label is read: the owner-marker
+     log replay is not done, and the report says so with `holdCheck:
+     "label"`. A close that lands after the state read, before the claim
+     marker posts, is not seen: the read narrows that window to one call but
+     cannot close it.
   5. The claim marker. Then `claim-lock --record-tokens --nonce`, right before
      the activation nonce is posted (`tokens-record-failed` on failure, with
      the claim already posted), then the activation nonce. The helper mints
@@ -8150,6 +8189,56 @@ same as `AW4`/`AW5`.
 - Fail closed: if execution fails, output is invalid JSON, or required
   fields are missing, discard helper output and apply written D4/E-phase
   branch-sync checks directly.
+
+### F4 worktree and branch cleanup (steps 4 to 6)
+
+Run it from the primary worktree. Any other directory is refused, so the helper
+never removes the worktree it runs in. Command:
+
+```sh
+node scripts/f4-worktree-branch-cleanup.mjs --issue <n> \
+  --claim-id <claim-id> --nonce <nonce> --agent-id <agent-id> \
+  --worktree <absolute-path> [--apply]
+```
+
+The helper runs F4 steps 4 to 6 in order, and each step is gated on the head
+proof in `docs/idd-resume-detail.md` (F4 Head Proof). The steps are a no-follow
+check of the worktree path, a claim check, the proof dry run (the marker command
+without `--apply` , so the helper never posts a proof), the fetch and
+fast-forward of the development branch (the pull request base ref), the worktree
+and local-branch removal under the clone-scoped lock with a second claim check,
+and the remote branch.
+
+Dry-run is the default. It runs the proof, claim, and read-only
+development-branch checks, and the step 5 inspection, and it reports `would-run`
+for the fetch, the fast-forward, and each removal. `--apply` performs them.
+`git worktree remove` runs without `--force` , and a dirty, ignored,
+populated-submodule, or symlinked path holds before any removal.
+
+Output is one JSON document with `steps[]` , `status` , `failedStep` , and
+`notRunSteps` . Status `dry-run` or `complete` exits `0` ; `hold` or `failed`
+exits `1` . A remote branch hold reports the `delete-remote-branch` action code,
+and that helper detail is the next action.
+
+| Reason                          | Next action                                                                                                                                                                                                                   |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `symlink-path`                  | Hold. A path in the worktree or above it is a symlink, or a tracked entry resolves outside the worktree. Nothing ran in that path. The operator inspects the symlink, then fixes or removes it.                               |
+| `fetch-failed`                  | Hold. git fetch origin failed, and nothing changed. Check the network and the remote, then rerun.                                                                                                                             |
+| `lock-busy`                     | Hold. Another session holds the clone-scoped lock. Rerun after it is released.                                                                                                                                                |
+| `base-ref-unreadable`           | Hold. The base branch of the pull request could not be read as a valid branch name. Rerun. If it persists, the operator checks the pull request.                                                                              |
+| `primary-worktree-dirty`        | Hold. Local changes in the primary worktree block the fast-forward. The operator cleans those paths (never stash or discard them), then reruns steps 4 to 6.                                                                  |
+| `primary-ignored-overwrite`     | Hold. An ignored file in the primary worktree would be overwritten by the fast-forward. The operator moves that file outside the repository, then reruns steps 4 to 6.                                                        |
+| `development-branch-in-use`     | Hold. The development branch is checked out in another worktree, which the path in the detail names. Do not touch that worktree. The operator frees the branch, then reruns.                                                  |
+| `development-branch-diverged`   | Hold. The development branch cannot fast-forward to origin. Do not reset or rebase. The operator reconciles it.                                                                                                               |
+| `primary-update-failed`         | Hold. The primary worktree update failed for a reason this helper does not classify. Nothing was removed. The operator inspects the primary worktree. Do not reset or stash.                                                  |
+| `inconsistent-worktree-state`   | Hold. The worktree path, its git registration, and the claim branch disagree, or git could not read them. Nothing was removed. The operator checks git worktree list and the claim.                                           |
+| `dirty-worktree`                | Hold. The worktree holds untracked, modified, or ignored files. Nothing was removed. The F4 session preserves that content outside the worktree by hand, discarding only reproducible configured-command output, then reruns. |
+| `submodule-worktree`            | Hold. The worktree holds a populated submodule. Nothing was removed. The F4 session preserves that content outside the worktree by hand, then reruns.                                                                         |
+| `branch-tip-mismatch`           | Hold. The local branch tip does not equal the proof branch tip, or the ref is missing while its worktree exists. Nothing was removed. The operator checks the branch state.                                                   |
+| `local-branch-unmerged-commits` | Hold. git branch -d refused, and the local tip is not the proof head. The operator comments on the issue and makes a fresh claim check before any forced deletion.                                                            |
+| `worktree-remove-refused`       | Failed. git worktree remove refused after the checks passed, so the worktree may be partly changed. The operator inspects it. A rerun reads the proof again and posts nothing.                                                |
+| `delete-setting-unreadable`     | Hold. delete_branch_on_merge could not be read as a boolean. Nothing remote was deleted. Rerun once the setting is readable.                                                                                                  |
+| `remote-delete-unreadable`      | Hold. The output of the remote branch helper could not be read. Nothing remote was deleted. Rerun, and check the helper output.                                                                                               |
 
 ### Trial merge audit
 

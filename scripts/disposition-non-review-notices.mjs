@@ -58,6 +58,7 @@ import {
   buildHelperErrorEnvelope,
   classifyHelperError,
   isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
@@ -366,7 +367,17 @@ export function buildDispositionPlan(input, options = {}) {
   const planned = [];
   const skipped = [];
   const coveredByBot = new Map();
-  for (const comment of comments) {
+  // The gate pairs a bot's notices in activity-time order (an edited notice
+  // counts as later), so cover and plan them in that order too, not in
+  // creation order (Copilot and CodeRabbit review of kurone-kito/idd-skill#4445).
+  const commentsInGateOrder = [...comments].sort(
+    (left, right) =>
+      compareIsoTimestamps(
+        effectiveRegularCommentActivityAt(left),
+        effectiveRegularCommentActivityAt(right),
+      ) || left.id - right.id,
+  );
+  for (const comment of commentsInGateOrder) {
     const identity = advisoryBotIdentityToken(comment.login);
     if (
       !isHandledBot(comment.login) ||
@@ -419,10 +430,18 @@ export function buildDispositionPlan(input, options = {}) {
         isReviewSummaryDisposition({ body: comment.body }),
     )
     .map((comment) => ({
+      id: comment.id,
       body: comment.body,
       activityAt: effectiveRegularCommentActivityAt(comment),
       consumed: false,
-    }));
+    }))
+    // The gate consumes these in activity-time order (Copilot review of
+    // kurone-kito/idd-skill#4445), so match them in that order too.
+    .sort(
+      (left, right) =>
+        compareIsoTimestamps(left.activityAt, right.activityAt) ||
+        left.id - right.id,
+    );
   const isCoveredCodexNoFindSource = (source) => {
     const sourceIdentity = advisoryBotIdentityToken(source.login);
     if (
@@ -498,7 +517,7 @@ export function buildDispositionPlan(input, options = {}) {
           dispositionActivityAt,
         ) < 0,
     );
-  for (const comment of comments) {
+  for (const comment of commentsInGateOrder) {
     const identity = advisoryBotIdentityToken(comment.login);
     if (
       !isHandledBot(comment.login) ||
@@ -609,7 +628,7 @@ export function buildDispositionPlan(input, options = {}) {
         trustedMarkerLogins.has(entry.comment.login) && entry.parsed !== null,
     )
     .filter((entry) => classifyCommentEditState(entry.comment) === 'unedited');
-  for (const comment of comments) {
+  for (const comment of commentsInGateOrder) {
     if (
       advisoryBotIdentityToken(comment.login) !== 'chatgpt-codex-connector' ||
       !isHandledBot(comment.login) ||
@@ -711,6 +730,133 @@ export function buildDispositionPlan(input, options = {}) {
   }
   return { headSha, planned, skipped };
 }
+/**
+ * The pairing pool a planned notice belongs to, or `null` for none. The gate
+ * pairs a bot's notices in activity order, and the notice carry takes them
+ * before any generic comment. A summary acceptance is refused on its own
+ * (see selectDispositionPlan), because the gate pools it with older generic
+ * comments. A Codex no-find result names its source comment instead.
+ */
+function pairingPoolKind(entry) {
+  if (
+    entry.reason === 'Codex no-find result' ||
+    entry.reason === 'summary walkthrough'
+  ) {
+    return null;
+  }
+  return 'notice';
+}
+/**
+ * Narrow a plan to the listed `--comment-id` values (#4437). Pure: planning
+ * itself never changes. The count-based, oldest-first pairing still runs over
+ * every comment, so a selected body is byte-identical to the body the
+ * unfiltered plan produces for the same comment.
+ *
+ * `undefined` means no filter, and the plan comes back unchanged. A listed ID
+ * is accepted when it is a planned notice, or when the plan skipped it as
+ * `already-dispositioned` (reported as skipped, never posted again). Any other
+ * listed ID is refused, with the plan's skip reason when it has one.
+ *
+ * Within one bot's count-paired notices, a selection must name the oldest
+ * undispositioned notices in order (Codex P1 on kurone-kito/idd-skill#4445).
+ * The gate attaches a posted disposition to the oldest unanswered notice
+ * first, so a newer notice selected while an older one is skipped would stay
+ * outstanding although the helper reports it applied. Such a notice is
+ * refused, naming the older notice it would have to wait behind. Repeated IDs
+ * collapse, and the selected plan keeps the plan's own order.
+ */
+export function selectDispositionPlan(
+  plan,
+  commentIds,
+  activityAt = () => undefined,
+  isSummaryAt = () => false,
+) {
+  if (commentIds === undefined) {
+    return { plan, refused: [] };
+  }
+  const listed = new Set(commentIds);
+  const plannedById = new Map(
+    plan.planned.map((entry) => [entry.noticeId, entry]),
+  );
+  const skippedById = new Map(
+    plan.skipped.map((entry) => [entry.noticeId, entry]),
+  );
+  const refused = [];
+  for (const noticeId of listed) {
+    const plannedEntry = plannedById.get(noticeId);
+    if (plannedEntry !== undefined) {
+      // A summary acceptance is not a notice: it stays with the unfiltered run.
+      if (plannedEntry.reason === 'summary walkthrough') {
+        refused.push({
+          noticeId,
+          reason: plannedEntry.reason,
+          pairedBefore: null,
+        });
+      }
+      continue;
+    }
+    const skip = skippedById.get(noticeId);
+    if (skip?.reason === 'already-dispositioned') {
+      // An already-covered summary is refused just like a planned one.
+      if (isSummaryAt(noticeId)) {
+        refused.push({
+          noticeId,
+          reason: 'summary walkthrough',
+          pairedBefore: null,
+        });
+      }
+      continue;
+    }
+    refused.push({
+      noticeId,
+      reason: skip?.reason ?? null,
+      pairedBefore: null,
+    });
+  }
+  const countPools = new Map();
+  for (const entry of plan.planned) {
+    const kind = pairingPoolKind(entry);
+    if (kind === null) {
+      continue;
+    }
+    const key = `${advisoryBotIdentityToken(entry.botLogin)}|${kind}`;
+    countPools.set(key, [...(countPools.get(key) ?? []), entry]);
+  }
+  for (const pool of countPools.values()) {
+    // The gate orders a bot's notices by activity time, not by creation, so an
+    // edited notice moves later there (Codex/E10 review of kurone-kito/idd-skill#4445).
+    const ordered = [...pool].sort((left, right) => {
+      const leftAt = activityAt(left.noticeId);
+      const rightAt = activityAt(right.noticeId);
+      if (leftAt === undefined || rightAt === undefined) {
+        return 0;
+      }
+      return (
+        compareIsoTimestamps(leftAt, rightAt) || left.noticeId - right.noticeId
+      );
+    });
+    let firstUnlisted = null;
+    for (const entry of ordered) {
+      if (!listed.has(entry.noticeId)) {
+        firstUnlisted ??= entry.noticeId;
+      } else if (firstUnlisted !== null) {
+        refused.push({
+          noticeId: entry.noticeId,
+          reason: null,
+          pairedBefore: firstUnlisted,
+        });
+      }
+    }
+  }
+  return {
+    plan: {
+      headSha: plan.headSha,
+      planned: plan.planned.filter((entry) => listed.has(entry.noticeId)),
+      skipped: plan.skipped.filter((entry) => listed.has(entry.noticeId)),
+    },
+    refused,
+  };
+}
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `pr:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --pr spec key
@@ -727,6 +873,7 @@ const DISPOSITION_NON_REVIEW_NOTICES_FLAG_SPEC = {
   '--agent-id': { type: 'string', default: '' },
   '--trusted-marker-logins': { type: 'string', default: '' },
   '--advisory-bot-logins': { type: 'string', default: '' },
+  '--comment-id': { type: 'string', multiple: true },
   '--apply': { type: 'boolean', default: false },
   '--help': { type: 'boolean', short: 'h' },
 };
@@ -756,6 +903,26 @@ function splitList(value) {
 function parseLenientIntegerOrNull(token) {
   return token === undefined ? null : Number.parseInt(token, 10);
 }
+/**
+ * `--comment-id` values (#4437). Each must be a positive decimal integer, so
+ * `0`, `01`, `1.5`, `-3`, and `abc` are usage errors (exit 1, no gh call).
+ * Absent gives `undefined`, meaning no filter. Repeats are kept here and
+ * collapse in {@link selectDispositionPlan}.
+ */
+function parseCommentIds(values) {
+  if (values === undefined) {
+    return undefined;
+  }
+  return values.map((token) => {
+    const value = Number(token);
+    if (!/^[1-9][0-9]*$/.test(token) || !Number.isSafeInteger(value)) {
+      throw markCliUsageError(
+        new Error(`--comment-id expects a positive integer, got "${token}"`),
+      );
+    }
+    return value;
+  });
+}
 export function parseArgs(argv) {
   const { values, help } = parseCliArgs(
     argv,
@@ -770,6 +937,7 @@ export function parseArgs(argv) {
     agentId: values['agent-id'],
     trustedMarkerLogins: splitList(values['trusted-marker-logins']),
     advisoryBotLogins: splitList(values['advisory-bot-logins']),
+    commentIds: parseCommentIds(values['comment-id']),
     apply: values.apply,
     help,
   };
@@ -820,6 +988,7 @@ comment it does not plan is listed in \`skipped\` with a reason, for example
                                  (default: your gh login, so re-runs are idempotent)
   --advisory-bot-logins a,b      advisory bot logins (default: flag > IDD_ADVISORY_BOT_LOGINS
                                  > .github/idd/config.json > coderabbit + codex)
+  --comment-id <id>              limit the dry run or --apply to the listed notices (repeatable)
   --apply                        post the dispositions (default: dry-run)
   -h, --help                     show this help
 `;
@@ -1275,6 +1444,12 @@ function main() {
   // for dry-run and again immediately before --apply posts, so a HEAD advance or
   // a disposition another session raced in is reflected just-in-time (the apply
   // path never reuses the dry-run snapshot).
+  // The activity time of each comment as of the latest planNow(), so
+  // selectDispositionPlan orders a bot's notices the way the gate does (#4437).
+  let activityByNoticeId = new Map();
+  // The summary walkthroughs as of the latest planNow(), so the selection can
+  // refuse one even when the plan already skipped it (#4437).
+  let summaryNoticeIds = new Set();
   const planNow = () => {
     const headSha = ghText([
       'api',
@@ -1304,15 +1479,61 @@ function main() {
       updatedAt: comment.updated_at ?? '',
       lastEditedAt: lastEditedAtByNodeId.get(String(comment.node_id)),
     }));
+    summaryNoticeIds = new Set(
+      comments
+        .filter(
+          (comment) =>
+            isReviewSummaryComment(comment.body) &&
+            !isAdvisoryNonReviewNotice(comment.body),
+        )
+        .map((comment) => comment.id),
+    );
+    activityByNoticeId = new Map(
+      comments.map((comment) => [
+        comment.id,
+        effectiveRegularCommentActivityAt(comment),
+      ]),
+    );
     const markerPrefix = resolveConfiguredMarkerPrefix();
     return buildDispositionPlan(
       { headSha, comments },
       { advisoryBotLogins, trustedMarkerLogins, markerPrefix },
     );
   };
+  // #4437: --comment-id narrows the plan to the listed notices. A listed ID that
+  // is not a planned notice refuses the whole run before any write, in dry run
+  // and in apply alike, so a mistyped ID never reads as an empty plan.
+  const selectOrRefuse = (plan) => {
+    const selection = selectDispositionPlan(
+      plan,
+      args.commentIds,
+      (noticeId) => activityByNoticeId.get(noticeId),
+      (noticeId) => summaryNoticeIds.has(noticeId),
+    );
+    if (selection.refused.length === 0) {
+      return selection.plan;
+    }
+    const detail = selection.refused
+      .map((entry) => {
+        if (entry.pairedBefore !== null) {
+          return `${entry.noticeId} (count-based pairing needs older notice ${entry.pairedBefore} listed too)`;
+        }
+        if (entry.reason === 'summary walkthrough') {
+          return `${entry.noticeId} (a summary acceptance is not a notice; run without --comment-id for it)`;
+        }
+        if (entry.reason !== null) {
+          return `${entry.noticeId} (skipped: ${entry.reason})`;
+        }
+        return `${entry.noticeId} (not a notice on PR #${pr})`;
+      })
+      .join(', ');
+    const message = `disposition-non-review-notices: --comment-id cannot be applied as selected: ${detail}; refused before any write`;
+    writeStderrSync(`${message}\n`);
+    exitClassified(1, 'gate', message);
+  };
   if (!args.apply) {
     process.stdout.write(
-      `${JSON.stringify({ mode: 'dry-run', prNumber: pr, ...planNow() }, null, 2)}\n`,
+      `${JSON.stringify({ mode: 'dry-run', prNumber: pr, ...selectOrRefuse(planNow()) }, null, 2)}\n`,
     );
     process.exit(0);
   }
@@ -1372,7 +1593,7 @@ function main() {
   }
   // Re-plan from a fresh read AFTER claim revalidation, so the post loop never
   // re-posts a disposition that raced in since the dry-run.
-  const plan = planNow();
+  const plan = selectOrRefuse(planNow());
   // Seed the viewer-authored comment ids known before this run (pre-existing
   // plus, once applyDispositionPlan runs, the ones it posts), so a
   // post-failure recovery attributes a NEW comment to the current notice's

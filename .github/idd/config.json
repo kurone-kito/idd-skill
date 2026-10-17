@@ -73,6 +73,11 @@
       "maxConcurrent": 4
     }
   },
+  "localExec": {
+    "admission": {
+      "testCommand": "pnpm test"
+    }
+  },
   "ciGate": {
     "trustEmptyProtectionReads": true,
     "externalChecks": {

@@ -30,8 +30,16 @@
 // the written path as the next action (A5(a) has its own reason,
 // `approval-unproven`, and the local worktree scan has
 // `local-worktree-unreadable`). Only a failure before any check starts (the
-// repository resolution and the read of the issue's title and assignees) is a
-// `transport` error rather than a report.
+// repository resolution and the read of the issue's title, assignees, and
+// state) is a `transport` error rather than a report.
+//
+// The `issue-state` guard runs right after that read and before the first A5
+// check. A closed issue (`state` is `CLOSED`) is refused as `issue-closed` with
+// one failed `issue-state` step, and the A5 checks are then `not-run`. An
+// `OPEN` issue adds no step, so its report is unchanged. A state that is
+// neither is a failed read, not a refusal. With `--apply`, the state is read
+// again before the final hold check, and a closed issue stops the run there as
+// `issue-closed` (one failed `issue-state-recheck` step).
 import { spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { lstatSync } from 'node:fs';
@@ -104,6 +112,9 @@ const MARKER_TIMESTAMP = '(?<ts>\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z)';
  * (the grammar anchors the whole body).
  */
 const MARKER_NOTE_SUFFIX = '(?:\\r?\\n\\r?\\n_[^\\n]*\\bIDD\\b[^\\n]*_)?\\s*$';
+/** The next action when the issue is not OPEN (the issue-state guard). */
+const CLOSED_NEXT =
+  'The issue is closed, so it cannot be claimed. Do not claim it. If a maintainer reopens it, rerun this helper; otherwise choose an open issue. This helper created nothing.';
 /** The next action when the policy or the viewer cannot be read (nothing claimed yet). */
 const POLICY_NEXT =
   'Fix the policy (the repository config or the user-global policy) or restore access to the viewer login, then rerun this helper. This helper created no worktree or branch.';
@@ -254,7 +265,10 @@ export function createDefaultDeps() {
     mintNonce: () => randomBytes(16).toString('hex'),
   };
 }
-/** Read the title and assignees with one `gh issue view`; `null` when malformed. */
+/**
+ * Read the title, assignees, and state with one `gh issue view`; `null` when
+ * malformed. A state other than `OPEN` or `CLOSED` is malformed too.
+ */
 function parseIssueRead(stdout) {
   const parsed = parseJsonObject(stdout);
   if (
@@ -278,7 +292,11 @@ function parseIssueRead(stdout) {
     }
     assignees.push(assignee.login);
   }
-  return { title: parsed.title, assignees };
+  const state = parsed.state;
+  if (state !== 'OPEN' && state !== 'CLOSED') {
+    return null;
+  }
+  return { title: parsed.title, assignees, state };
 }
 /** True when a child helper's `issue` block names the issue it was asked about. */
 function describesIssue(value, issueNumber) {
@@ -698,9 +716,11 @@ function checkBranchCollision(issueNumber, repository, deps) {
   return pass(`no local worktree or remote branch matches ${prefix}*`);
 }
 /**
- * Run the five A5 pre-checks for one issue, read-only. Resolves the repository
- * and reads the issue's title and assignees first; a failure there is a
- * `transport` outcome. Then it runs A5(a) to A5(e) in order, stops at the first
+ * Run the issue-state guard and the five A5 pre-checks for one issue, read-only.
+ * Resolves the repository and reads the issue's title, assignees, and state
+ * first; a failure there is a `transport` outcome. A closed issue is refused
+ * next as `issue-closed`, with one failed `issue-state` step and the A5 checks
+ * `not-run`. Otherwise it runs A5(a) to A5(e) in order, stops at the first
  * check that is not eligible, and marks the rest `not-run`.
  */
 export function runClaimPrechecks(issueNumber, deps) {
@@ -721,14 +741,15 @@ export function runClaimPrechecks(issueNumber, deps) {
       'view',
       String(issueNumber),
       '--json',
-      'title,assignees',
+      'title,assignees,state',
     ]);
     if (read.status !== 0) {
       readFailure = `gh issue view ended with ${describeStatus(read)}`;
     } else {
       issue = parseIssueRead(read.stdout);
       if (issue === null) {
-        readFailure = 'gh issue view printed no valid title and assignees';
+        readFailure =
+          'gh issue view printed no valid title, assignees, and state';
       }
     }
   } catch (error) {
@@ -777,6 +798,19 @@ export function runClaimPrechecks(issueNumber, deps) {
   const steps = [];
   let report = { reason: null };
   let stopped = false;
+  // The issue-state guard runs before the first A5 check. It adds its own step
+  // only when it refuses, so an OPEN issue keeps the A5 steps as they were.
+  if (readIssue.state !== 'OPEN') {
+    steps.push({
+      id: 'issue-state',
+      status: 'failed',
+      reason: 'issue-closed',
+      nextAction: CLOSED_NEXT,
+      detail: `the issue state is ${readIssue.state}, not OPEN`,
+    });
+    stopped = true;
+    report = { reason: 'issue-closed' };
+  }
   for (const check of checks) {
     if (stopped) {
       steps.push({
@@ -1763,6 +1797,65 @@ function checkHoldBeforeClaim(state) {
   return applyPass(`no ${state.authoringLabel} label (holdCheck: label)`);
 }
 /**
+ * The issue state, read again right before the claim marker. The pre-check
+ * reads it once, so an issue closed during the write half would still get a
+ * claim marker. Like the pre-check guard, this adds a step only when it
+ * refuses: a closed issue (`issue-closed`), or a state that cannot be read or
+ * is not `OPEN` or `CLOSED` (`precheck-unavailable`). Nothing is sent before it.
+ */
+function recheckIssueState(state) {
+  const next =
+    state.identity === null
+      ? 'Inspect the issue state by hand.'
+      : lostClaimNext(state.identity.claimId);
+  let current = null;
+  let readFailure = '';
+  try {
+    const read = state.deps.run('gh', [
+      'issue',
+      'view',
+      String(state.issue),
+      '--json',
+      'state',
+    ]);
+    if (read.status !== 0) {
+      readFailure = `gh issue view ended with ${describeStatus(read)}`;
+    } else {
+      const value = parseJsonObject(read.stdout)?.state;
+      if (value === 'OPEN' || value === 'CLOSED') {
+        current = value;
+      } else {
+        readFailure = 'gh issue view printed no valid state';
+      }
+    }
+  } catch (error) {
+    readFailure = errorMessage(error);
+  }
+  if (current === 'OPEN') {
+    return null;
+  }
+  const failure =
+    current === null
+      ? {
+          reason: 'precheck-unavailable',
+          nextAction: next,
+          detail: `the issue state re-read failed: ${readFailure}`,
+        }
+      : {
+          reason: 'issue-closed',
+          nextAction: next,
+          detail: `the issue state is ${current}, not OPEN, before the claim marker`,
+        };
+  state.steps.push({
+    id: 'issue-state-recheck',
+    status: 'failed',
+    reason: failure.reason,
+    nextAction: failure.nextAction,
+    detail: failure.detail,
+  });
+  return failure;
+}
+/**
  * The claim marker. A failed write is `claimPosted: false` only when nothing
  * was sent; otherwise the comments are read, and the claim is never posted twice.
  */
@@ -2149,6 +2242,11 @@ function runClaimWrites(state) {
     // The claim-state gate and the label read come last, so that the fresh
     // marker fetch and the hold read are the nearest reads before the claim.
     step(state, 'own-worktree-gate', checkOwnWorktreeGate(state)) ??
+    // The issue state is read before the hold check, so that the authoring
+    // label stays the last read before the claim marker. An issue that is
+    // already closed here is refused, even though the pre-check read it as
+    // open. A close that lands after this read is not seen.
+    recheckIssueState(state) ??
     step(state, 'hold-check', checkHoldBeforeClaim(state)) ??
     step(state, 'claim-post', postClaim(state)) ??
     // The nonce-bearing record comes right before its marker posts (the
@@ -2385,6 +2483,10 @@ Without --apply it makes no write: no marker, no worktree, no lock file, no
 git change. --agent-id and --project-status are checked but not used without
 --apply.
 
+Before the checks, the issue-state guard reads the issue's state. A closed
+issue stops the run as issue-closed (the issue-state step), and no A5 check
+runs. An OPEN issue adds no step.
+
 Checks, in order, stopping at the first one that is not eligible (later
 checks are reported as not-run):
 
@@ -2402,7 +2504,8 @@ for the local scan) with the written path as the next action.
 With --apply, when every pre-check passes, the helper runs the fresh-claim
 order of idd-claim.instructions.md: B1 step 1 and the worktree (under the
 clone-scoped lock), the generated tokens, the own-worktree gate, the
-authoring-label hold check, the claim marker, the activation nonce,
+issue-state re-read (issue-closed), the authoring-label hold check, the claim
+marker, the activation nonce,
 the worktree-local claim lock, the final assert, and a second hold check. It mints the
 claim id and the nonce itself. --agent-id is the agent id the claim is made
 under. --project-status is your statement of the project status part of A5(b),
@@ -2420,8 +2523,8 @@ projectStatus, holdCheck, claimPosted (true, false, or "unknown"),
 lostClaimCleanupRequired, nextAction, and claim (agentId, claimId, nonce,
 branch, worktree) once the worktree exists. Exit 0 means eligible, or with
 --apply that the claim is verified. An ineligible or stopped result exits 1
-(gate). A failure to resolve the repository or to read the issue's title and
-assignees exits 1 (transport) before any check runs. An argument error exits 2
-(usage), including --apply without --agent-id or --project-status.
+(gate). A failure to resolve the repository or to read the issue's title,
+assignees, and state exits 1 (transport) before any check runs. An argument
+error exits 2 (usage), including --apply without --agent-id or --project-status.
 `;
 }

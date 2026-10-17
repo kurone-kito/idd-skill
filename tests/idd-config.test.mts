@@ -32,6 +32,7 @@ import {
   resolveUserGlobalConfigPath,
   selectTrustedConfigRef,
 } from '../src/scripts/idd-config.mts';
+import { normalizePolicyConfig } from '../src/scripts/policy-helpers.mts';
 import { trackTempDirectories } from './temp-fixtures.mts';
 
 // #4049: every fixture directory below is removed when the file finishes.
@@ -1743,6 +1744,42 @@ test('repository-policy fields stay local when a local document exists', () => {
     soloCodeownerAdminFallback: 'hold-and-report',
   });
   assert.equal(noLocal.sourceMap.mergePolicy, 'user-global');
+});
+
+test('a user-global localExec stays out of the layered result when a repository document exists (#4427)', () => {
+  const identity = {
+    githubSlug: 'owner/repo',
+    hasGithubOrigin: true,
+    mainWorktreeRoot: '/srv/repo',
+  };
+  const userGlobalConfig = {
+    localExec: { admission: { enabled: false } },
+    overrides: [
+      {
+        match: { repo: 'owner/repo' },
+        config: {
+          localExec: { admission: { enabled: false, maxConcurrent: 8 } },
+        },
+      },
+    ],
+  };
+  const layered = resolveLayeredPolicy({
+    localDocument: { exists: true, config: { markerPrefix: 'local' } },
+    identity,
+    userGlobalConfig,
+  });
+  assert.equal(Object.hasOwn(layered.config, 'localExec'), false);
+  // The repository-only normalizer, applied to a repository document that
+  // omits localExec, still yields admission enabled with the defaults.
+  assert.equal(
+    normalizePolicyConfig({ markerPrefix: 'local' }).localExec.admission
+      .enabled,
+    true,
+  );
+  assert.equal(
+    normalizePolicyConfig(layered.config).localExec.admission.enabled,
+    true,
+  );
 });
 
 test('a malformed higher-layer value blocks inheritance at that field', () => {

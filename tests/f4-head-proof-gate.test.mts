@@ -1089,7 +1089,7 @@ test('collectTrustedMarkers filters by author, claim, parse state, and edit stat
     ],
     CLAIM,
     trusted,
-  );
+  ).map(({ entry }) => entry);
   assert.deepEqual(markers, [
     {
       claimId: CLAIM,
@@ -1703,4 +1703,300 @@ test('the proof command takes the repository from the checkout origin, not from 
     return harness().deps;
   });
   assert.equal(captured, resolveCheckoutRepository);
+});
+
+// --- #4442: a superseding proof sets a malformed one aside -------------------
+
+/** A proof that does not parse: its `branch-tip` field is missing. */
+function malformedProof(): string {
+  return `<!-- idd-f4-head-proof: v2 pr=${PR} claim=${CLAIM} branch=${BRANCH} f2=${F2} merge=${MERGE} head=${HEAD} -->\n\n_${AGENT}: F4 head-proof marker. Do not edit._`;
+}
+
+test('a valid superseding proof sets a malformed proof of this claim aside, and F4 proceeds', () => {
+  const h = harness();
+  h.issueComments.push(
+    comment(80, malformedProof(), {
+      createdAt: ACTIVATED,
+      updatedAt: ACTIVATED,
+    }),
+    comment(81, proofBody({ supersedes: '80' })),
+  );
+  const output = expectVerdict(
+    runF4HeadProofGate(INPUT, h.deps),
+    'proceed',
+    'reusable',
+    0,
+  );
+  assert.ok(
+    output.warnings?.some((line) =>
+      line.includes(
+        'malformed f4 head-proof comment 80 is set aside by superseding proof comment 81',
+      ),
+    ),
+    JSON.stringify(output.warnings),
+  );
+  assert.deepEqual(h.posts, []);
+});
+
+test('a malformed proof of this claim with no superseding proof still holds F4', () => {
+  const h = harness();
+  h.issueComments.push(comment(82, malformedProof()));
+  expectVerdict(
+    runF4HeadProofGate(APPLY, h.deps),
+    'hold',
+    'conflicting-marker',
+    1,
+  );
+  assert.deepEqual(h.posts, []);
+});
+
+test('a superseding proof that is not reusable does not set the malformed proof aside', () => {
+  const h = harness();
+  h.issueComments.push(
+    comment(83, malformedProof(), {
+      createdAt: ACTIVATED,
+      updatedAt: ACTIVATED,
+    }),
+    comment(84, proofBody({ supersedes: '83', merge: '9'.repeat(40) })),
+  );
+  const output = expectVerdict(
+    runF4HeadProofGate(INPUT, h.deps),
+    'hold',
+    'conflicting-marker',
+    1,
+  );
+  assert.ok(
+    !output.warnings?.some((line) => line.includes('set aside')),
+    JSON.stringify(output.warnings),
+  );
+});
+
+test('a superseding proof created before the malformed proof it names does not set it aside', () => {
+  const h = harness();
+  h.issueComments.push(
+    comment(97, proofBody({ supersedes: '98' }), {
+      createdAt: ACTIVATED,
+      updatedAt: ACTIVATED,
+    }),
+    comment(98, malformedProof()),
+  );
+  const output = expectVerdict(
+    runF4HeadProofGate(INPUT, h.deps),
+    'hold',
+    'conflicting-marker',
+    1,
+  );
+  assert.ok(
+    !output.warnings?.some((line) => line.includes('set aside')),
+    JSON.stringify(output.warnings),
+  );
+});
+
+test('a superseding proof from an untrusted author does not count', () => {
+  const h = harness();
+  h.issueComments.push(
+    comment(85, malformedProof()),
+    comment(86, proofBody({ supersedes: '85' }), { authorLogin: 'stranger' }),
+  );
+  expectVerdict(
+    runF4HeadProofGate(INPUT, h.deps),
+    'hold',
+    'conflicting-marker',
+    1,
+  );
+});
+
+test('a superseding proof does not set aside an edited proof, which still holds F4', () => {
+  const h = harness();
+  h.issueComments.push(
+    comment(93, proofBody({ merge: '9'.repeat(40) }), {
+      lastEditedAt: '2026-10-16T02:00:00Z',
+    }),
+    comment(94, proofBody({ supersedes: '93' })),
+  );
+  expectVerdict(
+    runF4HeadProofGate(INPUT, h.deps),
+    'hold',
+    'conflicting-marker',
+    1,
+  );
+});
+
+test('--supersedes refuses a well-formed proof, names it, and posts nothing', () => {
+  const h = harness();
+  h.issueComments.push(comment(87, proofBody()));
+  const output = expectVerdict(
+    runF4HeadProofGate({ ...APPLY, supersedes: 87 }, h.deps),
+    'hold',
+    'supersede-refused',
+    1,
+  );
+  assert.ok(
+    output.warnings?.some((line) =>
+      line.includes('comment 87 is not a malformed proof of this claim'),
+    ),
+    JSON.stringify(output.warnings),
+  );
+  assert.deepEqual(h.posts, []);
+});
+
+test('--supersedes refuses an edited proof, since only a malformed proof is superseded', () => {
+  const h = harness();
+  h.issueComments.push(
+    comment(88, proofBody(), { lastEditedAt: '2026-10-16T02:00:00Z' }),
+  );
+  expectVerdict(
+    runF4HeadProofGate({ ...APPLY, supersedes: 88 }, h.deps),
+    'hold',
+    'supersede-refused',
+    1,
+  );
+  assert.deepEqual(h.posts, []);
+});
+
+test('--supersedes holds on a comment ID that is not a malformed proof of this claim', () => {
+  const h = harness();
+  expectVerdict(
+    runF4HeadProofGate({ ...APPLY, supersedes: 999 }, h.deps),
+    'hold',
+    'supersede-target-unknown',
+    1,
+  );
+  assert.deepEqual(h.posts, []);
+});
+
+test('--supersedes holds while another trusted proof of this claim remains', () => {
+  const h = harness();
+  h.issueComments.push(
+    comment(91, malformedProof()),
+    comment(92, malformedProof()),
+  );
+  expectVerdict(
+    runF4HeadProofGate({ ...APPLY, supersedes: 91 }, h.deps),
+    'hold',
+    'conflicting-marker',
+    1,
+  );
+  assert.deepEqual(h.posts, []);
+});
+
+test('--supersedes on the only malformed proof posts a proof that names it, confirmed by the read-back', () => {
+  const preview = harness();
+  preview.issueComments.push(
+    comment(90, malformedProof(), {
+      createdAt: ACTIVATED,
+      updatedAt: ACTIVATED,
+    }),
+  );
+  const dry = expectVerdict(
+    runF4HeadProofGate({ ...INPUT, supersedes: 90 }, preview.deps),
+    'post',
+    null,
+    0,
+  );
+  assert.equal(dry.body, proofBody({ supersedes: '90' }));
+  assert.deepEqual(preview.posts, []);
+
+  const h = harness();
+  h.issueComments.push(
+    comment(90, malformedProof(), {
+      createdAt: ACTIVATED,
+      updatedAt: ACTIVATED,
+    }),
+  );
+  const output = expectVerdict(
+    runF4HeadProofGate({ ...APPLY, supersedes: 90 }, h.deps),
+    'proceed',
+    'posted-confirmed',
+    0,
+  );
+  assert.deepEqual(h.posts, [proofBody({ supersedes: '90' })]);
+  assert.equal(output.commentId, 9001);
+  // The supersession appears only on the read-back, and it is still reported.
+  assert.ok(
+    output.warnings?.some((line) =>
+      line.includes(
+        'malformed f4 head-proof comment 90 is set aside by superseding proof comment 9001',
+      ),
+    ),
+    JSON.stringify(output.warnings),
+  );
+});
+
+test('an edited malformed proof is never superseded, and the write naming it is refused', () => {
+  const dry = harness();
+  dry.issueComments.push(
+    comment(110, malformedProof(), {
+      createdAt: ACTIVATED,
+      updatedAt: ACTIVATED,
+      lastEditedAt: '2026-10-16T02:00:00Z',
+    }),
+    comment(111, proofBody({ supersedes: '110' })),
+  );
+  const output = expectVerdict(
+    runF4HeadProofGate(INPUT, dry.deps),
+    'hold',
+    'conflicting-marker',
+    1,
+  );
+  assert.ok(
+    !output.warnings?.some((line) => line.includes('set aside')),
+    JSON.stringify(output.warnings),
+  );
+
+  const h = harness();
+  h.issueComments.push(
+    comment(112, malformedProof(), {
+      createdAt: ACTIVATED,
+      updatedAt: ACTIVATED,
+      lastEditedAt: '2026-10-16T02:00:00Z',
+    }),
+  );
+  expectVerdict(
+    runF4HeadProofGate({ ...APPLY, supersedes: 112 }, h.deps),
+    'hold',
+    'supersede-refused',
+    1,
+  );
+  assert.deepEqual(h.posts, []);
+});
+
+test('--supersedes on a malformed proof with no readable claim is refused, not called well-formed', () => {
+  const h = harness();
+  h.issueComments.push(comment(113, '<!-- idd-f4-head-proof: v2 pr=oops -->'));
+  const output = expectVerdict(
+    runF4HeadProofGate({ ...APPLY, supersedes: 113 }, h.deps),
+    'hold',
+    'supersede-refused',
+    1,
+  );
+  assert.ok(
+    output.warnings?.some((line) =>
+      line.includes('comment 113 is not a malformed proof of this claim'),
+    ),
+    JSON.stringify(output.warnings),
+  );
+  assert.deepEqual(h.posts, []);
+});
+
+test('a superseding proof posted in the same second as the malformed proof it names still sets it aside', () => {
+  const h = harness();
+  h.issueComments.push(
+    comment(80, malformedProof()),
+    comment(81, proofBody({ supersedes: '80' })),
+  );
+  const output = expectVerdict(
+    runF4HeadProofGate(INPUT, h.deps),
+    'proceed',
+    'reusable',
+    0,
+  );
+  assert.ok(
+    output.warnings?.some((line) =>
+      line.includes(
+        'malformed f4 head-proof comment 80 is set aside by superseding proof comment 81',
+      ),
+    ),
+    JSON.stringify(output.warnings),
+  );
 });

@@ -3567,8 +3567,9 @@ export function checkActionability(context: Context): CheckOutcome {
   // hasAcceptance/hasChecklist/hasSteps early-pass below so that heading's
   // presence alone can no longer paper over an empty candidate-files
   // section. A body with NO `## Candidate files` heading at all is
-  // unaffected (an orphan issue legitimately omits the optional section,
-  // per contract.md) -- `hasCandidateFilesHeading` distinguishes that
+  // unaffected (this check reads a section only when it is present; whether
+  // an S or M orphan must carry one is the audit's effort-candidate-file-limit
+  // check, #4434) -- `hasCandidateFilesHeading` distinguishes that
   // case from "present but empty", which `parseCandidateFiles` alone
   // cannot (both parse to zero paths).
   if (

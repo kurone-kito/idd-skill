@@ -661,6 +661,47 @@
       },
       "description": "GitHub API policy. `telemetry` opts in to local request-lifecycle observations, `readCache` opts in to the host-local REST read cache, and `loadControl` opts in to host-local admission and a shared throttle cooldown. Optional; omitting the container keeps telemetry disabled, every read live, and every request uncoordinated. `telemetry` does not wire Discover; an enabled `readCache` lets Discover helpers serve a hint."
     },
+    "localExec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "admission": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Host-local admission for this repository's validation commands. Optional; defaults to true. Only a literal false turns it off, and that affects this repository's own commands only; other repositories of the same OS user still take the slot."
+            },
+            "maxConcurrent": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Validation runs admitted at once across processes of the same OS user. Optional; defaults to 1 (serial). A value above 8 falls back to 1."
+            },
+            "maxWait": {
+              "type": "string",
+              "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+              "description": "Longest a validation run waits to be admitted, as an ISO 8601 duration. Optional; defaults to `PT2H`. A value longer than `PT6H` falls back to the default."
+            },
+            "backend": {
+              "type": "string",
+              "enum": ["flock", "pueue"],
+              "description": "Admission backend. Optional; defaults to `flock`. A `flock` backend with a cap above 1 is kept as written here; the admission helper rejects that combination at run time."
+            },
+            "pueueGroup": {
+              "type": "string",
+              "description": "Pueue group name used when `backend` is `pueue`. Optional; a blank value or an omitted key means `idd-validate`."
+            },
+            "testCommand": {
+              "type": "string",
+              "description": "Optional command string for the repository's test run. A blank value or an omitted key means unset."
+            }
+          },
+          "description": "Admission settings for local validation commands. Optional; omitting it keeps the defaults above."
+        }
+      },
+      "description": "Repository-local execution policy. Repository-owned: a user-global document may not set it (user-global-config.schema.json rejects it). Optional; omitting it enables admission with the defaults above."
+    },
     "orchestrator": {
       "type": "object",
       "additionalProperties": false,

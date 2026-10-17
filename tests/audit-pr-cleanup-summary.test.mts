@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { SKIP_REASON_CODES } from '../src/scripts/audit-pr-cleanup.mts';
 import {
+  type CleanupHold,
   type CleanupReport,
   computeReportSummary,
+  HOLD_REASON_CODES,
 } from '../src/scripts/audit-pr-cleanup-summary.mts';
 
 function createReport(overrides: Partial<CleanupReport> = {}): CleanupReport {
@@ -456,5 +458,119 @@ test('the minimization doc lists exactly the closed skip reason codes (#3857)', 
       (SKIP_REASON_CODES as readonly string[]).includes(code),
       `the doc names an unlisted code ${code}`,
     );
+  }
+});
+
+// kurone-kito/idd-skill#4369: a gate hold outranks every other apply status,
+// so the F4 decision tree reads a held run as a stop.
+const GATE_HOLD: CleanupHold = {
+  code: 'head-changed',
+  verdict: 'hold',
+  nextAction: 'Do not apply. The pull request head moved during the run.',
+};
+
+test('computeReportSummary: a gate hold sets status held over every other status (#4369)', () => {
+  const cases: [string, Partial<CleanupReport>][] = [
+    ['applied', { applied: [{ subjectId: 'a' }] }],
+    ['clean', {}],
+    ['failed', { failed: [{ subjectId: 'b', error: 'boom' }] }],
+    ['rescan-failed', { rescanError: 'the rescan failed' }],
+    [
+      'time-budget-exhausted',
+      { timeBudgetExhausted: true, candidates: [{ subjectId: 'c' }] },
+    ],
+  ];
+  for (const [name, overrides] of cases) {
+    const report = createReport({
+      mode: 'apply',
+      holds: [GATE_HOLD],
+      ...overrides,
+    });
+    computeReportSummary(report);
+    assert.equal(report.status, 'held', `status for ${name}`);
+  }
+});
+
+test('computeReportSummary: a held run still lists its failed rows (#4369)', () => {
+  const failedRow = { subjectId: 'b', error: 'boom' };
+  const report = createReport({
+    mode: 'apply',
+    holds: [GATE_HOLD],
+    failed: [failedRow],
+  });
+  computeReportSummary(report);
+  assert.equal(report.status, 'held');
+  assert.deepEqual(report.failed, [failedRow]);
+  assert.equal(report.summary?.failed, 1);
+});
+
+test('computeReportSummary: a dry run keeps its own status when a hold is present (#4369)', () => {
+  const report = createReport({
+    mode: 'dry-run',
+    holds: [GATE_HOLD],
+    candidates: [{ subjectId: 'a' }],
+  });
+  computeReportSummary(report);
+  assert.equal(report.status, 'needs-apply');
+});
+
+test('computeReportSummary: an empty hold list leaves the apply status unchanged (#4369)', () => {
+  const report = createReport({
+    mode: 'apply',
+    holds: [],
+    applied: [{ subjectId: 'a' }],
+  });
+  computeReportSummary(report);
+  assert.equal(report.status, 'applied');
+});
+
+test('HOLD_REASON_CODES is a closed list of unique kebab-case codes (#4369)', () => {
+  assert.equal(new Set(HOLD_REASON_CODES).size, HOLD_REASON_CODES.length);
+  assert.equal(HOLD_REASON_CODES.length, 18);
+  for (const code of HOLD_REASON_CODES) {
+    assert.match(code, /^[a-z0-9]+(?:-[a-z0-9]+)*$/u, code);
+  }
+});
+
+// kurone-kito/idd-skill#4369: the hold-reason table lists each code once, the
+// table and the exported list agree both ways, and each code has a producer.
+// The summary module defines the list, so it is excluded from the producer scan.
+test('the minimization doc lists each hold reason code once, and each has a producer (#4369)', () => {
+  const doc = readFileSync(
+    new URL('../docs/idd-comment-minimization.md', import.meta.url),
+    'utf8',
+  );
+  const heading = '### Hold reason codes';
+  const start = doc.indexOf(heading);
+  assert.notStrictEqual(
+    start,
+    -1,
+    'the doc must have a Hold reason codes section',
+  );
+  const rest = doc.slice(start + heading.length);
+  const nextHeading = rest.search(/\n#{1,3} /u);
+  const section = nextHeading === -1 ? rest : rest.slice(0, nextHeading);
+  const documented = [...section.matchAll(/^\| `([a-z0-9-]+)`\s*\|/gmu)].map(
+    (match) => match[1] ?? '',
+  );
+  assert.equal(
+    new Set(documented).size,
+    documented.length,
+    'no code is documented twice',
+  );
+  assert.deepEqual(
+    [...documented].sort(),
+    [...HOLD_REASON_CODES].sort(),
+    'the doc table and HOLD_REASON_CODES list the same codes',
+  );
+
+  const sourceDir = new URL('../src/scripts/', import.meta.url);
+  const producers = readdirSync(sourceDir)
+    .filter((name) => name.endsWith('.mts'))
+    .filter((name) => name !== 'audit-pr-cleanup-summary.mts')
+    .map((name) => readFileSync(new URL(name, sourceDir), 'utf8'))
+    .join('\n');
+  for (const code of HOLD_REASON_CODES) {
+    assert.ok(producers.includes(`'${code}'`), `no source produces ${code}`);
   }
 });

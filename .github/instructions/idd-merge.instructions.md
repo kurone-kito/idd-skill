@@ -428,6 +428,19 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      informational); `incomplete`/`failed` still take the
      cleanup-failure path below.
 
+     If the apply `status` is `held`: the head-proof gate (issue `#4369`)
+     stopped the cleanup before its next pass, so the proof of this head
+     is not settled. Do not route the run to the cleanup-failure path, and
+     do not run `--skip-claim-check` or any manual remedy. Read each
+     `holds` entry's `verdict`. For `verdict: hold`, first revalidate the
+     claim with `resume-claim-routing --assert` (exit 0, `already_owned`).
+     If that fails, end quietly. Otherwise post a hold note that lists each
+     entry's `code` and `nextAction`, then stop F4 here. For
+     `verdict: stop` (the claim is not this session's), post nothing and
+     end quietly: this session takes no further mutation. Either way, do not
+     run step 4 or later. The hold rules are in
+     `idd-overview-appendix.instructions.md`.
+
      If the apply `status` is `failed`, `incomplete`, or
      `rescan-failed`: re-check, then post cleanup-failure (or
      `recheck-failed`) as above, including the

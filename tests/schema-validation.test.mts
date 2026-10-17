@@ -1855,6 +1855,73 @@ test('policy schema accepts githubApi loadControl and rejects bad bounds', () =>
   );
 });
 
+test('policy schema accepts localExec.admission and rejects a bad backend (#4427)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const accepted = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  accepted.localExec = {
+    admission: {
+      enabled: false,
+      maxConcurrent: 2,
+      maxWait: 'PT6H',
+      backend: 'flock',
+      pueueGroup: 'idd-validate',
+      testCommand: 'pnpm run test:scripts',
+    },
+  };
+  assert.deepEqual(validate(accepted, schema), []);
+
+  const rejected = JSON.parse(JSON.stringify(accepted));
+  rejected.localExec.admission.backend = 'docker';
+  assert.ok(
+    validate(rejected, schema).some((error) =>
+      error.includes('$.localExec.admission.backend'),
+    ),
+  );
+
+  const unknown = JSON.parse(JSON.stringify(accepted));
+  unknown.localExec.admission = { directory: '/tmp/x' };
+  assert.ok(
+    validate(unknown, schema).some((error) =>
+      error.includes('additional property "directory"'),
+    ),
+  );
+});
+
+test('user-global config schema rejects localExec at the top level and in overrides (#4427)', () => {
+  const schema = loadJson('schemas/user-global-config.schema.json');
+  const context = {
+    root: REPO_ROOT,
+    schemaPath: 'schemas/user-global-config.schema.json',
+  };
+  const valid = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/user-global-config.valid.json')),
+  );
+  assert.deepEqual(validate(valid, schema, '$', context), []);
+
+  const topLevel = JSON.parse(JSON.stringify(valid));
+  topLevel.localExec = { admission: { enabled: false } };
+  assert.ok(
+    validate(topLevel, schema, '$', context).some((error) =>
+      error.includes('additional property "localExec"'),
+    ),
+  );
+
+  const overridden = JSON.parse(JSON.stringify(valid));
+  overridden.overrides = [
+    {
+      match: { repo: 'owner/repo' },
+      config: { localExec: { admission: { enabled: false } } },
+    },
+  ];
+  assert.ok(
+    validate(overridden, schema, '$', context).some((error) =>
+      error.includes('localExec'),
+    ),
+  );
+});
+
 // #3626: the schema, `normalizePolicyConfig` and the helper docs give one
 // answer for a blank telemetry path: it counts as unset and uses the default
 // file, so the schema must not reject the empty string that the normalizer

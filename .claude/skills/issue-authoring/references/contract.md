@@ -871,17 +871,24 @@ The `## Candidate files` section is not free-form prose: the
 for the A4 Step 2 high-contention shared-file check (see
 [High-contention shared-file overlap](https://github.com/kurone-kito/idd-skill/blob/main/docs/policy-constants.md#high-contention-shared-files)).
 Populate it accurately rather than as a loose reading aid for humans.
-Optional for an orphan or roadmap issue; required for a
+Required for an orphan whose effort hint is `S` or `M`; optional for an
+orphan whose effort hint is `L`, absent, or malformed, and for a roadmap
+issue. Required for a
 [child issue under a roadmap](#child-issue-under-a-roadmap) (see
 [Required draft content](#required-draft-content) below). For a child,
 the section parsing to zero paths -- heading missing or present but
 empty -- disqualifies it from `ready`, unless it also carries an
 `authoring-bucket: needs-decision`/`blocked-by-human` marker or a
 suitability score of `1` (`audit-authored-issue`'s
-`candidate-files-not-empty` check). A child with an `S` or `M` effort
-hint must also stay within the
+`candidate-files-not-empty` check). A child or an orphan with an `S` or
+`M` effort hint must also stay within the
 [over-scope split threshold](#effort-hint)
-(`effort-candidate-file-limit`).
+(`effort-candidate-file-limit`). For an orphan with an `S` or `M` hint,
+a missing or zero-path section fails that check with no exemption: a
+`Split out of` line, a human-bucket marker, and a suitability score of
+`1` do not excuse it. The over-limit rule for orphans followed the
+overruns in issues `#4372` and `#4375`; the section requirement itself is
+preventive (no observed incident yet).
 
 - List each candidate file path inside backticks, one path (or one
   bullet) per line — for example `` - `src/scripts/idd-onboard.mts` ``.
@@ -902,6 +909,9 @@ hint must also stay within the
 - `## Background` or `## Goal`
 - `## Proposed change`
 - `## Acceptance criteria`
+- `## Candidate files` with at least one path when the effort footer is
+  `S` or `M`; optional for `L`, an absent effort footer, or a malformed
+  one (see [Candidate files format](#candidate-files-format))
 - an autopilot-suitability footer at the end of the body (visible
   line + `<!-- <marker-prefix>-autopilot-suitability: N -->` marker;
   see [Autopilot-suitability score](#autopilot-suitability-score))
@@ -1466,8 +1476,8 @@ still passes), the equivalent one-directional check for
 `needsDecisionLabelName` label, markerPrefix consistency across every
 authoring marker, the declared shape's required section headings, the
 roadmap-id/blocked-by dependency-marker rules, visible/hidden line
-agreement for the suitability and effort footers, and a child's
-candidate-file count against the
+agreement for the suitability and effort footers, and the
+candidate-file count of a child or an orphan against the
 [over-scope split threshold](#effort-hint) for its `S`/`M` effort hint
 (`effort-candidate-file-limit`) — so a weak model does
 not have to hold every rule in its head at once while drafting.
@@ -1797,19 +1807,21 @@ likely bundles multiple intents. Return to
 [Decompose and Draft](#2-decompose-and-draft) and split at intent level
 instead of publishing one oversized issue labeled `L`.
 
-**Over-scope split threshold.** A child draft whose effort hint is `S`
-or `M` must not list more candidate files than its row below allows.
-Split an over-threshold draft into a held roadmap with children before
-publication, so no loop session claims an oversized issue. The count is
-the number of distinct paths the `## Candidate files` parser extracts
-(see [Candidate files format](#candidate-files-format)), so keep notes
-out of backticks. A body that is already the product of a split is
+**Over-scope split threshold.** An orphan or child draft whose effort
+hint is `S` or `M` must not list more candidate files than its row below
+allows. Split an over-threshold draft into a held roadmap with children
+before publication, so no loop session claims an oversized issue. The
+count is the number of distinct paths the `## Candidate files` parser
+extracts (see [Candidate files format](#candidate-files-format)), so keep
+notes out of backticks. A body that is already the product of a split is
 exempt when it carries a plain-text `Split out of #<n>` line (not inside
 backticks or an HTML comment). The exemption is self-asserted, so a
 reviewer confirms the referenced issue is the real parent. The rule
-checks only the child shape, and only when a coherent hidden effort
-marker is present (a draft with no effort footer is not checked); it
-also checks a human-bucket child audited without `--expect-bucket`.
+checks the child and orphan shapes, and only when a coherent hidden
+effort marker is present (a draft with no effort footer is not checked);
+it also checks a human-bucket child or orphan audited without
+`--expect-bucket`. An `S` or `M` orphan whose section has no path fails
+the rule outright, because a missing section hides the count.
 `audit-authored-issue`'s
 `effort-candidate-file-limit` check enforces this table, which is the
 single source of the values.
@@ -1865,7 +1877,8 @@ Binding rules:
   in an autopilot run under `autopilotSuitability.effortL: refuse`, which is
   routed to humans instead of being selected, whatever its score. At publish
   time, two lints refuse a body that fails them:
-  the [over-scope split threshold](#effort-hint) for `S`/`M` children, and
+  the [over-scope split threshold](#effort-hint) for `S`/`M` orphans and
+  children, and
   `effort-l-ready` for `L` under `refuse`. Both run in attended and
   autopilot sessions alike; neither is Discover selection.
 - **Fail-safe on absence.** A missing, non-`S|M|L`, or conflicting

@@ -538,6 +538,24 @@ does not cover a standalone or ad hoc `gh` command, and it is not a
 cross-host or global limit. Turning it on does not connect Discover; the
 helper-script load-control section describes the contract.
 
+`localExec.admission` is the repository-local admission policy for local
+validation commands (issue `kurone-kito/idd-skill#4427`, roadmap
+`kurone-kito/idd-skill#4426`). Unlike `githubApi.loadControl`, it defaults
+on: an omitted object lets one validation run at a time, waits up to `PT2H`
+for a slot, and uses the `flock` backend. It defaults on because a repository
+that imports the template would otherwise run unprotected, while concurrent
+IDD sessions on one host can exhaust it. Only a literal `false` turns it off,
+and that turns it off for this repository's own commands only; another
+repository of the same operating-system user still takes the slot. The
+object belongs in the repository document. A user-global document that sets
+`localExec` fails schema validation, and the layered merge drops a user-global
+`localExec` whenever a repository document exists. `maxConcurrent` accepts 1 to
+8, and a value outside that range falls back to 1. `maxWait` accepts up to
+`PT6H`, and a longer or unparseable value falls back to `PT2H`. `backend` is
+`flock` or `pueue`. `pueueGroup` names the Pueue group, which defaults to
+`idd-validate`. `testCommand` is an optional command string, and a blank value
+leaves it unset.
+
 For advisory review timing, repositories may now customize
 `advisoryWait.requestCap`, `advisoryWait.pendingWindow`,
 `advisoryWait.settledWindow`, and `advisoryWait.pollInterval` in

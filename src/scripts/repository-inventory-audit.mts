@@ -60,6 +60,7 @@ export const COVERED_HELPERS = [
   'delete-remote-branch',
   'disposition-non-review-notices',
   'e10-recurrence',
+  'f4-worktree-branch-cleanup',
   'external-check-waiver',
   'force-handoff',
   'forced-handoff-marker',

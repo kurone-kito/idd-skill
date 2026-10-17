@@ -531,6 +531,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Dry-run or apply a maintainer-authorized external-check waiver comment for an active PR claim.',
   },
   {
+    id: 'f4-worktree-branch-cleanup',
+    scriptName: 'idd:f4-worktree-branch-cleanup',
+    binName: 'idd-f4-worktree-branch-cleanup',
+    entryPath: 'scripts/f4-worktree-branch-cleanup.mjs',
+    vendoredCommand: 'node scripts/f4-worktree-branch-cleanup.mjs',
+    description:
+      'Run F4 steps 4 to 6 (fast-forward, worktree and branch removal, remote branch) behind the head proof; dry-run by default.',
+  },
+  {
     id: 'force-handoff',
     scriptName: 'idd:force-handoff',
     binName: 'idd-force-handoff',

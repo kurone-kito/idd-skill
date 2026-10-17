@@ -340,16 +340,24 @@ function effortFooter(hint: string): string {
 // Verified empirically (suitability-triage.mjs --body-file --verbose and
 // a standalone evaluateA4Viability probe) that this body cleanly passes
 // all 3 A4 criteria and all 6 evaluated A4.5 checks.
+/**
+ * `candidateFiles` defaults to one backtick-quoted path, the same default as
+ * `childBody`, so an orphan fixture carries the `## Candidate files` section
+ * that an S or M orphan must have. Pass `null` to omit the heading, or `[]`
+ * for a present heading with no parseable path (the zero-path case).
+ */
 function orphanBody({
   score = 4,
   effort = 'M',
   includeEffort = true,
   proposedChange = true,
+  candidateFiles = ['`src/scripts/example.mts`'],
 }: {
   score?: number;
   effort?: string;
   includeEffort?: boolean;
   proposedChange?: boolean;
+  candidateFiles?: readonly string[] | null;
 } = {}): string {
   return [
     '# Add a sample orphan feature',
@@ -363,6 +371,14 @@ function orphanBody({
     '',
     '- [ ] `node --test tests/example.test.mts` passes with the new case covered',
     '',
+    ...(candidateFiles === null
+      ? []
+      : [
+          '## Candidate files',
+          '',
+          ...candidateFiles.map((path) => `- ${path}`),
+          '',
+        ]),
     suitabilityFooter(score),
     ...(includeEffort ? ['', effortFooter(effort)] : []),
   ].join('\n');
@@ -2457,7 +2473,9 @@ test('candidate-files-not-empty passes for a child issue with at least one real 
 });
 
 test('candidate-files-not-empty is not applicable to the orphan shape, even with zero candidate files', () => {
-  const report = auditAuthoredIssue(orphanBody(), { shape: 'orphan' });
+  const report = auditAuthoredIssue(orphanBody({ candidateFiles: [] }), {
+    shape: 'orphan',
+  });
   assert.equal(findingResult(report, 'candidate-files-not-empty'), 'pass');
 });
 
@@ -2625,7 +2643,7 @@ test('effort-candidate-file-limit ignores a Split out of mention in code, an HTM
   }
 });
 
-test('effort-candidate-file-limit does not check an L child, a child with no effort footer, the orphan shape, or a bucket audit', () => {
+test('effort-candidate-file-limit does not check an L child, a child with no effort footer, or a bucket audit, but checks an S orphan', () => {
   assert.equal(
     effortLimitResult(
       childBody({ effort: 'L', candidateFiles: candidatePaths(12) }),
@@ -2641,7 +2659,7 @@ test('effort-candidate-file-limit does not check an L child, a child with no eff
       childBody({ effort: 'S', candidateFiles: candidatePaths(12) }),
       { shape: 'orphan' },
     ),
-    'pass',
+    'fail',
   );
   assert.equal(
     effortLimitResult(
@@ -2650,6 +2668,214 @@ test('effort-candidate-file-limit does not check an L child, a child with no eff
     ),
     'pass',
   );
+});
+
+// --- effort-candidate-file-limit on the orphan shape (#4434): one case per
+// row of the gate-rule verdict table in the issue body ---
+
+function orphanEffortResult(
+  body: string,
+  options: Partial<Parameters<typeof auditAuthoredIssue>[1]> = {},
+): 'pass' | 'fail' {
+  return effortLimitResult(body, { shape: 'orphan', ...options });
+}
+
+test('effort-candidate-file-limit passes an orphan at the S and M limits and fails one past them (#4434)', () => {
+  assert.equal(
+    orphanEffortResult(
+      orphanBody({ effort: 'S', candidateFiles: candidatePaths(3) }),
+    ),
+    'pass',
+  );
+  assert.equal(
+    orphanEffortResult(
+      orphanBody({ effort: 'S', candidateFiles: candidatePaths(4) }),
+    ),
+    'fail',
+  );
+  assert.equal(
+    orphanEffortResult(
+      orphanBody({ effort: 'M', candidateFiles: candidatePaths(8) }),
+    ),
+    'pass',
+  );
+  assert.equal(
+    orphanEffortResult(
+      orphanBody({ effort: 'M', candidateFiles: candidatePaths(9) }),
+    ),
+    'fail',
+  );
+});
+
+test('effort-candidate-file-limit passes an S or M orphan with one candidate path (#4434)', () => {
+  for (const effort of ['S', 'M']) {
+    assert.equal(
+      orphanEffortResult(
+        orphanBody({ effort, candidateFiles: candidatePaths(1) }),
+      ),
+      'pass',
+      effort,
+    );
+  }
+});
+
+test('effort-candidate-file-limit does not check an L orphan, with or without a section (#4434)', () => {
+  assert.equal(
+    orphanEffortResult(
+      orphanBody({ effort: 'L', candidateFiles: candidatePaths(20) }),
+    ),
+    'pass',
+  );
+  assert.equal(
+    orphanEffortResult(orphanBody({ effort: 'L', candidateFiles: null })),
+    'pass',
+  );
+  assert.equal(
+    orphanEffortResult(orphanBody({ effort: 'L', candidateFiles: [] })),
+    'pass',
+  );
+});
+
+test('effort-candidate-file-limit fails an S or M orphan whose section is missing or has zero paths (#4434)', () => {
+  for (const effort of ['S', 'M']) {
+    assert.equal(
+      orphanEffortResult(orphanBody({ effort, candidateFiles: null })),
+      'fail',
+      `${effort} without a section`,
+    );
+    assert.equal(
+      orphanEffortResult(orphanBody({ effort, candidateFiles: [] })),
+      'fail',
+      `${effort} with zero paths`,
+    );
+  }
+});
+
+test('effort-candidate-file-limit exempts no human bucket or score-1 orphan from the section requirement (#4434)', () => {
+  const cases: [string, string][] = [
+    [
+      'needs-decision marker',
+      withAuthoringBucket(
+        orphanBody({ effort: 'S', candidateFiles: null }),
+        'needs-decision',
+      ),
+    ],
+    [
+      'blocked-by-human marker',
+      withAuthoringBucket(
+        orphanBody({ effort: 'S', candidateFiles: [] }),
+        'blocked-by-human',
+      ),
+    ],
+    [
+      'suitability score 1',
+      orphanBody({ effort: 'M', candidateFiles: null, score: 1 }),
+    ],
+  ];
+  for (const [label, body] of cases) {
+    assert.equal(orphanEffortResult(body), 'fail', label);
+  }
+});
+
+test('effort-candidate-file-limit fails an S or M orphan with no section even with a Split out of line (#4434)', () => {
+  for (const candidateFiles of [null, []]) {
+    const body = `${orphanBody({ effort: 'S', candidateFiles })}\n\nSplit out of #12\n`;
+    assert.equal(orphanEffortResult(body), 'fail');
+  }
+});
+
+test('effort-candidate-file-limit exempts an over-limit M orphan with a Split out of line and a section (#4434)', () => {
+  const body = `${orphanBody({ effort: 'M', candidateFiles: candidatePaths(9) })}\n\nSplit out of #12\n`;
+  assert.equal(orphanEffortResult(body), 'pass');
+});
+
+test('effort-candidate-file-limit fails an over-limit M orphan routed to a human bucket, unlike a bucket audit (#4434)', () => {
+  const body = withAuthoringBucket(
+    orphanBody({ effort: 'M', candidateFiles: candidatePaths(9) }),
+    'needs-decision',
+  );
+  assert.equal(orphanEffortResult(body), 'fail');
+  assert.equal(
+    orphanEffortResult(body, { expectedAuthoringBucket: 'needs-decision' }),
+    'pass',
+  );
+});
+
+test('effort-candidate-file-limit is not applicable to an S or M orphan bucket audit, even with no section (#4434)', () => {
+  for (const candidateFiles of [null, []]) {
+    assert.equal(
+      orphanEffortResult(orphanBody({ effort: 'S', candidateFiles }), {
+        expectedAuthoringBucket: 'needs-decision',
+      }),
+      'pass',
+    );
+  }
+  assert.equal(
+    orphanEffortResult(
+      orphanBody({ effort: 'M', candidateFiles: candidatePaths(9) }),
+      { expectedAuthoringBucket: 'needs-decision' },
+    ),
+    'pass',
+  );
+});
+
+test('effort-candidate-file-limit is not applicable to an orphan with no coherent effort marker (#4434)', () => {
+  assert.equal(
+    orphanEffortResult(
+      orphanBody({ includeEffort: false, candidateFiles: null }),
+    ),
+    'pass',
+  );
+  assert.equal(
+    orphanEffortResult(orphanBody({ effort: 'X', candidateFiles: null })),
+    'pass',
+  );
+});
+
+test('effort-candidate-file-limit is not applicable to a roadmap body at any count (#4434)', () => {
+  const body = `${roadmapBody()}\n\n${effortFooter('S')}`;
+  assert.equal(effortLimitResult(body, { shape: 'roadmap' }), 'pass');
+});
+
+test('effort-candidate-file-limit passes a child with S or M and no section or zero paths, as candidate-files-not-empty fails it (#4434)', () => {
+  for (const candidateFiles of [null, []]) {
+    for (const effort of ['S', 'M']) {
+      const report = auditAuthoredIssue(childBody({ effort, candidateFiles }), {
+        shape: 'child',
+      });
+      assert.equal(
+        findingResult(report, 'effort-candidate-file-limit'),
+        'pass',
+        effort,
+      );
+      assert.equal(
+        findingResult(report, 'candidate-files-not-empty'),
+        'fail',
+        effort,
+      );
+    }
+  }
+});
+
+test('effort-candidate-file-limit and candidate-files-not-empty both pass a child routed to a human bucket or scored 1 (#4434)', () => {
+  const cases: string[] = [
+    childBody({
+      effort: 'S',
+      candidateFiles: null,
+      extraMarkers: '<!-- idd-skill-authoring-bucket: needs-decision -->',
+    }),
+    childBody({
+      effort: 'M',
+      candidateFiles: [],
+      extraMarkers: '<!-- idd-skill-authoring-bucket: blocked-by-human -->',
+    }),
+    childBody({ effort: 'S', candidateFiles: null, score: 1 }),
+  ];
+  for (const body of cases) {
+    const report = auditAuthoredIssue(body, { shape: 'child' });
+    assert.equal(findingResult(report, 'effort-candidate-file-limit'), 'pass');
+    assert.equal(findingResult(report, 'candidate-files-not-empty'), 'pass');
+  }
 });
 
 function effortLReadyResult(
@@ -6002,6 +6228,14 @@ const CARRIER_SCAN_SKIP = markdownItAvailable()
 function carrierTest(name: string, fn: () => void): void {
   test(name, { skip: CARRIER_SCAN_SKIP }, fn);
 }
+
+carrierTest(
+  'effort-candidate-file-limit is not applicable to a draft carrier body at any count (#4434)',
+  () => {
+    const body = `${roadmapBody()}\n\n${effortFooter('S')}`;
+    assert.equal(effortLimitResult(body, { shape: 'carrier' }), 'pass');
+  },
+);
 
 carrierTest(
   'effort-l-ready leaves a draft carrier out of the unreadable-config failure (#4282)',

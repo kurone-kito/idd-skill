@@ -371,6 +371,16 @@ interface PolicyConfigFile {
       maxWait?: string;
     };
   };
+  localExec?: {
+    admission?: {
+      enabled?: boolean;
+      maxConcurrent?: number;
+      maxWait?: string;
+      backend?: 'flock' | 'pueue';
+      pueueGroup?: string;
+      testCommand?: string;
+    };
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -708,6 +718,7 @@ export const policyConfigKeys = [
   'localValidationEvidence',
   'providerHealth',
   'githubApi',
+  'localExec',
 ] as const satisfies readonly (keyof PolicyConfigFile)[];
 
 export const userGlobalConfigKeys = [
