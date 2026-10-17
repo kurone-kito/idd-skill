@@ -233,7 +233,7 @@ export const NEXT_ACTIONS: Readonly<
   'claim-activation-unknown':
     'Hold. The activation time of this claim cannot be read. The operator checks the claim record on the issue.',
   'proof-missing':
-    'No trusted proof exists yet. If cleanup had candidates, rerun F4 step 3, whose gate posts the proof. Otherwise run post-idd-marker --type f4-head-proof as a dry run, then with --apply on a post verdict, and rerun this helper.',
+    'No trusted proof exists yet. If cleanup had candidates, rerun F4 step 3, whose gate posts the proof. Otherwise run post-idd-marker --type f4-head-proof --target issue <issue-number> --claim-id <claim-id> --agent-id <agent-id> --worktree <issue-worktree-path> as a dry run, then add --apply on a post verdict, and rerun this helper.',
   'proof-unreadable':
     'Hold. The output of the marker dry run could not be read as a verdict. Rerun the dry run and inspect its stderr. Do not proceed.',
   'proof-worktree-missing':
@@ -269,9 +269,9 @@ export const NEXT_ACTIONS: Readonly<
   'worktree-remove-refused':
     'Failed. git worktree remove refused after the checks passed, so the worktree may be partly changed. The operator inspects it. A rerun reads the proof again and posts nothing.',
   'delete-setting-unreadable':
-    'Hold at step 6. delete_branch_on_merge could not be read as a boolean, and nothing remote was deleted. The operator completes step 6 by hand with delete-remote-branch and the expected SHA, and the session continues from step 7 after the operator confirms. Do not rerun the helper.',
+    'Hold at step 6. delete_branch_on_merge could not be read as a boolean, and nothing remote was deleted. In a dry run nothing has changed, so rerun it once the setting is readable. In an applied run, steps 4 and 5 have already run, so the operator completes step 6 by hand with delete-remote-branch and the expected SHA, and the session continues from step 7 after the operator confirms. Do not rerun an applied run.',
   'remote-delete-unreadable':
-    'Hold at step 6. The output of the remote branch helper could not be read, and nothing remote was deleted. The operator completes step 6 by hand with delete-remote-branch and the expected SHA, after reading its output, and the session continues from step 7 after the operator confirms. Do not rerun the helper.',
+    'Hold at step 6. The output of the remote branch helper could not be read, and nothing remote was deleted. In a dry run nothing has changed, so rerun it. In an applied run, steps 4 and 5 have already run, so the operator completes step 6 by hand with delete-remote-branch and the expected SHA, after reading its output, and the session continues from step 7 after the operator confirms. Do not rerun an applied run.',
 };
 
 /** True when `target` is `root` or lies inside it, with no `..` escape. */
