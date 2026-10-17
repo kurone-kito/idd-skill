@@ -286,9 +286,9 @@ blank/absent `testCommand` is unset. Route each full `commands.<gate>`
 value intact in one profile-selected
 `idd-local-admission -- <shell> -c <string>` call: `fix-validate`
 (B3/C5, E9, D1 conflict fix, code-caused recovery), D2
-`pre-push-validate`, and E12/Esync `post-fix-validate`. Run nonblank
-`testCommand` as a second admitted call immediately after each suite; use
-no other string for it.
+`pre-push-validate`, E12/Esync `post-fix-validate`. Admit
+`testCommand` separately only when a phase invokes it; never append it to a
+named command set or use another string.
 
 With helper runtime, use only it. Otherwise `enabled: false` runs directly;
 use the [helper-free fallback](../../docs/idd-helper-scripts.md#helper-free-fallback)
