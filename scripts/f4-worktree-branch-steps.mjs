@@ -80,7 +80,7 @@ export const NEXT_ACTIONS = {
   'proof-unreadable':
     'Hold. The output of the marker dry run could not be read as a verdict. Rerun the dry run and inspect its stderr. Do not proceed.',
   'proof-worktree-missing':
-    'Hold. The claimed worktree is no longer registered, and the proof dry run needs it, so this run cannot read the proof. This run removed nothing. Read the proof on the claimed issue, restore the worktree registration, and rerun the removal helper again; do not run step 6 by hand.',
+    'Hold. The claimed worktree is no longer registered, so the proof dry run cannot read the proof. This run removed nothing. If step 5 already removed the worktree, the operator completes step 6 by hand with delete-remote-branch and the expected SHA, and the session continues from step 7 after the operator confirms. Otherwise restore the worktree registration and rerun the removal helper.',
   'symlink-path':
     'Hold. A path in the worktree or above it is a symlink, or a tracked entry resolves outside the worktree. Nothing ran in that path. The operator inspects the symlink, then fixes or removes it.',
   'fetch-failed':
@@ -112,9 +112,9 @@ export const NEXT_ACTIONS = {
   'worktree-remove-refused':
     'Failed. git worktree remove refused after the checks passed, so the worktree may be partly changed. The operator inspects it. A rerun reads the proof again and posts nothing.',
   'delete-setting-unreadable':
-    'Hold. delete_branch_on_merge could not be read as a boolean. Nothing remote was deleted. Rerun once the setting is readable.',
+    'Hold at step 6. delete_branch_on_merge could not be read as a boolean, and nothing remote was deleted. The operator completes step 6 by hand with delete-remote-branch and the expected SHA, and the session continues from step 7 after the operator confirms. Do not rerun the helper.',
   'remote-delete-unreadable':
-    'Hold. The output of the remote branch helper could not be read. Nothing remote was deleted. Rerun, and check the helper output.',
+    'Hold at step 6. The output of the remote branch helper could not be read, and nothing remote was deleted. The operator completes step 6 by hand with delete-remote-branch and the expected SHA, after reading its output, and the session continues from step 7 after the operator confirms. Do not rerun the helper.',
 };
 /** True when `target` is `root` or lies inside it, with no `..` escape. */
 export function isWithinRoot(root, target) {
