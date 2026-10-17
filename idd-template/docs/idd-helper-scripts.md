@@ -2653,7 +2653,10 @@ one-slot `flock` path. If `flock` is absent, print the helper's notice and run
 directly. Otherwise resolve `state` to absolute `XDG_STATE_HOME`, or
 `$HOME/.local/state` when that variable is relative or unset; if neither gives
 an absolute path, refuse with exit `2`. The following Bash-compatible shell
-fragment opens the same per-user lock file as the helper:
+fragment opens the same per-user lock file as the helper. It enables
+noninteractive job control to give the admitted child its own process group;
+if the running shell cannot enable job control, the fragment refuses before
+starting the command:
 
 ```sh
 case ${XDG_STATE_HOME:-} in
@@ -2718,7 +2721,52 @@ fi
 exec 9<"$lock" || { printf 'local-admission: cannot open lock; command not started\n' >&2; exit 2; }
 umask "$original_umask" || { printf 'local-admission: cannot restore umask; command not started\n' >&2; exit 2; }
 if flock --timeout "$wait_seconds" --conflict-exit-code 75 9; then
-  if IDD_LOCAL_ADMISSION=1 "$shell" -c "$command"; then status=0; else status=$?; fi
+  if ! set -m 2>/dev/null; then
+    printf 'local-admission: this shell cannot enable job control; command not started\n' >&2
+    flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
+    exit 2
+  fi
+  case $- in
+    *m*) ;;
+    *)
+      printf 'local-admission: job control is unavailable; command not started\n' >&2
+      flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
+      exit 2
+      ;;
+  esac
+  child_pid=
+  pending_signal=
+  forward_signal() {
+    signal=$1
+    case $signal in
+      INT) signal_status=130 ;;
+      TERM) signal_status=143 ;;
+    esac
+    trap '' INT TERM
+    if [ -n "$child_pid" ]; then
+      kill -"$signal" -- "-$child_pid" 2>/dev/null || :
+      wait "$child_pid" 2>/dev/null || :
+      while kill -0 -- "-$child_pid" 2>/dev/null; do sleep 1; done
+    fi
+    flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
+    exit "$signal_status"
+  }
+  handle_signal() {
+    signal=$1
+    if [ -n "$child_pid" ]; then
+      forward_signal "$signal"
+    else
+      pending_signal=$signal
+    fi
+  }
+  trap 'handle_signal INT' INT
+  trap 'handle_signal TERM' TERM
+  IDD_LOCAL_ADMISSION=1 "$shell" -c "$command" &
+  child_pid=$!
+  if [ -n "$pending_signal" ]; then forward_signal "$pending_signal"; fi
+  if wait "$child_pid"; then status=0; else status=$?; fi
+  trap - INT TERM
+  child_pid=
   flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
   exit "$status"
 else
@@ -2746,8 +2794,8 @@ them:
 - A rename over the lock path after the open, or a parent-path swap between the
   directory check and the open. A later caller that opens the path then locks a
   different file, while the held inode stays locked.
-- A command that ignores SIGINT or SIGTERM keeps the slot after the helper
-  exits.
+- A process group that does not exit after SIGINT or SIGTERM keeps its
+  admission slot held while the helper or fallback waits for the group to end.
 - `IDD_LOCAL_ADMISSION` already set in the environment skips admission. A
   session must not set the variable itself.
 - The slot covers one OS user. A second OS user has another slot, and a run from
