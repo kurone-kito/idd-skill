@@ -609,10 +609,11 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      still does, compare `git rev-parse <branch-name>` with `gh pr
      view {pr-number} --json state,headRefOid`: matching `MERGED`
      head → keep the branch, re-validate claim, comment, and let the
-     helper continue to step 6 (`Next action: none`). Only the operator
-     may run `git branch -D <branch-name>`, and the helper is then rerun.
-     Otherwise hold `local-branch-unmerged-commits`, stop before step 7,
-     keep claim.
+     helper continue to step 6 (`Next action: none`). The operator may
+     later run `git branch -D <branch-name>` as a post-F4 action. That needs
+     no helper rerun, which could not pass its proof check once step 5 has
+     unregistered the worktree. Otherwise hold
+     `local-branch-unmerged-commits`, stop before step 7, keep claim.
 
 6. If GitHub auto-delete is disabled (`delete_branch_on_merge` is false),
    delete the remote branch per
