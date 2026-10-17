@@ -1520,7 +1520,9 @@ yet, so stop and report instead.
 outside the worktree. Fill the fields of `schemas/worker-report.schema.json`:
 `schemaVersion`, `issue`, `pullRequest`, `claimId`, `harness`, `workerHandle`,
 `terminalPhase`, `outcome`, and the optional `reviewRounds`, `stalls`,
-`deviations`, `frictions`, and `followUps`. Give `workerHandle` any non-empty
+`deviations`, `frictions`, `followUps`, and `unfiledFollowUps`. Use
+`followUps` only for issues you filed; put textual follow-ups you identified but
+did not file in `unfiledFollowUps`. Give `workerHandle` any non-empty
 value, such as `{agent-id}`, which the orchestrator overwrites from its roster
 entry, and leave `verifiedAt` and `recordedAt` out, because you cannot know
 them. Do not append the draft to the

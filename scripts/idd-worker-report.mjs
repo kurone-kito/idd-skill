@@ -581,6 +581,8 @@ export function summarizeWorkerReports(file, since = null) {
   let total = 0;
   let invalidLines = 0;
   let recorded = 0;
+  let unfiledFollowUpReports = 0;
+  let unfiledFollowUpEntries = 0;
   for (const entry of parseLines(readStore(file))) {
     if (entry === undefined || validateWorkerReport(entry).length > 0) {
       invalidLines += 1;
@@ -604,6 +606,11 @@ export function summarizeWorkerReports(file, since = null) {
         (frictionFiles.get(friction.file) ?? 0) + 1,
       );
     }
+    const unfiledFollowUps = report.unfiledFollowUps ?? [];
+    if (unfiledFollowUps.length > 0) {
+      unfiledFollowUpReports += 1;
+      unfiledFollowUpEntries += unfiledFollowUps.length;
+    }
   }
   const distribution = {};
   for (const round of [...rounds.keys()].sort((a, b) => a - b)) {
@@ -623,6 +630,10 @@ export function summarizeWorkerReports(file, since = null) {
           b.count - a.count || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0),
       )
       .slice(0, FRICTION_FILE_LIMIT),
+    unfiledFollowUps: {
+      reports: unfiledFollowUpReports,
+      entries: unfiledFollowUpEntries,
+    },
   };
 }
 // ---------------------------------------------------------------------------
@@ -745,8 +756,9 @@ Local store for a worker's final report. Nothing is posted to GitHub.
                      nothing. A record with the same claimId, workerHandle and
                      terminalPhase as an existing line is reported as
                      {"status":"duplicate"} (exit 0) and not appended.
-  summary            Print outcome counts, the review-round distribution and
-                     the most frequent frictions files. Never writes.
+  summary            Print outcome counts, review-round distribution, frequent
+                     friction files and unfiledFollowUps report and entry
+                     counts. Never writes.
 
   --file <path>      append: read the record from this file.
   --stdin            append: read the record from standard input.

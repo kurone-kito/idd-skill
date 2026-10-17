@@ -642,6 +642,7 @@ export const workerReportKeys = [
   'deviations',
   'frictions',
   'followUps',
+  'unfiledFollowUps',
 ] as const satisfies readonly (keyof WorkerReport)[];
 
 export const tokenCostSnapshotKeys = [
@@ -1495,6 +1496,7 @@ const workerReportFixture = {
     },
   ],
   followUps: ['kurone-kito/idd-skill#3851'],
+  unfiledFollowUps: ['The worker found another issue to consider.'],
 } satisfies WorkerReport;
 
 const tokenCostZeroPercentiles = { p25: 0, p50: 0, p75: 0 };
