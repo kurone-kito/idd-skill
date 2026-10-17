@@ -431,9 +431,9 @@ values as well as the F2 watermark and local branch tip. The comment body
 must start with the marker token and include a visible note after it;
 `gh issue comment` and `gh api -f body=` silently
 reject HTML-only operational markers (PR `#3741` review comment
-`#4173965040`). POST a JSON document instead. This block is reference only:
-a claimed run posts the proof through the marker command, and without that
-helper the run holds rather than posting by hand:
+`#4173965040`). The marker command renders and posts this body, so no
+session posts it by hand. The block below only shows the rendered body; do
+not run it:
 
 ```sh
 F4_MARKER_TOKEN=$(printf \
@@ -476,9 +476,9 @@ inspection/removal; the local branch may also be absent, and if it still
 exists its tip must equal `{branch-tip-SHA}`. If both are present, require
 the local branch to exist and its tip to equal `{branch-tip-SHA}`, then
 run the normal safety inspection. The removal helper, not the session,
-performs this next step. Delete the local branch with
-`git branch -d -- "$BRANCH_NAME"` only when it exists; absence is
-already complete. Keep
+owns local-branch deletion: it runs
+`git branch -d -- "$BRANCH_NAME"` only when the branch exists, and absence
+is already complete. Keep
 the existing unmerged-branch hold path.
 
 The removal helper, `node scripts/f4-worktree-branch-cleanup.mjs` (see
@@ -591,7 +591,7 @@ and the next action below. The codes for steps 4 to 6 are in
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `claim-lost`                | Stop. The claim is not this session, or it could not be confirmed. Take no further mutation and report the handoff. Do not unclaim.                                                                                                                                                                                                                                                                  |
 | `owner-evidence-required`   | Stop. The claim ID matches, but the independent owner evidence (the claim lock, the generated tokens, and the branch) does not. Restore the claimed worktree lock, or the operator decides.                                                                                                                                                                                                          |
-| `proof-missing`             | No trusted proof exists yet. If cleanup had candidates, rerun F4 step 3, whose gate posts the proof. Otherwise run the marker command as a dry run, then with `--apply` on a `post` verdict, and rerun this helper.                                                                                                                                                                                  |
+| `proof-missing`             | No trusted proof exists yet. If cleanup had candidates, rerun F4 step 3, whose gate posts the proof. Otherwise run `post-idd-marker --type f4-head-proof --target issue <issue-number> --claim-id <claim-id> --agent-id <agent-id> --worktree <issue-worktree-path>` as a dry run, then add `--apply` on a `post` verdict, and rerun this helper.                                                    |
 | `proof-unreadable`          | Hold. The output of the marker dry run could not be read as a verdict. Rerun the dry run and inspect its stderr. Do not proceed.                                                                                                                                                                                                                                                                     |
 | `proof-worktree-missing`    | Hold. The claimed worktree is no longer registered, so the proof dry run cannot read the proof. This run removed nothing. If step 5 already removed the worktree, the operator completes step 6 by hand with delete-remote-branch and the expected SHA, and the session continues from step 7 after the operator confirms. Otherwise restore the worktree registration and rerun the removal helper. |
 | `claim-or-lock`             | Stop. The claim or its worktree lock is not this session. Take no further mutation and report the handoff.                                                                                                                                                                                                                                                                                           |
