@@ -860,9 +860,11 @@ was skipped.
 A claimed single-PR apply runs the F4 head-proof gate before each pass
 that has candidates (issue `#4369`). A gate hold ends the run with apply
 status `held`, which outranks every other status. The run's `holds` list
-names each reason below with its next action. A `held` run posts a hold
-note, as `idd-merge.instructions.md` describes, and never a cleanup-failure
-comment, so `held` is not an evidence outcome. Each code has a producer
+names each reason below with its next action. A `held` run with a `hold`
+verdict posts a hold note, as `idd-merge.instructions.md` describes. A
+`stop` verdict (the claim is not this session's) posts nothing, and the
+session ends quietly. Neither case writes a cleanup-failure comment, so
+`held` is not an evidence outcome. Each code has a producer
 and exactly one row in this table, and the repository tests check both.
 
 | Code                        | Produced by                 | Meaning and next action                                                                                                               |
@@ -939,8 +941,9 @@ corresponding path:
 |                      | step 3.                                                      |
 
 After apply, if `status` is `held`, the head-proof gate stopped the run
-before its next pass. Post the hold note from `idd-merge.instructions.md`
-(see [Hold reason codes](#hold-reason-codes)), and post neither an
+before its next pass. For a `hold` verdict, post the hold note from
+`idd-merge.instructions.md` (see [Hold reason codes](#hold-reason-codes)).
+For a `stop` verdict, post nothing. In both cases, post neither an
 evidence comment nor a cleanup-failure comment. After apply, if `status`
 is `failed`, `incomplete`, or `rescan-failed`,
 run the same pre-POST re-check and act on `RECHECK_RESULT`:
