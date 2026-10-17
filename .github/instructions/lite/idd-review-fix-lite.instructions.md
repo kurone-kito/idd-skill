@@ -13,20 +13,21 @@ standard file.
 
 ## Helper runtime contract
 
-- Use every named helper or command set. Missing, failing, or disagreeing
-  helpers are stop-and-ask conditions; never fall back silently to prose.
+- Use every named helper/command set; missing, failing, or conflicting
+  state means stop and ask (no prose fallback).
 - `instructions-only` uses `idd-review-fix.instructions.md`.
 - **Command sets**: `fix-validate` (E9) and `post-fix-validate` (E12) are
   read from `.github/idd/config.json`'s `commands` mapping; if unreadable,
   stop and ask.
 - Judge each run by exit status (Bash `${PIPESTATUS[0]}` or
   `set -o pipefail`); filtered output cannot prove success (#3139).
-- Wrap each whole configured string in one `idd-local-admission --`
-  call. Read and admit `localExec.admission.testCommand` from the repository
-  policy file when set. Exit 75 is expiry only if stderr contains
-  `local-admission: expired`: report no command started; do not rerun
-  or treat the step as a pass (not a test rerun or Discover incomplete-result retry).
-  Otherwise, 75 is the command's own status.
+- Resolve active-profile `idd-local-admission` via manifest/docs; run
+  each configured string once as a single shell-child argument through
+  `--`.
+- Admit `localExec.admission.testCommand` from repo policy likewise.
+  Exit 75 expires only with stderr `local-admission: expired`: report
+  no start; do not rerun or count a pass (not a test rerun or Discover
+  incomplete-result retry). Otherwise, 75 is command status.
 
 ## Upstream-triage boundary
 
