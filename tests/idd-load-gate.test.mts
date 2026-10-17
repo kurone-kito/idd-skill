@@ -12,6 +12,7 @@ import {
   parseLoadGateArgs,
   waitForLoad,
 } from '../src/scripts/idd-load-gate.mts';
+import { readOneMinuteLoad } from '../src/scripts/idd-worker-budget.mts';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -57,6 +58,7 @@ test('passes at once with waitedMs 0 when the load is below the limit', () => {
     maxLoad: 24,
     waitedMs: 0,
     passed: true,
+    reason: 'below-limit',
   });
   assert.deepEqual(sleeps, []);
   assert.equal(reads(), 1);
@@ -73,6 +75,7 @@ test('passes after waiting once the load falls below the limit before the timeou
     maxLoad: 24,
     waitedMs: 60000,
     passed: true,
+    reason: 'below-limit',
   });
   assert.deepEqual(sleeps, [30000, 30000]);
 });
@@ -88,6 +91,7 @@ test('exits with passed false when the timeout ends with the load still above th
     maxLoad: 24,
     waitedMs: 90000,
     passed: false,
+    reason: 'timeout',
   });
   assert.deepEqual(sleeps, [30000, 30000, 30000]);
   // The read at the deadline is the final sample, so the verdict is current.
@@ -114,6 +118,7 @@ test('a zero timeout is a single check and never sleeps', () => {
     maxLoad: 24,
     waitedMs: 0,
     passed: false,
+    reason: 'timeout',
   });
   assert.deepEqual(sleeps, []);
   assert.equal(reads(), 1);
@@ -129,19 +134,56 @@ test('the last sleep is shortened to the deadline', () => {
   assert.deepEqual(sleeps, [30000, 15000]);
 });
 
-test('an unreadable load fails closed and waits out the timeout', () => {
-  const { readers, sleeps } = fakeReaders([null]);
+test('a platform with no load average passes at once with reason load-unavailable', () => {
+  // The injected reader stands in for Windows, where readOneMinuteLoad returns
+  // null: no load can be read, so the gate must not wait for the timeout.
+  const { readers, sleeps, reads } = fakeReaders([null]);
   const verdict = waitForLoad(
-    { maxLoad: 24, timeoutMs: 60000, pollMs: 30000 },
+    { maxLoad: 24, timeoutMs: 600000, pollMs: 30000 },
     readers,
   );
   assert.deepEqual(verdict, {
     load1m: null,
     maxLoad: 24,
-    waitedMs: 60000,
-    passed: false,
+    waitedMs: 0,
+    passed: true,
+    reason: 'load-unavailable',
   });
-  assert.deepEqual(sleeps, [30000, 30000]);
+  assert.deepEqual(sleeps, []);
+  assert.equal(reads(), 1);
+});
+
+test('a null load passes even with a zero timeout, without a sleep', () => {
+  const { readers, sleeps } = fakeReaders([null]);
+  const verdict = waitForLoad(
+    { maxLoad: 24, timeoutMs: 0, pollMs: 30000 },
+    readers,
+  );
+  assert.equal(verdict.passed, true);
+  assert.equal(verdict.reason, 'load-unavailable');
+  assert.deepEqual(sleeps, []);
+});
+
+test('the Windows reader path passes the gate: win32 reports no load', () => {
+  // readOneMinuteLoad is the production reader's own function; on win32 it
+  // returns null even when the load-average array has a value.
+  const sleeps: number[] = [];
+  const winReader: LoadGateReaders = {
+    load1m: () => readOneMinuteLoad([3.2, 3.1, 3.0], 'win32'),
+    coreCount: () => 24,
+    now: () => 0,
+    sleep: (ms) => {
+      sleeps.push(ms);
+    },
+  };
+  assert.equal(readOneMinuteLoad([3.2, 3.1, 3.0], 'win32'), null);
+  const verdict = waitForLoad(
+    { maxLoad: 24, timeoutMs: 600000, pollMs: 30000 },
+    winReader,
+  );
+  assert.equal(verdict.passed, true);
+  assert.equal(verdict.reason, 'load-unavailable');
+  assert.deepEqual(sleeps, []);
 });
 
 test('the default limit is the CPU count, read from the readers', () => {
@@ -151,6 +193,7 @@ test('the default limit is the CPU count, read from the readers', () => {
     maxLoad: 8,
     waitedMs: 0,
     passed: true,
+    reason: 'below-limit',
   });
   const atLimit = fakeReaders([8], 8);
   assert.equal(

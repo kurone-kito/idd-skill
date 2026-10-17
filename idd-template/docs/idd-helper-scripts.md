@@ -898,9 +898,12 @@ in this preamble, since the fallback differs per helper.
   one-minute load average is below `--max-load` (default: the CPU count),
   checking every `--poll-ms` until `--timeout-ms`. It exits `0` when the load
   passes, `3` when the timeout ends at or above the limit, and `2` on a usage
-  error. It prints one JSON line (`load1m`, `maxLoad`, `waitedMs`, `passed`)
-  and runs no command itself. A null load (no load average on this platform)
-  fails closed.
+  error. It prints one JSON line (`load1m`, `maxLoad`, `waitedMs`, `passed`,
+  `reason`) and runs no command itself. The `reason` field is `below-limit`,
+  `timeout`, or `load-unavailable`. When the platform reports no load average
+  (Windows, for example), the load cannot be read, so the gate passes at once
+  with `load1m` set to `null` and reason `load-unavailable` instead of waiting
+  out the timeout.
 - `scripts/idd-worker-budget.mjs` for a read-only per-session dispatch
   budget (issue
   [kurone-kito/idd-skill#3835](https://github.com/kurone-kito/idd-skill/issues/3835));

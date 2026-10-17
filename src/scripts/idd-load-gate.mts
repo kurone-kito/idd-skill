@@ -10,7 +10,9 @@
 // The gate runs no command. It waits until the one-minute load average is
 // below the limit, then exits 0 so a `&&` chain continues. If the timeout ends
 // with the load still at or above the limit, it exits 3 so the chain stops.
-// An unreadable load fails closed, counting as at or above the limit.
+// When the platform reports no load average (Windows, for example), the load
+// cannot be read, so the gate passes at once with reason `load-unavailable`
+// instead of holding every validation chain on that platform for the timeout.
 
 import * as os from 'node:os';
 import { performance } from 'node:perf_hooks';
@@ -42,9 +44,10 @@ Wait until the 1-minute load average is below --max-load (default: the CPU
 count). Check it every --poll-ms (default ${DEFAULT_POLL_MS}) until --timeout-ms
 (default ${DEFAULT_TIMEOUT_MS}) elapses.
 
-Exits 0 when the load passes, 3 when the timeout ends at or above the limit,
-and 2 on a usage error. Prints one JSON line on stdout for a pass or a
-timeout. Runs no command itself: place it first in a && chain.
+Exits 0 when the load passes or cannot be read on this platform, 3 when the
+timeout ends at or above the limit, and 2 on a usage error. Prints one JSON
+line on stdout for a pass or a timeout. Runs no command itself: place it
+first in a && chain.
 
 Options:
   --max-load <n>      positive decimal limit (default: CPU count)
@@ -72,12 +75,20 @@ export interface LoadGateReaders {
   sleep: (ms: number) => void;
 }
 
+/**
+ * Why the gate reached its verdict: `below-limit` (the load passed),
+ * `load-unavailable` (the platform reports no load average, so the gate passed
+ * at once), or `timeout` (the load stayed at or above the limit).
+ */
+export type LoadGateReason = 'below-limit' | 'load-unavailable' | 'timeout';
+
 /** One gate verdict, printed as the single JSON line on stdout. */
 export interface LoadGateVerdict {
   load1m: number | null;
   maxLoad: number;
   waitedMs: number;
   passed: boolean;
+  reason: LoadGateReason;
 }
 
 const DECIMAL_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
@@ -140,7 +151,9 @@ export function parseLoadGateArgs(argv: readonly string[]): LoadGateArgs {
  * Each pass reads the load first. A pass ends the wait; a read at or past the
  * deadline is the final sample, so the timeout verdict never rests on a stale
  * reading. Otherwise the loop sleeps the shorter of one poll interval and the
- * time left before the deadline. A null load never passes (fail closed).
+ * time left before the deadline. A null load means the platform reports no
+ * load average (Windows, for example), so the gate passes at once with reason
+ * `load-unavailable` rather than waiting out a timeout it can never satisfy.
  */
 export function waitForLoad(
   args: { maxLoad?: number | undefined; timeoutMs: number; pollMs: number },
@@ -152,11 +165,20 @@ export function waitForLoad(
     const load1m = readers.load1m();
     const elapsed = readers.now() - start;
     const waitedMs = Math.max(0, Math.round(elapsed));
-    if (load1m !== null && load1m < maxLoad) {
-      return { load1m, maxLoad, waitedMs, passed: true };
+    if (load1m === null) {
+      return {
+        load1m: null,
+        maxLoad,
+        waitedMs,
+        passed: true,
+        reason: 'load-unavailable',
+      };
+    }
+    if (load1m < maxLoad) {
+      return { load1m, maxLoad, waitedMs, passed: true, reason: 'below-limit' };
     }
     if (elapsed >= args.timeoutMs) {
-      return { load1m, maxLoad, waitedMs, passed: false };
+      return { load1m, maxLoad, waitedMs, passed: false, reason: 'timeout' };
     }
     readers.sleep(Math.min(args.pollMs, args.timeoutMs - elapsed));
   }
