@@ -387,6 +387,39 @@ test('a missing flock on PATH runs the command directly with one notice', async 
   assert.equal(existsSync(join(h.state, 'idd-skill')), false);
 });
 
+test('a missing flock bypasses raw-cap validation and runs directly', async () => {
+  const h = makeHarness();
+  const repo = makeRepo({ localExec: { admission: { maxConcurrent: 9 } } });
+  const notes: string[] = [];
+  const status = await runLocalAdmission(['--', 'sh', '-c', 'exit 0'], {
+    env: h.env,
+    cwd: repo,
+    stderr: (text) => notes.push(text),
+    findFlock: () => null,
+  });
+  assert.equal(status, 0);
+  assert.equal(notes.length, 1);
+  assert.match(notes[0] ?? '', /flock is not available/);
+  assert.equal(existsSync(join(h.state, 'idd-skill')), false);
+});
+
+test('win32 bypasses raw-cap validation and runs directly', async () => {
+  const h = makeHarness();
+  const repo = makeRepo({ localExec: { admission: { maxConcurrent: 9 } } });
+  const notes: string[] = [];
+  const status = await runLocalAdmission(['--', 'sh', '-c', 'exit 0'], {
+    env: h.env,
+    cwd: repo,
+    platform: 'win32',
+    stderr: (text) => notes.push(text),
+    findFlock: () => '/usr/bin/flock',
+  });
+  assert.equal(status, 0);
+  assert.equal(notes.length, 1);
+  assert.match(notes[0] ?? '', /flock is not available/);
+  assert.equal(existsSync(join(h.state, 'idd-skill')), false);
+});
+
 test('win32 runs the command directly with one notice and never creates the lock', async () => {
   const h = makeHarness();
   const work = makeWorkDir();

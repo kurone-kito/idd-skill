@@ -475,15 +475,6 @@ export async function runLocalAdmission(argv, overrides = {}) {
   if (!admission.enabled) {
     return runDirect(command, deps);
   }
-  if (
-    admission.backend === 'flock' &&
-    storedCapAboveOne(storedMaxConcurrent(raw))
-  ) {
-    deps.stderr(
-      `local-admission: the flock backend admits one command at a time, but localExec.admission.maxConcurrent is ${String(storedMaxConcurrent(raw))}; command not started\n`,
-    );
-    return REFUSED_EXIT_CODE;
-  }
   if (admission.backend === 'pueue') {
     deps.stderr(
       'local-admission: backend "pueue" is not implemented yet; this run takes the flock path with one slot\n',
@@ -495,6 +486,15 @@ export async function runLocalAdmission(argv, overrides = {}) {
       'local-admission: flock is not available on this host; running the command without admission\n',
     );
     return runDirect(command, deps);
+  }
+  if (
+    admission.backend === 'flock' &&
+    storedCapAboveOne(storedMaxConcurrent(raw))
+  ) {
+    deps.stderr(
+      `local-admission: the flock backend admits one command at a time, but localExec.admission.maxConcurrent is ${String(storedMaxConcurrent(raw))}; command not started\n`,
+    );
+    return REFUSED_EXIT_CODE;
   }
   const maxWaitMs =
     parseIsoDurationToMs(admission.maxWait) ??

@@ -2641,13 +2641,16 @@ Behavior:
 
 Use this only when helper runtime is absent. Set `shell` and `command` to the
 exact child argv that would follow `--`; keep the complete command string in
-one value. If `IDD_LOCAL_ADMISSION` is already present, run the child directly
-and return its status without taking a lock; the helper sets it for admitted
-children so a nested call uses this same bypass. Read `enabled`, `backend`, and
-the raw `maxConcurrent` from `localExec.admission` in the repository's
-`.github/idd/config.json` (the defaults are `true`, `flock`, and `1`). If repo
-policy sets `enabled: false`, run `"$shell" -c "$command"` directly. Set
-`wait_seconds` from repository `maxWait` (ISO duration, rounded up to seconds).
+one value. If `IDD_LOCAL_ADMISSION` is already present, run the child with
+`exec "$shell" -c "$command"` and return its status without taking a lock; the
+helper sets it for admitted children so a nested call uses this same bypass.
+Read `enabled`, `backend`, and raw `maxConcurrent` from
+`localExec.admission` in the repository's `.github/idd/config.json` (defaults:
+`true`, `flock`, and `1`). If repo
+policy sets `enabled: false`, run the command the same way. These direct paths
+replace the fallback shell with the child, so a signal sent to its PID reaches
+the command. Set `wait_seconds` from repository `maxWait` (ISO duration, rounded
+up to seconds).
 Omitted, invalid, or above-maximum values use the default 7200 seconds
 (`PT2H`); the maximum valid value is 21600 seconds (`PT6H`). If `backend` is
 `pueue`, print the helper's one notice that it is not implemented and continue
@@ -2658,7 +2661,7 @@ stored raw `maxConcurrent` is above `1`; the normalizer's clamp does not apply.
 This raw-cap check requires `awk`; if it is unavailable or returns an
 unexpected status, refuse with exit `2` before starting the command. If
 `flock` is present but `setsid` is not, refuse with exit `2` before starting
-the command. The fallback also requires `env --default-signal`; refuse with
+the command. The locked path also requires `env --default-signal`; refuse with
 exit `2` if that option is unavailable. Otherwise resolve
 `state` to absolute `XDG_STATE_HOME`, or
 `$HOME/.local/state` when that variable is relative or unset; if neither gives
@@ -2672,21 +2675,27 @@ shell's ignored SIGINT. The admitted child has its own process group and
 session, with no controlling terminal.
 
 ```sh
-if [ "${IDD_LOCAL_ADMISSION+x}" = x ]; then
-  "$shell" -c "$command"
+run_direct() {
+  exec "$shell" -c "$command"
   exit $?
+}
+if [ "${IDD_LOCAL_ADMISSION+x}" = x ]; then
+  run_direct
 fi
 # Set these to the values read from repository localExec.admission.
+enabled=true
 backend=flock
 raw_max_concurrent=1
 wait_seconds=7200 # Replace with the validated repository maxWait when set.
+if [ "$enabled" = false ]; then
+  run_direct
+fi
 if [ "$backend" = pueue ]; then
   printf 'local-admission: backend "pueue" is not implemented yet; this run takes the flock path with one slot\n' >&2
 fi
 if ! command -v flock >/dev/null 2>&1; then
   printf 'local-admission: flock is not available on this host; running the command without admission\n' >&2
-  "$shell" -c "$command"
-  exit $?
+  run_direct
 fi
 if [ "$backend" = flock ]; then
   if ! command -v awk >/dev/null 2>&1; then
