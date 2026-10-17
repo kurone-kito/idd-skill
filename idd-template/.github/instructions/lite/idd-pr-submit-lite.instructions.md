@@ -16,10 +16,9 @@ claimed, implemented issue.
   `set -o pipefail`); filtered output cannot prove success (#3139).
 - `instructions-only`: use `idd-pr-submit.instructions.md`.
 - Phase mismatch is a bug.
-- Resolve active-profile `idd-local-admission` via manifest/docs; run
-  each configured string once as a single shell-child argument through
-  `--`.
-- Admit `localExec.admission.testCommand` from repo policy likewise.
+- Resolve active-profile `idd-local-admission` via manifest/docs; pass
+  each configured string once as `-- <shell> -c <string>` (one argument).
+- If set in repo policy, admit `localExec.admission.testCommand` likewise.
   Exit 75 expires only with stderr `local-admission: expired`: report
   no start; do not rerun or count a pass (not a test rerun or Discover
   incomplete-result retry). Otherwise, 75 is command status.
