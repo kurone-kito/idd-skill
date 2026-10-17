@@ -289,6 +289,51 @@ layered on top of the distributed IDD defaults:
   carries a `round <r>/5` clause. See
   [docs/idd-design-rationale.md](docs/idd-design-rationale.md#e4e5-adopt-now-urgency-defer)
   for the baseline and the severity-tiered matrix.
+- **Triage record opt-in (deferred)**: This source repository sets
+  `critiqueLoop.triageRecord` to `"off"` explicitly, which is also the
+  distributed default that `idd-template/` keeps. The opt-in to `"record"`
+  is deferred because `advisory-convergence` prints
+  `resolve-review-thread --apply` pointers without the `--tier` and
+  `--urgency` flags that `record` requires for an Accepted or Rejected
+  reply, so `resolve-review-thread` refuses those pointers. Observed
+  2026-10-16 on pull request `#4405` (Copilot discussion `r4288841711`).
+  The opt-in depends on an `advisory-convergence` change that emits those
+  flags. Until that change lands, the value stays `"off"`; after it lands,
+  set the value to `"record"`. With `record`,
+  `resolve-review-thread` requires `--tier` and `--urgency` on each
+  applied Accepted or Rejected PATH A reply, except a `--path-b` reply or
+  a `**Rejection confirmed by maintainer**` reply. The helper writes a
+  `Triage:` line for
+  each reply that carries both flags, in any mode. The switch to
+  `"enforce"` waits for the weekly audit data and is decided in issue
+  `#4208`. Evidence for the later opt-in: among the 100
+  pull requests that were merged at or before 2026-10-13T06:58:55Z and
+  are numbered `#3936` to `#4158`, six
+  deferral-form replies appeared on four pull requests, and one of 535
+  review-thread replies that begin with `**Accepted**` or `**Rejected**`
+  recorded an urgency. Two conversation replies, on `#3966` and `#4044`,
+  also recorded urgencies, outside that count (item 2 of the subsection).
+  See the
+  [review-loop audit (2026-10-13)](docs/idd-design-rationale.md#review-loop-audit-2026-10-13)
+  subsection of the design rationale.
+- **Effort L refusal opt-in**: This source repository also records
+  `autopilotSuitability.effortL: "refuse"` as a local IDD dogfooding
+  policy (applies only to `kurone-kito/idd-skill`); `idd-template/` keeps
+  the distributed default `"allow"`, so adopters are unchanged. With
+  `refuse`, `audit-authored-issue` fails an orphan or child body whose
+  effort is `L` (check `effort-l-ready`) unless it is routed to a human
+  bucket, and autopilot Discover routes an effort `L` orphan to a human.
+  To turn this off, remove the field or set it to `"allow"`. Evidence: in
+  the same 100-pull-request cohort as the bullet above, 6 of the 8 pull
+  requests whose issue has effort `L` reached 7 or more Copilot reviews,
+  against 2 of the 33 pull requests with effort `S`. The `L` group is only
+  8 pull requests. The subsection does not separate pull request size from
+  effort: changed lines and Copilot review count have a Spearman correlation
+  of 0.57 over the cohort, and the 20 pull requests with 7 or more reviews
+  have a median of 967.5 changed lines, against 122.5 for the 64 with at
+  most 3 (item 5). Item 7 gives the effort groups. See the
+  [review-loop audit (2026-10-13)](docs/idd-design-rationale.md#review-loop-audit-2026-10-13)
+  subsection of the design rationale.
 - **GitHub API load control**: This source repository also records
   `githubApi.loadControl: { enabled: true, maxConcurrent: 4 }` in
   `.github/idd/config.json` as a local IDD dogfooding policy (applies

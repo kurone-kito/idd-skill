@@ -46,6 +46,7 @@
   "critiqueLoop": {
     "deferAfterRounds": 5,
     "deferByUrgency": "severity-tiered",
+    "triageRecord": "off",
     "deferRelaxAtRounds": [4, 7],
     "telemetryHook": {
       "command": "idd-critique-telemetry"
@@ -56,7 +57,8 @@
     "authorityPolicy": "owners-and-maintainers-only"
   },
   "autopilotSuitability": {
-    "floor": 3
+    "floor": 3,
+    "effortL": "refuse"
   },
   "worktreeGuard": {
     "enabled": true
