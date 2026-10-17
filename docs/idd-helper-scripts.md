@@ -451,6 +451,7 @@ outcome path.
 | `idd-issue-authoring-delegate.mjs`   | an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                  | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception (deterministic, network-free)                                                                                                                                                                       |
 | `idd-critique-telemetry-hook.mjs`    | an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                  | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception; `--invoke` always exits `0` with no envelope (fire-and-forget contract)                                                                                                                            |
 | `idd-suggest-untrusted-labelers.mjs` | an invalid `--format`, or an unknown flag (exit `1`/`2`)                                                                                                                                                                                                                                                    | a `gh` failure sweeping issue events (a rate-limit-shaped 403/429 gets an actionable message, still `transport`)                                                                        | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception                                                                                                                                                                                                     |
+| `idd-local-admission.mjs`            | an unknown flag, or no command after `--`                                                                                                                                                                                                                                                                   | none today                                                                                                                                                                              | the command's own status; `2` for a refusal before the command starts (policy, cap, symlink, or lock); `75` with `local-admission: expired` when the wait reaches `maxWait`                                                                                                                                                                                                                                                                                                                                                                                                                                                      | an unexpected exception                                                                                                                                                                                                     |
 | `idd-worker-report.mjs`              | a missing or unknown mode, an unknown flag, a bad `--file`/`--stdin`/`--since` combination or value, or a record that is unreadable, not JSON, or fails the schema (exit `1`)                                                                                                                               | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception, including a store lock that could not be acquired (network-free)                                                                                                                                   |
 
 `tests/helper-cli-contract.test.mts` (source repo only) enumerates
@@ -2578,6 +2579,82 @@ read-cache fetch. Enabling load control adds `--include` to a
 non-paginated `ghApiJson`, the same additive mode as
 `githubApi.telemetry`. The generic `ghText` and `ghTextAsync` runners
 cannot add it, so they fall back to the 60-second backoff.
+
+## Local validation admission (kurone-kito/idd-skill#4428)
+
+`scripts/idd-local-admission.mjs` runs one command after `--` under a
+host-local slot that every repository of one OS user shares (issue
+`#4426`). The slot is a `flock(1)` lock. The command after `--` is the
+child argv: the helper never parses a shell string, so a phase that needs
+a shell passes the shell as its argv.
+
+```sh
+node scripts/idd-local-admission.mjs -- <command> [args...]
+```
+
+The policy is `localExec.admission` in the repository's
+`.github/idd/config.json`, read through the repository-policy normalizer. The
+helper reads only that file, never the layered user-global config, so a
+user-global value cannot change the slot. It finds the repository root as the
+nearest ancestor that holds `.git`. With no such ancestor, or no policy file at
+that root, it uses the defaults.
+
+Behavior:
+
+- `enabled: false` runs the command directly and returns its status. No lock
+  file is created.
+- Backend `flock` with a stored `maxConcurrent` above 1 exits `2` before the
+  command starts. The rule reads the raw stored value: a number above 1, or a
+  string that reads above 1. The normalizer's clamp does not apply, so a stored
+  `9` is refused rather than run serially.
+- Backend `pueue` is accepted by the schema, but this helper does not implement
+  it yet. The run takes the flock path with one slot, prints one notice that
+  names the backend, and leaves the stored cap unchanged. The pueue child issue
+  replaces this rule when it lands.
+- Where `flock` is not on `PATH` (Windows, and macOS unless it is installed),
+  the command runs directly with one notice. Admission is off on that host.
+- The lock is `<state>/idd-skill/local-admission/validate.lock`. `<state>` is an
+  absolute `XDG_STATE_HOME`, else `~/.local/state`; on Windows, an absolute
+  `LOCALAPPDATA`, else `~/AppData/Local`. The directory is a sibling of
+  `github-api-load-control`. The helper never writes, truncates, deletes, or
+  records the file.
+- A wait that reaches `maxWait` (`PT2H` by default, at most six hours) prints
+  `local-admission: expired` and exits `75`, and the command does not start.
+  While the wait lasts, stderr gets a `local-admission: waiting` line at least
+  once a minute.
+- A child that exits `75` after the lock is acquired is returned as `75`
+  without the expiry line. Any other outcome is the command's own status.
+- SIGINT and SIGTERM are forwarded to the admitted process group. The helper
+  waits for that group to end, then exits with `128` plus the signal number. It
+  never escalates to SIGKILL, so a command that ignores the signal keeps the
+  slot.
+- The admitted command runs in its own session with no controlling terminal.
+- Setting `IDD_LOCAL_ADMISSION` in the environment makes the helper run the
+  command directly, without the lock. The helper sets that variable for the
+  admitted command, so a nested call cannot wait on the same lock.
+- The bin `idd-local-admission` runs this module in the same process instead of
+  through `run-helper`, which forwards no signals. A SIGTERM sent to the
+  registered command therefore reaches the admitted command.
+
+Refusals before the command starts exit `2`: a policy file that fails to parse,
+a raw cap above 1 under `flock`, a symlink at `idd-skill` or `local-admission`,
+a lock file that is a symlink or not a regular file, or a `flock` that fails
+before it takes the lock.
+
+Residual risks, open for the operator to accept. The helper does not mitigate
+them:
+
+- A symlink at the state base or above it.
+- A rename over the lock path after the open, or a parent-path swap between the
+  directory check and the open. A later caller that opens the path then locks a
+  different file, while the held inode stays locked.
+- A command that ignores SIGINT or SIGTERM keeps the slot after the helper
+  exits.
+- `IDD_LOCAL_ADMISSION` already set in the environment skips admission. A
+  session must not set the variable itself.
+- The slot covers one OS user. A second OS user has another slot, and a run from
+  the pueue backend, once it lands, can overlap the flock slot.
+- Admission is off where `flock` is absent (Windows, and macOS unless installed).
 
 ## Effective layered policy (kurone-kito/idd-skill#3820)
 
