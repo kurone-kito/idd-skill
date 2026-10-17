@@ -8894,8 +8894,10 @@ and that helper detail is the next action.
   recorded by the orchestrator at verification and not per claim. Workers
   omit it; the orchestrator recomputes it from GitHub and replaces any draft
   value. Omit it when `pullRequest` is `null` or a complete count cannot be
-  read. Never store a partial count. The command is in the `Worker report`
-  Fill note in `idd-workflow.md`.
+  read. Never store a partial count. The command requires `jq`; if `jq` is
+  unavailable, or the command exits nonzero, discard its output and omit the
+  field. Its compatible pagination forms are in the `Worker report` Fill note
+  in `idd-workflow.md`.
 - `workerHandle`: the identifier the harness returned when it started the
   worker, written by the orchestrator before the append. The dedupe key
   includes it, so a handle taken from anywhere else can make a retry look like

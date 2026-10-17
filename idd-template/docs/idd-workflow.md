@@ -1524,15 +1524,25 @@ review list for a non-null `pullRequest`:
 
 ```bash
 set -o pipefail
-gh api "repos/<owner>/<repo>/pulls/<n>/reviews" --paginate --slurp |
-  jq '[.[][] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | length'
+if gh api --help | grep -F -- '--slurp' >/dev/null; then
+  gh api "repos/<owner>/<repo>/pulls/<n>/reviews" --paginate --slurp |
+    jq '[.[][] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | length'
+else
+  gh api "repos/<owner>/<repo>/pulls/<n>/reviews" --paginate |
+    jq -s '[.[][] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | length'
+fi
 ```
 
-Replace the placeholders before running the command. It counts all review
-states, across all pages and claims. A worker or older draft value is never
-used. Omit the field when `pullRequest` is null or the command cannot read the
-complete count; never record a partial count. The orchestrator completes the
-rest of the draft, as section 5 of the orchestrator phase file says.
+Replace the placeholders before running the command. It uses `--slurp`
+when the installed `gh` supports it. Older versions emit one JSON page per
+line, so the fallback uses `jq -s` to wrap those pages into the same array
+shape. Both paths require `jq`. The command counts all review states, across
+all pages and claims. A worker or older draft value is never used. Use the
+printed value only when the full command exits with status 0; discard all
+output on a nonzero exit. Omit the field when `pullRequest` is null, `jq` is
+unavailable, or the command cannot read the complete count; never record a
+partial count. The orchestrator completes the rest of the draft, as section 5
+of the orchestrator phase file says.
 
 ### Orchestrator run report
 
