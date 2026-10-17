@@ -32,6 +32,7 @@ import {
   fetchReviewThreads,
   markerRunOf,
   parsePrNumbers,
+  pinActiveGhHost,
   pullRequestHeadRequest,
   readActiveClaim,
   repositoryBindingHold,
@@ -3370,6 +3371,31 @@ test('checkF4HeadProofGate: a proof with a malformed field has no identity to bi
       'gate-unreadable',
       JSON.stringify(proof).slice(0, 80),
     );
+  }
+});
+
+test('pinActiveGhHost: a claimed run pins GH_HOST to the active host, and keeps a host the caller set (#4369)', () => {
+  const saved = {
+    GH_HOST: process.env.GH_HOST,
+    GITHUB_SERVER_URL: process.env.GITHUB_SERVER_URL,
+  };
+  try {
+    delete process.env.GH_HOST;
+    delete process.env.GITHUB_SERVER_URL;
+    assert.equal(pinActiveGhHost(), 'github.com');
+    assert.equal(process.env.GH_HOST, 'github.com');
+
+    process.env.GH_HOST = 'ghes.example.com';
+    assert.equal(pinActiveGhHost(), 'ghes.example.com');
+    assert.equal(process.env.GH_HOST, 'ghes.example.com');
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
   }
 });
 

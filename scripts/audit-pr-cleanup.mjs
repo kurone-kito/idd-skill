@@ -396,6 +396,9 @@ async function processOnePr(
 ) {
   // The claimed single-PR scope of the head-proof gate (#4369), or null.
   const scope = f4GateScope(args, prNumber);
+  if (scope !== null) {
+    pinActiveGhHost();
+  }
   const repositoryHold =
     scope === null
       ? null
@@ -898,6 +901,20 @@ function isHoldReasonCode(value) {
 }
 function helperNextAction(code) {
   return HELPER_NEXT_ACTIONS[code] ?? GENERIC_NEXT_ACTION;
+}
+/**
+ * Pin `GH_HOST` to the active GitHub host for a claimed run (#4369). Without
+ * it, gh falls back to its own default host, which can differ from the origin
+ * the binding check reads, so the candidate scan and the minimize calls could
+ * reach another host than the proof does. Pinned, every gh call of the run and
+ * the marker child reach the same host. A `GH_HOST` the caller already set wins.
+ */
+export function pinActiveGhHost() {
+  const host = activeGithubHost();
+  if (host !== null && !process.env.GH_HOST?.trim()) {
+    process.env.GH_HOST = host;
+  }
+  return host;
 }
 /**
  * The hold for a cleanup whose target repository is not the one the checkout's
