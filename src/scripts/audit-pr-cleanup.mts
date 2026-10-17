@@ -24,7 +24,6 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
-import { resolveCheckoutRepository } from './f4-head-proof-live.mts';
 import {
   combineOwnerRepoFlags,
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
@@ -68,6 +67,7 @@ import {
   fetchLastEditedAtByNodeId,
   fetchReviewThreadCommentUserContentEdits,
   gitChildEnvironment,
+  originNamesRepository,
 } from './provider-adapter-github.mts';
 import { enrichThreadsWithBotEditHistories } from './review-thread-edit-histories.mts';
 
@@ -660,7 +660,7 @@ async function processOnePr(
   const repositoryHold =
     scope === null
       ? null
-      : repositoryBindingHold(owner, repo, checkoutRepositoryOrNull());
+      : repositoryBindingHold(originNamesRepository(owner, repo));
   const claimContext: ClaimContext = {
     expectedLinkedPrs: buildExpectedLinkedPrReferences(owner, repo, prNumber),
     // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
@@ -1267,38 +1267,20 @@ function helperNextAction(code: HoldReasonCode): string {
 }
 
 /**
- * The `owner/repo` of the current checkout, as the marker command reads it, or
- * null when the origin does not name one (#4369).
+ * The hold for a cleanup whose target repository is not the one the checkout's
+ * origin names on the active host (#4369). The marker command reads the
+ * checkout's repository and takes no repository flag, so a proof read there
+ * cannot bind a cleanup of another repository. `bound` is the result of
+ * `originNamesRepository`, the same check the marker command runs.
  */
-function checkoutRepositoryOrNull(): string | null {
-  try {
-    const named = resolveCheckoutRepository();
-    return `${named.owner}/${named.repo}`;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * The hold for a cleanup whose target repository is not the checkout's (#4369).
- * The marker command reads the checkout's repository and takes no repository
- * flag, so a proof read there cannot bind a cleanup of another repository.
- */
-export function repositoryBindingHold(
-  owner: string,
-  repo: string,
-  checkout: string | null,
-): CleanupHold | null {
-  const target = `${owner}/${repo}`;
-  if (checkout !== null && checkout.toLowerCase() === target.toLowerCase()) {
+export function repositoryBindingHold(bound: boolean): CleanupHold | null {
+  if (bound) {
     return null;
   }
   return helperHold(
     'repo-mismatch',
     'hold',
-    checkout === null
-      ? 'the checkout repository could not be read'
-      : `the checkout is ${checkout}, not ${target}`,
+    'the checkout origin does not name this repository on the active host',
   );
 }
 

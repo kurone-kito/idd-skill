@@ -3321,32 +3321,13 @@ test('checkF4HeadProofGate: a post naming another pull request holds before any 
   );
 });
 
-test('repositoryBindingHold: a cleanup of another repository than the checkout holds (#4369)', () => {
-  assert.equal(
-    repositoryBindingHold('kurone-kito', 'idd-skill', 'kurone-kito/idd-skill'),
-    null,
-  );
-  assert.equal(
-    repositoryBindingHold('Kurone-Kito', 'IDD-skill', 'kurone-kito/idd-skill'),
-    null,
-    'GitHub names compare without case',
-  );
+test('repositoryBindingHold: a cleanup whose origin does not name its repository holds (#4369)', () => {
+  assert.equal(repositoryBindingHold(true), null);
 
-  const other = repositoryBindingHold(
-    'someone',
-    'elsewhere',
-    'kurone-kito/idd-skill',
-  );
+  const other = repositoryBindingHold(false);
   assert.equal(other?.code, 'repo-mismatch');
   assert.equal(other?.verdict, 'hold');
-  assert.match(
-    other?.detail ?? '',
-    /kurone-kito\/idd-skill, not someone\/elsewhere/u,
-  );
-
-  const unreadable = repositoryBindingHold('kurone-kito', 'idd-skill', null);
-  assert.equal(unreadable?.code, 'repo-mismatch');
-  assert.match(unreadable?.detail ?? '', /could not be read/u);
+  assert.match(other?.detail ?? '', /does not name this repository/u);
 });
 
 test('checkF4HeadProofGate: a proof that names another pull request or head, or none, is not a verdict (#4369)', () => {
