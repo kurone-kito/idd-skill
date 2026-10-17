@@ -2640,13 +2640,19 @@ Behavior:
 
 Use this only when helper runtime is absent. Set `shell` and `command` to the
 exact child argv that would follow `--`; keep the complete command string in
-one value. If repo policy sets `enabled: false`, run `"$shell" -c "$command"`
-directly. If `flock` is absent, print the helper's one notice and run directly.
-Otherwise resolve `state` to absolute `XDG_STATE_HOME`, or `$HOME/.local/state`
-when that variable is relative or unset; if neither gives an absolute path,
-refuse with exit `2`. Set `wait_seconds` from repository
+one value. Read `enabled`, `backend`, and the raw `maxConcurrent` from
+`localExec.admission` in the repository's `.github/idd/config.json` (the
+defaults are `true`, `flock`, and `1`). If repo policy sets `enabled: false`,
+run `"$shell" -c "$command"` directly. Set `wait_seconds` from repository
 `maxWait` (ISO duration, rounded up to seconds); the default is 7200 (`PT2H`)
-and the maximum is 21600 (`PT6H`). The following Bash-compatible shell
+and the maximum is 21600 (`PT6H`). If `backend` is `flock` and the stored raw
+`maxConcurrent` is above `1`, refuse with exit `2` before starting the
+command; the normalizer's clamp does not apply. If `backend` is `pueue`, print
+the helper's one notice that it is not implemented and continue with the
+one-slot `flock` path. If `flock` is absent, print the helper's notice and run
+directly. Otherwise resolve `state` to absolute `XDG_STATE_HOME`, or
+`$HOME/.local/state` when that variable is relative or unset; if neither gives
+an absolute path, refuse with exit `2`. The following Bash-compatible shell
 fragment opens the same per-user lock file as the helper:
 
 ```sh
@@ -2657,7 +2663,23 @@ case ${XDG_STATE_HOME:-} in
        *) printf 'local-admission: no absolute state root; command not started\n' >&2; exit 2 ;;
      esac ;;
 esac
+# Set these to the values read from repository localExec.admission.
+backend=flock
+raw_max_concurrent=1
 wait_seconds=7200 # Replace with the validated repository maxWait when set.
+if [ "$backend" = pueue ]; then
+  printf 'local-admission: backend "pueue" is not implemented yet; this run takes the flock path with one slot\n' >&2
+fi
+if [ "$backend" = flock ] && awk -v cap="$raw_max_concurrent" 'BEGIN { exit !(cap + 0 > 1) }'; then
+  printf 'local-admission: the flock backend admits one command at a time, but localExec.admission.maxConcurrent is %s; command not started\n' "$raw_max_concurrent" >&2
+  exit 2
+fi
+if ! command -v flock >/dev/null 2>&1; then
+  printf 'local-admission: flock is not available on this host; running the command without admission\n' >&2
+  "$shell" -c "$command"
+  exit $?
+fi
+original_umask=$(umask)
 umask 077
 lock_dir="$state/idd-skill/local-admission"
 for dir in "$state/idd-skill" "$lock_dir"; do
@@ -2681,8 +2703,20 @@ if [ -L "$lock" ] || { [ -e "$lock" ] && [ ! -f "$lock" ]; }; then
   printf 'local-admission: unsafe lock file; command not started\n' >&2
   exit 2
 fi
-: >> "$lock" || { printf 'local-admission: cannot open lock; command not started\n' >&2; exit 2; }
+if [ ! -e "$lock" ]; then
+  (set -C; : > "$lock") 2>/dev/null || {
+    if [ ! -e "$lock" ]; then
+      printf 'local-admission: cannot create lock; command not started\n' >&2
+      exit 2
+    fi
+  }
+fi
+if [ -L "$lock" ] || [ ! -f "$lock" ]; then
+  printf 'local-admission: unsafe lock file; command not started\n' >&2
+  exit 2
+fi
 exec 9<"$lock" || { printf 'local-admission: cannot open lock; command not started\n' >&2; exit 2; }
+umask "$original_umask" || { printf 'local-admission: cannot restore umask; command not started\n' >&2; exit 2; }
 if flock --timeout "$wait_seconds" --conflict-exit-code 75 9; then
   if IDD_LOCAL_ADMISSION=1 "$shell" -c "$command"; then status=0; else status=$?; fi
   flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
