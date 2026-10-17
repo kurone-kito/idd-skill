@@ -8877,7 +8877,9 @@ and that helper detail is the next action.
   `recordedAt`.
   Optional are `vendorSessionId`, `reviewRounds`, `stalls`, `deviations`,
   `frictions` (an entry may name the instruction or doc path in `file`),
-  and `followUps`. `terminalPhase` and each `phase` take a phase id such as
+  `followUps` (issues the worker filed), and `unfiledFollowUps` (text the worker
+  identified but did not file; each entry is limited to 500 UTF-16 code units).
+  `terminalPhase` and each `phase` take a phase id such as
   `F4`, `E4`, or the canonical underscore form `F2_5` from
   `schemas/phase-graph.json` (a dot, as in `F2.5`, is accepted too). Every
   string is length-bounded. The helper stores the
@@ -8917,8 +8919,11 @@ and that helper detail is the next action.
 - `summary`: read-only; it takes no lock and creates nothing. It prints
   JSON with the outcome counts (every outcome, zero-filled), the
   distribution of `reviewRounds`, the ten most frequent `frictions`
-  `file` values, and `invalidLines`, the count of lines that are not valid
-  records. `--since <ISO8601>` keeps only records whose `recordedAt` is at
+  `file` values, `unfiledFollowUps` report and entry counts, and `invalidLines`,
+  the count of lines that are not valid records. The follow-up report count
+  includes valid in-window records with at least one entry; the entry count
+  sums their entries. Both counts are zero when none match. `--since <ISO8601>`
+  keeps only records whose `recordedAt` is at
   or after that instant; it takes a real date-time with an offset, such as
   `2026-10-08T02:00:00Z` or `2026-10-08T11:00:00+09:00`, not a bare date.
 - Concurrency: the duplicate check and the write happen together under an

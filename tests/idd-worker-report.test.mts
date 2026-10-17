@@ -516,6 +516,7 @@ test('summary on an empty store reports zero and creates nothing', () => {
     });
     assert.deepEqual(summary.reviewRounds, { recorded: 0, distribution: {} });
     assert.deepEqual(summary.frictionFiles, []);
+    assert.deepEqual(summary.unfiledFollowUps, { reports: 0, entries: 0 });
     assert.equal(existsSync(join(sandbox.state, 'idd-skill')), false);
   } finally {
     cleanup(sandbox);
@@ -534,6 +535,10 @@ test('summary on a store with three records counts outcomes, rounds and friction
       report({
         workerHandle: 'a',
         reviewRounds: 2,
+        unfiledFollowUps: [
+          'Consider the related issue.',
+          'Check the API docs.',
+        ],
         frictions: [friction('docs/a.md'), friction('docs/b.md')],
         recordedAt: '2026-10-08T10:00:00Z',
       }),
@@ -541,6 +546,7 @@ test('summary on a store with three records counts outcomes, rounds and friction
         workerHandle: 'b',
         outcome: 'failed',
         reviewRounds: 2,
+        unfiledFollowUps: ['Document the workaround.'],
         frictions: [friction('docs/a.md'), { phase: 'C', summary: 'No file.' }],
         recordedAt: '2026-10-08T11:00:00Z',
       }),
@@ -583,6 +589,7 @@ test('summary on a store with three records counts outcomes, rounds and friction
       { file: 'docs/a.md', count: 2 },
       { file: 'docs/b.md', count: 1 },
     ]);
+    assert.deepEqual(summary.unfiledFollowUps, { reports: 2, entries: 3 });
     // --since filters on recordedAt.
     const since = JSON.parse(
       runCli(sandbox, ['summary', '--since', '2026-10-08T11:00:00Z']).stdout,
@@ -590,6 +597,7 @@ test('summary on a store with three records counts outcomes, rounds and friction
     assert.equal(since.total, 2);
     assert.equal(since.since, '2026-10-08T11:00:00Z');
     assert.equal(since.outcomes.merged, 0);
+    assert.deepEqual(since.unfiledFollowUps, { reports: 1, entries: 1 });
   } finally {
     cleanup(sandbox);
   }
@@ -927,6 +935,70 @@ test('the schema accepts null where allowed and enforces the string bounds', () 
   assert.equal(ok({ issue: 'owner/repo#12' }), true);
   assert.equal(ok({ reviewRounds: -1 }), false);
   assert.equal(ok({ reviewRounds: 0 }), true);
+});
+
+test('unfiled follow-ups accept bounded text without changing filed follow-ups', () => {
+  const validRecord = report({
+    followUps: [],
+    unfiledFollowUps: ['Consider updating the docs.'],
+  });
+  assert.deepEqual(validateWorkerReport(validRecord), []);
+
+  const valid = (value: unknown): boolean =>
+    validateWorkerReport({ ...report(), unfiledFollowUps: [value] }).length ===
+    0;
+  for (const value of [
+    42,
+    '',
+    ' \t\r\n',
+    '\u0085',
+    'kurone-kito/idd-skill#123',
+    '  kurone-kito/idd-skill#123 \n',
+    '\u0085kurone-kito/idd-skill#123\u0085',
+    ' \u0085 kurone-kito/idd-skill#123\t\n',
+  ]) {
+    assert.equal(valid(value), false, `${JSON.stringify(value)} should fail`);
+  }
+  assert.equal(
+    validateWorkerReport({ ...report(), followUps: ['text follow-up'] })
+      .length > 0,
+    true,
+  );
+  assert.equal(
+    validateWorkerReport({ ...report(), branch: 'main' }).length > 0,
+    true,
+  );
+
+  const exactLimit = `${'x'.repeat(497)}😀\n`;
+  const overLimit = `${'x'.repeat(498)}😀\n`;
+  assert.equal(exactLimit.length, 500);
+  assert.equal(overLimit.length, 501);
+  assert.equal(valid(exactLimit), true);
+  assert.equal(valid(overLimit), false);
+});
+
+test('legacy worker reports append unchanged and summarize unfiled follow-up zeroes', () => {
+  const sandbox = makeSandbox();
+  try {
+    const legacy = report({ workerHandle: 'legacy-worker' });
+    assert.deepEqual(validateWorkerReport(legacy), []);
+    const appended = runCli(
+      sandbox,
+      ['append', '--stdin'],
+      JSON.stringify(legacy),
+    );
+    assert.equal(appended.status, 0, appended.stderr);
+    assert.deepEqual(JSON.parse(storeLines(sandbox)[0]), legacy);
+    assert.deepEqual(
+      JSON.parse(runCli(sandbox, ['summary']).stdout).unfiledFollowUps,
+      { reports: 0, entries: 0 },
+    );
+    const help = runCli(sandbox, ['--help']);
+    assert.equal(help.status, 0, help.stderr);
+    assert.match(help.stdout, /unfiledFollowUps/);
+  } finally {
+    cleanup(sandbox);
+  }
 });
 
 test('timestamps that name no real instant are rejected, not normalized', () => {

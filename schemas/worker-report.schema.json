@@ -194,6 +194,14 @@
         "pattern": "^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}#[1-9][0-9]{0,9}$"
       },
       "description": "Follow-up issues the worker filed, as owner/repo#number."
+    },
+    "unfiledFollowUps": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(?=[\\s\\S]{1,500}(?![\\s\\S]))(?=[\\s\\S]*[^\\s\\u0085])(?![\\s\\u0085]*[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}#[1-9][0-9]{0,9}[\\s\\u0085]*(?![\\s\\S]))"
+      },
+      "description": "Text follow-ups the worker identified but did not file. Each string is limited to 500 UTF-16 code units."
     }
   }
 }
