@@ -469,6 +469,18 @@
         }
       }
     },
+    "idd-local-admission.mjs": {
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
     "idd-local-validation-evidence.mjs": {
       "runs": {
         "unknownFlag": {

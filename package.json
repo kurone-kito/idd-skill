@@ -55,6 +55,7 @@
     "idd-issue-authoring-delegate": "./bin/idd-issue-authoring-delegate.mjs",
     "idd-live-status-digest": "./bin/idd-live-status-digest.mjs",
     "idd-load-gate": "./bin/idd-load-gate.mjs",
+    "idd-local-admission": "./bin/idd-local-admission.mjs",
     "idd-local-validation-evidence": "./bin/idd-local-validation-evidence.mjs",
     "idd-local-worktree-recovery": "./bin/idd-local-worktree-recovery.mjs",
     "idd-merge-execute": "./bin/idd-merge-execute.mjs",

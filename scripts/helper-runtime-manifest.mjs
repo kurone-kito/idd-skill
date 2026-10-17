@@ -493,6 +493,15 @@ const HELPER_COMMANDS = [
       'Wait until the one-minute load average is below a limit before a heavy step; exits 3 at the timeout while the load stays at or above it.',
   },
   {
+    id: 'local-admission',
+    scriptName: 'idd:local-admission',
+    binName: 'idd-local-admission',
+    entryPath: 'scripts/idd-local-admission.mjs',
+    vendoredCommand: 'node scripts/idd-local-admission.mjs',
+    description:
+      'Run one command under the host-local validation slot (flock, one slot per OS user), with admission read from localExec.admission; refuses before starting when the policy is invalid.',
+  },
+  {
     id: 'local-validation-evidence',
     scriptName: 'idd:local-validation-evidence',
     binName: 'idd-local-validation-evidence',
