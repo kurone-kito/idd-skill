@@ -941,7 +941,8 @@ corresponding path:
 |                      | step 3.                                                      |
 
 After apply, if `status` is `held`, the head-proof gate stopped the run
-before its next pass. For a `hold` verdict, post the hold note from
+before its next pass. For a `hold` verdict, revalidate the claim first, and
+end quietly if that fails. Otherwise post the hold note from
 `idd-merge.instructions.md` (see [Hold reason codes](#hold-reason-codes)).
 For a `stop` verdict, post nothing. In both cases, post neither an
 evidence comment nor a cleanup-failure comment. After apply, if `status`
