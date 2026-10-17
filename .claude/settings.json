@@ -1,5 +1,5 @@
 {
-  "$comment": "Curated Claude Code permission baseline for this repository. See docs/permissions.md#claude-code-permission-baseline for the rationale, scope, and known flag/path matching gotchas. `gh api` is deliberately NOT allowlisted here (see the gh-api DELETE-verb trap in the doc); the DELETE-verb deny entries below are defense in depth if a future edit adds one back. Personal additions belong in .claude/settings.local.json, which layers on top of this file.",
+  "$comment": "Curated Claude Code permission baseline for this repository. See docs/permissions.md#claude-code-permission-baseline for the rationale, scope, and known flag/path matching gotchas. `gh api` is deliberately NOT allowlisted here (see the gh-api DELETE-verb trap in the doc). The three DELETE-verb entries in `ask` make a matching call prompt for confirmation each time; they are a prompt, not a deny. Personal additions belong in .claude/settings.local.json, which layers on top of this file.",
   "permissions": {
     "allow": [
       "Bash(git status*)",
@@ -45,7 +45,9 @@
       "Bash(git clean -f*)",
       "Bash(git branch -D*)",
       "Bash(gh repo delete*)",
-      "Bash(gh issue delete*)",
+      "Bash(gh issue delete*)"
+    ],
+    "ask": [
       "Bash(gh api -X DELETE*)",
       "Bash(gh api --method DELETE*)",
       "Bash(gh api --method=DELETE*)"
