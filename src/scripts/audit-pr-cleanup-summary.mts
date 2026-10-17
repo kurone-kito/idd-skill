@@ -10,6 +10,46 @@ interface CleanupReportItem {
   [key: string]: unknown;
 }
 
+/**
+ * The closed hold-reason codes of a claimed apply's F4 head-proof gate
+ * (kurone-kito/idd-skill#4369). Each code has a producer and a row in the
+ * hold-reason table of idd-template/docs/idd-comment-minimization.md. The
+ * first twelve come from the verdict table, `post-rejected` from the marker
+ * command's post, `gate-unreadable` from a marker child that printed no
+ * result, and the last four from the audit helper's own gate reads.
+ */
+export const HOLD_REASON_CODES = [
+  'claim-or-lock',
+  'pr-state',
+  'ref-read',
+  'marker-read-failed',
+  'branch-absent',
+  'conflicting-marker',
+  'watermark-unauthenticated',
+  'claim-activation-unknown',
+  'posted-disagreed',
+  'post-unconfirmed',
+  'reread-failed',
+  'reread-conflict',
+  'post-rejected',
+  'gate-unreadable',
+  'worktree-not-found',
+  'head-changed',
+  'head-read-failed',
+  'repo-mismatch',
+] as const;
+
+export type HoldReasonCode = (typeof HOLD_REASON_CODES)[number];
+
+/** One gate hold: its reason code, the verdict it came from, and the next action. */
+export interface CleanupHold {
+  code: HoldReasonCode;
+  verdict: 'hold' | 'stop';
+  nextAction: string;
+  /** One line of cause: the marker command's warnings, or the read that failed. */
+  detail?: string;
+}
+
 export interface CleanupReport {
   candidates: unknown[];
   skipped: CleanupReportItem[];
@@ -39,6 +79,22 @@ export interface CleanupReport {
    * workflow step output.
    */
   skipReasonSummary?: string;
+  /**
+   * Gate holds of a claimed single-PR apply (kurone-kito/idd-skill#4369), each
+   * with its reason code and next action. A non-empty list makes the apply
+   * status `held`, which takes precedence over every other status.
+   */
+  holds?: CleanupHold[];
+  /**
+   * The F4 head-proof gate verdict (`proceed`, `hold`, `stop`, or `post`) of a
+   * claimed run, or `gate-not-applicable` when no gate ran (#4369).
+   */
+  gate?: string;
+  /**
+   * The reason behind `gate`: a hold's code, or the validated reason of a
+   * `proceed`. Null for `post` and for `gate-not-applicable`.
+   */
+  gateReason?: string | null;
 }
 
 const SKIP_REASON_CODE_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -102,6 +158,13 @@ export function computeReportSummary(report: CleanupReport): void {
   }
 
   if (report.mode === 'apply') {
+    // A gate hold (#4369) outranks every other apply status, `failed` and
+    // `applied` included, so the F4 decision tree reads a held run as a stop
+    // before any failure route. The failed rows stay listed in the report.
+    if (report.holds !== undefined && report.holds.length > 0) {
+      report.status = 'held';
+      return;
+    }
     // A confirming rescan that itself failed means convergence was never
     // verified, regardless of what the pre-rescan applied/failed counts
     // say -- this must never be reported as `applied`/`clean` (#2011

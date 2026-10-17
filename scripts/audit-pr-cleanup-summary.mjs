@@ -3,6 +3,34 @@
 // The scripts/audit-pr-cleanup-summary.mjs copy is generated from the
 // .mts source named above by `pnpm run build`. Edit the .mts source,
 // never the generated .mjs. See docs/typescript-sources.md.
+/**
+ * The closed hold-reason codes of a claimed apply's F4 head-proof gate
+ * (kurone-kito/idd-skill#4369). Each code has a producer and a row in the
+ * hold-reason table of idd-template/docs/idd-comment-minimization.md. The
+ * first twelve come from the verdict table, `post-rejected` from the marker
+ * command's post, `gate-unreadable` from a marker child that printed no
+ * result, and the last four from the audit helper's own gate reads.
+ */
+export const HOLD_REASON_CODES = [
+  'claim-or-lock',
+  'pr-state',
+  'ref-read',
+  'marker-read-failed',
+  'branch-absent',
+  'conflicting-marker',
+  'watermark-unauthenticated',
+  'claim-activation-unknown',
+  'posted-disagreed',
+  'post-unconfirmed',
+  'reread-failed',
+  'reread-conflict',
+  'post-rejected',
+  'gate-unreadable',
+  'worktree-not-found',
+  'head-changed',
+  'head-read-failed',
+  'repo-mismatch',
+];
 const SKIP_REASON_CODE_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /**
  * Counts the skipped rows by reason code (kurone-kito/idd-skill#3857). The
@@ -59,6 +87,13 @@ export function computeReportSummary(report) {
     return;
   }
   if (report.mode === 'apply') {
+    // A gate hold (#4369) outranks every other apply status, `failed` and
+    // `applied` included, so the F4 decision tree reads a held run as a stop
+    // before any failure route. The failed rows stay listed in the report.
+    if (report.holds !== undefined && report.holds.length > 0) {
+      report.status = 'held';
+      return;
+    }
     // A confirming rescan that itself failed means convergence was never
     // verified, regardless of what the pre-rescan applied/failed counts
     // say -- this must never be reported as `applied`/`clean` (#2011

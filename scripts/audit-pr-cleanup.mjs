@@ -4,9 +4,15 @@
 // The scripts/audit-pr-cleanup.mjs copy is generated from the .mts source named
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
+import { spawnSync } from 'node:child_process';
 import { readFileSync, writeSync } from 'node:fs';
+import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { computeReportSummary } from './audit-pr-cleanup-summary.mjs';
+import {
+  computeReportSummary,
+  HOLD_REASON_CODES,
+} from './audit-pr-cleanup-summary.mjs';
+import { resolveBundleRoot } from './bundle-root.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   isAuthorizedForcedHandoffActor,
@@ -16,6 +22,7 @@ import {
 import {
   combineOwnerRepoFlags,
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  ghApiJson,
   ghText,
 } from './gh-exec.mjs';
 import {
@@ -26,6 +33,7 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
+import { parseLocalWorktreeList } from './local-worktree-occupancy.mjs';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mjs';
 import {
   classifyIddPrComment,
@@ -46,8 +54,11 @@ import {
   unsafeTextFinding,
 } from './protocol-helpers.mjs';
 import {
+  activeGithubHost,
   fetchLastEditedAtByNodeId,
   fetchReviewThreadCommentUserContentEdits,
+  gitChildEnvironment,
+  originNamesRepository,
 } from './provider-adapter-github.mjs';
 import { enrichThreadsWithBotEditHistories } from './review-thread-edit-histories.mjs';
 /**
@@ -170,6 +181,41 @@ const MAX_REVIEW_THREAD_COMMENT_PAGES = 50;
 // other usages -- interface declarations are erased at runtime and exempt,
 // and TypeScript resolves an interface regardless of declaration order).
 const UNBOUNDED_TIME_BUDGET = { exhausted: () => false };
+// The F4 head-proof gate's constants (#4369). Declared above the CLI entry
+// block for the same module-eval-order reason as UNBOUNDED_TIME_BUDGET.
+const F4_GATE_NOT_APPLICABLE = 'gate-not-applicable';
+const F4_MARKER_TIMEOUT_MS = 300_000;
+const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/u;
+const MARKER_VERDICTS = new Set(['proceed', 'hold', 'stop', 'post']);
+/** The reasons a `proceed` verdict carries for a validated proof (#4369). */
+const F4_PROCEED_REASONS = new Set([
+  'reusable',
+  'posted-confirmed',
+  'reread-reusable',
+]);
+/** Next actions of the holds this helper decides itself. */
+const HELPER_NEXT_ACTIONS = {
+  'claim-or-lock':
+    'Do not apply. This session does not hold the claim, so end quietly.',
+  'worktree-not-found':
+    'Do not apply. Git registers no worktree for the claim branch; restore it, then rerun.',
+  'head-changed':
+    'Do not apply. The pull request head moved during the run; read it again, then rerun the cleanup.',
+  'head-read-failed':
+    'Do not apply. The pull request head could not be read; fix the cause, then rerun.',
+  'post-unconfirmed':
+    'Do not post again. The proof was posted but a dry run still finds none; reconcile by reading the issue comments.',
+  'gate-unreadable':
+    'Do not apply. The head-proof check printed no usable verdict; read its output, fix the cause, then rerun.',
+  'repo-mismatch':
+    'Do not apply. The checkout names a different repository than this cleanup targets; run it from that checkout, or drop --repo and --owner, then rerun.',
+};
+const GENERIC_NEXT_ACTION =
+  'Do not apply. Read the hold reason and the head-proof output, fix the cause, then rerun.';
+/** The message `assertActiveClaim` throws when another session holds the claim. */
+const CLAIM_MISMATCH_PREFIX = 'claim check failed for #';
+const CLAIM_READ_NEXT_ACTION =
+  'Do not apply. The claim could not be read; fix the cause, then rerun.';
 if (import.meta.main) {
   if (isHelperErrorEnvelopeEnabled()) {
     runHelperCli('audit-pr-cleanup', main);
@@ -348,18 +394,42 @@ async function processOnePr(
   args,
   budget = UNBOUNDED_TIME_BUDGET,
 ) {
+  // The claimed single-PR scope of the head-proof gate (#4369), or null.
+  const scope = f4GateScope(args, prNumber);
+  if (scope !== null) {
+    pinActiveGhHost();
+  }
+  const repositoryHold =
+    scope === null
+      ? null
+      : repositoryBindingHold(originNamesRepository(owner, repo));
   const claimContext = {
     expectedLinkedPrs: buildExpectedLinkedPrReferences(owner, repo, prNumber),
     // The PR's first-commit time backs the Part B forced-handoff rule (#1058):
     // a legitimate issue-only handoff that predates the PR is honored even
     // against this PR-backed claim. Resolve it once for both claim asserts.
-    prFirstCommitAt: args.apply
-      ? fetchPrFirstCommitAt(owner, repo, prNumber)
-      : null,
+    // A claimed dry run resolves the same context, so its gate matches apply.
+    prFirstCommitAt:
+      args.apply || scope !== null
+        ? fetchPrFirstCommitAt(owner, repo, prNumber)
+        : null,
   };
   const report = await buildReport(owner, repo, prNumber);
   if (args.apply) {
     report.mode = 'apply';
+    const gateState = { headSha: null };
+    // A cleanup that targets another repository than the checkout holds before
+    // any pass (#4369). The proof gate runs only when the repositories match.
+    const beforePass =
+      scope === null
+        ? undefined
+        : () =>
+            repositoryHold ??
+            checkF4HeadProofGate(
+              scope,
+              gateState,
+              createF4GateDeps(owner, repo, args, scope, claimContext),
+            );
     const {
       report: finalReport,
       attempts,
@@ -375,19 +445,42 @@ async function processOnePr(
       undefined,
       undefined,
       budget,
+      beforePass,
     );
     finalReport.retryAttempts = attempts;
     if (boundExhausted) {
       finalReport.retryBoundExhausted = true;
     }
     computeReportSummary(finalReport);
-    if (finalReport.failed.length > 0 || finalReport.rescanError) {
+    // A gate hold (#4369) is a failed run for the exit status, though its
+    // status is `held` and never routes to the failure path.
+    if (
+      finalReport.failed.length > 0 ||
+      finalReport.rescanError ||
+      (finalReport.holds?.length ?? 0) > 0
+    ) {
       writeReport(finalReport, args.format);
       return true;
     }
     computeReportSummary(finalReport);
     writeReport(finalReport, args.format);
     return false;
+  }
+  // A claimed dry run reports the gate verdict (#4369); every other dry run
+  // reports that no gate applies, which is not a verdict.
+  if (scope !== null && report.candidates.length > 0) {
+    const gate =
+      repositoryHold === null
+        ? describeF4HeadProofGate(
+            scope,
+            createF4GateDeps(owner, repo, args, scope, claimContext),
+          )
+        : { gate: repositoryHold.verdict, gateReason: repositoryHold.code };
+    report.gate = gate.gate;
+    report.gateReason = gate.gateReason;
+  } else {
+    report.gate = F4_GATE_NOT_APPLICABLE;
+    report.gateReason = null;
   }
   computeReportSummary(report);
   writeReport(report, args.format);
@@ -633,6 +726,7 @@ export async function runApplyWithRetry(
   maxAttempts = DEFAULT_APPLY_RETRY_MAX_ATTEMPTS,
   backoff = defaultApplyRetryBackoff,
   budget = UNBOUNDED_TIME_BUDGET,
+  beforePass,
 ) {
   // A non-finite `maxAttempts` (`Infinity`) would defeat the bounded-retry
   // contract with an unbounded loop; a fractional value (e.g. `2.5`) would
@@ -662,6 +756,17 @@ export async function runApplyWithRetry(
       // counting a pass that never started would misreport one cleanup
       // pass as having run against this HEAD.
       return { report, attempts: attempt - 1, boundExhausted: false };
+    }
+    // The F4 head-proof gate of a claimed single-PR apply (#4369) runs before
+    // every pass that has candidates to apply. A hold records its reason and
+    // returns here, so this pass never runs and no rescan follows. The report
+    // keeps the rows already applied, and the summary reads it as `held`.
+    if (beforePass !== undefined && report.candidates.length > 0) {
+      const hold = beforePass();
+      if (hold !== null) {
+        report.holds = [...(report.holds ?? []), hold];
+        return { report, attempts: attempt - 1, boundExhausted: false };
+      }
     }
     // Captured before `applyPass` mutates `report` (#3321, Codex review
     // PR #3499): once this pass has run, an empty `report.candidates`
@@ -755,6 +860,536 @@ export async function runApplyWithRetry(
   // Unreachable: totalAttempts is normalized to >= 1 above, so the loop
   // always runs at least one attempt and returns from inside it.
   return { report, attempts: 0, boundExhausted: true };
+}
+/**
+ * The proof identity of a marker envelope (#4369). The marker contract names
+ * seven proof fields, so a proof missing any of them has no identity to bind.
+ */
+function readProofIdentity(value) {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+  const fields = value;
+  const text = (key) => (typeof fields[key] === 'string' ? fields[key] : null);
+  const pr = typeof fields.pr === 'number' ? fields.pr : null;
+  const complete = [
+    text('claim'),
+    text('branch'),
+    text('f2'),
+    text('branchTip'),
+    text('merge'),
+    text('head'),
+  ].every((field) => field !== null);
+  // The renderer writes a non-empty branch and full lowercase SHAs, so a value
+  // outside that form is malformed, and it has no identity to bind (#4369).
+  const wellFormed =
+    (text('branch') ?? '') !== '' &&
+    ['f2', 'branchTip', 'merge', 'head'].every((key) =>
+      FULL_SHA_PATTERN.test(text(key) ?? ''),
+    );
+  if (pr === null || !complete || !wellFormed) {
+    return null;
+  }
+  return {
+    pr,
+    head: (text('head') ?? '').toLowerCase(),
+    claim: text('claim'),
+  };
+}
+function isHoldReasonCode(value) {
+  return value !== null && HOLD_REASON_CODES.includes(value);
+}
+function helperNextAction(code) {
+  return HELPER_NEXT_ACTIONS[code] ?? GENERIC_NEXT_ACTION;
+}
+/**
+ * Pin `GH_HOST` to the active GitHub host for a claimed run (#4369). Without
+ * it, gh falls back to its own default host, which can differ from the origin
+ * the binding check reads, so the candidate scan and the minimize calls could
+ * reach another host than the proof does. Pinned, every gh call of the run and
+ * the marker child reach the same host. A `GH_HOST` the caller already set wins.
+ */
+export function pinActiveGhHost() {
+  const host = activeGithubHost();
+  if (host !== null && !process.env.GH_HOST?.trim()) {
+    process.env.GH_HOST = host;
+  }
+  return host;
+}
+/**
+ * The hold for a cleanup whose target repository is not the one the checkout's
+ * origin names on the active host (#4369). The marker command reads the
+ * checkout's repository and takes no repository flag, so a proof read there
+ * cannot bind a cleanup of another repository. `bound` is the result of
+ * `originNamesRepository`, the same check the marker command runs.
+ */
+export function repositoryBindingHold(bound) {
+  if (bound) {
+    return null;
+  }
+  return helperHold(
+    'repo-mismatch',
+    'hold',
+    'the checkout origin does not name this repository on the active host',
+  );
+}
+/** The first line of an error, so one hold line carries its cause. */
+function firstLine(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.split('\n')[0] ?? '';
+}
+function boundedDetail(text) {
+  const flat = text.replace(/\s+/gu, ' ').trim().slice(0, 300);
+  return flat === '' ? null : flat;
+}
+function helperHold(code, verdict, detail) {
+  return {
+    code,
+    verdict,
+    nextAction: helperNextAction(code),
+    ...(detail === null ? {} : { detail }),
+  };
+}
+/**
+ * The hold for a failed claim check (#4369). A mismatch means another session
+ * holds the claim, so the run stops quietly. Any other failure is a read error:
+ * the claim may still be this session's, so the run holds for a rerun.
+ */
+export function claimFailureHold(error) {
+  const message = firstLine(error);
+  const detail = boundedDetail(message);
+  if (message.startsWith(CLAIM_MISMATCH_PREFIX)) {
+    return helperHold('claim-or-lock', 'stop', detail);
+  }
+  return {
+    code: 'claim-or-lock',
+    verdict: 'hold',
+    nextAction: CLAIM_READ_NEXT_ACTION,
+    ...(detail === null ? {} : { detail }),
+  };
+}
+/**
+ * Read the marker command's stdout as a verdict. Output that is not a JSON
+ * verdict is `gate-unreadable`, a hold, so an unreadable gate never passes.
+ */
+function readMarkerDecision(run, expected) {
+  // The first stderr line names the cause of a child that printed no verdict.
+  const stderrCause = boundedDetail(firstLine(run.stderr ?? ''));
+  const unreadable = (detail) => ({
+    verdict: 'hold',
+    reason: 'gate-unreadable',
+    nextAction: null,
+    detail: stderrCause === null ? detail : `${detail}; stderr: ${stderrCause}`,
+    proof: null,
+  });
+  const stdout = run.stdout;
+  if (stdout === null || stdout.trim() === '') {
+    return unreadable('the marker command printed no result');
+  }
+  let envelope;
+  try {
+    envelope = JSON.parse(stdout);
+  } catch {
+    return unreadable('the marker command printed no JSON');
+  }
+  if (typeof envelope !== 'object' || envelope === null) {
+    return unreadable('the marker command printed no JSON object');
+  }
+  const fields = envelope;
+  // The envelope must answer this invocation: the same type, issue, and mode.
+  // An envelope for another invocation is not a verdict on this one (#4369).
+  const expectedMode = expected.apply ? 'apply' : 'dry-run';
+  if (
+    fields.type !== 'f4-head-proof' ||
+    fields.target !== 'issue' ||
+    fields.number !== Number(expected.claimIssue) ||
+    fields.mode !== expectedMode
+  ) {
+    return unreadable('the marker command answered a different invocation');
+  }
+  const verdict = fields.verdict;
+  if (typeof verdict !== 'string' || !MARKER_VERDICTS.has(verdict)) {
+    return unreadable('the marker command gave no verdict');
+  }
+  const reason = typeof fields.reason === 'string' ? fields.reason : null;
+  // The marker contract: exit 0 for proceed and post, exit 1 for hold and stop.
+  // An exit that disagrees with the verdict is not a verdict (#4369).
+  const expectedExit = verdict === 'proceed' || verdict === 'post' ? 0 : 1;
+  if (run.exitCode !== expectedExit) {
+    return unreadable(
+      `the marker command exited ${run.exitCode ?? 'without a status'} for ${verdict}`,
+    );
+  }
+  if (verdict !== 'proceed' && verdict !== 'post' && reason === null) {
+    return unreadable(`the marker command gave ${verdict} without a reason`);
+  }
+  // A proceed verdict lets a pass run, so only a reason the marker command
+  // gives for a validated proof counts. A post verdict carries no reason.
+  // Anything else fails closed as unreadable (kurone-kito/idd-skill#4369).
+  if (
+    verdict === 'proceed' &&
+    (reason === null || !F4_PROCEED_REASONS.has(reason))
+  ) {
+    return unreadable(
+      `the marker command gave proceed with reason ${reason ?? 'none'}`,
+    );
+  }
+  if (verdict === 'post' && reason !== null) {
+    return unreadable(`the marker command gave post with reason ${reason}`);
+  }
+  const warnings = Array.isArray(fields.warnings)
+    ? fields.warnings.filter((line) => typeof line === 'string')
+    : [];
+  return {
+    verdict: verdict,
+    reason,
+    nextAction:
+      typeof fields.nextAction === 'string' ? fields.nextAction : null,
+    detail: boundedDetail(warnings.join('; ')),
+    proof: readProofIdentity(fields.proof),
+  };
+}
+/** Run the marker command once and read its verdict. A throw is unreadable. */
+function markerDecision(deps, options) {
+  try {
+    return readMarkerDecision(deps.runMarker(options), options);
+  } catch (error) {
+    return {
+      verdict: 'hold',
+      reason: 'gate-unreadable',
+      nextAction: null,
+      detail: boundedDetail(firstLine(error)),
+      proof: null,
+    };
+  }
+}
+/**
+ * The hold a non-proceed decision becomes. A listed reason keeps its code and
+ * verdict; any other reason becomes `gate-unreadable`, with the reason kept
+ * as its detail.
+ */
+function holdFromDecision(decision) {
+  const verdict = decision.verdict === 'stop' ? 'stop' : 'hold';
+  if (isHoldReasonCode(decision.reason)) {
+    return {
+      code: decision.reason,
+      verdict,
+      nextAction: decision.nextAction ?? helperNextAction(decision.reason),
+      ...(decision.detail === null ? {} : { detail: decision.detail }),
+    };
+  }
+  const cause = `marker reason ${decision.reason ?? 'none'}`;
+  const detail = boundedDetail(
+    decision.detail === null ? cause : `${decision.detail}; ${cause}`,
+  );
+  return helperHold('gate-unreadable', 'hold', detail);
+}
+/**
+ * The hold for a proceed verdict whose proof names another pull request, or
+ * another head than this pass read (#4369). The marker command derives its
+ * pull request from the claimed branch, which the claim check does not bind
+ * to the pull request being cleaned. A proof without an identity is unreadable.
+ * `head` is null for a dry run, which reads no head.
+ */
+function proofBindingHold(decision, scope, head) {
+  if (decision.proof === null) {
+    return helperHold(
+      'gate-unreadable',
+      'hold',
+      'the proceed verdict names no proof identity',
+    );
+  }
+  if (decision.proof.pr !== scope.prNumber) {
+    return helperHold(
+      'conflicting-marker',
+      'hold',
+      `the proof names pull request ${decision.proof.pr ?? 'none'}, not ${scope.prNumber}`,
+    );
+  }
+  if (decision.proof.claim !== scope.claimId) {
+    return helperHold(
+      'conflicting-marker',
+      'hold',
+      `the proof names claim ${decision.proof.claim ?? 'none'}, not ${scope.claimId}`,
+    );
+  }
+  if (head !== null && decision.proof.head !== head.toLowerCase()) {
+    return helperHold(
+      'conflicting-marker',
+      'hold',
+      `the proof names head ${decision.proof.head ?? 'none'}, not ${head}`,
+    );
+  }
+  return null;
+}
+/**
+ * The head-proof gate before one pass (#4369): the claim, the head, the
+ * worktree, then the marker dry run. A `post` verdict gets one `--apply` run
+ * and a dry run that must return `proceed`. Returns the hold that stops the
+ * pass, or null when the pass may run. The head is read once, and each later
+ * pass compares against that first read. Nothing here minimizes a comment.
+ */
+export function checkF4HeadProofGate(scope, state, deps) {
+  let claim;
+  try {
+    claim = deps.assertClaim();
+  } catch (error) {
+    return claimFailureHold(error);
+  }
+  let head;
+  try {
+    head = deps.readHeadSha(scope.prNumber);
+  } catch (error) {
+    return helperHold(
+      'head-read-failed',
+      'hold',
+      boundedDetail(firstLine(error)),
+    );
+  }
+  if (state.headSha === null) {
+    state.headSha = head;
+  } else if (state.headSha !== head) {
+    return helperHold(
+      'head-changed',
+      'hold',
+      `the head was ${state.headSha} and is now ${head}`,
+    );
+  }
+  let worktree;
+  try {
+    worktree = deps.findWorktree(claim.branch);
+  } catch (error) {
+    return helperHold(
+      'worktree-not-found',
+      'hold',
+      boundedDetail(firstLine(error)),
+    );
+  }
+  if (worktree === null) {
+    return helperHold(
+      'worktree-not-found',
+      'hold',
+      `git registers no worktree for ${claim.branch}`,
+    );
+  }
+  const run = {
+    claimIssue: scope.claimIssue,
+    claimId: scope.claimId,
+    agentId: claim.agentId,
+    worktree,
+  };
+  const dry = markerDecision(deps, { ...run, apply: false });
+  if (dry.verdict === 'proceed') {
+    return proofBindingHold(dry, scope, head);
+  }
+  if (dry.verdict !== 'post') {
+    return holdFromDecision(dry);
+  }
+  // A post names the pull request it would prove. Bind it before any apply run,
+  // so a proof for another pull request is never posted (#4369).
+  const postBound = proofBindingHold(dry, scope, head);
+  if (postBound !== null) {
+    return postBound;
+  }
+  const posted = markerDecision(deps, { ...run, apply: true });
+  if (posted.verdict !== 'proceed') {
+    return holdFromDecision(posted);
+  }
+  // The posted proof is bound too, before the re-read may accept it (#4369).
+  const postedBound = proofBindingHold(posted, scope, head);
+  if (postedBound !== null) {
+    return postedBound;
+  }
+  const reread = markerDecision(deps, { ...run, apply: false });
+  if (reread.verdict === 'proceed') {
+    return proofBindingHold(reread, scope, head);
+  }
+  if (reread.verdict === 'post') {
+    return helperHold(
+      'post-unconfirmed',
+      'hold',
+      'the proof was posted, but a dry run still finds none',
+    );
+  }
+  return holdFromDecision(reread);
+}
+/**
+ * The `gate` and `gateReason` a dry run reports for a claimed single-PR run
+ * (#4369). It makes the same claim, worktree, and marker dry run as the apply
+ * gate, but never reads the head and never runs `--apply`.
+ */
+export function describeF4HeadProofGate(scope, deps) {
+  let claim;
+  try {
+    claim = deps.assertClaim();
+  } catch (error) {
+    const hold = claimFailureHold(error);
+    return { gate: hold.verdict, gateReason: hold.code };
+  }
+  let worktree;
+  try {
+    worktree = deps.findWorktree(claim.branch);
+  } catch {
+    worktree = null;
+  }
+  if (worktree === null) {
+    return { gate: 'hold', gateReason: 'worktree-not-found' };
+  }
+  const decision = markerDecision(deps, {
+    claimIssue: scope.claimIssue,
+    claimId: scope.claimId,
+    agentId: claim.agentId,
+    worktree,
+    apply: false,
+  });
+  if (decision.verdict === 'proceed' || decision.verdict === 'post') {
+    // A dry run reads no head, so only the pull request binds here. The gate
+    // binds a post the same way before it posts, so the report must match it.
+    const bound = proofBindingHold(decision, scope, null);
+    if (bound !== null) {
+      return { gate: bound.verdict, gateReason: bound.code };
+    }
+  }
+  if (decision.verdict === 'hold' || decision.verdict === 'stop') {
+    const hold = holdFromDecision(decision);
+    return { gate: hold.verdict, gateReason: hold.code };
+  }
+  return { gate: decision.verdict, gateReason: decision.reason };
+}
+/**
+ * The claimed single-PR run the gate applies to: an apply or dry run that
+ * names a claim, without `--prs` (a batch never runs under one claim) and
+ * without `--skip-claim-check`. Null for every other run, which keeps its
+ * behavior.
+ */
+export function f4GateScope(args, prNumber) {
+  if (
+    args.prs !== undefined ||
+    args.skipClaimCheck ||
+    args.claimIssue === undefined ||
+    args.claimId === undefined
+  ) {
+    return null;
+  }
+  return { prNumber, claimIssue: args.claimIssue, claimId: args.claimId };
+}
+/** The registered worktree of `branch`, from `git worktree list --porcelain -z`. */
+function findRegisteredWorktreeForBranch(branch) {
+  const listing = spawnSync('git', ['worktree', 'list', '--porcelain', '-z'], {
+    encoding: 'utf8',
+    env: gitChildEnvironment(),
+  });
+  if (listing.status !== 0) {
+    throw new Error(`git worktree list failed (status ${listing.status})`);
+  }
+  const record = parseLocalWorktreeList(listing.stdout).find(
+    (entry) =>
+      entry.branchRef === `refs/heads/${branch}` &&
+      !entry.prunable &&
+      !entry.bare,
+  );
+  return record?.path ?? null;
+}
+/**
+ * The REST request for a pull request's head. It names the active GitHub host
+ * explicitly, so the head is read from the same host the origin check and the
+ * marker child use, not from gh's own default host (#4369).
+ */
+export function pullRequestHeadRequest(owner, repo, prNumber, host) {
+  return {
+    path: `repos/${owner}/${repo}/pulls/${prNumber}`,
+    extraArgs: ['--hostname', host],
+  };
+}
+/** The live head SHA of a pull request, from the REST pulls endpoint. */
+function readPullRequestHeadSha(owner, repo, prNumber) {
+  const request = pullRequestHeadRequest(
+    owner,
+    repo,
+    prNumber,
+    activeGithubHost() ?? 'github.com',
+  );
+  const payload = ghApiJson(request.path, {
+    extraArgs: request.extraArgs,
+  });
+  const sha = payload?.head?.sha;
+  if (typeof sha !== 'string' || !FULL_SHA_PATTERN.test(sha)) {
+    throw new Error(`pull request #${prNumber} has no readable head sha`);
+  }
+  return sha;
+}
+/**
+ * Run the compiled `post-idd-marker` for the head proof and return its stdout.
+ * The child gets the sanitized Git environment, as the claim check does.
+ */
+function runMarkerCommand(options) {
+  const script = join(
+    resolveBundleRoot(import.meta.dirname),
+    'scripts',
+    'post-idd-marker.mjs',
+  );
+  const argv = [
+    script,
+    '--type',
+    'f4-head-proof',
+    '--target',
+    'issue',
+    options.claimIssue,
+    '--claim-id',
+    options.claimId,
+    '--agent-id',
+    options.agentId,
+    '--worktree',
+    options.worktree,
+  ];
+  if (options.apply) {
+    argv.push('--apply');
+  }
+  return markerRunOf(
+    spawnSync(process.execPath, argv, {
+      encoding: 'utf8',
+      env: gitChildEnvironment(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: F4_MARKER_TIMEOUT_MS,
+    }),
+  );
+}
+/**
+ * One marker run from its spawn result. A child that failed to start, timed
+ * out, or was killed did not finish its proof, so it has no stdout and no exit
+ * status, even when its stdout holds a complete JSON envelope (#4369).
+ */
+export function markerRunOf(result) {
+  // The stderr is kept on every outcome, because a crash names its cause there.
+  const stderr =
+    typeof result.stderr === 'string' ? { stderr: result.stderr } : {};
+  if (result.error !== undefined || result.status === null) {
+    return { stdout: null, exitCode: null, ...stderr };
+  }
+  return {
+    stdout:
+      typeof result.stdout === 'string' && result.stdout.trim() !== ''
+        ? result.stdout
+        : null,
+    exitCode: result.status,
+    ...stderr,
+  };
+}
+function createF4GateDeps(owner, repo, args, scope, claimContext) {
+  return {
+    assertClaim: () =>
+      assertActiveClaim(
+        owner,
+        repo,
+        scope.claimIssue,
+        args.agentId,
+        scope.claimId,
+        claimContext,
+      ),
+    findWorktree: findRegisteredWorktreeForBranch,
+    readHeadSha: (prNumber) => readPullRequestHeadSha(owner, repo, prNumber),
+    runMarker: runMarkerCommand,
+  };
 }
 // Build an IDD-scoped disposition-author predicate from the resolved
 // trusted-marker actors (the accounts the IDD agent posts dispositions under).
@@ -1700,6 +2335,9 @@ function assertActiveClaim(
       `claim check failed for #${issueNumber}: active claim is ${activeLabel}`,
     );
   }
+  // Returned so a caller that needs the claim's agent ID or branch (the F4
+  // head-proof gate, #4369) reads the claim once, not a second time.
+  return active;
 }
 export function readActiveClaim(owner, repo, issueNumber, options = {}) {
   const rows = parsePaginatedGhNdjson(
@@ -1975,6 +2613,20 @@ function writeReport(report, format) {
     console.log(
       `summary: status=${report.status}, candidates=${report.summary.candidate}, applied=${report.summary.applied}, failed=${report.summary.failed}, skipped=${report.summary.skipped}${retrySuffix}${rescanErrorSuffix}`,
     );
+    console.log('');
+  }
+  if (report.gate !== undefined) {
+    const reason = report.gateReason ? ` (${report.gateReason})` : '';
+    console.log(`gate: ${report.gate}${reason}`);
+  }
+  if (report.holds !== undefined && report.holds.length > 0) {
+    console.log(`holds: ${report.holds.length}`);
+    for (const hold of report.holds) {
+      const detail = hold.detail ? ` (${hold.detail})` : '';
+      console.log(
+        `  ${hold.verdict} ${hold.code}: ${hold.nextAction}${detail}`,
+      );
+    }
     console.log('');
   }
   printRows('candidates', report.candidates);
