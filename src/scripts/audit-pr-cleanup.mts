@@ -1196,16 +1196,33 @@ export interface F4GateDecision {
   } | null;
 }
 
-/** The proof identity of a marker envelope (#4369). */
+/**
+ * The proof identity of a marker envelope (#4369). The marker contract names
+ * seven proof fields, so a proof missing any of them has no identity to bind.
+ */
 function readProofIdentity(value: unknown): F4GateDecision['proof'] {
   if (typeof value !== 'object' || value === null) {
     return null;
   }
   const fields = value as Record<string, unknown>;
+  const text = (key: string): string | null =>
+    typeof fields[key] === 'string' ? (fields[key] as string) : null;
+  const pr = typeof fields.pr === 'number' ? fields.pr : null;
+  const complete = [
+    text('claim'),
+    text('branch'),
+    text('f2'),
+    text('branchTip'),
+    text('merge'),
+    text('head'),
+  ].every((field) => field !== null);
+  if (pr === null || !complete) {
+    return null;
+  }
   return {
-    pr: typeof fields.pr === 'number' ? fields.pr : null,
-    head: typeof fields.head === 'string' ? fields.head.toLowerCase() : null,
-    claim: typeof fields.claim === 'string' ? fields.claim : null,
+    pr,
+    head: (text('head') ?? '').toLowerCase(),
+    claim: text('claim'),
   };
 }
 

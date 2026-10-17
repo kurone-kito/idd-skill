@@ -2575,6 +2575,20 @@ const GATE_CLAIM: FakeClaim = {
   createdAt: '2026-10-16T19:45:17Z',
 };
 
+/** A complete proof (all seven marker fields), with the given fields replaced. */
+function proofOf(overrides: Record<string, unknown>): Record<string, unknown> {
+  return {
+    pr: GATE_SCOPE.prNumber,
+    head: GATE_SHA_A,
+    claim: 'claim-1',
+    branch: GATE_CLAIM.branch,
+    f2: 'c'.repeat(40),
+    branchTip: 'd'.repeat(40),
+    merge: 'e'.repeat(40),
+    ...overrides,
+  };
+}
+
 // A marker envelope names the pull request and head it proves. The default
 // names the scope's pull request at the head the fake reads, so each test
 // overrides only the identity it exercises.
@@ -2588,6 +2602,9 @@ function markerJson(fields: Record<string, unknown>): string {
       head: GATE_SHA_A,
       claim: 'claim-1',
       branch: GATE_CLAIM.branch,
+      f2: 'c'.repeat(40),
+      branchTip: 'd'.repeat(40),
+      merge: 'e'.repeat(40),
     },
     ...fields,
   });
@@ -3264,13 +3281,29 @@ test('checkF4HeadProofGate: an exit status that disagrees with the verdict is un
   }
 });
 
+test('checkF4HeadProofGate: a proof missing any of its seven fields is unreadable (#4369)', () => {
+  const gate = fakeGate({
+    markers: [
+      markerJson({
+        verdict: 'proceed',
+        reason: 'reusable',
+        proof: { pr: 7, head: GATE_SHA_A, claim: 'claim-1' },
+      }),
+    ],
+  });
+  const hold = checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, gate.deps);
+
+  assert.equal(hold?.code, 'gate-unreadable');
+  assert.equal(gate.calls.marker.length, 1, 'no apply run follows it');
+});
+
 test('checkF4HeadProofGate: a proof that names another claim holds as conflicting-marker (#4369)', () => {
   const gate = fakeGate({
     markers: [
       markerJson({
         verdict: 'proceed',
         reason: 'reusable',
-        proof: { pr: 7, head: GATE_SHA_A, claim: 'other-claim' },
+        proof: proofOf({ claim: 'other-claim' }),
       }),
     ],
   });
@@ -3287,7 +3320,7 @@ test('checkF4HeadProofGate: a posted proof naming another pull request is never 
       markerJson({
         verdict: 'proceed',
         reason: 'posted-confirmed',
-        proof: { pr: 8, head: GATE_SHA_A },
+        proof: proofOf({ pr: 8 }),
       }),
       markerJson({ verdict: 'proceed', reason: 'reusable' }),
     ],
@@ -3307,7 +3340,7 @@ test('checkF4HeadProofGate: a post naming another pull request holds before any 
     markers: [
       markerJson({
         verdict: 'post',
-        proof: { pr: 8, head: GATE_SHA_A },
+        proof: proofOf({ pr: 8 }),
       }),
     ],
   });
@@ -3336,7 +3369,7 @@ test('checkF4HeadProofGate: a proof that names another pull request or head, or 
       markerJson({
         verdict: 'proceed',
         reason: 'reusable',
-        proof: { pr: 8, head: GATE_SHA_A },
+        proof: proofOf({ pr: 8 }),
       }),
     ],
   });
@@ -3358,7 +3391,7 @@ test('checkF4HeadProofGate: a proof that names another pull request or head, or 
       markerJson({
         verdict: 'proceed',
         reason: 'reusable',
-        proof: { pr: 7, head: GATE_SHA_B },
+        proof: proofOf({ head: GATE_SHA_B }),
       }),
     ],
   });
@@ -3380,7 +3413,7 @@ test('checkF4HeadProofGate: a proof that names another pull request or head, or 
       markerJson({
         verdict: 'proceed',
         reason: 'reusable',
-        proof: { pr: 8, head: GATE_SHA_A },
+        proof: proofOf({ pr: 8 }),
       }),
     ],
   });
@@ -3391,9 +3424,7 @@ test('checkF4HeadProofGate: a proof that names another pull request or head, or 
 
   // The gate binds a post before it posts, so the dry-run report binds it too.
   const describedPost = fakeGate({
-    markers: [
-      markerJson({ verdict: 'post', proof: { pr: 8, head: GATE_SHA_A } }),
-    ],
+    markers: [markerJson({ verdict: 'post', proof: proofOf({ pr: 8 }) })],
   });
   assert.deepEqual(describeF4HeadProofGate(GATE_SCOPE, describedPost.deps), {
     gate: 'hold',
