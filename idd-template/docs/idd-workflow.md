@@ -1503,13 +1503,14 @@ yet, so stop and report instead.
 **Worker report.** Write your final report as a draft to `{report-path}`,
 outside the worktree. Fill the fields of `schemas/worker-report.schema.json`:
 `schemaVersion`, `issue`, `pullRequest`, `claimId`, `harness`, `workerHandle`,
-`terminalPhase`, `outcome`, and the optional `reviewRounds`, `stalls`,
+`terminalPhase`, `outcome`, and the optional `stalls`,
 `deviations`, `frictions`, `followUps`, and `unfiledFollowUps`. Use
 `followUps` only for issues you filed; put textual follow-ups you identified but
 did not file in `unfiledFollowUps`. Give `workerHandle` any non-empty
 value, such as `{agent-id}`, which the orchestrator overwrites from its roster
 entry, and leave `verifiedAt` and `recordedAt` out, because you cannot know
-them. Do not append the draft to the
+them. Also leave `reviewRounds` out: the orchestrator derives it from the
+pull request's reviews. Do not append the draft to the
 [worker final report store](idd-helper-scripts.md#worker-final-report-store),
 because the orchestrator checks it against live GitHub state first. The
 `outcome` that the draft proposes follows
@@ -1518,8 +1519,20 @@ because the orchestrator checks it against live GitHub state first. The
 Fill note: set `{report-path}` to a file whose name starts with the issue number,
 for example `2878-worker-report.json`, directly in the scratchpad path that the
 harness reports, because an orchestrator restart looks there for report drafts.
-The orchestrator completes the draft, as section 5 of the orchestrator phase
-file says.
+At verification, the orchestrator computes `reviewRounds` from the complete
+review list for a non-null `pullRequest`:
+
+```bash
+set -o pipefail
+gh api "repos/<owner>/<repo>/pulls/<n>/reviews" --paginate --slurp |
+  jq '[.[][] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | length'
+```
+
+Replace the placeholders before running the command. It counts all review
+states, across all pages and claims. A worker or older draft value is never
+used. Omit the field when `pullRequest` is null or the command cannot read the
+complete count; never record a partial count. The orchestrator completes the
+rest of the draft, as section 5 of the orchestrator phase file says.
 
 ### Orchestrator run report
 
@@ -1789,8 +1802,11 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    again, if no other unmatched own claim or unmatched live worker remains. Do
    not append a draft that does not match. Then verify its outcome,
    `pullRequest`, and `terminalPhase` against live GitHub state, set
-   `verifiedAt` to that check and `recordedAt` to the time of the append, then
-   append it. If no draft is found, verify the terminal outcome from live GitHub
+   `verifiedAt` to that check and `recordedAt` to the time of the append.
+   Recompute `reviewRounds` from the complete paginated review list using the
+   Worker report Fill note above, replacing any draft value. Omit the field if
+   `pullRequest` is null or the complete count cannot be read. Then append it.
+   If no draft is found, verify the terminal outcome from live GitHub
    state, build the record as the
    [worker final report store](idd-helper-scripts.md#worker-final-report-store)
    describes, with `harness` set to the slug the store lists for this session's

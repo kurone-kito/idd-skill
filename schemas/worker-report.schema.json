@@ -104,7 +104,7 @@
     "reviewRounds": {
       "type": "integer",
       "minimum": 0,
-      "description": "How many review rounds the worker ran."
+      "description": "Number of review submissions by copilot-pull-request-reviewer[bot] on the pull request, across all pages and review states, counted PR-wide by the orchestrator at verification and not per claim. Omit when the pull request is null or the complete count cannot be read; workers do not provide this field."
     },
     "stalls": {
       "type": "array",

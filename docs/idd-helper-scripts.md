@@ -8889,6 +8889,13 @@ and that helper detail is the next action.
   numeric offset, and seconds `00` to `59`, that name a real instant: a day
   that does not exist (`2026-02-30`), hour 24, or an out-of-range offset is
   rejected rather than silently normalized.
+- `reviewRounds`: the PR-wide count of review submissions by
+  `copilot-pull-request-reviewer[bot]`, across all pages and review states,
+  recorded by the orchestrator at verification and not per claim. Workers
+  omit it; the orchestrator recomputes it from GitHub and replaces any draft
+  value. Omit it when `pullRequest` is `null` or a complete count cannot be
+  read. Never store a partial count. The command is in the `Worker report`
+  Fill note in `idd-workflow.md`.
 - `workerHandle`: the identifier the harness returned when it started the
   worker, written by the orchestrator before the append. The dedupe key
   includes it, so a handle taken from anywhere else can make a retry look like
