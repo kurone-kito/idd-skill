@@ -12,11 +12,16 @@ standard file.
   helpers are stop-and-ask conditions; never fall back silently to prose.
 - `instructions-only` uses `idd-review-fix.instructions.md`.
 - **Command sets**: `fix-validate` (E9) and `post-fix-validate` (E12) are
-  read from `.github/idd/config.json`'s `commands` mapping. If that file
-  is missing or the command set cannot be read, stop and ask rather than
-  guessing a command. Judge each run by exit status (Bash
-  `${PIPESTATUS[0]}`/`set -o pipefail`); a `tail`/`head` filter can't
-  prove success (#3139).
+  read from `.github/idd/config.json`'s `commands` mapping; if unreadable,
+  stop and ask.
+- Judge each run by exit status (Bash `${PIPESTATUS[0]}` or
+  `set -o pipefail`); filtered output cannot prove success (#3139).
+- Wrap each whole configured string in one `idd-local-admission --`
+  call. Read and admit `localExec.admission.testCommand` from the repository
+  policy file when set. Exit 75 is expiry only if stderr contains
+  `local-admission: expired`: report no command started; do not rerun
+  or treat the step as a pass (not a test rerun or Discover incomplete-result retry).
+  Otherwise, 75 is the command's own status.
 
 ## Upstream-triage boundary
 

@@ -3,19 +3,22 @@
 `{default-branch}`: the GitHub default branch. `{development-branch}`: the base
 branch (`developmentBranch`, or the default branch when absent).
 
-Lite profile for helper-enabled weak/local models. Same semantics as
-`idd-work.instructions.md`. Use only for a single claimed issue. If the
-repository is `instructions-only`, use the standard work instructions instead.
+Lite profile for helper-enabled weak/local models; same as
+`idd-work.instructions.md`. For one claimed issue only; `instructions-only`
+uses the standard work instructions.
 
 ## Helper runtime contract
 
-- When a step names a helper or command set, use it. If a required helper is
-  missing, fails, or disagrees with live state, stop and ask; never fall back
-  silently to prose.
-- `instructions-only`: do not use this lite file; use
-  `idd-work.instructions.md` instead.
-- Any mismatch between this file and the standard work phase is a bug in this
-  file.
+- Use named helpers/commands. If a required one is missing, fails, or
+  disagrees with live state, stop and ask; no silent prose fallback.
+- `instructions-only`: use `idd-work.instructions.md`.
+- A mismatch with the standard work phase is a bug.
+- Wrap each whole configured string in one `idd-local-admission --`
+  call. Read and admit `localExec.admission.testCommand` from the repository
+  policy file when set. Exit 75 is expiry only if stderr contains
+  `local-admission: expired`: report no command started; do not rerun
+  or treat the step as a pass (not a test rerun or Discover incomplete-result retry).
+  Otherwise, 75 is the command's own status.
 
 ## Stop-and-ask conditions
 
