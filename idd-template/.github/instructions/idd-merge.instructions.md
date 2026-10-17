@@ -603,10 +603,11 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      `error: the branch '<branch-name>' is not fully merged`. If it
      still does, compare `git rev-parse <branch-name>` with `gh pr
      view {pr-number} --json state,headRefOid`: matching `MERGED`
-     head → keep it, re-validate claim, comment: operator may run
-     `git branch -D <branch-name>`, continue to step 6 (`Next action:
-     none`); otherwise hold `local-branch-unmerged-commits`, stop
-     before step 7, keep claim.
+     head → keep the branch, re-validate claim, comment, and let the
+     helper continue to step 6 (`Next action: none`). Only the operator
+     may run `git branch -D <branch-name>`, and the helper is then rerun.
+     Otherwise hold `local-branch-unmerged-commits`, stop before step 7,
+     keep claim.
 
 6. If GitHub auto-delete is disabled (`delete_branch_on_merge` is false),
    delete the remote branch per
