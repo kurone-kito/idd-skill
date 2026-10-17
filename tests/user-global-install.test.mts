@@ -238,7 +238,9 @@ test('the installed entry uses the separately deployed activation command', () =
     'utf8',
   );
   assert.match(installedEntry, /~\/.local\/bin\/idd-activation/);
-  assert.match(installedEntry, /~\/.local\/bin\/idd-activation\.cmd/);
+  assert.ok(
+    installedEntry.includes('"%USERPROFILE%\\.local\\bin\\idd-activation.cmd"'),
+  );
   assert.doesNotMatch(
     installedEntry,
     /\$PAYLOAD\/scripts\/idd-activation\.mjs/,

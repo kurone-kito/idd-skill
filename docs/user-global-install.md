@@ -287,14 +287,15 @@ files load only after the gate reports `active`. The gate is read-only and makes
 no network calls.
 
 Run `idd-activation` from the repository directory. The command takes `--cwd
-<path>` to classify another directory. If the command is absent from `PATH`, the
-entry uses `~/.local/bin/idd-activation` or, on Windows,
-`~/.local/bin/idd-activation.cmd`. Those executables are deployed by the host
-setup; `--install-user-global` installs the payload and does not copy CLI
-helpers or write to `~/.local/bin`. The onboarding output prints separate
-`npm install -g` and `pnpm add -g` commands for installing the package CLI. From
-a checkout of this repository, run `node scripts/idd-activation.mjs [--cwd
-<path>]`.
+<path>` to classify another directory. If the command is absent from `PATH`, use
+`~/.local/bin/idd-activation` on POSIX. On Windows, use
+`& "$HOME\.local\bin\idd-activation.cmd"` in PowerShell or
+`"%USERPROFILE%\.local\bin\idd-activation.cmd"` in Command Prompt. Those
+executables are deployed by the host setup; `--install-user-global` installs
+the payload and does not copy CLI helpers or write to `~/.local/bin`. The
+onboarding output prints separate `npm install -g` and `pnpm add -g` commands
+for installing the package CLI. From a checkout of this repository, run `node
+scripts/idd-activation.mjs [--cwd <path>]`.
 
 The gate checks these rules in order and stops at the first match:
 
