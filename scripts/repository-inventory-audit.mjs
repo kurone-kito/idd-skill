@@ -46,6 +46,7 @@ export const COVERED_HELPERS = [
   'idd-doctor',
   'idd-effective-config',
   'idd-issue-authoring-delegate',
+  'idd-load-gate',
   'idd-roadmap-audit-execute',
   'idd-suggest-untrusted-labelers',
   'idd-worker-budget',

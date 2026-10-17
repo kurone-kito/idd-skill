@@ -19,6 +19,7 @@ const pkg = JSON.parse(
 const chain: string = config.commands['pre-push-validate'];
 
 const EXPECTED_ORDER = [
+  'node scripts/idd-load-gate.mjs',
   'pnpm run check',
   'pnpm run doctor:github',
   'node scripts/token-cost-report.mjs --check',
@@ -55,23 +56,38 @@ test('the pre-push chain runs check, then doctor, then token-cost, then stray', 
   assert.deepEqual(run.calls, EXPECTED_ORDER);
 });
 
+// The calls made up to and including `step`, so a failure test reads by step
+// name and does not break when a leading step (the load gate) is added.
+function callsThrough(step: string): string[] {
+  return EXPECTED_ORDER.slice(0, EXPECTED_ORDER.indexOf(step) + 1);
+}
+
 test('a failing check stops the chain before doctor runs', () => {
   const run = runChain('pnpm run check');
   // A non-zero status means no push-success evidence can be recorded.
   assert.notEqual(run.status, 0);
-  assert.deepEqual(run.calls, ['pnpm run check']);
+  assert.deepEqual(run.calls, callsThrough('pnpm run check'));
+});
+
+test('a load gate hold stops the chain before any validation step runs', () => {
+  const run = runChain('node scripts/idd-load-gate.mjs');
+  assert.notEqual(run.status, 0);
+  assert.deepEqual(run.calls, ['node scripts/idd-load-gate.mjs']);
 });
 
 test('a failing doctor stops the chain before token-cost and stray run', () => {
   const run = runChain('pnpm run doctor:github');
   assert.notEqual(run.status, 0);
-  assert.deepEqual(run.calls, EXPECTED_ORDER.slice(0, 2));
+  assert.deepEqual(run.calls, callsThrough('pnpm run doctor:github'));
 });
 
 test('a failing stray check stops the chain before the trial budget check runs (#4010)', () => {
   const run = runChain('node scripts/check-stray-commit-closes.mjs');
   assert.notEqual(run.status, 0);
-  assert.deepEqual(run.calls, EXPECTED_ORDER.slice(0, 4));
+  assert.deepEqual(
+    run.calls,
+    callsThrough('node scripts/check-stray-commit-closes.mjs'),
+  );
 });
 
 test('a failing trial budget check is the last step and still fails the chain (#4010)', () => {

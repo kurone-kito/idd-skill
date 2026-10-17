@@ -216,6 +216,19 @@ test('helper-cli-contract fixture: every discovered bin/idd-*.mjs has a table ro
 
 // --- per-bin sweep -------------------------------------------------------
 
+/**
+ * Bins whose no-args run depends on the host, so this sweep cannot pin its
+ * exit code or bound its run time. `idd-load-gate.mjs` with no arguments waits
+ * up to its 600000 ms default for the one-minute load to fall below the CPU
+ * count: it exits 0 at once on a quiet host and runs past
+ * PER_RUN_TIMEOUT_MS on a busy one. Its no-args behavior is pinned with an
+ * injected load reader in tests/idd-load-gate.test.mts instead. Their
+ * unknown-flag runs are still checked here.
+ */
+const HOST_DEPENDENT_NO_ARGS_BINS: ReadonlySet<string> = new Set([
+  'idd-load-gate.mjs',
+]);
+
 for (const bin of DISCOVERED_BINS) {
   test(`bin/${bin}: unknown-flag and no-args runs behave per the contract table`, () => {
     const entry = TABLE.bins[bin];
@@ -228,12 +241,16 @@ for (const bin of DISCOVERED_BINS) {
       `bin/${bin} (unknown flag) exceeded the ${PER_RUN_TIMEOUT_MS}ms per-run timeout`,
     );
 
-    const noArgsResult = spawnBin(bin, []);
-    assert.equal(
-      noArgsResult.timedOut,
-      false,
-      `bin/${bin} (no args) exceeded the ${PER_RUN_TIMEOUT_MS}ms per-run timeout`,
-    );
+    const noArgsResult = HOST_DEPENDENT_NO_ARGS_BINS.has(bin)
+      ? null
+      : spawnBin(bin, []);
+    if (noArgsResult !== null) {
+      assert.equal(
+        noArgsResult.timedOut,
+        false,
+        `bin/${bin} (no args) exceeded the ${PER_RUN_TIMEOUT_MS}ms per-run timeout`,
+      );
+    }
 
     const runs = entry.runs;
     assert.ok(runs, `bin/${bin} has no "runs" table entry`);
@@ -262,28 +279,30 @@ for (const bin of DISCOVERED_BINS) {
       runs.unknownFlag.exitCode,
     );
 
-    assert.equal(
-      noArgsResult.status,
-      runs.noArgs.exitCode,
-      `bin/${bin} (no args) exit code`,
-    );
-    const noArgsEnvelope = extractEnvelope(noArgsResult.stderr);
-    if (runs.noArgs.kind === null) {
+    if (noArgsResult !== null) {
       assert.equal(
-        noArgsEnvelope,
-        null,
-        `bin/${bin} (no args) expected no envelope line`,
-      );
-    } else {
-      assert.ok(
-        noArgsEnvelope,
-        `bin/${bin} (no args) expected a trailing error envelope line`,
-      );
-      assert.equal(noArgsEnvelope.iddHelperError.kind, runs.noArgs.kind);
-      assert.equal(
-        noArgsEnvelope.iddHelperError.exitCode,
+        noArgsResult.status,
         runs.noArgs.exitCode,
+        `bin/${bin} (no args) exit code`,
       );
+      const noArgsEnvelope = extractEnvelope(noArgsResult.stderr);
+      if (runs.noArgs.kind === null) {
+        assert.equal(
+          noArgsEnvelope,
+          null,
+          `bin/${bin} (no args) expected no envelope line`,
+        );
+      } else {
+        assert.ok(
+          noArgsEnvelope,
+          `bin/${bin} (no args) expected a trailing error envelope line`,
+        );
+        assert.equal(noArgsEnvelope.iddHelperError.kind, runs.noArgs.kind);
+        assert.equal(
+          noArgsEnvelope.iddHelperError.exitCode,
+          runs.noArgs.exitCode,
+        );
+      }
     }
   });
 }
