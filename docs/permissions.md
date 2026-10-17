@@ -466,10 +466,10 @@ record still excludes its candidate when edited.
 ## Claude Code Permission Baseline
 
 This section is **Claude Code-specific**: it documents the committed
-`.claude/settings.json` allow/deny baseline and its opt-in template
+`.claude/settings.json` allow/ask/deny baseline and its opt-in template
 counterpart. Copilot, Codex CLI, OpenCode, and Antigravity CLI have no
 equivalent file and ignore it. Grok Build is the exception: it merges
-that committed allow/deny baseline into its permission rules. This
+that committed allow/ask/deny baseline into its permission rules. This
 section is not a cross-agent permission contract for the harnesses that
 ignore the file.
 
@@ -483,7 +483,10 @@ worth repeating here: a broad `Bash(gh api*)` allow implicitly permits
 `gh api ... -X DELETE` too, unless the DELETE verb is separately
 denied. This repository's own `.claude/settings.json` and the opt-in
 `idd-template/.claude/settings.json` counterpart adopt that same
-allow/deny split, softened as described below.
+allow/deny split, softened as described below. The one difference is
+the three `gh api` DELETE-verb spellings: this repository's baseline
+moves them to `ask`, which prompts for each call, while the template
+counterpart keeps them in `deny`.
 
 ### What the baseline allows
 
@@ -575,12 +578,31 @@ allow/deny split, softened as described below.
 
 `git push --force` / `--force-with-lease` / `-f`, `git reset --hard`,
 `git clean -f`, `git branch -D`, `gh repo delete`, `gh issue delete`,
-all three `gh api` DELETE-verb spellings (`-X DELETE`, `--method
-DELETE`, `--method=DELETE`, kept as defense in depth even though `gh
-api` itself is not allowlisted — see the trap below), and — template
-counterpart only —
+and — template counterpart only —
 `node scripts/idd-merge-execute.mjs` / `node bin/idd-merge-execute.mjs`
 as a literal invocation.
+
+### What the baseline asks about
+
+The three `gh api` DELETE-verb spellings (`-X DELETE`, `--method
+DELETE`, `--method=DELETE`) sit in `permissions.ask`, not in
+`permissions.deny`. A call that matches one of them prompts for
+confirmation each time, and it runs only when the operator approves
+that call. A deny rule blocks every DELETE call outright, and the
+only way to allow one is a change to the shared file. That cost was
+observed on issue `#4365` (2026-10-16): a malformed F4 head proof could
+be removed only after a permission change. The operator chose the ask
+state on 2026-10-17 (issue `#4444`), because a three-state mechanism
+lets a single, reviewed DELETE call proceed without a standing change.
+This baseline does not allowlist `gh api`, so a DELETE call would already
+prompt under the default behavior. The ask entries make that prompt
+explicit, and they keep it even if a later allow rule would otherwise
+cover the call, because Claude Code evaluates deny rules, then ask
+rules, then allow rules.
+
+The opt-in template counterpart, `idd-template/.claude/settings.json`,
+keeps the same three spellings in its `deny` array. An adopter who
+copies that file blocks the verb instead of prompting for it.
 
 **This deny is a default-off guard, not a tamper-proof boundary.** The
 script's own path is an invariant literal prefix for the _direct_ form
@@ -616,14 +638,17 @@ distinguishing a read verb from a write verb within one command
 family. That has consequences worth knowing before you add any `gh
 api` allow entry to this baseline:
 
-- A deny rule for `Bash(gh api -X DELETE*)` only intercepts the
+- An ask rule for `Bash(gh api -X DELETE*)` only matches the
   invocation where `-X DELETE` is the **first** argument after `gh
   api`. `gh api <path> -X DELETE` -- method flag **after** the
   resource path, which is at least as common in practice -- is a
-  different literal prefix and is **not** caught by that same deny
-  rule. The same positional gap applies to the `git push --force*`
-  family of deny rules against a command that places `--force` after
-  other arguments (`git push origin main --force`).
+  different literal prefix and is **not** matched by that same ask
+  rule. A call that no rule matches falls through to the default
+  prompt, which exists here only because this baseline allows no `gh
+  api` call; a future `gh api` allow that covered it would let it run
+  without a prompt. The same positional gap applies to the `git
+  push --force*` family of deny rules against a command that places
+  `--force` after other arguments (`git push origin main --force`).
 - A repository-scoped allow such as `Bash(gh api
   repos/<owner>/<repo>/*)` does not close that gap: it still matches
   every method and verb within that repository's REST namespace,
@@ -637,11 +662,12 @@ api` allow entry to this baseline:
   trailing-wildcard allow that permits the read form. Neither can be
   narrowed to "read-only" by a prefix rule either.
 
-Because none of these gaps can be closed with deny rules or narrower
-prefixes alone, this baseline's answer is to not allow `gh api` at all
-(see above) rather than try to out-narrow the trap. Treat the DELETE-verb
-deny entries as one residual layer for the day a maintainer adds a `gh
-api` allow back, not as proof that doing so would be safe.
+Because none of these gaps can be closed with ask or deny rules or
+narrower prefixes alone, this baseline's answer is to not allow `gh api`
+at all (see above) rather than try to out-narrow the trap. Treat the
+DELETE-verb `ask` entries as one residual layer, which prompts for each
+DELETE call, for the day a maintainer adds a `gh api` allow back, not as
+proof that doing so would be safe.
 
 ### Deliberately softer than soloscrum's deny set
 
