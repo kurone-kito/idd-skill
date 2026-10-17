@@ -32,6 +32,7 @@ import {
   fetchReviewThreads,
   markerRunOf,
   parsePrNumbers,
+  pullRequestHeadRequest,
   readActiveClaim,
   repositoryBindingHold,
   runApplyWithRetry,
@@ -3351,6 +3352,16 @@ test('checkF4HeadProofGate: a post naming another pull request holds before any 
   assert.equal(
     gate.calls.marker.every((run) => run.apply === false),
     true,
+  );
+});
+
+test('pullRequestHeadRequest: the head is read from the named host, not gh default (#4369)', () => {
+  assert.deepEqual(
+    pullRequestHeadRequest('kurone-kito', 'idd-skill', 7, 'ghes.example.com'),
+    {
+      path: 'repos/kurone-kito/idd-skill/pulls/7',
+      extraArgs: ['--hostname', 'ghes.example.com'],
+    },
   );
 });
 

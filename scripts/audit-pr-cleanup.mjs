@@ -54,6 +54,7 @@ import {
   unsafeTextFinding,
 } from './protocol-helpers.mjs';
 import {
+  activeGithubHost,
   fetchLastEditedAtByNodeId,
   fetchReviewThreadCommentUserContentEdits,
   gitChildEnvironment,
@@ -1265,9 +1266,28 @@ function findRegisteredWorktreeForBranch(branch) {
   );
   return record?.path ?? null;
 }
+/**
+ * The REST request for a pull request's head. It names the active GitHub host
+ * explicitly, so the head is read from the same host the origin check and the
+ * marker child use, not from gh's own default host (#4369).
+ */
+export function pullRequestHeadRequest(owner, repo, prNumber, host) {
+  return {
+    path: `repos/${owner}/${repo}/pulls/${prNumber}`,
+    extraArgs: ['--hostname', host],
+  };
+}
 /** The live head SHA of a pull request, from the REST pulls endpoint. */
 function readPullRequestHeadSha(owner, repo, prNumber) {
-  const payload = ghApiJson(`repos/${owner}/${repo}/pulls/${prNumber}`);
+  const request = pullRequestHeadRequest(
+    owner,
+    repo,
+    prNumber,
+    activeGithubHost() ?? 'github.com',
+  );
+  const payload = ghApiJson(request.path, {
+    extraArgs: request.extraArgs,
+  });
   const sha = payload?.head?.sha;
   if (typeof sha !== 'string' || !FULL_SHA_PATTERN.test(sha)) {
     throw new Error(`pull request #${prNumber} has no readable head sha`);
