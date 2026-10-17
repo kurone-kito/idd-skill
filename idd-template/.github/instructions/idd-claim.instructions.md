@@ -283,10 +283,14 @@ Resolve the commands as A5(a) does.
    (`released-claim-local-worktree-occupied`). Only on `claimable`, post
    the claim comment per
    [Claim format](idd-overview-core.instructions.md#claim-format), then
-   the activation nonce. Any other verdict follows the A5(c) routing
-   above; this worktree holds no claim yet.
+   record `{nonce}` with `claim-lock --record-tokens --nonce` on
+   the same `<path>` before posting the activation nonce. Any other
+   verdict follows the A5(c) routing above; this worktree holds no claim
+   yet.
 4. `--acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}`,
-   on the linked worktree only.
+   on the linked worktree only. First repeat
+   `claim-lock --record-tokens --nonce` for the same path and nonce before
+   running the acquire.
 5. After the settle delay, `resume-claim-routing.mjs --issue <n> --assert
    --claim-id {claim-id} --nonce {nonce} --worktree <path>`. This verification
    alone counts.
@@ -366,8 +370,8 @@ verification_ below); never skip it for any activation path:
 _{agent-id}: claim activation nonce — IDD automation marker. Do not edit._
 ```
 
-`{nonce}` is fresh; record it via the `--record-tokens` call above
-plus `--nonce {nonce}`. For
+`{nonce}` is fresh. Record it before posting the activation-nonce marker
+in step 3, then repeat the same record at step 4's acquire point. For
 multiple trusted markers sharing a claim, the lexicographically earliest
 nonce wins; no marker means no comparison. With helper runtime, post it
 using
