@@ -2636,6 +2636,70 @@ Behavior:
   through `run-helper`, which forwards no signals. A SIGTERM sent to the
   registered command therefore reaches the admitted command.
 
+### Helper-free fallback
+
+Use this only when helper runtime is absent. Set `shell` and `command` to the
+exact child argv that would follow `--`; keep the complete command string in
+one value. If repo policy sets `enabled: false`, run `"$shell" -c "$command"`
+directly. If `flock` is absent, print the helper's one notice and run directly.
+Otherwise resolve `state` to absolute `XDG_STATE_HOME`, or `$HOME/.local/state`
+when that variable is relative or unset; if neither gives an absolute path,
+refuse with exit `2`. Set `wait_seconds` from repository
+`maxWait` (ISO duration, rounded up to seconds); the default is 7200 (`PT2H`)
+and the maximum is 21600 (`PT6H`). The following Bash-compatible shell
+fragment opens the same per-user lock file as the helper:
+
+```sh
+case ${XDG_STATE_HOME:-} in
+  /*) state=$XDG_STATE_HOME ;;
+  *) case ${HOME:-} in
+       /*) state=$HOME/.local/state ;;
+       *) printf 'local-admission: no absolute state root; command not started\n' >&2; exit 2 ;;
+     esac ;;
+esac
+wait_seconds=7200 # Replace with the validated repository maxWait when set.
+umask 077
+lock_dir="$state/idd-skill/local-admission"
+for dir in "$state/idd-skill" "$lock_dir"; do
+  if [ -L "$dir" ] || { [ -e "$dir" ] && [ ! -d "$dir" ]; }; then
+    printf 'local-admission: unsafe lock directory; command not started\n' >&2
+    exit 2
+  fi
+done
+mkdir -p "$lock_dir" || {
+  printf 'local-admission: cannot create lock directory; command not started\n' >&2
+  exit 2
+}
+for dir in "$state/idd-skill" "$lock_dir"; do
+  if [ -L "$dir" ] || [ ! -d "$dir" ]; then
+    printf 'local-admission: unsafe lock directory; command not started\n' >&2
+    exit 2
+  fi
+done
+lock="$lock_dir/validate.lock"
+if [ -L "$lock" ] || { [ -e "$lock" ] && [ ! -f "$lock" ]; }; then
+  printf 'local-admission: unsafe lock file; command not started\n' >&2
+  exit 2
+fi
+: >> "$lock" || { printf 'local-admission: cannot open lock; command not started\n' >&2; exit 2; }
+exec 9<"$lock" || { printf 'local-admission: cannot open lock; command not started\n' >&2; exit 2; }
+if flock --timeout "$wait_seconds" --conflict-exit-code 75 9; then
+  if IDD_LOCAL_ADMISSION=1 "$shell" -c "$command"; then status=0; else status=$?; fi
+  flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
+  exit "$status"
+else
+  status=$?
+  if [ "$status" -eq 75 ]; then
+    printf 'local-admission: expired (waited %s seconds); command not started\n' "$wait_seconds" >&2
+  fi
+  exit "$status"
+fi
+```
+
+The timeout branch prints the same expiry line and exits `75` before the child
+starts. A child exit `75` is returned without that line. Other `flock` errors
+also do not count as expiry.
+
 Refusals before the command starts exit `2`: a policy file that fails to parse,
 a raw cap above 1 under `flock`, a symlink at `idd-skill` or `local-admission`,
 a lock file that is a symlink or not a regular file, or a `flock` that fails

@@ -137,19 +137,16 @@ inherit a non-stale claim. For legacy claim migration (comments without
 ## Thresholds
 
 Ownership timing defaults (`claim-stale-age`, `claim-heartbeat-interval`)
-live in `docs/policy-constants.md`.
+are in `docs/policy-constants.md`.
 
-- **Stale**: an active claim whose latest **valid** `claimed-by`
-  comment's GitHub `created_at` is ≥ 24 h ago. Another session may take
-  it over by posting a fresh `{claim-id}` whose `supersedes:` value is
-  that active claim's `{claim-id}`.
-- **Heartbeat**: after re-validating ownership, re-post the claim
-  comment every 12 h while holding or when any phase is expected to
-  exceed 12 h. The latest **valid** `claimed-by` comment for the same
-  `{claim-id}` resets the stale clock. Embedded timestamps are ignored;
-  only the comment's GitHub `created_at` counts. In a hold, a living
-  orchestrator of the same session may renew it for up to 72 h (fan-out
-  variant); without one, the 24 h stale clock applies.
+- **Stale**: A claim is stale 24 h after its latest valid `claimed-by`
+  comment's GitHub `created_at`. Takeover uses a fresh `{claim-id}` whose
+  `supersedes:` names that active claim.
+- **Heartbeat**: Revalidate ownership and repost the claim comment every
+  12 h while holding or before any phase expected to exceed 12 h. The
+  latest valid `claimed-by` comment for the same `{claim-id}` resets the
+  stale clock; ignore embedded timestamps. In a hold, a living same-session
+  orchestrator may renew it up to 72 h (fan-out); otherwise 24 h applies.
 - **Heartbeat-overdue**: diagnostic only; see
   `idd-resume-stall.instructions.md` S3.
 
@@ -264,16 +261,17 @@ which still stop child selection in Discover.
 
 ## Project commands
 
-**Policy.** Effective keys: profile-selected
-`idd-effective-config --key <path>`; if unavailable, use only repo
-`.github/idd/config.json`. Repo keys:
-`commands`,
+**Policy.** Effective keys use profile-selected
+`idd-effective-config --key <path>`; otherwise read only repo
+`.github/idd/config.json`. Repo-only keys: `commands`, `localExec`,
 `skipIssueAuthorApprovalGate`, `maintainerApprovalActorPolicy`,
-`upstreamEscalation`, and `forcedHandoff`. Read `mergeGate`, `ciGate`, and
-trusted-base values from PR base. `commands` must pass the canonical
-schema; missing/invalid config stops.
-Absent values keep the gate enabled and default approval actors to
-`owners-and-maintainers-only`.
+`upstreamEscalation`, `forcedHandoff`. Read `mergeGate`, `ciGate`, and
+trusted-base values from PR base. Repo config must pass canonical schema;
+else stop.
+
+<!-- dprint-ignore -->
+Absent values keep the gate enabled and default approval actors to `owners-and-maintainers-only`.
+
 `node scripts/<name>.mjs` means `vendored-node`; other profiles:
 `docs/idd-helper-scripts.md`.
 
@@ -288,35 +286,37 @@ Absent values keep the gate enabled and default approval actors to
 | **orphan-first-policy** | `none` |
 <!-- dprint-ignore-end -->
 
-**Full-profile validation.** Once via profile-selected
-`idd-local-admission -- <shell> -c <string>`, run the complete B3/C5
-`fix-validate`, D2 `pre-push-validate`, E12 `post-fix-validate`, and
-nonblank repo `localExec.admission.testCommand` strings. Blank/absent is
-unset; do not substitute a suite command.
+**Full-profile validation.** Read optional
+`localExec.admission.testCommand` from the same
+`.github/idd/config.json` as `commands`; blank/absent is unset. Run complete
+B3/C5 `fix-validate`, D2 `pre-push-validate`, E12 `post-fix-validate`, and
+nonblank `testCommand` strings once via profile-selected
+`idd-local-admission -- <shell> -c <string>`. Do not split or substitute.
 
-Helper off: use the documented per-user `flock` lock if `flock` is on
-`PATH`; otherwise run and print one notice. Helper on: use helper only.
+With helper runtime, use only the helper. Without it, `enabled: false`
+runs directly; otherwise use the
+[helper-free fallback](../../docs/idd-helper-scripts.md#helper-free-fallback)
+with `flock` on `PATH`, or run directly with one notice.
 
 **Admission expiry.** Only exit `75` plus stderr
-`local-admission: expired` means no start. Report; do not rerun or pass it.
-No Issue `#1391` flakiness rerun or Discover incomplete-result retry.
-Bare `75` is command status.
+`local-admission: expired` means no command started. Report; never
+rerun or pass it. Do not apply issue `#1391`'s flakiness rerun or Discover's
+incomplete-result retry. Bare `75` is command status.
 
-`pre-push-validate` omits auto-fix: on lint failure run `fix-validate`,
-commit, then rerun it. Stage and commit fix/post-fix changes before push,
+`pre-push-validate` omits auto-fix; on lint failure, run and commit
+`fix-validate`, then rerun it. Commit fix/post-fix edits before push,
 rebase, or clean-tree steps.
 
-`install-deps` must work in fresh, reused, and recreated worktrees without
-manual cleanup or unexpected tracked changes.
+`install-deps` must work in fresh/reused/recreated worktrees without cleanup
+or tracked changes.
 
-Judge a command-set run by exit status; in pipes check `${PIPESTATUS[0]}`
-or `pipefail` (#3139).
+Judge a command-set run by exit status; in pipes check `${PIPESTATUS[0]}` or
+`pipefail` (#3139).
 
 **Tool availability:** Prefer Node.js project scripts; else
 `npx <tool>` if Node.js and `npx` are available.
-
 `npx <tool>` only when `npx` is available and no relevant script exists;
-otherwise `true`. Other absent tools: `true`.
+else `true`. Others absent: `true`.
 
 ## Phase routing table
 
