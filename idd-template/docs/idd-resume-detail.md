@@ -497,14 +497,15 @@ finish afterward. The F4 session never runs `git worktree remove --force`. These
 content refusals are preventive; no observed incident yet.
 
 For step 6, use the profile-selected `delete-remote-branch` helper with
-`BRANCH_NAME` and the verified `PR_HEAD_SHA_F3`. Its default dry-run
+`BRANCH_NAME` and the verified `PR_HEAD_SHA_F3`. The removal helper makes
+this call, and the session never runs it by hand. Its default dry-run
 must report `would-delete` with the expected SHA, or `already-absent`;
 run the same command with `--apply` only for `would-delete`. The helper
 checks the live remote ref and default branch, uses an argument-vector
 `--force-with-lease` compare-and-delete, and confirms absence. Continue
 only for `deleted` or `already-absent`; any mismatch, default-branch
 refusal, failed mutation, or inconclusive confirmation holds F4. For
-example, the vendored-node form is:
+reference only, the underlying vendored-node form is:
 
 ```sh
 node scripts/delete-remote-branch.mjs \
