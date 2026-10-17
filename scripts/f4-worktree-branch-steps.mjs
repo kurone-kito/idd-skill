@@ -102,7 +102,7 @@ export const NEXT_ACTIONS = {
   'inconsistent-worktree-state':
     'Hold. The worktree path, its git registration, and the claim branch disagree, or git could not read them. Nothing was removed. The operator checks git worktree list and the claim.',
   'dirty-worktree':
-    'Hold. The worktree holds untracked, modified, or ignored files. Nothing was removed. The F4 session preserves that content outside the worktree by hand, discarding only reproducible configured-command output, then reruns.',
+    'Hold. The worktree holds untracked, modified, or ignored files. Nothing was removed. The F4 session preserves that content outside the worktree by hand, including every reproducible configured-command output, then reruns.',
   'submodule-worktree':
     'Hold. The worktree holds a populated submodule. Nothing was removed. The F4 session preserves that content outside the worktree by hand, then reruns.',
   'branch-tip-mismatch':
