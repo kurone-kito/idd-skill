@@ -2640,14 +2640,18 @@ Behavior:
 
 Use this only when helper runtime is absent. Set `shell` and `command` to the
 exact child argv that would follow `--`; keep the complete command string in
-one value. Read `enabled`, `backend`, and the raw `maxConcurrent` from
-`localExec.admission` in the repository's `.github/idd/config.json` (the
-defaults are `true`, `flock`, and `1`). If repo policy sets `enabled: false`,
-run `"$shell" -c "$command"` directly. Set `wait_seconds` from repository
-`maxWait` (ISO duration, rounded up to seconds); the default is 7200 (`PT2H`)
-and the maximum is 21600 (`PT6H`). If `backend` is `flock` and the stored raw
-`maxConcurrent` is above `1`, refuse with exit `2` before starting the
-command; the normalizer's clamp does not apply. If `backend` is `pueue`, print
+one value. If `IDD_LOCAL_ADMISSION` is already present, run the child directly
+and return its status without taking a lock; the helper sets it for admitted
+children so a nested call uses this same bypass. Read `enabled`, `backend`, and
+the raw `maxConcurrent` from `localExec.admission` in the repository's
+`.github/idd/config.json` (the defaults are `true`, `flock`, and `1`). If repo
+policy sets `enabled: false`, run `"$shell" -c "$command"` directly. Set
+`wait_seconds` from repository `maxWait` (ISO duration, rounded up to seconds).
+Omitted, invalid, or above-maximum values use the default 7200 seconds
+(`PT2H`); the maximum valid value is 21600 seconds (`PT6H`). If `backend` is
+`flock` and the stored raw `maxConcurrent` is above `1`, refuse with exit `2`
+before starting the command; the normalizer's clamp does not apply. If
+`backend` is `pueue`, print
 the helper's one notice that it is not implemented and continue with the
 one-slot `flock` path. If `flock` is absent, print the helper's notice and run
 directly. Otherwise resolve `state` to absolute `XDG_STATE_HOME`, or
@@ -2659,6 +2663,10 @@ if the running shell cannot enable job control, the fragment refuses before
 starting the command:
 
 ```sh
+if [ "${IDD_LOCAL_ADMISSION+x}" = x ]; then
+  "$shell" -c "$command"
+  exit $?
+fi
 case ${XDG_STATE_HOME:-} in
   /*) state=$XDG_STATE_HOME ;;
   *) case ${HOME:-} in
@@ -2773,14 +2781,16 @@ else
   status=$?
   if [ "$status" -eq 75 ]; then
     printf 'local-admission: expired (waited %s seconds); command not started\n' "$wait_seconds" >&2
+    exit 75
   fi
-  exit "$status"
+  printf 'local-admission: flock stopped with status %s before acquiring the lock; command not started\n' "$status" >&2
+  exit 2
 fi
 ```
 
 The timeout branch prints the same expiry line and exits `75` before the child
-starts. A child exit `75` is returned without that line. Other `flock` errors
-also do not count as expiry.
+starts. A child exit `75` is returned without that line. Other `flock` failures
+before acquisition print a diagnostic and exit `2` without starting the child.
 
 Refusals before the command starts exit `2`: a policy file that fails to parse,
 a raw cap above 1 under `flock`, a symlink at `idd-skill` or `local-admission`,
