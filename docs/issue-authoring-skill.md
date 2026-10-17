@@ -1747,6 +1747,135 @@ baseline denies the `gh api -X DELETE` spelling and does not allowlist `gh api`,
 so that spelling is not used (observed on issue #3841, 2026-10-08; see
 issue #3898). First re-fetch owner comments during release-marker preflight.
 
+#### Per-target release checklist
+
+Use this checklist for an explicit-request release, after the Stage 2
+checks above pass and the user's release request is verified. Each entry
+names its command. The verify, re-fetch, reuse, and restore rules are in
+[Authoring hold and release](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-hold-and-release)
+and are not repeated here. Each post is a dry run unless it has `--apply`, so
+preview it first. For an issue in another repository, pass `--owner` and
+`--repo` to the helper and `--repo <owner>/<repo>` to `gh`. Run the
+entries in this order: entry 1 for every target, entry 2 once, entries 3
+and 4 for each non-anchor target in turn, entries 3 and 4 for the anchor,
+and entry 5 last. The defer-source auto-release exception adds a
+sole-member check before the first label removal. This checklist does not
+cover that path; follow the contract for it.
+
+1. **Preflight, every target.** Run the contract's sweep against the target
+   and the journal first (attempted, not blocking, so the command ends in
+   `|| true`). Use `owner/repo#number` for a journal in another repository.
+
+   ```sh
+   node scripts/sweep-authoring-markers.mjs --issue <target-issue-number> \
+     --issue <journal-issue-number> \
+     --marker-prefix <resolved-target-prefix> \
+     --trusted-marker-logins <trusted-login-1,...> \
+     --deadline-ms 300000 --apply || true
+   ```
+
+   Then append the release marker only when the re-fetched owner log has no
+   valid `mode=release` marker for this owner and set. Otherwise reuse the
+   earliest matching comment ID.
+
+   ```sh
+   node scripts/post-idd-marker.mjs --type authoring-owner \
+     --target issue <target-number> \
+     --marker-target <owner>/<repo>#<target-number> \
+     --anchor <owner>/<repo>#<anchor-number> \
+     --mode release \
+     --marker-owner <opaque-owner-token> \
+     --set <opaque-set-id> \
+     --session <opaque-session-id> \
+     --snapshot-sha256 none \
+     --supersedes <opaque-owner-token> \
+     --marker-prefix <marker-prefix> \
+     --apply
+   ```
+
+2. **Release guard, anchor, once per set.** Before the first label removal,
+   append or reuse this marker. Post it once for the set, not per target.
+
+   ```sh
+   node scripts/post-idd-marker.mjs --type authoring-owner \
+     --target issue <anchor-number> \
+     --marker-target <owner>/<repo>#<anchor-number> \
+     --anchor <owner>/<repo>#<anchor-number> \
+     --mode release-guard \
+     --marker-owner <opaque-owner-token> \
+     --set <opaque-set-id> \
+     --session <opaque-session-id> \
+     --body-sha256 none \
+     --snapshot-sha256 none \
+     --supersedes <opaque-owner-token> \
+     --marker-prefix <marker-prefix> \
+     --apply
+   ```
+
+3. **Heartbeat, before each label removal.** Post the anchor's heartbeat
+   first. Then post the target's own heartbeat when it is a different issue.
+   Use the owner token of the issue named by `--marker-target`.
+
+   ```sh
+   node scripts/post-idd-marker.mjs --type authoring-owner \
+     --target issue <number> \
+     --marker-target <owner>/<repo>#<number> \
+     --anchor <owner>/<repo>#<anchor-number> \
+     --mode heartbeat \
+     --marker-owner <opaque-owner-token> \
+     --set <opaque-set-id> \
+     --session <opaque-session-id> \
+     --snapshot-sha256 none \
+     --supersedes <opaque-owner-token> \
+     --marker-prefix <marker-prefix> \
+     --apply
+   ```
+
+4. **Label removal, one target at a time, anchor last.** Re-fetch the issue
+   after each removal and confirm the label is gone before the next target.
+   To restore a label, use the add form below.
+
+   ```sh
+   gh issue edit <number> --remove-label "<authoring label>"
+   gh issue view <number> --json labels
+   # restore on failure:
+   gh issue edit <number> --add-label "<authoring label>"
+   ```
+
+5. **Release complete, anchor, once per set.** After every target's label
+   removal is verified, run the anchor sweep first, with the anchor as the
+   target:
+
+   ```sh
+   node scripts/sweep-authoring-markers.mjs --issue <anchor-issue-number> \
+     --issue <journal-issue-number> \
+     --marker-prefix <resolved-target-prefix> \
+     --trusted-marker-logins <trusted-login-1,...> \
+     --deadline-ms 300000 --apply || true
+   ```
+
+   Then compute `<snapshot-sha256>` with the set-snapshot algorithm in the
+   same contract section, and post the completion marker.
+
+   ```sh
+   node scripts/post-idd-marker.mjs --type authoring-owner \
+     --target issue <anchor-number> \
+     --marker-target <owner>/<repo>#<anchor-number> \
+     --anchor <owner>/<repo>#<anchor-number> \
+     --mode release-complete \
+     --marker-owner <opaque-owner-token> \
+     --set <opaque-set-id> \
+     --session <opaque-session-id> \
+     --body-sha256 none \
+     --snapshot-sha256 <snapshot-sha256> \
+     --supersedes <opaque-owner-token> \
+     --marker-prefix <marker-prefix> \
+     --apply
+   ```
+
+After entry 5 closes the set, the contract's closing sweep runs once more.
+It is not one of the five entries above; see its **Closing sweep** bullet.
+
 **Mandatory release-time hide-on-supersede sweep (#2896, #2935).** At
 this same point -- before the reuse-or-append decision below, so a
 retried or resumed release (which reuses an existing `release` marker
