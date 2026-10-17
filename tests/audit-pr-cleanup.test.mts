@@ -3355,6 +3355,24 @@ test('checkF4HeadProofGate: a post naming another pull request holds before any 
   );
 });
 
+test('checkF4HeadProofGate: a proof with a malformed field has no identity to bind (#4369)', () => {
+  const malformed = [
+    proofOf({ f2: 'not-a-sha' }),
+    proofOf({ branchTip: 'A'.repeat(40) }),
+    proofOf({ branch: '' }),
+  ];
+  for (const proof of malformed) {
+    const gate = fakeGate({
+      markers: [markerJson({ verdict: 'proceed', reason: 'reusable', proof })],
+    });
+    assert.equal(
+      checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, gate.deps)?.code,
+      'gate-unreadable',
+      JSON.stringify(proof).slice(0, 80),
+    );
+  }
+});
+
 test('pullRequestHeadRequest: the head is read from the named host, not gh default (#4369)', () => {
   assert.deepEqual(
     pullRequestHeadRequest('kurone-kito', 'idd-skill', 7, 'ghes.example.com'),

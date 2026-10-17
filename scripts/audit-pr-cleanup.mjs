@@ -877,7 +877,14 @@ function readProofIdentity(value) {
     text('merge'),
     text('head'),
   ].every((field) => field !== null);
-  if (pr === null || !complete) {
+  // The renderer writes a non-empty branch and full lowercase SHAs, so a value
+  // outside that form is malformed, and it has no identity to bind (#4369).
+  const wellFormed =
+    (text('branch') ?? '') !== '' &&
+    ['f2', 'branchTip', 'merge', 'head'].every((key) =>
+      FULL_SHA_PATTERN.test(text(key) ?? ''),
+    );
+  if (pr === null || !complete || !wellFormed) {
     return null;
   }
   return {
