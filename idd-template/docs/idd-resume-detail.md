@@ -333,6 +333,14 @@ check after a hold (PR `#3741` review comments `#4173683166`,
 `#4174056093`, `#4174056098`, `#4174056101`, `#4174123484`, and
 `#4174335516`; preventive, no observed incident yet).
 
+Observed 2026-10-11 to 2026-10-12 (issue `#4064`): the cleanups for issues
+`#4034`, `#4009`, and `#3944` (PRs `#4040`, `#4041`, and `#4056`) ran with
+no persisted proof. The live cleanup checks did not replace the persisted
+proof this section requires. The marker command,
+`post-idd-marker --type f4-head-proof`, runs the checks below and posts only
+on a `post` verdict (see
+[the marker contract](idd-helper-scripts.md#f4-head-proof-marker-contract)).
+
 Before F4 step 3, revalidate the claim and local lock, then read the
 claimed issue's comments before inspecting the local branch. First look
 for a reusable, valid proof for the active claim and PR; it restores both
@@ -423,7 +431,9 @@ values as well as the F2 watermark and local branch tip. The comment body
 must start with the marker token and include a visible note after it;
 `gh issue comment` and `gh api -f body=` silently
 reject HTML-only operational markers (PR `#3741` review comment
-`#4173965040`). POST a JSON document instead:
+`#4173965040`). The marker command renders and posts this body, so no
+session posts it by hand. The block below only shows the rendered body; do
+not run it:
 
 ```sh
 F4_MARKER_TOKEN=$(printf \
@@ -440,7 +450,14 @@ jq -n --arg body "$F4_MARKER_BODY" '{body: $body}' | \
 Fetch the comments again and confirm the exact body, trusted author,
 `created_at`, and `updated_at` before continuing. If the write response
 is ambiguous, reconcile by reading comments; never post another marker
-blindly. A missing or inconclusive proof holds before cleanup. The proof
+blindly. The write may still have landed, so re-read the issue comments
+three times, and accept the proof only when all three re-reads show the
+same reusable marker. A failed, absent, or conflicting re-read holds before
+cleanup. `decideAfterPost` in `f4-head-proof-verdict.mts` owns this rule, and
+the marker command applies it (preventive; no observed incident yet). A
+confirmed write needs one re-fetch that matches the posted marker; a mismatch
+holds with `posted-disagreed`. A missing or inconclusive proof holds before
+cleanup. The proof
 is an issue comment, so merged-PR cleanup cannot remove it; retain it
 through claim release.
 
@@ -458,20 +475,43 @@ hold as an inconsistent worktree state. If both are absent, skip
 inspection/removal; the local branch may also be absent, and if it still
 exists its tip must equal `{branch-tip-SHA}`. If both are present, require
 the local branch to exist and its tip to equal `{branch-tip-SHA}`, then
-run the normal safety inspection. Delete the local branch with
-`git branch -d -- "$BRANCH_NAME"` only when it exists; absence is
-already complete. Keep
+run the normal safety inspection. The removal helper, not the session,
+owns local-branch deletion: it runs
+`git branch -d -- "$BRANCH_NAME"` only when the branch exists, and absence
+is already complete. Keep
 the existing unmerged-branch hold path.
 
+The removal helper, `node scripts/f4-worktree-branch-cleanup.mjs` (see
+[helper steps](idd-helper-scripts.md#f4-worktree-and-branch-cleanup-steps-4-to-6)),
+runs these checks and gates each removal on the proof. It refuses a worktree
+that holds untracked, modified, or ignored files (`dirty-worktree`) or a
+populated submodule (`submodule-worktree`), and it then removes nothing.
+Preserve that content by hand before rerunning the helper, including
+reproducible output. Move untracked and ignored files, and secrets such as
+`.env`, to a verified path outside the repository, and never commit or push
+them. Save uncommitted tracked edits as a patch outside the repository, then
+revert those paths. A backup ref holds commits only, so it does not clear the
+check. Make the helper's own `git status` check print nothing, then rerun.
+The helper never removes preserved content itself. For a populated submodule,
+the operator runs `git -C <issue-worktree-path> submodule deinit --all` after
+preservation, with the worktree still registered, and then the helper is
+rerun. A forced removal is not an F4
+route: it unregisters the path, so the proof dry run and this helper cannot
+finish afterward. The F4 session never runs `git worktree remove --force`. These
+content refusals are preventive; no observed incident yet.
+
 For step 6, use the profile-selected `delete-remote-branch` helper with
-`BRANCH_NAME` and the verified `PR_HEAD_SHA_F3`. Its default dry-run
+`BRANCH_NAME` and the verified `PR_HEAD_SHA_F3`. The removal helper makes
+this call in its apply run. If it does not complete after step 5 and
+delete_branch_on_merge is false, the operator runs it by hand, and the session
+never runs it. Its default dry-run
 must report `would-delete` with the expected SHA, or `already-absent`;
-then run the same command with `--apply`. The helper checks the live
-remote ref and default branch, uses an argument-vector
+run the same command with `--apply` only for `would-delete`. The helper
+checks the live remote ref and default branch, uses an argument-vector
 `--force-with-lease` compare-and-delete, and confirms absence. Continue
 only for `deleted` or `already-absent`; any mismatch, default-branch
 refusal, failed mutation, or inconclusive confirmation holds F4. For
-example, the vendored-node form is:
+reference only, the underlying vendored-node form is:
 
 ```sh
 node scripts/delete-remote-branch.mjs \
@@ -549,21 +589,21 @@ marker command's dry run and never posts one. Each hold prints its reason code
 and the next action below. The codes for steps 4 to 6 are in
 `docs/idd-helper-scripts.md` .
 
-| Reason                      | Next action                                                                                                                                                                                                                                                        |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `claim-lost`                | Stop. The claim is not this session, or it could not be confirmed. Take no further mutation and report the handoff. Do not unclaim.                                                                                                                                |
-| `owner-evidence-required`   | Stop. The claim ID matches, but the independent owner evidence (the claim lock, the generated tokens, and the branch) does not. Restore the claimed worktree lock, or the operator decides.                                                                        |
-| `proof-missing`             | No trusted proof exists yet. Rerun F4 step 3. The step 3 gate or the marker command posts the proof when the local branch ref exists.                                                                                                                              |
-| `proof-unreadable`          | Hold. The output of the marker dry run could not be read as a verdict. Rerun the dry run and inspect its stderr. Do not proceed.                                                                                                                                   |
-| `proof-worktree-missing`    | Hold. The claimed worktree is no longer registered, and the proof dry run needs it, so this run cannot read the proof. This run removed nothing. Read the proof on the claimed issue, and finish step 6 by hand, or restore the worktree registration for a rerun. |
-| `claim-or-lock`             | Stop. The claim or its worktree lock is not this session. Take no further mutation and report the handoff.                                                                                                                                                         |
-| `pr-state`                  | Do not post. The merged pull request could not be read or does not agree with itself. Read it again, then rerun this helper.                                                                                                                                       |
-| `ref-read`                  | Do not post. The local branch ref could not be read. Check the repository state, then rerun.                                                                                                                                                                       |
-| `marker-read-failed`        | Do not post. The trusted markers of the issue could not be read. Rerun once the read succeeds.                                                                                                                                                                     |
-| `branch-absent`             | The local branch ref is absent, and no trusted proof can stand without it. The operator checks the branch. Do not recreate it or guess its tip, and report.                                                                                                        |
-| `conflicting-marker`        | Hold. A trusted proof for this claim conflicts with the live state or with another proof. The operator reviews the markers on the claimed issue. Do not post another proof.                                                                                        |
-| `watermark-unauthenticated` | Hold. The review watermark for this claim cannot be authenticated. Rerun F4 step 2 after the review snapshot is recorded again.                                                                                                                                    |
-| `claim-activation-unknown`  | Hold. The activation time of this claim cannot be read. The operator checks the claim record on the issue.                                                                                                                                                         |
+| Reason                      | Next action                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `claim-lost`                | Stop. The claim is not this session, or it could not be confirmed. Take no further mutation and report the handoff. Do not unclaim.                                                                                                                                                                                                                                                                                                                                              |
+| `owner-evidence-required`   | Stop. The claim ID matches, but the independent owner evidence (the claim lock, the generated tokens, and the branch) does not. Restore the claimed worktree lock, or the operator decides.                                                                                                                                                                                                                                                                                      |
+| `proof-missing`             | No trusted proof exists yet. If cleanup had candidates, rerun F4 step 3, whose gate posts the proof. Otherwise run the profile-selected `post-idd-marker --type f4-head-proof` command (form in `idd-helper-scripts.md`) with `--target issue <issue-number>`, `--claim-id <claim-id>`, `--agent-id <agent-id>`, and `--worktree <issue-worktree-path>` as a dry run, then add `--apply` on a `post` verdict, and rerun this helper.                                             |
+| `proof-unreadable`          | Hold. The output of the marker dry run could not be read as a verdict. Rerun the dry run and inspect its stderr. Do not proceed.                                                                                                                                                                                                                                                                                                                                                 |
+| `proof-worktree-missing`    | Hold. The claimed worktree is no longer registered, so the proof dry run cannot read the proof. This run removed nothing. If step 5 already removed the worktree, the operator completes step 6 by hand with delete-remote-branch and the expected SHA when delete_branch_on_merge is false, and the session continues from step 7 after the operator confirms. Otherwise restore the worktree registration and rerun the removal helper (preventive; no observed incident yet). |
+| `claim-or-lock`             | Stop. The claim or its worktree lock is not this session. Take no further mutation and report the handoff.                                                                                                                                                                                                                                                                                                                                                                       |
+| `pr-state`                  | Do not post. The merged pull request could not be read or does not agree with itself. Read it again, then rerun this helper.                                                                                                                                                                                                                                                                                                                                                     |
+| `ref-read`                  | Do not post. The local branch ref could not be read. Check the repository state, then rerun.                                                                                                                                                                                                                                                                                                                                                                                     |
+| `marker-read-failed`        | Do not post. The trusted markers of the issue could not be read. Rerun once the read succeeds.                                                                                                                                                                                                                                                                                                                                                                                   |
+| `branch-absent`             | The local branch ref is absent, and no trusted proof can stand without it. The operator checks the branch. Do not recreate it or guess its tip, and report.                                                                                                                                                                                                                                                                                                                      |
+| `conflicting-marker`        | Hold. A trusted proof for this claim conflicts with the live state or with another proof. The operator reviews the markers on the claimed issue. Do not post another proof.                                                                                                                                                                                                                                                                                                      |
+| `watermark-unauthenticated` | Hold. The review watermark for this claim cannot be authenticated. Rerun F4 step 2 after the review snapshot is recorded again.                                                                                                                                                                                                                                                                                                                                                  |
+| `claim-activation-unknown`  | Hold. The activation time of this claim cannot be read. The operator checks the claim record on the issue.                                                                                                                                                                                                                                                                                                                                                                       |
 
 ## §W1 — PR exists (1 match), no worktree
 
@@ -1104,11 +1144,12 @@ against an unrelated branch, and none has an observed incident of its own
 
    Otherwise the same lock is already held, and the confirm-the-block
    re-check above already ran while holding it. Run `git worktree
-   remove <path>`, then `git worktree prune` — as F4's own step 5
-   (`idd-merge.instructions.md`). If it fails with `fatal: working
-   trees containing submodules cannot be moved or removed`, retry
-   `git worktree remove --force <path>` after confirming step 3's
-   preservation already succeeded — the other allowed case is a dirty
+   remove <path>`, then `git worktree prune` — the removal that F4 step 5
+   (`idd-merge.instructions.md`) runs through the removal helper. If it fails
+   with `fatal: working trees containing submodules cannot be moved or
+   removed`, only the operator, never the F4 session, may retry
+   `git worktree remove --force <path>`, after confirming step 3's
+   preservation already succeeded. The other allowed case is a dirty
    removal failure after a fresh, complete unmerged-path fallback copy;
    generic dirty-removal failures remain a hold. This also deletes
    that worktree's claim lock and generated-tokens record, since both

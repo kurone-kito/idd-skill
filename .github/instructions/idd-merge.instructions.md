@@ -319,9 +319,31 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    reuse its trusted marker before reading a branch ref, and capture
    fresh proof values only when no reusable proof exists. Keep the
    proof through F4; do not use the digest as proof.
+
+   The proof must exist before step 3 even with no cleanup candidates,
+   because the step 3 gate runs only before a pass with candidates.
+   Without a reusable proof, run the profile-selected marker command below
+   (form in `docs/idd-helper-scripts.md`) as a dry run, and add `--apply`
+   only on a `post` verdict. `proceed` continues, `hold` stops F4 under the
+   hold rules, and `stop` ends quietly.
+
+   ```sh
+   node scripts/post-idd-marker.mjs --type f4-head-proof \
+     --target issue <issue-number> --claim-id <claim-id> \
+     --agent-id <agent-id> --worktree <issue-worktree-path>
+   ```
+
 3. Run merged-PR comment cleanup (must not run before F3 succeeds).
    Re-validate the active claim before each GitHub minimization
    mutation.
+
+   **Step 3 gate.** The claimed `audit-pr-cleanup --apply` run below, with
+   `--claim-issue` and `--claim-id`, is the step 3 gate (issue `#4369`).
+   Before each pass with candidates it runs the F4 head-proof
+   check, and on a `post` verdict it posts the proof. A clean dry run runs
+   no gate, but step 2 still requires the proof. A claim-less run, such as
+   the post-merge workflow, has no gate by decision, and F4 never uses
+   `--skip-claim-check`.
 
    Apply the [Timing](../../docs/idd-comment-minimization.md#timing) and
    [Candidate Rules](../../docs/idd-comment-minimization.md#candidate-rules)
@@ -331,8 +353,8 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    may exit without a recorded reason when cleanup candidates exist. In
    the idd-skill source repository, run the profile-selected helper form
    from `docs/idd-helper-scripts.md` in dry-run mode first; in adopter
-   repositories, skip to the GraphQL fallback below unless the helper
-   scripts were installed.
+   repositories, the GraphQL fallback below serves claim-less runs only. A
+   claimed F4 run without the helper scripts holds F4 instead.
 
    ```sh
    node scripts/audit-pr-cleanup.mjs --pr <pr-number> --dry-run --format table
@@ -458,7 +480,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      `recheck-failed`) listing the blocked candidates and the count,
      then proceed to step 4.
 
-   For the GraphQL fallback (helper unavailable): check
+   For the GraphQL fallback (helper unavailable; claim-less runs only): check
    `viewerCanMinimize` and `isMinimized` before minimizing; skip
    already-minimized comments and ones the viewer cannot minimize.
    Re-validate the active claim before each mutation. Before every
@@ -473,8 +495,27 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 4. Concurrent workers sharing one clone: serialize this fetch and
    step 5's `worktree remove` behind the
    [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock).
-   From the **primary worktree** (elsewhere would fast-forward the
-   wrong branch), switch to `{development-branch}` (the PR's
+   Steps 4 to 6 run through the removal helper, a dry run by default,
+   with `--apply` to perform them. Run it from the **primary worktree**, in
+   its profile-selected form from `docs/idd-helper-scripts.md`:
+
+   ```sh
+   node scripts/f4-worktree-branch-cleanup.mjs --issue <issue-number> \
+     --claim-id <claim-id> --nonce <nonce> --agent-id <agent-id> \
+     --worktree <absolute-issue-worktree-path> [--apply]
+   ```
+
+   The helper is the gate: step 4 has no separate gate command, and the
+   helper refuses unless the proof gives `proceed`
+   ([helper steps](../../docs/idd-helper-scripts.md#f4-worktree-and-branch-cleanup-steps-4-to-6)).
+   The clone-scoped lock is taken only with `--apply`. The git commands
+   below are the steps the helper runs, and the session does not run them
+   by hand. If the helper runtime is unavailable, hold before step 4 and
+   ask an authorized operator; do not run steps 4 to 6 by hand.
+
+   From the **primary worktree** (elsewhere would fast-forward the wrong
+   branch), switch to `{development-branch}`
+   (the PR's
    validated target; see
    [B1 Worktree creation Step 2](idd-work.instructions.md#b1--create-worktree-with-branch))
    and fast-forward it:
@@ -510,13 +551,18 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 
    Off-default `{development-branch}`: `git switch {default-branch}`
    once F4 completes/holds, for B1's checkout.
-5. Run from the **primary worktree**, not one being removed.
-   Removal discards ignored submodule data. Scope
-   to `<path>`. Inspect leftovers under `-` (not a repo).
+5. Run from the **primary worktree**, not one being removed. The
+   helper runs the checks in this step, and it refuses a worktree that
+   holds untracked, modified, or ignored files (`dirty-worktree`), a
+   populated submodule (`submodule-worktree`), or a symlink
+   (`symlink-path`). A refused worktree is never removed. Git would
+   discard ignored submodule data on removal, and the helper refuses
+   instead. Scope to `<path>`. Inspect leftovers under `-` (not a repo).
 
    Use `--untracked-files=normal` (not `all`). A clean submodule can
    still hide a stash or unpushed commit; tag-only detached history is
-   not counted; local refs are:
+   not counted. Manual inspection covers the following; the helper refuses
+   any populated submodule either way:
 
    - `git -C <path> status --porcelain --ignored --untracked-files=normal`
    - `git -C <path> submodule status --recursive`
@@ -526,10 +572,16 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      git -C <path> submodule foreach --recursive 'git status --porcelain --ignored --untracked-files=normal && git stash list && git rev-list --exclude=refs/tags/\* --glob=refs/\* --count --not --remotes && { git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count; }'
      ```
 
-   Discard only reproducible configured-command output; preserve all else.
-   Copy secrets (`.env`) outside `<path>` — never commit or push them.
-   Preserve work in backup ref or external path. Before removal, `cd`
-   to primary; stay; revalidate:
+   Preserve everything the helper refuses before rerunning it, including
+   reproducible output, outside the repository by hand: move rather than
+   copy, and never commit or push `.env` or other secrets. The helper never
+   removes that content itself, and a backup ref alone does not clear the
+   check. The [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof)
+   section has the full steps. For a populated submodule, the operator runs
+   `git -C <path> submodule deinit --all` after preservation, with the
+   worktree still registered, and the helper is rerun; otherwise the session
+   holds. Before
+   removal, `cd` to primary; stay; revalidate:
 
    ```sh
    node scripts/resume-claim-routing.mjs --issue <issue-number> \
@@ -541,14 +593,14 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    `--worktree` (`owner_evidence_required` /
    `claim-id-match-without-independent-owner-evidence`) is incomplete:
    re-run with the flag. A remaining `stop` means do
-   not remove the worktree. `git worktree remove --force` runs only
-   after failure `working trees containing submodules cannot be moved
-   or removed`, and only after leftovers are preserved. Revalidate
-   `--worktree` immediately before that retry.
+   not remove the worktree. The helper never passes `--force`, and the F4
+   session never runs `git worktree remove --force`. A forced removal of a
+   submodule leftover is a manual operator action only, outside F4: it
+   unregisters the path, so this helper cannot finish steps 4 to 6 after it.
    [Removed-cwd](../../docs/idd-helper-scripts.md#f4-branch-failure-routes).
    Resume-safe absence checks and the pre-removal branch-tip check are in
    [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof).
-   Then:
+   The helper then runs:
 
    - `git worktree remove <path>`.
    - `git branch -d <branch-name>` (`-D` is denied; see
@@ -557,14 +609,27 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      `error: the branch '<branch-name>' is not fully merged`. If it
      still does, compare `git rev-parse <branch-name>` with `gh pr
      view {pr-number} --json state,headRefOid`: matching `MERGED`
-     head → keep it, re-validate claim, comment: operator may run
-     `git branch -D <branch-name>`, continue to step 6 (`Next action:
-     none`); otherwise hold `local-branch-unmerged-commits`, stop
-     before step 7, keep claim.
+     head → keep the branch, re-validate claim, comment, and let the
+     helper continue to step 6 (`Next action: none`). The operator may
+     later run `git branch -D <branch-name>` as a post-F4 action. That needs
+     no helper rerun, which could not pass its proof check once step 5 has
+     unregistered the worktree. Otherwise hold
+     `local-branch-unmerged-commits`, stop before step 7, keep claim.
 
-6. If GitHub auto-delete is disabled, delete the remote branch per
-   [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof).
-   (WorkTrunk may run steps 5–6; step 4 stays a plain git operation.)
+6. If GitHub auto-delete is disabled (`delete_branch_on_merge` is false),
+   the removal helper deletes the remote branch in its apply run, through
+   `delete-remote-branch`, with the verified `PR_HEAD_SHA_F3` as the expected
+   SHA. If that step does not complete, the operator completes it by hand.
+   When the setting could not be read, first confirm it with `gh api
+   repos/{owner}/{repo} --jq .delete_branch_on_merge`; when it is true, step 6
+   is skipped. Then delete the remote branch per
+   [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof), with
+   `delete-remote-branch`, a dry run first and `--apply` only for
+   `would-delete`. Do not rerun the removal helper for step 6, because its
+   proof dry run needs the worktree that step 5 already removed. The session
+   continues from step 7 after the operator confirms. Steps 4 to 6 run only
+   through the removal helper, WorkTrunk included; the session never runs the
+   step 6 command by hand.
 7. After steps 4–6, follow the
    [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof)
    to verify/repair the PR digest before the issue digest. Hold on failed

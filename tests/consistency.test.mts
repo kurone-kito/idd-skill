@@ -2510,7 +2510,7 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   );
   assert.match(
     headProof,
-    /Delete the local branch with\s+`git branch -d -- "\$BRANCH_NAME"` only when it exists; absence is\s+already complete/,
+    /owns local-branch\s+deletion: it runs\s+`git branch -d -- "\$BRANCH_NAME"` only when the branch exists,\s+and absence\s+is already complete/,
   );
   assert.match(
     headProof,
