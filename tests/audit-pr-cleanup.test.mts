@@ -3264,6 +3264,28 @@ test('checkF4HeadProofGate: an exit status that disagrees with the verdict is un
   }
 });
 
+test('checkF4HeadProofGate: a posted proof naming another pull request is never accepted by the re-read (#4369)', () => {
+  const gate = fakeGate({
+    markers: [
+      markerJson({ verdict: 'post' }),
+      markerJson({
+        verdict: 'proceed',
+        reason: 'posted-confirmed',
+        proof: { pr: 8, head: GATE_SHA_A },
+      }),
+      markerJson({ verdict: 'proceed', reason: 'reusable' }),
+    ],
+  });
+  const hold = checkF4HeadProofGate(GATE_SCOPE, { headSha: null }, gate.deps);
+
+  assert.equal(hold?.code, 'conflicting-marker');
+  assert.deepEqual(
+    gate.calls.marker.map((run) => run.apply),
+    [false, true],
+    'the re-read never runs after a foreign posted proof',
+  );
+});
+
 test('checkF4HeadProofGate: a post naming another pull request holds before any apply run (#4369)', () => {
   const gate = fakeGate({
     markers: [

@@ -1578,6 +1578,11 @@ export function checkF4HeadProofGate(
   if (posted.verdict !== 'proceed') {
     return holdFromDecision(posted);
   }
+  // The posted proof is bound too, before the re-read may accept it (#4369).
+  const postedBound = proofBindingHold(posted, scope.prNumber, head);
+  if (postedBound !== null) {
+    return postedBound;
+  }
   const reread = markerDecision(deps, { ...run, apply: false });
   if (reread.verdict === 'proceed') {
     return proofBindingHold(reread, scope.prNumber, head);
