@@ -291,38 +291,49 @@ changes until the activation gate reports `active: true`.
 For a policy-only first activation, a maintainer completes one bounded setup
 outside normal IDD authoring and execution:
 
+Before creating either issue below, put a unique, stable marker in its intended
+body. If an issue-creation result is uncertain, do not retry until both reads
+below are complete. Search all issue states in the target repository for the
+intended title and marker, then verify the result with the
+[paginated repository issues API](https://docs.github.com/en/rest/issues/issues#list-repository-issues)
+using `state=all` and following pagination through every page. Treat the API
+read as unavailable if any page cannot be read. If both reads identify the same
+single suitable issue, record its canonical `owner/repo#number` and do not
+retry. Retry only when both complete, successful reads find no match. If the
+reads disagree, either read is unavailable, multiple matches exist, or a match
+is unsuitable to continue, stop and reconcile manually.
+
 1. Create a durable, comment-only journal issue first. Record its canonical
    `owner/repo#number`; it is infrastructure for authoring records, not an IDD
-   work item.
+   work item. Apply the issue-creation reconciliation rule above if the result
+   is uncertain.
 2. Prepare the first issue for the repository policy outside the
    normal held-issue publisher. Point
    `issueAuthoring.journalIssue` to the journal that already exists.
-   Before publishing, include a unique, stable marker in the intended
-   issue body. If creation is uncertain, search all issue states in the
-   target repository for the intended title and that marker, then verify
-   the result with the [paginated repository issues API](https://docs.github.com/en/rest/issues/issues#list-repository-issues)
-   using `state=all`, following pagination through every page. Treat the
-   API read as unavailable if any page cannot be read. If both reads
-   identify the same single suitable issue, record its canonical
-   `owner/repo#number` and do not retry. Retry only when both complete,
-   successful reads find no match. If the reads
-   disagree, either read is unavailable, multiple matches exist, or a
-   match is unsuitable to continue, stop and reconcile manually.
+   Apply the issue-creation reconciliation rule above if the result is
+   uncertain.
    If the issue cannot be published, keep the journal and continue
    preparation outside normal IDD.
 3. Review and land the first policy through the repository's ordinary
-   change process. If landing is uncertain, inspect the policy PR state
-   and merge commit, then read the policy from the current trusted base.
-   Treat it as landed only when the PR is merged and that policy is
-   present on the base. Otherwise keep the journal and preparation
+   change process, linking its PR with a closing keyword for the first policy
+   issue (for example, `Closes #<issue-number>`). If landing is uncertain,
+   inspect the policy PR state and merge commit, then read the policy from the
+   current trusted base. Treat it as landed only when the PR is merged and that
+   policy is present on the base. Verify that the first policy issue is closed
+   before returning to normal IDD. Otherwise keep the journal and preparation
    outside the IDD loop. Do not make the policy PR depend on a new
    `ciGate.*` value that only its own head contains; follow [ciGate F2 bootstrap](customization.md#cigate-f2-bootstrap).
 4. Before returning to normal IDD, verify that `idd-activation` reports
    `active: true` through the repository-policy or matching-override route. For
    `repository-policy-minimal-import`, put the first policy in the canonical
-   `.github/idd/config.json` and require `idd-doctor` to accept it against the
-   policy schema before returning to normal IDD. A legacy root `idd-policy.json`
-   can activate the gate, but it is not loaded as effective policy. Inspect the
+   `.github/idd/config.json` and inspect `idd-doctor --repo-root
+   "<repository-root>" --json`. Require its `passes` array to include
+   `.github/idd/config.json validates against policy.schema.json`. The command
+   may still exit nonzero because a policy-only repository lacks the full-core
+   instruction and reference files; that overall exit status does not replace
+   the schema-specific pass. If the pass is absent or the report identifies the
+   canonical policy as invalid, stop. A legacy root `idd-policy.json` can
+   activate the gate, but it is not loaded as effective policy. Inspect the
    effective `issueAuthoring.journalIssue` value and its source, using
    `idd-effective-config` when available, and confirm it resolves to the
    existing durable journal. Also verify that the selected helper runtime can
