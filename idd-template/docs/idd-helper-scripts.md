@@ -4589,6 +4589,22 @@ ruling recorded a maintainer decision: recognize the bootstrap PR as
 out-of-loop-authorized only with explicit, dedicated marker evidence,
 never merely an absent claim.
 
+#### Issue-mediated bootstrap and authoring hold
+
+The bootstrap guide can create a held issue before the core import. Its
+configured `issueAuthoring.authoringLabelName` (default
+`status:authoring`) suppresses Discover only after activation. The label
+does not activate the payload or provide the durable journal and publisher
+prerequisites; removing it alone is not release evidence. This boundary was
+observed on 2026-10-17 in [PR 3](https://github.com/kurone-kito/DDMMHBC/pull/3)
+and rechecked on 2026-10-17 after [PR 20](https://github.com/kurone-kito/DDMMHBC/pull/20).
+
+For a full-template import, keep the policy and core import in the single
+reviewed issue described by the onboarding guide's
+[one-issue scope](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/docs/onboarding/issue-mediated-bootstrap.md#scope-exactly-one-issue).
+The separate policy-only/global-only first-journal procedure does not replace
+that full-import process.
+
 `classifyPrLoopMembership()` (`protocol-helpers.mts`) is the single
 shared classifier both consumers now call. It returns one of three
 verdicts:

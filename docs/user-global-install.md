@@ -273,6 +273,87 @@ leaves the required list only when `pre-merge-readiness` runs with
 `--global-only` and both conditions hold on the trusted base ref and the PR
 head. An unavailable read keeps the check required.
 
+### Initial journal and policy bootstrap
+
+An installed payload alone does not activate a repository. When there is no
+core instruction file, repository policy, or matching user-global override,
+`idd-activation` reports `no-activation-rule`; the user-global entry then does
+nothing IDD-specific. Do not run another IDD helper or change repository state
+while that result is inactive. This missing first-journal sequence was observed
+in [PR 3](https://github.com/kurone-kito/DDMMHBC/pull/3) and rechecked after
+[PR 20](https://github.com/kurone-kito/DDMMHBC/pull/20).
+
+Only a maintainer/operator using the ordinary, human-controlled repository
+process performs the bounded setup below, outside the gated agent session. An
+agent session that read `active: false` remains a no-op and makes no repository
+changes until the activation gate reports `active: true`.
+
+For a policy-only first activation, a maintainer completes one bounded setup
+outside normal IDD authoring and execution:
+
+Before creating either issue below, put a unique, stable marker in its intended
+body. If an issue-creation result is uncertain, do not retry until both reads
+below are complete. Search all issue states in the target repository for the
+intended title and marker, then verify the result with the
+[paginated repository issues API](https://docs.github.com/en/rest/issues/issues#list-repository-issues)
+using `state=all` and following pagination through every page. Treat the API
+read as unavailable if any page cannot be read. If both reads identify the same
+single suitable issue, record its canonical `owner/repo#number` and do not
+retry. Retry only when both complete, successful reads find no match. If the
+reads disagree, either read is unavailable, multiple matches exist, or a match
+is unsuitable to continue, stop and reconcile manually.
+
+1. Create a durable, comment-only journal issue first. Record its canonical
+   `owner/repo#number`; it is infrastructure for authoring records, not an IDD
+   work item. Apply the issue-creation reconciliation rule above if the result
+   is uncertain.
+2. Prepare the first issue for the repository policy outside the
+   normal held-issue publisher. Point
+   `issueAuthoring.journalIssue` to the journal that already exists.
+   Apply the issue-creation reconciliation rule above if the result is
+   uncertain.
+   If the issue cannot be published, keep the journal and continue
+   preparation outside normal IDD.
+3. Review and land the first policy through the repository's ordinary
+   change process, linking its PR with a closing keyword for the first policy
+   issue (for example, `Closes #<issue-number>`). If landing is uncertain,
+   inspect the policy PR state and merge commit, then read the policy from the
+   current trusted base. Treat it as landed only when the PR is merged and that
+   policy is present on the base. Verify that the first policy issue is closed
+   before returning to normal IDD. Otherwise keep the journal and preparation
+   outside the IDD loop. Do not make the policy PR depend on a new
+   `ciGate.*` value that only its own head contains; follow [ciGate F2 bootstrap](customization.md#cigate-f2-bootstrap).
+4. Before returning to normal IDD, verify that `idd-activation` reports
+   `active: true` through the repository-policy or matching-override route. For
+   `repository-policy-minimal-import`, put the first policy in the canonical
+   `.github/idd/config.json` and inspect `idd-doctor --repo-root
+   "<repository-root>" --json`. Require its `passes` array to include
+   `.github/idd/config.json validates against policy.schema.json`. The command
+   may still exit nonzero because a policy-only repository lacks the full-core
+   instruction and reference files; that overall exit status does not replace
+   the schema-specific pass. If the pass is absent or the report identifies the
+   canonical policy as invalid, stop. A legacy root `idd-policy.json` can
+   activate the gate, but it is not loaded as effective policy. Inspect the
+   effective `issueAuthoring.journalIssue` value and its source, using
+   `idd-effective-config` when available, and confirm it resolves to the
+   existing durable journal. Also verify that the selected helper runtime can
+   use the capability-checked held-publication flow. That flow must apply the
+   configured `issueAuthoring.authoringLabelName`, publish the exact
+   publication token, and use an actor with the required trusted write
+   authority. An explicit `--policy` path selects configuration but does not
+   create or replace the journal. If any result is missing or unverifiable,
+   stop and name the prerequisite to repair. The installed payload, an issue
+   body, and a GitHub hold label do not establish activation or publisher
+   readiness.
+
+This exception covers only the initial journal and first policy issue. It does
+not authorize later direct issue creation, bypass the normal authoring-owner
+protocol, or permit an automatic merge. A repository-match user-global
+override remains a supported activation route, and policy-only adoption does
+not require the optional full-core import. See the
+[Global-only profile](global-only-profile.md) for the reusable boundary and the
+[issue-mediated bootstrap guide](../idd-template/docs/onboarding/issue-mediated-bootstrap.md).
+
 ## Activation gate and context cost
 
 The entry text tells the agent to run `idd-activation` from the repository

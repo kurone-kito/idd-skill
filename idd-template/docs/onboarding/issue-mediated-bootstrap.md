@@ -144,14 +144,16 @@ section to that full-clone path rather than the single-file download,
 so this issue's own acceptance criterion below ("every file required
 by the selected helper runtime profile") is actually satisfiable.
 
-### The status:authoring hold still applies
+### The configured authoring hold label still applies
 
-The issue-authoring skill's normal authoring-hold/release contract
-still governs this draft: while the `status:authoring` label is present,
-no session should treat the draft as ready, and removing the label is
-what releases it for execution. That contract keeps working pre-import
-because the label lives on the GitHub issue itself, not in the
-repository tree — it needs no local IDD instructions to be present yet.
+Use the configured `issueAuthoring.authoringLabelName` as the hold
+label (`status:authoring` by default), not as activation or release
+evidence. Full imports follow the
+[one-issue scope](#scope-exactly-one-issue) and the
+[adopter hold and release contract](../idd-helper-scripts.md#issue-mediated-bootstrap-and-authoring-hold).
+Observed 2026-10-17 in
+[PR 3](https://github.com/kurone-kito/DDMMHBC/pull/3) and rechecked on
+2026-10-17 after [PR 20](https://github.com/kurone-kito/DDMMHBC/pull/20).
 
 ### Fill-in bootstrap-issue body template
 
