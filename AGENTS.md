@@ -378,6 +378,24 @@ layered on top of the distributed IDD defaults:
   `orchestrator` field and the `orchestrator-worker-cap-dogfood` rule together,
   because the rule pins the value to exactly 4 and the field alone is not
   enough (refs `#3839`).
+- **Live status digest**: This source repository also records, as a
+  local IDD dogfooding policy (applies only to `kurone-kito/idd-skill`),
+  that every A5 issue claim and the pull request opened for it use a live
+  status digest. This is the repository's choice under the
+  [Live Status Digest Contract](docs/idd-comment-minimization.md#live-status-digest-contract).
+  It adds no digest step to a phase that has none, so the coordination
+  claims taken before A5 (A0-C draft-carrier, A1.5 roadmap-audit, and
+  A4.5 suitability-close) keep their current behavior. `idd-template/` is
+  unchanged, so adopters keep the distributed behavior.
+  Pull request `#4505` (issue `#4494`), merged 2026-10-18, added the
+  digest-use paragraph to that contract and listed recording this
+  repository's choice here as a follow-up. Before that merge, each of the
+  18 issues numbered `#4455` to `#4505` that were claimed before it
+  carried exactly one digest comment (checked 2026-10-18). After it, the
+  claim on issue `#4502` (2026-10-18) found no digest and created none,
+  and that issue and its pull request `#4507` closed without one. Without
+  this bullet, this repository records no choice, and the linked contract
+  decides what applies.
 
 ## Branch strategy
 
