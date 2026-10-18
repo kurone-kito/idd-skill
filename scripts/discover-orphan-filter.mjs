@@ -1784,6 +1784,7 @@ Output schema:
   "filtered": {
     "provider_outage_target": [...],
     "authoring_journal_target": [...],
+    "excluded_roadmap_leaf": [...],
     "roadmap_marker": [...],
     "blocked_by_marker": [...],
     "blocked_label": [...],
