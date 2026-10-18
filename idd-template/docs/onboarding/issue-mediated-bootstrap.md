@@ -147,8 +147,8 @@ by the selected helper runtime profile") is actually satisfiable.
 ### The configured authoring hold label still applies
 
 The configured `issueAuthoring.authoringLabelName` (default
-`status:authoring`) is a hold, not activation or release evidence. See
-[the adopter contract](../idd-helper-scripts.md#issue-mediated-bootstrap-and-authoring-hold).
+`status:authoring`) is a hold, not activation or release evidence. Follow the
+[initial journal and policy bootstrap procedure](https://github.com/kurone-kito/idd-skill/blob/main/docs/user-global-install.md#initial-journal-and-policy-bootstrap).
 Observed 2026-10-17 in
 [PR 3](https://github.com/kurone-kito/DDMMHBC/pull/3) and rechecked on
 2026-10-17 after [PR 20](https://github.com/kurone-kito/DDMMHBC/pull/20).
