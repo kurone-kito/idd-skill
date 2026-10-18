@@ -314,7 +314,7 @@ else `true`. Others: `true`.
 
 ## Phase routing table
 
-Read this file first, then load the phase file matching your situation.
+Read this file, the appendix unless routed to `lite/`, then your phase file.
 
 <!-- dprint-ignore-start -->
 | Situation | Read this file |
