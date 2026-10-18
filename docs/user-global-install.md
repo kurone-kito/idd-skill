@@ -280,7 +280,8 @@ core instruction file, repository policy, or matching user-global override,
 `idd-activation` reports `no-activation-rule`; the user-global entry then does
 nothing IDD-specific. Do not run another IDD helper or change repository state
 while that result is inactive. This missing first-journal sequence was observed
-in [PR 3](https://github.com/kurone-kito/DDMMHBC/pull/3) and rechecked after
+on 2026-10-17 in [PR 3](https://github.com/kurone-kito/DDMMHBC/pull/3) and
+rechecked on 2026-10-17 after
 [PR 20](https://github.com/kurone-kito/DDMMHBC/pull/20).
 
 Only a maintainer/operator using the ordinary, human-controlled repository
