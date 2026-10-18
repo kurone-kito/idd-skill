@@ -399,11 +399,12 @@ token for the rest of the run. Before each later mutation, apply the
 pre-mutation guard in `idd-work-lite.instructions.md`; a failed check means
 stop, do not mutate further.
 
-**Digest**: after verification, upsert the issue's `idd-live-status` digest
-(only when exactly one exists, or none) — `Phase: A5 claimed`, `Claim`,
-`Branch`, `Open blockers: none`, and `Next action: B1 install dependencies` when
-step 2 created the worktree, otherwise `Next action: B1 create branch and
-worktree`. Multiple digests: report their URLs; edit neither.
+**Digest**: after verification, if a digest is in use
+(`docs/idd-comment-minimization.md`), upsert the issue's `idd-live-status`
+digest — `Phase: A5 claimed`, `Claim`, `Branch`, `Open blockers: none`, and
+`Next action: B1 install dependencies` when step 2 created the worktree,
+otherwise `Next action: B1 create branch and worktree`. Multiple digests:
+report their URLs; edit neither.
 
 ## Worktree-local lock (same-machine fast path)
 

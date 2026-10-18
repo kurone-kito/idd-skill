@@ -4,7 +4,8 @@
 branch (`developmentBranch`, or the default branch when absent).
 
 Lite helper profile; claimed open PRs only. `instructions-only` uses the
-standard file.
+standard file. Digest steps here apply only while a digest is in use
+(`docs/idd-comment-minimization.md`).
 
 ## Helper runtime contract
 

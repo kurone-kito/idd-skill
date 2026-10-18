@@ -19,19 +19,17 @@ repository docs.
 ## Live status digest
 
 The optional live status digest is a human-facing issue or PR comment
-whose first line is `<!-- idd-live-status: current -->`. It summarizes
-phase, claim, branch, last-checked time, blockers, and next action. It
-is never an authority for IDD state — decide from trusted operational
-markers and GitHub state. If multiple marked digests exist, preserve
-them, report the URLs, and treat none as authoritative unattended. See
+whose first line is `<!-- idd-live-status: current -->`. It is never an
+authority for IDD state — decide from trusted operational markers and
+GitHub state. If multiple marked digests exist, preserve them, report
+the URLs, and treat none as authoritative unattended. See
 `docs/idd-comment-minimization.md` for the contract and
-`node scripts/live-status-digest.mjs`, an optional convenience helper
-(use the profile-selected form from `docs/idd-helper-scripts.md`).
+`node scripts/live-status-digest.mjs`, an optional helper (use the
+profile-selected form from `docs/idd-helper-scripts.md`).
 
 Treat each digest create or edit as a GitHub side effect under the claim
 revalidation gate (`idd-overview-core.instructions.md`), with fields
 from the revalidated claim; set `Authoritative by` to the evidence.
-If the claim was lost, do not update the digest.
 
 A PR digest edit is still PR activity: do not edit it between a valid
 E1 review watermark and an intended F3 merge (it would perturb
@@ -50,7 +48,7 @@ release in `Next action`, and the verified claim plus abort reason in
 `Authoritative by`; then post an `unclaimed-by` comment for that same
 `{claim-id}`. If the
 active claim no longer uses your `{claim-id}`, do not update the digest
-or post a release comment, since another session already took over.
+or post a release comment.
 Open PR and remote branch left by a stale or
 unclaimed state are inheritable by the next agent (see
 `idd-resume.instructions.md`).

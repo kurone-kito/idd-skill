@@ -766,7 +766,9 @@ are complementary, and §W7 still resumes from C1 after this audit.
 After Step 1 establishes the route and verifies any current-session claim,
 repair a missing or stale live status digest from the parsed claim state,
 PR state, CI state, and review activity when doing so is safe under the
-claim revalidation gate.
+claim revalidation gate. This applies only while a digest is in use, as the
+[live status digest contract](idd-comment-minimization.md#live-status-digest-contract)
+defines it; a missing digest alone does not put one in use.
 
 **Multiple marked digests** — If multiple comments whose first line is
 `<!-- idd-live-status: current -->` exist, preserve them all, report their

@@ -344,6 +344,10 @@ A2.
 always open `idd-suitability.instructions.md` (A4.5) before
 `idd-claim.instructions.md`.
 
+**Note**: phase digest steps, hold and abort included, apply only while a
+digest is in use (`docs/idd-comment-minimization.md`); neither a step nor a
+missing digest enables use.
+
 CI polling logic shared by D and E phases lives in
 `idd-ci.instructions.md`; callers declare their own on-success target.
 
