@@ -294,16 +294,25 @@ outside normal IDD authoring and execution:
 1. Create a durable, comment-only journal issue first. Record its canonical
    `owner/repo#number`; it is infrastructure for authoring records, not an IDD
    work item.
-2. Prepare and publish the first issue for the repository policy outside the
-   normal held-issue publisher. The policy points `issueAuthoring.journalIssue`
-   to the journal that already exists. Reconcile an uncertain issue-creation
-   result against GitHub before retrying, so one logical record cannot create
-   duplicates.
-3. Review and land the first policy through the repository's ordinary change
-   process. If that issue cannot be published or its policy cannot be landed,
-   keep the journal and continue preparation outside the IDD loop. Do not make
-   the policy PR depend on a new `ciGate.*` value that only its own head
-   contains; follow [ciGate F2 bootstrap](customization.md#cigate-f2-bootstrap).
+2. Prepare the first issue for the repository policy outside the
+   normal held-issue publisher. Point
+   `issueAuthoring.journalIssue` to the journal that already exists.
+   Before publishing, include a unique, stable marker in the intended
+   issue body. If creation is uncertain, search all issue states in the
+   target repository for the intended title and that marker. If exactly
+   one issue matches, record its canonical `owner/repo#number` and do
+   not retry creation. Retry only after a successful search finds no
+   match. If the search is unavailable, finds multiple matches, or the
+   matching issue is unsuitable to continue, stop and reconcile manually.
+   If the issue cannot be published, keep the journal and continue
+   preparation outside normal IDD.
+3. Review and land the first policy through the repository's ordinary
+   change process. If landing is uncertain, inspect the policy PR state
+   and merge commit, then read the policy from the current trusted base.
+   Treat it as landed only when the PR is merged and that policy is
+   present on the base. Otherwise keep the journal and preparation
+   outside the IDD loop. Do not make the policy PR depend on a new
+   `ciGate.*` value that only its own head contains; follow [ciGate F2 bootstrap](customization.md#cigate-f2-bootstrap).
 4. Before returning to normal IDD, verify that `idd-activation` reports
    `active: true` through the repository-policy or matching-override route; the
    policy source selected for publishing resolves to an existing durable
