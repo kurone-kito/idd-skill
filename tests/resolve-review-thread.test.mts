@@ -1715,6 +1715,7 @@ function triageFlags(overrides: Partial<TriageFlags> = {}): TriageFlags {
     scopeFence: false,
     protectedAuthority: false,
     acceptedMidFix: false,
+    adoptNow: false,
     override: null,
     ...overrides,
   };
@@ -2226,6 +2227,7 @@ test('--help lists the triage flags, including the verdict flags (#4186, #4187)'
     '--scope-fence',
     '--protected-authority',
     '--accepted-mid-fix',
+    '--adopt-now',
     '--override',
   ]) {
     assert.match(output, new RegExp(`^ {2}${flag}[ <]`, 'mu'), flag);
@@ -4262,5 +4264,230 @@ test('record mode reads the reviews once on an apply, since only enforce refuses
       call.some((arg) => arg.includes('/pulls/42/reviews')),
     ).length,
     1,
+  );
+});
+
+// #4436: `--adopt-now` reports adopt-now condition (d) under `severity-tiered`.
+// It turns a defer verdict into `keep` blocked by `adopt-now` and leaves every
+// other verdict as it is.
+
+test('parseArgs reads --adopt-now as off by default and on when given (#4436)', () => {
+  assert.equal(
+    parseArgs(['--pr', '42', '--comment-id', '1001']).adoptNow,
+    false,
+  );
+  assert.equal(
+    parseArgs(['--pr', '42', '--comment-id', '1001', '--adopt-now']).adoptNow,
+    true,
+  );
+});
+
+test('--adopt-now turns a step-0 defer into keep blocked by adopt-now; without it the verdict stays defer (#4436)', () => {
+  const adopted = buildTriage(triagePort(0), ACCEPTED_FIXED, {
+    tier: 'low',
+    urgency: 'very-low',
+    adoptNow: true,
+  });
+  assert.deepEqual(adopted.verdict, {
+    verdict: 'keep',
+    eligibility: 'low',
+    blocked: 'adopt-now',
+  });
+  assert.equal(
+    adopted.body,
+    `${ACCEPTED_FIXED}\nTriage: tier low; urgency very-low; step 0; verdict keep; blocked adopt-now\n\n${TRIAGE_STAMP}`,
+  );
+  const plain = buildTriage(triagePort(0), ACCEPTED_FIXED, {
+    tier: 'low',
+    urgency: 'very-low',
+  });
+  assert.deepEqual(plain.verdict, {
+    verdict: 'defer',
+    eligibility: 'low',
+    blocked: null,
+  });
+  assert.equal(
+    plain.body,
+    `${ACCEPTED_FIXED}\nTriage: tier low; urgency very-low; step 0; verdict defer\n\n${TRIAGE_STAMP}`,
+  );
+});
+
+test('compute-only triage prints keep blocked by adopt-now with --adopt-now and defer without it (#4436)', () => {
+  const adopted = runTriageApply(
+    [
+      ...COMPUTE_ONLY_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'very-low',
+      '--adopt-now',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(0),
+  );
+  assert.equal(adopted.status, 0, adopted.stderr);
+  assert.equal(
+    JSON.parse(adopted.stdout).triage,
+    'Triage: tier low; urgency very-low; step 0; verdict keep; blocked adopt-now',
+  );
+  assertComputeOnlyCalls(adopted, ['/pulls/42/reviews']);
+
+  const plain = runTriageApply(
+    [...COMPUTE_ONLY_ARGS, '--tier', 'low', '--urgency', 'very-low'],
+    TRIAGE_TIERED_CONFIG,
+    triageReviewRows(0),
+  );
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.equal(
+    JSON.parse(plain.stdout).triage,
+    'Triage: tier low; urgency very-low; step 0; verdict defer',
+  );
+  assertComputeOnlyCalls(plain, ['/pulls/42/reviews']);
+});
+
+test('--adopt-now leaves a keep verdict with its own reason: a scope fence and the matrix (#4436)', () => {
+  const scoped = buildTriage(triagePort(0), ACCEPTED_FIXED, {
+    tier: 'low',
+    urgency: 'very-low',
+    scopeFence: true,
+    adoptNow: true,
+  });
+  assert.deepEqual(scoped.verdict, {
+    verdict: 'keep',
+    eligibility: null,
+    blocked: 'scope-fence',
+  });
+  assert.equal(
+    scoped.body,
+    `${ACCEPTED_FIXED}\nTriage: tier low; urgency very-low; step 0; verdict keep; blocked scope-fence\n\n${TRIAGE_STAMP}`,
+  );
+  const matrix = buildTriage(triagePort(0), ACCEPTED_FIXED, {
+    tier: 'high',
+    urgency: 'high',
+    adoptNow: true,
+  });
+  assert.deepEqual(matrix.verdict, {
+    verdict: 'keep',
+    eligibility: 'high',
+    blocked: 'matrix',
+  });
+});
+
+test('enforce posts an Accepted reply with --adopt-now that it would refuse at defer (#4436)', () => {
+  const args = [
+    ...TRIAGE_THREAD_ARGS,
+    '--tier',
+    'low',
+    '--urgency',
+    'very-low',
+    '--body',
+    ACCEPTED_FIXED,
+  ];
+  const refused = runTriageApply(
+    args,
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(0),
+  );
+  assert.equal(refused.status, 1, refused.stderr);
+  assert.deepEqual(refused.posted, []);
+
+  const adopted = runTriageApply(
+    [...args, '--adopt-now'],
+    TRIAGE_ENFORCE_CONFIG,
+    triageReviewRows(0),
+  );
+  assert.equal(adopted.status, 0, adopted.stderr);
+  assert.match(
+    adopted.stderr,
+    /triage verdict: keep \(eligibility low, blocked by adopt-now\)/u,
+  );
+  assert.deepEqual(adopted.posted, [
+    `${ACCEPTED_FIXED}\nTriage: tier low; urgency very-low; step 0; verdict keep; blocked adopt-now\n\n${TRIAGE_STAMP}`,
+  ]);
+});
+
+test('validateTriageFlags accepts --adopt-now under severity-tiered with both scores (#4436)', () => {
+  assert.doesNotThrow(() =>
+    validateTriageFlags({
+      flags: triageFlags({ tier: 'low', urgency: 'very-low', adoptNow: true }),
+      apply: false,
+      body: ACCEPTED_FIXED,
+      triageRecord: 'record',
+      reviewPolicy: undefined,
+      deferByUrgency: 'severity-tiered',
+    }),
+  );
+});
+
+/**
+ * Run the compiled CLI with `--adopt-now` and assert a usage refusal that
+ * names the flag, with nothing printed on stdout and no `gh` call (#4436).
+ */
+function assertAdoptNowRefused(
+  cliArgs: string[],
+  config: Record<string, unknown>,
+  message: RegExp,
+): void {
+  const run = runTriageApply(cliArgs, config, triageReviewRows(0), {
+    IDD_HELPER_ERROR_ENVELOPE: '1',
+  });
+  assert.equal(run.status, 1, run.stderr);
+  assert.equal(envelopeKind(run.stderr), 'usage');
+  assert.match(run.stderr, /--adopt-now/u);
+  assert.match(run.stderr, message);
+  assert.equal(run.stdout, '');
+  assert.deepEqual(run.calls, []);
+  assert.deepEqual(run.posted, []);
+}
+
+test('--adopt-now is refused when deferByUrgency is not severity-tiered (#4436)', () => {
+  assertAdoptNowRefused(
+    [
+      ...COMPUTE_ONLY_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'very-low',
+      '--adopt-now',
+    ],
+    { critiqueLoop: { deferByUrgency: 'low-and-medium' } },
+    /--adopt-now requires critiqueLoop\.deferByUrgency severity-tiered/u,
+  );
+});
+
+test('--adopt-now is refused with --lite (#4436)', () => {
+  assertAdoptNowRefused(
+    [
+      ...COMPUTE_ONLY_ARGS,
+      '--tier',
+      'low',
+      '--urgency',
+      'very-low',
+      '--lite',
+      '--adopt-now',
+    ],
+    TRIAGE_TIERED_CONFIG,
+    /--adopt-now cannot be combined with --lite/u,
+  );
+});
+
+test('--adopt-now is refused with --path-b, and the refusal names it (#4436)', () => {
+  assertAdoptNowRefused(
+    [...TRIAGE_THREAD_DRY_ARGS, '--path-b', '--adopt-now'],
+    TRIAGE_TIERED_CONFIG,
+    /--path-b cannot be combined with .*--adopt-now/u,
+  );
+});
+
+test('--adopt-now is refused without both --tier and --urgency (#4436)', () => {
+  assertAdoptNowRefused(
+    [...COMPUTE_ONLY_ARGS, '--tier', 'low', '--adopt-now'],
+    TRIAGE_TIERED_CONFIG,
+    /--adopt-now requires --tier and --urgency/u,
+  );
+  assertAdoptNowRefused(
+    [...TRIAGE_THREAD_DRY_ARGS, '--adopt-now'],
+    TRIAGE_TIERED_CONFIG,
+    /--adopt-now requires --tier and --urgency/u,
   );
 });

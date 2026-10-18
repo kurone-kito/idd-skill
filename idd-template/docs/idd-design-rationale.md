@@ -1619,10 +1619,15 @@ set (see the wave-gradient subsection below), High defers only
 at `very-low`. Medium, including unknown severity, defers at
 `very-low`, `low`, or `medium`. Low defers at every scored urgency.
 An unscored urgency does not defer. `low` and `low-and-medium` still
-never defer High, so the hearing bullet above applies to those two
-modes only. That bullet's condition (d), piggybacking on an already
-certain push, belongs to the binary allowlist and has no counterpart
-here: the matrix alone decides.
+never defer High, so the hearing's High ceiling applies to those two
+modes only. The hearing's adopt-now condition (d), piggybacking on an
+already certain push, applies here too (issue `#4436`): when the
+matrix gives `defer`, the agent's `resolve-review-thread --adopt-now`
+turns the verdict into `keep`. Before that, `computeTriageVerdict`
+(issue `#4187`) passed adopt-now as false and no flag could change it,
+so (d) never reached a verdict; the issue `#4188` worker report
+recorded the gap. The maintainer chose this rule in the Groom hearing
+of 2026-10-18.
 
 PR #3550 and PR #3574 motivated the High cell as context only; neither
 is a dependency. On 2026-09-28 those pull requests had review
