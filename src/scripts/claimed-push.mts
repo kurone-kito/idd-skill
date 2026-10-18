@@ -29,6 +29,7 @@ import {
 import { GENERATED_SOURCE_BANNER_PATTERN } from './consistency-helpers.mts';
 import { parseCandidateFiles } from './discover-shared-file-overlap.mts';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
+import { isNotDispatchedRefusal } from './github-api-refusal.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -147,6 +148,11 @@ export interface CommandResult {
   stdout: string;
   stderr: string;
   error?: string;
+  /**
+   * True when GitHub API load control refused a `gh` read before any process
+   * started. The read was not attempted, so it is not a broken installation.
+   */
+  notDispatched?: boolean;
 }
 
 export type CommandRequest =
@@ -623,11 +629,16 @@ function readGh(ctx: Context, args: readonly string[]): Read<string> {
   if (end.kind === 'no-start') {
     return {
       ok: false,
-      failure: failed(
-        describeEnd(what, end),
-        NEXT_ACTION.helperInstallation,
-        null,
-      ),
+      failure: result.notDispatched
+        ? failed(
+            withDetail(
+              `${what} was refused by GitHub API load control before it started`,
+              end.detail,
+            ),
+            NEXT_ACTION.stopAndReport,
+            null,
+          )
+        : failed(describeEnd(what, end), NEXT_ACTION.helperInstallation, null),
     };
   }
   if (end.kind === 'signal' || end.status !== 0) {
@@ -1563,6 +1574,7 @@ function runGhRead(args: readonly string[]): CommandResult {
       ...(status === null
         ? { error: error instanceof Error ? error.message : String(error) }
         : {}),
+      ...(isNotDispatchedRefusal(error) ? { notDispatched: true } : {}),
     };
   }
 }

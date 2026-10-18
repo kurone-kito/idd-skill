@@ -1783,6 +1783,32 @@ test('every failed scope input or run refuses with a next action', () => {
       null,
     ],
     [
+      'issue read refused by GitHub API load control',
+      {
+        world: {
+          [K.issueView]: result(null, '', '', {
+            error: 'github api load control: busy',
+            notDispatched: true,
+          }),
+        },
+      },
+      NEXT.stopAndReport,
+      null,
+    ],
+    [
+      'default-branch read refused by GitHub API load control',
+      {
+        world: {
+          [K.repoView]: result(null, '', '', {
+            error: 'github api load control: cooldown',
+            notDispatched: true,
+          }),
+        },
+      },
+      NEXT.stopAndReport,
+      null,
+    ],
+    [
       'issue output',
       { world: { [K.issueView]: result(0, 'not json') } },
       NEXT.stopAndReport,

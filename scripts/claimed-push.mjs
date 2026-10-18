@@ -27,6 +27,7 @@ import {
 import { GENERATED_SOURCE_BANNER_PATTERN } from './consistency-helpers.mjs';
 import { parseCandidateFiles } from './discover-shared-file-overlap.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import { isNotDispatchedRefusal } from './github-api-refusal.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   isHelperErrorEnvelopeEnabled,
@@ -438,11 +439,16 @@ function readGh(ctx, args) {
   if (end.kind === 'no-start') {
     return {
       ok: false,
-      failure: failed(
-        describeEnd(what, end),
-        NEXT_ACTION.helperInstallation,
-        null,
-      ),
+      failure: result.notDispatched
+        ? failed(
+            withDetail(
+              `${what} was refused by GitHub API load control before it started`,
+              end.detail,
+            ),
+            NEXT_ACTION.stopAndReport,
+            null,
+          )
+        : failed(describeEnd(what, end), NEXT_ACTION.helperInstallation, null),
     };
   }
   if (end.kind === 'signal' || end.status !== 0) {
@@ -1315,6 +1321,7 @@ function runGhRead(args) {
       ...(status === null
         ? { error: error instanceof Error ? error.message : String(error) }
         : {}),
+      ...(isNotDispatchedRefusal(error) ? { notDispatched: true } : {}),
     };
   }
 }

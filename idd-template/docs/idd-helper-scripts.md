@@ -9796,9 +9796,12 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
    or `M` effort marker passes the finding as not applicable, so the step
    passes with the audit's detail as its reason. A failed git read refuses
    with the next action to read the git error in the worktree and fix it,
-   then rerun; every other refusal of this step (a failed `gh` read, an
-   unreadable policy, an unusable base, an empty title or body, a
-   malformed audit result) has the next action to stop and report.
+   then rerun; a `gh` that cannot start has the next action to check the
+   helper installation, then rerun; every other refusal of this step (a
+   failed `gh` read, including one that GitHub API load control refused
+   before it started, an unreadable policy, an unusable base, an empty
+   title or body, a malformed audit result) has the next action to stop
+   and report.
 
    ```sh
    node scripts/clone-lock.mjs --exec --agent-id <your agent id> -- git fetch origin +refs/heads/<base>:refs/remotes/origin/<base>
