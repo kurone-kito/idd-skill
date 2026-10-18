@@ -1695,6 +1695,22 @@ test('a body with no heading after its first line is refused before either run',
   }
 });
 
+test('a canonical path a bullet cannot carry is refused before either run', () => {
+  for (const path of ['src/a`b.mts', 'src/a\nb.mts', 'src/a\rb.mts']) {
+    const r = run({
+      world: {
+        [K.diff]: result(0, nulList(['src/scripts/claimed-push.mts', path])),
+      },
+    });
+    assertRefused(r, 'scope', NEXT.stopAndReport, { exitStatus: 0 });
+    assert.ok(
+      stepOf(r, 'scope').reason.includes(JSON.stringify(path)),
+      stepOf(r, 'scope').reason,
+    );
+    assert.equal(r.count(K.audit), 0);
+  }
+});
+
 test('a body with a Split out of line passes the second run over the limit', () => {
   const r = run({
     input: { apply: false },

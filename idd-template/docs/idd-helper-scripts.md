@@ -9768,8 +9768,10 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
    twice, in the primary checkout: on the issue body, and on a copy that
    is the body with a leading `## Candidate files` section of one
    backticked bullet per canonical path. It first refuses a body with no
-   heading after its first line, and a copy whose section the candidate
-   parser does not read exactly as the section alone. The verdict of each
+   heading after its first line, a canonical path that holds a backtick or
+   a line break (a bullet cannot carry it), and a copy whose section the
+   candidate parser does not read exactly as the section alone. The
+   verdict of each
    run is its `effort-candidate-file-limit` finding; the audit exits `1`
    whenever any finding fails, so its exit status is not read. A run that
    cannot start (next action: check the helper installation, then rerun),

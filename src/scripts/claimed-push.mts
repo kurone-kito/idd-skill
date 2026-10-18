@@ -1134,6 +1134,17 @@ function stepScope(ctx: Context): StepOutcome {
   const { paths } = canonical.value;
   const { title, body } = issue.value;
 
+  // A backtick ends the bullet's code span early and a line break ends the
+  // bullet, so the parser would read another path, or none, for such a path.
+  const unwritable = paths.filter((path) => /[`\r\n]/u.test(path));
+  if (unwritable.length > 0) {
+    return failed(
+      `the canonical path(s) ${unwritable.map((path) => JSON.stringify(path)).join(', ')} hold a backtick or a line break, so a ## Candidate files bullet cannot carry them and the audit could not count them`,
+      NEXT_ACTION.stopAndReport,
+      0,
+    );
+  }
+
   if (!hasHeadingAfterFirstLine(body)) {
     return failed(
       `issue ${ctx.input.issue}'s body has no heading after its first line, so a leading ## Candidate files section would run to the end of the body`,
