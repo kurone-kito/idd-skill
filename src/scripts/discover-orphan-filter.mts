@@ -198,6 +198,7 @@ const WORD_CHAR_PATTERN = /[A-Za-z0-9]/;
 export type OrphanFilteredReason =
   | 'provider_outage_target'
   | 'authoring_journal_target'
+  | 'excluded_roadmap_leaf'
   | 'roadmap_marker'
   | 'blocked_by_marker'
   | 'blocked_label'
@@ -334,6 +335,8 @@ interface ClassifyIssueOptions {
 }
 
 interface FilterOrphanIssuesOptions {
+  /** Roadmap graph issues already evaluated by a roadmap-first fallback. */
+  excludeIssueNumbers?: Iterable<number>;
   issueStateByNumber?: Iterable<[number, string]>;
   fetchIssueStateByNumber?: (issueNumber: number) => string;
   fetchLabelEventsByIssueNumber?: (issueNumber: number) => unknown[];
@@ -493,6 +496,8 @@ interface ParsedArgs {
   purgeCache: boolean;
   /** `--draft-carriers` (#4257): list the draft carriers and exit. */
   draftCarriers: boolean;
+  /** Repeatable `--exclude-issue` values, normalized before cache identity. */
+  excludeIssues: number[];
 }
 
 if (import.meta.main) {
@@ -1325,6 +1330,7 @@ export async function filterOrphanIssues(
   options: FilterOrphanIssuesOptions = {},
 ) {
   const issueStateByNumber = new Map(options.issueStateByNumber ?? []);
+  const excludedIssueNumbers = new Set(options.excludeIssueNumbers ?? []);
   const fetchIssueStateByNumber =
     typeof options.fetchIssueStateByNumber === 'function'
       ? options.fetchIssueStateByNumber
@@ -1332,6 +1338,7 @@ export async function filterOrphanIssues(
   const filtered: Record<OrphanFilteredReason, FilteredIssueEntry[]> = {
     provider_outage_target: [],
     authoring_journal_target: [],
+    excluded_roadmap_leaf: [],
     roadmap_marker: [],
     blocked_by_marker: [],
     blocked_label: [],
@@ -1392,6 +1399,17 @@ export async function filterOrphanIssues(
   );
 
   for (const issue of issues) {
+    if (excludedIssueNumbers.has(issue.number)) {
+      filtered.excluded_roadmap_leaf.push({
+        number: issue.number,
+        title: issue.title,
+        state: issue.state,
+        reason: 'excluded_roadmap_leaf',
+        details: null,
+        url: issue.url ?? '',
+      });
+      continue;
+    }
     const classifyOptions: ClassifyIssueOptions = {
       issueStateByNumber,
       fetchIssueStateByNumber,
@@ -1777,6 +1795,9 @@ async function runCli(): Promise<HelperCliResult> {
       autopilot: args.autopilot,
       withClaimState: args.withClaimState,
       currentClaimId: args.currentClaimId,
+      // Always key the normalized set, including [], so pre-change hints and
+      // reports from another roadmap graph can never satisfy this request.
+      excludeIssues: args.excludeIssues,
     },
     policy,
     noCache: args.noCache,
@@ -1872,6 +1893,9 @@ function rejectDraftCarrierCombinations(args: ParsedArgs): void {
   }
   if (args.pr !== null) {
     combined.push('--pr');
+  }
+  if (args.excludeIssues.length > 0) {
+    combined.push('--exclude-issue');
   }
   if (args.noCache) {
     combined.push('--no-cache');
@@ -2096,6 +2120,7 @@ async function produceOutput(
     autopilot: args.autopilot,
     now: args.now || new Date(),
     claimState,
+    excludeIssueNumbers: args.excludeIssues,
   });
 
   const output = {
@@ -2136,6 +2161,7 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
     refreshCache: false,
     purgeCache: false,
     draftCarriers: false,
+    excludeIssues: [],
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -2164,6 +2190,27 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
         );
       }
       parsed.pr = parsedNumber;
+      index += 1;
+      continue;
+    }
+    if (token === '--exclude-issue') {
+      if (value === undefined || value.startsWith('--')) {
+        throw markCliUsageError(
+          new Error('missing value for argument: --exclude-issue'),
+        );
+      }
+      if (!/^\d+$/u.test(value)) {
+        throw markCliUsageError(
+          new Error(`invalid --exclude-issue value: ${value}`),
+        );
+      }
+      const issueNumber = Number(value);
+      if (!Number.isSafeInteger(issueNumber) || issueNumber <= 0) {
+        throw markCliUsageError(
+          new Error(`invalid --exclude-issue value: ${value}`),
+        );
+      }
+      parsed.excludeIssues.push(issueNumber);
       index += 1;
       continue;
     }
@@ -2224,14 +2271,20 @@ function parseArgs(rawArgv: string[]): ParsedArgs {
     }
     throw markCliUsageError(new Error(`unknown argument: ${token}`));
   }
+  parsed.excludeIssues = [...new Set(parsed.excludeIssues)].sort(
+    (left, right) => left - right,
+  );
   return parsed;
 }
 
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/discover-orphan-filter.mjs [--owner <owner>] [--repo <repo>] [--policy <path>] [--pr <number>] [--now <ISO8601>] [--autopilot] [--with-claim-state] [--current-claim-id <id>] [--no-cache | --refresh-cache]
+  node scripts/discover-orphan-filter.mjs [--owner <owner>] [--repo <repo>] [--policy <path>] [--pr <number>] [--now <ISO8601>] [--autopilot] [--with-claim-state] [--current-claim-id <id>] [--exclude-issue <number> ...] [--no-cache | --refresh-cache]
   node scripts/discover-orphan-filter.mjs --purge-cache
   node scripts/discover-orphan-filter.mjs --draft-carriers [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>]
+
+Repeat --exclude-issue <positive-number> to omit open issues already evaluated
+by a roadmap graph; each is reported under filtered.excluded_roadmap_leaf.
 
 Hint cache (opt-in via githubApi.readCache.enabled; off by default): the whole
 output is cached as a short-lived HINT, so an unchanged repeat inside

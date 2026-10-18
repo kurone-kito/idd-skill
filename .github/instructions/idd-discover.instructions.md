@@ -195,6 +195,9 @@ exhaustion) to the A4 **"report and stop"** terminal, (d) to A1.5's
 report-and-stop — since A1 already ran and must not be re-entered (no
 A1 ↔ A0-O or A4 ↔ A0-O loop).
 
+(a)/(b): repeat `--exclude-issue <n>` for A2 leaves; (c)/(d),
+orphan-first: none.
+
 - If `orphan-first-policy` is `public-disabled`: for a public repository
   (or when visibility cannot be determined), skip A0-O without searching
   open issues, using the same trigger-based redirect above. For private
