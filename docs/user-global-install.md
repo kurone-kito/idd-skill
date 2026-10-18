@@ -299,11 +299,15 @@ outside normal IDD authoring and execution:
    `issueAuthoring.journalIssue` to the journal that already exists.
    Before publishing, include a unique, stable marker in the intended
    issue body. If creation is uncertain, search all issue states in the
-   target repository for the intended title and that marker. If exactly
-   one issue matches, record its canonical `owner/repo#number` and do
-   not retry creation. Retry only after a successful search finds no
-   match. If the search is unavailable, finds multiple matches, or the
-   matching issue is unsuitable to continue, stop and reconcile manually.
+   target repository for the intended title and that marker, then verify
+   the result with the [paginated repository issues API](https://docs.github.com/en/rest/issues/issues#list-repository-issues)
+   using `state=all`, following pagination through every page. Treat the
+   API read as unavailable if any page cannot be read. If both reads
+   identify the same single suitable issue, record its canonical
+   `owner/repo#number` and do not retry. Retry only when both complete,
+   successful reads find no match. If the reads
+   disagree, either read is unavailable, multiple matches exist, or a
+   match is unsuitable to continue, stop and reconcile manually.
    If the issue cannot be published, keep the journal and continue
    preparation outside normal IDD.
 3. Review and land the first policy through the repository's ordinary
@@ -316,9 +320,10 @@ outside normal IDD authoring and execution:
 4. Before returning to normal IDD, verify that `idd-activation` reports
    `active: true` through the repository-policy or matching-override route. For
    `repository-policy-minimal-import`, put the first policy in the canonical
-   `.github/idd/config.json`: a legacy root `idd-policy.json` can activate the
-   gate, but it is not loaded as effective policy. Inspect the effective
-   `issueAuthoring.journalIssue` value and its source, using
+   `.github/idd/config.json` and require `idd-doctor` to accept it against the
+   policy schema before returning to normal IDD. A legacy root `idd-policy.json`
+   can activate the gate, but it is not loaded as effective policy. Inspect the
+   effective `issueAuthoring.journalIssue` value and its source, using
    `idd-effective-config` when available, and confirm it resolves to the
    existing durable journal. Also verify that the selected helper runtime can
    use the capability-checked held-publication flow. That flow must apply the
