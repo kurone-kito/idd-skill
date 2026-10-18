@@ -3821,9 +3821,9 @@ With `--tier` and `--urgency` both given, the helper writes one `Triage:`
 line before the reply-identity stamp, so the E4 tier, the E4 urgency, the
 relax step, and the E5 verdict travel with the reply. The other triage
 flags feed that line. Without the pair they have no line to carry them and
-change nothing, except two flags that are refused with a usage error:
-`--path-b`, when combined with any other triage flag, and `--override`,
-which needs the pair. The line is written
+change nothing, except three flags that are refused with a usage error:
+`--path-b`, when combined with any other triage flag, and `--override` and
+`--adopt-now`, which need the pair. The line is written
 whenever the pair is given. `critiqueLoop.triageRecord` (default `off`)
 decides only whether the pair is required, whether an `enforce` refusal
 applies, and whether `--override` is accepted.
@@ -3858,6 +3858,10 @@ Flags, one line each:
   reviewer. This blocks a deferral.
 - `--accepted-mid-fix`: the item was Accepted in an earlier E5 pass, and its
   fix is still in progress. This blocks a deferral.
+- `--adopt-now`: adopt-now condition (d) of the E5 Defer rule holds: another
+  item in the same E5 pass is already Accepted, so a push is certain, and this
+  fix stays within that push's files. It turns a `defer` verdict into `keep`
+  with `blocked adopt-now`. See the rules below.
 - `--override <reason>`: posts an Accepted reply that the defer matrix
   refuses, and records the reason as the line's last part, after
   `override:`. See the rules below.
@@ -3879,6 +3883,13 @@ Rules:
   check names the missing flag. It accepts no `--override`. A refused input
   exits `1` with kind `usage`. It reads GitHub only under `severity-tiered`
   without `--lite`.
+- **Adopt-now.** `--adopt-now` needs `deferByUrgency` `severity-tiered` and
+  the pair, and cannot combine with `--lite` or `--path-b`. A refused input
+  exits `1` with kind `usage` and a message that names `--adopt-now`. The
+  matrix decides first, and the flag changes only a `defer` verdict: a `keep`
+  from the matrix or from a blocking flag such as `--scope-fence` keeps its
+  own `blocked` reason. An Accepted reply with the flag needs no `--override`,
+  since its verdict is `keep`.
 - **Override.** `--override` needs `record` or `enforce`, `deferByUrgency`
   `severity-tiered`, the pair, an `**Accepted**` body, and a `defer` verdict.
   A `keep` verdict is refused with a usage error. The reason must be one

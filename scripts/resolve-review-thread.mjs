@@ -355,7 +355,8 @@ function checkOverrideReason(reason) {
  * to carry it is a no-op, not an error, except under `--path-b`, which refuses
  * every verdict input (#4187). An invalid value is always a usage error. The
  * static `--override` conditions are checked here too (#4187); the verdict
- * condition needs the relax step, so `buildTriageReplyBody` checks it.
+ * condition needs the relax step, so `buildTriageReplyBody` checks it. The
+ * `--adopt-now` conditions are all static, so they are checked here (#4436).
  */
 export function validateTriageFlags(input) {
   const { flags } = input;
@@ -385,6 +386,7 @@ export function validateTriageFlags(input) {
     flags.scopeFence ||
     flags.protectedAuthority ||
     flags.acceptedMidFix ||
+    flags.adoptNow ||
     flags.override !== null;
   // Checked before the pair, so `--path-b` with a lone score names `--path-b`.
   if (
@@ -392,8 +394,23 @@ export function validateTriageFlags(input) {
     (flags.tier !== '' || flags.urgency !== '' || scoringFlags)
   ) {
     throw new TriageUsageError(
-      '--path-b cannot be combined with --tier, --urgency, --copilot-label, --safety-class, --scope-fence, --protected-authority, --accepted-mid-fix, --override, --lite, or --advisory-converged',
+      '--path-b cannot be combined with --tier, --urgency, --copilot-label, --safety-class, --scope-fence, --protected-authority, --accepted-mid-fix, --adopt-now, --override, --lite, or --advisory-converged',
     );
+  }
+  // Checked before the pair, unlike `--override` below, so a lone score with
+  // `--adopt-now` names `--adopt-now` rather than the pair (#4436).
+  if (flags.adoptNow) {
+    if (input.deferByUrgency !== 'severity-tiered') {
+      throw new TriageUsageError(
+        '--adopt-now requires critiqueLoop.deferByUrgency severity-tiered',
+      );
+    }
+    if (flags.lite) {
+      throw new TriageUsageError('--adopt-now cannot be combined with --lite');
+    }
+    if (flags.tier === '' || flags.urgency === '') {
+      throw new TriageUsageError('--adopt-now requires --tier and --urgency');
+    }
   }
   if ((flags.tier === '') !== (flags.urgency === '')) {
     throw new TriageUsageError('--tier and --urgency must be given together');
@@ -570,8 +587,11 @@ function scoreTriageRecord(input) {
  * `severity-tiered` (#4187). Pure: it reads and prints nothing, so the dry
  * run, the apply path, and any later compute-only mode share one answer.
  * `decideUrgencyDefer` does the matrix work; this maps its output onto the
- * fields the `Triage:` line carries. The inputs are the issue's: path A, no
- * awaiting-decision hold, no adopt-now.
+ * fields the `Triage:` line carries. The inputs are the issue's: path A and no
+ * awaiting-decision hold. `decideUrgencyDefer` ignores `adoptNow` under
+ * `severity-tiered`, so adopt-now condition (d) is applied here, after the
+ * matrix: `--adopt-now` turns a defer into `keep` blocked by `adopt-now`, and
+ * every other verdict keeps its own eligibility and reason (#4436).
  */
 export function computeTriageVerdict(record, flags) {
   const decision = decideUrgencyDefer({
@@ -586,8 +606,16 @@ export function computeTriageVerdict(record, flags) {
     protectedAuthority: flags.protectedAuthority,
     acceptedMidFix: flags.acceptedMidFix,
     awaitingMaintainerDecision: false,
+    // Ignored under `severity-tiered`; condition (d) is applied below (#4436).
     adoptNow: false,
   });
+  if (decision.defer && flags.adoptNow) {
+    return {
+      verdict: 'keep',
+      eligibility: decision.eligibility,
+      blocked: 'adopt-now',
+    };
+  }
   return {
     verdict: decision.defer ? 'defer' : 'keep',
     eligibility: decision.eligibility,
@@ -662,6 +690,7 @@ const RESOLVE_REVIEW_THREAD_FLAG_SPEC = {
   '--scope-fence': { type: 'boolean', default: false },
   '--protected-authority': { type: 'boolean', default: false },
   '--accepted-mid-fix': { type: 'boolean', default: false },
+  '--adopt-now': { type: 'boolean', default: false },
   // No default: an absent flag is `undefined`, so `--override ""` (an empty
   // reason, refused later) is still visible (#4187).
   '--override': { type: 'string' },
@@ -720,6 +749,7 @@ export function parseArgs(argv) {
     scopeFence: values['scope-fence'],
     protectedAuthority: values['protected-authority'],
     acceptedMidFix: values['accepted-mid-fix'],
+    adoptNow: values['adopt-now'],
     override: values.override ?? null,
     apply: values.apply,
     help,
@@ -781,6 +811,9 @@ reply with the same flags would carry, and posts nothing. For example:
                                  blocks a deferral (optional)
   --accepted-mid-fix             Accepted in an earlier E5 pass, fix still in progress;
                                  blocks a deferral (optional)
+  --adopt-now                    adopt-now condition (d) holds: turns a defer verdict into
+                                 keep (severity-tiered only; needs --tier and --urgency;
+                                 not with --lite or --path-b)
   --override <reason>            post an Accepted reply the defer matrix refuses, with the
                                  reason recorded on its Triage line (needs a defer verdict)
   --apply                        post the reply and resolve the thread, or post the
@@ -1057,6 +1090,7 @@ function triageFlagsFromArgs(args) {
     scopeFence: args.scopeFence,
     protectedAuthority: args.protectedAuthority,
     acceptedMidFix: args.acceptedMidFix,
+    adoptNow: args.adoptNow,
     override: args.override,
   };
 }
