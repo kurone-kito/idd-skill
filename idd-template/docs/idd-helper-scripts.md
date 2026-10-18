@@ -2684,13 +2684,17 @@ without forking; if the running shell cannot disable job control, it refuses
 before starting the command. It resets the admitted child's SIGINT and SIGTERM
 dispositions before `setsid` so the child does not inherit the background
 shell's ignored SIGINT. Direct paths use the same supervisor and isolate the
-process group when the shell can disable job control and `setsid` is available.
+process group when the shell can disable job control, `setsid` is available,
+and the process-state probe succeeds; otherwise they use the non-group
+supervisor.
 
 The process-state check treats a group as drained when it is absent or every
 remaining member is in state Z or X. It polls every second. If ps later fails
 or emits malformed output, the wait stays active and the lock stays held.
-Before starting a process-group-supervised command, refuse with exit 2 when ps
-is unavailable or its output is not a successful, well-formed process listing.
+Before starting an admitted command, refuse with exit 2 when ps is unavailable
+or its output is not a successful, well-formed process listing. For a direct
+run, use process-group isolation only when that probe succeeds; otherwise
+continue without group isolation.
 
 ```sh
 child_pid=
@@ -2784,11 +2788,7 @@ run_child() {
     if set +m 2>/dev/null; then
       case $- in *m*) ;; *) group_ready=true ;; esac
     fi
-    if [ "$group_ready" = true ]; then
-      if ! process_state_ready; then
-        printf 'local-admission: ps is not available or returned unusable process-state output; command not started\n' >&2
-        exit 2
-      fi
+    if [ "$group_ready" = true ] && process_state_ready; then
       child_group=true
       if command -v env >/dev/null 2>&1 &&
          env --default-signal=INT --default-signal=TERM >/dev/null 2>&1; then
