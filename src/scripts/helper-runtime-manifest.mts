@@ -393,7 +393,7 @@ const HELPER_COMMANDS: HelperCommand[] = [
     entryPath: 'scripts/claimed-push.mjs',
     vendoredCommand: 'node scripts/claimed-push.mjs',
     description:
-      'Push the claimed branch to origin only after the claim, the worktree location, and the configured pre-push gate pass in order (dry run unless --apply).',
+      'Push the claimed branch to origin only after six steps pass in order: the claim assert, the worktree location, the scope check (audit-authored-issue on the issue body and on the paths the branch changed), the configured pre-push gate, a second claim assert, and the push (dry run unless --apply; the dry run runs the first three).',
   },
   {
     id: 'clone-lock',

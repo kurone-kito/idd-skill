@@ -105,6 +105,19 @@ naming the branch state and stop; do not push.
 
 ## D2 — Verify claim, lint, test, push
 
+With helper runtime enabled, the normal (non-force) push runs through
+the profile-selected `claimed-push` helper
+([Claimed push](../../docs/idd-helper-scripts.md#claimed-push-kurone-kitoidd-skill4375)),
+started from the claimed worktree with
+`--issue {issue-number} --claim-id {claim-id} [--nonce {nonce}] --apply`.
+`--apply` runs the claim assert, the location check, the `scope` check,
+the configured gate (**pre-push-validate**), a second claim assert, and
+the push, in that order, so do not run the gate or push a second time.
+Require `pushed: true` with all six steps `passed`. On a refusal, follow
+the report's `nextAction`; when `pushed` is `null` (the push outcome is
+unknown), inspect the remote branch and do not retry. Under
+`instructions-only`, use steps 1-3 below.
+
 1. Re-read the issue to confirm the claim is still yours: the **active
    claim** must still use your current `{claim-id}`. If the active claim
    is missing, released, or held by a different `{claim-id}` (even under
@@ -125,7 +138,10 @@ naming the branch state and stop; do not push.
    already-published branch under an explicit force-push exception, use
    `--force-with-lease` only when repository policy permits it and the
    exceptional route already required a rebase; otherwise stop and
-   return to the merge-based sync path.
+   return to the merge-based sync path. `claimed-push` never forces: with
+   helper runtime, first run its default dry run (no `--apply`) and
+   require `assert`, `location`, and `scope` to pass, then steps 1-2
+   above; the dry run does not stand in for the claim re-read or the gate.
 
 Once the branch is pushed, treat it as published review history. A PR
 that is merely `BEHIND` does not force a branch update unless branch
