@@ -2,10 +2,12 @@ name: Review policy audit
 # Weekly audit of this repository's recent merged pull requests with
 # copilot-review-wave-audit --check (issue #4189). The check exits 1 when a
 # Copilot overview cannot be parsed, when a Triage line is malformed, or when
-# an accepted reply carries a defer verdict. The recorded-share threshold needs
-# --since, which this job does not pass yet, so it is not enforced here. The
-# audit imports only Node built-ins and the repository's own generated
-# scripts/*.mjs modules, so the job needs no dependency install.
+# an accepted reply carries a defer verdict. It also exits 1 when, among pull
+# requests merged on or after the --since date, fewer than 90% of the
+# accepted, deferred, or rejected Copilot finding threads carry a Triage line;
+# no pull request counts before that date. The audit imports only Node
+# built-ins and the repository's own generated scripts/*.mjs modules, so the
+# job needs no dependency install.
 #
 # Source-repository only: this workflow is never distributed to idd-template/.
 on:
@@ -64,4 +66,5 @@ jobs:
       - name: Audit recent pull requests
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/copilot-review-wave-audit.mjs --limit 30 --check
+        # --since: UTC merge date of PR #4508 (triage opt-in, #4202) plus 7 days
+        run: node scripts/copilot-review-wave-audit.mjs --limit 30 --check --since 2026-10-25
