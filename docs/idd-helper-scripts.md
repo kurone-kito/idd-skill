@@ -2653,8 +2653,10 @@ exact child argv that would follow `--`; keep the complete command string in
 one value. If `IDD_LOCAL_ADMISSION` is already present, supervise the child
 without taking a lock; the helper sets it for admitted children so a nested
 call uses this same bypass. Direct paths forward signals and reap the child,
-using an isolated process group when the host has the required tools. Both
-failures were reproduced during issue `#4430` review. Read
+using an isolated process group when the host has the required tools. Review
+of issue `#4430` found on 2026-10-18 that helper-free direct paths
+could refuse when `ps` was unavailable or unusable (PR `#4485`, review
+comments 4305232738 and 4305235845). Read
 `enabled`, `backend`, and raw `maxConcurrent` from
 `localExec.admission` in the repository's `.github/idd/config.json` (defaults:
 `true`, `flock`, and `1`). If repo
@@ -2689,8 +2691,9 @@ and the process-state probe succeeds; otherwise they use the non-group
 supervisor.
 
 The process-state check treats a group as drained when it is absent or every
-remaining member is in state Z or X. It polls every second. If ps later fails
-or emits malformed output, the wait stays active and the lock stays held.
+remaining member is in state Z or X. It polls every second. If `ps` later fails
+or emits malformed output, the wait stays active and the lock stays held. This
+is preventive; no observed incident yet.
 Before starting an admitted command, refuse with exit 2 when ps is unavailable
 or its output is not a successful, well-formed process listing. For a direct
 run, use process-group isolation only when that probe succeeds; otherwise
