@@ -9756,8 +9756,9 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
    `git diff --no-renames --name-only -z <branch point>` (committed,
    staged, and unstaged changes, and both sides of a rename) and
    `git ls-files --others --exclude-standard -z`, minus two kinds of path,
-   both read at the branch point with `git ls-tree` and `git show` so that
-   a branch cannot exclude its own files: a file whose first
+   both read at the branch point with `git ls-tree` (a literal pathspec)
+   and `git show` so that a branch cannot exclude its own files: a file
+   whose first
    `// idd-generated-from:` banner, read from its first 200 bytes as the
    build reads it, names a different path, and a
    `syncPairs` target of `audit/sync-manifest.json` (a missing manifest
@@ -9769,8 +9770,9 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
    is the body with a leading `## Candidate files` section of one
    backticked bullet per canonical path. It first refuses a body with no
    heading after its first line (an ATX heading, or a Setext heading as the
-   candidate parser reads one), a canonical path that holds a backtick or
-   a line break (a bullet cannot carry it), and a copy whose section the
+   candidate parser reads one), a canonical path that holds a backtick, a
+   line break, or bytes that are not UTF-8 (a bullet cannot carry it
+   faithfully), and a copy whose section the
    candidate parser does not read exactly as the section alone. The
    verdict of each
    run is its `effort-candidate-file-limit` finding; the audit exits `1`

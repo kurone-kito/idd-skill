@@ -1167,10 +1167,12 @@ function stepScope(ctx: Context): StepOutcome {
 
   // A backtick ends the bullet's code span early and a line break ends the
   // bullet, so the parser would read another path, or none, for such a path.
-  const unwritable = paths.filter((path) => /[`\r\n]/u.test(path));
+  // A replacement character means git printed bytes that are not UTF-8, so
+  // two such paths can decode to one string and count once.
+  const unwritable = paths.filter((path) => /[`\r\n\uFFFD]/u.test(path));
   if (unwritable.length > 0) {
     return failed(
-      `the canonical path(s) ${unwritable.map((path) => JSON.stringify(path)).join(', ')} hold a backtick or a line break, so a ## Candidate files bullet cannot carry them and the audit could not count them`,
+      `the canonical path(s) ${unwritable.map((path) => JSON.stringify(path)).join(', ')} hold a backtick, a line break, or bytes that are not UTF-8, so a ## Candidate files bullet cannot carry them and the audit could not count them`,
       NEXT_ACTION.stopAndReport,
       0,
     );
@@ -1740,7 +1742,7 @@ export function readPrimaryPolicy(
 
 /**
  * A `readBaseText` built on a command runner: `git ls-tree -z <branch point>
- * -- <path>` prints nothing and exits 0 for a path absent there, and `git show
+ * -- :(literal)<path>` prints nothing and exits 0 for a path absent there, and `git show
  * <branch point>:<path>` reads a present file. An entry that is not a file
  * (a submodule) is present with no text. Any other git failure is an error.
  */
@@ -1757,7 +1759,8 @@ export function makeBaseTextReader(
     };
     const listing = run({
       kind: 'git',
-      args: ['ls-tree', '-z', branchPoint, '--', path],
+      // `:(literal)` keeps a name such as `:(top)src` from reading as magic.
+      args: ['ls-tree', '-z', branchPoint, '--', `:(literal)${path}`],
       cwd: worktree,
     });
     if (listing.status !== 0) {

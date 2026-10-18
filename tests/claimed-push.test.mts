@@ -1696,7 +1696,12 @@ test('a body with no heading after its first line is refused before either run',
 });
 
 test('a canonical path a bullet cannot carry is refused before either run', () => {
-  for (const path of ['src/a`b.mts', 'src/a\nb.mts', 'src/a\rb.mts']) {
+  for (const path of [
+    'src/a`b.mts',
+    'src/a\nb.mts',
+    'src/a\rb.mts',
+    'src/a\uFFFDb.mts',
+  ]) {
     const r = run({
       world: {
         [K.diff]: result(0, nulList(['src/scripts/claimed-push.mts', path])),
@@ -2067,16 +2072,26 @@ test('an unreadable policy refuses the scope step before any read', () => {
 test('readBaseText reports absent, present, and error through the runner', () => {
   const calls: CommandRequest[] = [];
   const answers: Record<string, CommandResult> = {
-    'ls-tree -z bp -- absent.md': result(0, ''),
-    'ls-tree -z bp -- file.mjs': result(0, `100644 blob ${HEAD}\tfile.mjs\0`),
+    'ls-tree -z bp -- :(literal)absent.md': result(0, ''),
+    'ls-tree -z bp -- :(literal)file.mjs': result(
+      0,
+      `100644 blob ${HEAD}\tfile.mjs\0`,
+    ),
     'show bp:file.mjs': result(0, '// idd-generated-from: src/file.mts\n'),
-    'ls-tree -z bp -- broken.md': result(128, '', 'fatal: not a tree object'),
-    'ls-tree -z bp -- unreadable-blob.md': result(
+    'ls-tree -z bp -- :(literal)broken.md': result(
+      128,
+      '',
+      'fatal: not a tree object',
+    ),
+    'ls-tree -z bp -- :(literal)unreadable-blob.md': result(
       0,
       `100644 blob ${HEAD}\tunreadable-blob.md\0`,
     ),
     'show bp:unreadable-blob.md': result(128, '', 'fatal: bad object'),
-    'ls-tree -z bp -- module': result(0, `160000 commit ${HEAD}\tmodule\0`),
+    'ls-tree -z bp -- :(literal)module': result(
+      0,
+      `160000 commit ${HEAD}\tmodule\0`,
+    ),
   };
   const reader = makeBaseTextReader((request) => {
     calls.push(request);
