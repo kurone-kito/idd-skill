@@ -151,8 +151,9 @@ The configured `issueAuthoring.authoringLabelName` (default
 after activation Discover suppresses the draft while it remains. The label
 does not activate the payload or provide publisher/journal prerequisites;
 removing it alone does not verify release. See the
-[global-only profile](../global-only-profile.md). The gap was observed in
-[PR 3](https://github.com/kurone-kito/DDMMHBC/pull/3) and rechecked after
+[global-only profile](../global-only-profile.md). The gap was observed on
+2026-10-17 in [PR 3](https://github.com/kurone-kito/DDMMHBC/pull/3) and
+rechecked on 2026-10-17 after
 [PR 20](https://github.com/kurone-kito/DDMMHBC/pull/20).
 
 ### Fill-in bootstrap-issue body template
