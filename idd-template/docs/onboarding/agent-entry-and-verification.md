@@ -186,9 +186,8 @@ Cursor CLI auto-loads `AGENTS.md` and always applies `CLAUDE.md` when
 present. Operators follow the Cursor CLI `AGENTS.md` row in
 [IDD workflow](../idd-workflow.md): automatically available IDD
 context is `AGENTS.md` and `CLAUDE.md` when both exist; nothing from
-`.github/instructions/`; open
-`.github/instructions/idd-overview-core.instructions.md` and the
-routed phase file manually. Keep Claude-only adapter bullets out of Cursor
+`.github/instructions/`; open the files in that row's "Open manually"
+cell. Keep Claude-only adapter bullets out of Cursor
 policy. Do not create `CURSOR.md`.
 
 It discovers the optional `issue-authoring` / `idd-spec-audit`
