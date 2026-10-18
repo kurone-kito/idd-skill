@@ -7265,6 +7265,21 @@ test('#4482: only a matching completed no-find Codex summary for an older HEAD i
         prHeadSha: headSha,
       },
     );
+  const summarizeRegular = (body: string) =>
+    summarizeRegularCommentsForGate(
+      [
+        {
+          id: 4482,
+          author: { login: 'chatgpt-codex-connector[bot]' },
+          body,
+          createdAt: '2026-10-18T07:00:00Z',
+        },
+      ],
+      {
+        advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+        prHeadSha: headSha,
+      },
+    );
 
   // PR #4405 recorded a failed review with findings; that observed state
   // remains blocking while a clean older review can proceed without a reply.
@@ -7272,12 +7287,23 @@ test('#4482: only a matching completed no-find Codex summary for an older HEAD i
   assert.equal(clean.route, 'proceed');
   assert.equal(clean.blockingCount, 0);
   assert.deepEqual(clean.missingRegularComments, []);
+  assert.equal(summarizeRegular(buildSummary()).count, 0);
 
   const duplicateState = buildSummary();
   const duplicateStateBlock =
     '<!-- codex-review-state:v1 {"code_review":{"commit_sha":"' +
     oldSha +
     '","status":"completed","has_any_findings":false,"has_unresolved_findings":false}} -->';
+  const duplicateObjectKeyState =
+    `<!-- codex-review-state:v1 {"code_review":{"commit_sha":"${oldSha}",` +
+    '"status":"completed","has_any_findings":true,' +
+    '"has_any_findings":false,"has_unresolved_findings":false}} -->';
+  const duplicateCodeReviewState =
+    `<!-- codex-review-state:v1 {"code_review":{"commit_sha":"${oldSha}",` +
+    '"status":"completed","has_any_findings":false,' +
+    '"has_unresolved_findings":false},' +
+    `"code_review":{"commit_sha":"${oldSha}","status":"completed",` +
+    '"has_any_findings":false,"has_unresolved_findings":false}} -->';
   const blockingBodies = [
     buildSummary({
       status: 'failed',
@@ -7294,6 +7320,11 @@ test('#4482: only a matching completed no-find Codex summary for an older HEAD i
       extraRows:
         '| 🔒 **Security Review** | ✅ **Completed** | `1111111` | PR opened |\n',
     }),
+    buildSummary({ stateBlock: duplicateObjectKeyState }),
+    buildSummary({ stateBlock: duplicateCodeReviewState }),
+    buildSummary({
+      stateBlock: '<!-- codex-review-state:v1 {"code_review":} -->',
+    }),
     `${duplicateState}\n${duplicateStateBlock}`,
     buildSummary().replace('| Review | Status |', '| Review | State |'),
   ];
@@ -7305,7 +7336,104 @@ test('#4482: only a matching completed no-find Codex summary for an older HEAD i
       blocked.missingRegularComments[0].authorLogin,
       'chatgpt-codex-connector[bot]',
     );
+    const regularComments = summarizeRegular(body);
+    assert.equal(regularComments.count, 1);
+    assert.deepEqual(
+      regularComments.items.map((comment) => comment.id),
+      ['4482'],
+    );
   }
+
+  const currentHeadSummary = buildSummary({
+    stateCommit: headSha,
+    tableCommit: headSha.slice(0, 7),
+  });
+  assert.equal(summarizeRegular(currentHeadSummary).count, 1);
+  assert.deepEqual(summarizeRegular(currentHeadSummary).items[0].id, '4482');
+});
+
+test('#4482: an old-summary acceptance cannot clear later unrelated feedback', () => {
+  const headSha = '1111111111111111111111111111111111111111';
+  const oldSha = 'abcdef0123456789abcdef0123456789abcdef01';
+  const codexLogin = 'chatgpt-codex-connector[bot]';
+  const oldSummary = {
+    id: 4482,
+    author: { login: codexLogin },
+    body:
+      '<!-- codex-pull-request-review-summary -->\n' +
+      '<!-- codex-review-state:v1 ' +
+      JSON.stringify({
+        code_review: {
+          commit_sha: oldSha,
+          status: 'completed',
+          has_any_findings: false,
+          has_unresolved_findings: false,
+        },
+      }) +
+      ' -->\n\n' +
+      '## Codex Review Summary\n\n' +
+      '| Review | Status | Commit | Review trigger |\n' +
+      '| --- | --- | --- | --- |\n' +
+      `| 📝 **Code Review** | ✅ **Completed** | ${oldSha.slice(0, 7)} | PR opened |\n`,
+    createdAt: '2026-07-01T10:00:00Z',
+    updatedAt: '2026-07-01T10:00:00Z',
+    lastEditedAt: null,
+  };
+  const unrelatedFeedback = {
+    id: 4483,
+    author: { login: 'coderabbitai[bot]' },
+    body: 'Please address this separate review finding.',
+    createdAt: '2026-07-01T10:02:00Z',
+    updatedAt: '2026-07-01T10:02:00Z',
+    lastEditedAt: null,
+  };
+  const oldSummaryAcceptance = {
+    id: 4484,
+    author: { login: 'idd-agent' },
+    body:
+      `**Accepted** — ${codexLogin} summary walkthrough at HEAD ${oldSha}; ` +
+      'actionable comments, if any, are dispositioned as their own review threads\n\n' +
+      '<!-- idd-skill-review-reply -->',
+    createdAt: '2026-07-01T10:01:00Z',
+    updatedAt: '2026-07-01T10:01:00Z',
+    lastEditedAt: null,
+  };
+  const duplicateOldSummaryAcceptance = {
+    ...oldSummaryAcceptance,
+    id: 4485,
+    createdAt: '2026-07-01T10:03:00Z',
+    updatedAt: '2026-07-01T10:03:00Z',
+  };
+  const comments = [
+    oldSummary,
+    oldSummaryAcceptance,
+    unrelatedFeedback,
+    duplicateOldSummaryAcceptance,
+  ];
+  const options = {
+    iddAgentLogins: ['idd-agent'],
+    trustedMarkerLogins: ['idd-agent'],
+    advisoryBotLogins: [codexLogin, 'coderabbitai[bot]'],
+    prHeadSha: headSha,
+  };
+
+  const dispositionEvidence = summarizeDispositionEvidenceForGate(
+    { comments, threads: [] },
+    options,
+  );
+  assert.equal(dispositionEvidence.route, 'return-to-e1');
+  assert.equal(dispositionEvidence.missingRegularCommentCount, 1);
+  assert.deepEqual(
+    dispositionEvidence.missingRegularComments.map((comment) => comment.id),
+    ['4483'],
+  );
+
+  const regularComments = summarizeRegularCommentsForGate(comments, options);
+  assert.equal(regularComments.count, 1);
+  assert.deepEqual(
+    regularComments.items.map((comment) => comment.id),
+    ['4483'],
+  );
 });
 
 // #1833: a disposition reply starting with `**Rejected**` but missing the

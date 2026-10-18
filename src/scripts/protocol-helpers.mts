@@ -2905,15 +2905,105 @@ export function isCodexReviewSummaryCompleteForHeadSha(
   return boldStatusWord.trim().toLowerCase() === 'completed';
 }
 
+// Scan one JSON value and reject duplicate keys at every object depth. JSON.parse
+// keeps the last duplicate value, which is unsafe for evidence that must fail
+// closed when its fields contradict one another.
+function parseJsonRejectingDuplicateObjectKeys(text: string): unknown {
+  let index = 0;
+  const skipWhitespace = () => {
+    while (/\s/.test(text[index] ?? '')) index += 1;
+  };
+  const parseString = (): string => {
+    const start = index;
+    index += 1;
+    while (index < text.length) {
+      if (text[index] === '\\') {
+        index += 2;
+        continue;
+      }
+      if (text[index] === '"') {
+        index += 1;
+        return JSON.parse(text.slice(start, index)) as string;
+      }
+      index += 1;
+    }
+    throw new Error('unterminated JSON string');
+  };
+  const parseValue = (): void => {
+    skipWhitespace();
+    if (text[index] === '{') {
+      index += 1;
+      skipWhitespace();
+      if (text[index] === '}') {
+        index += 1;
+        return;
+      }
+      const keys = new Set<string>();
+      while (index < text.length) {
+        skipWhitespace();
+        if (text[index] !== '"') throw new Error('invalid JSON object key');
+        const key = parseString();
+        if (keys.has(key)) throw new Error('duplicate JSON object key');
+        keys.add(key);
+        skipWhitespace();
+        if (text[index] !== ':') throw new Error('invalid JSON object');
+        index += 1;
+        parseValue();
+        skipWhitespace();
+        if (text[index] === '}') {
+          index += 1;
+          return;
+        }
+        if (text[index] !== ',') throw new Error('invalid JSON object');
+        index += 1;
+      }
+      throw new Error('unterminated JSON object');
+    }
+    if (text[index] === '[') {
+      index += 1;
+      skipWhitespace();
+      if (text[index] === ']') {
+        index += 1;
+        return;
+      }
+      while (index < text.length) {
+        parseValue();
+        skipWhitespace();
+        if (text[index] === ']') {
+          index += 1;
+          return;
+        }
+        if (text[index] !== ',') throw new Error('invalid JSON array');
+        index += 1;
+      }
+      throw new Error('unterminated JSON array');
+    }
+    if (text[index] === '"') {
+      parseString();
+      return;
+    }
+    const start = index;
+    while (index < text.length && !/[\s,}\]]/.test(text[index] ?? '')) {
+      index += 1;
+    }
+    if (start === index) throw new Error('invalid JSON value');
+  };
+
+  parseValue();
+  skipWhitespace();
+  if (index !== text.length) throw new Error('trailing JSON content');
+  return JSON.parse(text);
+}
+
 // #4482: a clean review-status summary for an earlier commit does not need a
 // disposition, but only when Codex's structured state and its visible table
 // independently agree. Keep this separate from the general current-HEAD
 // completion predicate above: the readiness gate must continue blocking every
 // missing, malformed, contradictory, finding-bearing, or current-HEAD shape.
-export function isCodexCompletedNoFindSummaryForOlderHead(
+function codexCompletedNoFindSummaryCommitForOlderHead(
   body: string,
   headSha: string,
-): boolean {
+): string | null {
   const text = String(body ?? '');
   const fullHeadSha = String(headSha ?? '')
     .trim()
@@ -2922,7 +3012,7 @@ export function isCodexCompletedNoFindSummaryForOlderHead(
     !text.trimStart().startsWith(CODEX_SUMMARY_MARKER) ||
     !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(fullHeadSha)
   ) {
-    return false;
+    return null;
   }
 
   const stateMarkerCount = text.match(/codex-review-state:v1/g)?.length ?? 0;
@@ -2930,25 +3020,25 @@ export function isCodexCompletedNoFindSummaryForOlderHead(
     ...text.matchAll(/<!--\s*codex-review-state:v1\s+([\s\S]*?)\s*-->/g),
   ];
   if (stateMarkerCount !== 1 || stateBlocks.length !== 1) {
-    return false;
+    return null;
   }
   const statePayload = stateBlocks[0]?.[1];
   if (typeof statePayload !== 'string') {
-    return false;
+    return null;
   }
 
   let parsedState: unknown;
   try {
-    parsedState = JSON.parse(statePayload.trim());
+    parsedState = parseJsonRejectingDuplicateObjectKeys(statePayload.trim());
   } catch {
-    return false;
+    return null;
   }
   if (
     parsedState === null ||
     typeof parsedState !== 'object' ||
     Array.isArray(parsedState)
   ) {
-    return false;
+    return null;
   }
   const codeReview = (parsedState as Record<string, unknown>).code_review;
   if (
@@ -2956,11 +3046,11 @@ export function isCodexCompletedNoFindSummaryForOlderHead(
     typeof codeReview !== 'object' ||
     Array.isArray(codeReview)
   ) {
-    return false;
+    return null;
   }
   const state = codeReview as Record<string, unknown>;
   if (typeof state.commit_sha !== 'string') {
-    return false;
+    return null;
   }
   const stateCommit = state.commit_sha.trim().toLowerCase();
   if (
@@ -2970,7 +3060,7 @@ export function isCodexCompletedNoFindSummaryForOlderHead(
     state.has_any_findings !== false ||
     state.has_unresolved_findings !== false
   ) {
-    return false;
+    return null;
   }
 
   // Find exactly one Markdown table whose header identifies Review, Status,
@@ -3025,7 +3115,7 @@ export function isCodexCompletedNoFindSummaryForOlderHead(
   });
   const [candidate] = candidates;
   if (!candidate || candidates.length !== 1) {
-    return false;
+    return null;
   }
   const { group, reviewColumn, statusColumn, commitColumn } = candidate;
   const columnCount = group[0].length;
@@ -3035,13 +3125,13 @@ export function isCodexCompletedNoFindSummaryForOlderHead(
     separator.length !== columnCount ||
     !separator.every((cell) => /^:?-{3,}:?$/.test(cell))
   ) {
-    return false;
+    return null;
   }
 
   const codeReviewRows: { status: string; commit: string }[] = [];
   for (const row of group.slice(2)) {
     if (row.length !== columnCount) {
-      return false;
+      return null;
     }
     const reviewName = /\*\*(.+?)\*\*/
       .exec(row[reviewColumn])?.[1]
@@ -3050,10 +3140,10 @@ export function isCodexCompletedNoFindSummaryForOlderHead(
     const rawCommit = row[commitColumn].replace(/`/g, '').trim().toLowerCase();
     const noCommit = rawCommit === '' || rawCommit === '—' || rawCommit === '-';
     if (!noCommit && !/^[0-9a-f]{7,64}$/.test(rawCommit)) {
-      return false;
+      return null;
     }
     if (!noCommit && fullHeadSha.startsWith(rawCommit)) {
-      return false;
+      return null;
     }
     if (reviewName === 'code review') {
       codeReviewRows.push({
@@ -3064,15 +3154,98 @@ export function isCodexCompletedNoFindSummaryForOlderHead(
   }
   const [codeReviewRow] = codeReviewRows;
   if (!codeReviewRow || codeReviewRows.length !== 1) {
-    return false;
+    return null;
   }
   const tableStatus =
     /\*\*(.+?)\*\*/.exec(codeReviewRow.status)?.[1]?.trim().toLowerCase() ?? '';
-  return (
-    tableStatus === 'completed' &&
+  return tableStatus === 'completed' &&
     codeReviewRow.commit !== '' &&
     stateCommit.startsWith(codeReviewRow.commit)
+    ? stateCommit
+    : null;
+}
+
+export function isCodexCompletedNoFindSummaryForOlderHead(
+  body: string,
+  headSha: string,
+): boolean {
+  return codexCompletedNoFindSummaryCommitForOlderHead(body, headSha) !== null;
+}
+
+function parseSummaryDispositionHeadSha(body: string): string | null {
+  const match =
+    /^\*\*Accepted[.!:]?\*\*\s+—\s+[^\s]+\s+summary walkthrough at HEAD\s+([0-9a-f]{7,64})\b/i.exec(
+      body.trimStart(),
+    );
+  return match?.[1]?.toLowerCase() ?? null;
+}
+
+function findSupersededCodexOldHeadSummaryDispositionIndexes<
+  T extends {
+    id: string;
+    authorLogin: string;
+    body: string;
+    activityAt: string;
+    sortedIndex: number;
+    lastEditedAt?: string | null;
+  },
+>(
+  comments: T[],
+  options: {
+    advisoryBotLogins: Set<string>;
+    iddAgentLogins: Set<string>;
+    currentHeadSha: string;
+  },
+): Set<number> {
+  const { advisoryBotLogins, iddAgentLogins } = options;
+  const currentHeadSha = options.currentHeadSha.trim().toLowerCase();
+  if (!currentHeadSha) return new Set();
+
+  const matchedDispositionIndexes = new Set<number>();
+  const oldHeadSources = comments.filter(
+    (comment) =>
+      isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+      advisoryBotIdentityToken(comment.authorLogin) ===
+        'chatgpt-codex-connector' &&
+      codexCompletedNoFindSummaryCommitForOlderHead(
+        comment.body,
+        currentHeadSha,
+      ) !== null,
   );
+
+  for (const source of oldHeadSources) {
+    const sourceCommit = codexCompletedNoFindSummaryCommitForOlderHead(
+      source.body,
+      currentHeadSha,
+    );
+    if (!sourceCommit) continue;
+
+    const matchingDispositions = comments.filter((comment) => {
+      if (
+        matchedDispositionIndexes.has(comment.sortedIndex) ||
+        !iddAgentLogins.has(comment.authorLogin) ||
+        !isReviewSummaryDisposition({ body: comment.body }) ||
+        classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) !==
+          'unedited' ||
+        !isValidIsoTimestamp(comment.activityAt) ||
+        compareIsoTimestamps(comment.activityAt, source.activityAt) <= 0 ||
+        !dispositionNamesAdvisoryBot(comment.body, source.authorLogin)
+      ) {
+        return false;
+      }
+      const dispositionHead = parseSummaryDispositionHeadSha(comment.body);
+      return Boolean(
+        dispositionHead &&
+          (sourceCommit.startsWith(dispositionHead) ||
+            dispositionHead.startsWith(sourceCommit)),
+      );
+    });
+
+    for (const matchingDisposition of matchingDispositions) {
+      matchedDispositionIndexes.add(matchingDisposition.sortedIndex);
+    }
+  }
+  return matchedDispositionIndexes;
 }
 
 // #3520: Codex posts a second, terminal top-level comment when a review finds
@@ -8853,9 +9026,19 @@ export function summarizeRegularCommentsForGate(
     })
     .map((comment, sortedIndex) => ({ ...comment, sortedIndex }));
 
+  const supersededCodexOldHeadSummaryDispositionIndexes =
+    findSupersededCodexOldHeadSummaryDispositionIndexes(normalized, {
+      advisoryBotLogins,
+      iddAgentLogins,
+      currentHeadSha: normalizedCurrentHead,
+    });
+
   const lastIddReplyAt = normalized.reduce((latestTimestamp, comment) => {
     if (
       isIddOperationalComment(comment) ||
+      supersededCodexOldHeadSummaryDispositionIndexes.has(
+        comment.sortedIndex,
+      ) ||
       !iddAgentLogins.has(comment.authorLogin)
     ) {
       return latestTimestamp;
@@ -8977,6 +9160,18 @@ export function summarizeRegularCommentsForGate(
 
   const items = normalized
     .filter((comment) => !isIddOperationalComment(comment))
+    .filter(
+      (comment) =>
+        !(
+          isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+          advisoryBotIdentityToken(comment.authorLogin) ===
+            'chatgpt-codex-connector' &&
+          isCodexCompletedNoFindSummaryForOlderHead(
+            comment.body,
+            normalizedCurrentHead,
+          )
+        ),
+    )
     .filter((comment) => !iddAgentLogins.has(comment.authorLogin))
     .filter(
       (comment) =>
@@ -9391,6 +9586,12 @@ export function summarizeDispositionEvidenceForGate(
       iddAgentLogins,
       currentHeadSha: normalizedCurrentHead,
     });
+  const supersededCodexOldHeadSummaryDispositionIndexes =
+    findSupersededCodexOldHeadSummaryDispositionIndexes(normalizedComments, {
+      advisoryBotLogins,
+      iddAgentLogins,
+      currentHeadSha: normalizedCurrentHead,
+    });
 
   // #1182 trusted machine-disposition recognition, scoped to this gate. A
   // trusted-marker actor who authored one of the two machine-generated advisory
@@ -9649,6 +9850,9 @@ export function summarizeDispositionEvidenceForGate(
       (comment) =>
         iddAgentLogins.has(comment.authorLogin) &&
         !consumedNoticeDispositionIndexes.has(comment.sortedIndex) &&
+        !supersededCodexOldHeadSummaryDispositionIndexes.has(
+          comment.sortedIndex,
+        ) &&
         !isCodexNoFindResultDisposition(comment.body) &&
         // #4306: a reply that leaves a decision open answers no comment, a
         // human's included; the comment stays outstanding until a settled
