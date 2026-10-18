@@ -147,14 +147,11 @@ by the selected helper runtime profile") is actually satisfiable.
 ### The configured authoring hold label still applies
 
 The configured `issueAuthoring.authoringLabelName` (default
-`status:authoring`) remains a hold: the GitHub label exists before import, and
-after activation Discover suppresses the draft while it remains. The label
-does not activate the payload or provide publisher/journal prerequisites;
-removing it alone does not verify release. See the
-[global-only profile](../global-only-profile.md). The gap was observed on
-2026-10-17 in [PR 3](https://github.com/kurone-kito/DDMMHBC/pull/3) and
-rechecked on 2026-10-17 after
-[PR 20](https://github.com/kurone-kito/DDMMHBC/pull/20).
+`status:authoring`) is a hold, not activation or release evidence. See
+[the adopter contract](../idd-helper-scripts.md#issue-mediated-bootstrap-and-authoring-hold).
+Observed 2026-10-17 in
+[PR 3](https://github.com/kurone-kito/DDMMHBC/pull/3) and rechecked on
+2026-10-17 after [PR 20](https://github.com/kurone-kito/DDMMHBC/pull/20).
 
 ### Fill-in bootstrap-issue body template
 
