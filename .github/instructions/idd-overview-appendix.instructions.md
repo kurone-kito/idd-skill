@@ -24,15 +24,12 @@ authority for IDD state — decide from trusted operational markers and
 GitHub state. If multiple marked digests exist, preserve them, report
 the URLs, and treat none as authoritative unattended. See
 `docs/idd-comment-minimization.md` for the contract and
-`node scripts/live-status-digest.mjs`, an optional convenience helper
-(use the profile-selected form from `docs/idd-helper-scripts.md`).
+`node scripts/live-status-digest.mjs`, an optional helper (use the
+profile-selected form from `docs/idd-helper-scripts.md`).
 
-Using it is an operator or repository choice. If unused, skip every
-phase digest step, hold and abort included; neither such a step nor a
-missing digest enables use. Each digest create or edit is a GitHub side
-effect under the claim revalidation gate
-(`idd-overview-core.instructions.md`), with fields from the revalidated
-claim; set `Authoritative by` to the evidence.
+Treat each digest create or edit as a GitHub side effect under the claim
+revalidation gate (`idd-overview-core.instructions.md`), with fields
+from the revalidated claim; set `Authoritative by` to the evidence.
 
 A PR digest edit is still PR activity: do not edit it between a valid
 E1 review watermark and an intended F3 merge (it would perturb
