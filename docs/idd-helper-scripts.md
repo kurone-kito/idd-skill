@@ -4578,7 +4578,7 @@ ruling recorded a maintainer decision: recognize the bootstrap PR as
 out-of-loop-authorized only with explicit, dedicated marker evidence,
 never merely an absent claim.
 
-### Issue-mediated bootstrap and authoring hold
+#### Issue-mediated bootstrap and authoring hold
 
 The bootstrap guide can create a held issue before the core import. Its
 configured `issueAuthoring.authoringLabelName` (default
