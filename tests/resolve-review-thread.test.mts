@@ -12,6 +12,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import {
+  computeAdvisoryConvergenceVerdict,
+  formatAssertNextActions,
+} from '../src/scripts/advisory-convergence.mts';
 import { extractPreviouslyMissedItemTitles } from '../src/scripts/copilot-review-body.mts';
 import { tagGhCommandError } from '../src/scripts/gh-exec.mts';
 import { classifyHelperError } from '../src/scripts/helper-cli-runner.mts';
@@ -2396,6 +2400,14 @@ if (args[0] === 'api' && joined.includes('/pulls/42/reviews')) {
   }
   ${reviewsRoute}
 }
+if (args[0] === 'api' && args[1] === 'user') out('kurone-kito\\n');
+if (args[0] === 'api' && joined.includes('/pulls/42') && joined.includes('.head.ref')) out('issue/5-triage-fixture\\n');
+if (args[0] === 'api' && args[1] === 'graphql' && joined.includes('issue(number:$number)')) {
+  const createdAt = new Date(Date.now() - 60000).toISOString();
+  const markerTime = createdAt.replace(/\\.\\d{3}Z$/u, 'Z');
+  const body = '<!-- claimed-by: fixture-agent fixture-claim supersedes: none ' + markerTime + ' branch: issue/5-triage-fixture -->\\n\\n_fixture-agent: issue claim — IDD automation marker. Do not edit._';
+  out(JSON.stringify({ data: { repository: { issue: { comments: { nodes: [{ id: 'IC_fixture', databaseId: 5001, body, createdAt, updatedAt: createdAt, lastEditedAt: null, author: { login: 'kurone-kito', __typename: 'User' } }], pageInfo: { hasNextPage: false, endCursor: null } } } } } }));
+}
 if (args[0] === 'api' && joined.includes('/issues/42/comments') && !args.includes('POST')) {
   out('[]\\n');
 }
@@ -2534,6 +2546,113 @@ test('the compiled CLI posts the Triage line before the stamp on a record-mode t
   assert.deepEqual(run.posted, [
     `**Accepted** — fixed in abc\nTriage: tier high; urgency high; step 0; verdict keep; blocked matrix\n\n${TRIAGE_STAMP}`,
   ]);
+});
+
+test('the advisory-convergence record pointer applies with a valid claim and resolves its thread', () => {
+  const now = new Date().toISOString();
+  const head = 'a'.repeat(40);
+  const verdict = computeAdvisoryConvergenceVerdict(
+    {
+      prNumber: 42,
+      prHeadSha: head,
+      reviews: [
+        {
+          author: { login: TRIAGE_LOGIN },
+          submittedAt: now,
+          commitId: head,
+          itemCount: 1,
+          body: '<!-- ccr-overview-v2 -->\n\n## Copilot review overview\n\n**Findings:** One\n',
+        },
+      ],
+      claimMarkerHistoryPresent: false,
+      claimCandidateAmbiguous: false,
+    },
+    {
+      now,
+      primaryBotLogin: 'copilot',
+      triageRecord: 'record',
+      trustedMarkerLogins: ['kurone-kito'],
+    },
+  );
+  const pointer = verdict.nextActions.find((action) =>
+    action.pointer.startsWith(
+      'node scripts/resolve-review-thread.mjs --pr 42 --comment-id',
+    ),
+  )?.pointer;
+  assert.ok(
+    pointer,
+    formatAssertNextActions(verdict, { triageRecord: 'record' }),
+  );
+  assert.match(pointer, /--tier <tier> --urgency <urgency> --apply$/u);
+
+  const tokens = pointer
+    .match(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S+/gu)
+    ?.map((token) =>
+      token.startsWith('"') ? (JSON.parse(token) as string) : token,
+    );
+  assert.ok(tokens);
+  assert.deepEqual(tokens.slice(0, 2), [
+    'node',
+    'scripts/resolve-review-thread.mjs',
+  ]);
+  const cliArgs = tokens.slice(2);
+  for (let index = 0; index < cliArgs.length; index += 1) {
+    if (cliArgs[index] === '--comment-id') cliArgs[index + 1] = '1001';
+    if (cliArgs[index] === '--body') {
+      cliArgs[index + 1] =
+        '**Accepted** — fixed in 0123456789abcdef0123456789abcdef01234567';
+    }
+    if (cliArgs[index] === '--claim-issue') cliArgs[index + 1] = '5';
+    if (cliArgs[index] === '--claim-id') cliArgs[index + 1] = 'fixture-claim';
+    if (cliArgs[index] === '--tier') cliArgs[index + 1] = 'high';
+    if (cliArgs[index] === '--urgency') cliArgs[index + 1] = 'medium';
+  }
+  cliArgs.push('--owner', 'o', '--repo', 'r');
+
+  const config = {
+    trustedMarkerActors: ['kurone-kito'],
+    critiqueLoop: {
+      triageRecord: 'record',
+      deferByUrgency: 'severity-tiered',
+      deferRelaxAtRounds: [4, 7],
+    },
+  };
+  const applied = runTriageApply(cliArgs, config, triageReviewRows(2));
+  assert.equal(
+    applied.status,
+    0,
+    `${applied.stderr}\n${applied.stdout}\n${JSON.stringify(applied.calls)}`,
+  );
+  assert.equal(applied.posted.length, 1);
+  assert.match(
+    applied.posted[0] ?? '',
+    /^\*\*Accepted\*\* — fixed in 0123456789abcdef0123456789abcdef01234567\nTriage: tier high; urgency medium/u,
+  );
+  assert.ok(
+    applied.calls.some((call) =>
+      call.some((argument) => argument.includes('resolveReviewThread')),
+    ),
+    JSON.stringify(applied.calls),
+  );
+
+  const missingTriageArgs = cliArgs.filter(
+    (argument, index, all) =>
+      argument !== '--tier' &&
+      argument !== '--urgency' &&
+      all[index - 1] !== '--tier' &&
+      all[index - 1] !== '--urgency',
+  );
+  const missing = runTriageApply(
+    missingTriageArgs,
+    config,
+    triageReviewRows(2),
+  );
+  assert.equal(missing.status, 1, missing.stderr);
+  assert.match(
+    missing.stderr,
+    /triageRecord record requires --tier and --urgency/u,
+  );
+  assert.deepEqual(missing.posted, []);
 });
 
 test('validateTriageFlags names --path-b when a lone urgency is given with it (#4186)', () => {

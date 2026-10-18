@@ -6852,6 +6852,17 @@ test('collectFromGitHub sources reviewPolicy into the returned options (#2137: p
   assert.match(source, /options:\s*\{[^}]*\breviewPolicy,[^}]*\}/s);
 });
 
+test('collectFromGitHub forwards the normalized triageRecord mode into options', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/advisory-convergence.mts', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /export function collectFromGitHub\([\s\S]*?options:\s*\{[\s\S]*?\btriageRecord:\s*policy\.critiqueLoop\.triageRecord,/,
+  );
+});
+
 test('collectFromGitHub resolves the provider-outage declaration at the SAME injected now the returned verdict uses (#2353, Codex review on PR #2370)', () => {
   // Same "pin the call site" spirit as the #1810/#1906/#2137 tests above:
   // `resolveProviderOutageDeclaration` must read the resolved `resolvedNow`
@@ -6980,6 +6991,47 @@ test('runAdvisoryConvergence: without --assert always exits 0 regardless of the 
   const { verdict, exitCode } = runAdvisoryConvergence(['--pr', '1234'], deps);
   assert.equal(verdict?.ready, false);
   assert.equal(exitCode, 0);
+});
+
+test('runAdvisoryConvergence carries triageRecord to the verdict and stderr formatter without widening its schema', () => {
+  const result = runAdvisoryConvergence(
+    ['--pr', '42', '--assert'],
+    depsFor(
+      baseInputs({ prNumber: 42, reviews: [copilotReview({ itemCount: 2 })] }),
+      baseOptions({ triageRecord: 'record' }),
+    ),
+  );
+  assert.equal(result.triageRecord, 'record');
+  assert.ok(result.verdict);
+  assertValidVerdict(result.verdict);
+  const action = result.verdict.nextActions.find(
+    (item) =>
+      item.token ===
+      ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN.DISPOSITION_POSTED_ITEMS,
+  );
+  assert.ok(action);
+
+  let stdout = '';
+  let stderr = '';
+  writeAdvisoryConvergenceCliOutput(result.verdict, {
+    emitGuidance: true,
+    triageRecord: result.triageRecord,
+    stdout: {
+      write: (chunk) => {
+        stdout += chunk;
+      },
+    },
+    stderr: {
+      write: (chunk) => {
+        stderr += chunk;
+      },
+    },
+  });
+  const parsed = JSON.parse(stdout) as AdvisoryConvergenceVerdict;
+  assert.deepEqual(parsed.nextActions, result.verdict.nextActions);
+  assert.ok(stderr.includes(action.pointer));
+  assert.match(stderr, /--tier from low, medium, or high/);
+  assert.match(stderr, /--urgency from very-low, low, medium, or high/);
 });
 
 test('runAdvisoryConvergence: --help short-circuits before collecting any evidence', () => {
@@ -9281,26 +9333,134 @@ const MIXED_PREVIOUSLY_MISSED_BODY = [
 function nextActionsFor(
   body: string,
   comments: ReturnType<typeof citedDispositionComment>[] = [],
+  options: {
+    prNumber?: number;
+    triageRecord?: 'off' | 'record' | 'enforce';
+  } = {},
 ) {
   const verdict = computeAdvisoryConvergenceVerdict(
     baseInputs({
+      prNumber: options.prNumber ?? 1234,
       reviews: [copilotReview({ itemCount: 0, body })],
       comments,
     }),
-    baseOptions(),
+    baseOptions({ triageRecord: options.triageRecord }),
   );
   assertValidVerdict(verdict);
   const forced = { ...verdict, ready: false };
   return {
     verdict,
-    items: collectAssertNextActions(forced),
-    text: formatAssertNextActions(forced),
+    items: collectAssertNextActions(forced, {
+      triageRecord: options.triageRecord,
+    }),
+    text: formatAssertNextActions(forced, {
+      triageRecord: options.triageRecord,
+    }),
   };
 }
 
 function tokensOf(items: { token: string }[]): string[] {
   return items.map((item) => item.token);
 }
+
+test('disposition pointers include triage placeholders only for record and enforce', () => {
+  const postedItemsFor = (triageRecord: 'off' | 'record' | 'enforce') => {
+    const verdict = computeAdvisoryConvergenceVerdict(
+      baseInputs({
+        prNumber: 42,
+        reviews: [copilotReview({ itemCount: 2 })],
+      }),
+      baseOptions({ triageRecord }),
+    );
+    assertValidVerdict(verdict);
+    const action = verdict.nextActions.find(
+      (item) =>
+        item.token ===
+        ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN.DISPOSITION_POSTED_ITEMS,
+    );
+    assert.ok(action);
+    return {
+      verdict,
+      action,
+      text: formatAssertNextActions(verdict, { triageRecord }),
+    };
+  };
+
+  const postedOff = postedItemsFor('off');
+  assert.equal(
+    postedOff.action.pointer,
+    'node scripts/resolve-review-thread.mjs --pr 42 --comment-id <id> --body "**Accepted** — …" --claim-issue <n> --claim-id <id> --apply',
+  );
+  for (const triageRecord of ['record', 'enforce'] as const) {
+    const posted = postedItemsFor(triageRecord);
+    const bodyPointer =
+      triageRecord === 'enforce'
+        ? '--body "<reply-body>"'
+        : '--body "**Accepted** — …"';
+    assert.equal(
+      posted.action.pointer,
+      `node scripts/resolve-review-thread.mjs --pr 42 --comment-id <id> ${bodyPointer} --claim-issue <n> --claim-id <id> --tier <tier> --urgency <urgency> --apply`,
+    );
+    assert.match(posted.action.summary, /--tier from low, medium, or high/);
+    assert.match(
+      posted.action.summary,
+      /--urgency from very-low, low, medium, or high/,
+    );
+    assert.ok(posted.text.includes(posted.action.pointer));
+    if (triageRecord === 'enforce') {
+      assert.match(
+        posted.text,
+        /For enforce, first run node scripts\/resolve-review-thread\.mjs --pr 42 --tier <tier> --urgency <urgency>/,
+      );
+      assert.match(
+        posted.text,
+        /If it reports defer, use the E5 \*\*Rejected\*\* deferred-follow-up reply; add --override "<reason>" to an Accepted reply only when justified/u,
+      );
+    }
+  }
+
+  const stampedOff = nextActionsFor(CITED_PREVIOUSLY_MISSED_BODY, [], {
+    prNumber: 42,
+    triageRecord: 'off',
+  }).items.find(
+    (item) =>
+      item.token ===
+      ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN.STAMPED_DISPOSITION_SUPPRESSED,
+  );
+  assert.equal(
+    stampedOff?.pointer,
+    'node scripts/resolve-review-thread.mjs --pr 42 --review-id <review-id> --item-title "<item-title>" --body "<reply-body>" --claim-issue <claim-issue> --claim-id <claim-id> --apply',
+  );
+
+  for (const triageRecord of ['record', 'enforce'] as const) {
+    const stamped = nextActionsFor(CITED_PREVIOUSLY_MISSED_BODY, [], {
+      prNumber: 42,
+      triageRecord,
+    });
+    const action = stamped.items.find(
+      (item) =>
+        item.token ===
+        ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN.STAMPED_DISPOSITION_SUPPRESSED,
+    );
+    assert.ok(action);
+    assert.equal(
+      action.pointer,
+      'node scripts/resolve-review-thread.mjs --pr 42 --review-id <review-id> --item-title "<item-title>" --body "<reply-body>" --claim-issue <claim-issue> --claim-id <claim-id> --tier <tier> --urgency <urgency> --apply',
+    );
+    assert.match(action.summary, /--tier from low, medium, or high/);
+    assert.match(
+      action.summary,
+      /--urgency from very-low, low, medium, or high/,
+    );
+    assert.ok(stamped.text.includes(action.pointer));
+    if (triageRecord === 'enforce') {
+      assert.match(
+        stamped.text,
+        /For enforce, first run node scripts\/resolve-review-thread\.mjs --pr 42 --tier <tier> --urgency <urgency>/,
+      );
+    }
+  }
+});
 
 test('stamped disposition (#4007): cited-only items name the stamped reply, not a review-ack', () => {
   const { verdict, items, text } = nextActionsFor(CITED_PREVIOUSLY_MISSED_BODY);

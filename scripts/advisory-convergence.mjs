@@ -2045,19 +2045,22 @@ export function computeAdvisoryConvergenceVerdict(inputs, options) {
   };
   // #2143: same catalog as the stderr track. Computed AFTER `ready` so a
   // ready verdict is always `[]`; `ready` itself never reads this field.
-  const nextActions = collectAssertNextActions({
-    ready,
-    prNumber: inputs.prNumber,
-    prHeadSha,
-    primaryBotLogin,
-    applicability,
-    review: reviewReport,
-    threads: threadClause,
-    deadline,
-    waiver,
-    sameHeadReroll,
-    terminal,
-  });
+  const nextActions = collectAssertNextActions(
+    {
+      ready,
+      prNumber: inputs.prNumber,
+      prHeadSha,
+      primaryBotLogin,
+      applicability,
+      review: reviewReport,
+      threads: threadClause,
+      deadline,
+      waiver,
+      sameHeadReroll,
+      terminal,
+    },
+    { triageRecord: options.triageRecord },
+  );
   return {
     protocolVersion: '1',
     decisionAuthority: 'instructions',
@@ -2336,9 +2339,13 @@ export function runAdvisoryConvergence(argv, deps = defaultDeps) {
     args.now = normalizedNow;
   }
   const { inputs, options } = deps.collect(args);
-  const verdict = computeAdvisoryConvergenceVerdict(inputs, options);
+  const triageRecord = options.triageRecord ?? 'off';
+  const verdict = computeAdvisoryConvergenceVerdict(inputs, {
+    ...options,
+    triageRecord,
+  });
   const exitCode = args.assert ? (verdict.ready ? 0 : 1) : 0;
-  return { verdict, exitCode, help: false };
+  return { verdict, exitCode, help: false, triageRecord };
 }
 /**
  * #2015: `true` only for the narrow "primary bot has not reviewed this
@@ -3786,6 +3793,7 @@ export function collectFromGitHub(
       recoveryCycleCap,
       terminalWindowMinutes,
       forcedHandoffEnabled,
+      triageRecord: policy.critiqueLoop.triageRecord,
       isAuthorizedForcedHandoff: (forcedBy) =>
         isAuthorizedForcedHandoffActor(
           owner,
@@ -4224,6 +4232,25 @@ function fetchReviewThreads(port, prNumber) {
     .listChangeRequestReviewThreadsWithAuthorType(prNumber)
     .map(toReviewThreadPayload);
 }
+function dispositionTriagePointerFlags(triageRecord) {
+  return triageRecord === 'record' || triageRecord === 'enforce'
+    ? ' --tier <tier> --urgency <urgency>'
+    : '';
+}
+function dispositionTriagePointerBody(triageRecord) {
+  return triageRecord === 'enforce' ? '"<reply-body>"' : '"**Accepted** — …"';
+}
+function dispositionTriagePointerGuidance(triageRecord, pr) {
+  if (triageRecord !== 'record' && triageRecord !== 'enforce') {
+    return '';
+  }
+  const selectionGuidance =
+    ' Choose --tier from low, medium, or high and --urgency from very-low, low, medium, or high; replace both placeholders with the values selected for the finding.';
+  if (triageRecord !== 'enforce') {
+    return selectionGuidance;
+  }
+  return `${selectionGuidance} For enforce, first run node scripts/resolve-review-thread.mjs --pr ${pr} --tier <tier> --urgency <urgency> (with any applicable E5 flags) to read the verdict without posting. If it reports defer, use the E5 **Rejected** deferred-follow-up reply; add --override "<reason>" to an Accepted reply only when justified and the fresh verdict is still defer.`;
+}
 /**
  * Structured next-action catalog for a non-ready verdict (#2143).
  * Derived from structured verdict fields, never from parsing `reasons[]`.
@@ -4231,7 +4258,7 @@ function fetchReviewThreads(port, prNumber) {
  * Shared by the stdout JSON field and the stderr formatter so the two
  * channels cannot disagree.
  */
-export function collectAssertNextActions(verdict) {
+export function collectAssertNextActions(verdict, options = {}) {
   if (verdict.ready) {
     return [];
   }
@@ -4239,6 +4266,13 @@ export function collectAssertNextActions(verdict) {
   const sha = verdict.prHeadSha;
   const bot = verdict.primaryBotLogin || 'copilot';
   const T = ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN;
+  const triagePointerFlags = dispositionTriagePointerFlags(
+    options.triageRecord,
+  );
+  const triagePointerGuidance = dispositionTriagePointerGuidance(
+    options.triageRecord,
+    pr,
+  );
   const items = [];
   if (verdict.applicability.status === 'indeterminate') {
     const waiverReady =
@@ -4291,14 +4325,15 @@ export function collectAssertNextActions(verdict) {
     typeof itemCount === 'number' &&
     itemCount > 0
   ) {
-    const pointer = `node scripts/resolve-review-thread.mjs --pr ${pr} --comment-id <id> --body "**Accepted** — …" --claim-issue <n> --claim-id <id> --apply`;
+    const pointerBody = dispositionTriagePointerBody(options.triageRecord);
+    const pointer = `node scripts/resolve-review-thread.mjs --pr ${pr} --comment-id <id> --body ${pointerBody} --claim-issue <n> --claim-id <id>${triagePointerFlags} --apply`;
     const skipPending =
       pendingThreadIds.length > 0
         ? ` Do not run it on a pending-decision thread (${pendingThreadIds.join(', ')}); those stay open until the maintainer decides.`
         : '';
     items.push({
       token: T.DISPOSITION_POSTED_ITEMS,
-      summary: `Latest ${bot} review on HEAD has ${itemCount} posted item(s). Disposition each thread (E6/E13): ${pointer}${skipPending}`,
+      summary: `Latest ${bot} review on HEAD has ${itemCount} posted item(s). Disposition each thread (E6/E13): ${pointer}${triagePointerGuidance}${skipPending}`,
       pointer,
     });
   }
@@ -4357,11 +4392,11 @@ export function collectAssertNextActions(verdict) {
   const { citedCount, citationFreeCount, citedDispositionsSatisfied } =
     verdict.review.suppressedCitation;
   if (citedCount > 0 && !citedDispositionsSatisfied) {
-    const pointer = `node scripts/resolve-review-thread.mjs --pr ${pr} --review-id <review-id> --item-title "<item-title>" --body "<reply-body>" --claim-issue <claim-issue> --claim-id <claim-id> --apply`;
+    const pointer = `node scripts/resolve-review-thread.mjs --pr ${pr} --review-id <review-id> --item-title "<item-title>" --body "<reply-body>" --claim-issue <claim-issue> --claim-id <claim-id>${triagePointerFlags} --apply`;
     // --review-id takes the numeric REST id; the verdict carries the GraphQL
     // node id, so the summary gives the lookup that maps one to the other.
     const reviewNodeId = verdict.review.reviewId ?? '<review-node-id>';
-    const summary = `Latest ${bot} review reports ${citedCount} suppressed comment(s) that name a file or line. Each needs a stamped disposition reply (#3942): a trusted, unedited PR comment posted after the review. Its body carries <!-- {markerPrefix}-review-reply --> (markerPrefix from .github/idd/config.json) and opens with **Accepted**, with **Rejected** naming the file or line as evidence, or with the recorded deferral **Rejected** — deferred to follow-up issue #<n> (<clause>): <reason>. A review-ack does not cover these. A cited item outside a Previously missed section (a legacy Suppressed comments body has none) has no helper path: report it to the operator and do not answer it with a direct PR comment. The <review-id> is the numeric REST id of review ${reviewNodeId}; find it with gh api repos/<owner>/<repo>/pulls/${pr}/reviews --paginate --jq '.[] | select(.node_id == "${reviewNodeId}") | .id'. Post it with: ${pointer}`;
+    const summary = `Latest ${bot} review reports ${citedCount} suppressed comment(s) that name a file or line. Each needs a stamped disposition reply (#3942): a trusted, unedited PR comment posted after the review. Its body carries <!-- {markerPrefix}-review-reply --> (markerPrefix from .github/idd/config.json) and opens with **Accepted**, with **Rejected** naming the file or line as evidence, or with the recorded deferral **Rejected** — deferred to follow-up issue #<n> (<clause>): <reason>. A review-ack does not cover these. A cited item outside a Previously missed section (a legacy Suppressed comments body has none) has no helper path: report it to the operator and do not answer it with a direct PR comment. The <review-id> is the numeric REST id of review ${reviewNodeId}; find it with gh api repos/<owner>/<repo>/pulls/${pr}/reviews --paginate --jq '.[] | select(.node_id == "${reviewNodeId}") | .id'. Post it with: ${pointer}${triagePointerGuidance}`;
     items.push({
       token: T.STAMPED_DISPOSITION_SUPPRESSED,
       summary,
@@ -4455,8 +4490,8 @@ const STAMPED_DISPOSITION_GUIDANCE = [
  * `verdict.nextActions`, so a spread-mutated verdict stays consistent
  * with its own fields. Empty when `ready` is true.
  */
-export function formatAssertNextActions(verdict) {
-  const items = collectAssertNextActions(verdict);
+export function formatAssertNextActions(verdict, options = {}) {
+  const items = collectAssertNextActions(verdict, options);
   if (items.length === 0) {
     return '';
   }
@@ -4489,7 +4524,9 @@ export function writeAdvisoryConvergenceCliOutput(verdict, options = {}) {
   const stderr = options.stderr ?? process.stderr;
   const env = options.env ?? process.env;
   if (options.emitGuidance && !verdict.ready) {
-    const next = formatAssertNextActions(verdict);
+    const next = formatAssertNextActions(verdict, {
+      triageRecord: options.triageRecord,
+    });
     if (next) {
       stderr.write(next);
       if (env.GITHUB_ACTIONS === 'true') {
@@ -4522,7 +4559,7 @@ if (import.meta.main) {
 }
 function main() {
   const { pollIntervalMs, maxWaitMs } = readCopilotReviewPollPolicy();
-  const { verdict, exitCode, help, nowFlagError } =
+  const { verdict, exitCode, help, nowFlagError, triageRecord } =
     runAdvisoryConvergenceWithPoll(process.argv.slice(2), defaultDeps, {
       pollIntervalMs,
       maxWaitMs,
@@ -4544,6 +4581,7 @@ function main() {
   } else if (verdict) {
     writeAdvisoryConvergenceCliOutput(verdict, {
       emitGuidance: exitCode !== 0,
+      triageRecord,
     });
   }
   return exitCode;
