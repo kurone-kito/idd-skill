@@ -314,11 +314,15 @@ outside normal IDD authoring and execution:
    outside the IDD loop. Do not make the policy PR depend on a new
    `ciGate.*` value that only its own head contains; follow [ciGate F2 bootstrap](customization.md#cigate-f2-bootstrap).
 4. Before returning to normal IDD, verify that `idd-activation` reports
-   `active: true` through the repository-policy or matching-override route; the
-   policy source selected for publishing resolves to an existing durable
-   journal through `issueAuthoring.journalIssue`; and the selected helper
-   runtime can use the capability-checked held-publication flow. That flow must
-   apply the configured `issueAuthoring.authoringLabelName`, publish the exact
+   `active: true` through the repository-policy or matching-override route. For
+   `repository-policy-minimal-import`, put the first policy in the canonical
+   `.github/idd/config.json`: a legacy root `idd-policy.json` can activate the
+   gate, but it is not loaded as effective policy. Inspect the effective
+   `issueAuthoring.journalIssue` value and its source, using
+   `idd-effective-config` when available, and confirm it resolves to the
+   existing durable journal. Also verify that the selected helper runtime can
+   use the capability-checked held-publication flow. That flow must apply the
+   configured `issueAuthoring.authoringLabelName`, publish the exact
    publication token, and use an actor with the required trusted write
    authority. An explicit `--policy` path selects configuration but does not
    create or replace the journal. If any result is missing or unverifiable,
