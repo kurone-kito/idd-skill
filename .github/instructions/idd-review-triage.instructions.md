@@ -179,7 +179,9 @@ Reply
   `round <round>/<threshold>`, and bundled into the pass's one follow-up.
   Where clause (a) or (b) holds, the finding stays adopt-now. This
   overrides adopt-now clause (d) in `idd-review-triage.instructions.md`.
-  Factual and correctness findings are not covered by this rule and keep
+  The round-count step runs after the helper verdict and defers an item
+  even when the verdict is `keep` with `blocked: adopt-now`. Factual and
+  correctness findings are not covered by this rule and keep
   their existing handling; adopt-now clause (c) already covers a defect in
   instruction text that changes what an agent does. PATH B, scope-fenced,
   mid-fix, CODEOWNER, and required-reviewer items stay outside this rule.
@@ -205,10 +207,10 @@ Reply
   eligible within the ceiling (`low`: Low; `low-and-medium`: Low or
   Medium — High never eligible). A null urgency still defers. Clause:
   `adopt-now: no; severity <tier>[, Copilot <label>]`.
-- **`severity-tiered`** replaces that allowlist from round 1. Judge
-  validity and E4 severity (a false claim is Rejected), then urgency by
-  the fix's marginal review-wave cost: `very-low` < `low` < `medium` <
-  `high`. The matrix decides; regression, unmet requirements,
+- **`severity-tiered`** replaces that allowlist, except (d), from
+  round 1. Judge validity and E4 severity (a false claim is Rejected),
+  then urgency by the fix's marginal review-wave cost: `very-low` <
+  `low` < `medium` < `high`. The matrix decides; regression, unmet requirements,
   correctness, and safety never override. `very-low`: wording/formatting
   changing no behavior; `low`: extra tests, comments, or naming for
   already-correct behavior; `medium`: local maintainability, or a
@@ -224,7 +226,11 @@ Reply
   an exception to "never override"; `deferAfterRounds` is unchanged.
   Clause: `urgency <level>; severity <tier>[, Copilot <label>]`, plus
   `; step <k>` above step 0. Read `converged` once per pass; if true,
-  add one step ([wave gradient]).
+  add one step ([wave gradient]). The agent reports adopt-now condition
+  (d) with `--adopt-now` (not with `--lite`), which turns a `defer`
+  verdict into `keep`: (d) another item in the same E5 pass is already
+  Accepted (any severity), so a push is certain, and this fix stays
+  within that push's files.
 
 **Triage record.** With `triageRecord` on, before deciding each PATH A
 item run `resolve-review-thread --pr <n>` with `--tier`, `--urgency`,
