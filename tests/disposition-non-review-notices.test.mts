@@ -2935,6 +2935,73 @@ test('#2695: buildDispositionPlan plans an **Accepted** for an undispositioned C
   assert.equal(plan.skipped.length, 0);
 });
 
+test('#4482: a clean completed Codex summary for an older HEAD is skipped without a disposition', () => {
+  const oldSha = 'abcdef0123456789abcdef0123456789abcdef01';
+  const cleanOldSummary =
+    '<!-- codex-pull-request-review-summary -->\n' +
+    '<!-- codex-review-state:v1 ' +
+    JSON.stringify({
+      code_review: {
+        commit_sha: oldSha,
+        status: 'completed',
+        has_any_findings: false,
+        has_unresolved_findings: false,
+      },
+      security_review: {
+        commit_sha: null,
+        status: null,
+        has_any_findings: null,
+        has_unresolved_findings: null,
+      },
+    }) +
+    ' -->\n\n' +
+    '## Codex Review Summary\n\n' +
+    '| Review | Status | Commit | Review trigger |\n' +
+    '| --- | --- | --- | --- |\n' +
+    '| 📝 **Code Review** | ✅ **Completed** | `abcdef0` | PR opened |\n';
+  const plan = buildDispositionPlan(
+    { headSha: HEAD_SHA, comments: [notice(4482, CODEX, cleanOldSummary)] },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+
+  assert.deepEqual(plan.planned, []);
+  assert.deepEqual(plan.skipped, [
+    {
+      noticeId: 4482,
+      botLogin: CODEX,
+      reason: 'codex-old-head-no-find-summary',
+    },
+  ]);
+});
+
+test('#4482: a Codex table row for the current HEAD keeps the existing disposition plan', () => {
+  const oldSha = 'abcdef0123456789abcdef0123456789abcdef01';
+  const currentHeadSummary =
+    '<!-- codex-pull-request-review-summary -->\n' +
+    '<!-- codex-review-state:v1 ' +
+    JSON.stringify({
+      code_review: {
+        commit_sha: oldSha,
+        status: 'completed',
+        has_any_findings: false,
+        has_unresolved_findings: false,
+      },
+    }) +
+    ' -->\n\n' +
+    '## Codex Review Summary\n\n' +
+    '| Review | Status | Commit | Review trigger |\n' +
+    '| --- | --- | --- | --- |\n' +
+    `| 📝 **Code Review** | ✅ **Completed** | ${HEAD_SHA.slice(0, 7)} | PR opened |\n`;
+  const plan = buildDispositionPlan(
+    { headSha: HEAD_SHA, comments: [notice(4483, CODEX, currentHeadSummary)] },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+
+  assert.equal(plan.planned.length, 1);
+  assert.equal(plan.planned[0].noticeId, 4483);
+  assert.equal(plan.skipped.length, 0);
+});
+
 test('#2695 (Codex review, P1): buildDispositionPlan never auto-accepts a Codex summary while its table still shows the HEAD as Running', () => {
   // Guards the exact TOCTOU hazard Codex's own review flagged on this fix's
   // first commit: accepting a still-Running summary would let the gate treat

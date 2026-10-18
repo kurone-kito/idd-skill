@@ -80,6 +80,7 @@ import {
   isAdvisoryNonReviewNotice,
   isCodeRabbitAlreadyReviewedAcknowledgement,
   isCodeRabbitReviewInProgressSummary,
+  isCodexCompletedNoFindSummaryForOlderHead,
   isCodexNoFindResult,
   isCodexNoFindResultForHeadSha,
   isCodexReviewSummaryCompleteForHeadSha,
@@ -635,6 +636,20 @@ export function buildDispositionPlan(
         noticeId: comment.id,
         botLogin: comment.login,
         reason: 'coderabbit-review-in-progress',
+      });
+      continue;
+    }
+    // #4482: a completed, no-find Codex summary for an older HEAD is already
+    // settled evidence; keep it visible with its own skip reason and do not
+    // suggest an acceptance for a review that did not cover the live HEAD.
+    if (
+      identity === 'chatgpt-codex-connector' &&
+      isCodexCompletedNoFindSummaryForOlderHead(comment.body, headSha)
+    ) {
+      skipped.push({
+        noticeId: comment.id,
+        botLogin: comment.login,
+        reason: 'codex-old-head-no-find-summary',
       });
       continue;
     }

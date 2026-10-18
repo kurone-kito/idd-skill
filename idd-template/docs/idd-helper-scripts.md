@@ -3651,14 +3651,23 @@ The adopted helper boundaries are intentionally narrow:
   Codex status row for the current HEAD that is not Completed, Failed
   included), `codex-no-result-for-head` (a Codex status table with no
   row for the current HEAD, an unparseable table or no table, or a Codex
-  no-find result for an older HEAD), and `unrecognized-notice-body`
-  (any other handled comment, for example a CodeRabbit acknowledgement
-  or a regular Copilot or Codex comment). A `codex-no-result-for-head`
+  no-find result for an older HEAD),
+  `codex-old-head-no-find-summary` (a completed Codex Code Review for an
+  older commit whose state block and table agree, both finding flags are
+  false, and whose table has no row for the current HEAD), and
+  `unrecognized-notice-body` (any other handled comment, for example a
+  CodeRabbit acknowledgement or a regular Copilot or Codex comment). A
+  `codex-no-result-for-head`
   comment is reported, not dispositioned, because Codex can still add a
   row for the current HEAD; the manual E4 `**Rejected**` stays its
   route. The helper does not track that manual reply, so it keeps
   reporting the comment after one is posted: check `pre-merge-readiness`
   `dispositionEvidence.missingRegularComments` before replying. A
+  `codex-old-head-no-find-summary` comment needs no disposition and
+  receives no reply. Missing, malformed, mismatched, finding-bearing,
+  failed, or current-HEAD evidence stays on the existing path; pull
+  request [#4405](https://github.com/kurone-kito/idd-skill/pull/4405)
+  records a failed review with findings that must remain blocking. A
   `codex-review-running` comment whose row for the current HEAD is
   `Failed` is not a completed review, so the helper does not post for it,
   and when `pre-merge-readiness` still lists the comment in
