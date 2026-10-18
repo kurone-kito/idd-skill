@@ -5,11 +5,16 @@
 // `pnpm run build`. Edit the .mts source, never the generated .mjs. See
 // docs/typescript-sources.md.
 //
-// Pushes a claimed branch only after the claim, the worktree location, and
-// the configured `commands.pre-push-validate` gate have all passed in order
-// (issue #4375). The helper never forces, never retries, and never creates a
-// commit. Every child process runs through an injectable runner, so a test
-// can stub the claim assert, every git call, the gate, and the push.
+// Pushes a claimed branch only after the claim, the worktree location, the
+// B3 scope check, and the configured `commands.pre-push-validate` gate have
+// all passed in order (issues #4375 and #4480). The six steps are `assert`,
+// `location`, `scope`, `gate`, `reassert`, and `push`. The `scope` step only
+// reads: it runs `audit-authored-issue` on the issue body and on a copy whose
+// leading `## Candidate files` section lists the paths the branch changed
+// since its branch point, so an over-scope branch stops before the push. The
+// helper never forces, never retries, and never creates a commit. Every child
+// process runs through an injectable runner, so a test can stub the claim
+// assert, every git and gh read, the audit, the gate, and the push.
 import { spawnSync } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -19,6 +24,10 @@ import {
   parseCliArgs,
   requireFlag,
 } from './cli-args.mjs';
+import { GENERATED_SOURCE_BANNER_PATTERN } from './consistency-helpers.mjs';
+import { parseCandidateFiles } from './discover-shared-file-overlap.mjs';
+import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import { isNotDispatchedRefusal } from './github-api-refusal.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   isHelperErrorEnvelopeEnabled,
@@ -26,6 +35,13 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mjs';
 import { loadLayeredLocalPolicy } from './idd-config.mjs';
+import { parseLocalWorktreeList } from './local-worktree-occupancy.mjs';
+import { maskMarkdownForScan } from './markdown-code.mjs';
+import { normalizeMarkerPrefix } from './marker-helpers.mjs';
+import {
+  inspectDevelopmentBranch,
+  resolveEffectiveDevelopmentBranch,
+} from './policy-helpers.mjs';
 
 const CLAIMED_PUSH_FLAG_SPEC = {
   '--issue': { type: 'string' },
@@ -38,6 +54,41 @@ const CLAIMED_PUSH_FLAG_SPEC = {
 const REMOTE_NAME = 'origin';
 /** The claim assert is the existing helper, run as a child process. */
 const CLAIM_ASSERT_SCRIPT = 'resume-claim-routing.mjs';
+/** The scope check runs the existing authored-issue audit as it stands. */
+const AUDIT_SCRIPT = 'audit-authored-issue.mjs';
+/** The one audit finding the scope step reads. */
+const EFFORT_FINDING_ID = 'effort-candidate-file-limit';
+/** The sync manifest, read at the branch point for its `syncPairs` targets. */
+const SYNC_MANIFEST_PATH = 'audit/sync-manifest.json';
+/** The only default-branch read the `gh` kind runs. */
+const REPO_DEFAULT_BRANCH_ARGS = [
+  'repo',
+  'view',
+  '--json',
+  'defaultBranchRef',
+  '--jq',
+  '.defaultBranchRef.name',
+];
+/** An ATX heading, as the `## Candidate files` parser recognizes one. */
+const ATX_HEADING = /^ {0,3}#{1,6}\s+/u;
+/*
+ * The parser's Setext rules (`discover-shared-file-overlap.mts`, which does
+ * not export them): an underline ends the section when the line over it is
+ * a non-blank paragraph line, not a list item, a quote, or a list item's
+ * indented continuation.
+ */
+const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/u;
+const LIST_OR_QUOTE_LINE = /^ {0,3}(?:[-*+][ \t]+|\d+[.)][ \t]+|>)/u;
+const INDENTED_LINE = /^[ \t]+\S/u;
+/**
+ * A generated-from banner is read from a file's first 200 bytes, the window
+ * `build-ts` and `audit-docs` use, so an example banner line further down a
+ * document (as in `docs/typescript-sources.md`) never marks it generated.
+ */
+const GENERATED_BANNER_SCAN_BYTES = 200;
+/** How the audit counts canonical paths, stated in every scope reason. */
+const AUDIT_COUNT_RULE =
+  'the audit counts distinct parsed keys, so paths that share a key count once, and its parser drops a token with no "/" or "." or with whitespace, so such a path is not counted';
 /** Captured child output above this size is reported as a failed run. */
 const MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 /** A dirty-tree reason lists at most this many status lines. */
@@ -65,6 +116,10 @@ const NEXT_ACTION = {
   pushRejected: (branch) =>
     `read git's message, fetch and inspect ${REMOTE_NAME}/${branch}, never force`,
   pushUnknown: 'read the remote branch before any new push, no retry',
+  scopeOverrun:
+    'stop without pushing and follow the Scope overrun rule in idd-work.instructions.md',
+  staleBase: (base) =>
+    `run node scripts/clone-lock.mjs --exec --agent-id <your agent id> -- git fetch ${REMOTE_NAME} +refs/heads/${base}:refs/remotes/${REMOTE_NAME}/${base} (see docs/idd-helper-scripts.md, "Clone-scoped lock"), then rerun the helper once; if the base is still stale, stop, report both SHAs, and do not push`,
 };
 function classifyEnd(result) {
   if (result.status !== null) {
@@ -298,6 +353,8 @@ function stepLocation(ctx) {
       0,
     );
   }
+  // The scope step runs the audit from here, so it reads the primary's policy.
+  ctx.primary = primary;
   // A repository without an origin remote falls back to the primary basename.
   const originRead = ctx.deps.run({
     kind: 'git',
@@ -366,6 +423,598 @@ function stepLocation(ctx) {
     exitStatus: 0,
     reason: `the worktree ${actualReal} is the sibling path of ${branch} and is on that branch`,
   };
+}
+function isRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+/** Run one allowed `gh` read in the worktree; any non-zero end refuses. */
+function readGh(ctx, args) {
+  const result = ctx.deps.run({
+    kind: 'gh',
+    args,
+    cwd: ctx.worktree ?? ctx.input.cwd,
+  });
+  const end = classifyEnd(result);
+  const what = `gh ${args.slice(0, 2).join(' ')}`;
+  if (end.kind === 'no-start') {
+    return {
+      ok: false,
+      failure: result.notDispatched
+        ? failed(
+            withDetail(
+              `${what} was refused by GitHub API load control before it started`,
+              end.detail,
+            ),
+            NEXT_ACTION.stopAndReport,
+            null,
+          )
+        : failed(describeEnd(what, end), NEXT_ACTION.helperInstallation, null),
+    };
+  }
+  if (end.kind === 'signal' || end.status !== 0) {
+    return {
+      ok: false,
+      failure: failed(
+        withDetail(
+          describeEnd(what, end),
+          end.kind === 'exit' ? firstLine(result.stderr) : '',
+        ),
+        NEXT_ACTION.stopAndReport,
+        end.kind === 'exit' ? end.status : null,
+      ),
+    };
+  }
+  return { ok: true, value: result.stdout };
+}
+/** Item 4(a) of issue #4480: the issue title and body, both non-empty. */
+function readIssue(ctx) {
+  const read = readGh(ctx, [
+    'issue',
+    'view',
+    String(ctx.input.issue),
+    '--json',
+    'title,body',
+  ]);
+  if (!read.ok) {
+    return read;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(read.value);
+  } catch {
+    parsed = undefined;
+  }
+  const title = isRecord(parsed) ? parsed.title : undefined;
+  const body = isRecord(parsed) ? parsed.body : undefined;
+  if (typeof title !== 'string' || typeof body !== 'string') {
+    return {
+      ok: false,
+      failure: failed(
+        `gh issue view ${ctx.input.issue} did not print a JSON object with a title and a body`,
+        NEXT_ACTION.stopAndReport,
+        0,
+      ),
+    };
+  }
+  if (title.trim() === '' || body.trim() === '') {
+    return {
+      ok: false,
+      failure: failed(
+        `issue ${ctx.input.issue} has an empty ${title.trim() === '' ? 'title' : 'body'}`,
+        NEXT_ACTION.stopAndReport,
+        0,
+      ),
+    };
+  }
+  return { ok: true, value: { title: title.trim(), body } };
+}
+/**
+ * Item 4(c): the effective base, which must exist on origin and as its
+ * remote-tracking ref. A remote-tracking ref that is missing or differs from
+ * the SHA `git ls-remote` prints is stale and refuses with the fetch next
+ * action, naming both SHAs: a ref behind origin would add paths to the
+ * branch-point diff, and a ref ahead of or diverged from origin (after a
+ * force-push) would hide paths, so no verdict is trusted against either.
+ */
+function resolveBase(ctx, policy) {
+  let liveDefault = null;
+  if (inspectDevelopmentBranch(policy).status === 'absent') {
+    const read = readGh(ctx, REPO_DEFAULT_BRANCH_ARGS);
+    if (!read.ok) {
+      return read;
+    }
+    const name = read.value.trim();
+    if (
+      inspectDevelopmentBranch({ developmentBranch: name }).status !==
+      'configured'
+    ) {
+      return {
+        ok: false,
+        failure: failed(
+          `the live default branch name is unusable (${JSON.stringify(name)})`,
+          NEXT_ACTION.stopAndReport,
+          0,
+        ),
+      };
+    }
+    liveDefault = name;
+  }
+  const target = resolveEffectiveDevelopmentBranch(policy, liveDefault);
+  if (
+    (target.status !== 'configured' && target.status !== 'default') ||
+    target.branch === undefined
+  ) {
+    return {
+      ok: false,
+      failure: failed(
+        target.status === 'invalid'
+          ? `the policy's developmentBranch is invalid: ${target.reason ?? 'unknown reason'}`
+          : 'no development branch could be resolved',
+        NEXT_ACTION.stopAndReport,
+        null,
+      ),
+    };
+  }
+  const base = target.branch;
+  const remote = readGit(ctx, ['ls-remote', '--heads', REMOTE_NAME, base]);
+  if (!remote.ok) {
+    return {
+      ok: false,
+      failure: failed(
+        remote.reason,
+        NEXT_ACTION.readGitError,
+        remote.exitStatus,
+      ),
+    };
+  }
+  const remoteLine = remote.stdout
+    .split(/\r?\n/u)
+    .find((line) => line.trimEnd().endsWith(`\trefs/heads/${base}`));
+  const remoteSha = remoteLine?.split('\t')[0]?.trim() ?? '';
+  if (!GIT_OBJECT_ID.test(remoteSha)) {
+    return {
+      ok: false,
+      failure: failed(
+        `${REMOTE_NAME} has no branch ${base}`,
+        NEXT_ACTION.stopAndReport,
+        0,
+      ),
+    };
+  }
+  const tracking = ctx.deps.run({
+    kind: 'git',
+    args: [
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `refs/remotes/${REMOTE_NAME}/${base}`,
+    ],
+    cwd: ctx.worktree ?? ctx.input.cwd,
+  });
+  const trackingEnd = classifyEnd(tracking);
+  const trackingSha = tracking.stdout.trim();
+  if (
+    trackingEnd.kind === 'exit' &&
+    trackingEnd.status === 1 &&
+    trackingSha === ''
+  ) {
+    return {
+      ok: false,
+      failure: failed(
+        `the base ${base} is stale: ${REMOTE_NAME} has ${remoteSha}, and refs/remotes/${REMOTE_NAME}/${base} is missing`,
+        NEXT_ACTION.staleBase(base),
+        1,
+      ),
+    };
+  }
+  if (trackingEnd.kind !== 'exit' || trackingEnd.status !== 0) {
+    return {
+      ok: false,
+      failure: failed(
+        withDetail(
+          describeEnd(
+            `git rev-parse refs/remotes/${REMOTE_NAME}/${base}`,
+            trackingEnd,
+          ),
+          trackingEnd.kind === 'exit' ? firstLine(tracking.stderr) : '',
+        ),
+        NEXT_ACTION.readGitError,
+        trackingEnd.kind === 'exit' ? trackingEnd.status : null,
+      ),
+    };
+  }
+  if (!GIT_OBJECT_ID.test(trackingSha)) {
+    return {
+      ok: false,
+      failure: failed(
+        `git rev-parse refs/remotes/${REMOTE_NAME}/${base} did not print an object id`,
+        NEXT_ACTION.readGitError,
+        0,
+      ),
+    };
+  }
+  if (trackingSha !== remoteSha) {
+    return {
+      ok: false,
+      failure: failed(
+        `the base ${base} is stale: ${REMOTE_NAME} has ${remoteSha}, and refs/remotes/${REMOTE_NAME}/${base} has ${trackingSha}`,
+        NEXT_ACTION.staleBase(base),
+        0,
+      ),
+    };
+  }
+  return { ok: true, value: { base } };
+}
+function gitPathList(stdout) {
+  return stdout.split('\0').filter((path) => path !== '');
+}
+/** The `syncPairs` targets of the manifest at the branch point. */
+function readManifestTargets(ctx, worktree, branchPoint) {
+  const read = ctx.deps.readBaseText(worktree, branchPoint, SYNC_MANIFEST_PATH);
+  if (read.status === 'error') {
+    return {
+      ok: false,
+      failure: failed(read.reason, NEXT_ACTION.readGitError, null),
+    };
+  }
+  if (read.status === 'absent') {
+    return { ok: true, value: new Set() };
+  }
+  const malformed = (detail) => ({
+    ok: false,
+    failure: failed(
+      `${SYNC_MANIFEST_PATH} at the branch point ${branchPoint} is malformed: ${detail}`,
+      NEXT_ACTION.stopAndReport,
+      null,
+    ),
+  });
+  let manifest;
+  try {
+    manifest = JSON.parse(read.text);
+  } catch (error) {
+    return malformed(error instanceof Error ? error.message : String(error));
+  }
+  if (!isRecord(manifest)) {
+    return malformed('it is not a JSON object');
+  }
+  const pairs = manifest.syncPairs;
+  if (pairs === undefined) {
+    return { ok: true, value: new Set() };
+  }
+  if (!Array.isArray(pairs)) {
+    return malformed('syncPairs is not an array');
+  }
+  const targets = new Set();
+  for (const pair of pairs) {
+    const target = isRecord(pair) ? pair.target : undefined;
+    if (typeof target !== 'string' || target === '') {
+      return malformed('a syncPairs entry has no target');
+    }
+    targets.add(target);
+  }
+  return { ok: true, value: targets };
+}
+/**
+ * Item 4(d): every path the branch changed since its branch point, committed
+ * or not, minus the generated copies and the sync-manifest targets that exist
+ * at the branch point. Both exclusions read the branch point, never the
+ * branch, so a branch cannot exclude its own files.
+ */
+function readCanonicalPaths(ctx, base) {
+  const worktree = ctx.worktree ?? ctx.input.cwd;
+  const gitFailure = (read) => ({
+    ok: false,
+    failure: failed(read.reason, NEXT_ACTION.readGitError, read.exitStatus),
+  });
+  const mergeBase = readGit(ctx, [
+    'merge-base',
+    `refs/remotes/${REMOTE_NAME}/${base}`,
+    'HEAD',
+  ]);
+  if (!mergeBase.ok) {
+    return gitFailure(mergeBase);
+  }
+  const branchPoint = mergeBase.stdout.trim();
+  if (!GIT_OBJECT_ID.test(branchPoint)) {
+    return {
+      ok: false,
+      failure: failed(
+        'git merge-base did not print an object id',
+        NEXT_ACTION.readGitError,
+        0,
+      ),
+    };
+  }
+  // -z keeps core.quotePath from quoting a path; --no-renames lists both
+  // sides of a rename.
+  const diff = readGit(ctx, [
+    'diff',
+    '--no-renames',
+    '--name-only',
+    '-z',
+    branchPoint,
+  ]);
+  if (!diff.ok) {
+    return gitFailure(diff);
+  }
+  const untracked = readGit(ctx, [
+    'ls-files',
+    '--others',
+    '--exclude-standard',
+    '-z',
+  ]);
+  if (!untracked.ok) {
+    return gitFailure(untracked);
+  }
+  const changed = [
+    ...new Set([...gitPathList(diff.stdout), ...gitPathList(untracked.stdout)]),
+  ].sort();
+  const targets = readManifestTargets(ctx, worktree, branchPoint);
+  if (!targets.ok) {
+    return targets;
+  }
+  const paths = [];
+  for (const path of changed) {
+    if (targets.value.has(path)) {
+      continue;
+    }
+    const text = ctx.deps.readBaseText(worktree, branchPoint, path);
+    if (text.status === 'error') {
+      return {
+        ok: false,
+        failure: failed(text.reason, NEXT_ACTION.readGitError, null),
+      };
+    }
+    if (text.status === 'present') {
+      const banner = GENERATED_SOURCE_BANNER_PATTERN.exec(
+        Buffer.from(text.text, 'utf8')
+          .subarray(0, GENERATED_BANNER_SCAN_BYTES)
+          .toString('utf8'),
+      );
+      if (banner?.[1] !== undefined && banner[1] !== path) {
+        continue;
+      }
+    }
+    paths.push(path);
+  }
+  if (paths.length === 0) {
+    return {
+      ok: false,
+      failure: failed(
+        `the branch changed no canonical path since its branch point ${branchPoint}`,
+        NEXT_ACTION.stopAndReport,
+        0,
+      ),
+    };
+  }
+  return { ok: true, value: { branchPoint, paths } };
+}
+/** The canonical `## Candidate files` section the copy leads with. */
+function canonicalSection(paths) {
+  return `## Candidate files\n\n${paths.map((path) => `- \`${path}\``).join('\n')}\n\n`;
+}
+/** Whether the body has an ATX heading after its first line, as the parser masks it. */
+function hasHeadingAfterFirstLine(body) {
+  const lines = maskMarkdownForScan(body, {
+    inlineCode: 'keep',
+    htmlComments: 'mask',
+    htmlBlocks: 'mask',
+  }).split(/\r?\n/u);
+  return lines.some(
+    (line, index) =>
+      index >= 1 &&
+      (ATX_HEADING.test(line) ||
+        (index >= 2 &&
+          SETEXT_UNDERLINE.test(line) &&
+          isSetextContentLine(lines, index - 1))),
+  );
+}
+/** Whether `lines[index]` can be the text of a Setext heading under it. */
+function isSetextContentLine(lines, index) {
+  const line = lines[index] ?? '';
+  if (line.trim() === '' || LIST_OR_QUOTE_LINE.test(line)) {
+    return false;
+  }
+  if (!INDENTED_LINE.test(line)) {
+    return true;
+  }
+  let above = index - 1;
+  while (above >= 0 && INDENTED_LINE.test(lines[above] ?? '')) {
+    above -= 1;
+  }
+  return !LIST_OR_QUOTE_LINE.test(lines[above] ?? '');
+}
+/** The `effort-candidate-file-limit` finding of one audit's JSON report. */
+function effortFindingOf(stdout) {
+  let report;
+  try {
+    report = JSON.parse(stdout);
+  } catch {
+    return 'malformed';
+  }
+  if (!isRecord(report) || !Array.isArray(report.findings)) {
+    return 'malformed';
+  }
+  const finding = report.findings.find(
+    (entry) => isRecord(entry) && entry.id === EFFORT_FINDING_ID,
+  );
+  if (finding === undefined) {
+    return 'missing';
+  }
+  if (finding.result !== 'pass' && finding.result !== 'fail') {
+    return 'malformed';
+  }
+  return {
+    result: finding.result,
+    detail: typeof finding.detail === 'string' ? finding.detail : '',
+  };
+}
+/** Item 5: one audit run; its exit status is not the verdict. */
+function runAudit(ctx, label, body, markerPrefix, title) {
+  const result = ctx.deps.run({
+    kind: 'helper',
+    script: AUDIT_SCRIPT,
+    args: [
+      '--shape',
+      'child',
+      '--stdin',
+      '--marker-prefix',
+      markerPrefix,
+      '--title',
+      title,
+    ],
+    cwd: ctx.primary ?? ctx.input.cwd,
+    stdin: body,
+  });
+  const end = classifyEnd(result);
+  const what = `the audit of ${label}`;
+  if (end.kind === 'no-start') {
+    return {
+      ok: false,
+      failure: failed(
+        describeEnd(what, end),
+        NEXT_ACTION.helperInstallation,
+        null,
+      ),
+    };
+  }
+  if (end.kind === 'signal') {
+    return {
+      ok: false,
+      failure: failed(describeEnd(what, end), NEXT_ACTION.stopAndReport, null),
+    };
+  }
+  const finding = effortFindingOf(result.stdout);
+  if (finding === 'malformed' || finding === 'missing') {
+    return {
+      ok: false,
+      failure: failed(
+        withDetail(
+          `${describeEnd(what, end)} ${
+            finding === 'malformed'
+              ? 'and did not print one JSON object with a findings array'
+              : `and reported no ${EFFORT_FINDING_ID} finding`
+          }`,
+          firstLine(result.stderr),
+        ),
+        NEXT_ACTION.stopAndReport,
+        end.status,
+      ),
+    };
+  }
+  return { ok: true, ...finding, exitStatus: end.status };
+}
+function sameList(left, right) {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+/**
+ * The B3 scope check of `idd-work.instructions.md`, read-only. It reads the
+ * issue, the primary checkout's policy, and the base, builds the canonical
+ * paths, and runs `audit-authored-issue` on the issue body and on a copy that
+ * leads with those paths as its `## Candidate files` section. The verdict of
+ * each run is its `effort-candidate-file-limit` finding.
+ */
+function stepScope(ctx) {
+  const { worktree, primary } = ctx;
+  if (worktree === null || primary === null) {
+    // Unreachable: a passed location step sets both values.
+    throw new Error(
+      'claimed-push: the scope step ran without a passed location',
+    );
+  }
+  const policyRead = ctx.deps.readPolicy(worktree);
+  if (!policyRead.ok) {
+    return failed(policyRead.reason, NEXT_ACTION.stopAndReport, null);
+  }
+  const policy = policyRead.policy ?? null;
+  const issue = readIssue(ctx);
+  if (!issue.ok) {
+    return issue.failure;
+  }
+  const markerPrefix = normalizeMarkerPrefix(
+    isRecord(policy) ? policy.markerPrefix : undefined,
+  );
+  const baseRead = resolveBase(ctx, policy);
+  if (!baseRead.ok) {
+    return baseRead.failure;
+  }
+  const { base } = baseRead.value;
+  const canonical = readCanonicalPaths(ctx, base);
+  if (!canonical.ok) {
+    return canonical.failure;
+  }
+  const { paths } = canonical.value;
+  const { title, body } = issue.value;
+  // A backtick ends the bullet's code span early and a line break ends the
+  // bullet, so the parser would read another path, or none, for such a path.
+  // A replacement character means git printed bytes that are not UTF-8, so
+  // two such paths can decode to one string and count once.
+  const unwritable = paths.filter((path) => /[`\r\n\uFFFD]/u.test(path));
+  if (unwritable.length > 0) {
+    return failed(
+      `the canonical path(s) ${unwritable.map((path) => JSON.stringify(path)).join(', ')} hold a backtick, a line break, or bytes that are not UTF-8, so a ## Candidate files bullet cannot carry them and the audit could not count them`,
+      NEXT_ACTION.stopAndReport,
+      0,
+    );
+  }
+  if (!hasHeadingAfterFirstLine(body)) {
+    return failed(
+      `issue ${ctx.input.issue}'s body has no heading after its first line, so a leading ## Candidate files section would run to the end of the body`,
+      NEXT_ACTION.stopAndReport,
+      0,
+    );
+  }
+  const section = canonicalSection(paths);
+  const copy = `${section}${body}`;
+  const sectionKeys = ctx.deps.parseCandidates(section);
+  if (!sameList(ctx.deps.parseCandidates(copy), sectionKeys)) {
+    return failed(
+      'the copy of the body does not parse to exactly the canonical ## Candidate files section, so the audit would not count the canonical paths',
+      NEXT_ACTION.stopAndReport,
+      null,
+    );
+  }
+  const counted = `${paths.length} canonical path(s), which the audit counts as ${sectionKeys.length} (${paths.join(', ')}); ${AUDIT_COUNT_RULE}`;
+  const original = runAudit(ctx, 'the issue body', body, markerPrefix, title);
+  if (!original.ok) {
+    return original.failure;
+  }
+  const scoped = runAudit(
+    ctx,
+    'the body with the canonical paths',
+    copy,
+    markerPrefix,
+    title,
+  );
+  if (!scoped.ok) {
+    return scoped.failure;
+  }
+  if (original.result === 'pass' && scoped.result === 'pass') {
+    return {
+      status: 'passed',
+      exitStatus: 0,
+      reason: `${EFFORT_FINDING_ID} passes on the issue body (${original.detail}) and with the canonical paths (${scoped.detail}); ${counted}`,
+    };
+  }
+  const parts = [
+    ...(original.result === 'fail'
+      ? [`${EFFORT_FINDING_ID} fails on the issue body: ${original.detail}`]
+      : []),
+    ...(scoped.result === 'fail'
+      ? [
+          `${EFFORT_FINDING_ID} fails with the canonical paths: ${scoped.detail}`,
+        ]
+      : []),
+    counted,
+  ];
+  return failed(
+    parts.join('; '),
+    NEXT_ACTION.scopeOverrun,
+    original.result === 'fail' ? original.exitStatus : scoped.exitStatus,
+  );
 }
 /** A failed outcome when the tree is dirty or unreadable, else null. */
 function checkCleanTree(ctx, when) {
@@ -546,20 +1195,23 @@ function stepPush(ctx) {
 const STEPS = [
   { id: 'assert', run: stepAssert, applyOnly: false },
   { id: 'location', run: stepLocation, applyOnly: false },
+  { id: 'scope', run: stepScope, applyOnly: false },
   { id: 'gate', run: stepGate, applyOnly: true },
   { id: 'reassert', run: stepReassert, applyOnly: true },
   { id: 'push', run: stepPush, applyOnly: true },
 ];
 /**
- * Run the five steps in order, stopping at the first failure. Without
- * `input.apply`, only the claim assert and the location check run. The
- * report always lists all five steps; the ones not run are `skipped`.
+ * Run the six steps in order, stopping at the first failure. Without
+ * `input.apply`, only the claim assert, the location check, and the scope
+ * check run. The report always lists all six steps; the ones not run are
+ * `skipped`.
  */
 export function runClaimedPush(input, deps = createProductionDeps()) {
   const ctx = {
     input,
     deps,
     worktree: null,
+    primary: null,
     branch: null,
     recordedHead: null,
     pushed: false,
@@ -611,6 +1263,69 @@ function fromSpawn(result) {
   };
 }
 /**
+ * The two argument lists the `gh` kind runs: the issue read and the
+ * default-branch read. Every other list is refused before any process starts.
+ */
+function isAllowedGhRead(args) {
+  if (
+    args.length === 5 &&
+    args[0] === 'issue' &&
+    args[1] === 'view' &&
+    /^[1-9][0-9]*$/u.test(args[2] ?? '') &&
+    args[3] === '--json' &&
+    args[4] === 'title,body'
+  ) {
+    return true;
+  }
+  return sameList(args, REPO_DEFAULT_BRANCH_ARGS);
+}
+function outputText(value) {
+  if (typeof value === 'string') return value;
+  return Buffer.isBuffer(value) ? value.toString('utf8') : '';
+}
+/**
+ * Run an allowed `gh` read through the repository's `gh` layer. `ghText`
+ * takes no directory and runs in this process's directory, the worktree; `gh`
+ * resolves the repository from the git remote the worktree shares with the
+ * primary checkout.
+ */
+function runGhRead(args) {
+  if (!isAllowedGhRead(args)) {
+    return {
+      status: null,
+      signal: null,
+      stdout: '',
+      stderr: '',
+      error: `the gh kind refuses this argument list: gh ${args.join(' ')}`,
+    };
+  }
+  try {
+    return {
+      status: 0,
+      signal: null,
+      stdout: ghText([...args], GH_TEXT_LOOP_TIMEOUT_OPTIONS),
+      stderr: '',
+    };
+  } catch (error) {
+    const fields = isRecord(error) ? error : {};
+    const status = typeof fields.status === 'number' ? fields.status : null;
+    const signal =
+      typeof fields.signal === 'string' && fields.signal !== ''
+        ? fields.signal
+        : null;
+    return {
+      status,
+      signal,
+      stdout: outputText(fields.stdout),
+      stderr: outputText(fields.stderr),
+      ...(status === null
+        ? { error: error instanceof Error ? error.message : String(error) }
+        : {}),
+      ...(isNotDispatchedRefusal(error) ? { notDispatched: true } : {}),
+    };
+  }
+}
+/**
  * The production runner. It never throws: a failure to resolve or spawn is a
  * result with no exit status, so a refusal always reaches the JSON report.
  * The gate runs through a shell with no timeout, and its stdout goes to this
@@ -627,9 +1342,14 @@ export function runProductionCommand(request) {
         }),
       );
     }
+    if (request.kind === 'gh') {
+      return runGhRead(request.args);
+    }
     let file = 'git';
     let args = request.kind === 'git' ? request.args : [];
+    let stdin;
     if (request.kind === 'helper') {
+      stdin = request.stdin;
       const script = join(
         resolveBundleRoot(import.meta.dirname),
         'scripts',
@@ -651,7 +1371,8 @@ export function runProductionCommand(request) {
       spawnSync(file, [...args], {
         cwd: request.cwd,
         encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+        ...(stdin === undefined ? {} : { input: stdin }),
         maxBuffer: MAX_BUFFER_BYTES,
       }),
     );
@@ -716,11 +1437,113 @@ export function readEffectiveGateCommand(worktree, options = {}) {
     };
   }
 }
+/**
+ * Read the layered effective policy of the primary checkout: the first record
+ * of `git worktree list --porcelain -z` run from the worktree, then the same
+ * loader the claim uses, with the primary as its directory. The branch's own
+ * copy of the policy is never read. A null policy means no tier has a file.
+ * A repository policy file that cannot be read refuses.
+ */
+export function readPrimaryPolicy(worktree, options = {}) {
+  try {
+    const list = spawnSync('git', ['worktree', 'list', '--porcelain', '-z'], {
+      cwd: worktree,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: MAX_BUFFER_BYTES,
+      ...(options.env === undefined ? {} : { env: options.env }),
+    });
+    if (list.error !== undefined || list.status !== 0) {
+      return {
+        ok: false,
+        reason: withDetail(
+          'git worktree list could not be read',
+          list.error?.message ?? firstLine(list.stderr ?? ''),
+        ),
+      };
+    }
+    const main = parseLocalWorktreeList(list.stdout)[0];
+    if (main === undefined || main.path === '' || main.bare) {
+      return {
+        ok: false,
+        reason: 'git worktree list names no primary checkout',
+      };
+    }
+    const loaded = loadLayeredLocalPolicy({
+      cwd: main.path,
+      ...(options.env === undefined ? {} : { env: options.env }),
+      ...(options.homedir === undefined ? {} : { homedir: options.homedir }),
+    });
+    if (loaded.local.diagnostic !== undefined) {
+      return {
+        ok: false,
+        reason: `the repository policy of the primary checkout ${main.path} is unreadable: ${loaded.local.diagnostic}`,
+      };
+    }
+    return { ok: true, policy: loaded.config ?? null };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `could not read the policy of the primary checkout: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+/**
+ * A `readBaseText` built on a command runner: `git ls-tree -z <branch point>
+ * -- :(literal)<path>` prints nothing and exits 0 for a path absent there, and `git show
+ * <branch point>:<path>` reads a present file. An entry that is not a file
+ * (a submodule) is present with no text. Any other git failure is an error.
+ */
+export function makeBaseTextReader(run) {
+  return (worktree, branchPoint, path) => {
+    const describe = (what, result) => {
+      const end = classifyEnd(result);
+      return withDetail(
+        describeEnd(what, end),
+        end.kind === 'exit' ? firstLine(result.stderr) : '',
+      );
+    };
+    const listing = run({
+      kind: 'git',
+      // `:(literal)` keeps a name such as `:(top)src` from reading as magic.
+      args: ['ls-tree', '-z', branchPoint, '--', `:(literal)${path}`],
+      cwd: worktree,
+    });
+    if (listing.status !== 0) {
+      return {
+        status: 'error',
+        reason: describe(`git ls-tree ${branchPoint} -- ${path}`, listing),
+      };
+    }
+    const entry = listing.stdout.split('\0').find((line) => line !== '');
+    if (entry === undefined) {
+      return { status: 'absent' };
+    }
+    if (entry.split(/\s/u)[1] !== 'blob') {
+      return { status: 'present', text: '' };
+    }
+    const shown = run({
+      kind: 'git',
+      args: ['show', `${branchPoint}:${path}`],
+      cwd: worktree,
+    });
+    if (shown.status !== 0) {
+      return {
+        status: 'error',
+        reason: describe(`git show ${branchPoint}:${path}`, shown),
+      };
+    }
+    return { status: 'present', text: shown.stdout };
+  };
+}
 export function createProductionDeps() {
   return {
     run: runProductionCommand,
     realpath: realpathOrNull,
     readGateCommand: (worktree) => readEffectiveGateCommand(worktree),
+    readPolicy: (worktree) => readPrimaryPolicy(worktree),
+    readBaseText: makeBaseTextReader(runProductionCommand),
+    parseCandidates: parseCandidateFiles,
   };
 }
 export function parseArgs(argv) {
@@ -744,12 +1567,18 @@ function printUsage(stdout) {
   stdout.write(
     `Usage:\n  node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--apply]\n\n` +
       'Pushes the claimed branch to origin only after the claim, the worktree\n' +
-      'location, and the configured pre-push gate have passed in order, then\n' +
-      're-checks the claim and the gated commit just before the push.\n' +
-      'Dry-run is the default: it checks the claim and the location, skips the\n' +
-      'gate and the push, and exits 0 when both pass. --apply also runs the\n' +
-      'gate and pushes once. The helper never forces, never retries, and never\n' +
-      'creates a commit. --nonce is passed to the claim check only when given.\n',
+      'location, the scope check, and the configured pre-push gate have passed\n' +
+      'in order, then re-checks the claim and the gated commit just before the\n' +
+      'push. The six steps are assert, location, scope, gate, reassert, and\n' +
+      'push. The scope step runs audit-authored-issue on the issue body and on\n' +
+      'a copy whose leading ## Candidate files section lists the paths the\n' +
+      'branch changed since its branch point, and fails when either\n' +
+      'effort-candidate-file-limit finding fails.\n' +
+      'Dry-run is the default: it runs the claim assert, the location check,\n' +
+      'and the scope check, skips the gate, the second assert, and the push,\n' +
+      'and exits 0 when all three pass. --apply runs all six steps and pushes\n' +
+      'once. The helper never forces, never retries, and never creates a\n' +
+      'commit. --nonce is passed to the claim check only when given.\n',
   );
 }
 /**

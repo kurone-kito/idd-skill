@@ -444,7 +444,7 @@ outcome path.
 | `idd-doctor.mjs`                     | an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                  | a `gh` failure reached during a live check                                                                                                                                              | the report contains at least one error (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception                                                                                                                                                                                                     |
 | `idd-delete-remote-branch.mjs`       | missing/empty `--branch`, missing/invalid `--expected-sha`, or an unknown flag (exit `1`)                                                                                                                                                                                                                   | —                                                                                                                                                                                       | invalid ref, unreadable remote/default-branch state, expected-SHA mismatch, refused default branch, failed delete, or unconfirmed deletion (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | an unexpected exception                                                                                                                                                                                                     |
 | `idd-f4-worktree-branch-cleanup.mjs` | missing `--issue`, `--claim-id`, `--nonce`, or `--agent-id`, a relative `--worktree`, a run outside the primary worktree, or an unknown flag (exit `1`)                                                                                                                                                     | a failed `gh` read, reported as a hold (exit `1`)                                                                                                                                       | a hold or failed verdict (exit `1`), such as `claim-lost`, `proof-missing`, or `dirty-worktree`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | an exception from a dependency, reported as a failed step (exit `1`)                                                                                                                                                        |
-| `idd-claimed-push.mjs`               | missing or invalid `--issue`, missing `--claim-id`, an empty `--nonce`, or an unknown flag (exit `1`)                                                                                                                                                                                                       | —                                                                                                                                                                                       | a refused or failed step: the claim assert, the location check, a dirty tree, the gate, the second assert, or the push (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception                                                                                                                                                                                                     |
+| `idd-claimed-push.mjs`               | missing or invalid `--issue`, missing `--claim-id`, an empty `--nonce`, or an unknown flag (exit `1`)                                                                                                                                                                                                       | —                                                                                                                                                                                       | a refused or failed step: the claim assert, the location check, the scope check, a dirty tree, the gate, the second assert, or the push (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | an unexpected exception                                                                                                                                                                                                     |
 | `idd-onboard.mjs`                    | missing/conflicting mode flags, a stage-foreign flag, `--import`/`--verify` missing `--source`, `--record-policy` missing `--transcript`, `--install-user-global`/`--uninstall` with a flag outside their whitelist or an invalid `--harness` list, an unknown argument, or a missing flag value (exit `2`) | a `gh` failure reached during any stage (exit `2`)                                                                                                                                      | `--substitute`/`--import`/`--verify` report a blocking verdict, `--hear`/`--record-policy` report a schema-invalid transcript, or `--install-user-global`/`--uninstall` refuse or fail (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                | an environment/config issue (e.g. `--substitute`'s own core file set resolution, path confinement) or any other unexpected exception (exit `2`)                                                                             |
 | `helper-runtime-manifest.mjs`        | an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                  | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception                                                                                                                                                                                                     |
 | `idd-critique-delegate.mjs`          | an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                  | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception (deterministic, network-free)                                                                                                                                                                       |
@@ -9709,8 +9709,9 @@ issue #3285; the field report is tracked in issue #3552.
 ## Claimed push (kurone-kito/idd-skill#4375)
 
 `scripts/claimed-push.mjs` (bin `idd-claimed-push`) pushes the claimed
-branch only after the claim, the worktree location, and the configured
-`commands.pre-push-validate` gate have passed, in that order. The
+branch only after the claim, the worktree location, the B3 scope check,
+and the configured `commands.pre-push-validate` gate have passed, in that
+order. The
 overview's [claim revalidation gate](../.github/instructions/idd-overview-core.instructions.md#claim-revalidation-gate)
 and its rule to judge a command set by its own exit status say the same
 thing in prose; nothing enforced the order. Observed in the 2026-10-14 to
@@ -9722,6 +9723,12 @@ worker brief had told each of them not to. The pushed head commits were
 pushes, and the failed gate and the semicolon chain are recorded only in
 the operator's worker reports, which live outside this repository.
 
+The scope check is the pre-push stop of the work phase's "Scope overrun"
+rule, which nothing in the push path ran. On issue `#4375` it did not run
+before the first push (pull request `#4399`); it ran at F2 and tripped
+(effort M, 15 candidate files, limit 8) after the branch was published.
+Issue `#4480` added it as the `scope` step.
+
 ```sh
 node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--apply]
 ```
@@ -9732,10 +9739,20 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
   of the working directory (a failure there is reported under `assert`,
   with the next action to run the helper from the claimed worktree) and the
   branch is `active_claim.branch` of the assert's output.
-- **Dry run**: without `--apply`, the claim assert and the location check
-  run and the other three steps are reported `skipped`; the report says
-  `mode: "dry-run"` and `pushed: false`, and the exit is `0` when both
-  steps pass. With `--apply`, all five steps run.
+- **Inputs of the scope step**, all read-only: the issue title and body
+  (`gh issue view <n> --json title,body`); the layered effective policy of
+  the primary checkout, the first record of `git worktree list --porcelain`,
+  never the branch's own copy (its `markerPrefix`, normalized as the audit
+  normalizes its own `--marker-prefix`, and its `developmentBranch`); the
+  default branch (`gh repo view --json defaultBranchRef --jq
+  .defaultBranchRef.name`), read only when `developmentBranch` is absent;
+  and the git reads named in step 3. Its `gh` reads go through the
+  repository's `gh` layer, and any other `gh` argument list is refused
+  without starting a process.
+- **Dry run**: without `--apply`, the claim assert, the location check,
+  and the scope check run and the other three steps are reported
+  `skipped`; the report says `mode: "dry-run"` and `pushed: false`, and the
+  exit is `0` when the three steps pass. With `--apply`, all six steps run.
 - **Steps**, in order, each stopping the run at its first failure (the
   steps after it are reported `skipped`). The helper runs the existing
   helpers as child processes through an injectable runner and never
@@ -9755,7 +9772,69 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
    claimed worktree), and that the current branch is the claimed branch
    and HEAD is not detached (next action: switch the worktree to the
    claimed branch).
-3. `gate`: requires a clean tree by `git status --porcelain
+3. `scope`: the B3 scope check; it only reads. The base is the policy's
+   `developmentBranch`, else the live default branch; a malformed value
+   or a default name that fails the development-branch character check
+   refuses. The base must be listed by
+   `git ls-remote --heads origin <base>` and exist as
+   `refs/remotes/origin/<base>`; the step never fetches. The branch point
+   is `git merge-base refs/remotes/origin/<base> HEAD`. The canonical
+   paths are the union of
+   `git diff --no-renames --name-only -z <branch point>` (committed,
+   staged, and unstaged changes, and both sides of a rename) and
+   `git ls-files --others --exclude-standard -z`, minus two kinds of path,
+   both read at the branch point with `git ls-tree` (a literal pathspec)
+   and `git show` so that a branch cannot exclude its own files: a file
+   whose first
+   `// idd-generated-from:` banner, read from its first 200 bytes as the
+   build reads it, names a different path, and a
+   `syncPairs` target of `audit/sync-manifest.json` (a missing manifest
+   gives none). A file absent at the branch point is never a generated
+   copy, and a deleted path counts unless it is one of the two. An empty
+   set refuses. The step then runs `audit-authored-issue` with
+   `--shape child --stdin --marker-prefix <prefix> --title <title>`
+   twice, in the primary checkout: on the issue body, and on a copy that
+   is the body with a leading `## Candidate files` section of one
+   backticked bullet per canonical path. It first refuses a body with no
+   heading after its first line (an ATX heading, or a Setext heading as the
+   candidate parser reads one), a canonical path that holds a backtick, a
+   line break, or bytes that are not UTF-8 (a bullet cannot carry it
+   faithfully), and a copy whose section the
+   candidate parser does not read exactly as the section alone. The
+   verdict of each
+   run is its `effort-candidate-file-limit` finding; the audit exits `1`
+   whenever any finding fails, so its exit status is not read. A run that
+   cannot start (next action: check the helper installation, then rerun),
+   ends by signal, prints anything but one JSON object with a `findings`
+   array, or has no such finding refuses. The step fails when either
+   finding fails. Its reason names the canonical paths, how many the audit
+   counts, and the counting rule: distinct parsed keys, and a token
+   without `/` or `.`, or with whitespace, is not counted. The next action
+   is to stop without pushing and follow the Scope overrun rule in
+   `idd-work.instructions.md`. When `refs/remotes/origin/<base>` is
+   missing or differs from the SHA `git ls-remote` printed, the base is
+   stale, and the step refuses before it reads the branch point, whatever
+   the audits would say: a ref behind `origin` adds paths to the diff,
+   and a ref ahead of or diverged from it after a force-push hides paths.
+   The reason names both SHAs, and the next action is to run the fetch
+   below (see [Clone-scoped lock](#clone-scoped-lock)) and rerun the
+   helper once, then stop and report both SHAs without a push if it is
+   still stale. A body without a coherent `S`
+   or `M` effort marker passes the finding as not applicable, so the step
+   passes with the audit's detail as its reason. A failed git read refuses
+   with the next action to read the git error in the worktree and fix it,
+   then rerun; a `gh` that cannot start has the next action to check the
+   helper installation, then rerun; every other refusal of this step (a
+   failed `gh` read, including one that GitHub API load control refused
+   before it started, an unreadable policy, an unusable base, an empty
+   title or body, a malformed audit result) has the next action to stop
+   and report.
+
+   ```sh
+   node scripts/clone-lock.mjs --exec --agent-id <your agent id> -- git fetch origin +refs/heads/<base>:refs/remotes/origin/<base>
+   ```
+
+4. `gate`: requires a clean tree by `git status --porcelain
    --untracked-files=all --ignore-submodules=none`, so a user-level
    `status.showUntrackedFiles` setting cannot hide files and a
    `diff.ignoreSubmodules` or `submodule.<name>.ignore` setting cannot hide
@@ -9767,14 +9846,14 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
    refuses with the next action to fix the failure, commit, and rerun; a
    gate that is not configured or cannot start refuses with the next
    action to configure the command or run the written gate by hand.
-4. `reassert`: runs the `assert` step again immediately before the push,
+5. `reassert`: runs the `assert` step again immediately before the push,
    because the gate can run for minutes (next action: stop and re-read the
    claim, or, when the second assert cannot start, check the helper
    installation, then rerun; the assert must also still name the same
    branch), then requires `git rev-parse HEAD` and the branch tip to equal
    the recorded value (next action: rerun the helper so the gate sees the
    new HEAD).
-5. `push`: runs `git push -u origin <branch>` when the branch has no
+6. `push`: runs `git push -u origin <branch>` when the branch has no
    upstream yet, else `git push origin <branch>`, once. A push that git
    rejects (non-fast-forward, hook, missing remote) fails with git's
    message (next action: read git's message, fetch and inspect
@@ -9813,15 +9892,21 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
   `worktree`, and `steps`. Every step has an `id`, a `status` (`passed`,
   `failed`, or `skipped`), and a `reason`. A step that ran a command
   carries that command's `exitStatus`: `0` on every passed step (assert,
-  location, reassert, gate, and push; location decides by its last git
-  read, `git branch --show-current`). On a failed step the status is that
-  of the command whose result decided it, and `null` when that command
-  ended without one. A refusal that judges a value a command printed
-  (a branch the assert named, a URL or path git printed, a moved HEAD, a
-  dirty tree) carries that command's `0`. Two refusals carry none because
-  no command decided them: a path that cannot be resolved (the expected
-  sibling path or the worktree), and a gate command that is unconfigured
-  or whose policy cannot be read. Every `failed` step has a non-empty
+  location, scope, reassert, gate, and push; location decides by its last
+  git read, `git branch --show-current`). On a failed step the status is
+  that of the command whose result decided it, and `null` when that
+  command ended without one. A refusal that judges a value a command
+  printed (a branch the assert named, a URL or path git printed, a moved
+  HEAD, a dirty tree, an issue body) carries that command's `0`. Two
+  refusals carry none because no command decided them: a path that cannot
+  be resolved (the expected sibling path or the worktree), and a gate
+  command that is unconfigured or whose policy cannot be read. The scope
+  step always states its `exitStatus`: `0` when it passes, the audit's
+  status for a failed finding, the status of the command that decided any
+  other refusal, and `null` when no command decided it (an unreadable
+  policy, a malformed `developmentBranch`, a branch-point read or manifest
+  that cannot be used, or a copy whose section does not read back). Every
+  `failed` step has a non-empty
   `nextAction`. `pushed` is `true` after a push (the report then adds
   `pushedSha`, the recorded HEAD, and `pushMessage`), `false` when no push
   ran or git rejected it, and `null` when the push ended without an exit
@@ -9829,10 +9914,11 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
 - **Exit codes**: `0` when no step refused or failed, `1` for a refusal or
   failure, and `1` with kind `usage` for an argument error.
 - **Limits**: the helper never retries, never passes a force flag, and never
-  creates a commit. The `--force-with-lease` route that D2 allows after
-  publication stays a manual route. Adopting the helper in the D2 push step
-  and the E-phase push steps is a separate change, because those bundles
-  are size-budgeted.
+  creates a commit. D2 runs its normal push through the helper; the
+  `--force-with-lease` route that D2 allows after publication stays a
+  manual route, which checks `assert`, `location`, and `scope` with the
+  helper's dry run first. Adopting the helper in the E-phase push steps is
+  a separate change, because those bundles are size-budgeted.
 - **Known limit**: git resolves the branch argument of the push when the
   push starts, after the `reassert` step has compared HEAD and the branch
   tip. The helper keeps the branch argument because a SHA source does not

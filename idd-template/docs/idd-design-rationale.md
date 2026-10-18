@@ -957,13 +957,16 @@ This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
   command, with the body on `--stdin` and the target's resolved
   `--marker-prefix`, so a target with another prefix or without a
   local config still reads its effort marker), run on the issue body and
-  again on a copy whose `## Candidate files` section is replaced by
-  the diff's canonical paths: every path the branch changed, whether
-  committed, staged, unstaged, or untracked, that is the union of
-  `git diff --name-only origin/{development-branch}` (the working tree
-  against the base) and `git ls-files --others --exclude-standard`,
-  minus generated mirrors: a file whose `idd-generated-from` banner
-  names a different path, or a sync manifest target. A canonical
+  again on a copy that has the diff's canonical paths as a leading
+  `## Candidate files` section and is otherwise the body. The canonical
+  paths are every path the branch changed since its branch point
+  `git merge-base origin/{development-branch} HEAD`, whether committed,
+  staged, unstaged, or untracked: the union of
+  `git diff --no-renames --name-only <branch point>` (the working tree
+  against the branch point, with both sides of a rename) and
+  `git ls-files --others --exclude-standard`, minus generated mirrors
+  that exist at the branch point: a file whose `idd-generated-from`
+  banner names a different path, or a sync manifest target. A canonical
   `src/**/*.mts` source carries a banner that names itself, so it
   stays in the list. Each path goes on its own bullet in the contract's
   Candidate files format. Review of PR 4160 pointed out that a
