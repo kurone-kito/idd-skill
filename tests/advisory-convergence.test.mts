@@ -9393,9 +9393,13 @@ test('disposition pointers include triage placeholders only for record and enfor
   );
   for (const triageRecord of ['record', 'enforce'] as const) {
     const posted = postedItemsFor(triageRecord);
+    const bodyPointer =
+      triageRecord === 'enforce'
+        ? '--body "<reply-body>"'
+        : '--body "**Accepted** — …"';
     assert.equal(
       posted.action.pointer,
-      'node scripts/resolve-review-thread.mjs --pr 42 --comment-id <id> --body "**Accepted** — …" --claim-issue <n> --claim-id <id> --tier <tier> --urgency <urgency> --apply',
+      `node scripts/resolve-review-thread.mjs --pr 42 --comment-id <id> ${bodyPointer} --claim-issue <n> --claim-id <id> --tier <tier> --urgency <urgency> --apply`,
     );
     assert.match(posted.action.summary, /--tier from low, medium, or high/);
     assert.match(
@@ -9403,6 +9407,16 @@ test('disposition pointers include triage placeholders only for record and enfor
       /--urgency from very-low, low, medium, or high/,
     );
     assert.ok(posted.text.includes(posted.action.pointer));
+    if (triageRecord === 'enforce') {
+      assert.match(
+        posted.text,
+        /For enforce, first run node scripts\/resolve-review-thread\.mjs --pr 42 --tier <tier> --urgency <urgency>/,
+      );
+      assert.match(
+        posted.text,
+        /If it reports defer, use the E5 \*\*Rejected\*\* deferred-follow-up reply; add --override "<reason>" to an Accepted reply only when justified/u,
+      );
+    }
   }
 
   const stampedOff = nextActionsFor(CITED_PREVIOUSLY_MISSED_BODY, [], {
@@ -9439,6 +9453,12 @@ test('disposition pointers include triage placeholders only for record and enfor
       /--urgency from very-low, low, medium, or high/,
     );
     assert.ok(stamped.text.includes(action.pointer));
+    if (triageRecord === 'enforce') {
+      assert.match(
+        stamped.text,
+        /For enforce, first run node scripts\/resolve-review-thread\.mjs --pr 42 --tier <tier> --urgency <urgency>/,
+      );
+    }
   }
 });
 

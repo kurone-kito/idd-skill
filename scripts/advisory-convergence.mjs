@@ -4237,10 +4237,19 @@ function dispositionTriagePointerFlags(triageRecord) {
     ? ' --tier <tier> --urgency <urgency>'
     : '';
 }
-function dispositionTriagePointerGuidance(triageRecord) {
-  return triageRecord === 'record' || triageRecord === 'enforce'
-    ? ' Choose --tier from low, medium, or high and --urgency from very-low, low, medium, or high; replace both placeholders with the values selected for the finding.'
-    : '';
+function dispositionTriagePointerBody(triageRecord) {
+  return triageRecord === 'enforce' ? '"<reply-body>"' : '"**Accepted** — …"';
+}
+function dispositionTriagePointerGuidance(triageRecord, pr) {
+  if (triageRecord !== 'record' && triageRecord !== 'enforce') {
+    return '';
+  }
+  const selectionGuidance =
+    ' Choose --tier from low, medium, or high and --urgency from very-low, low, medium, or high; replace both placeholders with the values selected for the finding.';
+  if (triageRecord !== 'enforce') {
+    return selectionGuidance;
+  }
+  return `${selectionGuidance} For enforce, first run node scripts/resolve-review-thread.mjs --pr ${pr} --tier <tier> --urgency <urgency> (with any applicable E5 flags) to read the verdict without posting. If it reports defer, use the E5 **Rejected** deferred-follow-up reply; add --override "<reason>" to an Accepted reply only when justified and the fresh verdict is still defer.`;
 }
 /**
  * Structured next-action catalog for a non-ready verdict (#2143).
@@ -4262,6 +4271,7 @@ export function collectAssertNextActions(verdict, options = {}) {
   );
   const triagePointerGuidance = dispositionTriagePointerGuidance(
     options.triageRecord,
+    pr,
   );
   const items = [];
   if (verdict.applicability.status === 'indeterminate') {
@@ -4315,7 +4325,8 @@ export function collectAssertNextActions(verdict, options = {}) {
     typeof itemCount === 'number' &&
     itemCount > 0
   ) {
-    const pointer = `node scripts/resolve-review-thread.mjs --pr ${pr} --comment-id <id> --body "**Accepted** — …" --claim-issue <n> --claim-id <id>${triagePointerFlags} --apply`;
+    const pointerBody = dispositionTriagePointerBody(options.triageRecord);
+    const pointer = `node scripts/resolve-review-thread.mjs --pr ${pr} --comment-id <id> --body ${pointerBody} --claim-issue <n> --claim-id <id>${triagePointerFlags} --apply`;
     const skipPending =
       pendingThreadIds.length > 0
         ? ` Do not run it on a pending-decision thread (${pendingThreadIds.join(', ')}); those stay open until the maintainer decides.`
