@@ -2905,6 +2905,176 @@ export function isCodexReviewSummaryCompleteForHeadSha(
   return boldStatusWord.trim().toLowerCase() === 'completed';
 }
 
+// #4482: a clean review-status summary for an earlier commit does not need a
+// disposition, but only when Codex's structured state and its visible table
+// independently agree. Keep this separate from the general current-HEAD
+// completion predicate above: the readiness gate must continue blocking every
+// missing, malformed, contradictory, finding-bearing, or current-HEAD shape.
+export function isCodexCompletedNoFindSummaryForOlderHead(
+  body: string,
+  headSha: string,
+): boolean {
+  const text = String(body ?? '');
+  const fullHeadSha = String(headSha ?? '')
+    .trim()
+    .toLowerCase();
+  if (
+    !text.trimStart().startsWith(CODEX_SUMMARY_MARKER) ||
+    !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(fullHeadSha)
+  ) {
+    return false;
+  }
+
+  const stateMarkerCount = text.match(/codex-review-state:v1/g)?.length ?? 0;
+  const stateBlocks = [
+    ...text.matchAll(/<!--\s*codex-review-state:v1\s+([\s\S]*?)\s*-->/g),
+  ];
+  if (stateMarkerCount !== 1 || stateBlocks.length !== 1) {
+    return false;
+  }
+  const statePayload = stateBlocks[0]?.[1];
+  if (typeof statePayload !== 'string') {
+    return false;
+  }
+
+  let parsedState: unknown;
+  try {
+    parsedState = JSON.parse(statePayload.trim());
+  } catch {
+    return false;
+  }
+  if (
+    parsedState === null ||
+    typeof parsedState !== 'object' ||
+    Array.isArray(parsedState)
+  ) {
+    return false;
+  }
+  const codeReview = (parsedState as Record<string, unknown>).code_review;
+  if (
+    codeReview === null ||
+    typeof codeReview !== 'object' ||
+    Array.isArray(codeReview)
+  ) {
+    return false;
+  }
+  const state = codeReview as Record<string, unknown>;
+  if (typeof state.commit_sha !== 'string') {
+    return false;
+  }
+  const stateCommit = state.commit_sha.trim().toLowerCase();
+  if (
+    !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(stateCommit) ||
+    stateCommit === fullHeadSha ||
+    state.status !== 'completed' ||
+    state.has_any_findings !== false ||
+    state.has_unresolved_findings !== false
+  ) {
+    return false;
+  }
+
+  // Find exactly one Markdown table whose header identifies Review, Status,
+  // and Commit. Requiring a single, well-formed table makes duplicate or
+  // malformed status evidence fail closed instead of guessing which row wins.
+  const tableGroups: string[][][] = [];
+  let currentGroup: string[][] = [];
+  const flushGroup = () => {
+    if (currentGroup.length > 0) {
+      tableGroups.push(currentGroup);
+      currentGroup = [];
+    }
+  };
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+      currentGroup.push(
+        trimmed
+          .slice(1, -1)
+          .split('|')
+          .map((cell) => cell.trim()),
+      );
+    } else {
+      flushGroup();
+    }
+  }
+  flushGroup();
+
+  const candidates = tableGroups.flatMap((group) => {
+    const header = group[0].map((cell) => cell.toLowerCase());
+    const reviewColumns = header.flatMap((cell, index) =>
+      cell === 'review' ? [index] : [],
+    );
+    const statusColumns = header.flatMap((cell, index) =>
+      cell === 'status' ? [index] : [],
+    );
+    const commitColumns = header.flatMap((cell, index) =>
+      cell === 'commit' ? [index] : [],
+    );
+    return reviewColumns.length === 1 &&
+      statusColumns.length === 1 &&
+      commitColumns.length === 1
+      ? [
+          {
+            group,
+            reviewColumn: reviewColumns[0],
+            statusColumn: statusColumns[0],
+            commitColumn: commitColumns[0],
+          },
+        ]
+      : [];
+  });
+  const [candidate] = candidates;
+  if (!candidate || candidates.length !== 1) {
+    return false;
+  }
+  const { group, reviewColumn, statusColumn, commitColumn } = candidate;
+  const columnCount = group[0].length;
+  const separator = group[1] ?? [];
+  if (
+    group.length < 3 ||
+    separator.length !== columnCount ||
+    !separator.every((cell) => /^:?-{3,}:?$/.test(cell))
+  ) {
+    return false;
+  }
+
+  const codeReviewRows: { status: string; commit: string }[] = [];
+  for (const row of group.slice(2)) {
+    if (row.length !== columnCount) {
+      return false;
+    }
+    const reviewName = /\*\*(.+?)\*\*/
+      .exec(row[reviewColumn])?.[1]
+      ?.trim()
+      .toLowerCase();
+    const rawCommit = row[commitColumn].replace(/`/g, '').trim().toLowerCase();
+    const noCommit = rawCommit === '' || rawCommit === '—' || rawCommit === '-';
+    if (!noCommit && !/^[0-9a-f]{7,64}$/.test(rawCommit)) {
+      return false;
+    }
+    if (!noCommit && fullHeadSha.startsWith(rawCommit)) {
+      return false;
+    }
+    if (reviewName === 'code review') {
+      codeReviewRows.push({
+        status: row[statusColumn],
+        commit: noCommit ? '' : rawCommit,
+      });
+    }
+  }
+  const [codeReviewRow] = codeReviewRows;
+  if (!codeReviewRow || codeReviewRows.length !== 1) {
+    return false;
+  }
+  const tableStatus =
+    /\*\*(.+?)\*\*/.exec(codeReviewRow.status)?.[1]?.trim().toLowerCase() ?? '';
+  return (
+    tableStatus === 'completed' &&
+    codeReviewRow.commit !== '' &&
+    stateCommit.startsWith(codeReviewRow.commit)
+  );
+}
+
 // #3520: Codex posts a second, terminal top-level comment when a review finds
 // no major issues. It is separate from the sticky review-status summary above
 // and must be matched against the current HEAD before it can be treated as a
@@ -9262,6 +9432,18 @@ export function summarizeDispositionEvidenceForGate(
 
   const outstandingComments = normalizedComments
     .filter((comment) => !isIddOperationalComment(comment))
+    .filter(
+      (comment) =>
+        !(
+          isGateAdvisoryBotLogin(comment.authorLogin, advisoryBotLogins) &&
+          advisoryBotIdentityToken(comment.authorLogin) ===
+            'chatgpt-codex-connector' &&
+          isCodexCompletedNoFindSummaryForOlderHead(
+            comment.body,
+            normalizedCurrentHead,
+          )
+        ),
+    )
     .filter(
       (comment) =>
         !iddAgentLogins.has(comment.authorLogin) &&

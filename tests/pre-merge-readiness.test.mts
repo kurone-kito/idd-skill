@@ -7202,6 +7202,112 @@ test('disposition evidence still blocks an undispositioned non-review notice', (
   assert.equal(summary.missingRegularComments[0].hint, undefined);
 });
 
+test('#4482: only a matching completed no-find Codex summary for an older HEAD is omitted from readiness evidence', () => {
+  const headSha = '1111111111111111111111111111111111111111';
+  const oldSha = 'abcdef0123456789abcdef0123456789abcdef01';
+  const buildSummary = (
+    options: {
+      stateCommit?: string;
+      tableCommit?: string;
+      status?: string;
+      hasAnyFindings?: boolean;
+      hasUnresolvedFindings?: boolean;
+      stateBlock?: string;
+      extraRows?: string;
+    } = {},
+  ) => {
+    const stateCommit = options.stateCommit ?? oldSha;
+    const tableCommit = options.tableCommit ?? stateCommit.slice(0, 7);
+    const status = options.status ?? 'completed';
+    const stateBlock =
+      options.stateBlock ??
+      `<!-- codex-review-state:v1 ${JSON.stringify({
+        code_review: {
+          commit_sha: stateCommit,
+          has_any_findings: options.hasAnyFindings ?? false,
+          has_unresolved_findings: options.hasUnresolvedFindings ?? false,
+          status,
+        },
+        security_review: {
+          commit_sha: null,
+          has_any_findings: null,
+          has_unresolved_findings: null,
+          status: null,
+        },
+      })} -->`;
+    const tableStatus =
+      status === 'completed' ? '✅ **Completed**' : '❌ **Failed**';
+    return (
+      '<!-- codex-pull-request-review-summary -->\n' +
+      stateBlock +
+      '\n\n## Codex Review Summary\n\n' +
+      '| Review | Status | Commit | Review trigger |\n' +
+      '| --- | --- | --- | --- |\n' +
+      `| 📝 **Code Review** | ${tableStatus} | ${tableCommit} | PR opened |\n` +
+      (options.extraRows ?? '')
+    );
+  };
+  const summarize = (body: string) =>
+    summarizeDispositionEvidenceForGate(
+      {
+        comments: [
+          {
+            id: 4482,
+            author: { login: 'chatgpt-codex-connector[bot]' },
+            body,
+            createdAt: '2026-10-18T07:00:00Z',
+          },
+        ],
+        threads: [],
+      },
+      {
+        advisoryBotLogins: ['chatgpt-codex-connector[bot]'],
+        prHeadSha: headSha,
+      },
+    );
+
+  // PR #4405 recorded a failed review with findings; that observed state
+  // remains blocking while a clean older review can proceed without a reply.
+  const clean = summarize(buildSummary());
+  assert.equal(clean.route, 'proceed');
+  assert.equal(clean.blockingCount, 0);
+  assert.deepEqual(clean.missingRegularComments, []);
+
+  const duplicateState = buildSummary();
+  const duplicateStateBlock =
+    '<!-- codex-review-state:v1 {"code_review":{"commit_sha":"' +
+    oldSha +
+    '","status":"completed","has_any_findings":false,"has_unresolved_findings":false}} -->';
+  const blockingBodies = [
+    buildSummary({
+      status: 'failed',
+      hasAnyFindings: true,
+      hasUnresolvedFindings: true,
+    }),
+    buildSummary({ hasAnyFindings: true }),
+    buildSummary({ stateBlock: '' }),
+    buildSummary({
+      stateCommit: 'bbbbbb0123456789abcdef0123456789abcdef01',
+      tableCommit: 'cccccc0',
+    }),
+    buildSummary({
+      extraRows:
+        '| 🔒 **Security Review** | ✅ **Completed** | `1111111` | PR opened |\n',
+    }),
+    `${duplicateState}\n${duplicateStateBlock}`,
+    buildSummary().replace('| Review | Status |', '| Review | State |'),
+  ];
+  for (const body of blockingBodies) {
+    const blocked = summarize(body);
+    assert.equal(blocked.route, 'return-to-e1');
+    assert.equal(blocked.missingRegularCommentCount, 1);
+    assert.equal(
+      blocked.missingRegularComments[0].authorLogin,
+      'chatgpt-codex-connector[bot]',
+    );
+  }
+});
+
 // #1833: a disposition reply starting with `**Rejected**` but missing the
 // required `did not review HEAD` phrase passes the generic `isDispositionComment`
 // check (so the general 1:1 pairing accepts it as SOME disposition), but the
