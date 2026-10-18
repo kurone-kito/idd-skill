@@ -1443,6 +1443,28 @@ test('--help documents --draft-carriers, which help-text-flags does not cover fo
   );
 });
 
+test('--help lists excluded_roadmap_leaf in the filtered output schema (#4498)', () => {
+  const result = spawnHelperBinWithEnvelope('idd-discover-orphan-filter.mjs', [
+    '--help',
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  // The prose above the schema also names filtered.excluded_roadmap_leaf, so
+  // look only inside the "filtered" block of the output schema.
+  const lines = result.stdout.split(/\r?\n/);
+  const schemaStart = lines.indexOf('Output schema:');
+  assert.notEqual(schemaStart, -1, result.stdout);
+  const filteredStart = lines.indexOf('  "filtered": {', schemaStart);
+  assert.notEqual(filteredStart, -1, result.stdout);
+  const filteredEnd = lines.indexOf('  },', filteredStart);
+  assert.notEqual(filteredEnd, -1, result.stdout);
+  assert.ok(
+    lines
+      .slice(filteredStart + 1, filteredEnd)
+      .includes('    "excluded_roadmap_leaf": [...],'),
+    result.stdout,
+  );
+});
+
 test('--draft-carriers rejects the flags that select the orphan path, a cache mode, or a malformed --now (#4257)', () => {
   for (const extra of [
     ['--autopilot'],
