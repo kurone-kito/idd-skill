@@ -144,9 +144,10 @@ section to that full-clone path rather than the single-file download,
 so this issue's own acceptance criterion below ("every file required
 by the selected helper runtime profile") is actually satisfiable.
 
-### The status:authoring hold still applies
+### The configured authoring hold label still applies
 
-`status:authoring` remains a hold: the GitHub label exists before import, and
+The configured `issueAuthoring.authoringLabelName` (default
+`status:authoring`) remains a hold: the GitHub label exists before import, and
 after activation Discover suppresses the draft while it remains. The label
 does not activate the payload or provide publisher/journal prerequisites;
 removing it alone does not verify release. See the
