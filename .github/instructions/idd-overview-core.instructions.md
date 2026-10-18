@@ -303,9 +303,9 @@ with `flock` on `PATH`, or run directly with one notice.
 pass it. Do not use issue `#1391`'s flakiness rerun or Discover's
 incomplete-result retry. Bare `75` is command status.
 
-`pre-push-validate` does not auto-fix. After lint failure, run
-`fix-validate`, then rerun it. Inspect, stage, and commit its or
-`post-fix-validate`'s formatter output before push.
+If `pre-push-validate` lint fails, run `fix-validate`, then rerun
+`pre-push-validate`. Inspect, stage, and commit `fix-validate` or
+`post-fix-validate` formatter output before push.
 
 `install-deps` must not add tracked changes.
 
