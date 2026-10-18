@@ -281,17 +281,21 @@ directory and to read its JSON output. If `active` is `true`, the agent opens
 `instructionsRoot` and follows the phase routing from there. Otherwise it does
 nothing IDD-specific.
 
-The context cost is the entry text itself. It is 1013 bytes at the time of
-writing, and each session of an installed harness loads it. The IDD overview and
-the phase files load only after the gate reports `active`. The gate is read-only
-and makes no network calls.
+The context cost is the entry text itself, kept under 1200 bytes by a test, and
+each session of an installed harness loads it. The IDD overview and the phase
+files load only after the gate reports `active`. The gate is read-only and makes
+no network calls.
 
 Run `idd-activation` from the repository directory. The command takes `--cwd
-<path>` to classify another directory. The entry text also names `node
-"$PAYLOAD/scripts/idd-activation.mjs"` as a fallback, but the installer does not
-copy `scripts/` into the payload, so that fallback does not find the helper.
-From a checkout of this repository, run `node scripts/idd-activation.mjs [--cwd
-<path>]`.
+<path>` to classify another directory. If the command is absent from `PATH`, use
+`~/.local/bin/idd-activation` on POSIX. On Windows, use
+`& "$HOME\.local\bin\idd-activation.cmd"` in PowerShell or
+`"%USERPROFILE%\.local\bin\idd-activation.cmd"` in Command Prompt. Those
+executables are deployed by the host setup; `--install-user-global` installs
+the payload and does not copy CLI helpers or write to `~/.local/bin`. The
+onboarding output prints separate `npm install -g` and `pnpm add -g` commands
+for installing the package CLI. From a checkout of this repository, run `node
+scripts/idd-activation.mjs [--cwd <path>]`.
 
 The gate checks these rules in order and stops at the first match:
 

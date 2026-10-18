@@ -326,13 +326,60 @@ test('activation runs with HOME unset and writes nothing', () => {
   }
 });
 
-test('the user-global entry text stays within its byte limit and names the helper', () => {
+test('the user-global entry names installed activation fallbacks', () => {
   const text = readFileSync(ENTRY_PATH, 'utf8');
   assert.ok(
     Buffer.byteLength(text, 'utf8') <= ENTRY_LIMIT_BYTES,
     `entry text must stay within ${ENTRY_LIMIT_BYTES} bytes`,
   );
   assert.match(text, /idd-activation/);
+  assert.match(text, /~\/\.local\/bin\/idd-activation/);
+  assert.ok(text.includes('& "$HOME\\.local\\bin\\idd-activation.cmd"'));
+  assert.ok(text.includes('"%USERPROFILE%\\.local\\bin\\idd-activation.cmd"'));
+  assert.doesNotMatch(text, /\$PAYLOAD\/scripts\/idd-activation\.mjs/);
+});
+
+test('Windows cmd resolves the user-profile activation fallback', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'idd-activation-cmd-'));
+  try {
+    const home = join(root, 'home with spaces');
+    const localBin = join(home, '.local', 'bin');
+    const command = join(localBin, 'idd-activation.cmd');
+    mkdirSync(localBin, { recursive: true });
+    writeFileSync(
+      command,
+      '@echo off\r\n"%IDD_NODE_EXECUTABLE%" "%IDD_ACTIVATION_SCRIPT%" %*\r\nexit /b %ERRORLEVEL%\r\n',
+    );
+
+    const commandLine =
+      '""%USERPROFILE%\\.local\\bin\\idd-activation.cmd" --help"';
+    const result = spawnSync(
+      process.env.ComSpec ?? 'cmd.exe',
+      ['/d', '/s', '/c', commandLine],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          USERPROFILE: home,
+          IDD_NODE_EXECUTABLE: process.execPath,
+          IDD_ACTIVATION_SCRIPT: resolve(
+            REPO_ROOT,
+            'scripts/idd-activation.mjs',
+          ),
+        },
+        timeout: 10_000,
+        windowsVerbatimArguments: true,
+      },
+    );
+
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Usage:/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('the activation CLI prints the JSON verdict for a directory', () => {

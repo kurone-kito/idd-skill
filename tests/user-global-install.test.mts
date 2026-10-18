@@ -15,6 +15,7 @@
 // they do not depend on who runs them.
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -219,6 +220,39 @@ test('a fresh install lays down the payload, skills, and receipt, and uninstall 
   assert.equal(nodeFs.existsSync(join(home, '.claude', 'skills')), false);
   assert.equal(nodeFs.existsSync(join(home, '.agents', 'skills')), false);
   assert.deepEqual(nodeFs.readdirSync(join(home, '.claude')), []);
+});
+
+test('the installed entry uses the separately deployed activation command', () => {
+  const home = makeHome();
+  const localBin = join(home, '.local/bin');
+  const activationCommand = join(localBin, 'idd-activation');
+  const windowsActivationCommand = join(localBin, 'idd-activation.cmd');
+  nodeFs.mkdirSync(localBin, { recursive: true });
+  nodeFs.symlinkSync(join(REPO, 'bin/idd-activation.mjs'), activationCommand);
+  nodeFs.writeFileSync(windowsActivationCommand, '@echo off\r\nexit /b 0\r\n');
+
+  installPayload(optionsFor(home));
+
+  const installedEntry = nodeFs.readFileSync(
+    join(currentOf(home), 'user-global/entry.md'),
+    'utf8',
+  );
+  assert.match(installedEntry, /~\/.local\/bin\/idd-activation/);
+  assert.ok(
+    installedEntry.includes('"%USERPROFILE%\\.local\\bin\\idd-activation.cmd"'),
+  );
+  assert.doesNotMatch(
+    installedEntry,
+    /\$PAYLOAD\/scripts\/idd-activation\.mjs/,
+  );
+  assert.ok(nodeFs.existsSync(activationCommand));
+  assert.ok(nodeFs.existsSync(windowsActivationCommand));
+
+  const help = spawnSync(activationCommand, ['--help'], {
+    encoding: 'utf8',
+  });
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /Usage:/);
 });
 
 test('a second install of the same version writes no file', () => {
