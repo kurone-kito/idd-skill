@@ -26,6 +26,7 @@ import {
   findRepositoryRoot,
   LOCAL_ADMISSION_ENV_VAR,
   LOCK_OPEN_FLAGS,
+  parseProcessGroupStateOutput,
   resolveStateBase,
   runLocalAdmission,
   storedCapAboveOne,
@@ -225,6 +226,24 @@ test('storedCapAboveOne reads a stored cap above one as a number or numeric stri
   }
 });
 
+test('process-group state waits for live members and drains zombie-only groups', () => {
+  const pgid = 4321;
+  assert.equal(
+    parseProcessGroupStateOutput(
+      ['4321 Z', '4321 X', '7654 S'].join('\n'),
+      pgid,
+    ),
+    false,
+  );
+  assert.equal(
+    parseProcessGroupStateOutput(['4321 Z', '4321 S'].join('\n'), pgid),
+    true,
+  );
+  assert.equal(parseProcessGroupStateOutput('malformed output', pgid), null);
+  assert.equal(parseProcessGroupStateOutput('4321 Z\n\n7654 S', pgid), null);
+  assert.equal(parseProcessGroupStateOutput('', pgid), null);
+});
+
 test('findRepositoryRoot returns the nearest ancestor holding .git', () => {
   const repo = makeRepo();
   const nested = join(repo, 'a', 'b');
@@ -243,7 +262,9 @@ test('usage errors: a missing command and an unknown flag are usage errors', asy
   );
 });
 
-test('a raw stored cap above one refuses with exit 2 before any lock or spawn', async () => {
+test('a raw stored cap above one refuses with exit 2 before any lock or spawn', {
+  skip: !REAL_LOCK,
+}, async () => {
   const h = makeHarness();
   const repo = makeRepo({ localExec: { admission: { maxConcurrent: 9 } } });
   const notes: string[] = [];
@@ -353,6 +374,55 @@ test('enabled false is accepted by the loader and runs the command with no lock 
   assert.equal(existsSync(join(h.state, 'idd-skill')), false);
 });
 
+test('an unavailable ps refuses before starting a locked command', async () => {
+  const h = makeHarness();
+  const notes: string[] = [];
+  let spawned = false;
+  const status = await runLocalAdmission(['--', 'true'], {
+    env: h.env,
+    platform: 'linux',
+    cwd: makeWorkDir(),
+    stderr: (text) => notes.push(text),
+    readPolicy: () => ({ localExec: { admission: { enabled: true } } }),
+    findFlock: () => '/usr/bin/flock',
+    findPs: () => null,
+    spawn: () => {
+      spawned = true;
+      throw new Error('must not spawn');
+    },
+  });
+  assert.equal(status, 2);
+  assert.equal(spawned, false);
+  assert.match(notes.join(''), /ps is not available.*command not started/);
+  assert.equal(existsSync(join(h.state, 'idd-skill')), false);
+});
+
+test('an unusable ps refuses before starting a locked command', async () => {
+  const h = makeHarness();
+  const notes: string[] = [];
+  let spawned = false;
+  const status = await runLocalAdmission(['--', 'true'], {
+    env: h.env,
+    platform: 'linux',
+    cwd: makeWorkDir(),
+    stderr: (text) => notes.push(text),
+    readPolicy: () => ({ localExec: { admission: { enabled: true } } }),
+    findFlock: () => '/usr/bin/flock',
+    findPs: () => process.execPath,
+    spawn: () => {
+      spawned = true;
+      throw new Error('must not spawn');
+    },
+  });
+  assert.equal(status, 2);
+  assert.equal(spawned, false);
+  assert.match(
+    notes.join(''),
+    /ps .*unusable process-state output.*command not started/,
+  );
+  assert.equal(existsSync(join(h.state, 'idd-skill')), false);
+});
+
 test('IDD_LOCAL_ADMISSION in the environment skips the policy read and the lock', async () => {
   const h = makeHarness();
   const repo = makeRepo();
@@ -380,6 +450,39 @@ test('a missing flock on PATH runs the command directly with one notice', async 
     cwd: work,
     stderr: (text) => notes.push(text),
     findFlock: () => null,
+  });
+  assert.equal(status, 0);
+  assert.equal(notes.length, 1);
+  assert.match(notes[0] ?? '', /flock is not available/);
+  assert.equal(existsSync(join(h.state, 'idd-skill')), false);
+});
+
+test('a missing flock bypasses raw-cap validation and runs directly', async () => {
+  const h = makeHarness();
+  const repo = makeRepo({ localExec: { admission: { maxConcurrent: 9 } } });
+  const notes: string[] = [];
+  const status = await runLocalAdmission(['--', 'sh', '-c', 'exit 0'], {
+    env: h.env,
+    cwd: repo,
+    stderr: (text) => notes.push(text),
+    findFlock: () => null,
+  });
+  assert.equal(status, 0);
+  assert.equal(notes.length, 1);
+  assert.match(notes[0] ?? '', /flock is not available/);
+  assert.equal(existsSync(join(h.state, 'idd-skill')), false);
+});
+
+test('win32 bypasses raw-cap validation and runs directly', async () => {
+  const h = makeHarness();
+  const repo = makeRepo({ localExec: { admission: { maxConcurrent: 9 } } });
+  const notes: string[] = [];
+  const status = await runLocalAdmission(['--', 'sh', '-c', 'exit 0'], {
+    env: h.env,
+    cwd: repo,
+    platform: 'win32',
+    stderr: (text) => notes.push(text),
+    findFlock: () => '/usr/bin/flock',
   });
   assert.equal(status, 0);
   assert.equal(notes.length, 1);

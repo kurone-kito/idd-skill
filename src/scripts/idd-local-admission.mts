@@ -13,6 +13,7 @@ import {
   type ChildProcess,
   type SpawnOptions,
   spawn,
+  spawnSync,
 } from 'node:child_process';
 import {
   accessSync,
@@ -57,7 +58,9 @@ const REFUSED_EXIT_CODE = 2;
 const SPAWN_FAILURE_NOT_FOUND_EXIT_CODE = 127;
 const SPAWN_FAILURE_OTHER_EXIT_CODE = 126;
 const DEFAULT_WAIT_NOTICE_INTERVAL_MS = 60_000;
-const GROUP_POLL_INTERVAL_MS = 50;
+const GROUP_POLL_INTERVAL_MS = 1000;
+const PROCESS_STATE_PROBE_TIMEOUT_MS = 1000;
+const PROCESS_STATE_PROBE_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 const FALLBACK_MAX_WAIT_MS = 2 * 60 * 60 * 1000;
 const LOCK_PARENT_DIRECTORY = 'idd-skill';
 const LOCK_DIRECTORY = 'local-admission';
@@ -109,6 +112,8 @@ export interface LocalAdmissionDeps {
   readPolicy: (policyPath: string) => unknown;
   /** Absolute path of `flock` on this host, or null when it is not installed. */
   findFlock: (env: NodeJS.ProcessEnv) => string | null;
+  /** Absolute path of the ps utility, or null when it is not installed. */
+  findPs: (env: NodeJS.ProcessEnv) => string | null;
   spawn: (
     command: string,
     args: string[],
@@ -129,6 +134,7 @@ function defaultDependencies(): LocalAdmissionDeps {
     },
     readPolicy: (policyPath) => readRepositoryPolicyFile(policyPath).config,
     findFlock: (env) => findExecutableOnPath('flock', env),
+    findPs: (env) => findExecutableOnPath('ps', env),
     spawn: (command, args, options) => spawn(command, args, options),
     waitNoticeIntervalMs: DEFAULT_WAIT_NOTICE_INTERVAL_MS,
   };
@@ -311,13 +317,15 @@ function openLockFile(
   }
 }
 
-/** Resolves when the process group `pgid` has no members left. */
-function waitForGroupToEnd(pgid: number): Promise<void> {
+/** Resolves when the group is absent or contains only zombie/dead members. */
+function waitForGroupToEnd(
+  pgid: number,
+  processStateTool: string | null,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
   return new Promise((resolveWait) => {
     const poll = (): void => {
-      try {
-        process.kill(-pgid, 0);
-      } catch {
+      if (!processGroupHasLiveMember(pgid, processStateTool, env)) {
         resolveWait();
         return;
       }
@@ -327,9 +335,87 @@ function waitForGroupToEnd(pgid: number): Promise<void> {
   });
 }
 
+/**
+ * Returns true for a live member, false for an absent or Z/X-only group,
+ * and null when output is malformed or empty.
+ */
+export function parseProcessGroupStateOutput(
+  output: string,
+  pgid: number,
+): boolean | null {
+  const rows = output.split(/\r?\n/);
+  if (rows.at(-1) === '') rows.pop();
+  if (rows.length === 0) return null;
+  for (const row of rows) {
+    if (row.trim().length === 0) return null;
+    const fields = row.trim().split(/\s+/);
+    const processGroup = fields[0];
+    const state = fields[1];
+    if (
+      fields.length !== 2 ||
+      processGroup === undefined ||
+      !/^\d+$/.test(processGroup) ||
+      state === undefined ||
+      !/^[A-Za-z?]/.test(state)
+    ) {
+      return null;
+    }
+    if (processGroup === String(pgid) && !/^[ZzXx]/.test(state)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function processGroupHasLiveMember(
+  pgid: number,
+  processStateTool: string | null,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const output = readProcessStateOutput(processStateTool, env);
+  return (
+    output === null || parseProcessGroupStateOutput(output, pgid) !== false
+  );
+}
+
+function readProcessStateOutput(
+  processStateTool: string | null,
+  env: NodeJS.ProcessEnv,
+): string | null {
+  if (processStateTool === null) return null;
+  try {
+    const result = spawnSync(processStateTool, ['-A', '-o', 'pgid=,stat='], {
+      encoding: 'utf8',
+      env,
+      maxBuffer: PROCESS_STATE_PROBE_MAX_BUFFER_BYTES,
+      timeout: PROCESS_STATE_PROBE_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    if (
+      result.error !== undefined ||
+      result.status !== 0 ||
+      typeof result.stdout !== 'string'
+    ) {
+      return null;
+    }
+    return result.stdout;
+  } catch {
+    return null;
+  }
+}
+
+function processStateToolIsUsable(
+  processStateTool: string | null,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const output = readProcessStateOutput(processStateTool, env);
+  return output !== null && parseProcessGroupStateOutput(output, -1) !== null;
+}
+
 interface SuperviseOptions {
   /** Signal the whole process group (the locked path) instead of the child only. */
   group: boolean;
+  processStateTool?: string | null;
   onBeforeSettle?: () => void;
   /** The child's own outcome, used when no signal was forwarded. */
   onClose: (code: number | null, signal: NodeJS.Signals | null) => number;
@@ -392,7 +478,11 @@ function superviseChild(
         const status = signalStatus(forwarded);
         const pgid = child.pid;
         if (options.group && pgid !== undefined) {
-          void waitForGroupToEnd(pgid).then(() => settle(status));
+          void waitForGroupToEnd(
+            pgid,
+            options.processStateTool ?? null,
+            deps.env,
+          ).then(() => settle(status));
         } else {
           settle(status);
         }
@@ -444,6 +534,7 @@ function runDirect(
 function runLocked(
   command: readonly string[],
   flockPath: string,
+  processStateTool: string,
   lockFd: number,
   maxWaitMs: number,
   deps: LocalAdmissionDeps,
@@ -485,6 +576,7 @@ function runLocked(
   });
   return superviseChild(child, deps, {
     group: true,
+    processStateTool,
     onBeforeSettle: () => clearInterval(notice),
     onClose: (code, signal) => {
       if (acquired) return code ?? signalStatus(signal);
@@ -572,15 +664,6 @@ export async function runLocalAdmission(
   if (!admission.enabled) {
     return runDirect(command, deps);
   }
-  if (
-    admission.backend === 'flock' &&
-    storedCapAboveOne(storedMaxConcurrent(raw))
-  ) {
-    deps.stderr(
-      `local-admission: the flock backend admits one command at a time, but localExec.admission.maxConcurrent is ${String(storedMaxConcurrent(raw))}; command not started\n`,
-    );
-    return REFUSED_EXIT_CODE;
-  }
   if (admission.backend === 'pueue') {
     deps.stderr(
       'local-admission: backend "pueue" is not implemented yet; this run takes the flock path with one slot\n',
@@ -593,6 +676,25 @@ export async function runLocalAdmission(
     );
     return runDirect(command, deps);
   }
+  if (
+    admission.backend === 'flock' &&
+    storedCapAboveOne(storedMaxConcurrent(raw))
+  ) {
+    deps.stderr(
+      `local-admission: the flock backend admits one command at a time, but localExec.admission.maxConcurrent is ${String(storedMaxConcurrent(raw))}; command not started\n`,
+    );
+    return REFUSED_EXIT_CODE;
+  }
+  const processStateTool = deps.findPs(deps.env);
+  if (
+    processStateTool === null ||
+    !processStateToolIsUsable(processStateTool, deps.env)
+  ) {
+    deps.stderr(
+      'local-admission: ps is not available or returned unusable process-state output; command not started\n',
+    );
+    return REFUSED_EXIT_CODE;
+  }
   const maxWaitMs =
     parseIsoDurationToMs(admission.maxWait) ??
     parseIsoDurationToMs(POLICY_DEFAULTS.localExec.admission.maxWait) ??
@@ -602,7 +704,14 @@ export async function runLocalAdmission(
     deps.stderr(`local-admission: ${opened.refusal}; command not started\n`);
     return REFUSED_EXIT_CODE;
   }
-  return runLocked(command, flockPath, opened.fd, maxWaitMs, deps);
+  return runLocked(
+    command,
+    flockPath,
+    processStateTool,
+    opened.fd,
+    maxWaitMs,
+    deps,
+  );
 }
 
 /** The CLI body: reads the process arguments and returns the exit status. */

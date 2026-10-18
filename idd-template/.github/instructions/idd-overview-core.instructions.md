@@ -132,19 +132,16 @@ inherit a non-stale claim. For legacy claim migration (comments without
 ## Thresholds
 
 Ownership timing defaults (`claim-stale-age`, `claim-heartbeat-interval`)
-live in `docs/policy-constants.md`.
+are in `docs/policy-constants.md`.
 
-- **Stale**: an active claim whose latest **valid** `claimed-by`
-  comment's GitHub `created_at` is ≥ 24 h ago. Another session may take
-  it over by posting a fresh `{claim-id}` whose `supersedes:` value is
-  that active claim's `{claim-id}`.
-- **Heartbeat**: after re-validating ownership, re-post the claim
-  comment every 12 h while holding or when any phase is expected to
-  exceed 12 h. The latest **valid** `claimed-by` comment for the same
-  `{claim-id}` resets the stale clock. Embedded timestamps are ignored;
-  only the comment's GitHub `created_at` counts. In a hold, a living
-  orchestrator of the same session may renew it for up to 72 h (fan-out
-  variant); without one, the 24 h stale clock applies.
+- **Stale**: A claim is stale 24 h after its latest valid `claimed-by`
+  comment's GitHub `created_at`. Takeover uses a fresh `{claim-id}` whose
+  `supersedes:` names that active claim.
+- **Heartbeat**: Revalidate ownership and repost the claim comment every
+  12 h while holding or before any phase expected to exceed 12 h. The
+  latest valid `claimed-by` comment for the same `{claim-id}` resets the
+  stale clock; ignore embedded timestamps. In a hold, a living same-session
+  orchestrator may renew it up to 72 h (fan-out); otherwise 24 h applies.
 - **Heartbeat-overdue**: diagnostic only; see
   `idd-resume-stall.instructions.md` S3.
 
@@ -259,27 +256,18 @@ which still stop child selection in Discover.
 
 ## Project commands
 
-When a phase names a command set, run the corresponding commands.
-**Adapt this section for other projects.**
+**Policy.** Use profile-selected `idd-effective-config --key <path>`;
+otherwise read repo `.github/idd/config.json`. Repo-only:
+`commands`, `localExec`, `skipIssueAuthorApprovalGate`,
+`maintainerApprovalActorPolicy`, `upstreamEscalation`, `forcedHandoff`.
+Read `mergeGate`, `ciGate`, and trusted-base from PR base; stop if the
+repo config fails canonical schema.
 
-**Policy and helper spelling.** Read policy keys from the effective policy
-(profile-selected `idd-effective-config --key <path>`; without helper output,
-the repository-local `.github/idd/config.json`, with no user-global layers),
-except `commands`,
-`skipIssueAuthorApprovalGate`, `maintainerApprovalActorPolicy`,
-`upstreamEscalation`, and `forcedHandoff`, which stay repository-local.
-Merge-gate reads (`mergeGate`, `ciGate`) and trusted-base reads stay on
-the PR's base ref. The command entries below (`install-deps` and the three
-validation entries) are read from the `commands` object of
-`.github/idd/config.json`, which must validate against
-the canonical schema at
-<https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json>. If it is
-missing or invalid, stop and report. Absent values keep the gate
-enabled and default approval actors to
-`owners-and-maintainers-only`.
-`node scripts/<name>.mjs` examples are the `vendored-node` spelling; other
-profiles use the forms in `docs/idd-helper-scripts.md`
-(Helper Runtime Profiles and Profile Wiring Surface).
+<!-- dprint-ignore -->
+Absent values keep the gate enabled and default approval actors to `owners-and-maintainers-only`.
+
+`node scripts/<name>.mjs` means `vendored-node`; other profiles:
+`docs/idd-helper-scripts.md`.
 
 <!-- dprint-ignore-start -->
 | Name | Entries |
@@ -292,24 +280,37 @@ profiles use the forms in `docs/idd-helper-scripts.md`
 | **orphan-first-policy** | `none` |
 <!-- dprint-ignore-end -->
 
-`pre-push-validate` omits auto-fix. If lint fails, run
-**fix-validate**, commit, then re-run **pre-push-validate**.
+**Full-profile validation.** Read `commands` and
+`localExec.admission.testCommand` from repo `.github/idd/config.json`;
+blank/absent `testCommand` is unset. Route each full `commands.<gate>`
+value intact in one profile-selected
+`idd-local-admission -- <shell> -c <string>` call: `fix-validate`
+(B3/C5, E9, D1 conflict fix, code-caused recovery), D2
+`pre-push-validate`, E12/Esync `post-fix-validate`. Admit it separately
+after each listed command at B3/C5, D2, and E12; skip if included.
 
-If **fix-validate**/**post-fix-validate** changes files, stage and
-commit before any push, rebase, or clean-tree step.
+With helper runtime, use only it. Otherwise `enabled: false` runs directly;
+use the [helper-free fallback](../../docs/idd-helper-scripts.md#helper-free-fallback)
+with `flock` on `PATH`, or run directly with one notice.
 
-`install-deps` must be idempotent: re-running it in fresh, reused, or
-recreated worktrees must not need manual cleanup or leave unexpected
-tracked changes.
+**Admission expiry.** Only exit `75` plus stderr
+`local-admission: expired` means no command started. Report; never rerun or
+pass it. Do not use issue `#1391`'s flakiness rerun or Discover's
+incomplete-result retry. Bare `75` is command status.
 
-Judge a command-set run by exit status; when piping, check
-`${PIPESTATUS[0]}` or `pipefail` because filters can't prove success
-(#3139).
+If `pre-push-validate` lint fails, run `fix-validate`, then rerun
+`pre-push-validate`. Inspect, stage, and commit `fix-validate` or
+`post-fix-validate` formatter output before push.
 
-**Tool availability**: run commands only when tools exist. For Node.js,
-prefer project scripts; use `npx <tool>` if Node.js and `npx` are available
-and no relevant script exists; else use `true`. For other tools, use
-`true` when absent.
+`install-deps` must not add tracked changes.
+
+Judge a command-set run by exit status; in pipes check `${PIPESTATUS[0]}` or
+`pipefail` (#3139).
+
+**Tool availability:** Prefer Node.js project scripts; else
+`npx <tool>` if Node.js and `npx` are available.
+`npx <tool>` only when `npx` is available and no relevant script exists;
+else `true`. Others: `true`.
 
 ## Phase routing table
 

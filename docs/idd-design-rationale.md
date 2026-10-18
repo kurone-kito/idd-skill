@@ -905,6 +905,21 @@ adopters scale out concurrent sessions (#1391). Hosted CI governs when
 it disagrees with a local outcome for the same commit; that does not
 waive the fix-validate / pre-push-validate requirements themselves.
 
+### B3 — Host-local validation admission (kurone-kito/idd-skill#4426)
+
+The operator reported repeated host crashes when local validation runs
+overlapped on 2026-10-16 (roadmap `#4426`). `idd-worker-budget` is checked
+before dispatch, so it can stop new workers, not validation in sessions
+already running. The clone-scoped lock serializes shared-clone fetch and
+worktree operations; it is neither an operating-system-user test slot nor
+safe around a multi-minute run because a killed owner can leave it locked.
+`idd-local-admission` holds the per-user slot around the complete command.
+
+An expiry means exit `75` plus `local-admission: expired` on stderr: the
+command did not start. Report it without rerunning or passing it. Issue
+`#1391`'s flakiness diagnosis applies only after a test ran and failed; an
+admission expiry does not qualify. A bare `75` is the command's own status.
+
 ### B3 — Edit the canonical source of a generated docs/instructions file, not its mirror
 
 This repository generates several `docs/**.md` and
