@@ -382,6 +382,49 @@ test('Windows cmd resolves the user-profile activation fallback', {
   }
 });
 
+test('Windows PowerShell resolves the user-profile activation fallback', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const root = mkdtempSync(
+    join(realpathSync(tmpdir()), 'idd-activation-powershell-'),
+  );
+  try {
+    const home = join(root, 'home with spaces');
+    const localBin = join(home, '.local', 'bin');
+    const command = join(localBin, 'idd-activation.cmd');
+    mkdirSync(localBin, { recursive: true });
+    writeFileSync(
+      command,
+      '@echo off\r\necho idd-powershell-activation-fallback-ok\r\nexit /b 0\r\n',
+    );
+
+    const result = spawnSync(
+      'powershell.exe',
+      [
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        'Set-Variable -Name HOME -Value $env:IDD_TEST_HOME -Force; & "$HOME\\.local\\bin\\idd-activation.cmd"',
+      ],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          IDD_TEST_HOME: home,
+        },
+        timeout: 10_000,
+      },
+    );
+
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /idd-powershell-activation-fallback-ok/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('the activation CLI prints the JSON verdict for a directory', () => {
   const box = sandbox();
   try {
