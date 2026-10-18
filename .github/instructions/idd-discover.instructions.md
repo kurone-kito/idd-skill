@@ -176,9 +176,8 @@ Read the **issue-scope** value from the Project commands table in
   filtered them all), **trigger (b)** (candidates reach A3.5 but A4
   Step 1, Step 1.5, or Step 2's floor skip discards every one), or
   **trigger (c)** (A1 finds no roadmap issues), or **trigger (d)** (A1.5
-  stop). A0-O runs **at most once** per Discover pass as this fallback. A
-  non-empty A3.5 approval-needed bucket is not a true zero and never
-  triggers this fallback. See
+  stop). Run A0-O at most once per pass; A3.5 approval-needed
+  candidates never trigger it. See
   [A0-O fallback triggers](../../docs/idd-design-rationale.md#a0-o-roadmap-first-fallback-triggers).
 - If `issue-scope` is `orphan-first`: proceed to A0-O.
 
@@ -194,6 +193,9 @@ the invoking trigger instead — (a)/(c) to the A3 decision tree, (b) (A4
 exhaustion) to the A4 **"report and stop"** terminal, (d) to A1.5's
 report-and-stop — since A1 already ran and must not be re-entered (no
 A1 ↔ A0-O or A4 ↔ A0-O loop).
+
+(a)/(b): use `--exclude-issue <n>` per A2 leaf with helpers; without
+them, manually omit those recorded leaf numbers. (c)/(d), orphan-first: none.
 
 - If `orphan-first-policy` is `public-disabled`: for a public repository
   (or when visibility cannot be determined), skip A0-O without searching

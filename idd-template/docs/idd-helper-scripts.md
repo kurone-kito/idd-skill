@@ -806,7 +806,11 @@ in this preamble, since the fallback differs per helper.
   `missing_refs_line`, `ambiguous_refs_line`, or `unresolvable:#N` (the last
   also lists the origin in the top-level `unresolvable` array), or
   `needs_decision_label_conflicts_with_authoring_label` when the configured
-  authoring and needs-decision labels collide (issue #4065)
+  authoring and needs-decision labels collide (issue #4065).
+  Repeatable `--exclude-issue <positive-number>` excludes matching open issues
+  before classification and claim annotation, reporting them under
+  `filtered.excluded_roadmap_leaf`. Values are deduplicated for the hint-cache
+  key, including the empty set; this option is rejected with `--draft-carriers`.
   Default-on (not opt-in): the output's `draftCarriers` lists the draft
   carriers, which are the open issues that carry the authoring-only label and
   the carrier marker outside code (issue `#4257`). Each carrier is `held` (it

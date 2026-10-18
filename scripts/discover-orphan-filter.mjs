@@ -880,6 +880,7 @@ function classifyDraftCarriers(issues, options) {
 }
 export async function filterOrphanIssues(issues, options = {}) {
   const issueStateByNumber = new Map(options.issueStateByNumber ?? []);
+  const excludedIssueNumbers = new Set(options.excludeIssueNumbers ?? []);
   const fetchIssueStateByNumber =
     typeof options.fetchIssueStateByNumber === 'function'
       ? options.fetchIssueStateByNumber
@@ -887,6 +888,7 @@ export async function filterOrphanIssues(issues, options = {}) {
   const filtered = {
     provider_outage_target: [],
     authoring_journal_target: [],
+    excluded_roadmap_leaf: [],
     roadmap_marker: [],
     blocked_by_marker: [],
     blocked_label: [],
@@ -936,6 +938,17 @@ export async function filterOrphanIssues(issues, options = {}) {
     options.isTrustedCollaborator ?? (() => false),
   );
   for (const issue of issues) {
+    if (excludedIssueNumbers.has(issue.number)) {
+      filtered.excluded_roadmap_leaf.push({
+        number: issue.number,
+        title: issue.title,
+        state: issue.state,
+        reason: 'excluded_roadmap_leaf',
+        details: null,
+        url: issue.url ?? '',
+      });
+      continue;
+    }
     const classifyOptions = {
       issueStateByNumber,
       fetchIssueStateByNumber,
@@ -1309,6 +1322,9 @@ async function runCli() {
       autopilot: args.autopilot,
       withClaimState: args.withClaimState,
       currentClaimId: args.currentClaimId,
+      // Always key the normalized set, including [], so pre-change hints and
+      // reports from another roadmap graph can never satisfy this request.
+      excludeIssues: args.excludeIssues,
     },
     policy,
     noCache: args.noCache,
@@ -1386,6 +1402,9 @@ function rejectDraftCarrierCombinations(args) {
   }
   if (args.pr !== null) {
     combined.push('--pr');
+  }
+  if (args.excludeIssues.length > 0) {
+    combined.push('--exclude-issue');
   }
   if (args.noCache) {
     combined.push('--no-cache');
@@ -1581,6 +1600,7 @@ async function produceOutput(args, policy) {
     autopilot: args.autopilot,
     now: args.now || new Date(),
     claimState,
+    excludeIssueNumbers: args.excludeIssues,
   });
   const output = {
     repository: { owner, repo },
@@ -1618,6 +1638,7 @@ function parseArgs(rawArgv) {
     refreshCache: false,
     purgeCache: false,
     draftCarriers: false,
+    excludeIssues: [],
   };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -1645,6 +1666,27 @@ function parseArgs(rawArgv) {
         );
       }
       parsed.pr = parsedNumber;
+      index += 1;
+      continue;
+    }
+    if (token === '--exclude-issue') {
+      if (value === undefined || value.startsWith('--')) {
+        throw markCliUsageError(
+          new Error('missing value for argument: --exclude-issue'),
+        );
+      }
+      if (!/^\d+$/u.test(value)) {
+        throw markCliUsageError(
+          new Error(`invalid --exclude-issue value: ${value}`),
+        );
+      }
+      const issueNumber = Number(value);
+      if (!Number.isSafeInteger(issueNumber) || issueNumber <= 0) {
+        throw markCliUsageError(
+          new Error(`invalid --exclude-issue value: ${value}`),
+        );
+      }
+      parsed.excludeIssues.push(issueNumber);
       index += 1;
       continue;
     }
@@ -1705,13 +1747,19 @@ function parseArgs(rawArgv) {
     }
     throw markCliUsageError(new Error(`unknown argument: ${token}`));
   }
+  parsed.excludeIssues = [...new Set(parsed.excludeIssues)].sort(
+    (left, right) => left - right,
+  );
   return parsed;
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/discover-orphan-filter.mjs [--owner <owner>] [--repo <repo>] [--policy <path>] [--pr <number>] [--now <ISO8601>] [--autopilot] [--with-claim-state] [--current-claim-id <id>] [--no-cache | --refresh-cache]
+  node scripts/discover-orphan-filter.mjs [--owner <owner>] [--repo <repo>] [--policy <path>] [--pr <number>] [--now <ISO8601>] [--autopilot] [--with-claim-state] [--current-claim-id <id>] [--exclude-issue <number> ...] [--no-cache | --refresh-cache]
   node scripts/discover-orphan-filter.mjs --purge-cache
   node scripts/discover-orphan-filter.mjs --draft-carriers [--owner <owner>] [--repo <repo>] [--policy <path>] [--now <ISO8601>]
+
+Repeat --exclude-issue <positive-number> to omit open issues already evaluated
+by a roadmap graph; each is reported under filtered.excluded_roadmap_leaf.
 
 Hint cache (opt-in via githubApi.readCache.enabled; off by default): the whole
 output is cached as a short-lived HINT, so an unchanged repeat inside

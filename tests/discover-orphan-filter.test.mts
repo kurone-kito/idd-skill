@@ -361,6 +361,65 @@ test('filterOrphanIssues excludes blocked labels and open blockers', async () =>
   assert.equal(result.filtered.blocked_label.length, 1);
 });
 
+test('#4493 excludes markerless roadmap leaves before orphan-only checks', async () => {
+  const triageLookups: number[] = [];
+  const result = await filterOrphanIssues(
+    [
+      {
+        number: 4401,
+        title: 'markerless roadmap leaf',
+        state: 'OPEN',
+        labels: [],
+        body: 'No roadmap marker is present.',
+        url: 'https://example.com/4401',
+      },
+      {
+        number: 4402,
+        title: 'independent orphan',
+        state: 'OPEN',
+        labels: [],
+        body: '',
+        url: 'https://example.com/4402',
+      },
+    ],
+    {
+      excludeIssueNumbers: [4401],
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      fetchCommentsByIssueNumber: (issueNumber) => {
+        triageLookups.push(issueNumber);
+        return [];
+      },
+      trustedMarkerLogins: ['trusted'],
+    },
+  );
+
+  assert.deepEqual(
+    result.orphans.map((issue) => issue.number),
+    [4402],
+  );
+  assert.deepEqual(
+    result.filtered.excluded_roadmap_leaf.map((issue) => ({
+      number: issue.number,
+      title: issue.title,
+      state: issue.state,
+      reason: issue.reason,
+      url: issue.url,
+    })),
+    [
+      {
+        number: 4401,
+        title: 'markerless roadmap leaf',
+        state: 'OPEN',
+        reason: 'excluded_roadmap_leaf',
+        url: 'https://example.com/4401',
+      },
+    ],
+  );
+  assert.equal(result.counts.filtered.excluded_roadmap_leaf, 1);
+  assert.deepEqual(triageLookups, [4402]);
+});
+
 test('#2767: filterOrphanIssues demotes a runtime-observation-precondition candidate via fetchUserContentEditorsByIssueNumber and warns', async () => {
   const issues = [
     {
@@ -1394,6 +1453,7 @@ test('--draft-carriers rejects the flags that select the orphan path, a cache mo
     ['--no-cache'],
     ['--refresh-cache'],
     ['--purge-cache'],
+    ['--exclude-issue', '4401'],
     ['--now', 'not-a-date'],
   ]) {
     const result = spawnHelperBinWithEnvelope(
@@ -3163,6 +3223,164 @@ process.exit(1);
     }
   } finally {
     restore();
+  }
+});
+
+test('#4493: --exclude-issue validates before GitHub reads and accepts repeats', () => {
+  const restore = stubExecutable(
+    'gh',
+    `process.stderr.write("unexpected gh invocation: " + process.argv.slice(2).join(" ") + "\\n");
+process.exit(1);
+`,
+  );
+  try {
+    for (const [args, message] of [
+      [['--exclude-issue'], /missing value for argument: --exclude-issue/u],
+      [
+        ['--exclude-issue', '--autopilot'],
+        /missing value for argument: --exclude-issue/u,
+      ],
+      [['--exclude-issue', 'nope'], /invalid --exclude-issue value: nope/u],
+      [['--exclude-issue', '0'], /invalid --exclude-issue value: 0/u],
+      [['--exclude-issue', '1x'], /invalid --exclude-issue value: 1x/u],
+      [
+        ['--exclude-issue', '9007199254740992'],
+        /invalid --exclude-issue value: 9007199254740992/u,
+      ],
+    ] as const) {
+      const result = spawnHelperBinWithEnvelope(
+        'idd-discover-orphan-filter.mjs',
+        args,
+      );
+      const label = `${args.join(' ')}: ${JSON.stringify(result)}`;
+      assert.equal(result.status, 1, label);
+      assert.match(result.stderr, message, label);
+      assert.doesNotMatch(result.stderr, /unexpected gh invocation/u, label);
+      assert.equal(result.envelope?.kind, 'usage', label);
+    }
+  } finally {
+    restore();
+  }
+});
+
+test('#4493: hint-cache keys include distinct and empty exclusion sets', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-roadmap-leaf-exclusion-cache-'));
+  const workspace = join(root, 'workspace');
+  const cacheHome = join(root, 'cache');
+  const issues = [
+    {
+      number: 4401,
+      title: 'markerless roadmap leaf',
+      state: 'open',
+      labels: [],
+      body: 'No roadmap marker is present.',
+      url: 'https://example.com/4401',
+      html_url: 'https://example.com/4401',
+    },
+    {
+      number: 4402,
+      title: 'independent orphan',
+      state: 'open',
+      labels: [],
+      body: '',
+      url: 'https://example.com/4402',
+      html_url: 'https://example.com/4402',
+    },
+  ];
+  mkdirSync(join(workspace, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(workspace, '.github', 'idd', 'config.json'),
+    JSON.stringify({ githubApi: { readCache: { enabled: true } } }),
+  );
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+if (args[0] === 'api') {
+  const path = args[1] || '';
+  if (path.startsWith('repos/kurone-kito/idd-skill/issues?state=open')) {
+    process.stdout.write(JSON.stringify(${JSON.stringify(issues)}) + '\\n');
+    process.exit(0);
+  }
+  process.stdout.write('[]\\n');
+  process.exit(0);
+}
+process.stderr.write('unexpected gh invocation: ' + args.join(' ') + '\\n');
+process.exit(1);
+`,
+  );
+  const savedCacheHome = process.env.XDG_CACHE_HOME;
+  const savedGhToken = process.env.GH_TOKEN;
+  process.env.XDG_CACHE_HOME = cacheHome;
+  process.env.GH_TOKEN = 'idd-test-cache-token';
+  try {
+    const run = (extraArgs: string[]) => {
+      const result = spawnHelperBinWithEnvelope(
+        'idd-discover-orphan-filter.mjs',
+        ['--owner', 'kurone-kito', '--repo', 'idd-skill', ...extraArgs],
+        { cwd: workspace },
+      );
+      assert.equal(result.status, 0, JSON.stringify(result));
+      return JSON.parse(result.stdout) as {
+        orphans: { number: number }[];
+        filtered: { excluded_roadmap_leaf: { number: number }[] };
+        cache: { mode: string; source: string; complete: boolean };
+      };
+    };
+
+    const first = run(['--exclude-issue', '4401', '--exclude-issue', '4401']);
+    assert.deepEqual(first.cache, {
+      mode: 'hint',
+      source: 'live',
+      ageMs: 0,
+      maxAgeMs: 300000,
+      complete: true,
+      enumerations: 1,
+      exhaustionRefresh: false,
+    });
+    assert.deepEqual(
+      first.orphans.map((issue) => issue.number),
+      [4402],
+    );
+    assert.deepEqual(
+      first.filtered.excluded_roadmap_leaf.map((issue) => issue.number),
+      [4401],
+    );
+
+    const second = run(['--exclude-issue', '4402']);
+    assert.equal(second.cache.source, 'live');
+    assert.deepEqual(
+      second.orphans.map((issue) => issue.number),
+      [4401],
+    );
+    assert.deepEqual(
+      second.filtered.excluded_roadmap_leaf.map((issue) => issue.number),
+      [4402],
+    );
+
+    const empty = run([]);
+    assert.equal(empty.cache.source, 'live');
+    assert.deepEqual(
+      empty.orphans.map((issue) => issue.number).sort((a, b) => a - b),
+      [4401, 4402],
+    );
+    assert.deepEqual(empty.filtered.excluded_roadmap_leaf, []);
+
+    const emptyRepeat = run([]);
+    assert.equal(emptyRepeat.cache.source, 'hint');
+    assert.deepEqual(emptyRepeat.orphans, empty.orphans);
+  } finally {
+    restore();
+    if (savedCacheHome === undefined) {
+      delete process.env.XDG_CACHE_HOME;
+    } else {
+      process.env.XDG_CACHE_HOME = savedCacheHome;
+    }
+    if (savedGhToken === undefined) {
+      delete process.env.GH_TOKEN;
+    } else {
+      process.env.GH_TOKEN = savedGhToken;
+    }
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
