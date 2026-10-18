@@ -9768,7 +9768,8 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
    twice, in the primary checkout: on the issue body, and on a copy that
    is the body with a leading `## Candidate files` section of one
    backticked bullet per canonical path. It first refuses a body with no
-   heading after its first line, a canonical path that holds a backtick or
+   heading after its first line (an ATX heading, or a Setext heading as the
+   candidate parser reads one), a canonical path that holds a backtick or
    a line break (a bullet cannot carry it), and a copy whose section the
    candidate parser does not read exactly as the section alone. The
    verdict of each

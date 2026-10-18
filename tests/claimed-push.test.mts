@@ -1711,6 +1711,28 @@ test('a canonical path a bullet cannot carry is refused before either run', () =
   }
 });
 
+test('a Setext heading after the first line counts as a heading', () => {
+  for (const [label, body, refused] of [
+    ['setext h2', 'Text.\n\nBackground\n----------\n\nMore text.\n', false],
+    ['setext h1', 'Text.\n\nBackground\n==========\n\nMore text.\n', false],
+    ['thematic break', 'Text.\n\n---\n\nMore text.\n', true],
+    ['list item over a rule', 'Text.\n\n- item\n---\n', true],
+    ['first-line setext', 'Background\n---\n\nMore text.\n', true],
+  ] as const) {
+    const r = run({
+      input: { apply: false },
+      world: { [K.issueView]: result(0, issueJson(body)) },
+    });
+    if (refused) {
+      assertRefused(r, 'scope', NEXT.stopAndReport, { exitStatus: 0 });
+      assert.equal(r.count(K.audit), 0, label);
+    } else {
+      assert.equal(stepOf(r, 'scope').status, 'passed', label);
+      assert.equal(r.count(K.audit), 2, label);
+    }
+  }
+});
+
 test('a body with a Split out of line passes the second run over the limit', () => {
   const r = run({
     input: { apply: false },

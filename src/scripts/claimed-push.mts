@@ -81,6 +81,16 @@ const REPO_DEFAULT_BRANCH_ARGS = [
 /** An ATX heading, as the `## Candidate files` parser recognizes one. */
 const ATX_HEADING = /^ {0,3}#{1,6}\s+/u;
 
+/*
+ * The parser's Setext rules (`discover-shared-file-overlap.mts`, which does
+ * not export them): an underline ends the section when the line over it is
+ * a non-blank paragraph line, not a list item, a quote, or a list item's
+ * indented continuation.
+ */
+const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/u;
+const LIST_OR_QUOTE_LINE = /^ {0,3}(?:[-*+][ \t]+|\d+[.)][ \t]+|>)/u;
+const INDENTED_LINE = /^[ \t]+\S/u;
+
 /**
  * A generated-from banner is read from a file's first 200 bytes, the window
  * `build-ts` and `audit-docs` use, so an example banner line further down a
@@ -983,14 +993,35 @@ function canonicalSection(paths: readonly string[]): string {
 
 /** Whether the body has an ATX heading after its first line, as the parser masks it. */
 function hasHeadingAfterFirstLine(body: string): boolean {
-  return maskMarkdownForScan(body, {
+  const lines = maskMarkdownForScan(body, {
     inlineCode: 'keep',
     htmlComments: 'mask',
     htmlBlocks: 'mask',
-  })
-    .split(/\r?\n/u)
-    .slice(1)
-    .some((line) => ATX_HEADING.test(line));
+  }).split(/\r?\n/u);
+  return lines.some(
+    (line, index) =>
+      index >= 1 &&
+      (ATX_HEADING.test(line) ||
+        (index >= 2 &&
+          SETEXT_UNDERLINE.test(line) &&
+          isSetextContentLine(lines, index - 1))),
+  );
+}
+
+/** Whether `lines[index]` can be the text of a Setext heading under it. */
+function isSetextContentLine(lines: readonly string[], index: number): boolean {
+  const line = lines[index] ?? '';
+  if (line.trim() === '' || LIST_OR_QUOTE_LINE.test(line)) {
+    return false;
+  }
+  if (!INDENTED_LINE.test(line)) {
+    return true;
+  }
+  let above = index - 1;
+  while (above >= 0 && INDENTED_LINE.test(lines[above] ?? '')) {
+    above -= 1;
+  }
+  return !LIST_OR_QUOTE_LINE.test(lines[above] ?? '');
 }
 
 type AuditVerdict =
