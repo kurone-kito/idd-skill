@@ -24,6 +24,30 @@ must never replace trusted operational markers, review state, CI state,
 branch protection, or GitHub issue and pull request state as workflow
 evidence.
 
+Using a digest is optional. The operator or the repository chooses
+whether a run uses one, for example in the operator's instructions or
+the repository's agent instructions. When neither has chosen, a current
+digest that a trusted marker actor already posted on the issue or pull
+request means one is in use, and otherwise none is. Every phase step
+that creates, updates, upserts, verifies, or recreates a digest,
+including the hold, abort, and resume steps, applies only while a digest
+is in use. Reaching such a step, or finding no digest during resume,
+does not by itself put a digest in use. Without a digest, issue or pull
+request comments and commits still record material decisions and holds.
+Trusted markers and GitHub state stay authoritative either way. While a
+digest is in use, every rule in this contract applies unchanged, as do
+the claim revalidation gate and the limits on pull request digest edits
+during merge intent in `idd-overview-appendix.instructions.md`.
+
+Observed 2026-10-16 on [kurone-kito/setup.ubuntu#220][digest-incident]
+(issue 219), recorded in the 2026-10-17 setup.ubuntu section of the
+[field-feedback gist][digest-feedback-gist]: the operator created and
+updated digests because the phase steps required them, and could not
+tell whether skipping them was allowed.
+
+[digest-incident]: https://github.com/kurone-kito/setup.ubuntu/pull/220
+[digest-feedback-gist]: https://gist.github.com/kurone-kito/9f2d7871542cb2f7a255f92a7c1232d0
+
 The first line of every current digest comment is this stable marker:
 
 ```html
@@ -81,14 +105,15 @@ claim workflow ownership. Roadmap-audit digests follow the same rule:
 the roadmap-audit claim gates edits to the roadmap issue digest only,
 not child issue execution.
 
-If the digest is missing during resume, recreate it from the parsed
-claim state, PR state, CI state, and review activity after the resume
-route is known. If the digest is stale, update the existing marked
-comment from that same authoritative state. If multiple marked digest
-comments exist, do not delete, minimize, or guess which one is
-authoritative during an unattended run; preserve the audit history,
-report the duplicate URLs, and use trusted markers and GitHub state for
-all workflow decisions until a repair path selects one current digest.
+While a digest is in use, recreate a missing one during resume from the
+parsed claim state, PR state, CI state, and review activity after the
+resume route is known, and update a stale one from that same
+authoritative state. A missing digest alone does not put one in use. If
+multiple marked digest comments exist, do not delete, minimize, or guess
+which one is authoritative during an unattended run; preserve the audit
+history, report the duplicate URLs, and use trusted markers and GitHub
+state for all workflow decisions until a repair path selects one current
+digest.
 
 ### Maintainer-gated duplicate repair
 
