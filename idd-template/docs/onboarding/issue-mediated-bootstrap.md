@@ -146,8 +146,10 @@ by the selected helper runtime profile") is actually satisfiable.
 
 ### The configured authoring hold label still applies
 
-`status:authoring` is a hold, not activation or release evidence. Full
-imports follow the [one-issue scope](#scope-exactly-one-issue) and the
+Use the configured `issueAuthoring.authoringLabelName` as the hold
+label (`status:authoring` by default), not as activation or release
+evidence. Full imports follow the
+[one-issue scope](#scope-exactly-one-issue) and the
 [adopter hold and release contract](../idd-helper-scripts.md#issue-mediated-bootstrap-and-authoring-hold).
 Observed 2026-10-17 in
 [PR 3](https://github.com/kurone-kito/DDMMHBC/pull/3) and rechecked on
