@@ -146,12 +146,13 @@ by the selected helper runtime profile") is actually satisfiable.
 
 ### The status:authoring hold still applies
 
-The issue-authoring skill's normal authoring-hold/release contract
-still governs this draft: while the `status:authoring` label is present,
-no session should treat the draft as ready, and removing the label is
-what releases it for execution. That contract keeps working pre-import
-because the label lives on the GitHub issue itself, not in the
-repository tree — it needs no local IDD instructions to be present yet.
+`status:authoring` remains a hold: the GitHub label exists before import, and
+after activation Discover suppresses the draft while it remains. The label
+does not activate the payload or provide publisher/journal prerequisites;
+removing it alone does not verify release. See the
+[global-only profile](../global-only-profile.md). The gap was observed in
+[PR 3](https://github.com/kurone-kito/DDMMHBC/pull/3) and rechecked after
+[PR 20](https://github.com/kurone-kito/DDMMHBC/pull/20).
 
 ### Fill-in bootstrap-issue body template
 

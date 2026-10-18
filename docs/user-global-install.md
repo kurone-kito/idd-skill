@@ -273,6 +273,58 @@ leaves the required list only when `pre-merge-readiness` runs with
 `--global-only` and both conditions hold on the trusted base ref and the PR
 head. An unavailable read keeps the check required.
 
+### Initial journal and policy bootstrap
+
+An installed payload alone does not activate a repository. When there is no
+core instruction file, repository policy, or matching user-global override,
+`idd-activation` reports `no-activation-rule`; the user-global entry then does
+nothing IDD-specific. Do not run another IDD helper or change repository state
+while that result is inactive. This missing first-journal sequence was observed
+in [PR 3](https://github.com/kurone-kito/DDMMHBC/pull/3) and rechecked after
+[PR 20](https://github.com/kurone-kito/DDMMHBC/pull/20).
+
+Only a maintainer/operator using the ordinary, human-controlled repository
+process performs the bounded setup below, outside the gated agent session. An
+agent session that read `active: false` remains a no-op and makes no repository
+changes until the activation gate reports `active: true`.
+
+For a policy-only first activation, a maintainer completes one bounded setup
+outside normal IDD authoring and execution:
+
+1. Create a durable, comment-only journal issue first. Record its canonical
+   `owner/repo#number`; it is infrastructure for authoring records, not an IDD
+   work item.
+2. Prepare and publish the first issue for the repository policy outside the
+   normal held-issue publisher. The policy points `issueAuthoring.journalIssue`
+   to the journal that already exists. Reconcile an uncertain issue-creation
+   result against GitHub before retrying, so one logical record cannot create
+   duplicates.
+3. Review and land the first policy through the repository's ordinary change
+   process. If that issue cannot be published or its policy cannot be landed,
+   keep the journal and continue preparation outside the IDD loop. Do not make
+   the policy PR depend on a new `ciGate.*` value that only its own head
+   contains; follow [ciGate F2 bootstrap](customization.md#cigate-f2-bootstrap).
+4. Before returning to normal IDD, verify that `idd-activation` reports
+   `active: true` through the repository-policy or matching-override route; the
+   policy source selected for publishing resolves to an existing durable
+   journal through `issueAuthoring.journalIssue`; and the selected helper
+   runtime can use the capability-checked held-publication flow. That flow must
+   apply the configured `issueAuthoring.authoringLabelName`, publish the exact
+   publication token, and use an actor with the required trusted write
+   authority. An explicit `--policy` path selects configuration but does not
+   create or replace the journal. If any result is missing or unverifiable,
+   stop and name the prerequisite to repair. The installed payload, an issue
+   body, and a GitHub hold label do not establish activation or publisher
+   readiness.
+
+This exception covers only the initial journal and first policy issue. It does
+not authorize later direct issue creation, bypass the normal authoring-owner
+protocol, or permit an automatic merge. A repository-match user-global
+override remains a supported activation route, and policy-only adoption does
+not require the optional full-core import. See the
+[Global-only profile](global-only-profile.md) for the reusable boundary and the
+[issue-mediated bootstrap guide](../idd-template/docs/onboarding/issue-mediated-bootstrap.md).
+
 ## Activation gate and context cost
 
 The entry text tells the agent to run `idd-activation` from the repository

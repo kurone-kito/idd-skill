@@ -7,12 +7,10 @@ tags: [global-only, profile, readiness]
 
 # Global-only profile
 
-A global-only profile runs IDD without the two workflows it depends on: the
-template advisory-convergence workflow (`idd-advisory-convergence`), which
-never reports, and the cleanup workflow (`post-merge-cleanup`), which never
-runs. The instructions come from the installed payload. The merge and cleanup
-instructions point here. Other workflows the repository commits do not change
-the profile.
+A global-only profile uses the installed payload while the template
+advisory-convergence (`idd-advisory-convergence`) and post-merge-cleanup
+workflows are absent. Merge and cleanup instructions point here; other
+committed workflows do not affect the profile.
 
 ## Definition
 
@@ -31,8 +29,15 @@ A repository is global-only when both of these hold.
    repository root listing. Only a readable root with neither file counts as
    absent.
 
-If either condition fails, or either read fails, the advisory check stays
-required, exactly as in a repository-local install.
+A failed condition or read keeps advisory convergence required as in a local
+install.
+
+An inactive agent remains a no-op. For policy-only activation, a maintainer
+creates a durable, comment-only journal, then prepares the first policy issue
+outside that session; the policy points `issueAuthoring.journalIssue` to the
+existing journal. Resume only after activation and publisher prerequisites are
+verified; this grants no later authoring or merge exception. See the
+[bootstrap procedure](https://github.com/kurone-kito/idd-skill/blob/main/docs/user-global-install.md#initial-journal-and-policy-bootstrap).
 
 ## Trust rule
 
