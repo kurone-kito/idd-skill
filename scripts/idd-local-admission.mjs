@@ -7,7 +7,7 @@
 // roadmap #4426). The command after `--` is the child argv: this helper never
 // parses a shell string. Policy comes from `localExec.admission`, read through
 // the repository-policy normalizer.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   accessSync,
   closeSync,
@@ -47,7 +47,9 @@ const REFUSED_EXIT_CODE = 2;
 const SPAWN_FAILURE_NOT_FOUND_EXIT_CODE = 127;
 const SPAWN_FAILURE_OTHER_EXIT_CODE = 126;
 const DEFAULT_WAIT_NOTICE_INTERVAL_MS = 60_000;
-const GROUP_POLL_INTERVAL_MS = 50;
+const GROUP_POLL_INTERVAL_MS = 1000;
+const PROCESS_STATE_PROBE_TIMEOUT_MS = 1000;
+const PROCESS_STATE_PROBE_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 const FALLBACK_MAX_WAIT_MS = 2 * 60 * 60 * 1000;
 const LOCK_PARENT_DIRECTORY = 'idd-skill';
 const LOCK_DIRECTORY = 'local-admission';
@@ -95,6 +97,7 @@ function defaultDependencies() {
     },
     readPolicy: (policyPath) => readRepositoryPolicyFile(policyPath).config,
     findFlock: (env) => findExecutableOnPath('flock', env),
+    findPs: (env) => findExecutableOnPath('ps', env),
     spawn: (command, args, options) => spawn(command, args, options),
     waitNoticeIntervalMs: DEFAULT_WAIT_NOTICE_INTERVAL_MS,
   };
@@ -251,13 +254,11 @@ function openLockFile(deps) {
     return { refusal: `cannot open ${lockPath}: ${errorMessage(error)}` };
   }
 }
-/** Resolves when the process group `pgid` has no members left. */
-function waitForGroupToEnd(pgid) {
+/** Resolves when the group is absent or contains only zombie/dead members. */
+function waitForGroupToEnd(pgid, processStateTool, env) {
   return new Promise((resolveWait) => {
     const poll = () => {
-      try {
-        process.kill(-pgid, 0);
-      } catch {
+      if (!processGroupHasLiveMember(pgid, processStateTool, env)) {
         resolveWait();
         return;
       }
@@ -265,6 +266,66 @@ function waitForGroupToEnd(pgid) {
     };
     poll();
   });
+}
+/**
+ * Returns true for a live member, false for an absent or Z/X-only group,
+ * and null when output is malformed or empty.
+ */
+export function parseProcessGroupStateOutput(output, pgid) {
+  const rows = output.split(/\r?\n/);
+  if (rows.at(-1) === '') rows.pop();
+  if (rows.length === 0) return null;
+  for (const row of rows) {
+    if (row.trim().length === 0) return null;
+    const fields = row.trim().split(/\s+/);
+    const processGroup = fields[0];
+    const state = fields[1];
+    if (
+      fields.length !== 2 ||
+      processGroup === undefined ||
+      !/^\d+$/.test(processGroup) ||
+      state === undefined ||
+      !/^[A-Za-z?]/.test(state)
+    ) {
+      return null;
+    }
+    if (processGroup === String(pgid) && !/^[ZzXx]/.test(state)) {
+      return true;
+    }
+  }
+  return false;
+}
+function processGroupHasLiveMember(pgid, processStateTool, env) {
+  const output = readProcessStateOutput(processStateTool, env);
+  return (
+    output === null || parseProcessGroupStateOutput(output, pgid) !== false
+  );
+}
+function readProcessStateOutput(processStateTool, env) {
+  if (processStateTool === null) return null;
+  try {
+    const result = spawnSync(processStateTool, ['-A', '-o', 'pgid=,stat='], {
+      encoding: 'utf8',
+      env,
+      maxBuffer: PROCESS_STATE_PROBE_MAX_BUFFER_BYTES,
+      timeout: PROCESS_STATE_PROBE_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    if (
+      result.error !== undefined ||
+      result.status !== 0 ||
+      typeof result.stdout !== 'string'
+    ) {
+      return null;
+    }
+    return result.stdout;
+  } catch {
+    return null;
+  }
+}
+function processStateToolIsUsable(processStateTool, env) {
+  const output = readProcessStateOutput(processStateTool, env);
+  return output !== null && parseProcessGroupStateOutput(output, -1) !== null;
 }
 /**
  * Forward SIGINT and SIGTERM to the child, and settle one promise with the
@@ -318,7 +379,11 @@ function superviseChild(child, deps, options) {
         const status = signalStatus(forwarded);
         const pgid = child.pid;
         if (options.group && pgid !== undefined) {
-          void waitForGroupToEnd(pgid).then(() => settle(status));
+          void waitForGroupToEnd(
+            pgid,
+            options.processStateTool ?? null,
+            deps.env,
+          ).then(() => settle(status));
         } else {
           settle(status);
         }
@@ -362,7 +427,14 @@ function runDirect(command, deps) {
  * tells a lock expiry (exit 75 without it) from the command's own status
  * (including 75 after it). The notice repeats until the lock is acquired.
  */
-function runLocked(command, flockPath, lockFd, maxWaitMs, deps) {
+function runLocked(
+  command,
+  flockPath,
+  processStateTool,
+  lockFd,
+  maxWaitMs,
+  deps,
+) {
   let child;
   try {
     child = deps.spawn(flockPath, buildFlockArguments(command, maxWaitMs), {
@@ -400,6 +472,7 @@ function runLocked(command, flockPath, lockFd, maxWaitMs, deps) {
   });
   return superviseChild(child, deps, {
     group: true,
+    processStateTool,
     onBeforeSettle: () => clearInterval(notice),
     onClose: (code, signal) => {
       if (acquired) return code ?? signalStatus(signal);
@@ -496,6 +569,16 @@ export async function runLocalAdmission(argv, overrides = {}) {
     );
     return REFUSED_EXIT_CODE;
   }
+  const processStateTool = deps.findPs(deps.env);
+  if (
+    processStateTool === null ||
+    !processStateToolIsUsable(processStateTool, deps.env)
+  ) {
+    deps.stderr(
+      'local-admission: ps is not available or returned unusable process-state output; command not started\n',
+    );
+    return REFUSED_EXIT_CODE;
+  }
   const maxWaitMs =
     parseIsoDurationToMs(admission.maxWait) ??
     parseIsoDurationToMs(POLICY_DEFAULTS.localExec.admission.maxWait) ??
@@ -505,7 +588,14 @@ export async function runLocalAdmission(argv, overrides = {}) {
     deps.stderr(`local-admission: ${opened.refusal}; command not started\n`);
     return REFUSED_EXIT_CODE;
   }
-  return runLocked(command, flockPath, opened.fd, maxWaitMs, deps);
+  return runLocked(
+    command,
+    flockPath,
+    processStateTool,
+    opened.fd,
+    maxWaitMs,
+    deps,
+  );
 }
 /** The CLI body: reads the process arguments and returns the exit status. */
 export function runLocalAdmissionCli() {

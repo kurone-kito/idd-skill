@@ -2686,6 +2686,12 @@ dispositions before `setsid` so the child does not inherit the background
 shell's ignored SIGINT. Direct paths use the same supervisor and isolate the
 process group when the shell can disable job control and `setsid` is available.
 
+The process-state check treats a group as drained when it is absent or every
+remaining member is in state Z or X. It polls every second. If ps later fails
+or emits malformed output, the wait stays active and the lock stays held.
+Before starting a process-group-supervised command, refuse with exit 2 when ps
+is unavailable or its output is not a successful, well-formed process listing.
+
 ```sh
 child_pid=
 child_group=false
@@ -2693,6 +2699,29 @@ child_reset_signals=false
 flock_pid=
 pending_signal=
 lock_fd_open=false
+group_has_live_member() {
+  process_list=$(ps -A -o pgid=,stat= 2>/dev/null) || return 0
+  [ -n "$process_list" ] || return 0
+  while IFS=' ' read -r member_group member_state extra; do
+    [ -n "$member_group" ] || return 0
+    case $member_group in *[!0-9]*) return 0 ;; esac
+    [ -n "$member_state" ] || return 0
+    [ -z "$extra" ] || return 0
+    case $member_state in
+      Z*|z*|X*|x*) ;;
+      [A-Za-z?]*) [ "$member_group" = "$1" ] && return 0 ;;
+      *) return 0 ;;
+    esac
+  done <<EOF
+$process_list
+EOF
+  return 1
+}
+process_state_ready() {
+  if ! command -v ps >/dev/null 2>&1; then return 1; fi
+  if group_has_live_member -1; then return 1; fi
+  return 0
+}
 forward_signal() {
   signal=$1
   case $signal in
@@ -2717,7 +2746,7 @@ forward_signal() {
     fi
     wait "$child_pid" 2>/dev/null || :
     if [ "$child_group" = true ]; then
-      while kill -0 -- "-$child_pid" 2>/dev/null; do sleep 1; done
+      while group_has_live_member "$child_pid"; do sleep 1; done
     fi
     child_pid=
   fi
@@ -2743,6 +2772,10 @@ run_child() {
   child_group=false
   child_reset_signals=false
   if [ "$run_mode" = admitted ]; then
+    if ! process_state_ready; then
+      printf 'local-admission: ps is not available or returned unusable process-state output; command not started\n' >&2
+      exit 2
+    fi
     child_group=true
     child_reset_signals=true
     IDD_LOCAL_ADMISSION=1 env --default-signal=INT --default-signal=TERM setsid "$shell" -c "$command" &
@@ -2752,6 +2785,10 @@ run_child() {
       case $- in *m*) ;; *) group_ready=true ;; esac
     fi
     if [ "$group_ready" = true ]; then
+      if ! process_state_ready; then
+        printf 'local-admission: ps is not available or returned unusable process-state output; command not started\n' >&2
+        exit 2
+      fi
       child_group=true
       if command -v env >/dev/null 2>&1 &&
          env --default-signal=INT --default-signal=TERM >/dev/null 2>&1; then
@@ -2936,6 +2973,8 @@ a raw cap above 1 under `flock`, unavailable signal-reset support, a symlink at
 `idd-skill` or `local-admission`,
 a lock file that is a symlink or not a regular file, or a `flock` that fails
 before it takes the lock.
+The helper also refuses before starting a process-group-supervised command
+when the ps process-state utility is unavailable or returns unusable output.
 
 Residual risks, open for the operator to accept. The helper does not mitigate
 them:
@@ -2944,9 +2983,12 @@ them:
 - A rename over the lock path after the open, or a parent-path swap between the
   directory check and the open. A later caller that opens the path then locks a
   different file, while the held inode stays locked.
-- Preventive; no observed incident yet. A process group that does not exit
-  after SIGINT or SIGTERM keeps its admission slot held while the helper or
-  fallback waits for the group to end.
+- Review finding 4305110564 on pull request #4485 (issue #4430), posted
+  2026-10-18: a descendant that ignores SIGTERM can become a PID-1-owned
+  zombie in a container whose PID 1 does not reap it; a `kill -0` poll can
+  then keep the admission lock held although no group member remains live.
+  The helper and fallback drain groups containing only Z/X members; a live
+  member or unknown process-state result keeps the lock held.
 - `IDD_LOCAL_ADMISSION` already set in the environment skips admission. A
   session must not set the variable itself.
 - The slot covers one OS user. A second OS user has another slot, and a run from
