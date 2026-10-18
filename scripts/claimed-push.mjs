@@ -495,10 +495,11 @@ function readIssue(ctx) {
 }
 /**
  * Item 4(c): the effective base, which must exist on origin and as its
- * remote-tracking ref. A missing remote-tracking ref refuses with the fetch
- * next action. A tracking ref that differs from origin is reported back, and
- * only the next action of a `fail` verdict depends on it: a stale ref can only
- * add paths to the branch-point diff, so it never turns a fail into a pass.
+ * remote-tracking ref. A remote-tracking ref that is missing or differs from
+ * the SHA `git ls-remote` prints is stale and refuses with the fetch next
+ * action, naming both SHAs: a ref behind origin would add paths to the
+ * branch-point diff, and a ref ahead of or diverged from origin (after a
+ * force-push) would hide paths, so no verdict is trusted against either.
  */
 function resolveBase(ctx, policy) {
   let liveDefault = null;
@@ -617,7 +618,17 @@ function resolveBase(ctx, policy) {
       ),
     };
   }
-  return { ok: true, value: { base, remoteSha, trackingSha } };
+  if (trackingSha !== remoteSha) {
+    return {
+      ok: false,
+      failure: failed(
+        `the base ${base} is stale: ${REMOTE_NAME} has ${remoteSha}, and refs/remotes/${REMOTE_NAME}/${base} has ${trackingSha}`,
+        NEXT_ACTION.staleBase(base),
+        0,
+      ),
+    };
+  }
+  return { ok: true, value: { base } };
 }
 function gitPathList(stdout) {
   return stdout.split('\0').filter((path) => path !== '');
@@ -895,7 +906,7 @@ function stepScope(ctx) {
   if (!baseRead.ok) {
     return baseRead.failure;
   }
-  const { base, remoteSha, trackingSha } = baseRead.value;
+  const { base } = baseRead.value;
   const canonical = readCanonicalPaths(ctx, base);
   if (!canonical.ok) {
     return canonical.failure;
@@ -941,7 +952,6 @@ function stepScope(ctx) {
       reason: `${EFFORT_FINDING_ID} passes on the issue body (${original.detail}) and with the canonical paths (${scoped.detail}); ${counted}`,
     };
   }
-  const stale = remoteSha !== trackingSha;
   const parts = [
     ...(original.result === 'fail'
       ? [`${EFFORT_FINDING_ID} fails on the issue body: ${original.detail}`]
@@ -952,15 +962,10 @@ function stepScope(ctx) {
         ]
       : []),
     counted,
-    ...(stale
-      ? [
-          `the base ${base} is stale: ${REMOTE_NAME} has ${remoteSha}, refs/remotes/${REMOTE_NAME}/${base} has ${trackingSha}`,
-        ]
-      : []),
   ];
   return failed(
     parts.join('; '),
-    stale ? NEXT_ACTION.staleBase(base) : NEXT_ACTION.scopeOverrun,
+    NEXT_ACTION.scopeOverrun,
     original.result === 'fail' ? original.exitStatus : scoped.exitStatus,
   );
 }

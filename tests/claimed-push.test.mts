@@ -1845,16 +1845,28 @@ test('every failed scope input or run refuses with a next action', () => {
 });
 
 test('a stale base names both SHAs and the fetch next action', () => {
-  const stale = run({
-    world: {
-      [K.tracking]: result(0, `${STALE_SHA}\n`),
-      [K.diff]: result(0, nulList(manyPaths(9))),
-      [K.audit]: realAudit,
-    },
-  });
-  assertRefused(stale, 'scope', SCOPE_NEXT.staleBase(BASE), { exitStatus: 1 });
-  assert.match(stepOf(stale, 'scope').reason, new RegExp(BASE_SHA, 'u'));
-  assert.match(stepOf(stale, 'scope').reason, new RegExp(STALE_SHA, 'u'));
+  // Behind, ahead, or diverged: any mismatch refuses before the branch point
+  // is read, whatever the audits would say, because a ref ahead of origin
+  // after a force-push would hide paths from the diff.
+  for (const audit of [realAudit, auditResult('pass')]) {
+    for (const diff of [manyPaths(9), manyPaths(1)]) {
+      const stale = run({
+        input: { apply: false },
+        world: {
+          [K.tracking]: result(0, `${STALE_SHA}\n`),
+          [K.diff]: result(0, nulList(diff)),
+          [K.audit]: audit,
+        },
+      });
+      assertRefused(stale, 'scope', SCOPE_NEXT.staleBase(BASE), {
+        exitStatus: 0,
+      });
+      assert.match(stepOf(stale, 'scope').reason, new RegExp(BASE_SHA, 'u'));
+      assert.match(stepOf(stale, 'scope').reason, new RegExp(STALE_SHA, 'u'));
+      assert.equal(stale.count(K.mergeBase), 0);
+      assert.equal(stale.count(K.audit), 0);
+    }
+  }
 
   const fresh = run({
     world: { [K.diff]: result(0, nulList(manyPaths(9))), [K.audit]: realAudit },
@@ -1862,14 +1874,10 @@ test('a stale base names both SHAs and the fetch next action', () => {
   assertRefused(fresh, 'scope', SCOPE_NEXT.overrun, { exitStatus: 1 });
   assert.doesNotMatch(stepOf(fresh, 'scope').reason, /stale/u);
 
-  // A stale base only adds paths, so a pass stays a pass.
-  const passing = run({
-    input: { apply: false },
-    world: { [K.tracking]: result(0, `${STALE_SHA}\n`), [K.audit]: realAudit },
-  });
-  assert.equal(stepOf(passing, 'scope').status, 'passed');
-
   const missing = run({ world: { [K.tracking]: result(1, '') } });
+  assertRefused(missing, 'scope', SCOPE_NEXT.staleBase(BASE), {
+    exitStatus: 1,
+  });
   assert.match(stepOf(missing, 'scope').reason, new RegExp(BASE_SHA, 'u'));
   assert.match(stepOf(missing, 'scope').reason, /missing/u);
   assert.equal(missing.count(K.mergeBase), 0);

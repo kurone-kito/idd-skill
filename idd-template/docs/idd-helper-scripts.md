@@ -9779,14 +9779,15 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
    counts, and the counting rule: distinct parsed keys, and a token
    without `/` or `.`, or with whitespace, is not counted. The next action
    is to stop without pushing and follow the Scope overrun rule in
-   `idd-work.instructions.md`. When `refs/remotes/origin/<base>` differs
-   from the SHA `git ls-remote` printed, or is missing, the base is stale:
-   the reason names both SHAs, and the next action is to run the fetch
+   `idd-work.instructions.md`. When `refs/remotes/origin/<base>` is
+   missing or differs from the SHA `git ls-remote` printed, the base is
+   stale, and the step refuses before it reads the branch point, whatever
+   the audits would say: a ref behind `origin` adds paths to the diff,
+   and a ref ahead of or diverged from it after a force-push hides paths.
+   The reason names both SHAs, and the next action is to run the fetch
    below (see [Clone-scoped lock](#clone-scoped-lock)) and rerun the
    helper once, then stop and report both SHAs without a push if it is
-   still stale. A missing remote-tracking ref refuses with that next
-   action at once; a differing one only selects it for a failed finding,
-   because a stale base can only add paths. A body without a coherent `S`
+   still stale. A body without a coherent `S`
    or `M` effort marker passes the finding as not applicable, so the step
    passes with the audit's detail as its reason. A failed git read refuses
    with the next action to read the git error in the worktree and fix it,
