@@ -1384,6 +1384,64 @@ test('findBodyItem refuses an unknown review and a body with no Previously misse
   );
 });
 
+/** A real Copilot review body from the bot-comment corpus, by entry id. */
+function botCorpusBody(id: string): string {
+  const corpus = JSON.parse(
+    readFileSync(
+      join(REPO_ROOT, 'tests/fixtures/bot-comment-corpus/corpus.json'),
+      'utf8',
+    ),
+  ) as { id: string; body: string }[];
+  const entry = corpus.find((candidate) => candidate.id === id);
+  assert.ok(entry, `bot-comment corpus entry ${id}`);
+  return entry.body;
+}
+
+test('findBodyItem reads a section titled "1 previously missed issue" (#4526)', () => {
+  // PR #4514 review 5563781160: the title Copilot uses since 2026-10-16.
+  const reviews = [
+    {
+      id: 5563781160,
+      body: botCorpusBody('copilot-v2-new-title-previously-missed-4514'),
+    },
+  ];
+  assert.deepEqual(
+    findBodyItem(
+      reviews,
+      5563781160,
+      'Recognize Setext headings when validating section boundaries',
+      4514,
+    ),
+    {
+      found: true,
+      title: 'Recognize Setext headings when validating section boundaries',
+      index: 1,
+    },
+  );
+});
+
+test('findBodyItem reads a section titled "2 previously missed issues" with a shared title (#4526)', () => {
+  // PR #4452 review 5554498936: two items with the same title, one per file.
+  const reviews = [
+    {
+      id: 5554498936,
+      body: botCorpusBody('copilot-v2-new-title-previously-missed-4452'),
+    },
+  ];
+  const title = 'Distinguish claim loss from unreadable claim failures';
+  const ambiguous = findBodyItem(reviews, 5554498936, title, 4452);
+  assert.equal(ambiguous.found, false);
+  assert.match(
+    (ambiguous as { error: string }).error,
+    /lists 2 Previously missed items titled .*pass --item-index/,
+  );
+  assert.deepEqual(findBodyItem(reviews, 5554498936, title, 4452, 2), {
+    found: true,
+    title,
+    index: 2,
+  });
+});
+
 test('runBodyItemDisposition dry-run prints the stamped body and posts nothing (#4012)', () => {
   const port = bodyItemPort([BODY_ITEM_CLAIM]);
   let claimChecks = 0;

@@ -130,9 +130,11 @@ export interface AdvisoryConvergenceReviewClause {
   /** #1880: count of thread-less findings parsed from the latest review
    * body, `0` when no recognized section is present (or the review is
    * off-HEAD). The three recognized sources are the current
-   * `ccr-overview-v2` shape's `Previously missed (N)` section, the legacy
-   * overview's `### Suppressed comments (N)` heading, and the original
-   * August `<summary>Suppressed comments (N)</summary>` form. See
+   * `ccr-overview-v2` shape's Previously missed section (titled
+   * `Previously missed (N)`, or `N previously missed issue(s)` since
+   * 2026-10-16, #4526), the legacy overview's
+   * `### Suppressed comments (N)` heading, and the original August
+   * `<summary>Suppressed comments (N)</summary>` form. See
    * {@link parseSuppressedCommentCount}. */
   suppressedCount: number;
   /** kurone-kito/idd-skill#3258: the recognized review-body shape
@@ -158,8 +160,10 @@ export interface AdvisoryConvergenceReviewClause {
  *
  * Delegates to {@link classifyCopilotReviewBody} (copilot-review-body.mts,
  * #3258), which recognizes both the current `ccr-overview-v2` shape's
- * `Previously missed (N)` section and the legacy overview's `Suppressed
- * comments (N)` heading (plus the original, even-older bare August
+ * Previously missed section (titled `Previously missed (N)`, or
+ * `N previously missed issue(s)` since 2026-10-16, #4526) and the legacy
+ * overview's `Suppressed comments (N)` heading (plus the original,
+ * even-older bare August
  * `<summary>Suppressed comments (N)</summary>` form the original #1880 fix
  * matched) -- see that module for the full shape-detection rationale,
  * including the code-region-stripping step that keeps a review body
