@@ -60,7 +60,7 @@ import {
   resolveEffectiveCritiqueLoopTelemetryHook,
   resolveEffectiveIssueAuthoringDelegate,
 } from './policy-helpers.mts';
-import { loadJson, validate } from './validate-schemas.mts';
+import { validate } from './validate-schemas.mts';
 
 export type {
   GitTextRunner,
@@ -348,6 +348,24 @@ export function buildIddConfigContentsArgs(
   ];
 }
 
+/** Build Contents API arguments for the policy schema at a trusted ref. */
+export function buildPolicySchemaContentsArgs(
+  owner: string,
+  repo: string,
+  ref: string,
+): string[] {
+  return [
+    'api',
+    `repos/${owner}/${repo}/contents/schemas/policy.schema.json`,
+    '--method',
+    'GET',
+    '-f',
+    `ref=${ref}`,
+    '--jq',
+    '.content',
+  ];
+}
+
 /**
  * Fetch and parse `.github/idd/config.json` for `owner/repo` **at a trusted
  * `ref`** -- a repository's default branch, or a PR's base branch -- via
@@ -625,9 +643,11 @@ export interface TrustedDangerouslyAutoDecideReport {
  * Read provisional-decision authority from a trusted repository base ref.
  * PR-scoped callers pass the trusted PR base name; repository-scoped callers
  * omit it and this function resolves the live default branch. Callers must
- * never pass a PR head or feature-worktree ref. User-global fallback is
- * disabled; malformed values and unreadable policy return `enabled: false`
- * with the cause so they cannot grant authority silently.
+ * never pass a PR head or feature-worktree ref. Both the policy document and
+ * its schema are fetched at that ref so a feature-branch schema change cannot
+ * relax validation of the trusted policy. User-global fallback is disabled;
+ * malformed values and unreadable policy return `enabled: false` with the
+ * cause so they cannot grant authority silently.
  */
 // audit:ignore-dead-export: #4529 provides the repository-only authority reader for downstream provisional-decision consumers
 export function readTrustedDangerouslyAutoDecide({
@@ -636,12 +656,22 @@ export function readTrustedDangerouslyAutoDecide({
   baseRefName = '',
   readDefaultBranch = readGithubRepoDefaultBranch,
   fetchEncodedConfig,
+  fetchEncodedPolicySchema = (fetchOwner, fetchRepo, fetchRef) =>
+    ghText(
+      buildPolicySchemaContentsArgs(fetchOwner, fetchRepo, fetchRef),
+      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+    ),
 }: {
   owner: string;
   repo: string;
   baseRefName?: string;
   readDefaultBranch?: (owner: string, repo: string) => string | null;
   fetchEncodedConfig?: (owner: string, repo: string, ref: string) => string;
+  fetchEncodedPolicySchema?: (
+    owner: string,
+    repo: string,
+    ref: string,
+  ) => string;
 }): TrustedDangerouslyAutoDecideReport {
   let ref = '';
   const disabled = (
@@ -667,10 +697,16 @@ export function readTrustedDangerouslyAutoDecide({
       { userGlobalFallback: false },
     );
     if (config === null) return disabled('config-absent');
-    const schemaErrors = validate(
-      config,
-      loadJson('schemas/policy.schema.json'),
-    );
+    const encodedSchema = fetchEncodedPolicySchema(owner, repo, ref);
+    const schema = JSON.parse(
+      Buffer.from(encodedSchema.replace(/\n/g, ''), 'base64').toString('utf8'),
+    ) as unknown;
+    if (!isPlainObject(schema)) {
+      throw new Error(
+        `expected a JSON object for schemas/policy.schema.json at trusted ref "${ref}"`,
+      );
+    }
+    const schemaErrors = validate(config, schema);
     if (schemaErrors.length > 0) {
       const shown = schemaErrors.slice(0, 10);
       const remainder = schemaErrors.length - shown.length;
@@ -680,7 +716,7 @@ export function readTrustedDangerouslyAutoDecide({
         enabled: false,
         source: 'repository',
         ref,
-        error: `trusted repository policy fails schema validation against policy.schema.json: ${shown.join('; ')}${suffix}`,
+        error: `trusted repository policy fails schema validation against policy.schema.json at ref "${ref}": ${shown.join('; ')}${suffix}`,
       };
     }
     if (!Object.hasOwn(config, 'dangerouslyAutoDecide'))
