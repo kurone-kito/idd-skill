@@ -1370,9 +1370,9 @@ test('the production deps refuse a bound that is not a positive number', () => {
     deps.ghRepositorySlug({
       kind: 'hosted',
       host: 'github.com',
-      owner: 'octo_acme',
+      owner: 'cat_acme',
       repo: 'r',
     }),
-    'github.com/octo_acme/r',
+    'github.com/cat_acme/r',
   );
 });
