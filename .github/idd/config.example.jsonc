@@ -254,6 +254,9 @@
   //   //   decides.
   //   // When the key is left out, the IDD_TRUST_COLLABORATOR_MARKERS
   //   // environment variable decides instead; an explicit false ignores it.
+  //   // One exception: the advisory-wait-state helper reads only that
+  //   // environment variable and ignores this key, so a true or false here
+  //   // does not change which advisory-wait markers it trusts.
   //   "allowCollaboratorMarkers": false
   // },
 
