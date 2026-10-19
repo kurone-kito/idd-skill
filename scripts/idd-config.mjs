@@ -32,7 +32,8 @@
 // wider-review change #1721 does not attempt. A later session may pick that
 // residual up knowingly.
 import { lstatSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { resolveBundleRoot } from './bundle-root.mjs';
 import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghText,
@@ -52,7 +53,7 @@ import {
   resolveEffectiveCritiqueLoopTelemetryHook,
   resolveEffectiveIssueAuthoringDelegate,
 } from './policy-helpers.mjs';
-import { validate } from './validate-schemas.mjs';
+import { loadJson, validate } from './validate-schemas.mjs';
 
 export {
   deriveRepositoryIdentity,
@@ -267,6 +268,89 @@ export function buildPolicySchemaContentsArgs(owner, repo, ref) {
     '--jq',
     '.content',
   ];
+}
+function readBundleRepositorySlug() {
+  try {
+    const manifest = loadJson('package.json');
+    if (!isPlainObject(manifest)) return null;
+    const repository = manifest.repository;
+    const url =
+      typeof repository === 'string'
+        ? repository
+        : isPlainObject(repository) && typeof repository.url === 'string'
+          ? repository.url
+          : '';
+    const match =
+      url.match(/^github:([^/?#]+\/[^/?#]+)(?:[?#].*)?$/i) ??
+      url.match(/github\.com[:/]([^/?#]+\/[^/?#]+)/i);
+    const slug = match?.[1]?.replace(/\.git$/i, '').toLowerCase();
+    return slug && /^[^/]+\/[^/]+$/.test(slug) ? slug : null;
+  } catch {
+    return null;
+  }
+}
+export function bundleRootIsGitCheckout(
+  bundleRoot = resolveBundleRoot(import.meta.dirname),
+  hasGitMetadata = (directory) => {
+    lstatSync(join(directory, '.git'));
+    return true;
+  },
+) {
+  // Package-manager installs live below node_modules even when their target
+  // repository has a .git ancestor. A workspace-linked source package resolves
+  // to its real checkout path instead and must keep the trusted-ref boundary.
+  if (bundleRoot.split(/[\\/]/u).includes('node_modules')) return false;
+  let directory = bundleRoot;
+  while (true) {
+    try {
+      if (hasGitMetadata(directory)) return true;
+    } catch (error) {
+      if (!isEnoentError(error)) return true;
+    }
+    const parent = dirname(directory);
+    if (parent === directory) return false;
+    directory = parent;
+  }
+}
+/**
+ * Read the policy schema from the repository's trusted ref when it exists.
+ * Installed-package adopters do not copy the schema into their repository, so
+ * a 404 may use the helper bundle's schema only when its package metadata
+ * names a different repository and the bundle is an installed package rather
+ * than a checked-out source or vendored tree. Same-repository, checked-out,
+ * and unknown bundles stay fail-closed, preserving the trusted-ref boundary.
+ * Other read failures also stay errors rather than being mistaken for a
+ * missing adopter schema.
+ */
+export function fetchEncodedPolicySchemaAtTrustedRef(
+  owner,
+  repo,
+  ref,
+  fetchRemoteSchema = (args) => ghText(args, GH_TEXT_LOOP_TIMEOUT_OPTIONS),
+  loadBundledSchema = () => loadJson('schemas/policy.schema.json'),
+  readBundledRepository = readBundleRepositorySlug,
+  isCheckedOutBundle = bundleRootIsGitCheckout,
+) {
+  try {
+    return fetchRemoteSchema(buildPolicySchemaContentsArgs(owner, repo, ref));
+  } catch (error) {
+    if (deriveGhHttpStatus(error) !== 404) throw error;
+    const bundleRepository = readBundledRepository();
+    if (
+      isCheckedOutBundle() ||
+      bundleRepository === null ||
+      bundleRepository.toLowerCase() === `${owner}/${repo}`.toLowerCase()
+    ) {
+      throw error;
+    }
+    const schema = loadBundledSchema();
+    if (!isPlainObject(schema)) {
+      throw new Error(
+        'bundled schemas/policy.schema.json is not a JSON object',
+      );
+    }
+    return Buffer.from(JSON.stringify(schema), 'utf8').toString('base64');
+  }
 }
 /**
  * Fetch and parse `.github/idd/config.json` for `owner/repo` **at a trusted
@@ -500,11 +584,7 @@ export function readTrustedDangerouslyAutoDecide({
   baseRefName = '',
   readDefaultBranch = readGithubRepoDefaultBranch,
   fetchEncodedConfig,
-  fetchEncodedPolicySchema = (fetchOwner, fetchRepo, fetchRef) =>
-    ghText(
-      buildPolicySchemaContentsArgs(fetchOwner, fetchRepo, fetchRef),
-      GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-    ),
+  fetchEncodedPolicySchema = fetchEncodedPolicySchemaAtTrustedRef,
 }) {
   let ref = '';
   const disabled = (reason) => ({

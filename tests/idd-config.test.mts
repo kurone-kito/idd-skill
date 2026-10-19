@@ -15,8 +15,10 @@ import { test } from 'node:test';
 import {
   buildIddConfigContentsArgs,
   buildPolicySchemaContentsArgs,
+  bundleRootIsGitCheckout,
   deriveRepositoryIdentity,
   evaluateForcedHandoffPreflight,
+  fetchEncodedPolicySchemaAtTrustedRef,
   isUpstreamEscalationEnabled,
   loadIddConfig,
   loadLayeredLocalPolicy,
@@ -1053,6 +1055,127 @@ test('buildPolicySchemaContentsArgs pins the canonical schema to the given trust
     '--jq',
     '.content',
   ]);
+});
+
+test('trusted policy schema falls back to the bundled schema only when the target has no schema (#4529)', () => {
+  const expectedSchema = {
+    type: 'object',
+    properties: { example: { type: 'boolean' } },
+  };
+  const seenArgs: string[][] = [];
+  const encoded = fetchEncodedPolicySchemaAtTrustedRef(
+    'o',
+    'r',
+    'main',
+    (args) => {
+      seenArgs.push(args);
+      throw syntheticNotFoundError();
+    },
+    () => expectedSchema,
+    () => 'helper/source',
+    () => false,
+  );
+
+  assert.deepEqual(seenArgs, [buildPolicySchemaContentsArgs('o', 'r', 'main')]);
+  assert.deepEqual(
+    JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')),
+    expectedSchema,
+  );
+});
+
+test('trusted policy schema does not fall back when the target is the helper repository (#4529)', () => {
+  const notFound = syntheticNotFoundError();
+  let bundledSchemaRead = false;
+
+  assert.throws(
+    () =>
+      fetchEncodedPolicySchemaAtTrustedRef(
+        'o',
+        'r',
+        'main',
+        () => {
+          throw notFound;
+        },
+        () => {
+          bundledSchemaRead = true;
+          return {};
+        },
+        () => 'o/r',
+        () => false,
+      ),
+    notFound,
+  );
+  assert.equal(bundledSchemaRead, false);
+});
+
+test('trusted policy schema does not fall back from a checked-out bundle (#4529)', () => {
+  const notFound = syntheticNotFoundError();
+  let bundledSchemaRead = false;
+
+  assert.throws(
+    () =>
+      fetchEncodedPolicySchemaAtTrustedRef(
+        'o',
+        'r',
+        'main',
+        () => {
+          throw notFound;
+        },
+        () => {
+          bundledSchemaRead = true;
+          return {};
+        },
+        () => 'helper/source',
+        () => true,
+      ),
+    notFound,
+  );
+  assert.equal(bundledSchemaRead, false);
+});
+
+test('bundle checkout detection finds Git metadata in ancestors but ignores installed dependencies (#4529)', () => {
+  const gitRoot = join(tmpdir(), 'idd-config-git-root');
+  const gitMetadataAt = (directory: string) => directory === gitRoot;
+
+  assert.equal(
+    bundleRootIsGitCheckout(
+      join(gitRoot, 'packages', 'idd-skill'),
+      gitMetadataAt,
+    ),
+    true,
+  );
+  assert.equal(
+    bundleRootIsGitCheckout(
+      join(gitRoot, 'node_modules', 'idd-skill'),
+      gitMetadataAt,
+    ),
+    false,
+  );
+});
+
+test('trusted policy schema does not mask non-404 read failures with the bundled schema (#4529)', () => {
+  const unavailable = Object.assign(new Error('API unavailable'), {
+    stderr: 'HTTP 503 (HTTP 503)',
+  });
+  let bundledSchemaRead = false;
+
+  assert.throws(
+    () =>
+      fetchEncodedPolicySchemaAtTrustedRef(
+        'o',
+        'r',
+        'main',
+        () => {
+          throw unavailable;
+        },
+        () => {
+          bundledSchemaRead = true;
+          return {};
+        },
+      ),
+    unavailable,
+  );
+  assert.equal(bundledSchemaRead, false);
 });
 
 // --- loadTrustedIddConfig (#2373) ---------------------------------------
