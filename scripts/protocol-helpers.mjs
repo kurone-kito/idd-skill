@@ -12,6 +12,7 @@ import {
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   normalizeAdvisoryWaitRuntimeOptions,
   normalizeSecondaryBotLoginList,
+  resolveAdvisoryQuietWindowBotLogins,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from './advisory-wait-policy.mjs';
 
@@ -4759,8 +4760,9 @@ export function dispositionNamesAdvisoryBot(
         ) === token,
     );
 }
-// #2544/#2547: classifies the configured secondary advisory bot's current
-// standing for the CURRENT HEAD into exactly one of three outcomes --
+// #2544/#2547: classifies one secondary advisory bot's current standing (one
+// login of the #4467 window set) for the CURRENT HEAD into exactly one of
+// three outcomes --
 // still pending, definitively declined, or genuinely settled -- so
 // `buildSecondaryQuietWindowStatus` can give each its own wait treatment
 // (full window / zero-wait / short settled buffer respectively) instead of
@@ -4960,6 +4962,9 @@ export function computeSecondaryAdvisoryReviewSettlement(
 // into the single `{ settledAt, declined }` shape
 // `buildSecondaryQuietWindowStatus` consumes, so a repository that configures
 // more than one secondary login still gets exactly one quiet-window status.
+// #4467: `buildPreMergeReadinessSummary` passes the window set of
+// `resolveAdvisoryQuietWindowBotLogins` (every non-primary advisory bot),
+// not only the explicit `advisoryWait.secondaryBotLogin` list.
 //
 // - Any login still pending (neither settled nor declined for this HEAD)
 //   keeps the caller on the full configured window: reports
@@ -11257,7 +11262,7 @@ export function buildPreMergeReadinessSummary(
       dispositionAuthorLogins: iddAgentLogins,
     },
   );
-  // #2544/#3186: whether the configured secondary bot(s) have already
+  // #2544/#3186/#4467: whether every non-primary advisory bot has already
   // posted a genuine (non-notice) comment for the CURRENT HEAD -- reuses
   // `options.advisoryConvergenceHeadObservedAt` (the earliest GitHub-recorded
   // check-suite `createdAt` for the current HEAD, already resolved by the
@@ -11267,16 +11272,22 @@ export function buildPreMergeReadinessSummary(
   // 'when did this HEAD land' either way" -- the committer-supplied
   // `committedDate` can lag the actual push, so both readers now share the
   // GitHub-observed anchor instead).
-  // `foldSecondaryAdvisoryReviewSettlements` combines every configured
-  // login's own independent classification into the single shape
+  // #4467: the window set is every non-primary advisory bot, from
+  // `resolveAdvisoryQuietWindowBotLogins`: the raw `options.advisoryBotLogins`
+  // (unset means the default bots) plus the explicit secondary logins, minus
+  // both primary identities. It feeds this fold only; the normalized
+  // `advisoryBotLogins` above is not defaulted.
+  // `foldSecondaryAdvisoryReviewSettlements` combines every window login's
+  // own independent classification into the single shape
   // `buildSecondaryQuietWindowStatus` consumes -- see its own doc comment
   // for the exact fold rule (any pending keeps the full window; all
   // declined completes immediately; otherwise anchor on the latest genuine
   // review).
-  const secondaryBotLogins = normalizeSecondaryBotLoginList(
-    options.secondaryBotLogins ?? options.secondaryBotLogin,
-    resolvedPrimaryBotLogin,
-  );
+  const secondaryBotLogins = resolveAdvisoryQuietWindowBotLogins({
+    advisoryBotLogins: options.advisoryBotLogins,
+    secondaryBotLogin: options.secondaryBotLogins ?? options.secondaryBotLogin,
+    primaryBotLogin: resolvedPrimaryBotLogin,
+  });
   const secondaryReviewSettlement = foldSecondaryAdvisoryReviewSettlements(
     comments,
     {

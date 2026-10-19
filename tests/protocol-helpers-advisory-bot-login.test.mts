@@ -1,5 +1,14 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import {
+  readAdvisorySecondaryBotLogins,
+  resolveAdvisoryBotRestLogin,
+  resolveAdvisoryQuietWindowBotLogins,
+  resolveAdvisorySecondaryBotLogins,
+} from '../src/scripts/advisory-wait-policy.mts';
 import {
   computeSecondaryAdvisoryReviewSettlement,
   foldSecondaryAdvisoryReviewSettlements,
@@ -800,5 +809,184 @@ test('#3262: isCopilotReviewerLogin rejects a registrable lookalike for either c
   assert.equal(
     isCopilotReviewerLogin('coderabbitai1[bot]', 'coderabbitai', 'Bot'),
     false,
+  );
+});
+
+// #4467: the secondary quiet window covers every non-primary advisory bot.
+
+test('#4467: with the default primary, both of its identities leave the window set, including an explicit entry', () => {
+  assert.equal(
+    resolveAdvisoryBotRestLogin(),
+    'copilot-pull-request-reviewer[bot]',
+  );
+  assert.deepEqual(
+    resolveAdvisoryQuietWindowBotLogins({
+      advisoryBotLogins: [
+        'copilot-pull-request-reviewer[bot]',
+        'copilot-pull-request-reviewer',
+        'coderabbitai[bot]',
+        'chatgpt-codex-connector[bot]',
+      ],
+      secondaryBotLogin: ['Copilot', 'copilot-pull-request-reviewer[bot]'],
+    }),
+    ['coderabbitai[bot]', 'chatgpt-codex-connector[bot]'],
+  );
+});
+
+test('#4467: with a non-default primary, its GraphQL and REST identities both leave the window set', () => {
+  // A configured primary is already a real account login, so its REST login
+  // is the same login. The bot identity token makes `my-bot` and
+  // `my-bot[bot]` one identity, as the fold does.
+  assert.equal(resolveAdvisoryBotRestLogin('my-bot'), 'my-bot');
+  assert.deepEqual(
+    resolveAdvisoryQuietWindowBotLogins({
+      advisoryBotLogins: ['my-bot', 'My-Bot[bot]'],
+      primaryBotLogin: 'my-bot',
+    }),
+    [],
+  );
+  assert.deepEqual(
+    resolveAdvisoryQuietWindowBotLogins({
+      advisoryBotLogins: ['my-bot', 'secondary-reviewer[bot]'],
+      secondaryBotLogin: 'my-bot',
+      primaryBotLogin: 'my-bot[bot]',
+    }),
+    ['secondary-reviewer[bot]'],
+  );
+  // A default advisory bot named as the primary leaves the default set.
+  assert.deepEqual(
+    resolveAdvisoryQuietWindowBotLogins({ primaryBotLogin: 'coderabbitai' }),
+    ['chatgpt-codex-connector[bot]'],
+  );
+});
+
+test('#4467: an explicit secondary entry absent from advisoryBotLogins joins the window set, while the request list stays explicit', () => {
+  const config = {
+    advisoryBotLogins: ['coderabbitai[bot]', 'chatgpt-codex-connector[bot]'],
+    advisoryWait: { secondaryBotLogin: 'custom-secondary[bot]' },
+  };
+  assert.deepEqual(
+    resolveAdvisoryQuietWindowBotLogins({
+      advisoryBotLogins: config.advisoryBotLogins,
+      secondaryBotLogin: config.advisoryWait.secondaryBotLogin,
+    }),
+    [
+      'coderabbitai[bot]',
+      'chatgpt-codex-connector[bot]',
+      'custom-secondary[bot]',
+    ],
+  );
+  assert.deepEqual(resolveAdvisorySecondaryBotLogins(config), [
+    'custom-secondary[bot]',
+  ]);
+  const dir = mkdtempSync(join(tmpdir(), 'idd-quiet-window-request-list-'));
+  try {
+    const path = join(dir, 'config.json');
+    writeFileSync(path, JSON.stringify(config));
+    assert.deepEqual(readAdvisorySecondaryBotLogins(path), [
+      'custom-secondary[bot]',
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('#4467: with advisoryBotLogins and secondaryBotLogin both unset, the window set is CodeRabbit and Codex minus the primary', () => {
+  assert.deepEqual(resolveAdvisoryQuietWindowBotLogins(), [
+    'coderabbitai[bot]',
+    'chatgpt-codex-connector[bot]',
+  ]);
+  assert.deepEqual(
+    resolveAdvisoryQuietWindowBotLogins({
+      advisoryBotLogins: null,
+      secondaryBotLogin: undefined,
+      primaryBotLogin: '',
+    }),
+    ['coderabbitai[bot]', 'chatgpt-codex-connector[bot]'],
+  );
+  // An explicit empty list is not unset.
+  assert.deepEqual(
+    resolveAdvisoryQuietWindowBotLogins({ advisoryBotLogins: [] }),
+    [],
+  );
+});
+
+test('#4467: the fold over the derived window set covers completion, decline, pending, and an empty window set', () => {
+  const windowSet = resolveAdvisoryQuietWindowBotLogins();
+  const fold = (
+    comments: ReturnType<typeof comment>[],
+    secondaryBotLogins: string[],
+  ) =>
+    foldSecondaryAdvisoryReviewSettlements(comments, {
+      secondaryBotLogins,
+      headCommittedAt: HEAD_COMMITTED_AT,
+      headSha: HEAD_SHA,
+    });
+
+  // A recognized completion from every window bot anchors on the later one.
+  assert.deepEqual(
+    fold(
+      [
+        comment(
+          'coderabbitai[bot]',
+          CODERABBIT_SUMMARY,
+          '2026-09-02T12:01:00Z',
+        ),
+        comment(
+          'chatgpt-codex-connector[bot]',
+          CODEX_SUMMARY_COMPLETED,
+          '2026-09-02T12:02:00Z',
+        ),
+      ],
+      windowSet,
+    ),
+    { settledAt: '2026-09-02T12:02:00Z', declined: false },
+  );
+  // A recognized decline from every window bot completes the wait.
+  assert.deepEqual(
+    fold(
+      [
+        comment('coderabbitai[bot]', DECLINE_NOTICE, '2026-09-02T12:01:00Z'),
+        comment(
+          'chatgpt-codex-connector[bot]',
+          DECLINE_NOTICE,
+          '2026-09-02T12:02:00Z',
+        ),
+      ],
+      windowSet,
+    ),
+    { settledAt: null, declined: true },
+  );
+  // A pending bot keeps the full window, even after its sibling completed.
+  assert.deepEqual(
+    fold(
+      [
+        comment(
+          'coderabbitai[bot]',
+          CODERABBIT_SUMMARY,
+          '2026-09-02T12:01:00Z',
+        ),
+      ],
+      windowSet,
+    ),
+    { settledAt: null, declined: false },
+  );
+  // Only the primary listed: the window set is empty, the unconfigured path.
+  const emptyWindowSet = resolveAdvisoryQuietWindowBotLogins({
+    advisoryBotLogins: ['copilot', 'copilot-pull-request-reviewer[bot]'],
+  });
+  assert.deepEqual(emptyWindowSet, []);
+  assert.deepEqual(
+    fold(
+      [
+        comment(
+          'coderabbitai[bot]',
+          CODERABBIT_SUMMARY,
+          '2026-09-02T12:01:00Z',
+        ),
+      ],
+      emptyWindowSet,
+    ),
+    { settledAt: null, declined: false },
   );
 });
