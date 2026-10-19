@@ -8,7 +8,9 @@
 // - Copy this file, and replace every value marked as a placeholder.
 // - Uncomment only the optional settings you want to change, and change
 //   them. Keep a key out when you do not change it: an operator's user-global
-//   configuration may supply a key that this file leaves out.
+//   configuration may supply a key that this file leaves out. After you
+//   uncomment a whole object, delete each key marked "Default: omitted" that
+//   you do not mean to set; its value is only an example.
 // - Delete every line whose first non-blank characters are //.
 // - Merge the result into .github/idd/config.json.
 //

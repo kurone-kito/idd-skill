@@ -41,7 +41,11 @@ comments fails to parse. To use the example:
    Leave the other keys out: an operator's user-global configuration may
    supply a key that the repository file leaves out. Inside a
    commented-out object, each explanation line carries a second `//`, so it
-   stays a comment after you uncomment the object.
+   stays a comment after you uncomment the object. After you uncomment a
+   whole object, delete each key whose comment says `Default: omitted`
+   unless you mean to set it, before step 3 removes those notes: its value
+   is only an example, such as `"testCommand": "npm test"` or
+   `"declarationTarget": 1`, and it changes behavior once it is set.
 3. Delete every comment line. Each comment in the example is a whole line
    whose first non-blank characters are `//`, so deleting those lines
    leaves strict JSON:
@@ -64,10 +68,12 @@ comments fails to parse. To use the example:
    onboarding already recorded there, such as the substituted placeholders
    and `helperRuntime`: an omitted `helperRuntime` means the
    `instructions-only` profile.
-5. Search the result for `replace-me` and `REPLACE_WITH`. Each placeholder
-   is a schema-valid value, so `idd-doctor` does not report one left in
-   place. Then run `idd-doctor`, which reports a `config.json` that fails
-   the schema.
+5. Search the result for `replace-me`, `REPLACE_WITH`, `example-`, and
+   `/absolute/path/to/`. Each placeholder and example value is
+   schema-valid, so `idd-doctor` does not report one left in place. A
+   numeric or plain example value carries no such marker, so step 2 is the
+   check for those. Then run `idd-doctor`, which reports a `config.json`
+   that fails the schema.
 
 These cautions are preventive; no observed incident yet.
 
