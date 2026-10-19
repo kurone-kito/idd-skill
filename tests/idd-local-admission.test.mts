@@ -924,7 +924,12 @@ test('pueue creates a missing group at the cap and preserves shell argv', {
     },
   );
   const calls = state.calls as string[][];
-  assert.deepEqual(calls[0], ['status', '--json']);
+  assert.deepEqual(calls[0]?.slice(0, 2), ['status', '--json']);
+  assert.match(
+    calls[0]?.[2] ?? '',
+    /^label=idd-local-admission-health-[0-9a-f-]{36}$/,
+  );
+  assert.deepEqual(calls[0]?.slice(3), ['first', '1']);
   assert.deepEqual(calls[1], ['group', '--json']);
   assert.deepEqual(calls[2], [
     'group',

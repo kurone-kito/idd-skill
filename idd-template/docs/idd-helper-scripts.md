@@ -2613,11 +2613,14 @@ Behavior:
   starts when the raw stored `maxConcurrent` is above 1; a stored `9` is
   refused rather than silently run serially. This raw-cap refusal applies only
   to the flock backend.
-- On non-Windows hosts, backend `pueue` uses `pueue status --json` to check the
-  daemon before submitting anything. A missing client, connection error,
-  timeout, or any non-zero daemon-check exit prints one pueue notice and uses
-  the flock path, whatever the client exit code. Nothing was submitted, so this
-  fallback cannot start a duplicate. The pueue path does not require `flock`.
+- On non-Windows hosts, backend `pueue` uses `pueue status --json` with a fresh
+  random-label query and `first 1` to check the daemon before submitting
+  anything. The query normally selects no tasks and limits the returned status
+  to at most one task record, so the helper does not capture the full retained
+  task list. A missing client, connection error, timeout, or any non-zero
+  daemon-check exit prints one pueue notice and uses the flock path, whatever
+  the client exit code. Nothing was submitted, so this fallback cannot start a
+  duplicate. The pueue path does not require `flock`.
 - The pueue backend reads the configured group and creates a missing group with
   the effective cap (1 through 8). If another session creates it first, the
   helper rereads the group and uses it. An existing group's parallel count is

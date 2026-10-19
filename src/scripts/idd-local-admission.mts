@@ -987,7 +987,13 @@ function runPueueAdmission(
     }
     if (pueuePath === null)
       return fallback('client is not available on this host');
-    const daemon = await call(['status', '--json']);
+    const daemon = await call([
+      'status',
+      '--json',
+      `label=idd-local-admission-health-${randomUUID()}`,
+      'first',
+      '1',
+    ]);
     if (pendingSignal !== null) return statusForSignal();
     if (!isPueueClientSuccess(daemon)) {
       return fallback('daemon is not accepting commands');
