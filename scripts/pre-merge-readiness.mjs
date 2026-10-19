@@ -1373,7 +1373,11 @@ export function collectPreMergeReadiness(
       now,
       trustedMarkerLogins,
       iddAgentLogins,
-      advisoryBotLogins,
+      // #4467: source `none` (no flag, environment, or policy list) is the
+      // unset value, so the secondary quiet window gets the default
+      // advisory bots. Every other reader sees `[]` either way.
+      advisoryBotLogins:
+        advisoryBotLoginsSource === 'none' ? undefined : advisoryBotLogins,
       advisoryBotLoginsSource,
       prAuthorLogin,
       expectedClaimId: args.expectedClaimId,

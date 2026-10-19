@@ -15389,6 +15389,148 @@ test('#3261: an unrecognized secondary-bot identity never gets the settled buffe
   assert.equal(status.declined, false);
 });
 
+// #4467: the quiet window covers every non-primary advisory bot. These cases
+// use this repository's own advisory configuration, with the window set to
+// PT5M here so the test does not depend on the configured length.
+
+const CODEX_LOGIN = 'chatgpt-codex-connector[bot]';
+const CODERABBIT_LOGIN = 'coderabbitai[bot]';
+
+function repositoryQuietWindowOptions() {
+  const config = readJson('.github/idd/config.json') as {
+    advisoryBotLogins: string[];
+    advisoryWait: Record<string, unknown>;
+  };
+  return {
+    advisoryBotLogins: config.advisoryBotLogins,
+    primaryBotLogin: config.advisoryWait.primaryBotLogin as string | undefined,
+    secondaryBotLogins: config.advisoryWait.secondaryBotLogin,
+    secondaryQuietWindowMinutes: resolveAdvisorySecondaryQuietWindowMinutes({
+      ...config,
+      advisoryWait: { ...config.advisoryWait, secondaryQuietWindow: 'PT5M' },
+    }),
+    advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+    advisoryConvergenceHeadObservedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+  };
+}
+
+test('#4467: with this repository configuration, a Codex decline of the current HEAD does not complete the window while CodeRabbit is silent', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const comments = [
+    ...fixture.input.comments,
+    declinedNoticeComment(CODEX_LOGIN, '2026-05-11T23:51:00Z'),
+  ];
+  // The decline is recognized for the current HEAD, so the window holds only
+  // because CodeRabbit is still pending.
+  assert.deepEqual(
+    computeSecondaryAdvisoryReviewSettlement(comments, {
+      secondaryBotLogin: CODEX_LOGIN,
+      headCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+      headSha: fixture.input.prHeadSha,
+    }),
+    { settled: false, settledAt: null, declined: true },
+  );
+  const summary = buildPreMergeReadinessSummary(
+    { ...fixture.input, comments },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      ...repositoryQuietWindowOptions(),
+    },
+  );
+  const status = secondaryQuietWindowOf(summary);
+  assert.equal(status.minutes, 5);
+  // The full window, anchored on the activity ceiling inside the window.
+  assert.equal(status.anchorAt, '2026-05-11T23:56:00Z');
+  assert.equal(status.elapsedMinutes, 4);
+  assert.equal(status.remainingMinutes, 1);
+  assert.equal(status.elapsed, false);
+  assert.equal(status.declined, false);
+  assert.ok(
+    (summary.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'secondary-quiet-window',
+    ),
+  );
+});
+
+test('#4467: with this repository configuration, a CodeRabbit decline no longer completes the window while Codex is silent', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(
+    {
+      ...fixture.input,
+      comments: [
+        ...fixture.input.comments,
+        declinedNoticeComment(CODERABBIT_LOGIN, '2026-05-11T23:51:00Z'),
+      ],
+    },
+    {
+      ...fixture.options,
+      includeDispositionEvidence: true,
+      ...repositoryQuietWindowOptions(),
+    },
+  );
+  const status = secondaryQuietWindowOf(summary);
+  // Before #4467, CodeRabbit was the only window bot, so this decline
+  // completed the wait at once (`declined: true`).
+  assert.equal(status.anchorAt, '2026-05-11T23:56:00Z');
+  assert.equal(status.elapsed, false);
+  assert.equal(status.declined, false);
+  assert.ok(
+    (summary.blockers as { gate: string }[]).some(
+      (blocker) => blocker.gate === 'secondary-quiet-window',
+    ),
+  );
+});
+
+test('#4467: an omitted advisoryBotLogins option gives the window the default bots and changes nothing else', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const { advisoryBotLogins: _omitted, ...optionsWithoutAdvisoryBots } =
+    fixture.options;
+  const input = {
+    ...fixture.input,
+    comments: [
+      ...fixture.input.comments,
+      genuineReviewComment(CODERABBIT_LOGIN, '2026-05-11T23:51:00Z'),
+    ],
+  };
+  const windowOptions = {
+    includeDispositionEvidence: true,
+    advisoryBotLoginsSource: 'none',
+    secondaryQuietWindowMinutes: 5,
+    secondaryBotLogins: [CODERABBIT_LOGIN],
+    advisoryConvergenceHeadCommittedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+    advisoryConvergenceHeadObservedAt: TWO_SECONDARY_HEAD_COMMITTED_AT,
+  };
+  const omitted = buildPreMergeReadinessSummary(input, {
+    ...optionsWithoutAdvisoryBots,
+    ...windowOptions,
+  });
+  // Codex is in the default set and has not posted, so CodeRabbit's review
+  // alone does not start the settled buffer.
+  const omittedStatus = secondaryQuietWindowOf(omitted);
+  assert.equal(omittedStatus.anchorAt, '2026-05-11T23:56:00Z');
+  assert.equal(omittedStatus.elapsed, false);
+  const omittedAckOnly = (
+    omitted as {
+      reviewCurrency: {
+        live: { ackOnly: { advisoryBotLogins: string[]; source: string } };
+      };
+    }
+  ).reviewCurrency.live.ackOnly;
+  assert.deepEqual(omittedAckOnly.advisoryBotLogins, []);
+  assert.equal(omittedAckOnly.source, 'none');
+
+  // An explicit empty list leaves CodeRabbit as the only window bot, so its
+  // review starts the settled buffer, as before #4467.
+  const explicitEmpty = buildPreMergeReadinessSummary(input, {
+    ...fixture.options,
+    ...windowOptions,
+  });
+  const explicitEmptyStatus = secondaryQuietWindowOf(explicitEmpty);
+  assert.equal(explicitEmptyStatus.anchorAt, '2026-05-11T23:51:00Z');
+  assert.equal(explicitEmptyStatus.elapsed, true);
+});
+
 // #2272: the development-branch-target gate is a fail-closed invariant
 // distinct from every other pre-merge gate above -- absent entirely
 // (unmigrated caller / every fixture above) adds no blocker at all,

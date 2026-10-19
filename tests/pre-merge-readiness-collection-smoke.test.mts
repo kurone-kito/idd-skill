@@ -1564,17 +1564,24 @@ test('collectPreMergeReadiness: an empty baseRefName falls back to the repositor
 
 // ---------------------------------------------------------------------------
 // #2544: secondaryQuietWindow settled-buffer end-to-end wiring. Proves
-// collectPreMergeReadiness's own readAdvisorySecondaryBotLogin() call
+// collectPreMergeReadiness's own secondary-bot and advisory-bot resolution
 // (pre-merge-readiness.mts) actually reaches buildPreMergeReadinessSummary
 // and computeSecondaryAdvisoryReviewSettlement (protocol-helpers.mts), not
 // just the unit-level buildSecondaryQuietWindowStatus tests in
-// tests/advisory-wait-policy.test.mts.
+// tests/advisory-wait-policy.test.mts. #4467: the injected config leaves
+// `advisoryBotLogins` unset, so the window covers the default advisory bots
+// (CodeRabbit and Codex) as well as the explicit CodeRabbit secondary.
 // ---------------------------------------------------------------------------
 
 function runSecondaryQuietWindowFixture(
   comments: Array<{ body: string; createdAt: string; authorLogin: string }>,
   now: string,
-): { elapsed: boolean; remainingMinutes: number | null } {
+): {
+  elapsed: boolean;
+  remainingMinutes: number | null;
+  anchorAt: string;
+  minutes: number;
+} {
   const cwdRoot = mkdtempSync(
     join(tmpdir(), 'idd-pre-merge-secondary-quiet-window-'),
   );
@@ -1647,6 +1654,8 @@ function runSecondaryQuietWindowFixture(
     return report.secondaryQuietWindow as {
       elapsed: boolean;
       remainingMinutes: number | null;
+      anchorAt: string;
+      minutes: number;
     };
   } finally {
     process.chdir(originalCwd);
@@ -1654,13 +1663,31 @@ function runSecondaryQuietWindowFixture(
   }
 }
 
-test('collectPreMergeReadiness: secondaryQuietWindow settles quickly once CodeRabbit posts a genuine review for HEAD, well before the configured 1h window would elapse', () => {
+const QUIET_WINDOW_CODERABBIT_SUMMARY =
+  '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
+  '## Walkthrough\nSome walkthrough text.';
+const QUIET_WINDOW_CODERABBIT_RATE_LIMIT =
+  '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n' +
+  '> ## Review limit reached';
+// #4467: a Codex review-status comment whose row for the fixture HEAD
+// (`'a'.repeat(40)`) reads Completed -- Codex's recognized completion shape.
+const QUIET_WINDOW_CODEX_COMPLETED =
+  '<!-- codex-pull-request-review-summary -->\n\n' +
+  '## Codex Review Summary\n\n' +
+  '| Review | Status | Commit | Review trigger |\n' +
+  '| --- | --- | --- | --- |\n' +
+  `| 📝 **Code Review** | ✅ **Completed** | \`${'a'.repeat(7)}\` | PR opened |\n`;
+const QUIET_WINDOW_CODEX_RATE_LIMIT =
+  '## Review limit reached\n\nRate limited for this HEAD.';
+
+// #4467: before the window covered every non-primary advisory bot, this
+// CodeRabbit review alone started the #2544 settled buffer. Codex is now in
+// the window set and has not posted, so the full configured window applies.
+test('collectPreMergeReadiness: secondaryQuietWindow keeps the full window when only CodeRabbit has posted a genuine review for HEAD, because Codex is still pending (#4467)', () => {
   const status = runSecondaryQuietWindowFixture(
     [
       {
-        body:
-          '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
-          '## Walkthrough\nSome walkthrough text.',
+        body: QUIET_WINDOW_CODERABBIT_SUMMARY,
         createdAt: '2026-07-31T23:02:00Z',
         authorLogin: 'coderabbitai[bot]',
       },
@@ -1669,27 +1696,72 @@ test('collectPreMergeReadiness: secondaryQuietWindow settles quickly once CodeRa
     // nowhere near the configured PT1H window.
     '2026-07-31T23:07:00Z',
   );
-  assert.equal(status.elapsed, true);
+  assert.equal(status.elapsed, false);
+  assert.equal(status.minutes, 60);
+  assert.equal(status.anchorAt, '2026-07-31T23:02:00Z');
+  assert.equal(status.remainingMinutes, 55);
 });
 
-// #2547: a rate-limit notice for the current HEAD is a definitive decline,
-// not "still might be mid-review" -- the wait is skipped entirely (zero
-// remaining minutes), unlike the pre-#2547 behavior this test used to
-// assert (full window, `elapsed: false`, `remainingMinutes: 56`).
-test('collectPreMergeReadiness: secondaryQuietWindow skips the wait entirely once CodeRabbit has posted a rate-limit notice for HEAD (#2547 decline, not #2335 mid-review)', () => {
+test('collectPreMergeReadiness: secondaryQuietWindow settles quickly once CodeRabbit and Codex have both posted a genuine review for HEAD, anchored on the later one', () => {
   const status = runSecondaryQuietWindowFixture(
     [
       {
-        body:
-          '<!-- This is an auto-generated comment: rate limited by coderabbit.ai -->\n' +
-          '> ## Review limit reached',
+        body: QUIET_WINDOW_CODERABBIT_SUMMARY,
+        createdAt: '2026-07-31T23:02:00Z',
+        authorLogin: 'coderabbitai[bot]',
+      },
+      {
+        body: QUIET_WINDOW_CODEX_COMPLETED,
+        createdAt: '2026-07-31T23:03:00Z',
+        authorLogin: 'chatgpt-codex-connector[bot]',
+      },
+    ],
+    // 5 minutes after the later (Codex) review -- the #2544 settled buffer.
+    '2026-07-31T23:08:00Z',
+  );
+  assert.equal(status.elapsed, true);
+  assert.equal(status.minutes, 5);
+  assert.equal(status.anchorAt, '2026-07-31T23:03:00Z');
+});
+
+// #2547: a rate-limit notice for the current HEAD is a definitive decline,
+// not "still might be mid-review". #4467: the decline completes the wait only
+// once every window bot has declined; while Codex is pending, CodeRabbit's
+// decline alone keeps the full window (`remainingMinutes: 56`).
+test('collectPreMergeReadiness: secondaryQuietWindow keeps the full window when only CodeRabbit has posted a rate-limit notice for HEAD, because Codex is still pending (#4467)', () => {
+  const status = runSecondaryQuietWindowFixture(
+    [
+      {
+        body: QUIET_WINDOW_CODERABBIT_RATE_LIMIT,
         createdAt: '2026-07-31T23:02:00Z',
         authorLogin: 'coderabbitai[bot]',
       },
     ],
     '2026-07-31T23:06:00Z',
   );
+  assert.equal(status.elapsed, false);
+  assert.equal(status.anchorAt, '2026-07-31T23:02:00Z');
+  assert.equal(status.remainingMinutes, 56);
+});
+
+test('collectPreMergeReadiness: secondaryQuietWindow skips the wait entirely once CodeRabbit and Codex have both posted a rate-limit notice for HEAD (#2547 decline, not #2335 mid-review)', () => {
+  const status = runSecondaryQuietWindowFixture(
+    [
+      {
+        body: QUIET_WINDOW_CODERABBIT_RATE_LIMIT,
+        createdAt: '2026-07-31T23:02:00Z',
+        authorLogin: 'coderabbitai[bot]',
+      },
+      {
+        body: QUIET_WINDOW_CODEX_RATE_LIMIT,
+        createdAt: '2026-07-31T23:03:00Z',
+        authorLogin: 'chatgpt-codex-connector[bot]',
+      },
+    ],
+    '2026-07-31T23:06:00Z',
+  );
   assert.equal(status.elapsed, true);
+  assert.equal(status.anchorAt, 'declined');
   assert.equal(status.remainingMinutes, 0);
 });
 

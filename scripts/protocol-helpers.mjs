@@ -12,6 +12,7 @@ import {
   DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
   normalizeAdvisoryWaitRuntimeOptions,
   normalizeSecondaryBotLoginList,
+  resolveAdvisoryQuietWindowBotLogins,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from './advisory-wait-policy.mjs';
 
@@ -11257,7 +11258,7 @@ export function buildPreMergeReadinessSummary(
       dispositionAuthorLogins: iddAgentLogins,
     },
   );
-  // #2544/#3186: whether the configured secondary bot(s) have already
+  // #2544/#3186/#4467: whether every non-primary advisory bot has already
   // posted a genuine (non-notice) comment for the CURRENT HEAD -- reuses
   // `options.advisoryConvergenceHeadObservedAt` (the earliest GitHub-recorded
   // check-suite `createdAt` for the current HEAD, already resolved by the
@@ -11267,16 +11268,22 @@ export function buildPreMergeReadinessSummary(
   // 'when did this HEAD land' either way" -- the committer-supplied
   // `committedDate` can lag the actual push, so both readers now share the
   // GitHub-observed anchor instead).
-  // `foldSecondaryAdvisoryReviewSettlements` combines every configured
-  // login's own independent classification into the single shape
+  // #4467: the window set is every non-primary advisory bot, from
+  // `resolveAdvisoryQuietWindowBotLogins`: the raw `options.advisoryBotLogins`
+  // (unset means the default bots) plus the explicit secondary logins, minus
+  // both primary identities. It feeds this fold only; the normalized
+  // `advisoryBotLogins` above is not defaulted.
+  // `foldSecondaryAdvisoryReviewSettlements` combines every window login's
+  // own independent classification into the single shape
   // `buildSecondaryQuietWindowStatus` consumes -- see its own doc comment
   // for the exact fold rule (any pending keeps the full window; all
   // declined completes immediately; otherwise anchor on the latest genuine
   // review).
-  const secondaryBotLogins = normalizeSecondaryBotLoginList(
-    options.secondaryBotLogins ?? options.secondaryBotLogin,
-    resolvedPrimaryBotLogin,
-  );
+  const secondaryBotLogins = resolveAdvisoryQuietWindowBotLogins({
+    advisoryBotLogins: options.advisoryBotLogins,
+    secondaryBotLogin: options.secondaryBotLogins ?? options.secondaryBotLogin,
+    primaryBotLogin: resolvedPrimaryBotLogin,
+  });
   const secondaryReviewSettlement = foldSecondaryAdvisoryReviewSettlements(
     comments,
     {

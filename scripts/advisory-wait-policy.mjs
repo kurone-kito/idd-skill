@@ -182,7 +182,6 @@ export function readAdvisoryPrimaryBotLogin(path = '.github/idd/config.json') {
  * real account login. Pure and fails closed to the default REST login when
  * `primaryBotLogin` is blank.
  */
-// audit:ignore-dead-export: no production caller found by #3478's first repo-wide run; left for follow-up triage
 export function resolveAdvisoryBotRestLogin(
   primaryBotLogin = DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
 ) {
@@ -190,6 +189,67 @@ export function resolveAdvisoryBotRestLogin(
   return normalized === DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN
     ? DEFAULT_ADVISORY_PRIMARY_BOT_REST_LOGIN
     : normalized;
+}
+/**
+ * The bot identity token of a login: trimmed, lowercased, with one trailing
+ * `[bot]` removed. Matches `advisoryBotIdentityToken` in protocol-helpers.mts,
+ * which the quiet-window fold uses to match a login to its comments. Kept
+ * local because importing that module here would create an import cycle.
+ */
+function quietWindowBotIdentityToken(login) {
+  return login
+    .trim()
+    .toLowerCase()
+    .replace(/\[bot\]$/, '');
+}
+/**
+ * Resolve the bots that the secondary quiet window waits on (#4467): every
+ * non-primary advisory bot.
+ *
+ * - `advisoryBotLogins` is the resolved `advisoryBotLogins` value. When it is
+ *   unset (`undefined` or `null`), {@link DEFAULT_ADVISORY_BOT_LOGINS} is used.
+ *   An array is used as given, so an explicit empty list stays empty.
+ * - `secondaryBotLogin` is the explicit `advisoryWait.secondaryBotLogin`
+ *   value (one login or a list). Its entries are added to the list, and the
+ *   union is normalized by {@link normalizeSecondaryBotLoginList}.
+ * - Both identities of the primary bot are then removed: its GraphQL login
+ *   (`primaryBotLogin`, `copilot` when blank) and its REST login
+ *   ({@link resolveAdvisoryBotRestLogin}). The removal runs after the union,
+ *   so an explicit entry that names a primary identity is removed too. It
+ *   compares bot identity tokens, the same way the fold matches a login to
+ *   its comments, so `my-bot` and `my-bot[bot]` are one identity.
+ *
+ * An empty result leaves the fold with no bot to settle, which is the
+ * unconfigured path. The advisory-wait request list does not use this set;
+ * it keeps reading only the explicit `advisoryWait.secondaryBotLogin` entries
+ * (`readAdvisorySecondaryBotLogins`).
+ */
+export function resolveAdvisoryQuietWindowBotLogins({
+  advisoryBotLogins,
+  secondaryBotLogin,
+  primaryBotLogin,
+} = {}) {
+  const resolvedPrimaryBotLogin =
+    normalizeConfiguredPrimaryBotLogin(primaryBotLogin);
+  const primaryTokens = new Set([
+    quietWindowBotIdentityToken(resolvedPrimaryBotLogin),
+    quietWindowBotIdentityToken(
+      resolveAdvisoryBotRestLogin(resolvedPrimaryBotLogin),
+    ),
+  ]);
+  const advisoryLogins =
+    advisoryBotLogins === undefined || advisoryBotLogins === null
+      ? DEFAULT_ADVISORY_BOT_LOGINS
+      : Array.isArray(advisoryBotLogins)
+        ? advisoryBotLogins
+        : [advisoryBotLogins];
+  const explicitSecondaryLogins = Array.isArray(secondaryBotLogin)
+    ? secondaryBotLogin
+    : [secondaryBotLogin];
+  return normalizeSecondaryBotLoginList(
+    [...advisoryLogins, ...explicitSecondaryLogins],
+    resolvedPrimaryBotLogin,
+  ).filter((login) => !primaryTokens.has(quietWindowBotIdentityToken(login)));
 }
 /**
  * Normalize a raw `advisoryWait.secondaryBotLogin` value -- a single string
@@ -565,8 +625,9 @@ function computeQuietWindowElapsed({
 /**
  * Build the `advisoryWait.secondaryQuietWindow` gate status (#2335): once
  * the E-phase convergence conditions are already met -- no unresolved
- * review item, every disposition recorded -- a slower secondary advisory
- * bot (`advisoryWait.secondaryBotLogin`) can still land a finding after a
+ * review item, every disposition recorded -- a slower non-primary advisory
+ * bot (any bot of {@link resolveAdvisoryQuietWindowBotLogins}'s window set,
+ * #4467) can still land a finding after a
  * snapshot already looked converged (measured on PR #2330: findings landed
  * 34s and 2m after a zero-unresolved judgement). This gate requires the
  * configured window to have elapsed since the last SUBSTANTIVE activity
