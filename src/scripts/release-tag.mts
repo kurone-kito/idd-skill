@@ -1490,11 +1490,15 @@ async function checkReleaseIssue(ctx: Context, slug: string): Promise<void> {
   const labels = isRecord(policy.policy) ? policy.policy.labels : undefined;
   if (isRecord(labels) && Object.hasOwn(labels, 'blockedByHumanLabelName')) {
     const raw = labels.blockedByHumanLabelName;
-    if (typeof raw !== 'string' || raw.trim() === '') {
+    if (
+      typeof raw !== 'string' ||
+      raw.trim() === '' ||
+      CONTROL_CHARACTER.test(raw)
+    ) {
       throw new Refused(
         step,
         'policy-label-invalid',
-        `labels.blockedByHumanLabelName must be a non-empty string, not ${describe(raw)}`,
+        `labels.blockedByHumanLabelName must be a non-empty string without control characters, not ${describe(raw)}`,
       );
     }
   }

@@ -608,23 +608,25 @@ test('a gate label from a user-global override also blocks', async () => {
 });
 
 test('a malformed gate label in the policy is refused', async () => {
-  const fx = makeFixture();
-  writeFileSync(
-    join(fx.primary, '.github/idd/config.json'),
-    JSON.stringify({
-      iddVersion: VERSION,
-      labels: { blockedByHumanLabelName: '' },
-    }),
-  );
-  const { deps, calls } = harness(fx);
-  assertRefused(
-    await runReleaseTag(releaseInput(fx), deps),
-    'policy-label-invalid',
-  );
-  assert.deepEqual(
-    calls.filter((call) => call.kind === 'gh'),
-    [],
-  );
+  for (const label of ['', 'status:blocked\u0007']) {
+    const fx = makeFixture();
+    writeFileSync(
+      join(fx.primary, '.github/idd/config.json'),
+      JSON.stringify({
+        iddVersion: VERSION,
+        labels: { blockedByHumanLabelName: label },
+      }),
+    );
+    const { deps, calls } = harness(fx);
+    assertRefused(
+      await runReleaseTag(releaseInput(fx), deps),
+      'policy-label-invalid',
+    );
+    assert.deepEqual(
+      calls.filter((call) => call.kind === 'gh'),
+      [],
+    );
+  }
 });
 
 test('the gate-label policy read runs under the time bound', async () => {
