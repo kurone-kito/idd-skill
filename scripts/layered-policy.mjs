@@ -18,6 +18,8 @@ export const REPOSITORY_POLICY_FIELDS = Object.freeze({
   mergePolicy: 'idd-merge-execute.mts and idd-merge.instructions.md',
   /** `mergeGate` controls the trusted solo-CODEOWNER fallback in F3. */
   mergeGate: 'idd-merge-execute.mts',
+  /** `dangerouslyAutoDecide` grants provisional-choice authority only from a trusted repository baseline. */
+  dangerouslyAutoDecide: 'trusted repository decision-authority reader',
   /** `advisoryConvergence` configures the convergence helper policy read. */
   advisoryConvergence: 'advisory-convergence.mts',
   /** `reviewPolicy` controls whether advisory convergence applies. */
@@ -77,6 +79,10 @@ export const REPOSITORY_POLICY_FIELDS = Object.freeze({
    */
   localExec: 'local validation admission helper (roadmap #4426)',
 });
+/** These authority fields never inherit from user-global policy, even without a local file. */
+const ALWAYS_REPOSITORY_LOCAL_POLICY_FIELDS = new Set([
+  'dangerouslyAutoDecide',
+]);
 /** Local delegate objects are validated as a whole by their consumers. */
 const ATOMIC_REPOSITORY_LOCAL_POLICY_PATHS = new Set([
   'critiqueLoop.delegate',
@@ -202,6 +208,7 @@ export function resolveLayeredPolicy(input) {
 function overlayGlobalLayer(base, layer, source, localExists, sourceMap) {
   const filtered = Object.fromEntries(
     Object.entries(layer).flatMap(([key, value]) => {
+      if (ALWAYS_REPOSITORY_LOCAL_POLICY_FIELDS.has(key)) return [];
       if (!localExists || !Object.hasOwn(REPOSITORY_POLICY_FIELDS, key))
         return [[key, value]];
       // A local document owns the repository children of `issueAuthoring`, but
