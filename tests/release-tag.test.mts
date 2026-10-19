@@ -891,6 +891,22 @@ test('a failed signature check keeps the local tag and makes no push', async () 
   assert.deepEqual(remoteTags(fx), []);
 });
 
+test('an OpenPGP MESSAGE armor is verified as a signature, not refused as unsigned', async () => {
+  const fx = makeFixture();
+  const message = join(fx.root, 'message.txt');
+  writeFileSync(
+    message,
+    `release ${TAG}\n-----BEGIN PGP MESSAGE-----\n\nnot a real signature\n-----END PGP MESSAGE-----\n`,
+  );
+  git(fx, fx.primary, ['tag', '-a', '-F', message, TAG, fx.sha]);
+  const { deps, calls } = harness(fx);
+  const outcome = await runReleaseTag(releaseInput(fx, { apply: true }), deps);
+  assertRefused(outcome, 'signature-check-failed');
+  assert.equal(gitCalls(calls, 'verify-tag').length, 1);
+  assert.deepEqual(gitCalls(calls, 'push'), []);
+  assert.equal(localTags(fx).length, 1);
+});
+
 test('a push rejected once with an empty remote is retried once and lands', async () => {
   const fx = makeFixture();
   const flag = join(fx.root, 'rejected-once');

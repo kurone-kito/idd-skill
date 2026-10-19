@@ -1821,16 +1821,25 @@ async function tagObjectProblem(
   return { problem: null, body };
 }
 
+/**
+ * The signature armor lines git knows (`gpg-interface.c`: `openpgp_sigs`,
+ * `x509_sigs`, and `ssh_sigs`). OpenPGP has two.
+ */
+const SIGNATURE_MARKERS: readonly (readonly [string, SignatureKind])[] = [
+  ['-----BEGIN PGP SIGNATURE-----', 'openpgp'],
+  ['-----BEGIN PGP MESSAGE-----', 'openpgp'],
+  ['-----BEGIN SIGNED MESSAGE-----', 'x509'],
+  ['-----BEGIN SSH SIGNATURE-----', 'ssh'],
+];
+
+/** The kind of the last line that starts a known signature, as git reads it. */
 function signatureKind(body: string): SignatureKind {
-  const markers = body
-    .split('\n')
-    .filter((line) => line.startsWith('-----BEGIN '))
-    .map((line) => line.trim());
-  const last = markers.at(-1);
-  if (last === '-----BEGIN SSH SIGNATURE-----') return 'ssh';
-  if (last === '-----BEGIN PGP SIGNATURE-----') return 'openpgp';
-  if (last === '-----BEGIN SIGNED MESSAGE-----') return 'x509';
-  return 'none';
+  let kind: SignatureKind = 'none';
+  for (const line of body.split('\n')) {
+    const match = SIGNATURE_MARKERS.find(([marker]) => line.startsWith(marker));
+    if (match !== undefined) kind = match[1];
+  }
+  return kind;
 }
 
 /**
