@@ -575,6 +575,38 @@ test('a closed release issue and a blocked one are each refused and write nothin
   }
 });
 
+test('a gate label from a user-global override also blocks', async () => {
+  const fx = makeFixture();
+  const configHome = join(fx.root, 'xdg');
+  mkdirSync(join(configHome, 'idd-skill'), { recursive: true });
+  writeFileSync(
+    join(configHome, 'idd-skill', 'config.json'),
+    JSON.stringify({
+      overrides: [
+        {
+          match: { repo: 'fixture-owner/fixture-repo' },
+          config: { labels: { blockedByHumanLabelName: 'release:hold' } },
+        },
+      ],
+    }),
+  );
+  const env: NodeJS.ProcessEnv = { ...fx.env, XDG_CONFIG_HOME: configHome };
+  delete env.GITHUB_ACTIONS;
+  const { deps, calls } = harness(fx, {
+    env,
+    gh: { labels: ['release', 'release:hold'] },
+  });
+  const outcome = await runReleaseTag(releaseInput(fx), deps);
+  assertRefused(outcome, 'release-issue-blocked');
+  assert.match(outcome.report.refusal?.detail ?? '', /release:hold/u);
+  assert.deepEqual(
+    calls
+      .filter((call) => call.kind === 'git')
+      .map((call) => subcommand(call.args)),
+    ['remote', 'remote', 'worktree'],
+  );
+});
+
 test('a malformed gate label in the policy is refused', async () => {
   const fx = makeFixture();
   writeFileSync(

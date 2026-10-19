@@ -32,7 +32,10 @@ import { basename, isAbsolute, resolve } from 'node:path';
 import { runProductionCommand as runClaimedPushCommand } from './claimed-push.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { isNotDispatchedRefusal } from './github-api-refusal.mjs';
-import { loadLayeredLocalPolicy } from './idd-config.mjs';
+import {
+  loadLayeredLocalPolicy,
+  loadUserGlobalPolicyDocument,
+} from './idd-config.mjs';
 import { parseLocalWorktreeList } from './local-worktree-occupancy.mjs';
 import {
   inspectDevelopmentBranch,
@@ -659,6 +662,25 @@ function positiveMs(value, fallback, name) {
   }
   return value;
 }
+/** The `labels.blockedByHumanLabelName` of a policy object, when non-empty. */
+function gateLabelOf(config) {
+  const labels = isRecord(config) ? config.labels : undefined;
+  const value = isRecord(labels) ? labels.blockedByHumanLabelName : undefined;
+  return typeof value === 'string' && value.trim() !== '' ? value : null;
+}
+/** Every gate label the user-global file sets, at its top level or in an override. */
+function userGlobalGateLabels(env) {
+  const document = loadUserGlobalPolicyDocument({ env });
+  if (document.status !== 'present' || !isRecord(document.config)) return [];
+  const found = [gateLabelOf(document.config)];
+  const overrides = document.config.overrides;
+  if (Array.isArray(overrides)) {
+    for (const entry of overrides) {
+      found.push(gateLabelOf(isRecord(entry) ? entry.config : undefined));
+    }
+  }
+  return [...new Set(found.filter((label) => label !== null))];
+}
 /**
  * The production deps: git runs under the time bound with `env`, the `gh`
  * reads run through the repository's `gh` layer, and the gate label comes
@@ -695,14 +717,26 @@ export function createReleaseTagDeps(options = {}) {
     },
     readPolicy: (primary) => {
       try {
-        const loaded = loadLayeredLocalPolicy({ cwd: primary, env });
+        // The repository file alone: the layered loader would match a
+        // user-global override to this repository with git outside the time
+        // bound, so the user-global labels are collected separately below.
+        const loaded = loadLayeredLocalPolicy({
+          cwd: primary,
+          env,
+          noUserGlobal: true,
+        });
         if (loaded.local.diagnostic !== undefined) {
           return {
             ok: false,
             reason: `the repository policy of the primary checkout ${primary} is unreadable: ${loaded.local.diagnostic}`,
           };
         }
-        return { ok: true, policy: loaded.config ?? null };
+        return {
+          ok: true,
+          policy: loaded.config ?? null,
+          userGlobalLabels:
+            env.GITHUB_ACTIONS === 'true' ? [] : userGlobalGateLabels(env),
+        };
       } catch (error) {
         return {
           ok: false,
@@ -1041,8 +1075,12 @@ async function checkReleaseIssue(ctx, slug) {
       );
     }
   }
-  const gate = normalizePolicyConfig(policy.policy).labels
-    .blockedByHumanLabelName;
+  const gates = [
+    ...new Set([
+      normalizePolicyConfig(policy.policy).labels.blockedByHumanLabelName,
+      ...policy.userGlobalLabels,
+    ]),
+  ];
   const stdout = await ghRead(
     ctx,
     step,
@@ -1088,18 +1126,19 @@ async function checkReleaseIssue(ctx, slug) {
       `issue #${ctx.input.issue} is ${describe(issue.state)}, not OPEN`,
     );
   }
-  if (names.includes(gate)) {
+  const blocking = gates.find((gate) => names.includes(gate));
+  if (blocking !== undefined) {
     throw new Refused(
       step,
       'release-issue-blocked',
-      `issue #${ctx.input.issue} carries the label ${describe(gate)}`,
+      `issue #${ctx.input.issue} carries the label ${describe(blocking)}`,
     );
   }
   setPrecondition(
     ctx.report,
     step,
     'passed',
-    `issue #${ctx.input.issue} is open without ${describe(gate)}`,
+    `issue #${ctx.input.issue} is open without ${gates.map((gate) => describe(gate)).join(' or ')}`,
   );
 }
 async function checkPullRequest(ctx, slug) {
