@@ -823,7 +823,9 @@ function runPueueAdmission(command, admission, raw, deps) {
       ? parsePueueGroups(groupsResult.stdout)
       : null;
     if (groups === null) return fallback('could not read the group list');
-    let group = groups[groupName];
+    let group = Object.hasOwn(groups, groupName)
+      ? groups[groupName]
+      : undefined;
     if (group === undefined) {
       const created = await call([
         'group',
@@ -839,7 +841,7 @@ function runPueueAdmission(command, admission, raw, deps) {
         groups = isPueueClientSuccess(groupsResult)
           ? parsePueueGroups(groupsResult.stdout)
           : null;
-        if (groups === null || groups[groupName] === undefined) {
+        if (groups === null || !Object.hasOwn(groups, groupName)) {
           return fallback('could not create the configured group');
         }
         group = groups[groupName];
