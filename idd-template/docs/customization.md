@@ -612,18 +612,28 @@ ordinary advisory input. Resolution trims and lowercases each entry, drops
 blanks, drops any entry equal to the primary, and dedupes
 case-insensitively; omitting `advisoryWait.secondaryBotLogin` (or a value
 that normalizes to an empty list -- for example every entry equal to the
-primary) disables the supplement entirely, keeping behavior identical to a
-primary-only policy. Configure each secondary to a requestable reviewer
-whose request appears on the PR timeline so the once-per-HEAD guard can
-observe it.
+primary) disables the supplement entirely, so no secondary request is sent,
+the same as a primary-only policy; the quiet window's set below is separate.
+Configure each secondary to a requestable reviewer whose request appears on
+the PR timeline so the once-per-HEAD guard can observe it.
 
 `advisoryWait.secondaryQuietWindow` (#2335, off by default when omitted)
 requires a configured quiet period to elapse since the last substantive
 review activity
 before `pre-merge-readiness` treats the review as settled -- covering a
-slower secondary bot that lands a finding after a snapshot already looked
-converged. It anchors on the same non-ack-only activity ceiling the review-
-currency gate already computes (`ackOnlyPostDisposition`), except that the
+slower non-primary advisory bot that lands a finding after a snapshot already
+looked converged. **#4467**: the window set is every non-primary advisory
+bot: the logins in the resolved top-level `advisoryBotLogins`
+(`coderabbitai[bot]` and `chatgpt-codex-connector[bot]` when none is
+resolved), plus the explicit `advisoryWait.secondaryBotLogin` entries, minus
+both identities of the primary bot (its GraphQL login,
+`advisoryWait.primaryBotLogin`, and its REST login,
+`copilot-pull-request-reviewer[bot]` for Copilot). The removal compares bot
+identities, so `my-bot` and `my-bot[bot]` are one bot, and it also removes
+an explicit entry that names the primary. The request list does not change:
+only the explicit `advisoryWait.secondaryBotLogin` entries are requested. It
+anchors on the same non-ack-only activity ceiling the review-currency gate
+already computes (`ackOnlyPostDisposition`), except that the
 own timestamp of an unedited top-level disposition by a trusted author
 (advisory bots excepted) is left out, so the agent's own unedited disposition
 reply never restarts the window (observed 2026-10-12 on a kurone-kito/dotfiles
@@ -638,23 +648,38 @@ thread, and a bot reply on an unresolved thread, still reopen it, because
 thread activity feeds the ceiling. Distinct from
 `advisoryWait.settledWindow`, which bounds the PRIMARY bot's own pending
 state, not a late secondary-bot arrival. **#2544**:
-once a secondary bot has already posted a genuine review for the current
-HEAD, only a short fixed confirmation buffer applies from that review's own
-timestamp instead of the full configured duration -- a HEAD that no
-configured secondary bot has reviewed yet still waits the full period
-unchanged.
+once a bot in the window set has already posted a genuine review for the
+current HEAD (with several bots, the `#3186` fold below decides), only a
+short fixed confirmation buffer applies from that review's own timestamp
+instead of the full configured duration -- while any bot in the window set
+is still pending for a HEAD, that HEAD waits the full period unchanged.
 **#2547**: a rate-limit / skip-review notice for the current HEAD, with no
 later genuine comment, is a third outcome distinct from `#2544`'s
 pending/settled split -- a definitive decline, not "might still be
-reviewing" -- and skips the wait entirely (no buffer, no remaining window).
-A repository need not configure anything extra for this: it applies
-automatically whenever `advisoryWait.secondaryQuietWindow` and
-`advisoryWait.secondaryBotLogin` are both set. **#3186**: with several
-secondary logins configured, `pre-merge-readiness` classifies each one's
-settlement independently first -- any login still pending keeps the full
-window; once every login has declined, the wait completes immediately;
-otherwise the short settled buffer anchors on the _latest_ timestamp among
-the settled logins, and a declined login never extends that wait.
+reviewing" -- and skips the wait entirely (no buffer, no remaining window;
+with several bots, only once every bot in the window set has declined, per
+the `#3186` fold below). The decline skip needs no dedicated setting;
+whether it fires depends on the window set. The window applies whenever
+`secondaryQuietWindow` is set and the window set is not empty. This is not
+an only-when rule: an empty window set does not turn the window off. A
+configured `secondaryQuietWindow` then has no bot to settle or decline it,
+so neither the settled buffer nor the decline skip applies, and the full
+configured length always elapses. A default bot that the repository does not
+run never comments, so it stays pending and holds the full window. List the
+bots the repository runs in `advisoryBotLogins` (the `pre-merge-readiness`
+flag `--advisory-bot-logins` and the `IDD_ADVISORY_BOT_LOGINS` environment
+variable take precedence over it). Only CodeRabbit and Codex have a
+recognized completed shape (issue `#3261`), so any other listed bot holds
+the full window unless it declines. For an empty window set, list only the
+primary's logins there and leave `advisoryWait.secondaryBotLogin` unset.
+Setting `advisoryBotLogins` also turns on the ack-only classification that
+its schema entry describes.
+**#3186**: with several logins in the window set, `pre-merge-readiness`
+classifies each one's settlement independently first -- any login still
+pending keeps the full window; once every login has declined, the wait
+completes immediately; otherwise the short settled buffer anchors on the
+_latest_ timestamp among the settled logins, and a declined login never
+extends that wait.
 **#3260**: CodeRabbit edits its summary comment in place while it starts (or
 pauses) a review, so the LATEST matching comment can be an in-progress or
 paused revision rather than genuine settlement evidence. An in-progress
