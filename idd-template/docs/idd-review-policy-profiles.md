@@ -649,8 +649,8 @@ safety class defers to the bundled follow-up. At any step under
 `"severity-tiered"`, the agent reports adopt-now condition (d) with
 `resolve-review-thread --adopt-now`, which turns a `defer` verdict into
 `keep`; the helper refuses the flag when `critiqueLoop.deferByUrgency` is
-not `"severity-tiered"`, with `--lite`, with `--path-b`, and when `--tier`
-or `--urgency` is missing (see the Adopt-now rule under
+not `"severity-tiered"`, with `--path-b`, and when `--tier` or `--urgency`
+is missing (see the Adopt-now rule under
 [Triage record flags](idd-helper-scripts.md#triage-record-flags)).
 
 **Reply and follow-up.** The reply keeps its form:

@@ -398,15 +398,13 @@ export function validateTriageFlags(input) {
     );
   }
   // Checked before the pair, unlike `--override` below, so a lone score with
-  // `--adopt-now` names `--adopt-now` rather than the pair (#4436).
+  // `--adopt-now` names `--adopt-now` rather than the pair (#4436). `--lite`
+  // is accepted: an Accepted item makes the push certain there too (#4519).
   if (flags.adoptNow) {
     if (input.deferByUrgency !== 'severity-tiered') {
       throw new TriageUsageError(
         '--adopt-now requires critiqueLoop.deferByUrgency severity-tiered',
       );
-    }
-    if (flags.lite) {
-      throw new TriageUsageError('--adopt-now cannot be combined with --lite');
     }
     if (flags.tier === '' || flags.urgency === '') {
       throw new TriageUsageError('--adopt-now requires --tier and --urgency');
@@ -813,7 +811,7 @@ reply with the same flags would carry, and posts nothing. For example:
                                  blocks a deferral (optional)
   --adopt-now                    adopt-now condition (d) holds: turns a defer verdict into
                                  keep (severity-tiered only; needs --tier and --urgency;
-                                 not with --lite or --path-b)
+                                 not with --path-b)
   --override <reason>            post an Accepted reply the defer matrix refuses, with the
                                  reason recorded on its Triage line (needs a defer verdict)
   --apply                        post the reply and resolve the thread, or post the
