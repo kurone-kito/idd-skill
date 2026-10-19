@@ -51,6 +51,22 @@ const IDENTITY = {
   GIT_COMMITTER_NAME: 'release fixture',
   GIT_COMMITTER_EMAIL: EMAIL,
 };
+/** What the harness reports for `git --version` unless a test overrides it. */
+const SUPPORTED_GIT_VERSION = 'git version 2.44.0\n';
+
+/**
+ * Whether the host git fails `git tag -s` when an SSH signer fails. Before
+ * 2.44.0 it writes an unsigned tag instead, which the broken-signer case tests.
+ */
+const HOST_GIT_FAILS_A_FAILED_SSH_SIGN = (() => {
+  const match = /^git version (\d+)\.(\d+)/u.exec(
+    execFileSync('git', ['--version'], { encoding: 'utf8' }),
+  );
+  const major = Number(match?.[1]);
+  const minor = Number(match?.[2]);
+  return major > 2 || (major === 2 && minor >= 44);
+})();
+
 /** The process-tree fixtures need POSIX `ps` and `sh`. */
 const SKIP_PROCESS_TREE = process.platform === 'win32';
 
@@ -325,6 +341,9 @@ function harness(fx: Fixture, options: HarnessOptions = {}): Harness {
       const replaced = await options.wrap(request, real.run);
       if (replaced !== null) return replaced;
     }
+    // A supported version, so the scenarios do not depend on the host git;
+    // the version-gate test overrides it through `wrap`.
+    if (request.args[0] === '--version') return ok(SUPPORTED_GIT_VERSION);
     return await real.run(request);
   };
   return { deps: { ...real, run, ghRepositorySlug: () => SLUG }, calls };
@@ -1096,7 +1115,11 @@ test('a signing setting that cannot be read is refused, not read as unset', asyn
   }
 });
 
-test('a broken signer leaves no tag and no unsigned tag', async () => {
+test('a broken signer leaves no tag and no unsigned tag', {
+  skip:
+    !HOST_GIT_FAILS_A_FAILED_SSH_SIGN &&
+    'the host git is older than 2.44.0 and writes an unsigned tag when an SSH signer fails',
+}, async () => {
   const fx = makeFixture();
   const signer = writeStub(
     fx,
