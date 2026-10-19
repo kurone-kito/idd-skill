@@ -6,8 +6,9 @@
 //
 // It reads only the part of an overview body that is independent of "is this a
 // v2 overview?": the Open section, in any of its header forms (`Open (n)`,
-// `n open findings`, or `n open issues`), the `Previously missed (n)` section,
-// and the severity label each item carries. The v2 marker test stays with the
+// `n open findings`, or `n open issues`), the previously missed section (as
+// `Previously missed (n)` or `n previously missed issues`), and the severity
+// label each item carries. The v2 marker test stays with the
 // caller, because the wave audit and the snapshot decide "v2" differently. The
 // snapshot uses `classifyCopilotReviewBody`, which strips code first, and the
 // wave audit uses a plain marker `includes` test.
@@ -28,14 +29,17 @@ const SECTION_HEADER_RE = /<summary><strong>([^<]+)<\/strong><\/summary>/g;
 // first seen in review 5553947628 on PR #4452, issue #4472). The new wording
 // alternation adds no capture group, so the count stays in group 1 or 2. The
 // ` open ` after the digits keeps `<n> previously missed issues` out.
-//
-// Copilot retitled the previously missed section on the same day, to
-// `<n> previously missed issue(s)`, and PREVIOUSLY_MISSED_HEADER_RE below does
-// not read that title yet. Its items carry no `#discussion_r` link, so such a
-// section is skipped with no unparsed reason, and its findings are not counted
-// in `previouslyMissed` (issue #4526 lists this gap as out of its scope).
 const OPEN_HEADER_RE = /^(?:Open \((\d+)\)|(\d+) open (?:findings?|issues?))$/;
-const PREVIOUSLY_MISSED_HEADER_RE = /^Previously missed \((\d+)\)$/;
+// The Previously missed section header, in both forms: `Previously missed
+// (<n>)` (the original title) and `<n> previously missed issue` /
+// `<n> previously missed issues` (from 2026-10-16, first seen in review
+// 5554260551 on PR #4455). Its items carry no `#discussion_r` link, so an
+// unrecognized title is skipped with no unparsed reason and its findings go
+// uncounted. Fixing only the Open header would have turned such a review from
+// unparsed into v2 with a count of 0 (issue #4472). Issue #4526 changes the same
+// title in `copilot-review-body.mts`.
+const PREVIOUSLY_MISSED_HEADER_RE =
+  /^(?:Previously missed \((\d+)\)|(\d+) previously missed issues?)$/;
 // Sections recognized and never read for items: the resolved list in both
 // forms, and "What changed in this PR". Reading "What changed" for items would
 // turn a prose-only section into a drift reason, so it stays ignored, as before
@@ -129,7 +133,7 @@ export function parseOverviewSections(body) {
     }
     const missedMatch = PREVIOUSLY_MISSED_HEADER_RE.exec(header);
     if (missedMatch) {
-      const expected = Number.parseInt(missedMatch[1], 10);
+      const expected = Number.parseInt(missedMatch[1] ?? missedMatch[2], 10);
       const alts = [...content.matchAll(SEVERITY_ALT_RE)];
       for (const alt of alts) {
         previouslyMissed[toSeverity(alt[1])] += 1;

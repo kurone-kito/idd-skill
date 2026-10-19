@@ -804,15 +804,53 @@ ${openLine('High', 1001)}
   );
 });
 
-test('parseOverviewBody: a "2 previously missed issues" section is not read as Open', () => {
-  // `previouslyMissed` is not asserted: PREVIOUSLY_MISSED_HEADER_RE does not
-  // read the retitled section yet, so its two items are not counted (issue
-  // #4526 lists that gap as out of its scope).
+test('parseOverviewBody: real "2 previously missed issues" section counts both items and is not read as Open', () => {
   const parsed = parseOverviewBody(OPEN_ISSUE_WITH_MISSED_FIXTURE);
   assert.equal(parsed.kind, 'v2');
   assert.deepEqual(parsed.open, [
     { severity: 'medium', id: 4300045455, isNew: true },
   ]);
+  assert.deepEqual(parsed.previouslyMissed, { high: 0, medium: 0, low: 2 });
+});
+
+test('parseOverviewBody: a "1 previously missed issue" section counts its item', () => {
+  const body = `<!-- ccr-overview-v2 -->
+
+<details>
+<summary><strong>1 previously missed issue</strong></summary>
+
+<details>
+<summary>${pictureBadge('Medium')} one finding</summary>
+
+body
+</details>
+</details>
+`;
+  const parsed = parseOverviewBody(body);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, []);
+  assert.deepEqual(parsed.previouslyMissed, { high: 0, medium: 1, low: 0 });
+});
+
+test('parseOverviewBody: a "2 previously missed issues" header with one item is unparsed (count mismatch)', () => {
+  const body = `<!-- ccr-overview-v2 -->
+
+<details>
+<summary><strong>2 previously missed issues</strong></summary>
+
+<details>
+<summary>${pictureBadge('Low')} one finding</summary>
+
+body
+</details>
+</details>
+`;
+  const parsed = parseOverviewBody(body);
+  assert.equal(parsed.kind, 'unparsed');
+  assert.match(
+    parsed.unparsedReason ?? '',
+    /Previously missed header declared 2 but 1 were parsed/,
+  );
 });
 
 test('parseOverviewBody: real **No open issues** body stays v2 with an empty Open (existing behavior)', () => {
