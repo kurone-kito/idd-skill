@@ -890,6 +890,7 @@ test('policy normalization provides default-safe values and supports aliases', (
     },
     orphanFirstPolicy: 'none',
     skipIssueAuthorApprovalGate: false,
+    dangerouslyAutoDecide: false,
     maintainerApprovalActorPolicy: 'owners-and-maintainers-only',
     stallRecovery: {
       quietWindow: 'PT30M',
@@ -1126,6 +1127,7 @@ test('policy normalization provides default-safe values and supports aliases', (
       },
       orphanFirstPolicy: 'maintainer-approved',
       skipIssueAuthorApprovalGate: true,
+      dangerouslyAutoDecide: false,
       maintainerApprovalActorPolicy: 'all-write-permission-actors',
       stallRecovery: {
         quietWindow: 'PT45M',

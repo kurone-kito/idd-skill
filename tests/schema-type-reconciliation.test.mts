@@ -228,6 +228,7 @@ interface PolicyConfigFile {
   issueScope?: 'roadmap' | 'roadmap-first' | 'orphan-first';
   orphanFirstPolicy?: 'none' | 'maintainer-approved' | 'public-disabled';
   skipIssueAuthorApprovalGate?: boolean;
+  dangerouslyAutoDecide?: boolean;
   critiqueLoopProfile?: string;
   mergeHandoffActor?: string;
   externalAdvisoryBot?: string;
@@ -685,6 +686,7 @@ export const policyConfigKeys = [
   'issueScope',
   'orphanFirstPolicy',
   'skipIssueAuthorApprovalGate',
+  'dangerouslyAutoDecide',
   'critiqueLoopProfile',
   'mergeHandoffActor',
   'externalAdvisoryBot',
@@ -2128,6 +2130,55 @@ const SCHEMA_TEST_DATA: Record<CatalogSchemaFile, SchemaTestData> = {
 const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = SCHEMA_TYPE_CATALOG.map(
   (entry) => ({ ...entry, ...SCHEMA_TEST_DATA[entry.schemaFile] }),
 );
+
+test('policy schema accepts only boolean dangerouslyAutoDecide values (#4529)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const value of [true, false]) {
+    assert.deepEqual(
+      validate(
+        { ...policyConfigFixture, dangerouslyAutoDecide: value },
+        schema,
+      ),
+      [],
+      `expected ${String(value)} to validate`,
+    );
+  }
+  for (const value of ['true', 1, null]) {
+    assert.ok(
+      validate({ ...policyConfigFixture, dangerouslyAutoDecide: value }, schema)
+        .length > 0,
+      `expected ${String(value)} to be rejected`,
+    );
+  }
+});
+
+test('user-global schema rejects dangerouslyAutoDecide in the base and overrides (#4529)', () => {
+  const schema = loadJson('schemas/user-global-config.schema.json');
+  const context = {
+    root: process.cwd(),
+    schemaPath: 'schemas/user-global-config.schema.json',
+  };
+  assert.ok(
+    validate({ dangerouslyAutoDecide: true }, schema, '$', context).length > 0,
+    'expected the user-global base to reject the repository-only key',
+  );
+  assert.ok(
+    validate(
+      {
+        overrides: [
+          {
+            match: { repo: 'owner/repo' },
+            config: { dangerouslyAutoDecide: true },
+          },
+        ],
+      },
+      schema,
+      '$',
+      context,
+    ).length > 0,
+    'expected user-global overrides to reject the repository-only key',
+  );
+});
 
 // ---------------------------------------------------------------------------
 // Helpers.

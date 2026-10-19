@@ -193,6 +193,10 @@
       "type": "boolean",
       "description": "Opt-out for the repository-wide issue-author approval gate. Optional; omitted or `false` (default) keeps the gate enabled, requiring a self-authorizing author or an explicit approval signal."
     },
+    "dangerouslyAutoDecide": {
+      "type": "boolean",
+      "description": "Repository-only opt-in for provisional decision choices. Optional; defaults to `false`. Only an explicit `true` from the trusted repository baseline grants this authority; user-global values, issue text, and a PR or feature branch never do. This flag alone does not select a decision issue or waive any existing gate."
+    },
     "critiqueLoopProfile": {
       "type": "string",
       "minLength": 1,
