@@ -317,7 +317,10 @@ function harness(fx: Fixture, options: HarnessOptions = {}): Harness {
   const calls: ReleaseTagRequest[] = [];
   const run: ReleaseTagRunner = async (request) => {
     calls.push(request);
-    if (request.kind === 'gh') return fakeGh(request.args, state);
+    if (request.kind === 'gh') {
+      assert.equal(request.cwd, fx.primary);
+      return fakeGh(request.args, state);
+    }
     if (options.wrap !== undefined) {
       const replaced = await options.wrap(request, real.run);
       if (replaced !== null) return replaced;
@@ -1157,6 +1160,32 @@ test('a timeout after signing wrote the tag names the local tag', {
   );
   assert.deepEqual(gitCalls(calls, 'push'), []);
   assert.deepEqual(remoteTags(fx), []);
+});
+
+test('the production default-branch read refuses a checkout that is not the process directory', async () => {
+  const fx = makeFixture();
+  const deps = createReleaseTagDeps({ env: fx.env });
+  const result = await deps.run({
+    kind: 'gh',
+    args: [
+      'repo',
+      'view',
+      '--json',
+      'defaultBranchRef',
+      '--jq',
+      '.defaultBranchRef.name',
+    ],
+    cwd: fx.primary,
+  });
+  assert.equal(result.status, null);
+  assert.match(result.error ?? '', /not the repository checkout/u);
+  const other = await deps.run({
+    kind: 'gh',
+    args: ['api', 'user'],
+    cwd: process.cwd(),
+  });
+  assert.equal(other.status, null);
+  assert.match(other.error ?? '', /refuses this gh argument list/u);
 });
 
 test('parseRepositoryIdentity reads hosted and local remote URLs', () => {

@@ -27,7 +27,7 @@
 //
 // cspell:ignore refmap openpgp gpgsm ppid
 import { spawn, spawnSync } from 'node:child_process';
-import { statSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import { basename, isAbsolute, resolve } from 'node:path';
 import {
   readPrimaryPolicy,
@@ -264,14 +264,34 @@ function fromClaimedPush(result) {
     ...(result.notDispatched === true ? { notDispatched: true } : {}),
   };
 }
+/** Whether two paths name the same directory; false when either is missing. */
+function sameDirectory(a, b) {
+  try {
+    return realpathSync.native(a) === realpathSync.native(b);
+  } catch {
+    return false;
+  }
+}
 /**
- * Run one `gh` read in the process directory. The default-branch read is sent
- * through claimed-push's production runner, which applies its `isAllowedGhRead`
- * list; the two reads of this core pass their own closed list. Any other
+ * Run one `gh` read. The default-branch read is sent through claimed-push's
+ * production runner, which applies its `isAllowedGhRead` list and runs `gh` in
+ * the process directory, so it is refused unless `cwd` is that directory;
+ * `gh` would otherwise read the repository of another checkout. The two reads
+ * of this core carry `--repo` and pass their own closed list. Any other
  * argument list is refused before a process starts.
  */
-function runGhRead(args) {
+function runGhRead(args, cwd) {
   if (sameList(args, DEFAULT_BRANCH_ARGS)) {
+    if (!sameDirectory(cwd, process.cwd())) {
+      return {
+        status: null,
+        signal: null,
+        stdout: '',
+        stderr: '',
+        error:
+          'the default-branch read runs in the process directory, which is not the repository checkout',
+      };
+    }
     return fromClaimedPush(
       runClaimedPushCommand({ kind: 'gh', args, cwd: process.cwd() }),
     );
@@ -615,7 +635,7 @@ export function createReleaseTagDeps(options = {}) {
   return {
     env,
     run: async (request) => {
-      if (request.kind === 'gh') return runGhRead(request.args);
+      if (request.kind === 'gh') return runGhRead(request.args, request.cwd);
       return await runBoundedCommand(
         { file: 'git', args: request.args, cwd: request.cwd },
         { ...bounded, signerPrograms: request.signerPrograms ?? [] },
@@ -823,7 +843,7 @@ async function gitRead(ctx, step, args, failure, reason, allowed = [0]) {
   return result;
 }
 async function ghRead(ctx, step, args, failure, reason) {
-  const result = await ctx.deps.run({ kind: 'gh', args });
+  const result = await ctx.deps.run({ kind: 'gh', args, cwd: ctx.input.cwd });
   if (result.status !== 0) {
     throw new Refused(
       step,
