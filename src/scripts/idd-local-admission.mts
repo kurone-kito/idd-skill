@@ -1190,10 +1190,12 @@ function runPueueAdmission(
         return signalStatus(signalled);
       }
       const afterKill = await readCheckedTask(taskId, taskLabel);
-      await stopFollow(followPromise);
       if (afterKill?.state === 'done') {
+        // The task completed before the kill landed; let pueue finish streaming its output.
+        await followPromise;
         return finishTask(taskId, afterKill, false);
       }
+      await stopFollow(followPromise);
       cleanupHandlers();
       return pueueOutcomeUnknown(deps, `task ${taskId}`);
     }

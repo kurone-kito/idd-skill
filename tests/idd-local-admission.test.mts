@@ -1700,15 +1700,18 @@ test('a failed running kill returns a newly observed finished task status', {
   const fake = makeFakePueue(h.env, {
     initialStatus: 'Running',
     followHang: true,
+    followDrainDelay: 400,
     followReady: ready,
     killExit: 1,
     logResponses: ['Running', 'Running', { Done: { Failed: 19 } }],
+    streamOutput: 'final output chunk\n',
   });
   const run = runBin(['--', 'true'], repo, fake.env);
   await waitFor(() => existsSync(ready));
   run.child.kill('SIGTERM');
   const result = await run.done;
   assert.equal(result.status, 19);
+  assert.equal(result.stdout, 'final output chunk\n');
   assert.ok(
     (readFakePueue(fake).calls as string[][]).some(
       (call) => call[0] === 'remove' && call[1] === '17',
