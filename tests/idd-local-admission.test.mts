@@ -157,7 +157,12 @@ const wireStatus = (status) => {
   };
 };
 if (args[0] === 'status') {
-  if (state.statusHang) { save(); if (state.statusReady) fs.writeFileSync(state.statusReady, 'ready'); setInterval(() => {}, 1000); }
+  if (state.statusHang) {
+    save();
+    if (state.statusReady) fs.writeFileSync(state.statusReady, 'ready');
+    setInterval(() => {}, 1000);
+    return;
+  }
   output(state.statusOutput ?? '{}');
   save();
   process.exit(state.daemonExit ?? 0);
@@ -238,7 +243,11 @@ if (args[0] === 'follow') {
     save();
     if (state.followReady) fs.writeFileSync(state.followReady, String(process.pid));
     if (state.followDrainDelay !== undefined) {
-      setTimeout(() => { output(state.streamOutput ?? ''); process.exit(state.followExit ?? 0); }, state.followDrainDelay);
+      setTimeout(() => {
+        output(state.streamOutput ?? '');
+        if (state.streamStderr) process.stderr.write(state.streamStderr);
+        process.exit(state.followExit ?? 0);
+      }, state.followDrainDelay);
       return;
     }
     process.on('SIGTERM', () => process.exit(0));
@@ -249,7 +258,8 @@ if (args[0] === 'follow') {
     const value = task(taskId);
     if (value && state.followFinalStatus) value.status = state.followFinalStatus;
     save();
-    output(value?.streamOutput ?? '');
+    output(value?.streamOutput ?? state.streamOutput ?? '');
+    if (state.streamStderr) process.stderr.write(state.streamStderr);
     process.exit(state.followExit ?? 0);
   }
 }
@@ -308,6 +318,7 @@ async function runPueueTest(
   const status = await runLocalAdmission(['--', ...command], {
     cwd: repo,
     env: fake.env,
+    platform: 'linux',
     stderr: (text: string) => notes.push(text),
     waitNoticeIntervalMs: 5,
     pueueClientTimeoutMs: 3000,
@@ -940,8 +951,20 @@ test('pueue daemon failure uses flock without changing policy despite cap above 
   const policy = {
     localExec: { admission: { backend: 'pueue', maxConcurrent: 4 } },
   };
-  const result = await runPueueTest(policy, { daemonExit: 1 });
-  const before = readFileSync(join(result.repo, POLICY), 'utf8');
+  const h = makeHarness();
+  const repo = makeRepo(policy);
+  const before = readFileSync(join(repo, POLICY), 'utf8');
+  const fake = makeFakePueue(h.env, { daemonExit: 1 });
+  const notes: string[] = [];
+  const status = await runLocalAdmission(['--', 'true'], {
+    cwd: repo,
+    env: fake.env,
+    platform: 'linux',
+    stderr: (text: string) => notes.push(text),
+    pueueClientTimeoutMs: 3000,
+    pueuePollIntervalMs: 2,
+  });
+  const result = { status, stderr: notes.join(''), fake, repo };
   assert.equal(result.status, 0);
   assert.match(result.stderr, /pueue daemon is not accepting commands/);
   assert.equal(Array.isArray(readFakePueue(result.fake).calls), true);
@@ -1215,6 +1238,24 @@ test('queued pueue tasks expire by id; stash/removal failures keep expiry defini
   assert.doesNotMatch(startedRace.stderr, /expired/);
 });
 
+test('pueue follow keeps client stderr separate from task output', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const h = makeHarness();
+  const repo = makeRepo({ localExec: { admission: { backend: 'pueue' } } });
+  const fake = makeFakePueue(h.env, {
+    initialStatus: 'Running',
+    followFinalStatus: { Done: { Success: null } },
+    streamOutput: 'task output\n',
+    streamStderr: 'pueue diagnostic\n',
+  });
+  const run = runBin(['--', 'true'], repo, fake.env);
+  const result = await run.done;
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'task output\n');
+  assert.match(result.stderr, /pueue diagnostic/);
+});
+
 test('pueue state read failures and task-label mismatches are outcome unknown without task actions', async () => {
   const policy = { localExec: { admission: { backend: 'pueue' } } };
   const readFailure = await runPueueTest(policy, { logExit: 1 }, ['true'], {
@@ -1245,6 +1286,22 @@ test('pueue state read failures and task-label mismatches are outcome unknown wi
     (call) => ['stash', 'remove', 'kill'].includes(call[0] ?? ''),
   );
   assert.deepEqual(actions, []);
+  const embeddedIdMismatch = await runPueueTest(
+    policy,
+    { logTaskId: 18 },
+    ['true'],
+    { findFlock: () => null },
+  );
+  assert.equal(embeddedIdMismatch.status, 3);
+  const embeddedIdActions = (
+    readFakePueue(embeddedIdMismatch.fake).calls as string[][]
+  ).filter((call) => ['stash', 'remove', 'kill'].includes(call[0] ?? ''));
+  assert.deepEqual(embeddedIdActions, []);
+  assert.ok(
+    (readFakePueue(embeddedIdMismatch.fake).tasks as Record<string, unknown>)[
+      '17'
+    ],
+  );
   const disappeared = await runPueueTest(
     policy,
     { deleteTaskOnLogCall: 1 },
@@ -1451,6 +1508,11 @@ test('a signal while running kills the pueue task; failed kill exits even if fol
       (call) => call[0] === 'kill' && call[1] === '17',
     ),
   );
+  assert.ok(
+    (readFakePueue(fake).calls as string[][]).some(
+      (call) => call[0] === 'remove' && call[1] === '17',
+    ),
+  );
 
   const h2 = makeHarness();
   const repo2 = makeRepo(policy);
@@ -1469,6 +1531,10 @@ test('a signal while running kills the pueue task; failed kill exits even if fol
   assert.match(result2.stderr, /pueue task outcome unknown \(task 17\)/);
   const calls2 = readFakePueue(fake2).calls as string[][];
   assert.ok(calls2.some((call) => call[0] === 'kill' && call[1] === '17'));
+  assert.equal(
+    calls2.some((call) => call[0] === 'remove' && call[1] === '17'),
+    false,
+  );
 });
 
 test('a signal after the task finishes lets pueue follow drain its remaining output', {

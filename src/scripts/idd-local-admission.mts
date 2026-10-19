@@ -690,7 +690,7 @@ function runPueueClient(
     });
     child.stderr?.on('data', (chunk: string) => {
       stderr += chunk;
-      if (streamOutput) process.stdout.write(chunk);
+      if (streamOutput) process.stderr.write(chunk);
     });
     child.on('error', (error: Error) => {
       if (settled) return;
@@ -908,9 +908,12 @@ function runPueueAdmission(
   const call = (
     args: string[],
     options: { timeout?: number | null; stream?: boolean } = {},
-  ): Promise<PueueCallResult> =>
-    runPueueClient(
-      pueuePath as string,
+  ): Promise<PueueCallResult> => {
+    if (pueuePath === null) {
+      throw new Error('pueue client path was not checked before use');
+    }
+    return runPueueClient(
+      pueuePath,
       args,
       deps,
       options.timeout === undefined
@@ -922,6 +925,7 @@ function runPueueAdmission(
         else activeClient = child;
       },
     );
+  };
   const fallback = async (reason: string): Promise<number> => {
     deps.stderr(`local-admission: pueue ${reason}; using the flock path\n`);
     return runFlockAdmission(command, raw, deps, false);
@@ -1143,6 +1147,7 @@ function runPueueAdmission(
       if (isPueueClientSuccess(killed)) {
         if (activeClient !== null) activeClient = null;
         await stopFollow(followPromise);
+        await removeTask(taskId);
         cleanupHandlers();
         return signalStatus(signalled);
       }
@@ -1167,7 +1172,10 @@ function runPueueAdmission(
     if (pendingSignal !== null) {
       phase = 'queued';
       const killed = await call(['kill', taskId]);
-      if (isPueueClientSuccess(killed)) return statusForSignal();
+      if (isPueueClientSuccess(killed)) {
+        await removeTask(taskId);
+        return statusForSignal();
+      }
       const afterKill = await readCheckedTask(taskId, taskLabel);
       if (afterKill?.state === 'done')
         return finishTask(taskId, afterKill, false);
