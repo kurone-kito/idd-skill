@@ -802,7 +802,6 @@ function parsePueueGroups(output: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(output);
     if (!isRecord(parsed)) return null;
-    if (isRecord(parsed.groups)) return parsed.groups;
     return parsed;
   } catch {
     return null;

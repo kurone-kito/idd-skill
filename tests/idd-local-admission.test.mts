@@ -964,6 +964,36 @@ test('pueue creates missing groups at both supported cap endpoints', {
   }
 });
 
+test('pueue preserves an existing group literally named groups', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const result = await runPueueTest(
+    {
+      localExec: {
+        admission: { backend: 'pueue', maxConcurrent: 2, pueueGroup: 'groups' },
+      },
+    },
+    {
+      groups: { groups: { parallel_tasks: 2, status: 'Running' } },
+      runCommandOnAdd: true,
+    },
+    ['true'],
+    { findFlock: () => null },
+  );
+  assert.equal(result.status, 0);
+  const state = readFakePueue(result.fake);
+  assert.deepEqual(state.groups, {
+    groups: { parallel_tasks: 2, status: 'Running' },
+  });
+  assert.equal((state.added as Record<string, unknown>).group, 'groups');
+  assert.equal(
+    (state.calls as string[][]).some(
+      (call) => call[0] === 'group' && call[1] === 'add',
+    ),
+    false,
+  );
+});
+
 test('pueue daemon failure uses flock without changing policy despite cap above one', {
   skip: !REAL_LOCK,
 }, async () => {

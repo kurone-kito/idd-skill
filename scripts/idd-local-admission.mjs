@@ -658,7 +658,6 @@ function parsePueueGroups(output) {
   try {
     const parsed = JSON.parse(output);
     if (!isRecord(parsed)) return null;
-    if (isRecord(parsed.groups)) return parsed.groups;
     return parsed;
   } catch {
     return null;
