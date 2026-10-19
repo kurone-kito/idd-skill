@@ -113,6 +113,9 @@ started from the claimed worktree with
 `--apply` runs the claim assert, the location check, the `scope` check,
 the configured gate (**pre-push-validate**), a second claim assert, and
 the push, in that order, so do not run the gate or push a second time.
+The helper runs the gate through `idd-local-admission` itself (directly
+on Windows, where admission is off), so do not wrap the call in
+admission or admit the gate again.
 Require `pushed: true` with all six steps `passed`. On a refusal, follow
 the report's `nextAction`; when `pushed` is `null` (the push outcome is
 unknown), inspect the remote branch and do not retry. Under

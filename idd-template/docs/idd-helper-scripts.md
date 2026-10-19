@@ -9843,12 +9843,26 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
    `diff.ignoreSubmodules` or `submodule.<name>.ignore` setting cannot hide
    a dirty submodule (next action: stage and commit, then rerun),
    records `git rev-parse HEAD`, runs the effective
-   `commands.pre-push-validate` in a shell in the worktree, then requires
-   a clean tree again (next action: commit or discard what the gate
-   changed, then rerun). A gate that exits non-zero or ends by signal
-   refuses with the next action to fix the failure, commit, and rerun; a
-   gate that is not configured or cannot start refuses with the next
-   action to configure the command or run the written gate by hand.
+   `commands.pre-push-validate` in the worktree through
+   `idd-local-admission` (issue `#4525`; on Windows, where admission is
+   off, in a shell directly), then requires a clean tree again (next
+   action: commit or discard what the gate changed, then rerun). A gate
+   that exits non-zero or ends by signal refuses with the next action to
+   fix the failure, commit, and rerun, except two exits of the admitted
+   call, whose next action names the stderr line that decides it. Exit
+   `75`: a `local-admission: expired` line above means the gate did not
+   start, so report it and do not rerun the helper or push by hand.
+   Exit `2`: a `local-admission:` line that ends with
+   `command not started`, or one that says the lock stays held until the
+   command exits, means stop and report without changing the repository
+   policy, and do not rerun. Without such a line, either exit is the
+   gate's own status: fix the failure, commit, and rerun. A gate that is
+   not configured, or that cannot start on Windows, refuses with the next
+   action to configure the command or run the written gate by hand. An
+   admission child that cannot start (for example a missing
+   `scripts/idd-local-admission.mjs`) refuses with the next action to
+   check the helper installation, then rerun, because a gate run by hand
+   would run outside admission.
 5. `reassert`: runs the `assert` step again immediately before the push,
    because the gate can run for minutes (next action: stop and re-read the
    claim, or, when the second assert cannot start, check the helper
@@ -9889,8 +9903,19 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
   omits, which is how an installed payload serves a repository with a
   minimal policy file (that tier is not read when `GITHUB_ACTIONS` is
   `true`). A repository policy file that cannot be read refuses instead of
-  falling through to a user-global entry. Only the exit status judges the
-  gate; a command killed by a signal counts as failed.
+  falling through to a user-global entry. Except on Windows, the gate runs
+  as one child: Node runs the payload's own
+  `scripts/idd-local-admission.mjs` with the arguments `--`, `/bin/sh`,
+  `-c`, and the command, unchanged, so `/bin/sh` parses the command as the
+  shell spawn did before. The child runs in the worktree, so the branch's
+  own `.github/idd/config.json` decides admission (`localExec.admission`),
+  the same copy the gate command is read from; with `enabled: false`, or
+  where `flock` is not on `PATH`, `idd-local-admission` runs the gate
+  directly. The helper reads no admission policy itself and passes its
+  environment on unchanged, so an inherited `IDD_LOCAL_ADMISSION` runs the
+  gate without the lock. The gate's output and the `local-admission:`
+  lines go to the helper's stderr as they are written. Only the exit
+  status judges the gate; a command killed by a signal counts as failed.
 - **Report**: JSON on stdout with `mode`, `pushed`, `issue`, `branch`,
   `worktree`, and `steps`. Every step has an `id`, a `status` (`passed`,
   `failed`, or `skipped`), and a `reason`. A step that ran a command
@@ -9930,7 +9955,12 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
   writer of the claimed branch is the claiming session's own process tree:
   the claim names one owning session and the `assert` and `reassert` steps
   check that identity, but nothing locks the worktree between the check
-  and the push.
+  and the push. Signals are a second limit: the bin runs this script
+  through `run-helper`, which forwards no signals, and the gate runs under
+  `spawnSync`, which blocks the helper while it waits. A SIGTERM sent only
+  to the helper's own process therefore does not reach the admitted gate,
+  which keeps the validation slot until it ends. Making the helper forward
+  signals is not part of issue `#4525`.
 
 ## Dead-export audit (kurone-kito/idd-skill#3478)
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -25,15 +26,18 @@ import type {
   PolicyRead,
 } from '../src/scripts/claimed-push.mts';
 import {
+  gateSpawn,
   makeBaseTextReader,
   parseArgs,
   readEffectiveGateCommand,
   readPrimaryPolicy,
   runClaimedPush,
   runCli,
+  runGate,
   runProductionCommand,
 } from '../src/scripts/claimed-push.mts';
 import { parseCandidateFiles } from '../src/scripts/discover-shared-file-overlap.mts';
+import { findExecutableOnPath } from '../src/scripts/idd-local-admission.mts';
 import {
   fixtureEnv,
   pinLoadControlOff,
@@ -58,6 +62,15 @@ const NEXT = {
   pushRejected: `read git's message, fetch and inspect origin/${BRANCH}, never force`,
   pushUnknown: 'read the remote branch before any new push, no retry',
   readGitError: 'read the git error in the worktree and fix it, then rerun',
+} as const;
+
+// The two admission next actions state the exit-75 and exit-2 rows of issue
+// 4525's table; they are written out here for the same reason.
+const ADMISSION_NEXT = {
+  expired:
+    'if the stderr above has a "local-admission: expired" line (a helper error envelope JSON line can follow it), the gate did not start: report it, and do not rerun the helper or push by hand; otherwise the gate itself exited 75: fix the failure, commit, and rerun',
+  refused:
+    'if the stderr above has a "local-admission:" line that ends with "command not started" (admission refused before the gate started) or says the lock stays held until the command exits (the gate started and could not be stopped), stop and report without changing the repository policy, and do not rerun; otherwise the gate itself exited 2: fix the failure, commit, and rerun',
 } as const;
 
 // The scope step's next actions are copied from items 4(c) and 6 of issue
@@ -285,6 +298,8 @@ interface Scenario {
   /** Files at the branch point; a path not listed is absent there. */
   baseFiles?: Record<string, BaseTextRead>;
   parseCandidates?: (body: string) => string[];
+  /** The platform that routes the gate; `linux` (admitted) by default. */
+  platform?: NodeJS.Platform;
 }
 
 interface Run {
@@ -320,6 +335,7 @@ function harness(scenario: Scenario = {}): Harness {
       seen.set(key, index + 1);
       return list[Math.min(index, list.length - 1)] as CommandResult;
     },
+    platform: scenario.platform ?? 'linux',
     realpath: (path) => (known.has(path) ? path : null),
     readGateCommand: () =>
       scenario.gate ?? { ok: true, command: 'pnpm run check' },
@@ -617,10 +633,128 @@ test('a long dirty-tree listing is capped', () => {
 });
 
 test('a gate that exits non-zero refuses without a second assert or a push', () => {
-  const r = run({ world: { [K.gate]: result(2) } });
-  assertRefused(r, 'gate', NEXT.fixThenRerun, { exitStatus: 2 });
+  const r = run({ world: { [K.gate]: result(1) } });
+  assertRefused(r, 'gate', NEXT.fixThenRerun, { exitStatus: 1 });
   assert.equal(r.count(K.assert), 1);
   noPush(r);
+});
+
+// ---- Gate admission (issue 4525) --------------------------------------------
+
+/** A gate string with quotes, `&&`, and `$`, passed on byte for byte. */
+const TRICKY_GATE = `printf '%s|' "it's" 'a&&b' "$PROBE_4525" > out.txt && printf '%s' "\${IDD_LOCAL_ADMISSION-unset}" >> out.txt`;
+
+test('on POSIX the gate request alone asks for admission, with the command unchanged', () => {
+  const r = run({ gate: { ok: true, command: TRICKY_GATE } });
+  assert.equal(r.report.pushed, true);
+  const gates = r.calls.filter((call) => call.kind === 'gate');
+  assert.deepEqual(gates, [
+    { kind: 'gate', command: TRICKY_GATE, cwd: WORKTREE, admission: true },
+  ]);
+  for (const call of r.calls) {
+    if (call.kind === 'gate') continue;
+    if (call.kind === 'helper') {
+      assert.notEqual(call.script, 'idd-local-admission.mjs');
+    }
+    assert.equal(
+      call.args.some((arg) => arg.includes('idd-local-admission')),
+      false,
+      `${keyOf(call)} must not run through admission`,
+    );
+  }
+  // The claim asserts, the scope reads and audits, and the push all ran.
+  assert.equal(r.count(K.assert), 2);
+  assert.equal(r.count(K.issueView), 1);
+  assert.equal(r.count(K.audit), 2);
+  assert.equal(r.count(K.pushNew), 1);
+});
+
+test('on win32 the gate request runs without admission, as before', () => {
+  const r = run({ platform: 'win32' });
+  assert.equal(r.report.pushed, true);
+  const gate = r.calls.find((call) => call.kind === 'gate');
+  assert.deepEqual(gate, {
+    kind: 'gate',
+    command: 'pnpm run check',
+    cwd: WORKTREE,
+    admission: false,
+  });
+  assert.equal(
+    stepOf(r, 'gate').reason,
+    'commands.pre-push-validate exited 0 and left the working tree clean',
+  );
+});
+
+test('an admitted gate that exits 0 after admission notices passes after the clean-tree check', () => {
+  const notices = [
+    'local-admission: waiting for the validation slot\n',
+    'local-admission: flock is not available on this host; running the command without admission\n',
+  ];
+  for (const stderr of notices) {
+    const r = run({ world: { [K.gate]: result(0, '', stderr) } });
+    const gate = stepOf(r, 'gate');
+    assert.equal(gate.status, 'passed');
+    assert.equal(gate.exitStatus, 0);
+    assert.equal(
+      gate.reason,
+      'commands.pre-push-validate through idd-local-admission exited 0 and left the working tree clean',
+    );
+    assert.equal(r.count(K.status), 2, 'the tree is checked before and after');
+    assert.equal(r.report.pushed, true);
+  }
+  const dirty = run({
+    world: {
+      [K.gate]: result(0, '', notices[0]),
+      [K.status]: [result(0, ''), result(0, ' M generated.mjs\n')],
+    },
+  });
+  assertRefused(dirty, 'gate', NEXT.commitOrDiscard, { exitStatus: 0 });
+});
+
+test('an admitted gate that exits 75 names the expiry line in its next action', () => {
+  const r = run({ world: { [K.gate]: result(75) } });
+  assertRefused(r, 'gate', ADMISSION_NEXT.expired, { exitStatus: 75 });
+  assert.match(
+    stepOf(r, 'gate').reason,
+    /through idd-local-admission exited 75/u,
+  );
+  assert.equal(r.count(K.assert), 1, 'no second assert');
+  noPush(r);
+});
+
+test('an admitted gate that exits 2 names the refusal lines in its next action', () => {
+  const r = run({ world: { [K.gate]: result(2) } });
+  assertRefused(r, 'gate', ADMISSION_NEXT.refused, { exitStatus: 2 });
+  assert.equal(r.count(K.assert), 1, 'no second assert');
+  noPush(r);
+});
+
+test('any other non-zero exit of an admitted gate is a gate failure', () => {
+  // 143 is 128 plus SIGTERM, what idd-local-admission returns after it
+  // forwarded the signal to the admitted command.
+  for (const status of [1, 3, 74, 76, 126, 127, 143]) {
+    const r = run({ world: { [K.gate]: result(status) } });
+    assertRefused(r, 'gate', NEXT.fixThenRerun, { exitStatus: status });
+  }
+});
+
+test('an admission child killed by a signal is a gate failure with no exit status', () => {
+  const r = run({
+    world: { [K.gate]: result(null, '', '', { signal: 'SIGTERM' }) },
+  });
+  assertRefused(r, 'gate', NEXT.fixThenRerun, { exitStatus: null });
+  assert.match(stepOf(r, 'gate').reason, /killed by signal SIGTERM/u);
+});
+
+test('on win32 exits 75 and 2 keep the gate-failure next action', () => {
+  for (const status of [75, 2]) {
+    const r = run({ platform: 'win32', world: { [K.gate]: result(status) } });
+    assertRefused(r, 'gate', NEXT.fixThenRerun, { exitStatus: status });
+    assert.equal(
+      stepOf(r, 'gate').reason,
+      `commands.pre-push-validate exited ${status}`,
+    );
+  }
 });
 
 test('a gate killed by a signal refuses with no exit status', () => {
@@ -640,8 +774,23 @@ test('a buffer overflow that kills the gate keeps the error text', () => {
   assert.match(r.report.steps[3]?.reason ?? '', /SIGTERM.*ENOBUFS/u);
 });
 
-test('a gate that cannot start refuses with the configure next action', () => {
-  const r = run({ world: { [K.gate]: CANNOT_START } });
+test('an admission child that cannot start refuses with the installation next action', () => {
+  const missing = result(null, '', '', {
+    error: '/payload/scripts/idd-local-admission.mjs does not exist',
+  });
+  for (const outcome of [CANNOT_START, missing]) {
+    const r = run({ world: { [K.gate]: outcome } });
+    assertRefused(r, 'gate', NEXT.helperInstallation, { exitStatus: null });
+    assert.match(
+      r.report.steps[3]?.reason ?? '',
+      /through idd-local-admission could not start: /u,
+    );
+    noPush(r);
+  }
+});
+
+test('on win32 a gate that cannot start keeps the configure next action', () => {
+  const r = run({ platform: 'win32', world: { [K.gate]: CANNOT_START } });
   assertRefused(r, 'gate', NEXT.configureGate, { exitStatus: null });
   assert.match(
     r.report.steps[3]?.reason ?? '',
@@ -991,6 +1140,7 @@ test('the assert receives the identity, the nonce only when given, and the workt
     kind: 'gate',
     command: 'pnpm run check',
     cwd: WORKTREE,
+    admission: true,
   });
 });
 
@@ -1180,6 +1330,7 @@ test('runCli prints the usage for --help without running any command', () => {
   const chunks: string[] = [];
   const deps: ClaimedPushDeps = {
     run: () => assert.fail('no command may run for --help'),
+    platform: 'linux',
     realpath: () => assert.fail('no path may be resolved for --help'),
     readGateCommand: () => assert.fail('no policy may be read for --help'),
     readPolicy: () => assert.fail('no policy may be read for --help'),
@@ -1220,12 +1371,54 @@ test('the production runner reports a failure to start instead of throwing', () 
   });
   assert.equal(git.status, null);
   assert.ok((git.error ?? '') !== '');
+  // Without admission, so this process never takes the host-local slot under
+  // the suite's own state root; the admitted runs below use a child process.
   const gate = runProductionCommand({
     kind: 'gate',
     command: `"${process.execPath}" -e "process.exit(7)"`,
     cwd: tmpdir(),
+    admission: false,
   });
   assert.equal(gate.status, 7);
+});
+
+test('the admitted gate spawn passes the gate string as the last argv element', () => {
+  const script = join(ROOT, 'scripts', 'idd-local-admission.mjs');
+  const request = {
+    kind: 'gate',
+    command: TRICKY_GATE,
+    cwd: WORKTREE,
+    admission: true,
+  } as const;
+  const admitted = gateSpawn(request, script);
+  assert.deepEqual(admitted, {
+    file: process.execPath,
+    args: [script, '--', '/bin/sh', '-c', TRICKY_GATE],
+    options: { cwd: WORKTREE, stdio: ['ignore', 2, 2] },
+  });
+  assert.equal(admitted.args?.at(-1), TRICKY_GATE);
+  assert.equal(
+    'env' in admitted.options,
+    false,
+    'the environment is inherited',
+  );
+
+  const direct = gateSpawn({ ...request, admission: false }, script);
+  assert.deepEqual(direct, {
+    file: TRICKY_GATE,
+    options: { cwd: WORKTREE, shell: true, stdio: ['ignore', 2, 2] },
+  });
+});
+
+test('an admission script missing from the payload cannot start', () => {
+  const missingScriptPath = join(makeScratch(), 'idd-local-admission.mjs');
+  const missing = runGate(
+    { kind: 'gate', command: 'exit 0', cwd: tmpdir(), admission: true },
+    missingScriptPath,
+  );
+  assert.equal(missing.status, null);
+  assert.equal(missing.signal, null);
+  assert.equal(missing.error, `${missingScriptPath} does not exist`);
 });
 
 test('a helper script missing from the bundle cannot start', () => {
@@ -1252,11 +1445,49 @@ after(() => {
   }
 });
 
-test('a gate that prints to stdout leaves stdout holding only the report', () => {
-  const dir = makeScratch();
-  const gateScript = join(dir, 'gate.mjs');
-  writeFileSync(gateScript, "process.stdout.write('gate-says-hello\\n');\n");
-  const gateCommand = `"${process.execPath}" "${gateScript}"`;
+/** A POSIX host with `flock(1)` on PATH. */
+const HAS_FLOCK =
+  process.platform !== 'win32' &&
+  findExecutableOnPath('flock', process.env) !== null;
+
+/**
+ * The real-lock rows also need `ps`: once idd-local-admission has found
+ * `flock`, it refuses without a usable `ps`.
+ */
+const REAL_LOCK = HAS_FLOCK && findExecutableOnPath('ps', process.env) !== null;
+
+/**
+ * An admitted gate with the default policy starts on this host: it takes the
+ * lock, or runs directly after the notice where `flock` is missing.
+ */
+const ADMITTED_GATE_STARTS =
+  process.platform !== 'win32' && (REAL_LOCK || !HAS_FLOCK);
+
+const LOCK_RELATIVE = join('idd-skill', 'local-admission', 'validate.lock');
+
+interface ChildRun {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  report: ClaimedPushReport;
+}
+
+/**
+ * Run `runCli --apply` in a child process with every command stubbed except
+ * the gate, which goes through the production runner in `cwd`. The child gets
+ * its own state root, so an admitted gate never takes the slot under the
+ * suite's (`tests/isolate-state.mts` would report the lock file as a leak),
+ * and `IDD_LOCAL_ADMISSION` is deleted from its base environment, because the
+ * suite itself can run under admission (as `makeHarness` in
+ * `tests/idd-local-admission.test.mts` does).
+ */
+function runCliInChild(options: {
+  gateCommand: string;
+  cwd: string;
+  state: string;
+  platform?: NodeJS.Platform;
+  env?: Record<string, string>;
+}): ChildRun {
   const moduleUrl = pathToFileURL(
     resolve(import.meta.dirname, '../src/scripts/claimed-push.mts'),
   ).href;
@@ -1266,12 +1497,12 @@ test('a gate that prints to stdout leaves stdout holding only the report', () =>
       '../src/scripts/discover-shared-file-overlap.mts',
     ),
   ).href;
-  const fixture = join(dir, 'fixture.mjs');
+  const fixture = join(makeScratch(), 'fixture.mjs');
   writeFileSync(
     fixture,
     `import { runCli, runProductionCommand } from ${JSON.stringify(moduleUrl)};
 import { parseCandidateFiles } from ${JSON.stringify(parserUrl)};
-const [worldJson, gateCommand, cwd] = process.argv.slice(2);
+const [worldJson, gateCommand, cwd, platform] = process.argv.slice(2);
 const world = JSON.parse(worldJson);
 const counts = {};
 const run = (request) => {
@@ -1288,6 +1519,7 @@ const run = (request) => {
 };
 const deps = {
   run,
+  platform,
   realpath: (path) => path,
   readGateCommand: () => ({ ok: true, command: gateCommand }),
   readPolicy: () => ({ ok: true, policy: null }),
@@ -1301,16 +1533,186 @@ process.exitCode = runCli(
 );
 `,
   );
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    XDG_STATE_HOME: options.state,
+    LOCALAPPDATA: join(options.state, 'local-appdata'),
+  };
+  delete env.IDD_LOCAL_ADMISSION;
+  Object.assign(env, options.env);
   const child = spawnSync(
     process.execPath,
-    [fixture, JSON.stringify(defaultWorld()), gateCommand, dir],
-    { encoding: 'utf8' },
+    [
+      fixture,
+      JSON.stringify(defaultWorld()),
+      options.gateCommand,
+      options.cwd,
+      options.platform ?? process.platform,
+    ],
+    { encoding: 'utf8', env, timeout: 120_000 },
   );
+  assert.equal(child.error, undefined, child.stderr);
+  return {
+    status: child.status,
+    stdout: child.stdout,
+    stderr: child.stderr,
+    report: JSON.parse(child.stdout) as ClaimedPushReport,
+  };
+}
+
+/** A scratch directory with a `.git` entry, and optionally a policy file. */
+function makeRepoDir(policy?: unknown): string {
+  const dir = makeScratch();
+  mkdirSync(join(dir, '.git'));
+  if (policy !== undefined) {
+    writePolicy(dir, JSON.stringify(policy));
+  }
+  return dir;
+}
+
+function readOut(dir: string, name = 'out.txt'): string | null {
+  try {
+    return readFileSync(join(dir, name), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+test('a gate that prints to stdout leaves stdout holding only the report', {
+  // On win32 the gate runs in a shell directly; elsewhere it is admitted.
+  skip: process.platform !== 'win32' && !ADMITTED_GATE_STARTS,
+}, () => {
+  const dir = makeScratch();
+  const gateScript = join(dir, 'gate.mjs');
+  writeFileSync(gateScript, "process.stdout.write('gate-says-hello\\n');\n");
+  const child = runCliInChild({
+    gateCommand: `"${process.execPath}" "${gateScript}"`,
+    cwd: dir,
+    state: makeScratch(),
+  });
   assert.equal(child.status, 0, child.stderr);
-  const report = JSON.parse(child.stdout) as ClaimedPushReport;
-  assert.equal(report.pushed, true);
+  assert.equal(child.report.pushed, true);
   assert.doesNotMatch(child.stdout, /gate-says-hello/u);
   assert.match(child.stderr, /gate-says-hello/u);
+});
+
+test('a real admitted gate runs the configured string intact', {
+  skip: !ADMITTED_GATE_STARTS,
+}, () => {
+  const cwd = makeRepoDir();
+  const state = makeScratch();
+  const child = runCliInChild({
+    gateCommand: TRICKY_GATE,
+    cwd,
+    state,
+    platform: 'linux',
+    env: { PROBE_4525: 'probe value' },
+  });
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.report.steps[3]?.status, 'passed');
+  // The admitted gate sees IDD_LOCAL_ADMISSION=1 only when it holds the lock.
+  assert.equal(
+    readOut(cwd),
+    `it's|a&&b|probe value|${REAL_LOCK ? '1' : 'unset'}`,
+  );
+  assert.equal(existsSync(join(state, LOCK_RELATIVE)), REAL_LOCK);
+  if (!REAL_LOCK) {
+    assert.match(child.stderr, /flock is not available/u);
+  }
+});
+
+test('with admission disabled the gate still runs and its own status decides', {
+  skip: process.platform === 'win32',
+}, () => {
+  const cwd = makeRepoDir({ localExec: { admission: { enabled: false } } });
+  const state = makeScratch();
+  const failing = runCliInChild({
+    gateCommand: `printf '%s' "\${IDD_LOCAL_ADMISSION-unset}" > out.txt; exit 3`,
+    cwd,
+    state,
+    platform: 'linux',
+  });
+  assert.equal(failing.status, 1);
+  const step = failing.report.steps[3];
+  assert.equal(step?.status, 'failed');
+  assert.equal(step?.exitStatus, 3);
+  assert.equal(step?.nextAction, NEXT.fixThenRerun);
+  assert.equal(failing.report.pushed, false);
+  // claimed-push added no IDD_LOCAL_ADMISSION, and the disabled admission
+  // passed its own environment to the gate as it was.
+  assert.equal(readOut(cwd), 'unset');
+
+  const passing = runCliInChild({
+    gateCommand: 'printf ok > ok.txt',
+    cwd,
+    state,
+    platform: 'linux',
+  });
+  assert.equal(passing.status, 0, passing.stderr);
+  assert.equal(passing.report.pushed, true);
+  assert.equal(readOut(cwd, 'ok.txt'), 'ok');
+  assert.equal(existsSync(join(state, LOCK_RELATIVE)), false);
+});
+
+test('an inherited IDD_LOCAL_ADMISSION reaches the admitted gate unchanged', {
+  skip: process.platform === 'win32',
+}, () => {
+  const cwd = makeRepoDir();
+  const state = makeScratch();
+  const child = runCliInChild({
+    gateCommand: `printf '%s' "\${IDD_LOCAL_ADMISSION-unset}" > out.txt`,
+    cwd,
+    state,
+    platform: 'linux',
+    env: { IDD_LOCAL_ADMISSION: 'inherited-4525' },
+  });
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(readOut(cwd), 'inherited-4525');
+  // A set variable makes idd-local-admission run the gate without the lock.
+  assert.equal(existsSync(join(state, LOCK_RELATIVE)), false);
+});
+
+test('a real admission refusal exits 2 before the gate starts', {
+  // The cap is checked once flock is found, before the ps check.
+  skip: !HAS_FLOCK,
+}, () => {
+  const cwd = makeRepoDir({ localExec: { admission: { maxConcurrent: 9 } } });
+  const child = runCliInChild({
+    gateCommand: 'printf started > out.txt',
+    cwd,
+    state: makeScratch(),
+    platform: 'linux',
+  });
+  assert.equal(child.status, 1);
+  const step = child.report.steps[3];
+  assert.equal(step?.status, 'failed');
+  assert.equal(step?.exitStatus, 2);
+  assert.equal(step?.nextAction, ADMISSION_NEXT.refused);
+  assert.equal(child.report.pushed, false);
+  assert.match(child.stderr, /local-admission: .*; command not started/u);
+  assert.equal(readOut(cwd), null, 'the gate never started');
+});
+
+test('a host without flock prints the notice and the admitted gate still passes', {
+  skip: process.platform === 'win32',
+}, () => {
+  const cwd = makeRepoDir();
+  const state = makeScratch();
+  const child = runCliInChild({
+    gateCommand: 'printf ok > out.txt',
+    cwd,
+    state,
+    platform: 'linux',
+    env: { PATH: makeScratch() },
+  });
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.report.steps[3]?.status, 'passed');
+  assert.match(
+    child.stderr,
+    /local-admission: flock is not available on this host/u,
+  );
+  assert.equal(readOut(cwd), 'ok');
+  assert.equal(existsSync(join(state, LOCK_RELATIVE)), false);
 });
 
 function writePolicy(dir: string, text: string): void {
