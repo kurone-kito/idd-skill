@@ -2035,8 +2035,10 @@ async function localTagNote(ctx: Context): Promise<string> {
 
 /**
  * Refuse a git that writes an unsigned tag when an SSH signer fails, before
- * anything is signed. Checked whenever this run would create the tag, in a dry
- * run too, so the refusal shows before `--apply`.
+ * anything is signed. Checked whenever this run would create an SSH-signed
+ * tag, in a dry run too, so the refusal shows before `--apply`. OpenPGP and
+ * X.509 signing on that git already fail closed: their signer path returns
+ * -1, which `git tag` dies on.
  */
 async function checkSigningGit(ctx: Context): Promise<void> {
   const step = 'create-tag';
@@ -2064,11 +2066,15 @@ async function checkSigningGit(ctx: Context): Promise<void> {
   }
 }
 
-async function createTag(ctx: Context): Promise<string> {
+/** The signature format `git tag -s` uses here, from `gpg.format`. */
+async function signingKind(ctx: Context): Promise<SignatureKind> {
+  const format =
+    (await configValue(ctx, 'create-tag', 'gpg.format')) ?? 'openpgp';
+  return format === 'ssh' ? 'ssh' : format === 'x509' ? 'x509' : 'openpgp';
+}
+
+async function createTag(ctx: Context, kind: SignatureKind): Promise<string> {
   const step = 'create-tag';
-  const format = (await configValue(ctx, step, 'gpg.format')) ?? 'openpgp';
-  const kind: SignatureKind =
-    format === 'ssh' ? 'ssh' : format === 'x509' ? 'x509' : 'openpgp';
   const result = await git(
     ctx,
     [
@@ -2301,7 +2307,8 @@ async function runChecksAndEffects(ctx: Context): Promise<void> {
     return;
   }
   ctx.report.decision = local === null ? 'create' : 'use-local-tag';
-  if (local === null) await checkSigningGit(ctx);
+  const kind = local === null ? await signingKind(ctx) : null;
+  if (kind === 'ssh') await checkSigningGit(ctx);
   if (local !== null) {
     ctx.report.tagObject = local;
     ctx.report.peeledCommit = ctx.input.sha;
@@ -2343,7 +2350,7 @@ async function runChecksAndEffects(ctx: Context): Promise<void> {
     );
     return;
   }
-  const object = local ?? (await createTag(ctx));
+  const object = local ?? (await createTag(ctx, kind ?? 'openpgp'));
   ctx.report.tagObject = object;
   ctx.report.peeledCommit = ctx.input.sha;
   await checkLocalSignature(ctx, object);

@@ -1588,8 +1588,10 @@ async function localTagNote(ctx) {
 }
 /**
  * Refuse a git that writes an unsigned tag when an SSH signer fails, before
- * anything is signed. Checked whenever this run would create the tag, in a dry
- * run too, so the refusal shows before `--apply`.
+ * anything is signed. Checked whenever this run would create an SSH-signed
+ * tag, in a dry run too, so the refusal shows before `--apply`. OpenPGP and
+ * X.509 signing on that git already fail closed: their signer path returns
+ * -1, which `git tag` dies on.
  */
 async function checkSigningGit(ctx) {
   const step = 'create-tag';
@@ -1616,11 +1618,14 @@ async function checkSigningGit(ctx) {
     );
   }
 }
-async function createTag(ctx) {
+/** The signature format `git tag -s` uses here, from `gpg.format`. */
+async function signingKind(ctx) {
+  const format =
+    (await configValue(ctx, 'create-tag', 'gpg.format')) ?? 'openpgp';
+  return format === 'ssh' ? 'ssh' : format === 'x509' ? 'x509' : 'openpgp';
+}
+async function createTag(ctx, kind) {
   const step = 'create-tag';
-  const format = (await configValue(ctx, step, 'gpg.format')) ?? 'openpgp';
-  const kind =
-    format === 'ssh' ? 'ssh' : format === 'x509' ? 'x509' : 'openpgp';
   const result = await git(
     ctx,
     [
@@ -1845,7 +1850,8 @@ async function runChecksAndEffects(ctx) {
     return;
   }
   ctx.report.decision = local === null ? 'create' : 'use-local-tag';
-  if (local === null) await checkSigningGit(ctx);
+  const kind = local === null ? await signingKind(ctx) : null;
+  if (kind === 'ssh') await checkSigningGit(ctx);
   if (local !== null) {
     ctx.report.tagObject = local;
     ctx.report.peeledCommit = ctx.input.sha;
@@ -1887,7 +1893,7 @@ async function runChecksAndEffects(ctx) {
     );
     return;
   }
-  const object = local ?? (await createTag(ctx));
+  const object = local ?? (await createTag(ctx, kind ?? 'openpgp'));
   ctx.report.tagObject = object;
   ctx.report.peeledCommit = ctx.input.sha;
   await checkLocalSignature(ctx, object);

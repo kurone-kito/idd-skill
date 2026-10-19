@@ -1050,7 +1050,7 @@ test('a GH_REPO that names another repository is refused', async () => {
   );
 });
 
-test('a git older than 2.44 is refused before anything is signed', async () => {
+test('a git older than 2.44 is refused before an SSH tag is signed', async () => {
   const fx = makeFixture();
   for (const apply of [false, true]) {
     const { deps, calls } = harness(fx, {
@@ -1071,6 +1071,16 @@ test('a git older than 2.44 is refused before anything is signed', async () => {
   }
   assert.deepEqual(localTags(fx), []);
   assert.deepEqual(remoteTags(fx), []);
+
+  // OpenPGP signing on that git already fails closed, so it is not gated.
+  git(fx, fx.primary, ['config', 'gpg.format', 'openpgp']);
+  const { deps } = harness(fx, {
+    wrap: async (request) =>
+      request.args[0] === '--version' ? ok('git version 2.43.0\n') : null,
+  });
+  const outcome = await runReleaseTag(releaseInput(fx), deps);
+  assert.equal(outcome.exitStatus, 0, JSON.stringify(outcome.report, null, 2));
+  assert.equal(outcome.report.decision, 'create');
 });
 
 test('a signing setting that cannot be read is refused, not read as unset', async () => {
