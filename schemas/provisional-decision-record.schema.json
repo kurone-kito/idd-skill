@@ -1,0 +1,524 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/provisional-decision-record.schema.json",
+  "title": "Provisional Decision Record",
+  "description": "Closed serialized event shape for provisional decisions. The replay evaluator separately verifies authorship, source and claim freshness, and transition authority.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "recordId",
+    "source",
+    "bundleGeneration",
+    "decisionGeneration",
+    "claimLineage",
+    "evidenceReferences",
+    "event"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [1],
+      "description": "Version of this serialized event contract."
+    },
+    "recordId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+      "description": "Stable identity for this immutable event record."
+    },
+    "source": {
+      "type": "object",
+      "description": "Repository and issue identity with the source snapshot bound to the decision.",
+      "required": ["repository", "issueNumber", "snapshot"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+          "description": "Owner and repository slug whose issue carries the decision."
+        },
+        "issueNumber": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "Source issue number, bounded to JavaScript's safe-integer range."
+        },
+        "snapshot": {
+          "type": "object",
+          "description": "The issue title, body digest, and update time captured for this decision.",
+          "required": ["title", "bodySha256", "updatedAt"],
+          "properties": {
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Source issue title at the recorded snapshot."
+            },
+            "bodySha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "description": "Lowercase SHA-256 digest of the source issue body."
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "description": "GitHub update time for the source issue snapshot."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "bundleGeneration": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Positive generation of the current decision bundle."
+    },
+    "decisionGeneration": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "Positive generation of this decision within its bundle."
+    },
+    "claimLineage": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["claimId", "agentId", "branch", "claimedAt"],
+        "properties": {
+          "claimId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Opaque ID of a claim in the source issue's verified lineage."
+          },
+          "agentId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Agent identity recorded for this claim."
+          },
+          "branch": {
+            "type": "string",
+            "pattern": "^issue/[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "description": "Canonical implementation branch for this claim."
+          },
+          "claimedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "GitHub creation time for the claim marker."
+          },
+          "supersedes": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Prior claim ID superseded by this claim, when this is a takeover."
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "Claim identities in lineage order; the replay evaluator verifies them against trusted claim evidence."
+    },
+    "evidenceReferences": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^https?://\\S+$"
+      },
+      "description": "Links to evidence only; a URL does not grant authority or replace independent verification."
+    },
+    "event": {
+      "type": "object",
+      "description": "One immutable event in the provisional-decision lifecycle.",
+      "oneOf": [
+        {
+          "required": [
+            "type",
+            "question",
+            "selectedOption",
+            "feasibleAlternatives",
+            "executionCriteria"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["selected"],
+              "description": "Marks the event that records a provisional option selection."
+            },
+            "question": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The product, technical, or scope question answered by this decision."
+            },
+            "selectedOption": {
+              "type": "object",
+              "description": "The feasible option selected for provisional execution.",
+              "required": [
+                "id",
+                "description",
+                "feasibilityRationale",
+                "requirementFit",
+                "consequences",
+                "verification",
+                "reversalOrMigration",
+                "rationale"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Stable ID used to refer to the selected option."
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Human-readable behavior of the selected option."
+                },
+                "feasibilityRationale": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Why the selected option is feasible within the stated constraints."
+                },
+                "requirementFit": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "How the selected option meets the source issue's requirements."
+                },
+                "consequences": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Expected consequences of selecting this option."
+                },
+                "verification": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "How the selected option's result can be checked."
+                },
+                "reversalOrMigration": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Reversal or migration work required by this option, or why none is required."
+                },
+                "rationale": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Why the selected option best fits the recorded evidence and requirements."
+                }
+              },
+              "additionalProperties": false
+            },
+            "feasibleAlternatives": {
+              "type": "array",
+              "minItems": 1,
+              "description": "Feasible options compared and rejected in favor of the selected option.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "description",
+                  "feasibilityRationale",
+                  "requirementFit",
+                  "consequences",
+                  "verification",
+                  "reversalOrMigration",
+                  "comparison",
+                  "rejectionReason"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Stable ID used to refer to this alternative."
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Human-readable behavior of this alternative."
+                  },
+                  "feasibilityRationale": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Why this alternative can be implemented within the stated constraints."
+                  },
+                  "requirementFit": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "How this alternative meets the source issue's requirements."
+                  },
+                  "consequences": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Expected consequences of choosing this alternative."
+                  },
+                  "verification": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "How this alternative's result could be checked."
+                  },
+                  "reversalOrMigration": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Reversal or migration work required by this alternative, or why none is required."
+                  },
+                  "comparison": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "How this alternative compares with the selected option."
+                  },
+                  "rejectionReason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Why this feasible alternative was not selected."
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "executionCriteria": {
+              "type": "array",
+              "minItems": 1,
+              "description": "Objective conditions that must be met before the provisional work counts as complete.",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "description": "One independently verifiable completion condition."
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "required": ["type", "startedAt", "planReference"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["work-started"],
+              "description": "Marks the event that binds the decision to ongoing implementation."
+            },
+            "startedAt": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Time the implementation work was recorded as started."
+            },
+            "planReference": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^https?://\\S+$",
+              "description": "Link to the reviewed implementation plan for this decision."
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "required": ["type", "result"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["work-completed"],
+              "description": "Marks the event that records verified completion evidence."
+            },
+            "result": {
+              "type": "object",
+              "description": "The deliverable and evidence used to verify completed work.",
+              "oneOf": [
+                {
+                  "required": [
+                    "kind",
+                    "reference",
+                    "verifiedAt",
+                    "headSha",
+                    "mergeCommitSha"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": ["merged-pull-request"],
+                      "description": "Kind of verified deliverable."
+                    },
+                    "reference": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^https?://\\S+$",
+                      "description": "Link to the deliverable or its authoritative record."
+                    },
+                    "verifiedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "Time the deliverable was independently verified."
+                    },
+                    "headSha": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{40}$",
+                      "description": "Verified pull-request head commit."
+                    },
+                    "mergeCommitSha": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{40}$",
+                      "description": "Verified merge commit."
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "required": ["kind", "reference", "verifiedAt"],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": ["other"],
+                      "description": "Kind of verified deliverable."
+                    },
+                    "reference": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^https?://\\S+$",
+                      "description": "Link to the deliverable or its authoritative record."
+                    },
+                    "verifiedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "Time the deliverable was independently verified."
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "required": ["type", "confirmation"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["confirmed"],
+              "description": "Marks an event that records an explicit human confirmation."
+            },
+            "confirmation": {
+              "type": "object",
+              "description": "Reference and answer for the current completed decision bundle.",
+              "required": ["commentUrl", "response", "confirmedAt"],
+              "properties": {
+                "commentUrl": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^https?://\\S+$",
+                  "description": "Link to the issue comment carrying the confirmation answer."
+                },
+                "response": {
+                  "type": "string",
+                  "enum": ["accepted"],
+                  "description": "Affirmative response accepted by the lifecycle."
+                },
+                "confirmedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "GitHub creation time of the confirmation comment."
+                },
+                "confirmedBy": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Display metadata only; replay verifies the actual comment author and does not infer human intent from a shared login."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "required": ["type", "reworkRequest"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["rework-requested"],
+              "description": "Marks an event that records the operator's request to use another option."
+            },
+            "reworkRequest": {
+              "type": "object",
+              "description": "The alternate option and rationale requested for same-source rework.",
+              "required": [
+                "commentUrl",
+                "requestedAt",
+                "requestedOptionId",
+                "rationale"
+              ],
+              "properties": {
+                "commentUrl": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^https?://\\S+$",
+                  "description": "Link to the issue comment that requests the alternate choice."
+                },
+                "requestedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "GitHub creation time of the rework request comment."
+                },
+                "requestedOptionId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Stable ID of the alternate option selected by the operator."
+                },
+                "rationale": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Why the operator requests rework using the alternate option."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "required": ["type", "reworkRoadmap"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["rework-authored"],
+              "description": "Marks an event that records publication of the same-source rework roadmap."
+            },
+            "reworkRoadmap": {
+              "type": "object",
+              "description": "Identity and link for the authored rework roadmap on the source issue.",
+              "required": [
+                "roadmapIssueNumber",
+                "roadmapMarkerId",
+                "authoringSetId",
+                "url"
+              ],
+              "properties": {
+                "roadmapIssueNumber": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "description": "Source issue number after it becomes the rework roadmap."
+                },
+                "roadmapMarkerId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Roadmap identity marker recorded in the source issue body."
+                },
+                "authoringSetId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Authoring set identity for the held rework children."
+                },
+                "url": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^https?://\\S+$",
+                  "description": "Link to the same issue after it is published as a roadmap."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

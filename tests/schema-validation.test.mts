@@ -40,6 +40,125 @@ type PolicyFixture = JsonRecord & {
   };
 };
 
+const PROVISIONAL_EVIDENCE_URL =
+  'https://github.com/kurone-kito/idd-skill/issues/4519';
+
+function buildProvisionalDecisionRecord(event: JsonRecord): JsonRecord {
+  return {
+    schemaVersion: 1,
+    recordId: 'record-4519-decision-1',
+    source: {
+      repository: 'kurone-kito/idd-skill',
+      issueNumber: 4519,
+      snapshot: {
+        title: 'Example decision source',
+        bodySha256: 'a'.repeat(64),
+        updatedAt: '2026-10-20T00:00:00Z',
+      },
+    },
+    bundleGeneration: 1,
+    decisionGeneration: 1,
+    claimLineage: [
+      {
+        claimId: 'claim-4519-1',
+        agentId: 'codex-example',
+        branch: 'issue/4519-example-decision',
+        claimedAt: '2026-10-20T00:00:00Z',
+      },
+    ],
+    evidenceReferences: [PROVISIONAL_EVIDENCE_URL],
+    event,
+  };
+}
+
+function provisionalDecisionEvent(type: string): JsonRecord {
+  switch (type) {
+    case 'selected':
+      return {
+        type,
+        question: 'Which behavior should the provisional implementation use?',
+        selectedOption: {
+          id: 'option-a',
+          description: 'Keep the existing behavior',
+          feasibilityRationale:
+            'The current implementation already supports it.',
+          requirementFit: 'It meets the verified requirement.',
+          consequences: 'No migration is needed for current users.',
+          verification: 'Run the targeted schema validation checks.',
+          reversalOrMigration: 'No reversal or migration is required.',
+          rationale: 'It meets the verified requirement with no migration.',
+        },
+        feasibleAlternatives: [
+          {
+            id: 'option-b',
+            description: 'Adopt the alternate behavior',
+            feasibilityRationale: 'The repository can support this option.',
+            requirementFit: 'It also meets the verified requirement.',
+            consequences: 'It adds migration work for existing records.',
+            verification: 'Validate migrated records against the schema.',
+            reversalOrMigration: 'Existing records need a migration.',
+            comparison: 'It adds migration work without improving the fit.',
+            rejectionReason: 'Option A better matches the current evidence.',
+          },
+        ],
+        executionCriteria: [
+          'The selected behavior passes its targeted checks.',
+        ],
+      };
+    case 'work-started':
+      return {
+        type,
+        startedAt: '2026-10-20T00:00:00Z',
+        planReference: PROVISIONAL_EVIDENCE_URL,
+      };
+    case 'work-completed':
+      return {
+        type,
+        result: {
+          kind: 'merged-pull-request',
+          reference: 'https://github.com/kurone-kito/idd-skill/pull/1',
+          verifiedAt: '2026-10-20T00:00:00Z',
+          headSha: 'b'.repeat(40),
+          mergeCommitSha: 'c'.repeat(40),
+        },
+      };
+    case 'confirmed':
+      return {
+        type,
+        confirmation: {
+          commentUrl: `${PROVISIONAL_EVIDENCE_URL}#issuecomment-1`,
+          response: 'accepted',
+          confirmedAt: '2026-10-20T00:00:00Z',
+          confirmedBy: 'maintainer-example',
+        },
+      };
+    case 'rework-requested':
+      return {
+        type,
+        reworkRequest: {
+          commentUrl: `${PROVISIONAL_EVIDENCE_URL}#issuecomment-2`,
+          requestedAt: '2026-10-20T00:00:00Z',
+          requestedOptionId: 'option-b',
+          rationale: 'The alternate option is preferred after review.',
+        },
+      };
+    case 'rework-authored':
+      return {
+        type,
+        reworkRoadmap: {
+          roadmapIssueNumber: 4519,
+          roadmapMarkerId: 'decision-rework-4519-1',
+          authoringSetId: 'set-4519-rework-1',
+          url: PROVISIONAL_EVIDENCE_URL,
+        },
+      };
+    default:
+      throw new Error(
+        `Unsupported provisional decision event fixture: ${type}`,
+      );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Schema keyword hygiene — no unsupported keywords allowed
 // ---------------------------------------------------------------------------
@@ -549,6 +668,21 @@ test('checkSchemaKeywords accepts exclusiveMinimum', () => {
   );
 });
 
+test('checkSchemaKeywords accepts maximum', () => {
+  assert.deepEqual(checkSchemaKeywords({ type: 'integer', maximum: 10 }), []);
+});
+
+test('validator enforces maximum for numbers', () => {
+  const maximum = Number.MAX_SAFE_INTEGER;
+  assert.deepEqual(validate(maximum, { type: 'integer', maximum }), []);
+  assert.ok(
+    validate(maximum + 1, { type: 'integer', maximum }).some((error) =>
+      error.includes('maximum'),
+    ),
+  );
+  assert.deepEqual(validate('not a number', { type: 'string', maximum }), []);
+});
+
 // ---------------------------------------------------------------------------
 // Fixture validation — valid fixtures must pass, invalid must fail
 // ---------------------------------------------------------------------------
@@ -569,6 +703,158 @@ test('claim-marker invalid fixture fails validation', () => {
     false,
   );
   assert.ok(ok, 'Expected invalid fixture to fail schema validation');
+});
+
+test('provisional-decision-record schema uses only supported keywords', () => {
+  const schema = loadJson('schemas/provisional-decision-record.schema.json');
+  assert.deepEqual(checkSchemaKeywords(schema), []);
+});
+
+test('provisional-decision-record valid fixture passes validation', () => {
+  const { ok, errors } = validateFixture(
+    'schemas/provisional-decision-record.schema.json',
+    'fixtures/schemas/provisional-decision-record.valid.json',
+    true,
+  );
+  assert.ok(ok, errors.join('\n'));
+});
+
+test('provisional-decision-record invalid fixture fails validation', () => {
+  const { ok } = validateFixture(
+    'schemas/provisional-decision-record.schema.json',
+    'fixtures/schemas/provisional-decision-record.invalid.json',
+    false,
+  );
+  assert.ok(ok, 'Expected invalid fixture to fail schema validation');
+});
+
+test('provisional-decision-record schema accepts every event variant', () => {
+  const schema = loadJson('schemas/provisional-decision-record.schema.json');
+  const variants = [
+    'selected',
+    'work-started',
+    'work-completed',
+    'confirmed',
+    'rework-requested',
+    'rework-authored',
+  ];
+  for (const type of variants) {
+    const errors = validate(
+      buildProvisionalDecisionRecord(provisionalDecisionEvent(type)),
+      schema,
+    );
+    assert.deepEqual(errors, [], `${type}: ${errors.join('; ')}`);
+  }
+});
+
+test('provisional-decision-record schema accepts other completion evidence', () => {
+  const schema = loadJson('schemas/provisional-decision-record.schema.json');
+  const event = provisionalDecisionEvent('work-completed');
+  event.result = {
+    kind: 'other',
+    reference: PROVISIONAL_EVIDENCE_URL,
+    verifiedAt: '2026-10-20T00:00:00Z',
+  };
+  assert.deepEqual(validate(buildProvisionalDecisionRecord(event), schema), []);
+});
+
+test('provisional-decision-record schema rejects malformed and unsafe data', () => {
+  const schema = loadJson('schemas/provisional-decision-record.schema.json');
+  const invalidations: [string, (record: JsonRecord) => void][] = [
+    [
+      'unknown envelope field',
+      (record) => {
+        record.untrusted = true;
+      },
+    ],
+    [
+      'missing selection field',
+      (record) => {
+        delete (record.event as JsonRecord).selectedOption;
+      },
+    ],
+    [
+      'missing decision question',
+      (record) => {
+        delete (record.event as JsonRecord).question;
+      },
+    ],
+    [
+      'missing selected option requirement fit',
+      (record) => {
+        delete ((record.event as JsonRecord).selectedOption as JsonRecord)
+          .requirementFit;
+      },
+    ],
+    [
+      'missing alternative rejection reason',
+      (record) => {
+        const event = record.event as JsonRecord;
+        const alternative = (event.feasibleAlternatives as JsonRecord[])[0];
+        delete alternative.rejectionReason;
+      },
+    ],
+    [
+      'merged pull request without a head commit',
+      (record) => {
+        record.event = provisionalDecisionEvent('work-completed');
+        const result = (record.event as JsonRecord).result as JsonRecord;
+        delete result.headSha;
+      },
+    ],
+    [
+      'merged pull request without a merge commit',
+      (record) => {
+        record.event = provisionalDecisionEvent('work-completed');
+        const result = (record.event as JsonRecord).result as JsonRecord;
+        delete result.mergeCommitSha;
+      },
+    ],
+    [
+      'malformed repository reference',
+      (record) => {
+        (record.source as JsonRecord).repository = 'not a repository';
+      },
+    ],
+    [
+      'malformed evidence reference',
+      (record) => {
+        (record.evidenceReferences as string[])[0] = 'issue #4519';
+      },
+    ],
+    [
+      'issue number above the safe-integer boundary',
+      (record) => {
+        (record.source as JsonRecord).issueNumber = Number.MAX_SAFE_INTEGER + 1;
+      },
+    ],
+    [
+      'generation above the safe-integer boundary',
+      (record) => {
+        record.bundleGeneration = Number.MAX_SAFE_INTEGER + 1;
+      },
+    ],
+  ];
+
+  for (const [name, mutate] of invalidations) {
+    const instance = buildProvisionalDecisionRecord(
+      provisionalDecisionEvent('selected'),
+    );
+    mutate(instance);
+    assert.ok(
+      validate(instance, schema).length > 0,
+      `Expected ${name} to fail`,
+    );
+  }
+});
+
+test('provisional-decision-record schema accepts the safe-integer boundary', () => {
+  const schema = loadJson('schemas/provisional-decision-record.schema.json');
+  const instance = buildProvisionalDecisionRecord(
+    provisionalDecisionEvent('selected'),
+  );
+  instance.bundleGeneration = Number.MAX_SAFE_INTEGER;
+  assert.deepEqual(validate(instance, schema), []);
 });
 
 test('forced-handoff-marker valid fixture passes validation', () => {

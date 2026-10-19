@@ -11,7 +11,7 @@
  *
  * Supported enforcement keywords:
  *   type, required, properties, patternProperties, additionalProperties,
- *   minLength, minimum, exclusiveMinimum, pattern, format (date-time, RFC 3339),
+ *   minLength, minimum, maximum, exclusiveMinimum, pattern, format (date-time, RFC 3339),
  *   minItems, items, enum, oneOf, `$defs`, and constrained local `$ref`
  *
  * Any other keyword in a schema triggers an error, preventing false
@@ -47,6 +47,7 @@ const ENFORCED_KEYWORDS = new Set([
   'additionalProperties',
   'minLength',
   'minimum',
+  'maximum',
   'exclusiveMinimum',
   'pattern',
   'format',
@@ -382,6 +383,9 @@ export function validate(
   }
   if (actualType === 'number' && s.minimum !== undefined && data < s.minimum) {
     errors.push(`${path}: ${data} < minimum ${s.minimum}`);
+  }
+  if (actualType === 'number' && s.maximum !== undefined && data > s.maximum) {
+    errors.push(`${path}: ${data} > maximum ${s.maximum}`);
   }
   if (
     actualType === 'number' &&
