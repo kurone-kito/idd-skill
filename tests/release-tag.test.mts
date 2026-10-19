@@ -778,6 +778,21 @@ test('a remote tag at the SHA with a valid signature is found, and nothing is wr
   );
 });
 
+test('a found remote tag is not refused over a stale local tag', async () => {
+  const fx = makeFixture();
+  const object = pushSignedTag(fx, fx.seed, fx.sha);
+  git(fx, fx.primary, ['tag', TAG, fx.base]);
+  const before = localTags(fx);
+  const { deps, calls } = harness(fx);
+  const outcome = await runReleaseTag(releaseInput(fx, { apply: true }), deps);
+  assert.equal(outcome.exitStatus, 0, JSON.stringify(outcome.report, null, 2));
+  assert.equal(outcome.report.decision, 'found');
+  assert.equal(outcome.report.tagObject, object);
+  assert.equal(outcome.report.preconditions.at(-1)?.status, 'not-run');
+  assert.deepEqual(localTags(fx), before);
+  assert.deepEqual(gitCalls(calls, 'push'), []);
+});
+
 test('a dry run with a configured tag refspec still creates no tag ref', async () => {
   const fx = makeFixture();
   pushSignedTag(fx, fx.seed, fx.sha);

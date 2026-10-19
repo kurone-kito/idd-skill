@@ -2348,7 +2348,17 @@ async function runChecksAndEffects(ctx: Context): Promise<void> {
   );
   await checkChangelog(ctx);
   const found = await checkRemoteTag(ctx);
-  const local = await checkLocalTag(ctx);
+  // The local tag matters only when the remote tag is absent: a found remote
+  // tag means no local tag is used or written, so a stale one never refuses.
+  const local = found ? null : await checkLocalTag(ctx);
+  if (found) {
+    setPrecondition(
+      ctx.report,
+      'local-tag',
+      'not-run',
+      `${REMOTE} already has a valid ${ctx.input.tag}, so no local tag is used or written`,
+    );
+  }
 
   if (found) {
     ctx.report.decision = 'found';
