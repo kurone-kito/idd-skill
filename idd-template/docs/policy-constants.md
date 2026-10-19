@@ -292,9 +292,8 @@ and its REST login, `copilot-pull-request-reviewer[bot]` for Copilot). The
 removal compares bot identities, so `my-bot` and `my-bot[bot]` are one bot,
 and it also removes an explicit entry that names the primary. An empty
 window set does not turn the window off: no bot can settle or decline it, so
-a configured window always runs its full length from the anchor below (with
-no activity to anchor on yet, it reports elapsed, as for any window set). It
-anchors on the same
+a configured window runs its full length from the anchor below (with no
+activity to anchor on yet, it reports elapsed). It anchors on the same
 `ackOnlyPostDisposition`-aware activity ceiling the currency gate already
 computes, except that the own timestamp of an unedited top-level disposition
 by a trusted author (advisory bots excepted) is left out, so the agent's own

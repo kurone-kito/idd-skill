@@ -665,9 +665,9 @@ whether it fires depends on the window set. The window applies whenever
 an only-when rule: an empty window set does not turn the window off. A
 configured `secondaryQuietWindow` then has no bot to settle or decline it,
 so neither the settled buffer nor the decline skip applies, and the full
-configured length must always elapse from the activity anchor (with no
-activity to anchor on yet, the window reports elapsed, as for any window
-set). A default bot that the repository does not run never comments, so it
+configured length must elapse from the last substantive review activity
+(with no such activity to anchor on yet, the window reports elapsed). A
+default bot that the repository does not run never comments, so it
 stays pending and holds the full window. List the bots the repository runs
 in `advisoryBotLogins` (the `pre-merge-readiness` flag
 `--advisory-bot-logins` and the `IDD_ADVISORY_BOT_LOGINS` environment

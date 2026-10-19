@@ -144,7 +144,8 @@ the primary bot (its `advisoryWait.primaryBotLogin` login and its REST
 login). The window set is empty only when every listed login is a primary
 identity, for example when `advisoryBotLogins` lists only the primary and
 `advisoryWait.secondaryBotLogin` is unset. Then no bot can settle or decline
-the window, and it always runs its full length from the activity anchor. See
+the window, and it runs its full length from the last substantive review
+activity (with no such activity to anchor on, it reports elapsed). See
 [IDD policy constants](policy-constants.md) for the exact fold rule.
 
 ## PR Review Profile Edit Surfaces
