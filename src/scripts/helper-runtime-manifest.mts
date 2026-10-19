@@ -600,7 +600,7 @@ const HELPER_COMMANDS: HelperCommand[] = [
     entryPath: 'scripts/idd-local-admission.mjs',
     vendoredCommand: 'node scripts/idd-local-admission.mjs',
     description:
-      'Run one command under the host-local validation slot (flock, one slot per OS user), with admission read from localExec.admission; refuses before starting when the policy is invalid.',
+      'Run one command under host-local admission (flock or a shared pueue group), with policy read from localExec.admission; refuses before starting when the policy is invalid.',
   },
   {
     id: 'local-validation-evidence',
