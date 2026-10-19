@@ -2204,12 +2204,20 @@ async function createTag(ctx: Context, kind: SignatureKind): Promise<string> {
     await signerPrograms(ctx, step, kind),
   );
   if (result.timedOut === true) {
-    throw timeoutRefusal(
+    // Classify the timeout first. Only a tree confirmed gone (or one whose
+    // sole survivor is the signer) allows another git command; otherwise
+    // the local tag is not read at all.
+    const refusal = timeoutRefusal(
       step,
       result,
       'signing-timeout',
-      `signing ${ctx.input.tag} did not finish; ${await localTagNote(ctx)}`,
+      `signing ${ctx.input.tag} did not finish`,
     );
+    refusal.refusal.detail +=
+      refusal.refusal.name === 'signing-timeout'
+        ? `; ${await localTagNote(ctx)}`
+        : '; the local tag was not read, because the process tree is unconfirmed';
+    throw refusal;
   }
   if (result.status !== 0) {
     throw new Refused(

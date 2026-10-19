@@ -1294,13 +1294,24 @@ test('a survivor that is not the signer is refused, under one shared wait', {
   );
   git(fx, fx.primary, ['config', 'gpg.ssh.program', signer]);
   const wait = 1_500;
-  const { deps } = harness(fx, { timeBoundMs: 2_000, sharedWaitMs: wait });
+  const { deps, calls } = harness(fx, {
+    timeBoundMs: 2_000,
+    sharedWaitMs: wait,
+  });
   try {
     const outcome = await runReleaseTag(
       releaseInput(fx, { apply: true }),
       deps,
     );
     assertRefused(outcome, 'process-survivor');
+    // No git command runs after the timed-out `git tag` while the tree
+    // is unconfirmed.
+    assert.equal(calls.at(-1)?.kind, 'git');
+    assert.equal(subcommand(calls.at(-1)?.args ?? []), 'tag');
+    assert.match(
+      outcome.report.refusal?.detail ?? '',
+      /local tag was not read/u,
+    );
     const pids = readPids(survivors);
     assert.equal(pids.length, 3);
     const processes = outcome.report.refusal?.processes;
