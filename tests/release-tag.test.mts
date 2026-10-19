@@ -966,6 +966,29 @@ test('a GH_REPO that names another repository is refused', async () => {
   );
 });
 
+test('a git older than 2.44 is refused before anything is signed', async () => {
+  const fx = makeFixture();
+  for (const apply of [false, true]) {
+    const { deps, calls } = harness(fx, {
+      wrap: async (request) =>
+        request.args[0] === '--version'
+          ? {
+              status: 0,
+              signal: null,
+              stdout: 'git version 2.43.0\n',
+              stderr: '',
+            }
+          : null,
+    });
+    const outcome = await runReleaseTag(releaseInput(fx, { apply }), deps);
+    assertRefused(outcome, 'git-version-unsupported');
+    assert.equal(outcome.report.effects[0]?.status, 'failed');
+    assert.deepEqual(gitCalls(calls, 'tag'), []);
+  }
+  assert.deepEqual(localTags(fx), []);
+  assert.deepEqual(remoteTags(fx), []);
+});
+
 test('a broken signer leaves no tag and no unsigned tag', async () => {
   const fx = makeFixture();
   const signer = writeStub(

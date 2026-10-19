@@ -90,6 +90,13 @@ const DEFAULT_BRANCH_ARGS = [
 const ISSUE_FIELDS = 'state,labels';
 const PULL_REQUEST_FIELDS = 'state,mergeCommit';
 
+/**
+ * The first git release whose `git tag -s` fails when an SSH signer fails.
+ * Before 2.44.0, `builtin/tag.c` tested the signer's positive exit status with
+ * `< 0`, so the command exited 0 and wrote an unsigned annotated tag.
+ */
+const MIN_SIGNING_GIT = { major: 2, minor: 44 } as const;
+
 /** Fetch flags that keep a fetch to its own refspec and to no other write. */
 const FETCH_FLAGS = [
   '--no-tags',
@@ -138,6 +145,7 @@ export type ReleaseTagRefusalName =
   | 'remote-tag-signature-invalid'
   | 'local-tag-unreadable'
   | 'local-tag-conflict'
+  | 'git-version-unsupported'
   | 'signing-failed'
   | 'signing-timeout'
   | 'created-tag-invalid'
@@ -1905,6 +1913,37 @@ async function localTagNote(ctx: Context): Promise<string> {
   return `whether a local ${ctx.input.tag} exists is unknown`;
 }
 
+/**
+ * Refuse a git that writes an unsigned tag when an SSH signer fails, before
+ * anything is signed. Checked whenever this run would create the tag, in a dry
+ * run too, so the refusal shows before `--apply`.
+ */
+async function checkSigningGit(ctx: Context): Promise<void> {
+  const step = 'create-tag';
+  const result = await gitRead(
+    ctx,
+    step,
+    ['--version'],
+    'git-version-unsupported',
+    'git --version could not be read',
+  );
+  const text = result.stdout.trim();
+  const match = /^git version (\d+)\.(\d+)/u.exec(text);
+  const major = Number(match?.[1]);
+  const minor = Number(match?.[2]);
+  if (
+    match === null ||
+    major < MIN_SIGNING_GIT.major ||
+    (major === MIN_SIGNING_GIT.major && minor < MIN_SIGNING_GIT.minor)
+  ) {
+    throw new Refused(
+      step,
+      'git-version-unsupported',
+      `${describe(text)} is older than git ${MIN_SIGNING_GIT.major}.${MIN_SIGNING_GIT.minor}.0 or unreadable; before that release, git tag -s exits 0 and writes an unsigned tag when an SSH signer fails, so no tag is signed`,
+    );
+  }
+}
+
 async function createTag(ctx: Context): Promise<string> {
   const step = 'create-tag';
   const format = (await configValue(ctx, 'gpg.format')) ?? 'openpgp';
@@ -2142,6 +2181,7 @@ async function runChecksAndEffects(ctx: Context): Promise<void> {
     return;
   }
   ctx.report.decision = local === null ? 'create' : 'use-local-tag';
+  if (local === null) await checkSigningGit(ctx);
   if (local !== null) {
     ctx.report.tagObject = local;
     ctx.report.peeledCommit = ctx.input.sha;
