@@ -200,6 +200,13 @@
   // - true: the gate is off for the whole repository.
   // "skipIssueAuthorApprovalGate": false,
 
+  // Repository-only opt-in for provisional decision choices. User-global
+  // values, issue text, and pull-request heads never grant this authority.
+  // - true: allows the configured provisional-decision policy to act; it
+  //   selects no decision issue and waives no other gate by itself.
+  // - false (default): provisional decision choices stay disabled.
+  // "dangerouslyAutoDecide": false,
+
   // Free text that names the selected critique-loop profile, for people. No
   // helper reads it. Default: omitted.
   // "critiqueLoopProfile": "default",
