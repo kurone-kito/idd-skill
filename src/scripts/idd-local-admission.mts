@@ -1015,6 +1015,7 @@ function runPueueAdmission(
         'add',
         '--parallel',
         String(cap),
+        '--',
         groupName,
       ]);
       if (pendingSignal !== null) return statusForSignal();
@@ -1051,8 +1052,7 @@ function runPueueAdmission(
     phase = 'add';
     const added = await call([
       'add',
-      '-g',
-      groupName,
+      `--group=${groupName}`,
       '-w',
       deps.cwd,
       '-l',

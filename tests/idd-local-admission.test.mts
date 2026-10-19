@@ -192,6 +192,7 @@ if (args[0] === 'add') {
   const label = value('-l');
   const command = args.at(-1);
   const cwd = value('-w');
+  const groupArgument = args.find((arg) => arg.startsWith('--group='));
   state.tasks ??= {};
   const taskData = { label: state.taskLabelOverride ?? label, status: state.initialStatus ?? 'Queued', output: state.taskOutput ?? '' };
   if (state.runCommandOnAdd) {
@@ -202,7 +203,16 @@ if (args[0] === 'add') {
   }
   if (state.initialStatus === 'Done') taskData.status = { Done: { Success: null } };
   state.tasks[id] = taskData;
-  state.added = { id, label, command, cwd, group: value('-g') };
+  state.added = {
+    id,
+    label,
+    command,
+    cwd,
+    group:
+      groupArgument === undefined
+        ? value('-g')
+        : groupArgument.slice('--group='.length),
+  };
   save();
   if (state.addHang) {
     if (state.addReady) fs.writeFileSync(state.addReady, 'ready');
@@ -936,6 +946,7 @@ test('pueue creates a missing group at the cap and preserves shell argv', {
     'add',
     '--parallel',
     '4',
+    '--',
     'idd-validate',
   ]);
   const addIndex = calls.findIndex((call) => call[0] === 'add');
@@ -991,6 +1002,51 @@ test('pueue preserves an existing group literally named groups', {
       (call) => call[0] === 'group' && call[1] === 'add',
     ),
     false,
+  );
+});
+
+test('pueue passes leading-hyphen group names as values and positionals', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const policy = {
+    localExec: {
+      admission: { backend: 'pueue', maxConcurrent: 1, pueueGroup: '--help' },
+    },
+  };
+  const existing = await runPueueTest(policy, {
+    groups: { '--help': { parallel_tasks: 1, status: 'Running' } },
+    runCommandOnAdd: true,
+  });
+  assert.equal(existing.status, 0);
+  const existingState = readFakePueue(existing.fake);
+  assert.equal(
+    (existingState.added as Record<string, unknown>).group,
+    '--help',
+  );
+  const existingCalls = existingState.calls as string[][];
+  assert.ok(
+    existingCalls.some(
+      (call) => call.slice(0, 2).join(' ') === 'add --group=--help',
+    ),
+  );
+  assert.equal(
+    existingCalls.some((call) => call[0] === 'group' && call[1] === 'add'),
+    false,
+  );
+
+  const missing = await runPueueTest(policy, { runCommandOnAdd: true });
+  assert.equal(missing.status, 0);
+  const missingState = readFakePueue(missing.fake);
+  assert.equal((missingState.added as Record<string, unknown>).group, '--help');
+  const missingCalls = missingState.calls as string[][];
+  assert.deepEqual(
+    missingCalls.find((call) => call[0] === 'group' && call[1] === 'add'),
+    ['group', 'add', '--parallel', '1', '--', '--help'],
+  );
+  assert.ok(
+    missingCalls.some(
+      (call) => call.slice(0, 2).join(' ') === 'add --group=--help',
+    ),
   );
 });
 
