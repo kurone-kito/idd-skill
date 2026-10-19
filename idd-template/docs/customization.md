@@ -648,11 +648,12 @@ thread, and a bot reply on an unresolved thread, still reopen it, because
 thread activity feeds the ceiling. Distinct from
 `advisoryWait.settledWindow`, which bounds the PRIMARY bot's own pending
 state, not a late secondary-bot arrival. **#2544**:
-once a bot in the window set has already posted a genuine review for the
-current HEAD (with several bots, the `#3186` fold below decides), only a
-short fixed confirmation buffer applies from that review's own timestamp
-instead of the full configured duration -- while any bot in the window set
-is still pending for a HEAD, that HEAD waits the full period unchanged.
+once a bot in the window set has already posted a recognized completed
+review for the current HEAD (with several bots, the `#3186` fold below
+decides), only a short fixed confirmation buffer applies from that review's
+own timestamp instead of the full configured duration -- while any bot in
+the window set is still pending for a HEAD, that HEAD waits the full period
+unchanged.
 **#2547**: a rate-limit / skip-review notice for the current HEAD, with no
 later genuine comment, is a third outcome distinct from `#2544`'s
 pending/settled split -- a definitive decline, not "might still be
@@ -664,14 +665,17 @@ whether it fires depends on the window set. The window applies whenever
 an only-when rule: an empty window set does not turn the window off. A
 configured `secondaryQuietWindow` then has no bot to settle or decline it,
 so neither the settled buffer nor the decline skip applies, and the full
-configured length always elapses. A default bot that the repository does not
-run never comments, so it stays pending and holds the full window. List the
-bots the repository runs in `advisoryBotLogins` (the `pre-merge-readiness`
-flag `--advisory-bot-logins` and the `IDD_ADVISORY_BOT_LOGINS` environment
+configured length must always elapse from the activity anchor (with no
+activity to anchor on yet, the window reports elapsed, as for any window
+set). A default bot that the repository does not run never comments, so it
+stays pending and holds the full window. List the bots the repository runs
+in `advisoryBotLogins` (the `pre-merge-readiness` flag
+`--advisory-bot-logins` and the `IDD_ADVISORY_BOT_LOGINS` environment
 variable take precedence over it). Only CodeRabbit and Codex have a
 recognized completed shape (issue `#3261`), so any other listed bot holds
-the full window unless it declines. For an empty window set, list only the
-primary's logins there and leave `advisoryWait.secondaryBotLogin` unset.
+the full window unless it posts a recognized rate-limit or skip-review
+notice. For an empty window set, list only the primary's logins in
+`advisoryBotLogins` and leave `advisoryWait.secondaryBotLogin` unset.
 Setting `advisoryBotLogins` also turns on the ack-only classification that
 its schema entry describes.
 **#3186**: with several logins in the window set, `pre-merge-readiness`

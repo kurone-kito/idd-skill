@@ -138,13 +138,13 @@ request. Pick each secondary from a requestable reviewer whose
 guard can observe it. A configured `advisoryWait.secondaryQuietWindow`
 (F2's quiet-window wait) settles on its window set, which differs from the
 request list: every non-primary advisory bot in `advisoryBotLogins` (the two
-default review bots, CodeRabbit and Codex, when none is configured), plus the
+default review bots, CodeRabbit and Codex, when none is resolved), plus the
 explicit `advisoryWait.secondaryBotLogin` entries, minus both identities of
 the primary bot (its `advisoryWait.primaryBotLogin` login and its REST
 login). The window set is empty only when every listed login is a primary
 identity, for example when `advisoryBotLogins` lists only the primary and
 `advisoryWait.secondaryBotLogin` is unset. Then no bot can settle or decline
-the window, and it always waits its full length. See
+the window, and it always runs its full length from the activity anchor. See
 [IDD policy constants](policy-constants.md) for the exact fold rule.
 
 ## PR Review Profile Edit Surfaces
