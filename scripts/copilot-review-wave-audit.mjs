@@ -21,14 +21,16 @@
 // Copilot's severity label is only machine-readable from a review body
 // carrying the `<!-- ccr-overview-v2 -->` marker (a body without it is
 // `legacy`). Findings are grouped under `<details><summary><strong>...`
-// sections: the Open section, as `Open (<n>)` (the original format) or
-// `<n> open findings` (the October 2026 format, issue #4184); `Resolved since last
-// review (<n>)` or `<n> resolved since last review`; and `Previously missed
-// (<n>)` (each nested finding under "Previously missed" carries a severity but
-// no `#discussion_r<id>` link, so it has no thread to key by -- excluded from
-// every thread-keyed metric below). A `What changed in this PR` section may
-// also appear. Every nested finding's own `<summary>` never wraps its severity
-// badge in `<strong>`, which is what lets `findSections`
+// sections: the Open section, as `Open (<n>)` (the original format),
+// `<n> open findings` (from about 2026-10-07, issue #4184), or
+// `<n> open issues` (from 2026-10-16, issue #4472); `Resolved since last
+// review (<n>)` or `<n> resolved since last review`; and the previously missed
+// section, as `Previously missed (<n>)` or, from 2026-10-16,
+// `<n> previously missed issues` (each nested finding under it carries a
+// severity but no `#discussion_r<id>` link, so it has no thread to key by --
+// excluded from every thread-keyed metric below). A `What changed in this PR`
+// section may also appear. Every nested finding's own `<summary>` never wraps
+// its severity badge in `<strong>`, which is what lets `findSections`
 // (copilot-overview-sections.mts) tell a top-level section header apart from a
 // nested one with a single discriminator. In the original format the header
 // line's own `**Findings:** N <picture ... alt="... severity">` also carries an
