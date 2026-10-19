@@ -53,7 +53,11 @@ import {
   resolveEffectiveCritiqueLoopTelemetryHook,
   resolveEffectiveIssueAuthoringDelegate,
 } from './policy-helpers.mjs';
-import { loadJson, validate } from './validate-schemas.mjs';
+import {
+  checkSchemaKeywords,
+  loadJson,
+  validate,
+} from './validate-schemas.mjs';
 
 export {
   deriveRepositoryIdentity,
@@ -616,6 +620,19 @@ export function readTrustedDangerouslyAutoDecide({
       throw new Error(
         `expected a JSON object for schemas/policy.schema.json at trusted ref "${ref}"`,
       );
+    }
+    const schemaKeywordErrors = checkSchemaKeywords(schema);
+    if (schemaKeywordErrors.length > 0) {
+      const shown = schemaKeywordErrors.slice(0, 10);
+      const remainder = schemaKeywordErrors.length - shown.length;
+      const suffix = remainder > 0 ? ` (and ${remainder} more)` : '';
+      return {
+        status: 'unreadable',
+        enabled: false,
+        source: 'repository',
+        ref,
+        error: `trusted repository policy schema has unsupported keywords at ref "${ref}": ${shown.join('; ')}${suffix}`,
+      };
     }
     const schemaErrors = validate(config, schema);
     if (schemaErrors.length > 0) {

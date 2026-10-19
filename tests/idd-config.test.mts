@@ -1403,6 +1403,43 @@ test('trusted provisional-decision authority validates against the schema at the
   assert.match(report.error ?? '', /\$\.issueScope/);
 });
 
+test('trusted provisional-decision authority fails closed for unsupported schema keywords (#4529)', () => {
+  const schema = JSON.parse(
+    readFileSync(
+      new URL('../schemas/policy.schema.json', import.meta.url),
+      'utf8',
+    ),
+  ) as { properties: Record<string, Record<string, unknown>> };
+  const dangerouslyAutoDecideSchema = schema.properties.dangerouslyAutoDecide;
+  assert.ok(dangerouslyAutoDecideSchema);
+  schema.properties.dangerouslyAutoDecide = {
+    ...dangerouslyAutoDecideSchema,
+    const: false,
+  };
+
+  const report = readTrustedDangerouslyAutoDecide({
+    owner: 'o',
+    repo: 'r',
+    baseRefName: 'main',
+    fetchEncodedConfig: () =>
+      toEncodedConfig(trustedPolicyConfig({ dangerouslyAutoDecide: true })),
+    fetchEncodedPolicySchema: (_owner, _repo, ref) => {
+      assert.equal(ref, 'main');
+      return toEncodedConfig(schema);
+    },
+  });
+
+  assert.equal(report.status, 'unreadable');
+  assert.equal(report.enabled, false);
+  assert.equal(report.source, 'repository');
+  assert.equal(report.ref, 'main');
+  assert.match(
+    report.error ?? '',
+    /trusted repository policy schema has unsupported keywords/,
+  );
+  assert.match(report.error ?? '', /unsupported keyword "const"/);
+});
+
 test('trusted provisional-decision authority fails closed when trusted schema cannot be read (#4529)', () => {
   const report = readTrustedDangerouslyAutoDecide({
     owner: 'o',
