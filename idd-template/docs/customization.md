@@ -1653,6 +1653,26 @@ consider — it does not stop CodeRabbit's own auto-labeling heuristic
 from applying that label anyway. Keep the generated or manual CI guard
 above in place regardless of whether this snippet is adopted.
 
+## Provisional Decision Opt-in
+
+dangerouslyAutoDecide is an optional, repository-only boolean that
+defaults to false. Only an explicit true in the trusted repository
+baseline can authorize provisional decision choices. User-global values
+and overrides are rejected by the schema and ignored by the layered
+resolver; issue text and a PR or feature branch cannot grant this
+authority.
+
+Inspect the current checkout's value and provenance with
+node scripts/idd-effective-config.mjs --key dangerouslyAutoDecide.
+This report describes the checked-out policy; decision consumers must
+read authority from the trusted PR base ref, or resolve the live default
+branch for repository-scoped decisions, and fail closed when that source
+is invalid or unreadable. They must never read a PR head or feature-worktree
+ref as authority. The field alone does not select a
+decision issue, waive existing gates, or enable the provisional
+decision lifecycle. Keep it absent or false until that complete
+lifecycle is available and the repository has explicitly opted in.
+
 ## Issue Scope
 
 The default `issue-scope` is `roadmap-first`: Discover runs the roadmap

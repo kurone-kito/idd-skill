@@ -238,6 +238,7 @@ export const POLICY_DEFAULTS = Object.freeze({
   issueScope: 'roadmap-first',
   orphanFirstPolicy: 'none',
   skipIssueAuthorApprovalGate: false,
+  dangerouslyAutoDecide: false,
   maintainerApprovalActorPolicy: 'owners-and-maintainers-only',
   stallRecovery: Object.freeze({
     quietWindow: 'PT30M',
@@ -797,6 +798,7 @@ export function normalizePolicyConfig(config) {
       POLICY_DEFAULTS.orphanFirstPolicy,
     ),
     skipIssueAuthorApprovalGate: c?.skipIssueAuthorApprovalGate === true,
+    dangerouslyAutoDecide: c?.dangerouslyAutoDecide === true,
     maintainerApprovalActorPolicy: parseEnum(
       c?.maintainerApprovalActorPolicy,
       APPROVAL_ACTOR_POLICIES,

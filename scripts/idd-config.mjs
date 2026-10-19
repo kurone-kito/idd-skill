@@ -32,7 +32,8 @@
 // wider-review change #1721 does not attempt. A later session may pick that
 // residual up knowingly.
 import { lstatSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { resolveBundleRoot } from './bundle-root.mjs';
 import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghText,
@@ -52,6 +53,11 @@ import {
   resolveEffectiveCritiqueLoopTelemetryHook,
   resolveEffectiveIssueAuthoringDelegate,
 } from './policy-helpers.mjs';
+import {
+  checkSchemaKeywords,
+  loadJson,
+  validate,
+} from './validate-schemas.mjs';
 
 export {
   deriveRepositoryIdentity,
@@ -253,6 +259,102 @@ export function buildIddConfigContentsArgs(owner, repo, ref) {
     '--jq',
     '.content',
   ];
+}
+/** Build Contents API arguments for the policy schema at a trusted ref. */
+export function buildPolicySchemaContentsArgs(owner, repo, ref) {
+  return [
+    'api',
+    `repos/${owner}/${repo}/contents/schemas/policy.schema.json`,
+    '--method',
+    'GET',
+    '-f',
+    `ref=${ref}`,
+    '--jq',
+    '.content',
+  ];
+}
+function readBundleRepositorySlug() {
+  try {
+    const manifest = loadJson('package.json');
+    if (!isPlainObject(manifest)) return null;
+    const repository = manifest.repository;
+    const url =
+      typeof repository === 'string'
+        ? repository
+        : isPlainObject(repository) && typeof repository.url === 'string'
+          ? repository.url
+          : '';
+    const match =
+      url.match(/^github:([^/?#]+\/[^/?#]+)(?:[?#].*)?$/i) ??
+      url.match(/github\.com[:/]([^/?#]+\/[^/?#]+)/i);
+    const slug = match?.[1]?.replace(/\.git$/i, '').toLowerCase();
+    return slug && /^[^/]+\/[^/]+$/.test(slug) ? slug : null;
+  } catch {
+    return null;
+  }
+}
+export function bundleRootIsGitCheckout(
+  bundleRoot = resolveBundleRoot(import.meta.dirname),
+  hasGitMetadata = (directory) => {
+    lstatSync(join(directory, '.git'));
+    return true;
+  },
+) {
+  // Package-manager installs live below node_modules even when their target
+  // repository has a .git ancestor. A workspace-linked source package resolves
+  // to its real checkout path instead and must keep the trusted-ref boundary.
+  if (bundleRoot.split(/[\\/]/u).includes('node_modules')) return false;
+  let directory = bundleRoot;
+  while (true) {
+    try {
+      if (hasGitMetadata(directory)) return true;
+    } catch (error) {
+      if (!isEnoentError(error)) return true;
+    }
+    const parent = dirname(directory);
+    if (parent === directory) return false;
+    directory = parent;
+  }
+}
+/**
+ * Read the policy schema from the repository's trusted ref when it exists.
+ * Installed-package adopters do not copy the schema into their repository, so
+ * a 404 may use the helper bundle's schema only when its package metadata
+ * names a different repository and the bundle is an installed package rather
+ * than a checked-out source or vendored tree. Same-repository, checked-out,
+ * and unknown bundles stay fail-closed, preserving the trusted-ref boundary.
+ * Other read failures also stay errors rather than being mistaken for a
+ * missing adopter schema.
+ */
+export function fetchEncodedPolicySchemaAtTrustedRef(
+  owner,
+  repo,
+  ref,
+  fetchRemoteSchema = (args) => ghText(args, GH_TEXT_LOOP_TIMEOUT_OPTIONS),
+  loadBundledSchema = () => loadJson('schemas/policy.schema.json'),
+  readBundledRepository = readBundleRepositorySlug,
+  isCheckedOutBundle = bundleRootIsGitCheckout,
+) {
+  try {
+    return fetchRemoteSchema(buildPolicySchemaContentsArgs(owner, repo, ref));
+  } catch (error) {
+    if (deriveGhHttpStatus(error) !== 404) throw error;
+    const bundleRepository = readBundledRepository();
+    if (
+      isCheckedOutBundle() ||
+      bundleRepository === null ||
+      bundleRepository.toLowerCase() === `${owner}/${repo}`.toLowerCase()
+    ) {
+      throw error;
+    }
+    const schema = loadBundledSchema();
+    if (!isPlainObject(schema)) {
+      throw new Error(
+        'bundled schemas/policy.schema.json is not a JSON object',
+      );
+    }
+    return Buffer.from(JSON.stringify(schema), 'utf8').toString('base64');
+  }
 }
 /**
  * Fetch and parse `.github/idd/config.json` for `owner/repo` **at a trusted
@@ -464,6 +566,107 @@ export function readTrustedForcedHandoffMode(
   } catch (error) {
     return {
       status: 'unreadable',
+      ref,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+/**
+ * Read provisional-decision authority from a trusted repository base ref.
+ * PR-scoped callers pass the trusted PR base name; repository-scoped callers
+ * omit it and this function resolves the live default branch. Callers must
+ * never pass a PR head or feature-worktree ref. Both the policy document and
+ * its schema are fetched at that ref so a feature-branch schema change cannot
+ * relax validation of the trusted policy. User-global fallback is disabled;
+ * malformed values and unreadable policy return `enabled: false` with the
+ * cause so they cannot grant authority silently.
+ */
+// audit:ignore-dead-export: #4529 provides the repository-only authority reader for downstream provisional-decision consumers
+export function readTrustedDangerouslyAutoDecide({
+  owner,
+  repo,
+  baseRefName = '',
+  readDefaultBranch = readGithubRepoDefaultBranch,
+  fetchEncodedConfig,
+  fetchEncodedPolicySchema = fetchEncodedPolicySchemaAtTrustedRef,
+}) {
+  let ref = '';
+  const disabled = (reason) => ({
+    status: 'disabled',
+    enabled: false,
+    source: 'repository',
+    ref,
+    reason,
+  });
+  try {
+    ref = selectTrustedConfigRef(
+      baseRefName,
+      String(baseRefName ?? '').trim() ? null : readDefaultBranch(owner, repo),
+    );
+    const config = loadTrustedIddConfig(
+      owner,
+      repo,
+      ref,
+      fetchEncodedConfig,
+      undefined,
+      { userGlobalFallback: false },
+    );
+    if (config === null) return disabled('config-absent');
+    const encodedSchema = fetchEncodedPolicySchema(owner, repo, ref);
+    const schema = JSON.parse(
+      Buffer.from(encodedSchema.replace(/\n/g, ''), 'base64').toString('utf8'),
+    );
+    if (!isPlainObject(schema)) {
+      throw new Error(
+        `expected a JSON object for schemas/policy.schema.json at trusted ref "${ref}"`,
+      );
+    }
+    const schemaKeywordErrors = checkSchemaKeywords(schema);
+    if (schemaKeywordErrors.length > 0) {
+      const shown = schemaKeywordErrors.slice(0, 10);
+      const remainder = schemaKeywordErrors.length - shown.length;
+      const suffix = remainder > 0 ? ` (and ${remainder} more)` : '';
+      return {
+        status: 'unreadable',
+        enabled: false,
+        source: 'repository',
+        ref,
+        error: `trusted repository policy schema has unsupported keywords at ref "${ref}": ${shown.join('; ')}${suffix}`,
+      };
+    }
+    const schemaErrors = validate(config, schema);
+    if (schemaErrors.length > 0) {
+      const shown = schemaErrors.slice(0, 10);
+      const remainder = schemaErrors.length - shown.length;
+      const suffix = remainder > 0 ? ` (and ${remainder} more)` : '';
+      return {
+        status: 'unreadable',
+        enabled: false,
+        source: 'repository',
+        ref,
+        error: `trusted repository policy fails schema validation against policy.schema.json at ref "${ref}": ${shown.join('; ')}${suffix}`,
+      };
+    }
+    if (!Object.hasOwn(config, 'dangerouslyAutoDecide'))
+      return disabled('property-absent');
+    const value = config.dangerouslyAutoDecide;
+    if (typeof value !== 'boolean') {
+      return {
+        status: 'unreadable',
+        enabled: false,
+        source: 'repository',
+        ref,
+        error: `dangerouslyAutoDecide must be a boolean when present, got ${value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value}`,
+      };
+    }
+    return value
+      ? { status: 'enabled', enabled: true, source: 'repository', ref }
+      : disabled('explicit-false');
+  } catch (error) {
+    return {
+      status: 'unreadable',
+      enabled: false,
+      source: 'repository',
       ref,
       error: error instanceof Error ? error.message : String(error),
     };
