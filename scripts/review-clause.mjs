@@ -67,8 +67,10 @@ export {
  *
  * Delegates to {@link classifyCopilotReviewBody} (copilot-review-body.mts,
  * #3258), which recognizes both the current `ccr-overview-v2` shape's
- * `Previously missed (N)` section and the legacy overview's `Suppressed
- * comments (N)` heading (plus the original, even-older bare August
+ * Previously missed section (titled `Previously missed (N)`, or
+ * `N previously missed issue(s)` since 2026-10-16, #4526) and the legacy
+ * overview's `Suppressed comments (N)` heading (plus the original,
+ * even-older bare August
  * `<summary>Suppressed comments (N)</summary>` form the original #1880 fix
  * matched) -- see that module for the full shape-detection rationale,
  * including the code-region-stripping step that keeps a review body

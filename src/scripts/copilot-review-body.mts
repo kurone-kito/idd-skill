@@ -150,15 +150,22 @@ function isCopilotNoReviewableFilesBody(body: unknown): boolean {
  * `<summary>Suppressed comments (N)</summary>` heading. */
 const V2_MARKER_PATTERN = /^<!--\s*ccr-overview-v2\s*-->/i;
 
-/** Matches `<summary><strong>Previously missed (N)</strong></summary>`,
- * tolerating an absent `<strong>` wrapper. Deliberately does NOT match
- * "Resolved since last review (N)" (PR #3174's real body has both
- * sections, with different counts -- only Open/Resolved-since-last-review
- * items link an existing `#discussion_r…` thread that Clause 2 already
- * covers; only "Previously missed" is genuinely thread-less) or the
+/** Matches the Previously missed section title in either form Copilot has
+ * used, tolerating an absent `<strong>` wrapper:
+ * `<summary><strong>Previously missed (N)</strong></summary>`, and since
+ * 2026-10-16 `<summary><strong>N previously missed issue(s)</strong></summary>`
+ * (first seen in PR #4455 review 5554260551; the old title last appears in
+ * PR #4451 review 5553603900; kurone-kito/idd-skill#4526). The count is
+ * capture group 1 for the old title and group 2 for the new one; see
+ * {@link previouslyMissedCount}. Deliberately does NOT match
+ * "Resolved since last review (N)" / "N resolved since last review" (PR
+ * #3174's real body has both sections, with different counts -- only
+ * Open/Resolved-since-last-review items link an existing
+ * `#discussion_r…` thread that Clause 2 already covers; only "Previously
+ * missed" is genuinely thread-less), the "N open issue(s)" section, or the
  * `**Findings:**` header line. */
 const V2_PREVIOUSLY_MISSED_PATTERN =
-  /<summary>\s*(?:<strong>\s*)?previously missed \((\d+)\)(?:\s*<\/strong>)?\s*<\/summary>/i;
+  /<summary>\s*(?:<strong>\s*)?(?:previously missed \((\d+)\)|(\d+) previously missed issues?)(?:\s*<\/strong>)?\s*<\/summary>/i;
 
 /** "Opens with" -- checked against the code-stripped body's own trimmed
  * start, mirroring {@link V2_MARKER_PATTERN}. */
@@ -206,6 +213,12 @@ function toCount(raw: string | undefined): number {
   return Number.isFinite(count) ? count : 0;
 }
 
+/** The count a {@link V2_PREVIOUSLY_MISSED_PATTERN} match carries, from
+ * whichever title form matched. */
+function previouslyMissedCount(match: RegExpMatchArray): number {
+  return toCount(match[1] ?? match[2]);
+}
+
 /**
  * Classify a Copilot review body into one of the recognized shapes and
  * extract the thread-less ("suppressed") finding count that shape's own
@@ -243,7 +256,7 @@ export function classifyCopilotReviewBody(
     const match = stripped.match(V2_PREVIOUSLY_MISSED_PATTERN);
     return {
       shape: 'overview-v2',
-      suppressedCount: match ? toCount(match[1]) : 0,
+      suppressedCount: match ? previouslyMissedCount(match) : 0,
     };
   }
   // #3390 review (this PR's own Copilot review, Medium finding): the bare

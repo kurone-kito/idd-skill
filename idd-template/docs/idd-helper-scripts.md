@@ -8175,11 +8175,14 @@ alongside `suppressedCount`:
 
 - `overview-v2`: the body carries the `<!-- ccr-overview-v2 -->` marker
   at its own start. `suppressedCount` comes from a
-  `<summary><strong>Previously missed (N)</strong></summary>` section
-  (the `<strong>` wrapper is optional); the `**Findings:**` header and
-  the `Open` / `Resolved since last review` sections are never counted,
-  since those items already link an existing review-thread Clause 2
-  already covers.
+  `<summary><strong>Previously missed (N)</strong></summary>` section,
+  titled `<summary><strong>N previously missed issue(s)</strong></summary>`
+  since 2026-10-16 (`#4526`), with the count taken from the title in
+  either form (the `<strong>` wrapper is optional); the `**Findings:**`
+  header and the `Open` / `Resolved since last review` sections (titled
+  `N open issue(s)` and `N resolved since last review` in the newer
+  form) are never counted, since those items already link an existing
+  review-thread Clause 2 already covers.
 - `overview-legacy`: the pre-2026-09-19 overview (opens with
   `## Pull request overview`, or carries a `<details>` block summarized
   `Review details` or `Pull request overview`), or the original,

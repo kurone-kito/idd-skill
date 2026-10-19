@@ -40,6 +40,7 @@ import {
   resolveCopilotPending,
   unsafeTextReason,
 } from '../src/scripts/protocol-helpers.mts';
+import { resolveLatestCopilotReviewClause } from '../src/scripts/review-clause.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 import { trackTempDirectories } from './temp-fixtures.mts';
 import { readJson } from './test-utils.mts';
@@ -2736,4 +2737,118 @@ test('decline (#4142): an on-HEAD decline is an unreadable same-head review, so 
   );
   assert.notEqual(withAck.outcome, 'DISPOSITION_NEEDED');
   assert.notEqual(withAck.outcome, 'SATISFIED');
+});
+
+// --- The new Previously missed title (#4526) --------------------------------
+//
+// Since 2026-10-16 Copilot titles the thread-less section
+// `N previously missed issue(s)` instead of `Previously missed (N)`. Before
+// #4526 the shared parser read such a section as absent, so Clause 1 and the
+// cited-item rule below saw none of its items. Both fixtures are verbatim
+// Copilot review bodies; the zero-width spaces (U+200B) inside each cited path
+// are written as escape sequences.
+
+/** PR #4457 review 5556465525 (head 8e853640f), whose only section is
+ * `1 previously missed issue`. */
+const NEW_TITLE_CLAUSE_BODY = [
+  '<!-- ccr-overview-v2 -->',
+  '',
+  '### 🔵 Needs a closer look',
+  '',
+  'The no-candidate refusal action does not identify the marker command to run.',
+  '',
+  '**No open issues** 🎉',
+  '',
+  '<details>',
+  '<summary><strong>1 previously missed issue</strong></summary>',
+  '',
+  "In code that hasn't changed since last review",
+  '',
+  '<details>',
+  '<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> Specify helper and marker type for proof-missing refusals</summary>',
+  '',
+  '`src/\u200Bscripts/\u200Bf4-worktree-branch-steps.mts:236`',
+  '',
+  'The new no-candidate branch still says only “run the marker command,” so this standalone `nextAction` does not tell an operator which helper or marker type to invoke. A `proof-missing` refusal can therefore not be acted on from the helper output alone; name `post-idd-marker --type f4-head-proof` (and keep the profile-selected invocation details in the linked docs).',
+  '</details>',
+  '</details>',
+  '',
+  '<sub>Review effort: Lite</sub>',
+].join('\n');
+
+/** PR #4514 review 5563883235 (head 6028240c8): one file-cited item under
+ * `1 previously missed issue`. */
+const NEW_TITLE_CITED_BODY = [
+  '<!-- ccr-overview-v2 -->',
+  '',
+  '### 🔵 Needs a closer look',
+  '',
+  'Two moderate implementation issues and one documentation nit remain unresolved.',
+  '',
+  '**No open issues** 🎉',
+  '',
+  '<details>',
+  '<summary><strong>1 previously missed issue</strong></summary>',
+  '',
+  "In code that hasn't changed since last review",
+  '',
+  '<details>',
+  '<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> Preserve GitHub API load-control refusal metadata</summary>',
+  '',
+  '`src/\u200Bscripts/\u200Bclaimed-push.mts:1562`',
+  '',
+  '`ghText` also fails before spawning when host-local GitHub API load control refuses a request, and that error has no `status` or `signal`. This catch turns it into the same `status: null` result as a missing executable, so `readGh` reports `NEXT_ACTION.helperInstallation` (“check the helper installation”) instead of preserving the not-dispatched/load-control condition. That sends the operator toward the wrong recovery path; carry the refusal metadata through `CommandResult` and classify it separately (or at least report the load-control reason).',
+  '</details>',
+  '</details>',
+  '',
+  '<sub>Review effort: Lite</sub>',
+].join('\n');
+
+test('#4526: Clause 1 counts the item under "1 previously missed issue" at the review\'s own head', () => {
+  const head = '8e853640f1bbbd96a1bbb6d6ba2360e71c2148a4';
+  const clause = resolveLatestCopilotReviewClause(
+    [
+      {
+        id: 'PRR_5556465525',
+        author: { login: 'copilot-pull-request-reviewer' },
+        submittedAt: '2026-10-17T05:36:53Z',
+        commitId: head,
+        itemCount: 0,
+        body: NEW_TITLE_CLAUSE_BODY,
+      },
+    ],
+    head,
+    DEFAULT_ADVISORY_PRIMARY_BOT_LOGIN,
+  );
+  assert.equal(clause.matchesHead, true);
+  assert.equal(clause.bodyShape, 'overview-v2');
+  assert.equal(clause.suppressedCount, 1);
+  assert.equal(clause.satisfied, false);
+});
+
+test('#4526: a same-head review with a cited "1 previously missed issue" item and no stamped disposition needs a disposition', () => {
+  const head = '6028240c867fb470827b2e2697b5a64ba5fc14ad';
+  const summary = buildAdvisoryWaitSummary(
+    {
+      prHeadSha: head,
+      reviews: [
+        {
+          author: { login: 'copilot-pull-request-reviewer' },
+          submittedAt: '2026-10-18T16:33:14Z',
+          commitId: head,
+          body: NEW_TITLE_CITED_BODY,
+        },
+      ],
+      requestedReviewers: [],
+      timelineEvents: [],
+      comments: [],
+    },
+    { now: '2026-10-18T17:00:00Z', trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(classifyCopilotReviewBody(NEW_TITLE_CITED_BODY), {
+    shape: 'overview-v2',
+    suppressedCount: 1,
+  });
+  assert.equal(summary.outcome, 'DISPOSITION_NEEDED');
+  assert.equal(summary.f3Outcome, 'DISPOSITION_NEEDED');
 });

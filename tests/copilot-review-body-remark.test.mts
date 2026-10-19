@@ -8,6 +8,7 @@ import {
   classifyCopilotReviewBody,
   extractCopilotReviewBodyRemark,
   extractPreviouslyMissedItems,
+  extractPreviouslyMissedItemTitles,
   namesFileOrLine,
 } from '../src/scripts/copilot-review-body.mts';
 
@@ -940,4 +941,202 @@ test('namesFileOrLine: a backticked or bold citation counts, plain text does not
     ),
     false,
   );
+});
+
+// #4526: since 2026-10-16 Copilot titles the thread-less section
+// `N previously missed issue(s)` instead of `Previously missed (N)`. The
+// three real bodies below are bot-comment corpus entries; the rest are
+// synthetic bodies that pin the shapes this change must keep.
+
+/** A v2 body whose only sections are the given `<details>` blocks. */
+function v2Body(...sections: string[]): string {
+  return ['<!-- ccr-overview-v2 -->', '', ...sections].join('\n');
+}
+
+/** A Previously missed wrapper titled `title`, holding `items`. */
+function previouslyMissedSection(title: string, ...items: string[]): string {
+  return [
+    '<details>',
+    `<summary><strong>${title}</strong></summary>`,
+    '',
+    "In code that hasn't changed since last review",
+    '',
+    ...items,
+    '</details>',
+  ].join('\n');
+}
+
+/** One Previously missed item titled `title`, with `text` as its body. */
+function previouslyMissedItem(title: string, text: string): string {
+  return [
+    '<details>',
+    `<summary>${title}</summary>`,
+    '',
+    text,
+    '</details>',
+  ].join('\n');
+}
+
+test('the new title: each real corpus body gives the count and the item titles (#4526)', () => {
+  const singular = corpusBody('copilot-v2-new-title-previously-missed-4514');
+  assert.deepEqual(classifyCopilotReviewBody(singular), {
+    shape: 'overview-v2',
+    suppressedCount: 1,
+  });
+  assert.deepEqual(extractPreviouslyMissedItemTitles(singular), [
+    'Recognize Setext headings when validating section boundaries',
+  ]);
+
+  const plural = corpusBody('copilot-v2-new-title-previously-missed-4452');
+  assert.deepEqual(classifyCopilotReviewBody(plural), {
+    shape: 'overview-v2',
+    suppressedCount: 2,
+  });
+  assert.deepEqual(extractPreviouslyMissedItemTitles(plural), [
+    'Distinguish claim loss from unreadable claim failures',
+    'Distinguish claim loss from unreadable claim failures',
+  ]);
+
+  const first = corpusBody('copilot-v2-new-title-previously-missed-4455');
+  assert.deepEqual(classifyCopilotReviewBody(first), {
+    shape: 'overview-v2',
+    suppressedCount: 1,
+  });
+  assert.deepEqual(extractPreviouslyMissedItemTitles(first), [
+    'Preserve proof state when retrying after worktree removal',
+  ]);
+});
+
+test('the new title: the old title still gives the same results (#4526)', () => {
+  assert.deepEqual(
+    classifyCopilotReviewBody(corpusBody('copilot-v2-previously-missed-3196')),
+    { shape: 'overview-v2', suppressedCount: 1 },
+  );
+  assert.deepEqual(
+    classifyCopilotReviewBody(
+      corpusBody('copilot-v2-resolved-and-previously-missed-3174'),
+    ),
+    { shape: 'overview-v2', suppressedCount: 2 },
+  );
+});
+
+test('the new title: open and resolved sections alone are never counted (#4526)', () => {
+  const body = v2Body(
+    '<details open>',
+    '<summary><strong>1 open issue</strong></summary>',
+    '',
+    '- [Fix the parser](https://github.com/o/r/pull/1#discussion_r1) · New',
+    '</details>',
+    '',
+    '<details>',
+    '<summary><strong>2 resolved since last review</strong></summary>',
+    '',
+    '- [Fix the reader](https://github.com/o/r/pull/1#discussion_r2)',
+    '- [Fix the writer](https://github.com/o/r/pull/1#discussion_r3)',
+    '</details>',
+  );
+  assert.deepEqual(classifyCopilotReviewBody(body), {
+    shape: 'overview-v2',
+    suppressedCount: 0,
+  });
+  assert.equal(extractPreviouslyMissedItemTitles(body), null);
+  assert.equal(extractPreviouslyMissedItems(body), null);
+});
+
+test('the new title: a title shown only in a code span or fenced block is not counted (#4526)', () => {
+  const inSpan = v2Body(
+    'Copilot now writes `<summary><strong>1 previously missed issue</strong></summary>`.',
+  );
+  assert.deepEqual(classifyCopilotReviewBody(inSpan), {
+    shape: 'overview-v2',
+    suppressedCount: 0,
+  });
+  const inFence = v2Body(
+    '```html',
+    previouslyMissedSection(
+      '2 previously missed issues',
+      previouslyMissedItem('Fix it', '`src/a.mts:1`'),
+    ),
+    '```',
+  );
+  assert.deepEqual(classifyCopilotReviewBody(inFence), {
+    shape: 'overview-v2',
+    suppressedCount: 0,
+  });
+});
+
+test('the new title: the shapes that gave no item list still give none (#4526)', () => {
+  const section = previouslyMissedSection(
+    '1 previously missed issue',
+    previouslyMissedItem('Rename the helper', 'The name reads poorly.'),
+  );
+  // No ccr-overview-v2 marker at the start of the body.
+  assert.equal(
+    extractPreviouslyMissedItemTitles(`Intro text\n\n${section}`),
+    null,
+  );
+  // A wrapper that never closes.
+  assert.equal(
+    extractPreviouslyMissedItemTitles(
+      v2Body(section.slice(0, section.lastIndexOf('</details>'))),
+    ),
+    null,
+  );
+  // A nested block without its own summary is not an item.
+  const summaryLess = v2Body(
+    previouslyMissedSection(
+      '1 previously missed issue',
+      '<details>\nIntro prose with no item summary.\n</details>',
+    ),
+  );
+  assert.deepEqual(extractPreviouslyMissedItemTitles(summaryLess), []);
+  assert.deepEqual(citationBreakdown(summaryLess, 1), {
+    citedCount: 1,
+    citationFreeCount: 0,
+  });
+});
+
+test('citationBreakdown: a new-title item that names a file is cited (#4526)', () => {
+  const body = corpusBody('copilot-v2-new-title-previously-missed-4514');
+  const { suppressedCount } = classifyCopilotReviewBody(body);
+  assert.deepEqual(citationBreakdown(body, suppressedCount), {
+    citedCount: 1,
+    citationFreeCount: 0,
+  });
+});
+
+test('citationBreakdown: a new-title item that names no file or line is citation-free (#4526)', () => {
+  const body = v2Body(
+    previouslyMissedSection(
+      '1 previously missed issue',
+      previouslyMissedItem(
+        'Rename the helper',
+        'The name reads poorly next to the neighbouring helper.',
+      ),
+    ),
+  );
+  const { suppressedCount } = classifyCopilotReviewBody(body);
+  assert.equal(suppressedCount, 1);
+  assert.deepEqual(citationBreakdown(body, suppressedCount), {
+    citedCount: 0,
+    citationFreeCount: 1,
+  });
+});
+
+test('citationBreakdown: a new-title count with fewer readable items fails closed (#4526)', () => {
+  const body = v2Body(
+    previouslyMissedSection(
+      '2 previously missed issues',
+      previouslyMissedItem(
+        'Rename the helper',
+        'The name reads poorly next to the neighbouring helper.',
+      ),
+    ),
+  );
+  const { suppressedCount } = classifyCopilotReviewBody(body);
+  assert.equal(suppressedCount, 2);
+  assert.deepEqual(citationBreakdown(body, suppressedCount), {
+    citedCount: 2,
+    citationFreeCount: 0,
+  });
 });
