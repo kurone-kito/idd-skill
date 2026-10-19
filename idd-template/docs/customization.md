@@ -50,12 +50,14 @@ comments fails to parse. To use the example:
    sed '/^[[:space:]]*\/\//d' config.example.jsonc > config.from-example.json
    ```
 
-   In PowerShell:
+   In PowerShell 7 or later, which writes UTF-8 without a byte-order mark
+   through `-Encoding utf8NoBOM` (Windows PowerShell 5.1 has no such
+   encoding, and its default output is not UTF-8):
 
    ```powershell
    Get-Content config.example.jsonc |
      Where-Object { $_ -notmatch '^\s*//' } |
-     Set-Content config.from-example.json
+     Set-Content -Encoding utf8NoBOM config.from-example.json
    ```
 
 4. Merge the result into `.github/idd/config.json`. Keep the values that
