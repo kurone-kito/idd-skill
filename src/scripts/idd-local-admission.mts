@@ -685,12 +685,12 @@ function runPueueClient(
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', (chunk: string) => {
-      stdout += chunk;
       if (streamOutput) process.stdout.write(chunk);
+      else stdout += chunk;
     });
     child.stderr?.on('data', (chunk: string) => {
-      stderr += chunk;
       if (streamOutput) process.stderr.write(chunk);
+      else stderr += chunk;
     });
     child.on('error', (error: Error) => {
       if (settled) return;
@@ -933,8 +933,14 @@ function runPueueAdmission(
   const readTask = async (
     taskId: string,
     expectedLabel: string,
+    includeOutput = false,
   ): Promise<PueueTaskSnapshot | null> => {
-    const result = await call(['log', taskId, '--json', '--full']);
+    const result = await call([
+      'log',
+      taskId,
+      '--json',
+      ...(includeOutput ? ['--full'] : []),
+    ]);
     if (!isPueueClientSuccess(result)) return null;
     const task = parsePueueTask(result.stdout, taskId);
     if (task === null || task.label !== expectedLabel) return null;
@@ -960,7 +966,17 @@ function runPueueAdmission(
   const readCheckedTask = async (
     taskId: string,
     label: string,
-  ): Promise<PueueTaskSnapshot | null> => readTask(taskId, label);
+    includeOutput = false,
+  ): Promise<PueueTaskSnapshot | null> =>
+    readTask(taskId, label, includeOutput);
+
+  const readFinishedTask = async (
+    taskId: string,
+    label: string,
+  ): Promise<PueueTaskSnapshot | null> => {
+    const task = await readCheckedTask(taskId, label, true);
+    return task?.state === 'done' ? task : null;
+  };
 
   const work = async (): Promise<number> => {
     if (deps.platform === 'win32') {
@@ -1054,7 +1070,10 @@ function runPueueAdmission(
         return pueueOutcomeUnknown(deps, `task ${taskId}`);
       }
       if (beforeStash.state === 'done') {
-        return finishTask(taskId, beforeStash, true);
+        const finished = await readFinishedTask(taskId, taskLabel);
+        return finished === null
+          ? pueueOutcomeUnknown(deps, `task ${taskId}`)
+          : finishTask(taskId, finished, true);
       }
       if (beforeStash.state === 'running' || beforeStash.state === 'paused') {
         return null;
@@ -1079,7 +1098,10 @@ function runPueueAdmission(
       if (afterStash === null)
         return pueueOutcomeUnknown(deps, `task ${taskId}`);
       if (afterStash.state === 'done') {
-        return finishTask(taskId, afterStash, true);
+        const finished = await readFinishedTask(taskId, taskLabel);
+        return finished === null
+          ? pueueOutcomeUnknown(deps, `task ${taskId}`)
+          : finishTask(taskId, finished, true);
       }
       if (afterStash.state === 'running' || afterStash.state === 'paused') {
         return null;
@@ -1094,7 +1116,12 @@ function runPueueAdmission(
       }
       const task = await readCheckedTask(taskId, taskLabel);
       if (task === null) return pueueOutcomeUnknown(deps, `task ${taskId}`);
-      if (task.state === 'done') return finishTask(taskId, task, true);
+      if (task.state === 'done') {
+        const finished = await readFinishedTask(taskId, taskLabel);
+        return finished === null
+          ? pueueOutcomeUnknown(deps, `task ${taskId}`)
+          : finishTask(taskId, finished, true);
+      }
       if (task.state === 'running' || task.state === 'paused') break;
       const elapsed = Date.now() - startedAt;
       if (elapsed >= maxWaitMs) {
@@ -1160,7 +1187,7 @@ function runPueueAdmission(
       return pueueOutcomeUnknown(deps, `task ${taskId}`);
     }
     const follow = followSignal.value;
-    if (!isPueueClientSuccess(follow)) {
+    if (!isPueueClientSuccess(follow) && pendingSignal === null) {
       cleanupHandlers();
       return pueueOutcomeUnknown(deps, `task ${taskId}`);
     }

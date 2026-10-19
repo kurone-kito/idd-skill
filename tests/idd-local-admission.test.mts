@@ -239,6 +239,10 @@ if (args[0] === 'log') {
   process.exit(0);
 }
 if (args[0] === 'follow') {
+  if (state.followFailAndSignal) {
+    process.kill(process.ppid, 'SIGTERM');
+    process.exit(1);
+  }
   if (state.followHang) {
     save();
     if (state.followReady) fs.writeFileSync(state.followReady, String(process.pid));
@@ -725,13 +729,16 @@ test('win32 bypasses raw-cap validation and runs directly', async () => {
   const h = makeHarness();
   const repo = makeRepo({ localExec: { admission: { maxConcurrent: 9 } } });
   const notes: string[] = [];
-  const status = await runLocalAdmission(['--', 'sh', '-c', 'exit 0'], {
-    env: h.env,
-    cwd: repo,
-    platform: 'win32',
-    stderr: (text) => notes.push(text),
-    findFlock: () => '/usr/bin/flock',
-  });
+  const status = await runLocalAdmission(
+    ['--', process.execPath, '-e', 'process.exit(0)'],
+    {
+      env: h.env,
+      cwd: repo,
+      platform: 'win32',
+      stderr: (text) => notes.push(text),
+      findFlock: () => '/usr/bin/flock',
+    },
+  );
   assert.equal(status, 0);
   assert.equal(notes.length, 1);
   assert.match(notes[0] ?? '', /flock is not available/);
@@ -742,13 +749,16 @@ test('win32 runs the command directly with one notice and never creates the lock
   const h = makeHarness();
   const work = makeWorkDir();
   const notes: string[] = [];
-  const status = await runLocalAdmission(['--', 'sh', '-c', 'exit 0'], {
-    env: h.env,
-    cwd: work,
-    platform: 'win32',
-    stderr: (text) => notes.push(text),
-    findFlock: () => '/usr/bin/flock',
-  });
+  const status = await runLocalAdmission(
+    ['--', process.execPath, '-e', 'process.exit(0)'],
+    {
+      env: h.env,
+      cwd: work,
+      platform: 'win32',
+      stderr: (text) => notes.push(text),
+      findFlock: () => '/usr/bin/flock',
+    },
+  );
   assert.equal(status, 0);
   assert.equal(notes.length, 1);
   assert.equal(existsSync(join(h.state, 'idd-skill')), false);
@@ -879,7 +889,9 @@ test('an admitted command sees IDD_LOCAL_ADMISSION=1, and a set variable skips t
   assert.equal(skipped.status, 0);
 });
 
-test('pueue creates a missing group at the cap and preserves shell argv', async () => {
+test('pueue creates a missing group at the cap and preserves shell argv', {
+  skip: process.platform === 'win32',
+}, async () => {
   const policy = {
     localExec: { admission: { backend: 'pueue', maxConcurrent: 4 } },
   };
@@ -930,7 +942,9 @@ test('pueue creates a missing group at the cap and preserves shell argv', async 
   }
 });
 
-test('pueue creates missing groups at both supported cap endpoints', async () => {
+test('pueue creates missing groups at both supported cap endpoints', {
+  skip: process.platform === 'win32',
+}, async () => {
   for (const cap of [1, 8]) {
     const result = await runPueueTest(
       { localExec: { admission: { backend: 'pueue', maxConcurrent: cap } } },
@@ -1009,7 +1023,9 @@ test('pueue daemon timeout uses flock and a missing client never calls pueue', {
   );
 });
 
-test('pueue cap outside the supported range falls back to one without rewriting policy', async () => {
+test('pueue cap outside the supported range falls back to one without rewriting policy', {
+  skip: process.platform === 'win32',
+}, async () => {
   for (const cap of [12, 2.5]) {
     const policy = {
       localExec: { admission: { backend: 'pueue', maxConcurrent: cap } },
@@ -1034,7 +1050,9 @@ test('pueue cap outside the supported range falls back to one without rewriting 
   }
 });
 
-test('pueue uses an existing group, reports its cap and paused state, and works without flock', async () => {
+test('pueue uses an existing group, reports its cap and paused state, and works without flock', {
+  skip: process.platform === 'win32',
+}, async () => {
   const result = await runPueueTest(
     { localExec: { admission: { backend: 'pueue', maxConcurrent: 3 } } },
     {
@@ -1115,7 +1133,9 @@ test('pueue create race rereads a group; a missing or unreadable group falls bac
   );
 });
 
-test('pueue add uncertainty never falls back or submits a second task', async () => {
+test('pueue add uncertainty never falls back or submits a second task', {
+  skip: process.platform === 'win32',
+}, async () => {
   const policy = { localExec: { admission: { backend: 'pueue' } } };
   for (const scenario of [{ addExit: 1 }, { addOutput: 'not-an-id' }]) {
     const result = await runPueueTest(policy, scenario, ['true'], {
@@ -1142,7 +1162,9 @@ test('pueue add uncertainty never falls back or submits a second task', async ()
   assert.match(timeout.stderr, /outcome unknown \(label idd-local-admission-/);
 });
 
-test('pueue log reads only the requested task-ID entry from the JSON response', async () => {
+test('pueue log reads only the requested task-ID entry from the JSON response', {
+  skip: process.platform === 'win32',
+}, async () => {
   const policy = { localExec: { admission: { backend: 'pueue' } } };
   const result = await runPueueTest(policy, { logEnvelopeId: '18' }, ['true'], {
     findFlock: () => null,
@@ -1152,12 +1174,38 @@ test('pueue log reads only the requested task-ID entry from the JSON response', 
   const calls = readFakePueue(result.fake).calls as string[][];
   assert.ok(calls.some((call) => call[0] === 'log' && call[1] === '17'));
   assert.equal(
+    calls.some((call) => call[0] === 'log' && call.includes('--full')),
+    false,
+  );
+  assert.equal(
     calls.some((call) => call[0] === 'remove'),
     false,
   );
 });
 
-test('pueue returns command status, reports results without exit codes, and tolerates removal failure', async () => {
+test('pueue fetches full output only for a task already finished', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const h = makeHarness();
+  const repo = makeRepo({ localExec: { admission: { backend: 'pueue' } } });
+  const fake = makeFakePueue(h.env, {
+    initialStatus: { Done: { Success: null } },
+    taskOutput: 'finished before follow\n',
+  });
+  const result = await runBin(['--', 'true'], repo, fake.env).done;
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'finished before follow\n');
+  const logCalls = (readFakePueue(fake).calls as string[][]).filter(
+    (call) => call[0] === 'log',
+  );
+  assert.equal(logCalls.length, 2);
+  assert.equal(logCalls[0]?.includes('--full'), false);
+  assert.equal(logCalls[1]?.includes('--full'), true);
+});
+
+test('pueue returns command status, reports results without exit codes, and tolerates removal failure', {
+  skip: process.platform === 'win32',
+}, async () => {
   const policy = { localExec: { admission: { backend: 'pueue' } } };
   const cases = [
     { status: { Done: { Success: null } }, expected: 0 },
@@ -1256,7 +1304,9 @@ test('pueue follow keeps client stderr separate from task output', {
   assert.match(result.stderr, /pueue diagnostic/);
 });
 
-test('pueue state read failures and task-label mismatches are outcome unknown without task actions', async () => {
+test('pueue state read failures and task-label mismatches are outcome unknown without task actions', {
+  skip: process.platform === 'win32',
+}, async () => {
   const policy = { localExec: { admission: { backend: 'pueue' } } };
   const readFailure = await runPueueTest(policy, { logExit: 1 }, ['true'], {
     findFlock: () => null,
@@ -1311,7 +1361,9 @@ test('pueue state read failures and task-label mismatches are outcome unknown wi
   assert.equal(disappeared.status, 3);
 });
 
-test('pueue follow failure and early stream end leave a running task outcome unknown', async () => {
+test('pueue follow failure and early stream end leave a running task outcome unknown', {
+  skip: process.platform === 'win32',
+}, async () => {
   const policy = { localExec: { admission: { backend: 'pueue' } } };
   const followFailure = await runPueueTest(
     policy,
@@ -1346,17 +1398,45 @@ test('pueue follow failure and early stream end leave a running task outcome unk
   assert.equal(resultReadFailure.status, 3);
 });
 
+test('a failed pueue follow racing with SIGTERM still kills and removes the task', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const h = makeHarness();
+  const repo = makeRepo({ localExec: { admission: { backend: 'pueue' } } });
+  const fake = makeFakePueue(h.env, {
+    initialStatus: 'Running',
+    followFailAndSignal: true,
+  });
+  const result = await runBin(['--', 'true'], repo, fake.env).done;
+  assert.equal(result.status, 143, result.stderr);
+  const calls = readFakePueue(fake).calls as string[][];
+  assert.ok(calls.some((call) => call[0] === 'kill' && call[1] === '17'));
+  assert.ok(calls.some((call) => call[0] === 'remove' && call[1] === '17'));
+});
+
 test('win32 pueue configuration keeps the direct-run behavior with one notice', async () => {
-  const result = await runPueueTest(
-    { localExec: { admission: { backend: 'pueue' } } },
-    {},
-    ['true'],
-    { platform: 'win32' },
+  const h = makeHarness();
+  const repo = makeRepo({ localExec: { admission: { backend: 'pueue' } } });
+  const notes: string[] = [];
+  const spawnCalls: string[] = [];
+  const status = await runLocalAdmission(
+    ['--', process.execPath, '-e', 'process.exit(0)'],
+    {
+      env: h.env,
+      cwd: repo,
+      platform: 'win32',
+      stderr: (text) => notes.push(text),
+      findPueue: () => null,
+      spawn: (command, args, options) => {
+        spawnCalls.push(command);
+        return spawn(command, args, options);
+      },
+    },
   );
-  assert.equal(result.status, 0);
-  assert.equal(result.stderr.trim().split('\n').length, 1);
-  assert.match(result.stderr, /unavailable on win32/);
-  assert.deepEqual(readFakePueue(result.fake).calls, []);
+  assert.equal(status, 0);
+  assert.equal(notes.length, 1);
+  assert.match(notes[0] ?? '', /unavailable on win32/);
+  assert.deepEqual(spawnCalls, [process.execPath]);
 });
 
 test('signals before add stop the client call and submit no task', {
@@ -1535,6 +1615,25 @@ test('a signal while running kills the pueue task; failed kill exits even if fol
     calls2.some((call) => call[0] === 'remove' && call[1] === '17'),
     false,
   );
+
+  const h3 = makeHarness();
+  const repo3 = makeRepo(policy);
+  const ready3 = join(h3.state, 'follow.pid');
+  const fake3 = makeFakePueue(h3.env, {
+    initialStatus: 'Running',
+    followHang: true,
+    followDrainDelay: 100,
+    followExit: 1,
+    followReady: ready3,
+  });
+  const run3 = runBin(['--', 'true'], repo3, fake3.env);
+  await waitFor(() => existsSync(ready3));
+  run3.child.kill('SIGTERM');
+  const result3 = await run3.done;
+  assert.equal(result3.status, 143, result3.stderr);
+  const calls3 = readFakePueue(fake3).calls as string[][];
+  assert.ok(calls3.some((call) => call[0] === 'kill' && call[1] === '17'));
+  assert.ok(calls3.some((call) => call[0] === 'remove' && call[1] === '17'));
 });
 
 test('a signal after the task finishes lets pueue follow drain its remaining output', {

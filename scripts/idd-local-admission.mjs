@@ -564,12 +564,12 @@ function runPueueClient(
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', (chunk) => {
-      stdout += chunk;
       if (streamOutput) process.stdout.write(chunk);
+      else stdout += chunk;
     });
     child.stderr?.on('data', (chunk) => {
-      stderr += chunk;
       if (streamOutput) process.stderr.write(chunk);
+      else stderr += chunk;
     });
     child.on('error', (error) => {
       if (settled) return;
@@ -763,8 +763,13 @@ function runPueueAdmission(command, admission, raw, deps) {
     deps.stderr(`local-admission: pueue ${reason}; using the flock path\n`);
     return runFlockAdmission(command, raw, deps, false);
   };
-  const readTask = async (taskId, expectedLabel) => {
-    const result = await call(['log', taskId, '--json', '--full']);
+  const readTask = async (taskId, expectedLabel, includeOutput = false) => {
+    const result = await call([
+      'log',
+      taskId,
+      '--json',
+      ...(includeOutput ? ['--full'] : []),
+    ]);
     if (!isPueueClientSuccess(result)) return null;
     const task = parsePueueTask(result.stdout, taskId);
     if (task === null || task.label !== expectedLabel) return null;
@@ -783,7 +788,12 @@ function runPueueAdmission(command, admission, raw, deps) {
     await removeTask(taskId);
     return status;
   };
-  const readCheckedTask = async (taskId, label) => readTask(taskId, label);
+  const readCheckedTask = async (taskId, label, includeOutput = false) =>
+    readTask(taskId, label, includeOutput);
+  const readFinishedTask = async (taskId, label) => {
+    const task = await readCheckedTask(taskId, label, true);
+    return task?.state === 'done' ? task : null;
+  };
   const work = async () => {
     if (deps.platform === 'win32') {
       deps.stderr(
@@ -874,7 +884,10 @@ function runPueueAdmission(command, admission, raw, deps) {
         return pueueOutcomeUnknown(deps, `task ${taskId}`);
       }
       if (beforeStash.state === 'done') {
-        return finishTask(taskId, beforeStash, true);
+        const finished = await readFinishedTask(taskId, taskLabel);
+        return finished === null
+          ? pueueOutcomeUnknown(deps, `task ${taskId}`)
+          : finishTask(taskId, finished, true);
       }
       if (beforeStash.state === 'running' || beforeStash.state === 'paused') {
         return null;
@@ -899,7 +912,10 @@ function runPueueAdmission(command, admission, raw, deps) {
       if (afterStash === null)
         return pueueOutcomeUnknown(deps, `task ${taskId}`);
       if (afterStash.state === 'done') {
-        return finishTask(taskId, afterStash, true);
+        const finished = await readFinishedTask(taskId, taskLabel);
+        return finished === null
+          ? pueueOutcomeUnknown(deps, `task ${taskId}`)
+          : finishTask(taskId, finished, true);
       }
       if (afterStash.state === 'running' || afterStash.state === 'paused') {
         return null;
@@ -914,7 +930,12 @@ function runPueueAdmission(command, admission, raw, deps) {
       }
       const task = await readCheckedTask(taskId, taskLabel);
       if (task === null) return pueueOutcomeUnknown(deps, `task ${taskId}`);
-      if (task.state === 'done') return finishTask(taskId, task, true);
+      if (task.state === 'done') {
+        const finished = await readFinishedTask(taskId, taskLabel);
+        return finished === null
+          ? pueueOutcomeUnknown(deps, `task ${taskId}`)
+          : finishTask(taskId, finished, true);
+      }
       if (task.state === 'running' || task.state === 'paused') break;
       const elapsed = Date.now() - startedAt;
       if (elapsed >= maxWaitMs) {
@@ -980,7 +1001,7 @@ function runPueueAdmission(command, admission, raw, deps) {
       return pueueOutcomeUnknown(deps, `task ${taskId}`);
     }
     const follow = followSignal.value;
-    if (!isPueueClientSuccess(follow)) {
+    if (!isPueueClientSuccess(follow) && pendingSignal === null) {
       cleanupHandlers();
       return pueueOutcomeUnknown(deps, `task ${taskId}`);
     }
