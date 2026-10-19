@@ -992,6 +992,48 @@ test('a git older than 2.44 is refused before anything is signed', async () => {
   assert.deepEqual(remoteTags(fx), []);
 });
 
+test('a signing setting that cannot be read is refused, not read as unset', async () => {
+  const unreadable: CommandResult = {
+    status: 3,
+    signal: null,
+    stdout: '',
+    stderr: 'fatal: bad config line 1',
+  };
+  const stalled: CommandResult = {
+    status: null,
+    signal: null,
+    stdout: '',
+    stderr: '',
+    timedOut: true,
+    termination: {
+      recorded: [],
+      survivors: [],
+      waitedMs: 0,
+      pidRecorded: true,
+      listingAvailable: true,
+    },
+  };
+  for (const [result, name] of [
+    [unreadable, 'signing-config-unreadable'],
+    [stalled, 'command-timeout'],
+  ] as const) {
+    const fx = makeFixture();
+    const { deps, calls } = harness(fx, {
+      wrap: async (request) =>
+        request.args[0] === 'config' && request.args[2] === 'gpg.format'
+          ? result
+          : null,
+    });
+    const outcome = await runReleaseTag(
+      releaseInput(fx, { apply: true }),
+      deps,
+    );
+    assertRefused(outcome, name);
+    assert.deepEqual(gitCalls(calls, 'tag'), []);
+    assert.deepEqual(localTags(fx), []);
+  }
+});
+
 test('a broken signer leaves no tag and no unsigned tag', async () => {
   const fx = makeFixture();
   const signer = writeStub(

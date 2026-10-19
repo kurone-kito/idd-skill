@@ -146,6 +146,7 @@ export type ReleaseTagRefusalName =
   | 'local-tag-unreadable'
   | 'local-tag-conflict'
   | 'git-version-unsupported'
+  | 'signing-config-unreadable'
   | 'signing-failed'
   | 'signing-timeout'
   | 'created-tag-invalid'
@@ -1773,9 +1774,33 @@ function signatureKind(body: string): SignatureKind {
   return 'none';
 }
 
-async function configValue(ctx: Context, key: string): Promise<string | null> {
+/**
+ * One git setting: its value, or null when it is unset (`git config --get`
+ * exits 1). A timeout refuses by the timeout precedence, and any other failure
+ * refuses, so an unreadable setting never reads as an unset one.
+ */
+async function configValue(
+  ctx: Context,
+  step: ReleaseTagPreconditionName | ReleaseTagEffectName,
+  key: string,
+): Promise<string | null> {
   const result = await git(ctx, ['config', '--get', key]);
-  if (result.status !== 0) return null;
+  if (result.timedOut === true) {
+    throw timeoutRefusal(
+      step,
+      result,
+      'command-timeout',
+      `${key} could not be read`,
+    );
+  }
+  if (result.status === 1) return null;
+  if (result.status !== 0) {
+    throw new Refused(
+      step,
+      'signing-config-unreadable',
+      withDetail(`${key} could not be read`, failureDetail(result)),
+    );
+  }
   const value = result.stdout.trim();
   return value === '' ? null : value;
 }
@@ -1783,17 +1808,18 @@ async function configValue(ctx: Context, key: string): Promise<string | null> {
 /** The signing programs git runs for a signature format. */
 async function signerPrograms(
   ctx: Context,
+  step: ReleaseTagPreconditionName | ReleaseTagEffectName,
   kind: SignatureKind,
 ): Promise<string[]> {
   if (kind === 'ssh') {
-    return [(await configValue(ctx, 'gpg.ssh.program')) ?? 'ssh-keygen'];
+    return [(await configValue(ctx, step, 'gpg.ssh.program')) ?? 'ssh-keygen'];
   }
   if (kind === 'x509') {
-    return [(await configValue(ctx, 'gpg.x509.program')) ?? 'gpgsm'];
+    return [(await configValue(ctx, step, 'gpg.x509.program')) ?? 'gpgsm'];
   }
   const set = [
-    await configValue(ctx, 'gpg.openpgp.program'),
-    await configValue(ctx, 'gpg.program'),
+    await configValue(ctx, step, 'gpg.openpgp.program'),
+    await configValue(ctx, step, 'gpg.program'),
   ].filter((value): value is string => value !== null);
   return set.length > 0 ? [...new Set(set)] : ['gpg'];
 }
@@ -1820,7 +1846,7 @@ async function signatureProblem(
       'verify-tag',
       object,
     ],
-    await signerPrograms(ctx, kind),
+    await signerPrograms(ctx, step, kind),
   );
   if (result.timedOut === true) {
     throw timeoutRefusal(
@@ -1972,7 +1998,7 @@ async function checkSigningGit(ctx: Context): Promise<void> {
 
 async function createTag(ctx: Context): Promise<string> {
   const step = 'create-tag';
-  const format = (await configValue(ctx, 'gpg.format')) ?? 'openpgp';
+  const format = (await configValue(ctx, step, 'gpg.format')) ?? 'openpgp';
   const kind: SignatureKind =
     format === 'ssh' ? 'ssh' : format === 'x509' ? 'x509' : 'openpgp';
   const result = await git(
@@ -1985,7 +2011,7 @@ async function createTag(ctx: Context): Promise<string> {
       ctx.input.tag,
       ctx.input.sha,
     ],
-    await signerPrograms(ctx, kind),
+    await signerPrograms(ctx, step, kind),
   );
   if (result.timedOut === true) {
     throw timeoutRefusal(
