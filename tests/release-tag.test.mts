@@ -576,6 +576,40 @@ test('a malformed gate label in the policy is refused', async () => {
   );
 });
 
+test('the gate-label policy read runs under the time bound', async () => {
+  const fx = makeFixture();
+  const { deps, calls } = harness(fx, {
+    wrap: async (request) =>
+      request.args[0] === 'worktree'
+        ? {
+            status: null,
+            signal: null,
+            stdout: '',
+            stderr: '',
+            timedOut: true,
+            termination: {
+              recorded: [4242],
+              survivors: [
+                { pid: 4242, args: 'git worktree list', signer: false },
+              ],
+              waitedMs: 5,
+              pidRecorded: true,
+              listingAvailable: true,
+            },
+          }
+        : null,
+  });
+  const outcome = await runReleaseTag(releaseInput(fx), deps);
+  assertRefused(outcome, 'process-survivor');
+  assert.deepEqual(outcome.report.refusal?.processes?.recorded, [4242]);
+  assert.deepEqual(
+    calls.filter((call) => call.kind === 'gh'),
+    [],
+  );
+  assert.equal(outcome.report.preconditions[2]?.name, 'release-issue');
+  assert.equal(outcome.report.preconditions[2]?.status, 'failed');
+});
+
 test('a pull request that is not merged, or merged as another commit, is refused', async () => {
   for (const [gh, name] of [
     [{ pullRequestState: 'OPEN' }, 'pull-request-not-merged'],

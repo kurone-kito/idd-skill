@@ -29,12 +29,11 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { realpathSync, statSync } from 'node:fs';
 import { basename, isAbsolute, resolve } from 'node:path';
-import {
-  readPrimaryPolicy,
-  runProductionCommand as runClaimedPushCommand,
-} from './claimed-push.mjs';
+import { runProductionCommand as runClaimedPushCommand } from './claimed-push.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { isNotDispatchedRefusal } from './github-api-refusal.mjs';
+import { loadLayeredLocalPolicy } from './idd-config.mjs';
+import { parseLocalWorktreeList } from './local-worktree-occupancy.mjs';
 import {
   inspectDevelopmentBranch,
   normalizePolicyConfig,
@@ -641,7 +640,23 @@ export function createReleaseTagDeps(options = {}) {
         { ...bounded, signerPrograms: request.signerPrograms ?? [] },
       );
     },
-    readPolicy: (cwd) => readPrimaryPolicy(cwd, { env }),
+    readPolicy: (primary) => {
+      try {
+        const loaded = loadLayeredLocalPolicy({ cwd: primary, env });
+        if (loaded.local.diagnostic !== undefined) {
+          return {
+            ok: false,
+            reason: `the repository policy of the primary checkout ${primary} is unreadable: ${loaded.local.diagnostic}`,
+          };
+        }
+        return { ok: true, policy: loaded.config ?? null };
+      } catch (error) {
+        return {
+          ok: false,
+          reason: `the policy could not be read: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    },
     isRegularFile: (path) => {
       try {
         return statSync(path).isFile();
@@ -934,7 +949,28 @@ async function checkRepository(ctx) {
 }
 async function checkReleaseIssue(ctx, slug) {
   const step = 'release-issue';
-  const policy = ctx.deps.readPolicy(ctx.input.cwd);
+  const listing = await gitRead(
+    ctx,
+    step,
+    ['worktree', 'list', '--porcelain', '-z'],
+    'policy-unreadable',
+    'git worktree list could not be read',
+  );
+  let primary;
+  try {
+    const main = parseLocalWorktreeList(listing.stdout)[0];
+    primary = main === undefined || main.bare ? undefined : main.path;
+  } catch {
+    primary = undefined;
+  }
+  if (primary === undefined || primary === '') {
+    throw new Refused(
+      step,
+      'policy-unreadable',
+      'git worktree list names no primary checkout',
+    );
+  }
+  const policy = ctx.deps.readPolicy(primary);
   if (!policy.ok) {
     throw new Refused(step, 'policy-unreadable', policy.reason);
   }

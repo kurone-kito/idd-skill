@@ -34,11 +34,12 @@ import { basename, isAbsolute, resolve } from 'node:path';
 import {
   type CommandResult as ClaimedPushCommandResult,
   type PolicyRead,
-  readPrimaryPolicy,
   runProductionCommand as runClaimedPushCommand,
 } from './claimed-push.mts';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { isNotDispatchedRefusal } from './github-api-refusal.mts';
+import { loadLayeredLocalPolicy } from './idd-config.mts';
+import { parseLocalWorktreeList } from './local-worktree-occupancy.mts';
 import {
   inspectDevelopmentBranch,
   normalizePolicyConfig,
@@ -335,8 +336,12 @@ export interface ReleaseTagDeps {
   run: ReleaseTagRunner;
   /** The environment the git children get; `GH_REPO` is read from it. */
   env: NodeJS.ProcessEnv;
-  /** The primary checkout's layered policy, never a worktree's copy. */
-  readPolicy: (cwd: string) => PolicyRead;
+  /**
+   * The layered policy of the primary checkout at `primary`. The core finds
+   * that path with a bounded `git worktree list`, so a worktree's own copy
+   * of the policy is never read.
+   */
+  readPolicy: (primary: string) => PolicyRead;
   isRegularFile: (path: string) => boolean;
   /** The `gh --repo` value for `origin`, or null when there is none. */
   ghRepositorySlug: (identity: RepositoryIdentity) => string | null;
@@ -958,7 +963,23 @@ export function createReleaseTagDeps(
         { ...bounded, signerPrograms: request.signerPrograms ?? [] },
       );
     },
-    readPolicy: (cwd) => readPrimaryPolicy(cwd, { env }),
+    readPolicy: (primary) => {
+      try {
+        const loaded = loadLayeredLocalPolicy({ cwd: primary, env });
+        if (loaded.local.diagnostic !== undefined) {
+          return {
+            ok: false,
+            reason: `the repository policy of the primary checkout ${primary} is unreadable: ${loaded.local.diagnostic}`,
+          };
+        }
+        return { ok: true, policy: loaded.config ?? null };
+      } catch (error) {
+        return {
+          ok: false,
+          reason: `the policy could not be read: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    },
     isRegularFile: (path) => {
       try {
         return statSync(path).isFile();
@@ -1317,7 +1338,28 @@ async function checkRepository(ctx: Context): Promise<string> {
 
 async function checkReleaseIssue(ctx: Context, slug: string): Promise<void> {
   const step = 'release-issue';
-  const policy = ctx.deps.readPolicy(ctx.input.cwd);
+  const listing = await gitRead(
+    ctx,
+    step,
+    ['worktree', 'list', '--porcelain', '-z'],
+    'policy-unreadable',
+    'git worktree list could not be read',
+  );
+  let primary: string | undefined;
+  try {
+    const main = parseLocalWorktreeList(listing.stdout)[0];
+    primary = main === undefined || main.bare ? undefined : main.path;
+  } catch {
+    primary = undefined;
+  }
+  if (primary === undefined || primary === '') {
+    throw new Refused(
+      step,
+      'policy-unreadable',
+      'git worktree list names no primary checkout',
+    );
+  }
+  const policy = ctx.deps.readPolicy(primary);
   if (!policy.ok) {
     throw new Refused(step, 'policy-unreadable', policy.reason);
   }
