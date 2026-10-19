@@ -761,7 +761,9 @@ async function terminateTree(
   }
   for (const entry of recorded) signalTerm(entry.pid);
 
-  const started = Date.now();
+  // A monotonic clock: a wall-clock step (seen on WSL2) must not stretch or
+  // cut the shared wait.
+  const started = performance.now();
   const deadline = started + options.sharedWaitMs;
   let alive = recorded;
   let listingAvailable = true;
@@ -775,7 +777,7 @@ async function terminateTree(
       alive = recorded.filter((entry) => live.has(entry.pid));
       if (alive.length === 0) break;
     }
-    const remaining = deadline - Date.now();
+    const remaining = deadline - performance.now();
     if (remaining <= 0) break;
     await delay(Math.min(options.pollIntervalMs, remaining));
   }
@@ -789,7 +791,7 @@ async function terminateTree(
         options.signerPrograms.length > 0 &&
         namesProgram(entry.args, options.signerPrograms),
     })),
-    waitedMs: Date.now() - started,
+    waitedMs: Math.round(performance.now() - started),
     pidRecorded: true,
     listingAvailable,
   };
