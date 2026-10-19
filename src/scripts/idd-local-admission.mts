@@ -770,7 +770,10 @@ function parsePueueTask(
     const state = stateMap[statusName];
     if (state === undefined) return null;
     const doneValue = isRecord(statusValue) ? statusValue.Done : undefined;
-    const resultValue = isRecord(doneValue) ? doneValue.result : undefined;
+    const resultValue =
+      isRecord(doneValue) && Object.hasOwn(doneValue, 'result')
+        ? doneValue.result
+        : doneValue;
     const resultName = enumName(resultValue);
     let exitCode: number | undefined;
     const failedValue = isRecord(resultValue) ? resultValue.Failed : undefined;
