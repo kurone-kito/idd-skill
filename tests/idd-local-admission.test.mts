@@ -115,6 +115,47 @@ const taskId = args[1];
 state.calls.push(args);
 const task = (id) => state.tasks?.[id];
 const output = (value) => process.stdout.write(value);
+const timestamp = '2026-10-19T00:00:00+00:00';
+const wireStatus = (status) => {
+  if (typeof status === 'string') {
+    if (status === 'Queued') {
+      return { Queued: { enqueued_at: timestamp } };
+    }
+    if (status === 'Running' || status === 'Paused') {
+      return { [status]: { enqueued_at: timestamp, start: timestamp } };
+    }
+    if (status === 'Stashed') return { Stashed: { enqueue_at: null } };
+    if (status === 'Locked') {
+      return { Locked: { previous_status: { Queued: { enqueued_at: timestamp } } } };
+    }
+    return status;
+  }
+  if (
+    !status ||
+    typeof status !== 'object' ||
+    !status.Done ||
+    typeof status.Done !== 'object'
+  ) {
+    return status;
+  }
+  const done = status.Done;
+  const variant = Object.keys(done).find(
+    (key) => !['enqueued_at', 'start', 'end', 'result'].includes(key),
+  );
+  let result = done.result;
+  if (result === undefined && variant) {
+    const value = done[variant];
+    result = value === null ? variant : { [variant]: value };
+  }
+  return {
+    Done: {
+      enqueued_at: done.enqueued_at ?? timestamp,
+      start: done.start ?? timestamp,
+      end: done.end ?? timestamp,
+      result,
+    },
+  };
+};
 if (args[0] === 'status') {
   if (state.statusHang) { save(); if (state.statusReady) fs.writeFileSync(state.statusReady, 'ready'); setInterval(() => {}, 1000); }
   output(state.statusOutput ?? '{}');
@@ -176,7 +217,20 @@ if (args[0] === 'log') {
   const responses = state.logResponses?.[taskId] ?? state.logResponses;
   if (responses?.length) value.status = responses.shift();
   save();
-  output(JSON.stringify({ task: { id: Number(taskId), label: value.label, status: value.status }, output: value.output }));
+  const envelopeId = String(state.logEnvelopeId ?? taskId);
+  const taskIdInResponse = Number(state.logTaskId ?? taskId);
+  output(
+    JSON.stringify({
+      [envelopeId]: {
+        task: {
+          id: taskIdInResponse,
+          label: value.label,
+          status: wireStatus(value.status),
+        },
+        output: value.output,
+      },
+    }),
+  );
   process.exit(0);
 }
 if (args[0] === 'follow') {
@@ -1065,13 +1119,31 @@ test('pueue add uncertainty never falls back or submits a second task', async ()
   assert.match(timeout.stderr, /outcome unknown \(label idd-local-admission-/);
 });
 
+test('pueue log reads only the requested task-ID entry from the JSON response', async () => {
+  const policy = { localExec: { admission: { backend: 'pueue' } } };
+  const result = await runPueueTest(policy, { logEnvelopeId: '18' }, ['true'], {
+    findFlock: () => null,
+  });
+  assert.equal(result.status, 3);
+  assert.match(result.stderr, /pueue task outcome unknown \(task 17\)/);
+  const calls = readFakePueue(result.fake).calls as string[][];
+  assert.ok(calls.some((call) => call[0] === 'log' && call[1] === '17'));
+  assert.equal(
+    calls.some((call) => call[0] === 'remove'),
+    false,
+  );
+});
+
 test('pueue returns command status, reports results without exit codes, and tolerates removal failure', async () => {
   const policy = { localExec: { admission: { backend: 'pueue' } } };
   const cases = [
     { status: { Done: { Success: null } }, expected: 0 },
     { status: { Done: { Failed: 23 } }, expected: 23 },
     { status: { Done: { Failed: 75 } }, expected: 75 },
-    { status: { Done: { FailedToSpawn: null } }, expected: 126 },
+    {
+      status: { Done: { FailedToSpawn: 'could not spawn command' } },
+      expected: 126,
+    },
     { status: { Done: { Killed: null } }, expected: 1 },
     { status: { Done: { Errored: null } }, expected: 1 },
     { status: { Done: { DependencyFailed: null } }, expected: 1 },

@@ -604,11 +604,14 @@ function enumName(value) {
   }
   return null;
 }
-function parsePueueTask(output) {
+function parsePueueTask(output, expectedTaskId) {
   try {
     const root = JSON.parse(output);
     if (!isRecord(root)) return null;
-    const task = isRecord(root.task) ? root.task : root;
+    const entry = isRecord(root[expectedTaskId]) ? root[expectedTaskId] : root;
+    if (!isRecord(entry.task)) return null;
+    const task = entry.task;
+    if (String(task.id) !== expectedTaskId) return null;
     const label = typeof task.label === 'string' ? task.label : '';
     const statusValue = task.status;
     const statusName = enumName(statusValue);
@@ -624,17 +627,19 @@ function parsePueueTask(output) {
     const state = stateMap[statusName];
     if (state === undefined) return null;
     const doneValue = isRecord(statusValue) ? statusValue.Done : undefined;
-    const resultName = enumName(doneValue);
+    const resultValue = isRecord(doneValue) ? doneValue.result : undefined;
+    const resultName = enumName(resultValue);
     let exitCode;
-    if (isRecord(doneValue) && typeof doneValue.Failed === 'number') {
-      exitCode = doneValue.Failed;
-    } else if (isRecord(doneValue) && isRecord(doneValue.Failed)) {
-      const maybeCode = doneValue.Failed.exit_code ?? doneValue.Failed.code;
+    const failedValue = isRecord(resultValue) ? resultValue.Failed : undefined;
+    if (typeof failedValue === 'number') {
+      exitCode = failedValue;
+    } else if (isRecord(failedValue)) {
+      const maybeCode = failedValue.exit_code ?? failedValue.code;
       if (typeof maybeCode === 'number') exitCode = maybeCode;
     }
     if (resultName === 'success') exitCode = 0;
     const outputText =
-      typeof root.output === 'string' ? root.output : undefined;
+      typeof entry.output === 'string' ? entry.output : undefined;
     return {
       label,
       state,
@@ -757,7 +762,7 @@ function runPueueAdmission(command, admission, raw, deps) {
   const readTask = async (taskId, expectedLabel) => {
     const result = await call(['log', taskId, '--json', '--full']);
     if (!isPueueClientSuccess(result)) return null;
-    const task = parsePueueTask(result.stdout);
+    const task = parsePueueTask(result.stdout, taskId);
     if (task === null || task.label !== expectedLabel) return null;
     return task;
   };
