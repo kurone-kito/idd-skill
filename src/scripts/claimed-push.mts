@@ -14,9 +14,12 @@
 // since its branch point, so an over-scope branch stops before the push. The
 // helper never forces, never retries, and never creates a commit. Every child
 // process runs through an injectable runner, so a test can stub the claim
-// assert, every git and gh read, the audit, the gate, and the push.
+// assert, every git and gh read, the audit, the gate, and the push. The gate
+// is the only child that runs through host-local admission (issue #4525): the
+// payload's own `idd-local-admission -- /bin/sh -c <gate>`, except on Windows,
+// where it runs in a shell directly as before.
 
-import { spawnSync } from 'node:child_process';
+import { type SpawnSyncOptions, spawnSync } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 
@@ -62,6 +65,21 @@ const CLAIM_ASSERT_SCRIPT = 'resume-claim-routing.mjs';
 
 /** The scope check runs the existing authored-issue audit as it stands. */
 const AUDIT_SCRIPT = 'audit-authored-issue.mjs';
+
+/** The gate runs through the payload's own host-local admission helper. */
+const LOCAL_ADMISSION_SCRIPT = 'idd-local-admission.mjs';
+
+/**
+ * The shell the admitted gate string goes to, as one argv element after `-c`.
+ * It is the shell `shell: true` uses on POSIX, so the string parses as before.
+ */
+const GATE_SHELL = '/bin/sh';
+
+/** Exit status of an admission wait that reached `maxWait` (issue #4428). */
+const ADMISSION_EXPIRED_STATUS = 75;
+
+/** Exit status of an admission refusal, or of a stop it could not deliver. */
+const ADMISSION_REFUSED_STATUS = 2;
 
 /** The one audit finding the scope step reads. */
 const EFFORT_FINDING_ID = 'effort-candidate-file-limit';
@@ -129,6 +147,10 @@ const NEXT_ACTION = {
   commitThenRerun: 'stage and commit, then rerun',
   fixThenRerun: 'fix the failure, commit, and rerun',
   configureGate: 'configure the command or run the written gate by hand',
+  admissionExpired:
+    'if the stderr above has a "local-admission: expired" line (a helper error envelope JSON line can follow it), the gate did not start: report it, and do not rerun the helper or push by hand; otherwise the gate itself exited 75: fix the failure, commit, and rerun',
+  admissionRefused:
+    'if the stderr above has a "local-admission:" line that ends with "command not started" (admission refused before the gate started) or says the lock stays held until the command exits (the gate started and could not be stopped), stop and report without changing the repository policy, and do not rerun; otherwise the gate itself exited 2: fix the failure, commit, and rerun',
   commitOrDiscard: 'commit or discard what the gate changed, then rerun',
   rerunForHead: 'rerun the helper so the gate sees the new HEAD',
   readGitError: 'read the git error in the worktree and fix it, then rerun',
@@ -171,7 +193,19 @@ export type CommandRequest =
       args: readonly string[];
       cwd: string;
     }
-  | { kind: 'gate'; command: string; cwd: string };
+  | GateRequest;
+
+/** The configured `commands.pre-push-validate`, run in the worktree. */
+export interface GateRequest {
+  kind: 'gate';
+  command: string;
+  cwd: string;
+  /**
+   * True: run as one `idd-local-admission -- /bin/sh -c <command>` child.
+   * False (Windows): run the command in a shell directly, as before #4525.
+   */
+  admission: boolean;
+}
 
 export type CommandRunner = (request: CommandRequest) => CommandResult;
 
@@ -192,6 +226,11 @@ export type BaseTextRead =
 
 export interface ClaimedPushDeps {
   run: CommandRunner;
+  /**
+   * The platform that routes the gate: every platform but `win32` runs it
+   * through `idd-local-admission`, which never takes the lock on `win32`.
+   */
+  platform: NodeJS.Platform;
   /** Canonical path, or null when the path cannot be resolved. */
   realpath: (path: string) => string | null;
   /** The effective `commands.pre-push-validate`, read for this worktree. */
@@ -1281,6 +1320,24 @@ function checkCleanTree(
   );
 }
 
+/**
+ * The next action for a gate that exited non-zero. The helper cannot read the
+ * admission's stderr lines (they stream to this process's stderr with the
+ * gate's output), so for the two statuses `idd-local-admission` also returns
+ * for its own outcomes, the next action names the line that tells them from
+ * the gate's own status (core "Admission expiry": bare `75` is command
+ * status).
+ */
+function gateFailureAction(admission: boolean, status: number): string {
+  if (admission && status === ADMISSION_EXPIRED_STATUS) {
+    return NEXT_ACTION.admissionExpired;
+  }
+  if (admission && status === ADMISSION_REFUSED_STATUS) {
+    return NEXT_ACTION.admissionRefused;
+  }
+  return NEXT_ACTION.fixThenRerun;
+}
+
 function stepGate(ctx: Context): StepOutcome {
   const dirty = checkCleanTree(ctx, 'before');
   if (dirty !== null) {
@@ -1296,21 +1353,35 @@ function stepGate(ctx: Context): StepOutcome {
   if (!gate.ok) {
     return failed(gate.reason, NEXT_ACTION.configureGate);
   }
+  const admission = ctx.deps.platform !== 'win32';
   const result = ctx.deps.run({
     kind: 'gate',
     command: gate.command,
     cwd: ctx.worktree ?? ctx.input.cwd,
+    admission,
   });
   const end = classifyEnd(result);
-  const what = 'commands.pre-push-validate';
+  const what = admission
+    ? 'commands.pre-push-validate through idd-local-admission'
+    : 'commands.pre-push-validate';
   if (end.kind === 'no-start') {
-    return failed(describeEnd(what, end), NEXT_ACTION.configureGate, null);
+    // A gate run by hand would run outside admission, so an admission child
+    // that cannot start points at the installation instead.
+    return failed(
+      describeEnd(what, end),
+      admission ? NEXT_ACTION.helperInstallation : NEXT_ACTION.configureGate,
+      null,
+    );
   }
   if (end.kind === 'signal') {
     return failed(describeEnd(what, end), NEXT_ACTION.fixThenRerun, null);
   }
   if (end.status !== 0) {
-    return failed(describeEnd(what, end), NEXT_ACTION.fixThenRerun, end.status);
+    return failed(
+      describeEnd(what, end),
+      gateFailureAction(admission, end.status),
+      end.status,
+    );
   }
   const after = checkCleanTree(ctx, 'after');
   if (after !== null) {
@@ -1579,22 +1650,88 @@ function runGhRead(args: readonly string[]): CommandResult {
   }
 }
 
+/** A child helper's path in the payload's own `scripts/` directory. */
+function helperScriptPath(script: string): string {
+  return join(resolveBundleRoot(import.meta.dirname), 'scripts', script);
+}
+
+/** A child helper missing from the payload: a result with no exit status. */
+function missingScript(path: string): CommandResult {
+  return {
+    status: null,
+    signal: null,
+    stdout: '',
+    stderr: '',
+    error: `${path} does not exist`,
+  };
+}
+
+/** How the production runner starts a gate; `args` is absent for a shell. */
+export interface GateSpawn {
+  file: string;
+  args?: string[];
+  options: SpawnSyncOptions;
+}
+
+/**
+ * The spawn of one gate request. With admission it is
+ * `node <admissionScript> -- /bin/sh -c <command>`, the command the last argv
+ * element, byte for byte; without it (Windows) the command runs in a shell, as
+ * before. Neither form sets `env`, so the child inherits this process's
+ * environment as it is, `IDD_LOCAL_ADMISSION` set or unset. There is no
+ * timeout, and the gate's stdout goes to this process's stderr so that stdout
+ * carries only the report.
+ */
+export function gateSpawn(
+  request: GateRequest,
+  admissionScript: string,
+): GateSpawn {
+  const stdio: SpawnSyncOptions['stdio'] = ['ignore', 2, 2];
+  if (!request.admission) {
+    return {
+      file: request.command,
+      options: { cwd: request.cwd, shell: true, stdio },
+    };
+  }
+  return {
+    file: process.execPath,
+    args: [admissionScript, '--', GATE_SHELL, '-c', request.command],
+    options: { cwd: request.cwd, stdio },
+  };
+}
+
+/**
+ * Run one gate request. The admission script is the payload's own
+ * `scripts/idd-local-admission.mjs`, resolved as the other child helpers are;
+ * a missing one is a result with no exit status.
+ */
+export function runGate(
+  request: GateRequest,
+  admissionScript?: string,
+): CommandResult {
+  let script = '';
+  if (request.admission) {
+    script = admissionScript ?? helperScriptPath(LOCAL_ADMISSION_SCRIPT);
+    if (!existsSync(script)) {
+      return missingScript(script);
+    }
+  }
+  const plan = gateSpawn(request, script);
+  return fromSpawn(
+    plan.args === undefined
+      ? spawnSync(plan.file, plan.options)
+      : spawnSync(plan.file, plan.args, plan.options),
+  );
+}
+
 /**
  * The production runner. It never throws: a failure to resolve or spawn is a
  * result with no exit status, so a refusal always reaches the JSON report.
- * The gate runs through a shell with no timeout, and its stdout goes to this
- * process's stderr so that stdout carries only the report.
  */
 export function runProductionCommand(request: CommandRequest): CommandResult {
   try {
     if (request.kind === 'gate') {
-      return fromSpawn(
-        spawnSync(request.command, {
-          cwd: request.cwd,
-          shell: true,
-          stdio: ['ignore', 2, 2],
-        }),
-      );
+      return runGate(request);
     }
     if (request.kind === 'gh') {
       return runGhRead(request.args);
@@ -1604,19 +1741,9 @@ export function runProductionCommand(request: CommandRequest): CommandResult {
     let stdin: string | undefined;
     if (request.kind === 'helper') {
       stdin = request.stdin;
-      const script = join(
-        resolveBundleRoot(import.meta.dirname),
-        'scripts',
-        request.script,
-      );
+      const script = helperScriptPath(request.script);
       if (!existsSync(script)) {
-        return {
-          status: null,
-          signal: null,
-          stdout: '',
-          stderr: '',
-          error: `${script} does not exist`,
-        };
+        return missingScript(script);
       }
       file = process.execPath;
       args = [script, ...request.args];
@@ -1806,6 +1933,7 @@ export function makeBaseTextReader(
 export function createProductionDeps(): ClaimedPushDeps {
   return {
     run: runProductionCommand,
+    platform: process.platform,
     realpath: realpathOrNull,
     readGateCommand: (worktree) => readEffectiveGateCommand(worktree),
     readPolicy: (worktree) => readPrimaryPolicy(worktree),
@@ -1852,8 +1980,10 @@ function printUsage(stdout: { write: (text: string) => unknown }): void {
       'Dry-run is the default: it runs the claim assert, the location check,\n' +
       'and the scope check, skips the gate, the second assert, and the push,\n' +
       'and exits 0 when all three pass. --apply runs all six steps and pushes\n' +
-      'once. The helper never forces, never retries, and never creates a\n' +
-      'commit. --nonce is passed to the claim check only when given.\n',
+      'once. The gate runs as idd-local-admission -- /bin/sh -c <gate>\n' +
+      '(directly in a shell on Windows). The helper never forces, never\n' +
+      'retries, and never creates a commit. --nonce is passed to the claim\n' +
+      'check only when given.\n',
   );
 }
 
