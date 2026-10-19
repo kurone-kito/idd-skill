@@ -1055,6 +1055,44 @@ test('another tag object at the SHA after a failed push is a conflict, not a lan
   assert.deepEqual(remoteTags(fx), [`refs/tags/${TAG} ${raced}`]);
 });
 
+test('a timed-out post-push read keeps its process record', async () => {
+  const fx = makeFixture();
+  let pushed = false;
+  const { deps } = harness(fx, {
+    wrap: async (request) => {
+      if (request.args[0] === 'push') {
+        pushed = true;
+        return null;
+      }
+      if (pushed && request.args[0] === 'ls-remote') {
+        return {
+          status: null,
+          signal: null,
+          stdout: '',
+          stderr: '',
+          timedOut: true,
+          termination: {
+            recorded: [4343],
+            survivors: [],
+            waitedMs: 7,
+            pidRecorded: true,
+            listingAvailable: true,
+          },
+        };
+      }
+      return null;
+    },
+  });
+  const outcome = await runReleaseTag(releaseInput(fx, { apply: true }), deps);
+  assertRefused(outcome, 'post-push-check-failed');
+  assert.equal(outcome.report.pushed, true);
+  assert.deepEqual(outcome.report.refusal?.processes, {
+    recorded: [4343],
+    survivors: [],
+    waitedMs: 7,
+  });
+});
+
 test('a push URL that names another repository is refused before any tag is made', async () => {
   const fx = makeFixture();
   const elsewhere = join(fx.root, 'elsewhere.git');

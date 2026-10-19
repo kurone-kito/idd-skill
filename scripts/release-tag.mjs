@@ -1857,11 +1857,12 @@ async function pushTag(ctx, object) {
 }
 async function postPushCheck(ctx, object) {
   const step = 'post-push-check';
-  const fail = (detail) =>
+  const fail = (detail, processes = null) =>
     new Refused(
       step,
       'post-push-check-failed',
       `${detail}; nothing was repaired`,
+      processes,
     );
   let remote;
   try {
@@ -1869,8 +1870,10 @@ async function postPushCheck(ctx, object) {
   } catch (error) {
     // A process-tree refusal keeps its own name: it blocks more than a
     // failed check does.
+    // Any other refusal is reported as the failed check, keeping the time
+    // bound's process record when the read timed out.
     if (error instanceof Refused && !PROCESS_REFUSALS.has(error.refusal.name)) {
-      throw fail(error.refusal.detail);
+      throw fail(error.refusal.detail, error.refusal.processes);
     }
     throw error;
   }
