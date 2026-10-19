@@ -132,13 +132,21 @@ gate, receives a primary `advisory-wait` marker, or consumes the primary's
 request cap, and each one's output is ordinary advisory input (classified
 PATH A / PATH B by the snapshot and triage rules). Leaving
 `advisoryWait.secondaryBotLogin` unset (or a value that normalizes to an
-empty list, for example every entry equal to the primary) keeps single-bot
-behavior. Pick each secondary from a requestable reviewer whose
+empty list, for example every entry equal to the primary) sends no secondary
+request. Pick each secondary from a requestable reviewer whose
 `--add-reviewer` request appears on the PR timeline so the once-per-HEAD
 guard can observe it. A configured `advisoryWait.secondaryQuietWindow`
-(F2's quiet-window wait) folds every configured secondary's own settlement
-before it applies — see [IDD policy constants](policy-constants.md) for the
-exact fold rule.
+(F2's quiet-window wait) settles on its window set, which differs from the
+request list: every non-primary advisory bot in `advisoryBotLogins` (the two
+default review bots, CodeRabbit and Codex, when none is resolved), plus the
+explicit `advisoryWait.secondaryBotLogin` entries, minus both identities of
+the primary bot (its `advisoryWait.primaryBotLogin` login and its REST
+login). The window set is empty only when every listed login is a primary
+identity, for example when `advisoryBotLogins` lists only the primary and
+`advisoryWait.secondaryBotLogin` is unset. Then no bot can settle or decline
+the window, and it runs its full length from the last substantive review
+activity (with no such activity to anchor on, it reports elapsed). See
+[IDD policy constants](policy-constants.md) for the exact fold rule.
 
 ## PR Review Profile Edit Surfaces
 
