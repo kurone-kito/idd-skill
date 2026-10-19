@@ -389,6 +389,17 @@ test('the example carries no onboarding placeholder token', () => {
   assert.deepEqual(findPlaceholders(EXAMPLE), []);
 });
 
+test('each omitted-default note stays on one line', () => {
+  // docs/customization.md tells adopters to search for the literal note, so
+  // a note split across two comment lines would hide its key.
+  const split = LINES.flatMap((line, index) =>
+    COMMENT_LINE.test(line) && /\bDefault:\s*$/u.test(line)
+      ? [`line ${index + 1}`]
+      : [],
+  );
+  assert.deepEqual(split, [], `${EXAMPLE_PATH} splits ${OMITTED_DEFAULT}`);
+});
+
 test('each commented-out top-level setting uncomments on its own into a valid config', () => {
   assert.ok(BLOCKS.length > 0, `${EXAMPLE_PATH}: no commented-out settings`);
   for (const block of BLOCKS) {

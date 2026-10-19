@@ -10,7 +10,9 @@
 //   them. Keep a key out when you do not change it: an operator's user-global
 //   configuration may supply a key that this file leaves out. After you
 //   uncomment a whole object, delete each key marked "Default: omitted" that
-//   you do not mean to set; its value is only an example.
+//   you do not mean to set, because its value is not a default. When that
+//   key was the last one in its object, also delete the comma that ends the
+//   line before it.
 // - Delete every line whose first non-blank characters are //.
 // - Merge the result into .github/idd/config.json.
 //
@@ -328,9 +330,9 @@
   //   // Timing used only during a declared provider outage.
   //   "providerOutage": {
   //     // A shorter terminalWindow, used only while a valid outage
-  //     // declaration covers the advisory-convergence service. Default:
-  //     // omitted, which keeps terminalWindow at all times. A value longer
-  //     // than terminalWindow has no effect.
+  //     // declaration covers the advisory-convergence service.
+  //     // Default: omitted, which keeps terminalWindow at all times. A value
+  //     // longer than terminalWindow has no effect.
   //     "terminalWindow": "PT6H"
   //   }
   // },
@@ -362,10 +364,10 @@
   // How the local CI gate treats checks from outside the repository and
   // unreadable protection settings.
   // "ciGate": {
-  //   // Selector lists for checks from outside the repository. Default:
-  //   // omitted, so no such check is waivable. A list that is present needs
-  //   // at least one entry. matchMode "exact" (default) compares the whole
-  //   // check name; "glob" allows wildcards.
+  //   // Selector lists for checks from outside the repository.
+  //   // Default: omitted, so no such check is waivable. A list that is
+  //   // present needs at least one entry. matchMode "exact" (default)
+  //   // compares the whole check name; "glob" allows wildcards.
   //   "externalChecks": {
   //     // Checks to record as advisory. Validated and recorded only: no
   //     // helper reads this list yet, so listing a check changes nothing,
@@ -542,8 +544,8 @@
   //   // Issue numbers of legacy roadmap roots that predate the
   //   // <prefix>-roadmap-id marker. Default: omitted, which adds no roots.
   //   "legacyRoots": [1],
-  //   // An open milestone title to prefer inside a score tie band. Default:
-  //   // omitted or "", which turns the preference off.
+  //   // An open milestone title to prefer inside a score tie band.
+  //   // Default: omitted or "", which turns the preference off.
   //   "milestoneScope": ""
   // },
 
@@ -607,10 +609,10 @@
   //   "deferNeedsDecision": "on",
   //   // The longest the parent waits for a delegated critique subagent.
   //   "subagentWaitCeiling": "PT20M",
-  //   // A command that C1 and E10 run as the critique reviewer. Default:
-  //   // omitted, which keeps the per-agent critique; a user-global delegate
-  //   // may then apply. Set the key to null to block a user-global delegate
-  //   // without adding a command.
+  //   // A command that C1 and E10 run as the critique reviewer.
+  //   // Default: omitted, which keeps the per-agent critique; a user-global
+  //   // delegate may then apply. Set the key to null to block a user-global
+  //   // delegate without adding a command.
   //   "delegate": {
   //     "command": "example-critique-command",
   //     // When the per-agent critique also runs.

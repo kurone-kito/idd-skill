@@ -43,9 +43,11 @@ comments fails to parse. To use the example:
    commented-out object, each explanation line carries a second `//`, so it
    stays a comment after you uncomment the object. After you uncomment a
    whole object, delete each key whose comment says `Default: omitted`
-   unless you mean to set it, before step 3 removes those notes: its value
-   is only an example, such as `"testCommand": "npm test"` or
-   `"declarationTarget": 1`, and it changes behavior once it is set.
+   unless you mean to set it, before step 3 removes those notes. Its value
+   is not a default, and a value such as `"testCommand": "npm test"` or
+   `"declarationTarget": 1` changes behavior once it is set. When the
+   deleted key was the last one in its object, also delete the comma that
+   ends the line before it.
 3. Delete every comment line. Each comment in the example is a whole line
    whose first non-blank characters are `//`, so deleting those lines
    leaves strict JSON:
