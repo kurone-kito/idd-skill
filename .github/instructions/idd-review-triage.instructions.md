@@ -227,10 +227,9 @@ Reply
   Clause: `urgency <level>; severity <tier>[, Copilot <label>]`, plus
   `; step <k>` above step 0. Read `converged` once per pass; if true,
   add one step ([wave gradient]). The agent reports adopt-now condition
-  (d) with `--adopt-now` (not with `--lite`), which turns a `defer`
-  verdict into `keep`: (d) another item in the same E5 pass is already
-  Accepted (any severity), so a push is certain, and this fix stays
-  within that push's files.
+  (d) with `--adopt-now`, which turns a `defer` verdict into `keep`: (d)
+  another item in the same E5 pass is already Accepted (any severity),
+  so a push is certain, and this fix stays within that push's files.
 
 **Triage record.** With `triageRecord` on, before deciding each PATH A
 item run `resolve-review-thread --pr <n>` with `--tier`, `--urgency`,

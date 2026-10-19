@@ -3884,7 +3884,7 @@ Rules:
   exits `1` with kind `usage`. It reads GitHub only under `severity-tiered`
   without `--lite`.
 - **Adopt-now.** `--adopt-now` needs `deferByUrgency` `severity-tiered` and
-  the pair, and cannot combine with `--lite` or `--path-b`. A refused input
+  the pair, and cannot combine with `--path-b`. A refused input
   exits `1` with kind `usage` and a message that names `--adopt-now`. The
   matrix decides first, and the flag changes only a `defer` verdict: a `keep`
   from the matrix or from a blocking flag such as `--scope-fence` keeps its
