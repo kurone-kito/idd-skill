@@ -1243,6 +1243,50 @@ test('a signing setting that cannot be read is refused, not read as unset', asyn
   }
 });
 
+test('a timed-out local-tag read after a failed signing keeps its own refusal', async () => {
+  const fx = makeFixture();
+  const signer = writeStub(fx, 'failing-signer', 'exit 1\n');
+  git(fx, fx.primary, ['config', 'gpg.ssh.program', signer]);
+  let signed = false;
+  const { deps } = harness(fx, {
+    wrap: async (request) => {
+      if (subcommand(request.args) === 'tag') {
+        signed = true;
+        return {
+          status: 1,
+          signal: null,
+          stdout: '',
+          stderr: 'error: unable to sign the tag',
+        };
+      }
+      if (signed && subcommand(request.args) === 'rev-parse') {
+        return {
+          status: null,
+          signal: null,
+          stdout: '',
+          stderr: '',
+          timedOut: true,
+          termination: {
+            recorded: [4444],
+            survivors: [{ pid: 4444, args: 'git rev-parse', signer: false }],
+            waitedMs: 9,
+            pidRecorded: true,
+            listingAvailable: true,
+          },
+        };
+      }
+      return null;
+    },
+  });
+  const outcome = await runReleaseTag(releaseInput(fx, { apply: true }), deps);
+  assertRefused(outcome, 'process-survivor');
+  assert.match(
+    outcome.report.refusal?.detail ?? '',
+    /signing v1\.2\.3 failed/u,
+  );
+  assert.deepEqual(outcome.report.refusal?.processes?.recorded, [4444]);
+});
+
 test('a broken signer leaves no tag and no unsigned tag', {
   skip:
     !HOST_GIT_FAILS_A_FAILED_SSH_SIGN &&

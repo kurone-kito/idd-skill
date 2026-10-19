@@ -2134,7 +2134,13 @@ async function checkLocalTag(ctx: Context): Promise<string | null> {
   return object;
 }
 
-async function localTagNote(ctx: Context): Promise<string> {
+/**
+ * Whether the local tag exists, for a refusal's detail after signing ended
+ * badly. `earlier` names that end: when this read itself times out, its own
+ * timeout refusal (with its process record) replaces the earlier refusal and
+ * carries `earlier` in its detail.
+ */
+async function localTagNote(ctx: Context, earlier: string): Promise<string> {
   const result = await git(ctx, [
     'rev-parse',
     '--verify',
@@ -2142,6 +2148,14 @@ async function localTagNote(ctx: Context): Promise<string> {
     '--end-of-options',
     `refs/tags/${ctx.input.tag}`,
   ]);
+  if (result.timedOut === true) {
+    throw timeoutRefusal(
+      'create-tag',
+      result,
+      'command-timeout',
+      `${earlier}; reading the local tag ${ctx.input.tag} afterwards did not finish`,
+    );
+  }
   if (result.status === 0) {
     return `the local tag ${ctx.input.tag} (${result.stdout.trim()}) exists and was left in place`;
   }
@@ -2215,7 +2229,7 @@ async function createTag(ctx: Context, kind: SignatureKind): Promise<string> {
     );
     refusal.refusal.detail +=
       refusal.refusal.name === 'signing-timeout'
-        ? `; ${await localTagNote(ctx)}`
+        ? `; ${await localTagNote(ctx, refusal.refusal.detail)}`
         : '; the local tag was not read, because the process tree is unconfirmed';
     throw refusal;
   }
@@ -2224,7 +2238,10 @@ async function createTag(ctx: Context, kind: SignatureKind): Promise<string> {
       step,
       'signing-failed',
       withDetail(
-        `signing ${ctx.input.tag} failed; ${await localTagNote(ctx)}`,
+        `signing ${ctx.input.tag} failed; ${await localTagNote(
+          ctx,
+          `signing ${ctx.input.tag} failed`,
+        )}`,
         failureDetail(result),
       ),
     );
