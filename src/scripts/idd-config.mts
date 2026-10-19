@@ -60,6 +60,7 @@ import {
   resolveEffectiveCritiqueLoopTelemetryHook,
   resolveEffectiveIssueAuthoringDelegate,
 } from './policy-helpers.mts';
+import { loadJson, validate } from './validate-schemas.mts';
 
 export type {
   GitTextRunner,
@@ -666,6 +667,22 @@ export function readTrustedDangerouslyAutoDecide({
       { userGlobalFallback: false },
     );
     if (config === null) return disabled('config-absent');
+    const schemaErrors = validate(
+      config,
+      loadJson('schemas/policy.schema.json'),
+    );
+    if (schemaErrors.length > 0) {
+      const shown = schemaErrors.slice(0, 10);
+      const remainder = schemaErrors.length - shown.length;
+      const suffix = remainder > 0 ? ` (and ${remainder} more)` : '';
+      return {
+        status: 'unreadable',
+        enabled: false,
+        source: 'repository',
+        ref,
+        error: `trusted repository policy fails schema validation against policy.schema.json: ${shown.join('; ')}${suffix}`,
+      };
+    }
     if (!Object.hasOwn(config, 'dangerouslyAutoDecide'))
       return disabled('property-absent');
     const value = config.dangerouslyAutoDecide;

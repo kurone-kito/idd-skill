@@ -50,6 +50,18 @@ function toEncodedConfig(config: unknown): string {
   return Buffer.from(JSON.stringify(config), 'utf8').toString('base64');
 }
 
+function trustedPolicyConfig(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const validPolicy = JSON.parse(
+    readFileSync(
+      new URL('../fixtures/schemas/policy.valid.json', import.meta.url),
+      'utf8',
+    ),
+  ) as Record<string, unknown>;
+  return { ...validPolicy, ...overrides };
+}
+
 function syntheticNotFoundError(): Error & { stderr?: string } {
   const notFound = new Error('Not Found (HTTP 404)') as Error & {
     stderr?: string;
@@ -1040,8 +1052,8 @@ test('trusted provisional-decision authority uses only the selected repository r
   const seen: string[] = [];
   let defaultReads = 0;
   const refConfigs: Record<string, unknown> = {
-    main: { dangerouslyAutoDecide: false },
-    'feature-branch': { dangerouslyAutoDecide: true },
+    main: trustedPolicyConfig({ dangerouslyAutoDecide: false }),
+    'feature-branch': trustedPolicyConfig({ dangerouslyAutoDecide: true }),
   };
   const base = readTrustedDangerouslyAutoDecide({
     owner: 'o',
@@ -1070,7 +1082,8 @@ test('trusted provisional-decision authority uses only the selected repository r
     owner: 'o',
     repo: 'r',
     baseRefName: 'main',
-    fetchEncodedConfig: () => toEncodedConfig({ dangerouslyAutoDecide: true }),
+    fetchEncodedConfig: () =>
+      toEncodedConfig(trustedPolicyConfig({ dangerouslyAutoDecide: true })),
   });
   assert.deepEqual(optedIn, {
     status: 'enabled',
@@ -1092,7 +1105,9 @@ test('trusted provisional-decision authority resolves the live default branch wh
     },
     fetchEncodedConfig: (_owner, _repo, ref) => {
       seen.push(ref);
-      return toEncodedConfig({ dangerouslyAutoDecide: false });
+      return toEncodedConfig(
+        trustedPolicyConfig({ dangerouslyAutoDecide: false }),
+      );
     },
   });
   assert.deepEqual(seen, ['main']);
@@ -1142,14 +1157,15 @@ test('trusted provisional-decision authority reports invalid and unreadable sour
       repo: 'r',
       baseRefName: 'main',
       fetchEncodedConfig: () =>
-        toEncodedConfig({ dangerouslyAutoDecide: 'true' }),
+        toEncodedConfig(trustedPolicyConfig({ dangerouslyAutoDecide: 'true' })),
     }),
     {
       status: 'unreadable',
       enabled: false,
       source: 'repository',
       ref: 'main',
-      error: 'dangerouslyAutoDecide must be a boolean when present, got string',
+      error:
+        'trusted repository policy fails schema validation against policy.schema.json: $.dangerouslyAutoDecide: expected type "boolean", got "string"',
     },
   );
 
@@ -1166,6 +1182,31 @@ test('trusted provisional-decision authority reports invalid and unreadable sour
     unreadable.error ?? '',
     /cannot confirm \.github\/idd\/config\.json/,
   );
+});
+
+test('trusted provisional-decision authority rejects a schema-invalid repository policy (#4529)', () => {
+  const report = readTrustedDangerouslyAutoDecide({
+    owner: 'o',
+    repo: 'r',
+    baseRefName: 'main',
+    fetchEncodedConfig: () =>
+      toEncodedConfig(
+        trustedPolicyConfig({
+          dangerouslyAutoDecide: true,
+          issueScope: 'invalid-scope',
+        }),
+      ),
+  });
+
+  assert.equal(report.status, 'unreadable');
+  assert.equal(report.enabled, false);
+  assert.equal(report.source, 'repository');
+  assert.equal(report.ref, 'main');
+  assert.match(
+    report.error ?? '',
+    /trusted repository policy fails schema validation against policy\.schema\.json/,
+  );
+  assert.match(report.error ?? '', /\$\.issueScope/);
 });
 
 test('effective policy reports repository-only provisional-decision provenance (#4529)', () => {
