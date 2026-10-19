@@ -59,9 +59,12 @@ const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const OBJECT_ID_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
 const CONTROL_CHARACTER = /\p{Cc}/u;
-/** A `gh --repo` value: `HOST/OWNER/REPO`. */
+/**
+ * A `gh --repo` value: `HOST/OWNER/REPO`. An owner may hold `_`, as an
+ * enterprise managed user's login does.
+ */
 const GH_REPOSITORY_SLUG =
-  /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\/[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/u;
+  /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+$/u;
 /** The default-branch read, exactly as claimed-push's allow-list has it. */
 const DEFAULT_BRANCH_ARGS = [
   'repo',
@@ -164,15 +167,24 @@ function lines(text) {
  * path or a `file://` URL, and null for anything else.
  */
 export function parseRepositoryIdentity(url) {
-  if (CONTROL_CHARACTER.test(url)) return null;
-  const value = url.trim();
-  if (value === '') return null;
+  // A URL with control characters or surrounding whitespace is refused, not
+  // trimmed: git would not reach the repository the trimmed text names.
+  if (url === '' || url !== url.trim() || CONTROL_CHARACTER.test(url)) {
+    return null;
+  }
+  const value = url;
   const scheme = /^([a-z][a-z0-9+.-]*):\/\/(.*)$/iu.exec(value);
   if (scheme !== null) {
     const name = (scheme[1] ?? '').toLowerCase();
     const rest = scheme[2] ?? '';
     if (name === 'file') {
-      const path = decodeURIComponent(rest.replace(/^[^/]*/u, ''));
+      let path;
+      try {
+        path = decodeURIComponent(rest.replace(/^[^/]*/u, ''));
+      } catch {
+        // A malformed percent escape names no path.
+        return null;
+      }
       return path.startsWith('/')
         ? { kind: 'local', path: resolve(path) }
         : null;
@@ -913,11 +925,14 @@ async function checkRepository(ctx) {
   }
   const fetchIdentity = parseRepositoryIdentity(fetchUrls[0] ?? '');
   const pushIdentity = parseRepositoryIdentity(pushUrls[0] ?? '');
-  if (
-    fetchIdentity === null ||
-    pushIdentity === null ||
-    !sameRepository(fetchIdentity, pushIdentity)
-  ) {
+  if (fetchIdentity === null || pushIdentity === null) {
+    throw new Refused(
+      step,
+      'origin-url-unreadable',
+      `the ${REMOTE} ${fetchIdentity === null ? 'fetch' : 'push'} URL names no repository this core can compare`,
+    );
+  }
+  if (!sameRepository(fetchIdentity, pushIdentity)) {
     throw new Refused(
       step,
       'push-url-mismatch',

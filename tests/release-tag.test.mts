@@ -988,6 +988,18 @@ test('a push URL that names another repository is refused before any tag is made
   );
 });
 
+test('a malformed origin URL is refused by name, not thrown', async () => {
+  const fx = makeFixture();
+  git(fx, fx.primary, ['config', 'remote.origin.url', 'file:///%ZZ']);
+  const { deps, calls } = harness(fx);
+  const outcome = await runReleaseTag(releaseInput(fx), deps);
+  assertRefused(outcome, 'origin-url-unreadable');
+  assert.deepEqual(
+    calls.filter((call) => call.kind === 'gh'),
+    [],
+  );
+});
+
 test('a GH_REPO that names another repository is refused', async () => {
   const fx = makeFixture();
   const { deps, calls } = harness(fx, {
@@ -1309,6 +1321,10 @@ test('parseRepositoryIdentity reads hosted and local remote URLs', () => {
     'https://github.com/a/b/c',
     'ftp://github.com/a/b',
     'https://github.com/a/b\n',
+    ' https://github.com/a/b',
+    'https://github.com/a/b ',
+    'file:///srv/repo%zz',
+    'file:///%ZZ',
   ]) {
     assert.equal(parseRepositoryIdentity(url), null, url);
   }
@@ -1333,5 +1349,14 @@ test('the production deps refuse a bound that is not a positive number', () => {
       repo: 'r',
     }),
     'github.com/o/r',
+  );
+  assert.equal(
+    deps.ghRepositorySlug({
+      kind: 'hosted',
+      host: 'github.com',
+      owner: 'octo_acme',
+      repo: 'r',
+    }),
+    'github.com/octo_acme/r',
   );
 });
