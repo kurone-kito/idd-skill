@@ -115,6 +115,22 @@ const EFFECT_ORDER = [
   'push-tag',
   'post-push-check',
 ];
+/** The port each transport uses when the URL names none. */
+const DEFAULT_PORTS = {
+  ssh: 22,
+  https: 443,
+  http: 80,
+  git: 9418,
+};
+/** The transport of each accepted URL scheme. */
+const SCHEME_TRANSPORTS = {
+  https: 'https',
+  http: 'http',
+  ssh: 'ssh',
+  'git+ssh': 'ssh',
+  'ssh+git': 'ssh',
+  git: 'git',
+};
 class Refused extends Error {
   refusal;
   step;
@@ -189,32 +205,54 @@ export function parseRepositoryIdentity(url) {
         ? { kind: 'local', path: resolve(path) }
         : null;
     }
-    if (!['https', 'http', 'ssh', 'git', 'git+ssh', 'ssh+git'].includes(name)) {
-      return null;
-    }
+    const transport = Object.hasOwn(SCHEME_TRANSPORTS, name)
+      ? SCHEME_TRANSPORTS[name]
+      : undefined;
+    if (transport === undefined) return null;
     const hosted =
-      /^(?:[^/@]+@)?([A-Za-z0-9.-]+)(?::\d+)?\/([^/]+)\/([^/]+?)(?:\.git)?\/*$/u.exec(
+      /^(?:[^/@]+@)?([A-Za-z0-9.-]+)(?::(\d+))?\/([^/]+)\/([^/]+?)(?:\.git)?\/*$/u.exec(
         rest,
       );
-    return hostedIdentity(hosted);
+    if (hosted === null) return null;
+    return hostedIdentity(
+      transport,
+      hosted[1],
+      hosted[2] === undefined ? DEFAULT_PORTS[transport] : Number(hosted[2]),
+      hosted[3],
+      hosted[4],
+    );
   }
   if (isAbsolute(value)) return { kind: 'local', path: resolve(value) };
   const scp =
     /^(?:[^/@:]+@)?([A-Za-z0-9.-]+):(?!\/)([^/]+)\/([^/]+?)(?:\.git)?\/*$/u.exec(
       value,
     );
-  return hostedIdentity(scp);
+  if (scp === null) return null;
+  return hostedIdentity('ssh', scp[1], DEFAULT_PORTS.ssh, scp[2], scp[3]);
 }
-function hostedIdentity(match) {
-  if (match === null) return null;
-  const host = (match[1] ?? '').toLowerCase();
-  const owner = match[2] ?? '';
-  const repo = match[3] ?? '';
-  if (host === '' || owner === '' || repo === '' || repo === '.git') {
+function hostedIdentity(transport, rawHost, port, owner, repo) {
+  const host = (rawHost ?? '').toLowerCase();
+  if (
+    host === '' ||
+    owner === undefined ||
+    owner === '' ||
+    repo === undefined ||
+    repo === '' ||
+    repo === '.git' ||
+    !Number.isSafeInteger(port) ||
+    port < 1 ||
+    port > 65_535
+  ) {
     return null;
   }
-  return { kind: 'hosted', host, owner, repo };
+  return { kind: 'hosted', transport, host, port, owner, repo };
 }
+/**
+ * Whether two identities name one repository: the same host, owner, and
+ * repository, and, over the same transport, the same port. Ports of different
+ * transports are not compared, so HTTPS fetch with SSH push to the same
+ * repository passes, while SSH on port 22 and SSH on port 2222 do not.
+ */
 function sameRepository(a, b) {
   if (a.kind === 'local' || b.kind === 'local') {
     return a.kind === 'local' && b.kind === 'local' && a.path === b.path;
@@ -222,7 +260,8 @@ function sameRepository(a, b) {
   return (
     a.host === b.host &&
     a.owner.toLowerCase() === b.owner.toLowerCase() &&
-    a.repo.toLowerCase() === b.repo.toLowerCase()
+    a.repo.toLowerCase() === b.repo.toLowerCase() &&
+    (a.transport !== b.transport || a.port === b.port)
   );
 }
 /** The `gh --repo` slug of a hosted identity. */

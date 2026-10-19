@@ -1035,6 +1035,37 @@ test('a malformed origin URL is refused by name, not thrown', async () => {
   );
 });
 
+test('fetch and push URLs on one transport must use one port', async () => {
+  for (const [fetchUrl, pushUrl, name] of [
+    [
+      'ssh://git@github.com/fixture-owner/fixture-repo.git',
+      'ssh://git@github.com:2222/fixture-owner/fixture-repo.git',
+      'push-url-mismatch',
+    ],
+    [
+      'https://github.com/fixture-owner/fixture-repo.git',
+      'git@github.com:fixture-owner/fixture-repo.git',
+      // The repository check passes; the closed fake issue then stops the
+      // run before any command could reach the network.
+      'release-issue-closed',
+    ],
+  ] as const) {
+    const fx = makeFixture();
+    git(fx, fx.primary, ['config', 'remote.origin.url', fetchUrl]);
+    git(fx, fx.primary, ['config', 'remote.origin.pushurl', pushUrl]);
+    const { deps, calls } = harness(fx, { gh: { issueState: 'CLOSED' } });
+    const outcome = await runReleaseTag(releaseInput(fx), deps);
+    assertRefused(outcome, name);
+    assertNoWrites(calls);
+    assert.equal(
+      calls.some(
+        (call) => call.kind === 'git' && subcommand(call.args) === 'ls-remote',
+      ),
+      false,
+    );
+  }
+});
+
 test('a GH_REPO that names another repository is refused', async () => {
   const fx = makeFixture();
   const { deps, calls } = harness(fx, {
@@ -1326,43 +1357,36 @@ test('the production default-branch read refuses a checkout that is not the proc
 });
 
 test('parseRepositoryIdentity reads hosted and local remote URLs', () => {
-  const hosted = {
+  const https = {
     kind: 'hosted',
+    transport: 'https',
     host: 'github.com',
+    port: 443,
     owner: 'kurone-kito',
     repo: 'idd-skill',
   };
-  assert.deepEqual(
-    parseRepositoryIdentity('https://github.com/kurone-kito/idd-skill.git'),
-    hosted,
-  );
-  assert.deepEqual(
-    parseRepositoryIdentity('https://github.com/kurone-kito/idd-skill/'),
-    hosted,
-  );
-  assert.deepEqual(
-    parseRepositoryIdentity('git@github.com:kurone-kito/idd-skill.git'),
-    hosted,
-  );
-  assert.deepEqual(
-    parseRepositoryIdentity('ssh://git@github.com:22/kurone-kito/idd-skill'),
-    hosted,
-  );
-  assert.deepEqual(
-    parseRepositoryIdentity('https://GitHub.com/Kurone-Kito/idd-skill'),
-    {
-      ...hosted,
-      owner: 'Kurone-Kito',
-    },
-  );
-  assert.deepEqual(parseRepositoryIdentity('/srv/git/repo.git'), {
-    kind: 'local',
-    path: '/srv/git/repo.git',
-  });
-  assert.deepEqual(parseRepositoryIdentity('file:///srv/git/repo.git'), {
-    kind: 'local',
-    path: '/srv/git/repo.git',
-  });
+  const ssh = { ...https, transport: 'ssh', port: 22 };
+  const cases: [string, unknown][] = [
+    ['https://github.com/kurone-kito/idd-skill.git', https],
+    ['https://github.com/kurone-kito/idd-skill/', https],
+    ['git@github.com:kurone-kito/idd-skill.git', ssh],
+    ['ssh://git@github.com/kurone-kito/idd-skill', ssh],
+    ['ssh://git@github.com:2222/kurone-kito/idd-skill', { ...ssh, port: 2222 }],
+    ['git+ssh://git@github.com/kurone-kito/idd-skill', ssh],
+    [
+      'git://github.com/kurone-kito/idd-skill',
+      { ...https, transport: 'git', port: 9418 },
+    ],
+    [
+      'https://GitHub.com/Kurone-Kito/idd-skill',
+      { ...https, owner: 'Kurone-Kito' },
+    ],
+    ['/srv/git/repo.git', { kind: 'local', path: '/srv/git/repo.git' }],
+    ['file:///srv/git/repo.git', { kind: 'local', path: '/srv/git/repo.git' }],
+  ];
+  for (const [url, expected] of cases) {
+    assert.deepEqual(parseRepositoryIdentity(url), expected, url);
+  }
   for (const url of [
     '',
     'relative/path',
@@ -1372,6 +1396,8 @@ test('parseRepositoryIdentity reads hosted and local remote URLs', () => {
     'https://github.com/a/b\n',
     ' https://github.com/a/b',
     'https://github.com/a/b ',
+    'https://github.com:0/a/b',
+    'https://github.com:70000/a/b',
     'file:///srv/repo%zz',
     'file:///%ZZ',
   ]) {
@@ -1393,7 +1419,9 @@ test('the production deps refuse a bound that is not a positive number', () => {
   assert.equal(
     deps.ghRepositorySlug({
       kind: 'hosted',
+      transport: 'https',
       host: 'github.com',
+      port: 443,
       owner: 'o',
       repo: 'r',
     }),
@@ -1402,7 +1430,9 @@ test('the production deps refuse a bound that is not a positive number', () => {
   assert.equal(
     deps.ghRepositorySlug({
       kind: 'hosted',
+      transport: 'https',
       host: 'github.com',
+      port: 443,
       owner: 'cat_acme',
       repo: 'r',
     }),
