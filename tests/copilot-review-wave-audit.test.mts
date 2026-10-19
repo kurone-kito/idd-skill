@@ -255,6 +255,116 @@ This PR updates the merged-PR feedback sweep to recognize trusted rejections of 
 
 💡 <a href="/kurone-kito/idd-skill/new/main?filename=.github/skills/code-review/SKILL.md" class="Link--inTextBlock" target="_blank" rel="noopener noreferrer">Add a \`code-review\` agent skill</a> or configure MCP servers for context-aware, tailored reviews. <a href="https://docs.github.com/copilot/how-tos/use-copilot-agents/request-a-code-review/use-code-review?tool=webui#mcp-servers-and-agent-skills" class="Link--inTextBlock" target="_blank" rel="noopener noreferrer">Learn more in the docs.</a>`;
 
+// Real review body: PR #4448 review 5556746335 (kurone-kito/idd-skill), in
+// the wording Copilot uses from 2026-10-16 (issue #4472): a `1 open issue`
+// header whose item carries an absolute link and `· New`, and a
+// `2 resolved since last review` section.
+const OPEN_ISSUE_FIXTURE = `<!-- ccr-overview-v2 -->
+
+### 🟡 Changes recommended
+
+Update the description and rationale to document the shipped load-unavailable bypass.
+
+<details open>
+<summary><strong>1 open issue</strong></summary>
+
+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Document shipped load-unavailable bypass in PR acceptance context](https://github.com/kurone-kito/idd-skill/pull/4448#discussion_r4301823946) · New
+</details>
+
+<details>
+<summary><strong>2 resolved since last review</strong></summary>
+
+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Mandatory load gate blocks all Windows validation](https://github.com/kurone-kito/idd-skill/pull/4448#discussion_r4298232018)
+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Windows validation is blocked by the mandatory load gate](https://github.com/kurone-kito/idd-skill/pull/4448#discussion_r4297724261)
+</details>
+
+<sub>Review effort: Lite</sub>`;
+
+// Real review body: PR #4452 review 5555394376 (kurone-kito/idd-skill), the
+// plural form of the same wording (issue #4472): a `2 open issues` header with
+// two high items, both carrying `· New`.
+const OPEN_ISSUES_FIXTURE = `<!-- ccr-overview-v2 -->
+
+### 🟡 Changes recommended
+
+Critical and moderate unresolved findings remain in the cleanup gate implementation.
+
+<details open>
+<summary><strong>2 open issues</strong></summary>
+
+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Inconsistent API hosts can target the wrong repository](https://github.com/kurone-kito/idd-skill/pull/4452#discussion_r4300760284) · New
+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Malformed proof fields can bypass completeness validation](https://github.com/kurone-kito/idd-skill/pull/4452#discussion_r4300760306) · New
+</details>
+
+<sub>Review effort: Lite</sub>`;
+
+// Real review body: PR #4452 review 5554498936 (kurone-kito/idd-skill): a
+// `1 open issue` header, a `2 previously missed issues` section (the retitled
+// previously missed section, issue #4526), and `3 resolved since last review`.
+// Backticks are escaped, and the zero-width spaces in the citation paths are
+// written as \u200B.
+const OPEN_ISSUE_WITH_MISSED_FIXTURE = `<!-- ccr-overview-v2 -->
+
+### 🟡 Changes recommended
+
+Unresolved moderate findings affect proof validation, retry-budget enforcement, and hold-note routing.
+
+<details open>
+<summary><strong>1 open issue</strong></summary>
+
+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Apply proof binding to post dry-run outcomes](https://github.com/kurone-kito/idd-skill/pull/4452#discussion_r4300045455) · New
+</details>
+
+<details>
+<summary><strong>2 previously missed issues</strong></summary>
+
+In code that hasn't changed since last review
+
+<details>
+<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-light.png" alt="Low severity" width="62" height="18" align="texttop"></picture> Distinguish claim loss from unreadable claim failures</summary>
+
+\`docs/\u200Bidd-comment-minimization.md:870\`
+
+This row presents every \`claim-or-lock\` outcome as a stop that can end quietly, but \`claimFailureHold\` deliberately uses the same code with verdict \`hold\` when the claim read fails and tells the operator to fix the cause and rerun. Distinguish the \`stop\`/not-owned case from the \`hold\`/unreadable case here so the hold-note next action is not contradictory.
+</details>
+<details>
+<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/low-v2-light.png" alt="Low severity" width="62" height="18" align="texttop"></picture> Distinguish claim loss from unreadable claim failures</summary>
+
+\`idd-template/\u200Bdocs/\u200Bidd-comment-minimization.md:870\`
+
+This row presents every \`claim-or-lock\` outcome as a stop that can end quietly, but \`claimFailureHold\` deliberately uses the same code with verdict \`hold\` when the claim read fails and tells the operator to fix the cause and rerun. Distinguish the \`stop\`/not-owned case from the \`hold\`/unreadable case here so the hold-note next action is not contradictory.
+</details>
+</details>
+
+<details>
+<summary><strong>3 resolved since last review</strong></summary>
+
+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Update stale HOLD_REASON_CODES count assertion](https://github.com/kurone-kito/idd-skill/pull/4452#discussion_r4299908840)
+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Reject unexpected marker exit status and verdicts](https://github.com/kurone-kito/idd-skill/pull/4452#discussion_r4299908800)
+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/high-v2-light.png" alt="High severity" width="62" height="18" align="texttop"></picture> [Validate proof binding before applying marker](https://github.com/kurone-kito/idd-skill/pull/4452#discussion_r4299908759)
+</details>
+
+<sub>Review effort: Lite</sub>`;
+
+// Real review body: PR #4452 review 5554634977 (kurone-kito/idd-skill), the
+// zero-open shape of the same wording: a `**No open issues**` line with no Open
+// section, and one resolved item.
+const NO_OPEN_ISSUES_FIXTURE = `<!-- ccr-overview-v2 -->
+
+### 🔵 Needs a closer look
+
+Two moderate issues remain in gate time-budget enforcement and malformed verdict validation.
+
+**No open issues** 🎉
+
+<details>
+<summary><strong>1 resolved since last review</strong></summary>
+
+- <picture><source media="(prefers-color-scheme: dark)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.svg"><img src="https://github.githubassets.com/static/images/icons/copilot-code-review/medium-v2-light.png" alt="Medium severity" width="62" height="18" align="texttop"></picture> [Apply proof binding to post dry-run outcomes](https://github.com/kurone-kito/idd-skill/pull/4452#discussion_r4300045455)
+</details>
+
+<sub>Review effort: Lite</sub>`;
+
 function review(
   id: number,
   submittedAt: string,
@@ -656,6 +766,57 @@ ${FENCE}
 ${FENCE}
 `;
   const parsed = parseOverviewBody(body);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, []);
+});
+
+test('parseOverviewBody: real "1 open issue" fixture is v2 with its one item', () => {
+  const parsed = parseOverviewBody(OPEN_ISSUE_FIXTURE);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, [
+    { severity: 'medium', id: 4301823946, isNew: true },
+  ]);
+});
+
+test('parseOverviewBody: real "2 open issues" fixture is v2 with both items', () => {
+  const parsed = parseOverviewBody(OPEN_ISSUES_FIXTURE);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, [
+    { severity: 'high', id: 4300760284, isNew: true },
+    { severity: 'high', id: 4300760306, isNew: true },
+  ]);
+});
+
+test('parseOverviewBody: a "2 open issues" header with one item is unparsed (count mismatch)', () => {
+  const body = `<!-- ccr-overview-v2 -->
+
+<details open>
+<summary><strong>2 open issues</strong></summary>
+
+${openLine('High', 1001)}
+</details>
+`;
+  const parsed = parseOverviewBody(body);
+  assert.equal(parsed.kind, 'unparsed');
+  assert.match(
+    parsed.unparsedReason ?? '',
+    /Open header declared 2 but 1 were parsed/,
+  );
+});
+
+test('parseOverviewBody: a "2 previously missed issues" section is not read as Open', () => {
+  // `previouslyMissed` is not asserted: PREVIOUSLY_MISSED_HEADER_RE does not
+  // read the retitled section yet, so its two items are not counted (issue
+  // #4526 lists that gap as out of its scope).
+  const parsed = parseOverviewBody(OPEN_ISSUE_WITH_MISSED_FIXTURE);
+  assert.equal(parsed.kind, 'v2');
+  assert.deepEqual(parsed.open, [
+    { severity: 'medium', id: 4300045455, isNew: true },
+  ]);
+});
+
+test('parseOverviewBody: real **No open issues** body stays v2 with an empty Open (existing behavior)', () => {
+  const parsed = parseOverviewBody(NO_OPEN_ISSUES_FIXTURE);
   assert.equal(parsed.kind, 'v2');
   assert.deepEqual(parsed.open, []);
 });

@@ -5,12 +5,12 @@
 // distributed helper can import it without pulling in the wave audit.
 //
 // It reads only the part of an overview body that is independent of "is this a
-// v2 overview?": the Open section, in either header form (`Open (n)` or
-// `n open findings`), the `Previously missed (n)` section, and the severity
-// label each item carries. The v2 marker test stays with the caller, because
-// the wave audit and the snapshot decide "v2" differently. The snapshot uses
-// `classifyCopilotReviewBody`, which strips code first, and the wave audit uses
-// a plain marker `includes` test.
+// v2 overview?": the Open section, in any of its header forms (`Open (n)`,
+// `n open findings`, or `n open issues`), the `Previously missed (n)` section,
+// and the severity label each item carries. The v2 marker test stays with the
+// caller, because the wave audit and the snapshot decide "v2" differently. The
+// snapshot uses `classifyCopilotReviewBody`, which strips code first, and the
+// wave audit uses a plain marker `includes` test.
 import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 export function emptySeverityCounts() {
   return { high: 0, medium: 0, low: 0 };
@@ -22,10 +22,19 @@ export function toSeverity(word) {
 // "Previously missed" finding's own <summary>: only a top-level header wraps
 // its text in <strong>. See copilot-review-wave-audit.mts's header comment.
 const SECTION_HEADER_RE = /<summary><strong>([^<]+)<\/strong><\/summary>/g;
-// The Open section header, in both forms: `Open (<n>)` (the original format)
-// and `<n> open finding` / `<n> open findings` (the October 2026 format, issue
-// #4184).
-const OPEN_HEADER_RE = /^(?:Open \((\d+)\)|(\d+) open findings?)$/;
+// The Open section header, in all three forms: `Open (<n>)` (the original
+// format), `<n> open finding` / `<n> open findings` (from about 2026-10-07,
+// issue #4184), and `<n> open issue` / `<n> open issues` (from 2026-10-16,
+// first seen in review 5553947628 on PR #4452, issue #4472). The new wording
+// alternation adds no capture group, so the count stays in group 1 or 2. The
+// ` open ` after the digits keeps `<n> previously missed issues` out.
+//
+// Copilot retitled the previously missed section on the same day, to
+// `<n> previously missed issue(s)`, and PREVIOUSLY_MISSED_HEADER_RE below does
+// not read that title yet. Its items carry no `#discussion_r` link, so such a
+// section is skipped with no unparsed reason, and its findings are not counted
+// in `previouslyMissed` (issue #4526 lists this gap as out of its scope).
+const OPEN_HEADER_RE = /^(?:Open \((\d+)\)|(\d+) open (?:findings?|issues?))$/;
 const PREVIOUSLY_MISSED_HEADER_RE = /^Previously missed \((\d+)\)$/;
 // Sections recognized and never read for items: the resolved list in both
 // forms, and "What changed in this PR". Reading "What changed" for items would
@@ -77,16 +86,17 @@ function findSections(body) {
 }
 /**
  * Extract the Open and Previously missed sections of one overview body, without
- * deciding whether the body is a v2 overview. The Open header is read in both
- * forms (`Open (<n>)` and `<n> open findings`), and its items link either
- * relatively or absolutely. A section whose parsed item count disagrees with its
- * own header count gives a reason. Three drift signals give one too: a
- * `**<n> open findings**` line with n > 0 and no Open section, a section whose
- * header is not recognized but whose content lists severity-labelled findings,
- * and -- in the original format -- a `**Findings:** N` line (N > 0) with no Open
- * section. "Resolved since last review" (both forms) and "What changed in this
- * PR" are recognized and ignored. An unrecognized section with no
- * severity-labelled finding is not, by itself, a reason.
+ * deciding whether the body is a v2 overview. The Open header is read in all
+ * three forms (`Open (<n>)`, `<n> open findings`, and `<n> open issues`), and
+ * its items link either relatively or absolutely. A section whose parsed item
+ * count disagrees with its own header count gives a reason. Three drift
+ * signals give one too: a `**<n> open findings**` line with n > 0 and no Open
+ * section, a section whose header is not recognized but whose content lists
+ * severity-labelled findings, and -- in the original format -- a
+ * `**Findings:** N` line (N > 0) with no Open section. "Resolved since last
+ * review" (both forms) and "What changed in this PR" are recognized and
+ * ignored. An unrecognized section with no severity-labelled finding is not,
+ * by itself, a reason.
  */
 export function parseOverviewSections(body) {
   // Fenced and inline code is an example, not a finding. Mask it first, as
