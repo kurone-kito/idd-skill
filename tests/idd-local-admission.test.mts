@@ -106,7 +106,11 @@ const { spawnSync } = require('node:child_process');
 const file = process.env.FAKE_PUEUE_STATE;
 const state = JSON.parse(fs.readFileSync(file, 'utf8'));
 const args = process.argv.slice(2);
-const save = () => fs.writeFileSync(file, JSON.stringify(state));
+const save = () => {
+  const temporary = file + '.' + process.pid + '.tmp';
+  fs.writeFileSync(temporary, JSON.stringify(state));
+  fs.renameSync(temporary, file);
+};
 const taskId = args[1];
 state.calls.push(args);
 const task = (id) => state.tasks?.[id];
