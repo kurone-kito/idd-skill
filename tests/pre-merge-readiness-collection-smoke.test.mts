@@ -1576,16 +1576,22 @@ test('collectPreMergeReadiness: an empty baseRefName falls back to the repositor
 function runSecondaryQuietWindowFixture(
   comments: Array<{ body: string; createdAt: string; authorLogin: string }>,
   now: string,
+  configOverrides: Record<string, unknown> = {},
 ): {
   elapsed: boolean;
   remainingMinutes: number | null;
   anchorAt: string;
   minutes: number;
+  configuredMinutes: number;
 } {
   const cwdRoot = mkdtempSync(
     join(tmpdir(), 'idd-pre-merge-secondary-quiet-window-'),
   );
   const originalCwd = process.cwd();
+  // #4467: the window set reads the resolved `advisoryBotLogins`, whose
+  // environment layer would otherwise override the injected config below.
+  const originalAdvisoryBotLogins = process.env.IDD_ADVISORY_BOT_LOGINS;
+  delete process.env.IDD_ADVISORY_BOT_LOGINS;
   try {
     process.chdir(cwdRoot);
     // #2373: fed via the injected loadTrustedConfig param below, not a
@@ -1596,6 +1602,7 @@ function runSecondaryQuietWindowFixture(
         secondaryBotLogin: 'coderabbitai[bot]',
         secondaryQuietWindow: 'PT1H',
       },
+      ...configOverrides,
     };
 
     const port = createFakeProviderAdapter({
@@ -1656,8 +1663,14 @@ function runSecondaryQuietWindowFixture(
       remainingMinutes: number | null;
       anchorAt: string;
       minutes: number;
+      configuredMinutes: number;
     };
   } finally {
+    if (originalAdvisoryBotLogins === undefined) {
+      delete process.env.IDD_ADVISORY_BOT_LOGINS;
+    } else {
+      process.env.IDD_ADVISORY_BOT_LOGINS = originalAdvisoryBotLogins;
+    }
     process.chdir(originalCwd);
     rmSync(cwdRoot, { recursive: true, force: true });
   }
@@ -1722,6 +1735,26 @@ test('collectPreMergeReadiness: secondaryQuietWindow settles quickly once CodeRa
   assert.equal(status.elapsed, true);
   assert.equal(status.minutes, 5);
   assert.equal(status.anchorAt, '2026-07-31T23:03:00Z');
+});
+
+// #4467: a configured `advisoryBotLogins` list replaces the default bots, so
+// with only CodeRabbit listed its review alone starts the settled buffer.
+test('collectPreMergeReadiness: secondaryQuietWindow uses a configured advisoryBotLogins list in place of the default bots (#4467)', () => {
+  const status = runSecondaryQuietWindowFixture(
+    [
+      {
+        body: QUIET_WINDOW_CODERABBIT_SUMMARY,
+        createdAt: '2026-07-31T23:02:00Z',
+        authorLogin: 'coderabbitai[bot]',
+      },
+    ],
+    '2026-07-31T23:07:00Z',
+    { advisoryBotLogins: ['coderabbitai[bot]'] },
+  );
+  assert.equal(status.elapsed, true);
+  assert.equal(status.minutes, 5);
+  assert.equal(status.configuredMinutes, 60);
+  assert.equal(status.anchorAt, '2026-07-31T23:02:00Z');
 });
 
 // #2547: a rate-limit notice for the current HEAD is a definitive decline,

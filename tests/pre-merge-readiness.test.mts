@@ -15482,7 +15482,7 @@ test('#4467: with this repository configuration, a CodeRabbit decline no longer 
   );
 });
 
-test('#4467: an omitted advisoryBotLogins option gives the window the default bots and changes nothing else', () => {
+test('#4467: an omitted advisoryBotLogins option gives the window the default bots and leaves the reported advisory-bot list empty', () => {
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
   const { advisoryBotLogins: _omitted, ...optionsWithoutAdvisoryBots } =
     fixture.options;
