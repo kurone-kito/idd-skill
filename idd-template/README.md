@@ -110,6 +110,7 @@ generated separately in `ONBOARDING.md`.
 .githooks/_idd-worktree-guard.sh
 .githooks/pre-commit
 .githooks/pre-push
+.github/idd/config.example.jsonc
 .github/idd/config.json
 .github/instructions/claim-orchestrator.instructions.md
 .github/instructions/idd-advisory-wait.instructions.md

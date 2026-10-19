@@ -794,6 +794,7 @@ for the frontmatter convention its generated table follows.
 
 ```text
 .github/idd/config.json
+.github/idd/config.example.jsonc
 .github/workflows/post-merge-cleanup.yml
 .githooks/_idd-worktree-guard.sh
 .githooks/pre-commit

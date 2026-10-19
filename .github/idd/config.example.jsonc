@@ -1,0 +1,777 @@
+// Annotated example of the IDD policy configuration.
+//
+// IDD reads this repository's policy from .github/idd/config.json, and it
+// parses that file as strict JSON. No IDD helper reads this example as
+// configuration, and a file that contains comments is not a valid
+// configuration. To start a configuration from it:
+//
+// - Copy this file, and replace every value marked as a placeholder.
+// - Uncomment only the optional settings you want to change, and change
+//   them. Keep a key out when you do not change it: an operator's user-global
+//   configuration may supply a key that this file leaves out.
+// - Delete every line whose first non-blank characters are //.
+// - Merge the result into .github/idd/config.json.
+//
+// docs/customization.md describes these steps. The policy schema at the
+// $schema URL below is the authority for every key and value.
+//
+// The active lines are the required settings, set to the distributed
+// recommendations, and $schema. Every optional setting is commented out and
+// shows its default, or says that leaving the key out is the default and
+// shows an example value. The template's config.json sets a few optional keys
+// to their defaults; this file leaves them commented out.
+//
+// Keys follow the schema's order, except that commands comes last. Every
+// comment is a whole line. Inside a commented-out object, each explanation
+// line carries a second //, so it stays a comment after you uncomment the
+// object. Uncommenting a whole top-level setting needs no comma change, but
+// uncommenting only part of an object can.
+{
+  // Editor metadata: the schema URL, so that an editor can check this file. No
+  // IDD helper reads it, and it has no default. It is the one optional key
+  // that stays active.
+  "$schema": "https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json",
+
+  // Required. The IDD release this repository imported, as
+  // major.minor.patch. idd-doctor also runs a content-based staleness check.
+  "iddVersion": "0.16.0",
+
+  // Required. Placeholder: replace it before use. The prefix in every marker
+  // token and generated label name, such as <prefix>-roadmap-id: a lowercase
+  // letter, then 1 to 31 lowercase letters, digits, or hyphens.
+  "markerPrefix": "replace-me",
+
+  // The long-lived branch that receives IDD pull requests, as a short branch
+  // name, never a refs/heads/ ref. Default: omitted, which uses the
+  // repository's live GitHub default branch. A configured branch that does
+  // not exist on the remote, or a malformed value, stops the work instead of
+  // falling back.
+  // "developmentBranch": "develop",
+
+  // The Git hosting provider.
+  // - "github" (default): GitHub, the only provider any helper talks to.
+  // - "gitlab": validated and recorded only; no adapter exists yet.
+  // - "bitbucket": validated and recorded only; no adapter exists yet.
+  // "provider": "github",
+
+  // Required. Which session may run the final F3 merge.
+  // - "human_merge" (the distributed default): a human maintainer merges and
+  //   cleans up, and the session stops at the F2.5 handoff.
+  // - "separate_merge_agent": a worker hands off to a separate, trusted
+  //   session that runs only the merge phase.
+  // - "fully_autonomous_merge": an explicit opt-in; the same session merges
+  //   once every gate passes. Read docs/permissions.md before you choose it.
+  "mergePolicy": "human_merge",
+
+  // Diagnostics only: confirms that you reconsidered mergePolicy, and never
+  // changes what mergePolicy allows. idd-doctor warns when mergePolicy is
+  // fully_autonomous_merge and this key is absent or holds another value.
+  // Default: omitted.
+  // - "human_merge", "separate_merge_agent", or "fully_autonomous_merge":
+  //   records that you confirmed that mergePolicy value.
+  // "mergePolicyAck": "human_merge",
+
+  // Required. The pull request review profile. A profile other than the
+  // default also needs the phase-file edits that
+  // docs/idd-review-policy-profiles.md lists.
+  // - "copilot-advisory" (the distributed default): GitHub Copilot reviews as
+  //   an advisory bot, and CI, branch protection, and claim checks still gate
+  //   the merge.
+  // - "human-required": a maintainer, CODEOWNER, or required reviewer
+  //   approves every pull request. The advisory-convergence check reports
+  //   not applicable.
+  // - "no-advisory": no advisory bot; CI and branch protection gate the
+  //   merge. The advisory-convergence check reports not applicable.
+  // - "external-bot": another advisory bot, named by
+  //   advisoryWait.primaryBotLogin, takes Copilot's place.
+  "reviewPolicy": "copilot-advisory",
+
+  // Required. Who resolves review threads. No helper enforces this value: a
+  // profile other than the default takes effect only through the phase-file
+  // edits in docs/idd-review-policy-profiles.md, and idd-doctor warns while
+  // one is set. Branch-protection conversation rules always win.
+  // - "fast-agent-resolve" (the distributed default): the agent resolves a
+  //   thread after it acts on the feedback.
+  // - "hybrid-reviewer-ack": the agent may resolve bot threads, and human
+  //   threads stay open until the reviewer or a maintainer acknowledges the
+  //   fix.
+  // - "strict-reviewer-resolve": reviewers or maintainers resolve the
+  //   threads, and the merge waits for them.
+  "threadResolutionPolicy": "fast-agent-resolve",
+
+  // The language of newly written issue and pull request prose. It never
+  // changes marker formats or the English footer lines that helpers parse.
+  // Default: omitted, which behaves as en.
+  // - A language tag such as "en", "ja", or "pt-BR": write in that language.
+  // - "match-source": match the operator's language in an interactive
+  //   session, and the implemented issue's language when no operator is
+  //   present.
+  // "authoringLanguage": "en",
+
+  // Required. Claim ownership timing, as ISO 8601 durations.
+  "claimTiming": {
+    // A claim is stale, and open to takeover, this long after its latest
+    // valid claimed-by comment. The distributed value is PT24H.
+    "staleAge": "PT24H",
+    // How often an owning session posts its claim comment again. The
+    // distributed value is PT12H.
+    "heartbeatInterval": "PT12H"
+  },
+
+  // Required. Placeholder: replace it before use. The GitHub logins, or bot
+  // and App identities, whose claim, release, review-watermark, and other
+  // operational marker comments count for state changes. List at least one.
+  // The placeholder is not a valid GitHub login, so it never matches a real
+  // actor.
+  "trustedMarkerActors": ["REPLACE_WITH_GITHUB_LOGIN"],
+
+  // Logins of advisory review bots. Their acknowledgement comments after a
+  // disposition may count as ack-only, and the secondary quiet window waits
+  // for them. Default: omitted. The ack-only classification is then off, and
+  // the helpers that need a bot list, such as the merged pull request
+  // feedback sweep and the secondary quiet window, use coderabbitai[bot] and
+  // chatgpt-codex-connector[bot] instead.
+  // "advisoryBotLogins": ["example-review-bot[bot]"],
+
+  // The onboarding workshop's example repository.
+  // "workshop": {
+  //   // An owner/repo slug whose README should link back to docs/workshop/;
+  //   // idd-doctor checks that link. Default: omitted or "", which turns
+  //   // the check off.
+  //   "exampleRepository": ""
+  // },
+
+  // How this repository runs the IDD helper scripts. Default: omitted, which
+  // means the instructions-only profile. Leave the whole object out for that
+  // profile; the example below selects package-manager.
+  // "helperRuntime": {
+  //   // Required inside this object.
+  //   // - "instructions-only": no helpers; agents follow the instruction
+  //   //   files. An omitted object means this profile, so do not add the
+  //   //   object for it.
+  //   // - "package-manager": the repository's own package manager installs
+  //   //   the helper package as a dependency.
+  //   // - "vendored-node": the helper scripts are copied into the repository
+  //   //   and run with node.
+  //   // - "ephemeral-npx": one-shot npx or pnpm dlx commands, with no
+  //   //   copied files.
+  //   // - "user-global": each operator installs the helper commands once,
+  //   //   and repositories find them on PATH.
+  //   "profile": "package-manager",
+  //   // The launcher for ephemeral-npx; the other profiles ignore it.
+  //   // - "npx" (default): npx --yes --package <spec> <command>.
+  //   // - "pnpm-dlx": pnpm dlx --package <spec> <command>.
+  //   // - "auto": pnpm-dlx when the repository's pnpm is version 10 or
+  //   //   later, and npx otherwise, including on native Windows.
+  //   "launcher": "npx",
+  //   // The helper package: a pinned npm spec, tarball URL, or reviewed
+  //   // commit archive. Default: omitted, which uses the mutable archive of
+  //   // the main branch. The example is a placeholder: replace its last
+  //   // segment with a reviewed commit or release tag. Only letters, digits,
+  //   // and @:/_.+^#%- are allowed.
+  //   "packageSpec": "https://codeload.github.com/kurone-kito/idd-skill/tar.gz/REPLACE_WITH_REVIEWED_COMMIT"
+  // },
+
+  // Which candidates Discover considers.
+  // - "roadmap-first" (default): roadmap issues first, then orphan issues
+  //   when no roadmap issue can start.
+  // - "roadmap": roadmap issues only; orphan issues are never considered.
+  // - "orphan-first": orphan issues first, then roadmap issues.
+  // "issueScope": "roadmap-first",
+
+  // An extra approval gate for orphan candidates.
+  // - "none" (default): only the standard readiness checks.
+  // - "maintainer-approved": an orphan issue needs maintainer approval: an
+  //   author who is a maintainer approval actor under
+  //   maintainerApprovalActorPolicy, the ready label from such an actor, or
+  //   a fresh IDD ready comment from one.
+  // - "public-disabled": a public repository, or one whose visibility cannot
+  //   be determined, skips orphan discovery; a private or internal
+  //   repository keeps the default behavior.
+  // "orphanFirstPolicy": "none",
+
+  // The issue-author approval gate for unattended work.
+  // - false (default): the gate stays on; an issue needs an author who can
+  //   approve it, or an explicit approval signal.
+  // - true: the gate is off for the whole repository.
+  // "skipIssueAuthorApprovalGate": false,
+
+  // Free text that names the selected critique-loop profile, for people. No
+  // helper reads it. Default: omitted.
+  // "critiqueLoopProfile": "default",
+
+  // Free text that names the merge-capable actor for separate_merge_agent,
+  // for people. No helper reads it. Default: omitted.
+  // "mergeHandoffActor": "example-merge-bot",
+
+  // Free text that names an external advisory bot, for people. No helper
+  // reads it; advisoryWait.primaryBotLogin is the key the runtime reads.
+  // Default: omitted.
+  // "externalAdvisoryBot": "example-review-bot[bot]",
+
+  // Who counts as a maintainer approval actor for the issue-author approval
+  // gate.
+  // - "owners-and-maintainers-only" (default): owners and collaborators with
+  //   Maintain or Admin permission.
+  // - "all-write-permission-actors": also collaborators with Write
+  //   permission.
+  // "maintainerApprovalActorPolicy": "owners-and-maintainers-only",
+
+  // An explicit list of logins with maintainer approval authority. The
+  // runtime does not enforce this list yet. Default: omitted.
+  // "maintainerApprovalActors": ["example-maintainer"],
+
+  // Stalled-session recovery timing.
+  // "stallRecovery": {
+  //   // How long a claimed issue shows no session activity before the
+  //   // resume-stall checks treat its session as possibly stalled.
+  //   "quietWindow": "PT30M"
+  // },
+
+  // Forced handoff: a human-gated way to move a stuck claim that is not
+  // stale yet. Agents never start one on their own.
+  // "forcedHandoff": {
+  //   // - "disabled" (default): no forced handoff; only the stale-claim
+  //   //   takeover applies.
+  //   // - "human-gated": a maintainer may approve moving a stuck claim
+  //   //   before it becomes stale.
+  //   "mode": "disabled",
+  //   // Who may approve a forced handoff.
+  //   // - "owners-and-maintainers-only" (default): owners and collaborators
+  //   //   with Maintain or Admin permission.
+  //   // - "all-write-permission-actors": also collaborators with Write
+  //   //   permission.
+  //   "authorityPolicy": "owners-and-maintainers-only"
+  // },
+
+  // Which marker authors count as trusted.
+  // "markerTrust": {
+  //   // - false (default): only trustedMarkerActors and the session's own
+  //   //   verified markers count.
+  //   // - true: markers from collaborators with Write, Maintain, or Admin
+  //   //   permission count too. This never grants external-check waiver
+  //   //   authority, which ciGate.externalCheckWaivers.authorityPolicy
+  //   //   decides.
+  //   // When the key is left out, the IDD_TRUST_COLLABORATOR_MARKERS
+  //   // environment variable decides instead; an explicit false ignores it.
+  //   "allowCollaboratorMarkers": false
+  // },
+
+  // The advisory review wait for the primary bot, in D4, E14, F2, and F3. A
+  // key you leave out keeps its default. Durations here are whole minutes.
+  // "advisoryWait": {
+  //   // Which pull requests the advisory-convergence check covers.
+  //   // - "all-prs" (default): every pull request.
+  //   // - "idd-claimed": only pull requests with a verified IDD claim; the
+  //   //   check reports not applicable for the others.
+  //   "convergenceScope": "all-prs",
+  //   // Bot-authored pull requests under all-prs.
+  //   // - false (default): they need convergence or a waiver like any other
+  //   //   pull request.
+  //   // - true: a pull request from a Bot account with no claim-marker
+  //   //   history reports not applicable. No effect under idd-claimed.
+  //   "exemptBotAuthoredPrs": false,
+  //   // The most re-review requests posted to the primary bot per pull
+  //   // request. IDD counts them; GitHub does not enforce it.
+  //   "requestCap": 30,
+  //   // How long to wait while the primary bot's review is pending.
+  //   "pendingWindow": "PT30M",
+  //   // How long to wait after the primary bot's review is submitted or
+  //   // cancelled.
+  //   "settledWindow": "PT10M",
+  //   // The interval between polls while waiting.
+  //   "pollInterval": "PT2M",
+  //   // What happens once requestCap is used up.
+  //   // - "phase-specific" (default): E14 moves on to E15, and F2 and F3
+  //   //   hold.
+  //   // - "hold": E14, F2, and F3 all hold.
+  //   "capExhaustedRoute": "phase-specific",
+  //   // The login of the primary advisory bot. Default: copilot (GitHub
+  //   // Copilot).
+  //   "primaryBotLogin": "copilot",
+  //   // One login, or a list of logins, of secondary advisory bots. IDD asks
+  //   // each one once per head commit, only while the primary bot is
+  //   // cap-exhausted or stalled. Their reviews are never required for the
+  //   // merge, though secondaryQuietWindow, when set, still waits for them.
+  //   // Default: omitted, which turns this supplement off.
+  //   "secondaryBotLogin": "example-review-bot[bot]",
+  //   // From the head commit's first check suite, after this long a
+  //   // maintainer waiver can also turn the advisory-convergence check green
+  //   // without a fresh review, when ciGate.externalCheckWaivers.mode is
+  //   // maintainer-authorized and ciGate.externalChecks.waivable lists
+  //   // idd-advisory-convergence. A fresh converged review still turns it
+  //   // green.
+  //   "convergenceDeadline": "PT24H",
+  //   // Same-head rerolls allowed once the primary bot's review covers the
+  //   // head and every remaining item has a disposition.
+  //   "sameHeadRerollCap": 2,
+  //   // Copilot stall-recovery cycles allowed per head commit.
+  //   "recoveryCycleCap": 2,
+  //   // Measured from the first recovery cycle on the head: once
+  //   // recoveryCycleCap is used up and this long has passed with no review
+  //   // of the head, Copilot is reported unavailable. That makes a
+  //   // maintainer waiver possible under the same two conditions as
+  //   // convergenceDeadline; it never satisfies the gate by itself.
+  //   "terminalWindow": "PT12H",
+  //   // After the review first looks converged, how long to wait for a
+  //   // slower non-primary advisory bot before pre-merge readiness treats
+  //   // the review as settled, measured from the last substantive review
+  //   // activity. The bots are advisoryBotLogins plus secondaryBotLogin,
+  //   // without the primary bot. Default: omitted, which turns the window
+  //   // off.
+  //   "secondaryQuietWindow": "PT15M",
+  //   // Timing used only during a declared provider outage.
+  //   "providerOutage": {
+  //     // A shorter terminalWindow, used only while a valid outage
+  //     // declaration covers the advisory-convergence service. Default:
+  //     // omitted, which keeps terminalWindow at all times. A value longer
+  //     // than terminalWindow has no effect.
+  //     "terminalWindow": "PT6H"
+  //   }
+  // },
+
+  // The advisory-convergence check's own short poll for a primary-bot review
+  // that has not landed yet. Durations here are whole seconds or longer.
+  // "advisoryConvergence": {
+  //   // The interval between checks. Default: omitted, which keeps a
+  //   // built-in 7.5-second interval that no duration value can express.
+  //   "copilotReviewPollInterval": "PT10S",
+  //   // The longest the poll waits in total.
+  //   "copilotReviewPollMaxWait": "PT10M"
+  // },
+
+  // CI wait timing and reruns for the D, E, and F phases.
+  // "ciWait": {
+  //   // How long a required check may run, from its reported start, before
+  //   // stalled-run recovery begins.
+  //   "runningTimeout": "PT30M",
+  //   // How long to wait for the required checks to appear at all.
+  //   "generationTimeout": "PT10M",
+  //   // - "rerun-once" (default): the first eligible infrastructure or
+  //   //   stalled failure reruns once, and a repeat holds.
+  //   // - "hold": never rerun automatically; hold at the first eligible
+  //   //   failure.
+  //   "rerunPolicy": "rerun-once"
+  // },
+
+  // How the local CI gate treats checks from outside the repository and
+  // unreadable protection settings.
+  // "ciGate": {
+  //   // Selector lists for checks from outside the repository. Default:
+  //   // omitted, so no such check is waivable. A list that is present needs
+  //   // at least one entry. matchMode "exact" (default) compares the whole
+  //   // check name; "glob" allows wildcards.
+  //   "externalChecks": {
+  //     // Checks to record as advisory. Validated and recorded only: no
+  //     // helper reads this list yet, so listing a check changes nothing,
+  //     // and the CI gate treats it like an unlisted check. Default: omitted.
+  //     "advisory": [{ "selector": "example-external-check", "matchMode": "exact" }],
+  //     // Checks that a maintainer may waive through externalCheckWaivers.
+  //     // Default: omitted.
+  //     "waivable": [{ "selector": "example-external-*", "matchMode": "glob" }]
+  //   },
+  //   // Maintainer waivers for checks on the waivable list.
+  //   "externalCheckWaivers": {
+  //     // - "disabled" (default): no check can be waived, whatever the
+  //     //   waivable list says.
+  //     // - "maintainer-authorized": a valid maintainer waiver can waive a
+  //     //   check on the waivable list.
+  //     "mode": "disabled",
+  //     // Who may write a valid waiver.
+  //     // - "owners-and-maintainers-only" (default): owners and
+  //     //   collaborators with Maintain or Admin permission.
+  //     // - "all-write-permission-actors": also collaborators with Write
+  //     //   permission.
+  //     "authorityPolicy": "owners-and-maintainers-only",
+  //     // How long one waiver stays valid.
+  //     "maxValidity": "PT24H"
+  //   },
+  //   // A 404 from the branch-protection or ruleset reads.
+  //   // - false (default): treated as unreadable, which holds like a 403.
+  //   // - true: treated as no protection configured. Set it only after you
+  //   //   confirm that the automation token can read those endpoints.
+  //   "trustEmptyProtectionReads": false,
+  //   // A required check pinned to one GitHub App or integration.
+  //   // - false (default): its passing state stays unresolved, because IDD
+  //   //   cannot verify which App produced the check.
+  //   // - true: it counts once present, matched by name, and passing. Set it
+  //   //   only after you confirm that the pinned App is its only producer.
+  //   "trustSourcePinnedRequiredChecks": false,
+  //   // A global-only run with no required checks and no check runs.
+  //   // - false (default): the CI gate holds.
+  //   // - true: the CI gate passes, only in that global-only case.
+  //   "allowNoRequiredChecksInGlobalOnly": false
+  // },
+
+  // Outage relief: a repository-scoped declaration while a provider service
+  // is unavailable.
+  // "providerOutage": {
+  //   // The issue number that holds outage declarations. Default: omitted,
+  //   // which turns declarations off.
+  //   "declarationTarget": 1,
+  //   // How long one declaration stays valid.
+  //   "maxValidity": "PT24H",
+  //   // How many pull requests may be parked at once for an unavailable
+  //   // service. At the limit, sessions stop claiming new issues.
+  //   "maxParkedChanges": 10
+  // },
+
+  // Local validation evidence markers.
+  // "localValidationEvidence": {
+  //   // How long a local-validation-evidence marker counts as fresh, from the
+  //   // marker comment's creation.
+  //   "maxAge": "PT4H"
+  // },
+
+  // The read-only provider-health classifier. It never gates a merge.
+  // "providerHealth": {
+  //   // How many distinct pull requests must show failures before a service
+  //   // can be rated worse than degraded. A value below 2 falls back to 2.
+  //   "minCorroboratingPrs": 2,
+  //   // How far back the classifier looks for evidence.
+  //   "samplingWindow": "PT24H"
+  // },
+
+  // GitHub API request handling on this host. Leaving it out keeps
+  // telemetry off, every read live, and every request uncoordinated.
+  // "githubApi": {
+  //   // Local request-cost records for IDD's GitHub API wrappers.
+  //   "telemetry": {
+  //     // - false (default): nothing is recorded.
+  //     // - true: request observations go to a local file; nothing is
+  //     //   uploaded.
+  //     "enabled": false,
+  //     // The most lines kept in the file; older lines are dropped.
+  //     "maxRecords": 100,
+  //     // The record file, as an absolute path or one that starts with ~/.
+  //     // The value shown is the default, and a blank value counts as unset.
+  //     // A value that is neither absolute nor starts with ~/ keeps telemetry
+  //     // off.
+  //     "path": "~/.local/state/idd-skill/github-api-telemetry.jsonl"
+  //   },
+  //   // A host-local cache for classified REST reads.
+  //   "readCache": {
+  //     // - false (default): every read goes to GitHub.
+  //     // - true: the cache is on, and Discover helpers may use a short-lived
+  //     //   hint that only ranks candidates and never replaces a live gate.
+  //     "enabled": false,
+  //     // The oldest stored response that a hint may reuse.
+  //     "maxAge": "PT5M",
+  //     // The most bytes of stored responses, 100 MiB. A larger value falls
+  //     // back to this default.
+  //     "maxBytes": 104857600,
+  //     // How long a stored response is kept before it is dropped.
+  //     "retention": "PT24H",
+  //     // An absolute cache directory. Default: omitted, which uses the
+  //     // per-user cache directory: $XDG_CACHE_HOME or ~/.cache on Linux,
+  //     // ~/Library/Caches on macOS, or %LOCALAPPDATA% on Windows, followed
+  //     // by idd-skill/github-api-read-cache.
+  //     "directory": "/absolute/path/to/github-api-read-cache"
+  //   },
+  //   // Host-local admission for requests through IDD's own gh wrappers. It
+  //   // does not cover a gh command typed by hand.
+  //   "loadControl": {
+  //     // - false (default): requests are not coordinated.
+  //     // - true: requests wait for a free slot, and a shared throttle
+  //     //   cooldown applies.
+  //     "enabled": false,
+  //     // Requests admitted at once for this OS user. A value above 8 falls
+  //     // back to 1.
+  //     "maxConcurrent": 1,
+  //     // The longest a read waits for a slot; a write is admitted at once
+  //     // or refused. A value above ten minutes falls back to the default.
+  //     "maxWait": "PT30S"
+  //   }
+  // },
+
+  // Host-local admission for this repository's validation commands. Unlike
+  // githubApi.loadControl, it is on by default.
+  // "localExec": {
+  //   "admission": {
+  //     // - true (default): validation runs wait for a slot that every
+  //     //   repository of this OS user shares.
+  //     // - false: this repository's own commands skip admission; other
+  //     //   repositories still take the slot.
+  //     "enabled": true,
+  //     // Validation runs admitted at once. A value above 8 falls back to 1.
+  //     "maxConcurrent": 1,
+  //     // The longest a validation run waits for a slot. A value above PT6H
+  //     // falls back to the default.
+  //     "maxWait": "PT2H",
+  //     // - "flock" (default): a host-local lock file. The admission helper
+  //     //   refuses a maxConcurrent above 1 with this backend.
+  //     // - "pueue": runs queue in a pueue group.
+  //     "backend": "flock",
+  //     // The pueue group for the pueue backend. Blank or omitted means
+  //     // idd-validate.
+  //     "pueueGroup": "idd-validate",
+  //     // The repository's test command, which validation steps run through
+  //     // admission after their command set unless that set already runs
+  //     // it. Default: omitted or blank, which means no test command.
+  //     "testCommand": "npm test"
+  //   }
+  // },
+
+  // Orchestrator fan-out limits, for each orchestrator session.
+  // "orchestrator": {
+  //   // The most workers one orchestrator session runs at once, from 1 to 8.
+  //   // A value of 1 allows one worker.
+  //   "maxWorkers": 2,
+  //   // After a host-load stop, how many budget readings in a row must show
+  //   // a free slot before the orchestrator starts another worker.
+  //   "hostLoadClearStreak": 3,
+  //   // The longest the orchestrator waits for host load to clear, from the
+  //   // first host-load reading.
+  //   "hostLoadWaitCeiling": "PT30M"
+  // },
+
+  // Discover tuning.
+  // "discover": {
+  //   // How many candidates the active-claim pre-scan checks per batch.
+  //   "activeClaimPreScanBatchSize": 10,
+  //   // Candidate order inside one suitability-score tie band.
+  //   // - "off" (default): the lowest issue number first.
+  //   // - "session-offset": each concurrent session starts at its own
+  //   //   offset, which cuts claim races between sessions.
+  //   "selectionDesync": "off",
+  //   // Issue numbers of legacy roadmap roots that predate the
+  //   // <prefix>-roadmap-id marker. Default: omitted, which adds no roots.
+  //   "legacyRoots": [1],
+  //   // An open milestone title to prefer inside a score tie band. Default:
+  //   // omitted or "", which turns the preference off.
+  //   "milestoneScope": ""
+  // },
+
+  // Claim verification timing.
+  // "claim": {
+  //   // How long to wait after posting a claim comment before reading it
+  //   // back.
+  //   "verifySettleDelay": "PT5S"
+  // },
+
+  // Guardrails for the self-review and review-fix loops. A key you leave out
+  // keeps its default.
+  // "critiqueLoop": {
+  //   // After this many C-phase loops, the remaining Low-severity accepted
+  //   // findings may be skipped once fix-validate passes.
+  //   "cPhaseLowSeveritySkipAfter": 2,
+  //   // Consecutive E10 passes without progress before the loop stops: a
+  //   // recurring Medium or High finding holds for a maintainer, and Low-only
+  //   // findings go to a follow-up issue.
+  //   "e10NoProgressHoldAfter": 3,
+  //   // The most E10 critique passes per issue. After that, once no High or
+  //   // Medium accepted finding is open and fix-validate passes on the
+  //   // current head, the remaining Low findings go to a follow-up issue.
+  //   "e10MaxPasses": 2,
+  //   // From this pull-request-wide Copilot review count, a wording-only Low
+  //   // finding that is not adopt-now goes to a follow-up issue instead of
+  //   // being fixed.
+  //   "deferAfterRounds": 12,
+  //   // An urgency-based defer rule that applies from the first round.
+  //   // - "off" (default): the rule is off.
+  //   // - "low": a Low finding that is not adopt-now goes to a follow-up
+  //   //   issue.
+  //   // - "low-and-medium": a Low or Medium finding that is not adopt-now
+  //   //   goes to a follow-up issue. High never does under low or
+  //   //   low-and-medium.
+  //   // - "severity-tiered": a severity-and-urgency matrix decides. At step
+  //   //   0 (deferRelaxAtRounds left out, or a review count below its first
+  //   //   entry), High goes to a follow-up issue only at very-low urgency.
+  //   //   See docs/idd-review-policy-profiles.md.
+  //   "deferByUrgency": "off",
+  //   // Tier and urgency records on review replies made through the
+  //   // resolve-review-thread helper.
+  //   // - "off" (default): no tier or urgency is required. A reply that
+  //   //   passes both still gets a Triage: line.
+  //   // - "record": an applied Accepted or Rejected PATH A reply needs a
+  //   //   tier and an urgency, which the helper records. A --path-b reply
+  //   //   and a maintainer-confirmation reply are exempt.
+  //   // - "enforce": like record, and the helper also refuses an Accepted
+  //   //   reply that the defer matrix says to defer, unless a reason is
+  //   //   given. It acts only with severity-tiered, and otherwise behaves as
+  //   //   record.
+  //   "triageRecord": "off",
+  //   // One or two ascending review counts at which severity-tiered relaxes.
+  //   // Default: omitted, which turns the gradient off. No effect under the
+  //   // other deferByUrgency values. docs/customization.md recommends the
+  //   // example value.
+  //   "deferRelaxAtRounds": [4, 7],
+  //   // - "on" (default): a finding that needs a person's judgment may go to
+  //   //   a needs-decision follow-up issue when merging is safe.
+  //   // - "off": the loop stops for a person instead.
+  //   "deferNeedsDecision": "on",
+  //   // The longest the parent waits for a delegated critique subagent.
+  //   "subagentWaitCeiling": "PT20M",
+  //   // A command that C1 and E10 run as the critique reviewer. Default:
+  //   // omitted, which keeps the per-agent critique; a user-global delegate
+  //   // may then apply. Set the key to null to block a user-global delegate
+  //   // without adding a command.
+  //   "delegate": {
+  //     "command": "example-critique-command",
+  //     // When the per-agent critique also runs.
+  //     // - "fallback" (default): only when the delegate fails.
+  //     // - "combined": always, and the findings of both count.
+  //     // - "on-success": only when the delegate succeeds, and the findings
+  //     //   of both count.
+  //     // - "never": never.
+  //     "mode": "fallback"
+  //   },
+  //   // A fire-and-forget command run for each C-phase critique round. It
+  //   // never supplies findings or changes the loop. Default: omitted; a
+  //   // user-global hook may then apply. Set the key to null to block a
+  //   // user-global hook.
+  //   "telemetryHook": {
+  //     "command": "example-telemetry-command"
+  //   }
+  // },
+
+  // Timers for a CHANGES_REQUESTED review whose finding was rejected.
+  // "reviewEscalation": {
+  //   // Reviewer silence after the rejection reply before a maintainer is
+  //   // asked.
+  //   "changesRequestedFirstEscalation": "PT24H",
+  //   // Further silence before the needs-decision label is added and the
+  //   // claim is released.
+  //   "changesRequestedSecondEscalation": "PT48H"
+  // },
+
+  // Approval signals for the issue-author approval gate.
+  // "approvalSignals": {
+  //   // The label that a maintainer approval actor applies to approve an
+  //   // issue.
+  //   "readyLabelName": "idd:ready",
+  //   // - "presence-only" (default): the label counts while it is present,
+  //   //   when a maintainer approval actor applied it.
+  //   // - "event-freshness": the label counts only when it was applied after
+  //   //   the latest substantive issue edit or plan update.
+  //   "labelFreshnessMode": "presence-only"
+  // },
+
+  // Issue-authoring settings.
+  // "issueAuthoring": {
+  //   // The most clarification rounds before a draft must converge.
+  //   "maxClarificationRounds": 3,
+  //   // The label that marks an issue as being authored; Discover skips it.
+  //   "authoringLabelName": "status:authoring",
+  //   // How long the authoring label may stay before a stalled-authoring
+  //   // warning. Keep it below claimTiming.staleAge.
+  //   "authoringStaleAge": "PT4H",
+  //   // Within this window, a heartbeat may reuse a matching recent marker
+  //   // instead of posting a new one. Keep it below authoringStaleAge.
+  //   "heartbeatCoalesceWindow": "PT2M",
+  //   // An existing owner/repo#number issue that records publication intent
+  //   // for a standalone authoring set. Default: omitted; such a set then
+  //   // stops for a person instead of guessing a journal.
+  //   "journalIssue": "example-owner/example-repo#1",
+  //   // The adversarial review of a finished issue draft.
+  //   "adversarialReview": {
+  //     // The longest the caller waits for a delegated draft review.
+  //     "waitCeiling": "PT20M",
+  //     // A command that reviews the draft, which it reads as JSON on stdin.
+  //     // The command is trusted and receives the draft. Default: omitted,
+  //     // which keeps the built-in reviewer; a user-global delegate may then
+  //     // apply. Set the key to null to block a user-global delegate.
+  //     "delegate": {
+  //       "command": "example-draft-review-command",
+  //       // When the built-in reviewer also runs.
+  //       // - "fallback" (default): only when the delegate fails.
+  //       // - "combined": always.
+  //       // - "on-success": only when the delegate succeeds.
+  //       // - "never": never.
+  //       "mode": "fallback"
+  //     }
+  //   }
+  // },
+
+  // How Discover uses the authored autopilot-suitability score, 1 to 5.
+  // "autopilotSuitability": {
+  //   // In autopilot runs, issues that score below the floor go to a person:
+  //   // 1 admits every score, and 5 admits only a score of 5. An issue with
+  //   // no score is evaluated normally, and the safety gates always run.
+  //   "floor": 3,
+  //   // - true (default): Discover uses the score.
+  //   // - false: Discover ignores the score.
+  //   "enabled": true,
+  //   // Issues whose effort footer is L.
+  //   // - "allow" (default): they stay eligible for ready authoring and
+  //   //   autopilot Discover.
+  //   // - "refuse": they fail the ready-authoring audit unless the body is
+  //   //   a roadmap, a bucket audit, or routed to a person, and autopilot
+  //   //   Discover routes an effort L orphan candidate to a person, even
+  //   //   when enabled is false. Roadmap children are not routed by this
+  //   //   policy.
+  //   "effortL": "allow"
+  // },
+
+  // The disposable-worktree guard.
+  // "worktreeGuard": {
+  //   // - false (default): idd-doctor only warns about an implementation
+  //   //   branch checked out in the primary worktree.
+  //   // - true: idd-doctor reports it as an error, and the optional local
+  //   //   hook refuses the commit or push once it is wired.
+  //   "enabled": false,
+  //   // Branch globs that count as implementation branches.
+  //   "branchPatterns": ["issue/*", "roadmap-audit/*"],
+  //   // - false (default): the guard allows a commit on the base branch in
+  //   //   the primary worktree.
+  //   // - true: on developmentBranch in the primary worktree, the hook also
+  //   //   refuses a commit, and any push except one that only deletes refs
+  //   //   other than developmentBranch. It needs enabled set to true and
+  //   //   developmentBranch set.
+  //   "refuseBaseBranchCommits": false
+  // },
+
+  // Upstream defect escalation, for a repository that imported IDD.
+  // "upstreamEscalation": {
+  //   // - false (default): no upstream-candidate marker, label, or issue is
+  //   //   ever produced.
+  //   // - true: a session may record a high-confidence defect in IDD itself
+  //   //   as a local status:upstream-candidate issue. It never writes to
+  //   //   the IDD source repository.
+  //   "enabled": false
+  // },
+
+  // Label names for the IDD roles. Keep every configured label present in
+  // the repository.
+  // "labels": {
+  //   // Applied to roadmap issues; the roadmap-id marker alone identifies a
+  //   // roadmap root.
+  //   "roadmapLabelName": "roadmap",
+  //   // Marks an issue that is blocked on a person; Discover skips it.
+  //   "blockedByHumanLabelName": "status:blocked-by-human",
+  //   // Marks an issue that needs a maintainer decision; Discover skips it.
+  //   "needsDecisionLabelName": "status:needs-decision",
+  //   // Marks an issue whose deliverable is other issues; Discover skips it.
+  //   "authoringOnlyLabelName": "status:authoring-only",
+  //   // Logins of issue auto-labelers that may not apply these labels.
+  //   // Default: omitted, which generates no guard workflow. An empty list
+  //   // is rejected.
+  //   "untrustedLabelerLogins": ["example-labeler[bot]"]
+  // },
+
+  // The F3 fallback when the only merge failure is the self-CODEOWNER
+  // base-branch policy error.
+  // "mergeGate": {
+  //   // - "auto-admin-retry" (default): F3 retries once with an admin merge
+  //   //   when every gate is green and the author is the only eligible
+  //   //   codeowner.
+  //   // - "hold-and-report": F3 always holds and reports.
+  //   "soloCodeownerAdminFallback": "auto-admin-retry"
+  // },
+
+  // Required. Placeholders: replace all four before use. The shell commands
+  // for the lifecycle steps; docs/customization.md describes each one. Use
+  // true only for a command that is meant to do nothing. This object stays
+  // last so that uncommenting any setting above needs no comma change.
+  "commands": {
+    // Installs the dependencies in a fresh worktree; it must be safe to run
+    // again.
+    "install-deps": "replace-me: the install-deps command",
+    // Fixes and checks the working tree before each commit.
+    "fix-validate": "replace-me: the fix-validate command",
+    // Checks the branch before a push, without fixing anything.
+    "pre-push-validate": "replace-me: the pre-push-validate command",
+    // Fixes and fully checks the working tree after review fixes.
+    "post-fix-validate": "replace-me: the post-fix-validate command"
+  }
+}

@@ -66,6 +66,7 @@
       "stripPrefix": "idd-template/",
       "sourceGlobs": [
         "idd-template/.github/idd/*.json",
+        "idd-template/.github/idd/*.jsonc",
         "idd-template/.github/workflows/post-merge-cleanup.yml",
         "idd-template/.githooks/*",
         "idd-template/.cspell.config.yml",
@@ -87,6 +88,7 @@
       ],
       "paths": [
         "idd-template/.github/idd/config.json",
+        "idd-template/.github/idd/config.example.jsonc",
         "idd-template/.github/workflows/post-merge-cleanup.yml",
         "idd-template/.githooks/_idd-worktree-guard.sh",
         "idd-template/.githooks/pre-commit",
@@ -1001,6 +1003,12 @@
       "id": "permissions-doc",
       "source": "idd-template/docs/permissions.md",
       "target": "docs/permissions.md",
+      "mode": "exact"
+    },
+    {
+      "id": "policy-config-example",
+      "source": "idd-template/.github/idd/config.example.jsonc",
+      "target": ".github/idd/config.example.jsonc",
       "mode": "exact"
     },
     {

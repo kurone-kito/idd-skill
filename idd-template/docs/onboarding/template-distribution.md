@@ -264,6 +264,7 @@ mkdir -p "${DEST}/.github/idd" "${DEST}/.github/workflows" \
 
 for FILE in \
   ".github/idd/config.json" \
+  ".github/idd/config.example.jsonc" \
   ".github/workflows/post-merge-cleanup.yml" \
   ".githooks/_idd-worktree-guard.sh" \
   ".githooks/pre-commit" \
@@ -401,6 +402,7 @@ mkdir -p "${DEST}/.github/idd" "${DEST}/.github/workflows" \
 
 for FILE in \
   ".github/idd/config.json" \
+  ".github/idd/config.example.jsonc" \
   ".github/workflows/post-merge-cleanup.yml" \
   ".githooks/_idd-worktree-guard.sh" \
   ".githooks/pre-commit" \
