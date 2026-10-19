@@ -1375,7 +1375,10 @@ export function collectPreMergeReadiness(
       iddAgentLogins,
       // #4467: source `none` (no flag, environment, or policy list) is the
       // unset value, so the secondary quiet window gets the default
-      // advisory bots. Every other reader sees `[]` either way.
+      // advisory bots. Every other reader sees `[]` either way. An empty or
+      // all-blank configured list also resolves to source `none`, so it
+      // gets the default bots too; to keep them out of the window, list only
+      // the primary bot (roadmap #4412).
       advisoryBotLogins:
         advisoryBotLoginsSource === 'none' ? undefined : advisoryBotLogins,
       advisoryBotLoginsSource,

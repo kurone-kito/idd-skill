@@ -6266,8 +6266,9 @@ export function dispositionNamesAdvisoryBot(
     );
 }
 
-// #2544/#2547: classifies the configured secondary advisory bot's current
-// standing for the CURRENT HEAD into exactly one of three outcomes --
+// #2544/#2547: classifies one secondary advisory bot's current standing (one
+// login of the #4467 window set) for the CURRENT HEAD into exactly one of
+// three outcomes --
 // still pending, definitively declined, or genuinely settled -- so
 // `buildSecondaryQuietWindowStatus` can give each its own wait treatment
 // (full window / zero-wait / short settled buffer respectively) instead of
@@ -6478,6 +6479,9 @@ export function computeSecondaryAdvisoryReviewSettlement(
 // into the single `{ settledAt, declined }` shape
 // `buildSecondaryQuietWindowStatus` consumes, so a repository that configures
 // more than one secondary login still gets exactly one quiet-window status.
+// #4467: `buildPreMergeReadinessSummary` passes the window set of
+// `resolveAdvisoryQuietWindowBotLogins` (every non-primary advisory bot),
+// not only the explicit `advisoryWait.secondaryBotLogin` list.
 //
 // - Any login still pending (neither settled nor declined for this HEAD)
 //   keeps the caller on the full configured window: reports
@@ -13727,8 +13731,9 @@ export function buildPreMergeReadinessSummary(
     iddAgentLogins?: unknown[] | null;
     // #4467: also the base of the secondary quiet window's bot set (see
     // `resolveAdvisoryQuietWindowBotLogins`). Omitted or `null` gives that
-    // set the default advisory bots; an explicit `[]` gives it none. Every
-    // other reader here uses the given list only, `[]` when omitted.
+    // set the default advisory bots; an explicit `[]` adds no advisory bots,
+    // so only the explicit secondary logins remain. Every other reader here
+    // uses the given list only, `[]` when omitted.
     advisoryBotLogins?: unknown[] | null;
     advisoryBotLoginsSource?: unknown;
     prAuthorLogin?: string | null;

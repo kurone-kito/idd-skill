@@ -24,6 +24,8 @@ export const DEFAULT_ADVISORY_PRIMARY_BOT_REST_LOGIN =
 // the two stay aligned on which identities count as advisory bots when
 // `.github/idd/config.json` configures none. A single source avoids the
 // drift risk of two independently-maintained literals (see PR #1490 review).
+// #4467: `resolveAdvisoryQuietWindowBotLogins` below also uses it as the
+// default secondary quiet-window set.
 export const DEFAULT_ADVISORY_BOT_LOGINS = [
   'coderabbitai[bot]',
   'chatgpt-codex-connector[bot]',
