@@ -862,9 +862,9 @@ const USER_ACTOR_STEP_AGENT =
 const USER_ACTOR_STEP_ASSIGNED_TARGET =
   /\b(?:steps?|checks?|instructions?|tasks?|this\s+(?:step|check))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
-  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+to|required|instructed|expected|asked|tasked|assigned|responsible|accountable|owns?|owned|belongs?\s+to|runs?|ran|executes?|executed|perform(?:s|ed)|follows?|followed|carries\s+out|carried\s+out|does?|did|completes?|completed|verifies?|verified|checks?|checked|tests?|tested|implements?|implemented|handles?|handled|manages?|managed)\b/i;
-// #4577: assignments in the title and in later issue text can contradict the
-// user-actor wording, so inspect the complete issue corpus.
+  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assigned|responsible|accountable|owns?|owned|belongs?\s+to|runs?|ran|executes?|executed|perform(?:s|ed)|follows?|followed|carries\s+out|carried\s+out|does?|did|completes?|completed|verifies?|verified|checks?|checked|tests?|tested|implements?|implemented|handles?|handled|manages?|managed)\b/i;
+// #4577: scan the title and body as separate fields so an assignment in one
+// cannot combine with an unrelated target in the other.
 function hasAgentAssignmentToStep(context) {
   return context
     .split(/[.!?;]+/)
@@ -2463,6 +2463,7 @@ function isVerbWhollyInBodyCode(
 // comment above.
 function findUnsafeExecutionDirectiveMatch(
   corpus,
+  title,
   bodyOffset,
   body,
   bodyCodeRanges,
@@ -2505,7 +2506,8 @@ function findUnsafeExecutionDirectiveMatch(
         verbStart >= bodyOffset &&
         !verbIsInHtmlComment &&
         USER_ACTOR_STEP_BODY_BOUNDARY.test(userActorStepBodyPrefix) &&
-        !hasAgentAssignmentToStep(corpus);
+        !hasAgentAssignmentToStep(title) &&
+        !hasAgentAssignmentToStep(body);
       // #3073 round 4-6: the repository-owned-validation exception is now
       // a single fully anchored positive signature (see the constants'
       // shared comment above) -- the whole window must match the literal
@@ -3128,6 +3130,7 @@ export function checkTrustSafety(context) {
   // visible verb with a code-wrapped noun must still fail.
   const unsafeDirective = findUnsafeExecutionDirectiveMatch(
     corpus,
+    issue.title,
     bodyOffset,
     issue.body,
     bodyCodeRanges,

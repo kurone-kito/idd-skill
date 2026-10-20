@@ -2748,6 +2748,18 @@ test('trust safety allows a user step after agent text about following behavior 
   assert.equal(result.pass, true);
 });
 
+test('trust safety allows a user step when the title assigns unrelated agent work -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      title: 'Agent should implement keyboard support',
+      body: '## Manual verification\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('trust safety still flags a script assigned to the user -- #4562', () => {
   const result = checkTrustSafety({
     issue: {
@@ -2819,6 +2831,17 @@ test('trust safety rejects a declarative agent responsibility lead-in -- #4577',
     issue: {
       ...BASE_ISSUE,
       body: 'The coding agent is responsible for the following:\n\n## Manual verification\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety rejects a step assigned to the agent with "is for" -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'This step is for the coding agent.\n\nRun this step by the user.',
     },
     trustSafetyAmbiguous: false,
   } as Context);
