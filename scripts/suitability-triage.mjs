@@ -888,7 +888,8 @@ function assignmentHeadingContext(heading) {
     USER_ACTOR_STEP_ASSIGNED_TARGET.source,
     'i',
   ).exec(heading)?.[0];
-  const genericTarget = /\b(?:steps?|checks?)\b/i.exec(heading)?.[0];
+  const genericTargetMatch = /\b(?:steps?|checks?)\b/i.exec(heading);
+  const genericTarget = genericTargetMatch?.[0];
   if (
     !USER_ACTOR_STEP_AGENT.test(heading) ||
     (assignedTarget === undefined &&
@@ -897,7 +898,16 @@ function assignmentHeadingContext(heading) {
   ) {
     return null;
   }
-  if (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(heading)) {
+  const assignmentCue = new RegExp(
+    USER_ACTOR_STEP_ASSIGNMENT_CUE.source,
+    'i',
+  ).exec(heading);
+  const targetIsTheOnlyCue =
+    genericTargetMatch !== null &&
+    assignmentCue !== null &&
+    genericTargetMatch.index === assignmentCue.index &&
+    genericTargetMatch[0].toLowerCase() === assignmentCue[0].toLowerCase();
+  if (assignmentCue !== null && !targetIsTheOnlyCue) {
     return { context: '', assignment: heading };
   }
   const target =

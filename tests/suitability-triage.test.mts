@@ -10234,6 +10234,19 @@ test('trust safety carries a parent agent heading into nested step sections -- #
   }
 });
 
+test('trust safety synthesizes agent assignments from check headings -- #4577', () => {
+  for (const body of [
+    '## Coding agent checks\n\nRun this check by the user.',
+    '## Coding agent checks\n\n### Manual checks\n\nRun this check by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+});
+
 test('trust safety does not widen a numbered parent heading assignment -- #4577', () => {
   const result = checkTrustSafety({
     issue: {
