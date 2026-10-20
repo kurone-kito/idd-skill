@@ -1041,9 +1041,9 @@ const REPO_OWNED_VALIDATION_SENTENCE_START =
 const USER_ACTOR_STEP_WINDOW =
   /^\s*this\s+(?:step|check)\s+by\s+the\s+user\s*$/i;
 // #4577: allow the exact user-actor directive at a normal issue paragraph,
-// heading, or list-item boundary. Agent assignments in either actor order
-// still win across intervening headings and paragraphs. HTML-comment content
-// cannot establish a visible directive boundary.
+// heading, or list-item boundary. Explicit agent assignments in the issue
+// title or body still win, including assignments after the directive.
+// HTML-comment content cannot establish a visible directive boundary.
 const USER_ACTOR_STEP_LIST_MARKER = String.raw`(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ x]\][ \t]+)?`;
 const USER_ACTOR_STEP_BODY_BOUNDARY = new RegExp(
   String.raw`^(?:[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[\s\S]*\n[ \t]*\r?\n[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[ \t]*#{1,6}[ \t]+[^\r\n]*\r?\n[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[\s\S]*\n[ \t]*#{1,6}[ \t]+[^\r\n]*\r?\n[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[\s\S]*\n[ \t]*${USER_ACTOR_STEP_LIST_MARKER}[ \t]*)$`,
@@ -1051,11 +1051,15 @@ const USER_ACTOR_STEP_BODY_BOUNDARY = new RegExp(
 );
 const USER_ACTOR_STEP_AGENT =
   /\b(?:the\s+)?(?:coding\s+)?(?:agent|assistant|automation|AI|you|worker|bot|model)\b/i;
+// #4577: bare "following" is a target only when it introduces an assignment;
+// phrases such as "the following behavior" are not step assignments.
 const USER_ACTOR_STEP_ASSIGNED_TARGET =
-  /\b(?:steps?|checks?|instructions?|tasks?|following)\b/i;
+  /\b(?:steps?|checks?|instructions?|tasks?|this\s+(?:step|check))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
-  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+to|required|instructed|expected|asked|tasked|assigned|responsible|accountable|runs?|ran|executes?|executed|perform(?:s|ed)|follows?|followed|carries\s+out|carried\s+out|does?|did|completes?|completed|verifies?|verified|checks?|checked|tests?|tested|implements?|implemented|handles?|handled|manages?|managed)\b/i;
+  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+to|required|instructed|expected|asked|tasked|assigned|responsible|accountable|owns?|owned|belongs?\s+to|runs?|ran|executes?|executed|perform(?:s|ed)|follows?|followed|carries\s+out|carried\s+out|does?|did|completes?|completed|verifies?|verified|checks?|checked|tests?|tested|implements?|implemented|handles?|handled|manages?|managed)\b/i;
 
+// #4577: assignments in the title and in later issue text can contradict the
+// user-actor wording, so inspect the complete issue corpus.
 function hasAgentAssignmentToStep(context: string): boolean {
   return context
     .split(/[.!?;]+/)
@@ -2764,7 +2768,6 @@ function findUnsafeExecutionDirectiveMatch(
       );
       const targetMatch = targetPattern.exec(window);
       const userActorStepBodyPrefix = corpus.slice(bodyOffset, verbStart);
-      const userActorStepAssignmentContext = `${userActorStepBodyPrefix}${verbText}${window}`;
       const verbBodyStart = verbStart - bodyOffset;
       const verbIsInHtmlComment = bodyHtmlCommentRanges.some(
         (range) =>
@@ -2778,7 +2781,7 @@ function findUnsafeExecutionDirectiveMatch(
         verbStart >= bodyOffset &&
         !verbIsInHtmlComment &&
         USER_ACTOR_STEP_BODY_BOUNDARY.test(userActorStepBodyPrefix) &&
-        !hasAgentAssignmentToStep(userActorStepAssignmentContext);
+        !hasAgentAssignmentToStep(corpus);
       // #3073 round 4-6: the repository-owned-validation exception is now
       // a single fully anchored positive signature (see the constants'
       // shared comment above) -- the whole window must match the literal

@@ -2737,6 +2737,17 @@ test('trust safety allows a user-assigned step after unrelated agent work -- #45
   assert.equal(result.pass, true);
 });
 
+test('trust safety allows a user step after agent text about following behavior -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent should implement the following behavior.\n\n## Manual verification\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('trust safety still flags a script assigned to the user -- #4562', () => {
   const result = checkTrustSafety({
     issue: {
@@ -2853,7 +2864,9 @@ test('trust safety rejects passive and direct-object agent assignments -- #4577'
   for (const body of [
     'The following must be performed by the coding agent:\n\nRun this step by the user.',
     'The following steps are performed by the coding agent:\n\nRun this step by the user.',
+    'The following step is owned by the coding agent.\n\nRun this step by the user.',
     'The coding agent is assigned the following steps:\n\nRun this step by the user.',
+    'The coding agent owns the following step.\n\nRun this step by the user.',
     'The coding agent is tasked with the following steps:\n\nRun this step by the user.',
     'The coding agent\n\nmust perform the following steps:\n\nRun this step by the user.',
   ]) {
@@ -2863,6 +2876,29 @@ test('trust safety rejects passive and direct-object agent assignments -- #4577'
     } as Context);
     assert.equal(result.pass, false, body);
   }
+});
+
+test('trust safety rejects an agent assignment in the issue title -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      title: 'The coding agent must perform the following steps',
+      body: 'Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety rejects an agent assignment to this step after the user directive -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'Run this step by the user. The coding agent must perform this step.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
 });
 
 test('trust safety rejects agent assignment lead-ins beyond the former 100-character limit -- #4577', () => {
