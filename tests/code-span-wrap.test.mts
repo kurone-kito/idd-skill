@@ -127,6 +127,17 @@ test('does not flag common abbreviations before lowercase prose', () => {
   }
 });
 
+test('does not flag common title abbreviations before names', () => {
+  for (const span of [
+    '`See Dr. Smith`',
+    '`Contact Prof. Nguyen`',
+    '`Ask Mr. Lee`',
+    '`Visit St. Louis`',
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
+});
+
 test('still flags dotted identifiers whose suffix resembles an abbreviation', () => {
   for (const [span, before, after] of [
     ['`Namespace.e.g. type`', 'Namespace.e.g.', 'type'],
@@ -160,6 +171,17 @@ test('flags uppercase dotted-token continuations', () => {
       },
     ]);
   }
+});
+
+test('flags lowercase dotted prefixes before capitalized identifiers', () => {
+  assert.deepEqual(findCorruptingCodeSpanWraps('`com.example. MyClass`'), [
+    {
+      line: 1,
+      before: 'com.example.',
+      after: 'MyClass',
+      separator: 'literal-space',
+    },
+  ]);
 });
 
 test('does not flag sentence periods before prose in multi-tick code examples', () => {

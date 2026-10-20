@@ -61,6 +61,10 @@ export interface CodeSpanWrapViolation {
 const MID_TOKEN_CONTINUATION = /[-_/.]/;
 const TOKEN_CONTINUING = /[A-Za-z0-9\-_/.]/;
 const CONTEXT_CHARS = 20;
+const PROPER_NAME_TITLE_ABBREVIATION =
+  /(?:^|(?<![\p{L}\p{N}_./-]))(?:Mr|Mrs|Ms|Mx|Dr|Prof|Rev|Hon|Sr|Jr|St|Capt|Col|Gen|Sgt|Lt|Maj|Cmdr|Adm|Fr|Br)\.$/iu;
+const DOTTED_IDENTIFIER_PREFIX =
+  /(?:^|[^A-Za-z0-9_-])[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+$/u;
 
 function lineStartsFor(text: string): number[] {
   const starts = [0];
@@ -139,6 +143,15 @@ function isSentencePunctuation(
     /^[A-Z][A-Za-z]*(?:[-'’][A-Za-z]+)*(?=[,.!?;:]?(?:\s|`|$))/u.exec(
       suffix,
     )?.[0];
+  const prefix = inner.slice(0, delimiterIndex + 1);
+  if (nextWord !== undefined && PROPER_NAME_TITLE_ABBREVIATION.test(prefix)) {
+    return true;
+  }
+  // Lowercase namespace segments still form one dotted identifier. Keep
+  // their final period eligible for detection before a capitalized type.
+  if (DOTTED_IDENTIFIER_PREFIX.test(inner.slice(0, delimiterIndex))) {
+    return false;
+  }
   const followingText =
     nextWord === undefined ? '' : suffix.slice(nextWord.length).trimStart();
   const followingProseWord =
