@@ -2334,8 +2334,11 @@ function hasAgentPronounAssignmentBeforeUserStep(
   );
   const listItemPrefixPattern =
     /^([ \t]*)(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/;
-  const directiveListItemPrefix =
-    listItemPrefixPattern.exec(directiveLinePrefix);
+  const directiveListItemPrefix = USER_ACTOR_STEP_LIST_PREFIX.test(
+    directiveLinePrefix,
+  )
+    ? listItemPrefixPattern.exec(directiveLinePrefix)
+    : null;
   let precedingEnd =
     directiveListItemPrefix === null ? directiveBodyStart : directiveLineStart;
   while (
