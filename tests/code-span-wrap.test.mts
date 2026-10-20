@@ -113,6 +113,7 @@ test('does not flag legitimate option delimiters, comments, ellipses, or words',
   const spans = [
     '`-- option`',
     '`text -- option`',
+    '`. Add`',
     '`<!-- comment opener -->`',
     '`// comment opener`',
     '`value;// comment opener`',
@@ -123,6 +124,52 @@ test('does not flag legitimate option delimiters, comments, ellipses, or words',
   ];
 
   assert.deepEqual(findCorruptingCodeSpanWraps(spans.join('\n')), []);
+});
+
+test('flags a whitespace split in a URL after its scheme slashes', () => {
+  assert.deepEqual(findCorruptingCodeSpanWraps('`https:// example.com`'), [
+    {
+      line: 1,
+      before: 'https://',
+      after: 'example.com',
+      separator: 'literal-space',
+    },
+  ]);
+});
+
+test('does not treat escaped backticks as inline code for literal splits', () => {
+  assert.deepEqual(findCorruptingCodeSpanWraps('Example \\`foo- bar\\`'), []);
+});
+
+test('does not scan inline code examples inside HTML comments', () => {
+  assert.deepEqual(
+    findCorruptingCodeSpanWraps('Intro <!-- example: `foo- bar` --> tail'),
+    [],
+  );
+  assert.deepEqual(
+    findCorruptingCodeSpanWraps(
+      'Intro <!-- example: `foo- bar --> tail `real- code`',
+    ),
+    [
+      {
+        line: 1,
+        before: 'real-',
+        after: 'code',
+        separator: 'literal-space',
+      },
+    ],
+  );
+});
+
+test('still scans a literal comment opener inside an actual inline code span', () => {
+  assert.deepEqual(findCorruptingCodeSpanWraps('`<!-- foo- bar -->`'), [
+    {
+      line: 1,
+      before: '<!-- foo-',
+      after: 'bar -->',
+      separator: 'literal-space',
+    },
+  ]);
 });
 
 test('flags a literal-space split after a delimiter at the start of a span', () => {
@@ -559,4 +606,18 @@ test('findCorruptingCodeSpanWraps stays linear on many unclosed runs each follow
     `findCorruptingCodeSpanWraps took ${Math.round(elapsedMs)} ms for 25,000 unclosed runs`,
   );
   assert.deepEqual(violations, []);
+});
+
+test('findCorruptingCodeSpanWraps stays linear on distinct unmatched backtick runs before a literal split', () => {
+  for (const size of [100, 1000]) {
+    const text = `${Array.from({ length: size }, (_, index) => `${'`'.repeat(index + 1)}x`).join('')}- x`;
+    const start = performance.now();
+    const violations = findCorruptingCodeSpanWraps(text);
+    const elapsedMs = performance.now() - start;
+    assert.ok(
+      elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
+      `findCorruptingCodeSpanWraps took ${Math.round(elapsedMs)} ms for ${size} distinct unmatched runs`,
+    );
+    assert.deepEqual(violations, []);
+  }
 });

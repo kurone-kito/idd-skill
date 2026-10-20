@@ -38,7 +38,9 @@
 import {
   findFencedCodeRanges,
   findHtmlBlockRanges,
+  findHtmlCommentRanges,
   findIndentedCodeRanges,
+  findInlineCodeRanges,
   findInlineCodeSpans,
   findMarkdownCodeRanges,
   maskMarkdownCodeRegionsPreservingPositions,
@@ -98,10 +100,12 @@ function isStandaloneDoubleDash(
 function isLineCommentOpener(inner: string, secondSlashIndex: number): boolean {
   // A C-like line comment can start directly after code, as in
   // `value;// note`; requiring whitespace before the opener misses it.
-  if (inner[secondSlashIndex - 1] !== '/') {
+  const firstSlashIndex = secondSlashIndex - 1;
+  if (inner[firstSlashIndex] !== '/') {
     return false;
   }
-  return true;
+  // A URI scheme's `://` is part of the token, not a line comment.
+  return inner[firstSlashIndex - 1] !== ':';
 }
 
 function isHtmlCommentOpener(inner: string, secondDashIndex: number): boolean {
@@ -120,6 +124,23 @@ function isPartOfEllipsis(inner: string, dotIndex: number): boolean {
   return end - start >= 3;
 }
 
+function hasLiteralSplitCandidate(text: string): boolean {
+  for (let index = 0; index + 1 < text.length; index += 1) {
+    const delimiter = text[index];
+    const whitespace = text[index + 1];
+    if (
+      (delimiter === '-' ||
+        delimiter === '_' ||
+        delimiter === '/' ||
+        delimiter === '.') &&
+      (whitespace === ' ' || whitespace === '\t')
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Find inline code spans where a line break or literal horizontal
  * whitespace splits a token per the rules above. Returns one violation
@@ -129,28 +150,52 @@ export function findCorruptingCodeSpanWraps(
   text: string,
 ): CodeSpanWrapViolation[] {
   const normalized = text.replace(/\r\n?/g, '\n');
-  // Mask only block code and raw HTML, where backticks are literal text.
-  // maskMarkdownForScan also parses inline spans when inlineCode is 'keep';
-  // doing that here would duplicate findInlineCodeSpans and slow large scans.
+  // Mask block code and raw HTML first. Only parse inline ranges when the
+  // input contains a comment opener or a possible literal split, preserving
+  // the linear path for long backtick runs and ordinary spans.
   const fencedRanges = findFencedCodeRanges(normalized);
-  const scanned = maskMarkdownCodeRegionsPreservingPositions(
+  const htmlBlockRanges = findHtmlBlockRanges(normalized, fencedRanges);
+  const blockScanned = maskMarkdownCodeRegionsPreservingPositions(
     normalized,
     mergeMarkdownCodeRanges([
       ...fencedRanges,
       ...findIndentedCodeRanges(normalized, fencedRanges),
-      ...findHtmlBlockRanges(normalized, fencedRanges),
+      ...htmlBlockRanges,
     ]),
   );
+  // HTML comments render as opaque text. Only ranges containing a literal
+  // opener need to be passed so a genuine opener inside a code span stays text.
+  let scanned = blockScanned;
+  if (blockScanned.includes('<!--')) {
+    const codeRangesWithCommentOpeners = findInlineCodeRanges(
+      blockScanned,
+      0,
+      blockScanned.length,
+    ).filter(({ start, end }) =>
+      blockScanned.slice(start, end).includes('<!--'),
+    );
+    const htmlCommentRanges = findHtmlCommentRanges(
+      blockScanned,
+      codeRangesWithCommentOpeners,
+      fencedRanges,
+      htmlBlockRanges,
+    );
+    if (htmlCommentRanges.length > 0) {
+      scanned = maskMarkdownCodeRegionsPreservingPositions(
+        blockScanned,
+        mergeMarkdownCodeRanges(htmlCommentRanges),
+      );
+    }
+  }
   const lineStarts = lineStartsFor(scanned);
-  const violations: CodeSpanWrapViolation[] = [];
+  const violations: Array<{
+    offset: number;
+    violation: CodeSpanWrapViolation;
+  }> = [];
 
   for (const span of findInlineCodeSpans(scanned)) {
     const { inner } = span;
     const innerStart = span.index + span.ticks.length;
-    const spanViolations: Array<{
-      offset: number;
-      violation: CodeSpanWrapViolation;
-    }> = [];
     let cursor = 0;
     for (;;) {
       const breakIndex = inner.indexOf('\n', cursor);
@@ -171,8 +216,8 @@ export function findCorruptingCodeSpanWraps(
         nextChar !== undefined &&
         TOKEN_CONTINUING.test(nextChar)
       ) {
-        spanViolations.push({
-          offset: breakIndex,
+        violations.push({
+          offset: innerStart + breakIndex,
           violation: {
             line: lineNumberAt(innerStart + breakIndex, lineStarts),
             before: inner.slice(
@@ -185,7 +230,21 @@ export function findCorruptingCodeSpanWraps(
       }
       cursor = breakIndex + 1;
     }
+  }
 
+  // The literal-whitespace extension follows CommonMark delimiter and
+  // escape rules. Keep the existing line-break scanner's established
+  // matching behavior above.
+  const literalCodeRanges = hasLiteralSplitCandidate(scanned)
+    ? findInlineCodeRanges(scanned, 0, scanned.length)
+    : [];
+  for (const range of literalCodeRanges) {
+    let tickCount = 0;
+    while (scanned[range.start + tickCount] === '`') {
+      tickCount += 1;
+    }
+    const innerStart = range.start + tickCount;
+    const inner = scanned.slice(innerStart, range.end - tickCount);
     for (
       let delimiterIndex = 0;
       delimiterIndex < inner.length;
@@ -220,8 +279,7 @@ export function findCorruptingCodeSpanWraps(
 
       if (
         (delimiter === '.' &&
-          previous !== undefined &&
-          /[A-Za-z0-9]/.test(previous) &&
+          (previous === undefined || /[A-Za-z0-9]/.test(previous)) &&
           /^[A-Z]/.test(next)) ||
         (delimiter === '-' &&
           (isStandaloneDoubleDash(inner, delimiterIndex) ||
@@ -232,8 +290,8 @@ export function findCorruptingCodeSpanWraps(
         continue;
       }
 
-      spanViolations.push({
-        offset: delimiterIndex + 1,
+      violations.push({
+        offset: innerStart + delimiterIndex + 1,
         violation: {
           line: lineNumberAt(innerStart + delimiterIndex + 1, lineStarts),
           before: inner.slice(
@@ -245,12 +303,10 @@ export function findCorruptingCodeSpanWraps(
         },
       });
     }
-
-    spanViolations.sort((left, right) => left.offset - right.offset);
-    violations.push(...spanViolations.map(({ violation }) => violation));
   }
 
-  return violations;
+  violations.sort((left, right) => left.offset - right.offset);
+  return violations.map(({ violation }) => violation);
 }
 
 // idd-skill issue #2876: the corrupting-line-wrap failure mode above is not
