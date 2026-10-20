@@ -1921,7 +1921,7 @@ test('a pending signal still kills a running task when the follow output is inco
             .listeners('SIGTERM')
             .filter((listener) => !signalListenersBefore.has(listener))
             .at(-1);
-          if (typeof signalHandler === 'function') signalHandler();
+          if (typeof signalHandler === 'function') signalHandler('SIGTERM');
         });
       });
     }
