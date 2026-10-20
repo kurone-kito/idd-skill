@@ -10579,6 +10579,78 @@ test('trust safety scopes unnumbered assignments to step or check target kind --
   assert.equal(matchingHeadingKind.pass, false);
 });
 
+test('trust safety scopes unnumbered assignments to their heading section -- Codex review #4327719894', () => {
+  const body =
+    '## Implementation\n\nThe coding agent must perform this step.\n\n## Manual verification\n\nRun this step by the user.';
+  const result = checkTrustSafety({
+    issue: { ...BASE_ISSUE, body },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true, body);
+});
+
+test('trust safety scopes numbered assignments to their ordered list -- Codex review #4327719905', () => {
+  const separateLists = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Verification\n\n1. The coding agent must perform step 2.\n2. Continue the first list.\n\nA separate list follows.\n\n1. Prepare the environment.\n2. Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(separateLists.pass, true);
+
+  const sameList = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Verification\n\n1. The coding agent must perform step 2.\n2. Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(sameList.pass, false);
+});
+
+test('trust safety requires a direct relation between an agent cue and its target -- Copilot review #5588868628', () => {
+  const incidentalReference = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent should review the logs before this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(incidentalReference.pass, true);
+
+  const directAssignment = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent should perform this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(directAssignment.pass, false);
+});
+
+test('trust safety keeps agent actors across incidental and compound user mentions -- Codex review #4328001914 and #4328001921', () => {
+  for (const body of [
+    'The coding agent, using input from the user, must perform this step.\n\nRun this step by the user.',
+    'The coding agent and the user must perform this step.\n\nRun this step by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+
+  const replacementSubject = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must inspect the logs, and the user must perform this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(replacementSubject.pass, true);
+});
+
 test('trust safety recognizes completed, managed, followed, and carried-out assignments -- Copilot review #5588505530', () => {
   for (const [assignment, directive] of [
     [
