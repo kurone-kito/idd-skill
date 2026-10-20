@@ -104,8 +104,40 @@ function isLineCommentOpener(inner: string, secondSlashIndex: number): boolean {
   if (inner[firstSlashIndex] !== '/') {
     return false;
   }
-  // A URI scheme's `://` is part of the token, not a line comment.
-  return inner[firstSlashIndex - 1] !== ':';
+  // A valid URI scheme's `://` is part of the token, not a line comment.
+  const colonIndex = firstSlashIndex - 1;
+  if (inner[colonIndex] !== ':') {
+    return true;
+  }
+  let schemeStart = colonIndex - 1;
+  while (schemeStart >= 0 && /[A-Za-z0-9+.-]/.test(inner[schemeStart] ?? '')) {
+    schemeStart -= 1;
+  }
+  const scheme = inner.slice(schemeStart + 1, colonIndex);
+  const previous = inner[schemeStart];
+  return (
+    !/^[A-Za-z][A-Za-z0-9+.-]*$/.test(scheme) ||
+    (previous !== undefined && /[A-Za-z0-9+.-]/.test(previous))
+  );
+}
+
+function isSentencePunctuation(
+  inner: string,
+  delimiterIndex: number,
+  afterIndex: number,
+): boolean {
+  const previous = inner[delimiterIndex - 1];
+  // Preserve sentence periods followed by an ordinary sentence. Requiring
+  // a capitalized first word and a lowercase continuation avoids treating
+  // uppercase dotted-token continuations such as `README. MD` as prose.
+  const suffix = inner.slice(afterIndex).replace(/_+$/u, '').trimEnd();
+  if (previous === undefined) {
+    return /^[A-Z][a-z]+$/.test(suffix);
+  }
+  if (!/[a-z]/.test(previous)) {
+    return false;
+  }
+  return /^[A-Z][a-z]+(?:\s+[a-z][A-Za-z'-]*)+(?:[.!?])?$/.test(suffix);
 }
 
 function isHtmlCommentOpener(inner: string, secondDashIndex: number): boolean {
@@ -279,8 +311,7 @@ export function findCorruptingCodeSpanWraps(
 
       if (
         (delimiter === '.' &&
-          (previous === undefined || /[A-Za-z0-9]/.test(previous)) &&
-          /^[A-Z]/.test(next)) ||
+          isSentencePunctuation(inner, delimiterIndex, afterIndex)) ||
         (delimiter === '-' &&
           (isStandaloneDoubleDash(inner, delimiterIndex) ||
             isHtmlCommentOpener(inner, delimiterIndex))) ||

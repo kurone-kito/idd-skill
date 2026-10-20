@@ -109,6 +109,20 @@ test('does not flag the three current sentence-punctuation examples', () => {
   }
 });
 
+test('flags uppercase dotted-token continuations', () => {
+  for (const span of ['`README. MD`', '`config. JSON`', '`Namespace. Type`']) {
+    const [before, after] = span.slice(1, -1).split('. ');
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [
+      {
+        line: 1,
+        before: `${before}.`,
+        after,
+        separator: 'literal-space',
+      },
+    ]);
+  }
+});
+
 test('does not flag legitimate option delimiters, comments, ellipses, or words', () => {
   const spans = [
     '`-- option`',
@@ -135,6 +149,10 @@ test('flags a whitespace split in a URL after its scheme slashes', () => {
       separator: 'literal-space',
     },
   ]);
+});
+
+test('does not treat a numeric label followed by // as a URI scheme', () => {
+  assert.deepEqual(findCorruptingCodeSpanWraps('`case 1:// comment`'), []);
 });
 
 test('does not treat escaped backticks as inline code for literal splits', () => {
