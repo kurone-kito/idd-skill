@@ -152,11 +152,15 @@ function isSentencePunctuation(
   const followingProseWord =
     /^[A-Za-z]/u.test(followingText) ||
     /^[,.!?;:](?:\s|`|$)/u.test(followingText);
-  // Lowercase namespace segments still form one dotted identifier, but a
-  // following prose word marks a sentence boundary after a dotted name.
+  const camelCaseContinuation =
+    nextWord !== undefined && /[a-z][A-Z]/u.test(nextWord);
+  // Lowercase namespace segments still form one dotted identifier before a
+  // lone capitalized word or a camel-cased type, even when code follows it.
+  // A later ordinary prose word marks a sentence boundary after a dotted
+  // name.
   if (
     nextWord !== undefined &&
-    !followingProseWord &&
+    (!followingProseWord || camelCaseContinuation) &&
     DOTTED_IDENTIFIER_PREFIX.test(inner.slice(0, delimiterIndex))
   ) {
     return false;

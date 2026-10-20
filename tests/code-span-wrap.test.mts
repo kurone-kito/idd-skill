@@ -174,14 +174,23 @@ test('flags uppercase dotted-token continuations', () => {
 });
 
 test('flags lowercase dotted prefixes before capitalized identifiers', () => {
-  assert.deepEqual(findCorruptingCodeSpanWraps('`com.example. MyClass`'), [
-    {
-      line: 1,
-      before: 'com.example.',
-      after: 'MyClass',
-      separator: 'literal-space',
-    },
-  ]);
+  for (const [span, after] of [
+    ['`com.example. MyClass`', 'MyClass'],
+    ['`com.example. MyClass extends Base`', 'MyClass extends Base'],
+  ]) {
+    assert.deepEqual(
+      findCorruptingCodeSpanWraps(span),
+      [
+        {
+          line: 1,
+          before: 'com.example.',
+          after,
+          separator: 'literal-space',
+        },
+      ],
+      span,
+    );
+  }
 });
 
 test('does not flag a sentence after a dotted name', () => {
