@@ -1380,15 +1380,29 @@ interface PendingUserActorForwardAssignment {
 function retainForwardAssignmentForList(
   assignment: PendingUserActorForwardAssignment | null,
   listId: number | null,
+  parentListIds: ReadonlyMap<number, number | null>,
 ): PendingUserActorForwardAssignment | null {
   if (
     assignment === null ||
     assignment.listId === null ||
-    assignment.listId !== listId
+    !isListNestedWithin(listId, assignment.listId, parentListIds)
   ) {
     return null;
   }
   return assignment;
+}
+
+function isListNestedWithin(
+  listId: number | null,
+  ancestorListId: number,
+  parentListIds: ReadonlyMap<number, number | null>,
+): boolean {
+  let currentListId = listId;
+  while (currentListId !== null) {
+    if (currentListId === ancestorListId) return true;
+    currentListId = parentListIds.get(currentListId) ?? null;
+  }
+  return false;
 }
 
 function splitUserActorStepClauses(
@@ -1398,6 +1412,8 @@ function splitUserActorStepClauses(
   const clauses: ScopedUserActorStepClause[] = [];
   const paragraphBoundary =
     /\r?\n[ \t]*\r?\n|\r?\n(?=[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+)/g;
+  const listParentIds =
+    listIndex?.listParentIds ?? new Map<number, number | null>();
   let pendingForwardAssignment: PendingUserActorForwardAssignment | null = null;
   let pendingAgentSubject: string | null = null;
   for (const [sectionId, section] of splitMarkdownHeadingSections(
@@ -1466,7 +1482,11 @@ function splitUserActorStepClauses(
       if (
         pendingForwardAssignment !== null &&
         pendingForwardAssignment.listId !== null &&
-        paragraphListId !== pendingForwardAssignment.listId
+        !isListNestedWithin(
+          paragraphListId,
+          pendingForwardAssignment.listId,
+          listParentIds,
+        )
       ) {
         pendingForwardAssignment = null;
       }
@@ -1512,6 +1532,7 @@ function splitUserActorStepClauses(
       pendingForwardAssignment = retainForwardAssignmentForList(
         inheritedForwardAssignment,
         paragraphListId,
+        listParentIds,
       );
       const agentSubject =
         agentPrefix !== null ? `${agentPrefix} ${paragraph}` : paragraph;
@@ -2147,6 +2168,7 @@ interface UserActorStepBodyBoundaryIndex {
   lineKinds: ('blank' | 'heading' | 'setext' | 'other')[];
   orderedListOrdinals: (number | null)[];
   orderedListIds: (number | null)[];
+  listParentIds: Map<number, number | null>;
   headingSectionRanges: {
     start: number;
     end: number;
@@ -2167,6 +2189,7 @@ interface UserActorStepListFrame {
 interface UserActorStepOrderedListIndex {
   ordinals: (number | null)[];
   listIds: (number | null)[];
+  parentIds: Map<number, number | null>;
 }
 
 function buildOrderedUserStepListOrdinals(
@@ -2177,6 +2200,7 @@ function buildOrderedUserStepListOrdinals(
 ): UserActorStepOrderedListIndex {
   const ordinals: (number | null)[] = [];
   const listIds: (number | null)[] = [];
+  const parentIds = new Map<number, number | null>();
   const stack: UserActorStepListFrame[] = [];
   let nextListId = 0;
 
@@ -2227,6 +2251,7 @@ function buildOrderedUserStepListOrdinals(
           continuingList.nextOrdinal = ordinal + 1;
           continuingList.contentIndent = contentIndent;
         } else {
+          const parentListId = stack.at(-1)?.listId ?? null;
           stack.push({
             indent,
             kind: 'ordered',
@@ -2235,6 +2260,7 @@ function buildOrderedUserStepListOrdinals(
             contentIndent,
             listId,
           });
+          parentIds.set(listId, parentListId);
         }
         ordinals[lineIndex] = ordinal;
         listIds[lineIndex] = listId;
@@ -2247,6 +2273,7 @@ function buildOrderedUserStepListOrdinals(
         if (continuingList !== null) {
           continuingList.contentIndent = contentIndent;
         } else {
+          const parentListId = stack.at(-1)?.listId ?? null;
           stack.push({
             indent,
             kind: 'unordered',
@@ -2255,6 +2282,7 @@ function buildOrderedUserStepListOrdinals(
             contentIndent,
             listId,
           });
+          parentIds.set(listId, parentListId);
         }
         ordinals[lineIndex] = null;
         listIds[lineIndex] = listId;
@@ -2285,7 +2313,7 @@ function buildOrderedUserStepListOrdinals(
     }
   }
 
-  return { ordinals, listIds };
+  return { ordinals, listIds, parentIds };
 }
 
 function createUserActorStepBodyBoundaryIndex(
@@ -2353,6 +2381,7 @@ function createUserActorStepBodyBoundaryIndex(
     lineKinds,
     orderedListOrdinals: orderedLists.ordinals,
     orderedListIds: orderedLists.listIds,
+    listParentIds: orderedLists.parentIds,
     headingSectionRanges: headingSections.map((section, sectionId) => ({
       start: section.bodyStart,
       end: section.bodyEnd,

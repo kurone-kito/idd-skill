@@ -10704,6 +10704,7 @@ test('trust safety keeps a colon-introduced agent assignment across its full lis
   for (const body of [
     'The coding agent is responsible for:\n\n- Prepare the environment.\n- Run this step by the user.',
     'The coding agent is responsible for:\n\n1. Prepare the environment.\n2. Run this step by the user.',
+    'The coding agent is responsible for:\n\n- Prepare the environment.\n  - Check the prerequisites.\n- Run this step by the user.',
   ]) {
     const result = checkTrustSafety({
       issue: { ...BASE_ISSUE, body },
