@@ -1639,7 +1639,7 @@ test('pueue follow failure and early stream end leave a running task outcome unk
   assert.equal(resultReadFailure.status, 3);
 });
 
-test('pueue recovers a task completed before a failed follow read', {
+test('pueue retains a completed task when its follow read fails', {
   skip: process.platform === 'win32',
 }, async () => {
   const policy = { localExec: { admission: { backend: 'pueue' } } };
@@ -1653,18 +1653,16 @@ test('pueue recovers a task completed before a failed follow read', {
     taskOutput: 'full task output\n',
   });
   const result = await runBin(['--', 'true'], repo, fake.env).done;
-  assert.equal(result.status, 7, result.stderr);
+  assert.equal(result.status, 3, result.stderr);
   assert.equal(result.stdout, 'partial task output\n');
-  assert.doesNotMatch(result.stderr, /outcome unknown/);
+  assert.match(result.stderr, /pueue task outcome unknown \(task 17\)/);
   const state = readFakePueue(fake);
+  assert.ok((state.tasks as Record<string, unknown>)['17']);
   assert.equal(
-    (state.tasks as Record<string, unknown> | undefined)?.['17'],
-    undefined,
-  );
-  assert.ok(
     (state.calls as string[][]).some(
       (call) => call[0] === 'remove' && call[1] === '17',
     ),
+    false,
   );
 });
 
@@ -1904,6 +1902,46 @@ test('a signal while running kills the pueue task; failed kill exits even if fol
   const calls3 = readFakePueue(fake3).calls as string[][];
   assert.ok(calls3.some((call) => call[0] === 'kill' && call[1] === '17'));
   assert.ok(calls3.some((call) => call[0] === 'remove' && call[1] === '17'));
+});
+
+test('a pending signal still kills a running task when the follow output is incomplete', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const signalListenersBefore = new Set(process.listeners('SIGTERM'));
+  const spawnWithSignalAfterFollowClose = (
+    command: string,
+    args: string[],
+    options: import('node:child_process').SpawnOptions,
+  ): ChildProcess => {
+    const child = spawn(command, args, options);
+    if (args[0] === 'follow') {
+      queueMicrotask(() => {
+        child.once('close', () => {
+          const signalHandler = process
+            .listeners('SIGTERM')
+            .filter((listener) => !signalListenersBefore.has(listener))
+            .at(-1);
+          if (typeof signalHandler === 'function') signalHandler();
+        });
+      });
+    }
+    return child;
+  };
+  const result = await runPueueTest(
+    { localExec: { admission: { backend: 'pueue' } } },
+    {
+      initialStatus: 'Running',
+      followExit: 1,
+      followFinalStatus: 'Running',
+      streamStderr: 'Pueue: Error while reading file: simulated failure\n',
+    },
+    ['true'],
+    { findFlock: () => null, spawn: spawnWithSignalAfterFollowClose },
+  );
+  assert.equal(result.status, 143, result.stderr);
+  const calls = readFakePueue(result.fake).calls as string[][];
+  assert.ok(calls.some((call) => call[0] === 'kill' && call[1] === '17'));
+  assert.ok(calls.some((call) => call[0] === 'remove' && call[1] === '17'));
 });
 
 test('a signal after the task finishes lets pueue follow drain its remaining output', {

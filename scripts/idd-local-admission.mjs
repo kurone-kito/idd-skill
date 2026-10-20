@@ -817,6 +817,46 @@ function runPueueAdmission(command, admission, raw, deps) {
   };
   const readCheckedTask = async (taskId, label, includeOutput = false) =>
     readTask(taskId, label, includeOutput);
+  const handleRunningSignal = async (
+    taskId,
+    taskLabel,
+    followPromise,
+    signalled,
+  ) => {
+    phase = 'queued';
+    const beforeKill = await readCheckedTask(taskId, taskLabel);
+    if (beforeKill?.state === 'done') {
+      // The task already completed; let pueue finish streaming its output.
+      const completedFollow = await followPromise;
+      if (completedFollow.outputIncomplete)
+        return pueueOutcomeUnknown(deps, `task ${taskId}`);
+      return finishTask(taskId, beforeKill, false);
+    }
+    if (
+      beforeKill === null ||
+      (beforeKill.state !== 'running' && beforeKill.state !== 'paused')
+    ) {
+      await stopFollow(followPromise);
+      return pueueOutcomeUnknown(deps, `task ${taskId}`);
+    }
+    const killed = await call(['kill', taskId]);
+    if (isPueueClientSuccess(killed)) {
+      if (activeClient !== null) activeClient = null;
+      await stopFollow(followPromise);
+      await removeTask(taskId);
+      return signalStatus(signalled);
+    }
+    const afterKill = await readCheckedTask(taskId, taskLabel);
+    if (afterKill?.state === 'done') {
+      // The task completed before the kill landed; let pueue finish streaming its output.
+      const completedFollow = await followPromise;
+      if (completedFollow.outputIncomplete)
+        return pueueOutcomeUnknown(deps, `task ${taskId}`);
+      return finishTask(taskId, afterKill, false);
+    }
+    await stopFollow(followPromise);
+    return pueueOutcomeUnknown(deps, `task ${taskId}`);
+  };
   const readFinishedTask = async (taskId, label) => {
     const task = await readCheckedTask(taskId, label, true);
     if (task?.state !== 'done') return null;
@@ -1006,79 +1046,50 @@ function runPueueAdmission(command, admission, raw, deps) {
       signalPromise.then((value) => ({ kind: 'signal', value })),
     ]);
     if (followSignal.kind === 'signal') {
-      phase = 'queued';
       const signalled = pendingSignal ?? followSignal.value;
-      const beforeKill = await readCheckedTask(taskId, taskLabel);
-      if (beforeKill?.state === 'done') {
-        // The task already completed; let pueue finish streaming its output.
-        const completedFollow = await followPromise;
-        if (completedFollow.outputIncomplete) {
-          cleanupHandlers();
-          return pueueOutcomeUnknown(deps, `task ${taskId}`);
-        }
-        return finishTask(taskId, beforeKill, false);
-      }
-      if (
-        beforeKill === null ||
-        (beforeKill.state !== 'running' && beforeKill.state !== 'paused')
-      ) {
-        await stopFollow(followPromise);
-        cleanupHandlers();
-        return pueueOutcomeUnknown(deps, `task ${taskId}`);
-      }
-      const killed = await call(['kill', taskId]);
-      if (isPueueClientSuccess(killed)) {
-        if (activeClient !== null) activeClient = null;
-        await stopFollow(followPromise);
-        await removeTask(taskId);
-        cleanupHandlers();
-        return signalStatus(signalled);
-      }
-      const afterKill = await readCheckedTask(taskId, taskLabel);
-      if (afterKill?.state === 'done') {
-        // The task completed before the kill landed; let pueue finish streaming its output.
-        const completedFollow = await followPromise;
-        if (completedFollow.outputIncomplete) {
-          cleanupHandlers();
-          return pueueOutcomeUnknown(deps, `task ${taskId}`);
-        }
-        return finishTask(taskId, afterKill, false);
-      }
-      await stopFollow(followPromise);
-      cleanupHandlers();
-      return pueueOutcomeUnknown(deps, `task ${taskId}`);
+      return handleRunningSignal(taskId, taskLabel, followPromise, signalled);
     }
     const follow = followSignal.value;
     if (follow.outputIncomplete) {
-      cleanupHandlers();
+      if (pendingSignal !== null)
+        return handleRunningSignal(
+          taskId,
+          taskLabel,
+          followPromise,
+          pendingSignal,
+        );
       return pueueOutcomeUnknown(deps, `task ${taskId}`);
     }
-    if (!isPueueClientSuccess(follow) && pendingSignal === null) {
-      const afterFailedFollow = await readCheckedTask(taskId, taskLabel);
-      if (afterFailedFollow?.state === 'done' && pendingSignal === null)
-        return finishTask(taskId, afterFailedFollow, false);
-      if (pendingSignal === null) {
-        cleanupHandlers();
-        return pueueOutcomeUnknown(deps, `task ${taskId}`);
-      }
+    if (!isPueueClientSuccess(follow)) {
+      if (pendingSignal !== null)
+        return handleRunningSignal(
+          taskId,
+          taskLabel,
+          followPromise,
+          pendingSignal,
+        );
+      return pueueOutcomeUnknown(deps, `task ${taskId}`);
     }
     const afterFollow = await readCheckedTask(taskId, taskLabel);
-    if (afterFollow === null)
+    if (afterFollow === null) {
+      if (pendingSignal !== null)
+        return handleRunningSignal(
+          taskId,
+          taskLabel,
+          followPromise,
+          pendingSignal,
+        );
       return pueueOutcomeUnknown(deps, `task ${taskId}`);
+    }
     if (afterFollow.state === 'done')
       return finishTask(taskId, afterFollow, false);
-    if (pendingSignal !== null) {
-      phase = 'queued';
-      const killed = await call(['kill', taskId]);
-      if (isPueueClientSuccess(killed)) {
-        await removeTask(taskId);
-        return statusForSignal();
-      }
-      const afterKill = await readCheckedTask(taskId, taskLabel);
-      if (afterKill?.state === 'done')
-        return finishTask(taskId, afterKill, false);
-    }
-    cleanupHandlers();
+    if (pendingSignal !== null)
+      return handleRunningSignal(
+        taskId,
+        taskLabel,
+        followPromise,
+        pendingSignal,
+      );
     return pueueOutcomeUnknown(deps, `task ${taskId}`);
   };
   return work().then(
