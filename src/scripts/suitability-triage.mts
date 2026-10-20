@@ -1036,6 +1036,10 @@ const REPO_OWNED_VALIDATION_WINDOW =
   /^\s*(?:this|that)\s+(?:full|complete|validation|config|configuration)\s+(?:command|script)\s+to\s+(?:validate|verify|check|confirm)\s+(?:the\s+)?(?:configuration|config|setup|settings)\s*$/i;
 const REPO_OWNED_VALIDATION_SENTENCE_START =
   /(?:^|\n[ \t]*\r?\n\s*)(?:please\s+)?$/i;
+// #4562: "by the user" is an actor phrase only for these exact step/check
+// objects; keep every other supplied-content target on the unsafe path.
+const USER_ACTOR_STEP_WINDOW =
+  /^\s*this\s+(?:step|check)\s+by\s+the\s+user\s*$/i;
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =
   /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|skip|omit|ignore|exempt)\b/i;
@@ -2732,6 +2736,10 @@ function findUnsafeExecutionDirectiveMatch(
         verbStart + verbText.length,
       );
       const targetMatch = targetPattern.exec(window);
+      const userActorStepDirective =
+        verbText.toLowerCase() === 'run' &&
+        window.length < UNSAFE_DIRECTIVE_WINDOW_CHARS &&
+        USER_ACTOR_STEP_WINDOW.test(window);
       // #3073 round 4-6: the repository-owned-validation exception is now
       // a single fully anchored positive signature (see the constants'
       // shared comment above) -- the whole window must match the literal
@@ -2746,6 +2754,7 @@ function findUnsafeExecutionDirectiveMatch(
       // boundary plus an optional "Please ".
       if (
         targetMatch &&
+        !userActorStepDirective &&
         !(
           verbText.toLowerCase() === REPO_OWNED_VALIDATION_VERB &&
           window.length < UNSAFE_DIRECTIVE_WINDOW_CHARS &&
