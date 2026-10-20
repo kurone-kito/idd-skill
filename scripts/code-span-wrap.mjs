@@ -123,16 +123,20 @@ function isSentencePunctuation(inner, delimiterIndex, afterIndex) {
   if (nextWord !== undefined && PROPER_NAME_TITLE_ABBREVIATION.test(prefix)) {
     return true;
   }
-  // Lowercase namespace segments still form one dotted identifier. Keep
-  // their final period eligible for detection before a capitalized type.
-  if (DOTTED_IDENTIFIER_PREFIX.test(inner.slice(0, delimiterIndex))) {
-    return false;
-  }
   const followingText =
     nextWord === undefined ? '' : suffix.slice(nextWord.length).trimStart();
   const followingProseWord =
     /^[A-Za-z]/u.test(followingText) ||
     /^[,.!?;:](?:\s|`|$)/u.test(followingText);
+  // Lowercase namespace segments still form one dotted identifier, but a
+  // following prose word marks a sentence boundary after a dotted name.
+  if (
+    nextWord !== undefined &&
+    !followingProseWord &&
+    DOTTED_IDENTIFIER_PREFIX.test(inner.slice(0, delimiterIndex))
+  ) {
+    return false;
+  }
   if (previous !== undefined && /[0-9]/.test(previous)) {
     // A standalone numbered step may start with lowercase prose, while a
     // digit-suffixed identifier still needs evidence after its capitalized
