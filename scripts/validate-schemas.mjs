@@ -41,6 +41,43 @@ const ROOT = resolveBundleRoot(import.meta.dirname);
 // each parsed token beside its containing object so integer validation can
 // preserve JSON Schema's mathematical-integer semantics.
 const JSON_NUMBER_SOURCES = new WeakMap();
+const PARSED_JSON_DOCUMENTS = new WeakSet();
+function clearJsonNumberSource(parent, key) {
+  JSON_NUMBER_SOURCES.get(parent)?.delete(String(key));
+}
+function trackJsonObject(value) {
+  const sources = JSON_NUMBER_SOURCES.get(value);
+  if (!sources) return value;
+  let proxy;
+  proxy = new Proxy(value, {
+    set(target, property, nextValue, receiver) {
+      const succeeded = Reflect.set(target, property, nextValue, receiver);
+      if (succeeded && receiver === proxy) {
+        clearJsonNumberSource(proxy, property);
+      }
+      return succeeded;
+    },
+    defineProperty(target, property, descriptor) {
+      const succeeded = Reflect.defineProperty(target, property, descriptor);
+      if (
+        succeeded &&
+        (Object.hasOwn(descriptor, 'value') ||
+          Object.hasOwn(descriptor, 'get') ||
+          Object.hasOwn(descriptor, 'set'))
+      ) {
+        clearJsonNumberSource(proxy, property);
+      }
+      return succeeded;
+    },
+    deleteProperty(target, property) {
+      const succeeded = Reflect.deleteProperty(target, property);
+      if (succeeded) clearJsonNumberSource(proxy, property);
+      return succeeded;
+    },
+  });
+  JSON_NUMBER_SOURCES.set(proxy, sources);
+  return proxy;
+}
 function jsonNumberSource(parent, key) {
   const source = JSON_NUMBER_SOURCES.get(parent)?.get(key);
   const currentValue = parent[key];
@@ -71,10 +108,14 @@ function isIntegerValue(value, source) {
   );
 }
 function parseJsonWithNumberSources(text) {
-  return JSON.parse(text, function (key, value, context) {
+  let rootNumberSource;
+  const value = JSON.parse(text, function (key, parsedValue, context) {
     const source = context?.source;
-    if (typeof value === 'number' && typeof source === 'string') {
-      if (typeof this === 'object' && this !== null) {
+    if (typeof parsedValue === 'number' && typeof source === 'string') {
+      if (key === '') {
+        rootNumberSource = source;
+      }
+      if (key !== '' && typeof this === 'object' && this !== null) {
         let sources = JSON_NUMBER_SOURCES.get(this);
         if (!sources) {
           sources = new Map();
@@ -203,9 +244,6 @@ function isUriAuthority(value, scheme) {
   }
   if (port !== undefined) {
     if (!/^\d*$/u.test(port)) return false;
-    if (URI_NETWORK_SCHEMES.has(scheme.toLowerCase()) && port.length === 0) {
-      return false;
-    }
   }
   return true;
 }
@@ -507,6 +545,15 @@ export function validate(
   activeRefs = new Set(),
   numberSource,
 ) {
+  if (
+    typeof data === 'object' &&
+    data !== null &&
+    PARSED_JSON_DOCUMENTS.has(data)
+  ) {
+    const document = data;
+    data = document.value;
+    numberSource = document.rootNumberSource ?? numberSource;
+  }
   const s = schema;
   const errors = [];
   const actualType = getType(data);
@@ -774,6 +821,14 @@ export function validateConfigSection(config, schema, sectionKey, context) {
  * Load and parse a JSON file by path relative to repository root.
  */
 export function loadJson(relPath, root = ROOT) {
+  return loadJsonDocument(relPath, root).value;
+}
+/**
+ * Load a JSON document with source information for root-level numeric values.
+ * Pass the result directly to `validate` when exact root-number validation
+ * matters; `loadJson` retains its plain-value return type for other callers.
+ */
+export function loadJsonDocument(relPath, root = ROOT) {
   return parseJsonWithNumberSources(readFileSync(join(root, relPath), 'utf8'));
 }
 /**
@@ -820,7 +875,7 @@ export function validateFixture(
   root = ROOT,
 ) {
   const schema = loadJson(schemaPath, root);
-  const fixture = loadJson(fixturePath, root);
+  const fixture = loadJsonDocument(fixturePath, root);
   const context = { root, schemaPath };
   const keyErrors = checkSchemaKeywords(schema, '$', context);
   if (keyErrors.length > 0) {
@@ -832,7 +887,7 @@ export function validateFixture(
   const errs = validate(fixture, schema, '$', context);
   let graphErrors = [];
   if (schemaPath.endsWith('phase-graph.schema.json') && errs.length === 0) {
-    graphErrors = validatePhaseGraph(fixture);
+    graphErrors = validatePhaseGraph(fixture.value);
   }
   const allErrors = [...errs, ...graphErrors];
   const isValid = allErrors.length === 0;

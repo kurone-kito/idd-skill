@@ -46,6 +46,52 @@ const ROOT = resolveBundleRoot(import.meta.dirname);
 // preserve JSON Schema's mathematical-integer semantics.
 const JSON_NUMBER_SOURCES = new WeakMap<object, Map<string, string>>();
 
+export interface ParsedJsonDocument {
+  readonly value: unknown;
+  readonly rootNumberSource?: string;
+}
+
+const PARSED_JSON_DOCUMENTS = new WeakSet<object>();
+
+function clearJsonNumberSource(parent: object, key: PropertyKey): void {
+  JSON_NUMBER_SOURCES.get(parent)?.delete(String(key));
+}
+
+function trackJsonObject(value: object): object {
+  const sources = JSON_NUMBER_SOURCES.get(value);
+  if (!sources) return value;
+
+  let proxy: object;
+  proxy = new Proxy(value, {
+    set(target, property, nextValue, receiver) {
+      const succeeded = Reflect.set(target, property, nextValue, receiver);
+      if (succeeded && receiver === proxy) {
+        clearJsonNumberSource(proxy, property);
+      }
+      return succeeded;
+    },
+    defineProperty(target, property, descriptor) {
+      const succeeded = Reflect.defineProperty(target, property, descriptor);
+      if (
+        succeeded &&
+        (Object.hasOwn(descriptor, 'value') ||
+          Object.hasOwn(descriptor, 'get') ||
+          Object.hasOwn(descriptor, 'set'))
+      ) {
+        clearJsonNumberSource(proxy, property);
+      }
+      return succeeded;
+    },
+    deleteProperty(target, property) {
+      const succeeded = Reflect.deleteProperty(target, property);
+      if (succeeded) clearJsonNumberSource(proxy, property);
+      return succeeded;
+    },
+  });
+  JSON_NUMBER_SOURCES.set(proxy, sources);
+  return proxy;
+}
+
 function jsonNumberSource(parent: object, key: string): string | undefined {
   const source = JSON_NUMBER_SOURCES.get(parent)?.get(key);
   const currentValue = (parent as Record<string, unknown>)[key];
@@ -80,22 +126,34 @@ function isIntegerValue(value: number, source?: string): boolean {
   );
 }
 
-function parseJsonWithNumberSources(text: string): unknown {
-  return JSON.parse(text, function (key, value, context?: unknown) {
-    const source = (context as { source?: unknown } | undefined)?.source;
-    if (typeof value === 'number' && typeof source === 'string') {
-      const parent = this as unknown;
-      if (typeof parent === 'object' && parent !== null) {
-        let sources = JSON_NUMBER_SOURCES.get(parent);
-        if (!sources) {
-          sources = new Map();
-          JSON_NUMBER_SOURCES.set(parent, sources);
+function parseJsonWithNumberSources(text: string): ParsedJsonDocument {
+  let rootNumberSource: string | undefined;
+  const value = JSON.parse(
+    text,
+    function (key, parsedValue, context?: unknown) {
+      const source = (context as { source?: unknown } | undefined)?.source;
+      if (typeof parsedValue === 'number' && typeof source === 'string') {
+        if (key === '') {
+          rootNumberSource = source;
         }
-        sources.set(key, source);
+        const parent = this as unknown;
+        if (key !== '' && typeof parent === 'object' && parent !== null) {
+          let sources = JSON_NUMBER_SOURCES.get(parent);
+          if (!sources) {
+            sources = new Map();
+            JSON_NUMBER_SOURCES.set(parent, sources);
+          }
+          sources.set(key, source);
+        }
       }
-    }
-    return value;
-  });
+      return typeof parsedValue === 'object' && parsedValue !== null
+        ? trackJsonObject(parsedValue)
+        : parsedValue;
+    },
+  );
+  const document = Object.freeze({ value, rootNumberSource });
+  PARSED_JSON_DOCUMENTS.add(document);
+  return document;
 }
 
 interface SchemaNode {
@@ -592,6 +650,15 @@ export function validate(
   activeRefs: Set<string> = new Set(),
   numberSource?: string,
 ): string[] {
+  if (
+    typeof data === 'object' &&
+    data !== null &&
+    PARSED_JSON_DOCUMENTS.has(data)
+  ) {
+    const document = data as ParsedJsonDocument;
+    data = document.value;
+    numberSource = document.rootNumberSource ?? numberSource;
+  }
   const s = schema as SchemaNode;
   const errors: string[] = [];
   const actualType = getType(data);
@@ -879,6 +946,18 @@ export function validateConfigSection(
  * Load and parse a JSON file by path relative to repository root.
  */
 export function loadJson(relPath: string, root: string = ROOT): unknown {
+  return loadJsonDocument(relPath, root).value;
+}
+
+/**
+ * Load a JSON document with source information for root-level numeric values.
+ * Pass the result directly to `validate` when exact root-number validation
+ * matters; `loadJson` retains its plain-value return type for other callers.
+ */
+export function loadJsonDocument(
+  relPath: string,
+  root: string = ROOT,
+): ParsedJsonDocument {
   return parseJsonWithNumberSources(readFileSync(join(root, relPath), 'utf8'));
 }
 
@@ -932,7 +1011,7 @@ export function validateFixture(
   root: string = ROOT,
 ): { ok: boolean; errors: string[] } {
   const schema = loadJson(schemaPath, root);
-  const fixture = loadJson(fixturePath, root);
+  const fixture = loadJsonDocument(fixturePath, root);
   const context = { root, schemaPath };
   const keyErrors = checkSchemaKeywords(schema, '$', context);
   if (keyErrors.length > 0) {
@@ -944,7 +1023,7 @@ export function validateFixture(
   const errs = validate(fixture, schema, '$', context);
   let graphErrors: string[] = [];
   if (schemaPath.endsWith('phase-graph.schema.json') && errs.length === 0) {
-    graphErrors = validatePhaseGraph(fixture);
+    graphErrors = validatePhaseGraph(fixture.value);
   }
   const allErrors = [...errs, ...graphErrors];
   const isValid = allErrors.length === 0;

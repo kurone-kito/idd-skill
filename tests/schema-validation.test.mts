@@ -21,6 +21,7 @@ import {
   checkSchemaKeywords,
   discoverSchemaCases,
   loadJson,
+  loadJsonDocument,
   validate,
   validateFixture,
   validatePhaseGraph,
@@ -797,8 +798,66 @@ test('integer validation preserves exact JSON number tokens', () => {
 
     writeFileSync(join(root, 'record.json'), '{"value":9007199254740991.4}');
     const mutatedRecord = loadJson('record.json', root) as JsonRecord;
-    mutatedRecord.value = 1;
+    mutatedRecord.value = Number.MAX_SAFE_INTEGER;
     assert.deepEqual(validate(mutatedRecord, schema), []);
+
+    const redefinedRecord = loadJson('record.json', root) as JsonRecord;
+    Object.defineProperty(redefinedRecord, 'value', {
+      value: Number.MAX_SAFE_INTEGER,
+    });
+    assert.deepEqual(validate(redefinedRecord, schema), []);
+
+    const frozenRecord = loadJson('record.json', root) as JsonRecord;
+    Object.freeze(frozenRecord);
+    assert.ok(
+      validate(frozenRecord, schema).some((error) =>
+        error.includes('expected type "integer"'),
+      ),
+    );
+
+    const unchangedRecord = loadJson('record.json', root) as JsonRecord;
+    const receiver: JsonRecord = {};
+    Reflect.set(unchangedRecord, 'value', Number.MAX_SAFE_INTEGER, receiver);
+    assert.equal(receiver.value, Number.MAX_SAFE_INTEGER);
+    assert.ok(
+      validate(unchangedRecord, schema).some((error) =>
+        error.includes('expected type "integer"'),
+      ),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('root-number validation preserves its exact JSON token', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-schema-root-number-'));
+  const schema = {
+    type: 'integer',
+    maximum: Number.MAX_SAFE_INTEGER,
+  };
+  const maximumSchema = {
+    type: 'number',
+    maximum: Number.MAX_SAFE_INTEGER,
+  };
+
+  try {
+    writeFileSync(join(root, 'record.json'), '9007199254740991');
+    assert.deepEqual(
+      validate(loadJsonDocument('record.json', root), schema),
+      [],
+    );
+
+    writeFileSync(join(root, 'record.json'), '9007199254740991.4');
+    const document = loadJsonDocument('record.json', root);
+    const integerErrors = validate(document, schema);
+    assert.ok(
+      integerErrors.some((error) => error.includes('expected type "integer"')),
+    );
+    assert.ok(
+      validate(document, maximumSchema).some((error) =>
+        error.includes('maximum'),
+      ),
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
