@@ -2431,6 +2431,22 @@ test('findInlineCodeRanges stays linear on distinct unmatched runs across nested
   }
 });
 
+test('findInlineCodeRanges stays linear on matched spans across quote lines (#4563)', () => {
+  const count = 1000;
+  const text = Array.from(
+    { length: count },
+    (_, index) => `> \`code-${index}\``,
+  ).join('\n');
+  const start = performance.now();
+  const ranges = findInlineCodeRanges(text, 0, text.length);
+  const elapsedMs = performance.now() - start;
+  assert.ok(
+    elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
+    `findInlineCodeRanges took ${Math.round(elapsedMs)} ms for ${count} matched spans`,
+  );
+  assert.equal(ranges.length, count);
+});
+
 function assertStripLinear(
   label: string,
   firstSize: number,

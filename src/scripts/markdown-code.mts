@@ -3197,9 +3197,9 @@ export function findInlineCodeRanges(
     const blockBoundary = findMarkdownBlockBoundary(
       text,
       openerStart + openerLength,
-      end,
+      closingRun.end,
     );
-    if (closingRun.start < (blockBoundary ?? end)) {
+    if (blockBoundary === null || closingRun.start < blockBoundary) {
       ranges.push({ start: openerStart, end: closingRun.end });
       cursor = closingRun.end;
     } else {
