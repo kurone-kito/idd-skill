@@ -2693,6 +2693,39 @@ test('trust safety allows a check assigned to the user -- #4562', () => {
   assert.equal(result.pass, true);
 });
 
+test('trust safety allows a user-assigned step after neutral issue context -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'Introductory context.\n\n## Manual verification\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety allows a user-assigned check as a list item -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'Introductory context.\n\n- Run this check by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety allows a user-assigned step after unrelated agent work -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must implement the feature.\n\n## Manual verification\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('trust safety still flags a script assigned to the user -- #4562', () => {
   const result = checkTrustSafety({
     issue: {
@@ -2731,6 +2764,17 @@ test('trust safety rejects a user-actor phrase after an agent-assignment lead-in
     issue: {
       ...BASE_ISSUE,
       body: 'The coding agent must perform the following:\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety rejects a user-actor list item after an agent-assignment lead-in -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must perform the following:\n\n- Run this step by the user.',
     },
     trustSafetyAmbiguous: false,
   } as Context);

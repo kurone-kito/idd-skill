@@ -1040,10 +1040,14 @@ const REPO_OWNED_VALIDATION_SENTENCE_START =
 // objects; keep every other supplied-content target on the unsafe path.
 const USER_ACTOR_STEP_WINDOW =
   /^\s*this\s+(?:step|check)\s+by\s+the\s+user\s*$/i;
-// #4577: a paragraph break cannot establish who owns the instruction; its
-// previous paragraph may assign execution to the agent. Trust the actor
-// phrase only when it starts the issue body, before any other context.
-const USER_ACTOR_STEP_BODY_START = /^\s*$/i;
+// #4577: allow the exact user-actor directive at a normal issue paragraph,
+// heading, or list-item boundary. A preceding explicit agent assignment still
+// wins, including a same-sentence assignment and a "perform the following"
+// lead-in in the prior paragraph.
+const USER_ACTOR_STEP_BODY_BOUNDARY =
+  /^(?:[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?[ \t]*|[\s\S]*\n[ \t]*\r?\n[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?[ \t]*|[\s\S]*\n[ \t]*#{1,6}[ \t]+[^\r\n]*\r?\n[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?[ \t]*|[\s\S]*\n[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+[ \t]*)$/i;
+const USER_ACTOR_STEP_AGENT_ASSIGNMENT =
+  /\b(?:the\s+)?(?:coding\s+)?(?:agent|assistant|automation|AI|you)\b[^.!?]{0,100}\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:required|instructed|expected)\s+to|(?:was|is)\s+(?:asked|tasked)\s+to)\s+(?:run|execute|perform|follow|carry\s+out|do|complete|verify|check|test|implement)\s+(?:(?:this|that|next|the)\s+(?:step|check|instruction|task)|the\s+following|the\s+(?:next|above|below)\s+(?:steps?|checks?|instructions?|tasks?)|as\s+follows)\b/i;
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =
   /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|skip|omit|ignore|exempt)\b/i;
@@ -2740,12 +2744,19 @@ function findUnsafeExecutionDirectiveMatch(
         verbStart + verbText.length,
       );
       const targetMatch = targetPattern.exec(window);
+      const userActorStepBodyPrefix = corpus.slice(bodyOffset, verbStart);
+      const userActorStepAssignmentContext =
+        `${userActorStepBodyPrefix}${verbText}${window}`
+          .split(/\r?\n[ \t]*\r?\n/)
+          .slice(-2)
+          .join('\n');
       const userActorStepDirective =
         verbText.toLowerCase() === 'run' &&
         window.length < UNSAFE_DIRECTIVE_WINDOW_CHARS &&
         USER_ACTOR_STEP_WINDOW.test(window) &&
         verbStart >= bodyOffset &&
-        USER_ACTOR_STEP_BODY_START.test(corpus.slice(bodyOffset, verbStart));
+        USER_ACTOR_STEP_BODY_BOUNDARY.test(userActorStepBodyPrefix) &&
+        !USER_ACTOR_STEP_AGENT_ASSIGNMENT.test(userActorStepAssignmentContext);
       // #3073 round 4-6: the repository-owned-validation exception is now
       // a single fully anchored positive signature (see the constants'
       // shared comment above) -- the whole window must match the literal
