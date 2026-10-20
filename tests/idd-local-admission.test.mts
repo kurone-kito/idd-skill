@@ -1489,6 +1489,35 @@ test('pueue follow failure and early stream end leave a running task outcome unk
   assert.equal(resultReadFailure.status, 3);
 });
 
+test('pueue recovers a task completed before a failed follow read', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const policy = { localExec: { admission: { backend: 'pueue' } } };
+  const h = makeHarness();
+  const repo = makeRepo(policy);
+  const fake = makeFakePueue(h.env, {
+    initialStatus: 'Running',
+    followExit: 1,
+    followFinalStatus: { Done: { Failed: { exit_code: 7 } } },
+    streamOutput: 'partial task output\n',
+    taskOutput: 'full task output\n',
+  });
+  const result = await runBin(['--', 'true'], repo, fake.env).done;
+  assert.equal(result.status, 7, result.stderr);
+  assert.equal(result.stdout, 'partial task output\n');
+  assert.doesNotMatch(result.stderr, /outcome unknown/);
+  const state = readFakePueue(fake);
+  assert.equal(
+    (state.tasks as Record<string, unknown> | undefined)?.['17'],
+    undefined,
+  );
+  assert.ok(
+    (state.calls as string[][]).some(
+      (call) => call[0] === 'remove' && call[1] === '17',
+    ),
+  );
+});
+
 test('a failed pueue follow racing with SIGTERM still kills and removes the task', {
   skip: process.platform === 'win32',
 }, async () => {

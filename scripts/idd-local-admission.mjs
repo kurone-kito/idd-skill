@@ -1014,8 +1014,13 @@ function runPueueAdmission(command, admission, raw, deps) {
     }
     const follow = followSignal.value;
     if (!isPueueClientSuccess(follow) && pendingSignal === null) {
-      cleanupHandlers();
-      return pueueOutcomeUnknown(deps, `task ${taskId}`);
+      const afterFailedFollow = await readCheckedTask(taskId, taskLabel);
+      if (afterFailedFollow?.state === 'done' && pendingSignal === null)
+        return finishTask(taskId, afterFailedFollow, false);
+      if (pendingSignal === null) {
+        cleanupHandlers();
+        return pueueOutcomeUnknown(deps, `task ${taskId}`);
+      }
     }
     const afterFollow = await readCheckedTask(taskId, taskLabel);
     if (afterFollow === null)
