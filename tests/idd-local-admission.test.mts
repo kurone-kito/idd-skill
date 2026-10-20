@@ -1312,6 +1312,48 @@ test('pueue fetches full output only for a task already finished', {
   assert.equal(logCalls[1]?.includes('--full'), true);
 });
 
+test('pueue full-log error placeholders keep completed tasks outcome unknown', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const policy = { localExec: { admission: { backend: 'pueue' } } };
+  const errorOutputs = [
+    '(Pueue error) Failed to get log file handle: missing log file',
+    '(Pueue error) Failed to read local log output file: read failed',
+    '(Pueue error) Failed to decompress remote log output: invalid data',
+  ];
+
+  for (const taskOutput of errorOutputs) {
+    const output: string[] = [];
+    const stdout = new Writable({
+      write(chunk, _encoding, callback) {
+        output.push(chunk.toString());
+        callback();
+      },
+    });
+    const result = await runPueueTest(
+      policy,
+      {
+        initialStatus: { Done: { Success: null } },
+        taskOutput,
+      },
+      ['true'],
+      { findFlock: () => null, stdout },
+    );
+    await new Promise<void>((resolveFinish) => stdout.end(resolveFinish));
+    assert.equal(result.status, 3, result.stderr);
+    assert.match(result.stderr, /pueue task outcome unknown \(task 17\)/);
+    assert.equal(output.join(''), '');
+    const state = readFakePueue(result.fake);
+    assert.ok((state.tasks as Record<string, unknown>)['17']);
+    assert.equal(
+      (state.calls as string[][]).some(
+        (call) => call[0] === 'remove' && call[1] === '17',
+      ),
+      false,
+    );
+  }
+});
+
 test('pueue returns command status, reports results without exit codes, and tolerates removal failure', {
   skip: process.platform === 'win32',
 }, async () => {

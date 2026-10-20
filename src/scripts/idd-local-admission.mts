@@ -66,6 +66,11 @@ const DEFAULT_PUEUE_CLIENT_TIMEOUT_MS = 10_000;
 const PUEUE_POLL_INTERVAL_MS = 1000;
 const PUEUE_LOCAL_FOLLOW_INCOMPLETE_OUTPUT =
   /(?:Failed to get log file handles:|Pueue: Log file has gone away\.|Pueue: Error while reading file:|Pueue: Error while flushing stdout:)/;
+const PUEUE_LOG_ERROR_PREFIXES = [
+  '(Pueue error) Failed to get log file handle:',
+  '(Pueue error) Failed to read local log output file:',
+  '(Pueue error) Failed to decompress remote log output:',
+] as const;
 const PROCESS_STATE_PROBE_TIMEOUT_MS = 1000;
 const PROCESS_STATE_PROBE_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 const FALLBACK_MAX_WAIT_MS = 2 * 60 * 60 * 1000;
@@ -818,6 +823,10 @@ function parsePueueTask(
   }
 }
 
+function isPueueLogErrorOutput(output: string): boolean {
+  return PUEUE_LOG_ERROR_PREFIXES.some((prefix) => output.startsWith(prefix));
+}
+
 function parsePueueGroups(output: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(output);
@@ -997,7 +1006,10 @@ function runPueueAdmission(
     label: string,
   ): Promise<PueueTaskSnapshot | null> => {
     const task = await readCheckedTask(taskId, label, true);
-    return task?.state === 'done' ? task : null;
+    if (task?.state !== 'done') return null;
+    if (task.output !== undefined && isPueueLogErrorOutput(task.output))
+      return null;
+    return task;
   };
 
   const work = async (): Promise<number> => {
