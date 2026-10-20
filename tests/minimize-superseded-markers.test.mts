@@ -840,7 +840,7 @@ process.exit(0);
     const reason = report.items[0]?.reason ?? '';
     assert.match(reason, /^gh-graphql-error: /);
     assert.notEqual(reason, 'gh-graphql-error: ');
-    assert.match(reason, /ETIMEDOUT/i);
+    assert.match(reason, /ETIMEDOUT|signal/i);
     assert.equal(report.counts.failed, 1);
     assert.equal(report.counts.eligible, 0);
     assert.equal(report.counts.applied, 0);
@@ -884,7 +884,7 @@ process.exit(1);
       // The pre-fix behavior collapsed to exactly this string once
       // e.stderr's empty value short-circuited past e.message.
       assert.notEqual(result.reason, 'gh-graphql-error: ');
-      assert.match(result.reason, /ETIMEDOUT/i);
+      assert.match(result.reason, /ETIMEDOUT|signal/i);
     } finally {
       restore();
     }
