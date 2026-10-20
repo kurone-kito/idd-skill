@@ -1624,9 +1624,11 @@ test('maskMarkdownForScan does not treat a backslash-escaped backtick pair as a 
   assert.equal(maskMarkdownForScan(body), body);
 });
 
-test('findInlineCodeRanges does not use an escaped backtick run as a closer', () => {
+test('findInlineCodeRanges treats backslashes before a closer as code content', () => {
   const text = '\\' + '`' + '`foo- bar' + '\\' + '`';
-  assert.deepEqual(findInlineCodeRanges(text, 0, text.length), []);
+  assert.deepEqual(findInlineCodeRanges(text, 0, text.length), [
+    { start: 2, end: text.length },
+  ]);
 });
 
 test('findInlineCodeRanges keeps the unescaped suffix of an escaped run as a delimiter', () => {

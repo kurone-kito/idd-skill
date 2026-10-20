@@ -3107,9 +3107,10 @@ export function findInlineCodeRanges(
     runCursor += runLength;
   }
 
-  // Index each run's next effective-length closer once. A backslash can
-  // escape the first tick in a run while leaving its suffix available as a
-  // delimiter; an escaped one-tick run contributes no closer. The former
+  // Index each run's next raw-length closer once. A backslash can escape the
+  // first tick of an opener run while leaving its suffix available as the
+  // opener. Once a span is open, backslashes are literal code content, so a
+  // candidate closer still contributes its full raw run length. The former
   // opener loop searched the rest of the paragraph for every unmatched
   // run, making a sequence of distinct run lengths superlinear in the input
   // size.
@@ -3128,11 +3129,7 @@ export function findInlineCodeRanges(
     if (isEscapedBacktick(text, run.start) && run.length > 1) {
       nextSuffixLengthRun[index] = latestRunByLength.get(run.length - 1) ?? -1;
     }
-    const effectiveLength =
-      run.length - (isEscapedBacktick(text, run.start) ? 1 : 0);
-    if (effectiveLength > 0) {
-      latestRunByLength.set(effectiveLength, index);
-    }
+    latestRunByLength.set(run.length, index);
   }
   const runIndexByStart = new Map<number, number>();
   for (let index = 0; index < backtickRuns.length; index += 1) {
