@@ -11002,3 +11002,36 @@ test('trust safety treats contracted negative agent assignments as negated -- Co
     assert.equal(result.pass, true, assignment);
   }
 });
+
+test('trust safety recognizes Markdown emphasis around assigned step targets -- Codex review #4329703854', () => {
+  for (const [target, directive] of [
+    ['**this step**', 'Run this step by the user.'],
+    ['*this step*', 'Run this step by the user.'],
+    ['**this check**', 'Run this check by the user.'],
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `The coding agent must perform ${target}.\n\n${directive}`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, target);
+  }
+});
+
+test('trust safety treats never as explicit agent-assignment negation -- Codex review #4329703866', () => {
+  for (const assignment of [
+    'The coding agent never performs this step.',
+    'The coding agent is never responsible for this step.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, assignment);
+  }
+});

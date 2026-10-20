@@ -1087,7 +1087,7 @@ const USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE =
 const USER_ACTOR_STEP_USER_DIRECTIVE_START =
   /^\s*(?:(?:then|next|now|afterwards?)\s+)?run\s+this\s+(?:step|check)\s+by\s+the\s+user\b/i;
 const USER_ACTOR_STEP_NEGATION_CUE =
-  /\b(?:(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|(?:must|should|shall|will|could|would|might|may|need|do|does|did|is|are|was|were|has|have|had)n['’]t|(?:won|can|shan|ain)['’]t|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b/i;
+  /\b(?:never|(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|(?:must|should|shall|will|could|would|might|may|need|do|does|did|is|are|was|were|has|have|had)n['’]t|(?:won|can|shan|ain)['’]t|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b/i;
 
 interface MarkdownHeadingSection {
   body: string;
@@ -1721,7 +1721,7 @@ function hasAgentActorForTarget(
       if (passivePatient) return false;
       if (
         cue.start < targetStart &&
-        !/^\s*(?:(?:to|for|with|of)\s+)?$/i.test(
+        !/^\s*(?:[*_]{1,3}\s*)?(?:(?:to|for|with|of)\s+)?$/i.test(
           segment.text.slice(cue.end, targetStart),
         )
       ) {
