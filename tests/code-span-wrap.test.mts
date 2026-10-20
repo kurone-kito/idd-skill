@@ -109,6 +109,12 @@ test('does not flag the three current sentence-punctuation examples', () => {
   }
 });
 
+test('does not flag lowercase text after a standalone numbered step', () => {
+  for (const span of ['`1. first step`', '`2. continue here`']) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
+});
+
 test('flags uppercase dotted-token continuations', () => {
   for (const span of [
     '`README. MD`',

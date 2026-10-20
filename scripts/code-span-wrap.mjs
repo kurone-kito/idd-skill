@@ -108,21 +108,20 @@ function isSentencePunctuation(inner, delimiterIndex, afterIndex) {
     /^[A-Z][A-Za-z]*(?:[-'’][A-Za-z]+)*(?=[,.!?;:]?(?:\s|`|$))/u.exec(
       suffix,
     )?.[0];
-  if (nextWord === undefined) {
-    return false;
-  }
-  const followingText = suffix.slice(nextWord.length).trimStart();
+  const followingText =
+    nextWord === undefined ? '' : suffix.slice(nextWord.length).trimStart();
   const followingProseWord =
     /^[A-Za-z]/u.test(followingText) ||
     /^[,.!?;:](?:\s|`|$)/u.test(followingText);
-  if (/^[A-Z]{2,}$/u.test(nextWord) && !followingProseWord) {
-    return false;
-  }
-  if (previous === undefined || previous === '`') {
-    return true;
-  }
-  // A period after a standalone number can end a numbered list step.
-  if (/[0-9]/.test(previous)) {
+  if (previous !== undefined && /[0-9]/.test(previous)) {
+    // A standalone numbered step may start with lowercase prose, while a
+    // digit-suffixed identifier still needs evidence after its capitalized
+    // continuation before this period is treated as sentence punctuation.
+    const stepWord =
+      /^[A-Za-z]+(?:[-'’][A-Za-z]+)*(?=[,.!?;:]?(?:\s|`|$))/u.exec(suffix)?.[0];
+    if (stepWord === undefined) {
+      return false;
+    }
     let numberStart = delimiterIndex - 1;
     while (numberStart > 0 && /[0-9]/.test(inner[numberStart - 1] ?? '')) {
       numberStart -= 1;
@@ -131,8 +130,19 @@ function isSentencePunctuation(inner, delimiterIndex, afterIndex) {
     return (
       beforeNumber === undefined ||
       /\s/.test(beforeNumber) ||
-      (/[A-Za-z]/.test(beforeNumber) && followingProseWord)
+      (/[A-Za-z]/.test(beforeNumber) &&
+        nextWord !== undefined &&
+        followingProseWord)
     );
+  }
+  if (nextWord === undefined) {
+    return false;
+  }
+  if (/^[A-Z]{2,}$/u.test(nextWord) && !followingProseWord) {
+    return false;
+  }
+  if (previous === undefined || previous === '`') {
+    return true;
   }
   const previousWord = /[A-Za-z][A-Za-z0-9_-]*$/u.exec(
     inner.slice(0, delimiterIndex),
