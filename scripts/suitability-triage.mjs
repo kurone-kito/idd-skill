@@ -870,7 +870,7 @@ const USER_ACTOR_STEP_AGENT_SUBJECT = new RegExp(
 // Keep the target tied to a step/check or an explicitly referenced list;
 // unrelated implementation tasks must not veto a separate manual check.
 const USER_ACTOR_STEP_ASSIGNED_TARGET =
-  /\b(?:(?:(?:this|that)(?:\s+(?:exact|same|specific|particular))?|these|those)\s+(?:steps?|checks?|checklists?|lists?|items?)|the\s+(?:(?:exact|same|specific|particular)\s+)?(?:[a-z][\w-]*\s+){0,3}(?:steps?|checks?|checklists?|lists?|items?)|all\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:every|each)\s+(?:step|check|checklist|list|item)|(?:the\s+)?following\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:the\s+(?:exact|same|specific|particular)\s+)?instructions?\s+(?:below|above|that\s+follow|which\s+follow))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
+  /\b(?:(?:(?:this|that)\s+(?:[a-z][\w-]*\s+){0,3}|(?:these|those)\s+)(?:steps?|checks?|checklists?|lists?|items?)|the\s+(?:(?:exact|same|specific|particular)\s+)?(?:[a-z][\w-]*\s+){0,3}(?:steps?|checks?|checklists?|lists?|items?)|all\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:every|each)\s+(?:step|check|checklist|list|item)|(?:the\s+)?following\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:the\s+(?:exact|same|specific|particular)\s+)?instructions?\s+(?:below|above|that\s+follow|which\s+follow))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
 // A numbered assignment is scoped to the matching numbered checklist item.
 // Step/check targets keep their object kind; generic item targets apply to
 // either kind while retaining their ordinal and list scope.
@@ -883,7 +883,7 @@ const USER_ACTOR_STEP_FORWARD_ASSIGNMENT_INTRODUCER = new RegExp(
   'i',
 );
 const USER_ACTOR_STEP_TARGET_AGENT_RELATION =
-  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?(?:for|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|done\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by|completed\s+by|managed\s+by|followed\s+by|carried\s+out\s+by))\s*$/i;
+  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been|needs?\s+to|has\s+to|is\s+required\s+to)\s+)?(?:for|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|done\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by|completed\s+by|managed\s+by|followed\s+by|carried\s+out\s+by))\s*$/i;
 const USER_ACTOR_STEP_PASSIVE_PARTICIPLE =
   /^(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)$/i;
 const USER_ACTOR_STEP_PASSIVE_AUXILIARY =
@@ -893,7 +893,7 @@ const USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE =
 const USER_ACTOR_STEP_USER_DIRECTIVE_START =
   /^\s*(?:(?:then|next|now|afterwards?)\s+)?run\s+this\s+(?:step|check)\s+by\s+the\s+user\b/i;
 const USER_ACTOR_STEP_NEGATION_CUE = new RegExp(
-  String.raw`\b(?:never(?=\s+(?:(?:is|are|was|were)\s+)?${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|(?:must|should|shall|will|could|would|might|may|need|do|does|did|is|are|was|were|has|have|had)n['’]t|cannot(?=\s+(?:(?:be|remain(?:s)?)\s+)?${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|(?:won|can|shan|ain)['’]t|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b`,
+  String.raw`\b(?:never(?=\s+(?:(?:is|are|was|were)\s+)?${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|no\s+longer(?=\s+${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|(?:must|should|shall|will|could|would|might|may|need|do|does|did|is|are|was|were|has|have|had)n['’]t|cannot(?=\s+(?:(?:be|remain(?:s)?)\s+)?${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|(?:won|can|shan|ain)['’]t|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b`,
   'i',
 );
 const USER_ACTOR_STEP_AGENT_HEADING_LABEL =
@@ -1132,6 +1132,7 @@ function retainForwardAssignmentForList(assignment, listId, parentListIds) {
   if (
     assignment === null ||
     assignment.listId === null ||
+    (assignment.descendantsOnly && listId === assignment.listId) ||
     !isListNestedWithin(listId, assignment.listId, parentListIds)
   ) {
     return null;
@@ -1206,9 +1207,10 @@ function splitUserActorStepClauses(context, listIndex) {
         (USER_ACTOR_STEP_FORWARD_ASSIGNMENT_INTRODUCER.test(paragraph) ||
           (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(paragraph) &&
             USER_ACTOR_STEP_ASSIGNED_TARGET.test(paragraph) &&
-            /\b(?:following|below|above|that\s+follow|which\s+follow)\b/i.test(
+            (/\b(?:following|below|above|that\s+follow|which\s+follow)\b/i.test(
               paragraph,
-            ))) &&
+            ) ||
+              /:\s*$/.test(paragraph)))) &&
         !USER_ACTOR_STEP_NEGATION_CUE.test(paragraph);
       const agentPrefix =
         pendingAgentSubject !== null &&
@@ -1219,11 +1221,13 @@ function splitUserActorStepClauses(context, listIndex) {
       if (
         pendingForwardAssignment !== null &&
         pendingForwardAssignment.listId !== null &&
-        !isListNestedWithin(
-          paragraphListId,
-          pendingForwardAssignment.listId,
-          listParentIds,
-        )
+        ((pendingForwardAssignment.descendantsOnly &&
+          paragraphListId === pendingForwardAssignment.listId) ||
+          !isListNestedWithin(
+            paragraphListId,
+            pendingForwardAssignment.listId,
+            listParentIds,
+          ))
       ) {
         pendingForwardAssignment = null;
       }
@@ -1281,6 +1285,7 @@ function splitUserActorStepClauses(context, listIndex) {
         pendingForwardAssignment = {
           text: agentSubject,
           listId: paragraphListId,
+          descendantsOnly: paragraphListId !== null && /:\s*$/.test(paragraph),
         };
       } else if (
         pendingForwardAssignment === null &&

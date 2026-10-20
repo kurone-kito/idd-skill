@@ -10762,6 +10762,32 @@ test('trust safety requires a direct relation between an agent cue and its targe
   assert.equal(directAssignment.pass, false);
 });
 
+test('trust safety recognizes modal passive agent assignments -- Codex review #4330461962', () => {
+  for (const assignment of [
+    'This step needs to be performed by the coding agent.',
+    'This step has to be performed by the coding agent.',
+    'This step is required to be performed by the coding agent.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
+
+  const assignedToUser = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'This step needs to be performed by the user.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(assignedToUser.pass, true);
+});
+
 test('trust safety carries colon-introduced agent assignments into list items -- Codex review #4328240550', () => {
   for (const separator of ['\n', '\n\n']) {
     const result = checkTrustSafety({
@@ -10805,6 +10831,17 @@ test('trust safety keeps a colon-introduced agent assignment across its full lis
     trustSafetyAmbiguous: false,
   } as Context);
   assert.equal(separateList.pass, true);
+});
+
+test('trust safety carries explicit-target colon assignments into nested lists -- Codex review #4330461972', () => {
+  const nestedAssignment = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '- The coding agent must perform this step:\n  - Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(nestedAssignment.pass, false);
 });
 
 test('trust safety ties an immediate agent pronoun to the user-assigned step -- #4562', () => {
@@ -10930,19 +10967,42 @@ test('trust safety bounds the user actor exception to the current sibling item -
 });
 
 test('trust safety recognizes descriptive and owner phrasing for agent step assignments -- #4562', () => {
-  for (const assignment of [
-    'The coding agent is responsible for the special manual verification step.',
-    'The coding agent is the owner of this step.',
+  for (const [assignment, directive] of [
+    [
+      'The coding agent is responsible for the special manual verification step.',
+      'Run this step by the user.',
+    ],
+    [
+      'The coding agent is the owner of this step.',
+      'Run this step by the user.',
+    ],
+    [
+      'The coding agent must perform this manual step.',
+      'Run this step by the user.',
+    ],
+    [
+      'The coding agent should complete that optional check.',
+      'Run this check by the user.',
+    ],
   ]) {
     const result = checkTrustSafety({
       issue: {
         ...BASE_ISSUE,
-        body: `${assignment}\n\nRun this step by the user.`,
+        body: `${assignment}\n\n${directive}`,
       },
       trustSafetyAmbiguous: false,
     } as Context);
-    assert.equal(result.pass, false, assignment);
+    assert.equal(result.pass, false, `${assignment}\n${directive}`);
   }
+
+  const unrelatedImplementation = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must implement this manual parser.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(unrelatedImplementation.pass, true);
 });
 
 test('trust safety recognizes long colon-introduced agent assignments -- #4562', () => {
@@ -11087,6 +11147,7 @@ test('trust safety treats never as explicit agent-assignment negation -- Codex r
   for (const assignment of [
     'The coding agent never performs this step.',
     'The coding agent is never responsible for this step.',
+    'The coding agent is no longer responsible for this step.',
   ]) {
     const result = checkTrustSafety({
       issue: {
@@ -11097,6 +11158,15 @@ test('trust safety treats never as explicit agent-assignment negation -- Codex r
     } as Context);
     assert.equal(result.pass, true, assignment);
   }
+
+  const positiveAssignmentAfterNegation = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent is no longer responsible for this step; the coding agent must still perform this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(positiveAssignmentAfterNegation.pass, false);
 });
 
 test('trust safety recognizes e-ending progressive assignment verbs -- Codex review #4329937163', () => {
