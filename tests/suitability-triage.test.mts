@@ -10124,3 +10124,144 @@ test('trust safety still fails when only one word of the descriptive sentence is
   } as Context);
   assert.equal(result.pass, false);
 });
+
+test('trust safety recognizes uppercase X task-list markers for user steps -- #4577', () => {
+  for (const body of [
+    '- [X] Run this step by the user.',
+    '1. [X] Run this check by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, body);
+  }
+  const assigned = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must perform step 2.\n\n2. [X] Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(assigned.pass, false);
+});
+
+test('trust safety recognizes plural agent assignments and numbered target lists -- #4577', () => {
+  for (const [assignment, userStep] of [
+    ['The coding agents must perform step 1.', '1. Run this step by the user.'],
+    [
+      'The coding agent must perform steps 1, 2, and 3.',
+      '2. Run this step by the user.',
+    ],
+    [
+      'The coding agent must perform steps 1-3.',
+      '3. Run this step by the user.',
+    ],
+    [
+      'The coding agent must perform steps 1, 3-5, and 7.',
+      '4. Run this step by the user.',
+    ],
+    [
+      'The coding agent must perform checks 2 through 4.',
+      '4. Run this check by the user.',
+    ],
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\n${userStep}`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, `${assignment}\n${userStep}`);
+  }
+});
+
+test('trust safety keeps unrelated agent work separate across paragraphs -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent should implement the feature.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+
+  const danglingAgentSubject = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent\n\n## Manual verification\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(danglingAgentSubject.pass, true);
+});
+
+test('trust safety carries a parent agent heading into nested step sections -- #4577', () => {
+  for (const body of [
+    '## The coding agent must perform this step\n\n### Manual verification\n\nRun this step by the user.',
+    '## Coding agent steps\n\n### Step 1\n\nRun this step by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+});
+
+test('trust safety does not widen a numbered parent heading assignment -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## The coding agent must perform step 1\n\n### Manual verification\n\n2. Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety recognizes responsibility as an agent assignment cue -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent has responsibility for this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety does not attribute a comma-negated assignment to the agent -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The user must perform this step, not the coding agent.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety does not let a comment-only line create a paragraph boundary -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'Introductory context.\n<!-- hidden comment -->\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety scans many user-step directives without changing their boundaries -- #4577', () => {
+  const body = Array.from(
+    { length: 400 },
+    () => 'Run this step by the user.',
+  ).join('\n');
+  const result = checkTrustSafety({
+    issue: { ...BASE_ISSUE, body },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});

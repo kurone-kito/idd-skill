@@ -849,13 +849,13 @@ const USER_ACTOR_STEP_WINDOW = /^\s*this\s+(step|check)\s+by\s+the\s+user\s*$/i;
 // heading, or list-item boundary. Explicit agent assignments in the issue
 // title or body still win, including assignments after the directive.
 // HTML-comment content cannot establish a visible directive boundary.
-const USER_ACTOR_STEP_LIST_MARKER = String.raw`(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ x]\][ \t]+)?`;
-const USER_ACTOR_STEP_BODY_BOUNDARY = new RegExp(
-  String.raw`^(?:[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[\s\S]*\n[ \t]*\r?\n[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[ \t]*#{1,6}[ \t]+[^\r\n]*\r?\n[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[\s\S]*\n[ \t]*#{1,6}[ \t]+[^\r\n]*\r?\n[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[ \t]*[^\r\n]*\S[^\r\n]*\r?\n[ \t]*(?:=+|-+)[ \t]*\r?\n[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[\s\S]*\n[ \t]*[^\r\n]*\S[^\r\n]*\r?\n[ \t]*(?:=+|-+)[ \t]*\r?\n[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[\s\S]*\n[ \t]*${USER_ACTOR_STEP_LIST_MARKER}[ \t]*)$`,
+const USER_ACTOR_STEP_LIST_MARKER = String.raw`(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?`;
+const USER_ACTOR_STEP_LIST_PREFIX = new RegExp(
+  `^[ \\t]*(?:${USER_ACTOR_STEP_LIST_MARKER})[ \\t]*$`,
   'i',
 );
 const USER_ACTOR_STEP_AGENT =
-  /\b(?:the\s+)?(?:coding\s+)?(?:agent|assistant|automation|AI|you|worker|bot|model|codex|copilot|claude(?:\s+code)?|gemini(?:\s+cli)?|cursor|cline|opencode|windsurf|devin|grok(?:\s+build)?)\b/i;
+  /\b(?:the\s+)?(?:coding\s+)?(?:agents?|assistants?|automation|AIs?|you|workers?|bots?|models?|codex|copilots?|claude(?:\s+code)?|gemini(?:\s+cli)?|cursor|cline|opencode|windsurf|devin|grok(?:\s+build)?)\b/i;
 const USER_ACTOR_STEP_OTHER_ACTOR =
   /\b(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
 const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT =
@@ -873,11 +873,43 @@ const USER_ACTOR_STEP_ASSIGNED_TARGET =
 // A numbered assignment is scoped to the matching numbered checklist item
 // and object kind. Keep it separate from the broad target pattern.
 const USER_ACTOR_STEP_NUMBERED_TARGET =
-  /\b(?:this\s+|that\s+|the\s+)?(step|check)\s+(\d{1,9})\b/gi;
+  /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?)\s+(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
-  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|accountable|owns?|owned|belongs?\s+to|runs?|ran|executes?|executed|perform(?:s|ed)|follows?|followed|carries\s+out|carried\s+out|does?|did|completes?|completed|verifies?|verified|checks?|checked|tests?|tested|implements?|implemented|handles?|handled|manages?|managed)\b/i;
+  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibilit(?:y|ies)|accountable|owns?|owned|belongs?\s+to|runs?|ran|executes?|executed|perform(?:s|ed)|follows?|followed|carries\s+out|carried\s+out|does?|did|completes?|completed|verifies?|verified|checks?|checked|tests?|tested|implements?|implemented|handles?|handled|manages?|managed)\b/i;
 const USER_ACTOR_STEP_NEGATION_CUE =
   /\b(?:(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b/i;
+function assignmentHeadingContext(heading) {
+  const numberedTargetPattern = new RegExp(
+    USER_ACTOR_STEP_NUMBERED_TARGET.source,
+    'i',
+  );
+  const numbered = numberedTargetPattern.exec(heading);
+  const assignedTarget = new RegExp(
+    USER_ACTOR_STEP_ASSIGNED_TARGET.source,
+    'i',
+  ).exec(heading)?.[0];
+  const genericTarget = /\b(?:steps?|checks?)\b/i.exec(heading)?.[0];
+  if (
+    !USER_ACTOR_STEP_AGENT.test(heading) ||
+    (assignedTarget === undefined &&
+      numbered === null &&
+      genericTarget === null)
+  ) {
+    return null;
+  }
+  if (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(heading)) {
+    return { context: '', assignment: heading };
+  }
+  const target =
+    numbered?.[0] ??
+    assignedTarget ??
+    (genericTarget === undefined ? undefined : `the ${genericTarget}`) ??
+    'steps';
+  return {
+    context: '',
+    assignment: `the coding agent must perform ${target}`,
+  };
+}
 function splitMarkdownHeadingSections(context) {
   const lines = [];
   let lineStart = 0;
@@ -890,92 +922,195 @@ function splitMarkdownHeadingSections(context) {
         : lineEnd;
     lines.push({
       start: lineStart,
-      end: contentEnd,
+      lineAfter: newline === -1 ? context.length : newline + 1,
       text: context.slice(lineStart, contentEnd),
     });
-    if (newline === -1) {
-      break;
-    }
+    if (newline === -1) break;
     lineStart = newline + 1;
   }
-  const headingStarts = [];
+  const headings = [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    if (/^ {0,3}#{1,6}(?:[ \t]+|$)/.test(line.text)) {
-      headingStarts.push(line.start);
+    const atx = /^ {0,3}(#{1,6})(?:[ \t]+|$)/.exec(line.text);
+    if (atx) {
+      headings.push({
+        start: line.start,
+        bodyStart: line.lineAfter,
+        level: atx[1]?.length ?? 1,
+        text: line.text,
+      });
       continue;
     }
-    const underline = lines[index + 1]?.text;
+    const underline = lines[index + 1];
     if (
       /\S/.test(line.text) &&
       underline !== undefined &&
-      /^ {0,3}(?:=+|-+)[ \t]*$/.test(underline)
+      /^ {0,3}(=+|-+)[ \t]*$/.test(underline.text)
     ) {
-      headingStarts.push(line.start);
+      headings.push({
+        start: line.start,
+        bodyStart: underline.lineAfter,
+        level: underline.text.trimStart().startsWith('=') ? 1 : 2,
+        text: line.text,
+      });
       index += 1;
     }
   }
-  const sections = [];
-  let sectionStart = 0;
-  for (const headingStart of headingStarts) {
-    if (headingStart > sectionStart) {
-      sections.push(context.slice(sectionStart, headingStart));
-    }
-    sectionStart = headingStart;
+  if (headings.length === 0) {
+    return [{ body: context, headingContext: [], headingAssignment: null }];
   }
-  sections.push(context.slice(sectionStart));
+  const sections = [];
+  const firstHeading = headings[0];
+  if (firstHeading !== undefined && firstHeading.start > 0) {
+    sections.push({
+      body: context.slice(0, firstHeading.start),
+      headingContext: [],
+      headingAssignment: null,
+    });
+  }
+  const stack = [];
+  for (let index = 0; index < headings.length; index += 1) {
+    const heading = headings[index];
+    if (heading === undefined) continue;
+    while (true) {
+      const parent = stack.at(-1);
+      if (parent === undefined || parent.level < heading.level) break;
+      stack.pop();
+    }
+    const classified = assignmentHeadingContext(heading.text);
+    const headingContext = stack
+      .map(({ context: value }) => value)
+      .filter(Boolean);
+    if (classified?.context) headingContext.push(classified.context);
+    if (classified?.assignment) headingContext.push(classified.assignment);
+    if (classified === null && USER_ACTOR_STEP_AGENT.test(heading.text)) {
+      headingContext.push(heading.text);
+    }
+    const nextStart = headings[index + 1]?.start ?? context.length;
+    sections.push({
+      body: context.slice(heading.bodyStart, nextStart),
+      headingContext,
+      headingAssignment: classified?.assignment ?? null,
+    });
+    stack.push({
+      level: heading.level,
+      context:
+        classified?.context ??
+        classified?.assignment ??
+        (USER_ACTOR_STEP_AGENT.test(heading.text) ? heading.text : ''),
+    });
+  }
   return sections;
 }
-function splitUserActorStepClauses(context) {
+function splitSentenceAndSemicolonClauses(section) {
   const clauses = [];
-  for (const section of splitMarkdownHeadingSections(context)) {
-    let start = 0;
-    for (let index = 0; index < section.length; index += 1) {
-      const char = section[index];
-      if (char === ';') {
-        clauses.push(section.slice(start, index));
-        start = index + 1;
-        continue;
-      }
+  let start = 0;
+  for (let index = 0; index < section.length; index += 1) {
+    const char = section[index];
+    if (char === ';') {
+      clauses.push(section.slice(start, index));
+      start = index + 1;
+      continue;
+    }
+    if (
+      (char !== '.' && char !== '!' && char !== '?') ||
+      (index + 1 < section.length && !/\s/.test(section[index + 1] ?? ''))
+    ) {
+      continue;
+    }
+    if (char === '.') {
+      const previous = section[index - 1] ?? '';
+      const next = section[index + 1] ?? '';
+      if (/\d/.test(previous) && /\d/.test(next)) continue;
+      const suffix = section.slice(Math.max(start, index - 8), index + 1);
       if (
-        (char !== '.' && char !== '!' && char !== '?') ||
-        (index + 1 < section.length && !/\s/.test(section[index + 1] ?? ''))
+        /\b(?:e\.g|i\.e|etc|vs|mr|mrs|ms|dr|prof|st|no)\.$/i.test(suffix) ||
+        /(?:\b[A-Z]\.){2,}$/i.test(suffix)
       ) {
         continue;
       }
-      if (char === '.') {
-        const previous = section[index - 1] ?? '';
-        const next = section[index + 1] ?? '';
-        if (/\d/.test(previous) && /\d/.test(next)) {
-          continue;
-        }
-        const suffix = section.slice(Math.max(start, index - 8), index + 1);
-        if (
-          /\b(?:e\.g|i\.e|etc|vs|mr|mrs|ms|dr|prof|st|no)\.$/i.test(suffix) ||
-          /(?:\b[A-Z]\.){2,}$/i.test(suffix)
-        ) {
-          continue;
-        }
-      }
-      clauses.push(section.slice(start, index));
-      start = index + 1;
     }
-    clauses.push(section.slice(start));
+    clauses.push(section.slice(start, index));
+    start = index + 1;
   }
+  clauses.push(section.slice(start));
   return clauses;
 }
-function removeMarkdownRanges(text, ranges) {
-  let result = text;
-  for (const range of [...ranges].sort(
-    (left, right) => right.start - left.start,
-  )) {
-    const start = Math.max(0, range.start);
-    const end = Math.min(result.length, range.end);
-    if (start < end) {
-      result = result.slice(0, start) + result.slice(end);
+function splitUserActorStepClauses(context) {
+  const clauses = [];
+  const paragraphBoundary = /\r?\n[ \t]*\r?\n/g;
+  let pendingForwardAssignment = null;
+  let pendingAgentSubject = null;
+  for (const section of splitMarkdownHeadingSections(context)) {
+    const headingAssignments = new Set(section.headingContext);
+    if (section.headingAssignment !== null) {
+      headingAssignments.add(section.headingAssignment);
+    }
+    for (const headingAssignment of headingAssignments) {
+      clauses.push(...splitSentenceAndSemicolonClauses(headingAssignment));
+    }
+    const paragraphs = [];
+    let start = 0;
+    let boundary = paragraphBoundary.exec(section.body);
+    while (boundary !== null) {
+      paragraphs.push(section.body.slice(start, boundary.index));
+      start = boundary.index + boundary[0].length;
+      boundary = paragraphBoundary.exec(section.body);
+    }
+    paragraphs.push(section.body.slice(start));
+    paragraphBoundary.lastIndex = 0;
+    for (const paragraph of paragraphs) {
+      if (
+        !paragraph.trim() &&
+        section.headingContext.length === 0 &&
+        pendingForwardAssignment === null
+      )
+        continue;
+      const paragraphHasForwardAssignment =
+        USER_ACTOR_STEP_ASSIGNMENT_CUE.test(paragraph) &&
+        USER_ACTOR_STEP_ASSIGNED_TARGET.test(paragraph) &&
+        /\b(?:following|below|above|that\s+follow|which\s+follow)\b/i.test(
+          paragraph,
+        ) &&
+        !USER_ACTOR_STEP_NEGATION_CUE.test(paragraph);
+      const agentPrefix =
+        pendingAgentSubject !== null &&
+        paragraphHasForwardAssignment &&
+        !USER_ACTOR_STEP_AGENT.test(paragraph)
+          ? pendingAgentSubject
+          : null;
+      const contextual = [
+        ...(agentPrefix === null ? [] : [agentPrefix]),
+        ...(pendingForwardAssignment === null
+          ? []
+          : [pendingForwardAssignment]),
+        paragraph,
+      ]
+        .filter(Boolean)
+        .join(' ');
+      if (!paragraph.trim()) continue;
+      clauses.push(...splitSentenceAndSemicolonClauses(contextual));
+      pendingForwardAssignment = null;
+      const agentSubject =
+        agentPrefix !== null ? `${agentPrefix} ${paragraph}` : paragraph;
+      pendingAgentSubject = null;
+      if (
+        USER_ACTOR_STEP_AGENT.test(agentSubject) &&
+        paragraphHasForwardAssignment &&
+        !USER_ACTOR_STEP_NEGATION_CUE.test(agentSubject)
+      ) {
+        pendingForwardAssignment = agentSubject;
+      } else if (
+        pendingForwardAssignment === null &&
+        USER_ACTOR_STEP_AGENT.test(paragraph) &&
+        !USER_ACTOR_STEP_ASSIGNMENT_CUE.test(paragraph) &&
+        !USER_ACTOR_STEP_OTHER_ACTOR.test(paragraph)
+      ) {
+        pendingAgentSubject = paragraph;
+      }
     }
   }
-  return result;
+  return clauses;
 }
 function separateMarkdownRangesWithClauseBoundaries(text, ranges) {
   let result = text;
@@ -990,78 +1125,169 @@ function separateMarkdownRangesWithClauseBoundaries(text, ranges) {
   }
   return result;
 }
-function findNearestAssignmentCue(segment, targetStart, targetEnd) {
+function createAssignmentSegment(
+  clause,
+  start,
+  end,
+  hasAgentBefore,
+  negatedAgentMention,
+) {
+  const text = clause.slice(start, end);
   const cuePattern = new RegExp(USER_ACTOR_STEP_ASSIGNMENT_CUE.source, 'gi');
   const negationPattern = new RegExp(USER_ACTOR_STEP_NEGATION_CUE.source, 'gi');
-  const negations = [...segment.matchAll(negationPattern)].map((match) => ({
+  const negations = [...text.matchAll(negationPattern)].map((match) => ({
     start: match.index ?? 0,
     end: (match.index ?? 0) + (match[0]?.length ?? 0),
   }));
-  const cues = [...segment.matchAll(cuePattern)].filter((cue) => {
-    const start = cue.index ?? 0;
-    const end = start + (cue[0]?.length ?? 0);
-    return !negations.some(
-      (negation) => start < negation.end && end > negation.start,
-    );
-  });
-  if (cues.length === 0) {
-    return null;
+  const cues = [];
+  let negationIndex = 0;
+  for (const match of text.matchAll(cuePattern)) {
+    const cueStart = match.index ?? 0;
+    const cueEnd = cueStart + (match[0]?.length ?? 0);
+    while (
+      negationIndex < negations.length &&
+      (negations[negationIndex]?.end ?? Number.POSITIVE_INFINITY) <= cueStart
+    ) {
+      negationIndex += 1;
+    }
+    const nextNegation = negations[negationIndex];
+    if (
+      nextNegation !== undefined &&
+      cueStart < nextNegation.end &&
+      cueEnd > nextNegation.start
+    ) {
+      continue;
+    }
+    cues.push({ start: cueStart, end: cueEnd });
   }
-  return cues.reduce((nearest, cue) => {
-    const cueStart = cue.index ?? 0;
-    const cueEnd = cueStart + (cue[0]?.length ?? 0);
-    const nearestStart = nearest.index ?? 0;
-    const nearestEnd = nearestStart + (nearest[0]?.length ?? 0);
-    const distance =
-      cueEnd < targetStart
-        ? targetStart - cueEnd
-        : cueStart > targetEnd
-          ? cueStart - targetEnd
-          : 0;
-    const nearestDistance =
-      nearestEnd < targetStart
-        ? targetStart - nearestEnd
-        : nearestStart > targetEnd
-          ? nearestStart - targetEnd
-          : 0;
-    return distance < nearestDistance ? cue : nearest;
-  });
+  const cuePrefixMaxIndex = [];
+  let maxCueEnd = -1;
+  let maxCueIndex = -1;
+  for (let index = 0; index < cues.length; index += 1) {
+    const cue = cues[index];
+    if (cue !== undefined && cue.end > maxCueEnd) {
+      maxCueEnd = cue.end;
+      maxCueIndex = index;
+    }
+    cuePrefixMaxIndex.push(maxCueIndex);
+  }
+  const actorAssignmentText = text.replace(
+    /\bthis\s+(?:step|check)\s+by\s+the\s+user\b/gi,
+    ' ',
+  );
+  return {
+    start,
+    end,
+    text,
+    hasAgent: !negatedAgentMention && USER_ACTOR_STEP_AGENT.test(text),
+    hasOtherActor: USER_ACTOR_STEP_OTHER_ACTOR.test(actorAssignmentText),
+    hasAgentBefore,
+    cues,
+    cuePrefixMaxIndex,
+    negations,
+  };
+}
+function lowerBoundAssignmentCue(cues, position) {
+  let low = 0;
+  let high = cues.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const cue = cues[middle];
+    if (cue !== undefined && cue.start < position) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+function findNearestAssignmentCue(segment, targetStart, targetEnd) {
+  const { cues, cuePrefixMaxIndex } = segment;
+  if (cues.length === 0) return null;
+  const firstAtOrAfterTarget = lowerBoundAssignmentCue(cues, targetStart);
+  const priorIndex = firstAtOrAfterTarget - 1;
+  const priorMaxIndex =
+    priorIndex >= 0 ? cuePrefixMaxIndex[priorIndex] : undefined;
+  const left =
+    priorMaxIndex === undefined ? null : (cues[priorMaxIndex] ?? null);
+  const nextIndex = firstAtOrAfterTarget;
+  const right = cues[nextIndex] ?? null;
+  if (left !== null && left.end >= targetStart) return left;
+  if (right !== null && right.start <= targetEnd) return right;
+  if (left === null) return right;
+  if (right === null) return left;
+  return targetStart - left.end <= right.start - targetEnd ? left : right;
 }
 function assignmentIsNegated(segment, cueStart, targetStart, targetEnd) {
-  const negationPattern = new RegExp(USER_ACTOR_STEP_NEGATION_CUE.source, 'gi');
-  for (const negation of segment.matchAll(negationPattern)) {
-    const negationStart = negation.index ?? 0;
-    const negationEnd = negationStart + (negation[0]?.length ?? 0);
-    if (negationEnd > cueStart) {
-      continue;
-    }
-    // A negation before an action cue can negate that action. For passive
-    // assignment wording, the target comes first and the negation sits
-    // between the target and cue. A negation after a completed action and
-    // target belongs to later coordinated prose, so it cannot erase the
-    // earlier positive assignment.
-    const negationMatchesTargetPredicate =
-      cueStart >= targetEnd
-        ? negationStart >= targetStart
-        : negationEnd <= targetStart;
-    if (!negationMatchesTargetPredicate) {
-      continue;
-    }
-    const gap = segment.slice(negationEnd, cueStart);
-    if (
-      gap.length <= 80 &&
-      !/[.!?;]/.test(gap) &&
-      !/\b(?:and|or|but|while|whereas)\b/i.test(gap) &&
-      ![
-        ...gap.matchAll(
-          new RegExp(USER_ACTOR_STEP_ASSIGNMENT_CUE.source, 'gi'),
-        ),
-      ].length
-    ) {
-      return true;
+  const { negations, text } = segment;
+  let low = 0;
+  let high = negations.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const negation = negations[middle];
+    if (negation !== undefined && negation.end <= cueStart) low = middle + 1;
+    else high = middle;
+  }
+  const negation = low > 0 ? (negations[low - 1] ?? null) : null;
+  if (negation === null) return false;
+  // A negation before an action cue can negate that action. For passive
+  // assignment wording, the target comes first and the negation sits
+  // between the target and cue. A negation after a completed action and
+  // target belongs to later coordinated prose, so it cannot erase the
+  // earlier positive assignment.
+  const negationMatchesTargetPredicate =
+    cueStart >= targetEnd
+      ? negation.start >= targetStart
+      : negation.end <= targetStart;
+  if (!negationMatchesTargetPredicate) return false;
+  const gap = text.slice(negation.end, cueStart);
+  return (
+    gap.length <= 80 &&
+    !/[.!?;]/.test(gap) &&
+    !/\b(?:and|or|but|while|whereas)\b/i.test(gap) &&
+    !USER_ACTOR_STEP_ASSIGNMENT_CUE.test(gap)
+  );
+}
+function parseNumberedTargetRanges(value) {
+  const numberPattern = /(\d{1,9})(?:\s*(?:-|–|to|through)\s*(\d{1,9}))?/gi;
+  const matches = [...value.matchAll(numberPattern)];
+  const remaining = value
+    .replace(numberPattern, '')
+    .replace(/\b(?:and|or)\b/gi, '')
+    .replace(/[,\s]/g, '');
+  if (matches.length === 0 || remaining !== '') return null;
+  return matches.map((match) => {
+    const first = Number(match[1]);
+    const second = match[2] === undefined ? first : Number(match[2]);
+    return {
+      start: Math.min(first, second),
+      end: Math.max(first, second),
+    };
+  });
+}
+function mergeNumberedTargetRanges(ranges) {
+  const sorted = [...ranges].sort(
+    (left, right) => left.start - right.start || left.end - right.end,
+  );
+  const merged = [];
+  for (const range of sorted) {
+    const last = merged.at(-1);
+    if (last !== undefined && range.start <= last.end + 1) {
+      last.end = Math.max(last.end, range.end);
+    } else {
+      merged.push({ ...range });
     }
   }
-  return false;
+  return merged;
+}
+function hasNumberedTargetRange(ranges, ordinal) {
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const range = ranges[middle];
+    if (range !== undefined && range.start <= ordinal) low = middle + 1;
+    else high = middle;
+  }
+  const range = low > 0 ? ranges[low - 1] : undefined;
+  return range !== undefined && range.end >= ordinal;
 }
 // #4577: scan the title and body as separate fields so an assignment in one
 // cannot combine with an unrelated target in the other. Callers first
@@ -1069,7 +1295,7 @@ function assignmentIsNegated(segment, cueStart, targetStart, targetEnd) {
 function analyzeAgentAssignmentsToSteps(context) {
   const analysis = {
     allTargets: false,
-    numberedTargets: new Set(),
+    numberedTargetRanges: new Map(),
   };
   for (const clause of splitUserActorStepClauses(context)) {
     const targetPattern = new RegExp(
@@ -1080,19 +1306,55 @@ function analyzeAgentAssignmentsToSteps(context) {
       USER_ACTOR_STEP_NUMBERED_TARGET.source,
       'gi',
     );
-    const contrastPattern = /\b(?:but|while|whereas|and)\b/gi;
+    const contrastPattern = new RegExp(
+      '\\b(?:but|while|whereas|and)\\b|,\\s*not(?=\\s+' +
+        USER_ACTOR_STEP_AGENT.source +
+        ')',
+      'gi',
+    );
     const contrastPositions = [...clause.matchAll(contrastPattern)]
-      .map((match) => ({ index: match.index ?? 0, text: match[0] ?? '' }))
+      .map((match) => ({
+        index: match.index ?? 0,
+        end: (match.index ?? 0) + (match[0]?.length ?? 0),
+        text: match[0] ?? '',
+      }))
       .filter(({ index, text }) => {
-        if (text.toLowerCase() !== 'and') {
-          return true;
-        }
-        const rightSide = clause.slice(index + text.length);
+        if (!/^and$/i.test(text)) return true;
+        const rightSide = clause.slice(
+          index + text.length,
+          index + text.length + 128,
+        );
         return (
           USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT.test(rightSide) ||
           USER_ACTOR_STEP_AGENT_SUBJECT.test(rightSide)
         );
       });
+    const segments = [];
+    let segmentStart = 0;
+    let hasAgentBefore = false;
+    let negatedAgentMention = false;
+    for (const contrast of contrastPositions) {
+      const segment = createAssignmentSegment(
+        clause,
+        segmentStart,
+        contrast.index,
+        hasAgentBefore,
+        negatedAgentMention,
+      );
+      segments.push(segment);
+      hasAgentBefore ||= segment.hasAgent;
+      segmentStart = contrast.end;
+      negatedAgentMention = contrast.text.startsWith(',');
+    }
+    segments.push(
+      createAssignmentSegment(
+        clause,
+        segmentStart,
+        clause.length,
+        hasAgentBefore,
+        negatedAgentMention,
+      ),
+    );
     const targets = [
       ...[...clause.matchAll(targetPattern)]
         .filter((match) => {
@@ -1102,40 +1364,39 @@ function analyzeAgentAssignmentsToSteps(context) {
         .map((match) => ({
           match,
           targetKind: null,
-          ordinal: null,
+          numberedRanges: null,
         })),
       ...[...clause.matchAll(numberedTargetPattern)].map((match) => ({
         match,
-        targetKind: (match[1] ?? '').toLowerCase(),
-        ordinal: Number(match[2]),
+        targetKind: (match[1] ?? '').toLowerCase().replace(/s$/, ''),
+        numberedRanges: parseNumberedTargetRanges(match[2] ?? ''),
       })),
     ].sort((left, right) => (left.match.index ?? 0) - (right.match.index ?? 0));
-    for (const { match: targetMatch, targetKind, ordinal } of targets) {
+    for (const { match: targetMatch, targetKind, numberedRanges } of targets) {
       const targetIndex = targetMatch.index ?? 0;
       const targetEnd = targetIndex + (targetMatch[0]?.length ?? 0);
-      const priorContrast = contrastPositions
-        .filter((position) => position.index < targetIndex)
-        .at(-1);
-      const nextContrast = contrastPositions.find(
-        (position) => position.index > targetIndex,
-      );
-      const segmentStart =
-        priorContrast === undefined
-          ? 0
-          : priorContrast.index + priorContrast.text.length;
-      const segmentEnd = nextContrast?.index ?? clause.length;
-      const assignmentSegment = clause.slice(segmentStart, segmentEnd);
-      const localAgent = USER_ACTOR_STEP_AGENT.test(assignmentSegment);
+      let segmentLow = 0;
+      let segmentHigh = segments.length;
+      while (segmentLow < segmentHigh) {
+        const middle = Math.floor((segmentLow + segmentHigh) / 2);
+        const segment = segments[middle];
+        if (segment !== undefined && segment.end <= targetIndex) {
+          segmentLow = middle + 1;
+        } else segmentHigh = middle;
+      }
+      const assignmentSegment =
+        segments[Math.min(segmentLow, segments.length - 1)];
+      if (assignmentSegment === undefined) continue;
+      const localAgent = assignmentSegment.hasAgent;
       const hasInheritedAgent =
-        priorContrast !== undefined &&
-        USER_ACTOR_STEP_AGENT.test(clause.slice(0, priorContrast.index)) &&
+        assignmentSegment.hasAgentBefore &&
         !localAgent &&
-        !USER_ACTOR_STEP_OTHER_ACTOR.test(assignmentSegment);
+        !assignmentSegment.hasOtherActor;
       if (!localAgent && !hasInheritedAgent) {
         continue;
       }
-      const localTargetStart = targetIndex - segmentStart;
-      const localTargetEnd = targetEnd - segmentStart;
+      const localTargetStart = targetIndex - assignmentSegment.start;
+      const localTargetEnd = targetEnd - assignmentSegment.start;
       const cue = findNearestAssignmentCue(
         assignmentSegment,
         localTargetStart,
@@ -1145,19 +1406,31 @@ function analyzeAgentAssignmentsToSteps(context) {
         cue === null ||
         assignmentIsNegated(
           assignmentSegment,
-          cue.index ?? 0,
+          cue.start,
           localTargetStart,
           localTargetEnd,
         )
       ) {
         continue;
       }
-      if (ordinal === null) {
+      if (targetKind === null) {
+        analysis.allTargets = true;
+      } else if (numberedRanges === null) {
         analysis.allTargets = true;
       } else {
-        analysis.numberedTargets.add(`${targetKind}:${ordinal}`);
+        const prior = analysis.numberedTargetRanges.get(targetKind) ?? [];
+        analysis.numberedTargetRanges.set(
+          targetKind,
+          prior.concat(numberedRanges),
+        );
       }
     }
+  }
+  for (const [targetKind, ranges] of analysis.numberedTargetRanges) {
+    analysis.numberedTargetRanges.set(
+      targetKind,
+      mergeNumberedTargetRanges(ranges),
+    );
   }
   return analysis;
 }
@@ -1165,15 +1438,108 @@ function hasAgentAssignmentForUserStep(analysis, ordinal, targetKind) {
   return (
     analysis.allTargets ||
     (ordinal === null
-      ? analysis.numberedTargets.size > 0
-      : analysis.numberedTargets.has(`${targetKind}:${ordinal}`))
+      ? [...analysis.numberedTargetRanges.values()].some(
+          (ranges) => ranges.length > 0,
+        )
+      : hasNumberedTargetRange(
+          analysis.numberedTargetRanges.get(targetKind) ?? [],
+          ordinal,
+        ))
   );
 }
-function numberedUserStepListItemOrdinal(prefix) {
-  const currentLine = prefix.slice(prefix.lastIndexOf('\n') + 1);
-  const match = /^\s*(\d{1,9})[.)][ \t]+(?:\[[ x]\][ \t]+)?$/i.exec(
-    currentLine,
+function createUserActorStepBodyBoundaryIndex(
+  body,
+  codeRanges,
+  htmlCommentRanges,
+) {
+  const characters = body.split('');
+  for (const range of codeRanges) {
+    const start = Math.max(0, range.start);
+    const end = Math.min(body.length, range.end);
+    if (start >= end) continue;
+    for (let index = start; index < end; index += 1) {
+      if (characters[index] === '\n' || characters[index] === '\r') continue;
+      characters[index] = index === start ? ';' : ' ';
+    }
+  }
+  for (const range of htmlCommentRanges) {
+    const start = Math.max(0, range.start);
+    const end = Math.min(body.length, range.end);
+    if (start >= end) continue;
+    for (let index = start; index < end; index += 1) {
+      characters[index] = index === start ? ';' : ' ';
+    }
+  }
+  const text = characters.join('');
+  const lineStarts = [0];
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '\n') lineStarts.push(index + 1);
+  }
+  const firstNonWhitespace = [];
+  const lineKinds = [];
+  for (let lineIndex = 0; lineIndex < lineStarts.length; lineIndex += 1) {
+    const start = lineStarts[lineIndex] ?? text.length;
+    const nextLineStart = lineStarts[lineIndex + 1];
+    let end = nextLineStart === undefined ? text.length : nextLineStart - 1;
+    if (end > start && text[end - 1] === '\r') end -= 1;
+    let first = start;
+    while (first < end && (text[first] === ' ' || text[first] === '\t')) {
+      first += 1;
+    }
+    firstNonWhitespace.push(first);
+    const line = text.slice(start, end);
+    lineKinds.push(
+      first === end
+        ? 'blank'
+        : /^ {0,3}#{1,6}(?:[ \t]+|$)/.test(line)
+          ? 'heading'
+          : /^ {0,3}(?:=+|-+)[ \t]*$/.test(line)
+            ? 'setext'
+            : 'other',
+    );
+  }
+  return { text, lineStarts, firstNonWhitespace, lineKinds };
+}
+function lineIndexAtOffset(lineStarts, offset) {
+  let low = 0;
+  let high = lineStarts.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const lineStart = lineStarts[middle];
+    if (lineStart !== undefined && lineStart <= offset) low = middle + 1;
+    else high = middle;
+  }
+  return Math.max(0, low - 1);
+}
+function hasUserActorStepBodyBoundary(index, offset) {
+  const lineIndex = lineIndexAtOffset(index.lineStarts, offset);
+  const lineStart = index.lineStarts[lineIndex] ?? 0;
+  const blankPrefix = (index.firstNonWhitespace[lineIndex] ?? offset) >= offset;
+  const prefixLength = offset - lineStart;
+  const prefix =
+    prefixLength <= 40 ? index.text.slice(lineStart, offset) : null;
+  const listPrefix =
+    prefix !== null && USER_ACTOR_STEP_LIST_PREFIX.test(prefix);
+  if (lineIndex === 0) {
+    return blankPrefix || listPrefix;
+  }
+  if (listPrefix) return true;
+  if (!blankPrefix) return false;
+  const previousKind = index.lineKinds[lineIndex - 1];
+  if (previousKind === 'blank' || previousKind === 'heading') return true;
+  return (
+    previousKind === 'setext' &&
+    lineIndex >= 2 &&
+    index.lineKinds[lineIndex - 2] !== 'blank'
   );
+}
+function numberedUserStepListItemOrdinal(index, offset) {
+  const lineIndex = lineIndexAtOffset(index.lineStarts, offset);
+  const lineStart = index.lineStarts[lineIndex] ?? 0;
+  const prefixLength = offset - lineStart;
+  if (prefixLength > 40) return null;
+  const prefix = index.text.slice(lineStart, offset);
+  const match = /^[ \t]*(\d{1,9})[.)][ \t]+(?:\[[ xX]\][ \t]+)?$/i.exec(prefix);
   return match ? Number(match[1]) : null;
 }
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
@@ -2787,6 +3153,11 @@ function findUnsafeExecutionDirectiveMatch(
   const bodyAssignmentAnalysis = analyzeAgentAssignmentsToSteps(
     bodyAssignmentContext,
   );
+  const bodyBoundaryIndex = createUserActorStepBodyBoundaryIndex(
+    body,
+    bodyCodeRanges,
+    bodyHtmlCommentRanges,
+  );
   const verbPattern = new RegExp(
     String.raw`\b${UNSAFE_DIRECTIVE_VERB}\b`,
     'gi',
@@ -2811,32 +3182,18 @@ function findUnsafeExecutionDirectiveMatch(
       );
       const targetMatch = targetPattern.exec(window);
       const verbBodyStart = verbStart - bodyOffset;
-      const userActorStepBodyPrefix = removeMarkdownRanges(
-        maskMarkdownCodeRegionsPreservingPositions(
-          body.slice(0, verbBodyStart),
-          bodyCodeRanges
-            .filter((range) => range.start < verbBodyStart)
-            .map((range) => ({
-              ...range,
-              end: Math.min(range.end, verbBodyStart),
-            })),
-        ),
-        bodyHtmlCommentRanges
-          .filter((range) => range.start < verbBodyStart)
-          .map((range) => ({
-            ...range,
-            end: Math.min(range.end, verbBodyStart),
-          })),
-      );
-      const verbIsInHtmlComment = bodyHtmlCommentRanges.some(
-        (range) =>
-          range.start <= verbBodyStart &&
-          verbBodyStart + verbText.length <= range.end,
-      );
+      const verbHtmlCommentRange =
+        verbBodyStart >= 0
+          ? getMarkdownCodeRange(body, verbBodyStart, bodyHtmlCommentRanges)
+          : null;
+      const verbIsInHtmlComment =
+        verbHtmlCommentRange !== null &&
+        verbBodyStart + verbText.length <= verbHtmlCommentRange.end;
       const userStepTarget = USER_ACTOR_STEP_WINDOW.exec(window);
       const userStepKind = (userStepTarget?.[1] ?? '').toLowerCase();
       const userStepOrdinal = numberedUserStepListItemOrdinal(
-        userActorStepBodyPrefix,
+        bodyBoundaryIndex,
+        verbBodyStart,
       );
       const userActorStepDirective =
         verbText.toLowerCase() === 'run' &&
@@ -2844,7 +3201,7 @@ function findUnsafeExecutionDirectiveMatch(
         USER_ACTOR_STEP_WINDOW.test(window) &&
         verbStart >= bodyOffset &&
         !verbIsInHtmlComment &&
-        USER_ACTOR_STEP_BODY_BOUNDARY.test(userActorStepBodyPrefix) &&
+        hasUserActorStepBodyBoundary(bodyBoundaryIndex, verbBodyStart) &&
         !hasAgentAssignmentForUserStep(
           titleAssignmentAnalysis,
           userStepOrdinal,
