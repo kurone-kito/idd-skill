@@ -10864,6 +10864,15 @@ test('trust safety bounds the user actor exception to the current sibling item -
     trustSafetyAmbiguous: false,
   } as Context);
   assert.equal(nestedItem.pass, false);
+
+  const assignedSiblingStep = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '1. Run this step by the user.\n2. The coding agent must perform step 1.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(assignedSiblingStep.pass, false);
 });
 
 test('trust safety recognizes descriptive and owner phrasing for agent step assignments -- #4562', () => {
@@ -11036,13 +11045,46 @@ test('trust safety treats never as explicit agent-assignment negation -- Codex r
   }
 });
 
-test('trust safety does not treat a double-negative agent assignment as negated -- E10', () => {
+test('trust safety recognizes e-ending progressive assignment verbs -- Codex review #4329937163', () => {
+  for (const assignment of [
+    'The coding agent is completing this step.',
+    'The coding agent is handling this step.',
+    'The coding agent is managing this step.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
+});
+
+test('trust safety treats cannot as explicit agent-assignment negation -- Codex review #4329937172', () => {
   const result = checkTrustSafety({
     issue: {
       ...BASE_ISSUE,
-      body: 'The coding agent never fails to perform this step.\n\nRun this step by the user.',
+      body: 'The coding agent cannot perform this step.\n\nRun this step by the user.',
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, false);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety does not treat a double-negative agent assignment as negated -- E10', () => {
+  for (const assignment of [
+    'The coding agent never fails to perform this step.',
+    'The coding agent cannot fail to perform this step.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
 });

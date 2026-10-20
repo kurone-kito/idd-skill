@@ -877,7 +877,7 @@ const USER_ACTOR_STEP_ASSIGNED_TARGET =
 const USER_ACTOR_STEP_NUMBERED_TARGET =
   /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?|items?)\s+#?\s*(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)#?\s*\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
-  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|owner|ownership|belongs?\s+to|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)?|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complete(?:s|d|ing)?|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|handle(?:s|d|ing)?|manage(?:s|d|ing)?)\b/i;
+  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|owner|ownership|belongs?\s+to|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)?|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complet(?:e|es|ed|ing)|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|hand(?:le|les|led|ling)|man(?:age|ages|aged|aging))\b/i;
 const USER_ACTOR_STEP_FORWARD_ASSIGNMENT_INTRODUCER = new RegExp(
   String.raw`^\s*${USER_ACTOR_STEP_AGENT.source}[^.!?;:]*\b(?:(?:is|are|was|were|remains?)\s+(?:responsible\s+for|accountable\s+for|assigned\s+to|tasked\s+with|delegated\s+to|directed\s+to))\s*:\s*$`,
   'i',
@@ -893,7 +893,7 @@ const USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE =
 const USER_ACTOR_STEP_USER_DIRECTIVE_START =
   /^\s*(?:(?:then|next|now|afterwards?)\s+)?run\s+this\s+(?:step|check)\s+by\s+the\s+user\b/i;
 const USER_ACTOR_STEP_NEGATION_CUE = new RegExp(
-  String.raw`\b(?:never(?=\s+(?:(?:is|are|was|were)\s+)?${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|(?:must|should|shall|will|could|would|might|may|need|do|does|did|is|are|was|were|has|have|had)n['’]t|(?:won|can|shan|ain)['’]t|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b`,
+  String.raw`\b(?:never(?=\s+(?:(?:is|are|was|were)\s+)?${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|(?:must|should|shall|will|could|would|might|may|need|do|does|did|is|are|was|were|has|have|had)n['’]t|cannot(?=\s+(?:(?:be|remain(?:s)?)\s+)?${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|(?:won|can|shan|ain)['’]t|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b`,
   'i',
 );
 const USER_ACTOR_STEP_AGENT_HEADING_LABEL =
@@ -3799,8 +3799,6 @@ function findUnsafeExecutionDirectiveMatch(
       const verbIsInHtmlComment =
         verbHtmlCommentRange !== null &&
         verbBodyStart + verbText.length <= verbHtmlCommentRange.end;
-      const userStepTarget = USER_ACTOR_STEP_WINDOW.exec(window);
-      const userStepKind = (userStepTarget?.[1] ?? '').toLowerCase();
       const userStepOrdinal = numberedUserStepListItemOrdinal(
         bodyBoundaryIndex,
         verbBodyStart,
@@ -3819,6 +3817,8 @@ function findUnsafeExecutionDirectiveMatch(
         verbBodyStart,
         verbText.length,
       );
+      const userStepTarget = USER_ACTOR_STEP_WINDOW.exec(userActorStepWindow);
+      const userStepKind = (userStepTarget?.[1] ?? '').toLowerCase();
       const userActorStepDirective =
         verbText.toLowerCase() === 'run' &&
         userActorStepWindow.length < UNSAFE_DIRECTIVE_WINDOW_CHARS &&
