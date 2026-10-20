@@ -1040,8 +1040,9 @@ const REPO_OWNED_VALIDATION_SENTENCE_START =
 // objects; keep every other supplied-content target on the unsafe path.
 const USER_ACTOR_STEP_WINDOW = /^\s*this\s+(step|check)\s+by\s+the\s+user\s*$/i;
 // #4577: allow the exact user-actor directive at a normal issue paragraph,
-// heading, or list-item boundary. Explicit agent assignments in the issue
-// title or body still win, including assignments after the directive.
+// heading, or list-item boundary, or after a narrow clause connector.
+// Explicit agent assignments in the issue title or body still win,
+// including assignments after the directive.
 // HTML-comment content cannot establish a visible directive boundary.
 const USER_ACTOR_STEP_LIST_MARKER = String.raw`(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?`;
 const USER_ACTOR_STEP_LIST_PREFIX = new RegExp(
@@ -1069,11 +1070,13 @@ const USER_ACTOR_STEP_ASSIGNED_TARGET =
 const USER_ACTOR_STEP_NUMBERED_TARGET =
   /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?)\s+(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
-  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|belongs?\s+to|run(?:s|ning)?|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|complete(?:s|d|ing)?|verif(?:y|ies|ied|ying)|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|handle(?:s|d|ing)?|manage(?:s|d|ing)?)\b/i;
+  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|belongs?\s+to|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|complete(?:s|d|ing)?|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|handle(?:s|d|ing)?|manage(?:s|d|ing)?)\b/i;
 const USER_ACTOR_STEP_TARGET_AGENT_RELATION =
-  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?(?:for|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?responsibilit(?:y|ies)\s+of|(?:the\s+)?ownership\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:performed|run|executed|checked|tested|verified|implemented|handled)\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by))\s*$/i;
+  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?(?:for|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?(?:responsibility|responsibilities)\s+of|(?:the\s+)?ownership\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:performed|run|executed|checked|tested|verified|implemented|handled)\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by))\s*$/i;
 const USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE =
   /\b(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?)\b[^.!?;]{0,80}$/i;
+const USER_ACTOR_STEP_USER_DIRECTIVE_START =
+  /^\s*(?:(?:then|next|now|afterwards?)\s+)?run\s+this\s+(?:step|check)\s+by\s+the\s+user\b/i;
 const USER_ACTOR_STEP_NEGATION_CUE =
   /\b(?:(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b/i;
 
@@ -1275,6 +1278,14 @@ function splitSentenceAndSemicolonClauses(section: string): string[] {
   let start = 0;
   for (let index = 0; index < section.length; index += 1) {
     const char = section[index];
+    if (
+      char === ',' &&
+      USER_ACTOR_STEP_USER_DIRECTIVE_START.test(section.slice(index + 1))
+    ) {
+      clauses.push(section.slice(start, index));
+      start = index + 1;
+      continue;
+    }
     if (char === ';') {
       clauses.push(section.slice(start, index));
       start = index + 1;
@@ -1516,6 +1527,36 @@ function hasAgentActorForTarget(
   });
 }
 
+function assignmentSegmentHasAgentAssignmentRole(
+  segment: AssignmentSegment,
+): boolean {
+  // Carry the actor through contrast clauses only when an agent is tied to
+  // a checklist target. The next segment applies negation to its own action.
+  if (!segment.hasAgent || !USER_ACTOR_STEP_ASSIGNMENT_CUE.test(segment.text)) {
+    return false;
+  }
+  const targetPattern = new RegExp(
+    USER_ACTOR_STEP_ASSIGNED_TARGET.source,
+    'gi',
+  );
+  const numberedTargetPattern = new RegExp(
+    USER_ACTOR_STEP_NUMBERED_TARGET.source,
+    'gi',
+  );
+  const targets = [
+    ...[...segment.text.matchAll(targetPattern)].filter((match) => {
+      const end = (match.index ?? 0) + (match[0]?.length ?? 0);
+      return !/^\s+\d/.test(segment.text.slice(end));
+    }),
+    ...segment.text.matchAll(numberedTargetPattern),
+  ];
+  return targets.some((target) => {
+    const targetStart = target.index ?? 0;
+    const targetEnd = targetStart + (target[0]?.length ?? 0);
+    return hasAgentActorForTarget(segment, targetStart, targetEnd);
+  });
+}
+
 function lowerBoundAssignmentCue(
   cues: readonly AssignmentCue[],
   position: number,
@@ -1663,7 +1704,7 @@ function analyzeAgentAssignmentsToSteps(
       'gi',
     );
     const contrastPattern = new RegExp(
-      '\\b(?:but|while|whereas|and)\\b|,\\s*not(?=\\s+' +
+      '\\b(?:but|while|whereas|and|then|next|now|afterwards?)\\b|,\\s*not(?=\\s+' +
         USER_ACTOR_STEP_AGENT.source +
         ')',
       'gi',
@@ -1675,12 +1716,16 @@ function analyzeAgentAssignmentsToSteps(
         text: match[0] ?? '',
       }))
       .filter(({ index, text }) => {
-        if (!/^and$/i.test(text)) return true;
         const rightSide = clause.slice(
           index + text.length,
           index + text.length + 128,
         );
+        if (/^(?:then|next|now|afterwards?)$/i.test(text)) {
+          return USER_ACTOR_STEP_USER_DIRECTIVE_START.test(rightSide);
+        }
+        if (!/^and$/i.test(text)) return true;
         return (
+          USER_ACTOR_STEP_USER_DIRECTIVE_START.test(rightSide) ||
           USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT.test(rightSide) ||
           USER_ACTOR_STEP_AGENT_SUBJECT.test(rightSide)
         );
@@ -1698,7 +1743,7 @@ function analyzeAgentAssignmentsToSteps(
         negatedAgentMention,
       );
       segments.push(segment);
-      hasAgentBefore ||= segment.hasAgent;
+      hasAgentBefore ||= assignmentSegmentHasAgentAssignmentRole(segment);
       segmentStart = contrast.end;
       negatedAgentMention = contrast.text.startsWith(',');
     }
@@ -2015,6 +2060,14 @@ function hasUserActorStepBodyBoundary(
   index: UserActorStepBodyBoundaryIndex,
   offset: number,
 ): boolean {
+  const coordinatedPrefix = index.text.slice(Math.max(0, offset - 80), offset);
+  if (
+    /(?:,\s*(?:(?:and\s+)?(?:then|next|now|afterwards?)\s+|and\s+)?|\band\s+(?:(?:then|next|now|afterwards?)\s+)?|\b(?:then|next|now|afterwards?)\s+)$/i.test(
+      coordinatedPrefix,
+    )
+  ) {
+    return true;
+  }
   const lineIndex = lineIndexAtOffset(index.lineStarts, offset);
   const lineStart = index.lineStarts[lineIndex] ?? 0;
   const blankPrefix = (index.firstNonWhitespace[lineIndex] ?? offset) >= offset;

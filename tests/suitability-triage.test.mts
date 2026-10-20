@@ -2900,14 +2900,19 @@ test('trust safety rejects a step assigned to the agent with "is for" -- #4577',
 });
 
 test('trust safety requires an agent mention to occupy the assigned actor role -- #4577', () => {
-  const objectMention = checkTrustSafety({
-    issue: {
-      ...BASE_ISSUE,
-      body: 'This step tests the AI model.\n\nRun this step by the user.',
-    },
-    trustSafetyAmbiguous: false,
-  } as Context);
-  assert.equal(objectMention.pass, true);
+  for (const body of [
+    'This step tests the AI model.\n\nRun this step by the user.',
+    'This step tests the AI model, and run this step by the user.',
+    'The issue discusses a coding agent, and then run this step by the user.',
+    'The issue mentions a coding agent, then run this step by the user.',
+    'The issue mentions a coding agent, run this step by the user.',
+  ]) {
+    const objectMention = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(objectMention.pass, true, body);
+  }
 
   for (const assignment of [
     'The AI model must perform this step.',
@@ -2923,6 +2928,15 @@ test('trust safety requires an agent mention to occupy the assigned actor role -
     } as Context);
     assert.equal(result.pass, false, assignment);
   }
+
+  const assignedSameStep = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must perform this step, and then run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(assignedSameStep.pass, false);
 });
 
 test('trust safety rejects an agent assignment phrased as is to perform -- #4577', () => {
