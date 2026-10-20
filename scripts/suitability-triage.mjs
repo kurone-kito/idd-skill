@@ -856,7 +856,7 @@ const USER_ACTOR_STEP_LIST_PREFIX = new RegExp(
   'i',
 );
 const USER_ACTOR_STEP_AGENT =
-  /\b(?:the\s+)?(?:coding\s+)?(?:agents?|assistants?|automation|AIs?|you|workers?|bots?|models?|codex|copilots?|claude(?:\s+code)?|gemini(?:\s+cli)?|cursor|cline|opencode|windsurf|devin|grok(?:\s+build)?)\b/i;
+  /\b(?:the\s+)?(?:coding\s+)?(?:agents?|assistants?|automation|AIs?|LLMs?|you|workers?|bots?|models?|codex|copilots?|claude(?:\s+code)?|gemini(?:\s+cli)?|cursor|cline|opencode|windsurf|devin|grok(?:\s+build)?)\b/i;
 const USER_ACTOR_STEP_OTHER_ACTOR =
   /\b(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
 const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT =
@@ -897,7 +897,7 @@ const USER_ACTOR_STEP_NEGATION_CUE = new RegExp(
   'i',
 );
 const USER_ACTOR_STEP_AGENT_HEADING_LABEL =
-  /^\s*(?:the\s+)?(?:coding\s+)?(?:agents?|assistants?|automation|AIs?|you|workers?|bots?|models?|codex|copilots?|claude(?:\s+code)?|gemini(?:\s+cli)?|cursor|cline|opencode|windsurf|devin|grok(?:\s+build)?)(?:\s+(?:tasks?|responsibilities|duties|work))?\s*$/i;
+  /^\s*(?:the\s+)?(?:coding\s+)?(?:agents?|assistants?|automation|AIs?|LLMs?|you|workers?|bots?|models?|codex|copilots?|claude(?:\s+code)?|gemini(?:\s+cli)?|cursor|cline|opencode|windsurf|devin|grok(?:\s+build)?)(?:\s+(?:tasks?|responsibilities|duties|work))?\s*$/i;
 function normalizeMarkdownHeadingLabel(heading) {
   const isAtxHeading = /^ {0,3}#{1,6}[ \t]+/.test(heading);
   const label = heading.replace(/^ {0,3}#{1,6}[ \t]+/, '');
@@ -1545,9 +1545,12 @@ function assignmentIsNegated(segment, cueStart, targetStart, targetEnd) {
       : negation.end <= targetStart;
   if (!negationMatchesTargetPredicate) return false;
   const gap = text.slice(negation.end, cueStart);
+  // "doesn't fail to perform" is a positive assignment, so the outer
+  // negation must not erase the action cue after "fail to".
   return (
     gap.length <= 80 &&
     !/[.!?;]/.test(gap) &&
+    !/\bfail(?:s|ed|ing)?\s+to\s*$/i.test(gap) &&
     !/\b(?:and|or|but|while|whereas)\b/i.test(gap) &&
     !USER_ACTOR_STEP_ASSIGNMENT_CUE.test(gap)
   );
@@ -1853,6 +1856,75 @@ function hasAgentAssignmentForUserStep(
     (ordinal === null
       ? rangeSets.some((ranges) => ranges.length > 0)
       : rangeSets.some((ranges) => hasNumberedTargetRange(ranges, ordinal)))
+  );
+}
+// #4577: an explicit assignment in the sentence immediately after the
+// user-actor directive can refer back to that step/check with the pronoun
+// "it". Normalize only that short, same-paragraph continuation so the
+// ordinary assignment parser can apply its actor-role and negation rules.
+function hasAgentPronounAssignmentAfterUserStep(
+  context,
+  index,
+  directiveBodyStart,
+  verbLength,
+  actorWindowLength,
+  targetKind,
+) {
+  const continuationStart = directiveBodyStart + verbLength + actorWindowLength;
+  const section = index.headingSectionRanges.find(
+    ({ start: sectionStart, end: sectionEnd }) =>
+      directiveBodyStart >= sectionStart && directiveBodyStart < sectionEnd,
+  );
+  let end = Math.min(
+    section?.end ?? context.length,
+    continuationStart + UNSAFE_DIRECTIVE_WINDOW_CHARS,
+  );
+  const paragraphBoundary = /\r?\n[ \t]*\r?\n/.exec(
+    context.slice(continuationStart, end),
+  );
+  if (paragraphBoundary !== null) {
+    end = Math.min(end, continuationStart + (paragraphBoundary.index ?? 0));
+  }
+  const currentListId = userActorStepListId(index, directiveBodyStart);
+  if (currentListId !== null) {
+    const currentLineIndex = lineIndexAtOffset(
+      index.lineStarts,
+      directiveBodyStart,
+    );
+    for (
+      let lineIndex = currentLineIndex + 1;
+      lineIndex < index.lineStarts.length;
+      lineIndex += 1
+    ) {
+      if (index.orderedListIds[lineIndex] !== currentListId) continue;
+      const lineStart = index.lineStarts[lineIndex] ?? context.length;
+      if (lineStart <= continuationStart || lineStart >= end) continue;
+      const nextLineStart = index.lineStarts[lineIndex + 1] ?? context.length;
+      const line = context.slice(lineStart, nextLineStart);
+      if (/^[ \t]*(?:\d{1,9}[.)]|[-*+])[ \t]+(?:\[[ xX]\][ \t]+)?/.test(line)) {
+        end = lineStart;
+        break;
+      }
+    }
+  }
+  let start = continuationStart;
+  while (start < end && /[.!? \t\r\n]/.test(context[start] ?? '')) {
+    start += 1;
+  }
+  if (start >= end) return false;
+  const continuation = context.slice(start, end);
+  if (!/\bit\b/i.test(continuation)) return false;
+  const normalized = continuation.replace(/\bit\b/gi, `this ${targetKind}`);
+  const continuationAnalysis = analyzeAgentAssignmentsToSteps(
+    normalized,
+    'global',
+  );
+  return hasAgentAssignmentForUserStep(
+    continuationAnalysis,
+    null,
+    targetKind,
+    null,
+    null,
   );
 }
 function buildOrderedUserStepListOrdinals(
@@ -3839,6 +3911,14 @@ function findUnsafeExecutionDirectiveMatch(
           userStepKind,
           userStepSectionId,
           userStepListId,
+        ) &&
+        !hasAgentPronounAssignmentAfterUserStep(
+          bodyAssignmentContext,
+          bodyBoundaryIndex,
+          verbBodyStart,
+          verbText.length,
+          userActorStepWindow.length,
+          userStepKind,
         ) &&
         !hasBareAgentActorHeadingContext(bodyBoundaryIndex, verbBodyStart);
       // #3073 round 4-6: the repository-owned-validation exception is now

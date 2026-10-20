@@ -10807,6 +10807,60 @@ test('trust safety keeps a colon-introduced agent assignment across its full lis
   assert.equal(separateList.pass, true);
 });
 
+test('trust safety ties an immediate agent pronoun to the user-assigned step -- #4562', () => {
+  const contradictory = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'Run this step by the user. The coding agent must perform it.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(contradictory.pass, false);
+
+  const explicitlyNegated = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'Run this step by the user. The coding agent must not perform it.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(explicitlyNegated.pass, true);
+});
+
+test('trust safety recognizes LLM actors in step assignments -- #4562', () => {
+  for (const body of [
+    'The LLM must perform this step.\n\nRun this step by the user.',
+    'The LLMs must perform this check.\n\nRun this check by the user.',
+    '## LLM\n\nRun this step by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+});
+
+test('trust safety preserves positive assignments through fail-to double negation -- #4562', () => {
+  const doubleNegative = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: "The coding agent doesn't fail to perform this step.\n\nRun this step by the user.",
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(doubleNegative.pass, false);
+
+  const directNegative = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: "The coding agent doesn't perform this step.\n\nRun this step by the user.",
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(directNegative.pass, true);
+});
+
 test('trust safety recognizes hash-prefixed numbered step assignments -- #4562', () => {
   for (const [assignment, userStep] of [
     [
