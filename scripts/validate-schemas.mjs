@@ -449,7 +449,7 @@ function parseDecimalValue(value) {
 function compareDecimalValues(left, right) {
   const leftValue = parseDecimalValue(left);
   const rightValue = parseDecimalValue(right);
-  if (!leftValue || !rightValue) return 0;
+  if (!leftValue || !rightValue) return undefined;
   if (leftValue.sign !== rightValue.sign) {
     return leftValue.sign < rightValue.sign ? -1 : 1;
   }
@@ -470,7 +470,7 @@ function compareDecimalValues(left, right) {
   }
   return leftValue.sign * magnitudeComparison;
 }
-function compareNumberToBound(value, bound, source) {
+function compareNumberToBound(value, bound, source, boundSource) {
   const roundedComparison = value < bound ? -1 : value > bound ? 1 : 0;
   if (
     source === undefined ||
@@ -479,13 +479,16 @@ function compareNumberToBound(value, bound, source) {
   ) {
     return roundedComparison;
   }
-  if (bound === 0) {
+  const exactBoundSource = boundSource ?? String(bound);
+  const exactComparison = compareDecimalValues(source, exactBoundSource);
+  if (exactComparison !== undefined) return exactComparison;
+  if (bound === 0 && parseDecimalValue(exactBoundSource)?.sign === 0) {
     const match = /^(-?)(0|[1-9]\d*)(?:\.(\d+))?/u.exec(source);
     if (!match) return roundedComparison;
     if (!/[1-9]/u.test(match[2] + (match[3] ?? ''))) return 0;
     return match[1] === '-' ? -1 : 1;
   }
-  return compareDecimalValues(source, String(bound)) || roundedComparison;
+  return roundedComparison;
 }
 /**
  * Validate data against a schema (subset enforced by this validator).
@@ -592,21 +595,36 @@ export function validate(
   if (
     actualType === 'number' &&
     s.minimum !== undefined &&
-    compareNumberToBound(data, s.minimum, numberSource) < 0
+    compareNumberToBound(
+      data,
+      s.minimum,
+      numberSource,
+      jsonNumberSource(s, 'minimum'),
+    ) < 0
   ) {
     errors.push(`${path}: ${data} < minimum ${s.minimum}`);
   }
   if (
     actualType === 'number' &&
     s.maximum !== undefined &&
-    compareNumberToBound(data, s.maximum, numberSource) > 0
+    compareNumberToBound(
+      data,
+      s.maximum,
+      numberSource,
+      jsonNumberSource(s, 'maximum'),
+    ) > 0
   ) {
     errors.push(`${path}: ${data} > maximum ${s.maximum}`);
   }
   if (
     actualType === 'number' &&
     s.exclusiveMinimum !== undefined &&
-    compareNumberToBound(data, s.exclusiveMinimum, numberSource) <= 0
+    compareNumberToBound(
+      data,
+      s.exclusiveMinimum,
+      numberSource,
+      jsonNumberSource(s, 'exclusiveMinimum'),
+    ) <= 0
   ) {
     errors.push(`${path}: ${data} <= exclusiveMinimum ${s.exclusiveMinimum}`);
   }

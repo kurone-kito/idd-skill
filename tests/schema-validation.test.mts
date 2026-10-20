@@ -738,6 +738,37 @@ test('maximum compares underflowed JSON number tokens with zero exactly', () => 
   }
 });
 
+test('numeric bounds compare preserved underflowed schema tokens exactly', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-schema-bound-underflow-'));
+  const cases = [
+    ['maximum', '{"value":1e-399}', false],
+    ['maximum', '{"value":1e-401}', true],
+    ['minimum', '{"value":1e-401}', false],
+    ['minimum', '{"value":1e-399}', true],
+    ['exclusiveMinimum', '{"value":1e-400}', false],
+    ['exclusiveMinimum', '{"value":1e-399}', true],
+  ] as const;
+
+  try {
+    for (const [keyword, instanceJson, expectedValid] of cases) {
+      writeFileSync(
+        join(root, 'schema.json'),
+        `{"type":"object","required":["value"],"properties":{"value":{"type":"number","${keyword}":1e-400}},"additionalProperties":false}`,
+      );
+      writeFileSync(join(root, 'instance.json'), instanceJson);
+      const schema = loadJson('schema.json', root);
+      const instance = loadJson('instance.json', root);
+      assert.equal(
+        validate(instance, schema).length === 0,
+        expectedValid,
+        `${keyword}: ${instanceJson}`,
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('integer validation preserves exact JSON number tokens', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-schema-number-token-'));
   const schema = {
