@@ -2693,6 +2693,26 @@ test('trust safety allows a check assigned to the user -- #4562', () => {
   assert.equal(result.pass, true);
 });
 
+test('trust safety scopes numbered agent assignments to the matching user step -- #4577', () => {
+  const matching = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must perform step 1.\n\n1. Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(matching.pass, false);
+
+  const unrelated = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must perform step 1.\n\n2. Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(unrelated.pass, true);
+});
+
 test('trust safety allows a user-assigned step after neutral issue context -- #4577', () => {
   const result = checkTrustSafety({
     issue: {
@@ -2994,6 +3014,33 @@ test('trust safety does not inherit a negated agent assignment over an explicit 
     issue: {
       ...BASE_ISSUE,
       body: 'The coding agent must not perform this step, but the user should perform this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety keeps a positive agent assignment when a later negation is unrelated -- #4577', () => {
+  for (const assignment of [
+    'The coding agent must perform this step and must not inspect the logs.',
+    'The coding agent must not inspect the logs and is assigned this step.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
+});
+
+test('trust safety binds a while-contrast assignment to its explicit actor -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent implements the feature, while the user performs this step.\n\nRun this step by the user.',
     },
     trustSafetyAmbiguous: false,
   } as Context);

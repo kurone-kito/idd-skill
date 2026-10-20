@@ -865,6 +865,11 @@ const USER_ACTOR_STEP_OTHER_ACTOR =
 // unrelated implementation tasks must not veto a separate manual check.
 const USER_ACTOR_STEP_ASSIGNED_TARGET =
   /\b(?:(?:(?:this|that)(?:\s+(?:exact|same|specific|particular))?|these|those)\s+(?:steps?|checks?)|the\s+(?:(?:exact|same|specific|particular)\s+)?(?:steps?|checks?)|(?:the\s+)?following\s+(?:steps?|checks?)|(?:the\s+(?:exact|same|specific|particular)\s+)?instructions?\s+(?:below|above|that\s+follow|which\s+follow))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
+// A numbered assignment is scoped to the matching numbered checklist item.
+// Keep this separate from the broad target pattern so "step 1" does not
+// become an assignment to every user-owned step.
+const USER_ACTOR_STEP_NUMBERED_TARGET =
+  /\b(?:this\s+|that\s+|the\s+)?step\s+(\d{1,9})\b/gi;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
   /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|accountable|owns?|owned|belongs?\s+to|runs?|ran|executes?|executed|perform(?:s|ed)|follows?|followed|carries\s+out|carried\s+out|does?|did|completes?|completed|verifies?|verified|checks?|checked|tests?|tested|implements?|implemented|handles?|handled|manages?|managed)\b/i;
 const USER_ACTOR_STEP_NEGATION_CUE =
@@ -981,48 +986,177 @@ function separateMarkdownRangesWithClauseBoundaries(text, ranges) {
   }
   return result;
 }
+function findNearestAssignmentCue(segment, targetStart, targetEnd) {
+  const cuePattern = new RegExp(USER_ACTOR_STEP_ASSIGNMENT_CUE.source, 'gi');
+  const negationPattern = new RegExp(USER_ACTOR_STEP_NEGATION_CUE.source, 'gi');
+  const negations = [...segment.matchAll(negationPattern)].map((match) => ({
+    start: match.index ?? 0,
+    end: (match.index ?? 0) + (match[0]?.length ?? 0),
+  }));
+  const cues = [...segment.matchAll(cuePattern)].filter((cue) => {
+    const start = cue.index ?? 0;
+    const end = start + (cue[0]?.length ?? 0);
+    return !negations.some(
+      (negation) => start < negation.end && end > negation.start,
+    );
+  });
+  if (cues.length === 0) {
+    return null;
+  }
+  return cues.reduce((nearest, cue) => {
+    const cueStart = cue.index ?? 0;
+    const cueEnd = cueStart + (cue[0]?.length ?? 0);
+    const nearestStart = nearest.index ?? 0;
+    const nearestEnd = nearestStart + (nearest[0]?.length ?? 0);
+    const distance =
+      cueEnd < targetStart
+        ? targetStart - cueEnd
+        : cueStart > targetEnd
+          ? cueStart - targetEnd
+          : 0;
+    const nearestDistance =
+      nearestEnd < targetStart
+        ? targetStart - nearestEnd
+        : nearestStart > targetEnd
+          ? nearestStart - targetEnd
+          : 0;
+    return distance < nearestDistance ? cue : nearest;
+  });
+}
+function assignmentIsNegated(segment, cueStart, targetStart, targetEnd) {
+  const negationPattern = new RegExp(USER_ACTOR_STEP_NEGATION_CUE.source, 'gi');
+  for (const negation of segment.matchAll(negationPattern)) {
+    const negationStart = negation.index ?? 0;
+    const negationEnd = negationStart + (negation[0]?.length ?? 0);
+    if (negationEnd > cueStart) {
+      continue;
+    }
+    // A negation before an action cue can negate that action. For passive
+    // assignment wording, the target comes first and the negation sits
+    // between the target and cue. A negation after a completed action and
+    // target belongs to later coordinated prose, so it cannot erase the
+    // earlier positive assignment.
+    const negationMatchesTargetPredicate =
+      cueStart >= targetEnd
+        ? negationStart >= targetStart
+        : negationEnd <= targetStart;
+    if (!negationMatchesTargetPredicate) {
+      continue;
+    }
+    const gap = segment.slice(negationEnd, cueStart);
+    if (
+      gap.length <= 80 &&
+      !/[.!?;]/.test(gap) &&
+      !/\b(?:and|or|but|while|whereas)\b/i.test(gap) &&
+      ![
+        ...gap.matchAll(
+          new RegExp(USER_ACTOR_STEP_ASSIGNMENT_CUE.source, 'gi'),
+        ),
+      ].length
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 // #4577: scan the title and body as separate fields so an assignment in one
 // cannot combine with an unrelated target in the other. Callers first
 // separate Markdown code and HTML comments into clause boundaries.
-function hasAgentAssignmentToStep(context) {
-  return splitUserActorStepClauses(context).some((clause) => {
+function analyzeAgentAssignmentsToSteps(context) {
+  const analysis = {
+    allSteps: false,
+    numberedSteps: new Set(),
+  };
+  for (const clause of splitUserActorStepClauses(context)) {
     const targetPattern = new RegExp(
       USER_ACTOR_STEP_ASSIGNED_TARGET.source,
       'gi',
     );
-    const contrastPattern = /\bbut\b/gi;
-    const contrastPositions = [...clause.matchAll(contrastPattern)].map(
-      (match) => match.index,
+    const numberedTargetPattern = new RegExp(
+      USER_ACTOR_STEP_NUMBERED_TARGET.source,
+      'gi',
     );
-    for (const targetMatch of clause.matchAll(targetPattern)) {
-      const targetIndex = targetMatch.index;
+    const contrastPattern = /\b(?:but|while|whereas)\b/gi;
+    const contrastPositions = [...clause.matchAll(contrastPattern)].map(
+      (match) => ({ index: match.index ?? 0, text: match[0] ?? '' }),
+    );
+    const targets = [
+      ...[...clause.matchAll(targetPattern)]
+        .filter((match) => {
+          const end = (match.index ?? 0) + (match[0]?.length ?? 0);
+          return !/^\s+\d/.test(clause.slice(end));
+        })
+        .map((match) => ({ match, ordinal: null })),
+      ...[...clause.matchAll(numberedTargetPattern)].map((match) => ({
+        match,
+        ordinal: Number(match[1]),
+      })),
+    ].sort((left, right) => (left.match.index ?? 0) - (right.match.index ?? 0));
+    for (const { match: targetMatch, ordinal } of targets) {
+      const targetIndex = targetMatch.index ?? 0;
+      const targetEnd = targetIndex + (targetMatch[0]?.length ?? 0);
       const priorContrast = contrastPositions
-        .filter((position) => position < targetIndex)
+        .filter((position) => position.index < targetIndex)
         .at(-1);
       const nextContrast = contrastPositions.find(
-        (position) => position > targetIndex,
+        (position) => position.index > targetIndex,
       );
       const segmentStart =
-        priorContrast === undefined ? 0 : priorContrast + 'but'.length;
-      const segmentEnd = nextContrast ?? clause.length;
+        priorContrast === undefined
+          ? 0
+          : priorContrast.index + priorContrast.text.length;
+      const segmentEnd = nextContrast?.index ?? clause.length;
       const assignmentSegment = clause.slice(segmentStart, segmentEnd);
       const localAgent = USER_ACTOR_STEP_AGENT.test(assignmentSegment);
       const hasInheritedAgent =
         priorContrast !== undefined &&
-        USER_ACTOR_STEP_AGENT.test(clause.slice(0, priorContrast)) &&
+        USER_ACTOR_STEP_AGENT.test(clause.slice(0, priorContrast.index)) &&
         !localAgent &&
         !USER_ACTOR_STEP_OTHER_ACTOR.test(assignmentSegment);
+      if (!localAgent && !hasInheritedAgent) {
+        continue;
+      }
+      const localTargetStart = targetIndex - segmentStart;
+      const localTargetEnd = targetEnd - segmentStart;
+      const cue = findNearestAssignmentCue(
+        assignmentSegment,
+        localTargetStart,
+        localTargetEnd,
+      );
       if (
-        (!localAgent && !hasInheritedAgent) ||
-        !USER_ACTOR_STEP_ASSIGNMENT_CUE.test(assignmentSegment) ||
-        USER_ACTOR_STEP_NEGATION_CUE.test(assignmentSegment)
+        cue === null ||
+        assignmentIsNegated(
+          assignmentSegment,
+          cue.index ?? 0,
+          localTargetStart,
+          localTargetEnd,
+        )
       ) {
         continue;
       }
-      return true;
+      if (ordinal === null) {
+        analysis.allSteps = true;
+      } else {
+        analysis.numberedSteps.add(ordinal);
+      }
     }
-    return false;
-  });
+  }
+  return analysis;
+}
+function hasAgentAssignmentForUserStep(analysis, ordinal) {
+  return (
+    analysis.allSteps ||
+    (ordinal === null
+      ? analysis.numberedSteps.size > 0
+      : analysis.numberedSteps.has(ordinal))
+  );
+}
+function numberedUserStepListItemOrdinal(prefix) {
+  const currentLine = prefix.slice(prefix.lastIndexOf('\n') + 1);
+  const match = /^\s*(\d{1,9})[.)][ \t]+(?:\[[ x]\][ \t]+)?$/i.exec(
+    currentLine,
+  );
+  return match ? Number(match[1]) : null;
 }
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =
@@ -2632,6 +2766,15 @@ function findUnsafeExecutionDirectiveMatch(
     title,
     titleInertRanges,
   );
+  // Analyze each complete field once, then consult the indexed assignments
+  // for every candidate directive. Re-scanning both fields per `run` made
+  // adversarial issue bodies cost O(directives × body length).
+  const titleAssignmentAnalysis = analyzeAgentAssignmentsToSteps(
+    titleAssignmentContext,
+  );
+  const bodyAssignmentAnalysis = analyzeAgentAssignmentsToSteps(
+    bodyAssignmentContext,
+  );
   const verbPattern = new RegExp(
     String.raw`\b${UNSAFE_DIRECTIVE_VERB}\b`,
     'gi',
@@ -2678,6 +2821,9 @@ function findUnsafeExecutionDirectiveMatch(
           range.start <= verbBodyStart &&
           verbBodyStart + verbText.length <= range.end,
       );
+      const userStepOrdinal = numberedUserStepListItemOrdinal(
+        userActorStepBodyPrefix,
+      );
       const userActorStepDirective =
         verbText.toLowerCase() === 'run' &&
         window.length < UNSAFE_DIRECTIVE_WINDOW_CHARS &&
@@ -2685,8 +2831,11 @@ function findUnsafeExecutionDirectiveMatch(
         verbStart >= bodyOffset &&
         !verbIsInHtmlComment &&
         USER_ACTOR_STEP_BODY_BOUNDARY.test(userActorStepBodyPrefix) &&
-        !hasAgentAssignmentToStep(titleAssignmentContext) &&
-        !hasAgentAssignmentToStep(bodyAssignmentContext);
+        !hasAgentAssignmentForUserStep(
+          titleAssignmentAnalysis,
+          userStepOrdinal,
+        ) &&
+        !hasAgentAssignmentForUserStep(bodyAssignmentAnalysis, userStepOrdinal);
       // #3073 round 4-6: the repository-owned-validation exception is now
       // a single fully anchored positive signature (see the constants'
       // shared comment above) -- the whole window must match the literal
