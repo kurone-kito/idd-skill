@@ -1295,16 +1295,26 @@ test('pueue log reads only the requested task-ID entry from the JSON response', 
 test('pueue fetches full output only for a task already finished', {
   skip: process.platform === 'win32',
 }, async () => {
-  const h = makeHarness();
-  const repo = makeRepo({ localExec: { admission: { backend: 'pueue' } } });
-  const fake = makeFakePueue(h.env, {
-    initialStatus: { Done: { Success: null } },
-    taskOutput: 'finished before follow\n',
+  const output: string[] = [];
+  const stdout = new Writable({
+    write(chunk, _encoding, callback) {
+      output.push(chunk.toString());
+      callback();
+    },
   });
-  const result = await runBin(['--', 'true'], repo, fake.env).done;
+  const result = await runPueueTest(
+    { localExec: { admission: { backend: 'pueue' } } },
+    {
+      initialStatus: { Done: { Success: null } },
+      taskOutput: 'finished before follow\n',
+    },
+    ['true'],
+    { findFlock: () => null, stdout },
+  );
+  await new Promise<void>((resolveFinish) => stdout.end(resolveFinish));
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, 'finished before follow\n');
-  const logCalls = (readFakePueue(fake).calls as string[][]).filter(
+  assert.equal(output.join(''), 'finished before follow\n');
+  const logCalls = (readFakePueue(result.fake).calls as string[][]).filter(
     (call) => call[0] === 'log',
   );
   assert.equal(logCalls.length, 2);

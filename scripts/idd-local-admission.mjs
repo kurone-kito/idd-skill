@@ -810,7 +810,7 @@ function runPueueAdmission(command, admission, raw, deps) {
   };
   const finishTask = async (taskId, task, printOutput) => {
     phase = 'settled';
-    if (printOutput && task.output) process.stdout.write(task.output);
+    if (printOutput && task.output) deps.stdout.write(task.output);
     const status = resultForFinishedTask(task, deps, taskId);
     await removeTask(taskId);
     return status;
