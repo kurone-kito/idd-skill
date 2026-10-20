@@ -2551,8 +2551,13 @@ test('format uri accepts absolute URIs and rejects malformed references', () => 
   const schema = { type: 'string', format: 'uri' };
   for (const value of [
     'https://github.com/kurone-kito/idd-skill/issues/4519',
+    'https://example.com/a%20b',
     'mailto:team@example.com',
     'urn:example:decision',
+    'file:///tmp/decision.json',
+    'example:opaque-path',
+    'https://[2001:db8::1]/decision',
+    'https://[v1.example]/decision',
   ]) {
     assert.deepEqual(validate(value, schema), [], value);
   }
@@ -2561,6 +2566,13 @@ test('format uri accepts absolute URIs and rejects malformed references', () => 
     'https://:/x',
     'https://bad host/x',
     'https://example.com/%zz',
+    'https://example.com/[brackets]',
+    'https://example.com/?q=[brackets]',
+    'https://[not-an-ipv6-address]/x',
+    'https://example.com\\evil',
+    'https://example.com\\\\evil',
+    'https://example.com/\u0001x',
+    'https://example.com/é',
     'not a URI',
   ]) {
     const errors = validate(value, schema);

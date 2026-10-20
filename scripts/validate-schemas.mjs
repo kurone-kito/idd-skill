@@ -153,15 +153,93 @@ export function isRfc3339DateTime(value) {
   }
   return true;
 }
-/** Whether a string is an absolute URI that the platform URL parser accepts. */
-function isUri(value) {
-  if (/\s|%(?![0-9a-fA-F]{2})/.test(value)) return false;
-  try {
-    new URL(value);
-    return true;
-  } catch {
+const URI_PATH_CHARS = /^[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/u;
+const URI_QUERY_FRAGMENT_CHARS = /^[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*$/u;
+const URI_REG_NAME_CHARS = /^[A-Za-z0-9._~!$&'()*+,;=%-]*$/u;
+const URI_USERINFO_CHARS = /^[A-Za-z0-9._~!$&'()*+,;=:%-]*$/u;
+const URI_NETWORK_SCHEMES = new Set(['ftp', 'http', 'https', 'ws', 'wss']);
+/** Whether an authority follows the RFC 3986 authority grammar. */
+function isUriAuthority(value, scheme) {
+  const at = value.indexOf('@');
+  if (at !== value.lastIndexOf('@')) return false;
+  const hostPort = at < 0 ? value : value.slice(at + 1);
+  if (at >= 0 && !URI_USERINFO_CHARS.test(value.slice(0, at))) return false;
+  let host;
+  let port;
+  if (hostPort.startsWith('[')) {
+    const close = hostPort.indexOf(']');
+    if (close < 0) return false;
+    host = hostPort.slice(1, close);
+    const suffix = hostPort.slice(close + 1);
+    if (suffix !== '') {
+      if (!suffix.startsWith(':')) return false;
+      port = suffix.slice(1);
+    }
+    const isIpvFuture = /^v[0-9a-f]+\.[A-Za-z0-9._~!$&'()*+,;=:-]+$/iu.test(
+      host,
+    );
+    if (!isIpvFuture) {
+      try {
+        new URL(`http://[${host}]/`);
+      } catch {
+        return false;
+      }
+    }
+  } else {
+    if (hostPort.includes('[') || hostPort.includes(']')) return false;
+    const colon = hostPort.indexOf(':');
+    if (colon !== hostPort.lastIndexOf(':')) return false;
+    host = colon < 0 ? hostPort : hostPort.slice(0, colon);
+    if (colon >= 0) port = hostPort.slice(colon + 1);
+    if (!URI_REG_NAME_CHARS.test(host)) return false;
+  }
+  if (URI_NETWORK_SCHEMES.has(scheme.toLowerCase()) && host.length === 0) {
     return false;
   }
+  if (port !== undefined) {
+    if (!/^\d*$/u.test(port)) return false;
+    if (URI_NETWORK_SCHEMES.has(scheme.toLowerCase()) && port.length === 0) {
+      return false;
+    }
+  }
+  return true;
+}
+/** Whether a string is an absolute RFC 3986 URI. */
+function isUri(value) {
+  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):/u.exec(value)?.[1];
+  if (!scheme || /%(?![0-9a-fA-F]{2})/u.test(value)) return false;
+  const fragmentIndex = value.indexOf('#');
+  if (fragmentIndex !== value.lastIndexOf('#')) return false;
+  const beforeFragment =
+    fragmentIndex < 0 ? value : value.slice(0, fragmentIndex);
+  const fragment =
+    fragmentIndex < 0 ? undefined : value.slice(fragmentIndex + 1);
+  const queryIndex = beforeFragment.indexOf('?');
+  const hierarchy =
+    queryIndex < 0 ? beforeFragment : beforeFragment.slice(0, queryIndex);
+  const query =
+    queryIndex < 0 ? undefined : beforeFragment.slice(queryIndex + 1);
+  if (
+    (query !== undefined && !URI_QUERY_FRAGMENT_CHARS.test(query)) ||
+    (fragment !== undefined && !URI_QUERY_FRAGMENT_CHARS.test(fragment))
+  ) {
+    return false;
+  }
+  const schemeSpecificPart = hierarchy.slice(scheme.length + 1);
+  if (schemeSpecificPart.startsWith('//')) {
+    const pathStart = schemeSpecificPart.indexOf('/', 2);
+    const authority =
+      pathStart < 0
+        ? schemeSpecificPart.slice(2)
+        : schemeSpecificPart.slice(2, pathStart);
+    const path = pathStart < 0 ? '' : schemeSpecificPart.slice(pathStart);
+    return (
+      isUriAuthority(authority, scheme) &&
+      URI_PATH_CHARS.test(path) &&
+      (path === '' || path.startsWith('/'))
+    );
+  }
+  return URI_PATH_CHARS.test(schemeSpecificPart);
 }
 /**
  * Check that a schema object only uses allowed keywords, recursively.
