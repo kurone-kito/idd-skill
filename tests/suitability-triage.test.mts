@@ -10638,6 +10638,26 @@ test('trust safety scopes numbered assignments to their ordered list -- Codex re
   assert.equal(sameList.pass, false);
 });
 
+test('trust safety scopes unnumbered assignments to their unordered list -- #4562', () => {
+  const separateLists = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Verification\n\n- The coding agent must perform this step.\n\nA separate list follows.\n\n- Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(separateLists.pass, true);
+
+  const sameList = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Verification\n\n- The coding agent must perform this step.\n- Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(sameList.pass, false);
+});
+
 test('trust safety preserves list identity after masked Markdown ranges -- Copilot review #5589533467', () => {
   const lists =
     '## Verification\n\n1. The coding agent must perform step 2.\n2. Continue the first list.\n\nA separate list follows.\n\n1. Prepare the environment.\n2. Run this step by the user.';

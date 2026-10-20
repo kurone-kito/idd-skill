@@ -2129,7 +2129,7 @@ function hasAgentAssignmentForUserStep(
     return (
       listIds?.has(null) === true ||
       (targetListId !== null && listIds?.has(targetListId) === true) ||
-      (ordinal === null && (listIds?.size ?? 0) > 0)
+      (ordinal === null && targetListId === null && (listIds?.size ?? 0) > 0)
     );
   });
   const rangeSets: { start: number; end: number }[][] = [];
