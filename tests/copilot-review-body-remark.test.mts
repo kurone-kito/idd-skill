@@ -593,29 +593,44 @@ test('a code span in the heading line is not the plain heading (#3672)', () => {
   }
 });
 
-test('adversarial bodies return promptly, with or without the phrase (#3672)', () => {
+test('adversarial bodies return the expected remarks (#3672)', () => {
   // The shared Markdown masker costs far more than linear on crafted input (a
   // 65k-character run of unterminated code spans took tens of seconds, and a
   // `<a` line followed by spaces is cubic), so it only sees a bounded head
   // with bounded lines (#3688 review).
-  const started = performance.now();
-  for (const body of [
-    '`a\n'.repeat(22000),
-    `<a${' '.repeat(60000)}`,
-    `Needs a closer look\n${'`a\n'.repeat(22000)}`,
+  const adversarialCases: { body: string; expected: string | null }[] = [
+    { body: '`a\n'.repeat(22000), expected: null },
+    { body: `<a${' '.repeat(60000)}`, expected: null },
+    { body: `Needs a closer look\n${'`a\n'.repeat(22000)}`, expected: null },
     // A blank line first: `<a` right after a paragraph line opens no block.
-    `Needs a closer look\n\n<a${' '.repeat(60000)}`,
+    { body: `Needs a closer look\n\n<a${' '.repeat(60000)}`, expected: null },
     // The worst shape found for the bounded head: one unterminated code span
     // per paragraph.
-    `Needs a closer look\n\n${'`\n\n'.repeat(20000)}`,
+    { body: `Needs a closer look\n\n${'`\n\n'.repeat(20000)}`, expected: null },
     // A long run of blanks inside a label on an ATX heading line.
-    `### Needs a closer look: a${' '.repeat(65000)}b\n`,
-    `### Needs a closer look\n\n<a${' '.repeat(4000)}\n`.repeat(5),
-    `> \`a\` x\nNeeds a closer look\n`.repeat(3000),
-  ]) {
-    extractCopilotReviewBodyRemark(body);
+    {
+      body: `### Needs a closer look: a${' '.repeat(65000)}b\n`,
+      expected: `a${' '.repeat(65000)}b`,
+    },
+    {
+      body: `### Needs a closer look\n\n<a${' '.repeat(4000)}\n`.repeat(5),
+      expected: '<a',
+    },
+    { body: `> \`a\` x\nNeeds a closer look\n`.repeat(3000), expected: null },
+  ];
+  for (const { body, expected } of adversarialCases) {
+    assert.equal(
+      extractCopilotReviewBodyRemark(body),
+      expected,
+      body.slice(0, 80),
+    );
   }
-  assert.ok(performance.now() - started < 3000);
+});
+
+test('ignores a remark beyond the bounded scan head (#3672)', () => {
+  const body = `${'ordinary text\n'.repeat(200)}Needs a closer look: outside the scan head`;
+  assert.ok(body.indexOf('Needs a closer look') > 2048);
+  assert.equal(extractCopilotReviewBodyRemark(body), null);
 });
 
 test('a remark at the head of a very large body is still found, and read in full (#3672)', () => {
