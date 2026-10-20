@@ -870,7 +870,7 @@ const USER_ACTOR_STEP_AGENT_SUBJECT = new RegExp(
 // Keep the target tied to a step/check or an explicitly referenced list;
 // unrelated implementation tasks must not veto a separate manual check.
 const USER_ACTOR_STEP_ASSIGNED_TARGET =
-  /\b(?:(?:(?:this|that)(?:\s+(?:exact|same|specific|particular))?|these|those)\s+(?:steps?|checks?|checklists?|lists?|items?)|the\s+(?:(?:exact|same|specific|particular)\s+)?(?:steps?|checks?|checklists?|lists?|items?)|(?:the\s+)?following\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:the\s+(?:exact|same|specific|particular)\s+)?instructions?\s+(?:below|above|that\s+follow|which\s+follow))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
+  /\b(?:(?:(?:this|that)(?:\s+(?:exact|same|specific|particular))?|these|those)\s+(?:steps?|checks?|checklists?|lists?|items?)|the\s+(?:(?:exact|same|specific|particular)\s+)?(?:steps?|checks?|checklists?|lists?|items?)|all\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:every|each)\s+(?:step|check|checklist|list|item)|(?:the\s+)?following\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:the\s+(?:exact|same|specific|particular)\s+)?instructions?\s+(?:below|above|that\s+follow|which\s+follow))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
 // A numbered assignment is scoped to the matching numbered checklist item
 // and object kind. Keep it separate from the broad target pattern.
 const USER_ACTOR_STEP_NUMBERED_TARGET =
@@ -892,7 +892,7 @@ const USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE =
 const USER_ACTOR_STEP_USER_DIRECTIVE_START =
   /^\s*(?:(?:then|next|now|afterwards?)\s+)?run\s+this\s+(?:step|check)\s+by\s+the\s+user\b/i;
 const USER_ACTOR_STEP_NEGATION_CUE =
-  /\b(?:(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b/i;
+  /\b(?:(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|(?:must|should|shall|will|could|would|might|may|need|do|does|did|is|are|was|were|has|have|had)n['’]t|(?:won|can|shan|ain)['’]t|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b/i;
 const USER_ACTOR_STEP_AGENT_HEADING_LABEL =
   /^\s*(?:the\s+)?(?:coding\s+)?(?:agents?|assistants?|automation|AIs?|you|workers?|bots?|models?|codex|copilots?|claude(?:\s+code)?|gemini(?:\s+cli)?|cursor|cline|opencode|windsurf|devin|grok(?:\s+build)?)\s*$/i;
 function normalizeMarkdownHeadingLabel(heading) {
@@ -1075,8 +1075,8 @@ function splitMarkdownHeadingSections(context) {
     stack.push({
       level: heading.level,
       context:
-        classified?.context ??
-        classified?.assignment ??
+        classified?.context ||
+        classified?.assignment ||
         (headingStartsWithAgentActor(heading.text) ? heading.text : ''),
       bareAgentActor: isBareAgentActorHeading(heading.text),
     });
@@ -1144,7 +1144,7 @@ function splitUserActorStepClauses(context) {
           ({ clause, start }) => ({
             clause,
             sectionId,
-            globalScope: true,
+            globalScope: false,
             clauseStart: start,
             paragraphContextStart: null,
             paragraphSourceStart: null,
@@ -1241,7 +1241,8 @@ function separateMarkdownRangesWithClauseBoundaries(text, ranges) {
     const start = Math.max(0, range.start);
     const end = Math.min(result.length, range.end);
     if (start < end) {
-      result = `${result.slice(0, start)};${result.slice(end)}`;
+      const replacement = `;${' '.repeat(end - start - 1)}`;
+      result = `${result.slice(0, start)}${replacement}${result.slice(end)}`;
     }
   }
   return result;

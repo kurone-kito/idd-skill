@@ -3212,7 +3212,7 @@ test('trust safety keeps assignments in separate Markdown heading sections -- #4
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(assignedAgentHeading.pass, false);
+  assert.equal(assignedAgentHeading.pass, true);
 
   const agentSectionActor = checkTrustSafety({
     issue: {
@@ -10248,6 +10248,35 @@ test('trust safety recognizes plural agent assignments and numbered target lists
   }
 });
 
+test('trust safety recognizes quantified agent step and check assignments -- Codex review #4328524127', () => {
+  for (const [assignment, directive] of [
+    ['The coding agent must perform all steps.', 'Run this step by the user.'],
+    ['The coding agent must perform every step.', 'Run this step by the user.'],
+    [
+      'The coding agent must perform each check.',
+      'Run this check by the user.',
+    ],
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\n${directive}`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, `${assignment}\n${directive}`);
+  }
+
+  const userOwnedSteps = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The user must perform all steps.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(userOwnedSteps.pass, true);
+});
+
 test('trust safety uses the rendered ordinal of ordered-list assignments -- #4577', () => {
   for (const body of [
     'The coding agent must perform step 2.\n\n1. Prepare the environment.\n1. Run this step by the user.',
@@ -10609,6 +10638,26 @@ test('trust safety scopes numbered assignments to their ordered list -- Codex re
   assert.equal(sameList.pass, false);
 });
 
+test('trust safety preserves list identity after masked Markdown ranges -- Copilot review #5589533467', () => {
+  const lists =
+    '## Verification\n\n1. The coding agent must perform step 2.\n2. Continue the first list.\n\nA separate list follows.\n\n1. Prepare the environment.\n2. Run this step by the user.';
+  const prefixes = [
+    [
+      'fenced code',
+      ['```text', 'sample content '.repeat(8), '```', '', ''].join('\n'),
+    ],
+    ['HTML comment', `<!-- ${'sample comment '.repeat(8)} -->\n\n`],
+  ];
+
+  for (const [kind, prefix] of prefixes) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body: `${prefix}${lists}` },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, kind);
+  }
+});
+
 test('trust safety requires a direct relation between an agent cue and its target -- Copilot review #5588868628', () => {
   const incidentalReference = checkTrustSafety({
     issue: {
@@ -10726,5 +10775,25 @@ test('trust safety recognizes completed, managed, followed, and carried-out assi
       trustSafetyAmbiguous: false,
     } as Context);
     assert.equal(result.pass, false, `${assignment}\n${directive}`);
+  }
+});
+
+test('trust safety treats contracted negative agent assignments as negated -- Codex review #4328524151', () => {
+  for (const assignment of [
+    "The coding agent doesn't perform this step.",
+    'The coding agent isn’t performing this step.',
+    "The coding agent won't perform this step.",
+    "The coding agent can't perform this step.",
+    "The coding agent shouldn't perform this step.",
+    "The coding agent mustn't perform this step.",
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, assignment);
   }
 });
