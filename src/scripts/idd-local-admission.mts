@@ -15,6 +15,7 @@ import {
   spawn,
   spawnSync,
 } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   accessSync,
   closeSync,
@@ -28,7 +29,7 @@ import {
 } from 'node:fs';
 import { constants as osConstants, homedir as userHomedir } from 'node:os';
 import { delimiter, dirname, join, posix, resolve, win32 } from 'node:path';
-import type { Readable } from 'node:stream';
+import type { Readable, Writable } from 'node:stream';
 import { parseCliArgs } from './cli-args.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -54,11 +55,22 @@ export const LOCAL_ADMISSION_ENV_VAR = 'IDD_LOCAL_ADMISSION';
 const EXPIRED_EXIT_CODE = 75;
 /** Refusal before the command starts: policy, cap, symlink, open, or flock failure. */
 const REFUSED_EXIT_CODE = 2;
+/** The submitted pueue task may have run, but its final outcome is unknown. */
+const PUEUE_OUTCOME_UNKNOWN_EXIT_CODE = 3;
 /** A command that could not be started: 127 when not found, else 126 (the shell convention). */
 const SPAWN_FAILURE_NOT_FOUND_EXIT_CODE = 127;
 const SPAWN_FAILURE_OTHER_EXIT_CODE = 126;
 const DEFAULT_WAIT_NOTICE_INTERVAL_MS = 60_000;
 const GROUP_POLL_INTERVAL_MS = 1000;
+const DEFAULT_PUEUE_CLIENT_TIMEOUT_MS = 10_000;
+const PUEUE_POLL_INTERVAL_MS = 1000;
+const PUEUE_LOCAL_FOLLOW_INCOMPLETE_OUTPUT =
+  /(?:Failed to get log file handles:|Pueue: Log file has gone away\.|Pueue: Error while reading file:|Pueue: Error while flushing stdout:)/;
+const PUEUE_LOG_ERROR_PREFIXES = [
+  '(Pueue error) Failed to get log file handle:',
+  '(Pueue error) Failed to read local log output file:',
+  '(Pueue error) Failed to decompress remote log output:',
+] as const;
 const PROCESS_STATE_PROBE_TIMEOUT_MS = 1000;
 const PROCESS_STATE_PROBE_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 const FALLBACK_MAX_WAIT_MS = 2 * 60 * 60 * 1000;
@@ -94,11 +106,13 @@ const HELP_TEXT = `Usage:
 
 Run the command after \`--\` in the caller's working directory, under the
 host-local validation slot (#4428). Policy: \`localExec.admission\` in the
-repository's .github/idd/config.json.
+repository's .github/idd/config.json. The flock backend admits one command;
+the pueue backend uses the configured shared group on non-Windows hosts.
 
 Exit status: the command's own status; 2 when the command was refused before
 it started (policy, cap, symlink, or lock failure); 75 with
-\`local-admission: expired\` when the wait reached maxWait.
+\`local-admission: expired\` when the wait reached maxWait; 3 when a pueue
+task may have started but its outcome is unknown.
 `;
 
 /** Injection points for the flow. Production wiring is {@link defaultDependencies}. */
@@ -108,10 +122,14 @@ export interface LocalAdmissionDeps {
   cwd: string;
   homedir: string;
   stderr: (text: string) => void;
+  stdout: Writable;
+  stderrOutput: Writable;
   /** Reads a repository policy file by absolute path; throws when it is malformed. */
   readPolicy: (policyPath: string) => unknown;
   /** Absolute path of `flock` on this host, or null when it is not installed. */
   findFlock: (env: NodeJS.ProcessEnv) => string | null;
+  /** Absolute path of the pueue client on this host, or null when absent. */
+  findPueue: (env: NodeJS.ProcessEnv) => string | null;
   /** Absolute path of the ps utility, or null when it is not installed. */
   findPs: (env: NodeJS.ProcessEnv) => string | null;
   spawn: (
@@ -121,6 +139,10 @@ export interface LocalAdmissionDeps {
   ) => ChildProcess;
   /** Interval of the `local-admission: waiting` notice (issue #4428: default 60000). */
   waitNoticeIntervalMs: number;
+  /** Bound for each pueue client call except the output stream. */
+  pueueClientTimeoutMs: number;
+  /** Poll interval for queued pueue tasks. */
+  pueuePollIntervalMs: number;
 }
 
 function defaultDependencies(): LocalAdmissionDeps {
@@ -132,11 +154,16 @@ function defaultDependencies(): LocalAdmissionDeps {
     stderr: (text) => {
       process.stderr.write(text);
     },
+    stdout: process.stdout,
+    stderrOutput: process.stderr,
     readPolicy: (policyPath) => readRepositoryPolicyFile(policyPath).config,
     findFlock: (env) => findExecutableOnPath('flock', env),
+    findPueue: (env) => findExecutableOnPath('pueue', env),
     findPs: (env) => findExecutableOnPath('ps', env),
     spawn: (command, args, options) => spawn(command, args, options),
     waitNoticeIntervalMs: DEFAULT_WAIT_NOTICE_INTERVAL_MS,
+    pueueClientTimeoutMs: DEFAULT_PUEUE_CLIENT_TIMEOUT_MS,
+    pueuePollIntervalMs: PUEUE_POLL_INTERVAL_MS,
   };
 }
 
@@ -600,6 +627,737 @@ function runLocked(
   });
 }
 
+interface PueueCallResult {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  outputIncomplete: boolean;
+  error?: Error;
+}
+
+function signalProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (child.pid === undefined) return;
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    child.kill(signal);
+  }
+}
+
+/** Run one client command in its own group so a helper signal cannot leak to it. */
+function runPueueClient(
+  pueuePath: string,
+  args: string[],
+  deps: LocalAdmissionDeps,
+  timeoutMs: number | null,
+  streamOutput = false,
+  onChild?: (child: ChildProcess | null) => void,
+): Promise<PueueCallResult> {
+  return new Promise((resolveCall) => {
+    let child: ChildProcess;
+    try {
+      child = deps.spawn(pueuePath, args, {
+        cwd: deps.cwd,
+        env: deps.env,
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+    } catch (error) {
+      resolveCall({
+        code: null,
+        signal: null,
+        stdout: '',
+        stderr: '',
+        timedOut: false,
+        outputIncomplete: false,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+      return;
+    }
+    onChild?.(child);
+    let stdout = '';
+    let stderr = '';
+    let streamStderrTail = '';
+    let outputIncomplete = false;
+    let timedOut = false;
+    let settled = false;
+    let killTimer: NodeJS.Timeout | undefined;
+    const timer =
+      timeoutMs === null
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            signalProcessGroup(child, 'SIGTERM');
+            killTimer = setTimeout(
+              () => signalProcessGroup(child, 'SIGKILL'),
+              300,
+            );
+            killTimer.unref();
+          }, timeoutMs);
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    if (streamOutput) {
+      child.stdout?.pipe(deps.stdout, { end: false });
+      child.stderr?.on('data', (chunk: string) => {
+        const recent = streamStderrTail + chunk;
+        if (PUEUE_LOCAL_FOLLOW_INCOMPLETE_OUTPUT.test(recent))
+          outputIncomplete = true;
+        streamStderrTail = recent.slice(-256);
+      });
+      child.stderr?.pipe(deps.stderrOutput, { end: false });
+    } else {
+      child.stdout?.on('data', (chunk: string) => {
+        stdout += chunk;
+      });
+      child.stderr?.on('data', (chunk: string) => {
+        stderr += chunk;
+      });
+    }
+    child.on('error', (error: Error) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      if (killTimer !== undefined) clearTimeout(killTimer);
+      onChild?.(null);
+      resolveCall({
+        code: null,
+        signal: null,
+        stdout,
+        stderr,
+        timedOut,
+        outputIncomplete,
+        error,
+      });
+    });
+    child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      if (killTimer !== undefined) clearTimeout(killTimer);
+      onChild?.(null);
+      resolveCall({ code, signal, stdout, stderr, timedOut, outputIncomplete });
+    });
+  });
+}
+
+type PueueTaskState =
+  | 'queued'
+  | 'running'
+  | 'paused'
+  | 'stashed'
+  | 'locked'
+  | 'done'
+  | 'missing';
+
+interface PueueTaskSnapshot {
+  label: string;
+  state: PueueTaskState;
+  result?: string;
+  exitCode?: number;
+  output?: string;
+}
+
+function enumName(value: unknown): string | null {
+  if (typeof value === 'string') return value.toLowerCase();
+  if (isRecord(value)) {
+    const key = Object.keys(value)[0];
+    return key?.toLowerCase() ?? null;
+  }
+  return null;
+}
+
+function parsePueueTask(
+  output: string,
+  expectedTaskId: string,
+): PueueTaskSnapshot | null {
+  try {
+    const root: unknown = JSON.parse(output);
+    if (!isRecord(root)) return null;
+    const entry = isRecord(root[expectedTaskId]) ? root[expectedTaskId] : root;
+    if (!isRecord(entry.task)) return null;
+    const task = entry.task;
+    if (String(task.id) !== expectedTaskId) return null;
+    const label = typeof task.label === 'string' ? task.label : '';
+    const statusValue = task.status;
+    const statusName = enumName(statusValue);
+    if (statusName === null) return null;
+    const stateMap: Record<string, PueueTaskState> = {
+      queued: 'queued',
+      running: 'running',
+      paused: 'paused',
+      stashed: 'stashed',
+      locked: 'locked',
+      done: 'done',
+    };
+    const state = stateMap[statusName];
+    if (state === undefined) return null;
+    const doneValue = isRecord(statusValue) ? statusValue.Done : undefined;
+    const resultValue =
+      isRecord(doneValue) && Object.hasOwn(doneValue, 'result')
+        ? doneValue.result
+        : doneValue;
+    const resultName = enumName(resultValue);
+    let exitCode: number | undefined;
+    const failedValue = isRecord(resultValue) ? resultValue.Failed : undefined;
+    if (typeof failedValue === 'number') {
+      exitCode = failedValue;
+    } else if (isRecord(failedValue)) {
+      const maybeCode = failedValue.exit_code ?? failedValue.code;
+      if (typeof maybeCode === 'number') exitCode = maybeCode;
+    }
+    if (resultName === 'success') exitCode = 0;
+    const outputText =
+      typeof entry.output === 'string' ? entry.output : undefined;
+    return {
+      label,
+      state,
+      ...(resultName === null ? {} : { result: resultName }),
+      ...(exitCode === undefined ? {} : { exitCode }),
+      ...(outputText === undefined ? {} : { output: outputText }),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isPueueLogErrorOutput(output: string): boolean {
+  return PUEUE_LOG_ERROR_PREFIXES.some((prefix) => output.startsWith(prefix));
+}
+
+function parsePueueGroups(output: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(output);
+    if (!isRecord(parsed)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function isPueueClientSuccess(result: PueueCallResult): boolean {
+  return result.code === 0 && !result.timedOut && result.error === undefined;
+}
+
+function pueueOutcomeUnknown(
+  deps: LocalAdmissionDeps,
+  identity: string,
+): number {
+  deps.stderr(
+    `local-admission: pueue task outcome unknown (${identity}); command may have started\n`,
+  );
+  return PUEUE_OUTCOME_UNKNOWN_EXIT_CODE;
+}
+
+function effectivePueueCap(admission: { maxConcurrent: number }): number {
+  return Number.isInteger(admission.maxConcurrent) &&
+    admission.maxConcurrent >= 1 &&
+    admission.maxConcurrent <= 8
+    ? admission.maxConcurrent
+    : 1;
+}
+
+function resultForFinishedTask(
+  task: PueueTaskSnapshot,
+  deps: LocalAdmissionDeps,
+  taskId: string,
+): number {
+  if (task.exitCode !== undefined) return task.exitCode;
+  const result = task.result ?? 'unknown';
+  deps.stderr(
+    `local-admission: pueue task ${taskId} finished with ${result}\n`,
+  );
+  return result === 'failedtospawn' ? SPAWN_FAILURE_OTHER_EXIT_CODE : 1;
+}
+
+/** Run backend pueue; before `add` failures can safely use flock, after it they cannot. */
+function runPueueAdmission(
+  command: readonly string[],
+  admission: ReturnType<typeof normalizePolicyConfig>['localExec']['admission'],
+  raw: unknown,
+  deps: LocalAdmissionDeps,
+): Promise<number> {
+  const pueuePath = deps.findPueue(deps.env);
+  const maxWaitMs =
+    parseIsoDurationToMs(admission.maxWait) ??
+    parseIsoDurationToMs(POLICY_DEFAULTS.localExec.admission.maxWait) ??
+    FALLBACK_MAX_WAIT_MS;
+  const cap = effectivePueueCap(admission);
+  const groupName = admission.pueueGroup || 'idd-validate';
+  let pendingSignal: NodeJS.Signals | null = null;
+  let phase: 'pre-add' | 'add' | 'queued' | 'running' | 'settled' = 'pre-add';
+  let activeClient: ChildProcess | null = null;
+  let activeFollow: ChildProcess | null = null;
+  let activeFollowPromise: Promise<PueueCallResult> | null = null;
+  let wakeSignal: ((signal: NodeJS.Signals) => void) | null = null;
+  const signalPromise = new Promise<NodeJS.Signals>((resolveSignal) => {
+    wakeSignal = resolveSignal;
+  });
+  const handlers = new Map<NodeJS.Signals, () => void>();
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    const handler = (): void => {
+      pendingSignal ??= signal;
+      wakeSignal?.(pendingSignal);
+      if (phase === 'pre-add' && activeClient !== null) {
+        signalProcessGroup(activeClient, signal);
+      }
+    };
+    handlers.set(signal, handler);
+    process.on(signal, handler);
+  }
+  const cleanupHandlers = (): void => {
+    for (const [signal, handler] of handlers) process.off(signal, handler);
+    phase = 'settled';
+  };
+  const statusForSignal = (): number => signalStatus(pendingSignal);
+  const stopFollow = async (
+    followPromise: Promise<PueueCallResult>,
+  ): Promise<void> => {
+    const child = activeFollow;
+    if (child === null) return;
+    signalProcessGroup(child, 'SIGTERM');
+    let killTimer: NodeJS.Timeout | undefined;
+    const ended = await Promise.race([
+      followPromise.then(() => true),
+      new Promise<boolean>((resolveWait) => {
+        killTimer = setTimeout(() => resolveWait(false), 300);
+        killTimer.unref();
+      }),
+    ]);
+    if (killTimer !== undefined) clearTimeout(killTimer);
+    if (!ended && activeFollow !== null) {
+      signalProcessGroup(activeFollow, 'SIGKILL');
+    }
+    await followPromise;
+  };
+  const call = (
+    args: string[],
+    options: { timeout?: number | null; stream?: boolean } = {},
+  ): Promise<PueueCallResult> => {
+    if (pueuePath === null) {
+      throw new Error('pueue client path was not checked before use');
+    }
+    return runPueueClient(
+      pueuePath,
+      args,
+      deps,
+      options.timeout === undefined
+        ? deps.pueueClientTimeoutMs
+        : options.timeout,
+      options.stream ?? false,
+      (child) => {
+        if (options.stream) activeFollow = child;
+        else activeClient = child;
+      },
+    );
+  };
+  const fallback = async (reason: string): Promise<number> => {
+    deps.stderr(`local-admission: pueue ${reason}; using the flock path\n`);
+    return runFlockAdmission(command, raw, deps, false);
+  };
+  const readTask = async (
+    taskId: string,
+    expectedLabel: string,
+    includeOutput = false,
+  ): Promise<PueueTaskSnapshot | null> => {
+    const result = await call([
+      'log',
+      taskId,
+      '--json',
+      ...(includeOutput ? ['--full'] : []),
+    ]);
+    if (!isPueueClientSuccess(result)) return null;
+    const task = parsePueueTask(result.stdout, taskId);
+    if (task === null || task.label !== expectedLabel) return null;
+    return task;
+  };
+  const removeTask = async (taskId: string): Promise<void> => {
+    const removed = await call(['remove', taskId]);
+    if (!isPueueClientSuccess(removed)) {
+      deps.stderr(`local-admission: could not remove pueue task ${taskId}\n`);
+    }
+  };
+  const finishTask = async (
+    taskId: string,
+    task: PueueTaskSnapshot,
+    printOutput: boolean,
+  ): Promise<number> => {
+    phase = 'settled';
+    if (printOutput && task.output) deps.stdout.write(task.output);
+    const status = resultForFinishedTask(task, deps, taskId);
+    await removeTask(taskId);
+    return status;
+  };
+  const readCheckedTask = async (
+    taskId: string,
+    label: string,
+    includeOutput = false,
+  ): Promise<PueueTaskSnapshot | null> =>
+    readTask(taskId, label, includeOutput);
+
+  const handleRunningSignal = async (
+    taskId: string,
+    taskLabel: string,
+    followPromise: Promise<PueueCallResult>,
+    signalled: NodeJS.Signals,
+  ): Promise<number> => {
+    phase = 'queued';
+    const beforeKill = await readCheckedTask(taskId, taskLabel);
+    if (beforeKill?.state === 'done') {
+      // The task already completed; let pueue finish streaming its output.
+      const completedFollow = await followPromise;
+      if (
+        !isPueueClientSuccess(completedFollow) ||
+        completedFollow.outputIncomplete
+      )
+        return pueueOutcomeUnknown(deps, `task ${taskId}`);
+      return finishTask(taskId, beforeKill, false);
+    }
+    if (
+      beforeKill === null ||
+      (beforeKill.state !== 'running' && beforeKill.state !== 'paused')
+    ) {
+      await stopFollow(followPromise);
+      return pueueOutcomeUnknown(deps, `task ${taskId}`);
+    }
+    const killed = await call(['kill', taskId]);
+    if (isPueueClientSuccess(killed)) {
+      if (activeClient !== null) activeClient = null;
+      await stopFollow(followPromise);
+      await removeTask(taskId);
+      return signalStatus(signalled);
+    }
+    const afterKill = await readCheckedTask(taskId, taskLabel);
+    if (afterKill?.state === 'done') {
+      // The task completed before the kill landed; let pueue finish streaming its output.
+      const completedFollow = await followPromise;
+      if (
+        !isPueueClientSuccess(completedFollow) ||
+        completedFollow.outputIncomplete
+      )
+        return pueueOutcomeUnknown(deps, `task ${taskId}`);
+      return finishTask(taskId, afterKill, false);
+    }
+    await stopFollow(followPromise);
+    return pueueOutcomeUnknown(deps, `task ${taskId}`);
+  };
+
+  const readFinishedTask = async (
+    taskId: string,
+    label: string,
+  ): Promise<PueueTaskSnapshot | null> => {
+    const task = await readCheckedTask(taskId, label, true);
+    if (task?.state !== 'done') return null;
+    if (task.output !== undefined && isPueueLogErrorOutput(task.output))
+      return null;
+    return task;
+  };
+
+  const work = async (): Promise<number> => {
+    if (deps.platform === 'win32') {
+      deps.stderr(
+        'local-admission: pueue backend is unavailable on win32; running the command without admission\n',
+      );
+      return runDirect(command, deps);
+    }
+    if (pueuePath === null)
+      return fallback('client is not available on this host');
+    const daemon = await call([
+      'status',
+      '--json',
+      `label=idd-local-admission-health-${randomUUID()}`,
+      'first',
+      '1',
+    ]);
+    if (pendingSignal !== null) return statusForSignal();
+    if (!isPueueClientSuccess(daemon)) {
+      return fallback('daemon is not accepting commands');
+    }
+    let groupsResult = await call(['group', '--json']);
+    if (pendingSignal !== null) return statusForSignal();
+    let groups = isPueueClientSuccess(groupsResult)
+      ? parsePueueGroups(groupsResult.stdout)
+      : null;
+    if (groups === null) return fallback('could not read the group list');
+    let group = Object.hasOwn(groups, groupName)
+      ? groups[groupName]
+      : undefined;
+    if (group === undefined) {
+      const created = await call([
+        'group',
+        'add',
+        '--parallel',
+        String(cap),
+        '--',
+        groupName,
+      ]);
+      if (pendingSignal !== null) return statusForSignal();
+      if (!isPueueClientSuccess(created)) {
+        groupsResult = await call(['group', '--json']);
+        if (pendingSignal !== null) return statusForSignal();
+        groups = isPueueClientSuccess(groupsResult)
+          ? parsePueueGroups(groupsResult.stdout)
+          : null;
+        if (groups === null || !Object.hasOwn(groups, groupName)) {
+          return fallback('could not create the configured group');
+        }
+        group = groups[groupName];
+      } else {
+        group = { parallel_tasks: cap, status: 'Running' };
+      }
+    }
+    if (!isRecord(group)) return fallback('group details are malformed');
+    const parallel = group.parallel_tasks;
+    if (typeof parallel === 'number' && parallel !== cap) {
+      deps.stderr(
+        `local-admission: pueue group ${groupName} has parallel_tasks=${parallel}, expected ${cap}; submitting anyway\n`,
+      );
+    }
+    const groupStatus = enumName(group.status);
+    if (groupStatus === 'paused') {
+      deps.stderr(
+        `local-admission: pueue group ${groupName} is paused; the task may wait until maxWait\n`,
+      );
+    }
+    if (pendingSignal !== null) return statusForSignal();
+    const taskLabel = `idd-local-admission-${randomUUID()}`;
+    const taskCommand = `IDD_LOCAL_ADMISSION=1 ${command.map(shellQuote).join(' ')}`;
+    phase = 'add';
+    const added = await call([
+      'add',
+      `--group=${groupName}`,
+      '-w',
+      deps.cwd,
+      '-l',
+      taskLabel,
+      '-p',
+      taskCommand,
+    ]);
+    const idLine = added.stdout.trim().split(/\r?\n/).at(-1) ?? '';
+    if (!isPueueClientSuccess(added) || !/^\d+$/.test(idLine)) {
+      cleanupHandlers();
+      return pueueOutcomeUnknown(deps, `label ${taskLabel}`);
+    }
+    const taskId = idLine;
+    phase = 'queued';
+    deps.stderr(
+      `local-admission: pueue task ${taskId} queued (${taskLabel})\n`,
+    );
+    const startedAt = Date.now();
+    let lastNoticeAt = startedAt;
+    const stopQueuedTask = async (
+      signal: NodeJS.Signals | null,
+    ): Promise<number | null> => {
+      const beforeStash = await readCheckedTask(taskId, taskLabel);
+      if (beforeStash === null) {
+        return pueueOutcomeUnknown(deps, `task ${taskId}`);
+      }
+      if (beforeStash.state === 'done') {
+        const finished = await readFinishedTask(taskId, taskLabel);
+        return finished === null
+          ? pueueOutcomeUnknown(deps, `task ${taskId}`)
+          : finishTask(taskId, finished, true);
+      }
+      if (beforeStash.state === 'running' || beforeStash.state === 'paused') {
+        return null;
+      }
+      if (
+        beforeStash.state !== 'queued' &&
+        beforeStash.state !== 'stashed' &&
+        beforeStash.state !== 'locked'
+      ) {
+        return pueueOutcomeUnknown(deps, `task ${taskId}`);
+      }
+      const stashed = await call(['stash', taskId]);
+      if (isPueueClientSuccess(stashed)) {
+        await removeTask(taskId);
+        if (signal !== null) return signalStatus(signal);
+        deps.stderr(
+          `local-admission: expired (waited ${maxWaitMs} ms); command not started\n`,
+        );
+        return EXPIRED_EXIT_CODE;
+      }
+      const afterStash = await readCheckedTask(taskId, taskLabel);
+      if (afterStash === null)
+        return pueueOutcomeUnknown(deps, `task ${taskId}`);
+      if (afterStash.state === 'done') {
+        const finished = await readFinishedTask(taskId, taskLabel);
+        return finished === null
+          ? pueueOutcomeUnknown(deps, `task ${taskId}`)
+          : finishTask(taskId, finished, true);
+      }
+      if (afterStash.state === 'running' || afterStash.state === 'paused') {
+        return null;
+      }
+      return pueueOutcomeUnknown(deps, `task ${taskId}`);
+    };
+    while (true) {
+      if (pendingSignal !== null) {
+        const stopped = await stopQueuedTask(pendingSignal);
+        if (stopped !== null) return stopped;
+        break;
+      }
+      const task = await readCheckedTask(taskId, taskLabel);
+      if (task === null) return pueueOutcomeUnknown(deps, `task ${taskId}`);
+      if (task.state === 'done') {
+        const finished = await readFinishedTask(taskId, taskLabel);
+        return finished === null
+          ? pueueOutcomeUnknown(deps, `task ${taskId}`)
+          : finishTask(taskId, finished, true);
+      }
+      if (task.state === 'running' || task.state === 'paused') break;
+      const elapsed = Date.now() - startedAt;
+      if (elapsed >= maxWaitMs) {
+        const stopped = await stopQueuedTask(null);
+        if (stopped !== null) return stopped;
+        break;
+      }
+      if (Date.now() - lastNoticeAt >= deps.waitNoticeIntervalMs) {
+        deps.stderr('local-admission: waiting for the pueue validation slot\n');
+        lastNoticeAt = Date.now();
+      }
+      await new Promise((resolveWait) =>
+        setTimeout(
+          resolveWait,
+          Math.min(deps.pueuePollIntervalMs, Math.max(1, maxWaitMs - elapsed)),
+        ),
+      );
+    }
+    if (pendingSignal !== null) {
+      // A failed stash raced with task start; the running signal path below owns it.
+    }
+    phase = 'running';
+    const followPromise = call(['follow', taskId], {
+      timeout: null,
+      stream: true,
+    });
+    activeFollowPromise = followPromise;
+    const followSignal = await Promise.race([
+      followPromise.then((value) => ({ kind: 'follow' as const, value })),
+      signalPromise.then((value) => ({ kind: 'signal' as const, value })),
+    ]);
+    if (followSignal.kind === 'signal') {
+      const signalled = pendingSignal ?? followSignal.value;
+      return handleRunningSignal(taskId, taskLabel, followPromise, signalled);
+    }
+    const follow = followSignal.value;
+    if (follow.outputIncomplete) {
+      if (pendingSignal !== null)
+        return handleRunningSignal(
+          taskId,
+          taskLabel,
+          followPromise,
+          pendingSignal,
+        );
+      return pueueOutcomeUnknown(deps, `task ${taskId}`);
+    }
+    if (!isPueueClientSuccess(follow)) {
+      if (pendingSignal !== null)
+        return handleRunningSignal(
+          taskId,
+          taskLabel,
+          followPromise,
+          pendingSignal,
+        );
+      return pueueOutcomeUnknown(deps, `task ${taskId}`);
+    }
+    const afterFollow = await readCheckedTask(taskId, taskLabel);
+    if (afterFollow === null) {
+      if (pendingSignal !== null)
+        return handleRunningSignal(
+          taskId,
+          taskLabel,
+          followPromise,
+          pendingSignal,
+        );
+      return pueueOutcomeUnknown(deps, `task ${taskId}`);
+    }
+    if (afterFollow.state === 'done')
+      return finishTask(taskId, afterFollow, false);
+    if (pendingSignal !== null)
+      return handleRunningSignal(
+        taskId,
+        taskLabel,
+        followPromise,
+        pendingSignal,
+      );
+    return pueueOutcomeUnknown(deps, `task ${taskId}`);
+  };
+
+  return work().then(
+    (status) => {
+      cleanupHandlers();
+      return status;
+    },
+    async (error: unknown) => {
+      if (activeFollow !== null && activeFollowPromise !== null) {
+        await stopFollow(activeFollowPromise);
+      }
+      if (activeClient !== null) {
+        signalProcessGroup(activeClient, 'SIGTERM');
+      }
+      cleanupHandlers();
+      deps.stderr(`local-admission: pueue error: ${errorMessage(error)}\n`);
+      return PUEUE_OUTCOME_UNKNOWN_EXIT_CODE;
+    },
+  );
+}
+
+function runFlockAdmission(
+  command: readonly string[],
+  raw: unknown,
+  deps: LocalAdmissionDeps,
+  enforceStoredCap: boolean,
+): Promise<number> {
+  const flockPath = deps.platform === 'win32' ? null : deps.findFlock(deps.env);
+  if (flockPath === null) {
+    deps.stderr(
+      'local-admission: flock is not available on this host; running the command without admission\n',
+    );
+    return runDirect(command, deps);
+  }
+  if (enforceStoredCap && storedCapAboveOne(storedMaxConcurrent(raw))) {
+    deps.stderr(
+      `local-admission: the flock backend admits one command at a time, but localExec.admission.maxConcurrent is ${String(storedMaxConcurrent(raw))}; command not started\n`,
+    );
+    return Promise.resolve(REFUSED_EXIT_CODE);
+  }
+  const processStateTool = deps.findPs(deps.env);
+  if (
+    processStateTool === null ||
+    !processStateToolIsUsable(processStateTool, deps.env)
+  ) {
+    deps.stderr(
+      'local-admission: ps is not available or returned unusable process-state output; command not started\n',
+    );
+    return Promise.resolve(REFUSED_EXIT_CODE);
+  }
+  const admission = normalizePolicyConfig(raw).localExec.admission;
+  const maxWaitMs =
+    parseIsoDurationToMs(admission.maxWait) ??
+    parseIsoDurationToMs(POLICY_DEFAULTS.localExec.admission.maxWait) ??
+    FALLBACK_MAX_WAIT_MS;
+  const opened = openLockFile(deps);
+  if ('refusal' in opened) {
+    deps.stderr(`local-admission: ${opened.refusal}; command not started\n`);
+    return Promise.resolve(REFUSED_EXIT_CODE);
+  }
+  return runLocked(
+    command,
+    flockPath,
+    processStateTool,
+    opened.fd,
+    maxWaitMs,
+    deps,
+  );
+}
+
 /** `PATH` lookup for an executable file named `name`. */
 export function findExecutableOnPath(
   name: string,
@@ -665,53 +1423,9 @@ export async function runLocalAdmission(
     return runDirect(command, deps);
   }
   if (admission.backend === 'pueue') {
-    deps.stderr(
-      'local-admission: backend "pueue" is not implemented yet; this run takes the flock path with one slot\n',
-    );
+    return runPueueAdmission(command, admission, raw, deps);
   }
-  const flockPath = deps.platform === 'win32' ? null : deps.findFlock(deps.env);
-  if (flockPath === null) {
-    deps.stderr(
-      'local-admission: flock is not available on this host; running the command without admission\n',
-    );
-    return runDirect(command, deps);
-  }
-  if (
-    admission.backend === 'flock' &&
-    storedCapAboveOne(storedMaxConcurrent(raw))
-  ) {
-    deps.stderr(
-      `local-admission: the flock backend admits one command at a time, but localExec.admission.maxConcurrent is ${String(storedMaxConcurrent(raw))}; command not started\n`,
-    );
-    return REFUSED_EXIT_CODE;
-  }
-  const processStateTool = deps.findPs(deps.env);
-  if (
-    processStateTool === null ||
-    !processStateToolIsUsable(processStateTool, deps.env)
-  ) {
-    deps.stderr(
-      'local-admission: ps is not available or returned unusable process-state output; command not started\n',
-    );
-    return REFUSED_EXIT_CODE;
-  }
-  const maxWaitMs =
-    parseIsoDurationToMs(admission.maxWait) ??
-    parseIsoDurationToMs(POLICY_DEFAULTS.localExec.admission.maxWait) ??
-    FALLBACK_MAX_WAIT_MS;
-  const opened = openLockFile(deps);
-  if ('refusal' in opened) {
-    deps.stderr(`local-admission: ${opened.refusal}; command not started\n`);
-    return REFUSED_EXIT_CODE;
-  }
-  return runLocked(
-    command,
-    flockPath,
-    processStateTool,
-    opened.fd,
-    maxWaitMs,
-    deps,
-  );
+  return runFlockAdmission(command, raw, deps, true);
 }
 
 /** The CLI body: reads the process arguments and returns the exit status. */
