@@ -83,8 +83,13 @@ function parseJsonWithNumberSources(text) {
         sources.set(key, source);
       }
     }
-    return value;
+    return typeof parsedValue === 'object' && parsedValue !== null
+      ? trackJsonObject(parsedValue)
+      : parsedValue;
   });
+  const document = Object.freeze({ value, rootNumberSource });
+  PARSED_JSON_DOCUMENTS.add(document);
+  return document;
 }
 /** Keywords accepted as pure annotations (no validation effect). */
 const ANNOTATION_KEYWORDS = new Set(['$schema', '$id', 'title', 'description']);

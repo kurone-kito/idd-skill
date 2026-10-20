@@ -2637,6 +2637,7 @@ test('format uri accepts absolute URIs and rejects malformed references', () => 
   for (const value of [
     'https://github.com/kurone-kito/idd-skill/issues/4519',
     'https://example.com/a%20b',
+    'https://example.com:',
     'mailto:team@example.com',
     'urn:example:decision',
     'file:///tmp/decision.json',
@@ -2649,6 +2650,7 @@ test('format uri accepts absolute URIs and rejects malformed references', () => 
   for (const value of [
     'https://@/x',
     'https://:/x',
+    'https://example.com:abc/x',
     'https://bad host/x',
     'https://example.com/%zz',
     'https://example.com/[brackets]',

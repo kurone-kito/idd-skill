@@ -248,9 +248,6 @@ function isUriAuthority(value: string, scheme: string): boolean {
   }
   if (port !== undefined) {
     if (!/^\d*$/u.test(port)) return false;
-    if (URI_NETWORK_SCHEMES.has(scheme.toLowerCase()) && port.length === 0) {
-      return false;
-    }
   }
   return true;
 }
