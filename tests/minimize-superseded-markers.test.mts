@@ -807,18 +807,19 @@ test('runMinimize passes the deadline to gh and reports a timeout failure (#2754
   // before the sleep completes, proving runMinimize no longer leaves each
   // candidate's own probe bound to the flat 30s GH_TIMEOUT_MS default
   // regardless of how little of `deadlineMs` is actually left.
-  const markerDir = mkdtempSync(join(tmpdir(), 'idd-minimize-deadline-'));
-  const invocationMarker = join(markerDir, 'graphql-started');
   const restore = stubExecutable(
     'gh',
     `const args = process.argv.slice(2);
+const response = JSON.stringify({ data: { nodes: [{ __typename: 'IssueComment', id: 'IC_a', url: 'https://github.com/o/r/issues/1#issuecomment-1', isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } }] } });
 if (args[0] === 'api' && args[1] === 'graphql') {
-  require('node:fs').writeFileSync(${JSON.stringify(invocationMarker)}, 'started');
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
-  process.stdout.write(JSON.stringify({ data: { node: { __typename: 'IssueComment', url: 'https://github.com/o/r/issues/1#issuecomment-1', isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } } } }));
+  process.stdout.write(response);
   process.exit(0);
 }
-process.exit(1);
+// A wrong gh invocation returns an eligible result, so the assertions below
+// fail instead of mistaking an early stub exit for the expected timeout.
+process.stdout.write(response);
+process.exit(0);
 `,
   );
   try {
@@ -830,11 +831,10 @@ process.exit(1);
       allowUntrusted: false,
       deadlineMs: 150,
     });
-    // The probe call itself was killed by the timeout, so it surfaces as a
-    // transport failure -- not a clean eligible/would-apply result. The
-    // marker proves the stub reached the expected GraphQL branch before its
-    // timeout diagnostics are considered.
-    assert.equal(readFileSync(invocationMarker, 'utf8'), 'started');
+    // A timed-out probe surfaces as a transport failure -- not a clean
+    // eligible/would-apply result. The stub's non-GraphQL fallback returns an
+    // eligible node, keeping a command-shape mistake distinguishable from a
+    // timeout without depending on a marker written before the 150ms deadline.
     assert.equal(report.items.length, 1);
     assert.equal(report.items[0]?.status, 'failed');
     const reason = report.items[0]?.reason ?? '';
@@ -846,7 +846,6 @@ process.exit(1);
     assert.equal(report.counts.applied, 0);
   } finally {
     restore();
-    rmSync(markerDir, { recursive: true, force: true });
   }
 });
 
