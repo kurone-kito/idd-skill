@@ -847,19 +847,30 @@ const REPO_OWNED_VALIDATION_SENTENCE_START =
 const USER_ACTOR_STEP_WINDOW =
   /^\s*this\s+(?:step|check)\s+by\s+the\s+user\s*$/i;
 // #4577: allow the exact user-actor directive at a normal issue paragraph,
-// heading, or list-item boundary. A preceding explicit agent assignment still
-// wins across intervening headings and paragraphs, including lead-ins such as
-// GitHub task-list checkboxes are part of the list marker, not the directive.
+// heading, or list-item boundary. Agent assignments in either actor order
+// still win across intervening headings and paragraphs. HTML-comment content
+// cannot establish a visible directive boundary.
 const USER_ACTOR_STEP_LIST_MARKER = String.raw`(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ x]\][ \t]+)?`;
 const USER_ACTOR_STEP_BODY_BOUNDARY = new RegExp(
-  String.raw`^(?:[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[\s\S]*\n[ \t]*\r?\n[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[\s\S]*\n[ \t]*#{1,6}[ \t]+[^\r\n]*\r?\n[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[\s\S]*\n[ \t]*${USER_ACTOR_STEP_LIST_MARKER}[ \t]*)$`,
+  String.raw`^(?:[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[\s\S]*\n[ \t]*\r?\n[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[ \t]*#{1,6}[ \t]+[^\r\n]*\r?\n[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[\s\S]*\n[ \t]*#{1,6}[ \t]+[^\r\n]*\r?\n[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[\s\S]*\n[ \t]*${USER_ACTOR_STEP_LIST_MARKER}[ \t]*)$`,
   'i',
 );
-const USER_ACTOR_STEP_AGENT = String.raw`\b(?:the\s+)?(?:coding\s+)?(?:agent|assistant|automation|AI|you)\b`;
-const USER_ACTOR_STEP_AGENT_ASSIGNMENT = new RegExp(
-  String.raw`${USER_ACTOR_STEP_AGENT}[^.!?]{0,100}\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+to|(?:(?:is|was|has\s+been)\s+)?(?:required|instructed|expected|asked|tasked|assigned)\s+to)\s+(?:run|execute|perform|follow|carry\s+out|do|complete|verify|check|test|implement)[^.!?]{0,100}\b(?:steps?|checks?|instructions?|tasks?|following)\b|${USER_ACTOR_STEP_AGENT}[^.!?]{0,100}\b(?:is|are)\s+(?:responsible|accountable)\s+for[^.!?]{0,100}\b(?:steps?|checks?|instructions?|tasks?|following)\b`,
-  'i',
-);
+const USER_ACTOR_STEP_AGENT =
+  /\b(?:the\s+)?(?:coding\s+)?(?:agent|assistant|automation|AI|you|worker|bot|model)\b/i;
+const USER_ACTOR_STEP_ASSIGNED_TARGET =
+  /\b(?:steps?|checks?|instructions?|tasks?|following)\b/i;
+const USER_ACTOR_STEP_ASSIGNMENT_CUE =
+  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+to|required|instructed|expected|asked|tasked|assigned|responsible|accountable|runs?|ran|executes?|executed|perform(?:s|ed)|follows?|followed|carries\s+out|carried\s+out|does?|did|completes?|completed|verifies?|verified|checks?|checked|tests?|tested|implements?|implemented|handles?|handled|manages?|managed)\b/i;
+function hasAgentAssignmentToStep(context) {
+  return context
+    .split(/[.!?;]+/)
+    .some(
+      (clause) =>
+        USER_ACTOR_STEP_AGENT.test(clause) &&
+        USER_ACTOR_STEP_ASSIGNMENT_CUE.test(clause) &&
+        USER_ACTOR_STEP_ASSIGNED_TARGET.test(clause),
+    );
+}
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =
   /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|skip|omit|ignore|exempt)\b/i;
@@ -2452,6 +2463,7 @@ function findUnsafeExecutionDirectiveMatch(
   body,
   bodyCodeRanges,
 ) {
+  const bodyHtmlCommentRanges = findHtmlCommentRanges(body, bodyCodeRanges);
   const verbPattern = new RegExp(
     String.raw`\b${UNSAFE_DIRECTIVE_VERB}\b`,
     'gi',
@@ -2477,13 +2489,20 @@ function findUnsafeExecutionDirectiveMatch(
       const targetMatch = targetPattern.exec(window);
       const userActorStepBodyPrefix = corpus.slice(bodyOffset, verbStart);
       const userActorStepAssignmentContext = `${userActorStepBodyPrefix}${verbText}${window}`;
+      const verbBodyStart = verbStart - bodyOffset;
+      const verbIsInHtmlComment = bodyHtmlCommentRanges.some(
+        (range) =>
+          range.start <= verbBodyStart &&
+          verbBodyStart + verbText.length <= range.end,
+      );
       const userActorStepDirective =
         verbText.toLowerCase() === 'run' &&
         window.length < UNSAFE_DIRECTIVE_WINDOW_CHARS &&
         USER_ACTOR_STEP_WINDOW.test(window) &&
         verbStart >= bodyOffset &&
+        !verbIsInHtmlComment &&
         USER_ACTOR_STEP_BODY_BOUNDARY.test(userActorStepBodyPrefix) &&
-        !USER_ACTOR_STEP_AGENT_ASSIGNMENT.test(userActorStepAssignmentContext);
+        !hasAgentAssignmentToStep(userActorStepAssignmentContext);
       // #3073 round 4-6: the repository-owned-validation exception is now
       // a single fully anchored positive signature (see the constants'
       // shared comment above) -- the whole window must match the literal

@@ -2704,6 +2704,17 @@ test('trust safety allows a user-assigned step after neutral issue context -- #4
   assert.equal(result.pass, true);
 });
 
+test('trust safety allows a user-assigned step after a heading at the body start -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Manual verification\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('trust safety allows a user-assigned check as a list item -- #4577', () => {
   const result = checkTrustSafety({
     issue: {
@@ -2838,6 +2849,36 @@ test('trust safety rejects agent assignment target modifiers and quantifiers -- 
   }
 });
 
+test('trust safety rejects passive and direct-object agent assignments -- #4577', () => {
+  for (const body of [
+    'The following must be performed by the coding agent:\n\nRun this step by the user.',
+    'The following steps are performed by the coding agent:\n\nRun this step by the user.',
+    'The coding agent is assigned the following steps:\n\nRun this step by the user.',
+    'The coding agent is tasked with the following steps:\n\nRun this step by the user.',
+    'The coding agent\n\nmust perform the following steps:\n\nRun this step by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+});
+
+test('trust safety rejects agent assignment lead-ins beyond the former 100-character limit -- #4577', () => {
+  const filler = 'with the surrounding explanation preserved '.repeat(4);
+  for (const body of [
+    `The coding agent ${filler}must perform the following steps:\n\nRun this step by the user.`,
+    `The coding agent must perform ${filler}the following steps:\n\nRun this step by the user.`,
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+});
+
 test('trust safety allows checked and unchecked task-list user steps -- #4577', () => {
   for (const body of [
     '- [ ] Run this step by the user.',
@@ -2854,6 +2895,7 @@ test('trust safety allows checked and unchecked task-list user steps -- #4577', 
 test('trust safety keeps user-actor wording inside HTML comments unsafe -- #4577', () => {
   for (const body of [
     '<!-- Run this step by the user. -->',
+    '<!--\n\nRun this step by the user.\n-->',
     '<!-- Run the script provided by the user. -->',
   ]) {
     const result = checkTrustSafety({
