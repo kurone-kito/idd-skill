@@ -828,7 +828,10 @@ function runPueueAdmission(command, admission, raw, deps) {
     if (beforeKill?.state === 'done') {
       // The task already completed; let pueue finish streaming its output.
       const completedFollow = await followPromise;
-      if (completedFollow.outputIncomplete)
+      if (
+        !isPueueClientSuccess(completedFollow) ||
+        completedFollow.outputIncomplete
+      )
         return pueueOutcomeUnknown(deps, `task ${taskId}`);
       return finishTask(taskId, beforeKill, false);
     }
@@ -850,7 +853,10 @@ function runPueueAdmission(command, admission, raw, deps) {
     if (afterKill?.state === 'done') {
       // The task completed before the kill landed; let pueue finish streaming its output.
       const completedFollow = await followPromise;
-      if (completedFollow.outputIncomplete)
+      if (
+        !isPueueClientSuccess(completedFollow) ||
+        completedFollow.outputIncomplete
+      )
         return pueueOutcomeUnknown(deps, `task ${taskId}`);
       return finishTask(taskId, afterKill, false);
     }

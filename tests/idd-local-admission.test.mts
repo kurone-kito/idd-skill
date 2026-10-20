@@ -1666,6 +1666,89 @@ test('pueue retains a completed task when its follow read fails', {
   );
 });
 
+test('a signal race retains a completed task when pueue follow fails', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const signalListenersBefore = new Set(process.listeners('SIGTERM'));
+  const spawnWithSignalAfterFollowClose = (
+    command: string,
+    args: string[],
+    options: import('node:child_process').SpawnOptions,
+  ): ChildProcess => {
+    const child = spawn(command, args, options);
+    if (args[0] === 'follow') {
+      queueMicrotask(() => {
+        child.once('close', () => {
+          const signalHandler = process
+            .listeners('SIGTERM')
+            .filter((listener) => !signalListenersBefore.has(listener))
+            .at(-1);
+          if (typeof signalHandler === 'function') signalHandler('SIGTERM');
+        });
+      });
+    }
+    return child;
+  };
+  const scenarios: {
+    logResponses: unknown[];
+    killExit?: number;
+    expectKill: boolean;
+  }[] = [
+    {
+      logResponses: ['Running', { Done: { Failed: 19 } }],
+      expectKill: false,
+    },
+    {
+      logResponses: ['Running', 'Running', { Done: { Failed: 19 } }],
+      killExit: 1,
+      expectKill: true,
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const output: string[] = [];
+    const stdout = new Writable({
+      write(chunk: Buffer | string, _encoding, callback) {
+        output.push(chunk.toString());
+        callback();
+      },
+    });
+    const result = await runPueueTest(
+      { localExec: { admission: { backend: 'pueue' } } },
+      {
+        initialStatus: 'Running',
+        followExit: 1,
+        streamOutput: 'partial task output\n',
+        logResponses: scenario.logResponses,
+        ...(scenario.killExit === undefined
+          ? {}
+          : { killExit: scenario.killExit }),
+      },
+      ['true'],
+      {
+        findFlock: () => null,
+        spawn: spawnWithSignalAfterFollowClose,
+        stdout,
+      },
+    );
+
+    assert.equal(result.status, 3, result.stderr);
+    assert.equal(output.join(''), 'partial task output\n');
+    assert.match(result.stderr, /pueue task outcome unknown \(task 17\)/);
+    const state = readFakePueue(result.fake);
+    assert.ok((state.tasks as Record<string, unknown>)['17']);
+    const calls = state.calls as string[][];
+    assert.equal(
+      calls.some((call) => call[0] === 'kill' && call[1] === '17'),
+      scenario.expectKill,
+    );
+    assert.equal(
+      calls.some((call) => call[0] === 'remove' && call[1] === '17'),
+      false,
+    );
+  }
+});
+
 test('a failed pueue follow racing with SIGTERM still kills and removes the task', {
   skip: process.platform === 'win32',
 }, async () => {
