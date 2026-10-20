@@ -2914,14 +2914,20 @@ test('trust safety rejects an agent assignment in the issue title -- #4577', () 
 });
 
 test('trust safety rejects an imperative agent assignment -- #4577', () => {
-  const result = checkTrustSafety({
-    issue: {
-      ...BASE_ISSUE,
-      body: 'Assign this step to the coding agent.\n\nRun this step by the user.',
-    },
-    trustSafetyAmbiguous: false,
-  } as Context);
-  assert.equal(result.pass, false);
+  for (const assignment of [
+    'Assign this step to the coding agent.',
+    'The coding agent delegated this step.',
+    'The coding agent directed this step.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
 });
 
 test('trust safety does not treat unrelated implementation tasks as this step -- #4577', () => {

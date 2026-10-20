@@ -864,7 +864,7 @@ const USER_ACTOR_STEP_AGENT =
 const USER_ACTOR_STEP_ASSIGNED_TARGET =
   /\b(?:(?:(?:this|that)(?:\s+(?:exact|same|specific|particular))?|these|those)\s+(?:steps?|checks?)|the\s+(?:(?:exact|same|specific|particular)\s+)?(?:steps?|checks?)|(?:the\s+)?following\s+(?:steps?|checks?)|(?:the\s+(?:exact|same|specific|particular)\s+)?instructions?\s+(?:below|above|that\s+follow|which\s+follow))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
-  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|responsible|accountable|owns?|owned|belongs?\s+to|runs?|ran|executes?|executed|perform(?:s|ed)|follows?|followed|carries\s+out|carried\s+out|does?|did|completes?|completed|verifies?|verified|checks?|checked|tests?|tested|implements?|implemented|handles?|handled|manages?|managed)\b/i;
+  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|accountable|owns?|owned|belongs?\s+to|runs?|ran|executes?|executed|perform(?:s|ed)|follows?|followed|carries\s+out|carried\s+out|does?|did|completes?|completed|verifies?|verified|checks?|checked|tests?|tested|implements?|implemented|handles?|handled|manages?|managed)\b/i;
 // #4577: scan the title and body as separate fields so an assignment in one
 // cannot combine with an unrelated target in the other.
 function hasAgentAssignmentToStep(context) {
