@@ -1319,7 +1319,7 @@ function separateMarkdownRangesWithClauseBoundaries(text, ranges) {
 // aligned with the original issue body.
 function normalizeMarkdownStepAssignmentText(text) {
   const inlineLinkPattern =
-    /\[((?:\\.|[^\]\\\n])*)\]\((?:<[^>\n]*>|(?:\\.|[^)\n])*)\)/g;
+    /\[((?:\\.|[^\]\\\n])*)\]\((?:<[^>\n]*>|(?:\\.|[^)\\\n])*)\)/g;
   let normalized = text.replace(inlineLinkPattern, (match, label) => {
     const characters = match
       .split('')
