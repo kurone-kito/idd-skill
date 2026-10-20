@@ -29,7 +29,7 @@ import {
 } from 'node:fs';
 import { constants as osConstants, homedir as userHomedir } from 'node:os';
 import { delimiter, dirname, join, posix, resolve, win32 } from 'node:path';
-import type { Readable } from 'node:stream';
+import type { Readable, Writable } from 'node:stream';
 import { parseCliArgs } from './cli-args.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -64,6 +64,8 @@ const DEFAULT_WAIT_NOTICE_INTERVAL_MS = 60_000;
 const GROUP_POLL_INTERVAL_MS = 1000;
 const DEFAULT_PUEUE_CLIENT_TIMEOUT_MS = 10_000;
 const PUEUE_POLL_INTERVAL_MS = 1000;
+const PUEUE_LOCAL_FOLLOW_INCOMPLETE_OUTPUT =
+  /(?:Failed to get log file handles:|Pueue: Log file has gone away\.|Pueue: Error while reading file:|Pueue: Error while flushing stdout:)/;
 const PROCESS_STATE_PROBE_TIMEOUT_MS = 1000;
 const PROCESS_STATE_PROBE_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 const FALLBACK_MAX_WAIT_MS = 2 * 60 * 60 * 1000;
@@ -115,6 +117,8 @@ export interface LocalAdmissionDeps {
   cwd: string;
   homedir: string;
   stderr: (text: string) => void;
+  stdout: Writable;
+  stderrOutput: Writable;
   /** Reads a repository policy file by absolute path; throws when it is malformed. */
   readPolicy: (policyPath: string) => unknown;
   /** Absolute path of `flock` on this host, or null when it is not installed. */
@@ -145,6 +149,8 @@ function defaultDependencies(): LocalAdmissionDeps {
     stderr: (text) => {
       process.stderr.write(text);
     },
+    stdout: process.stdout,
+    stderrOutput: process.stderr,
     readPolicy: (policyPath) => readRepositoryPolicyFile(policyPath).config,
     findFlock: (env) => findExecutableOnPath('flock', env),
     findPueue: (env) => findExecutableOnPath('pueue', env),
@@ -622,6 +628,7 @@ interface PueueCallResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  outputIncomplete: boolean;
   error?: Error;
 }
 
@@ -660,6 +667,7 @@ function runPueueClient(
         stdout: '',
         stderr: '',
         timedOut: false,
+        outputIncomplete: false,
         error: error instanceof Error ? error : new Error(String(error)),
       });
       return;
@@ -667,6 +675,8 @@ function runPueueClient(
     onChild?.(child);
     let stdout = '';
     let stderr = '';
+    let streamStderrTail = '';
+    let outputIncomplete = false;
     let timedOut = false;
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
@@ -684,14 +694,23 @@ function runPueueClient(
           }, timeoutMs);
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
-    child.stdout?.on('data', (chunk: string) => {
-      if (streamOutput) process.stdout.write(chunk);
-      else stdout += chunk;
-    });
-    child.stderr?.on('data', (chunk: string) => {
-      if (streamOutput) process.stderr.write(chunk);
-      else stderr += chunk;
-    });
+    if (streamOutput) {
+      child.stdout?.pipe(deps.stdout, { end: false });
+      child.stderr?.on('data', (chunk: string) => {
+        const recent = streamStderrTail + chunk;
+        if (PUEUE_LOCAL_FOLLOW_INCOMPLETE_OUTPUT.test(recent))
+          outputIncomplete = true;
+        streamStderrTail = recent.slice(-256);
+      });
+      child.stderr?.pipe(deps.stderrOutput, { end: false });
+    } else {
+      child.stdout?.on('data', (chunk: string) => {
+        stdout += chunk;
+      });
+      child.stderr?.on('data', (chunk: string) => {
+        stderr += chunk;
+      });
+    }
     child.on('error', (error: Error) => {
       if (settled) return;
       settled = true;
@@ -704,6 +723,7 @@ function runPueueClient(
         stdout,
         stderr,
         timedOut,
+        outputIncomplete,
         error,
       });
     });
@@ -713,7 +733,7 @@ function runPueueClient(
       if (timer !== undefined) clearTimeout(timer);
       if (killTimer !== undefined) clearTimeout(killTimer);
       onChild?.(null);
-      resolveCall({ code, signal, stdout, stderr, timedOut });
+      resolveCall({ code, signal, stdout, stderr, timedOut, outputIncomplete });
     });
   });
 }
@@ -1169,7 +1189,11 @@ function runPueueAdmission(
       const beforeKill = await readCheckedTask(taskId, taskLabel);
       if (beforeKill?.state === 'done') {
         // The task already completed; let pueue finish streaming its output.
-        await followPromise;
+        const completedFollow = await followPromise;
+        if (completedFollow.outputIncomplete) {
+          cleanupHandlers();
+          return pueueOutcomeUnknown(deps, `task ${taskId}`);
+        }
         return finishTask(taskId, beforeKill, false);
       }
       if (
@@ -1191,7 +1215,11 @@ function runPueueAdmission(
       const afterKill = await readCheckedTask(taskId, taskLabel);
       if (afterKill?.state === 'done') {
         // The task completed before the kill landed; let pueue finish streaming its output.
-        await followPromise;
+        const completedFollow = await followPromise;
+        if (completedFollow.outputIncomplete) {
+          cleanupHandlers();
+          return pueueOutcomeUnknown(deps, `task ${taskId}`);
+        }
         return finishTask(taskId, afterKill, false);
       }
       await stopFollow(followPromise);
@@ -1199,6 +1227,10 @@ function runPueueAdmission(
       return pueueOutcomeUnknown(deps, `task ${taskId}`);
     }
     const follow = followSignal.value;
+    if (follow.outputIncomplete) {
+      cleanupHandlers();
+      return pueueOutcomeUnknown(deps, `task ${taskId}`);
+    }
     if (!isPueueClientSuccess(follow) && pendingSignal === null) {
       const afterFailedFollow = await readCheckedTask(taskId, taskLabel);
       if (afterFailedFollow?.state === 'done' && pendingSignal === null)

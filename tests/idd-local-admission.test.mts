@@ -17,6 +17,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { Writable } from 'node:stream';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { defaultLoadControlDirectory } from '../src/scripts/github-api-load-control.mts';
@@ -272,6 +273,23 @@ if (args[0] === 'follow') {
     const value = task(taskId);
     if (value && state.followFinalStatus) value.status = state.followFinalStatus;
     save();
+    if (state.followOutputBytes !== undefined) {
+      const chunk = 'x'.repeat(1024);
+      let remaining = Number(state.followOutputBytes);
+      const writeNext = () => {
+        while (remaining > 0) {
+          const next = chunk.slice(0, Math.min(chunk.length, remaining));
+          remaining -= next.length;
+          if (!process.stdout.write(next)) {
+            process.stdout.once('drain', writeNext);
+            return;
+          }
+        }
+        process.stdout.end();
+      };
+      writeNext();
+      return;
+    }
     output(value?.streamOutput ?? state.streamOutput ?? '');
     if (state.streamStderr) process.stderr.write(state.streamStderr);
     process.exit(state.followExit ?? 0);
@@ -1393,6 +1411,86 @@ test('pueue follow keeps client stderr separate from task output', {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, 'task output\n');
   assert.match(result.stderr, /pueue diagnostic/);
+});
+
+test('pueue follow pauses output reads when the caller applies backpressure', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const output: string[] = [];
+  let maxBuffered = 0;
+  let slowStdout!: Writable;
+  slowStdout = new Writable({
+    highWaterMark: 1024,
+    write(chunk, _encoding, callback) {
+      output.push(chunk.toString());
+      maxBuffered = Math.max(maxBuffered, slowStdout.writableLength);
+      setTimeout(callback, 2);
+    },
+  });
+  const result = await runPueueTest(
+    { localExec: { admission: { backend: 'pueue' } } },
+    {
+      initialStatus: 'Running',
+      followFinalStatus: { Done: { Success: null } },
+      followOutputBytes: 512 * 1024,
+    },
+    ['true'],
+    { stdout: slowStdout },
+  );
+  await new Promise<void>((resolveFinish) => slowStdout.end(resolveFinish));
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(output.join('').length, 512 * 1024);
+  assert.ok(
+    maxBuffered <= 128 * 1024,
+    `stdout buffer grew to ${maxBuffered} bytes`,
+  );
+});
+
+test('pueue follow keeps completed tasks when local log diagnostics mean output is incomplete', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const output: string[] = [];
+  const diagnostics: string[] = [];
+  const stdout = new Writable({
+    write(chunk, _encoding, callback) {
+      output.push(chunk.toString());
+      callback();
+    },
+  });
+  const stderrOutput = new Writable({
+    write(chunk, _encoding, callback) {
+      diagnostics.push(chunk.toString());
+      callback();
+    },
+  });
+  const result = await runPueueTest(
+    { localExec: { admission: { backend: 'pueue' } } },
+    {
+      initialStatus: 'Running',
+      followFinalStatus: { Done: { Success: null } },
+      followExit: 0,
+      streamOutput: 'partial task output\n',
+      streamStderr: 'Pueue: Error while reading file: simulated read failure\n',
+      taskOutput: 'full task output\n',
+    },
+    ['true'],
+    { stdout, stderrOutput },
+  );
+  await Promise.all([
+    new Promise<void>((resolveFinish) => stdout.end(resolveFinish)),
+    new Promise<void>((resolveFinish) => stderrOutput.end(resolveFinish)),
+  ]);
+  assert.equal(result.status, 3, result.stderr);
+  assert.equal(output.join(''), 'partial task output\n');
+  assert.match(diagnostics.join(''), /Error while reading file/);
+  const state = readFakePueue(result.fake);
+  assert.ok((state.tasks as Record<string, unknown>)['17']);
+  assert.equal(
+    (state.calls as string[][]).some(
+      (call) => call[0] === 'remove' && call[1] === '17',
+    ),
+    false,
+  );
 });
 
 test('pueue state read failures and task-label mismatches are outcome unknown without task actions', {
