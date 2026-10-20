@@ -37,12 +37,13 @@ import {
   getMarkdownCodeRange,
   indentationColumns,
   maskMarkdownCodeRegionsPreservingPositions,
+  maskMarkdownForScan,
 } from './markdown-code.mjs';
 import {
   normalizeMarkerPrefix,
   parseAuthoringBucketMarker,
 } from './marker-helpers.mjs';
-import { escapeRegex } from './marker-regex.mjs';
+import { createMarkerRegex, escapeRegex } from './marker-regex.mjs';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mjs';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
 import {
@@ -2518,6 +2519,10 @@ export function evaluateSuitability(issue, options = {}) {
       options.needsDecisionLabelName,
       POLICY_DEFAULTS.labels.needsDecisionLabelName,
     ),
+    authoringOnlyLabelName: normalizeConfiguredLabelName(
+      options.authoringOnlyLabelName,
+      POLICY_DEFAULTS.labels.authoringOnlyLabelName,
+    ),
     markerPrefix: normalizeMarkerPrefix(options.markerPrefix),
     highConfidenceDuplicate: normalizeHighConfidenceDuplicateInput(
       options.highConfidenceDuplicate,
@@ -3155,6 +3160,7 @@ export function checkDuplicateOrSuperseded(context) {
     const degradedExactMatch = duplicateCandidates.find(
       (candidate) =>
         candidate.number !== issue.number &&
+        !isDraftCarrierCandidate(context, candidate) &&
         normalizeText(candidate.title) === degradedExactTitle,
     );
     if (degradedExactMatch) {
@@ -3190,6 +3196,9 @@ export function checkDuplicateOrSuperseded(context) {
     if (candidate.number === issue.number) {
       return false;
     }
+    if (isDraftCarrierCandidate(context, candidate)) {
+      return false;
+    }
     return normalizeText(candidate.title) === exactTitle;
   });
   if (duplicate) {
@@ -3204,7 +3213,7 @@ export function checkDuplicateOrSuperseded(context) {
     if (candidate.number === issue.number) {
       return false;
     }
-    if (candidate.state === 'CLOSED') {
+    if (isDraftCarrierCandidate(context, candidate)) {
       return false;
     }
     const sim = computeSimilarity(exactTitle, normalizeText(candidate.title));
@@ -3232,6 +3241,27 @@ function computeSimilarity(str1, str2) {
   }
   const distance = levenshteinDistance(str1, str2);
   return (maxLen - distance) / maxLen;
+}
+function isDraftCarrierCandidate(context, candidate) {
+  if (candidate.isPullRequest) {
+    return false;
+  }
+  const authoringOnlyLabelName = normalizeLabels([
+    normalizeConfiguredLabelName(
+      context.authoringOnlyLabelName,
+      POLICY_DEFAULTS.labels.authoringOnlyLabelName,
+    ),
+  ])[0];
+  if (
+    !authoringOnlyLabelName ||
+    !normalizeLabels(candidate.labels).includes(authoringOnlyLabelName)
+  ) {
+    return false;
+  }
+  return createMarkerRegex(
+    normalizeMarkerPrefix(context.markerPrefix),
+    'draft-carrier',
+  ).test(maskMarkdownForScan(candidate.body ?? ''));
 }
 function levenshteinDistance(str1, str2) {
   const memo = {};
@@ -4453,6 +4483,7 @@ function runCli() {
     duplicateCandidates,
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+    authoringOnlyLabelName: labelsPolicy.authoringOnlyLabelName,
     markerPrefix: resolveMarkerPrefix(policyConfig),
     highConfidenceDuplicate,
     highConfidenceCollectionDegraded: collectionWarnings.length > 0,
@@ -5056,7 +5087,7 @@ function normalizeRepository(repository) {
   }
   return { owner, repo };
 }
-function normalizeDuplicateCandidates(candidates) {
+export function normalizeDuplicateCandidates(candidates) {
   if (!Array.isArray(candidates)) {
     return [];
   }
@@ -5068,6 +5099,9 @@ function normalizeDuplicateCandidates(candidates) {
         title: String(c.title ?? ''),
         state: String(c.state ?? ''),
         url: String(c.url ?? c.html_url ?? ''),
+        labels: normalizeLabels(c.labels),
+        body: String(c.body ?? ''),
+        isPullRequest: Boolean(c.isPullRequest ?? c.pull_request),
       };
     })
     .filter(
