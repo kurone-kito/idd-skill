@@ -1069,7 +1069,7 @@ const USER_ACTOR_STEP_ASSIGNED_TARGET =
 const USER_ACTOR_STEP_NUMBERED_TARGET =
   /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?)\s+(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
-  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|belongs?\s+to|runs?|ran|executes?|executed|perform(?:s|ed)|follows?|followed|carries\s+out|carried\s+out|does?|did|completes?|completed|verifies?|verified|checks?|checked|tests?|tested|implements?|implemented|handles?|handled|manages?|managed)\b/i;
+  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|belongs?\s+to|run(?:s|ning)?|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|complete(?:s|d|ing)?|verif(?:y|ies|ied|ying)|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|handle(?:s|d|ing)?|manage(?:s|d|ing)?)\b/i;
 const USER_ACTOR_STEP_NEGATION_CUE =
   /\b(?:(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b/i;
 

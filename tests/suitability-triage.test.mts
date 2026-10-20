@@ -2998,6 +2998,34 @@ test('trust safety rejects an imperative agent assignment -- #4577', () => {
   }
 });
 
+test('trust safety recognizes progressive agent actions as assignments -- #4577', () => {
+  for (const assignment of [
+    'The coding agent is performing this step.',
+    'The coding agent is running this check.',
+    'The coding agent is executing this step.',
+    'The coding agent is checking this step.',
+    'The coding agent is verifying this check.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
+
+  const unrelatedAgentWork = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent is implementing the feature.\n\n## Manual verification\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(unrelatedAgentWork.pass, true);
+});
+
 test('trust safety does not treat unrelated implementation tasks as this step -- #4577', () => {
   for (const agentWork of [
     'The coding agent should complete the implementation tasks.',
