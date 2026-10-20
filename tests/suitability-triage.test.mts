@@ -2973,6 +2973,95 @@ test('trust safety does not treat an explicitly negated agent step as assigned -
   assert.equal(result.pass, true);
 });
 
+test('trust safety evaluates positive agent assignments after a negated assignment -- #4577', () => {
+  for (const assignment of [
+    'The coding agent must not inspect this step, but must perform this step.',
+    'The coding agent must not perform this step but should perform this step.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
+});
+
+test('trust safety does not inherit a negated agent assignment over an explicit user assignment -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must not perform this step, but the user should perform this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety recognizes named coding agents in explicit step assignments -- #4577', () => {
+  for (const actor of ['Codex', 'Copilot', 'Claude Code', 'Gemini CLI']) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${actor} must perform this step.\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, actor);
+  }
+});
+
+test('trust safety keeps assignments in separate Markdown heading sections -- #4577', () => {
+  const unrelatedAgentHeading = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Agent implementation\n\n## Manual verification\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(unrelatedAgentHeading.pass, true);
+
+  const assignedAgentHeading = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## The coding agent must perform this step\n\n## Manual verification\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(assignedAgentHeading.pass, false);
+
+  const agentSectionActor = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Agent steps\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(agentSectionActor.pass, false);
+});
+
+test('trust safety accepts user steps after Setext headings but not hidden Setext boundaries -- #4577', () => {
+  const visibleHeading = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'Manual verification\n-------------------\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(visibleHeading.pass, true);
+
+  const hiddenHeading = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'Intro <!--\nManual verification\n-------------------\n-->Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(hiddenHeading.pass, false);
+});
+
 test('trust safety still rejects an agent assignment phrased as not only -- #4577', () => {
   const result = checkTrustSafety({
     issue: {
