@@ -126,7 +126,19 @@ test('flags uppercase dotted-token continuations', () => {
 test('does not flag sentence periods before prose in multi-tick code examples', () => {
   assert.deepEqual(
     findCorruptingCodeSpanWraps(
-      '``limit. Its `slots` value``\n``3. If `slots` is zero``\n``without B1. Record a `running` task``',
+      [
+        '``limit. Its `slots` value``',
+        '``3. If `slots` is zero``',
+        '``without B1. Record a `running` task``',
+        '`` `Run the command. Verify the output.` ``',
+        '`foo. Hello`',
+        '`foo. Please check`',
+        '`foo. Next step`',
+        '`foo. Note this`',
+        '`POSIX. On Windows, use`',
+        '`Command Prompt. Those executables`',
+        '`package CLI. From a checkout`',
+      ].join('\n'),
     ),
     [],
   );

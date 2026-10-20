@@ -49,56 +49,6 @@ import {
 const MID_TOKEN_CONTINUATION = /[-_/.]/;
 const TOKEN_CONTINUING = /[A-Za-z0-9\-_/.]/;
 const CONTEXT_CHARS = 20;
-// Common prose openers distinguish sentence periods from dotted identifiers.
-const SENTENCE_STARTERS = new Set([
-  'A',
-  'Add',
-  'After',
-  'An',
-  'And',
-  'Before',
-  'Do',
-  'Dispatched',
-  'Each',
-  'Either',
-  'For',
-  'From',
-  'If',
-  'In',
-  'Instead',
-  'I',
-  'Its',
-  'Look',
-  'Map',
-  'On',
-  'Omit',
-  'Once',
-  'Only',
-  'Otherwise',
-  'Preserve',
-  'Record',
-  'Recompute',
-  'Resolve',
-  'Run',
-  'Set',
-  'Since',
-  'Stash',
-  'Start',
-  'The',
-  'Then',
-  'These',
-  'They',
-  'This',
-  'Those',
-  'To',
-  'Use',
-  'When',
-  'Where',
-  'While',
-  'With',
-  'Without',
-  'Write',
-]);
 function lineStartsFor(text) {
   const starts = [0];
   for (let index = 0; index < text.length; index += 1) {
@@ -150,8 +100,8 @@ function isLineCommentOpener(inner, secondSlashIndex) {
 function isSentencePunctuation(inner, delimiterIndex, afterIndex) {
   const previous = inner[delimiterIndex - 1];
   const suffix = inner.slice(afterIndex).replace(/_+$/u, '').trimEnd();
-  const nextWord = /^(?:[A-Z][a-z]+|[AI])(?=\s|`|$)/u.exec(suffix)?.[0];
-  if (nextWord === undefined || !SENTENCE_STARTERS.has(nextWord)) {
+  const nextWord = /^[A-Z][A-Za-z]*(?=\s|`|$)/u.exec(suffix)?.[0];
+  if (nextWord === undefined || /^[A-Z]{2,}$/u.test(nextWord)) {
     return false;
   }
   if (previous === undefined || previous === '`') {
@@ -169,6 +119,23 @@ function isSentencePunctuation(inner, delimiterIndex, afterIndex) {
       /\s/.test(beforeNumber) ||
       /[A-Za-z]/.test(beforeNumber)
     );
+  }
+  const previousWord = /[A-Za-z][A-Za-z0-9_-]*$/u.exec(
+    inner.slice(0, delimiterIndex),
+  )?.[0];
+  const followingProseWord = /^[A-Za-z]/u.test(
+    suffix.slice(nextWord.length).trimStart(),
+  );
+  // A title-cased or uppercase prefix followed by a single capitalized token
+  // is more likely a dotted identifier than prose. A further word marks a
+  // sentence continuation, while lowercase prefixes can precede any
+  // capitalized opener (including a one-word sentence such as `foo. Hello`).
+  if (
+    previousWord !== undefined &&
+    /[A-Z]/u.test(previousWord) &&
+    !followingProseWord
+  ) {
+    return false;
   }
   return /[A-Za-z)]/.test(previous);
 }
