@@ -10222,14 +10222,19 @@ test('trust safety does not widen a numbered parent heading assignment -- #4577'
 });
 
 test('trust safety recognizes responsibility as an agent assignment cue -- #4577', () => {
-  const result = checkTrustSafety({
-    issue: {
-      ...BASE_ISSUE,
-      body: 'The coding agent has responsibility for this step.\n\nRun this step by the user.',
-    },
-    trustSafetyAmbiguous: false,
-  } as Context);
-  assert.equal(result.pass, false);
+  for (const assignment of [
+    'The coding agent has responsibility for this step.',
+    'The coding agent has responsibilities for this step.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
 });
 
 test('trust safety does not attribute a comma-negated assignment to the agent -- #4577', () => {
