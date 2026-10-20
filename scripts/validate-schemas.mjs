@@ -465,6 +465,10 @@ function getType(val) {
   if (Array.isArray(val)) return 'array';
   return typeof val;
 }
+// Bound BigInt parsing for untrusted JSON tokens. A comparison beyond this
+// limit is unavailable and must fail closed instead of accepting rounded
+// equality.
+const MAX_DECIMAL_EXPONENT_DIGITS = 1024;
 function parseDecimalValue(value) {
   const match = /^(-?)(0|[1-9]\d*)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/u.exec(
     value,
@@ -478,7 +482,7 @@ function parseDecimalValue(value) {
   const exponentText = match[4] ?? '0';
   const exponentDigits =
     exponentText.replace(/^[+-]/u, '').replace(/^0+/u, '') || '0';
-  if (exponentDigits.length > 15) return undefined;
+  if (exponentDigits.length > MAX_DECIMAL_EXPONENT_DIGITS) return undefined;
   const exponent = BigInt(
     `${exponentText.startsWith('-') ? '-' : ''}${exponentDigits}`,
   );
@@ -515,11 +519,7 @@ function compareDecimalValues(left, right) {
 }
 function compareNumberToBound(value, bound, source, boundSource) {
   const roundedComparison = value < bound ? -1 : value > bound ? 1 : 0;
-  if (
-    source === undefined ||
-    roundedComparison !== 0 ||
-    !Number.isFinite(bound)
-  ) {
+  if (source === undefined || roundedComparison !== 0) {
     return roundedComparison;
   }
   const exactBoundSource = boundSource ?? String(bound);
@@ -531,7 +531,7 @@ function compareNumberToBound(value, bound, source, boundSource) {
     if (!/[1-9]/u.test(match[2] + (match[3] ?? ''))) return 0;
     return match[1] === '-' ? -1 : 1;
   }
-  return roundedComparison;
+  return undefined;
 }
 /**
  * Validate data against a schema (subset enforced by this validator).
@@ -644,41 +644,46 @@ export function validate(
       `${path}: "${String(data)}" not in enum [${s.enum.join(', ')}]`,
     );
   }
-  if (
-    actualType === 'number' &&
-    s.minimum !== undefined &&
-    compareNumberToBound(
+  if (actualType === 'number' && s.minimum !== undefined) {
+    const comparison = compareNumberToBound(
       data,
       s.minimum,
       numberSource,
       jsonNumberSource(s, 'minimum'),
-    ) < 0
-  ) {
-    errors.push(`${path}: ${data} < minimum ${s.minimum}`);
+    );
+    if (comparison === undefined) {
+      errors.push(`${path}: cannot compare the JSON number to minimum exactly`);
+    } else if (comparison < 0) {
+      errors.push(`${path}: ${data} < minimum ${s.minimum}`);
+    }
   }
-  if (
-    actualType === 'number' &&
-    s.maximum !== undefined &&
-    compareNumberToBound(
+  if (actualType === 'number' && s.maximum !== undefined) {
+    const comparison = compareNumberToBound(
       data,
       s.maximum,
       numberSource,
       jsonNumberSource(s, 'maximum'),
-    ) > 0
-  ) {
-    errors.push(`${path}: ${data} > maximum ${s.maximum}`);
+    );
+    if (comparison === undefined) {
+      errors.push(`${path}: cannot compare the JSON number to maximum exactly`);
+    } else if (comparison > 0) {
+      errors.push(`${path}: ${data} > maximum ${s.maximum}`);
+    }
   }
-  if (
-    actualType === 'number' &&
-    s.exclusiveMinimum !== undefined &&
-    compareNumberToBound(
+  if (actualType === 'number' && s.exclusiveMinimum !== undefined) {
+    const comparison = compareNumberToBound(
       data,
       s.exclusiveMinimum,
       numberSource,
       jsonNumberSource(s, 'exclusiveMinimum'),
-    ) <= 0
-  ) {
-    errors.push(`${path}: ${data} <= exclusiveMinimum ${s.exclusiveMinimum}`);
+    );
+    if (comparison === undefined) {
+      errors.push(
+        `${path}: cannot compare the JSON number to exclusiveMinimum exactly`,
+      );
+    } else if (comparison <= 0) {
+      errors.push(`${path}: ${data} <= exclusiveMinimum ${s.exclusiveMinimum}`);
+    }
   }
   if (actualType === 'array') {
     const arr = data;

@@ -770,6 +770,48 @@ test('numeric bounds compare preserved underflowed schema tokens exactly', () =>
   }
 });
 
+test('numeric bounds compare long exponent tokens and fail closed past the limit', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-schema-long-exponent-'));
+  const exponent = '1000000000000000';
+  const largerMagnitudeExponent = '999999999999999';
+  const smallerMagnitudeExponent = '1000000000000001';
+  const tooLongExponent = '9'.repeat(1025);
+  const cases = [
+    ['maximum', `1e-${exponent}`, `1e-${largerMagnitudeExponent}`, false],
+    ['maximum', `1e-${exponent}`, `1e-${smallerMagnitudeExponent}`, true],
+    ['maximum', `1e-${exponent}`, `2e-${exponent}`, false],
+    ['minimum', `1e-${exponent}`, `1e-${smallerMagnitudeExponent}`, false],
+    ['minimum', `1e-${exponent}`, `1e-${exponent}`, true],
+    ['exclusiveMinimum', `1e-${exponent}`, `1e-${exponent}`, false],
+    [
+      'exclusiveMinimum',
+      `1e-${exponent}`,
+      `1e-${largerMagnitudeExponent}`,
+      true,
+    ],
+    ['maximum', `1e-${tooLongExponent}`, `2e-${tooLongExponent}`, false],
+  ] as const;
+
+  try {
+    for (const [keyword, bound, instanceValue, expectedValid] of cases) {
+      writeFileSync(
+        join(root, 'schema.json'),
+        `{"type":"object","required":["value"],"properties":{"value":{"type":"number","${keyword}":${bound}}},"additionalProperties":false}`,
+      );
+      writeFileSync(join(root, 'instance.json'), `{"value":${instanceValue}}`);
+      const schema = loadJson('schema.json', root);
+      const instance = loadJson('instance.json', root);
+      assert.equal(
+        validate(instance, schema).length === 0,
+        expectedValid,
+        `${keyword}: ${instanceValue} against ${bound}`,
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('integer validation preserves exact JSON number tokens', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-schema-number-token-'));
   const schema = {
