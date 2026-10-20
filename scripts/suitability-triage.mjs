@@ -1447,6 +1447,97 @@ function hasAgentAssignmentForUserStep(analysis, ordinal, targetKind) {
         ))
   );
 }
+function buildOrderedUserStepListOrdinals(
+  text,
+  lineStarts,
+  firstNonWhitespace,
+  lineKinds,
+) {
+  const ordinals = [];
+  const stack = [];
+  for (let lineIndex = 0; lineIndex < lineStarts.length; lineIndex += 1) {
+    const start = lineStarts[lineIndex] ?? text.length;
+    const nextStart = lineStarts[lineIndex + 1];
+    let end = nextStart === undefined ? text.length : nextStart - 1;
+    if (end > start && text[end - 1] === '\r') end -= 1;
+    const first = firstNonWhitespace[lineIndex] ?? end;
+    if (first >= end) continue;
+    const line = text.slice(start, end);
+    const marker =
+      /^([ \t]*)(?:(\d{1,9})([.)])|([-*+]))([ \t]+)(?:\[[ xX]\][ \t]+)?/.exec(
+        line,
+      );
+    if (marker) {
+      const indent = indentationColumns(marker[1] ?? '');
+      const digits = marker[2];
+      const markerKind = digits === undefined ? 'unordered' : 'ordered';
+      const delimiter = marker[3] ?? marker[4] ?? '';
+      const markerWidth = (digits?.length ?? 1) + 1;
+      const contentIndent = indentationColumns(
+        marker[5] ?? '',
+        indent + markerWidth,
+      );
+      while (stack.length > 0 && (stack.at(-1)?.indent ?? -1) > indent) {
+        stack.pop();
+      }
+      let current = stack.at(-1);
+      if (
+        current?.indent === indent &&
+        (current.kind !== markerKind || current.marker !== delimiter)
+      ) {
+        stack.pop();
+        current = stack.at(-1);
+      }
+      if (markerKind === 'ordered') {
+        const ordinal =
+          current?.indent === indent && current.kind === 'ordered'
+            ? current.nextOrdinal
+            : Number(digits);
+        if (current?.indent === indent && current.kind === 'ordered') {
+          current.nextOrdinal = ordinal + 1;
+          current.contentIndent = contentIndent;
+        } else {
+          stack.push({
+            indent,
+            kind: 'ordered',
+            marker: delimiter,
+            nextOrdinal: ordinal + 1,
+            contentIndent,
+          });
+        }
+        ordinals[lineIndex] = ordinal;
+      } else {
+        if (current?.indent === indent && current.kind === 'unordered') {
+          current.contentIndent = contentIndent;
+        } else {
+          stack.push({
+            indent,
+            kind: 'unordered',
+            marker: delimiter,
+            nextOrdinal: 0,
+            contentIndent,
+          });
+        }
+        ordinals[lineIndex] = null;
+      }
+      continue;
+    }
+    const lineIndent = indentationColumns(text.slice(start, first));
+    const previousLineIsBlank =
+      lineIndex > 0 && lineKinds[lineIndex - 1] === 'blank';
+    const isHeading =
+      lineKinds[lineIndex] === 'heading' || lineKinds[lineIndex] === 'setext';
+    if (previousLineIsBlank || isHeading) {
+      while (
+        stack.length > 0 &&
+        lineIndent < (stack.at(-1)?.contentIndent ?? 0)
+      ) {
+        stack.pop();
+      }
+    }
+  }
+  return ordinals;
+}
 function createUserActorStepBodyBoundaryIndex(
   body,
   codeRanges,
@@ -1498,7 +1589,18 @@ function createUserActorStepBodyBoundaryIndex(
             : 'other',
     );
   }
-  return { text, lineStarts, firstNonWhitespace, lineKinds };
+  return {
+    text,
+    lineStarts,
+    firstNonWhitespace,
+    lineKinds,
+    orderedListOrdinals: buildOrderedUserStepListOrdinals(
+      text,
+      lineStarts,
+      firstNonWhitespace,
+      lineKinds,
+    ),
+  };
 }
 function lineIndexAtOffset(lineStarts, offset) {
   let low = 0;
@@ -1535,12 +1637,7 @@ function hasUserActorStepBodyBoundary(index, offset) {
 }
 function numberedUserStepListItemOrdinal(index, offset) {
   const lineIndex = lineIndexAtOffset(index.lineStarts, offset);
-  const lineStart = index.lineStarts[lineIndex] ?? 0;
-  const prefixLength = offset - lineStart;
-  if (prefixLength > 40) return null;
-  const prefix = index.text.slice(lineStart, offset);
-  const match = /^[ \t]*(\d{1,9})[.)][ \t]+(?:\[[ xX]\][ \t]+)?$/i.exec(prefix);
-  return match ? Number(match[1]) : null;
+  return index.orderedListOrdinals[lineIndex] ?? null;
 }
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =

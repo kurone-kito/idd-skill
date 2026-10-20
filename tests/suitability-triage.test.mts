@@ -10177,6 +10177,30 @@ test('trust safety recognizes plural agent assignments and numbered target lists
   }
 });
 
+test('trust safety uses the rendered ordinal of ordered-list assignments -- #4577', () => {
+  for (const body of [
+    'The coding agent must perform step 2.\n\n1. Prepare the environment.\n1. Run this step by the user.',
+    'The coding agent must perform step 8.\n\n7. Prepare the environment.\n1. Run this step by the user.',
+    'The coding agent must perform step 2.\n\n1. Prepare the environment.\n   - Check the prerequisites.\n1. Run this step by the user.',
+    'The coding agent must perform step 2.\n\n1. Prepare the environment.\nA lazy continuation stays in the same list item.\n1. Run this step by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+
+  const separateLists = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must perform step 2.\n\n1. Prepare the environment.\n\nSeparate prose ends that list.\n\n1. Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(separateLists.pass, true);
+});
+
 test('trust safety keeps unrelated agent work separate across paragraphs -- #4577', () => {
   const result = checkTrustSafety({
     issue: {
