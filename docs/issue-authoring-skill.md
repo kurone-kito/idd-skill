@@ -2880,6 +2880,7 @@ Required content:
 - `## Background`
 - `## Proposed change`
 - `## Acceptance criteria`
+- `## Candidate files`
 - an autopilot-suitability footer at the end of the body (visible line +
   `<!-- idd-skill-autopilot-suitability: N -->` marker)
 - an optional effort footer next to it (visible line +
@@ -2889,7 +2890,6 @@ Required content:
 
 Optional content:
 
-- `## Candidate files`
 - `Blocked by #NNN`
 - `<!-- idd-skill-blocked-by: <roadmap-id> -->` when a separate roadmap
   must close first
@@ -2899,6 +2899,9 @@ Validation expectations:
 
 - the issue is referenced from its parent roadmap task list
 - acceptance criteria are locally verifiable
+- the required `## Candidate files` section lists the files the child is
+  expected to touch and supplies input to A4's
+  `discover-shared-file-overlap` check
 - any dependency marker is resolvable, intentionally chosen, and
   justified
 - the issue can be claimed independently without absorbing sibling work
