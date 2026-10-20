@@ -10700,6 +10700,86 @@ test('trust safety carries colon-introduced agent assignments into list items --
   assert.equal(unrelatedAssignment.pass, true);
 });
 
+test('trust safety keeps a colon-introduced agent assignment across its full list -- #4562', () => {
+  for (const body of [
+    'The coding agent is responsible for:\n\n- Prepare the environment.\n- Run this step by the user.',
+    'The coding agent is responsible for:\n\n1. Prepare the environment.\n2. Run this step by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+
+  const separateList = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent is responsible for:\n\n- Prepare the environment.\n\nThis prose ends the list.\n\n- Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(separateList.pass, true);
+});
+
+test('trust safety recognizes hash-prefixed numbered step assignments -- #4562', () => {
+  for (const [assignment, userStep] of [
+    [
+      'The coding agent must perform step #2.',
+      '1. Prepare the environment.\n2. Run this step by the user.',
+    ],
+    [
+      'The coding agent must perform steps #1 and #2.',
+      '1. Run this step by the user.',
+    ],
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body: `${assignment}\n\n${userStep}` },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
+});
+
+test('trust safety recognizes descriptive and owner phrasing for agent step assignments -- #4562', () => {
+  for (const assignment of [
+    'The coding agent is responsible for the special manual verification step.',
+    'The coding agent is the owner of this step.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
+});
+
+test('trust safety recognizes long colon-introduced agent assignments -- #4562', () => {
+  const leadIn = `The coding agent ${'continues to be '.repeat(8)}is responsible for:`;
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${leadIn}\n\n- Run this step by the user.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety carries agent task headings into nested manual checks -- #4562', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Coding agent tasks\n\n### Manual verification\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('trust safety recognizes possessive agent responsibility assignments -- Codex review #4328240569', () => {
   for (const possessive of ["agent's", 'agent’s']) {
     const assignedToAgent = checkTrustSafety({

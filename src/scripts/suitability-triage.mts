@@ -1064,19 +1064,19 @@ const USER_ACTOR_STEP_AGENT_SUBJECT = new RegExp(
 // Keep the target tied to a step/check or an explicitly referenced list;
 // unrelated implementation tasks must not veto a separate manual check.
 const USER_ACTOR_STEP_ASSIGNED_TARGET =
-  /\b(?:(?:(?:this|that)(?:\s+(?:exact|same|specific|particular))?|these|those)\s+(?:steps?|checks?|checklists?|lists?|items?)|the\s+(?:(?:exact|same|specific|particular)\s+)?(?:steps?|checks?|checklists?|lists?|items?)|all\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:every|each)\s+(?:step|check|checklist|list|item)|(?:the\s+)?following\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:the\s+(?:exact|same|specific|particular)\s+)?instructions?\s+(?:below|above|that\s+follow|which\s+follow))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
+  /\b(?:(?:(?:this|that)(?:\s+(?:exact|same|specific|particular))?|these|those)\s+(?:steps?|checks?|checklists?|lists?|items?)|the\s+(?:(?:exact|same|specific|particular)\s+)?(?:[a-z][\w-]*\s+){0,3}(?:steps?|checks?|checklists?|lists?|items?)|all\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:every|each)\s+(?:step|check|checklist|list|item)|(?:the\s+)?following\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:the\s+(?:exact|same|specific|particular)\s+)?instructions?\s+(?:below|above|that\s+follow|which\s+follow))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
 // A numbered assignment is scoped to the matching numbered checklist item
 // and object kind. Keep it separate from the broad target pattern.
 const USER_ACTOR_STEP_NUMBERED_TARGET =
-  /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?)\s+(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
+  /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?)\s+#?\s*(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)#?\s*\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
-  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|belongs?\s+to|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)?|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complete(?:s|d|ing)?|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|handle(?:s|d|ing)?|manage(?:s|d|ing)?)\b/i;
+  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|owner|ownership|belongs?\s+to|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)?|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complete(?:s|d|ing)?|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|handle(?:s|d|ing)?|manage(?:s|d|ing)?)\b/i;
 const USER_ACTOR_STEP_FORWARD_ASSIGNMENT_INTRODUCER = new RegExp(
-  String.raw`^\s*${USER_ACTOR_STEP_AGENT.source}[^.!?;:]{0,80}\b(?:(?:is|are|was|were|remains?)\s+(?:responsible\s+for|accountable\s+for|assigned\s+to|tasked\s+with|delegated\s+to|directed\s+to))\s*:\s*$`,
+  String.raw`^\s*${USER_ACTOR_STEP_AGENT.source}[^.!?;:]*\b(?:(?:is|are|was|were|remains?)\s+(?:responsible\s+for|accountable\s+for|assigned\s+to|tasked\s+with|delegated\s+to|directed\s+to))\s*:\s*$`,
   'i',
 );
 const USER_ACTOR_STEP_TARGET_AGENT_RELATION =
-  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?(?:for|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?(?:responsibility|responsibilities)\s+of|(?:the\s+)?ownership\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|done\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by|completed\s+by|managed\s+by|followed\s+by|carried\s+out\s+by))\s*$/i;
+  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?(?:for|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|done\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by|completed\s+by|managed\s+by|followed\s+by|carried\s+out\s+by))\s*$/i;
 const USER_ACTOR_STEP_PASSIVE_PARTICIPLE =
   /^(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)$/i;
 const USER_ACTOR_STEP_PASSIVE_AUXILIARY =
@@ -1098,7 +1098,7 @@ interface MarkdownHeadingSection {
 }
 
 const USER_ACTOR_STEP_AGENT_HEADING_LABEL =
-  /^\s*(?:the\s+)?(?:coding\s+)?(?:agents?|assistants?|automation|AIs?|you|workers?|bots?|models?|codex|copilots?|claude(?:\s+code)?|gemini(?:\s+cli)?|cursor|cline|opencode|windsurf|devin|grok(?:\s+build)?)\s*$/i;
+  /^\s*(?:the\s+)?(?:coding\s+)?(?:agents?|assistants?|automation|AIs?|you|workers?|bots?|models?|codex|copilots?|claude(?:\s+code)?|gemini(?:\s+cli)?|cursor|cline|opencode|windsurf|devin|grok(?:\s+build)?)(?:\s+(?:tasks?|responsibilities|duties|work))?\s*$/i;
 
 function normalizeMarkdownHeadingLabel(heading: string): string {
   const isAtxHeading = /^ {0,3}#{1,6}[ \t]+/.test(heading);
@@ -1369,15 +1369,36 @@ interface ScopedUserActorStepClause {
   clauseStart: number;
   paragraphContextStart: number | null;
   paragraphSourceStart: number | null;
+  paragraphListId: number | null;
+}
+
+interface PendingUserActorForwardAssignment {
+  text: string;
+  listId: number | null;
+}
+
+function retainForwardAssignmentForList(
+  assignment: PendingUserActorForwardAssignment | null,
+  listId: number | null,
+): PendingUserActorForwardAssignment | null {
+  if (
+    assignment === null ||
+    assignment.listId === null ||
+    assignment.listId !== listId
+  ) {
+    return null;
+  }
+  return assignment;
 }
 
 function splitUserActorStepClauses(
   context: string,
+  listIndex?: UserActorStepBodyBoundaryIndex,
 ): ScopedUserActorStepClause[] {
   const clauses: ScopedUserActorStepClause[] = [];
   const paragraphBoundary =
     /\r?\n[ \t]*\r?\n|\r?\n(?=[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+)/g;
-  let pendingForwardAssignment: string | null = null;
+  let pendingForwardAssignment: PendingUserActorForwardAssignment | null = null;
   let pendingAgentSubject: string | null = null;
   for (const [sectionId, section] of splitMarkdownHeadingSections(
     context,
@@ -1396,6 +1417,7 @@ function splitUserActorStepClauses(
             clauseStart: start,
             paragraphContextStart: null,
             paragraphSourceStart: null,
+            paragraphListId: null,
           }),
         ),
       );
@@ -1417,6 +1439,10 @@ function splitUserActorStepClauses(
     });
     paragraphBoundary.lastIndex = 0;
     for (const { text: paragraph, sourceStart } of paragraphs) {
+      const paragraphListId =
+        listIndex === undefined
+          ? null
+          : userActorStepListId(listIndex, sourceStart);
       if (
         !paragraph.trim() &&
         section.headingContext.length === 0 &&
@@ -1437,15 +1463,38 @@ function splitUserActorStepClauses(
         !USER_ACTOR_STEP_AGENT.test(paragraph)
           ? pendingAgentSubject
           : null;
+      if (
+        pendingForwardAssignment !== null &&
+        pendingForwardAssignment.listId !== null &&
+        paragraphListId !== pendingForwardAssignment.listId
+      ) {
+        pendingForwardAssignment = null;
+      }
+      const inheritedForwardAssignment: PendingUserActorForwardAssignment | null =
+        pendingForwardAssignment;
+      if (
+        inheritedForwardAssignment !== null &&
+        inheritedForwardAssignment.listId === null &&
+        paragraphListId !== null
+      ) {
+        inheritedForwardAssignment.listId = paragraphListId;
+      }
       const prefixParts = [
         ...(agentPrefix === null ? [] : [agentPrefix]),
-        ...(pendingForwardAssignment === null
+        ...(inheritedForwardAssignment === null
           ? []
-          : [pendingForwardAssignment]),
+          : [inheritedForwardAssignment.text]),
       ].filter(Boolean);
       const paragraphContextStart =
         prefixParts.join(' ').length + (prefixParts.length > 0 ? 1 : 0);
-      const contextual = [...prefixParts, paragraph].join(' ');
+      // An ordered-list marker's period is punctuation for Markdown, not a
+      // sentence boundary. Keep the character width unchanged so source
+      // offsets still map back to the original issue body.
+      const clauseParagraph = paragraph.replace(
+        /^([ \t]*\d{1,9})\.(?=[ \t]+)/,
+        '$1)',
+      );
+      const contextual = [...prefixParts, clauseParagraph].join(' ');
       if (!paragraph.trim()) continue;
       clauses.push(
         ...splitSentenceAndSemicolonClauses(contextual).map(
@@ -1456,10 +1505,14 @@ function splitUserActorStepClauses(
             clauseStart,
             paragraphContextStart,
             paragraphSourceStart: sourceStart,
+            paragraphListId,
           }),
         ),
       );
-      pendingForwardAssignment = null;
+      pendingForwardAssignment = retainForwardAssignmentForList(
+        inheritedForwardAssignment,
+        paragraphListId,
+      );
       const agentSubject =
         agentPrefix !== null ? `${agentPrefix} ${paragraph}` : paragraph;
       pendingAgentSubject = null;
@@ -1468,7 +1521,10 @@ function splitUserActorStepClauses(
         paragraphHasForwardAssignment &&
         !USER_ACTOR_STEP_NEGATION_CUE.test(agentSubject)
       ) {
-        pendingForwardAssignment = agentSubject;
+        pendingForwardAssignment = {
+          text: agentSubject,
+          listId: paragraphListId,
+        };
       } else if (
         pendingForwardAssignment === null &&
         USER_ACTOR_STEP_AGENT.test(paragraph) &&
@@ -1863,7 +1919,7 @@ function analyzeAgentAssignmentsToSteps(
     allTargetKinds: new Map(),
     numberedTargetRanges: new Map(),
   };
-  for (const scopedClause of splitUserActorStepClauses(context)) {
+  for (const scopedClause of splitUserActorStepClauses(context, listIndex)) {
     const { clause, sectionId } = scopedClause;
     const targetPattern = new RegExp(
       USER_ACTOR_STEP_ASSIGNED_TARGET.source,
@@ -2006,9 +2062,11 @@ function analyzeAgentAssignmentsToSteps(
             scopedClause.paragraphContextStart
           : null;
       const listId =
-        listIndex === undefined || bodyTargetOffset === null
-          ? null
-          : numberedUserStepListId(listIndex, bodyTargetOffset);
+        bodyTargetOffset === null
+          ? scopedClause.paragraphListId
+          : listIndex === undefined
+            ? null
+            : userActorStepListId(listIndex, bodyTargetOffset);
       if (targetKind === null) {
         analysis.allTargets = true;
       } else if (numberedRanges === null) {
@@ -2103,7 +2161,7 @@ interface UserActorStepListFrame {
   marker: string;
   nextOrdinal: number;
   contentIndent: number;
-  listId: number | null;
+  listId: number;
 }
 
 interface UserActorStepOrderedListIndex {
@@ -2181,8 +2239,13 @@ function buildOrderedUserStepListOrdinals(
         ordinals[lineIndex] = ordinal;
         listIds[lineIndex] = listId;
       } else {
-        if (current?.indent === indent && current.kind === 'unordered') {
-          current.contentIndent = contentIndent;
+        const continuingList =
+          current?.indent === indent && current.kind === 'unordered'
+            ? current
+            : null;
+        const listId = continuingList?.listId ?? nextListId++;
+        if (continuingList !== null) {
+          continuingList.contentIndent = contentIndent;
         } else {
           stack.push({
             indent,
@@ -2190,11 +2253,11 @@ function buildOrderedUserStepListOrdinals(
             marker: delimiter,
             nextOrdinal: 0,
             contentIndent,
-            listId: null,
+            listId,
           });
         }
         ordinals[lineIndex] = null;
-        listIds[lineIndex] = null;
+        listIds[lineIndex] = listId;
       }
       continue;
     }
@@ -2211,6 +2274,14 @@ function buildOrderedUserStepListOrdinals(
       ) {
         stack.pop();
       }
+    }
+    const currentList = stack.at(-1);
+    if (
+      !isHeading &&
+      currentList !== undefined &&
+      lineIndent >= currentList.contentIndent
+    ) {
+      listIds[lineIndex] = currentList.listId;
     }
   }
 
@@ -2350,7 +2421,7 @@ function numberedUserStepListItemOrdinal(
   return index.orderedListOrdinals[lineIndex] ?? null;
 }
 
-function numberedUserStepListId(
+function userActorStepListId(
   index: UserActorStepBodyBoundaryIndex,
   offset: number,
 ): number | null {
@@ -4127,7 +4198,7 @@ function findUnsafeExecutionDirectiveMatch(
         bodyBoundaryIndex,
         verbBodyStart,
       );
-      const userStepListId = numberedUserStepListId(
+      const userStepListId = userActorStepListId(
         bodyBoundaryIndex,
         verbBodyStart,
       );
