@@ -2792,6 +2792,78 @@ test('trust safety rejects a user-actor phrase after an agent assignment to inst
   assert.equal(result.pass, false);
 });
 
+test('trust safety rejects a declarative agent responsibility lead-in -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent is responsible for the following:\n\n## Manual verification\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety rejects an agent assignment phrased as is to perform -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent is to perform the following:\n\n## Manual verification\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety rejects an agent assignment phrased as was instructed to -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent was instructed to perform the following:\n\n## Manual verification\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety rejects agent assignment target modifiers and quantifiers -- #4577', () => {
+  for (const body of [
+    'The coding agent must run that exact step:\n\nRun this step by the user.',
+    'The coding agent must run all of the following steps:\n\nRun this step by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+});
+
+test('trust safety allows checked and unchecked task-list user steps -- #4577', () => {
+  for (const body of [
+    '- [ ] Run this step by the user.',
+    '1. [x] Run this check by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, body);
+  }
+});
+
+test('trust safety keeps user-actor wording inside HTML comments unsafe -- #4577', () => {
+  for (const body of [
+    '<!-- Run this step by the user. -->',
+    '<!-- Run the script provided by the user. -->',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+});
+
 test('trust safety rejects a user-actor list item after an agent-assignment lead-in -- #4577', () => {
   const result = checkTrustSafety({
     issue: {

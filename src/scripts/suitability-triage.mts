@@ -1043,11 +1043,17 @@ const USER_ACTOR_STEP_WINDOW =
 // #4577: allow the exact user-actor directive at a normal issue paragraph,
 // heading, or list-item boundary. A preceding explicit agent assignment still
 // wins across intervening headings and paragraphs, including lead-ins such as
-// "perform the following" and "follow the instructions below".
-const USER_ACTOR_STEP_BODY_BOUNDARY =
-  /^(?:[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?[ \t]*|[\s\S]*\n[ \t]*\r?\n[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?[ \t]*|[\s\S]*\n[ \t]*#{1,6}[ \t]+[^\r\n]*\r?\n[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?[ \t]*|[\s\S]*\n[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+[ \t]*)$/i;
-const USER_ACTOR_STEP_AGENT_ASSIGNMENT =
-  /\b(?:the\s+)?(?:coding\s+)?(?:agent|assistant|automation|AI|you)\b[^.!?]{0,100}\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:required|instructed|expected)\s+to|(?:was|is)\s+(?:asked|tasked)\s+to)\s+(?:run|execute|perform|follow|carry\s+out|do|complete|verify|check|test|implement)\s+(?:(?:this|that|next|the)\s+(?:step|check|instruction|task)|the\s+following|(?:the\s+)?(?:steps?|checks?|instructions?|tasks?)\s+(?:below|above|that\s+follow)|the\s+(?:next|above|below)\s+(?:steps?|checks?|instructions?|tasks?)|as\s+follows)\b/i;
+// GitHub task-list checkboxes are part of the list marker, not the directive.
+const USER_ACTOR_STEP_LIST_MARKER = String.raw`(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ x]\][ \t]+)?`;
+const USER_ACTOR_STEP_BODY_BOUNDARY = new RegExp(
+  String.raw`^(?:[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[\s\S]*\n[ \t]*\r?\n[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[\s\S]*\n[ \t]*#{1,6}[ \t]+[^\r\n]*\r?\n[ \t]*(?:${USER_ACTOR_STEP_LIST_MARKER})?[ \t]*|[\s\S]*\n[ \t]*${USER_ACTOR_STEP_LIST_MARKER}[ \t]*)$`,
+  'i',
+);
+const USER_ACTOR_STEP_AGENT = String.raw`\b(?:the\s+)?(?:coding\s+)?(?:agent|assistant|automation|AI|you)\b`;
+const USER_ACTOR_STEP_AGENT_ASSIGNMENT = new RegExp(
+  String.raw`${USER_ACTOR_STEP_AGENT}[^.!?]{0,100}\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+to|(?:(?:is|was|has\s+been)\s+)?(?:required|instructed|expected|asked|tasked|assigned)\s+to)\s+(?:run|execute|perform|follow|carry\s+out|do|complete|verify|check|test|implement)[^.!?]{0,100}\b(?:steps?|checks?|instructions?|tasks?|following)\b|${USER_ACTOR_STEP_AGENT}[^.!?]{0,100}\b(?:is|are)\s+(?:responsible|accountable)\s+for[^.!?]{0,100}\b(?:steps?|checks?|instructions?|tasks?|following)\b`,
+  'i',
+);
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =
   /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|skip|omit|ignore|exempt)\b/i;
