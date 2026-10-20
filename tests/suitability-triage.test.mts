@@ -10410,3 +10410,80 @@ test('trust safety scans many user-step directives without changing their bounda
   } as Context);
   assert.equal(result.pass, false);
 });
+
+test('trust safety carries an agent subject across an omitted coordinated predicate -- Codex review #4327146635', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must inspect the logs, but must perform this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety treats a pre-target AI model mention as an object -- Codex review #4327146649', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The user verifies the AI model in this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety scopes numbered assignments to their heading section -- Codex review #4327146660', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Implementation\n\nThe coding agent must perform step 2.\n\n## Manual verification\n\n1. Prepare the environment.\n2. Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety scopes unnumbered assignment checks to the target kind -- Copilot review #5587836826', () => {
+  const unrelatedKind = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must perform step 1.\n\nRun this check by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(unrelatedKind.pass, true);
+
+  const matchingKind = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must perform step 1.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(matchingKind.pass, false);
+});
+
+test('trust safety honors an explicit user actor after unrelated agent work -- #4562', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent should implement the feature, but run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety does not let the user actor phrase hide supplied content -- #4562', () => {
+  for (const body of [
+    'Run this step by the user with the attached script.',
+    'Run this check by the user using the script provided by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+});

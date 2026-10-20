@@ -1056,7 +1056,7 @@ const USER_ACTOR_STEP_OTHER_ACTOR =
 const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT =
   /^\s+(?:(?:the)\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
 const USER_ACTOR_STEP_AGENT_SUBJECT = new RegExp(
-  String.raw`^\s+${USER_ACTOR_STEP_AGENT.source}`,
+  String.raw`^\s*${USER_ACTOR_STEP_AGENT.source}`,
   'i',
 );
 // #4577: bare "following" is a target only when it introduces an assignment;
@@ -1349,18 +1349,31 @@ function splitSentenceAndSemicolonClauses(section: string): string[] {
   return clauses;
 }
 
-function splitUserActorStepClauses(context: string): string[] {
-  const clauses: string[] = [];
+interface ScopedUserActorStepClause {
+  clause: string;
+  sectionId: number;
+}
+
+function splitUserActorStepClauses(
+  context: string,
+): ScopedUserActorStepClause[] {
+  const clauses: ScopedUserActorStepClause[] = [];
   const paragraphBoundary = /\r?\n[ \t]*\r?\n/g;
   let pendingForwardAssignment: string | null = null;
   let pendingAgentSubject: string | null = null;
-  for (const section of splitMarkdownHeadingSections(context)) {
+  for (const [sectionId, section] of splitMarkdownHeadingSections(
+    context,
+  ).entries()) {
     const headingAssignments = new Set(section.headingContext);
     if (section.headingAssignment !== null) {
       headingAssignments.add(section.headingAssignment);
     }
     for (const headingAssignment of headingAssignments) {
-      clauses.push(...splitSentenceAndSemicolonClauses(headingAssignment));
+      clauses.push(
+        ...splitSentenceAndSemicolonClauses(headingAssignment).map(
+          (clause) => ({ clause, sectionId }),
+        ),
+      );
     }
     const paragraphs: string[] = [];
     let start = 0;
@@ -1402,7 +1415,12 @@ function splitUserActorStepClauses(context: string): string[] {
         .filter(Boolean)
         .join(' ');
       if (!paragraph.trim()) continue;
-      clauses.push(...splitSentenceAndSemicolonClauses(contextual));
+      clauses.push(
+        ...splitSentenceAndSemicolonClauses(contextual).map((clause) => ({
+          clause,
+          sectionId,
+        })),
+      );
       pendingForwardAssignment = null;
       const agentSubject =
         agentPrefix !== null ? `${agentPrefix} ${paragraph}` : paragraph;
@@ -1464,6 +1482,7 @@ interface AssignmentSegment {
   text: string;
   hasAgent: boolean;
   agentMentions: { start: number; end: number }[];
+  otherActorMentions: { start: number; end: number }[];
   hasOtherActor: boolean;
   hasAgentBefore: boolean;
   cues: AssignmentCue[];
@@ -1517,12 +1536,14 @@ function createAssignmentSegment(
     }
     cuePrefixMaxIndex.push(maxCueIndex);
   }
-  const actorAssignmentText = text.replace(
-    /\bthis\s+(?:step|check)\s+by\s+the\s+user\b/gi,
-    ' ',
-  );
   const agentMentions = [
     ...text.matchAll(new RegExp(USER_ACTOR_STEP_AGENT.source, 'gi')),
+  ].map((match) => ({
+    start: match.index ?? 0,
+    end: (match.index ?? 0) + (match[0]?.length ?? 0),
+  }));
+  const otherActorMentions = [
+    ...text.matchAll(new RegExp(USER_ACTOR_STEP_OTHER_ACTOR.source, 'gi')),
   ].map((match) => ({
     start: match.index ?? 0,
     end: (match.index ?? 0) + (match[0]?.length ?? 0),
@@ -1533,7 +1554,8 @@ function createAssignmentSegment(
     text,
     hasAgent: !negatedAgentMention && USER_ACTOR_STEP_AGENT.test(text),
     agentMentions,
-    hasOtherActor: USER_ACTOR_STEP_OTHER_ACTOR.test(actorAssignmentText),
+    otherActorMentions,
+    hasOtherActor: USER_ACTOR_STEP_OTHER_ACTOR.test(text),
     hasAgentBefore,
     cues,
     cuePrefixMaxIndex,
@@ -1545,9 +1567,15 @@ function hasAgentActorForTarget(
   segment: AssignmentSegment,
   targetStart: number,
   targetEnd: number,
+  cue: AssignmentCue | null,
 ): boolean {
   return segment.agentMentions.some((agent) => {
-    if (agent.start < targetEnd) return true;
+    if (agent.start < targetEnd) {
+      if (cue === null || agent.end > cue.start) return false;
+      return !segment.otherActorMentions.some(
+        (actor) => actor.start >= agent.end && actor.start < cue.start,
+      );
+    }
     const targetToAgent = segment.text.slice(targetEnd, agent.start);
     if (USER_ACTOR_STEP_TARGET_AGENT_RELATION.test(targetToAgent)) {
       return true;
@@ -1558,6 +1586,21 @@ function hasAgentActorForTarget(
       /^\s+to\s*$/i.test(targetToAgent)
     );
   });
+}
+
+function hasUnambiguousAgentSubject(segment: AssignmentSegment): boolean {
+  const firstAgent = segment.agentMentions[0];
+  const firstPredicate = new RegExp(
+    USER_ACTOR_STEP_ASSIGNMENT_CUE.source,
+    'i',
+  ).exec(segment.text);
+  return (
+    segment.hasAgent &&
+    USER_ACTOR_STEP_AGENT_SUBJECT.test(segment.text) &&
+    firstAgent !== undefined &&
+    firstPredicate !== null &&
+    firstPredicate.index >= firstAgent.end
+  );
 }
 
 function assignmentSegmentHasAgentAssignmentRole(
@@ -1586,7 +1629,11 @@ function assignmentSegmentHasAgentAssignmentRole(
   return targets.some((target) => {
     const targetStart = target.index ?? 0;
     const targetEnd = targetStart + (target[0]?.length ?? 0);
-    return hasAgentActorForTarget(segment, targetStart, targetEnd);
+    const cue = findNearestAssignmentCue(segment, targetStart, targetEnd);
+    return (
+      cue !== null &&
+      hasAgentActorForTarget(segment, targetStart, targetEnd, cue)
+    );
   });
 }
 
@@ -1722,12 +1769,13 @@ function hasNumberedTargetRange(
 // separate Markdown code and HTML comments into clause boundaries.
 function analyzeAgentAssignmentsToSteps(
   context: string,
+  scopeMode: 'global' | 'section' = 'section',
 ): UserActorStepAssignmentAnalysis {
   const analysis: UserActorStepAssignmentAnalysis = {
     allTargets: false,
     numberedTargetRanges: new Map(),
   };
-  for (const clause of splitUserActorStepClauses(context)) {
+  for (const { clause, sectionId } of splitUserActorStepClauses(context)) {
     const targetPattern = new RegExp(
       USER_ACTOR_STEP_ASSIGNED_TARGET.source,
       'gi',
@@ -1776,7 +1824,9 @@ function analyzeAgentAssignmentsToSteps(
         negatedAgentMention,
       );
       segments.push(segment);
-      hasAgentBefore ||= assignmentSegmentHasAgentAssignmentRole(segment);
+      hasAgentBefore ||=
+        assignmentSegmentHasAgentAssignmentRole(segment) ||
+        hasUnambiguousAgentSubject(segment);
       segmentStart = contrast.end;
       negatedAgentMention = contrast.text.startsWith(',');
     }
@@ -1823,10 +1873,16 @@ function analyzeAgentAssignmentsToSteps(
       if (assignmentSegment === undefined) continue;
       const localTargetStart = targetIndex - assignmentSegment.start;
       const localTargetEnd = targetEnd - assignmentSegment.start;
+      const cue = findNearestAssignmentCue(
+        assignmentSegment,
+        localTargetStart,
+        localTargetEnd,
+      );
       const localAgent = hasAgentActorForTarget(
         assignmentSegment,
         localTargetStart,
         localTargetEnd,
+        cue,
       );
       const hasInheritedAgent =
         assignmentSegment.hasAgentBefore &&
@@ -1835,11 +1891,6 @@ function analyzeAgentAssignmentsToSteps(
       if (!localAgent && !hasInheritedAgent) {
         continue;
       }
-      const cue = findNearestAssignmentCue(
-        assignmentSegment,
-        localTargetStart,
-        localTargetEnd,
-      );
       if (
         cue === null ||
         assignmentIsNegated(
@@ -1856,9 +1907,10 @@ function analyzeAgentAssignmentsToSteps(
       } else if (numberedRanges === null) {
         analysis.allTargets = true;
       } else {
-        const prior = analysis.numberedTargetRanges.get(targetKind) ?? [];
+        const scopeKey = `${scopeMode === 'global' ? '*' : sectionId}:${targetKind}`;
+        const prior = analysis.numberedTargetRanges.get(scopeKey) ?? [];
         analysis.numberedTargetRanges.set(
-          targetKind,
+          scopeKey,
           prior.concat(numberedRanges),
         );
       }
@@ -1877,17 +1929,23 @@ function hasAgentAssignmentForUserStep(
   analysis: UserActorStepAssignmentAnalysis,
   ordinal: number | null,
   targetKind: string,
+  targetSectionId: number | null,
 ): boolean {
+  const rangeSets = [
+    analysis.numberedTargetRanges.get(`*:${targetKind}`),
+    ...(targetSectionId === null
+      ? []
+      : [
+          analysis.numberedTargetRanges.get(`${targetSectionId}:${targetKind}`),
+        ]),
+  ].filter((ranges): ranges is { start: number; end: number }[] =>
+    Array.isArray(ranges),
+  );
   return (
     analysis.allTargets ||
     (ordinal === null
-      ? [...analysis.numberedTargetRanges.values()].some(
-          (ranges) => ranges.length > 0,
-        )
-      : hasNumberedTargetRange(
-          analysis.numberedTargetRanges.get(targetKind) ?? [],
-          ordinal,
-        ))
+      ? rangeSets.some((ranges) => ranges.length > 0)
+      : rangeSets.some((ranges) => hasNumberedTargetRange(ranges, ordinal)))
   );
 }
 
@@ -1897,6 +1955,11 @@ interface UserActorStepBodyBoundaryIndex {
   firstNonWhitespace: number[];
   lineKinds: ('blank' | 'heading' | 'setext' | 'other')[];
   orderedListOrdinals: (number | null)[];
+  headingSectionRanges: {
+    start: number;
+    end: number;
+    sectionId: number;
+  }[];
   bareAgentActorRanges: { start: number; end: number }[];
 }
 
@@ -2057,6 +2120,7 @@ function createUserActorStepBodyBoundaryIndex(
             : 'other',
     );
   }
+  const headingSections = splitMarkdownHeadingSections(text);
   return {
     text,
     lineStarts,
@@ -2068,7 +2132,12 @@ function createUserActorStepBodyBoundaryIndex(
       firstNonWhitespace,
       lineKinds,
     ),
-    bareAgentActorRanges: splitMarkdownHeadingSections(text)
+    headingSectionRanges: headingSections.map((section, sectionId) => ({
+      start: section.bodyStart,
+      end: section.bodyEnd,
+      sectionId,
+    })),
+    bareAgentActorRanges: headingSections
       .filter(({ bareAgentActorContext }) => bareAgentActorContext)
       .map(({ bodyStart, bodyEnd }) => ({ start: bodyStart, end: bodyEnd })),
   };
@@ -2095,7 +2164,7 @@ function hasUserActorStepBodyBoundary(
 ): boolean {
   const coordinatedPrefix = index.text.slice(Math.max(0, offset - 80), offset);
   if (
-    /(?:,\s*(?:(?:and\s+)?(?:then|next|now|afterwards?)\s+|and\s+)?|\band\s+(?:(?:then|next|now|afterwards?)\s+)?|\b(?:then|next|now|afterwards?)\s+)$/i.test(
+    /(?:,\s*(?:(?:(?:and|but)\s+)?(?:then|next|now|afterwards?)\s+|(?:and|but)\s+)?|\b(?:and|but)\s+(?:(?:then|next|now|afterwards?)\s+)?|\b(?:then|next|now|afterwards?)\s+)$/i.test(
       coordinatedPrefix,
     )
   ) {
@@ -2129,6 +2198,23 @@ function numberedUserStepListItemOrdinal(
 ): number | null {
   const lineIndex = lineIndexAtOffset(index.lineStarts, offset);
   return index.orderedListOrdinals[lineIndex] ?? null;
+}
+
+function headingSectionIdAtOffset(
+  index: UserActorStepBodyBoundaryIndex,
+  offset: number,
+): number | null {
+  const ranges = index.headingSectionRanges;
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const range = ranges[middle];
+    if (range !== undefined && range.start <= offset) low = middle + 1;
+    else high = middle;
+  }
+  const range = low > 0 ? ranges[low - 1] : undefined;
+  return range !== undefined && offset < range.end ? range.sectionId : null;
 }
 
 function hasBareAgentActorHeadingContext(
@@ -3834,6 +3920,7 @@ function findUnsafeExecutionDirectiveMatch(
   // adversarial issue bodies cost O(directives × body length).
   const titleAssignmentAnalysis = analyzeAgentAssignmentsToSteps(
     titleAssignmentContext,
+    'global',
   );
   const bodyAssignmentAnalysis = analyzeAgentAssignmentsToSteps(
     bodyAssignmentContext,
@@ -3880,6 +3967,10 @@ function findUnsafeExecutionDirectiveMatch(
         bodyBoundaryIndex,
         verbBodyStart,
       );
+      const userStepSectionId = headingSectionIdAtOffset(
+        bodyBoundaryIndex,
+        verbBodyStart,
+      );
       const userActorStepDirective =
         verbText.toLowerCase() === 'run' &&
         window.length < UNSAFE_DIRECTIVE_WINDOW_CHARS &&
@@ -3891,11 +3982,13 @@ function findUnsafeExecutionDirectiveMatch(
           titleAssignmentAnalysis,
           userStepOrdinal,
           userStepKind,
+          userStepSectionId,
         ) &&
         !hasAgentAssignmentForUserStep(
           bodyAssignmentAnalysis,
           userStepOrdinal,
           userStepKind,
+          userStepSectionId,
         ) &&
         !hasBareAgentActorHeadingContext(bodyBoundaryIndex, verbBodyStart);
       // #3073 round 4-6: the repository-owned-validation exception is now
