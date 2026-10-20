@@ -2675,7 +2675,7 @@ test('trust safety allows a step assigned to the user -- #4562', () => {
   const result = checkTrustSafety({
     issue: {
       ...BASE_ISSUE,
-      body: `${BASE_ISSUE.body}\n\nRun this step by the user.`,
+      body: 'Run this step by the user.',
     },
     trustSafetyAmbiguous: false,
   } as Context);
@@ -2686,7 +2686,7 @@ test('trust safety allows a check assigned to the user -- #4562', () => {
   const result = checkTrustSafety({
     issue: {
       ...BASE_ISSUE,
-      body: `${BASE_ISSUE.body}\n\nRun this check by the user.`,
+      body: 'Run this check by the user.',
     },
     trustSafetyAmbiguous: false,
   } as Context);
@@ -2720,6 +2720,17 @@ test('trust safety rejects the user-actor phrase when the sentence assigns execu
     issue: {
       ...BASE_ISSUE,
       body: `${BASE_ISSUE.body}\n\nThe coding agent must run this step by the user.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety rejects a user-actor phrase after an agent-assignment lead-in -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must perform the following:\n\nRun this step by the user.',
     },
     trustSafetyAmbiguous: false,
   } as Context);

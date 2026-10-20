@@ -846,11 +846,10 @@ const REPO_OWNED_VALIDATION_SENTENCE_START =
 // objects; keep every other supplied-content target on the unsafe path.
 const USER_ACTOR_STEP_WINDOW =
   /^\s*this\s+(?:step|check)\s+by\s+the\s+user\s*$/i;
-// #4577: an exact post-verb actor phrase cannot override preceding text
-// that assigns the step to the agent or gives it untrusted provenance. Keep
-// the allowance at the body's start or a new paragraph, like the
-// repository-owned validation exception above.
-const USER_ACTOR_STEP_SENTENCE_START = /(?:^|\n[ \t]*\r?\n\s*)$/i;
+// #4577: a paragraph break cannot establish who owns the instruction; its
+// previous paragraph may assign execution to the agent. Trust the actor
+// phrase only when it starts the issue body, before any other context.
+const USER_ACTOR_STEP_BODY_START = /^\s*$/i;
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =
   /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|skip|omit|ignore|exempt)\b/i;
@@ -2471,9 +2470,7 @@ function findUnsafeExecutionDirectiveMatch(
         window.length < UNSAFE_DIRECTIVE_WINDOW_CHARS &&
         USER_ACTOR_STEP_WINDOW.test(window) &&
         verbStart >= bodyOffset &&
-        USER_ACTOR_STEP_SENTENCE_START.test(
-          corpus.slice(bodyOffset, verbStart),
-        );
+        USER_ACTOR_STEP_BODY_START.test(corpus.slice(bodyOffset, verbStart));
       // #3073 round 4-6: the repository-owned-validation exception is now
       // a single fully anchored positive signature (see the constants'
       // shared comment above) -- the whole window must match the literal
