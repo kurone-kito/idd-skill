@@ -887,24 +887,55 @@ const USER_ACTOR_STEP_NEGATION_CUE =
   /\b(?:(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b/i;
 const USER_ACTOR_STEP_AGENT_HEADING_LABEL =
   /^\s*(?:the\s+)?(?:coding\s+)?(?:agents?|assistants?|automation|AIs?|you|workers?|bots?|models?|codex|copilots?|claude(?:\s+code)?|gemini(?:\s+cli)?|cursor|cline|opencode|windsurf|devin|grok(?:\s+build)?)\s*$/i;
-function isBareAgentActorHeading(heading) {
+function normalizeMarkdownHeadingLabel(heading) {
+  const isAtxHeading = /^ {0,3}#{1,6}[ \t]+/.test(heading);
   const label = heading.replace(/^ {0,3}#{1,6}[ \t]+/, '');
+  return (isAtxHeading ? label.replace(/[ \t]+#+[ \t]*$/, '') : label).trim();
+}
+function headingStartsWithAgentActor(heading) {
+  const label = normalizeMarkdownHeadingLabel(heading);
+  return new RegExp(`^\\s*${USER_ACTOR_STEP_AGENT.source}`, 'i').test(label);
+}
+function isBareAgentActorHeading(heading) {
+  const label = normalizeMarkdownHeadingLabel(heading);
   return USER_ACTOR_STEP_AGENT_HEADING_LABEL.test(label);
 }
 function assignmentHeadingContext(heading) {
+  const label = normalizeMarkdownHeadingLabel(heading);
   const numberedTargetPattern = new RegExp(
     USER_ACTOR_STEP_NUMBERED_TARGET.source,
     'i',
   );
-  const numbered = numberedTargetPattern.exec(heading);
+  const numbered = numberedTargetPattern.exec(label);
   const assignedTarget = new RegExp(
     USER_ACTOR_STEP_ASSIGNED_TARGET.source,
     'i',
-  ).exec(heading)?.[0];
-  const genericTargetMatch = /\b(?:steps?|checks?)\b/i.exec(heading);
+  ).exec(label)?.[0];
+  const genericTargetMatch = /\b(?:steps?|checks?)\b/i.exec(label);
   const genericTarget = genericTargetMatch?.[0];
+  const targetMatch =
+    numbered ??
+    new RegExp(USER_ACTOR_STEP_ASSIGNED_TARGET.source, 'i').exec(label) ??
+    genericTargetMatch;
+  const targetStart = targetMatch?.index ?? -1;
+  const targetEnd = targetStart + (targetMatch?.[0].length ?? 0);
+  const agentActorInTargetRole =
+    targetMatch !== null &&
+    [...label.matchAll(new RegExp(USER_ACTOR_STEP_AGENT.source, 'gi'))].some(
+      (agent) => {
+        const agentStart = agent.index ?? 0;
+        if (agentStart < targetEnd) return false;
+        const targetToAgent = label.slice(targetEnd, agentStart);
+        const explicitAssignmentRelation =
+          USER_ACTOR_STEP_TARGET_AGENT_RELATION.test(targetToAgent) &&
+          !/^\s+(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?for\s*$/i.test(
+            targetToAgent,
+          );
+        return explicitAssignmentRelation || /^\s+by\s*$/i.test(targetToAgent);
+      },
+    );
   if (
-    !USER_ACTOR_STEP_AGENT.test(heading) ||
+    (!headingStartsWithAgentActor(label) && !agentActorInTargetRole) ||
     (assignedTarget === undefined &&
       numbered === null &&
       genericTarget === null)
@@ -914,14 +945,14 @@ function assignmentHeadingContext(heading) {
   const assignmentCue = new RegExp(
     USER_ACTOR_STEP_ASSIGNMENT_CUE.source,
     'i',
-  ).exec(heading);
+  ).exec(label);
   const targetIsTheOnlyCue =
     genericTargetMatch !== null &&
     assignmentCue !== null &&
     genericTargetMatch.index === assignmentCue.index &&
     genericTargetMatch[0].toLowerCase() === assignmentCue[0].toLowerCase();
   if (assignmentCue !== null && !targetIsTheOnlyCue) {
-    return { context: '', assignment: heading };
+    return { context: '', assignment: label };
   }
   const target =
     numbered?.[0] ??
@@ -1018,7 +1049,7 @@ function splitMarkdownHeadingSections(context) {
       .filter(Boolean);
     if (classified?.context) headingContext.push(classified.context);
     if (classified?.assignment) headingContext.push(classified.assignment);
-    if (classified === null && USER_ACTOR_STEP_AGENT.test(heading.text)) {
+    if (classified === null && headingStartsWithAgentActor(heading.text)) {
       headingContext.push(heading.text);
     }
     const bareAgentActorContext =
@@ -1038,7 +1069,7 @@ function splitMarkdownHeadingSections(context) {
       context:
         classified?.context ??
         classified?.assignment ??
-        (USER_ACTOR_STEP_AGENT.test(heading.text) ? heading.text : ''),
+        (headingStartsWithAgentActor(heading.text) ? heading.text : ''),
       bareAgentActor: isBareAgentActorHeading(heading.text),
     });
   }
