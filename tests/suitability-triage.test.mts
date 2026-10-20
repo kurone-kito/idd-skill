@@ -2770,6 +2770,28 @@ test('trust safety rejects a user-actor phrase after an agent-assignment lead-in
   assert.equal(result.pass, false);
 });
 
+test('trust safety rejects a user-actor phrase after an agent assignment across a heading -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must perform the following:\n\n## Manual verification\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety rejects a user-actor phrase after an agent assignment to instructions below -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must follow the instructions below:\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('trust safety rejects a user-actor list item after an agent-assignment lead-in -- #4577', () => {
   const result = checkTrustSafety({
     issue: {
