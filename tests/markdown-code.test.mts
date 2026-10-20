@@ -6,6 +6,7 @@ import {
   findFencedCodeRanges,
   findHtmlBlockRanges,
   findHtmlCommentRanges,
+  findInlineCodeRanges,
   findInlineCodeSpans,
   findMarkdownCodeRanges,
   getMarkdownCodeRange,
@@ -1623,6 +1624,20 @@ test('maskMarkdownForScan does not treat a backslash-escaped backtick pair as a 
   assert.equal(maskMarkdownForScan(body), body);
 });
 
+test('findInlineCodeRanges treats backslashes before a closer as code content', () => {
+  const text = '\\' + '`' + '`foo- bar' + '\\' + '`';
+  assert.deepEqual(findInlineCodeRanges(text, 0, text.length), [
+    { start: 2, end: text.length },
+  ]);
+});
+
+test('findInlineCodeRanges keeps the unescaped suffix of an escaped run as a delimiter', () => {
+  const text = '\\' + '`' + '`foo`';
+  assert.deepEqual(findInlineCodeRanges(text, 0, text.length), [
+    { start: 2, end: 7 },
+  ]);
+});
+
 test('maskMarkdownForScan masks a double-backtick code span', () => {
   const body = 'see ``code #1`` end';
   assert.equal(maskMarkdownForScan(body), 'see             end');
@@ -2400,6 +2415,39 @@ test('findInlineCodeSpans matches the pre-#3705 pattern on seeded random strings
 // this file alone before suspecting a regression.
 const INLINE_CODE_SPAN_LINEAR_CEILING_MS = 2000;
 const INLINE_CODE_SPAN_LARGE_RUN = 100_000;
+
+test('findInlineCodeRanges stays linear on distinct unmatched runs across nested quote lines (#4563)', () => {
+  for (const size of [100, 1000]) {
+    const text = Array.from(
+      { length: size },
+      (_, index) => `> > x${'`'.repeat(index + 1)}y`,
+    ).join('\n');
+    const start = performance.now();
+    const ranges = findInlineCodeRanges(text, 0, text.length);
+    const elapsedMs = performance.now() - start;
+    assert.ok(
+      elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
+      `findInlineCodeRanges took ${Math.round(elapsedMs)} ms for ${size} distinct unmatched runs`,
+    );
+    assert.deepEqual(ranges, []);
+  }
+});
+
+test('findInlineCodeRanges stays linear on matched spans across quote lines (#4563)', () => {
+  const count = 1000;
+  const text = Array.from(
+    { length: count },
+    (_, index) => `> \`code-${index}\``,
+  ).join('\n');
+  const start = performance.now();
+  const ranges = findInlineCodeRanges(text, 0, text.length);
+  const elapsedMs = performance.now() - start;
+  assert.ok(
+    elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
+    `findInlineCodeRanges took ${Math.round(elapsedMs)} ms for ${count} matched spans`,
+  );
+  assert.equal(ranges.length, count);
+});
 
 function assertStripLinear(
   label: string,

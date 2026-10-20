@@ -29,6 +29,336 @@ test('flags a dot mid-token line break', () => {
   assert.equal(findCorruptingCodeSpanWraps('see `foo.\nbar` here').length, 1);
 });
 
+test('flags both reproduced literal-space splits with their source context', () => {
+  const first = findCorruptingCodeSpanWraps(
+    'Run `idd- claim.instructions.md`.',
+  );
+  assert.deepEqual(first, [
+    {
+      line: 1,
+      before: 'idd-',
+      after: 'claim.instructions.m',
+      separator: 'literal-space',
+    },
+  ]);
+
+  const second = findCorruptingCodeSpanWraps(
+    'Run `resume-claim- routing --assert`.',
+  );
+  assert.deepEqual(second, [
+    {
+      line: 1,
+      before: 'resume-claim-',
+      after: 'routing --assert',
+      separator: 'literal-space',
+    },
+  ]);
+});
+
+test('flags literal spaces and tabs after every token delimiter', () => {
+  for (const delimiter of ['-', '_', '/', '.']) {
+    for (const [whitespace, separator] of [
+      [' ', 'literal-space'],
+      ['\t', 'literal-tab'],
+    ] as const) {
+      const violations = findCorruptingCodeSpanWraps(
+        `see \`foo${delimiter}${whitespace}bar\` here`,
+      );
+      assert.deepEqual(
+        violations,
+        [
+          {
+            line: 1,
+            before: `foo${delimiter}`,
+            after: 'bar',
+            separator,
+          },
+        ],
+        `${JSON.stringify(whitespace)} after ${delimiter}`,
+      );
+    }
+  }
+});
+
+test('reports the source line containing a literal-space split', () => {
+  const violations = findCorruptingCodeSpanWraps(
+    ['first line', 'see `foo- bar` here'].join('\n'),
+  );
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].line, 2);
+});
+
+test('does not flag the three current sentence-punctuation examples', () => {
+  const sentencePunctuationExamples = [
+    [
+      'examples/minimal-run/claim-comment.md',
+      '`copilot-cli-abc12345: issue claim — IDD automation marker. Do not edit.`',
+    ],
+    [
+      'examples/minimal-run/heartbeat.md',
+      '`copilot-cli-abc12345: issue claim — IDD automation marker. Do not edit.`',
+    ],
+    [
+      'docs/harness-orchestrated-execution-investigation.md',
+      '`_{agent-id}: issue claim — IDD automation marker. Do not edit._`',
+    ],
+  ] as const;
+
+  for (const [source, span] of sentencePunctuationExamples) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], source);
+  }
+});
+
+test('does not flag lowercase text after a standalone numbered step', () => {
+  for (const span of ['`1. first step`', '`2. continue here`']) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
+});
+
+test('does not flag common abbreviations before lowercase prose', () => {
+  for (const span of [
+    '`Use e.g. this option`',
+    '`(e.g. this option)`',
+    '`Use i.e. that option`',
+    '`Use etc. in the next step`',
+    '`Compare vs. another case`',
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
+});
+
+test('does not flag common title abbreviations before names', () => {
+  for (const span of [
+    '`See Dr. Smith`',
+    '`Contact Prof. Nguyen`',
+    '`Ask Mr. Lee`',
+    '`Visit St. Louis`',
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
+});
+
+test('still flags dotted identifiers whose suffix resembles an abbreviation', () => {
+  for (const [span, before, after] of [
+    ['`Namespace.e.g. type`', 'Namespace.e.g.', 'type'],
+    ['`path/e.g. result`', 'path/e.g.', 'result'],
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [
+      {
+        line: 1,
+        before,
+        after,
+        separator: 'literal-space',
+      },
+    ]);
+  }
+});
+
+test('flags uppercase dotted-token continuations', () => {
+  for (const span of [
+    '`README. MD`',
+    '`config. JSON`',
+    '`Namespace. Type`',
+    '`Namespace1. Type`',
+  ]) {
+    const [before, after] = span.slice(1, -1).split('. ');
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [
+      {
+        line: 1,
+        before: `${before}.`,
+        after,
+        separator: 'literal-space',
+      },
+    ]);
+  }
+});
+
+test('flags lowercase dotted prefixes before capitalized identifiers', () => {
+  for (const [span, after] of [
+    ['`com.example. MyClass`', 'MyClass'],
+    ['`com.example. MyClass extends Base`', 'MyClass extends Base'],
+  ]) {
+    assert.deepEqual(
+      findCorruptingCodeSpanWraps(span),
+      [
+        {
+          line: 1,
+          before: 'com.example.',
+          after,
+          separator: 'literal-space',
+        },
+      ],
+      span,
+    );
+  }
+});
+
+test('does not flag a sentence after a dotted name', () => {
+  for (const span of [
+    '`Open example.com. Then continue`',
+    '`Visit example.com. GitHub Actions are available.`',
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
+});
+
+test('does not flag sentence periods before prose in multi-tick code examples', () => {
+  assert.deepEqual(
+    findCorruptingCodeSpanWraps(
+      [
+        '``limit. Its `slots` value``',
+        '``3. If `slots` is zero``',
+        '``without B1. Record a `running` task``',
+        '`` `Run the command. Verify the output.` ``',
+        '`foo. Hello`',
+        '`foo. Hello, world`',
+        '`foo. Hello!`',
+        '`foo. Hello-world`',
+        "`foo. It's`",
+        '`Run the command. However, stop.`',
+        '`Run the command. SSH connects securely`',
+        '`foo. Please check`',
+        '`foo. Next step`',
+        '`foo. Note this`',
+        '`POSIX. On Windows, use`',
+        '`Command Prompt. Those executables`',
+        '`package CLI. From a checkout`',
+        '`ExampleType. Hello, world`',
+        '`ExampleType. Hello!`',
+      ].join('\n'),
+    ),
+    [],
+  );
+});
+
+test('does not flag legitimate option delimiters, comments, ellipses, or words', () => {
+  const spans = [
+    '`-- option`',
+    '`text -- option`',
+    '`. Add`',
+    '`<!-- comment opener -->`',
+    '`// comment opener`',
+    '`value;// comment opener`',
+    '`value... continuation`',
+    '`git rebase -i`',
+    '`--option value`',
+    '`ordinary multiword code span`',
+  ];
+
+  assert.deepEqual(findCorruptingCodeSpanWraps(spans.join('\n')), []);
+});
+
+test('flags a whitespace split in a URL after its scheme slashes', () => {
+  assert.deepEqual(findCorruptingCodeSpanWraps('`https:// example.com`'), [
+    {
+      line: 1,
+      before: 'https://',
+      after: 'example.com',
+      separator: 'literal-space',
+    },
+  ]);
+});
+
+test('does not treat a numeric label followed by // as a URI scheme', () => {
+  for (const span of [
+    '`case 1:// comment`',
+    '`case FOO:// note`',
+    '`default:// fall through`',
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
+});
+
+test('does not treat escaped backticks as inline code for literal splits', () => {
+  assert.deepEqual(findCorruptingCodeSpanWraps('Example \\`foo- bar\\`'), []);
+});
+
+test('does not scan inline code examples inside HTML comments', () => {
+  assert.deepEqual(
+    findCorruptingCodeSpanWraps('Intro <!-- example: `foo- bar` --> tail'),
+    [],
+  );
+  assert.deepEqual(
+    findCorruptingCodeSpanWraps(
+      'Intro <!-- example: `foo- bar --> tail `real- code`',
+    ),
+    [
+      {
+        line: 1,
+        before: 'real-',
+        after: 'code',
+        separator: 'literal-space',
+      },
+    ],
+  );
+});
+
+test('still scans a literal comment opener inside an actual inline code span', () => {
+  assert.deepEqual(findCorruptingCodeSpanWraps('`<!-- foo- bar -->`'), [
+    {
+      line: 1,
+      before: '<!-- foo-',
+      after: 'bar -->',
+      separator: 'literal-space',
+    },
+  ]);
+});
+
+test('flags a literal-space split after a delimiter at the start of a span', () => {
+  for (const [span, before, after] of [
+    ['`/ usr/bin`', '/', 'usr/bin'],
+    ['`. gitignore`', '.', 'gitignore'],
+    ['`_ private`', '_', 'private'],
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [
+      {
+        line: 1,
+        before,
+        after,
+        separator: 'literal-space',
+      },
+    ]);
+  }
+  assert.deepEqual(findCorruptingCodeSpanWraps('`- option`'), []);
+});
+
+test('does not scan literal backticks in indented code blocks', () => {
+  const body = [
+    'before text',
+    '',
+    '    const value = `foo- bar`;',
+    '',
+    'after text',
+    'Run `foo- bar` outside the code block.',
+  ].join('\n');
+  assert.deepEqual(findCorruptingCodeSpanWraps(body), [
+    {
+      line: 6,
+      before: 'foo-',
+      after: 'bar',
+      separator: 'literal-space',
+    },
+  ]);
+});
+
+test('does not scan literal backticks in raw HTML blocks', () => {
+  const body = [
+    '<pre>',
+    'const value = `foo- bar`;',
+    '</pre>',
+    '',
+    'Run `foo- bar` outside the HTML block.',
+  ].join('\n');
+  assert.deepEqual(findCorruptingCodeSpanWraps(body), [
+    {
+      line: 5,
+      before: 'foo-',
+      after: 'bar',
+      separator: 'literal-space',
+    },
+  ]);
+});
+
 test('does not flag a break at a real word boundary (space before the break)', () => {
   assert.deepEqual(findCorruptingCodeSpanWraps('see `foo bar\nbaz` here'), []);
 });
@@ -127,6 +457,14 @@ test('finds every corrupting break when a span crosses more than one line', () =
   assert.deepEqual(
     violations.map((v) => v.line),
     [1, 2],
+  );
+});
+
+test('returns literal-space and line-break findings in document order', () => {
+  const violations = findCorruptingCodeSpanWraps('`foo- bar_\nbaz`');
+  assert.deepEqual(
+    violations.map((violation) => violation.separator ?? 'line-break'),
+    ['literal-space', 'line-break'],
   );
 });
 
@@ -400,4 +738,18 @@ test('findCorruptingCodeSpanWraps stays linear on many unclosed runs each follow
     `findCorruptingCodeSpanWraps took ${Math.round(elapsedMs)} ms for 25,000 unclosed runs`,
   );
   assert.deepEqual(violations, []);
+});
+
+test('findCorruptingCodeSpanWraps stays linear on distinct unmatched backtick runs before a literal split', () => {
+  for (const size of [100, 1000]) {
+    const text = `${Array.from({ length: size }, (_, index) => `${'`'.repeat(index + 1)}x`).join('')}- x`;
+    const start = performance.now();
+    const violations = findCorruptingCodeSpanWraps(text);
+    const elapsedMs = performance.now() - start;
+    assert.ok(
+      elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
+      `findCorruptingCodeSpanWraps took ${Math.round(elapsedMs)} ms for ${size} distinct unmatched runs`,
+    );
+    assert.deepEqual(violations, []);
+  }
 });
