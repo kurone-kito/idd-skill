@@ -3096,14 +3096,19 @@ test('trust safety binds a while-contrast assignment to its explicit actor -- #4
 });
 
 test('trust safety binds an and-joined step assignment to its explicit actor -- #4577', () => {
-  const result = checkTrustSafety({
-    issue: {
-      ...BASE_ISSUE,
-      body: 'The coding agent implements the feature and the user performs this step.\n\nRun this step by the user.',
-    },
-    trustSafetyAmbiguous: false,
-  } as Context);
-  assert.equal(result.pass, true);
+  for (const assignment of [
+    'The coding agent implements the feature and the user performs this step.',
+    'The user performs this step and the coding agent implements the feature.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, assignment);
+  }
 });
 
 test('trust safety recognizes named coding agents in explicit step assignments -- #4577', () => {

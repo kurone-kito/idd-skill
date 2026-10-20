@@ -1054,6 +1054,10 @@ const USER_ACTOR_STEP_OTHER_ACTOR =
   /\b(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
 const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT =
   /^\s+(?:(?:the)\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
+const USER_ACTOR_STEP_AGENT_SUBJECT = new RegExp(
+  String.raw`^\s+${USER_ACTOR_STEP_AGENT.source}`,
+  'i',
+);
 // #4577: bare "following" is a target only when it introduces an assignment;
 // phrases such as "the following behavior" are not step assignments.
 // Keep the target tied to a step/check or an explicitly referenced list;
@@ -1304,13 +1308,16 @@ function analyzeAgentAssignmentsToSteps(
     const contrastPattern = /\b(?:but|while|whereas|and)\b/gi;
     const contrastPositions = [...clause.matchAll(contrastPattern)]
       .map((match) => ({ index: match.index ?? 0, text: match[0] ?? '' }))
-      .filter(
-        ({ index, text }) =>
-          text.toLowerCase() !== 'and' ||
-          USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT.test(
-            clause.slice(index + text.length),
-          ),
-      );
+      .filter(({ index, text }) => {
+        if (text.toLowerCase() !== 'and') {
+          return true;
+        }
+        const rightSide = clause.slice(index + text.length);
+        return (
+          USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT.test(rightSide) ||
+          USER_ACTOR_STEP_AGENT_SUBJECT.test(rightSide)
+        );
+      });
     const targets = [
       ...[...clause.matchAll(targetPattern)]
         .filter((match) => {
