@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 
 import {
   auditCodeSpanWraps,
+  formatAuditFailureHeader,
+  formatCodeSpanViolation,
   globToRegExp,
   parseMarkdownlintIgnores,
 } from '../src/scripts/audit-code-span-wrap.mts';
@@ -77,6 +79,42 @@ test('globToRegExp matches a single-segment star inside a fixed directory', () =
   const pattern = globToRegExp('fixtures/issue-comments/*.md');
   assert.ok(pattern.test('fixtures/issue-comments/example.md'));
   assert.ok(!pattern.test('fixtures/issue-comments/nested/example.md'));
+});
+
+test('formatCodeSpanViolation reports literal spaces and tabs separately from line breaks', () => {
+  assert.equal(
+    formatCodeSpanViolation('docs/example.md', {
+      line: 4,
+      before: 'idd-',
+      after: 'claim.instructions.md',
+      separator: 'literal-space',
+    }),
+    '- docs/example.md:4  ...idd-|claim.instructions.md... (code span: literal space)',
+  );
+  assert.equal(
+    formatCodeSpanViolation('docs/example.md', {
+      line: 5,
+      before: 'foo_',
+      after: 'bar',
+      separator: 'literal-tab',
+    }),
+    '- docs/example.md:5  ...foo_|bar... (code span: literal tab)',
+  );
+  assert.equal(
+    formatCodeSpanViolation('docs/example.md', {
+      line: 6,
+      before: 'foo-',
+      after: 'bar',
+    }),
+    '- docs/example.md:6  ...foo-|bar... (code span: line break)',
+  );
+});
+
+test('formatAuditFailureHeader does not label prose emphasis findings as code-span splits', () => {
+  assert.equal(
+    formatAuditFailureHeader(),
+    'audit-code-span-wrap: corrupting split(s) found:',
+  );
 });
 
 test("this repository's ignore patterns actually exclude a matching path from the audit scope", () => {

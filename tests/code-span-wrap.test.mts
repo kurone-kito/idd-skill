@@ -29,6 +29,101 @@ test('flags a dot mid-token line break', () => {
   assert.equal(findCorruptingCodeSpanWraps('see `foo.\nbar` here').length, 1);
 });
 
+test('flags both reproduced literal-space splits with their source context', () => {
+  const first = findCorruptingCodeSpanWraps(
+    'Run `idd- claim.instructions.md`.',
+  );
+  assert.deepEqual(first, [
+    {
+      line: 1,
+      before: 'idd-',
+      after: 'claim.instructions.m',
+      separator: 'literal-space',
+    },
+  ]);
+
+  const second = findCorruptingCodeSpanWraps(
+    'Run `resume-claim- routing --assert`.',
+  );
+  assert.deepEqual(second, [
+    {
+      line: 1,
+      before: 'resume-claim-',
+      after: 'routing --assert',
+      separator: 'literal-space',
+    },
+  ]);
+});
+
+test('flags literal spaces and tabs after every token delimiter', () => {
+  for (const delimiter of ['-', '_', '/', '.']) {
+    for (const [whitespace, separator] of [
+      [' ', 'literal-space'],
+      ['\t', 'literal-tab'],
+    ] as const) {
+      const violations = findCorruptingCodeSpanWraps(
+        `see \`foo${delimiter}${whitespace}bar\` here`,
+      );
+      assert.deepEqual(
+        violations,
+        [
+          {
+            line: 1,
+            before: `foo${delimiter}`,
+            after: 'bar',
+            separator,
+          },
+        ],
+        `${JSON.stringify(whitespace)} after ${delimiter}`,
+      );
+    }
+  }
+});
+
+test('reports the source line containing a literal-space split', () => {
+  const violations = findCorruptingCodeSpanWraps(
+    ['first line', 'see `foo- bar` here'].join('\n'),
+  );
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].line, 2);
+});
+
+test('does not flag the three current sentence-punctuation examples', () => {
+  const sentencePunctuationExamples = [
+    [
+      'examples/minimal-run/claim-comment.md',
+      '`copilot-cli-abc12345: issue claim — IDD automation marker. Do not edit.`',
+    ],
+    [
+      'examples/minimal-run/heartbeat.md',
+      '`copilot-cli-abc12345: issue claim — IDD automation marker. Do not edit.`',
+    ],
+    [
+      'docs/harness-orchestrated-execution-investigation.md',
+      '`_{agent-id}: issue claim — IDD automation marker. Do not edit._`',
+    ],
+  ] as const;
+
+  for (const [source, span] of sentencePunctuationExamples) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], source);
+  }
+});
+
+test('does not flag legitimate option delimiters, comments, ellipses, or words', () => {
+  const spans = [
+    '`-- option`',
+    '`text -- option`',
+    '`<!-- comment opener -->`',
+    '`// comment opener`',
+    '`value... continuation`',
+    '`git rebase -i`',
+    '`--option value`',
+    '`ordinary multiword code span`',
+  ];
+
+  assert.deepEqual(findCorruptingCodeSpanWraps(spans.join('\n')), []);
+});
+
 test('does not flag a break at a real word boundary (space before the break)', () => {
   assert.deepEqual(findCorruptingCodeSpanWraps('see `foo bar\nbaz` here'), []);
 });
@@ -127,6 +222,14 @@ test('finds every corrupting break when a span crosses more than one line', () =
   assert.deepEqual(
     violations.map((v) => v.line),
     [1, 2],
+  );
+});
+
+test('returns literal-space and line-break findings in document order', () => {
+  const violations = findCorruptingCodeSpanWraps('`foo- bar_\nbaz`');
+  assert.deepEqual(
+    violations.map((violation) => violation.separator ?? 'line-break'),
+    ['literal-space', 'line-break'],
   );
 });
 

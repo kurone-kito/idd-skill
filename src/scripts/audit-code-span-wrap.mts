@@ -5,9 +5,10 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 //
-// Repository-local authoring guardrail (idd-skill issue #1677): fails when
-// a Markdown file contains an inline code span whose line break falls
-// mid-token (see code-span-wrap.mts for the exact rule and rationale).
+// Repository-local authoring guardrail (idd-skill issues #1677 and #4563):
+// fails when an inline code span contains a mid-token line break or a
+// literal space/tab after a token-continuing delimiter. The latter gap
+// was observed in issue #4315 (see code-span-wrap.mts for the exact rule).
 // Also fails on the prose counterpart (idd-skill issue #2876): a
 // hyphenated compound word whose line break falls immediately after the
 // hyphen inside `**bold**` / `*italic*` emphasis text. This is
@@ -129,6 +130,23 @@ interface FileViolations {
   proseViolations: CodeSpanWrapViolation[];
 }
 
+export function formatCodeSpanViolation(
+  file: string,
+  violation: CodeSpanWrapViolation,
+): string {
+  const cause =
+    violation.separator === 'literal-space'
+      ? 'literal space'
+      : violation.separator === 'literal-tab'
+        ? 'literal tab'
+        : 'line break';
+  return `- ${file}:${violation.line}  ...${violation.before}|${violation.after}... (code span: ${cause})`;
+}
+
+export function formatAuditFailureHeader(): string {
+  return 'audit-code-span-wrap: corrupting split(s) found:';
+}
+
 export interface AuditCodeSpanWrapsResult {
   results: FileViolations[];
   /**
@@ -142,10 +160,11 @@ export interface AuditCodeSpanWrapsResult {
 }
 
 /**
- * Scan every non-ignored Markdown file for corrupting mid-token line
- * breaks: inline code spans ({@link findCorruptingCodeSpanWraps}) and, per
- * idd-skill issue #2876, hyphenated compound words inside `**`/`*`
- * emphasis-marked prose text ({@link findCorruptingProseWraps}).
+ * Scan every non-ignored Markdown file for corrupting mid-token splits:
+ * line breaks or literal spaces/tabs inside inline code spans
+ * ({@link findCorruptingCodeSpanWraps}) and, per idd-skill issue #2876,
+ * line breaks inside `**`/`*` emphasis-marked prose text
+ * ({@link findCorruptingProseWraps}).
  */
 export function auditCodeSpanWraps(): AuditCodeSpanWrapsResult {
   const ignorePatterns = parseMarkdownlintIgnores(
@@ -192,12 +211,10 @@ if (import.meta.main) {
 
   if (results.length > 0) {
     failed = true;
-    console.error('audit-code-span-wrap: mid-token line break(s) found:');
+    console.error(formatAuditFailureHeader());
     for (const { file, codeSpanViolations, proseViolations } of results) {
       for (const violation of codeSpanViolations) {
-        console.error(
-          `- ${file}:${violation.line}  ...${violation.before}|${violation.after}... (code span)`,
-        );
+        console.error(formatCodeSpanViolation(file, violation));
       }
       for (const violation of proseViolations) {
         console.error(
@@ -206,12 +223,12 @@ if (import.meta.main) {
       }
     }
     console.error(
-      '\nCommonMark renders the line break as a literal space, corrupting ' +
-        'the token. Rewrap so the break falls at a word boundary instead, ' +
-        'or move the value into a fenced code block if it is too long to ' +
-        'fit on one line. Check whether the flagged character is itself a ' +
-        'hand-added wrap artifact (not part of the real value) -- if so, ' +
-        'delete it rather than just relocating the line break. See ' +
+      '\nA literal space or tab, or a line break rendered as a space, can ' +
+        'corrupt the token. Remove an unintended literal whitespace or ' +
+        'rewrap at a word boundary; move a value into a fenced code block ' +
+        'if it is too long to fit on one line. Check whether the flagged ' +
+        'character is a hand-added wrap artifact -- if so, delete it ' +
+        'rather than relocating the break. See ' +
         '.github/copilot-instructions.md for the convention.',
     );
   }
@@ -220,6 +237,6 @@ if (import.meta.main) {
     process.exit(1);
   }
   console.log(
-    'audit-code-span-wrap: no mid-token line breaks found (code spans or prose emphasis).',
+    'audit-code-span-wrap: no corrupting splits found (code spans or prose emphasis).',
   );
 }

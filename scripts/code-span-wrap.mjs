@@ -4,16 +4,15 @@
 // named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 //
-// Detects the *corrupting* sub-case of a Markdown-wrapped inline code
-// span (idd-skill issue #1677): CommonMark converts a line ending inside
-// a code span to a single space, so a break that falls mid-token --
-// right after a hyphen, underscore, slash, or dot that the token
-// continues through -- silently inserts a space the author never
-// intended, corrupting the rendered command or identifier so it can no
-// longer be copy-pasted correctly. A break at a real word boundary is
-// readable and is deliberately NOT flagged here (see the issue for why
-// that sub-case is left alone rather than banning multi-line spans
-// outright). Fenced code blocks are excluded first via
+// Detects corrupting splits inside Markdown inline code spans
+// (idd-skill issues #1677 and #4563). CommonMark converts a line ending
+// inside a code span to a single space, while a literal space or tab is
+// already rendered as whitespace. Either can split a token immediately
+// after a hyphen, underscore, slash, or dot that the token continues
+// through. The resulting command or identifier can no longer be copied
+// correctly; the literal-space incident was observed in issue #4315.
+// Breaks and spaces at real word boundaries remain readable and are
+// deliberately NOT flagged here. Fenced code blocks are excluded first via
 // blankFencedCodeBlocks, matching the same fence semantics
 // stripMarkdownCodeRegions already uses elsewhere in this repo.
 //
@@ -47,9 +46,60 @@ import {
 const MID_TOKEN_CONTINUATION = /[-_/.]/;
 const TOKEN_CONTINUING = /[A-Za-z0-9\-_/.]/;
 const CONTEXT_CHARS = 20;
+function lineStartsFor(text) {
+  const starts = [0];
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '\n') {
+      starts.push(index + 1);
+    }
+  }
+  return starts;
+}
+function lineNumberAt(offset, lineStarts) {
+  let low = 0;
+  let high = lineStarts.length;
+  while (low + 1 < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (lineStarts[middle] <= offset) {
+      low = middle;
+    } else {
+      high = middle;
+    }
+  }
+  return low + 1;
+}
+function isStandaloneDoubleDash(inner, secondDashIndex) {
+  if (inner[secondDashIndex - 1] !== '-') {
+    return false;
+  }
+  const firstDashIndex = secondDashIndex - 1;
+  return firstDashIndex === 0 || /\s/.test(inner[firstDashIndex - 1]);
+}
+function isLineCommentOpener(inner, secondSlashIndex) {
+  if (inner[secondSlashIndex - 1] !== '/') {
+    return false;
+  }
+  const firstSlashIndex = secondSlashIndex - 1;
+  return firstSlashIndex === 0 || /\s/.test(inner[firstSlashIndex - 1]);
+}
+function isHtmlCommentOpener(inner, secondDashIndex) {
+  return inner.slice(secondDashIndex - 3, secondDashIndex + 1) === '<!--';
+}
+function isPartOfEllipsis(inner, dotIndex) {
+  let start = dotIndex;
+  let end = dotIndex + 1;
+  while (inner[start - 1] === '.') {
+    start -= 1;
+  }
+  while (inner[end] === '.') {
+    end += 1;
+  }
+  return end - start >= 3;
+}
 /**
- * Find inline code spans whose line break falls mid-token per the rule
- * above. Returns one violation per corrupting break, in document order.
+ * Find inline code spans where a line break or literal horizontal
+ * whitespace splits a token per the rules above. Returns one violation
+ * per corrupting split, in document order.
  */
 export function findCorruptingCodeSpanWraps(text) {
   const normalized = text.replace(/\r\n?/g, '\n');
@@ -59,10 +109,12 @@ export function findCorruptingCodeSpanWraps(text) {
   // no false span can bridge a fenced block. Line counts stay aligned
   // with `normalized` because blanking preserves the number of lines.
   const scanned = blankFencedCodeBlocks(normalized);
+  const lineStarts = lineStartsFor(scanned);
   const violations = [];
   for (const span of findInlineCodeSpans(scanned)) {
     const { inner } = span;
     const innerStart = span.index + span.ticks.length;
+    const spanViolations = [];
     let cursor = 0;
     for (;;) {
       const breakIndex = inner.indexOf('\n', cursor);
@@ -83,19 +135,71 @@ export function findCorruptingCodeSpanWraps(text) {
         nextChar !== undefined &&
         TOKEN_CONTINUING.test(nextChar)
       ) {
-        const breakOffset = innerStart + breakIndex;
-        const line = scanned.slice(0, breakOffset).split('\n').length;
-        violations.push({
-          line,
-          before: inner.slice(
-            Math.max(0, breakIndex - CONTEXT_CHARS),
-            breakIndex,
-          ),
-          after: inner.slice(afterIndex, afterIndex + CONTEXT_CHARS),
+        spanViolations.push({
+          offset: breakIndex,
+          violation: {
+            line: lineNumberAt(innerStart + breakIndex, lineStarts),
+            before: inner.slice(
+              Math.max(0, breakIndex - CONTEXT_CHARS),
+              breakIndex,
+            ),
+            after: inner.slice(afterIndex, afterIndex + CONTEXT_CHARS),
+          },
         });
       }
       cursor = breakIndex + 1;
     }
+    for (
+      let delimiterIndex = 0;
+      delimiterIndex < inner.length;
+      delimiterIndex += 1
+    ) {
+      const delimiter = inner[delimiterIndex];
+      const firstWhitespace = inner[delimiterIndex + 1];
+      if (
+        delimiter === undefined ||
+        !MID_TOKEN_CONTINUATION.test(delimiter) ||
+        (firstWhitespace !== ' ' && firstWhitespace !== '\t')
+      ) {
+        continue;
+      }
+      const previous = inner[delimiterIndex - 1];
+      if (previous === undefined || !TOKEN_CONTINUING.test(previous)) {
+        continue;
+      }
+      let afterIndex = delimiterIndex + 1;
+      while (/\s/.test(inner[afterIndex] ?? '')) {
+        afterIndex += 1;
+      }
+      const next = inner[afterIndex];
+      if (next === undefined || !TOKEN_CONTINUING.test(next)) {
+        continue;
+      }
+      if (
+        (delimiter === '.' && /^[A-Z]/.test(next)) ||
+        (delimiter === '-' &&
+          (isStandaloneDoubleDash(inner, delimiterIndex) ||
+            isHtmlCommentOpener(inner, delimiterIndex))) ||
+        (delimiter === '/' && isLineCommentOpener(inner, delimiterIndex)) ||
+        (delimiter === '.' && isPartOfEllipsis(inner, delimiterIndex))
+      ) {
+        continue;
+      }
+      spanViolations.push({
+        offset: delimiterIndex + 1,
+        violation: {
+          line: lineNumberAt(innerStart + delimiterIndex + 1, lineStarts),
+          before: inner.slice(
+            Math.max(0, delimiterIndex + 1 - CONTEXT_CHARS),
+            delimiterIndex + 1,
+          ),
+          after: inner.slice(afterIndex, afterIndex + CONTEXT_CHARS),
+          separator: firstWhitespace === ' ' ? 'literal-space' : 'literal-tab',
+        },
+      });
+    }
+    spanViolations.sort((left, right) => left.offset - right.offset);
+    violations.push(...spanViolations.map(({ violation }) => violation));
   }
   return violations;
 }
