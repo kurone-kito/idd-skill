@@ -691,6 +691,17 @@ amendments below.
 
 ## Work and self-review
 
+The 2026-10-17 review error reported in
+[issue #4566](https://github.com/kurone-kito/idd-skill/issues/4566)
+concerned a draft carried in
+[issue #4479](https://github.com/kurone-kito/idd-skill/issues/4479): it
+misstated the history of [issue #3838](https://github.com/kurone-kito/idd-skill/issues/3838)
+and omitted [issue #1019](https://github.com/kurone-kito/idd-skill/issues/1019)
+as the source of the high-contention-only overlap scope. Both claims could
+have been checked against their source records before review. The new
+pre-review check requires current-source verification and places support
+in the existing packet, without changing its schema or the review.
+
 ### B1 Step 3 — install-deps silent under-install detection
 
 Two independent fresh-worktree sessions observed `pnpm install

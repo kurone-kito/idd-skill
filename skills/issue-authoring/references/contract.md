@@ -1197,6 +1197,31 @@ interactive cases in Human-dependency isolation follows that section's
 interactive rule instead. Every other uncertain check still uses this
 sentence, and this sentence does not turn those other checks into an ask.
 
+## Factual-claims check
+
+Before the completed-draft adversarial review, verify material factual
+claims that justify a draft's scope or design against current sources.
+This includes repository behavior against current code and documentation,
+issue or pull-request status and prior decisions against live GitHub
+records, and runtime observations under
+[Live-observed claim citation](#live-observed-claim-citation).
+
+Correct, qualify, or remove any such claim the evidence does not support. Put
+supporting file references, GitHub permalinks, or read-only command
+evidence in the review packet's existing `evidence` array. If a claim
+remains unverified and materially affects the proposed scope or rationale,
+route it under [Human-dependency isolation](#human-dependency-isolation)
+and [A4.5 Suitability Gate Alignment](#a45-suitability-gate-alignment): use
+`needs-decision` for an unresolved product, policy, or design choice, and
+`blocked-by-human` when verification waits on a person, credential, asset,
+or outside system.
+This check adds no field to the review packet schema and does not change
+the completed-draft review itself. This responds to the factual-history
+error reported in [issue #4566](https://github.com/kurone-kito/idd-skill/issues/4566)
+for a draft carried in [issue #4479](https://github.com/kurone-kito/idd-skill/issues/4479),
+concerning [issue #3838](https://github.com/kurone-kito/idd-skill/issues/3838)
+and [issue #1019](https://github.com/kurone-kito/idd-skill/issues/1019).
+
 ## Completed-draft adversarial review
 
 This review is distinct from the Intake and Clarification critique.

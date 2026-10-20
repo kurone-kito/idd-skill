@@ -141,6 +141,25 @@ This phase may draft a roadmap issue, sub-issues, or orphan issues as
 appropriate. The remaining sections of this document define the
 normative rules for those outputs.
 
+Before the completed-draft adversarial review, verify material factual
+claims that justify each draft's scope or design against current sources:
+repository behavior against current code and documentation, issue or
+pull-request status and prior decisions against live GitHub records, and
+runtime observations under the existing
+[Live-observed claim citation](#live-observed-claim-citation) rule.
+Correct, qualify, or remove any such unsupported claim, and put supporting file
+references, GitHub permalinks, or read-only command evidence in the
+review packet's existing `evidence` array. Route a materially unresolved
+claim under the existing rules in
+[Human-dependency isolation](#human-dependency-isolation) and
+[A4.5 Suitability Gate Alignment](#alignment-with-a45-suitability-gate):
+use `needs-decision` for unresolved product, policy, or design choices,
+and `blocked-by-human` when verification waits on a person, credential,
+asset, or outside system. This check adds no packet fields. It responds
+to the factual-history error reported in [issue #4566](https://github.com/kurone-kito/idd-skill/issues/4566),
+which concerns [issue #3838](https://github.com/kurone-kito/idd-skill/issues/3838)
+and [issue #1019](https://github.com/kurone-kito/idd-skill/issues/1019).
+
 ## Output readiness model
 
 The skill must score each candidate task on the following axes before it
