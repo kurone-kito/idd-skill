@@ -876,6 +876,10 @@ const USER_ACTOR_STEP_NUMBERED_TARGET =
   /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?)\s+(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
   /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|belongs?\s+to|run(?:s|ning)?|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|complete(?:s|d|ing)?|verif(?:y|ies|ied|ying)|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|handle(?:s|d|ing)?|manage(?:s|d|ing)?)\b/i;
+const USER_ACTOR_STEP_TARGET_AGENT_RELATION =
+  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?(?:for|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?responsibilit(?:y|ies)\s+of|(?:the\s+)?ownership\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:performed|run|executed|checked|tested|verified|implemented|handled)\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by))\s*$/i;
+const USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE =
+  /\b(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?)\b[^.!?;]{0,80}$/i;
 const USER_ACTOR_STEP_NEGATION_CUE =
   /\b(?:(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b/i;
 const USER_ACTOR_STEP_AGENT_HEADING_LABEL =
@@ -1210,17 +1214,38 @@ function createAssignmentSegment(
     /\bthis\s+(?:step|check)\s+by\s+the\s+user\b/gi,
     ' ',
   );
+  const agentMentions = [
+    ...text.matchAll(new RegExp(USER_ACTOR_STEP_AGENT.source, 'gi')),
+  ].map((match) => ({
+    start: match.index ?? 0,
+    end: (match.index ?? 0) + (match[0]?.length ?? 0),
+  }));
   return {
     start,
     end,
     text,
     hasAgent: !negatedAgentMention && USER_ACTOR_STEP_AGENT.test(text),
+    agentMentions,
     hasOtherActor: USER_ACTOR_STEP_OTHER_ACTOR.test(actorAssignmentText),
     hasAgentBefore,
     cues,
     cuePrefixMaxIndex,
     negations,
   };
+}
+function hasAgentActorForTarget(segment, targetStart, targetEnd) {
+  return segment.agentMentions.some((agent) => {
+    if (agent.start < targetEnd) return true;
+    const targetToAgent = segment.text.slice(targetEnd, agent.start);
+    if (USER_ACTOR_STEP_TARGET_AGENT_RELATION.test(targetToAgent)) {
+      return true;
+    }
+    const beforeTarget = segment.text.slice(0, targetStart);
+    return (
+      USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(beforeTarget) &&
+      /^\s+to\s*$/i.test(targetToAgent)
+    );
+  });
 }
 function lowerBoundAssignmentCue(cues, position) {
   let low = 0;
@@ -1422,7 +1447,13 @@ function analyzeAgentAssignmentsToSteps(context) {
       const assignmentSegment =
         segments[Math.min(segmentLow, segments.length - 1)];
       if (assignmentSegment === undefined) continue;
-      const localAgent = assignmentSegment.hasAgent;
+      const localTargetStart = targetIndex - assignmentSegment.start;
+      const localTargetEnd = targetEnd - assignmentSegment.start;
+      const localAgent = hasAgentActorForTarget(
+        assignmentSegment,
+        localTargetStart,
+        localTargetEnd,
+      );
       const hasInheritedAgent =
         assignmentSegment.hasAgentBefore &&
         !localAgent &&
@@ -1430,8 +1461,6 @@ function analyzeAgentAssignmentsToSteps(context) {
       if (!localAgent && !hasInheritedAgent) {
         continue;
       }
-      const localTargetStart = targetIndex - assignmentSegment.start;
-      const localTargetEnd = targetEnd - assignmentSegment.start;
       const cue = findNearestAssignmentCue(
         assignmentSegment,
         localTargetStart,
