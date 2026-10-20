@@ -10507,6 +10507,32 @@ test('trust safety honors an explicit user actor after unrelated agent work -- #
   assert.equal(result.pass, true);
 });
 
+test('trust safety honors explicit user recipients of transferred ownership -- #4562', () => {
+  for (const transfer of [
+    'assigns this step to the user',
+    'delegates this step to the user',
+    'directs this step to the user',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `The coding agent ${transfer}.\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, transfer);
+  }
+
+  const remainsAgentOwned = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent assigns this step to itself.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(remainsAgentOwned.pass, false);
+});
+
 test('trust safety does not let the user actor phrase hide supplied content -- #4562', () => {
   for (const body of [
     'Run this step by the user with the attached script.',
@@ -10658,6 +10684,44 @@ test('trust safety scopes unnumbered assignments to their unordered list -- #456
   assert.equal(sameList.pass, false);
 });
 
+test('trust safety scopes generic item assignments to their section and list -- #4562', () => {
+  const separateSection = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Implementation\n\nThe coding agent must perform all items.\n\n## Manual verification\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(separateSection.pass, true);
+
+  const separateList = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Verification\n\n- The coding agent must perform all items.\n\nA separate list follows.\n\n- Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(separateList.pass, true);
+
+  const sameSection = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Verification\n\nThe coding agent must perform all items.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(sameSection.pass, false);
+
+  const sameList = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Verification\n\n- The coding agent must perform all items.\n- Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(sameList.pass, false);
+});
+
 test('trust safety preserves list identity after masked Markdown ranges -- Copilot review #5589533467', () => {
   const lists =
     '## Verification\n\n1. The coding agent must perform step 2.\n2. Continue the first list.\n\nA separate list follows.\n\n1. Prepare the environment.\n2. Run this step by the user.';
@@ -10760,6 +10824,46 @@ test('trust safety recognizes hash-prefixed numbered step assignments -- #4562',
     } as Context);
     assert.equal(result.pass, false, assignment);
   }
+});
+
+test('trust safety maps numbered item assignments to checklist ordinals -- #4562', () => {
+  const assignedItem = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must perform item 2.\n\n1. Prepare the environment.\n2. Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(assignedItem.pass, false);
+
+  const differentOrdinal = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must perform item 2.\n\n1. Run this step by the user.\n2. Prepare the environment.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(differentOrdinal.pass, true);
+});
+
+test('trust safety bounds the user actor exception to the current sibling item -- #4562', () => {
+  const siblingItem = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '1. Run this step by the user.\n2. Prepare the environment.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(siblingItem.pass, true);
+
+  const nestedItem = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '- Run this step by the user.\n  - Run the attached script.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(nestedItem.pass, false);
 });
 
 test('trust safety recognizes descriptive and owner phrasing for agent step assignments -- #4562', () => {

@@ -871,10 +871,11 @@ const USER_ACTOR_STEP_AGENT_SUBJECT = new RegExp(
 // unrelated implementation tasks must not veto a separate manual check.
 const USER_ACTOR_STEP_ASSIGNED_TARGET =
   /\b(?:(?:(?:this|that)(?:\s+(?:exact|same|specific|particular))?|these|those)\s+(?:steps?|checks?|checklists?|lists?|items?)|the\s+(?:(?:exact|same|specific|particular)\s+)?(?:[a-z][\w-]*\s+){0,3}(?:steps?|checks?|checklists?|lists?|items?)|all\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:every|each)\s+(?:step|check|checklist|list|item)|(?:the\s+)?following\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:the\s+(?:exact|same|specific|particular)\s+)?instructions?\s+(?:below|above|that\s+follow|which\s+follow))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
-// A numbered assignment is scoped to the matching numbered checklist item
-// and object kind. Keep it separate from the broad target pattern.
+// A numbered assignment is scoped to the matching numbered checklist item.
+// Step/check targets keep their object kind; generic item targets apply to
+// either kind while retaining their ordinal and list scope.
 const USER_ACTOR_STEP_NUMBERED_TARGET =
-  /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?)\s+#?\s*(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)#?\s*\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
+  /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?|items?)\s+#?\s*(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)#?\s*\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
   /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|owner|ownership|belongs?\s+to|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)?|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complete(?:s|d|ing)?|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|handle(?:s|d|ing)?|manage(?:s|d|ing)?)\b/i;
 const USER_ACTOR_STEP_FORWARD_ASSIGNMENT_INTRODUCER = new RegExp(
@@ -1385,6 +1386,11 @@ function hasAgentActorForTarget(segment, targetStart, targetEnd, cue) {
   return segment.agentMentions.some((agent) => {
     if (agent.start < targetEnd) {
       if (cue === null) return false;
+      const explicitUserRecipient =
+        USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(
+          segment.text.slice(0, targetStart),
+        ) && /^\s+to\s+(?:the\s+)?user\b/i.test(segment.text.slice(targetEnd));
+      if (explicitUserRecipient) return false;
       if (agent.end > cue.start) {
         return (
           agent.start >= cue.end &&
@@ -1597,7 +1603,6 @@ function analyzeAgentAssignmentsToSteps(
   listIndex,
 ) {
   const analysis = {
-    allTargets: false,
     allTargetKinds: new Map(),
     numberedTargetRanges: new Map(),
   };
@@ -1681,11 +1686,14 @@ function analyzeAgentAssignmentsToSteps(
           targetKind: stepCheckTargetKind(match[0] ?? ''),
           numberedRanges: null,
         })),
-      ...[...clause.matchAll(numberedTargetPattern)].map((match) => ({
-        match,
-        targetKind: (match[1] ?? '').toLowerCase().replace(/s$/, ''),
-        numberedRanges: parseNumberedTargetRanges(match[2] ?? ''),
-      })),
+      ...[...clause.matchAll(numberedTargetPattern)].map((match) => {
+        const matchedKind = (match[1] ?? '').toLowerCase().replace(/s$/, '');
+        return {
+          match,
+          targetKind: matchedKind === 'item' ? '*' : matchedKind,
+          numberedRanges: parseNumberedTargetRanges(match[2] ?? ''),
+        };
+      }),
     ].sort((left, right) => (left.match.index ?? 0) - (right.match.index ?? 0));
     for (const { match: targetMatch, targetKind, numberedRanges } of targets) {
       const targetIndex = targetMatch.index ?? 0;
@@ -1749,9 +1757,7 @@ function analyzeAgentAssignmentsToSteps(
           : listIndex === undefined
             ? null
             : userActorStepListId(listIndex, bodyTargetOffset);
-      if (targetKind === null) {
-        analysis.allTargets = true;
-      } else if (numberedRanges === null) {
+      if (numberedRanges === null) {
         const prior = analysis.allTargetKinds.get(scopeKey) ?? new Set();
         prior.add(listId);
         analysis.allTargetKinds.set(scopeKey, prior);
@@ -1784,6 +1790,13 @@ function hasAgentAssignmentForUserStep(
     '*',
     ...(targetSectionId === null ? [] : [String(targetSectionId)]),
   ];
+  const hasAllTargetAssignment = sectionScopes.some((scope) => {
+    const listIds = analysis.allTargetKinds.get(`${scope}:*`);
+    return (
+      listIds?.has(null) === true ||
+      (targetListId !== null && listIds?.has(targetListId) === true)
+    );
+  });
   const hasUnnumberedAssignment = sectionScopes.some((scope) => {
     const listIds = analysis.allTargetKinds.get(`${scope}:${targetKind}`);
     return (
@@ -1795,25 +1808,45 @@ function hasAgentAssignmentForUserStep(
   const rangeSets = [];
   const globalRanges = analysis.numberedTargetRanges.get(`*:${targetKind}:*`);
   if (globalRanges !== undefined) rangeSets.push(globalRanges);
+  const globalAnyKindRanges = analysis.numberedTargetRanges.get('*:*:*');
+  if (globalAnyKindRanges !== undefined) rangeSets.push(globalAnyKindRanges);
   if (targetSectionId !== null) {
     const sectionPrefix = `${targetSectionId}:${targetKind}:`;
     const sectionWildcard = analysis.numberedTargetRanges.get(
       `${sectionPrefix}*`,
     );
     if (sectionWildcard !== undefined) rangeSets.push(sectionWildcard);
+    const genericSectionPrefix = `${targetSectionId}:*:`;
+    const genericSectionWildcard = analysis.numberedTargetRanges.get(
+      `${genericSectionPrefix}*`,
+    );
+    if (genericSectionWildcard !== undefined) {
+      rangeSets.push(genericSectionWildcard);
+    }
     if (targetListId !== null) {
       const matchingListRanges = analysis.numberedTargetRanges.get(
         `${sectionPrefix}${targetListId}`,
       );
       if (matchingListRanges !== undefined) rangeSets.push(matchingListRanges);
+      const genericMatchingListRanges = analysis.numberedTargetRanges.get(
+        `${genericSectionPrefix}${targetListId}`,
+      );
+      if (genericMatchingListRanges !== undefined) {
+        rangeSets.push(genericMatchingListRanges);
+      }
     } else if (ordinal === null) {
       for (const [key, ranges] of analysis.numberedTargetRanges) {
-        if (key.startsWith(sectionPrefix)) rangeSets.push(ranges);
+        if (
+          key.startsWith(sectionPrefix) ||
+          key.startsWith(genericSectionPrefix)
+        ) {
+          rangeSets.push(ranges);
+        }
       }
     }
   }
   return (
-    analysis.allTargets ||
+    hasAllTargetAssignment ||
     hasUnnumberedAssignment ||
     (ordinal === null
       ? rangeSets.some((ranges) => ranges.length > 0)
@@ -2061,6 +2094,33 @@ function numberedUserStepListItemOrdinal(index, offset) {
 function userActorStepListId(index, offset) {
   const lineIndex = lineIndexAtOffset(index.lineStarts, offset);
   return index.orderedListIds[lineIndex] ?? null;
+}
+function sliceUserActorStepWindowAtSiblingItem(
+  window,
+  index,
+  verbBodyStart,
+  verbLength,
+) {
+  const currentListId = userActorStepListId(index, verbBodyStart);
+  if (currentListId === null) return window;
+  const currentLineIndex = lineIndexAtOffset(index.lineStarts, verbBodyStart);
+  for (
+    let lineIndex = currentLineIndex + 1;
+    lineIndex < index.lineStarts.length;
+    lineIndex += 1
+  ) {
+    if (index.orderedListIds[lineIndex] !== currentListId) continue;
+    const lineStart = index.lineStarts[lineIndex] ?? index.text.length;
+    const nextLineStart = index.lineStarts[lineIndex + 1] ?? index.text.length;
+    const line = index.text.slice(lineStart, nextLineStart);
+    if (!/^[ \t]*(?:\d{1,9}[.)]|[-*+])[ \t]+(?:\[[ xX]\][ \t]+)?/.test(line)) {
+      continue;
+    }
+    const end = lineStart - verbBodyStart - verbLength;
+    if (end < 0 || end > window.length) continue;
+    return window.slice(0, end).replace(/[.!?][ \t\r\n]*$/, '');
+  }
+  return window;
 }
 function headingSectionIdAtOffset(index, offset) {
   const ranges = index.headingSectionRanges;
@@ -3751,10 +3811,16 @@ function findUnsafeExecutionDirectiveMatch(
         bodyBoundaryIndex,
         verbBodyStart,
       );
+      const userActorStepWindow = sliceUserActorStepWindowAtSiblingItem(
+        window,
+        bodyBoundaryIndex,
+        verbBodyStart,
+        verbText.length,
+      );
       const userActorStepDirective =
         verbText.toLowerCase() === 'run' &&
-        window.length < UNSAFE_DIRECTIVE_WINDOW_CHARS &&
-        USER_ACTOR_STEP_WINDOW.test(window) &&
+        userActorStepWindow.length < UNSAFE_DIRECTIVE_WINDOW_CHARS &&
+        USER_ACTOR_STEP_WINDOW.test(userActorStepWindow) &&
         verbStart >= bodyOffset &&
         !verbIsInHtmlComment &&
         hasUserActorStepBodyBoundary(bodyBoundaryIndex, verbBodyStart) &&
