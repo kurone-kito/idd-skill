@@ -3039,21 +3039,24 @@ test('trust safety rejects an imperative agent assignment -- #4577', () => {
 });
 
 test('trust safety recognizes progressive agent actions as assignments -- #4577', () => {
-  for (const assignment of [
-    'The coding agent is performing this step.',
-    'The coding agent is running this check.',
-    'The coding agent is executing this step.',
-    'The coding agent is checking this step.',
-    'The coding agent is verifying this check.',
+  for (const [assignment, directive] of [
+    ['The coding agent is performing this step.', 'Run this step by the user.'],
+    ['The coding agent is running this check.', 'Run this check by the user.'],
+    ['The coding agent is executing this step.', 'Run this step by the user.'],
+    ['The coding agent is checking this step.', 'Run this step by the user.'],
+    [
+      'The coding agent is verifying this check.',
+      'Run this check by the user.',
+    ],
   ]) {
     const result = checkTrustSafety({
       issue: {
         ...BASE_ISSUE,
-        body: `${assignment}\n\nRun this step by the user.`,
+        body: `${assignment}\n\n${directive}`,
       },
       trustSafetyAmbiguous: false,
     } as Context);
-    assert.equal(result.pass, false, assignment);
+    assert.equal(result.pass, false, `${assignment}\n${directive}`);
   }
 
   const unrelatedAgentWork = checkTrustSafety({
@@ -10486,4 +10489,92 @@ test('trust safety does not let the user actor phrase hide supplied content -- #
     } as Context);
     assert.equal(result.pass, false, body);
   }
+});
+
+test('trust safety recognizes passive done-by assignments to the agent -- Codex review #4327424881', () => {
+  for (const assignment of [
+    'This step must be done by the coding agent.',
+    'This step is done by the coding agent.',
+    'This step is to be done by the coding agent.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
+});
+
+test('trust safety does not treat a passive patient as the agent actor -- Codex review #4327424899', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The AI model should be tested in this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety still recognizes the agent as actor in a passive by-phrase -- #4562', () => {
+  const agentActor = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The AI model should be tested by the coding agent in this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(agentActor.pass, false);
+
+  const userActor = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The AI model should be tested by the user in this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(userActor.pass, true);
+});
+
+test('trust safety scopes unnumbered assignments to step or check target kind -- Codex review #4327424891', () => {
+  for (const body of [
+    'The coding agent must perform this step.\n\nRun this check by the user.',
+    'The coding agent must perform the checks.\n\nRun this step by the user.',
+    '## Coding agent checks\n\n## Manual verification\n\nRun this step by the user.',
+  ]) {
+    const unrelatedKind = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(unrelatedKind.pass, true, body);
+  }
+
+  for (const [assignment, directive] of [
+    ['The coding agent must perform this step.', 'Run this step by the user.'],
+    [
+      'The coding agent must perform the checks.',
+      'Run this check by the user.',
+    ],
+  ]) {
+    const matchingKind = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\n${directive}`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(matchingKind.pass, false, `${assignment}\n${directive}`);
+  }
+
+  const matchingHeadingKind = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Coding agent checks\n\n### Manual verification\n\nRun this check by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(matchingHeadingKind.pass, false);
 });

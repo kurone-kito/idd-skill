@@ -876,9 +876,13 @@ const USER_ACTOR_STEP_ASSIGNED_TARGET =
 const USER_ACTOR_STEP_NUMBERED_TARGET =
   /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?)\s+(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
-  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|belongs?\s+to|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|complete(?:s|d|ing)?|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|handle(?:s|d|ing)?|manage(?:s|d|ing)?)\b/i;
+  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|belongs?\s+to|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complete(?:s|d|ing)?|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|handle(?:s|d|ing)?|manage(?:s|d|ing)?)\b/i;
 const USER_ACTOR_STEP_TARGET_AGENT_RELATION =
-  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?(?:for|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?(?:responsibility|responsibilities)\s+of|(?:the\s+)?ownership\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:performed|run|executed|checked|tested|verified|implemented|handled)\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by))\s*$/i;
+  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?(?:for|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?(?:responsibility|responsibilities)\s+of|(?:the\s+)?ownership\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled)\s+by|done\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by))\s*$/i;
+const USER_ACTOR_STEP_PASSIVE_PARTICIPLE =
+  /^(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)$/i;
+const USER_ACTOR_STEP_PASSIVE_AUXILIARY =
+  /\b(?:am|is|are|was|were|be|been|being|get|gets|got|gotten)$/i;
 const USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE =
   /\b(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?)\b[^.!?;]{0,80}$/i;
 const USER_ACTOR_STEP_USER_DIRECTIVE_START =
@@ -1217,6 +1221,10 @@ function separateMarkdownRangesWithClauseBoundaries(text, ranges) {
   }
   return result;
 }
+function stepCheckTargetKind(value) {
+  const match = /\b(steps?|checks?)\b/i.exec(value);
+  return match?.[1]?.toLowerCase().replace(/s$/, '') ?? null;
+}
 function createAssignmentSegment(
   clause,
   start,
@@ -1292,7 +1300,27 @@ function createAssignmentSegment(
 function hasAgentActorForTarget(segment, targetStart, targetEnd, cue) {
   return segment.agentMentions.some((agent) => {
     if (agent.start < targetEnd) {
-      if (cue === null || agent.end > cue.start) return false;
+      if (cue === null) return false;
+      if (agent.end > cue.start) {
+        return (
+          agent.start >= cue.end &&
+          USER_ACTOR_STEP_PASSIVE_PARTICIPLE.test(
+            segment.text.slice(cue.start, cue.end),
+          ) &&
+          USER_ACTOR_STEP_PASSIVE_AUXILIARY.test(
+            segment.text.slice(0, cue.start).trimEnd(),
+          ) &&
+          /^\s+by\s+(?:the\s+)?$/i.test(
+            segment.text.slice(cue.end, agent.start),
+          )
+        );
+      }
+      const cueText = segment.text.slice(cue.start, cue.end);
+      const beforeCue = segment.text.slice(agent.end, cue.start);
+      const passivePatient =
+        USER_ACTOR_STEP_PASSIVE_PARTICIPLE.test(cueText) &&
+        USER_ACTOR_STEP_PASSIVE_AUXILIARY.test(beforeCue.trimEnd());
+      if (passivePatient) return false;
       return !segment.otherActorMentions.some(
         (actor) => actor.start >= agent.end && actor.start < cue.start,
       );
@@ -1461,6 +1489,7 @@ function hasNumberedTargetRange(ranges, ordinal) {
 function analyzeAgentAssignmentsToSteps(context, scopeMode = 'section') {
   const analysis = {
     allTargets: false,
+    allTargetKinds: new Set(),
     numberedTargetRanges: new Map(),
   };
   for (const { clause, sectionId } of splitUserActorStepClauses(context)) {
@@ -1535,7 +1564,7 @@ function analyzeAgentAssignmentsToSteps(context, scopeMode = 'section') {
         })
         .map((match) => ({
           match,
-          targetKind: null,
+          targetKind: stepCheckTargetKind(match[0] ?? ''),
           numberedRanges: null,
         })),
       ...[...clause.matchAll(numberedTargetPattern)].map((match) => ({
@@ -1593,7 +1622,7 @@ function analyzeAgentAssignmentsToSteps(context, scopeMode = 'section') {
       if (targetKind === null) {
         analysis.allTargets = true;
       } else if (numberedRanges === null) {
-        analysis.allTargets = true;
+        analysis.allTargetKinds.add(targetKind);
       } else {
         const scopeKey = `${scopeMode === 'global' ? '*' : sectionId}:${targetKind}`;
         const prior = analysis.numberedTargetRanges.get(scopeKey) ?? [];
@@ -1628,6 +1657,7 @@ function hasAgentAssignmentForUserStep(
   ].filter((ranges) => Array.isArray(ranges));
   return (
     analysis.allTargets ||
+    analysis.allTargetKinds.has(targetKind) ||
     (ordinal === null
       ? rangeSets.some((ranges) => ranges.length > 0)
       : rangeSets.some((ranges) => hasNumberedTargetRange(ranges, ordinal)))
