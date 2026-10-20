@@ -114,7 +114,11 @@ function isLineCommentOpener(inner: string, secondSlashIndex: number): boolean {
     schemeStart -= 1;
   }
   const scheme = inner.slice(schemeStart + 1, colonIndex);
-  return !/^[A-Za-z][A-Za-z0-9+.-]*$/.test(scheme);
+  if (!/^[A-Za-z][A-Za-z0-9+.-]*$/.test(scheme)) {
+    return true;
+  }
+  const beforeScheme = inner.slice(0, schemeStart + 1);
+  return scheme === 'default' || /(?:^|\s)case\s+$/u.test(beforeScheme);
 }
 
 function isSentencePunctuation(
@@ -124,7 +128,7 @@ function isSentencePunctuation(
 ): boolean {
   const previous = inner[delimiterIndex - 1];
   const suffix = inner.slice(afterIndex).replace(/_+$/u, '').trimEnd();
-  const nextWord = /^[A-Z][A-Za-z]*(?=\s|`|$)/u.exec(suffix)?.[0];
+  const nextWord = /^[A-Z][A-Za-z]*(?=[,.!?;:]?(?:\s|`|$))/u.exec(suffix)?.[0];
   if (nextWord === undefined || /^[A-Z]{2,}$/u.test(nextWord)) {
     return false;
   }
@@ -147,13 +151,14 @@ function isSentencePunctuation(
   const previousWord = /[A-Za-z][A-Za-z0-9_-]*$/u.exec(
     inner.slice(0, delimiterIndex),
   )?.[0];
-  const followingProseWord = /^[A-Za-z]/u.test(
-    suffix.slice(nextWord.length).trimStart(),
-  );
+  const followingText = suffix.slice(nextWord.length).trimStart();
+  const followingProseWord =
+    /^[A-Za-z]/u.test(followingText) ||
+    /^[,.!?;:](?:\s|`|$)/u.test(followingText);
   // A title-cased or uppercase prefix followed by a single capitalized token
-  // is more likely a dotted identifier than prose. A further word marks a
-  // sentence continuation, while lowercase prefixes can precede any
-  // capitalized opener (including a one-word sentence such as `foo. Hello`).
+  // is more likely a dotted identifier than prose. A further word or
+  // sentence punctuation after the opener marks prose, while lowercase
+  // prefixes can precede any capitalized opener (including `foo. Hello`).
   if (
     previousWord !== undefined &&
     /[A-Z]/u.test(previousWord) &&

@@ -132,12 +132,17 @@ test('does not flag sentence periods before prose in multi-tick code examples', 
         '``without B1. Record a `running` task``',
         '`` `Run the command. Verify the output.` ``',
         '`foo. Hello`',
+        '`foo. Hello, world`',
+        '`foo. Hello!`',
+        '`Run the command. However, stop.`',
         '`foo. Please check`',
         '`foo. Next step`',
         '`foo. Note this`',
         '`POSIX. On Windows, use`',
         '`Command Prompt. Those executables`',
         '`package CLI. From a checkout`',
+        '`ExampleType. Hello, world`',
+        '`ExampleType. Hello!`',
       ].join('\n'),
     ),
     [],
@@ -173,7 +178,13 @@ test('flags a whitespace split in a URL after its scheme slashes', () => {
 });
 
 test('does not treat a numeric label followed by // as a URI scheme', () => {
-  assert.deepEqual(findCorruptingCodeSpanWraps('`case 1:// comment`'), []);
+  for (const span of [
+    '`case 1:// comment`',
+    '`case FOO:// note`',
+    '`default:// fall through`',
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
 });
 
 test('does not treat escaped backticks as inline code for literal splits', () => {
