@@ -10578,3 +10578,37 @@ test('trust safety scopes unnumbered assignments to step or check target kind --
   } as Context);
   assert.equal(matchingHeadingKind.pass, false);
 });
+
+test('trust safety recognizes completed, managed, followed, and carried-out assignments -- Copilot review #5588505530', () => {
+  for (const [assignment, directive] of [
+    [
+      'This step is completed by the coding agent.',
+      'Run this step by the user.',
+    ],
+    [
+      'This step must be completed by the coding agent.',
+      'Run this step by the user.',
+    ],
+    [
+      'This check is to be managed by the coding agent.',
+      'Run this check by the user.',
+    ],
+    [
+      'This step was followed by the coding agent.',
+      'Run this step by the user.',
+    ],
+    [
+      'This check has been carried out by the coding agent.',
+      'Run this check by the user.',
+    ],
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\n${directive}`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, `${assignment}\n${directive}`);
+  }
+});
