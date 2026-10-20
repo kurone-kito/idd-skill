@@ -15,6 +15,70 @@ Keep one rule in mind: documentation can describe a local decision, but
 phase behavior changes only when the instruction files that enforce that
 behavior change too.
 
+## Annotated Configuration Example
+
+[`.github/idd/config.example.jsonc`](../.github/idd/config.example.jsonc)
+is a commented reference for `.github/idd/config.json`. Its active lines
+are `$schema` and the required settings with the distributed
+recommendations, plus placeholders for the values every repository
+supplies itself: `markerPrefix`, `trustedMarkerActors`, and the four
+`commands` entries. Every other optional setting is commented out with its
+default, or with a note that leaving the key out is the default, and the
+comments describe each accepted value. The
+[policy schema](https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json)
+remains the authority for every key and value.
+
+IDD reads `.github/idd/config.json` as strict JSON, so its helpers need no
+comment-aware parser. No IDD helper reads the example as configuration, and
+IDD does not accept JSONC as configuration: a `config.json` that contains
+comments fails to parse. To use the example:
+
+1. Copy it to a scratch location instead of editing it in place. A later
+   template import either overwrites an edited copy (the `gh api` and
+   `curl` fetch loops) or refuses to run until you pass `--force` or
+   `--hold` (`idd-onboard --import`).
+2. Replace the placeholders, and uncomment only the settings you change.
+   Leave the other keys out: an operator's user-global configuration may
+   supply a key that the repository file leaves out. Inside a
+   commented-out object, each explanation line carries a second `//`, so it
+   stays a comment after you uncomment the object. After you uncomment a
+   whole object, delete each key whose comment says `Default: omitted`
+   unless you mean to set it, before step 3 removes those notes. Its value
+   is not a default, and a value such as `"testCommand": "npm test"` or
+   `"declarationTarget": 1` changes behavior once it is set. When the
+   deleted key was the last one in its object, also delete the comma that
+   ends the line before it.
+3. Delete every comment line. Each comment in the example is a whole line
+   whose first non-blank characters are `//`, so deleting those lines
+   leaves strict JSON:
+
+   ```sh
+   sed '/^[[:space:]]*\/\//d' config.example.jsonc > config.from-example.json
+   ```
+
+   In PowerShell 7 or later, which writes UTF-8 without a byte-order mark
+   through `-Encoding utf8NoBOM` (Windows PowerShell 5.1 has no such
+   encoding, and its default output is not UTF-8):
+
+   ```powershell
+   Get-Content config.example.jsonc |
+     Where-Object { $_ -notmatch '^\s*//' } |
+     Set-Content -Encoding utf8NoBOM config.from-example.json
+   ```
+
+4. Merge the result into `.github/idd/config.json`. Keep the values that
+   onboarding already recorded there, such as the substituted placeholders
+   and `helperRuntime`: an omitted `helperRuntime` means the
+   `instructions-only` profile.
+5. Search the result for `replace-me`, `REPLACE_WITH`, `example-`, and
+   `/absolute/path/to/`. Each placeholder and example value is
+   schema-valid, so `idd-doctor` does not report one left in place. A
+   numeric or plain example value carries no such marker, so step 2 is the
+   check for those. Then run `idd-doctor`, which reports a `config.json`
+   that fails the schema.
+
+These cautions are preventive; no observed incident yet.
+
 ## Customization Surfaces
 
 | Surface                               | Default                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Where to customize                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -91,8 +155,9 @@ distributed IDD workflow a repository imported.
   example a new guardrail, hardening section, or default change — would
   matter to an adopter who re-syncs. Follow semantic-versioning intent: a
   new opt-in capability or hardening is a minor bump; a breaking change
-  to existing defaults is a major bump. Keep the template config and this
-  repository's own `.github/idd/config.json` on the same value. Every
+  to existing defaults is a major bump. Keep the template config, the
+  annotated `config.example.jsonc`, and this repository's own
+  `.github/idd/config.json` on the same value. Every
   `iddVersion` bump also requires a matching `CHANGELOG.md` entry in the
   same pull request, and an annotated `v<iddVersion>` git tag pushed to
   the source repository after the bump PR merges, so adopters can diff
