@@ -22,6 +22,7 @@ import {
   evaluateSuitabilityLocal,
   fetchMergedPrFileOverlapEvidence,
   loadHighContentionFiles,
+  normalizeDuplicateCandidates,
   parseArgs,
   resolveInputMode,
   splitLocalDraftTitleAndBody,
@@ -8047,6 +8048,262 @@ test('checkDuplicateOrSuperseded: a pass carries no tier at all', () => {
   } as Context);
   assert.equal(result.pass, true);
   assert.equal(result.tier, undefined);
+});
+
+// --- #4560: exclude valid draft carriers from title duplicate checks -----
+
+const OBSERVED_DRAFT_TITLE =
+  'chore(policy): enable triageRecord record after the helper fix';
+const DRAFT_CARRIER_BODY = '<!-- idd-skill-draft-carrier: v1 -->';
+
+function issueForDuplicateCheck(title = OBSERVED_DRAFT_TITLE) {
+  return { ...BASE_ISSUE, number: 4461, title };
+}
+
+function draftCarrierCandidate(
+  number: number,
+  title: string,
+  options: {
+    state?: string;
+    labels?: unknown;
+    body?: string;
+    pull_request?: unknown;
+  } = {},
+) {
+  return {
+    number,
+    title,
+    state: options.state ?? 'closed',
+    url: `https://example.com/issues/${number}`,
+    labels: Object.hasOwn(options, 'labels')
+      ? options.labels
+      : [{ name: 'enhancement' }, { name: 'status:authoring-only' }],
+    body: options.body ?? DRAFT_CARRIER_BODY,
+    ...(options.pull_request === undefined
+      ? {}
+      : { pull_request: options.pull_request }),
+  };
+}
+
+function duplicateCheck(
+  candidates: unknown,
+  options: Parameters<typeof evaluateSuitability>[1] = {},
+) {
+  const result = evaluateSuitability(issueForDuplicateCheck(), {
+    duplicateCandidates: candidates,
+    ...options,
+  });
+  const check = result.checks.find(
+    (candidate) => candidate.id === 'duplicate_or_superseded',
+  );
+  assert.ok(check, 'Check 4 result is present');
+  return check;
+}
+
+test('checkDuplicateOrSuperseded: skips valid draft carriers in all title paths and keeps non-carrier matches (#4560)', () => {
+  const nearTitle = `carrier: ${OBSERVED_DRAFT_TITLE}`;
+  const cases: {
+    name: string;
+    candidates: unknown[];
+    options?: Parameters<typeof evaluateSuitability>[1];
+    expected: 'pass' | 'fail';
+    evidence?: string;
+  }[] = [
+    {
+      name: 'observed closed #4414 carrier',
+      candidates: [draftCarrierCandidate(4414, nearTitle)],
+      expected: 'pass',
+    },
+    {
+      name: 'open near-duplicate carrier',
+      candidates: [draftCarrierCandidate(4476, nearTitle, { state: 'open' })],
+      expected: 'pass',
+    },
+    {
+      name: 'exact-title carrier in normal mode',
+      candidates: [draftCarrierCandidate(4477, OBSERVED_DRAFT_TITLE)],
+      expected: 'pass',
+    },
+    {
+      name: 'exact-title carrier in degraded mode',
+      candidates: [draftCarrierCandidate(4478, OBSERVED_DRAFT_TITLE)],
+      options: { highConfidenceCollectionDegraded: true },
+      expected: 'pass',
+    },
+    {
+      name: 'authoring-only label without marker',
+      candidates: [draftCarrierCandidate(4479, nearTitle, { body: '' })],
+      expected: 'fail',
+    },
+    {
+      name: 'marker only inside a fenced code block',
+      candidates: [
+        draftCarrierCandidate(4480, nearTitle, {
+          body: `\`\`\`html\n${DRAFT_CARRIER_BODY}\n\`\`\``,
+        }),
+      ],
+      expected: 'fail',
+    },
+    {
+      name: 'marker without authoring-only label',
+      candidates: [
+        draftCarrierCandidate(4481, nearTitle, {
+          labels: [{ name: 'enhancement' }],
+        }),
+      ],
+      expected: 'fail',
+    },
+    {
+      name: 'pull-request item with label and marker',
+      candidates: [
+        draftCarrierCandidate(4482, nearTitle, {
+          pull_request: { url: 'https://example.com/pull/4482' },
+        }),
+      ],
+      expected: 'fail',
+    },
+    {
+      name: 'later non-carrier still fails after a carrier',
+      candidates: [
+        draftCarrierCandidate(4483, nearTitle),
+        draftCarrierCandidate(4484, nearTitle, {
+          labels: [{ name: 'bug' }],
+          body: '',
+        }),
+      ],
+      expected: 'fail',
+      evidence: 'Near-duplicate found: #4484',
+    },
+    ...(['open', 'closed', 'CLOSED'] as const).map((state, index) => ({
+      name: `non-carrier near-duplicate in ${state} state`,
+      candidates: [
+        draftCarrierCandidate(4485 + index, nearTitle, {
+          state,
+          labels: [{ name: 'bug' }],
+          body: '',
+        }),
+      ],
+      expected: 'fail' as const,
+    })),
+    {
+      name: 'closed exact-title non-carrier in normal mode',
+      candidates: [
+        draftCarrierCandidate(4488, OBSERVED_DRAFT_TITLE, {
+          labels: [{ name: 'bug' }],
+          body: '',
+        }),
+      ],
+      expected: 'fail',
+    },
+    {
+      name: 'closed exact-title non-carrier in degraded mode',
+      candidates: [
+        draftCarrierCandidate(4489, OBSERVED_DRAFT_TITLE, {
+          labels: [{ name: 'bug' }],
+          body: '',
+        }),
+      ],
+      options: { highConfidenceCollectionDegraded: true },
+      expected: 'fail',
+    },
+    ...(['status:authoring', 'authoring-only'] as const).map(
+      (label, index) => ({
+        name: `lookalike label ${label} does not identify a carrier`,
+        candidates: [
+          draftCarrierCandidate(4490 + index, nearTitle, {
+            labels: [{ name: label }],
+          }),
+        ],
+        expected: 'fail' as const,
+      }),
+    ),
+    {
+      name: 'missing labels do not identify a carrier',
+      candidates: [
+        draftCarrierCandidate(4492, nearTitle, { labels: undefined }),
+      ],
+      expected: 'fail',
+    },
+    {
+      name: 'custom policy ignores the default authoring-only label',
+      candidates: [draftCarrierCandidate(4493, nearTitle)],
+      options: { authoringOnlyLabelName: 'triage:authoring-only' },
+      expected: 'fail',
+    },
+    {
+      name: 'custom policy recognizes its configured label',
+      candidates: [
+        draftCarrierCandidate(4494, nearTitle, {
+          labels: [{ name: 'triage:authoring-only' }],
+        }),
+      ],
+      options: { authoringOnlyLabelName: 'triage:authoring-only' },
+      expected: 'pass',
+    },
+    {
+      name: 'configured and candidate label casing is ignored',
+      candidates: [
+        draftCarrierCandidate(4495, nearTitle, {
+          labels: [{ name: ' STATUS:AUTHORING-ONLY ' }],
+        }),
+      ],
+      options: { authoringOnlyLabelName: ' status:authoring-only ' },
+      expected: 'pass',
+    },
+  ];
+
+  for (const scenario of cases) {
+    const check = duplicateCheck(scenario.candidates, scenario.options);
+    assert.equal(check.result, scenario.expected, scenario.name);
+    if (scenario.expected === 'fail') {
+      assert.equal(check.tier, 'weak', scenario.name);
+    }
+    if (scenario.evidence) {
+      assert.match(check.evidence, new RegExp(scenario.evidence));
+    }
+  }
+});
+
+test('normalizeDuplicateCandidates: normalization is idempotent and preserves carrier evidence for Check 4 (#4560)', () => {
+  const nearTitle = `carrier: ${OBSERVED_DRAFT_TITLE}`;
+  const normalizedOnce = normalizeDuplicateCandidates([
+    draftCarrierCandidate(4496, nearTitle),
+    draftCarrierCandidate(4497, nearTitle, {
+      labels: [{ name: 'bug' }],
+      body: '',
+    }),
+    draftCarrierCandidate(4498, nearTitle, {
+      pull_request: { url: 'https://example.com/pull/4498' },
+    }),
+  ]);
+  const normalizedTwice = normalizeDuplicateCandidates(normalizedOnce);
+
+  assert.deepEqual(normalizedTwice, normalizedOnce);
+  assert.deepEqual(
+    normalizedTwice.map((candidate) => candidate.isPullRequest),
+    [false, false, true],
+  );
+  assert.deepEqual(
+    normalizedTwice.map((candidate) => duplicateCheck([candidate]).result),
+    ['pass', 'fail', 'fail'],
+  );
+});
+
+test('runCli: policy authoringOnlyLabelName is passed to evaluateSuitability (#4560)', () => {
+  const source = readFileSync(
+    new URL('../src/scripts/suitability-triage.mts', import.meta.url),
+    'utf8',
+  );
+  const optionsStart = source.indexOf(
+    'const suitabilityOptions: SuitabilityOptions = {',
+  );
+  const optionsEnd = source.indexOf('\n  };', optionsStart);
+  assert.notEqual(optionsStart, -1);
+  assert.notEqual(optionsEnd, -1);
+  assert.match(
+    source.slice(optionsStart, optionsEnd),
+    /authoringOnlyLabelName:\s*labelsPolicy\.authoringOnlyLabelName/,
+  );
 });
 
 test('evaluateSuitability: checks[] threads tier through from the failing check', () => {

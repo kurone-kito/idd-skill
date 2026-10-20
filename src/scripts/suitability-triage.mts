@@ -44,12 +44,13 @@ import {
   indentationColumns,
   type MarkdownCodeRange,
   maskMarkdownCodeRegionsPreservingPositions,
+  maskMarkdownForScan,
 } from './markdown-code.mts';
 import {
   normalizeMarkerPrefix,
   parseAuthoringBucketMarker,
 } from './marker-helpers.mts';
-import { escapeRegex } from './marker-regex.mts';
+import { createMarkerRegex, escapeRegex } from './marker-regex.mts';
 import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
 import {
@@ -191,6 +192,9 @@ interface DuplicateCandidate {
   title: string;
   state: string;
   url: string;
+  labels?: string[];
+  body?: string;
+  isPullRequest?: boolean;
 }
 
 interface Context {
@@ -202,6 +206,8 @@ interface Context {
   blockedByHumanLabelName?: string;
   /** Configured `labels.needsDecisionLabelName` (#1273). */
   needsDecisionLabelName?: string;
+  /** Configured `labels.authoringOnlyLabelName` for draft-carrier detection. */
+  authoringOnlyLabelName?: string;
   /** #2737: configured `markerPrefix`, resolved to `DEFAULT_MARKER_PREFIX`
    * when absent -- read by Check 6 (Autonomy) to detect an
    * `authoring-bucket: blocked-by-human` marker. */
@@ -261,6 +267,7 @@ interface SuitabilityOptions {
   trustSafetyAmbiguous?: unknown;
   blockedByHumanLabelName?: unknown;
   needsDecisionLabelName?: unknown;
+  authoringOnlyLabelName?: unknown;
   /** #2737 */
   markerPrefix?: unknown;
   /** #1484 */
@@ -2792,6 +2799,10 @@ export function evaluateSuitability(
       options.needsDecisionLabelName,
       POLICY_DEFAULTS.labels.needsDecisionLabelName,
     ),
+    authoringOnlyLabelName: normalizeConfiguredLabelName(
+      options.authoringOnlyLabelName,
+      POLICY_DEFAULTS.labels.authoringOnlyLabelName,
+    ),
     markerPrefix: normalizeMarkerPrefix(options.markerPrefix),
     highConfidenceDuplicate: normalizeHighConfidenceDuplicateInput(
       options.highConfidenceDuplicate,
@@ -3447,6 +3458,7 @@ export function checkDuplicateOrSuperseded(context: Context): CheckOutcome {
     const degradedExactMatch = duplicateCandidates.find(
       (candidate) =>
         candidate.number !== issue.number &&
+        !isDraftCarrierCandidate(context, candidate) &&
         normalizeText(candidate.title) === degradedExactTitle,
     );
     if (degradedExactMatch) {
@@ -3485,6 +3497,9 @@ export function checkDuplicateOrSuperseded(context: Context): CheckOutcome {
     if (candidate.number === issue.number) {
       return false;
     }
+    if (isDraftCarrierCandidate(context, candidate)) {
+      return false;
+    }
     return normalizeText(candidate.title) === exactTitle;
   });
   if (duplicate) {
@@ -3500,7 +3515,7 @@ export function checkDuplicateOrSuperseded(context: Context): CheckOutcome {
     if (candidate.number === issue.number) {
       return false;
     }
-    if (candidate.state === 'CLOSED') {
+    if (isDraftCarrierCandidate(context, candidate)) {
       return false;
     }
     const sim = computeSimilarity(exactTitle, normalizeText(candidate.title));
@@ -3530,6 +3545,33 @@ function computeSimilarity(str1: string, str2: string): number {
   }
   const distance = levenshteinDistance(str1, str2);
   return (maxLen - distance) / maxLen;
+}
+
+function isDraftCarrierCandidate(
+  context: Context,
+  candidate: DuplicateCandidate,
+): boolean {
+  if (candidate.isPullRequest) {
+    return false;
+  }
+
+  const authoringOnlyLabelName = normalizeLabels([
+    normalizeConfiguredLabelName(
+      context.authoringOnlyLabelName,
+      POLICY_DEFAULTS.labels.authoringOnlyLabelName,
+    ),
+  ])[0];
+  if (
+    !authoringOnlyLabelName ||
+    !normalizeLabels(candidate.labels).includes(authoringOnlyLabelName)
+  ) {
+    return false;
+  }
+
+  return createMarkerRegex(
+    normalizeMarkerPrefix(context.markerPrefix),
+    'draft-carrier',
+  ).test(maskMarkdownForScan(candidate.body ?? ''));
 }
 
 function levenshteinDistance(str1: string, str2: string): number {
@@ -4813,6 +4855,7 @@ function runCli(): HelperCliResult {
     duplicateCandidates,
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+    authoringOnlyLabelName: labelsPolicy.authoringOnlyLabelName,
     markerPrefix: resolveMarkerPrefix(policyConfig),
     highConfidenceDuplicate,
     highConfidenceCollectionDegraded: collectionWarnings.length > 0,
@@ -5505,7 +5548,7 @@ function normalizeRepository(repository: unknown): Repository | null {
   return { owner, repo };
 }
 
-function normalizeDuplicateCandidates(
+export function normalizeDuplicateCandidates(
   candidates: unknown,
 ): DuplicateCandidate[] {
   if (!Array.isArray(candidates)) {
@@ -5519,12 +5562,19 @@ function normalizeDuplicateCandidates(
         state?: unknown;
         url?: unknown;
         html_url?: unknown;
+        labels?: unknown;
+        body?: unknown;
+        pull_request?: unknown;
+        isPullRequest?: unknown;
       };
       return {
         number: Number.parseInt(String(c.number), 10),
         title: String(c.title ?? ''),
         state: String(c.state ?? ''),
         url: String(c.url ?? c.html_url ?? ''),
+        labels: normalizeLabels(c.labels),
+        body: String(c.body ?? ''),
+        isPullRequest: Boolean(c.isPullRequest ?? c.pull_request),
       };
     })
     .filter(

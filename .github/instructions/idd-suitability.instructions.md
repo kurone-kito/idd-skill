@@ -109,7 +109,8 @@ or configured needs-decision label from `labels.needsDecisionLabelName`
   branch from A5(d) — the stale active claim, the latest released claim,
   verified forced-handoff evidence whose branch, and linked PR when it names
   one, match, or the legacy migration source — is this issue's own work, not a
-  duplicate. Any other open or draft PR still fails
+  duplicate. Any other open or draft PR still fails. A draft carrier is not
+  a title duplicate.
 - **Outcome on fail**: `duplicate`
 
 #### High-confidence tier (#1484)
