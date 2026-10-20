@@ -194,10 +194,12 @@ test('flags lowercase dotted prefixes before capitalized identifiers', () => {
 });
 
 test('does not flag a sentence after a dotted name', () => {
-  assert.deepEqual(
-    findCorruptingCodeSpanWraps('`Open example.com. Then continue`'),
-    [],
-  );
+  for (const span of [
+    '`Open example.com. Then continue`',
+    '`Visit example.com. GitHub Actions are available.`',
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
 });
 
 test('does not flag sentence periods before prose in multi-tick code examples', () => {
