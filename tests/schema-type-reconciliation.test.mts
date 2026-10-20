@@ -159,6 +159,39 @@ interface IssueAuthoringReviewInput {
   };
 }
 
+/**
+ * Provisional-decision serialized record shape
+ * (schemas/provisional-decision-record.schema.json).
+ *
+ * The schema child defines this persisted boundary; the sibling replay issue
+ * will own a runtime type when it adds the evaluator, so this reconciliation
+ * keeps a test-local top-level type for now.
+ */
+interface ProvisionalDecisionRecord {
+  schemaVersion: 1;
+  recordId: string;
+  source: {
+    repository: string;
+    issueNumber: number;
+    snapshot: {
+      title: string;
+      bodySha256: string;
+      updatedAt: string;
+    };
+  };
+  bundleGeneration: number;
+  decisionGeneration: number;
+  claimLineage: readonly {
+    claimId: string;
+    agentId: string;
+    branch: string;
+    claimedAt: string;
+    supersedes?: string;
+  }[];
+  evidenceReferences: readonly string[];
+  event: { type: string; [key: string]: unknown };
+}
+
 type ApprovalActorPolicy =
   | 'owners-and-maintainers-only'
   | 'all-write-permission-actors';
@@ -580,6 +613,17 @@ export const issueAuthoringReviewInputKeys = [
   'packet',
 ] as const satisfies readonly (keyof IssueAuthoringReviewInput)[];
 
+export const provisionalDecisionRecordKeys = [
+  'schemaVersion',
+  'recordId',
+  'source',
+  'bundleGeneration',
+  'decisionGeneration',
+  'claimLineage',
+  'evidenceReferences',
+  'event',
+] as const satisfies readonly (keyof ProvisionalDecisionRecord)[];
+
 export const onboardingHearingCatalogKeys = [
   'version',
   'items',
@@ -911,6 +955,10 @@ const exhaustivenessWitnesses: {
     IssueAuthoringReviewInput,
     (typeof issueAuthoringReviewInputKeys)[number]
   >;
+  provisionalDecisionRecord: CoversAllKeysOf<
+    ProvisionalDecisionRecord,
+    (typeof provisionalDecisionRecordKeys)[number]
+  >;
   onboardingHearingCatalog: CoversAllKeysOf<
     OnboardingHearingCatalog,
     (typeof onboardingHearingCatalogKeys)[number]
@@ -964,6 +1012,7 @@ const exhaustivenessWitnesses: {
   liveStatusDigest: true,
   phaseGraph: true,
   issueAuthoringReviewInput: true,
+  provisionalDecisionRecord: true,
   onboardingHearingCatalog: true,
   onboardingHearingTranscript: true,
   policyConfig: true,
@@ -1414,6 +1463,59 @@ const issueAuthoringReviewInputFixture = {
     checklist: ['a concrete surface and an objective verification are named'],
   },
 } satisfies IssueAuthoringReviewInput;
+
+const provisionalDecisionRecordFixture = {
+  schemaVersion: 1,
+  recordId: 'record-4519-decision-1',
+  source: {
+    repository: 'kurone-kito/idd-skill',
+    issueNumber: 4519,
+    snapshot: {
+      title: 'Example decision source',
+      bodySha256: 'a'.repeat(64),
+      updatedAt: '2026-10-20T00:00:00Z',
+    },
+  },
+  bundleGeneration: 1,
+  decisionGeneration: 1,
+  claimLineage: [
+    {
+      claimId: 'claim-4519-1',
+      agentId: 'codex-example',
+      branch: 'issue/4519-example-decision',
+      claimedAt: '2026-10-20T00:00:00Z',
+    },
+  ],
+  evidenceReferences: ['https://github.com/kurone-kito/idd-skill/issues/4519'],
+  event: {
+    type: 'selected',
+    question: 'Which behavior should the provisional implementation use?',
+    selectedOption: {
+      id: 'option-a',
+      description: 'Keep the existing behavior',
+      feasibilityRationale: 'The current implementation already supports it.',
+      requirementFit: 'It meets the verified requirement.',
+      consequences: 'No migration is needed for current users.',
+      verification: 'Run the targeted schema validation checks.',
+      reversalOrMigration: 'No reversal or migration is required.',
+      rationale: 'It meets the verified requirement with no migration.',
+    },
+    feasibleAlternatives: [
+      {
+        id: 'option-b',
+        description: 'Adopt the alternate behavior',
+        feasibilityRationale: 'The repository can support this option.',
+        requirementFit: 'It also meets the verified requirement.',
+        consequences: 'It adds migration work for existing records.',
+        verification: 'Validate migrated records against the schema.',
+        reversalOrMigration: 'Existing records need a migration.',
+        comparison: 'It adds migration work without improving the fit.',
+        rejectionReason: 'Option A better matches the current evidence.',
+      },
+    ],
+    executionCriteria: ['The selected behavior passes its targeted checks.'],
+  },
+} satisfies ProvisionalDecisionRecord;
 
 const onboardingHearingCatalogFixture = {
   version: '1.0.0',
@@ -2095,6 +2197,10 @@ const SCHEMA_TEST_DATA: Record<CatalogSchemaFile, SchemaTestData> = {
   'issue-authoring-review-input.schema.json': {
     keys: issueAuthoringReviewInputKeys,
     fixture: issueAuthoringReviewInputFixture,
+  },
+  'provisional-decision-record.schema.json': {
+    keys: provisionalDecisionRecordKeys,
+    fixture: provisionalDecisionRecordFixture,
   },
   'onboarding-hearing-catalog.schema.json': {
     keys: onboardingHearingCatalogKeys,

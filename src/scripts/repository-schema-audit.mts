@@ -202,6 +202,12 @@ export const SCHEMA_TYPE_CATALOG = [
       'docs/issue-authoring-skill.md (caller-composed stdin payload)',
   },
   {
+    schemaFile: 'provisional-decision-record.schema.json',
+    exportedType: 'ProvisionalDecisionRecord (test-local; no runtime type)',
+    owningModule:
+      'schemas/provisional-decision-record.schema.json (serialized contract; replay consumer tracked by #4571)',
+  },
+  {
     schemaFile: 'onboarding-hearing-catalog.schema.json',
     exportedType: 'OnboardingHearingCatalog',
     owningModule: 'src/scripts/onboarding-hearing.mts',
@@ -331,6 +337,16 @@ export const SCHEMA_OUTPUT_COVERAGE: readonly CoverageEntry[] = [
       'token-cost-snapshot.schema.json is a source-repo measurement ' +
       'contract, not a helper stdout envelope -- fixture coverage lives in ' +
       'discoverSchemaCases / scripts/validate-schemas.mjs.',
+  },
+  {
+    schema: 'provisional-decision-record.schema.json',
+    status: 'uncovered',
+    reason:
+      'provisional-decision-record.schema.json is a persisted lifecycle ' +
+      'record, not a helper stdout envelope -- its fixtures and event ' +
+      'variants are validated by discoverSchemaCases / ' +
+      'scripts/validate-schemas.mjs and tests/schema-validation.test.mts; ' +
+      'replay behavior belongs to sibling issue #4571.',
   },
   {
     schema: 'worker-report.schema.json',

@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { buildHelperRuntimeManifest } from '../src/scripts/helper-runtime-manifest.mts';
 import { createPhaseIdResolver } from '../src/scripts/phase-id-resolver.mts';
 import {
   parseClaimComment,
@@ -20,6 +21,7 @@ import {
   checkSchemaKeywords,
   discoverSchemaCases,
   loadJson,
+  loadJsonDocument,
   validate,
   validateFixture,
   validatePhaseGraph,
@@ -39,6 +41,125 @@ type PolicyFixture = JsonRecord & {
     terminalWindow?: unknown;
   };
 };
+
+const PROVISIONAL_EVIDENCE_URL =
+  'https://github.com/kurone-kito/idd-skill/issues/4519';
+
+function buildProvisionalDecisionRecord(event: JsonRecord): JsonRecord {
+  return {
+    schemaVersion: 1,
+    recordId: 'record-4519-decision-1',
+    source: {
+      repository: 'kurone-kito/idd-skill',
+      issueNumber: 4519,
+      snapshot: {
+        title: 'Example decision source',
+        bodySha256: 'a'.repeat(64),
+        updatedAt: '2026-10-20T00:00:00Z',
+      },
+    },
+    bundleGeneration: 1,
+    decisionGeneration: 1,
+    claimLineage: [
+      {
+        claimId: 'claim-4519-1',
+        agentId: 'codex-example',
+        branch: 'issue/4519-example-decision',
+        claimedAt: '2026-10-20T00:00:00Z',
+      },
+    ],
+    evidenceReferences: [PROVISIONAL_EVIDENCE_URL],
+    event,
+  };
+}
+
+function provisionalDecisionEvent(type: string): JsonRecord {
+  switch (type) {
+    case 'selected':
+      return {
+        type,
+        question: 'Which behavior should the provisional implementation use?',
+        selectedOption: {
+          id: 'option-a',
+          description: 'Keep the existing behavior',
+          feasibilityRationale:
+            'The current implementation already supports it.',
+          requirementFit: 'It meets the verified requirement.',
+          consequences: 'No migration is needed for current users.',
+          verification: 'Run the targeted schema validation checks.',
+          reversalOrMigration: 'No reversal or migration is required.',
+          rationale: 'It meets the verified requirement with no migration.',
+        },
+        feasibleAlternatives: [
+          {
+            id: 'option-b',
+            description: 'Adopt the alternate behavior',
+            feasibilityRationale: 'The repository can support this option.',
+            requirementFit: 'It also meets the verified requirement.',
+            consequences: 'It adds migration work for existing records.',
+            verification: 'Validate migrated records against the schema.',
+            reversalOrMigration: 'Existing records need a migration.',
+            comparison: 'It adds migration work without improving the fit.',
+            rejectionReason: 'Option A better matches the current evidence.',
+          },
+        ],
+        executionCriteria: [
+          'The selected behavior passes its targeted checks.',
+        ],
+      };
+    case 'work-started':
+      return {
+        type,
+        startedAt: '2026-10-20T00:00:00Z',
+        planReference: PROVISIONAL_EVIDENCE_URL,
+      };
+    case 'work-completed':
+      return {
+        type,
+        result: {
+          kind: 'merged-pull-request',
+          reference: 'https://github.com/kurone-kito/idd-skill/pull/1',
+          verifiedAt: '2026-10-20T00:00:00Z',
+          headSha: 'b'.repeat(40),
+          mergeCommitSha: 'c'.repeat(40),
+        },
+      };
+    case 'confirmed':
+      return {
+        type,
+        confirmation: {
+          commentUrl: `${PROVISIONAL_EVIDENCE_URL}#issuecomment-1`,
+          response: 'accepted',
+          confirmedAt: '2026-10-20T00:00:00Z',
+          confirmedBy: 'maintainer-example',
+        },
+      };
+    case 'rework-requested':
+      return {
+        type,
+        reworkRequest: {
+          commentUrl: `${PROVISIONAL_EVIDENCE_URL}#issuecomment-2`,
+          requestedAt: '2026-10-20T00:00:00Z',
+          requestedOptionId: 'option-b',
+          rationale: 'The alternate option is preferred after review.',
+        },
+      };
+    case 'rework-authored':
+      return {
+        type,
+        reworkRoadmap: {
+          roadmapIssueNumber: 4519,
+          roadmapMarkerId: 'decision-rework-4519-1',
+          authoringSetId: 'set-4519-rework-1',
+          url: PROVISIONAL_EVIDENCE_URL,
+        },
+      };
+    default:
+      throw new Error(
+        `Unsupported provisional decision event fixture: ${type}`,
+      );
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Schema keyword hygiene — no unsupported keywords allowed
@@ -549,6 +670,257 @@ test('checkSchemaKeywords accepts exclusiveMinimum', () => {
   );
 });
 
+test('checkSchemaKeywords accepts maximum', () => {
+  assert.deepEqual(checkSchemaKeywords({ type: 'integer', maximum: 10 }), []);
+});
+
+test('validator enforces maximum for numbers', () => {
+  const maximum = Number.MAX_SAFE_INTEGER;
+  assert.deepEqual(validate(maximum, { type: 'integer', maximum }), []);
+  assert.ok(
+    validate(maximum + 1, { type: 'integer', maximum }).some((error) =>
+      error.includes('maximum'),
+    ),
+  );
+  assert.deepEqual(validate('not a number', { type: 'string', maximum }), []);
+});
+
+test('maximum compares preserved JSON number tokens exactly', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-schema-maximum-token-'));
+  const schema = {
+    type: 'object',
+    required: ['value'],
+    properties: {
+      value: { type: 'number', maximum: Number.MAX_SAFE_INTEGER },
+    },
+    additionalProperties: false,
+  };
+  const cases = [
+    ['{"value":9007199254740991}', true],
+    ['{"value":9007199254740991.4}', false],
+    ['{"value":9007199254740990.9}', true],
+    ['{"value":9007199254740991.000}', true],
+    ['{"value":9007199254740991.4e0000000000000000}', false],
+  ] as const;
+
+  try {
+    for (const [json, expectedValid] of cases) {
+      writeFileSync(join(root, 'record.json'), json);
+      const record = loadJson('record.json', root);
+      assert.equal(validate(record, schema).length === 0, expectedValid, json);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('maximum compares underflowed JSON number tokens with zero exactly', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-schema-maximum-underflow-'));
+  const schema = {
+    type: 'object',
+    required: ['value'],
+    properties: { value: { type: 'number', maximum: 0 } },
+    additionalProperties: false,
+  };
+  const cases = [
+    ['{"value":1e-999999999999999999999999}', false],
+    ['{"value":-1e-999999999999999999999999}', true],
+    ['{"value":0e999999999999999999999999}', true],
+  ] as const;
+
+  try {
+    for (const [json, expectedValid] of cases) {
+      writeFileSync(join(root, 'record.json'), json);
+      const record = loadJson('record.json', root);
+      assert.equal(validate(record, schema).length === 0, expectedValid, json);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('numeric bounds compare preserved underflowed schema tokens exactly', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-schema-bound-underflow-'));
+  const cases = [
+    ['maximum', '{"value":1e-399}', false],
+    ['maximum', '{"value":1e-401}', true],
+    ['minimum', '{"value":1e-401}', false],
+    ['minimum', '{"value":1e-399}', true],
+    ['exclusiveMinimum', '{"value":1e-400}', false],
+    ['exclusiveMinimum', '{"value":1e-399}', true],
+  ] as const;
+
+  try {
+    for (const [keyword, instanceJson, expectedValid] of cases) {
+      writeFileSync(
+        join(root, 'schema.json'),
+        `{"type":"object","required":["value"],"properties":{"value":{"type":"number","${keyword}":1e-400}},"additionalProperties":false}`,
+      );
+      writeFileSync(join(root, 'instance.json'), instanceJson);
+      const schema = loadJson('schema.json', root);
+      const instance = loadJson('instance.json', root);
+      assert.equal(
+        validate(instance, schema).length === 0,
+        expectedValid,
+        `${keyword}: ${instanceJson}`,
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('numeric bounds compare long exponent tokens and fail closed past the limit', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-schema-long-exponent-'));
+  const exponent = '1000000000000000';
+  const largerMagnitudeExponent = '999999999999999';
+  const smallerMagnitudeExponent = '1000000000000001';
+  const tooLongExponent = '9'.repeat(1025);
+  const cases = [
+    ['maximum', `1e-${exponent}`, `1e-${largerMagnitudeExponent}`, false],
+    ['maximum', `1e-${exponent}`, `1e-${smallerMagnitudeExponent}`, true],
+    ['maximum', `1e-${exponent}`, `2e-${exponent}`, false],
+    ['minimum', `1e-${exponent}`, `1e-${smallerMagnitudeExponent}`, false],
+    ['minimum', `1e-${exponent}`, `1e-${exponent}`, true],
+    ['exclusiveMinimum', `1e-${exponent}`, `1e-${exponent}`, false],
+    [
+      'exclusiveMinimum',
+      `1e-${exponent}`,
+      `1e-${largerMagnitudeExponent}`,
+      true,
+    ],
+    ['maximum', `1e-${tooLongExponent}`, `2e-${tooLongExponent}`, false],
+  ] as const;
+
+  try {
+    for (const [keyword, bound, instanceValue, expectedValid] of cases) {
+      writeFileSync(
+        join(root, 'schema.json'),
+        `{"type":"object","required":["value"],"properties":{"value":{"type":"number","${keyword}":${bound}}},"additionalProperties":false}`,
+      );
+      writeFileSync(join(root, 'instance.json'), `{"value":${instanceValue}}`);
+      const schema = loadJson('schema.json', root);
+      const instance = loadJson('instance.json', root);
+      assert.equal(
+        validate(instance, schema).length === 0,
+        expectedValid,
+        `${keyword}: ${instanceValue} against ${bound}`,
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('integer validation preserves exact JSON number tokens', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-schema-number-token-'));
+  const schema = {
+    type: 'object',
+    required: ['value'],
+    properties: {
+      value: { type: 'integer', maximum: Number.MAX_SAFE_INTEGER },
+    },
+    additionalProperties: false,
+  };
+  const cases = [
+    ['{"value":9007199254740991}', true],
+    ['{"value":9007199254740991.0}', true],
+    ['{"value":9007199254740991.4}', false],
+    ['{"value":9007199254740992}', false],
+    ['{"value":1e-400}', false],
+    ['{"value":1e1}', true],
+  ] as const;
+
+  try {
+    for (const [json, expectedValid] of cases) {
+      writeFileSync(join(root, 'record.json'), json);
+      const record = loadJson('record.json', root);
+      assert.equal(validate(record, schema).length === 0, expectedValid, json);
+    }
+
+    writeFileSync(join(root, 'record.json'), '{"value":9007199254740991.4}');
+    const mutatedRecord = loadJson('record.json', root) as JsonRecord;
+    mutatedRecord.value = Number.MAX_SAFE_INTEGER;
+    assert.deepEqual(validate(mutatedRecord, schema), []);
+
+    const redefinedRecord = loadJson('record.json', root) as JsonRecord;
+    Object.defineProperty(redefinedRecord, 'value', {
+      value: Number.MAX_SAFE_INTEGER,
+    });
+    assert.deepEqual(validate(redefinedRecord, schema), []);
+
+    const frozenRecord = loadJson('record.json', root) as JsonRecord;
+    Object.freeze(frozenRecord);
+    assert.ok(
+      validate(frozenRecord, schema).some((error) =>
+        error.includes('expected type "integer"'),
+      ),
+    );
+
+    const unchangedRecord = loadJson('record.json', root) as JsonRecord;
+    const receiver: JsonRecord = {};
+    Reflect.set(unchangedRecord, 'value', Number.MAX_SAFE_INTEGER, receiver);
+    assert.equal(receiver.value, Number.MAX_SAFE_INTEGER);
+    assert.ok(
+      validate(unchangedRecord, schema).some((error) =>
+        error.includes('expected type "integer"'),
+      ),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('root-number validation preserves its exact JSON token', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-schema-root-number-'));
+  const schema = {
+    type: 'integer',
+    maximum: Number.MAX_SAFE_INTEGER,
+  };
+  const maximumSchema = {
+    type: 'number',
+    maximum: Number.MAX_SAFE_INTEGER,
+  };
+
+  try {
+    writeFileSync(join(root, 'record.json'), '9007199254740991');
+    assert.deepEqual(
+      validate(loadJsonDocument('record.json', root), schema),
+      [],
+    );
+
+    writeFileSync(join(root, 'record.json'), '9007199254740991.4');
+    const document = loadJsonDocument('record.json', root);
+    const integerErrors = validate(document, schema);
+    assert.ok(
+      integerErrors.some((error) => error.includes('expected type "integer"')),
+    );
+    assert.ok(
+      validate(document, maximumSchema).some((error) =>
+        error.includes('maximum'),
+      ),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('vendored-node manifest includes provisional decision schema data', () => {
+  const managedFiles = new Set(
+    buildHelperRuntimeManifest({
+      profile: 'vendored-node',
+      targetRoot: REPO_ROOT,
+    }).profiles['vendored-node'].managedFiles.map((file) => file.targetPath),
+  );
+  for (const file of [
+    'schemas/provisional-decision-record.schema.json',
+    'fixtures/schemas/provisional-decision-record.valid.json',
+    'fixtures/schemas/provisional-decision-record.invalid.json',
+  ]) {
+    assert.ok(managedFiles.has(file), `vendored-node manifest omits ${file}`);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Fixture validation — valid fixtures must pass, invalid must fail
 // ---------------------------------------------------------------------------
@@ -569,6 +941,232 @@ test('claim-marker invalid fixture fails validation', () => {
     false,
   );
   assert.ok(ok, 'Expected invalid fixture to fail schema validation');
+});
+
+test('provisional-decision-record schema uses only supported keywords', () => {
+  const schema = loadJson('schemas/provisional-decision-record.schema.json');
+  assert.deepEqual(checkSchemaKeywords(schema), []);
+});
+
+test('provisional-decision-record valid fixture passes validation', () => {
+  const { ok, errors } = validateFixture(
+    'schemas/provisional-decision-record.schema.json',
+    'fixtures/schemas/provisional-decision-record.valid.json',
+    true,
+  );
+  assert.ok(ok, errors.join('\n'));
+});
+
+test('provisional-decision-record invalid fixture fails validation', () => {
+  const { ok } = validateFixture(
+    'schemas/provisional-decision-record.schema.json',
+    'fixtures/schemas/provisional-decision-record.invalid.json',
+    false,
+  );
+  assert.ok(ok, 'Expected invalid fixture to fail schema validation');
+});
+
+test('provisional-decision-record schema accepts every event variant', () => {
+  const schema = loadJson('schemas/provisional-decision-record.schema.json');
+  const variants = [
+    'selected',
+    'work-started',
+    'work-completed',
+    'confirmed',
+    'rework-requested',
+    'rework-authored',
+  ];
+  for (const type of variants) {
+    const errors = validate(
+      buildProvisionalDecisionRecord(provisionalDecisionEvent(type)),
+      schema,
+    );
+    assert.deepEqual(errors, [], `${type}: ${errors.join('; ')}`);
+  }
+});
+
+test('provisional-decision-record schema rejects URLs without a hostname', () => {
+  const schema = loadJson('schemas/provisional-decision-record.schema.json');
+  const invalidations: [string, string, (record: JsonRecord) => void][] = [
+    [
+      'evidence reference',
+      'selected',
+      (record) => {
+        (record.evidenceReferences as string[])[0] = 'https://@/x';
+      },
+    ],
+    [
+      'plan reference',
+      'work-started',
+      (record) => {
+        (record.event as JsonRecord).planReference = 'https://@/x';
+      },
+    ],
+    [
+      'merged pull request reference',
+      'work-completed',
+      (record) => {
+        ((record.event as JsonRecord).result as JsonRecord).reference =
+          'https://@/x';
+      },
+    ],
+    [
+      'other completion reference',
+      'work-completed',
+      (record) => {
+        (record.event as JsonRecord).result = {
+          kind: 'other',
+          reference: 'https://@/x',
+          verifiedAt: '2026-10-20T00:00:00Z',
+        };
+      },
+    ],
+    [
+      'confirmation comment URL',
+      'confirmed',
+      (record) => {
+        ((record.event as JsonRecord).confirmation as JsonRecord).commentUrl =
+          'https://@/x';
+      },
+    ],
+    [
+      'rework request comment URL',
+      'rework-requested',
+      (record) => {
+        ((record.event as JsonRecord).reworkRequest as JsonRecord).commentUrl =
+          'https://@/x';
+      },
+    ],
+    [
+      'rework roadmap URL',
+      'rework-authored',
+      (record) => {
+        ((record.event as JsonRecord).reworkRoadmap as JsonRecord).url =
+          'https://@/x';
+      },
+    ],
+  ];
+
+  for (const [name, type, mutateRecord] of invalidations) {
+    const record = buildProvisionalDecisionRecord(
+      provisionalDecisionEvent(type),
+    );
+    mutateRecord(record);
+    assert.ok(
+      validate(record, schema).length > 0,
+      `Expected ${name} with an empty hostname to fail`,
+    );
+  }
+});
+
+test('provisional-decision-record schema accepts other completion evidence', () => {
+  const schema = loadJson('schemas/provisional-decision-record.schema.json');
+  const event = provisionalDecisionEvent('work-completed');
+  event.result = {
+    kind: 'other',
+    reference: PROVISIONAL_EVIDENCE_URL,
+    verifiedAt: '2026-10-20T00:00:00Z',
+  };
+  assert.deepEqual(validate(buildProvisionalDecisionRecord(event), schema), []);
+});
+
+test('provisional-decision-record schema rejects malformed and unsafe data', () => {
+  const schema = loadJson('schemas/provisional-decision-record.schema.json');
+  const invalidations: [string, (record: JsonRecord) => void][] = [
+    [
+      'unknown envelope field',
+      (record) => {
+        record.untrusted = true;
+      },
+    ],
+    [
+      'missing selection field',
+      (record) => {
+        delete (record.event as JsonRecord).selectedOption;
+      },
+    ],
+    [
+      'missing decision question',
+      (record) => {
+        delete (record.event as JsonRecord).question;
+      },
+    ],
+    [
+      'missing selected option requirement fit',
+      (record) => {
+        delete ((record.event as JsonRecord).selectedOption as JsonRecord)
+          .requirementFit;
+      },
+    ],
+    [
+      'missing alternative rejection reason',
+      (record) => {
+        const event = record.event as JsonRecord;
+        const alternative = (event.feasibleAlternatives as JsonRecord[])[0];
+        delete alternative.rejectionReason;
+      },
+    ],
+    [
+      'merged pull request without a head commit',
+      (record) => {
+        record.event = provisionalDecisionEvent('work-completed');
+        const result = (record.event as JsonRecord).result as JsonRecord;
+        delete result.headSha;
+      },
+    ],
+    [
+      'merged pull request without a merge commit',
+      (record) => {
+        record.event = provisionalDecisionEvent('work-completed');
+        const result = (record.event as JsonRecord).result as JsonRecord;
+        delete result.mergeCommitSha;
+      },
+    ],
+    [
+      'malformed repository reference',
+      (record) => {
+        (record.source as JsonRecord).repository = 'not a repository';
+      },
+    ],
+    [
+      'malformed evidence reference',
+      (record) => {
+        (record.evidenceReferences as string[])[0] = 'issue #4519';
+      },
+    ],
+    [
+      'issue number above the safe-integer boundary',
+      (record) => {
+        (record.source as JsonRecord).issueNumber = Number.MAX_SAFE_INTEGER + 1;
+      },
+    ],
+    [
+      'generation above the safe-integer boundary',
+      (record) => {
+        record.bundleGeneration = Number.MAX_SAFE_INTEGER + 1;
+      },
+    ],
+  ];
+
+  for (const [name, mutate] of invalidations) {
+    const instance = buildProvisionalDecisionRecord(
+      provisionalDecisionEvent('selected'),
+    );
+    mutate(instance);
+    assert.ok(
+      validate(instance, schema).length > 0,
+      `Expected ${name} to fail`,
+    );
+  }
+});
+
+test('provisional-decision-record schema accepts the safe-integer boundary', () => {
+  const schema = loadJson('schemas/provisional-decision-record.schema.json');
+  const instance = buildProvisionalDecisionRecord(
+    provisionalDecisionEvent('selected'),
+  );
+  instance.bundleGeneration = Number.MAX_SAFE_INTEGER;
+  assert.deepEqual(validate(instance, schema), []);
 });
 
 test('forced-handoff-marker valid fixture passes validation', () => {
@@ -2133,6 +2731,44 @@ test('discoverSchemaCases reports a schema that has no fixtures', () => {
 
 test('checkSchemaKeywords accepts supported format: uri', () => {
   assert.deepEqual(checkSchemaKeywords({ type: 'string', format: 'uri' }), []);
+});
+
+test('format uri accepts absolute URIs and rejects malformed references', () => {
+  const schema = { type: 'string', format: 'uri' };
+  for (const value of [
+    'https://github.com/kurone-kito/idd-skill/issues/4519',
+    'https://example.com/a%20b',
+    'https://example.com:',
+    'mailto:team@example.com',
+    'urn:example:decision',
+    'file:///tmp/decision.json',
+    'example:opaque-path',
+    'https://[2001:db8::1]/decision',
+    'https://[v1.example]/decision',
+  ]) {
+    assert.deepEqual(validate(value, schema), [], value);
+  }
+  for (const value of [
+    'https://@/x',
+    'https://:/x',
+    'https://example.com:abc/x',
+    'https://bad host/x',
+    'https://example.com/%zz',
+    'https://example.com/[brackets]',
+    'https://example.com/?q=[brackets]',
+    'https://[not-an-ipv6-address]/x',
+    'https://example.com\\evil',
+    'https://example.com\\\\evil',
+    'https://example.com/\u0001x',
+    'https://example.com/é',
+    'not a URI',
+  ]) {
+    const errors = validate(value, schema);
+    assert.ok(
+      errors.some((error) => error.includes('invalid uri value')),
+      `${value}: ${errors.join('; ')}`,
+    );
+  }
 });
 
 test('validate accepts a ["string","null"] union type and rejects other types', () => {
