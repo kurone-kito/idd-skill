@@ -878,6 +878,12 @@ const USER_ACTOR_STEP_ASSIGNMENT_CUE =
   /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|belongs?\s+to|runs?|ran|executes?|executed|perform(?:s|ed)|follows?|followed|carries\s+out|carried\s+out|does?|did|completes?|completed|verifies?|verified|checks?|checked|tests?|tested|implements?|implemented|handles?|handled|manages?|managed)\b/i;
 const USER_ACTOR_STEP_NEGATION_CUE =
   /\b(?:(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b/i;
+const USER_ACTOR_STEP_AGENT_HEADING_LABEL =
+  /^\s*(?:the\s+)?(?:coding\s+)?(?:agents?|assistants?|automation|AIs?|you|workers?|bots?|models?|codex|copilots?|claude(?:\s+code)?|gemini(?:\s+cli)?|cursor|cline|opencode|windsurf|devin|grok(?:\s+build)?)\s*$/i;
+function isBareAgentActorHeading(heading) {
+  const label = heading.replace(/^ {0,3}#{1,6}[ \t]+/, '');
+  return USER_ACTOR_STEP_AGENT_HEADING_LABEL.test(label);
+}
 function assignmentHeadingContext(heading) {
   const numberedTargetPattern = new RegExp(
     USER_ACTOR_STEP_NUMBERED_TARGET.source,
@@ -967,15 +973,27 @@ function splitMarkdownHeadingSections(context) {
     }
   }
   if (headings.length === 0) {
-    return [{ body: context, headingContext: [], headingAssignment: null }];
+    return [
+      {
+        body: context,
+        bodyStart: 0,
+        bodyEnd: context.length,
+        headingContext: [],
+        headingAssignment: null,
+        bareAgentActorContext: false,
+      },
+    ];
   }
   const sections = [];
   const firstHeading = headings[0];
   if (firstHeading !== undefined && firstHeading.start > 0) {
     sections.push({
       body: context.slice(0, firstHeading.start),
+      bodyStart: 0,
+      bodyEnd: firstHeading.start,
       headingContext: [],
       headingAssignment: null,
+      bareAgentActorContext: false,
     });
   }
   const stack = [];
@@ -996,11 +1014,17 @@ function splitMarkdownHeadingSections(context) {
     if (classified === null && USER_ACTOR_STEP_AGENT.test(heading.text)) {
       headingContext.push(heading.text);
     }
+    const bareAgentActorContext =
+      stack.some(({ bareAgentActor }) => bareAgentActor) ||
+      isBareAgentActorHeading(heading.text);
     const nextStart = headings[index + 1]?.start ?? context.length;
     sections.push({
       body: context.slice(heading.bodyStart, nextStart),
+      bodyStart: heading.bodyStart,
+      bodyEnd: nextStart,
       headingContext,
       headingAssignment: classified?.assignment ?? null,
+      bareAgentActorContext,
     });
     stack.push({
       level: heading.level,
@@ -1008,6 +1032,7 @@ function splitMarkdownHeadingSections(context) {
         classified?.context ??
         classified?.assignment ??
         (USER_ACTOR_STEP_AGENT.test(heading.text) ? heading.text : ''),
+      bareAgentActor: isBareAgentActorHeading(heading.text),
     });
   }
   return sections;
@@ -1610,6 +1635,9 @@ function createUserActorStepBodyBoundaryIndex(
       firstNonWhitespace,
       lineKinds,
     ),
+    bareAgentActorRanges: splitMarkdownHeadingSections(text)
+      .filter(({ bareAgentActorContext }) => bareAgentActorContext)
+      .map(({ bodyStart, bodyEnd }) => ({ start: bodyStart, end: bodyEnd })),
   };
 }
 function lineIndexAtOffset(lineStarts, offset) {
@@ -1648,6 +1676,18 @@ function hasUserActorStepBodyBoundary(index, offset) {
 function numberedUserStepListItemOrdinal(index, offset) {
   const lineIndex = lineIndexAtOffset(index.lineStarts, offset);
   return index.orderedListOrdinals[lineIndex] ?? null;
+}
+function hasBareAgentActorHeadingContext(index, offset) {
+  let low = 0;
+  let high = index.bareAgentActorRanges.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const range = index.bareAgentActorRanges[middle];
+    if (range !== undefined && range.start <= offset) low = middle + 1;
+    else high = middle;
+  }
+  const range = low > 0 ? index.bareAgentActorRanges[low - 1] : undefined;
+  return range !== undefined && offset >= range.start && offset < range.end;
 }
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =
@@ -3318,7 +3358,8 @@ function findUnsafeExecutionDirectiveMatch(
           bodyAssignmentAnalysis,
           userStepOrdinal,
           userStepKind,
-        );
+        ) &&
+        !hasBareAgentActorHeadingContext(bodyBoundaryIndex, verbBodyStart);
       // #3073 round 4-6: the repository-owned-validation exception is now
       // a single fully anchored positive signature (see the constants'
       // shared comment above) -- the whole window must match the literal

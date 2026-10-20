@@ -1075,8 +1075,19 @@ const USER_ACTOR_STEP_NEGATION_CUE =
 
 interface MarkdownHeadingSection {
   body: string;
+  bodyStart: number;
+  bodyEnd: number;
   headingContext: string[];
   headingAssignment: string | null;
+  bareAgentActorContext: boolean;
+}
+
+const USER_ACTOR_STEP_AGENT_HEADING_LABEL =
+  /^\s*(?:the\s+)?(?:coding\s+)?(?:agents?|assistants?|automation|AIs?|you|workers?|bots?|models?|codex|copilots?|claude(?:\s+code)?|gemini(?:\s+cli)?|cursor|cline|opencode|windsurf|devin|grok(?:\s+build)?)\s*$/i;
+
+function isBareAgentActorHeading(heading: string): boolean {
+  const label = heading.replace(/^ {0,3}#{1,6}[ \t]+/, '');
+  return USER_ACTOR_STEP_AGENT_HEADING_LABEL.test(label);
 }
 
 function assignmentHeadingContext(heading: string): {
@@ -1185,7 +1196,16 @@ function splitMarkdownHeadingSections(
   }
 
   if (headings.length === 0) {
-    return [{ body: context, headingContext: [], headingAssignment: null }];
+    return [
+      {
+        body: context,
+        bodyStart: 0,
+        bodyEnd: context.length,
+        headingContext: [],
+        headingAssignment: null,
+        bareAgentActorContext: false,
+      },
+    ];
   }
 
   const sections: MarkdownHeadingSection[] = [];
@@ -1193,11 +1213,18 @@ function splitMarkdownHeadingSections(
   if (firstHeading !== undefined && firstHeading.start > 0) {
     sections.push({
       body: context.slice(0, firstHeading.start),
+      bodyStart: 0,
+      bodyEnd: firstHeading.start,
       headingContext: [],
       headingAssignment: null,
+      bareAgentActorContext: false,
     });
   }
-  const stack: { level: number; context: string }[] = [];
+  const stack: {
+    level: number;
+    context: string;
+    bareAgentActor: boolean;
+  }[] = [];
   for (let index = 0; index < headings.length; index += 1) {
     const heading = headings[index];
     if (heading === undefined) continue;
@@ -1215,11 +1242,17 @@ function splitMarkdownHeadingSections(
     if (classified === null && USER_ACTOR_STEP_AGENT.test(heading.text)) {
       headingContext.push(heading.text);
     }
+    const bareAgentActorContext =
+      stack.some(({ bareAgentActor }) => bareAgentActor) ||
+      isBareAgentActorHeading(heading.text);
     const nextStart = headings[index + 1]?.start ?? context.length;
     sections.push({
       body: context.slice(heading.bodyStart, nextStart),
+      bodyStart: heading.bodyStart,
+      bodyEnd: nextStart,
       headingContext,
       headingAssignment: classified?.assignment ?? null,
+      bareAgentActorContext,
     });
     stack.push({
       level: heading.level,
@@ -1227,6 +1260,7 @@ function splitMarkdownHeadingSections(
         classified?.context ??
         classified?.assignment ??
         (USER_ACTOR_STEP_AGENT.test(heading.text) ? heading.text : ''),
+      bareAgentActor: isBareAgentActorHeading(heading.text),
     });
   }
   return sections;
@@ -1750,6 +1784,7 @@ interface UserActorStepBodyBoundaryIndex {
   firstNonWhitespace: number[];
   lineKinds: ('blank' | 'heading' | 'setext' | 'other')[];
   orderedListOrdinals: (number | null)[];
+  bareAgentActorRanges: { start: number; end: number }[];
 }
 
 interface UserActorStepListFrame {
@@ -1920,6 +1955,9 @@ function createUserActorStepBodyBoundaryIndex(
       firstNonWhitespace,
       lineKinds,
     ),
+    bareAgentActorRanges: splitMarkdownHeadingSections(text)
+      .filter(({ bareAgentActorContext }) => bareAgentActorContext)
+      .map(({ bodyStart, bodyEnd }) => ({ start: bodyStart, end: bodyEnd })),
   };
 }
 
@@ -1970,6 +2008,22 @@ function numberedUserStepListItemOrdinal(
 ): number | null {
   const lineIndex = lineIndexAtOffset(index.lineStarts, offset);
   return index.orderedListOrdinals[lineIndex] ?? null;
+}
+
+function hasBareAgentActorHeadingContext(
+  index: UserActorStepBodyBoundaryIndex,
+  offset: number,
+): boolean {
+  let low = 0;
+  let high = index.bareAgentActorRanges.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const range = index.bareAgentActorRanges[middle];
+    if (range !== undefined && range.start <= offset) low = middle + 1;
+    else high = middle;
+  }
+  const range = low > 0 ? index.bareAgentActorRanges[low - 1] : undefined;
+  return range !== undefined && offset >= range.start && offset < range.end;
 }
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =
@@ -3721,7 +3775,8 @@ function findUnsafeExecutionDirectiveMatch(
           bodyAssignmentAnalysis,
           userStepOrdinal,
           userStepKind,
-        );
+        ) &&
+        !hasBareAgentActorHeadingContext(bodyBoundaryIndex, verbBodyStart);
       // #3073 round 4-6: the repository-owned-validation exception is now
       // a single fully anchored positive signature (see the constants'
       // shared comment above) -- the whole window must match the literal
