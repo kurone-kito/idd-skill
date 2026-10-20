@@ -61,6 +61,56 @@ export interface CodeSpanWrapViolation {
 const MID_TOKEN_CONTINUATION = /[-_/.]/;
 const TOKEN_CONTINUING = /[A-Za-z0-9\-_/.]/;
 const CONTEXT_CHARS = 20;
+// Common prose openers distinguish sentence periods from dotted identifiers.
+const SENTENCE_STARTERS = new Set([
+  'A',
+  'Add',
+  'After',
+  'An',
+  'And',
+  'Before',
+  'Do',
+  'Dispatched',
+  'Each',
+  'Either',
+  'For',
+  'From',
+  'If',
+  'In',
+  'Instead',
+  'I',
+  'Its',
+  'Look',
+  'Map',
+  'On',
+  'Omit',
+  'Once',
+  'Only',
+  'Otherwise',
+  'Preserve',
+  'Record',
+  'Recompute',
+  'Resolve',
+  'Run',
+  'Set',
+  'Since',
+  'Stash',
+  'Start',
+  'The',
+  'Then',
+  'These',
+  'They',
+  'This',
+  'Those',
+  'To',
+  'Use',
+  'When',
+  'Where',
+  'While',
+  'With',
+  'Without',
+  'Write',
+]);
 
 function lineStartsFor(text: string): number[] {
   const starts = [0];
@@ -114,11 +164,7 @@ function isLineCommentOpener(inner: string, secondSlashIndex: number): boolean {
     schemeStart -= 1;
   }
   const scheme = inner.slice(schemeStart + 1, colonIndex);
-  const previous = inner[schemeStart];
-  return (
-    !/^[A-Za-z][A-Za-z0-9+.-]*$/.test(scheme) ||
-    (previous !== undefined && /[A-Za-z0-9+.-]/.test(previous))
-  );
+  return !/^[A-Za-z][A-Za-z0-9+.-]*$/.test(scheme);
 }
 
 function isSentencePunctuation(
@@ -127,17 +173,28 @@ function isSentencePunctuation(
   afterIndex: number,
 ): boolean {
   const previous = inner[delimiterIndex - 1];
-  // Preserve sentence periods followed by an ordinary sentence. Requiring
-  // a capitalized first word and a lowercase continuation avoids treating
-  // uppercase dotted-token continuations such as `README. MD` as prose.
   const suffix = inner.slice(afterIndex).replace(/_+$/u, '').trimEnd();
-  if (previous === undefined) {
-    return /^[A-Z][a-z]+$/.test(suffix);
-  }
-  if (!/[a-z]/.test(previous)) {
+  const nextWord = /^(?:[A-Z][a-z]+|[AI])(?=\s|`|$)/u.exec(suffix)?.[0];
+  if (nextWord === undefined || !SENTENCE_STARTERS.has(nextWord)) {
     return false;
   }
-  return /^[A-Z][a-z]+(?:\s+[a-z][A-Za-z'-]*)+(?:[.!?])?$/.test(suffix);
+  if (previous === undefined || previous === '`') {
+    return true;
+  }
+  // A period after a standalone number can end a numbered list step.
+  if (/[0-9]/.test(previous)) {
+    let numberStart = delimiterIndex - 1;
+    while (numberStart > 0 && /[0-9]/.test(inner[numberStart - 1] ?? '')) {
+      numberStart -= 1;
+    }
+    const beforeNumber = inner[numberStart - 1];
+    return (
+      beforeNumber === undefined ||
+      /\s/.test(beforeNumber) ||
+      /[A-Za-z]/.test(beforeNumber)
+    );
+  }
+  return /[A-Za-z)]/.test(previous);
 }
 
 function isHtmlCommentOpener(inner: string, secondDashIndex: number): boolean {

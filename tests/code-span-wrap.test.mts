@@ -123,6 +123,15 @@ test('flags uppercase dotted-token continuations', () => {
   }
 });
 
+test('does not flag sentence periods before prose in multi-tick code examples', () => {
+  assert.deepEqual(
+    findCorruptingCodeSpanWraps(
+      '``limit. Its `slots` value``\n``3. If `slots` is zero``\n``without B1. Record a `running` task``',
+    ),
+    [],
+  );
+});
+
 test('does not flag legitimate option delimiters, comments, ellipses, or words', () => {
   const spans = [
     '`-- option`',
