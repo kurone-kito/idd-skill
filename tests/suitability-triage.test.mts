@@ -2946,6 +2946,68 @@ test('trust safety does not treat unrelated implementation tasks as this step --
   }
 });
 
+test('trust safety keeps agent assignment clauses intact around abbreviations and decimals -- #4577', () => {
+  for (const assignment of [
+    'The coding agent, e.g. Copilot, must perform this step.',
+    'The coding agent at version 1.2 must perform this step.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
+});
+
+test('trust safety does not treat an explicitly negated agent step as assigned -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must not perform this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety still rejects an agent assignment phrased as not only -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must not only inspect this step but also perform this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety ignores agent assignments inside HTML comments and code -- #4577', () => {
+  for (const body of [
+    '<!-- The coding agent should perform the following steps. -->\n\nRun this step by the user.',
+    '```text\nThe coding agent should perform the following steps.\n```\n\nRun this step by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, body);
+  }
+});
+
+test('trust safety does not accept a boundary supplied only by an HTML comment -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'Intro <!--\n## hidden -->\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('trust safety rejects an agent assignment to this step after the user directive -- #4577', () => {
   const result = checkTrustSafety({
     issue: {

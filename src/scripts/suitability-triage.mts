@@ -1059,18 +1059,97 @@ const USER_ACTOR_STEP_ASSIGNED_TARGET =
   /\b(?:(?:(?:this|that)(?:\s+(?:exact|same|specific|particular))?|these|those)\s+(?:steps?|checks?)|the\s+(?:(?:exact|same|specific|particular)\s+)?(?:steps?|checks?)|(?:the\s+)?following\s+(?:steps?|checks?)|(?:the\s+(?:exact|same|specific|particular)\s+)?instructions?\s+(?:below|above|that\s+follow|which\s+follow))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
   /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|accountable|owns?|owned|belongs?\s+to|runs?|ran|executes?|executed|perform(?:s|ed)|follows?|followed|carries\s+out|carried\s+out|does?|did|completes?|completed|verifies?|verified|checks?|checked|tests?|tested|implements?|implemented|handles?|handled|manages?|managed)\b/i;
+const USER_ACTOR_STEP_NEGATION_CUE =
+  /\b(?:(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b/i;
+
+function splitUserActorStepClauses(context: string): string[] {
+  const clauses: string[] = [];
+  let start = 0;
+  for (let index = 0; index < context.length; index += 1) {
+    const char = context[index];
+    if (char === ';') {
+      clauses.push(context.slice(start, index));
+      start = index + 1;
+      continue;
+    }
+    if (
+      (char !== '.' && char !== '!' && char !== '?') ||
+      (index + 1 < context.length && !/\s/.test(context[index + 1] ?? ''))
+    ) {
+      continue;
+    }
+    if (char === '.') {
+      const previous = context[index - 1] ?? '';
+      const next = context[index + 1] ?? '';
+      if (/\d/.test(previous) && /\d/.test(next)) {
+        continue;
+      }
+      const suffix = context.slice(Math.max(start, index - 8), index + 1);
+      if (
+        /\b(?:e\.g|i\.e|etc|vs|mr|mrs|ms|dr|prof|st|no)\.$/i.test(suffix) ||
+        /(?:\b[A-Z]\.){2,}$/i.test(suffix)
+      ) {
+        continue;
+      }
+    }
+    clauses.push(context.slice(start, index));
+    start = index + 1;
+  }
+  clauses.push(context.slice(start));
+  return clauses;
+}
+
+function removeMarkdownRanges(
+  text: string,
+  ranges: readonly MarkdownCodeRange[],
+): string {
+  let result = text;
+  for (const range of [...ranges].sort(
+    (left, right) => right.start - left.start,
+  )) {
+    const start = Math.max(0, range.start);
+    const end = Math.min(result.length, range.end);
+    if (start < end) {
+      result = result.slice(0, start) + result.slice(end);
+    }
+  }
+  return result;
+}
+
+function separateMarkdownRangesWithClauseBoundaries(
+  text: string,
+  ranges: readonly MarkdownCodeRange[],
+): string {
+  let result = text;
+  for (const range of [...ranges].sort(
+    (left, right) => right.start - left.start,
+  )) {
+    const start = Math.max(0, range.start);
+    const end = Math.min(result.length, range.end);
+    if (start < end) {
+      result = `${result.slice(0, start)};${result.slice(end)}`;
+    }
+  }
+  return result;
+}
 
 // #4577: scan the title and body as separate fields so an assignment in one
-// cannot combine with an unrelated target in the other.
+// cannot combine with an unrelated target in the other. Callers first
+// separate Markdown code and HTML comments into clause boundaries.
 function hasAgentAssignmentToStep(context: string): boolean {
-  return context
-    .split(/[.!?;]+/)
-    .some(
-      (clause) =>
-        USER_ACTOR_STEP_AGENT.test(clause) &&
-        USER_ACTOR_STEP_ASSIGNMENT_CUE.test(clause) &&
-        USER_ACTOR_STEP_ASSIGNED_TARGET.test(clause),
+  return splitUserActorStepClauses(context).some((clause) => {
+    const targetMatch = USER_ACTOR_STEP_ASSIGNED_TARGET.exec(clause);
+    const negationMatch = USER_ACTOR_STEP_NEGATION_CUE.exec(clause);
+    return (
+      USER_ACTOR_STEP_AGENT.test(clause) &&
+      USER_ACTOR_STEP_ASSIGNMENT_CUE.test(clause) &&
+      targetMatch !== null &&
+      !(
+        negationMatch !== null &&
+        negationMatch.index < (targetMatch.index ?? Number.POSITIVE_INFINITY)
+      )
     );
+  });
 }
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =
@@ -2747,6 +2826,20 @@ function findUnsafeExecutionDirectiveMatch(
   bodyCodeRanges: MarkdownCodeRange[],
 ): string | null {
   const bodyHtmlCommentRanges = findHtmlCommentRanges(body, bodyCodeRanges);
+  const bodyInertRanges = [...bodyCodeRanges, ...bodyHtmlCommentRanges];
+  const bodyAssignmentContext = separateMarkdownRangesWithClauseBoundaries(
+    body,
+    bodyInertRanges,
+  );
+  const titleCodeRanges = findMarkdownCodeRanges(title);
+  const titleInertRanges = [
+    ...titleCodeRanges,
+    ...findHtmlCommentRanges(title, titleCodeRanges),
+  ];
+  const titleAssignmentContext = separateMarkdownRangesWithClauseBoundaries(
+    title,
+    titleInertRanges,
+  );
   const verbPattern = new RegExp(
     String.raw`\b${UNSAFE_DIRECTIVE_VERB}\b`,
     'gi',
@@ -2770,8 +2863,24 @@ function findUnsafeExecutionDirectiveMatch(
         verbStart + verbText.length,
       );
       const targetMatch = targetPattern.exec(window);
-      const userActorStepBodyPrefix = corpus.slice(bodyOffset, verbStart);
       const verbBodyStart = verbStart - bodyOffset;
+      const userActorStepBodyPrefix = removeMarkdownRanges(
+        maskMarkdownCodeRegionsPreservingPositions(
+          body.slice(0, verbBodyStart),
+          bodyCodeRanges
+            .filter((range) => range.start < verbBodyStart)
+            .map((range) => ({
+              ...range,
+              end: Math.min(range.end, verbBodyStart),
+            })),
+        ),
+        bodyHtmlCommentRanges
+          .filter((range) => range.start < verbBodyStart)
+          .map((range) => ({
+            ...range,
+            end: Math.min(range.end, verbBodyStart),
+          })),
+      );
       const verbIsInHtmlComment = bodyHtmlCommentRanges.some(
         (range) =>
           range.start <= verbBodyStart &&
@@ -2784,8 +2893,8 @@ function findUnsafeExecutionDirectiveMatch(
         verbStart >= bodyOffset &&
         !verbIsInHtmlComment &&
         USER_ACTOR_STEP_BODY_BOUNDARY.test(userActorStepBodyPrefix) &&
-        !hasAgentAssignmentToStep(title) &&
-        !hasAgentAssignmentToStep(body);
+        !hasAgentAssignmentToStep(titleAssignmentContext) &&
+        !hasAgentAssignmentToStep(bodyAssignmentContext);
       // #3073 round 4-6: the repository-owned-validation exception is now
       // a single fully anchored positive signature (see the constants'
       // shared comment above) -- the whole window must match the literal
