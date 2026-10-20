@@ -799,6 +799,80 @@ test('provisional-decision-record schema accepts every event variant', () => {
   }
 });
 
+test('provisional-decision-record schema rejects URLs without a hostname', () => {
+  const schema = loadJson('schemas/provisional-decision-record.schema.json');
+  const invalidations: [string, string, (record: JsonRecord) => void][] = [
+    [
+      'evidence reference',
+      'selected',
+      (record) => {
+        (record.evidenceReferences as string[])[0] = 'https://@/x';
+      },
+    ],
+    [
+      'plan reference',
+      'work-started',
+      (record) => {
+        (record.event as JsonRecord).planReference = 'https://@/x';
+      },
+    ],
+    [
+      'merged pull request reference',
+      'work-completed',
+      (record) => {
+        ((record.event as JsonRecord).result as JsonRecord).reference =
+          'https://@/x';
+      },
+    ],
+    [
+      'other completion reference',
+      'work-completed',
+      (record) => {
+        (record.event as JsonRecord).result = {
+          kind: 'other',
+          reference: 'https://@/x',
+          verifiedAt: '2026-10-20T00:00:00Z',
+        };
+      },
+    ],
+    [
+      'confirmation comment URL',
+      'confirmed',
+      (record) => {
+        ((record.event as JsonRecord).confirmation as JsonRecord).commentUrl =
+          'https://@/x';
+      },
+    ],
+    [
+      'rework request comment URL',
+      'rework-requested',
+      (record) => {
+        ((record.event as JsonRecord).reworkRequest as JsonRecord).commentUrl =
+          'https://@/x';
+      },
+    ],
+    [
+      'rework roadmap URL',
+      'rework-authored',
+      (record) => {
+        ((record.event as JsonRecord).reworkRoadmap as JsonRecord).url =
+          'https://@/x';
+      },
+    ],
+  ];
+
+  for (const [name, type, mutateRecord] of invalidations) {
+    const record = buildProvisionalDecisionRecord(
+      provisionalDecisionEvent(type),
+    );
+    mutateRecord(record);
+    assert.ok(
+      validate(record, schema).length > 0,
+      `Expected ${name} with an empty hostname to fail`,
+    );
+  }
+});
+
 test('provisional-decision-record schema accepts other completion evidence', () => {
   const schema = loadJson('schemas/provisional-decision-record.schema.json');
   const event = provisionalDecisionEvent('work-completed');
@@ -2471,6 +2545,30 @@ test('discoverSchemaCases reports a schema that has no fixtures', () => {
 
 test('checkSchemaKeywords accepts supported format: uri', () => {
   assert.deepEqual(checkSchemaKeywords({ type: 'string', format: 'uri' }), []);
+});
+
+test('format uri accepts absolute URIs and rejects malformed references', () => {
+  const schema = { type: 'string', format: 'uri' };
+  for (const value of [
+    'https://github.com/kurone-kito/idd-skill/issues/4519',
+    'mailto:team@example.com',
+    'urn:example:decision',
+  ]) {
+    assert.deepEqual(validate(value, schema), [], value);
+  }
+  for (const value of [
+    'https://@/x',
+    'https://:/x',
+    'https://bad host/x',
+    'https://example.com/%zz',
+    'not a URI',
+  ]) {
+    const errors = validate(value, schema);
+    assert.ok(
+      errors.some((error) => error.includes('invalid uri value')),
+      `${value}: ${errors.join('; ')}`,
+    );
+  }
 });
 
 test('validate accepts a ["string","null"] union type and rejects other types', () => {

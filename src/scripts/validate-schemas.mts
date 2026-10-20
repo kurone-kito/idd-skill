@@ -156,9 +156,7 @@ const ALLOWED_KEYWORDS = new Set([
 
 /**
  * Format values this validator recognizes. `date-time` is enforced as an RFC 3339 timestamp
- * (see `validate`); `uri` is accepted as a documentation-only annotation that a
- * full JSON Schema validator enforces but this lightweight one does not, so a
- * schema may declare it without tripping the unsupported-format guard.
+ * and `uri` is enforced as an absolute URI (see `validate`).
  */
 const SUPPORTED_FORMATS = new Set(['date-time', 'uri']);
 
@@ -199,6 +197,17 @@ export function isRfc3339DateTime(value: string): boolean {
     return false;
   }
   return true;
+}
+
+/** Whether a string is an absolute URI that the platform URL parser accepts. */
+function isUri(value: string): boolean {
+  if (/\s|%(?![0-9a-fA-F]{2})/.test(value)) return false;
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -500,6 +509,9 @@ export function validate(
     }
     if (s.format === 'date-time' && !isRfc3339DateTime(str)) {
       errors.push(`${path}: invalid date-time value "${str}"`);
+    }
+    if (s.format === 'uri' && !isUri(str)) {
+      errors.push(`${path}: invalid uri value "${str}"`);
     }
   }
 

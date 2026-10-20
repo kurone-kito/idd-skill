@@ -123,7 +123,8 @@
       "items": {
         "type": "string",
         "minLength": 1,
-        "pattern": "^https?://\\S+$"
+        "pattern": "^https?://\\S+$",
+        "format": "uri"
       },
       "description": "Links to evidence only; a URL does not grant authority or replace independent verification."
     },
@@ -304,6 +305,7 @@
               "type": "string",
               "minLength": 1,
               "pattern": "^https?://\\S+$",
+              "format": "uri",
               "description": "Link to the reviewed implementation plan for this decision."
             }
           },
@@ -339,6 +341,7 @@
                       "type": "string",
                       "minLength": 1,
                       "pattern": "^https?://\\S+$",
+                      "format": "uri",
                       "description": "Link to the deliverable or its authoritative record."
                     },
                     "verifiedAt": {
@@ -371,6 +374,7 @@
                       "type": "string",
                       "minLength": 1,
                       "pattern": "^https?://\\S+$",
+                      "format": "uri",
                       "description": "Link to the deliverable or its authoritative record."
                     },
                     "verifiedAt": {
@@ -403,6 +407,7 @@
                   "type": "string",
                   "minLength": 1,
                   "pattern": "^https?://\\S+$",
+                  "format": "uri",
                   "description": "Link to the issue comment carrying the confirmation answer."
                 },
                 "response": {
@@ -448,6 +453,7 @@
                   "type": "string",
                   "minLength": 1,
                   "pattern": "^https?://\\S+$",
+                  "format": "uri",
                   "description": "Link to the issue comment that requests the alternate choice."
                 },
                 "requestedAt": {
@@ -509,6 +515,7 @@
                   "type": "string",
                   "minLength": 1,
                   "pattern": "^https?://\\S+$",
+                  "format": "uri",
                   "description": "Link to the same issue after it is published as a roadmap."
                 }
               },
