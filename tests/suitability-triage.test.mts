@@ -10629,6 +10629,50 @@ test('trust safety requires a direct relation between an agent cue and its targe
   assert.equal(directAssignment.pass, false);
 });
 
+test('trust safety carries colon-introduced agent assignments into list items -- Codex review #4328240550', () => {
+  for (const separator of ['\n', '\n\n']) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `The coding agent is responsible for:${separator}- Run this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, JSON.stringify(separator));
+  }
+
+  const unrelatedAssignment = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent is responsible for code review.\n\n- Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(unrelatedAssignment.pass, true);
+});
+
+test('trust safety recognizes possessive agent responsibility assignments -- Codex review #4328240569', () => {
+  for (const possessive of ["agent's", 'agent’s']) {
+    const assignedToAgent = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `This step is the coding ${possessive} responsibility.\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(assignedToAgent.pass, false, possessive);
+  }
+
+  const assignedToUser = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: "This step is the user's responsibility.\n\nRun this step by the user.",
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(assignedToUser.pass, true);
+});
+
 test('trust safety keeps agent actors across incidental and compound user mentions -- Codex review #4328001914 and #4328001921', () => {
   for (const body of [
     'The coding agent, using input from the user, must perform this step.\n\nRun this step by the user.',

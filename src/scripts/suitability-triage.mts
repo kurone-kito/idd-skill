@@ -1071,6 +1071,10 @@ const USER_ACTOR_STEP_NUMBERED_TARGET =
   /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?)\s+(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
   /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|belongs?\s+to|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)?|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complete(?:s|d|ing)?|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|handle(?:s|d|ing)?|manage(?:s|d|ing)?)\b/i;
+const USER_ACTOR_STEP_FORWARD_ASSIGNMENT_INTRODUCER = new RegExp(
+  String.raw`^\s*${USER_ACTOR_STEP_AGENT.source}[^.!?;:]{0,80}\b(?:(?:is|are|was|were|remains?)\s+(?:responsible\s+for|accountable\s+for|assigned\s+to|tasked\s+with|delegated\s+to|directed\s+to))\s*:\s*$`,
+  'i',
+);
 const USER_ACTOR_STEP_TARGET_AGENT_RELATION =
   /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?(?:for|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?(?:responsibility|responsibilities)\s+of|(?:the\s+)?ownership\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|done\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by|completed\s+by|managed\s+by|followed\s+by|carried\s+out\s+by))\s*$/i;
 const USER_ACTOR_STEP_PASSIVE_PARTICIPLE =
@@ -1371,7 +1375,8 @@ function splitUserActorStepClauses(
   context: string,
 ): ScopedUserActorStepClause[] {
   const clauses: ScopedUserActorStepClause[] = [];
-  const paragraphBoundary = /\r?\n[ \t]*\r?\n/g;
+  const paragraphBoundary =
+    /\r?\n[ \t]*\r?\n|\r?\n(?=[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+)/g;
   let pendingForwardAssignment: string | null = null;
   let pendingAgentSubject: string | null = null;
   for (const [sectionId, section] of splitMarkdownHeadingSections(
@@ -1419,11 +1424,12 @@ function splitUserActorStepClauses(
       )
         continue;
       const paragraphHasForwardAssignment =
-        USER_ACTOR_STEP_ASSIGNMENT_CUE.test(paragraph) &&
-        USER_ACTOR_STEP_ASSIGNED_TARGET.test(paragraph) &&
-        /\b(?:following|below|above|that\s+follow|which\s+follow)\b/i.test(
-          paragraph,
-        ) &&
+        (USER_ACTOR_STEP_FORWARD_ASSIGNMENT_INTRODUCER.test(paragraph) ||
+          (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(paragraph) &&
+            USER_ACTOR_STEP_ASSIGNED_TARGET.test(paragraph) &&
+            /\b(?:following|below|above|that\s+follow|which\s+follow)\b/i.test(
+              paragraph,
+            ))) &&
         !USER_ACTOR_STEP_NEGATION_CUE.test(paragraph);
       const agentPrefix =
         pendingAgentSubject !== null &&
@@ -1646,6 +1652,18 @@ function hasAgentActorForTarget(
     const targetToAgent = segment.text.slice(targetEnd, agent.start);
     if (USER_ACTOR_STEP_TARGET_AGENT_RELATION.test(targetToAgent)) {
       return true;
+    }
+    if (cue !== null) {
+      const agentToCue = segment.text.slice(agent.end, cue.start);
+      if (
+        /^\s+(?:(?:is|are|was|were)\s+)?(?:the\s+)?$/i.test(targetToAgent) &&
+        /^['’]s\s*$/i.test(agentToCue) &&
+        /^(?:responsibility|responsibilities|accountability|assignment|assignments|ownership)\b/i.test(
+          segment.text.slice(cue.start, cue.end),
+        )
+      ) {
+        return true;
+      }
     }
     const beforeTarget = segment.text.slice(0, targetStart);
     return (
