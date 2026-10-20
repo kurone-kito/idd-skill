@@ -104,6 +104,13 @@ function isLineCommentOpener(inner, secondSlashIndex) {
 function isSentencePunctuation(inner, delimiterIndex, afterIndex) {
   const previous = inner[delimiterIndex - 1];
   const suffix = inner.slice(afterIndex).replace(/_+$/u, '').trimEnd();
+  const abbreviationBeforeLowercaseProse =
+    /(?:^|(?<![\p{L}\p{N}_./-]))(?:e\.g|i\.e|etc|vs)\.$/iu.test(
+      inner.slice(0, delimiterIndex + 1),
+    ) && /^[a-z]/u.test(suffix);
+  if (abbreviationBeforeLowercaseProse) {
+    return true;
+  }
   const nextWord =
     /^[A-Z][A-Za-z]*(?:[-'’][A-Za-z]+)*(?=[,.!?;:]?(?:\s|`|$))/u.exec(
       suffix,

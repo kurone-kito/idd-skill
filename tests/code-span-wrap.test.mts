@@ -115,6 +115,34 @@ test('does not flag lowercase text after a standalone numbered step', () => {
   }
 });
 
+test('does not flag common abbreviations before lowercase prose', () => {
+  for (const span of [
+    '`Use e.g. this option`',
+    '`(e.g. this option)`',
+    '`Use i.e. that option`',
+    '`Use etc. in the next step`',
+    '`Compare vs. another case`',
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
+});
+
+test('still flags dotted identifiers whose suffix resembles an abbreviation', () => {
+  for (const [span, before, after] of [
+    ['`Namespace.e.g. type`', 'Namespace.e.g.', 'type'],
+    ['`path/e.g. result`', 'path/e.g.', 'result'],
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [
+      {
+        line: 1,
+        before,
+        after,
+        separator: 'literal-space',
+      },
+    ]);
+  }
+});
+
 test('flags uppercase dotted-token continuations', () => {
   for (const span of [
     '`README. MD`',
