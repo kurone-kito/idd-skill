@@ -239,13 +239,13 @@ here.
 
 ## Remote fetch examples
 
-These `gh api` and `curl` loops intentionally list every canonical
-source file instead of fetching directories. This keeps raw-content
-imports deterministic and makes missing files visible during
-onboarding. Their `SKILL_DEST` variable is deliberately separate from
-the source path and controls the selected runtime-native target
-directory. `idd-template/ONBOARDING.md`'s Option A points here instead
-of inlining these loops.
+These `gh api` and `curl` loops list every canonical source file
+instead of fetching directories. This keeps raw-content imports
+deterministic and makes missing files visible during onboarding.
+Their `SKILL_DEST` variable is separate from the source path and
+controls the selected runtime-native target directory.
+`idd-template/ONBOARDING.md`'s Option A points here instead of inlining
+these loops.
 
 Use `gh api` or `curl` to download each file from the raw-content
 endpoint. Replace `{DEST}` with the root of the target repository.
@@ -264,6 +264,7 @@ mkdir -p "${DEST}/.github/idd" "${DEST}/.github/workflows" \
 
 for FILE in \
   ".github/idd/config.json" \
+  ".github/idd/config.example.jsonc" \
   ".github/workflows/post-merge-cleanup.yml" \
   ".githooks/_idd-worktree-guard.sh" \
   ".githooks/pre-commit" \
@@ -401,6 +402,7 @@ mkdir -p "${DEST}/.github/idd" "${DEST}/.github/workflows" \
 
 for FILE in \
   ".github/idd/config.json" \
+  ".github/idd/config.example.jsonc" \
   ".github/workflows/post-merge-cleanup.yml" \
   ".githooks/_idd-worktree-guard.sh" \
   ".githooks/pre-commit" \

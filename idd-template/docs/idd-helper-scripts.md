@@ -451,7 +451,7 @@ outcome path.
 | `idd-issue-authoring-delegate.mjs`   | an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                  | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception (deterministic, network-free)                                                                                                                                                                       |
 | `idd-critique-telemetry-hook.mjs`    | an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                  | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception; `--invoke` always exits `0` with no envelope (fire-and-forget contract)                                                                                                                            |
 | `idd-suggest-untrusted-labelers.mjs` | an invalid `--format`, or an unknown flag (exit `1`/`2`)                                                                                                                                                                                                                                                    | a `gh` failure sweeping issue events (a rate-limit-shaped 403/429 gets an actionable message, still `transport`)                                                                        | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception                                                                                                                                                                                                     |
-| `idd-local-admission.mjs`            | an unknown flag, or no command after `--`                                                                                                                                                                                                                                                                   | none today                                                                                                                                                                              | the command's own status; `2` for a refusal before the command starts (policy, cap, symlink, or lock); `75` with `local-admission: expired` when the wait reaches `maxWait`                                                                                                                                                                                                                                                                                                                                                                                                                                                      | an unexpected exception                                                                                                                                                                                                     |
+| `idd-local-admission.mjs`            | an unknown flag, or no command after `--`                                                                                                                                                                                                                                                                   | none today                                                                                                                                                                              | the command's own status; `2` for a refusal before the command starts (policy, cap, symlink, or lock); `75` with `local-admission: expired` when the wait reaches `maxWait`; `3` with `local-admission: pueue task outcome unknown` when a submitted task outcome cannot be verified                                                                                                                                                                                                                                                                                                                                             | an unexpected exception                                                                                                                                                                                                     |
 | `idd-worker-report.mjs`              | a missing or unknown mode, an unknown flag, a bad `--file`/`--stdin`/`--since` combination or value, or a record that is unreadable, not JSON, or fails the schema (exit `1`)                                                                                                                               | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception, including a store lock that could not be acquired (network-free)                                                                                                                                   |
 
 `tests/helper-cli-contract.test.mts` (source repo only) enumerates
@@ -2587,10 +2587,12 @@ cannot add it, so they fall back to the 60-second backoff.
 ## Local validation admission (kurone-kito/idd-skill#4428)
 
 `scripts/idd-local-admission.mjs` runs one command after `--` under a
-host-local slot that every repository of one OS user shares (issue
-`#4426`). The slot is a `flock(1)` lock. The command after `--` is the
-child argv: the helper never parses a shell string, so a phase that needs
-a shell passes the shell as its argv.
+host-local slot shared by repositories of one OS user (issue `#4426`). The
+`flock` backend uses a `flock(1)` lock; on non-Windows hosts, the `pueue`
+backend submits the command to the configured shared pueue group. The command
+after `--` is the child argv. The flock backend never parses a shell string;
+the pueue backend quotes each argv element before submitting the shell command
+that pueue requires.
 
 ```sh
 node scripts/idd-local-admission.mjs -- <command> [args...]
@@ -2607,39 +2609,91 @@ Behavior:
 
 - `enabled: false` runs the command directly and returns its status. No lock
   file is created.
-- Backend `flock` with a stored `maxConcurrent` above 1 exits `2` before the
-  command starts. The rule reads the raw stored value: a number above 1, or a
-  string that reads above 1. The normalizer's clamp does not apply, so a stored
-  `9` is refused rather than run serially.
-- Backend `pueue` is accepted by the schema, but this helper does not implement
-  it yet. The run takes the flock path with one slot, prints one notice that
-  names the backend, and leaves the stored cap unchanged. The pueue child issue
-  replaces this rule when it lands.
-- Where `flock` is not on `PATH` (Windows, and macOS unless it is installed),
-  the command runs directly with one notice before the fallback resolves its
-  state root. Admission is off on that host.
-- The lock is `<state>/idd-skill/local-admission/validate.lock`. `<state>` is an
-  absolute `XDG_STATE_HOME`, else `~/.local/state`; on Windows, an absolute
-  `LOCALAPPDATA`, else `~/AppData/Local`. The directory is a sibling of
-  `github-api-load-control`. The helper never writes, truncates, deletes, or
-  records the file.
+- Backend `flock` admits one command at a time. It exits `2` before the command
+  starts when the raw stored `maxConcurrent` is above 1; a stored `9` is
+  refused rather than silently run serially. This raw-cap refusal applies only
+  to the flock backend.
+- On non-Windows hosts, backend `pueue` uses `pueue status --json` with a fresh
+  random-label query and `first 1` to check the daemon before submitting
+  anything. The query normally selects no tasks and limits the returned status
+  to at most one task record, so the helper does not capture the full retained
+  task list. A missing client, connection error, timeout, or any non-zero
+  daemon-check exit prints one pueue notice and uses the flock path, whatever
+  the client exit code. Nothing was submitted, so this fallback cannot start a
+  duplicate. The pueue path does not require `flock`.
+- The pueue backend reads the configured group and creates a missing group with
+  the effective cap (1 through 8). If another session creates it first, the
+  helper rereads the group and uses it. An existing group's parallel count is
+  kept; a mismatch prints a notice and still submits. A paused group also gets
+  a notice, then the task waits under `maxWait`.
+- A pueue submission uses the caller's working directory, a random label, and
+  `IDD_LOCAL_ADMISSION=1`. Every later task read or action names the returned
+  task id. State reads use `pueue log <id> --json` and verify the label before
+  acting; the helper never prints pueue's JSON, which can include the captured
+  environment. If `add` fails, times out, or returns no task id, the helper
+  exits `3` with an outcome-unknown notice and does not use flock: the daemon
+  may already have queued the task.
+- Exit `3` also means that a submitted task may have started but its final
+  outcome could not be verified. The helper does not print an expiry notice,
+  use the flock fallback, or submit a second copy in that run. A later retry
+  can still duplicate a task left behind by an unknown outcome.
+- The pueue backend polls queued, stashed, and locked tasks until they start or
+  `maxWait` expires. On expiry it stashes and removes the task by id. A
+  successful stash proves that the command had not started, so the helper
+  prints `local-admission: expired` and exits `75`; if removal fails, the task
+  stays stashed and a notice names its id. When stash fails, the helper rereads
+  the task: a started task is handled as a run, and any other unverifiable
+  state exits `3`.
+- A finished pueue task returns its command exit code and is removed by id. A
+  failed removal prints a notice but does not change the returned status. A
+  task that finishes without an exit code prints its result and returns `126`
+  for a spawn failure or `1` for other pueue-only results. A child exit `75`
+  is returned without the expiry notice.
+- The flock lock is `<state>/idd-skill/local-admission/validate.lock`.
+  `<state>` is an absolute `XDG_STATE_HOME`, else `~/.local/state`; on Windows,
+  an absolute `LOCALAPPDATA`, else `~/AppData/Local`. The lock is used only by
+  the flock path, which never writes, truncates, deletes, or records the file.
+- Where `flock` is absent, the flock backend runs directly with one notice.
+  Backend `pueue` runs directly with one notice on `win32`; on other hosts it
+  can still use pueue without flock.
 - A wait that reaches `maxWait` (`PT2H` by default, at most six hours) prints
   `local-admission: expired` and exits `75`, and the command does not start.
   While the wait lasts, stderr gets a `local-admission: waiting` line at least
   once a minute.
 - A child that exits `75` after the lock is acquired is returned as `75`
   without the expiry line. Any other outcome is the command's own status.
-- SIGINT and SIGTERM are forwarded to the admitted process group. The helper
-  waits for that group to end, then exits with `128` plus the signal number. It
-  never escalates to SIGKILL, so a command that ignores the signal keeps the
-  slot.
-- The admitted command runs in its own session with no controlling terminal.
+- On the flock path, SIGINT and SIGTERM are forwarded to the admitted process
+  group. The helper waits for that group to end, then exits with `128` plus the
+  signal number. It never escalates to SIGKILL, so a command that ignores the
+  signal keeps the slot. On the pueue path, a signal while queued stashes and
+  removes the task; a signal while running calls `pueue kill <id>`, which sends
+  SIGKILL to that task's process group in pueue 4.x. A successful kill makes
+  the helper exit with `128` plus the received signal; if the kill fails, it
+  rereads the task and either returns a finished status or exits `3`.
+- The flock path runs the admitted command in its own session with no
+  controlling terminal. On the pueue path, the daemon starts it with the
+  environment captured at submission plus `PUEUE_GROUP` and
+  `PUEUE_WORKER_ID`, outside the caller's sandbox, container, or namespace.
+- On the pueue path, task stdout and stderr share pueue's task log; streamed
+  stderr therefore reaches the helper's stdout. The helper does not pass
+  caller stdin to a pueue task, so a command that reads stdin waits until a
+  client sends input with `pueue send` or the task is killed. The flock path
+  inherits the caller's stdin and keeps stdout and stderr separate.
 - Setting `IDD_LOCAL_ADMISSION` in the environment makes the helper run the
   command directly, without the lock. The helper sets that variable for the
   admitted command, so a nested call cannot wait on the same lock.
 - The bin `idd-local-admission` runs this module in the same process instead of
   through `run-helper`, which forwards no signals. A SIGTERM sent to the
   registered command therefore reaches the admitted command.
+
+The pueue backend relies on pueue's default settings. This reliance is an
+open risk for the operator to accept. With
+`client.read_local_logs: false`, a queued-task state read can fail and leave
+the task queued with exit `3`. A custom `daemon.shell_command` can parse the
+submitted command differently. `daemon.pause_group_on_failure` or
+`daemon.pause_all_on_failure` can pause the shared group after a failed task.
+These settings can therefore change whether a task runs, how it runs, or how
+later tasks wait.
 
 ### Full-profile validation command order
 
@@ -2669,8 +2723,8 @@ from repository `maxWait` (ISO duration, rounded
 up to seconds).
 Omitted, invalid, or above-maximum values use the default 7200 seconds
 (`PT2H`); the maximum valid value is 21600 seconds (`PT6H`). If `backend` is
-`pueue`, print the helper's one notice that it is not implemented and continue
-with the one-slot `flock` path. If `flock` is absent, print the helper's notice
+`pueue`, print one helper-free notice and continue with the one-slot `flock`
+path; this fallback does not call pueue. If `flock` is absent, print the notice
 and run directly before checking the raw cap or resolving the state root. If
 `flock` is present and `backend` is `flock`, refuse with exit `2` when the
 stored raw `maxConcurrent` is above `1`; the normalizer's clamp does not apply.
@@ -2839,7 +2893,7 @@ if [ "$enabled" = false ]; then
   run_direct
 fi
 if [ "$backend" = pueue ]; then
-  printf 'local-admission: backend "pueue" is not implemented yet; this run takes the flock path with one slot\n' >&2
+  printf 'local-admission: helper-free path uses flock for backend "pueue" with one slot\n' >&2
 fi
 if ! command -v flock >/dev/null 2>&1; then
   printf 'local-admission: flock is not available on this host; running the command without admission\n' >&2
@@ -2998,9 +3052,43 @@ them:
   member or unknown process-state result keeps the lock held.
 - `IDD_LOCAL_ADMISSION` already set in the environment skips admission. A
   session must not set the variable itself.
-- The slot covers one OS user. A second OS user has another slot, and a run from
-  the pueue backend, once it lands, can overlap the flock slot.
-- Admission is off where `flock` is absent (Windows, and macOS unless installed).
+- The slot covers one OS user. A second OS user has another slot. Flock and
+  pueue runs for one OS user can overlap because they use different admission
+  mechanisms; helper-free `pueue` fallback also uses only flock.
+- A pueue group is shared across repositories for one OS user. An existing
+  group with a larger parallel count can exceed this repository's configured
+  cap, and a paused group can leave tasks queued until `maxWait`.
+- Between a pueue state read that verifies the random label and a task action,
+  another client can remove or switch the task id. The later action could then
+  affect the replacement task; label checking narrows but cannot close this
+  race.
+- When a successful stash is followed by a failed remove, another client can
+  start the stashed task later, including after the original helper has
+  reported expiry or a signal exit.
+- An `add` whose result is unknown may already have queued the command. A later
+  retry can submit a second copy while the first task still exists; the group
+  cap limits concurrency, not duplicate submissions.
+- A pueue task left queued by an outcome-unknown failure, or by SIGKILL of the
+  helper, can start later without its original caller. A pueue task is not a
+  helper child; SIGKILL leaves it running and holding a group slot.
+- A task the helper does not observe finish, or a stashed task that could not
+  be removed, retains its log and captured environment in the daemon until an
+  operator removes it. The daemon runs the task outside any caller sandbox,
+  container, or namespace.
+- Pueue stores the submitted environment while a task exists, readable by the
+  same OS user. The helper avoids printing that JSON, but it cannot keep the
+  daemon from retaining the environment and task log.
+- The pueue path assumes default daemon and client settings. Turning off
+  `client.read_local_logs` can make queued state reads fail; changing
+  `daemon.shell_command` can change how the submitted command is parsed; and
+  `daemon.pause_group_on_failure` or `daemon.pause_all_on_failure` can pause
+  later work after one task fails. These settings remain an open risk for the
+  operator to accept.
+- The helper-free fallback does not invoke pueue; a configured pueue backend
+  takes its documented one-slot flock path instead.
+- Admission through flock is unavailable where `flock` is absent (Windows,
+  and macOS unless installed). The pueue backend works on non-Windows hosts
+  without flock.
 
 ## Effective layered policy (kurone-kito/idd-skill#3820)
 

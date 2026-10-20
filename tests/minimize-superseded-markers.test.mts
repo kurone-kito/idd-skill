@@ -799,7 +799,7 @@ test('runMinimize never reaches applyMinimize for a candidate whose OWN probe al
   }
 });
 
-test("runMinimize threads the actual remaining budget into probeSubject's own gh call, not just GH_TIMEOUT_MS (#2754, chatgpt-codex-connector review round 5)", () => {
+test('runMinimize passes the deadline to gh and reports a timeout failure (#2754, chatgpt-codex-connector review round 5)', () => {
   // The stub's probe response sleeps a full real second (via a blocking
   // Atomics.wait, portable to Windows unlike execSync('sleep 1')) before
   // answering -- a correctly-threaded ~150ms remainder passed all the way
@@ -810,15 +810,18 @@ test("runMinimize threads the actual remaining budget into probeSubject's own gh
   const restore = stubExecutable(
     'gh',
     `const args = process.argv.slice(2);
+const response = JSON.stringify({ data: { nodes: [{ __typename: 'IssueComment', id: 'IC_a', url: 'https://github.com/o/r/issues/1#issuecomment-1', isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } }] } });
 if (args[0] === 'api' && args[1] === 'graphql') {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
-  process.stdout.write(JSON.stringify({ data: { node: { __typename: 'IssueComment', url: 'https://github.com/o/r/issues/1#issuecomment-1', isMinimized: false, viewerCanMinimize: true, author: { login: 'kurone-kito' } } } }));
+  process.stdout.write(response);
   process.exit(0);
 }
-process.exit(1);
+// A wrong gh invocation returns an eligible result, so the assertions below
+// fail instead of mistaking an early stub exit for the expected timeout.
+process.stdout.write(response);
+process.exit(0);
 `,
   );
-  const start = Date.now();
   try {
     const report = runMinimize({
       subjectIds: ['IC_a'],
@@ -828,15 +831,19 @@ process.exit(1);
       allowUntrusted: false,
       deadlineMs: 150,
     });
-    const elapsed = Date.now() - start;
-    assert.ok(
-      elapsed < 900,
-      `expected the ~150ms timeout to cut off the 1s stub sleep, took ${elapsed}ms`,
-    );
-    // The probe call itself was killed by the timeout, so it surfaces as a
-    // transport failure -- not a clean eligible/would-apply result.
+    // A timed-out probe surfaces as a transport failure -- not a clean
+    // eligible/would-apply result. The stub's non-GraphQL fallback returns an
+    // eligible node, keeping a command-shape mistake distinguishable from a
+    // timeout without depending on a marker written before the 150ms deadline.
+    assert.equal(report.items.length, 1);
     assert.equal(report.items[0]?.status, 'failed');
+    const reason = report.items[0]?.reason ?? '';
+    assert.match(reason, /^gh-graphql-error: /);
+    assert.notEqual(reason, 'gh-graphql-error: ');
+    assert.match(reason, /ETIMEDOUT|signal/i);
+    assert.equal(report.counts.failed, 1);
     assert.equal(report.counts.eligible, 0);
+    assert.equal(report.counts.applied, 0);
   } finally {
     restore();
   }
@@ -877,7 +884,7 @@ process.exit(1);
       // The pre-fix behavior collapsed to exactly this string once
       // e.stderr's empty value short-circuited past e.message.
       assert.notEqual(result.reason, 'gh-graphql-error: ');
-      assert.match(result.reason, /ETIMEDOUT|signal|Command failed/i);
+      assert.match(result.reason, /ETIMEDOUT|signal/i);
     } finally {
       restore();
     }
