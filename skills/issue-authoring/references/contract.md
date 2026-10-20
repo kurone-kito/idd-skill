@@ -1210,13 +1210,17 @@ Correct, qualify, or remove any such claim the evidence does not support. Put
 supporting file references, GitHub permalinks, or read-only command
 evidence in the review packet's existing `evidence` array. If a claim
 remains unverified and materially affects the proposed scope or rationale,
-route the draft to `needs-decision` under the existing uncertainty rule
-in [A4.5 Suitability Gate Alignment](#a45-suitability-gate-alignment).
+route it under [Human-dependency isolation](#human-dependency-isolation)
+and [A4.5 Suitability Gate Alignment](#a45-suitability-gate-alignment): use
+`needs-decision` for an unresolved product, policy, or design choice, and
+`blocked-by-human` when verification waits on a person, credential, asset,
+or outside system.
 This check adds no field to the review packet schema and does not change
 the completed-draft review itself. This responds to the factual-history
-error recorded during draft review on 2026-10-17 in carrier issue
-[#4479](https://github.com/kurone-kito/idd-skill/issues/4479), including
-the issue #3838 status and issue #1019 scope-history claims.
+error reported in [issue #4566](https://github.com/kurone-kito/idd-skill/issues/4566)
+for a draft carried in [issue #4479](https://github.com/kurone-kito/idd-skill/issues/4479),
+concerning [issue #3838](https://github.com/kurone-kito/idd-skill/issues/3838)
+and [issue #1019](https://github.com/kurone-kito/idd-skill/issues/1019).
 
 ## Completed-draft adversarial review
 

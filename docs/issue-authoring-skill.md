@@ -150,10 +150,15 @@ runtime observations under the existing
 Correct, qualify, or remove any such unsupported claim, and put supporting file
 references, GitHub permalinks, or read-only command evidence in the
 review packet's existing `evidence` array. Route a materially unresolved
-claim through the existing
-[needs-decision uncertainty rule](#alignment-with-a45-suitability-gate);
-this check adds no packet fields. It responds to the factual-history
-error recorded in [issue #4479](https://github.com/kurone-kito/idd-skill/issues/4479).
+claim under the existing rules in
+[Human-dependency isolation](#human-dependency-isolation) and
+[A4.5 Suitability Gate Alignment](#alignment-with-a45-suitability-gate):
+use `needs-decision` for unresolved product, policy, or design choices,
+and `blocked-by-human` when verification waits on a person, credential,
+asset, or outside system. This check adds no packet fields. It responds
+to the factual-history error reported in [issue #4566](https://github.com/kurone-kito/idd-skill/issues/4566),
+which concerns [issue #3838](https://github.com/kurone-kito/idd-skill/issues/3838)
+and [issue #1019](https://github.com/kurone-kito/idd-skill/issues/1019).
 
 ## Output readiness model
 

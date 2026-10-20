@@ -79,9 +79,14 @@ needs-decision, blocked-by-human, and out-of-scope.
    records; and runtime observations under the existing artifact-citation
    rule. Correct, qualify, or remove any such unsupported claim, and put support
    in the review packet's existing `evidence` array. Route a materially
-   unresolved claim through the existing `needs-decision` rule. The
-   packet schema stays unchanged. This check responds to the factual
-   history error recorded in [issue #4479](https://github.com/kurone-kito/idd-skill/issues/4479).
+   unresolved claim through the existing uncertainty and
+   human-dependency rules: `needs-decision` for unresolved product,
+   policy, or design choices, and `blocked-by-human` when verification
+   waits on a person, credential, asset, or outside system. The packet
+   schema stays unchanged. This check responds to the factual-history
+   error reported in [issue #4566](https://github.com/kurone-kito/idd-skill/issues/4566),
+   which concerns [issue #3838](https://github.com/kurone-kito/idd-skill/issues/3838)
+   and [issue #1019](https://github.com/kurone-kito/idd-skill/issues/1019).
    Then run the completed-draft adversarial review on each completed
    roadmap, child, or orphan draft. This is
    not the Intake critique above. The packet, checklist, mode table,
