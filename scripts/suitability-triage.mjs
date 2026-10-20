@@ -892,8 +892,10 @@ const USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE =
   /\b(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?)\b[^.!?;]{0,80}$/i;
 const USER_ACTOR_STEP_USER_DIRECTIVE_START =
   /^\s*(?:(?:then|next|now|afterwards?)\s+)?run\s+this\s+(?:step|check)\s+by\s+the\s+user\b/i;
-const USER_ACTOR_STEP_NEGATION_CUE =
-  /\b(?:never|(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|(?:must|should|shall|will|could|would|might|may|need|do|does|did|is|are|was|were|has|have|had)n['’]t|(?:won|can|shan|ain)['’]t|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b/i;
+const USER_ACTOR_STEP_NEGATION_CUE = new RegExp(
+  String.raw`\b(?:never(?=\s+(?:(?:is|are|was|were)\s+)?${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|(?:must|should|shall|will|could|would|might|may|need|do|does|did|is|are|was|were|has|have|had)n['’]t|(?:won|can|shan|ain)['’]t|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b`,
+  'i',
+);
 const USER_ACTOR_STEP_AGENT_HEADING_LABEL =
   /^\s*(?:the\s+)?(?:coding\s+)?(?:agents?|assistants?|automation|AIs?|you|workers?|bots?|models?|codex|copilots?|claude(?:\s+code)?|gemini(?:\s+cli)?|cursor|cline|opencode|windsurf|devin|grok(?:\s+build)?)(?:\s+(?:tasks?|responsibilities|duties|work))?\s*$/i;
 function normalizeMarkdownHeadingLabel(heading) {

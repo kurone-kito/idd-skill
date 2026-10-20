@@ -11035,3 +11035,14 @@ test('trust safety treats never as explicit agent-assignment negation -- Codex r
     assert.equal(result.pass, true, assignment);
   }
 });
+
+test('trust safety does not treat a double-negative agent assignment as negated -- E10', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent never fails to perform this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
