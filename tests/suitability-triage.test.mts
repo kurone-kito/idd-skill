@@ -11211,6 +11211,24 @@ test('trust safety ties a preceding agent pronoun to its explicit step anteceden
     trustSafetyAmbiguous: false,
   } as Context);
   assert.equal(unrelatedPronoun.pass, true);
+
+  const parentAssignment = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '- This step verifies the deployment. The coding agent must perform it.\n  - Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(parentAssignment.pass, false);
+
+  const siblingAssignment = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '- This step verifies the deployment. The coding agent must perform it.\n- Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(siblingAssignment.pass, true);
 });
 
 test('trust safety recognizes bare directional step-list assignment targets -- #4577', () => {

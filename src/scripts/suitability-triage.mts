@@ -2323,7 +2323,21 @@ function hasAgentPronounAssignmentBeforeUserStep(
       directiveBodyStart >= sectionStart && directiveBodyStart < sectionEnd,
   );
   const sectionStart = section?.start ?? 0;
-  let precedingEnd = directiveBodyStart;
+  const directiveLineIndex = lineIndexAtOffset(
+    index.lineStarts,
+    directiveBodyStart,
+  );
+  const directiveLineStart = index.lineStarts[directiveLineIndex] ?? 0;
+  const directiveLinePrefix = context.slice(
+    directiveLineStart,
+    directiveBodyStart,
+  );
+  const listItemPrefixPattern =
+    /^([ \t]*)(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/;
+  const directiveListItemPrefix =
+    listItemPrefixPattern.exec(directiveLinePrefix);
+  let precedingEnd =
+    directiveListItemPrefix === null ? directiveBodyStart : directiveLineStart;
   while (
     precedingEnd > sectionStart &&
     /[ \t\r\n]/.test(context[precedingEnd - 1] ?? '')
@@ -2356,6 +2370,26 @@ function hasAgentPronounAssignmentBeforeUserStep(
     clauses.at(-2)?.clause ?? '',
   );
   if (!antecedentInAssignment && !antecedentInPriorClause) return false;
+  if (directiveListItemPrefix !== null) {
+    const assignmentOffset = precedingStart + assignment.start;
+    const assignmentLineIndex = lineIndexAtOffset(
+      index.lineStarts,
+      assignmentOffset,
+    );
+    const assignmentLineStart = index.lineStarts[assignmentLineIndex] ?? 0;
+    const assignmentLineEnd =
+      index.lineStarts[assignmentLineIndex + 1] ?? context.length;
+    const assignmentListItemPrefix = listItemPrefixPattern.exec(
+      context.slice(assignmentLineStart, assignmentLineEnd),
+    );
+    if (
+      assignmentListItemPrefix !== null &&
+      (assignmentListItemPrefix[1] ?? '').replace(/\t/g, '    ').length >=
+        (directiveListItemPrefix[1] ?? '').replace(/\t/g, '    ').length
+    ) {
+      return false;
+    }
+  }
 
   const normalized = assignment.clause.replace(
     /\bit\b/gi,
