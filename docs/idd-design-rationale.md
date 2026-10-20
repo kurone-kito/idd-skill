@@ -691,6 +691,15 @@ amendments below.
 
 ## Work and self-review
 
+The 2026-10-17 review record on draft carrier #4479 captured
+material history claims that were wrong or incomplete: issue #3838 was
+described as a declined check despite being completed, and issue #1019 was
+omitted as the source of the high-contention-only overlap scope. Both
+errors could have been caught from live GitHub records before review. The
+new pre-review check requires current-source verification and places
+support in the existing packet, without changing its schema or the review. See
+issue #4479 and implementation issue #4566.
+
 ### B1 Step 3 — install-deps silent under-install detection
 
 Two independent fresh-worktree sessions observed `pnpm install
