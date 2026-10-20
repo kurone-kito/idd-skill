@@ -110,7 +110,12 @@ test('does not flag the three current sentence-punctuation examples', () => {
 });
 
 test('flags uppercase dotted-token continuations', () => {
-  for (const span of ['`README. MD`', '`config. JSON`', '`Namespace. Type`']) {
+  for (const span of [
+    '`README. MD`',
+    '`config. JSON`',
+    '`Namespace. Type`',
+    '`Namespace1. Type`',
+  ]) {
     const [before, after] = span.slice(1, -1).split('. ');
     assert.deepEqual(findCorruptingCodeSpanWraps(span), [
       {
@@ -134,7 +139,10 @@ test('does not flag sentence periods before prose in multi-tick code examples', 
         '`foo. Hello`',
         '`foo. Hello, world`',
         '`foo. Hello!`',
+        '`foo. Hello-world`',
+        "`foo. It's`",
         '`Run the command. However, stop.`',
+        '`Run the command. SSH connects securely`',
         '`foo. Please check`',
         '`foo. Next step`',
         '`foo. Note this`',

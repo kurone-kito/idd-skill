@@ -128,8 +128,18 @@ function isSentencePunctuation(
 ): boolean {
   const previous = inner[delimiterIndex - 1];
   const suffix = inner.slice(afterIndex).replace(/_+$/u, '').trimEnd();
-  const nextWord = /^[A-Z][A-Za-z]*(?=[,.!?;:]?(?:\s|`|$))/u.exec(suffix)?.[0];
-  if (nextWord === undefined || /^[A-Z]{2,}$/u.test(nextWord)) {
+  const nextWord =
+    /^[A-Z][A-Za-z]*(?:[-'’][A-Za-z]+)*(?=[,.!?;:]?(?:\s|`|$))/u.exec(
+      suffix,
+    )?.[0];
+  if (nextWord === undefined) {
+    return false;
+  }
+  const followingText = suffix.slice(nextWord.length).trimStart();
+  const followingProseWord =
+    /^[A-Za-z]/u.test(followingText) ||
+    /^[,.!?;:](?:\s|`|$)/u.test(followingText);
+  if (/^[A-Z]{2,}$/u.test(nextWord) && !followingProseWord) {
     return false;
   }
   if (previous === undefined || previous === '`') {
@@ -145,16 +155,12 @@ function isSentencePunctuation(
     return (
       beforeNumber === undefined ||
       /\s/.test(beforeNumber) ||
-      /[A-Za-z]/.test(beforeNumber)
+      (/[A-Za-z]/.test(beforeNumber) && followingProseWord)
     );
   }
   const previousWord = /[A-Za-z][A-Za-z0-9_-]*$/u.exec(
     inner.slice(0, delimiterIndex),
   )?.[0];
-  const followingText = suffix.slice(nextWord.length).trimStart();
-  const followingProseWord =
-    /^[A-Za-z]/u.test(followingText) ||
-    /^[,.!?;:](?:\s|`|$)/u.test(followingText);
   // A title-cased or uppercase prefix followed by a single capitalized token
   // is more likely a dotted identifier than prose. A further word or
   // sentence punctuation after the opener marks prose, while lowercase
