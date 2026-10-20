@@ -844,8 +844,7 @@ const REPO_OWNED_VALIDATION_SENTENCE_START =
   /(?:^|\n[ \t]*\r?\n\s*)(?:please\s+)?$/i;
 // #4562: "by the user" is an actor phrase only for these exact step/check
 // objects; keep every other supplied-content target on the unsafe path.
-const USER_ACTOR_STEP_WINDOW =
-  /^\s*this\s+(?:step|check)\s+by\s+the\s+user\s*$/i;
+const USER_ACTOR_STEP_WINDOW = /^\s*this\s+(step|check)\s+by\s+the\s+user\s*$/i;
 // #4577: allow the exact user-actor directive at a normal issue paragraph,
 // heading, or list-item boundary. Explicit agent assignments in the issue
 // title or body still win, including assignments after the directive.
@@ -859,17 +858,18 @@ const USER_ACTOR_STEP_AGENT =
   /\b(?:the\s+)?(?:coding\s+)?(?:agent|assistant|automation|AI|you|worker|bot|model|codex|copilot|claude(?:\s+code)?|gemini(?:\s+cli)?|cursor|cline|opencode|windsurf|devin|grok(?:\s+build)?)\b/i;
 const USER_ACTOR_STEP_OTHER_ACTOR =
   /\b(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
+const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT =
+  /^\s+(?:(?:the)\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
 // #4577: bare "following" is a target only when it introduces an assignment;
 // phrases such as "the following behavior" are not step assignments.
 // Keep the target tied to a step/check or an explicitly referenced list;
 // unrelated implementation tasks must not veto a separate manual check.
 const USER_ACTOR_STEP_ASSIGNED_TARGET =
-  /\b(?:(?:(?:this|that)(?:\s+(?:exact|same|specific|particular))?|these|those)\s+(?:steps?|checks?)|the\s+(?:(?:exact|same|specific|particular)\s+)?(?:steps?|checks?)|(?:the\s+)?following\s+(?:steps?|checks?)|(?:the\s+(?:exact|same|specific|particular)\s+)?instructions?\s+(?:below|above|that\s+follow|which\s+follow))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
-// A numbered assignment is scoped to the matching numbered checklist item.
-// Keep this separate from the broad target pattern so "step 1" does not
-// become an assignment to every user-owned step.
+  /\b(?:(?:(?:this|that)(?:\s+(?:exact|same|specific|particular))?|these|those)\s+(?:steps?|checks?|checklists?|lists?|items?)|the\s+(?:(?:exact|same|specific|particular)\s+)?(?:steps?|checks?|checklists?|lists?|items?)|(?:the\s+)?following\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:the\s+(?:exact|same|specific|particular)\s+)?instructions?\s+(?:below|above|that\s+follow|which\s+follow))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
+// A numbered assignment is scoped to the matching numbered checklist item
+// and object kind. Keep it separate from the broad target pattern.
 const USER_ACTOR_STEP_NUMBERED_TARGET =
-  /\b(?:this\s+|that\s+|the\s+)?step\s+(\d{1,9})\b/gi;
+  /\b(?:this\s+|that\s+|the\s+)?(step|check)\s+(\d{1,9})\b/gi;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
   /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|accountable|owns?|owned|belongs?\s+to|runs?|ran|executes?|executed|perform(?:s|ed)|follows?|followed|carries\s+out|carried\s+out|does?|did|completes?|completed|verifies?|verified|checks?|checked|tests?|tested|implements?|implemented|handles?|handled|manages?|managed)\b/i;
 const USER_ACTOR_STEP_NEGATION_CUE =
@@ -1064,8 +1064,8 @@ function assignmentIsNegated(segment, cueStart, targetStart, targetEnd) {
 // separate Markdown code and HTML comments into clause boundaries.
 function analyzeAgentAssignmentsToSteps(context) {
   const analysis = {
-    allSteps: false,
-    numberedSteps: new Set(),
+    allTargets: false,
+    numberedTargets: new Set(),
   };
   for (const clause of splitUserActorStepClauses(context)) {
     const targetPattern = new RegExp(
@@ -1076,23 +1076,34 @@ function analyzeAgentAssignmentsToSteps(context) {
       USER_ACTOR_STEP_NUMBERED_TARGET.source,
       'gi',
     );
-    const contrastPattern = /\b(?:but|while|whereas)\b/gi;
-    const contrastPositions = [...clause.matchAll(contrastPattern)].map(
-      (match) => ({ index: match.index ?? 0, text: match[0] ?? '' }),
-    );
+    const contrastPattern = /\b(?:but|while|whereas|and)\b/gi;
+    const contrastPositions = [...clause.matchAll(contrastPattern)]
+      .map((match) => ({ index: match.index ?? 0, text: match[0] ?? '' }))
+      .filter(
+        ({ index, text }) =>
+          text.toLowerCase() !== 'and' ||
+          USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT.test(
+            clause.slice(index + text.length),
+          ),
+      );
     const targets = [
       ...[...clause.matchAll(targetPattern)]
         .filter((match) => {
           const end = (match.index ?? 0) + (match[0]?.length ?? 0);
           return !/^\s+\d/.test(clause.slice(end));
         })
-        .map((match) => ({ match, ordinal: null })),
+        .map((match) => ({
+          match,
+          targetKind: null,
+          ordinal: null,
+        })),
       ...[...clause.matchAll(numberedTargetPattern)].map((match) => ({
         match,
-        ordinal: Number(match[1]),
+        targetKind: (match[1] ?? '').toLowerCase(),
+        ordinal: Number(match[2]),
       })),
     ].sort((left, right) => (left.match.index ?? 0) - (right.match.index ?? 0));
-    for (const { match: targetMatch, ordinal } of targets) {
+    for (const { match: targetMatch, targetKind, ordinal } of targets) {
       const targetIndex = targetMatch.index ?? 0;
       const targetEnd = targetIndex + (targetMatch[0]?.length ?? 0);
       const priorContrast = contrastPositions
@@ -1135,20 +1146,20 @@ function analyzeAgentAssignmentsToSteps(context) {
         continue;
       }
       if (ordinal === null) {
-        analysis.allSteps = true;
+        analysis.allTargets = true;
       } else {
-        analysis.numberedSteps.add(ordinal);
+        analysis.numberedTargets.add(`${targetKind}:${ordinal}`);
       }
     }
   }
   return analysis;
 }
-function hasAgentAssignmentForUserStep(analysis, ordinal) {
+function hasAgentAssignmentForUserStep(analysis, ordinal, targetKind) {
   return (
-    analysis.allSteps ||
+    analysis.allTargets ||
     (ordinal === null
-      ? analysis.numberedSteps.size > 0
-      : analysis.numberedSteps.has(ordinal))
+      ? analysis.numberedTargets.size > 0
+      : analysis.numberedTargets.has(`${targetKind}:${ordinal}`))
   );
 }
 function numberedUserStepListItemOrdinal(prefix) {
@@ -2757,15 +2768,9 @@ function findUnsafeExecutionDirectiveMatch(
     body,
     bodyInertRanges,
   );
-  const titleCodeRanges = findMarkdownCodeRanges(title);
-  const titleInertRanges = [
-    ...titleCodeRanges,
-    ...findHtmlCommentRanges(title, titleCodeRanges),
-  ];
-  const titleAssignmentContext = separateMarkdownRangesWithClauseBoundaries(
-    title,
-    titleInertRanges,
-  );
+  // GitHub issue titles are plain text, not rendered Markdown. Treat code
+  // markers and comment-looking strings as literal untrusted title content.
+  const titleAssignmentContext = title;
   // Analyze each complete field once, then consult the indexed assignments
   // for every candidate directive. Re-scanning both fields per `run` made
   // adversarial issue bodies cost O(directives × body length).
@@ -2821,6 +2826,8 @@ function findUnsafeExecutionDirectiveMatch(
           range.start <= verbBodyStart &&
           verbBodyStart + verbText.length <= range.end,
       );
+      const userStepTarget = USER_ACTOR_STEP_WINDOW.exec(window);
+      const userStepKind = (userStepTarget?.[1] ?? '').toLowerCase();
       const userStepOrdinal = numberedUserStepListItemOrdinal(
         userActorStepBodyPrefix,
       );
@@ -2834,8 +2841,13 @@ function findUnsafeExecutionDirectiveMatch(
         !hasAgentAssignmentForUserStep(
           titleAssignmentAnalysis,
           userStepOrdinal,
+          userStepKind,
         ) &&
-        !hasAgentAssignmentForUserStep(bodyAssignmentAnalysis, userStepOrdinal);
+        !hasAgentAssignmentForUserStep(
+          bodyAssignmentAnalysis,
+          userStepOrdinal,
+          userStepKind,
+        );
       // #3073 round 4-6: the repository-owned-validation exception is now
       // a single fully anchored positive signature (see the constants'
       // shared comment above) -- the whole window must match the literal

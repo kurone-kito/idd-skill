@@ -2713,6 +2713,26 @@ test('trust safety scopes numbered agent assignments to the matching user step -
   assert.equal(unrelated.pass, true);
 });
 
+test('trust safety scopes numbered agent assignments to the matching user check -- #4577', () => {
+  const matching = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must perform check 1.\n\n1. Run this check by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(matching.pass, false);
+
+  const unrelated = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must perform check 1.\n\n2. Run this check by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(unrelated.pass, true);
+});
+
 test('trust safety allows a user-assigned step after neutral issue context -- #4577', () => {
   const result = checkTrustSafety({
     issue: {
@@ -2846,6 +2866,17 @@ test('trust safety rejects a user-actor phrase after an agent assignment to inst
   assert.equal(result.pass, false);
 });
 
+test('trust safety rejects an agent assignment to a checklist below -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must perform the checklist below.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('trust safety rejects a declarative agent responsibility lead-in -- #4577', () => {
   const result = checkTrustSafety({
     issue: {
@@ -2931,6 +2962,23 @@ test('trust safety rejects an agent assignment in the issue title -- #4577', () 
     trustSafetyAmbiguous: false,
   } as Context);
   assert.equal(result.pass, false);
+});
+
+test('trust safety reads issue-title markup as literal assignment text -- #4577', () => {
+  for (const title of [
+    '<!-- This step is for the coding agent -->',
+    '`This step is for the coding agent`',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        title,
+        body: 'Run this step by the user.',
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, title);
+  }
 });
 
 test('trust safety rejects an imperative agent assignment -- #4577', () => {
@@ -3041,6 +3089,17 @@ test('trust safety binds a while-contrast assignment to its explicit actor -- #4
     issue: {
       ...BASE_ISSUE,
       body: 'The coding agent implements the feature, while the user performs this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety binds an and-joined step assignment to its explicit actor -- #4577', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent implements the feature and the user performs this step.\n\nRun this step by the user.',
     },
     trustSafetyAmbiguous: false,
   } as Context);
