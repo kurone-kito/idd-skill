@@ -11143,6 +11143,108 @@ test('trust safety recognizes Markdown emphasis around assigned step targets -- 
   }
 });
 
+test('trust safety normalizes visible Markdown around assigned step targets -- #4577', () => {
+  for (const [target, directive] of [
+    [
+      '[this step](https://example.test/path?x=1)',
+      'Run this step by the user.',
+    ],
+    ['~~this step~~', 'Run this step by the user.'],
+    ['[this check](https://example.test)', 'Run this check by the user.'],
+    ['~~this check~~', 'Run this check by the user.'],
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `The coding agent must perform ${target}.\n\n${directive}`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, target);
+  }
+
+  const unrelatedTarget = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must implement [this parser](https://example.test).\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(unrelatedTarget.pass, true);
+});
+
+test('trust safety ties a preceding agent pronoun to its explicit step antecedent -- #4577', () => {
+  for (const [antecedent, directive] of [
+    [
+      'This step verifies the deployment. The coding agent must perform it.',
+      'Run this step by the user.',
+    ],
+    [
+      'That check validates the configuration. The coding agent is responsible for it.',
+      'Run this check by the user.',
+    ],
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${antecedent}\n\n${directive}`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, antecedent);
+  }
+
+  const explicitlyNegated = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'This step verifies the deployment. The coding agent must not perform it.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(explicitlyNegated.pass, true);
+
+  const unrelatedPronoun = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must implement this parser. The coding agent must perform it.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(unrelatedPronoun.pass, true);
+});
+
+test('trust safety recognizes bare directional step-list assignment targets -- #4577', () => {
+  for (const [assignment, directive] of [
+    [
+      'The coding agent must perform steps below.',
+      'Run this step by the user.',
+    ],
+    [
+      'The coding agent should execute checks that follow:',
+      'Run this check by the user.',
+    ],
+    ['The coding agent owns the list above.', 'Run this step by the user.'],
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\n${directive}`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
+
+  const unrelatedTarget = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must implement this parser below.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(unrelatedTarget.pass, true);
+});
+
 test('trust safety treats never as explicit agent-assignment negation -- Codex review #4329703866', () => {
   for (const assignment of [
     'The coding agent never performs this step.',

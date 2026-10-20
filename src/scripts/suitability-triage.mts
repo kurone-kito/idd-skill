@@ -1064,7 +1064,7 @@ const USER_ACTOR_STEP_AGENT_SUBJECT = new RegExp(
 // Keep the target tied to a step/check or an explicitly referenced list;
 // unrelated implementation tasks must not veto a separate manual check.
 const USER_ACTOR_STEP_ASSIGNED_TARGET =
-  /\b(?:(?:(?:this|that)\s+(?:[a-z][\w-]*\s+){0,3}|(?:these|those)\s+)(?:steps?|checks?|checklists?|lists?|items?)|the\s+(?:(?:exact|same|specific|particular)\s+)?(?:[a-z][\w-]*\s+){0,3}(?:steps?|checks?|checklists?|lists?|items?)|all\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:every|each)\s+(?:step|check|checklist|list|item)|(?:the\s+)?following\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:the\s+(?:exact|same|specific|particular)\s+)?instructions?\s+(?:below|above|that\s+follow|which\s+follow))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
+  /\b(?:(?:(?:this|that)\s+(?:[a-z][\w-]*\s+){0,3}|(?:these|those)\s+)(?:steps?|checks?|checklists?|lists?|items?)|the\s+(?:(?:exact|same|specific|particular)\s+)?(?:[a-z][\w-]*\s+){0,3}(?:steps?|checks?|checklists?|lists?|items?)|all\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:every|each)\s+(?:step|check|checklist|list|item)|(?:the\s+)?following\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:the\s+)?(?:steps?|checks?|checklists?|lists?|items?)\s+(?:below|above|that\s+follow|which\s+follow)|(?:the\s+(?:exact|same|specific|particular)\s+)?instructions?\s+(?:below|above|that\s+follow|which\s+follow))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
 // A numbered assignment is scoped to the matching numbered checklist item.
 // Step/check targets keep their object kind; generic item targets apply to
 // either kind while retaining their ordinal and list scope.
@@ -1586,6 +1586,34 @@ function separateMarkdownRangesWithClauseBoundaries(
     }
   }
   return result;
+}
+
+// Keep visible inline-link labels and strikethrough text available to the
+// assignment parser while masking Markdown syntax and link destinations.
+// Every replacement preserves UTF-16 offsets so list and section scopes stay
+// aligned with the original issue body.
+function normalizeMarkdownStepAssignmentText(text: string): string {
+  const inlineLinkPattern =
+    /\[((?:\\.|[^\]\\\n])*)\]\((?:<[^>\n]*>|(?:\\.|[^)\n])*)\)/g;
+  let normalized = text.replace(
+    inlineLinkPattern,
+    (match: string, label: string) => {
+      const characters: string[] = match
+        .split('')
+        .map((character) =>
+          character === '\n' || character === '\r' ? character : ' ',
+        );
+      for (let index = 0; index < label.length; index += 1) {
+        characters[index + 1] = label[index] ?? ' ';
+      }
+      return characters.join('');
+    },
+  );
+  const strikethroughPattern = /~~(?=\S)(?:(?!\n[ \t]*\n)[\s\S])*?\S~~/g;
+  normalized = normalized.replace(strikethroughPattern, (match) =>
+    match.replace(/~~/g, '  '),
+  );
+  return normalized;
 }
 
 interface UserActorStepAssignmentAnalysis {
@@ -2278,6 +2306,73 @@ function hasAgentPronounAssignmentAfterUserStep(
     null,
     null,
   );
+}
+
+// A pronoun assignment can also precede the user directive. Only bridge the
+// final sentence in the same paragraph, and only when that sentence or its
+// immediate predecessor explicitly names "this/that step/check". This keeps
+// unrelated agent work elsewhere in the issue from being borrowed as context.
+function hasAgentPronounAssignmentBeforeUserStep(
+  context: string,
+  index: UserActorStepBodyBoundaryIndex,
+  directiveBodyStart: number,
+  targetKind: string,
+): boolean {
+  const section = index.headingSectionRanges.find(
+    ({ start: sectionStart, end: sectionEnd }) =>
+      directiveBodyStart >= sectionStart && directiveBodyStart < sectionEnd,
+  );
+  const sectionStart = section?.start ?? 0;
+  let precedingEnd = directiveBodyStart;
+  while (
+    precedingEnd > sectionStart &&
+    /[ \t\r\n]/.test(context[precedingEnd - 1] ?? '')
+  ) {
+    precedingEnd -= 1;
+  }
+  const precedingWindowStart = Math.max(sectionStart, precedingEnd - 480);
+  const paragraphText = context.slice(precedingWindowStart, precedingEnd);
+  const paragraphBoundary =
+    /\r?\n[ \t]*\r?\n|\r?\n(?=[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+)/g;
+  let boundary: RegExpExecArray | null = paragraphBoundary.exec(paragraphText);
+  let precedingStart = precedingWindowStart;
+  while (boundary !== null) {
+    precedingStart = precedingWindowStart + boundary.index + boundary[0].length;
+    boundary = paragraphBoundary.exec(paragraphText);
+  }
+  paragraphBoundary.lastIndex = 0;
+
+  const preceding = context.slice(precedingStart, precedingEnd);
+  const clauses = splitSentenceAndSemicolonClauses(preceding).filter(
+    ({ clause }) => clause.trim().length > 0,
+  );
+  const assignment = clauses.at(-1);
+  if (assignment === undefined || !/\bit\b/i.test(assignment.clause)) {
+    return false;
+  }
+  const antecedentPattern = /\b(?:this|that)\s+(?:step|check)\b/i;
+  const antecedentInAssignment = antecedentPattern.test(assignment.clause);
+  const antecedentInPriorClause = antecedentPattern.test(
+    clauses.at(-2)?.clause ?? '',
+  );
+  if (!antecedentInAssignment && !antecedentInPriorClause) return false;
+
+  const normalized = assignment.clause.replace(
+    /\bit\b/gi,
+    `this ${targetKind}`,
+  );
+  const assignmentAnalysis = analyzeAgentAssignmentsToSteps(
+    normalized,
+    'global',
+  );
+  const hasAssignment = hasAgentAssignmentForUserStep(
+    assignmentAnalysis,
+    null,
+    targetKind,
+    null,
+    null,
+  );
+  return hasAssignment;
 }
 
 interface UserActorStepBodyBoundaryIndex {
@@ -4317,6 +4412,9 @@ function findUnsafeExecutionDirectiveMatch(
     body,
     bodyInertRanges,
   );
+  const normalizedBodyAssignmentContext = normalizeMarkdownStepAssignmentText(
+    bodyAssignmentContext,
+  );
   const bodyBoundaryIndex = createUserActorStepBodyBoundaryIndex(
     body,
     bodyCodeRanges,
@@ -4333,7 +4431,7 @@ function findUnsafeExecutionDirectiveMatch(
     'global',
   );
   const bodyAssignmentAnalysis = analyzeAgentAssignmentsToSteps(
-    bodyAssignmentContext,
+    normalizedBodyAssignmentContext,
     'section',
     bodyBoundaryIndex,
   );
@@ -4415,6 +4513,12 @@ function findUnsafeExecutionDirectiveMatch(
           verbBodyStart,
           verbText.length,
           userActorStepWindow.length,
+          userStepKind,
+        ) &&
+        !hasAgentPronounAssignmentBeforeUserStep(
+          normalizedBodyAssignmentContext,
+          bodyBoundaryIndex,
+          verbBodyStart,
           userStepKind,
         ) &&
         !hasBareAgentActorHeadingContext(bodyBoundaryIndex, verbBodyStart);
