@@ -221,6 +221,7 @@ const EXTRA_RUNTIME_FILES = new Map<string, string[]>([
       'schemas/pre-merge-readiness.schema.json',
       'schemas/onboarding-hearing-catalog.schema.json',
       'schemas/onboarding-hearing-transcript.schema.json',
+      'schemas/provisional-decision-record.schema.json',
       'fixtures/schemas/advisory-wait-state.invalid.json',
       'fixtures/schemas/advisory-wait-state.valid.json',
       'fixtures/schemas/claim-marker.invalid.json',
@@ -243,6 +244,8 @@ const EXTRA_RUNTIME_FILES = new Map<string, string[]>([
       'fixtures/schemas/onboarding-hearing-catalog.valid.json',
       'fixtures/schemas/onboarding-hearing-transcript.invalid.json',
       'fixtures/schemas/onboarding-hearing-transcript.valid.json',
+      'fixtures/schemas/provisional-decision-record.invalid.json',
+      'fixtures/schemas/provisional-decision-record.valid.json',
     ],
   ],
 ]);

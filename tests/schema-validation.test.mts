@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { buildHelperRuntimeManifest } from '../src/scripts/helper-runtime-manifest.mts';
 import { createPhaseIdResolver } from '../src/scripts/phase-id-resolver.mts';
 import {
   parseClaimComment,
@@ -681,6 +682,57 @@ test('validator enforces maximum for numbers', () => {
     ),
   );
   assert.deepEqual(validate('not a number', { type: 'string', maximum }), []);
+});
+
+test('integer validation preserves exact JSON number tokens', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-schema-number-token-'));
+  const schema = {
+    type: 'object',
+    required: ['value'],
+    properties: {
+      value: { type: 'integer', maximum: Number.MAX_SAFE_INTEGER },
+    },
+    additionalProperties: false,
+  };
+  const cases = [
+    ['{"value":9007199254740991}', true],
+    ['{"value":9007199254740991.0}', true],
+    ['{"value":9007199254740991.4}', false],
+    ['{"value":9007199254740992}', false],
+    ['{"value":1e-400}', false],
+    ['{"value":1e1}', true],
+  ] as const;
+
+  try {
+    for (const [json, expectedValid] of cases) {
+      writeFileSync(join(root, 'record.json'), json);
+      const record = loadJson('record.json', root);
+      assert.equal(validate(record, schema).length === 0, expectedValid, json);
+    }
+
+    writeFileSync(join(root, 'record.json'), '{"value":9007199254740991.4}');
+    const mutatedRecord = loadJson('record.json', root) as JsonRecord;
+    mutatedRecord.value = 1;
+    assert.deepEqual(validate(mutatedRecord, schema), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('vendored-node manifest includes provisional decision schema data', () => {
+  const managedFiles = new Set(
+    buildHelperRuntimeManifest({
+      profile: 'vendored-node',
+      targetRoot: REPO_ROOT,
+    }).profiles['vendored-node'].managedFiles.map((file) => file.targetPath),
+  );
+  for (const file of [
+    'schemas/provisional-decision-record.schema.json',
+    'fixtures/schemas/provisional-decision-record.valid.json',
+    'fixtures/schemas/provisional-decision-record.invalid.json',
+  ]) {
+    assert.ok(managedFiles.has(file), `vendored-node manifest omits ${file}`);
+  }
 });
 
 // ---------------------------------------------------------------------------

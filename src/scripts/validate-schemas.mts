@@ -40,6 +40,64 @@ import { resolveBundleRoot } from './bundle-root.mts';
 // import.meta.dirname would resolve to src/ for the source.
 const ROOT = resolveBundleRoot(import.meta.dirname);
 
+// JSON.parse converts number tokens to IEEE-754 values, which can make a
+// fractional token such as 9007199254740991.4 look like a safe integer. Keep
+// each parsed token beside its containing object so integer validation can
+// preserve JSON Schema's mathematical-integer semantics.
+const JSON_NUMBER_SOURCES = new WeakMap<object, Map<string, string>>();
+
+function jsonNumberSource(parent: object, key: string): string | undefined {
+  const source = JSON_NUMBER_SOURCES.get(parent)?.get(key);
+  const currentValue = (parent as Record<string, unknown>)[key];
+  return source !== undefined && Object.is(currentValue, Number(source))
+    ? source
+    : undefined;
+}
+
+function isExactJsonInteger(source: string): boolean {
+  const match = /^-?(0|[1-9]\d*)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/u.exec(source);
+  if (!match) return false;
+
+  const fraction = match[2] ?? '';
+  const digits = `${match[1]}${fraction}`;
+  const nonZeroDigits = digits.replace(/^0+/u, '');
+  if (nonZeroDigits === '') return true;
+
+  const trailingZeroCount = digits.length - digits.replace(/0+$/u, '').length;
+  const exponent = match[3] === undefined ? 0 : Number(match[3]);
+  if (!Number.isSafeInteger(exponent)) {
+    // The source token cannot contain enough fractional digits to offset an
+    // exponent outside the safe-integer range.
+    return exponent > 0;
+  }
+  return exponent - fraction.length + trailingZeroCount >= 0;
+}
+
+function isIntegerValue(value: number, source?: string): boolean {
+  return (
+    Number.isInteger(value) &&
+    (source === undefined || isExactJsonInteger(source))
+  );
+}
+
+function parseJsonWithNumberSources(text: string): unknown {
+  return JSON.parse(text, function (key, value, context?: unknown) {
+    const source = (context as { source?: unknown } | undefined)?.source;
+    if (typeof value === 'number' && typeof source === 'string') {
+      const parent = this as unknown;
+      if (typeof parent === 'object' && parent !== null) {
+        let sources = JSON_NUMBER_SOURCES.get(parent);
+        if (!sources) {
+          sources = new Map();
+          JSON_NUMBER_SOURCES.set(parent, sources);
+        }
+        sources.set(key, source);
+      }
+    }
+    return value;
+  });
+}
+
 interface SchemaNode {
   $ref?: string;
   $defs?: Record<string, SchemaNode>;
@@ -355,6 +413,7 @@ export function validate(
   path = '$',
   context?: SchemaValidationContext,
   activeRefs: Set<string> = new Set(),
+  numberSource?: string,
 ): string[] {
   const s = schema as SchemaNode;
   const errors: string[] = [];
@@ -374,7 +433,9 @@ export function validate(
       } else {
         const nextRefs = new Set(activeRefs);
         nextRefs.add(s.$ref);
-        errors.push(...validate(data, resolved, path, context, nextRefs));
+        errors.push(
+          ...validate(data, resolved, path, context, nextRefs, numberSource),
+        );
       }
     }
   }
@@ -385,7 +446,8 @@ export function validate(
     } else {
       const matchingBranches = s.oneOf.filter(
         (branch) =>
-          validate(data, branch, path, context, activeRefs).length === 0,
+          validate(data, branch, path, context, activeRefs, numberSource)
+            .length === 0,
       ).length;
       if (matchingBranches !== 1) {
         errors.push(
@@ -401,7 +463,8 @@ export function validate(
       // listed type, where 'integer' means an integer-valued number.
       const matches = s.type.some((t) =>
         t === 'integer'
-          ? actualType === 'number' && Number.isInteger(data)
+          ? actualType === 'number' &&
+            isIntegerValue(data as number, numberSource)
           : actualType === t,
       );
       if (!matches) {
@@ -415,7 +478,7 @@ export function validate(
         errors.push(`${path}: expected type "integer", got "${actualType}"`);
         return errors;
       }
-      if (!Number.isInteger(data)) {
+      if (!isIntegerValue(data as number, numberSource)) {
         errors.push(
           `${path}: expected type "integer", got non-integer number ${data as number}`,
         );
@@ -480,7 +543,14 @@ export function validate(
     if (s.items !== undefined) {
       for (let i = 0; i < arr.length; i++) {
         errors.push(
-          ...validate(arr[i], s.items, `${path}[${i}]`, context, activeRefs),
+          ...validate(
+            arr[i],
+            s.items,
+            `${path}[${i}]`,
+            context,
+            activeRefs,
+            jsonNumberSource(arr, String(i)),
+          ),
         );
       }
     }
@@ -502,6 +572,7 @@ export function validate(
             `${path}.${prop}`,
             context,
             activeRefs,
+            jsonNumberSource(obj, prop),
           ),
         );
       }
@@ -535,6 +606,7 @@ export function validate(
               `${path}.${key}`,
               context,
               activeRefs,
+              jsonNumberSource(obj, key),
             ),
           );
         }
@@ -554,6 +626,7 @@ export function validate(
             `${path}.${key}`,
             context,
             activeRefs,
+            jsonNumberSource(obj, key),
           ),
         );
       }
@@ -597,14 +670,21 @@ export function validateConfigSection(
   if (!Object.hasOwn(obj, sectionKey)) {
     return [];
   }
-  return validate(obj[sectionKey], sectionSchema, `$.${sectionKey}`, context);
+  return validate(
+    obj[sectionKey],
+    sectionSchema,
+    `$.${sectionKey}`,
+    context,
+    new Set(),
+    jsonNumberSource(obj, sectionKey),
+  );
 }
 
 /**
  * Load and parse a JSON file by path relative to repository root.
  */
 export function loadJson(relPath: string, root: string = ROOT): unknown {
-  return JSON.parse(readFileSync(join(root, relPath), 'utf8'));
+  return parseJsonWithNumberSources(readFileSync(join(root, relPath), 'utf8'));
 }
 
 interface PhaseGraphNode {
