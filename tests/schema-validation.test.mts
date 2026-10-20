@@ -684,6 +684,60 @@ test('validator enforces maximum for numbers', () => {
   assert.deepEqual(validate('not a number', { type: 'string', maximum }), []);
 });
 
+test('maximum compares preserved JSON number tokens exactly', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-schema-maximum-token-'));
+  const schema = {
+    type: 'object',
+    required: ['value'],
+    properties: {
+      value: { type: 'number', maximum: Number.MAX_SAFE_INTEGER },
+    },
+    additionalProperties: false,
+  };
+  const cases = [
+    ['{"value":9007199254740991}', true],
+    ['{"value":9007199254740991.4}', false],
+    ['{"value":9007199254740990.9}', true],
+    ['{"value":9007199254740991.000}', true],
+    ['{"value":9007199254740991.4e0000000000000000}', false],
+  ] as const;
+
+  try {
+    for (const [json, expectedValid] of cases) {
+      writeFileSync(join(root, 'record.json'), json);
+      const record = loadJson('record.json', root);
+      assert.equal(validate(record, schema).length === 0, expectedValid, json);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('maximum compares underflowed JSON number tokens with zero exactly', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-schema-maximum-underflow-'));
+  const schema = {
+    type: 'object',
+    required: ['value'],
+    properties: { value: { type: 'number', maximum: 0 } },
+    additionalProperties: false,
+  };
+  const cases = [
+    ['{"value":1e-999999999999999999999999}', false],
+    ['{"value":-1e-999999999999999999999999}', true],
+    ['{"value":0e999999999999999999999999}', true],
+  ] as const;
+
+  try {
+    for (const [json, expectedValid] of cases) {
+      writeFileSync(join(root, 'record.json'), json);
+      const record = loadJson('record.json', root);
+      assert.equal(validate(record, schema).length === 0, expectedValid, json);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('integer validation preserves exact JSON number tokens', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-schema-number-token-'));
   const schema = {

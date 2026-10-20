@@ -498,6 +498,87 @@ function getType(val: unknown): string {
   return typeof val;
 }
 
+interface DecimalValue {
+  sign: -1 | 0 | 1;
+  order: bigint;
+  digits: string;
+}
+
+function parseDecimalValue(value: string): DecimalValue | undefined {
+  const match = /^(-?)(0|[1-9]\d*)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/u.exec(
+    value,
+  );
+  if (!match) return undefined;
+
+  const digits = match[2] + (match[3] ?? '');
+  const firstNonZero = digits.search(/[1-9]/u);
+  if (firstNonZero < 0) {
+    return { sign: 0, order: 0n, digits: '0' };
+  }
+  const exponentText = match[4] ?? '0';
+  const exponentDigits =
+    exponentText.replace(/^[+-]/u, '').replace(/^0+/u, '') || '0';
+  if (exponentDigits.length > 15) return undefined;
+  const exponent = BigInt(
+    `${exponentText.startsWith('-') ? '-' : ''}${exponentDigits}`,
+  );
+
+  return {
+    sign: match[1] === '-' ? -1 : 1,
+    order: BigInt(match[2].length) + exponent - BigInt(firstNonZero),
+    digits: digits.slice(firstNonZero),
+  };
+}
+
+/** Compare exact decimal values without rounding through IEEE-754. */
+function compareDecimalValues(left: string, right: string): number {
+  const leftValue = parseDecimalValue(left);
+  const rightValue = parseDecimalValue(right);
+  if (!leftValue || !rightValue) return 0;
+  if (leftValue.sign !== rightValue.sign) {
+    return leftValue.sign < rightValue.sign ? -1 : 1;
+  }
+  if (leftValue.sign === 0) return 0;
+
+  let magnitudeComparison = 0;
+  if (leftValue.order !== rightValue.order) {
+    magnitudeComparison = leftValue.order < rightValue.order ? -1 : 1;
+  } else {
+    const width = Math.max(leftValue.digits.length, rightValue.digits.length);
+    for (let index = 0; index < width; index++) {
+      const leftDigit = leftValue.digits[index] ?? '0';
+      const rightDigit = rightValue.digits[index] ?? '0';
+      if (leftDigit !== rightDigit) {
+        magnitudeComparison = leftDigit < rightDigit ? -1 : 1;
+        break;
+      }
+    }
+  }
+  return leftValue.sign * magnitudeComparison;
+}
+
+function compareNumberToBound(
+  value: number,
+  bound: number,
+  source?: string,
+): number {
+  const roundedComparison = value < bound ? -1 : value > bound ? 1 : 0;
+  if (
+    source === undefined ||
+    roundedComparison !== 0 ||
+    !Number.isFinite(bound)
+  ) {
+    return roundedComparison;
+  }
+  if (bound === 0) {
+    const match = /^(-?)(0|[1-9]\d*)(?:\.(\d+))?/u.exec(source);
+    if (!match) return roundedComparison;
+    if (!/[1-9]/u.test(match[2] + (match[3] ?? ''))) return 0;
+    return match[1] === '-' ? -1 : 1;
+  }
+  return compareDecimalValues(source, String(bound)) || roundedComparison;
+}
+
 /**
  * Validate data against a schema (subset enforced by this validator).
  * Returns error messages — empty array means valid.
@@ -610,21 +691,21 @@ export function validate(
   if (
     actualType === 'number' &&
     s.minimum !== undefined &&
-    (data as number) < s.minimum
+    compareNumberToBound(data as number, s.minimum, numberSource) < 0
   ) {
     errors.push(`${path}: ${data as number} < minimum ${s.minimum}`);
   }
   if (
     actualType === 'number' &&
     s.maximum !== undefined &&
-    (data as number) > s.maximum
+    compareNumberToBound(data as number, s.maximum, numberSource) > 0
   ) {
     errors.push(`${path}: ${data as number} > maximum ${s.maximum}`);
   }
   if (
     actualType === 'number' &&
     s.exclusiveMinimum !== undefined &&
-    (data as number) <= s.exclusiveMinimum
+    compareNumberToBound(data as number, s.exclusiveMinimum, numberSource) <= 0
   ) {
     errors.push(
       `${path}: ${data as number} <= exclusiveMinimum ${s.exclusiveMinimum}`,
