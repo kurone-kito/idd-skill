@@ -12,9 +12,9 @@
 // through. The resulting command or identifier can no longer be copied
 // correctly; the literal-space incident was observed in issue #4315.
 // Breaks and spaces at real word boundaries remain readable and are
-// deliberately NOT flagged here. Fenced code blocks are excluded first via
-// blankFencedCodeBlocks, matching the same fence semantics
-// stripMarkdownCodeRegions already uses elsewhere in this repo.
+// deliberately NOT flagged here. Fenced and indented code blocks and raw
+// HTML blocks are excluded before scanning because CommonMark does not parse
+// inline code spans inside those blocks.
 //
 // The character immediately before the break's continuation character,
 // and the character immediately after the break, must each be
@@ -35,12 +35,13 @@
 // positives against every existing multi-line code span already in
 // this repository's corpus.
 import {
-  blankFencedCodeBlocks,
   findFencedCodeRanges,
   findHtmlBlockRanges,
+  findIndentedCodeRanges,
   findInlineCodeSpans,
   findMarkdownCodeRanges,
   maskMarkdownCodeRegionsPreservingPositions,
+  mergeMarkdownCodeRanges,
 } from './markdown-code.mjs';
 
 const MID_TOKEN_CONTINUATION = /[-_/.]/;
@@ -76,11 +77,12 @@ function isStandaloneDoubleDash(inner, secondDashIndex) {
   return firstDashIndex === 0 || /\s/.test(inner[firstDashIndex - 1]);
 }
 function isLineCommentOpener(inner, secondSlashIndex) {
+  // A C-like line comment can start directly after code, as in
+  // `value;// note`; requiring whitespace before the opener misses it.
   if (inner[secondSlashIndex - 1] !== '/') {
     return false;
   }
-  const firstSlashIndex = secondSlashIndex - 1;
-  return firstSlashIndex === 0 || /\s/.test(inner[firstSlashIndex - 1]);
+  return true;
 }
 function isHtmlCommentOpener(inner, secondDashIndex) {
   return inner.slice(secondDashIndex - 3, secondDashIndex + 1) === '<!--';
@@ -103,12 +105,18 @@ function isPartOfEllipsis(inner, dotIndex) {
  */
 export function findCorruptingCodeSpanWraps(text) {
   const normalized = text.replace(/\r\n?/g, '\n');
-  // Fenced-block content is blanked to '' per line, so a code span can
-  // never start or continue inside one; blanking always leaves a blank
-  // line, which the span scan below already treats as a span terminator, so
-  // no false span can bridge a fenced block. Line counts stay aligned
-  // with `normalized` because blanking preserves the number of lines.
-  const scanned = blankFencedCodeBlocks(normalized);
+  // Mask only block code and raw HTML, where backticks are literal text.
+  // maskMarkdownForScan also parses inline spans when inlineCode is 'keep';
+  // doing that here would duplicate findInlineCodeSpans and slow large scans.
+  const fencedRanges = findFencedCodeRanges(normalized);
+  const scanned = maskMarkdownCodeRegionsPreservingPositions(
+    normalized,
+    mergeMarkdownCodeRanges([
+      ...fencedRanges,
+      ...findIndentedCodeRanges(normalized, fencedRanges),
+      ...findHtmlBlockRanges(normalized, fencedRanges),
+    ]),
+  );
   const lineStarts = lineStartsFor(scanned);
   const violations = [];
   for (const span of findInlineCodeSpans(scanned)) {
@@ -164,7 +172,10 @@ export function findCorruptingCodeSpanWraps(text) {
         continue;
       }
       const previous = inner[delimiterIndex - 1];
-      if (previous === undefined || !TOKEN_CONTINUING.test(previous)) {
+      if (
+        (previous === undefined && delimiter === '-') ||
+        (previous !== undefined && !TOKEN_CONTINUING.test(previous))
+      ) {
         continue;
       }
       let afterIndex = delimiterIndex + 1;
@@ -176,7 +187,10 @@ export function findCorruptingCodeSpanWraps(text) {
         continue;
       }
       if (
-        (delimiter === '.' && /^[A-Z]/.test(next)) ||
+        (delimiter === '.' &&
+          previous !== undefined &&
+          /[A-Za-z0-9]/.test(previous) &&
+          /^[A-Z]/.test(next)) ||
         (delimiter === '-' &&
           (isStandaloneDoubleDash(inner, delimiterIndex) ||
             isHtmlCommentOpener(inner, delimiterIndex))) ||

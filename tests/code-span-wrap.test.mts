@@ -115,6 +115,7 @@ test('does not flag legitimate option delimiters, comments, ellipses, or words',
     '`text -- option`',
     '`<!-- comment opener -->`',
     '`// comment opener`',
+    '`value;// comment opener`',
     '`value... continuation`',
     '`git rebase -i`',
     '`--option value`',
@@ -122,6 +123,61 @@ test('does not flag legitimate option delimiters, comments, ellipses, or words',
   ];
 
   assert.deepEqual(findCorruptingCodeSpanWraps(spans.join('\n')), []);
+});
+
+test('flags a literal-space split after a delimiter at the start of a span', () => {
+  for (const [span, before, after] of [
+    ['`/ usr/bin`', '/', 'usr/bin'],
+    ['`. gitignore`', '.', 'gitignore'],
+    ['`_ private`', '_', 'private'],
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [
+      {
+        line: 1,
+        before,
+        after,
+        separator: 'literal-space',
+      },
+    ]);
+  }
+  assert.deepEqual(findCorruptingCodeSpanWraps('`- option`'), []);
+});
+
+test('does not scan literal backticks in indented code blocks', () => {
+  const body = [
+    'before text',
+    '',
+    '    const value = `foo- bar`;',
+    '',
+    'after text',
+    'Run `foo- bar` outside the code block.',
+  ].join('\n');
+  assert.deepEqual(findCorruptingCodeSpanWraps(body), [
+    {
+      line: 6,
+      before: 'foo-',
+      after: 'bar',
+      separator: 'literal-space',
+    },
+  ]);
+});
+
+test('does not scan literal backticks in raw HTML blocks', () => {
+  const body = [
+    '<pre>',
+    'const value = `foo- bar`;',
+    '</pre>',
+    '',
+    'Run `foo- bar` outside the HTML block.',
+  ].join('\n');
+  assert.deepEqual(findCorruptingCodeSpanWraps(body), [
+    {
+      line: 5,
+      before: 'foo-',
+      after: 'bar',
+      separator: 'literal-space',
+    },
+  ]);
 });
 
 test('does not flag a break at a real word boundary (space before the break)', () => {
