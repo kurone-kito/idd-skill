@@ -52,7 +52,7 @@ const CONTEXT_CHARS = 20;
 const PROPER_NAME_TITLE_ABBREVIATION =
   /(?:^|(?<![\p{L}\p{N}_./-]))(?:Mr|Mrs|Ms|Mx|Dr|Prof|Rev|Hon|Sr|Jr|St|Capt|Col|Gen|Sgt|Lt|Maj|Cmdr|Adm|Fr|Br)\.$/iu;
 const DOTTED_IDENTIFIER_PREFIX =
-  /(?:^|[^A-Za-z0-9_-])[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+$/u;
+  /^\s*[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+$/u;
 const MAX_DECLARATION_GENERIC_DEPTH = 8;
 const DECLARATION_CLAUSE_KEYWORDS = ['extends', 'implements', 'permits'];
 function skipDeclarationWhitespace(text, start) {
@@ -244,6 +244,8 @@ function isSentencePunctuation(inner, delimiterIndex, afterIndex) {
     isCompleteDeclarationTail(followingText);
   // Only a complete, recognized declaration tail stays code-shaped.
   // Trailing punctuation or prose keeps sentence punctuation detectable.
+  // A dotted prefix counts as declaration context only at span start;
+  // later domain-like text may be prose before a new sentence.
   if (
     nextWord !== undefined &&
     (!followingProseWord || declarationTypeContinuation) &&
