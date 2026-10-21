@@ -11288,6 +11288,88 @@ test('trust safety recognizes bare directional step-list assignment targets -- #
   assert.equal(unrelatedTarget.pass, true);
 });
 
+test('trust safety handles current review findings for user-actor assignments -- #4577', () => {
+  const requiredOfAgent = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'This step is required of the coding agent.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(requiredOfAgent.pass, false);
+
+  const explicitlyNotRequired = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent is not required to perform this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(explicitlyNotRequired.pass, true);
+
+  for (const suffix of [
+    '\n\n## Additional checks',
+    '\n\nlowercase continuation',
+    '\n\n1. Another check',
+    '\n\n[reference]: https://example.test',
+  ]) {
+    const punctuatedDirective = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `Run this step by the user.${suffix}`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(punctuatedDirective.pass, true, suffix);
+  }
+
+  for (const [target, directive] of [
+    ['list 1', '1. Run this step by the user.'],
+    ['checklist 1', '1. Run this check by the user.'],
+  ]) {
+    const numberedCollectionAssignment = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `The coding agent must perform ${target}.\n\n${directive}`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(numberedCollectionAssignment.pass, false, target);
+  }
+
+  const differentOrdinal = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must perform list 2.\n\n1. Run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(differentOrdinal.pass, true);
+
+  for (const implementationObject of [
+    'this step parser',
+    'this step-by-step parser',
+  ]) {
+    const unrelatedImplementation = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `The coding agent must implement ${implementationObject}.\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(unrelatedImplementation.pass, true, implementationObject);
+  }
+
+  const headingImplementationObject = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## The coding agent must implement this step parser\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(headingImplementationObject.pass, true);
+});
+
 test('trust safety treats never as explicit agent-assignment negation -- Codex review #4329703866', () => {
   for (const assignment of [
     'The coding agent never performs this step.',

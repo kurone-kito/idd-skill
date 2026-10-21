@@ -1038,7 +1038,8 @@ const REPO_OWNED_VALIDATION_SENTENCE_START =
   /(?:^|\n[ \t]*\r?\n\s*)(?:please\s+)?$/i;
 // #4562: "by the user" is an actor phrase only for these exact step/check
 // objects; keep every other supplied-content target on the unsafe path.
-const USER_ACTOR_STEP_WINDOW = /^\s*this\s+(step|check)\s+by\s+the\s+user\s*$/i;
+const USER_ACTOR_STEP_WINDOW =
+  /^\s*this\s+(step|check)\s+by\s+the\s+user\s*[.!?]?\s*$/i;
 // #4577: allow the exact user-actor directive at a normal issue paragraph,
 // heading, or list-item boundary, or after a narrow clause connector.
 // Explicit agent assignments in the issue title or body still win,
@@ -1065,11 +1066,35 @@ const USER_ACTOR_STEP_AGENT_SUBJECT = new RegExp(
 // unrelated implementation tasks must not veto a separate manual check.
 const USER_ACTOR_STEP_ASSIGNED_TARGET =
   /\b(?:(?:(?:this|that)\s+(?:[a-z][\w-]*\s+){0,3}|(?:these|those)\s+)(?:steps?|checks?|checklists?|lists?|items?)|the\s+(?:(?:exact|same|specific|particular)\s+)?(?:[a-z][\w-]*\s+){0,3}(?:steps?|checks?|checklists?|lists?|items?)|all\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:every|each)\s+(?:step|check|checklist|list|item)|(?:the\s+)?following\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:the\s+)?(?:steps?|checks?|checklists?|lists?|items?)\s+(?:below|above|that\s+follow|which\s+follow)|(?:the\s+(?:exact|same|specific|particular)\s+)?instructions?\s+(?:below|above|that\s+follow|which\s+follow))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
+// A checklist noun can also be part of an implementation object, not the
+// assigned user step (for example, "this step parser"). Keep those known
+// object suffixes out of the assignment set while retaining unknown targets
+// fail-closed. See the current-head Copilot review on PR #4577.
+const USER_ACTOR_STEP_IMPLEMENTATION_OBJECT_SUFFIX =
+  /^(?:\s+(?:parser|implementation|function|module|class|component|pattern|template|workflow|routine|procedure|generator|pipeline|executor|matcher|detector|engine|description|definition|object|type|plan)\b|-by-step\b)/i;
+function isUserActorStepAssignedTarget(
+  text: string,
+  match: RegExpExecArray,
+): boolean {
+  const end = (match.index ?? 0) + match[0].length;
+  return !USER_ACTOR_STEP_IMPLEMENTATION_OBJECT_SUFFIX.test(text.slice(end));
+}
+
+function hasUserActorStepAssignedTarget(text: string): boolean {
+  const targetPattern = new RegExp(
+    USER_ACTOR_STEP_ASSIGNED_TARGET.source,
+    'gi',
+  );
+  return [...text.matchAll(targetPattern)].some((match) =>
+    isUserActorStepAssignedTarget(text, match),
+  );
+}
 // A numbered assignment is scoped to the matching numbered checklist item.
 // Step/check targets keep their object kind; generic item targets apply to
-// either kind while retaining their ordinal and list scope.
+// either kind while retaining their ordinal and list scope. List/checklist
+// targets are collection-wide and therefore use the generic target kind.
 const USER_ACTOR_STEP_NUMBERED_TARGET =
-  /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?|items?)\s+#?\s*(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)#?\s*\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
+  /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?|checklists?|lists?|items?)\s+#?\s*(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)#?\s*\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
   /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|owner|ownership|belongs?\s+to|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)?|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complet(?:e|es|ed|ing)|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|hand(?:le|les|led|ling)|man(?:age|ages|aged|aging))\b/i;
 const USER_ACTOR_STEP_FORWARD_ASSIGNMENT_INTRODUCER = new RegExp(
@@ -1077,7 +1102,7 @@ const USER_ACTOR_STEP_FORWARD_ASSIGNMENT_INTRODUCER = new RegExp(
   'i',
 );
 const USER_ACTOR_STEP_TARGET_AGENT_RELATION =
-  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been|needs?\s+to|has\s+to|is\s+required\s+to)\s+)?(?:for|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|done\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by|completed\s+by|managed\s+by|followed\s+by|carried\s+out\s+by))\s*$/i;
+  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been|needs?\s+to|has\s+to|is\s+required\s+to)\s+)?(?:for|required\s+of|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|done\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by|completed\s+by|managed\s+by|followed\s+by|carried\s+out\s+by))\s*$/i;
 const USER_ACTOR_STEP_PASSIVE_PARTICIPLE =
   /^(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)$/i;
 const USER_ACTOR_STEP_PASSIVE_AUXILIARY =
@@ -1129,16 +1154,22 @@ function assignmentHeadingContext(heading: string): {
     'i',
   );
   const numbered = numberedTargetPattern.exec(label);
-  const assignedTarget = new RegExp(
+  const assignedTargetPattern = new RegExp(
     USER_ACTOR_STEP_ASSIGNED_TARGET.source,
-    'i',
-  ).exec(label)?.[0];
-  const genericTargetMatch = /\b(?:steps?|checks?)\b/i.exec(label);
+    'gi',
+  );
+  const assignedTargetMatch = [...label.matchAll(assignedTargetPattern)].find(
+    (match) => isUserActorStepAssignedTarget(label, match),
+  );
+  const assignedTarget = assignedTargetMatch?.[0];
+  const genericTargetCandidate = /\b(?:steps?|checks?)\b/i.exec(label);
+  const genericTargetMatch =
+    genericTargetCandidate !== null &&
+    isUserActorStepAssignedTarget(label, genericTargetCandidate)
+      ? genericTargetCandidate
+      : null;
   const genericTarget = genericTargetMatch?.[0];
-  const targetMatch =
-    numbered ??
-    new RegExp(USER_ACTOR_STEP_ASSIGNED_TARGET.source, 'i').exec(label) ??
-    genericTargetMatch;
+  const targetMatch = numbered ?? assignedTargetMatch ?? genericTargetMatch;
   const targetStart = targetMatch?.index ?? -1;
   const targetEnd = targetStart + (targetMatch?.[0].length ?? 0);
   const agentActorInTargetRole =
@@ -1475,7 +1506,7 @@ function splitUserActorStepClauses(
       const paragraphHasForwardAssignment =
         (USER_ACTOR_STEP_FORWARD_ASSIGNMENT_INTRODUCER.test(paragraph) ||
           (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(paragraph) &&
-            USER_ACTOR_STEP_ASSIGNED_TARGET.test(paragraph) &&
+            hasUserActorStepAssignedTarget(paragraph) &&
             (/\b(?:following|below|above|that\s+follow|which\s+follow)\b/i.test(
               paragraph,
             ) ||
@@ -1828,7 +1859,10 @@ function assignmentSegmentHasAgentAssignmentRole(
   const targets = [
     ...[...segment.text.matchAll(targetPattern)].filter((match) => {
       const end = (match.index ?? 0) + (match[0]?.length ?? 0);
-      return !/^\s+\d/.test(segment.text.slice(end));
+      return (
+        !/^\s+\d/.test(segment.text.slice(end)) &&
+        isUserActorStepAssignedTarget(segment.text, match)
+      );
     }),
     ...segment.text.matchAll(numberedTargetPattern),
   ];
@@ -1908,6 +1942,7 @@ function assignmentIsNegated(
       : negation.end <= targetStart;
   if (!negationMatchesTargetPredicate) return false;
   const gap = text.slice(negation.end, cueStart);
+  const requiredToAction = /^\s+required\s+to\s+(?:be\s+)?$/i.test(gap);
   // "doesn't fail to perform" is a positive assignment, so the outer
   // negation must not erase the action cue after "fail to".
   return (
@@ -1915,7 +1950,7 @@ function assignmentIsNegated(
     !/[.!?;]/.test(gap) &&
     !/\bfail(?:s|ed|ing)?\s+to\s*$/i.test(gap) &&
     !/\b(?:and|or|but|while|whereas)\b/i.test(gap) &&
-    !USER_ACTOR_STEP_ASSIGNMENT_CUE.test(gap)
+    (!USER_ACTOR_STEP_ASSIGNMENT_CUE.test(gap) || requiredToAction)
   );
 }
 
@@ -2058,7 +2093,10 @@ function analyzeAgentAssignmentsToSteps(
       ...[...clause.matchAll(targetPattern)]
         .filter((match) => {
           const end = (match.index ?? 0) + (match[0]?.length ?? 0);
-          return !/^\s+\d/.test(clause.slice(end));
+          return (
+            !/^\s+\d/.test(clause.slice(end)) &&
+            isUserActorStepAssignedTarget(clause, match)
+          );
         })
         .map((match) => ({
           match,
@@ -2069,7 +2107,12 @@ function analyzeAgentAssignmentsToSteps(
         const matchedKind = (match[1] ?? '').toLowerCase().replace(/s$/, '');
         return {
           match,
-          targetKind: matchedKind === 'item' ? '*' : matchedKind,
+          targetKind:
+            matchedKind === 'item' ||
+            matchedKind === 'list' ||
+            matchedKind === 'checklist'
+              ? '*'
+              : matchedKind,
           numberedRanges: parseNumberedTargetRanges(match[2] ?? ''),
         };
       }),
