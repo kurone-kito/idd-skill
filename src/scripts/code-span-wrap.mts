@@ -313,6 +313,52 @@ function parseDeclarationTypeList(
   }
 }
 
+function skipDeclarationTypeAnnotations(text: string, start: number): number {
+  let cursor = skipDeclarationTrivia(text, start);
+  while (true) {
+    const annotationEnd = skipDeclarationAnnotation(text, cursor);
+    if (annotationEnd === undefined) {
+      return cursor;
+    }
+    cursor = skipDeclarationTrivia(text, annotationEnd);
+  }
+}
+
+function parseDeclarationGenericArguments(
+  text: string,
+  start: number,
+  genericDepth: number,
+): number | undefined {
+  if (text[start] !== '<' || genericDepth >= MAX_DECLARATION_GENERIC_DEPTH) {
+    return undefined;
+  }
+
+  let cursor = skipDeclarationWhitespace(text, start + 1);
+  let argumentEnd = parseDeclarationTypeArgument(
+    text,
+    cursor,
+    genericDepth + 1,
+  );
+  if (argumentEnd === undefined) {
+    return undefined;
+  }
+  cursor = argumentEnd;
+  while (true) {
+    const commaIndex = skipDeclarationWhitespace(text, cursor);
+    if (text[commaIndex] !== ',') {
+      break;
+    }
+    cursor = skipDeclarationWhitespace(text, commaIndex + 1);
+    argumentEnd = parseDeclarationTypeArgument(text, cursor, genericDepth + 1);
+    if (argumentEnd === undefined) {
+      return undefined;
+    }
+    cursor = argumentEnd;
+  }
+  cursor = skipDeclarationWhitespace(text, cursor);
+  return text[cursor] === '>' ? cursor + 1 : undefined;
+}
+
 function parseDeclarationType(
   text: string,
   start: number,
@@ -320,17 +366,32 @@ function parseDeclarationType(
   requireUppercaseFinal = true,
   allowArraySuffix = false,
 ): number | undefined {
-  let cursor = start;
+  let cursor = skipDeclarationTypeAnnotations(text, start);
   let finalSegmentStartsUppercase = false;
   while (true) {
     const firstCode = text.charCodeAt(cursor);
     if (!isDeclarationIdentifierStart(firstCode)) {
       return undefined;
     }
-    finalSegmentStartsUppercase = firstCode >= 65 && firstCode <= 90;
+    finalSegmentStartsUppercase =
+      (firstCode >= 65 && firstCode <= 90) ||
+      (firstCode === 36 &&
+        text.charCodeAt(cursor + 1) >= 65 &&
+        text.charCodeAt(cursor + 1) <= 90);
     cursor += 1;
     while (isDeclarationIdentifierContinuation(text.charCodeAt(cursor))) {
       cursor += 1;
+    }
+    if (text[cursor] === '<') {
+      const genericArgumentsEnd = parseDeclarationGenericArguments(
+        text,
+        cursor,
+        genericDepth,
+      );
+      if (genericArgumentsEnd === undefined) {
+        return undefined;
+      }
+      cursor = genericArgumentsEnd;
     }
     if (text[cursor] !== '.') {
       break;
@@ -339,44 +400,6 @@ function parseDeclarationType(
   }
   if (requireUppercaseFinal && !finalSegmentStartsUppercase) {
     return undefined;
-  }
-
-  if (text[cursor] === '<') {
-    if (genericDepth >= MAX_DECLARATION_GENERIC_DEPTH) {
-      return undefined;
-    }
-
-    cursor = skipDeclarationWhitespace(text, cursor + 1);
-    let argumentEnd = parseDeclarationTypeArgument(
-      text,
-      cursor,
-      genericDepth + 1,
-    );
-    if (argumentEnd === undefined) {
-      return undefined;
-    }
-    cursor = argumentEnd;
-    while (true) {
-      const commaIndex = skipDeclarationWhitespace(text, cursor);
-      if (text[commaIndex] !== ',') {
-        break;
-      }
-      cursor = skipDeclarationWhitespace(text, commaIndex + 1);
-      argumentEnd = parseDeclarationTypeArgument(
-        text,
-        cursor,
-        genericDepth + 1,
-      );
-      if (argumentEnd === undefined) {
-        return undefined;
-      }
-      cursor = argumentEnd;
-    }
-    cursor = skipDeclarationWhitespace(text, cursor);
-    if (text[cursor] !== '>') {
-      return undefined;
-    }
-    cursor += 1;
   }
 
   if (allowArraySuffix) {
@@ -512,7 +535,7 @@ function isCompleteDeclarationBlock(text: string): boolean {
 
 function isQualifiedDeclarationTypeListPrefix(text: string): boolean {
   const normalized = normalizeSplitQualifiedTypeWhitespace(text);
-  let cursor = skipDeclarationWhitespace(normalized, 0);
+  let cursor = skipDeclarationTypeAnnotations(normalized, 0);
   while (cursor < normalized.length) {
     const remaining = normalized.slice(cursor).trimEnd();
     if (PARTIAL_QUALIFIED_DECLARATION_PATH.test(remaining)) {
@@ -527,7 +550,7 @@ function isQualifiedDeclarationTypeListPrefix(text: string): boolean {
     if (normalized[commaIndex] !== ',') {
       return false;
     }
-    cursor = skipDeclarationTrivia(normalized, commaIndex + 1);
+    cursor = skipDeclarationTypeAnnotations(normalized, commaIndex + 1);
   }
   return false;
 }
@@ -726,6 +749,36 @@ function isQualifiedTypeInDeclaration(
     return isCompleteMethodThrowsTail(continuation);
   }
   return isCompleteDeclarationTypeListAndBlock(continuation);
+}
+
+function isQualifiedDollarTypeContinuation(
+  inner: string,
+  delimiterIndex: number,
+  afterIndex: number,
+): boolean {
+  if (inner[delimiterIndex] !== '.' || inner[afterIndex] !== '$') {
+    return false;
+  }
+  const nextWord = /^\$[A-Za-z_$][A-Za-z0-9_$-]*/u.exec(
+    inner.slice(afterIndex),
+  )?.[0];
+  if (nextWord === undefined) {
+    return false;
+  }
+  const prefix = inner.slice(0, delimiterIndex);
+  if (
+    !isQualifiedClassExtendsPrefix(prefix) &&
+    !isQualifiedMethodThrowsPrefix(prefix)
+  ) {
+    return false;
+  }
+  const followingText = inner.slice(afterIndex + nextWord.length).trimStart();
+  return isQualifiedTypeInDeclaration(
+    inner,
+    delimiterIndex,
+    nextWord,
+    followingText,
+  );
 }
 
 function lineStartsFor(text: string): number[] {
@@ -1081,7 +1134,11 @@ export function findCorruptingCodeSpanWraps(
         afterIndex += 1;
       }
       const next = inner[afterIndex];
-      if (next === undefined || !TOKEN_CONTINUING.test(next)) {
+      if (
+        next === undefined ||
+        (!TOKEN_CONTINUING.test(next) &&
+          !isQualifiedDollarTypeContinuation(inner, delimiterIndex, afterIndex))
+      ) {
         continue;
       }
 

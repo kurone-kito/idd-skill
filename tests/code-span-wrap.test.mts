@@ -227,6 +227,8 @@ test('flags complete declaration tails with generic and combined types', () => {
 test('flags qualified types in class extends and method throws clauses', () => {
   for (const [span, type] of [
     ['`class Foo extends com.example. MyClass {}`', 'MyClass'],
+    ['`class Foo extends com.example. $GeneratedClass {}`', '$GeneratedClass'],
+    ['`class Foo extends @NonNull com.example. MyClass {}`', 'MyClass'],
     ['`class Foo<T> extends com.example. MyClass {}`', 'MyClass'],
     [
       '`class Foo<T extends Comparable<List<T>>> extends com.example. MyClass {}`',
@@ -265,6 +267,7 @@ test('flags qualified types in class extends and method throws clauses', () => {
       'MyInterface',
     ],
     ['`void run() throws com.example. MyException {}`', 'MyException'],
+    ['`void run() throws @NonNull com.example. MyException {}`', 'MyException'],
     [
       '`void run(@Size(max = 10) String value) throws com.example. MyException {}`',
       'MyException',
@@ -284,6 +287,14 @@ test('flags qualified types in class extends and method throws clauses', () => {
     ],
     [
       '`Map<? super Number, ?> run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`List<@Nullable String> run() throws com.example. MyException;`',
+      'MyException',
+    ],
+    [
+      '`Outer<String>.Inner run() throws com.example. MyException {}`',
       'MyException',
     ],
     [
@@ -361,6 +372,7 @@ test('accepts annotation arguments and comments around declaration headers', () 
     '`void run() throws com.example. MyException /* note */ prose`',
     '`void run() throws com.example. MyException; /* note */ prose`',
     '`void run() throws com.example. MyException {} // note\n prose`',
+    '`The method run() throws @NonNull com.example. MyException during the example.`',
   ]) {
     assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
   }
@@ -429,6 +441,15 @@ test('parses dollar and underscore identifiers in declaration type lists', () =>
   );
   assert.equal(laterSplit.length, 1);
   assert.equal(laterSplit[0]?.before.endsWith('$root._internal.'), true);
+
+  const dollarContinuation = findCorruptingCodeSpanWraps(
+    '`void run() throws com.example. $GeneratedException;`',
+  );
+  assert.equal(dollarContinuation.length, 1);
+  assert.equal(
+    dollarContinuation[0]?.after.startsWith('$GeneratedException'),
+    true,
+  );
 });
 
 test('flags declarations inside one balanced outer wrapper', () => {
