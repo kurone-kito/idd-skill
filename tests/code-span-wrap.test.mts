@@ -230,6 +230,7 @@ test('does not flag a sentence after a dotted name', () => {
     '`Visit example.com. GitHub Actions are available.`',
     '`Visit example.com. GitHub supports Actions.`',
     '`Visit example.com. GitHub implements additional features.`',
+    '`Visit example.com. GitHub implements Interface.`',
     '`Visit example.com. GitHub permits temporary access.`',
     '`Visit example.com. GitHub extends OAuth.`',
     '`Visit example.com. GitHub implements OAuth.`',
