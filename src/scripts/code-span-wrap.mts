@@ -65,6 +65,12 @@ const PROPER_NAME_TITLE_ABBREVIATION =
   /(?:^|(?<![\p{L}\p{N}_./-]))(?:Mr|Mrs|Ms|Mx|Dr|Prof|Rev|Hon|Sr|Jr|St|Capt|Col|Gen|Sgt|Lt|Maj|Cmdr|Adm|Fr|Br)\.$/iu;
 const DOTTED_IDENTIFIER_PREFIX =
   /(?:^|[^A-Za-z0-9_-])[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+$/u;
+const DECLARATION_TYPE = String.raw`(?:[A-Z][A-Za-z0-9_-]*|(?:[a-z][A-Za-z0-9_-]*\.)+[A-Z][A-Za-z0-9_-]*)(?:\s*<[^<>]+>)?`;
+const DECLARATION_CLAUSE = String.raw`(?:extends|implements|permits)\s+${DECLARATION_TYPE}(?:\s*,\s*${DECLARATION_TYPE})*`;
+const COMPLETE_DECLARATION_TAIL = new RegExp(
+  `^${DECLARATION_CLAUSE}(?:\\s+${DECLARATION_CLAUSE})*$`,
+  'u',
+);
 
 function lineStartsFor(text: string): number[] {
   const starts = [0];
@@ -155,11 +161,9 @@ function isSentencePunctuation(
   const declarationTypeContinuation =
     nextWord !== undefined &&
     /[a-z][A-Z]/u.test(nextWord) &&
-    /^(?:extends|implements|permits)\s+(?:[A-Z][A-Za-z0-9_-]*|(?:[a-z][A-Za-z0-9_-]*\.)+[A-Z][A-Za-z0-9_-]*)\b$/u.test(
-      followingText,
-    );
-  // Only a complete declaration-type tail stays code-shaped. Trailing
-  // punctuation or prose keeps sentence punctuation detectable.
+    COMPLETE_DECLARATION_TAIL.test(followingText);
+  // Only a complete, recognized declaration tail stays code-shaped.
+  // Trailing punctuation or prose keeps sentence punctuation detectable.
   if (
     nextWord !== undefined &&
     (!followingProseWord || declarationTypeContinuation) &&

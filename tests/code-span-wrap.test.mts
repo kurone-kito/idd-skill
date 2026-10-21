@@ -207,6 +207,19 @@ test('flags simple and qualified declaration targets', () => {
   }
 });
 
+test('flags complete declaration tails with generic and combined types', () => {
+  for (const span of [
+    '`com.example. MyClass extends Base<T>`',
+    '`com.example. MyClass implements Comparable<Foo>`',
+    '`com.example. MyClass implements First, Second`',
+    '`com.example. MyClass extends Base implements Interface`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.before, 'com.example.', span);
+  }
+});
+
 test('does not flag a sentence after a dotted name', () => {
   for (const span of [
     '`Open example.com. Then continue`',
