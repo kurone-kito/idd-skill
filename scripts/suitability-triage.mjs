@@ -995,6 +995,7 @@ const USER_ACTOR_STEP_NUMBERED_TARGET =
 const USER_ACTOR_STEP_AGENT_SEND_VERB = '(?:send|sends|sent|sending)';
 const USER_ACTOR_STEP_AGENT_RECEIVE_VERB =
   '(?:receive|receives|received|receiving)';
+const USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE = `(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|${USER_ACTOR_STEP_AGENT_SEND_VERB}|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?)`;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE = new RegExp(
   String.raw`\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|owner|ownership|belongs?\s+to|in\s+charge\s+of|oversee|oversees|overseeing|oversaw|overseen|take\s+care\s+of|takes\s+care\s+of|took\s+care\s+of|taken\s+care\s+of|taking\s+care\s+of|work(?:s|ed|ing)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|${USER_ACTOR_STEP_AGENT_SEND_VERB}|${USER_ACTOR_STEP_AGENT_RECEIVE_VERB}|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)?|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complet(?:e|es|ed|ing)|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|hand(?:le|les|led|ling)|man(?:age|ages|aged|aging))\b`,
   'i',
@@ -1045,9 +1046,14 @@ const USER_ACTOR_STEP_AGENT_INFORMATION_NOUN_TAIL =
 const USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION_SOURCE =
   '(?:implement|build|create|add|update|edit|fix|write|remove|delete|install|configure|prepare|investigate|document|refactor|change|migrate|deploy|publish|author|open|close|merge|inspect|analyze|analyse|validate|generate|test|review|run|execute|perform)';
 const USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION = new RegExp(
-  `\\b${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION_SOURCE}(?:s|es|ed|ing|d)?\\b`,
+  `\\b(?:${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION_SOURCE}(?:s|es|ed|ing|d)?|built|wrote|written|ran)\\b`,
   'i',
 );
+const USER_ACTOR_STEP_AGENT_SUBJECT_WORK_ACTION = new RegExp(
+  String.raw`^\s*(?:(?:must|should|shall|will|can|could|may|might|needs?\s+to|has\s+to|is\s+to|is\s+required\s+to|required\s+to|expected\s+to|instructed\s+to|am|is|are|was|were|be|been|being|has|have|had)\s+)*${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.source}|\b(?:and|or)\s+(?:then\s+)?(?:(?:must|should|shall|will|can|could|may|might|needs?\s+to|has\s+to|is\s+to|is\s+required\s+to|required\s+to|expected\s+to|instructed\s+to|am|is|are|was|were|be|been|being|has|have|had)\s+)*${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.source}`,
+  'i',
+);
+const USER_ACTOR_STEP_AGENT_PRONOUN_ASSIGNMENT_PREDICATE_SOURCE = `(?:${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.source}|${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}|(?:responsibility|responsibilities)|responsible|accountable|owns?|owned|owner|ownership|belongs?\\s+to|in\\s+charge\\s+of|oversee(?:s|n|ing)?|required\\s+to\\s+${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.source})`;
 const USER_ACTOR_STEP_AGENT_LATER_WORK_NOUN_DELIVERABLE = new RegExp(
   String.raw`(?:\band\b|\bor\b|,)\s+(?!(?:never|not|no\s+longer)\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|task(?:s|ed)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|${USER_ACTOR_STEP_AGENT_SEND_VERB}|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?)\b\s+|${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION_SOURCE}(?:s|es|ed|ing|d)?\b\s+|(?:built|wrote|ran)\b\s+)(?:(?:a|an|the)\s+)?(?:[\w-]+\s+){0,2}?(?:implementations?|work|tasks?|responsibilities|duties|assignments?|projects?|features?|support|testing|tests?|reviews?|documentation|maintenance|development|debugging|refactoring|migration|deployment|analysis|build)\b(?!\s+(?:details?|results?|status|overview|progress|history|summary)\b)`,
   'i',
@@ -1075,7 +1081,7 @@ const USER_ACTOR_STEP_AGENT_GIVEN_TECHNICAL_SUPPORT_FOLLOWUP =
   /(?:,\s*(?:and\s+)?|\band\s+)(?:give|gives|gave|given|giving)\s+(?:(?:(?:a|an|the)\s+)?(?:technical|tech)\s+support\s+(?:to|for)\s+(?:them|it)|(?:to\s+)?(?:them|it)\s+(?:(?:a|an|the)\s+)?(?:technical|tech)\s+support)\b/i;
 const USER_ACTOR_STEP_AGENT_LATER_PRONOUN_ASSIGNMENT_VERB = `(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|task(?:s|ed)?|${USER_ACTOR_STEP_AGENT_SEND_VERB}|${USER_ACTOR_STEP_AGENT_RECEIVE_VERB}|give|gives|gave|given|giving|hand(?:s|ed|ing)?|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?)`;
 const USER_ACTOR_STEP_AGENT_PRONOUN_WORK_ASSIGNMENT = new RegExp(
-  String.raw`^\s*(?:>\s*)*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)*(?:it|they|he|she)\s+(?:(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+to|is\s+required\s+to|required\s+to|expected\s+to)\s+)?(?:${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION_SOURCE}|${USER_ACTOR_STEP_AGENT_LATER_PRONOUN_ASSIGNMENT_VERB}|responsible\s+for|accountable\s+for|in\s+charge\s+of)\b`,
+  String.raw`^\s*(?:>\s*)*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)*(?:it|they|he|she)\s+(?:(?:must|should|shall|will|can|could|may|might|needs?\s+to|has\s+to|is\s+to|is\s+required\s+to|required\s+to|expected\s+to|instructed\s+to|am|is|are|was|were|be|been|being|has|have|had|has\s+been|have\s+been|had\s+been|do|does|did|(?:must|should|is|are|was|were|does|do|did|has|have|had)n['’]t|can['’]t|cannot|not|never|no\s+longer)\s+){0,3}(?:(?:fail(?:s|ed)?|refuse(?:s|d)?)\s+to\s+)?(?:${USER_ACTOR_STEP_AGENT_PRONOUN_ASSIGNMENT_PREDICATE_SOURCE})\b`,
   'i',
 );
 const USER_ACTOR_STEP_AGENT_LATER_PRONOUN_WORK_NOUN = `(?:implementations?|work|tasks?|responsibilities|duties|assignments?|projects?|features?|support|testing|tests?|reviews?|maintenance|development|debugging|refactoring|migration|deployment|analysis|build)`;
@@ -1116,7 +1122,6 @@ const USER_ACTOR_STEP_PASSIVE_PARTICIPLE_IN_PHRASE =
   /\b(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\b/i;
 const USER_ACTOR_STEP_PASSIVE_AUXILIARY =
   /\b(?:am|is|are|was|were|be|been|being|get|gets|got|gotten)$/i;
-const USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE = `(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|${USER_ACTOR_STEP_AGENT_SEND_VERB}|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?)`;
 const USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE = new RegExp(
   String.raw`\b${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}\b[^.!?;]{0,80}$`,
   'i',
@@ -2832,7 +2837,8 @@ function hasAgentWorkAssignmentInClause(clause) {
         !agentObjectAssignmentRelation &&
         USER_ACTOR_STEP_AGENT_SUBJECT_PREFIX.test(subjectPrefix) &&
         (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(suffix) ||
-          USER_ACTOR_STEP_GENERAL_WORK_ACTION.test(suffix));
+          USER_ACTOR_STEP_GENERAL_WORK_ACTION.test(suffix) ||
+          USER_ACTOR_STEP_AGENT_SUBJECT_WORK_ACTION.test(suffix));
       const passiveVerb =
         USER_ACTOR_STEP_PASSIVE_PARTICIPLE_IN_PHRASE.exec(suffix);
       const passiveSubject =
@@ -2953,7 +2959,7 @@ function hasAgentWorkAssignmentInClause(clause) {
         return true;
       }
       if (
-        /^['’]s\s*(?:responsibilit(?:y|ies)|ownership|assignments?|tasks?|jobs?|dut(?:y|ies))\b/i.test(
+        /^['’]s\s*(?:[\w-]+\s+){0,3}(?:(?:responsibility|responsibilities)|ownership|assignments?|tasks?|jobs?|dut(?:y|ies))\b/i.test(
           suffix,
         )
       ) {

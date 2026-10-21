@@ -12154,6 +12154,27 @@ test('trust safety keeps independent agent work assignments fail-closed -- #4596
       body: 'The coding agent was assigned keyboard support and hands the review to the user.\n\nRun this step by the user.',
     },
     {
+      body: 'The coding agent built keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent wrote keyboard support documentation.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent has written keyboard support documentation.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It has written keyboard support documentation.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agents are ready. They have built keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent was available. It had run the verification step.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent built keyboard support and hands the review to the user.\n\nRun this step by the user.',
+    },
+    {
       body: 'The coding agent is available. It must implement keyboard support.\n\nRun this step by the user.',
     },
     {
@@ -12163,6 +12184,27 @@ test('trust safety keeps independent agent work assignments fail-closed -- #4596
       body: 'The coding agent is available. It has a clear status. It must implement keyboard support.\n\nRun this step by the user.',
     },
     {
+      body: 'The coding agent is available. It implements keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It owns keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It is responsible for keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It must not implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It doesn’t implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It can’t fail to implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It is not required to implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
       body: "This step is the coding agent's task.\n\nRun this step by the user.",
     },
     {
@@ -12170,6 +12212,15 @@ test('trust safety keeps independent agent work assignments fail-closed -- #4596
     },
     {
       body: "This check is the coding agent's duty.\n\nRun this check by the user.",
+    },
+    {
+      body: "The coding agent's keyboard-support task is in progress.\n\nRun this step by the user.",
+    },
+    {
+      body: "The coding agent's platform migration job is in progress.\n\nRun this step by the user.",
+    },
+    {
+      body: 'The coding agent’s user-step verification duty is in progress.\n\nRun this step by the user.',
     },
     {
       body: 'The coding agent received the keyboard-support task.\n\nRun this step by the user.',
@@ -12202,6 +12253,24 @@ test('trust safety keeps independent agent work assignments fail-closed -- #4596
     trustSafetyAmbiguous: false,
   } as Context);
   assert.equal(handoffWithoutEarlierAgentWork.pass, true);
+
+  const unrelatedActorAction = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent attended the meeting while the maintainer writes keyboard-support documentation.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(unrelatedActorAction.pass, true);
+
+  const coordinatedAgentAction = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent is available and builds keyboard support.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(coordinatedAgentAction.pass, false);
 });
 
 test('trust safety bounds pathological agent-mention scans by failing closed -- #4596', () => {
