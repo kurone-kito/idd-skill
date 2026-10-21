@@ -524,6 +524,24 @@ test('accepts annotation arguments and comments around declaration headers', () 
   }
 });
 
+test('ignores sentence periods inside annotation string arguments', () => {
+  for (const span of [
+    '`void run() throws @Marker("not. a") com.example.MyException {}`',
+    '`class Foo extends @Marker("not. a") com.example.MyClass {}`',
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
+
+  for (const span of [
+    '`void run() throws @Marker("not. a") com.example. MyException {}`',
+    '`class Foo extends @Marker("not. a") com.example. MyClass {}`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.ok(violations[0]?.before.endsWith('com.example.'), span);
+  }
+});
+
 test('flags multiple split qualified types in supported declaration lists', () => {
   const cases = [
     {
@@ -1177,6 +1195,16 @@ test('findCorruptingCodeSpanWraps stays linear on a long qualified throws list',
     1000,
     (size) =>
       `\`class C { void f() throws ${Array(size).fill('com.example. MyException').join(', ')} {} }\``,
+    false,
+  );
+});
+
+test('findCorruptingCodeSpanWraps stays linear with deeply nested declaration contexts', () => {
+  assertWrapScanLinear(
+    'deeply nested declaration contexts',
+    1000,
+    (size) =>
+      `\`class C { void f() throws com.example. MyException { ${'if (ready) {'.repeat(size)} work(); ${'}'.repeat(size)} } }\``,
     false,
   );
 });

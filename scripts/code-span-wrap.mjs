@@ -668,6 +668,21 @@ function isQualifiedDeclarationTypeListPrefix(text) {
   }
   return false;
 }
+function materializeDeclarationBodyContexts(snapshot) {
+  const contexts = [];
+  for (
+    let context = snapshot;
+    context !== undefined;
+    context = context.parent
+  ) {
+    contexts.push({
+      kind: context.kind,
+      invocationDepth: context.invocationDepth,
+    });
+  }
+  contexts.reverse();
+  return contexts;
+}
 function isPartialQualifiedDeclarationTypePrefix(text) {
   const normalized = text.trimEnd();
   const typeEnd = parseDeclarationType(normalized, 0, 0, false);
@@ -1421,8 +1436,8 @@ function isQualifiedTypeInDeclaration(
   for (let index = declarationStarts.length - 1; index >= 0; index -= 1) {
     const declarationStart = declarationStarts[index];
     const declarationPrefix = prefix.slice(declarationStart?.offset ?? 0);
-    const enclosingContexts = declarationStart?.enclosingContexts ?? [];
-    const containingContext = enclosingContexts.at(-1)?.kind;
+    const contextSnapshot = declarationStart?.contextSnapshot;
+    const containingContext = contextSnapshot?.kind;
     if (
       isQualifiedMethodThrowsPrefix(declarationPrefix) &&
       (containingContext === undefined ||
@@ -1430,13 +1445,19 @@ function isQualifiedTypeInDeclaration(
         containingContext === 'enum' ||
         containingContext === 'anonymous' ||
         containingContext === 'anonymous-call') &&
-      isCompleteMethodThrowsTail(continuation, enclosingContexts)
+      isCompleteMethodThrowsTail(
+        continuation,
+        materializeDeclarationBodyContexts(contextSnapshot),
+      )
     ) {
       return true;
     }
     if (
       isQualifiedClassExtendsPrefix(declarationPrefix) &&
-      isCompleteDeclarationTypeListAndBlock(continuation, enclosingContexts)
+      isCompleteDeclarationTypeListAndBlock(
+        continuation,
+        materializeDeclarationBodyContexts(contextSnapshot),
+      )
     ) {
       return true;
     }
@@ -1444,13 +1465,18 @@ function isQualifiedTypeInDeclaration(
   return false;
 }
 function findDeclarationPrefixStarts(text) {
-  const starts = [{ offset: 0, enclosingContexts: [] }];
+  const starts = [{ offset: 0, contextSnapshot: undefined }];
   const contexts = [{ kind: 'top-level', memberStart: 0 }];
-  const getEnclosingContexts = () =>
-    contexts.slice(1).map(({ kind, invocationDepth }) => ({
-      kind: kind,
+  const pushContext = (kind, memberStart, invocationDepth) => {
+    const parent = contexts[contexts.length - 1];
+    const snapshot = {
+      kind,
       invocationDepth,
-    }));
+      parent: parent?.snapshot,
+    };
+    contexts.push({ kind, memberStart, invocationDepth, snapshot });
+  };
+  const getContextSnapshot = () => contexts[contexts.length - 1]?.snapshot;
   let parenthesisDepth = 0;
   let cursor = 0;
   while (cursor < text.length) {
@@ -1491,16 +1517,16 @@ function findDeclarationPrefixStarts(text) {
           ? undefined
           : getTypeDeclarationBodyKind(header);
       if (declarationKind !== undefined) {
-        contexts.push({ kind: declarationKind, memberStart: cursor + 1 });
+        pushContext(declarationKind, cursor + 1);
         starts.push({
           offset: cursor + 1,
-          enclosingContexts: getEnclosingContexts(),
+          contextSnapshot: getContextSnapshot(),
         });
       } else if (parent.kind === 'enum' && isEnumConstantBodyHeader(header)) {
-        contexts.push({ kind: 'anonymous', memberStart: cursor + 1 });
+        pushContext('anonymous', cursor + 1);
         starts.push({
           offset: cursor + 1,
-          enclosingContexts: getEnclosingContexts(),
+          contextSnapshot: getContextSnapshot(),
         });
       } else if (
         parent.kind !== 'annotation' &&
@@ -1511,24 +1537,21 @@ function findDeclarationPrefixStarts(text) {
           cursor += 1;
           continue;
         }
-        contexts.push({
-          kind: anonymousContext.kind,
-          memberStart: cursor + 1,
-          invocationDepth: anonymousContext.invocationDepth,
-        });
+        pushContext(
+          anonymousContext.kind,
+          cursor + 1,
+          anonymousContext.invocationDepth,
+        );
         starts.push({
           offset: cursor + 1,
-          enclosingContexts: getEnclosingContexts(),
+          contextSnapshot: getContextSnapshot(),
         });
       } else {
-        contexts.push({
-          kind: parenthesisDepth > 0 ? 'annotation' : 'block',
-          memberStart: cursor + 1,
-        });
+        pushContext(parenthesisDepth > 0 ? 'annotation' : 'block', cursor + 1);
         if (parenthesisDepth === 0) {
           starts.push({
             offset: cursor + 1,
-            enclosingContexts: getEnclosingContexts(),
+            contextSnapshot: getContextSnapshot(),
           });
         }
       }
@@ -1552,7 +1575,7 @@ function findDeclarationPrefixStarts(text) {
       ) {
         starts.push({
           offset: cursor + 1,
-          enclosingContexts: getEnclosingContexts(),
+          contextSnapshot: getContextSnapshot(),
         });
         parent.memberStart = cursor + 1;
       }
@@ -1566,13 +1589,13 @@ function findDeclarationPrefixStarts(text) {
       ) {
         starts.push({
           offset: cursor + 1,
-          enclosingContexts: getEnclosingContexts(),
+          contextSnapshot: getContextSnapshot(),
         });
         context.memberStart = cursor + 1;
       } else if (context?.kind === 'block' && parenthesisDepth === 0) {
         starts.push({
           offset: cursor + 1,
-          enclosingContexts: getEnclosingContexts(),
+          contextSnapshot: getContextSnapshot(),
         });
         context.memberStart = cursor + 1;
       } else if (
@@ -1583,7 +1606,7 @@ function findDeclarationPrefixStarts(text) {
       ) {
         starts.push({
           offset: cursor + 1,
-          enclosingContexts: getEnclosingContexts(),
+          contextSnapshot: getContextSnapshot(),
         });
         context.memberStart = cursor + 1;
       }
@@ -1592,7 +1615,7 @@ function findDeclarationPrefixStarts(text) {
       if (context?.kind === 'enum') {
         starts.push({
           offset: cursor + 1,
-          enclosingContexts: getEnclosingContexts(),
+          contextSnapshot: getContextSnapshot(),
         });
         context.memberStart = cursor + 1;
       }
@@ -1727,10 +1750,60 @@ function findDeclarationMethodThrowsTypeRange(text) {
   const end = parseDeclarationTypeList(text, start);
   return end === undefined ? undefined : { start, end };
 }
-function collectDeclarationTypeSplitOffsets(text, start, end, offsets) {
+function collectDeclarationTypeSplitOffsets(
+  text,
+  start,
+  end,
+  qualifiedOffsets,
+  ignoredOffsets,
+) {
   for (let index = start; index < end; index += 1) {
+    const character = text[index];
+    if (character === '"' || character === "'") {
+      const literalEnd = skipDeclarationQuotedLiteralEnd(text, index);
+      if (literalEnd === undefined || literalEnd > end) {
+        return;
+      }
+      for (
+        let literalIndex = index + 1;
+        literalIndex < literalEnd - 1;
+        literalIndex += 1
+      ) {
+        if (
+          text[literalIndex] === '.' &&
+          (text[literalIndex + 1] === ' ' || text[literalIndex + 1] === '\t')
+        ) {
+          ignoredOffsets.add(literalIndex);
+        }
+      }
+      index = literalEnd - 1;
+      continue;
+    }
     if (
-      text[index] !== '.' ||
+      character === '/' &&
+      (text[index + 1] === '/' || text[index + 1] === '*')
+    ) {
+      const commentEnd = skipDeclarationCommentEnd(text, index);
+      if (commentEnd === undefined || commentEnd > end) {
+        return;
+      }
+      for (
+        let commentIndex = index;
+        commentIndex < commentEnd;
+        commentIndex += 1
+      ) {
+        if (
+          text[commentIndex] === '.' &&
+          (text[commentIndex + 1] === ' ' || text[commentIndex + 1] === '\t')
+        ) {
+          ignoredOffsets.add(commentIndex);
+        }
+      }
+      index = commentEnd - 1;
+      continue;
+    }
+    if (
+      character !== '.' ||
       (text[index + 1] !== ' ' && text[index + 1] !== '\t')
     ) {
       continue;
@@ -1744,12 +1817,15 @@ function collectDeclarationTypeSplitOffsets(text, start, end, offsets) {
       next !== undefined &&
       (isDeclarationIdentifierStart(text.charCodeAt(nextIndex)) || next === '@')
     ) {
-      offsets.add(index);
+      qualifiedOffsets.add(index);
     }
   }
 }
 function findQualifiedDeclarationTypeSplitOffsets(text) {
-  const offsets = new Set();
+  const offsets = {
+    qualified: new Set(),
+    ignored: new Set(),
+  };
   for (const start of findDeclarationPrefixStarts(text)) {
     const boundary = findTypeBodyMemberDelimiter(text, start.offset);
     if (boundary?.delimiter !== '{' && boundary?.delimiter !== ';') {
@@ -1771,19 +1847,20 @@ function findQualifiedDeclarationTypeSplitOffsets(text) {
           sourceEnd !== undefined &&
           isCompleteDeclarationTypeListAndBlock(
             text.slice(start.offset + sourceStart),
-            start.enclosingContexts,
+            materializeDeclarationBodyContexts(start.contextSnapshot),
           )
         ) {
           collectDeclarationTypeSplitOffsets(
             text,
             start.offset + sourceStart,
             start.offset + sourceEnd + 1,
-            offsets,
+            offsets.qualified,
+            offsets.ignored,
           );
         }
       }
     }
-    const containingContext = start.enclosingContexts.at(-1)?.kind;
+    const containingContext = start.contextSnapshot?.kind;
     if (
       !isDeclarationMethodHeader(normalized.text) ||
       (containingContext !== undefined &&
@@ -1808,14 +1885,15 @@ function findQualifiedDeclarationTypeSplitOffsets(text) {
       sourceEnd !== undefined &&
       isCompleteMethodThrowsTail(
         text.slice(start.offset + sourceStart),
-        start.enclosingContexts,
+        materializeDeclarationBodyContexts(start.contextSnapshot),
       )
     ) {
       collectDeclarationTypeSplitOffsets(
         text,
         start.offset + sourceStart,
         start.offset + sourceEnd + 1,
-        offsets,
+        offsets.qualified,
+        offsets.ignored,
       );
     }
   }
@@ -2139,7 +2217,7 @@ export function findCorruptingCodeSpanWraps(text) {
     const wrappedContent = unwrapFullSpanOuterPair(inner);
     const sentenceInner = wrappedContent ?? inner;
     const sentenceIndexOffset = wrappedContent === undefined ? 0 : 1;
-    const qualifiedDeclarationTypeSplitOffsets =
+    const declarationTypeSplitOffsets =
       findQualifiedDeclarationTypeSplitOffsets(inner);
     for (
       let delimiterIndex = 0;
@@ -2148,6 +2226,9 @@ export function findCorruptingCodeSpanWraps(text) {
     ) {
       const delimiter = inner[delimiterIndex];
       const firstWhitespace = inner[delimiterIndex + 1];
+      if (declarationTypeSplitOffsets.ignored.has(delimiterIndex)) {
+        continue;
+      }
       if (
         delimiter === undefined ||
         !MID_TOKEN_CONTINUATION.test(delimiter) ||
@@ -2177,13 +2258,13 @@ export function findCorruptingCodeSpanWraps(text) {
             delimiterIndex,
             afterIndex,
           ) &&
-          !qualifiedDeclarationTypeSplitOffsets.has(delimiterIndex))
+          !declarationTypeSplitOffsets.qualified.has(delimiterIndex))
       ) {
         continue;
       }
       if (
         (delimiter === '.' &&
-          !qualifiedDeclarationTypeSplitOffsets.has(delimiterIndex) &&
+          !declarationTypeSplitOffsets.qualified.has(delimiterIndex) &&
           isSentencePunctuation(
             sentenceInner,
             delimiterIndex - sentenceIndexOffset,
