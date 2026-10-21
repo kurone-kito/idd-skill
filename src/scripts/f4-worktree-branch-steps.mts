@@ -963,6 +963,37 @@ function runStep4And5(
     }
   }
   if (inspected.worktreePresent) {
+    const finalStatus = deps.git(
+      [
+        '-C',
+        worktree,
+        'status',
+        '--porcelain',
+        '--ignored',
+        '--untracked-files=normal',
+      ],
+      primary,
+    );
+    if (finalStatus.status !== 0) {
+      return {
+        hold: {
+          code: 'inconsistent-worktree-state',
+          detail: `the final worktree status check failed after the claim assertion${preservedDestination === null ? '' : `; node_modules/ was preserved at ${preservedDestination}`}: ${finalStatus.stderr.trim()}`,
+        },
+        error: null,
+        at: 'step-5',
+      };
+    }
+    if (finalStatus.stdout.length > 0) {
+      return {
+        hold: {
+          code: 'dirty-worktree',
+          detail: `the worktree still has status output after the final claim assertion; the helper did not move newly appearing content${preservedDestination === null ? '' : `; node_modules/ was preserved at ${preservedDestination}`}`,
+        },
+        error: null,
+        at: 'step-5',
+      };
+    }
     const removed = deps.git(['worktree', 'remove', worktree], primary);
     if (removed.status !== 0) {
       return {
@@ -1572,13 +1603,40 @@ function inspectPreserveDestination(
     );
   }
 
-  const protectedRoots = [primary, ...records.map((record) => record.path)];
+  const commonDirectoryResult = deps.git(
+    ['rev-parse', '--git-common-dir'],
+    primary,
+  );
+  const commonDirectoryOutput = commonDirectoryResult.stdout.trim();
+  if (
+    commonDirectoryResult.status !== 0 ||
+    commonDirectoryOutput.length === 0
+  ) {
+    return refuse(
+      'the helper did not move node_modules/: Git common directory cannot be resolved',
+    );
+  }
+  const commonDirectoryPath = isAbsolute(commonDirectoryOutput)
+    ? commonDirectoryOutput
+    : resolve(primary, commonDirectoryOutput);
+  const commonDirectory = deps.realpath(commonDirectoryPath);
+  if (commonDirectory === null) {
+    return refuse(
+      'the helper did not move node_modules/: Git common directory cannot be resolved',
+    );
+  }
+
+  const protectedRoots = [
+    { path: primary, label: 'worktree' },
+    { path: commonDirectory, label: 'Git common directory' },
+    ...records.map((record) => ({ path: record.path, label: 'worktree' })),
+  ];
   for (const protectedRoot of protectedRoots) {
     const protectedReal =
-      deps.realpath(protectedRoot) ?? resolve(protectedRoot);
+      deps.realpath(protectedRoot.path) ?? resolve(protectedRoot.path);
     if (isWithinRoot(protectedReal, destinationBase)) {
       return refuse(
-        `the helper did not move node_modules/: destination ${destination} is inside protected worktree ${protectedRoot}`,
+        `the helper did not move node_modules/: destination ${destination} is inside protected ${protectedRoot.label} ${protectedRoot.path}`,
       );
     }
   }
@@ -1773,6 +1831,7 @@ function moveNodeModules(
         deps,
         staging,
         source,
+        expectedIdentity,
         `the staged source identity changed; expected ${expectedIdentity}, observed ${stagedIdentity ?? 'unavailable'}`,
       ),
     };
@@ -1785,6 +1844,7 @@ function moveNodeModules(
           deps,
           staging,
           source,
+          expectedIdentity,
           'the staged source ownership or privacy could not be verified',
         ),
       };
@@ -1797,6 +1857,7 @@ function moveNodeModules(
         deps,
         staging,
         source,
+        expectedIdentity,
         `the staged source could not be secured: ${error instanceof Error ? error.message : String(error)}`,
       ),
     };
@@ -1813,6 +1874,7 @@ function moveNodeModules(
           deps,
           staging,
           source,
+          expectedIdentity,
           'the staged source identity or original path changed before preservation',
         ),
       };
@@ -1825,6 +1887,7 @@ function moveNodeModules(
         deps,
         staging,
         source,
+        expectedIdentity,
         `rename to ${destination} failed: ${error instanceof Error ? error.message : String(error)}`,
       ),
     };
@@ -1840,6 +1903,7 @@ function moveNodeModules(
           deps,
           destination,
           source,
+          expectedIdentity,
           'the preserved source identity changed during the final move',
         ),
       };
@@ -1862,12 +1926,20 @@ function restoreNodeModulesAfterRace(
   deps: F4WorktreeBranchDeps,
   movedPath: string,
   source: string,
+  expectedIdentity: string,
   reason: string,
 ): string {
   try {
     const movedKind = deps.lstat(movedPath);
     if (movedKind === 'absent') {
       return `the helper did not move node_modules/: ${reason}; the staged path is absent and no automatic recovery was possible`;
+    }
+    if (movedKind !== 'directory') {
+      return `the helper did not move node_modules/: ${reason}; ${movedPath} was retained because it is not a real directory`;
+    }
+    const movedIdentity = deps.directoryIdentity(movedPath);
+    if (movedIdentity !== expectedIdentity) {
+      return `the helper did not move node_modules/: ${reason}; ${movedPath} was retained because its directory identity did not match the expected source`;
     }
     if (deps.lstat(source) !== 'absent') {
       return `the helper did not move node_modules/: ${reason}; ${movedPath} was retained because ${source} is occupied`;

@@ -34,6 +34,7 @@ const MERGE = 'c'.repeat(40);
 const F2 = 'd'.repeat(40);
 const OTHER = 'e'.repeat(40);
 const STATE_ROOT = '/state';
+const COMMON_DIR = '/git-common';
 const NODE_MODULES_IDENTITY = 'device-1:inode-1';
 const PRESERVE_STAGING = `${WORKTREE}/.idd-f4-node_modules-test-id`;
 const PRESERVE_DESTINATION =
@@ -120,6 +121,10 @@ function healthyRoutes(): Route[] {
       result: ok(worktreeListing()),
     },
     { match: (a) => a[0] === 'show-ref', result: ok() },
+    {
+      match: (a) => a[0] === 'rev-parse' && a.includes('--git-common-dir'),
+      result: ok(`${COMMON_DIR}\n`),
+    },
     { match: (a) => a[0] === 'switch', result: ok() },
     { match: (a) => a[0] === '-c' && a.includes('merge'), result: ok() },
     {
@@ -199,6 +204,10 @@ interface HarnessOptions {
   readonly directoryPrivacy?: (path: string) => DirectoryPrivacy;
   readonly mkdir?: (path: string) => void;
   readonly rename?: (source: string, destination: string) => void;
+  readonly replaceIdentityAfterRename?: {
+    readonly destination: string;
+    readonly identity: string;
+  };
 }
 
 /** Build the deps: git answers by the first matching route, else success. */
@@ -230,11 +239,15 @@ function harness(options: HarnessOptions = {}): Harness {
     if (path === PRESERVE_DESTINATION || path === PRESERVE_STAGING) {
       return 'absent';
     }
-    if (path === STATE_ROOT) return 'directory';
+    const stateRoot = options.stateRoot ?? STATE_ROOT;
+    if (path === stateRoot) return 'directory';
     if (
-      path === `${STATE_ROOT}/idd-skill` ||
-      path === `${STATE_ROOT}/idd-skill/f4-preserved`
+      path === `${stateRoot}/idd-skill` ||
+      path === `${stateRoot}/idd-skill/f4-preserved`
     ) {
+      return 'absent';
+    }
+    if (path.startsWith(`${stateRoot}/idd-skill/f4-preserved/`)) {
       return 'absent';
     }
     return 'directory';
@@ -266,6 +279,12 @@ function harness(options: HarnessOptions = {}): Harness {
       directoryIdentities.delete(source);
       if (identity !== undefined)
         directoryIdentities.set(destination, identity);
+      if (options.replaceIdentityAfterRename?.destination === destination) {
+        directoryIdentities.set(
+          destination,
+          options.replaceIdentityAfterRename.identity,
+        );
+      }
       absentPaths.add(source);
       absentPaths.delete(destination);
       renamedDirectories.delete(source);
@@ -750,7 +769,7 @@ test('an unclassified refusal holds with primary-update-failed', () => {
 test('a dirty worktree holds at step 5 and removes nothing', () => {
   const h = harness({
     routes: [
-      ...healthyRoutes().slice(0, 7),
+      ...healthyRoutes().slice(0, 8),
       {
         match: (a) => a[0] === '-C' && a[2] === 'status',
         result: ok('?? scratch.txt\n'),
@@ -775,7 +794,7 @@ test('an ignored-only file in the worktree still holds dirty-worktree', () => {
     input(),
     harness({
       routes: [
-        ...healthyRoutes().slice(0, 7),
+        ...healthyRoutes().slice(0, 8),
         {
           match: (a) => a[0] === '-C' && a[2] === 'status',
           result: ok('!! build/\n'),
@@ -869,6 +888,71 @@ test('a registered worktree inside node_modules prevents the move', () => {
   assert.deepEqual(h.renameCalls, []);
 });
 
+test('a destination inside the Git common directory holds without moving node_modules', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    stateRoot: COMMON_DIR,
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /protected Git common directory/,
+  );
+  assert.deepEqual(h.renameCalls, []);
+});
+
+test('a staged replacement object is retained when its identity changed', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    replaceIdentityAfterRename: {
+      destination: PRESERVE_STAGING,
+      identity: 'device-2:inode-2',
+    },
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /retained because its directory identity/,
+  );
+  assert.deepEqual(h.renameCalls, [
+    [`${WORKTREE}/node_modules`, PRESERVE_STAGING],
+  ]);
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
+});
+
+test('a destination replacement object is retained when its identity changed', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    replaceIdentityAfterRename: {
+      destination: PRESERVE_DESTINATION,
+      identity: 'device-2:inode-2',
+    },
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /retained because its directory identity/,
+  );
+  assert.deepEqual(h.renameCalls, [
+    [`${WORKTREE}/node_modules`, PRESERVE_STAGING],
+    [PRESERVE_STAGING, PRESERVE_DESTINATION],
+  ]);
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
+});
+
 test('a claim lost after the move keeps the preserved tree and worktree', () => {
   const lost = {
     exitCode: 0,
@@ -891,6 +975,28 @@ test('a claim lost after the move keeps the preserved tree and worktree', () => 
     [`${WORKTREE}/node_modules`, PRESERVE_STAGING],
     [PRESERVE_STAGING, PRESERVE_DESTINATION],
   ]);
+});
+
+test('a new ignored entry after the final claim assertion prevents removal', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n'), ok(''), ok('!! node_modules/\n')],
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /status output after the final claim assertion/,
+  );
+  assert.deepEqual(h.renameCalls, [
+    [`${WORKTREE}/node_modules`, PRESERVE_STAGING],
+    [PRESERVE_STAGING, PRESERVE_DESTINATION],
+  ]);
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
 });
 
 test('a skip-worktree entry holds dirty-worktree, since git status cannot vouch for it', () => {
