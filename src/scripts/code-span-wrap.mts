@@ -81,6 +81,60 @@ function skipDeclarationWhitespace(text: string, start: number): number {
   return cursor;
 }
 
+function skipDeclarationTrivia(text: string, start: number): number {
+  let cursor = start;
+  while (cursor < text.length) {
+    const afterWhitespace = skipDeclarationWhitespace(text, cursor);
+    if (afterWhitespace !== cursor) {
+      cursor = afterWhitespace;
+      continue;
+    }
+    if (text.startsWith('//', cursor)) {
+      const lineEnd = text.indexOf('\n', cursor + 2);
+      cursor = lineEnd < 0 ? text.length : lineEnd + 1;
+      continue;
+    }
+    if (text.startsWith('/*', cursor)) {
+      const commentEnd = text.indexOf('*/', cursor + 2);
+      if (commentEnd < 0) {
+        return text.length;
+      }
+      cursor = commentEnd + 2;
+      continue;
+    }
+    break;
+  }
+  return cursor;
+}
+
+function isDeclarationTriviaOnly(text: string, start: number): boolean {
+  let cursor = start;
+  while (cursor < text.length) {
+    const afterWhitespace = skipDeclarationWhitespace(text, cursor);
+    if (afterWhitespace !== cursor) {
+      cursor = afterWhitespace;
+      continue;
+    }
+    if (text.startsWith('//', cursor)) {
+      const lineEnd = text.indexOf('\n', cursor + 2);
+      if (lineEnd < 0) {
+        return true;
+      }
+      cursor = lineEnd + 1;
+      continue;
+    }
+    if (!text.startsWith('/*', cursor)) {
+      return false;
+    }
+    const commentEnd = text.indexOf('*/', cursor + 2);
+    if (commentEnd < 0) {
+      return false;
+    }
+    cursor = commentEnd + 2;
+  }
+  return true;
+}
+
 function findBalancedDeclarationDelimiterEnd(
   text: string,
   start: number,
@@ -211,7 +265,7 @@ function skipDeclarationAnnotation(
     return undefined;
   }
 
-  const cursor = skipDeclarationWhitespace(text, start + annotation[0].length);
+  const cursor = skipDeclarationTrivia(text, start + annotation[0].length);
   if (text[cursor] !== '(') {
     return cursor;
   }
@@ -246,11 +300,11 @@ function parseDeclarationTypeList(
   }
   let cursor = typeEnd;
   while (true) {
-    const commaIndex = skipDeclarationWhitespace(text, cursor);
+    const commaIndex = skipDeclarationTrivia(text, cursor);
     if (text[commaIndex] !== ',') {
       return cursor;
     }
-    cursor = skipDeclarationWhitespace(text, commaIndex + 1);
+    cursor = skipDeclarationTrivia(text, commaIndex + 1);
     typeEnd = parseDeclarationType(text, cursor, 0);
     if (typeEnd === undefined) {
       return undefined;
@@ -418,7 +472,7 @@ function skipDeclarationGenericClause(
 }
 
 function isCompleteDeclarationTail(text: string): boolean {
-  let cursor = skipDeclarationWhitespace(text, 0);
+  let cursor = skipDeclarationTrivia(text, 0);
   while (cursor < text.length) {
     const keyword = DECLARATION_CLAUSE_KEYWORDS.find((candidate) =>
       text.startsWith(candidate, cursor),
@@ -427,19 +481,20 @@ function isCompleteDeclarationTail(text: string): boolean {
       return false;
     }
     cursor += keyword.length;
-    if (cursor >= text.length || !/\s/u.test(text[cursor] ?? '')) {
+    const typeListStart = skipDeclarationTrivia(text, cursor);
+    if (typeListStart === cursor) {
       return false;
     }
-    cursor = skipDeclarationWhitespace(text, cursor);
+    cursor = typeListStart;
     const typeListEnd = parseDeclarationTypeList(text, cursor);
     if (typeListEnd === undefined) {
       return false;
     }
     cursor = typeListEnd;
 
-    const nextClause = skipDeclarationWhitespace(text, cursor);
+    const nextClause = skipDeclarationTrivia(text, cursor);
     if (nextClause === text.length) {
-      return true;
+      return isDeclarationTriviaOnly(text, cursor);
     }
     if (nextClause === cursor) {
       return false;
@@ -450,12 +505,9 @@ function isCompleteDeclarationTail(text: string): boolean {
 }
 
 function isCompleteDeclarationBlock(text: string): boolean {
-  const start = skipDeclarationWhitespace(text, 0);
-  const trimmed = text.trimEnd();
-  return (
-    findBalancedDeclarationDelimiterEnd(text, start, '{', '}') ===
-    trimmed.length
-  );
+  const start = skipDeclarationTrivia(text, 0);
+  const blockEnd = findBalancedDeclarationDelimiterEnd(text, start, '{', '}');
+  return blockEnd !== undefined && isDeclarationTriviaOnly(text, blockEnd);
 }
 
 function isQualifiedDeclarationTypeListPrefix(text: string): boolean {
@@ -471,59 +523,66 @@ function isQualifiedDeclarationTypeListPrefix(text: string): boolean {
     if (typeEnd === undefined) {
       return false;
     }
-    const commaIndex = skipDeclarationWhitespace(normalized, typeEnd);
+    const commaIndex = skipDeclarationTrivia(normalized, typeEnd);
     if (normalized[commaIndex] !== ',') {
       return false;
     }
-    cursor = skipDeclarationWhitespace(normalized, commaIndex + 1);
+    cursor = skipDeclarationTrivia(normalized, commaIndex + 1);
   }
   return false;
 }
 
 function isQualifiedClassExtendsPrefix(text: string): boolean {
-  let cursor = skipDeclarationWhitespace(text, 0);
+  let cursor = skipDeclarationTrivia(text, 0);
   while (cursor < text.length) {
     const annotationEnd = skipDeclarationAnnotation(text, cursor);
     if (annotationEnd !== undefined) {
-      cursor = skipDeclarationWhitespace(text, annotationEnd);
+      cursor = skipDeclarationTrivia(text, annotationEnd);
       continue;
     }
     const modifier =
-      /^(?:public|protected|private|abstract|static|final|sealed|non-sealed|strictfp)\s+/u.exec(
+      /^(?:public|protected|private|abstract|static|final|sealed|non-sealed|strictfp)\b/u.exec(
         text.slice(cursor),
       );
     if (modifier === null) {
       break;
     }
-    cursor += modifier[0].length;
+    cursor = skipDeclarationTrivia(text, cursor + modifier[0].length);
   }
 
-  const declarationKind = /^(class|interface)\s+/u.exec(text.slice(cursor));
+  const declarationKind = /^(class|interface)\b/u.exec(text.slice(cursor));
   if (declarationKind === null) {
     return false;
   }
-  cursor += declarationKind[0].length;
+  cursor = skipDeclarationTrivia(text, cursor + declarationKind[0].length);
   const name = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor));
   if (name === null) {
     return false;
   }
   cursor += name[0].length;
+  cursor = skipDeclarationTrivia(text, cursor);
   if (text[cursor] === '<') {
     const genericClauseEnd = skipDeclarationGenericClause(text, cursor);
     if (genericClauseEnd === undefined) {
       return false;
     }
-    cursor = genericClauseEnd;
+    cursor = skipDeclarationTrivia(text, genericClauseEnd);
   }
 
-  const extendsClause = /^\s+extends\s+(.+)$/u.exec(text.slice(cursor));
+  const extendsClause = /^extends\b/u.exec(text.slice(cursor));
   if (extendsClause === null) {
     return false;
   }
+  const typeListStart = skipDeclarationTrivia(
+    text,
+    cursor + extendsClause[0].length,
+  );
+  if (typeListStart === cursor + extendsClause[0].length) {
+    return false;
+  }
 
-  const typeListPrefix = extendsClause[1];
+  const typeListPrefix = text.slice(typeListStart);
   return (
-    typeListPrefix !== undefined &&
     (declarationKind[1] === 'interface' || !typeListPrefix.includes(',')) &&
     isQualifiedDeclarationTypeListPrefix(typeListPrefix)
   );
@@ -536,7 +595,7 @@ function isCompleteDeclarationTypeListAndBlock(text: string): boolean {
   }
 
   while (true) {
-    cursor = skipDeclarationWhitespace(text, cursor);
+    cursor = skipDeclarationTrivia(text, cursor);
     const remaining = text.slice(cursor);
     if (isCompleteDeclarationBlock(remaining)) {
       return true;
@@ -549,10 +608,11 @@ function isCompleteDeclarationTypeListAndBlock(text: string): boolean {
       return false;
     }
     cursor += keyword.length;
-    if (cursor >= text.length || !/\s/u.test(text[cursor] ?? '')) {
+    const typeListStart = skipDeclarationTrivia(text, cursor);
+    if (typeListStart === cursor) {
       return false;
     }
-    cursor = skipDeclarationWhitespace(text, cursor);
+    cursor = typeListStart;
     const typeListEnd = parseDeclarationTypeList(text, cursor);
     if (typeListEnd === undefined) {
       return false;
@@ -567,27 +627,31 @@ function isCompleteMethodThrowsTail(text: string): boolean {
     return false;
   }
 
-  const tail = text.slice(skipDeclarationWhitespace(text, cursor));
-  return isCompleteDeclarationBlock(tail) || tail.trim() === ';';
+  const tailStart = skipDeclarationTrivia(text, cursor);
+  const tail = text.slice(tailStart);
+  return (
+    isCompleteDeclarationBlock(tail) ||
+    (text[tailStart] === ';' && isDeclarationTriviaOnly(text, tailStart + 1))
+  );
 }
 
 function isQualifiedMethodThrowsPrefix(text: string): boolean {
-  let cursor = skipDeclarationWhitespace(text, 0);
+  let cursor = skipDeclarationTrivia(text, 0);
   while (true) {
     const annotationEnd = skipDeclarationAnnotation(text, cursor);
     if (annotationEnd !== undefined) {
-      cursor = skipDeclarationWhitespace(text, annotationEnd);
+      cursor = skipDeclarationTrivia(text, annotationEnd);
       continue;
     }
 
     const modifier =
-      /^(?:public|protected|private|static|final|abstract|default|synchronized|native|strictfp)\s+/u.exec(
+      /^(?:public|protected|private|static|final|abstract|default|synchronized|native|strictfp)\b/u.exec(
         text.slice(cursor),
       );
     if (modifier === null) {
       break;
     }
-    cursor += modifier[0].length;
+    cursor = skipDeclarationTrivia(text, cursor + modifier[0].length);
   }
 
   if (text[cursor] === '<') {
@@ -595,14 +659,14 @@ function isQualifiedMethodThrowsPrefix(text: string): boolean {
     if (typeParametersEnd === undefined) {
       return false;
     }
-    cursor = skipDeclarationWhitespace(text, typeParametersEnd);
+    cursor = skipDeclarationTrivia(text, typeParametersEnd);
   }
 
   const returnTypeEnd = parseDeclarationType(text, cursor, 0, false, true);
   if (returnTypeEnd === undefined) {
     return false;
   }
-  cursor = skipDeclarationWhitespace(text, returnTypeEnd);
+  cursor = skipDeclarationTrivia(text, returnTypeEnd);
   if (cursor === returnTypeEnd) {
     return false;
   }
@@ -611,7 +675,7 @@ function isQualifiedMethodThrowsPrefix(text: string): boolean {
   if (methodName === null) {
     return false;
   }
-  cursor = skipDeclarationWhitespace(text, cursor + methodName[0].length);
+  cursor = skipDeclarationTrivia(text, cursor + methodName[0].length);
   const parametersEnd = findBalancedDeclarationDelimiterEnd(
     text,
     cursor,
@@ -621,17 +685,19 @@ function isQualifiedMethodThrowsPrefix(text: string): boolean {
   if (parametersEnd === undefined) {
     return false;
   }
-  cursor = skipDeclarationWhitespace(text, parametersEnd);
-  if (!text.startsWith('throws', cursor)) {
+  cursor = skipDeclarationTrivia(text, parametersEnd);
+  const throwsClause = /^throws\b/u.exec(text.slice(cursor));
+  if (throwsClause === null) {
     return false;
   }
-  cursor += 'throws'.length;
-  if (cursor >= text.length || !/\s/u.test(text[cursor] ?? '')) {
-    return false;
-  }
-  return isQualifiedDeclarationTypeListPrefix(
-    text.slice(skipDeclarationWhitespace(text, cursor)),
+  const typeListStart = skipDeclarationTrivia(
+    text,
+    cursor + throwsClause[0].length,
   );
+  if (typeListStart === cursor + throwsClause[0].length) {
+    return false;
+  }
+  return isQualifiedDeclarationTypeListPrefix(text.slice(typeListStart));
 }
 
 function normalizeSplitQualifiedTypeWhitespace(text: string): string {

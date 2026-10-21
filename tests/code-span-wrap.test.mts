@@ -330,6 +330,42 @@ test('flags qualified types in class extends and method throws clauses', () => {
   }
 });
 
+test('accepts annotation arguments and comments around declaration headers', () => {
+  const cases = [
+    '`class Foo extends com.example. MyClass /* note */ {}`',
+    '`class Foo extends com.example. MyClass {} /* note */`',
+    '`class Foo extends com.example. MyClass /* note */ implements Runnable {}`',
+    '`class Foo extends com.example. MyClass implements Runnable /* note */ {}`',
+    '`class Foo /* note */ extends com.example. MyClass {}`',
+    '`class Foo extends /* note */ com.example. MyClass {}`',
+    '`interface Foo extends First, /* note */ com.example. MyInterface {}`',
+    '`void run() throws com.example. MyException /* note */ {}`',
+    '`void run() throws com.example. MyException {} /* note */`',
+    '`abstract void run() throws com.example. MyException; /* note */`',
+    '`void run() throws com.example. MyException, /* note */ other.Other {}`',
+    '`public/* note */ void run() throws com.example. MyException {}`',
+    '`void run() throws/* note */ com.example. MyException {}`',
+  ];
+
+  for (const span of cases) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+
+  for (const span of [
+    '`class Foo extends com.example. MyClass /* note */`',
+    '`class Foo extends com.example. MyClass {} /* note */ prose`',
+    '`class Foo extends com.example. MyClass {} // note\n prose`',
+    '`com.example. MyClass extends Base /* note`',
+    '`void run() throws com.example. MyException /* note */ prose`',
+    '`void run() throws com.example. MyException; /* note */ prose`',
+    '`void run() throws com.example. MyException {} // note\n prose`',
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
+});
+
 test('flags multiple split qualified types in supported declaration lists', () => {
   const cases = [
     {
