@@ -12135,6 +12135,75 @@ test('trust safety recognizes common agent ownership phrases -- #4596', () => {
   }
 });
 
+test('trust safety keeps independent agent work assignments fail-closed -- #4596', () => {
+  const assignments = [
+    {
+      title: 'ChatGPT must implement the feature',
+      body: 'Run this step by the user.',
+    },
+    {
+      body: 'The coding agent implements keyboard support and hands the review to the user.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is responsible for keyboard support and hands the review to the user.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent owns keyboard support and hands the review to the user.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent was assigned keyboard support and hands the review to the user.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It must implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available.\n\n- It must implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It has a clear status. It must implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: "This step is the coding agent's task.\n\nRun this step by the user.",
+    },
+    {
+      body: 'This step is the coding agent’s job.\n\nRun this step by the user.',
+    },
+    {
+      body: "This check is the coding agent's duty.\n\nRun this check by the user.",
+    },
+    {
+      body: 'The coding agent received the keyboard-support task.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent receives the keyboard-support task.\n\nRun this step by the user.',
+    },
+    {
+      body: '## ChatGPT tasks\n\nRun this step by the user.',
+    },
+  ];
+
+  for (const { title, body } of assignments) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        ...(title === undefined ? {} : { title }),
+        body,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, title ?? body);
+  }
+
+  const handoffWithoutEarlierAgentWork = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent handed the implementation task to the user.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(handoffWithoutEarlierAgentWork.pass, true);
+});
+
 test('trust safety bounds pathological agent-mention scans by failing closed -- #4596', () => {
   const repeatedMentions = 'The coding agent '.repeat(65);
   const result = checkTrustSafety({
