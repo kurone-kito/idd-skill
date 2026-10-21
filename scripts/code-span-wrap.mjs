@@ -54,11 +54,11 @@ const PROPER_NAME_TITLE_ABBREVIATION =
 const DOTTED_IDENTIFIER_PREFIX =
   /^\s*[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+$/u;
 const PARTIAL_QUALIFIED_DECLARATION_PATH =
-  /^[A-Za-z_$][A-Za-z0-9_$-]*(?:\.[A-Za-z_$][A-Za-z0-9_$-]*)+$/u;
+  /^[A-Za-z_$][A-Za-z0-9_$-]*(?:\.[A-Za-z_$][A-Za-z0-9_$-]*)*$/u;
 const MAX_DECLARATION_GENERIC_DEPTH = 8;
 const DECLARATION_CLAUSE_KEYWORDS = ['extends', 'implements', 'permits'];
 const QUALIFIED_METHOD_THROWS_HEADER =
-  /^\s*(?:(?:public|protected|private|static|final|abstract|synchronized|native|strictfp)\s+)*[A-Za-z_$][A-Za-z0-9_$.]*(?:<[^<>]*>)?\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\([^()]*\)\s+throws\s+/u;
+  /^\s*(?:(?:public|protected|private|static|final|abstract|default|synchronized|native|strictfp)\s+)*[A-Za-z_$][A-Za-z0-9_$.]*(?:<[^<>]*>)?\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\([^()]*\)\s+throws\s+/u;
 function skipDeclarationWhitespace(text, start) {
   let cursor = start;
   while (cursor < text.length && /\s/u.test(text[cursor] ?? '')) {
@@ -182,27 +182,28 @@ function isCompleteDeclarationBlock(text) {
   return text[start] === '{' && trimmed.endsWith('}');
 }
 function isQualifiedDeclarationTypeListPrefix(text) {
-  let cursor = skipDeclarationWhitespace(text, 0);
-  while (cursor < text.length) {
-    const remaining = text.slice(cursor).trimEnd();
+  const normalized = normalizeSplitQualifiedTypeWhitespace(text);
+  let cursor = skipDeclarationWhitespace(normalized, 0);
+  while (cursor < normalized.length) {
+    const remaining = normalized.slice(cursor).trimEnd();
     if (PARTIAL_QUALIFIED_DECLARATION_PATH.test(remaining)) {
       return true;
     }
-    const typeEnd = parseDeclarationType(text, cursor, 0);
+    const typeEnd = parseDeclarationType(normalized, cursor, 0);
     if (typeEnd === undefined) {
       return false;
     }
-    const commaIndex = skipDeclarationWhitespace(text, typeEnd);
-    if (text[commaIndex] !== ',') {
+    const commaIndex = skipDeclarationWhitespace(normalized, typeEnd);
+    if (normalized[commaIndex] !== ',') {
       return false;
     }
-    cursor = skipDeclarationWhitespace(text, commaIndex + 1);
+    cursor = skipDeclarationWhitespace(normalized, commaIndex + 1);
   }
   return false;
 }
 function isQualifiedClassExtendsPrefix(text) {
   const header =
-    /^\s*(?:(?:public|protected|private|abstract|final|sealed|non-sealed)\s+)*(class|interface)\s+[A-Za-z_$][A-Za-z0-9_$]*/u.exec(
+    /^\s*(?:(?:public|protected|private|abstract|static|final|sealed|non-sealed|strictfp)\s+)*(class|interface)\s+[A-Za-z_$][A-Za-z0-9_$]*/u.exec(
       text,
     );
   if (header === null) {
@@ -308,13 +309,13 @@ function isQualifiedTypeInDeclaration(
   if (!classExtendsPrefix && !methodThrowsPrefix) {
     return false;
   }
-  const continuation = `${nextWord} ${followingText}`;
+  const continuation = normalizeSplitQualifiedTypeWhitespace(
+    `${nextWord} ${followingText}`,
+  );
   if (methodThrowsPrefix) {
     return isCompleteMethodThrowsTail(continuation);
   }
-  return isCompleteDeclarationTypeListAndBlock(
-    normalizeSplitQualifiedTypeWhitespace(continuation),
-  );
+  return isCompleteDeclarationTypeListAndBlock(continuation);
 }
 function lineStartsFor(text) {
   const starts = [0];

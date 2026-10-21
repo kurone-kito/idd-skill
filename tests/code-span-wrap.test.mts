@@ -236,6 +236,7 @@ test('flags qualified types in class extends and method throws clauses', () => {
       '`class Foo<T> extends com.example. MyClass implements Runnable {}`',
       'MyClass',
     ],
+    ['`static class Foo extends com.example. MyClass {}`', 'MyClass'],
     [
       '`interface Foo<T> extends com.example. MyInterface, other.Other {}`',
       'MyInterface',
@@ -253,6 +254,7 @@ test('flags qualified types in class extends and method throws clauses', () => {
       'MyInterface',
     ],
     ['`void run() throws com.example. MyException {}`', 'MyException'],
+    ['`default void run() throws com.example. MyException {}`', 'MyException'],
     [
       '`void run() throws com.example. MyException, java.io.IOException {}`',
       'MyException',
@@ -273,6 +275,35 @@ test('flags qualified types in class extends and method throws clauses', () => {
     assert.ok(violations[0]?.before.endsWith('com.example.'), span);
     assert.ok(violations[0]?.after.startsWith(type), span);
     assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+});
+
+test('flags multiple split qualified types in supported declaration lists', () => {
+  const cases = [
+    {
+      span: '`interface Foo extends com.example. First, other. Second {}`',
+      packages: ['com.example.', 'other.'],
+      types: ['First', 'Second'],
+    },
+    {
+      span: '`void run() throws com.example. MyException, java.io. IOException {}`',
+      packages: ['com.example.', 'java.io.'],
+      types: ['MyException', 'IOException'],
+    },
+  ];
+
+  for (const { span, packages, types } of cases) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 2, span);
+    for (const [index, violation] of violations.entries()) {
+      assert.equal(
+        violation?.before.endsWith(packages[index] ?? ''),
+        true,
+        span,
+      );
+      assert.equal(violation?.after.startsWith(types[index] ?? ''), true, span);
+      assert.equal(violation?.separator, 'literal-space', span);
+    }
   }
 });
 
