@@ -38,7 +38,7 @@
 
   // Required. The IDD release this repository imported, as
   // major.minor.patch. idd-doctor also runs a content-based staleness check.
-  "iddVersion": "0.16.0",
+  "iddVersion": "0.17.0",
 
   // Required. Placeholder: replace it before use. The prefix in every marker
   // token and generated label name, such as <prefix>-roadmap-id: a lowercase
