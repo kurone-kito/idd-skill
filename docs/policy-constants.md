@@ -113,14 +113,18 @@ unattended sessions.
 
 The phase-ID compatibility contract separates machine-facing canonical
 IDs from human-facing display labels. Before 1.0.0, compatibility-breaking
-changes to supported behavior may ship in a 0.y.0 minor release; patch
-releases preserve compatibility. Declaring 1.0.0 stable is a separate
-operator decision. After that declaration, compatibility-breaking changes
-to the supported public surface require a major release.
+changes to the supported public surface may ship in a 0.y.0 minor release;
+patch releases preserve compatibility. Declaring 1.0.0 stable is a
+separate operator decision. After that declaration, compatibility-breaking
+changes to the supported public surface require a major release.
 
-Assess default changes against supported workflows and accepted inputs.
-Removing a key or adding a refusal is a review lead, not a compatibility
-verdict by itself.
+Assess default changes against the supported public surface, including
+supported workflows and accepted inputs. Removing a key or adding a
+refusal is a review lead, not a compatibility verdict by itself. Observed
+2026-10-18 in release issue `#4520` (pull request `#4457`, merged
+2026-10-17): the claimed F4 path without helper runtime changed from its
+GraphQL fallback to a hold, so the release audit assessed its
+supported-workflow impact instead of classifying the refusal alone.
 
 | Policy key                      | Policy default                                                 | Distributed value                                                                                                                                                                                                                                              | Owning surface                                                                                                                                             | Onboarding expectation                                                                                                                                                              |
 | ------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

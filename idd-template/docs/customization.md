@@ -169,10 +169,17 @@ distributed IDD workflow a repository imported.
   not independently trigger a release, and its changes ship with the
   parent roadmap's release (or the next top-level trigger).
 
-  A change to a default behavior that removes or renames no setting or
-  option, and does not make a previously accepted input fail, is a minor
-  bump. The release notes list such a change first under `Changed` as
-  "Default changes". Observed 2026-10-15 (issue `#4381`): an `iddVersion`
+  Follow semantic-versioning intent and the release-stage policy in
+  [Phase ID Compatibility Contract](#phase-id-compatibility-contract):
+  a new opt-in capability or hardening is a minor bump. Before 1.0.0,
+  compatibility-breaking changes to the supported public surface may
+  ship in a 0.y.0 minor bump, while patch releases preserve
+  compatibility. Declaring 1.0.0 stable is a separate operator decision;
+  after that, compatibility-breaking changes to the supported public
+  surface require a major bump. Assess default changes against supported
+  workflows and accepted inputs before choosing a bump. The release notes
+  list default changes first under `Changed` as "Default changes".
+  Observed 2026-10-15 (issue `#4381`): an `iddVersion`
   bump issue asked the session to stop and report on "a breaking change
   to a default that existed at v0.15.0" with no test for "breaking". A
   plan's "Default changes" bullet said no such change existed, and an
@@ -1004,8 +1011,9 @@ Example:
 
 Version compatibility follows the project's release-stage policy:
 
-- Before 1.0.0, compatibility-breaking changes to supported behavior may
-  ship in a 0.y.0 minor release. Patch releases preserve compatibility.
+- Before 1.0.0, compatibility-breaking changes to the supported public
+  surface may ship in a 0.y.0 minor release. Patch releases preserve
+  compatibility.
 - Declaring 1.0.0 stable is a separate operator decision. After that
   declaration, compatibility-breaking changes to the supported public
   surface require a major release.
@@ -1019,8 +1027,13 @@ announcement in the docs, and a documented window in which the alias
 remains accepted. In both cases, release notes must explain the user
 impact and provide migration guidance.
 
-Assess default changes against supported workflows and accepted inputs.
-A removed key or refusal alone does not determine compatibility.
+Assess default changes against the supported public surface, including
+supported workflows and accepted inputs. Removing a key or adding a
+refusal is a review lead, not a compatibility verdict by itself. Observed
+2026-10-18 in release issue `#4520` (pull request `#4457`, merged
+2026-10-17): the claimed F4 path without helper runtime changed from its
+GraphQL fallback to a hold, so the release audit assessed its
+supported-workflow impact instead of classifying the refusal alone.
 
 This issue defines the policy contract only. Broad phase renumbering or
 global identifier rewrites must land in follow-up implementation issues.
