@@ -547,6 +547,16 @@ interface DeclarationBodyContext {
   invocationDepth?: number;
 }
 
+interface DeclarationPrefixStart {
+  offset: number;
+  enclosingContexts: DeclarationBodyContext[];
+}
+
+interface DeclarationTypeRange {
+  start: number;
+  end: number;
+}
+
 function consumeTypeBodyRemainder(
   text: string,
   start: number,
@@ -570,10 +580,80 @@ function consumeBlockRemainder(
   start: number,
 ): number | undefined {
   let cursor = skipDeclarationTrivia(text, start);
-  while (text[cursor] === ';') {
-    cursor = skipDeclarationTrivia(text, cursor + 1);
+  while (cursor < text.length) {
+    if (text[cursor] === '}') {
+      return cursor + 1;
+    }
+    const statementEnd = findDeclarationBlockStatementEnd(text, cursor);
+    if (statementEnd === undefined || statementEnd <= cursor) {
+      return undefined;
+    }
+    cursor = skipDeclarationTrivia(text, statementEnd);
   }
-  return text[cursor] === '}' ? cursor + 1 : undefined;
+  return undefined;
+}
+
+function findDeclarationBlockStatementEnd(
+  text: string,
+  start: number,
+): number | undefined {
+  let parentheses = 0;
+  let brackets = 0;
+  let braces = 0;
+  let cursor = start;
+  while (cursor < text.length) {
+    const character = text[cursor];
+    if (character === '"' || character === "'") {
+      const literalEnd = skipDeclarationQuotedLiteralEnd(text, cursor);
+      if (literalEnd === undefined) {
+        return undefined;
+      }
+      cursor = literalEnd;
+      continue;
+    }
+    if (
+      character === '/' &&
+      (text[cursor + 1] === '/' || text[cursor + 1] === '*')
+    ) {
+      const commentEnd = skipDeclarationCommentEnd(text, cursor);
+      if (commentEnd === undefined) {
+        return undefined;
+      }
+      cursor = commentEnd;
+      continue;
+    }
+    if (character === '(') {
+      parentheses += 1;
+    } else if (character === ')') {
+      if (parentheses === 0) {
+        return undefined;
+      }
+      parentheses -= 1;
+    } else if (character === '[') {
+      brackets += 1;
+    } else if (character === ']') {
+      if (brackets === 0) {
+        return undefined;
+      }
+      brackets -= 1;
+    } else if (character === '{') {
+      braces += 1;
+    } else if (character === '}') {
+      if (braces === 0) {
+        return undefined;
+      }
+      braces -= 1;
+    } else if (
+      character === ';' &&
+      parentheses === 0 &&
+      brackets === 0 &&
+      braces === 0
+    ) {
+      return cursor + 1;
+    }
+    cursor += 1;
+  }
+  return undefined;
 }
 
 function skipInvocationRemainder(
@@ -654,6 +734,9 @@ function isDeclarationTailWithEnclosingBraces(
         return false;
       }
       cursor = skipDeclarationTrivia(text, invocationEnd);
+      if (text[cursor] === ';') {
+        cursor = skipDeclarationTrivia(text, cursor + 1);
+      }
     } else if (context.kind === 'block') {
       const blockEnd = consumeBlockRemainder(text, cursor);
       if (blockEnd === undefined) {
@@ -932,6 +1015,64 @@ function isDeclarationMethodHeader(text: string): boolean {
   return isDeclarationTriviaOnly(text, cursor);
 }
 
+function isDeclarationConstructorHeader(text: string): boolean {
+  let cursor = skipDeclarationTrivia(text, 0);
+  while (cursor < text.length) {
+    const annotationEnd = skipDeclarationAnnotation(text, cursor);
+    if (annotationEnd !== undefined) {
+      cursor = skipDeclarationTrivia(text, annotationEnd);
+      continue;
+    }
+    const modifier = /^(?:public|protected|private)\b/u.exec(
+      text.slice(cursor),
+    );
+    if (modifier === null) {
+      break;
+    }
+    cursor = skipDeclarationTrivia(text, cursor + modifier[0].length);
+  }
+
+  if (text[cursor] === '<') {
+    const typeParametersEnd = skipDeclarationGenericClause(text, cursor);
+    if (typeParametersEnd === undefined) {
+      return false;
+    }
+    cursor = skipDeclarationTrivia(text, typeParametersEnd);
+  }
+
+  const name = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor));
+  if (name === null) {
+    return false;
+  }
+  cursor = skipDeclarationTrivia(text, cursor + name[0].length);
+  const parametersEnd = findBalancedDeclarationDelimiterEnd(
+    text,
+    cursor,
+    '(',
+    ')',
+  );
+  if (parametersEnd === undefined) {
+    return false;
+  }
+  cursor = skipDeclarationTrivia(text, parametersEnd);
+  const throwsClause = /^throws\b/u.exec(text.slice(cursor));
+  if (throwsClause !== null) {
+    const typeListStart = skipDeclarationTrivia(
+      text,
+      cursor + throwsClause[0].length,
+    );
+    if (typeListStart === cursor + throwsClause[0].length) {
+      return false;
+    }
+    const typeListEnd = parseDeclarationTypeList(text, typeListStart);
+    if (typeListEnd === undefined) {
+      return false;
+    }
+    cursor = typeListEnd;
+  }
+  return isDeclarationTriviaOnly(text, cursor);
+}
+
 function isDeclarationFieldHeader(text: string): boolean {
   let cursor = skipDeclarationTrivia(text, 0);
   while (cursor < text.length) {
@@ -1049,6 +1190,7 @@ function skipCompleteTypeBodyMember(
   if (
     getTypeDeclarationBodyKind(header) === undefined &&
     !isDeclarationMethodHeader(header) &&
+    !isDeclarationConstructorHeader(header) &&
     !isAnonymousBody &&
     !/^(?:static)?$/u.test(header.trim())
   ) {
@@ -1478,14 +1620,10 @@ function isQualifiedTypeInDeclaration(
   return false;
 }
 
-function findDeclarationPrefixStarts(text: string): Array<{
-  offset: number;
-  enclosingContexts: DeclarationBodyContext[];
-}> {
-  const starts: Array<{
-    offset: number;
-    enclosingContexts: DeclarationBodyContext[];
-  }> = [{ offset: 0, enclosingContexts: [] }];
+function findDeclarationPrefixStarts(text: string): DeclarationPrefixStart[] {
+  const starts: DeclarationPrefixStart[] = [
+    { offset: 0, enclosingContexts: [] },
+  ];
   const contexts: Array<{
     kind: 'top-level' | DeclarationBodyContextKind;
     memberStart: number;
@@ -1591,6 +1729,7 @@ function findDeclarationPrefixStarts(text: string): Array<{
           parent.kind === 'enum' ||
           parent.kind === 'anonymous' ||
           parent.kind === 'anonymous-call' ||
+          parent.kind === 'block' ||
           (parent.kind === 'top-level' &&
             (closed.kind === 'type' || closed.kind === 'enum')))
       ) {
@@ -1644,6 +1783,245 @@ function findDeclarationPrefixStarts(text: string): Array<{
     cursor += 1;
   }
   return starts;
+}
+
+function normalizeSplitQualifiedTypeWhitespaceWithOffsets(text: string): {
+  text: string;
+  sourceOffsets: number[];
+} {
+  const normalized: string[] = [];
+  const sourceOffsets: number[] = [];
+  const splitPattern = /([A-Za-z_$][A-Za-z0-9_$]*)\.(\s+)(?=[A-Za-z_$])/gu;
+  let sourceCursor = 0;
+  for (const match of text.matchAll(splitPattern)) {
+    const matchStart = match.index;
+    const matchEnd = matchStart + match[0].length;
+    const identifierAndDotLength = (match[1]?.length ?? 0) + 1;
+    const copiedEnd = matchStart + identifierAndDotLength;
+    for (; sourceCursor < copiedEnd; sourceCursor += 1) {
+      normalized.push(text[sourceCursor] ?? '');
+      sourceOffsets.push(sourceCursor);
+    }
+    sourceCursor = matchEnd;
+  }
+  for (; sourceCursor < text.length; sourceCursor += 1) {
+    normalized.push(text[sourceCursor] ?? '');
+    sourceOffsets.push(sourceCursor);
+  }
+  return { text: normalized.join(''), sourceOffsets };
+}
+
+function findQualifiedClassExtendsTypeRange(
+  text: string,
+): DeclarationTypeRange | undefined {
+  let cursor = skipDeclarationTrivia(text, 0);
+  while (cursor < text.length) {
+    const annotationEnd = skipDeclarationAnnotation(text, cursor);
+    if (annotationEnd !== undefined) {
+      cursor = skipDeclarationTrivia(text, annotationEnd);
+      continue;
+    }
+    const modifier =
+      /^(?:public|protected|private|abstract|static|final|sealed|non-sealed|strictfp)\b/u.exec(
+        text.slice(cursor),
+      );
+    if (modifier === null) {
+      break;
+    }
+    cursor = skipDeclarationTrivia(text, cursor + modifier[0].length);
+  }
+
+  const declarationKind = /^(class|interface)\b/u.exec(text.slice(cursor));
+  if (declarationKind === null) {
+    return undefined;
+  }
+  cursor = skipDeclarationTrivia(text, cursor + declarationKind[0].length);
+  const name = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor));
+  if (name === null) {
+    return undefined;
+  }
+  cursor = skipDeclarationTrivia(text, cursor + name[0].length);
+  if (text[cursor] === '<') {
+    const genericClauseEnd = skipDeclarationGenericClause(text, cursor);
+    if (genericClauseEnd === undefined) {
+      return undefined;
+    }
+    cursor = skipDeclarationTrivia(text, genericClauseEnd);
+  }
+  const extendsClause = /^extends\b/u.exec(text.slice(cursor));
+  if (extendsClause === null) {
+    return undefined;
+  }
+  const start = skipDeclarationTrivia(text, cursor + extendsClause[0].length);
+  const end = parseDeclarationTypeList(text, start);
+  if (
+    end === undefined ||
+    (declarationKind[1] === 'class' &&
+      hasTopLevelDeclarationTypeListComma(text.slice(start, end)))
+  ) {
+    return undefined;
+  }
+  return { start, end };
+}
+
+function findDeclarationMethodThrowsTypeRange(
+  text: string,
+): DeclarationTypeRange | undefined {
+  let cursor = skipDeclarationTrivia(text, 0);
+  while (cursor < text.length) {
+    const annotationEnd = skipDeclarationAnnotation(text, cursor);
+    if (annotationEnd !== undefined) {
+      cursor = skipDeclarationTrivia(text, annotationEnd);
+      continue;
+    }
+    const modifier =
+      /^(?:public|protected|private|static|final|abstract|default|synchronized|native|strictfp)\b/u.exec(
+        text.slice(cursor),
+      );
+    if (modifier === null) {
+      break;
+    }
+    cursor = skipDeclarationTrivia(text, cursor + modifier[0].length);
+  }
+  if (text[cursor] === '<') {
+    const typeParametersEnd = skipDeclarationGenericClause(text, cursor);
+    if (typeParametersEnd === undefined) {
+      return undefined;
+    }
+    cursor = skipDeclarationTrivia(text, typeParametersEnd);
+  }
+  const returnTypeEnd = parseDeclarationType(text, cursor, 0, false, true);
+  if (returnTypeEnd === undefined) {
+    return undefined;
+  }
+  cursor = skipDeclarationTrivia(text, returnTypeEnd);
+  if (cursor === returnTypeEnd) {
+    return undefined;
+  }
+  const methodName = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor));
+  if (methodName === null) {
+    return undefined;
+  }
+  cursor = skipDeclarationTrivia(text, cursor + methodName[0].length);
+  const parametersEnd = findBalancedDeclarationDelimiterEnd(
+    text,
+    cursor,
+    '(',
+    ')',
+  );
+  if (parametersEnd === undefined) {
+    return undefined;
+  }
+  cursor = skipDeclarationTrivia(text, parametersEnd);
+  const throwsClause = /^throws\b/u.exec(text.slice(cursor));
+  if (throwsClause === null) {
+    return undefined;
+  }
+  const start = skipDeclarationTrivia(text, cursor + throwsClause[0].length);
+  const end = parseDeclarationTypeList(text, start);
+  return end === undefined ? undefined : { start, end };
+}
+
+function collectDeclarationTypeSplitOffsets(
+  text: string,
+  start: number,
+  end: number,
+  offsets: Set<number>,
+): void {
+  for (let index = start; index < end; index += 1) {
+    if (
+      text[index] !== '.' ||
+      (text[index + 1] !== ' ' && text[index + 1] !== '\t')
+    ) {
+      continue;
+    }
+    let nextIndex = index + 1;
+    while (text[nextIndex] === ' ' || text[nextIndex] === '\t') {
+      nextIndex += 1;
+    }
+    const next = text[nextIndex];
+    if (
+      next !== undefined &&
+      (isDeclarationIdentifierStart(text.charCodeAt(nextIndex)) || next === '@')
+    ) {
+      offsets.add(index);
+    }
+  }
+}
+
+function findQualifiedDeclarationTypeSplitOffsets(text: string): Set<number> {
+  const offsets = new Set<number>();
+  for (const start of findDeclarationPrefixStarts(text)) {
+    const boundary = findTypeBodyMemberDelimiter(text, start.offset);
+    if (boundary?.delimiter !== '{' && boundary?.delimiter !== ';') {
+      continue;
+    }
+    const header = text.slice(start.offset, boundary.index);
+    const normalized = normalizeSplitQualifiedTypeWhitespaceWithOffsets(header);
+    const typeKind = getTypeDeclarationBodyKind(normalized.text);
+    if (typeKind === 'type') {
+      const typeRange = findQualifiedClassExtendsTypeRange(normalized.text);
+      if (
+        typeRange !== undefined &&
+        isQualifiedClassExtendsPrefix(normalized.text.slice(0, typeRange.end))
+      ) {
+        const sourceStart = normalized.sourceOffsets[typeRange.start];
+        const sourceEnd = normalized.sourceOffsets[typeRange.end - 1];
+        if (
+          sourceStart !== undefined &&
+          sourceEnd !== undefined &&
+          isCompleteDeclarationTypeListAndBlock(
+            text.slice(start.offset + sourceStart),
+            start.enclosingContexts,
+          )
+        ) {
+          collectDeclarationTypeSplitOffsets(
+            text,
+            start.offset + sourceStart,
+            start.offset + sourceEnd + 1,
+            offsets,
+          );
+        }
+      }
+    }
+
+    const containingContext = start.enclosingContexts.at(-1)?.kind;
+    if (
+      !isDeclarationMethodHeader(normalized.text) ||
+      (containingContext !== undefined &&
+        containingContext !== 'type' &&
+        containingContext !== 'enum' &&
+        containingContext !== 'anonymous' &&
+        containingContext !== 'anonymous-call')
+    ) {
+      continue;
+    }
+    const typeRange = findDeclarationMethodThrowsTypeRange(normalized.text);
+    if (
+      typeRange === undefined ||
+      !isQualifiedMethodThrowsPrefix(normalized.text.slice(0, typeRange.end))
+    ) {
+      continue;
+    }
+    const sourceStart = normalized.sourceOffsets[typeRange.start];
+    const sourceEnd = normalized.sourceOffsets[typeRange.end - 1];
+    if (
+      sourceStart !== undefined &&
+      sourceEnd !== undefined &&
+      isCompleteMethodThrowsTail(
+        text.slice(start.offset + sourceStart),
+        start.enclosingContexts,
+      )
+    ) {
+      collectDeclarationTypeSplitOffsets(
+        text,
+        start.offset + sourceStart,
+        start.offset + sourceEnd + 1,
+        offsets,
+      );
+    }
+  }
+  return offsets;
 }
 
 function isQualifiedDollarTypeContinuation(
@@ -1994,6 +2372,8 @@ export function findCorruptingCodeSpanWraps(
     const wrappedContent = unwrapFullSpanOuterPair(inner);
     const sentenceInner = wrappedContent ?? inner;
     const sentenceIndexOffset = wrappedContent === undefined ? 0 : 1;
+    const qualifiedDeclarationTypeSplitOffsets =
+      findQualifiedDeclarationTypeSplitOffsets(inner);
     for (
       let delimiterIndex = 0;
       delimiterIndex < inner.length;
@@ -2027,13 +2407,19 @@ export function findCorruptingCodeSpanWraps(
       if (
         next === undefined ||
         (!TOKEN_CONTINUING.test(next) &&
-          !isQualifiedDollarTypeContinuation(inner, delimiterIndex, afterIndex))
+          !isQualifiedDollarTypeContinuation(
+            inner,
+            delimiterIndex,
+            afterIndex,
+          ) &&
+          !qualifiedDeclarationTypeSplitOffsets.has(delimiterIndex))
       ) {
         continue;
       }
 
       if (
         (delimiter === '.' &&
+          !qualifiedDeclarationTypeSplitOffsets.has(delimiterIndex) &&
           isSentencePunctuation(
             sentenceInner,
             delimiterIndex - sentenceIndexOffset,

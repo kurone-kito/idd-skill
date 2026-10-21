@@ -434,6 +434,8 @@ test('finds declaration starts inside executable and enum bodies', () => {
   for (const span of [
     '`class Outer { void run() { class Local extends com.example. MyClass {} } }`',
     '`class Outer { void run() { initialize(); class Local extends com.example. MyClass {} } }`',
+    '`class Outer { void run() { if (ready) {} class Local extends com.example. MyClass {} } }`',
+    '`class Outer { void run() { class Local extends com.example. MyClass {} int n = 0; } }`',
     '`enum Outer { VALUE { void run() throws com.example. MyException {} } }`',
   ]) {
     const violations = findCorruptingCodeSpanWraps(span);
@@ -446,6 +448,7 @@ test('allows valid sibling members after a declaration body', () => {
   for (const span of [
     '`class Outer { void run() throws com.example. MyException {} void other() {} }`',
     '`class Outer { void run() throws com.example. MyException {} void other() {} int value = 1; }`',
+    '`class Outer { void run() throws com.example. MyException {} Outer() {} }`',
   ]) {
     const violations = findCorruptingCodeSpanWraps(span);
     assert.equal(violations.length, 1, span);
@@ -465,6 +468,18 @@ test('finds qualified throws clauses in anonymous class members', () => {
     '`class Outer { Object value = new Object() { void first() {} void run() throws com.example. MyException {} }; }`',
     '`class Outer { Object value = new Object() { int value = 1; void run() throws com.example. MyException {} }; }`',
     '`class Outer { void run() { consume(new Object() { void nested() throws com.example. MyException {} }); } }`',
+    '`consume(new Object() { void run() throws com.example. MyException {} });`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+});
+
+test('finds split qualified types with a type-use annotation after the separator', () => {
+  for (const span of [
+    '`class Foo extends com.example. @Nullable MyClass {}`',
+    '`void run() throws com.example. @Nullable MyException {}`',
   ]) {
     const violations = findCorruptingCodeSpanWraps(span);
     assert.equal(violations.length, 1, span);
@@ -1152,6 +1167,16 @@ test('findCorruptingCodeSpanWraps stays linear on a long backtick run followed b
     'findCorruptingCodeSpanWraps',
     1000,
     (size) => `text ${'`'.repeat(size)}${'a`'.repeat(size)}`,
+    false,
+  );
+});
+
+test('findCorruptingCodeSpanWraps stays linear on a long qualified throws list', () => {
+  assertWrapScanLinear(
+    'qualified throws list',
+    1000,
+    (size) =>
+      `\`class C { void f() throws ${Array(size).fill('com.example. MyException').join(', ')} {} }\``,
     false,
   );
 });
