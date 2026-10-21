@@ -55,8 +55,6 @@ const DOTTED_IDENTIFIER_PREFIX =
   /^\s*[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+$/u;
 const MAX_DECLARATION_GENERIC_DEPTH = 8;
 const DECLARATION_CLAUSE_KEYWORDS = ['extends', 'implements', 'permits'];
-const QUALIFIED_CLASS_EXTENDS_PREFIX =
-  /^\s*(?:(?:public|protected|private|abstract|final|sealed|non-sealed)\s+)*(?:class|interface)\s+[A-Za-z_$][A-Za-z0-9_$]*(?:<[^<>]+>)?\s+extends\s+(?:[A-Za-z_$][A-Za-z0-9_$]*\.)+[A-Za-z_$][A-Za-z0-9_$]*$/u;
 const QUALIFIED_METHOD_THROWS_PREFIX =
   /^\s*(?:(?:public|protected|private|static|final|abstract|synchronized|native|strictfp)\s+)*[A-Za-z_$][A-Za-z0-9_$.]*(?:<[^<>]*>)?\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\([^()]*\)\s+throws\s+(?:[A-Za-z_$][A-Za-z0-9_$]*\.)+[A-Za-z_$][A-Za-z0-9_$]*$/u;
 function skipDeclarationWhitespace(text, start) {
@@ -181,6 +179,46 @@ function isCompleteDeclarationBlock(text) {
   // are body content and must not make a valid declaration look incomplete.
   return text[start] === '{' && trimmed.endsWith('}');
 }
+function isQualifiedClassExtendsPrefix(text) {
+  const header =
+    /^\s*(?:(?:public|protected|private|abstract|final|sealed|non-sealed)\s+)*(?:class|interface)\s+[A-Za-z_$][A-Za-z0-9_$]*/u.exec(
+      text,
+    );
+  if (header === null) {
+    return false;
+  }
+  let cursor = header[0].length;
+  if (text[cursor] === '<') {
+    let depth = 0;
+    let hasTypeParameterContent = false;
+    for (; cursor < text.length; cursor += 1) {
+      const character = text[cursor];
+      if (character === '<') {
+        depth += 1;
+        if (depth > MAX_DECLARATION_GENERIC_DEPTH) {
+          return false;
+        }
+      } else if (character === '>') {
+        depth -= 1;
+        if (depth < 0) {
+          return false;
+        }
+        if (depth === 0) {
+          cursor += 1;
+          break;
+        }
+      } else if (depth > 0 && !/\s/u.test(character ?? '')) {
+        hasTypeParameterContent = true;
+      }
+    }
+    if (depth !== 0 || !hasTypeParameterContent) {
+      return false;
+    }
+  }
+  return /^\s+extends\s+(?:[A-Za-z_$][A-Za-z0-9_$]*\.)+[A-Za-z_$][A-Za-z0-9_$]*$/u.test(
+    text.slice(cursor),
+  );
+}
 function isCompleteDeclarationTypeListAndBlock(text) {
   let cursor = parseDeclarationTypeList(text, 0);
   if (cursor === undefined) {
@@ -218,7 +256,7 @@ function isQualifiedTypeInDeclaration(
 ) {
   const prefix = inner.slice(0, delimiterIndex);
   if (
-    !QUALIFIED_CLASS_EXTENDS_PREFIX.test(prefix) &&
+    !isQualifiedClassExtendsPrefix(prefix) &&
     !QUALIFIED_METHOD_THROWS_PREFIX.test(prefix)
   ) {
     return false;

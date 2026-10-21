@@ -229,11 +229,19 @@ test('flags qualified types in class extends and method throws clauses', () => {
     ['`class Foo extends com.example. MyClass {}`', 'MyClass'],
     ['`class Foo<T> extends com.example. MyClass {}`', 'MyClass'],
     [
+      '`class Foo<T extends Comparable<List<T>>> extends com.example. MyClass {}`',
+      'MyClass',
+    ],
+    [
       '`class Foo<T> extends com.example. MyClass implements Runnable {}`',
       'MyClass',
     ],
     [
       '`interface Foo<T> extends com.example. MyInterface, other.Other {}`',
+      'MyInterface',
+    ],
+    [
+      '`interface Foo<T extends Comparable<List<T>>> extends com.example. MyInterface {}`',
       'MyInterface',
     ],
     ['`void run() throws com.example. MyException {}`', 'MyException'],
