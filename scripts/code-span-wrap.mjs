@@ -129,20 +129,22 @@ function parseDeclarationTypeArgument(text, start, genericDepth) {
   if (text[start] !== '?') {
     return parseDeclarationType(text, start, genericDepth);
   }
-  let cursor = skipDeclarationWhitespace(text, start + 1);
-  if (cursor === start + 1) {
-    return cursor;
-  }
+  const cursor = skipDeclarationWhitespace(text, start + 1);
   const varianceKeyword = ['extends', 'super'].find(
     (keyword) =>
       text.startsWith(keyword, cursor) &&
-      /\s/u.test(text[cursor + keyword.length] ?? ''),
+      !isDeclarationIdentifierContinuation(
+        text.charCodeAt(cursor + keyword.length),
+      ),
   );
   if (varianceKeyword === undefined) {
     return start + 1;
   }
-  cursor = skipDeclarationWhitespace(text, cursor + varianceKeyword.length);
-  return parseDeclarationType(text, cursor, genericDepth);
+  const boundStart = skipDeclarationWhitespace(
+    text,
+    cursor + varianceKeyword.length,
+  );
+  return parseDeclarationType(text, boundStart, genericDepth);
 }
 function isCompleteDeclarationTail(text) {
   let cursor = skipDeclarationWhitespace(text, 0);

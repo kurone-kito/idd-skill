@@ -230,11 +230,22 @@ test('flags declaration tails with Java wildcard type arguments', () => {
     'com.example. MyClass extends Base<?>',
     'com.example. MyClass extends Base<? extends Outer.Inner>',
     'com.example. MyClass implements Comparable<? super MyClass>',
+    'com.example. MyClass extends Base<?extends Outer.Inner>',
+    'com.example. MyClass implements Comparable<?super MyClass>',
   ]) {
     const span = inlineCode + declaration + inlineCode;
     const violations = findCorruptingCodeSpanWraps(span);
     assert.equal(violations.length, 1, span);
     assert.equal(violations[0]?.before, 'com.example.', span);
+  }
+});
+
+test('does not treat identifier prefixes as wildcard variance keywords', () => {
+  for (const span of [
+    '`com.example. MyClass extends Base<?extendsFoo>`',
+    '`com.example. MyClass extends Base<?superFoo>`',
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
   }
 });
 
