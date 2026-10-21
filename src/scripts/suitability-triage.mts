@@ -1100,13 +1100,85 @@ function hasUserActorStepAssignedTarget(text: string): boolean {
 const USER_ACTOR_STEP_NUMBERED_TARGET =
   /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?|checklists?|lists?|items?)\s+#?\s*(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)#?\s*\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
-  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|owner|ownership|belongs?\s+to|in\s+charge\s+of|work(?:s|ed|ing)?|give|gives|gave|given|giving|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)?|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complet(?:e|es|ed|ing)|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|hand(?:le|les|led|ling)|man(?:age|ages|aged|aging))\b/i;
+  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|owner|ownership|belongs?\s+to|in\s+charge\s+of|work(?:s|ed|ing)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)?|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complet(?:e|es|ed|ing)|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|hand(?:le|les|led|ling)|man(?:age|ages|aged|aging))\b/i;
 const USER_ACTOR_STEP_GENERAL_WORK_ACTION =
   /\b(?:review|build|create|add|update|edit|fix|write|remove|delete|install|configure|prepare|investigate|document|refactor|change|migrate|deploy|publish|author|open|close|merge|inspect|analyze|analyse|validate|generate)\b/i;
 const USER_ACTOR_STEP_AGENT_RECIPIENT_RELATION =
-  /(?:^|\s)(?:(?:is|are|was|were|must|should|shall|will|has\s+been|needs?\s+to|has\s+to|is\s+required\s+to)\s+)?(?:for|required\s+of|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|in\s+charge\s+of|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by)\s*$/i;
+  /(?:^|\s)(?:(?:is|are|was|were|must|should|shall|will|has\s+been|needs?\s+to|has\s+to|is\s+required\s+to)\s+)?(?:for|required\s+of|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|in\s+charge\s+of|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by)(?:\s+(?:a|an|the))?\s*$/i;
 const USER_ACTOR_STEP_AGENT_OBJECT_ASSIGNMENT_RELATION =
-  /\b(?:ask(?:s|ed)?|request(?:s|ed)?|task(?:s|ed)?|instruct(?:s|ed)?|expect(?:s|ed)?|tell(?:s|told)?|order(?:s|ed)?|want(?:s|ed)?|need(?:s|ed)?|assign(?:s|ed)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|let|lets|letting|have|has|had|give|gives|gave|given|giving)\s+(?:the\s+)?$/i;
+  /\b(?:ask(?:s|ed)?|request(?:s|ed)?|task(?:s|ed)?|instruct(?:s|ed)?|expect(?:s|ed)?|tells?|told|order(?:s|ed)?|want(?:s|ed)?|need(?:s|ed)?|assign(?:s|ed)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|let|lets|letting|have|has|had|give|gives|gave|given|giving)\s+(?:(?:a|an|the)\s+)?$/i;
+const USER_ACTOR_STEP_AGENT_STRONG_OBJECT_ASSIGNMENT_RELATION =
+  /\b(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|task(?:s|ed)?|give|gives|gave|given|giving)\s+(?:(?:a|an|the)\s+)?$/i;
+const USER_ACTOR_STEP_AGENT_STRONG_WORK_NOUN_COMPLEMENT =
+  /^\s+(?:(?:a|an|the)\s+)?(?:[\w-]+\s+){0,2}(?:implementations?|work|tasks?|responsibilities|duties|assignments?|projects?|features?|support|testing|tests?|reviews?|documentation|maintenance|development|debugging|refactoring|migration|deployment|analysis|build)\b/i;
+const USER_ACTOR_STEP_AGENT_WORK_VERB_COMPLEMENT = new RegExp(
+  `^\\s+(?:to\\s+)?(?:${USER_ACTOR_STEP_ASSIGNMENT_CUE.source}|${USER_ACTOR_STEP_GENERAL_WORK_ACTION.source})`,
+  'i',
+);
+const USER_ACTOR_STEP_AGENT_WORK_NOUN_COMPLEMENT =
+  /^\s+(?:(?:a|an|the)\s+)?(?:(?!(?:about|around|by|can|could|concerning|does|do|did|for|from|has|have|had|how|if|in|is|may|might|must|needs?|of|on|over|regarding|requires?|should|through|that|to|under|was|were|what|when|where|whether|which|who|why|will|would|with|as|question|joke|gift|story|message|comment|note|update)\b)[\w-]+\s+){0,2}(?:work|tasks?|responsibilities|duties|assignments?)\b/i;
+const USER_ACTOR_STEP_AGENT_FOR_WORK_COMPLEMENT =
+  /^\s+for\s+(?:(?:a|an|the)\s+)?(?:(?!(?:about|around|by|can|could|concerning|does|do|did|for|from|has|have|had|how|if|in|is|may|might|must|needs?|of|on|over|regarding|requires?|should|through|that|to|under|was|were|what|when|where|whether|which|who|why|will|would|with|as|question|joke|gift|story|message|comment|note|update)\b)[\w-]+\s+){0,2}(?:implementations?|work|tasks?|responsibilities|duties|assignments?|projects?|features?|support|testing|tests?|reviews?|documentation|maintenance|development|debugging|refactoring|migration|deployment|analysis|build)\b/i;
+const USER_ACTOR_STEP_AGENT_WORK_NOUN_CLAUSE_CONTINUATION =
+  /^\s+(?:about|as|contains?|details?|does|has|history|includes?|is|means?|must|needs?|overview|progress|results?|roadmap|requires?|seems?|should|shows?|status|suite|summary|was|were|will|would)\b/i;
+const USER_ACTOR_STEP_AGENT_INFORMATION_NOUN_TAIL =
+  /^\s+(?:details?|results?|status)\b/i;
+const USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION_SOURCE =
+  '(?:implement|build|create|add|update|edit|fix|write|remove|delete|install|configure|prepare|investigate|document|refactor|change|migrate|deploy|publish|author|open|close|merge|inspect|analyze|analyse|validate|generate|test|review|run|execute|perform)';
+const USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION = new RegExp(
+  `\\b${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION_SOURCE}\\b`,
+  'i',
+);
+const USER_ACTOR_STEP_AGENT_LATER_WORK_NOUN_DELIVERABLE = new RegExp(
+  String.raw`(?:\band\b|\bor\b|,)\s+(?!(?:never|not|no\s+longer)\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|task(?:s|ed)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?)\b\s+|${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION_SOURCE}(?:s|es|ed|ing|d)?\b\s+|(?:built|wrote|ran)\b\s+)(?:(?:a|an|the)\s+)?(?:[\w-]+\s+){0,2}?(?:implementations?|work|tasks?|responsibilities|duties|assignments?|projects?|features?|support|testing|tests?|reviews?|documentation|maintenance|development|debugging|refactoring|migration|deployment|analysis|build)\b(?!\s+(?:details?|results?|status|overview|progress|history|summary)\b)`,
+  'i',
+);
+const USER_ACTOR_STEP_AGENT_LATER_WORK_INFINITIVE_DELIVERABLE = new RegExp(
+  String.raw`(?:\band\b|\bor\b|,)\s+(?:to\s+${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.source}|for\s+(?:it|them|(?:(?:a|an|the)\s+)?${USER_ACTOR_STEP_ASSIGNABLE_AGENT.source})\s+to\s+${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.source})`,
+  'i',
+);
+const USER_ACTOR_STEP_AGENT_LATER_WORK_NOUN_AGENT_RECIPIENT = new RegExp(
+  String.raw`\b(?:(?:(?:is|are|was|were|must|should|shall|will|needs?\s+to|has\s+to)\s+)?(?:be\s+)?(?:provided|supplied|sent|given|delivered|done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by\s+(?:them|it|(?:(?:a|an|the)\s+)?${USER_ACTOR_STEP_ASSIGNABLE_AGENT.source})|(?:required|expected|requested)\s+(?:of|from)\s+(?:them|it|(?:(?:a|an|the)\s+)?${USER_ACTOR_STEP_ASSIGNABLE_AGENT.source})|(?:assigned|delegated|directed|tasked)\s+to\s+(?:them|it|(?:(?:a|an|the)\s+)?${USER_ACTOR_STEP_ASSIGNABLE_AGENT.source}))\b`,
+  'i',
+);
+const USER_ACTOR_STEP_AGENT_LATER_WORK_NOUN_TASK_TRANSFER_RECIPIENT =
+  new RegExp(
+    String.raw`\b(?:(?:is|are|was|were)\s+being|(?:is|are|was|were|has\s+been|have\s+been|had\s+been|must\s+be|should\s+be|shall\s+be|will\s+be|needs?\s+to\s+be|has\s+to\s+be)\s+)?(?:given|handed|transferred|reassigned|allocated|entrusted)\s+to\s+(?:them|it|(?:(?:a|an|the)\s+)?${USER_ACTOR_STEP_ASSIGNABLE_AGENT.source})\b`,
+    'i',
+  );
+const USER_ACTOR_STEP_AGENT_LATER_WORK_NOUN_TRANSFER_TO_AGENT =
+  /\b(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?)\s+(?:(?:a|an|the)\s+)?(?:[\w-]+\s+){0,2}?(?:implementations?|work|tasks?|responsibilities|duties|assignments?|projects?|features?|support|testing|tests?|reviews?|maintenance|development|debugging|refactoring|migration|deployment|analysis|build)\s+to\s+(?:(?:a|an|the)\s+)?$/i;
+const USER_ACTOR_STEP_AGENT_GIVEN_TECHNICAL_SUPPORT =
+  /\b(?:give|gives|gave|given|giving)\s+(?:(?:a|an|the)\s+)?(?:technical|tech)\s+support\b/i;
+const USER_ACTOR_STEP_AGENT_GIVEN_TECHNICAL_SUPPORT_FOLLOWUP =
+  /(?:,\s*(?:and\s+)?|\band\s+)(?:give|gives|gave|given|giving)\s+(?:(?:(?:a|an|the)\s+)?(?:technical|tech)\s+support\s+(?:to|for)\s+(?:them|it)|(?:to\s+)?(?:them|it)\s+(?:(?:a|an|the)\s+)?(?:technical|tech)\s+support)\b/i;
+const USER_ACTOR_STEP_AGENT_LATER_PRONOUN_ASSIGNMENT_VERB = `(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|task(?:s|ed)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?)`;
+const USER_ACTOR_STEP_AGENT_LATER_PRONOUN_WORK_NOUN = `(?:implementations?|work|tasks?|responsibilities|duties|assignments?|projects?|features?|support|testing|tests?|reviews?|maintenance|development|debugging|refactoring|migration|deployment|analysis|build)`;
+const USER_ACTOR_STEP_AGENT_LATER_PRONOUN_WORK_ASSIGNMENT = new RegExp(
+  String.raw`(?:,\s*(?:and\s+)?|\band\s+)(?!(?:no\s+longer|never|not)\s+|(?:and|or|but|while|whereas)\s+(?:no\s+longer|never|not)\s+)(?:(?:(?:the|a|an|this|that)\s+)?(?:[\w-]+\s+){1,2})?(?!(?:give|gives|gave|given|giving)\s+(?:(?:(?:a|an|the)\s+)?(?:technical|tech)\s+support\s+(?:to|for)\s+(?:them|it)|(?:to\s+)?(?:them|it)\s+(?:(?:a|an|the)\s+)?(?:technical|tech)\s+support)\b)${USER_ACTOR_STEP_AGENT_LATER_PRONOUN_ASSIGNMENT_VERB}\s+(?:(?!(?:no|not|never)\s+)(?:(?:a|an|the)\s+)?(?:[\w-]+\s+){0,2}?${USER_ACTOR_STEP_AGENT_LATER_PRONOUN_WORK_NOUN}\s+(?:to|for|with)\s+(?:them|it)|(?:to\s+)?(?:them|it)\s+to\s+(?:${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.source})|(?:to\s+)?(?:them|it)\s+(?!(?:no|not|never)\s+)(?:(?:a|an|the)\s+)?(?:[\w-]+\s+){0,2}?${USER_ACTOR_STEP_AGENT_LATER_PRONOUN_WORK_NOUN}|(?:them|it)\s+with\s+(?!(?:no|not|never)\s+)(?:(?:a|an|the)\s+)?(?:[\w-]+\s+){0,2}?${USER_ACTOR_STEP_AGENT_LATER_PRONOUN_WORK_NOUN})\b`,
+  'i',
+);
+function laterWorkNounHasClauseContinuation(suffix: string): boolean {
+  const laterWorkNoun =
+    USER_ACTOR_STEP_AGENT_LATER_WORK_NOUN_DELIVERABLE.exec(suffix);
+  const continuation =
+    laterWorkNoun === null
+      ? ''
+      : suffix.slice(laterWorkNoun.index + laterWorkNoun[0].length);
+  return (
+    laterWorkNoun !== null &&
+    USER_ACTOR_STEP_AGENT_WORK_NOUN_CLAUSE_CONTINUATION.test(continuation) &&
+    !USER_ACTOR_STEP_AGENT_LATER_WORK_NOUN_AGENT_RECIPIENT.test(continuation) &&
+    !(
+      /\b(?:work|tasks?|responsibilities|duties|assignments?|projects?|features?)\b/i.test(
+        laterWorkNoun[0],
+      ) &&
+      USER_ACTOR_STEP_AGENT_LATER_WORK_NOUN_TASK_TRANSFER_RECIPIENT.test(
+        continuation,
+      )
+    )
+  );
+}
 const USER_ACTOR_STEP_FORWARD_ASSIGNMENT_INTRODUCER = new RegExp(
   String.raw`^\s*${USER_ACTOR_STEP_AGENT.source}[^.!?;:]*\b(?:(?:is|are|was|were|remains?)\s+(?:responsible\s+for|accountable\s+for|assigned\s+to|tasked\s+with|delegated\s+to|directed\s+to))\s*:\s*$`,
   'i',
@@ -1120,7 +1192,7 @@ const USER_ACTOR_STEP_PASSIVE_PARTICIPLE_IN_PHRASE =
 const USER_ACTOR_STEP_PASSIVE_AUXILIARY =
   /\b(?:am|is|are|was|were|be|been|being|get|gets|got|gotten)$/i;
 const USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE =
-  /\b(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|give|gives|gave|given|giving)\b[^.!?;]{0,80}$/i;
+  /\b(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?)\b[^.!?;]{0,80}$/i;
 const USER_ACTOR_STEP_USER_DIRECTIVE_START =
   /^\s*(?:(?:then|next|now|afterwards?)\s+)?run\s+this\s+(?:step|check)\s+by\s+the\s+user\b/i;
 const USER_ACTOR_STEP_NEGATION_CUE = new RegExp(
@@ -1139,6 +1211,10 @@ interface MarkdownHeadingSection {
 
 const USER_ACTOR_STEP_AGENT_HEADING_LABEL =
   /^\s*(?:the\s+)?(?:coding\s+)?(?:agents?|assistants?|automation|AIs?|LLMs?|you|workers?|bots?|models?|codex|copilots?|claude(?:\s+code)?|gemini(?:\s+cli)?|cursor|cline|opencode|windsurf|devin|grok(?:\s+build)?)(?:\s+(?:tasks?|responsibilities|duties|work))?\s*$/i;
+const USER_ACTOR_STEP_AGENT_WORK_OBJECT =
+  /\b(?:implementation|work|tasks?|responsibilities|duties|assignments?|projects?|features?|support|testing|tests?|reviews?|documentation|maintenance|development|debugging|refactoring|migration|deployment|analysis|build)\b/i;
+const USER_ACTOR_STEP_AGENT_WORK_HEADING_RELATION =
+  /\b(?:for|to|by|owned\s+by|assigned\s+to|delegated\s+to|directed\s+to|responsible\s+(?:for|to)|tasked\s+with|in\s+charge\s+of)\b/i;
 
 function normalizeMarkdownHeadingLabel(heading: string): string {
   const isAtxHeading = /^ {0,3}#{1,6}[ \t]+/.test(heading);
@@ -1166,6 +1242,13 @@ function assignmentHeadingContext(heading: string): {
   assignment: string | null;
 } | null {
   const label = normalizeMarkdownHeadingLabel(heading);
+  if (
+    USER_ACTOR_STEP_ASSIGNABLE_AGENT.test(label) &&
+    USER_ACTOR_STEP_AGENT_WORK_OBJECT.test(label) &&
+    USER_ACTOR_STEP_AGENT_WORK_HEADING_RELATION.test(label)
+  ) {
+    return { context: '', assignment: label };
+  }
   const numberedTargetPattern = new RegExp(
     USER_ACTOR_STEP_NUMBERED_TARGET.source,
     'i',
@@ -2831,11 +2914,16 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
       const agentEnd = agentStart + (agent[0]?.length ?? 0);
       const prefix = assignmentClause.slice(0, agentStart);
       const suffix = assignmentClause.slice(agentEnd);
+      if (USER_ACTOR_STEP_AGENT_LATER_PRONOUN_WORK_ASSIGNMENT.test(suffix)) {
+        return true;
+      }
       const subjectStart = Math.max(
         prefix.lastIndexOf(','),
         prefix.lastIndexOf(':'),
       );
-      const subjectPrefix = prefix.slice(subjectStart + 1);
+      const subjectPrefix = prefix
+        .slice(subjectStart + 1)
+        .replace(/^\s*(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/, '');
       const isAgentSubject =
         /^\s*(?:(?:and|but|while|whereas)\s+)?(?:(?:a|an|the)\s+)?$/i.test(
           subjectPrefix,
@@ -2864,8 +2952,70 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
       if (USER_ACTOR_STEP_AGENT_RECIPIENT_RELATION.test(prefix)) {
         return true;
       }
+      const agentObjectAssignmentRelation =
+        USER_ACTOR_STEP_AGENT_OBJECT_ASSIGNMENT_RELATION.test(prefix);
+      const agentStrongWorkNoun =
+        USER_ACTOR_STEP_AGENT_STRONG_WORK_NOUN_COMPLEMENT.exec(suffix);
+      const agentWasGivenTechnicalSupport =
+        agentStrongWorkNoun !== null &&
+        /\b(?:give|gives|gave|given|giving)\b/i.test(prefix) &&
+        /\b(?:technical|tech)\s+support\b/i.test(agentStrongWorkNoun[0]);
+      const agentStrongWorkNounIsInformation =
+        agentStrongWorkNoun !== null &&
+        (agentWasGivenTechnicalSupport ||
+          (USER_ACTOR_STEP_AGENT_INFORMATION_NOUN_TAIL.test(
+            suffix.slice(agentStrongWorkNoun[0].length),
+          ) &&
+            (!USER_ACTOR_STEP_AGENT_LATER_WORK_NOUN_DELIVERABLE.test(
+              suffix.slice(agentStrongWorkNoun[0].length),
+            ) ||
+              laterWorkNounHasClauseContinuation(
+                suffix.slice(agentStrongWorkNoun[0].length),
+              )) &&
+            !USER_ACTOR_STEP_AGENT_LATER_WORK_INFINITIVE_DELIVERABLE.test(
+              suffix.slice(agentStrongWorkNoun[0].length),
+            )));
       if (
-        USER_ACTOR_STEP_AGENT_OBJECT_ASSIGNMENT_RELATION.test(prefix) &&
+        USER_ACTOR_STEP_AGENT_STRONG_OBJECT_ASSIGNMENT_RELATION.test(prefix) &&
+        agentStrongWorkNoun !== null &&
+        !agentStrongWorkNounIsInformation
+      ) {
+        return true;
+      }
+      const agentWorkNoun =
+        USER_ACTOR_STEP_AGENT_WORK_NOUN_COMPLEMENT.exec(suffix);
+      const agentWorkNounHasClauseContinuation =
+        agentWorkNoun !== null &&
+        USER_ACTOR_STEP_AGENT_WORK_NOUN_CLAUSE_CONTINUATION.test(
+          suffix.slice(agentWorkNoun[0].length),
+        );
+      const agentForWork =
+        USER_ACTOR_STEP_AGENT_FOR_WORK_COMPLEMENT.exec(suffix);
+      const agentForGivenTechnicalSupport =
+        agentForWork !== null &&
+        USER_ACTOR_STEP_AGENT_GIVEN_TECHNICAL_SUPPORT_FOLLOWUP.test(
+          suffix.slice(agentForWork.index + agentForWork[0].length),
+        );
+      const agentForInformation =
+        agentForWork !== null &&
+        USER_ACTOR_STEP_AGENT_INFORMATION_NOUN_TAIL.test(
+          suffix.slice(agentForWork[0].length),
+        ) &&
+        (!USER_ACTOR_STEP_AGENT_LATER_WORK_NOUN_DELIVERABLE.test(
+          suffix.slice(agentForWork[0].length),
+        ) ||
+          laterWorkNounHasClauseContinuation(
+            suffix.slice(agentForWork[0].length),
+          ) ||
+          agentForGivenTechnicalSupport) &&
+        !USER_ACTOR_STEP_AGENT_LATER_WORK_INFINITIVE_DELIVERABLE.test(
+          suffix.slice(agentForWork[0].length),
+        );
+      if (
+        agentObjectAssignmentRelation &&
+        (USER_ACTOR_STEP_AGENT_WORK_VERB_COMPLEMENT.test(suffix) ||
+          (agentWorkNoun !== null && !agentWorkNounHasClauseContinuation) ||
+          (agentForWork !== null && !agentForInformation)) &&
         !/^\s+to\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i.test(
           suffix,
         )
@@ -2873,7 +3023,8 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
         return true;
       }
       if (
-        USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(prefix) &&
+        USER_ACTOR_STEP_AGENT_LATER_WORK_NOUN_TRANSFER_TO_AGENT.test(prefix) &&
+        !USER_ACTOR_STEP_AGENT_GIVEN_TECHNICAL_SUPPORT.test(prefix) &&
         /\bto\s+(?:(?:a|an|the)\s+)?$/i.test(prefix)
       ) {
         return true;

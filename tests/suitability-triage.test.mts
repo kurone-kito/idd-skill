@@ -2682,6 +2682,17 @@ test('trust safety allows a step assigned to the user -- #4562', () => {
   assert.equal(result.pass, true);
 });
 
+test('trust safety keeps agent work explicitly transferred to the user available to the user -- #4596', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent handed the keyboard-support task to the user.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('trust safety allows a check assigned to the user -- #4562', () => {
   const result = checkTrustSafety({
     issue: {
@@ -2905,12 +2916,204 @@ test('trust safety disables the user-step exception for any agent work assignmen
       body: 'The maintainer requested the coding agent to implement keyboard support.\n\nRun this step by the user.',
     },
     {
+      name: 'agent receives an unrelated task through the told relation',
+      body: 'We told the coding agent to implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives an unrelated task through told with an indefinite article',
+      body: 'We told a coding agent to implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives an unrelated task through asked with an indefinite article',
+      body: 'We asked an assistant to test the deployment.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for an implementation deliverable',
+      body: 'We asked a coding agent for an implementation of keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for a documentation deliverable',
+      body: 'We asked a coding agent for documentation.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for an adjective-modified implementation deliverable',
+      body: 'We asked a coding agent for project status and a complete implementation of keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for a written documentation deliverable',
+      body: 'We asked a coding agent for project status and written documentation of keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent must supply the written documentation deliverable',
+      body: 'We asked a coding agent for project status, and written documentation must be supplied by them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'written documentation is required of the agent',
+      body: 'We asked a coding agent for project status, and written documentation is required of them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'written documentation is required from the agent',
+      body: 'We asked a coding agent for project status, and written documentation is required from them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work task is given to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task was given to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work project is given to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support project was given to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work task is handed to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task was handed to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work task is transferred to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task was transferred to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work task is reassigned to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task was reassigned to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work task is allocated to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task was allocated to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work task is entrusted to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task was entrusted to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an active entrusted work task is assigned to the agent',
+      body: 'We entrusted the keyboard-support task to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an active handed work task is assigned to the agent',
+      body: 'We handed the keyboard-support task to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an active transferred work task is assigned to the agent',
+      body: 'We transferred the keyboard-support task to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an active reallocated work task is assigned to the agent',
+      body: 'We allocated the keyboard-support task to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'technical support is assigned to the agent',
+      body: 'We assigned technical support to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'technical support is explicitly assigned to the agent as a pronoun object',
+      body: 'We asked a coding agent for project status, and assigned them technical support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a later coordinated assignment refers back to the agent',
+      body: 'We gave technical support to a coding agent, and assigned keyboard support to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a later dative assignment refers back to the agent',
+      body: 'We gave technical support to a coding agent, and assigned them the keyboard-support task.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a later tasked-with assignment refers back to the agent',
+      body: 'We gave technical support to a coding agent, and tasked them with keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a later assignment infinitive refers back to the agent',
+      body: 'We gave technical support to a coding agent, and assigned them to implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a later assignment may name an intervening subject',
+      body: 'We gave technical support to a coding agent, and the maintainer assigned them the keyboard-support task.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an active reassigned work project is assigned to the agent',
+      body: 'We reassigned the keyboard-support project to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a completed passive transfer assigns the task to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task has been given to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a completed passive entrustment assigns the task to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task has been entrusted to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an imperative assignment hands a work task to the agent',
+      body: 'Hand the keyboard-support task to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work task is being handed to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task is being handed to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work task is being entrusted to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task is being entrusted to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for documentation after an informational status request',
+      body: 'We asked a coding agent for project status and documentation.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for an implementation after an informational status request',
+      body: 'We asked a coding agent for project status and an implementation of keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked to implement after an informational status request',
+      body: 'We asked a coding agent for project status and to implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked to test after an informational status request',
+      body: 'We asked a coding agent for project status and to test the deployment.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for a pronoun-directed task after an informational status request',
+      body: 'We asked a coding agent for project status and for it to test the deployment.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for an explicit agent-directed task after an informational status request',
+      body: 'We asked a coding agent for project status and for the coding agent to test the deployment.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for a deliverable after an informational status request with a comma',
+      body: 'We asked a coding agent for project status, documentation.\n\nRun this step by the user.',
+    },
+    {
       name: 'delegated work object is assigned to agent',
       body: 'The maintainer delegated keyboard support to the coding agent.\n\nRun this step by the user.',
     },
     {
       name: 'agent receives a named task as assignment object',
       body: 'The maintainer assigned the coding agent a keyboard-support task.\n\nRun this step by the user.',
+    },
+    {
+      name: 'strong assignment verb assigns a project object to agent',
+      body: 'The maintainer assigned a coding agent a project.\n\nRun this step by the user.',
+    },
+    {
+      name: 'strong assignment verb assigns keyboard support to agent',
+      body: 'The maintainer assigned a coding agent keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'strong assignment verb assigns an implementation object to agent',
+      body: 'We assigned an assistant a keyboard-support implementation.\n\nRun this step by the user.',
+    },
+    {
+      name: 'strong assignment does not let informational status mask a later deliverable',
+      body: 'The maintainer assigned a coding agent the project status and documentation.\n\nRun this step by the user.',
+    },
+    {
+      name: 'give verb assigns a project object to agent',
+      body: 'The maintainer gave a coding agent a project.\n\nRun this step by the user.',
+    },
+    {
+      name: 'give verb assigns keyboard support to agent',
+      body: 'The maintainer gave a coding agent keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'give verb assigns an implementation object to agent',
+      body: 'The maintainer gave a coding agent a keyboard-support implementation.\n\nRun this step by the user.',
     },
     {
       name: 'agent receives a task through the give relation',
@@ -2962,6 +3165,30 @@ test('trust safety disables the user-step exception for any agent work assignmen
       body: '## **Coding agent steps**\n\nRun this step by the user.',
     },
     {
+      name: 'recipient-first heading assigns implementation to the agent',
+      body: '## Implementation for the coding agent\n\nRun this step by the user.',
+    },
+    {
+      name: 'recipient-first heading assigns keyboard support to the agent',
+      body: '## Keyboard support for the coding agent\n\nRun this step by the user.',
+    },
+    {
+      name: 'top-level unordered list assigns work to the agent',
+      body: '- The coding agent must implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'top-level ordered list assigns work to the agent',
+      body: '1. The coding agent must implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'top-level task list assigns work to the agent',
+      body: '- [ ] The coding agent must implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'top-level task list keeps negated agent assignments fail closed',
+      body: '- [ ] The coding agent is not required to implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
       name: 'assignment in a Setext heading',
       body: 'The feature work is assigned to the coding agent\n---\n\nRun this step by the user.',
     },
@@ -2982,6 +3209,64 @@ test('trust safety disables the user-step exception for any agent work assignmen
       trustSafetyAmbiguous: false,
     } as Context);
     assert.equal(result.pass, false, name);
+  }
+});
+
+test('trust safety keeps informational agent-object statements outside work assignments -- #4596', () => {
+  const statements = [
+    'We told the coding agent a joke.',
+    'We told a coding agent a joke.',
+    'We asked a coding agent a question.',
+    'We gave a coding agent a gift.',
+    'We told a coding agent about the project.',
+    'We told an assistant about a task.',
+    'We asked a coding agent about the tests.',
+    'We asked a coding agent how the tests work.',
+    'We told a coding agent that the project requires testing.',
+    'We told a coding agent the project requires testing.',
+    'We told a coding agent the test suite is failing.',
+    'We told a coding agent the deployment results.',
+    'We told a coding agent the project roadmap.',
+    'We asked a coding agent for the project status.',
+    'We asked a coding agent for project details.',
+    'We asked a coding agent for test results.',
+    'We asked a coding agent for project status and test results.',
+    'We asked a coding agent for project status and project details.',
+    'We asked a coding agent for project status, and written documentation is available.',
+    'We asked a coding agent for project status, and written documentation seems useful.',
+    'We asked a coding agent for project status, and written documentation is available to them.',
+    'We asked a coding agent for project status, and written documentation was provided to them.',
+    'We asked a coding agent for project status, and written documentation was given to them.',
+    'We asked a coding agent for project status, and technical support was given to them.',
+    'We asked a coding agent for project status, and written documentation was handed to them.',
+    'We asked a coding agent for project status, and written documentation was transferred to them.',
+    'We asked a coding agent for project status, and written documentation was entrusted to them.',
+    'We asked a coding agent for project status, and written documentation has been entrusted to them.',
+    'We asked a coding agent for project status, and written documentation has been transferred to them.',
+    'We gave written documentation to a coding agent.',
+    'We gave technical support to a coding agent.',
+    'We gave a coding agent technical support.',
+    'We gave tech support to a coding agent.',
+    'We gave a coding agent tech support.',
+    'We asked a coding agent for project status, and gave them technical support.',
+    'We asked a coding agent for project status, and gave technical support to them.',
+    'We gave technical support to a coding agent, and assigned them no task.',
+    'We gave technical support to a coding agent, and not assigned them the keyboard-support task.',
+    'We gave technical support to a coding agent, and no longer assigned them the keyboard-support task.',
+    'We gave technical support to a coding agent, and never assigned them the keyboard-support task.',
+    'We asked a coding agent for project status and implemented keyboard support.',
+    'We asked a coding agent for project status and reviewed the deployment.',
+    'We asked a coding agent for project status and generated test results.',
+  ];
+  for (const statement of statements) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${statement}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, statement);
   }
 });
 
