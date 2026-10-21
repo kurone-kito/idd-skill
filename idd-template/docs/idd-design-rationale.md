@@ -2245,6 +2245,24 @@ shadows a tracked path `tmp/f.txt` passes both shadow-path pipelines, so
 `git merge --ff-only` can still replace it while `git status --porcelain`
 is empty.
 
+### F2 ignored-path rerun retains standard excludes (kurone-kito/idd-skill#4590)
+
+Observed 2026-10-21 during D3.7's final check for
+[issue #4563](https://github.com/kurone-kito/idd-skill/issues/4563) and
+[PR #4582](https://github.com/kurone-kito/idd-skill/pull/4582): the
+ignored-path shadow check was reconstructed with `git ls-files
+--ignored`, omitting `--exclude-standard`. F2's first pipeline included
+that option, but its ignored-path instruction said only "again with
+`-o -i`", leaving the requirement implicit. Without the standard ignore
+sources, an ignored path could escape the check.
+
+Decision: keep `--exclude-standard` in the ignored-path rerun and spell
+out the complete options as `-o -i --exclude-standard`. The
+`shadow-path-guidance` audit pins that wording, its mutation test removes
+the option to prove the audit rejects the regression, and the shadow-path
+test derives its ignored variant from the instruction before checking a
+standard-ignored shadow.
+
 ## Instruction delivery
 
 ### Skill-based on-demand delivery of phase instructions: no-go (2026-07-16)

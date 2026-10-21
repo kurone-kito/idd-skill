@@ -891,8 +891,8 @@ const RULES = [
         requirePattern(
           path,
           contents,
-          /and again with `-o -i`; any output or failure holds\./,
-          'ignored-path F2 variant',
+          /and again with `-o -i --exclude-standard`; any output or failure holds\./,
+          'ignored-path F2 variant with standard excludes',
         );
         if (
           /xargs(?=\s)[^`]*?\s-[A-Za-z0-9]*r\b|xargs[^`]*--no-run-if-empty/.test(
