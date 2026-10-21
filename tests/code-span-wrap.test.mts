@@ -224,6 +224,42 @@ test('flags complete declaration tails with generic and combined types', () => {
   }
 });
 
+test('flags declaration tails with Java wildcard type arguments', () => {
+  const inlineCode = String.fromCharCode(96);
+  for (const declaration of [
+    'com.example. MyClass extends Base<?>',
+    'com.example. MyClass extends Base<? extends Outer.Inner>',
+    'com.example. MyClass implements Comparable<? super MyClass>',
+  ]) {
+    const span = inlineCode + declaration + inlineCode;
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.before, 'com.example.', span);
+  }
+});
+
+test('keeps wildcard-bound generic nesting bounded', () => {
+  const inlineCode = String.fromCharCode(96);
+  const atLimit =
+    inlineCode +
+    'com.example. MyClass extends Base<? extends ' +
+    'List<'.repeat(7) +
+    'String' +
+    '>'.repeat(7) +
+    '>' +
+    inlineCode;
+  const beyondLimit =
+    inlineCode +
+    'com.example. MyClass extends Base<? extends ' +
+    'List<'.repeat(8) +
+    'String' +
+    '>'.repeat(8) +
+    '>' +
+    inlineCode;
+  assert.equal(findCorruptingCodeSpanWraps(atLimit).length, 1, atLimit);
+  assert.deepEqual(findCorruptingCodeSpanWraps(beyondLimit), [], beyondLimit);
+});
+
 test('flags declarations inside one balanced outer wrapper', () => {
   for (const span of [
     '`(com.example. MyClass extends Base)`',

@@ -101,7 +101,11 @@ function parseDeclarationType(text, start, genericDepth) {
     return undefined;
   }
   cursor = skipDeclarationWhitespace(text, cursor + 1);
-  let argumentEnd = parseDeclarationType(text, cursor, genericDepth + 1);
+  let argumentEnd = parseDeclarationTypeArgument(
+    text,
+    cursor,
+    genericDepth + 1,
+  );
   if (argumentEnd === undefined) {
     return undefined;
   }
@@ -112,7 +116,7 @@ function parseDeclarationType(text, start, genericDepth) {
       break;
     }
     cursor = skipDeclarationWhitespace(text, commaIndex + 1);
-    argumentEnd = parseDeclarationType(text, cursor, genericDepth + 1);
+    argumentEnd = parseDeclarationTypeArgument(text, cursor, genericDepth + 1);
     if (argumentEnd === undefined) {
       return undefined;
     }
@@ -120,6 +124,25 @@ function parseDeclarationType(text, start, genericDepth) {
   }
   cursor = skipDeclarationWhitespace(text, cursor);
   return text[cursor] === '>' ? cursor + 1 : undefined;
+}
+function parseDeclarationTypeArgument(text, start, genericDepth) {
+  if (text[start] !== '?') {
+    return parseDeclarationType(text, start, genericDepth);
+  }
+  let cursor = skipDeclarationWhitespace(text, start + 1);
+  if (cursor === start + 1) {
+    return cursor;
+  }
+  const varianceKeyword = ['extends', 'super'].find(
+    (keyword) =>
+      text.startsWith(keyword, cursor) &&
+      /\s/u.test(text[cursor + keyword.length] ?? ''),
+  );
+  if (varianceKeyword === undefined) {
+    return start + 1;
+  }
+  cursor = skipDeclarationWhitespace(text, cursor + varianceKeyword.length);
+  return parseDeclarationType(text, cursor, genericDepth);
 }
 function isCompleteDeclarationTail(text) {
   let cursor = skipDeclarationWhitespace(text, 0);
