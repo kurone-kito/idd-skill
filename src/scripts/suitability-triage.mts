@@ -712,7 +712,6 @@ const USER_ACTOR_STEP_RAW_HTML_BLOCK_TAG_NAMES = [
   'h6',
   'head',
   'header',
-  'hgroup',
   'hr',
   'html',
   'iframe',
@@ -733,6 +732,7 @@ const USER_ACTOR_STEP_RAW_HTML_BLOCK_TAG_NAMES = [
   'script',
   'search',
   'section',
+  'source',
   'style',
   'summary',
   'table',
@@ -765,8 +765,6 @@ const USER_ACTOR_STEP_RAW_TEXT_HTML_TAG_SET = new Set([
   'pre',
   'script',
   'style',
-  'textarea',
-  'title',
 ]);
 
 function buildRepositoryFitParagraphSpans(
@@ -3077,6 +3075,15 @@ function hasOpenRawHtmlBlockBefore(
     const tagName = parsedTag.name;
 
     if (
+      USER_ACTOR_STEP_RAW_HTML_BLOCK_TAG_SET.has(tagName) &&
+      !USER_ACTOR_STEP_RAW_TEXT_HTML_TAG_SET.has(tagName) &&
+      isRawHtmlBlockTagLine(prefix, start)
+    ) {
+      const lineEnd = rawHtmlLineEnd(prefix, start);
+      if (findNextRawHtmlBlankLineEnd(prefix, lineEnd) === null) return true;
+    }
+
+    if (
       isStandaloneRawHtmlTagLine(prefix, start, end) &&
       !USER_ACTOR_STEP_RAW_HTML_BLOCK_TAG_SET.has(tagName)
     ) {
@@ -3198,6 +3205,11 @@ function isStandaloneRawHtmlTagLine(
   const before = text.slice(lineStart, start);
   const after = text.slice(end, lineEnd);
   return /^ {0,3}$/.test(before) && /^[ \t]*$/.test(after);
+}
+
+function isRawHtmlBlockTagLine(text: string, start: number): boolean {
+  const lineStart = rawHtmlLineStart(text, start);
+  return /^ {0,3}$/.test(text.slice(lineStart, start));
 }
 
 function findNextRawHtmlBlankLineEnd(

@@ -2878,6 +2878,8 @@ test('trust safety fails closed inside raw HTML blocks for user steps -- #4596',
     '<div>\n\nRun this step by the user.',
     '<div/>\n\n- Run this step by the user.',
     '<div data-value="> </div>">\n\n- Run this step by the user.',
+    '<div></div>\n- Run this step by the user.\n\nNext paragraph.',
+    '<hr>\n- Run this step by the user.\n\nNext paragraph.',
     '<span>\n- Run this step by the user.',
     '<script>\n\nRun this check by the user.\n\n</script>',
     '<?php\n\nRun this step by the user.',
@@ -2926,6 +2928,15 @@ test('trust safety fails closed inside raw HTML blocks for user steps -- #4596',
     trustSafetyAmbiguous: false,
   } as Context);
   assert.equal(outsideClosedOpaqueBlocks.pass, true);
+
+  const afterClosedProcessingInstruction = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '<?php ?>\n- Run this step by the user.\n\nNext paragraph.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(afterClosedProcessingInstruction.pass, true);
 
   const htmlLikeTextInsideRawTextBlock = checkTrustSafety({
     issue: {
