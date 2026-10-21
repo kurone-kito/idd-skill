@@ -232,12 +232,22 @@ test('flags qualified types in class extends and method throws clauses', () => {
       '`class Foo<T extends Comparable<List<T>>> extends com.example. MyClass {}`',
       'MyClass',
     ],
+    ['`class Foo<@Mark(">") T> extends com.example. MyClass {}`', 'MyClass'],
+    ['`class Foo<@Mark(1 > 0) T> extends com.example. MyClass {}`', 'MyClass'],
     [
       '`class Foo<T> extends com.example. MyClass implements Runnable {}`',
       'MyClass',
     ],
     ['`static class Foo extends com.example. MyClass {}`', 'MyClass'],
     ['`@Deprecated class Foo extends com.example. MyClass {}`', 'MyClass'],
+    [
+      '`@SuppressWarnings("x)") class Foo extends com.example. MyClass {}`',
+      'MyClass',
+    ],
+    [
+      '`@org.example.SuppressWarnings("x)") interface Foo extends com.example. MyInterface {}`',
+      'MyInterface',
+    ],
     [
       '`interface Foo<T> extends com.example. MyInterface, other.Other {}`',
       'MyInterface',
@@ -281,11 +291,19 @@ test('flags qualified types in class extends and method throws clauses', () => {
       'MyException',
     ],
     [
+      '`public <@Mark(1 > 0) T> void run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
       '`@Override public void run() throws com.example. MyException {}`',
       'MyException',
     ],
     [
       '`@org.example.Override public void run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`@SuppressWarnings("x)") void run() throws com.example. MyException {}`',
       'MyException',
     ],
     ['`default void run() throws com.example. MyException {}`', 'MyException'],

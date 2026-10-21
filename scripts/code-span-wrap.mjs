@@ -136,6 +136,51 @@ function findBalancedDeclarationDelimiterEnd(text, start, open, close) {
   }
   return undefined;
 }
+function skipDeclarationQuotedLiteralEnd(text, start) {
+  const quote = text[start];
+  if (quote !== '"' && quote !== "'") {
+    return undefined;
+  }
+  const delimiter =
+    quote === '"' && text.startsWith('"""', start) ? '"""' : quote;
+  let cursor = start + delimiter.length;
+  while (cursor < text.length) {
+    if (text[cursor] === '\\') {
+      cursor += 2;
+      continue;
+    }
+    if (text.startsWith(delimiter, cursor)) {
+      return cursor + delimiter.length;
+    }
+    cursor += 1;
+  }
+  return undefined;
+}
+function skipDeclarationCommentEnd(text, start) {
+  if (text.startsWith('//', start)) {
+    const lineEnd = text.indexOf('\n', start + 2);
+    return lineEnd < 0 ? text.length : lineEnd + 1;
+  }
+  if (text.startsWith('/*', start)) {
+    const commentEnd = text.indexOf('*/', start + 2);
+    return commentEnd < 0 ? undefined : commentEnd + 2;
+  }
+  return undefined;
+}
+function skipDeclarationAnnotation(text, start) {
+  const annotation =
+    /^@[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*/u.exec(
+      text.slice(start),
+    );
+  if (annotation === null) {
+    return undefined;
+  }
+  const cursor = skipDeclarationWhitespace(text, start + annotation[0].length);
+  if (text[cursor] !== '(') {
+    return cursor;
+  }
+  return findBalancedDeclarationDelimiterEnd(text, cursor, '(', ')');
+}
 function isAsciiLetter(code) {
   return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
 }
@@ -265,6 +310,35 @@ function skipDeclarationGenericClause(text, start) {
   let hasContent = false;
   for (let cursor = start; cursor < text.length; cursor += 1) {
     const character = text[cursor];
+    if (character === '@') {
+      const annotationEnd = skipDeclarationAnnotation(text, cursor);
+      if (annotationEnd === undefined) {
+        return undefined;
+      }
+      hasContent = true;
+      cursor = annotationEnd - 1;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      const literalEnd = skipDeclarationQuotedLiteralEnd(text, cursor);
+      if (literalEnd === undefined) {
+        return undefined;
+      }
+      hasContent = true;
+      cursor = literalEnd - 1;
+      continue;
+    }
+    if (
+      character === '/' &&
+      (text[cursor + 1] === '/' || text[cursor + 1] === '*')
+    ) {
+      const commentEnd = skipDeclarationCommentEnd(text, cursor);
+      if (commentEnd === undefined) {
+        return undefined;
+      }
+      cursor = commentEnd - 1;
+      continue;
+    }
     if (character === '<') {
       depth += 1;
       if (depth > MAX_DECLARATION_GENERIC_DEPTH) {
@@ -343,14 +417,32 @@ function isQualifiedDeclarationTypeListPrefix(text) {
   return false;
 }
 function isQualifiedClassExtendsPrefix(text) {
-  const header =
-    /^\s*(?:(?:(?:public|protected|private|abstract|static|final|sealed|non-sealed|strictfp)\s+|@[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\s+))*(class|interface)\s+[A-Za-z_$][A-Za-z0-9_$]*/u.exec(
-      text,
-    );
-  if (header === null) {
+  let cursor = skipDeclarationWhitespace(text, 0);
+  while (cursor < text.length) {
+    const annotationEnd = skipDeclarationAnnotation(text, cursor);
+    if (annotationEnd !== undefined) {
+      cursor = skipDeclarationWhitespace(text, annotationEnd);
+      continue;
+    }
+    const modifier =
+      /^(?:public|protected|private|abstract|static|final|sealed|non-sealed|strictfp)\s+/u.exec(
+        text.slice(cursor),
+      );
+    if (modifier === null) {
+      break;
+    }
+    cursor += modifier[0].length;
+  }
+  const declarationKind = /^(class|interface)\s+/u.exec(text.slice(cursor));
+  if (declarationKind === null) {
     return false;
   }
-  let cursor = header[0].length;
+  cursor += declarationKind[0].length;
+  const name = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor));
+  if (name === null) {
+    return false;
+  }
+  cursor += name[0].length;
   if (text[cursor] === '<') {
     const genericClauseEnd = skipDeclarationGenericClause(text, cursor);
     if (genericClauseEnd === undefined) {
@@ -365,7 +457,7 @@ function isQualifiedClassExtendsPrefix(text) {
   const typeListPrefix = extendsClause[1];
   return (
     typeListPrefix !== undefined &&
-    (header[1] === 'interface' || !typeListPrefix.includes(',')) &&
+    (declarationKind[1] === 'interface' || !typeListPrefix.includes(',')) &&
     isQualifiedDeclarationTypeListPrefix(typeListPrefix)
   );
 }
@@ -409,12 +501,9 @@ function isCompleteMethodThrowsTail(text) {
 function isQualifiedMethodThrowsPrefix(text) {
   let cursor = skipDeclarationWhitespace(text, 0);
   while (true) {
-    const annotation =
-      /^@[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\s+/u.exec(
-        text.slice(cursor),
-      );
-    if (annotation !== null) {
-      cursor += annotation[0].length;
+    const annotationEnd = skipDeclarationAnnotation(text, cursor);
+    if (annotationEnd !== undefined) {
+      cursor = skipDeclarationWhitespace(text, annotationEnd);
       continue;
     }
     const modifier =
