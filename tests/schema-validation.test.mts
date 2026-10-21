@@ -722,15 +722,20 @@ test('maximum compares distinct overflowing JSON number tokens exactly', () => {
       join(root, 'schema.json'),
       '{"type":"object","required":["value"],"properties":{"value":{"type":"number","maximum":1e999}},"additionalProperties":false}',
     );
-    writeFileSync(join(root, 'instance.json'), '{"value":9e999}');
+    writeFileSync(join(root, 'instance.json'), '{"value":1e999}');
 
     const schema = loadJson('schema.json', root) as JsonRecord;
-    const instance = loadJson('instance.json', root) as JsonRecord;
     const valueSchema = (schema.properties as JsonRecord).value as JsonRecord;
     assert.equal(valueSchema.maximum, Infinity);
+    const equalInstance = loadJson('instance.json', root) as JsonRecord;
+    assert.equal(equalInstance.value, Infinity);
+    assert.deepEqual(validate(equalInstance, schema), []);
+
+    writeFileSync(join(root, 'instance.json'), '{"value":9e999}');
+    const instance = loadJson('instance.json', root) as JsonRecord;
     assert.equal(instance.value, Infinity);
     assert.ok(
-      validate(instance, schema).some((error) => error.includes('maximum')),
+      validate(instance, schema).some((error) => error.includes('> maximum')),
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -973,7 +978,7 @@ test('root-number validation preserves its exact JSON token', () => {
     );
     assert.ok(
       validate(document, maximumSchema).some((error) =>
-        error.includes('maximum'),
+        error.includes('> maximum'),
       ),
     );
   } finally {
