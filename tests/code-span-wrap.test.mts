@@ -264,6 +264,14 @@ test('flags qualified types in class extends and method throws clauses', () => {
       '`public <T> void run() throws com.example. MyException {}`',
       'MyException',
     ],
+    [
+      '`@Override public void run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`@org.example.Override public void run() throws com.example. MyException {}`',
+      'MyException',
+    ],
     ['`default void run() throws com.example. MyException {}`', 'MyException'],
     [
       '`void run() throws com.example. MyException, java.io.IOException {}`',

@@ -370,6 +370,15 @@ function isCompleteMethodThrowsTail(text: string): boolean {
 function isQualifiedMethodThrowsPrefix(text: string): boolean {
   let cursor = skipDeclarationWhitespace(text, 0);
   while (true) {
+    const annotation =
+      /^@[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\s+/u.exec(
+        text.slice(cursor),
+      );
+    if (annotation !== null) {
+      cursor += annotation[0].length;
+      continue;
+    }
+
     const modifier =
       /^(?:public|protected|private|static|final|abstract|default|synchronized|native|strictfp)\s+/u.exec(
         text.slice(cursor),
