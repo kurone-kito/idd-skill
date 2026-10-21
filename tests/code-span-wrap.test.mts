@@ -210,7 +210,11 @@ test('flags simple and qualified declaration targets', () => {
 test('flags complete declaration tails with generic and combined types', () => {
   for (const span of [
     '`com.example. MyClass extends Base<T>`',
+    '`com.example. MyClass extends Base<List<String>>`',
+    '`com.example. MyClass extends Outer.Inner`',
+    '`com.example. MyClass extends com.other.Outer.Inner`',
     '`com.example. MyClass implements Comparable<Foo>`',
+    '`com.example. MyClass implements Map<String, List<Integer>>`',
     '`com.example. MyClass implements First, Second`',
     '`com.example. MyClass extends Base implements Interface`',
   ]) {

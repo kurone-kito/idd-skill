@@ -53,12 +53,116 @@ const PROPER_NAME_TITLE_ABBREVIATION =
   /(?:^|(?<![\p{L}\p{N}_./-]))(?:Mr|Mrs|Ms|Mx|Dr|Prof|Rev|Hon|Sr|Jr|St|Capt|Col|Gen|Sgt|Lt|Maj|Cmdr|Adm|Fr|Br)\.$/iu;
 const DOTTED_IDENTIFIER_PREFIX =
   /(?:^|[^A-Za-z0-9_-])[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+$/u;
-const DECLARATION_TYPE = String.raw`(?:[A-Z][A-Za-z0-9_-]*|(?:[a-z][A-Za-z0-9_-]*\.)+[A-Z][A-Za-z0-9_-]*)(?:\s*<[^<>]+>)?`;
-const DECLARATION_CLAUSE = String.raw`(?:extends|implements|permits)\s+${DECLARATION_TYPE}(?:\s*,\s*${DECLARATION_TYPE})*`;
-const COMPLETE_DECLARATION_TAIL = new RegExp(
-  `^${DECLARATION_CLAUSE}(?:\\s+${DECLARATION_CLAUSE})*$`,
-  'u',
-);
+const MAX_DECLARATION_GENERIC_DEPTH = 8;
+const DECLARATION_CLAUSE_KEYWORDS = ['extends', 'implements', 'permits'];
+function skipDeclarationWhitespace(text, start) {
+  let cursor = start;
+  while (cursor < text.length && /\s/u.test(text[cursor] ?? '')) {
+    cursor += 1;
+  }
+  return cursor;
+}
+function isAsciiLetter(code) {
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+function isDeclarationIdentifierContinuation(code) {
+  return (
+    isAsciiLetter(code) ||
+    (code >= 48 && code <= 57) ||
+    code === 45 ||
+    code === 95
+  );
+}
+function parseDeclarationType(text, start, genericDepth) {
+  let cursor = start;
+  let finalSegmentStartsUppercase = false;
+  while (true) {
+    const firstCode = text.charCodeAt(cursor);
+    if (!isAsciiLetter(firstCode)) {
+      return undefined;
+    }
+    finalSegmentStartsUppercase = firstCode >= 65 && firstCode <= 90;
+    cursor += 1;
+    while (isDeclarationIdentifierContinuation(text.charCodeAt(cursor))) {
+      cursor += 1;
+    }
+    if (text[cursor] !== '.') {
+      break;
+    }
+    cursor += 1;
+  }
+  if (!finalSegmentStartsUppercase) {
+    return undefined;
+  }
+  if (text[cursor] !== '<') {
+    return cursor;
+  }
+  if (genericDepth >= MAX_DECLARATION_GENERIC_DEPTH) {
+    return undefined;
+  }
+  cursor = skipDeclarationWhitespace(text, cursor + 1);
+  let argumentEnd = parseDeclarationType(text, cursor, genericDepth + 1);
+  if (argumentEnd === undefined) {
+    return undefined;
+  }
+  cursor = argumentEnd;
+  while (true) {
+    const commaIndex = skipDeclarationWhitespace(text, cursor);
+    if (text[commaIndex] !== ',') {
+      break;
+    }
+    cursor = skipDeclarationWhitespace(text, commaIndex + 1);
+    argumentEnd = parseDeclarationType(text, cursor, genericDepth + 1);
+    if (argumentEnd === undefined) {
+      return undefined;
+    }
+    cursor = argumentEnd;
+  }
+  cursor = skipDeclarationWhitespace(text, cursor);
+  return text[cursor] === '>' ? cursor + 1 : undefined;
+}
+function isCompleteDeclarationTail(text) {
+  let cursor = skipDeclarationWhitespace(text, 0);
+  while (cursor < text.length) {
+    const keyword = DECLARATION_CLAUSE_KEYWORDS.find((candidate) =>
+      text.startsWith(candidate, cursor),
+    );
+    if (keyword === undefined) {
+      return false;
+    }
+    cursor += keyword.length;
+    if (cursor >= text.length || !/\s/u.test(text[cursor] ?? '')) {
+      return false;
+    }
+    cursor = skipDeclarationWhitespace(text, cursor);
+    let typeEnd = parseDeclarationType(text, cursor, 0);
+    if (typeEnd === undefined) {
+      return false;
+    }
+    cursor = typeEnd;
+    while (true) {
+      const commaIndex = skipDeclarationWhitespace(text, cursor);
+      if (text[commaIndex] !== ',') {
+        break;
+      }
+      cursor = skipDeclarationWhitespace(text, commaIndex + 1);
+      typeEnd = parseDeclarationType(text, cursor, 0);
+      if (typeEnd === undefined) {
+        return false;
+      }
+      cursor = typeEnd;
+    }
+    const nextClause = skipDeclarationWhitespace(text, cursor);
+    if (nextClause === text.length) {
+      return true;
+    }
+    if (nextClause === cursor) {
+      return false;
+    }
+    cursor = nextClause;
+  }
+  return false;
+}
 function lineStartsFor(text) {
   const starts = [0];
   for (let index = 0; index < text.length; index += 1) {
@@ -137,7 +241,7 @@ function isSentencePunctuation(inner, delimiterIndex, afterIndex) {
   const declarationTypeContinuation =
     nextWord !== undefined &&
     /[a-z][A-Z]/u.test(nextWord) &&
-    COMPLETE_DECLARATION_TAIL.test(followingText);
+    isCompleteDeclarationTail(followingText);
   // Only a complete, recognized declaration tail stays code-shaped.
   // Trailing punctuation or prose keeps sentence punctuation detectable.
   if (
