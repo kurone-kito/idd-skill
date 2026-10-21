@@ -58,7 +58,7 @@ const PARTIAL_QUALIFIED_DECLARATION_PATH =
 const MAX_DECLARATION_GENERIC_DEPTH = 8;
 const DECLARATION_CLAUSE_KEYWORDS = ['extends', 'implements', 'permits'];
 const QUALIFIED_METHOD_THROWS_HEADER =
-  /^\s*(?:(?:public|protected|private|static|final|abstract|default|synchronized|native|strictfp)\s+)*[A-Za-z_$][A-Za-z0-9_$.]*(?:<[^<>]*>)?\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\([^()]*\)\s+throws\s+/u;
+  /^\s*(?:(?:public|protected|private|static|final|abstract|default|synchronized|native|strictfp)\s+)*(?:<[^<>]+>\s+)?[A-Za-z_$][A-Za-z0-9_$.]*(?:<[^<>]*>)?\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\([^()]*\)\s+throws\s+/u;
 function skipDeclarationWhitespace(text, start) {
   let cursor = start;
   while (cursor < text.length && /\s/u.test(text[cursor] ?? '')) {
@@ -69,10 +69,14 @@ function skipDeclarationWhitespace(text, start) {
 function isAsciiLetter(code) {
   return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
 }
+function isDeclarationIdentifierStart(code) {
+  return isAsciiLetter(code) || code === 36 || code === 95;
+}
 function isDeclarationIdentifierContinuation(code) {
   return (
     isAsciiLetter(code) ||
     (code >= 48 && code <= 57) ||
+    code === 36 ||
     code === 45 ||
     code === 95
   );
@@ -101,7 +105,7 @@ function parseDeclarationType(text, start, genericDepth) {
   let finalSegmentStartsUppercase = false;
   while (true) {
     const firstCode = text.charCodeAt(cursor);
-    if (!isAsciiLetter(firstCode)) {
+    if (!isDeclarationIdentifierStart(firstCode)) {
       return undefined;
     }
     finalSegmentStartsUppercase = firstCode >= 65 && firstCode <= 90;
@@ -203,7 +207,7 @@ function isQualifiedDeclarationTypeListPrefix(text) {
 }
 function isQualifiedClassExtendsPrefix(text) {
   const header =
-    /^\s*(?:(?:public|protected|private|abstract|static|final|sealed|non-sealed|strictfp)\s+)*(class|interface)\s+[A-Za-z_$][A-Za-z0-9_$]*/u.exec(
+    /^\s*(?:(?:(?:public|protected|private|abstract|static|final|sealed|non-sealed|strictfp)\s+|@[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\s+))*(class|interface)\s+[A-Za-z_$][A-Za-z0-9_$]*/u.exec(
       text,
     );
   if (header === null) {

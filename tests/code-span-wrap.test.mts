@@ -237,6 +237,7 @@ test('flags qualified types in class extends and method throws clauses', () => {
       'MyClass',
     ],
     ['`static class Foo extends com.example. MyClass {}`', 'MyClass'],
+    ['`@Deprecated class Foo extends com.example. MyClass {}`', 'MyClass'],
     [
       '`interface Foo<T> extends com.example. MyInterface, other.Other {}`',
       'MyInterface',
@@ -254,6 +255,10 @@ test('flags qualified types in class extends and method throws clauses', () => {
       'MyInterface',
     ],
     ['`void run() throws com.example. MyException {}`', 'MyException'],
+    [
+      '`public <T> void run() throws com.example. MyException {}`',
+      'MyException',
+    ],
     ['`default void run() throws com.example. MyException {}`', 'MyException'],
     [
       '`void run() throws com.example. MyException, java.io.IOException {}`',
@@ -325,6 +330,16 @@ test('preserves dollar and underscore identifiers in qualified declarations', ()
   assert.equal(violations[0]?.before.endsWith('$root._internal.'), true);
   assert.equal(violations[0]?.after.startsWith('MyClass'), true);
   assert.equal(violations[0]?.separator, 'literal-space');
+});
+
+test('parses dollar and underscore identifiers in declaration type lists', () => {
+  for (const prefix of ['$root.Base', '_root.Base']) {
+    const violations = findCorruptingCodeSpanWraps(
+      `\`interface Foo extends ${prefix}, com.example. MyInterface {}\``,
+    );
+    assert.equal(violations.length, 1, prefix);
+    assert.equal(violations[0]?.after.startsWith('MyInterface'), true, prefix);
+  }
 });
 
 test('flags declarations inside one balanced outer wrapper', () => {

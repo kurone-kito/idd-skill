@@ -74,7 +74,7 @@ const DECLARATION_CLAUSE_KEYWORDS = [
   'permits',
 ] as const;
 const QUALIFIED_METHOD_THROWS_HEADER =
-  /^\s*(?:(?:public|protected|private|static|final|abstract|default|synchronized|native|strictfp)\s+)*[A-Za-z_$][A-Za-z0-9_$.]*(?:<[^<>]*>)?\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\([^()]*\)\s+throws\s+/u;
+  /^\s*(?:(?:public|protected|private|static|final|abstract|default|synchronized|native|strictfp)\s+)*(?:<[^<>]+>\s+)?[A-Za-z_$][A-Za-z0-9_$.]*(?:<[^<>]*>)?\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\([^()]*\)\s+throws\s+/u;
 
 function skipDeclarationWhitespace(text: string, start: number): number {
   let cursor = start;
@@ -88,10 +88,15 @@ function isAsciiLetter(code: number): boolean {
   return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
 }
 
+function isDeclarationIdentifierStart(code: number): boolean {
+  return isAsciiLetter(code) || code === 36 || code === 95;
+}
+
 function isDeclarationIdentifierContinuation(code: number): boolean {
   return (
     isAsciiLetter(code) ||
     (code >= 48 && code <= 57) ||
+    code === 36 ||
     code === 45 ||
     code === 95
   );
@@ -129,7 +134,7 @@ function parseDeclarationType(
   let finalSegmentStartsUppercase = false;
   while (true) {
     const firstCode = text.charCodeAt(cursor);
-    if (!isAsciiLetter(firstCode)) {
+    if (!isDeclarationIdentifierStart(firstCode)) {
       return undefined;
     }
     finalSegmentStartsUppercase = firstCode >= 65 && firstCode <= 90;
@@ -239,7 +244,7 @@ function isQualifiedDeclarationTypeListPrefix(text: string): boolean {
 
 function isQualifiedClassExtendsPrefix(text: string): boolean {
   const header =
-    /^\s*(?:(?:public|protected|private|abstract|static|final|sealed|non-sealed|strictfp)\s+)*(class|interface)\s+[A-Za-z_$][A-Za-z0-9_$]*/u.exec(
+    /^\s*(?:(?:(?:public|protected|private|abstract|static|final|sealed|non-sealed|strictfp)\s+|@[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\s+))*(class|interface)\s+[A-Za-z_$][A-Za-z0-9_$]*/u.exec(
       text,
     );
   if (header === null) {
