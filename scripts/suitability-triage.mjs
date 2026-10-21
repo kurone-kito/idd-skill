@@ -842,6 +842,1766 @@ const REPO_OWNED_VALIDATION_WINDOW =
   /^\s*(?:this|that)\s+(?:full|complete|validation|config|configuration)\s+(?:command|script)\s+to\s+(?:validate|verify|check|confirm)\s+(?:the\s+)?(?:configuration|config|setup|settings)\s*$/i;
 const REPO_OWNED_VALIDATION_SENTENCE_START =
   /(?:^|\n[ \t]*\r?\n\s*)(?:please\s+)?$/i;
+// #4562: "by the user" is an actor phrase only for these exact step/check
+// objects; keep every other supplied-content target on the unsafe path.
+const USER_ACTOR_STEP_WINDOW =
+  /^[ \t]*this[ \t]+(step|check)[ \t]+by[ \t]+the[ \t]+user[ \t]*[.!?]?[ \t]*$/i;
+// #4577: allow the exact user-actor directive at a normal issue paragraph,
+// heading, or list-item boundary, or after a narrow clause connector.
+// Explicit agent assignments in the issue title or body still win,
+// including assignments after the directive.
+// HTML-comment content cannot establish a visible directive boundary.
+const USER_ACTOR_STEP_LIST_MARKER = String.raw`(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?`;
+const USER_ACTOR_STEP_LIST_PREFIX = new RegExp(
+  `^[ \\t]*(?:${USER_ACTOR_STEP_LIST_MARKER})[ \\t]*$`,
+  'i',
+);
+const USER_ACTOR_STEP_AGENT =
+  /\b(?:the\s+)?(?:coding\s+)?(?:agents?|assistants?|automation|AIs?(?!\s+models?\b)|LLMs?|you|workers?|bots?|(?<!AI\s)models?|codex|copilots?|claude(?:\s+code)?|gemini(?:\s+cli)?|cursor|cline|opencode|windsurf|devin|grok(?:\s+build)?)\b/i;
+const USER_ACTOR_STEP_ASSIGNABLE_AGENT = new RegExp(
+  `(?:${USER_ACTOR_STEP_AGENT.source}|\\bAI\\s+models?\\b)`,
+  'i',
+);
+const USER_ACTOR_STEP_OTHER_ACTOR =
+  /\b(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
+const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT =
+  /^\s+(?:(?:the)\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
+const USER_ACTOR_STEP_AGENT_SUBJECT = new RegExp(
+  String.raw`^\s*${USER_ACTOR_STEP_AGENT.source}`,
+  'i',
+);
+// #4577: bare "following" is a target only when it introduces an assignment;
+// phrases such as "the following behavior" are not step assignments.
+// Keep the target tied to a step/check or an explicitly referenced list;
+// unrelated implementation tasks must not veto a separate manual check.
+const USER_ACTOR_STEP_ASSIGNED_TARGET =
+  /\b(?:(?:(?:this|that)\s+(?:[a-z][\w-]*\s+){0,3}|(?:these|those)\s+)(?:steps?|checks?|checklists?|lists?|items?)|the\s+(?:(?:exact|same|specific|particular)\s+)?(?:[a-z][\w-]*\s+){0,3}(?:steps?|checks?|checklists?|lists?|items?)|all\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:every|each)\s+(?:step|check|checklist|list|item)|(?:the\s+)?following\s+(?:steps?|checks?|checklists?|lists?|items?)|(?:the\s+)?(?:steps?|checks?|checklists?|lists?|items?)\s+(?:below|above|that\s+follow|which\s+follow)|(?:the\s+(?:exact|same|specific|particular)\s+)?instructions?\s+(?:below|above|that\s+follow|which\s+follow))\b|^\s*(?:the\s+)?following\b(?=\s+(?:must|should|shall|will|needs?\s+to|has\s+to|is|are|was|were|be)\b)|\bfollowing\b(?=\s*(?:[:;.!?]|\r?\n|$))/i;
+// A checklist noun can also be part of an implementation object, not the
+// assigned user step (for example, "this step parser"). Keep those known
+// object suffixes out of the assignment set while retaining unknown targets
+// fail-closed. See the current-head Copilot review on PR #4577.
+const USER_ACTOR_STEP_IMPLEMENTATION_OBJECT_SUFFIX =
+  /^(?:\s+(?:parser|implementation|function|module|class|component|pattern|template|workflow|routine|procedure|generator|pipeline|executor|matcher|detector|engine|description|definition|object|type|plan)\b|-by-step\b)/i;
+function isUserActorStepAssignedTarget(text, match) {
+  const end = (match.index ?? 0) + match[0].length;
+  return !USER_ACTOR_STEP_IMPLEMENTATION_OBJECT_SUFFIX.test(text.slice(end));
+}
+function hasUserActorStepAssignedTarget(text) {
+  const targetPattern = new RegExp(
+    USER_ACTOR_STEP_ASSIGNED_TARGET.source,
+    'gi',
+  );
+  return [...text.matchAll(targetPattern)].some((match) =>
+    isUserActorStepAssignedTarget(text, match),
+  );
+}
+// A numbered assignment is scoped to the matching numbered checklist item.
+// Step/check targets keep their object kind; generic item targets apply to
+// either kind while retaining their ordinal and list scope. List/checklist
+// targets are collection-wide and therefore use the generic target kind.
+const USER_ACTOR_STEP_NUMBERED_TARGET =
+  /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?|checklists?|lists?|items?)\s+#?\s*(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)#?\s*\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
+const USER_ACTOR_STEP_ASSIGNMENT_CUE =
+  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|owner|ownership|belongs?\s+to|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)?|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complet(?:e|es|ed|ing)|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|hand(?:le|les|led|ling)|man(?:age|ages|aged|aging))\b/i;
+const USER_ACTOR_STEP_GENERAL_WORK_ACTION =
+  /\b(?:review|build|create|add|update|edit|fix|write|remove|delete|install|configure|prepare|investigate|document|refactor|change|migrate|deploy|publish|author|open|close|merge|inspect|analyze|analyse|validate|generate)\b/i;
+const USER_ACTOR_STEP_AGENT_RECIPIENT_RELATION =
+  /(?:^|\s)(?:(?:is|are|was|were|must|should|shall|will|has\s+been|needs?\s+to|has\s+to|is\s+required\s+to)\s+)?(?:for|required\s+of|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by)\s*$/i;
+const USER_ACTOR_STEP_AGENT_OBJECT_ASSIGNMENT_RELATION =
+  /\b(?:ask(?:s|ed)?|request(?:s|ed)?|task(?:s|ed)?|instruct(?:s|ed)?|expect(?:s|ed)?|tell(?:s|told)?|order(?:s|ed)?|want(?:s|ed)?|need(?:s|ed)?|assign(?:s|ed)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|give|gives|gave|given|giving)\s+(?:the\s+)?$/i;
+const USER_ACTOR_STEP_ASSIGNMENT_OBJECT_NOUN =
+  /\b(?:a|an|the|this|that|these|those|some|all|each|every)\s+(?:[a-z][\w-]*\s+){0,3}(?:tasks?|work(?:\s+items?)?|responsibilities|duties|assignments?|issues?|tickets?|features?|deliverables?)\b/i;
+const USER_ACTOR_STEP_FORWARD_ASSIGNMENT_INTRODUCER = new RegExp(
+  String.raw`^\s*${USER_ACTOR_STEP_AGENT.source}[^.!?;:]*\b(?:(?:is|are|was|were|remains?)\s+(?:responsible\s+for|accountable\s+for|assigned\s+to|tasked\s+with|delegated\s+to|directed\s+to))\s*:\s*$`,
+  'i',
+);
+const USER_ACTOR_STEP_TARGET_AGENT_RELATION =
+  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been|needs?\s+to|has\s+to|is\s+required\s+to)\s+)?(?:for|required\s+of|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|done\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by|completed\s+by|managed\s+by|followed\s+by|carried\s+out\s+by))\s*$/i;
+const USER_ACTOR_STEP_PASSIVE_PARTICIPLE =
+  /^(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)$/i;
+const USER_ACTOR_STEP_PASSIVE_PARTICIPLE_IN_PHRASE =
+  /\b(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\b/i;
+const USER_ACTOR_STEP_PASSIVE_AUXILIARY =
+  /\b(?:am|is|are|was|were|be|been|being|get|gets|got|gotten)$/i;
+const USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE =
+  /\b(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|give|gives|gave|given|giving)\b[^.!?;]{0,80}$/i;
+const USER_ACTOR_STEP_USER_DIRECTIVE_START =
+  /^\s*(?:(?:then|next|now|afterwards?)\s+)?run\s+this\s+(?:step|check)\s+by\s+the\s+user\b/i;
+const USER_ACTOR_STEP_NEGATION_CUE = new RegExp(
+  String.raw`\b(?:never(?=\s+(?:(?:is|are|was|were)\s+)?${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|no\s+longer(?=\s+${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|(?:must|should|shall|will|could|would|might|may|need|do|does|did|is|are|was|were|has|have|had)n['’]t|cannot(?=\s+(?:(?:be|remain(?:s)?)\s+)?${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|(?:won|can|shan|ain)['’]t|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b`,
+  'i',
+);
+const USER_ACTOR_STEP_AGENT_HEADING_LABEL =
+  /^\s*(?:the\s+)?(?:coding\s+)?(?:agents?|assistants?|automation|AIs?|LLMs?|you|workers?|bots?|models?|codex|copilots?|claude(?:\s+code)?|gemini(?:\s+cli)?|cursor|cline|opencode|windsurf|devin|grok(?:\s+build)?)(?:\s+(?:tasks?|responsibilities|duties|work))?\s*$/i;
+function normalizeMarkdownHeadingLabel(heading) {
+  const isAtxHeading = /^ {0,3}#{1,6}[ \t]+/.test(heading);
+  const label = heading.replace(/^ {0,3}#{1,6}[ \t]+/, '');
+  return normalizeMarkdownStepAssignmentText(
+    (isAtxHeading ? label.replace(/[ \t]+#+[ \t]*$/, '') : label).replace(
+      /[*_~`]/g,
+      '',
+    ),
+  ).trim();
+}
+function headingStartsWithAgentActor(heading) {
+  const label = normalizeMarkdownHeadingLabel(heading);
+  return new RegExp(`^\\s*${USER_ACTOR_STEP_AGENT.source}`, 'i').test(label);
+}
+function isBareAgentActorHeading(heading) {
+  const label = normalizeMarkdownHeadingLabel(heading);
+  return USER_ACTOR_STEP_AGENT_HEADING_LABEL.test(label);
+}
+function assignmentHeadingContext(heading) {
+  const label = normalizeMarkdownHeadingLabel(heading);
+  const numberedTargetPattern = new RegExp(
+    USER_ACTOR_STEP_NUMBERED_TARGET.source,
+    'i',
+  );
+  const numbered = numberedTargetPattern.exec(label);
+  const assignedTargetPattern = new RegExp(
+    USER_ACTOR_STEP_ASSIGNED_TARGET.source,
+    'gi',
+  );
+  const assignedTargetMatch = [...label.matchAll(assignedTargetPattern)].find(
+    (match) => isUserActorStepAssignedTarget(label, match),
+  );
+  const assignedTarget = assignedTargetMatch?.[0];
+  const genericTargetCandidate = /\b(?:steps?|checks?)\b/i.exec(label);
+  const genericTargetMatch =
+    genericTargetCandidate !== null &&
+    isUserActorStepAssignedTarget(label, genericTargetCandidate)
+      ? genericTargetCandidate
+      : null;
+  const genericTarget = genericTargetMatch?.[0];
+  const targetMatch = numbered ?? assignedTargetMatch ?? genericTargetMatch;
+  const targetStart = targetMatch?.index ?? -1;
+  const targetEnd = targetStart + (targetMatch?.[0].length ?? 0);
+  const agentActorInTargetRole =
+    targetMatch !== null &&
+    [...label.matchAll(new RegExp(USER_ACTOR_STEP_AGENT.source, 'gi'))].some(
+      (agent) => {
+        const agentStart = agent.index ?? 0;
+        if (agentStart < targetEnd) return false;
+        const targetToAgent = label.slice(targetEnd, agentStart);
+        const explicitAssignmentRelation =
+          USER_ACTOR_STEP_TARGET_AGENT_RELATION.test(targetToAgent) &&
+          !/^\s+(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?for\s*$/i.test(
+            targetToAgent,
+          );
+        return explicitAssignmentRelation || /^\s+by\s*$/i.test(targetToAgent);
+      },
+    );
+  if (
+    (!headingStartsWithAgentActor(label) && !agentActorInTargetRole) ||
+    (assignedTarget === undefined &&
+      numbered === null &&
+      genericTarget === null)
+  ) {
+    return null;
+  }
+  const assignmentCue = new RegExp(
+    USER_ACTOR_STEP_ASSIGNMENT_CUE.source,
+    'i',
+  ).exec(label);
+  const targetIsTheOnlyCue =
+    genericTargetMatch !== null &&
+    assignmentCue !== null &&
+    genericTargetMatch.index === assignmentCue.index &&
+    genericTargetMatch[0].toLowerCase() === assignmentCue[0].toLowerCase();
+  if (assignmentCue !== null && !targetIsTheOnlyCue) {
+    return { context: '', assignment: label };
+  }
+  const target =
+    numbered?.[0] ??
+    assignedTarget ??
+    (genericTarget === undefined ? undefined : `the ${genericTarget}`) ??
+    'steps';
+  return {
+    context: '',
+    assignment: `the coding agent must perform ${target}`,
+  };
+}
+function splitMarkdownHeadingSections(context) {
+  const lines = [];
+  let lineStart = 0;
+  while (lineStart <= context.length) {
+    const newline = context.indexOf('\n', lineStart);
+    const lineEnd = newline === -1 ? context.length : newline;
+    const contentEnd =
+      lineEnd > lineStart && context[lineEnd - 1] === '\r'
+        ? lineEnd - 1
+        : lineEnd;
+    lines.push({
+      start: lineStart,
+      lineAfter: newline === -1 ? context.length : newline + 1,
+      text: context.slice(lineStart, contentEnd),
+    });
+    if (newline === -1) break;
+    lineStart = newline + 1;
+  }
+  const headings = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const atx = /^ {0,3}(#{1,6})(?:[ \t]+|$)/.exec(line.text);
+    if (atx) {
+      headings.push({
+        start: line.start,
+        bodyStart: line.lineAfter,
+        level: atx[1]?.length ?? 1,
+        text: line.text,
+      });
+      continue;
+    }
+    const underline = lines[index + 1];
+    if (
+      /\S/.test(line.text) &&
+      underline !== undefined &&
+      /^ {0,3}(=+|-+)[ \t]*$/.test(underline.text)
+    ) {
+      headings.push({
+        start: line.start,
+        bodyStart: underline.lineAfter,
+        level: underline.text.trimStart().startsWith('=') ? 1 : 2,
+        text: line.text,
+      });
+      index += 1;
+    }
+  }
+  if (headings.length === 0) {
+    return [
+      {
+        body: context,
+        bodyStart: 0,
+        bodyEnd: context.length,
+        headingContext: [],
+        headingAssignment: null,
+        bareAgentActorContext: false,
+      },
+    ];
+  }
+  const sections = [];
+  const firstHeading = headings[0];
+  if (firstHeading !== undefined && firstHeading.start > 0) {
+    sections.push({
+      body: context.slice(0, firstHeading.start),
+      bodyStart: 0,
+      bodyEnd: firstHeading.start,
+      headingContext: [],
+      headingAssignment: null,
+      bareAgentActorContext: false,
+    });
+  }
+  const stack = [];
+  for (let index = 0; index < headings.length; index += 1) {
+    const heading = headings[index];
+    if (heading === undefined) continue;
+    while (true) {
+      const parent = stack.at(-1);
+      if (parent === undefined || parent.level < heading.level) break;
+      stack.pop();
+    }
+    const classified = assignmentHeadingContext(heading.text);
+    const headingContext = stack
+      .map(({ context: value }) => value)
+      .filter(Boolean);
+    if (classified?.context) headingContext.push(classified.context);
+    if (classified?.assignment) headingContext.push(classified.assignment);
+    if (classified === null && headingStartsWithAgentActor(heading.text)) {
+      headingContext.push(heading.text);
+    }
+    const bareAgentActorContext =
+      stack.some(({ bareAgentActor }) => bareAgentActor) ||
+      isBareAgentActorHeading(heading.text);
+    const nextStart = headings[index + 1]?.start ?? context.length;
+    sections.push({
+      body: context.slice(heading.bodyStart, nextStart),
+      bodyStart: heading.bodyStart,
+      bodyEnd: nextStart,
+      headingContext,
+      headingAssignment: classified?.assignment ?? null,
+      bareAgentActorContext,
+    });
+    stack.push({
+      level: heading.level,
+      context:
+        classified?.context ||
+        classified?.assignment ||
+        (headingStartsWithAgentActor(heading.text) ? heading.text : ''),
+      bareAgentActor: isBareAgentActorHeading(heading.text),
+    });
+  }
+  return sections;
+}
+function splitSentenceAndSemicolonClauses(section) {
+  const clauses = [];
+  let start = 0;
+  for (let index = 0; index < section.length; index += 1) {
+    const char = section[index];
+    if (
+      char === ',' &&
+      USER_ACTOR_STEP_USER_DIRECTIVE_START.test(section.slice(index + 1))
+    ) {
+      clauses.push({ clause: section.slice(start, index), start });
+      start = index + 1;
+      continue;
+    }
+    if (char === ';') {
+      clauses.push({ clause: section.slice(start, index), start });
+      start = index + 1;
+      continue;
+    }
+    if (
+      (char !== '.' && char !== '!' && char !== '?') ||
+      (index + 1 < section.length && !/\s/.test(section[index + 1] ?? ''))
+    ) {
+      continue;
+    }
+    if (char === '.') {
+      const previous = section[index - 1] ?? '';
+      const next = section[index + 1] ?? '';
+      if (/\d/.test(previous) && /\d/.test(next)) continue;
+      const suffix = section.slice(Math.max(start, index - 8), index + 1);
+      if (
+        /\b(?:e\.g|i\.e|etc|vs|mr|mrs|ms|dr|prof|st|no)\.$/i.test(suffix) ||
+        /(?:\b[A-Z]\.){2,}$/i.test(suffix)
+      ) {
+        continue;
+      }
+    }
+    clauses.push({ clause: section.slice(start, index), start });
+    start = index + 1;
+  }
+  clauses.push({ clause: section.slice(start), start });
+  return clauses;
+}
+function retainForwardAssignmentForList(assignment, listId, parentListIds) {
+  if (
+    assignment === null ||
+    assignment.listId === null ||
+    (assignment.descendantsOnly && listId === assignment.listId) ||
+    !isListNestedWithin(listId, assignment.listId, parentListIds)
+  ) {
+    return null;
+  }
+  return assignment;
+}
+function isListNestedWithin(listId, ancestorListId, parentListIds) {
+  let currentListId = listId;
+  while (currentListId !== null) {
+    if (currentListId === ancestorListId) return true;
+    currentListId = parentListIds.get(currentListId) ?? null;
+  }
+  return false;
+}
+function splitUserActorStepClauses(context, listIndex) {
+  const clauses = [];
+  const paragraphBoundary =
+    /\r?\n[ \t]*\r?\n|\r?\n(?=[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+)/g;
+  const listParentIds = listIndex?.listParentIds ?? new Map();
+  let pendingForwardAssignment = null;
+  let pendingAgentSubject = null;
+  for (const [sectionId, section] of splitMarkdownHeadingSections(
+    context,
+  ).entries()) {
+    const headingAssignments = new Set(section.headingContext);
+    if (section.headingAssignment !== null) {
+      headingAssignments.add(section.headingAssignment);
+    }
+    for (const headingAssignment of headingAssignments) {
+      clauses.push(
+        ...splitSentenceAndSemicolonClauses(headingAssignment).map(
+          ({ clause, start }) => ({
+            clause,
+            sectionId,
+            globalScope: false,
+            clauseStart: start,
+            paragraphContextStart: null,
+            paragraphSourceStart: null,
+            paragraphListId: null,
+          }),
+        ),
+      );
+    }
+    const paragraphs = [];
+    let start = 0;
+    let boundary = paragraphBoundary.exec(section.body);
+    while (boundary !== null) {
+      paragraphs.push({
+        text: section.body.slice(start, boundary.index),
+        sourceStart: section.bodyStart + start,
+      });
+      start = boundary.index + boundary[0].length;
+      boundary = paragraphBoundary.exec(section.body);
+    }
+    paragraphs.push({
+      text: section.body.slice(start),
+      sourceStart: section.bodyStart + start,
+    });
+    paragraphBoundary.lastIndex = 0;
+    for (const { text: paragraph, sourceStart } of paragraphs) {
+      const paragraphListId =
+        listIndex === undefined
+          ? null
+          : userActorStepListId(listIndex, sourceStart);
+      if (
+        !paragraph.trim() &&
+        section.headingContext.length === 0 &&
+        pendingForwardAssignment === null
+      )
+        continue;
+      const paragraphHasForwardAssignment =
+        (USER_ACTOR_STEP_FORWARD_ASSIGNMENT_INTRODUCER.test(paragraph) ||
+          (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(paragraph) &&
+            hasUserActorStepAssignedTarget(paragraph) &&
+            (/\b(?:following|below|above|that\s+follow|which\s+follow)\b/i.test(
+              paragraph,
+            ) ||
+              /:\s*$/.test(paragraph)))) &&
+        !USER_ACTOR_STEP_NEGATION_CUE.test(paragraph);
+      const agentPrefix =
+        pendingAgentSubject !== null &&
+        paragraphHasForwardAssignment &&
+        !USER_ACTOR_STEP_AGENT.test(paragraph)
+          ? pendingAgentSubject
+          : null;
+      if (
+        pendingForwardAssignment !== null &&
+        pendingForwardAssignment.listId !== null &&
+        ((pendingForwardAssignment.descendantsOnly &&
+          paragraphListId === pendingForwardAssignment.listId) ||
+          !isListNestedWithin(
+            paragraphListId,
+            pendingForwardAssignment.listId,
+            listParentIds,
+          ))
+      ) {
+        pendingForwardAssignment = null;
+      }
+      const inheritedForwardAssignment = pendingForwardAssignment;
+      if (
+        inheritedForwardAssignment !== null &&
+        inheritedForwardAssignment.listId === null &&
+        paragraphListId !== null
+      ) {
+        inheritedForwardAssignment.listId = paragraphListId;
+      }
+      const prefixParts = [
+        ...(agentPrefix === null ? [] : [agentPrefix]),
+        ...(inheritedForwardAssignment === null
+          ? []
+          : [inheritedForwardAssignment.text]),
+      ].filter(Boolean);
+      const paragraphContextStart =
+        prefixParts.join(' ').length + (prefixParts.length > 0 ? 1 : 0);
+      // An ordered-list marker's period is punctuation for Markdown, not a
+      // sentence boundary. Keep the character width unchanged so source
+      // offsets still map back to the original issue body.
+      const clauseParagraph = paragraph.replace(
+        /^([ \t]*\d{1,9})\.(?=[ \t]+)/,
+        '$1)',
+      );
+      const contextual = [...prefixParts, clauseParagraph].join(' ');
+      if (!paragraph.trim()) continue;
+      clauses.push(
+        ...splitSentenceAndSemicolonClauses(contextual).map(
+          ({ clause, start: clauseStart }) => ({
+            clause,
+            sectionId,
+            globalScope: false,
+            clauseStart,
+            paragraphContextStart,
+            paragraphSourceStart: sourceStart,
+            paragraphListId,
+          }),
+        ),
+      );
+      pendingForwardAssignment = retainForwardAssignmentForList(
+        inheritedForwardAssignment,
+        paragraphListId,
+        listParentIds,
+      );
+      const agentSubject =
+        agentPrefix !== null ? `${agentPrefix} ${paragraph}` : paragraph;
+      pendingAgentSubject = null;
+      if (
+        USER_ACTOR_STEP_AGENT.test(agentSubject) &&
+        paragraphHasForwardAssignment &&
+        !USER_ACTOR_STEP_NEGATION_CUE.test(agentSubject)
+      ) {
+        pendingForwardAssignment = {
+          text: agentSubject,
+          listId: paragraphListId,
+          descendantsOnly: paragraphListId !== null && /:\s*$/.test(paragraph),
+        };
+      } else if (
+        pendingForwardAssignment === null &&
+        USER_ACTOR_STEP_AGENT.test(paragraph) &&
+        !USER_ACTOR_STEP_ASSIGNMENT_CUE.test(paragraph) &&
+        !USER_ACTOR_STEP_OTHER_ACTOR.test(paragraph)
+      ) {
+        pendingAgentSubject = paragraph;
+      }
+    }
+  }
+  return clauses;
+}
+function separateMarkdownRangesWithClauseBoundaries(text, ranges) {
+  let result = text;
+  for (const range of [...ranges].sort(
+    (left, right) => right.start - left.start,
+  )) {
+    const start = Math.max(0, range.start);
+    const end = Math.min(result.length, range.end);
+    if (start < end) {
+      const replacement = `;${' '.repeat(end - start - 1)}`;
+      result = `${result.slice(0, start)}${replacement}${result.slice(end)}`;
+    }
+  }
+  return result;
+}
+// Keep visible inline-link labels and strikethrough text available to the
+// assignment parser while masking Markdown syntax and link destinations.
+// Every replacement preserves UTF-16 offsets so list and section scopes stay
+// aligned with the original issue body.
+function normalizeMarkdownStepAssignmentText(text) {
+  const inlineLinkPattern =
+    /\[((?:\\.|[^\]\\\n])*)\]\((?:<[^>\n]*>|(?:\\.|[^)\\\n])*)\)/g;
+  let normalized = text.replace(inlineLinkPattern, (match, label) => {
+    const characters = match
+      .split('')
+      .map((character) =>
+        character === '\n' || character === '\r' ? character : ' ',
+      );
+    for (let index = 0; index < label.length; index += 1) {
+      characters[index + 1] = label[index] ?? ' ';
+    }
+    return characters.join('');
+  });
+  const strikethroughPattern = /~~(?=\S)(?:(?!\n[ \t]*\n)[\s\S])*?\S~~/g;
+  normalized = normalized.replace(strikethroughPattern, (match) =>
+    match.replace(/~~/g, '  '),
+  );
+  return normalized;
+}
+function stepCheckTargetKind(value) {
+  const match = /\b(steps?|checks?)\b/i.exec(value);
+  return match?.[1]?.toLowerCase().replace(/s$/, '') ?? null;
+}
+function createAssignmentSegment(
+  clause,
+  start,
+  end,
+  hasAgentBefore,
+  negatedAgentMention,
+) {
+  const text = clause.slice(start, end);
+  const cuePattern = new RegExp(USER_ACTOR_STEP_ASSIGNMENT_CUE.source, 'gi');
+  const negationPattern = new RegExp(USER_ACTOR_STEP_NEGATION_CUE.source, 'gi');
+  const negations = [...text.matchAll(negationPattern)].map((match) => ({
+    start: match.index ?? 0,
+    end: (match.index ?? 0) + (match[0]?.length ?? 0),
+  }));
+  const cues = [];
+  let negationIndex = 0;
+  for (const match of text.matchAll(cuePattern)) {
+    const cueStart = match.index ?? 0;
+    const cueEnd = cueStart + (match[0]?.length ?? 0);
+    while (
+      negationIndex < negations.length &&
+      (negations[negationIndex]?.end ?? Number.POSITIVE_INFINITY) <= cueStart
+    ) {
+      negationIndex += 1;
+    }
+    const nextNegation = negations[negationIndex];
+    if (
+      nextNegation !== undefined &&
+      cueStart < nextNegation.end &&
+      cueEnd > nextNegation.start
+    ) {
+      continue;
+    }
+    cues.push({ start: cueStart, end: cueEnd });
+  }
+  const cuePrefixMaxIndex = [];
+  let maxCueEnd = -1;
+  let maxCueIndex = -1;
+  for (let index = 0; index < cues.length; index += 1) {
+    const cue = cues[index];
+    if (cue !== undefined && cue.end > maxCueEnd) {
+      maxCueEnd = cue.end;
+      maxCueIndex = index;
+    }
+    cuePrefixMaxIndex.push(maxCueIndex);
+  }
+  const agentMentions = [
+    ...text.matchAll(new RegExp(USER_ACTOR_STEP_AGENT.source, 'gi')),
+  ].map((match) => ({
+    start: match.index ?? 0,
+    end: (match.index ?? 0) + (match[0]?.length ?? 0),
+  }));
+  const otherActorMentions = [
+    ...text.matchAll(new RegExp(USER_ACTOR_STEP_OTHER_ACTOR.source, 'gi')),
+  ].map((match) => ({
+    start: match.index ?? 0,
+    end: (match.index ?? 0) + (match[0]?.length ?? 0),
+  }));
+  return {
+    start,
+    end,
+    text,
+    hasAgent: !negatedAgentMention && USER_ACTOR_STEP_AGENT.test(text),
+    agentMentions,
+    otherActorMentions,
+    hasOtherActor: USER_ACTOR_STEP_OTHER_ACTOR.test(text),
+    hasAgentBefore,
+    cues,
+    cuePrefixMaxIndex,
+    negations,
+  };
+}
+function hasAgentActorForTarget(segment, targetStart, targetEnd, cue) {
+  return segment.agentMentions.some((agent) => {
+    if (agent.start < targetEnd) {
+      if (cue === null) return false;
+      const explicitUserRecipient =
+        USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(
+          segment.text.slice(0, targetStart),
+        ) && /^\s+to\s+(?:the\s+)?user\b/i.test(segment.text.slice(targetEnd));
+      if (explicitUserRecipient) return false;
+      if (agent.end > cue.start) {
+        return (
+          agent.start >= cue.end &&
+          USER_ACTOR_STEP_PASSIVE_PARTICIPLE.test(
+            segment.text.slice(cue.start, cue.end),
+          ) &&
+          USER_ACTOR_STEP_PASSIVE_AUXILIARY.test(
+            segment.text.slice(0, cue.start).trimEnd(),
+          ) &&
+          /^\s+by\s+(?:the\s+)?$/i.test(
+            segment.text.slice(cue.end, agent.start),
+          )
+        );
+      }
+      const cueText = segment.text.slice(cue.start, cue.end);
+      const beforeCue = segment.text.slice(agent.end, cue.start);
+      const passivePatient =
+        USER_ACTOR_STEP_PASSIVE_PARTICIPLE.test(cueText) &&
+        USER_ACTOR_STEP_PASSIVE_AUXILIARY.test(beforeCue.trimEnd());
+      if (passivePatient) return false;
+      if (
+        cue.start < targetStart &&
+        !/^\s*(?:[*_]{1,3}\s*)?(?:(?:to|for|with|of)\s+)?$/i.test(
+          segment.text.slice(cue.end, targetStart),
+        )
+      ) {
+        return false;
+      }
+      if (hasUnambiguousAgentSubject(segment)) return true;
+      return !segment.otherActorMentions.some(
+        (actor) => actor.start >= agent.end && actor.start < cue.start,
+      );
+    }
+    const targetToAgent = segment.text.slice(targetEnd, agent.start);
+    if (USER_ACTOR_STEP_TARGET_AGENT_RELATION.test(targetToAgent)) {
+      return true;
+    }
+    if (cue !== null) {
+      const agentToCue = segment.text.slice(agent.end, cue.start);
+      if (
+        /^\s+(?:(?:is|are|was|were)\s+)?(?:the\s+)?$/i.test(targetToAgent) &&
+        /^['’]s\s*$/i.test(agentToCue) &&
+        /^(?:responsibility|responsibilities|accountability|assignment|assignments|ownership)\b/i.test(
+          segment.text.slice(cue.start, cue.end),
+        )
+      ) {
+        return true;
+      }
+    }
+    const beforeTarget = segment.text.slice(0, targetStart);
+    return (
+      USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(beforeTarget) &&
+      /^\s+to\s*$/i.test(targetToAgent)
+    );
+  });
+}
+function hasUnambiguousAgentSubject(segment) {
+  const firstAgent = segment.agentMentions[0];
+  const firstPredicate = new RegExp(
+    USER_ACTOR_STEP_ASSIGNMENT_CUE.source,
+    'i',
+  ).exec(segment.text);
+  return (
+    segment.hasAgent &&
+    USER_ACTOR_STEP_AGENT_SUBJECT.test(segment.text) &&
+    firstAgent !== undefined &&
+    firstPredicate !== null &&
+    firstPredicate.index >= firstAgent.end
+  );
+}
+function assignmentSegmentHasAgentAssignmentRole(segment) {
+  // Carry the actor through contrast clauses only when an agent is tied to
+  // a checklist target. The next segment applies negation to its own action.
+  if (!segment.hasAgent || !USER_ACTOR_STEP_ASSIGNMENT_CUE.test(segment.text)) {
+    return false;
+  }
+  const targetPattern = new RegExp(
+    USER_ACTOR_STEP_ASSIGNED_TARGET.source,
+    'gi',
+  );
+  const numberedTargetPattern = new RegExp(
+    USER_ACTOR_STEP_NUMBERED_TARGET.source,
+    'gi',
+  );
+  const targets = [
+    ...[...segment.text.matchAll(targetPattern)].filter((match) => {
+      const end = (match.index ?? 0) + (match[0]?.length ?? 0);
+      return (
+        !/^\s+\d/.test(segment.text.slice(end)) &&
+        isUserActorStepAssignedTarget(segment.text, match)
+      );
+    }),
+    ...segment.text.matchAll(numberedTargetPattern),
+  ];
+  return targets.some((target) => {
+    const targetStart = target.index ?? 0;
+    const targetEnd = targetStart + (target[0]?.length ?? 0);
+    const cue = findNearestAssignmentCue(segment, targetStart, targetEnd);
+    return (
+      cue !== null &&
+      hasAgentActorForTarget(segment, targetStart, targetEnd, cue)
+    );
+  });
+}
+function lowerBoundAssignmentCue(cues, position) {
+  let low = 0;
+  let high = cues.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const cue = cues[middle];
+    if (cue !== undefined && cue.start < position) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+function findNearestAssignmentCue(segment, targetStart, targetEnd) {
+  const { cues, cuePrefixMaxIndex } = segment;
+  if (cues.length === 0) return null;
+  const firstAtOrAfterTarget = lowerBoundAssignmentCue(cues, targetStart);
+  const priorIndex = firstAtOrAfterTarget - 1;
+  const priorMaxIndex =
+    priorIndex >= 0 ? cuePrefixMaxIndex[priorIndex] : undefined;
+  const left =
+    priorMaxIndex === undefined ? null : (cues[priorMaxIndex] ?? null);
+  const nextIndex = firstAtOrAfterTarget;
+  const right = cues[nextIndex] ?? null;
+  if (left !== null && left.end >= targetStart) return left;
+  if (right !== null && right.start <= targetEnd) return right;
+  if (left === null) return right;
+  if (right === null) return left;
+  return targetStart - left.end <= right.start - targetEnd ? left : right;
+}
+function assignmentIsNegated(segment, cueStart, targetStart, targetEnd) {
+  const { negations, text } = segment;
+  let low = 0;
+  let high = negations.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const negation = negations[middle];
+    if (negation !== undefined && negation.end <= cueStart) low = middle + 1;
+    else high = middle;
+  }
+  const negation = low > 0 ? (negations[low - 1] ?? null) : null;
+  if (negation === null) return false;
+  // A negation before an action cue can negate that action. For passive
+  // assignment wording, the target comes first and the negation sits
+  // between the target and cue. A negation after a completed action and
+  // target belongs to later coordinated prose, so it cannot erase the
+  // earlier positive assignment.
+  const negationMatchesTargetPredicate =
+    cueStart >= targetEnd
+      ? negation.start >= targetStart
+      : negation.end <= targetStart;
+  if (!negationMatchesTargetPredicate) return false;
+  const gap = text.slice(negation.end, cueStart);
+  const requiredToAction = /^\s+required\s+to\s+(?:be\s+)?$/i.test(gap);
+  // "doesn't fail to perform" is a positive assignment, so the outer
+  // negation must not erase the action cue after "fail to".
+  return (
+    gap.length <= 80 &&
+    !/[.!?;]/.test(gap) &&
+    !/\bfail(?:s|ed|ing)?\s+to\s*$/i.test(gap) &&
+    !/\b(?:and|or|but|while|whereas)\b/i.test(gap) &&
+    (!USER_ACTOR_STEP_ASSIGNMENT_CUE.test(gap) || requiredToAction)
+  );
+}
+function parseNumberedTargetRanges(value) {
+  const numberPattern = /(\d{1,9})(?:\s*(?:-|–|to|through)\s*(\d{1,9}))?/gi;
+  const matches = [...value.matchAll(numberPattern)];
+  const remaining = value
+    .replace(numberPattern, '')
+    .replace(/\b(?:and|or)\b/gi, '')
+    .replace(/[,\s]/g, '');
+  if (matches.length === 0 || remaining !== '') return null;
+  return matches.map((match) => {
+    const first = Number(match[1]);
+    const second = match[2] === undefined ? first : Number(match[2]);
+    return {
+      start: Math.min(first, second),
+      end: Math.max(first, second),
+    };
+  });
+}
+function mergeNumberedTargetRanges(ranges) {
+  const sorted = [...ranges].sort(
+    (left, right) => left.start - right.start || left.end - right.end,
+  );
+  const merged = [];
+  for (const range of sorted) {
+    const last = merged.at(-1);
+    if (last !== undefined && range.start <= last.end + 1) {
+      last.end = Math.max(last.end, range.end);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+  return merged;
+}
+function hasNumberedTargetRange(ranges, ordinal) {
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const range = ranges[middle];
+    if (range !== undefined && range.start <= ordinal) low = middle + 1;
+    else high = middle;
+  }
+  const range = low > 0 ? ranges[low - 1] : undefined;
+  return range !== undefined && range.end >= ordinal;
+}
+// #4577: scan the title and body as separate fields so an assignment in one
+// cannot combine with an unrelated target in the other. Callers first
+// separate Markdown code and HTML comments into clause boundaries.
+function analyzeAgentAssignmentsToSteps(
+  context,
+  scopeMode = 'section',
+  listIndex,
+) {
+  const analysis = {
+    allTargetKinds: new Map(),
+    numberedTargetRanges: new Map(),
+  };
+  for (const scopedClause of splitUserActorStepClauses(context, listIndex)) {
+    const { clause, sectionId } = scopedClause;
+    const targetPattern = new RegExp(
+      USER_ACTOR_STEP_ASSIGNED_TARGET.source,
+      'gi',
+    );
+    const numberedTargetPattern = new RegExp(
+      USER_ACTOR_STEP_NUMBERED_TARGET.source,
+      'gi',
+    );
+    const contrastPattern = new RegExp(
+      '\\b(?:but|while|whereas|and|then|next|now|afterwards?)\\b|,\\s*not(?=\\s+' +
+        USER_ACTOR_STEP_AGENT.source +
+        ')',
+      'gi',
+    );
+    const contrastPositions = [...clause.matchAll(contrastPattern)]
+      .map((match) => ({
+        index: match.index ?? 0,
+        end: (match.index ?? 0) + (match[0]?.length ?? 0),
+        text: match[0] ?? '',
+      }))
+      .filter(({ index, text }) => {
+        const rightSide = clause.slice(
+          index + text.length,
+          index + text.length + 128,
+        );
+        if (/^(?:then|next|now|afterwards?)$/i.test(text)) {
+          return USER_ACTOR_STEP_USER_DIRECTIVE_START.test(rightSide);
+        }
+        if (!/^and$/i.test(text)) return true;
+        const leftHasPredicate = USER_ACTOR_STEP_ASSIGNMENT_CUE.test(
+          clause.slice(0, index),
+        );
+        return (
+          USER_ACTOR_STEP_USER_DIRECTIVE_START.test(rightSide) ||
+          (leftHasPredicate &&
+            (USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT.test(rightSide) ||
+              USER_ACTOR_STEP_AGENT_SUBJECT.test(rightSide)))
+        );
+      });
+    const segments = [];
+    let segmentStart = 0;
+    let hasAgentBefore = false;
+    let negatedAgentMention = false;
+    for (const contrast of contrastPositions) {
+      const segment = createAssignmentSegment(
+        clause,
+        segmentStart,
+        contrast.index,
+        hasAgentBefore,
+        negatedAgentMention,
+      );
+      segments.push(segment);
+      hasAgentBefore ||=
+        assignmentSegmentHasAgentAssignmentRole(segment) ||
+        hasUnambiguousAgentSubject(segment);
+      segmentStart = contrast.end;
+      negatedAgentMention = contrast.text.startsWith(',');
+    }
+    segments.push(
+      createAssignmentSegment(
+        clause,
+        segmentStart,
+        clause.length,
+        hasAgentBefore,
+        negatedAgentMention,
+      ),
+    );
+    const targets = [
+      ...[...clause.matchAll(targetPattern)]
+        .filter((match) => {
+          const end = (match.index ?? 0) + (match[0]?.length ?? 0);
+          return (
+            !/^\s+\d/.test(clause.slice(end)) &&
+            isUserActorStepAssignedTarget(clause, match)
+          );
+        })
+        .map((match) => ({
+          match,
+          targetKind: stepCheckTargetKind(match[0] ?? ''),
+          numberedRanges: null,
+        })),
+      ...[...clause.matchAll(numberedTargetPattern)].map((match) => {
+        const matchedKind = (match[1] ?? '').toLowerCase().replace(/s$/, '');
+        return {
+          match,
+          targetKind:
+            matchedKind === 'item' ||
+            matchedKind === 'list' ||
+            matchedKind === 'checklist'
+              ? '*'
+              : matchedKind,
+          numberedRanges: parseNumberedTargetRanges(match[2] ?? ''),
+        };
+      }),
+    ].sort((left, right) => (left.match.index ?? 0) - (right.match.index ?? 0));
+    for (const { match: targetMatch, targetKind, numberedRanges } of targets) {
+      const targetIndex = targetMatch.index ?? 0;
+      const targetEnd = targetIndex + (targetMatch[0]?.length ?? 0);
+      let segmentLow = 0;
+      let segmentHigh = segments.length;
+      while (segmentLow < segmentHigh) {
+        const middle = Math.floor((segmentLow + segmentHigh) / 2);
+        const segment = segments[middle];
+        if (segment !== undefined && segment.end <= targetIndex) {
+          segmentLow = middle + 1;
+        } else segmentHigh = middle;
+      }
+      const assignmentSegment =
+        segments[Math.min(segmentLow, segments.length - 1)];
+      if (assignmentSegment === undefined) continue;
+      const localTargetStart = targetIndex - assignmentSegment.start;
+      const localTargetEnd = targetEnd - assignmentSegment.start;
+      const cue = findNearestAssignmentCue(
+        assignmentSegment,
+        localTargetStart,
+        localTargetEnd,
+      );
+      const localAgent = hasAgentActorForTarget(
+        assignmentSegment,
+        localTargetStart,
+        localTargetEnd,
+        cue,
+      );
+      const hasInheritedAgent =
+        assignmentSegment.hasAgentBefore &&
+        !localAgent &&
+        !assignmentSegment.hasOtherActor;
+      if (!localAgent && !hasInheritedAgent) {
+        continue;
+      }
+      if (
+        cue === null ||
+        assignmentIsNegated(
+          assignmentSegment,
+          cue.start,
+          localTargetStart,
+          localTargetEnd,
+        )
+      ) {
+        continue;
+      }
+      const scopeKey = `${scopeMode === 'global' || scopedClause.globalScope ? '*' : sectionId}:${targetKind ?? '*'}`;
+      const contextTargetOffset = scopedClause.clauseStart + targetIndex;
+      const bodyTargetOffset =
+        scopedClause.paragraphContextStart !== null &&
+        scopedClause.paragraphSourceStart !== null &&
+        contextTargetOffset >= scopedClause.paragraphContextStart
+          ? scopedClause.paragraphSourceStart +
+            contextTargetOffset -
+            scopedClause.paragraphContextStart
+          : null;
+      const listId =
+        bodyTargetOffset === null
+          ? scopedClause.paragraphListId
+          : listIndex === undefined
+            ? null
+            : userActorStepListId(listIndex, bodyTargetOffset);
+      if (numberedRanges === null) {
+        const prior = analysis.allTargetKinds.get(scopeKey) ?? new Set();
+        prior.add(listId);
+        analysis.allTargetKinds.set(scopeKey, prior);
+      } else {
+        const rangeKey = `${scopeKey}:${listId ?? '*'}`;
+        const prior = analysis.numberedTargetRanges.get(rangeKey) ?? [];
+        analysis.numberedTargetRanges.set(
+          rangeKey,
+          prior.concat(numberedRanges),
+        );
+      }
+    }
+  }
+  for (const [targetKind, ranges] of analysis.numberedTargetRanges) {
+    analysis.numberedTargetRanges.set(
+      targetKind,
+      mergeNumberedTargetRanges(ranges),
+    );
+  }
+  return analysis;
+}
+function hasAgentAssignmentForUserStep(
+  analysis,
+  ordinal,
+  targetKind,
+  targetSectionId,
+  targetListId,
+) {
+  const sectionScopes = [
+    '*',
+    ...(targetSectionId === null ? [] : [String(targetSectionId)]),
+  ];
+  const hasAllTargetAssignment = sectionScopes.some((scope) => {
+    const listIds = analysis.allTargetKinds.get(`${scope}:*`);
+    return (
+      listIds?.has(null) === true ||
+      (targetListId !== null && listIds?.has(targetListId) === true)
+    );
+  });
+  const hasUnnumberedAssignment = sectionScopes.some((scope) => {
+    const listIds = analysis.allTargetKinds.get(`${scope}:${targetKind}`);
+    return (
+      listIds?.has(null) === true ||
+      (targetListId !== null && listIds?.has(targetListId) === true) ||
+      (ordinal === null && targetListId === null && (listIds?.size ?? 0) > 0)
+    );
+  });
+  const rangeSets = [];
+  const globalRanges = analysis.numberedTargetRanges.get(`*:${targetKind}:*`);
+  if (globalRanges !== undefined) rangeSets.push(globalRanges);
+  const globalAnyKindRanges = analysis.numberedTargetRanges.get('*:*:*');
+  if (globalAnyKindRanges !== undefined) rangeSets.push(globalAnyKindRanges);
+  if (targetSectionId !== null) {
+    const sectionPrefix = `${targetSectionId}:${targetKind}:`;
+    const sectionWildcard = analysis.numberedTargetRanges.get(
+      `${sectionPrefix}*`,
+    );
+    if (sectionWildcard !== undefined) rangeSets.push(sectionWildcard);
+    const genericSectionPrefix = `${targetSectionId}:*:`;
+    const genericSectionWildcard = analysis.numberedTargetRanges.get(
+      `${genericSectionPrefix}*`,
+    );
+    if (genericSectionWildcard !== undefined) {
+      rangeSets.push(genericSectionWildcard);
+    }
+    if (targetListId !== null) {
+      const matchingListRanges = analysis.numberedTargetRanges.get(
+        `${sectionPrefix}${targetListId}`,
+      );
+      if (matchingListRanges !== undefined) rangeSets.push(matchingListRanges);
+      const genericMatchingListRanges = analysis.numberedTargetRanges.get(
+        `${genericSectionPrefix}${targetListId}`,
+      );
+      if (genericMatchingListRanges !== undefined) {
+        rangeSets.push(genericMatchingListRanges);
+      }
+    } else if (ordinal === null) {
+      for (const [key, ranges] of analysis.numberedTargetRanges) {
+        if (
+          key.startsWith(sectionPrefix) ||
+          key.startsWith(genericSectionPrefix)
+        ) {
+          rangeSets.push(ranges);
+        }
+      }
+    }
+  }
+  return (
+    hasAllTargetAssignment ||
+    hasUnnumberedAssignment ||
+    (ordinal === null
+      ? rangeSets.some((ranges) => ranges.length > 0)
+      : rangeSets.some((ranges) => hasNumberedTargetRange(ranges, ordinal)))
+  );
+}
+// #4577: an explicit assignment in the sentence immediately after the
+// user-actor directive can refer back to that step/check with the pronoun
+// "it". Normalize only that short, same-paragraph continuation so the
+// ordinary assignment parser can apply its actor-role and negation rules.
+function hasAgentPronounAssignmentAfterUserStep(
+  context,
+  index,
+  directiveBodyStart,
+  verbLength,
+  actorWindowLength,
+  targetKind,
+) {
+  const continuationStart = directiveBodyStart + verbLength + actorWindowLength;
+  const section = index.headingSectionRanges.find(
+    ({ start: sectionStart, end: sectionEnd }) =>
+      directiveBodyStart >= sectionStart && directiveBodyStart < sectionEnd,
+  );
+  let end = Math.min(
+    section?.end ?? context.length,
+    continuationStart + UNSAFE_DIRECTIVE_WINDOW_CHARS,
+  );
+  const paragraphBoundary = /\r?\n[ \t]*\r?\n/.exec(
+    context.slice(continuationStart, end),
+  );
+  if (paragraphBoundary !== null) {
+    end = Math.min(end, continuationStart + (paragraphBoundary.index ?? 0));
+  }
+  const currentListId = userActorStepListId(index, directiveBodyStart);
+  if (currentListId !== null) {
+    const currentLineIndex = lineIndexAtOffset(
+      index.lineStarts,
+      directiveBodyStart,
+    );
+    for (
+      let lineIndex = currentLineIndex + 1;
+      lineIndex < index.lineStarts.length;
+      lineIndex += 1
+    ) {
+      if (index.orderedListIds[lineIndex] !== currentListId) continue;
+      const lineStart = index.lineStarts[lineIndex] ?? context.length;
+      if (lineStart <= continuationStart || lineStart >= end) continue;
+      const nextLineStart = index.lineStarts[lineIndex + 1] ?? context.length;
+      const line = context.slice(lineStart, nextLineStart);
+      if (/^[ \t]*(?:\d{1,9}[.)]|[-*+])[ \t]+(?:\[[ xX]\][ \t]+)?/.test(line)) {
+        end = lineStart;
+        break;
+      }
+    }
+  }
+  let start = continuationStart;
+  while (start < end && /[.!? \t\r\n]/.test(context[start] ?? '')) {
+    start += 1;
+  }
+  if (start >= end) return false;
+  const continuation = context.slice(start, end);
+  if (!/\bit\b/i.test(continuation)) return false;
+  const normalized = continuation.replace(/\bit\b/gi, `this ${targetKind}`);
+  const continuationAnalysis = analyzeAgentAssignmentsToSteps(
+    normalized,
+    'global',
+  );
+  return hasAgentAssignmentForUserStep(
+    continuationAnalysis,
+    null,
+    targetKind,
+    null,
+    null,
+  );
+}
+// A pronoun assignment can also precede the user directive. Only bridge the
+// final sentence in the same paragraph, and only when that sentence or its
+// immediate predecessor explicitly names "this/that step/check". This keeps
+// unrelated agent work elsewhere in the issue from being borrowed as context.
+function hasAgentPronounAssignmentBeforeUserStep(
+  context,
+  index,
+  directiveBodyStart,
+  targetKind,
+) {
+  const section = index.headingSectionRanges.find(
+    ({ start: sectionStart, end: sectionEnd }) =>
+      directiveBodyStart >= sectionStart && directiveBodyStart < sectionEnd,
+  );
+  const sectionStart = section?.start ?? 0;
+  const directiveLineIndex = lineIndexAtOffset(
+    index.lineStarts,
+    directiveBodyStart,
+  );
+  const directiveLineStart = index.lineStarts[directiveLineIndex] ?? 0;
+  const directiveLinePrefix = context.slice(
+    directiveLineStart,
+    directiveBodyStart,
+  );
+  const listItemPrefixPattern =
+    /^([ \t]*)(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/;
+  const directiveListItemPrefix = USER_ACTOR_STEP_LIST_PREFIX.test(
+    directiveLinePrefix,
+  )
+    ? listItemPrefixPattern.exec(directiveLinePrefix)
+    : null;
+  let precedingEnd =
+    directiveListItemPrefix === null ? directiveBodyStart : directiveLineStart;
+  while (
+    precedingEnd > sectionStart &&
+    /[ \t\r\n]/.test(context[precedingEnd - 1] ?? '')
+  ) {
+    precedingEnd -= 1;
+  }
+  const precedingWindowStart = Math.max(sectionStart, precedingEnd - 480);
+  const paragraphText = context.slice(precedingWindowStart, precedingEnd);
+  const paragraphBoundary =
+    /\r?\n[ \t]*\r?\n|\r?\n(?=[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+)/g;
+  let boundary = paragraphBoundary.exec(paragraphText);
+  let precedingStart = precedingWindowStart;
+  while (boundary !== null) {
+    precedingStart = precedingWindowStart + boundary.index + boundary[0].length;
+    boundary = paragraphBoundary.exec(paragraphText);
+  }
+  paragraphBoundary.lastIndex = 0;
+  const preceding = context.slice(precedingStart, precedingEnd);
+  const clauses = splitSentenceAndSemicolonClauses(preceding).filter(
+    ({ clause }) => clause.trim().length > 0,
+  );
+  const assignment = clauses.at(-1);
+  if (assignment === undefined || !/\bit\b/i.test(assignment.clause)) {
+    return false;
+  }
+  const antecedentPattern = /\b(?:this|that)\s+(?:step|check)\b/i;
+  const antecedentInAssignment = antecedentPattern.test(assignment.clause);
+  const antecedentInPriorClause = antecedentPattern.test(
+    clauses.at(-2)?.clause ?? '',
+  );
+  if (!antecedentInAssignment && !antecedentInPriorClause) return false;
+  if (directiveListItemPrefix !== null) {
+    const assignmentOffset = precedingStart + assignment.start;
+    const assignmentLineIndex = lineIndexAtOffset(
+      index.lineStarts,
+      assignmentOffset,
+    );
+    const assignmentLineStart = index.lineStarts[assignmentLineIndex] ?? 0;
+    const assignmentLineEnd =
+      index.lineStarts[assignmentLineIndex + 1] ?? context.length;
+    const assignmentListItemPrefix = listItemPrefixPattern.exec(
+      context.slice(assignmentLineStart, assignmentLineEnd),
+    );
+    if (
+      assignmentListItemPrefix !== null &&
+      (assignmentListItemPrefix[1] ?? '').replace(/\t/g, '    ').length >=
+        (directiveListItemPrefix[1] ?? '').replace(/\t/g, '    ').length
+    ) {
+      return false;
+    }
+  }
+  const normalized = assignment.clause.replace(
+    /\bit\b/gi,
+    `this ${targetKind}`,
+  );
+  const assignmentAnalysis = analyzeAgentAssignmentsToSteps(
+    normalized,
+    'global',
+  );
+  const hasAssignment = hasAgentAssignmentForUserStep(
+    assignmentAnalysis,
+    null,
+    targetKind,
+    null,
+    null,
+  );
+  return hasAssignment;
+}
+function buildOrderedUserStepListOrdinals(
+  text,
+  lineStarts,
+  firstNonWhitespace,
+  lineKinds,
+) {
+  const ordinals = [];
+  const listIds = [];
+  const parentIds = new Map();
+  const stack = [];
+  let nextListId = 0;
+  for (let lineIndex = 0; lineIndex < lineStarts.length; lineIndex += 1) {
+    const start = lineStarts[lineIndex] ?? text.length;
+    const nextStart = lineStarts[lineIndex + 1];
+    let end = nextStart === undefined ? text.length : nextStart - 1;
+    if (end > start && text[end - 1] === '\r') end -= 1;
+    const first = firstNonWhitespace[lineIndex] ?? end;
+    if (first >= end) continue;
+    const line = text.slice(start, end);
+    const marker =
+      /^([ \t]*)(?:(\d{1,9})([.)])|([-*+]))([ \t]+)(?:\[[ xX]\][ \t]+)?/.exec(
+        line,
+      );
+    if (marker) {
+      const indent = indentationColumns(marker[1] ?? '');
+      const digits = marker[2];
+      const markerKind = digits === undefined ? 'unordered' : 'ordered';
+      const delimiter = marker[3] ?? marker[4] ?? '';
+      const markerWidth = (digits?.length ?? 1) + 1;
+      const contentIndent = indentationColumns(
+        marker[5] ?? '',
+        indent + markerWidth,
+      );
+      while (stack.length > 0 && (stack.at(-1)?.indent ?? -1) > indent) {
+        stack.pop();
+      }
+      let current = stack.at(-1);
+      if (
+        current?.indent === indent &&
+        (current.kind !== markerKind || current.marker !== delimiter)
+      ) {
+        stack.pop();
+        current = stack.at(-1);
+      }
+      if (markerKind === 'ordered') {
+        const continuingList =
+          current?.indent === indent && current.kind === 'ordered'
+            ? current
+            : null;
+        const ordinal = continuingList?.nextOrdinal ?? Number(digits);
+        const listId = continuingList?.listId ?? nextListId++;
+        if (continuingList !== null) {
+          continuingList.nextOrdinal = ordinal + 1;
+          continuingList.contentIndent = contentIndent;
+        } else {
+          const parentListId = stack.at(-1)?.listId ?? null;
+          stack.push({
+            indent,
+            kind: 'ordered',
+            marker: delimiter,
+            nextOrdinal: ordinal + 1,
+            contentIndent,
+            listId,
+          });
+          parentIds.set(listId, parentListId);
+        }
+        ordinals[lineIndex] = ordinal;
+        listIds[lineIndex] = listId;
+      } else {
+        const continuingList =
+          current?.indent === indent && current.kind === 'unordered'
+            ? current
+            : null;
+        const listId = continuingList?.listId ?? nextListId++;
+        if (continuingList !== null) {
+          continuingList.contentIndent = contentIndent;
+        } else {
+          const parentListId = stack.at(-1)?.listId ?? null;
+          stack.push({
+            indent,
+            kind: 'unordered',
+            marker: delimiter,
+            nextOrdinal: 0,
+            contentIndent,
+            listId,
+          });
+          parentIds.set(listId, parentListId);
+        }
+        ordinals[lineIndex] = null;
+        listIds[lineIndex] = listId;
+      }
+      continue;
+    }
+    const lineIndent = indentationColumns(text.slice(start, first));
+    const previousLineIsBlank =
+      lineIndex > 0 && lineKinds[lineIndex - 1] === 'blank';
+    const isHeading =
+      lineKinds[lineIndex] === 'heading' || lineKinds[lineIndex] === 'setext';
+    if (previousLineIsBlank || isHeading) {
+      while (
+        stack.length > 0 &&
+        lineIndent < (stack.at(-1)?.contentIndent ?? 0)
+      ) {
+        stack.pop();
+      }
+    }
+    const currentList = stack.at(-1);
+    if (
+      !isHeading &&
+      currentList !== undefined &&
+      lineIndent >= currentList.contentIndent
+    ) {
+      listIds[lineIndex] = currentList.listId;
+    }
+  }
+  return { ordinals, listIds, parentIds };
+}
+function createUserActorStepBodyBoundaryIndex(
+  body,
+  codeRanges,
+  htmlCommentRanges,
+) {
+  const characters = body.split('');
+  for (const range of codeRanges) {
+    const start = Math.max(0, range.start);
+    const end = Math.min(body.length, range.end);
+    if (start >= end) continue;
+    for (let index = start; index < end; index += 1) {
+      if (characters[index] === '\n' || characters[index] === '\r') continue;
+      characters[index] = index === start ? ';' : ' ';
+    }
+  }
+  for (const range of htmlCommentRanges) {
+    const start = Math.max(0, range.start);
+    const end = Math.min(body.length, range.end);
+    if (start >= end) continue;
+    for (let index = start; index < end; index += 1) {
+      characters[index] = index === start ? ';' : ' ';
+    }
+  }
+  const text = characters.join('');
+  const lineStarts = [0];
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '\n') lineStarts.push(index + 1);
+  }
+  const firstNonWhitespace = [];
+  const lineKinds = [];
+  for (let lineIndex = 0; lineIndex < lineStarts.length; lineIndex += 1) {
+    const start = lineStarts[lineIndex] ?? text.length;
+    const nextLineStart = lineStarts[lineIndex + 1];
+    let end = nextLineStart === undefined ? text.length : nextLineStart - 1;
+    if (end > start && text[end - 1] === '\r') end -= 1;
+    let first = start;
+    while (first < end && (text[first] === ' ' || text[first] === '\t')) {
+      first += 1;
+    }
+    firstNonWhitespace.push(first);
+    const line = text.slice(start, end);
+    lineKinds.push(
+      first === end
+        ? 'blank'
+        : /^ {0,3}#{1,6}(?:[ \t]+|$)/.test(line)
+          ? 'heading'
+          : /^ {0,3}(?:=+|-+)[ \t]*$/.test(line)
+            ? 'setext'
+            : 'other',
+    );
+  }
+  const headingSections = splitMarkdownHeadingSections(text);
+  const orderedLists = buildOrderedUserStepListOrdinals(
+    text,
+    lineStarts,
+    firstNonWhitespace,
+    lineKinds,
+  );
+  return {
+    text,
+    lineStarts,
+    firstNonWhitespace,
+    lineKinds,
+    orderedListOrdinals: orderedLists.ordinals,
+    orderedListIds: orderedLists.listIds,
+    listParentIds: orderedLists.parentIds,
+    headingSectionRanges: headingSections.map((section, sectionId) => ({
+      start: section.bodyStart,
+      end: section.bodyEnd,
+      sectionId,
+    })),
+    bareAgentActorRanges: headingSections
+      .filter(({ bareAgentActorContext }) => bareAgentActorContext)
+      .map(({ bodyStart, bodyEnd }) => ({ start: bodyStart, end: bodyEnd })),
+  };
+}
+function lineIndexAtOffset(lineStarts, offset) {
+  let low = 0;
+  let high = lineStarts.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const lineStart = lineStarts[middle];
+    if (lineStart !== undefined && lineStart <= offset) low = middle + 1;
+    else high = middle;
+  }
+  return Math.max(0, low - 1);
+}
+function hasStandaloneUserActorStepBlockBoundary(index, lineIndex, listId) {
+  const nextLineIndex = lineIndex + 1;
+  if (nextLineIndex >= index.lineStarts.length) return true;
+  if (index.lineKinds[nextLineIndex] === 'blank') return true;
+  if (index.lineKinds[nextLineIndex] === 'heading') return true;
+  if (listId === null) {
+    const nextListId = index.orderedListIds[nextLineIndex];
+    return nextListId !== undefined && nextListId !== null;
+  }
+  return (
+    index.orderedListIds[nextLineIndex] === listId &&
+    /^ {0,3}(?:\d{1,9}[.)]|[-*+])[ \t]+(?:\[[ xX]\][ \t]+)?/.test(
+      index.text.slice(
+        index.lineStarts[nextLineIndex] ?? index.text.length,
+        index.lineStarts[nextLineIndex + 1] ?? index.text.length,
+      ),
+    )
+  );
+}
+function isStandaloneUserActorStepDirective(
+  body,
+  index,
+  verbBodyStart,
+  verbLength,
+  bodyCodeRanges,
+  bodyHtmlCommentRanges,
+) {
+  const lineIndex = lineIndexAtOffset(index.lineStarts, verbBodyStart);
+  const lineStart = index.lineStarts[lineIndex] ?? 0;
+  const rawLineEnd = index.lineStarts[lineIndex + 1] ?? body.length;
+  const lineEnd =
+    body[rawLineEnd - 1] === '\n'
+      ? rawLineEnd - (body[rawLineEnd - 2] === '\r' ? 2 : 1)
+      : rawLineEnd;
+  const prefix = body.slice(lineStart, verbBodyStart);
+  const directiveLine = body.slice(lineStart, lineEnd);
+  const listPrefix =
+    /^([ ]{0,3})(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?$/.exec(prefix);
+  const listId = userActorStepListId(index, verbBodyStart);
+  const isTopLevelListItem =
+    listPrefix !== null &&
+    listId !== null &&
+    index.listParentIds.get(listId) === null;
+  const isPlainParagraph =
+    /^[ ]{0,3}$/.test(prefix) &&
+    listId === null &&
+    !/^ {0,3}(?:>|\||#{1,6}[ \t]|<!--|<\/?[A-Za-z])/.test(directiveLine);
+  if (!isTopLevelListItem && !isPlainParagraph) return false;
+  if (
+    !USER_ACTOR_STEP_WINDOW.test(
+      body.slice(verbBodyStart + verbLength, lineEnd),
+    )
+  ) {
+    return false;
+  }
+  const lineRange = { start: lineStart, end: lineEnd };
+  if (
+    [...bodyCodeRanges, ...bodyHtmlCommentRanges].some(
+      (range) => range.start < lineRange.end && range.end > lineRange.start,
+    )
+  ) {
+    return false;
+  }
+  if (isTopLevelListItem) {
+    return hasStandaloneUserActorStepBlockBoundary(index, lineIndex, listId);
+  }
+  const previousKind = index.lineKinds[lineIndex - 1];
+  const startsParagraph =
+    lineIndex === 0 ||
+    previousKind === 'blank' ||
+    previousKind === 'heading' ||
+    (previousKind === 'setext' &&
+      lineIndex >= 2 &&
+      index.lineKinds[lineIndex - 2] !== 'blank');
+  return (
+    startsParagraph &&
+    hasStandaloneUserActorStepBlockBoundary(index, lineIndex, null)
+  );
+}
+function hasAgentWorkAssignmentInClause(clause) {
+  const assignmentClausePattern = new RegExp(
+    `\\b(?:and|but|while|whereas)\\s+(?=${USER_ACTOR_STEP_ASSIGNABLE_AGENT.source})`,
+    'gi',
+  );
+  const assignmentClauses = clause.split(assignmentClausePattern);
+  for (const assignmentClause of assignmentClauses) {
+    const agentPattern = new RegExp(
+      USER_ACTOR_STEP_ASSIGNABLE_AGENT.source,
+      'gi',
+    );
+    for (const agent of assignmentClause.matchAll(agentPattern)) {
+      const agentStart = agent.index ?? 0;
+      const agentEnd = agentStart + (agent[0]?.length ?? 0);
+      const prefix = assignmentClause.slice(0, agentStart);
+      const suffix = assignmentClause.slice(agentEnd);
+      const subjectStart = Math.max(
+        prefix.lastIndexOf(','),
+        prefix.lastIndexOf(':'),
+      );
+      const subjectPrefix = prefix.slice(subjectStart + 1);
+      const isAgentSubject =
+        /^\s*(?:(?:and|but|while|whereas)\s+)?(?:the\s+)?$/i.test(
+          subjectPrefix,
+        ) &&
+        (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(suffix) ||
+          USER_ACTOR_STEP_GENERAL_WORK_ACTION.test(suffix));
+      const passiveVerb =
+        USER_ACTOR_STEP_PASSIVE_PARTICIPLE_IN_PHRASE.exec(suffix);
+      const passiveSubject =
+        passiveVerb !== null &&
+        (USER_ACTOR_STEP_PASSIVE_AUXILIARY.test(
+          suffix.slice(0, passiveVerb.index).trimEnd(),
+        ) ||
+          /\b(?:must|should|shall|will|can|could|may|might|needs?\s+to|has\s+to|required\s+to|expected\s+to|instructed\s+to)\s+be$/i.test(
+            suffix.slice(0, passiveVerb.index).trimEnd(),
+          ));
+      const transfersWorkToAnotherActor =
+        USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(suffix) &&
+        /\bto\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i.test(
+          suffix,
+        );
+      if (isAgentSubject && !passiveSubject && !transfersWorkToAnotherActor) {
+        return true;
+      }
+      if (USER_ACTOR_STEP_AGENT_RECIPIENT_RELATION.test(prefix)) {
+        return true;
+      }
+      if (
+        USER_ACTOR_STEP_AGENT_OBJECT_ASSIGNMENT_RELATION.test(prefix) &&
+        (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(suffix) ||
+          USER_ACTOR_STEP_GENERAL_WORK_ACTION.test(suffix) ||
+          USER_ACTOR_STEP_ASSIGNMENT_OBJECT_NOUN.test(suffix))
+      ) {
+        return true;
+      }
+      if (
+        USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(prefix) &&
+        /\bto\s+(?:the\s+)?$/i.test(prefix)
+      ) {
+        return true;
+      }
+      if (
+        /^['’]s\s*(?:responsibility|responsibilities|ownership|assignment)\b/i.test(
+          suffix,
+        )
+      ) {
+        return true;
+      }
+      if (
+        /\bnot\s+(?:the\s+)?$/i.test(prefix) &&
+        (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(assignmentClause) ||
+          USER_ACTOR_STEP_GENERAL_WORK_ACTION.test(assignmentClause))
+      ) {
+        return true;
+      }
+    }
+  }
+  const negatedAgent = new RegExp(
+    `\\bnot\\s+(?:the\\s+)?${USER_ACTOR_STEP_ASSIGNABLE_AGENT.source}`,
+    'i',
+  );
+  if (
+    negatedAgent.test(clause) &&
+    (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(clause) ||
+      USER_ACTOR_STEP_GENERAL_WORK_ACTION.test(clause))
+  ) {
+    return true;
+  }
+  return false;
+}
+function hasAgentWorkAssignmentInText(text) {
+  const normalized = normalizeMarkdownStepAssignmentText(text).replace(
+    /[*_~`[\]]/g,
+    ' ',
+  );
+  for (const section of splitMarkdownHeadingSections(normalized)) {
+    if (
+      USER_ACTOR_STEP_ASSIGNABLE_AGENT.test(section.headingContext.join(' ')) &&
+      (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(section.body) ||
+        USER_ACTOR_STEP_GENERAL_WORK_ACTION.test(section.body))
+    ) {
+      return true;
+    }
+    if (
+      splitSentenceAndSemicolonClauses(section.body).some(({ clause }) =>
+        hasAgentWorkAssignmentInClause(clause),
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+function hasAgentMentionAndAssignmentCue(text) {
+  if (hasAgentWorkAssignmentInText(text)) return true;
+  return text.split(/\r?\n[ \t]*\r?\n/).some((paragraph) => {
+    const normalized = normalizeMarkdownStepAssignmentText(paragraph);
+    const hasVisibleAssignment = hasAgentWorkAssignmentInText(normalized);
+    const hasSetextHeadingBoundary =
+      /(?:^|\r?\n)[ \t]*(?:=+|-+)[ \t]*(?:\r?\n|$)/m.test(paragraph);
+    const hasAmbiguousMarkdownAssignment =
+      (/[[\]*_~`<>|]/.test(paragraph) || hasSetextHeadingBoundary) &&
+      USER_ACTOR_STEP_ASSIGNABLE_AGENT.test(paragraph) &&
+      (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(paragraph) ||
+        USER_ACTOR_STEP_GENERAL_WORK_ACTION.test(paragraph));
+    return hasVisibleAssignment || hasAmbiguousMarkdownAssignment;
+  });
+}
+function hasAnyAgentWorkAssignment(
+  title,
+  bodyAssignmentContext,
+  titleAnalysis,
+  bodyAnalysis,
+) {
+  return (
+    hasAgentMentionAndAssignmentCue(title) ||
+    hasAgentMentionAndAssignmentCue(bodyAssignmentContext) ||
+    titleAnalysis.allTargetKinds.size > 0 ||
+    titleAnalysis.numberedTargetRanges.size > 0 ||
+    bodyAnalysis.allTargetKinds.size > 0 ||
+    bodyAnalysis.numberedTargetRanges.size > 0
+  );
+}
+function numberedUserStepListItemOrdinal(index, offset) {
+  const lineIndex = lineIndexAtOffset(index.lineStarts, offset);
+  return index.orderedListOrdinals[lineIndex] ?? null;
+}
+function userActorStepListId(index, offset) {
+  const lineIndex = lineIndexAtOffset(index.lineStarts, offset);
+  return index.orderedListIds[lineIndex] ?? null;
+}
+function sliceUserActorStepWindowAtSiblingItem(
+  window,
+  index,
+  verbBodyStart,
+  verbLength,
+) {
+  const currentListId = userActorStepListId(index, verbBodyStart);
+  if (currentListId === null) return window;
+  const currentLineIndex = lineIndexAtOffset(index.lineStarts, verbBodyStart);
+  for (
+    let lineIndex = currentLineIndex + 1;
+    lineIndex < index.lineStarts.length;
+    lineIndex += 1
+  ) {
+    if (index.orderedListIds[lineIndex] !== currentListId) continue;
+    const lineStart = index.lineStarts[lineIndex] ?? index.text.length;
+    const nextLineStart = index.lineStarts[lineIndex + 1] ?? index.text.length;
+    const line = index.text.slice(lineStart, nextLineStart);
+    if (!/^[ \t]*(?:\d{1,9}[.)]|[-*+])[ \t]+(?:\[[ xX]\][ \t]+)?/.test(line)) {
+      continue;
+    }
+    const end = lineStart - verbBodyStart - verbLength;
+    if (end < 0 || end > window.length) continue;
+    return window.slice(0, end).replace(/[.!?][ \t\r\n]*$/, '');
+  }
+  return window;
+}
+function headingSectionIdAtOffset(index, offset) {
+  const ranges = index.headingSectionRanges;
+  let low = 0;
+  let high = ranges.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const range = ranges[middle];
+    if (range !== undefined && range.start <= offset) low = middle + 1;
+    else high = middle;
+  }
+  const range = low > 0 ? ranges[low - 1] : undefined;
+  return range !== undefined && offset < range.end ? range.sectionId : null;
+}
+function hasBareAgentActorHeadingContext(index, offset) {
+  let low = 0;
+  let high = index.bareAgentActorRanges.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const range = index.bareAgentActorRanges[middle];
+    if (range !== undefined && range.start <= offset) low = middle + 1;
+    else high = middle;
+  }
+  const range = low > 0 ? index.bareAgentActorRanges[low - 1] : undefined;
+  return range !== undefined && offset >= range.start && offset < range.end;
+}
 const UNSAFE_DIRECTIVE_WINDOW_CHARS = 100;
 const NEGATION_PATTERN =
   /\b(not|no|don'?t|doesn'?t|can'?t|won'?t|never|avoid|skip|omit|ignore|exempt)\b/i;
@@ -2430,10 +4190,46 @@ function isVerbWhollyInBodyCode(
 // comment above.
 function findUnsafeExecutionDirectiveMatch(
   corpus,
+  title,
   bodyOffset,
   body,
   bodyCodeRanges,
 ) {
+  const bodyHtmlCommentRanges = findHtmlCommentRanges(body, bodyCodeRanges);
+  const bodyInertRanges = [...bodyCodeRanges, ...bodyHtmlCommentRanges];
+  const bodyAssignmentContext = separateMarkdownRangesWithClauseBoundaries(
+    body,
+    bodyInertRanges,
+  );
+  const normalizedBodyAssignmentContext = normalizeMarkdownStepAssignmentText(
+    bodyAssignmentContext,
+  );
+  const bodyBoundaryIndex = createUserActorStepBodyBoundaryIndex(
+    body,
+    bodyCodeRanges,
+    bodyHtmlCommentRanges,
+  );
+  // GitHub issue titles are plain text, not rendered Markdown. Treat code
+  // markers and comment-looking strings as literal untrusted title content.
+  const titleAssignmentContext = title;
+  // Analyze each complete field once, then consult the indexed assignments
+  // for every candidate directive. Re-scanning both fields per `run` made
+  // adversarial issue bodies cost O(directives × body length).
+  const titleAssignmentAnalysis = analyzeAgentAssignmentsToSteps(
+    titleAssignmentContext,
+    'global',
+  );
+  const bodyAssignmentAnalysis = analyzeAgentAssignmentsToSteps(
+    normalizedBodyAssignmentContext,
+    'section',
+    bodyBoundaryIndex,
+  );
+  const hasAnyAgentAssignment = hasAnyAgentWorkAssignment(
+    titleAssignmentContext,
+    bodyAssignmentContext,
+    titleAssignmentAnalysis,
+    bodyAssignmentAnalysis,
+  );
   const verbPattern = new RegExp(
     String.raw`\b${UNSAFE_DIRECTIVE_VERB}\b`,
     'gi',
@@ -2457,6 +4253,78 @@ function findUnsafeExecutionDirectiveMatch(
         verbStart + verbText.length,
       );
       const targetMatch = targetPattern.exec(window);
+      const verbBodyStart = verbStart - bodyOffset;
+      const verbHtmlCommentRange =
+        verbBodyStart >= 0
+          ? getMarkdownCodeRange(body, verbBodyStart, bodyHtmlCommentRanges)
+          : null;
+      const verbIsInHtmlComment =
+        verbHtmlCommentRange !== null &&
+        verbBodyStart + verbText.length <= verbHtmlCommentRange.end;
+      const userStepOrdinal = numberedUserStepListItemOrdinal(
+        bodyBoundaryIndex,
+        verbBodyStart,
+      );
+      const userStepListId = userActorStepListId(
+        bodyBoundaryIndex,
+        verbBodyStart,
+      );
+      const userStepSectionId = headingSectionIdAtOffset(
+        bodyBoundaryIndex,
+        verbBodyStart,
+      );
+      const userActorStepWindow = sliceUserActorStepWindowAtSiblingItem(
+        window,
+        bodyBoundaryIndex,
+        verbBodyStart,
+        verbText.length,
+      );
+      const userStepTarget = USER_ACTOR_STEP_WINDOW.exec(userActorStepWindow);
+      const userStepKind = (userStepTarget?.[1] ?? '').toLowerCase();
+      const userActorStepDirective =
+        verbText.toLowerCase() === 'run' &&
+        userActorStepWindow.length < UNSAFE_DIRECTIVE_WINDOW_CHARS &&
+        USER_ACTOR_STEP_WINDOW.test(userActorStepWindow) &&
+        verbStart >= bodyOffset &&
+        !verbIsInHtmlComment &&
+        isStandaloneUserActorStepDirective(
+          body,
+          bodyBoundaryIndex,
+          verbBodyStart,
+          verbText.length,
+          bodyCodeRanges,
+          bodyHtmlCommentRanges,
+        ) &&
+        !hasAnyAgentAssignment &&
+        !hasAgentAssignmentForUserStep(
+          titleAssignmentAnalysis,
+          userStepOrdinal,
+          userStepKind,
+          userStepSectionId,
+          userStepListId,
+        ) &&
+        !hasAgentAssignmentForUserStep(
+          bodyAssignmentAnalysis,
+          userStepOrdinal,
+          userStepKind,
+          userStepSectionId,
+          userStepListId,
+        ) &&
+        !hasAgentPronounAssignmentAfterUserStep(
+          bodyAssignmentContext,
+          bodyBoundaryIndex,
+          verbBodyStart,
+          verbText.length,
+          userActorStepWindow.length,
+          userStepKind,
+        ) &&
+        !hasAgentPronounAssignmentBeforeUserStep(
+          normalizedBodyAssignmentContext,
+          bodyBoundaryIndex,
+          verbBodyStart,
+          userStepKind,
+        ) &&
+        !hasBareAgentActorHeadingContext(bodyBoundaryIndex, verbBodyStart);
       // #3073 round 4-6: the repository-owned-validation exception is now
       // a single fully anchored positive signature (see the constants'
       // shared comment above) -- the whole window must match the literal
@@ -2471,6 +4339,7 @@ function findUnsafeExecutionDirectiveMatch(
       // boundary plus an optional "Please ".
       if (
         targetMatch &&
+        !userActorStepDirective &&
         !(
           verbText.toLowerCase() === REPO_OWNED_VALIDATION_VERB &&
           window.length < UNSAFE_DIRECTIVE_WINDOW_CHARS &&
@@ -3078,6 +4947,7 @@ export function checkTrustSafety(context) {
   // visible verb with a code-wrapped noun must still fail.
   const unsafeDirective = findUnsafeExecutionDirectiveMatch(
     corpus,
+    issue.title,
     bodyOffset,
     issue.body,
     bodyCodeRanges,
