@@ -714,6 +714,29 @@ test('maximum compares preserved JSON number tokens exactly', () => {
   }
 });
 
+test('maximum compares distinct overflowing JSON number tokens exactly', () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-schema-maximum-overflow-'));
+
+  try {
+    writeFileSync(
+      join(root, 'schema.json'),
+      '{"type":"object","required":["value"],"properties":{"value":{"type":"number","maximum":1e999}},"additionalProperties":false}',
+    );
+    writeFileSync(join(root, 'instance.json'), '{"value":9e999}');
+
+    const schema = loadJson('schema.json', root) as JsonRecord;
+    const instance = loadJson('instance.json', root) as JsonRecord;
+    const valueSchema = (schema.properties as JsonRecord).value as JsonRecord;
+    assert.equal(valueSchema.maximum, Infinity);
+    assert.equal(instance.value, Infinity);
+    assert.ok(
+      validate(instance, schema).some((error) => error.includes('maximum')),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('maximum compares underflowed JSON number tokens with zero exactly', () => {
   const root = mkdtempSync(join(tmpdir(), 'idd-schema-maximum-underflow-'));
   const schema = {
@@ -866,6 +889,59 @@ test('integer validation preserves exact JSON number tokens', () => {
         error.includes('expected type "integer"'),
       ),
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('nested integer validation uses assigned values after mutation', () => {
+  const root = mkdtempSync(
+    join(tmpdir(), 'idd-schema-nested-number-mutation-'),
+  );
+  const schema = {
+    type: 'object',
+    required: ['source'],
+    properties: {
+      source: {
+        type: 'object',
+        required: ['issueNumber'],
+        properties: {
+          issueNumber: {
+            type: 'integer',
+            maximum: Number.MAX_SAFE_INTEGER,
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+    additionalProperties: false,
+  };
+  const cases = [
+    {
+      json: '{"source":{"issueNumber":9007199254740993}}',
+      expectedOriginalError: 'maximum',
+    },
+    {
+      json: '{"source":{"issueNumber":9007199254740991.4}}',
+      expectedOriginalError: 'expected type "integer"',
+    },
+  ] as const;
+
+  try {
+    for (const { json, expectedOriginalError } of cases) {
+      writeFileSync(join(root, 'record.json'), json);
+      const record = loadJson('record.json', root) as JsonRecord;
+      assert.ok(
+        validate(record, schema).some((error) =>
+          error.includes(expectedOriginalError),
+        ),
+        json,
+      );
+
+      const source = record.source as JsonRecord;
+      source.issueNumber = Number.MAX_SAFE_INTEGER;
+      assert.deepEqual(validate(record, schema), [], json);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
