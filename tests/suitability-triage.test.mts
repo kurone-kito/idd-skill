@@ -2872,6 +2872,38 @@ test('trust safety fails closed for unsupported or ambiguous user-step Markdown 
   }
 });
 
+test('trust safety fails closed inside raw HTML blocks for user steps -- #4596', () => {
+  for (const body of [
+    '<div>\n\nRun this step by the user.\n\n</div>',
+    '<div>\n\nRun this step by the user.',
+    '<script>\n\nRun this check by the user.\n\n</script>',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+
+  const outsideHtmlBlock = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '<div>Closed content</div>\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(outsideHtmlBlock.pass, true);
+
+  const outsideRawTextBlock = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '<script>\nconst example = "<div>";\n</script>\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(outsideRawTextBlock.pass, true);
+});
+
 test('trust safety treats user-step examples inside code as inert content -- #4596', () => {
   for (const body of [
     '`Run this step by the user.`',
@@ -11933,6 +11965,41 @@ test('trust safety fails closed on assigned-agent forms found in current review 
       trustSafetyAmbiguous: false,
     } as Context);
     assert.equal(result.pass, false, title ?? body);
+  }
+});
+
+test('trust safety recognizes possessive and quantified agent subjects -- #4596', () => {
+  for (const subject of [
+    'Our coding agent',
+    'Any coding agent',
+    'Each coding agent',
+    'Their coding agents',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${subject} must implement the feature.\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, subject);
+  }
+});
+
+test('trust safety recognizes common agent ownership phrases -- #4596', () => {
+  for (const assignment of [
+    'The coding agent oversees this step.',
+    'The coding agent takes care of this step.',
+    'The coding agent took care of this step.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
   }
 });
 

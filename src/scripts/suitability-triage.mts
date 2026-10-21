@@ -676,6 +676,93 @@ function isRepositoryFitPeriodBoundary(
   );
 }
 
+// This list limits the user-step exception. An open block-level HTML tag
+// keeps following Markdown context ambiguous until a matching close tag.
+const USER_ACTOR_STEP_RAW_HTML_BLOCK_TAG_NAMES = [
+  'address',
+  'article',
+  'aside',
+  'base',
+  'basefont',
+  'blockquote',
+  'body',
+  'caption',
+  'center',
+  'col',
+  'colgroup',
+  'dd',
+  'details',
+  'dialog',
+  'dir',
+  'div',
+  'dl',
+  'dt',
+  'fieldset',
+  'figcaption',
+  'figure',
+  'footer',
+  'form',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'head',
+  'header',
+  'hr',
+  'html',
+  'iframe',
+  'legend',
+  'li',
+  'link',
+  'main',
+  'menu',
+  'menuitem',
+  'nav',
+  'ol',
+  'optgroup',
+  'option',
+  'p',
+  'param',
+  'pre',
+  'script',
+  'search',
+  'section',
+  'style',
+  'summary',
+  'table',
+  'tbody',
+  'td',
+  'textarea',
+  'tfoot',
+  'th',
+  'thead',
+  'title',
+  'tr',
+  'track',
+  'ul',
+] as const;
+const USER_ACTOR_STEP_RAW_HTML_BLOCK_TAG_SET = new Set<string>(
+  USER_ACTOR_STEP_RAW_HTML_BLOCK_TAG_NAMES,
+);
+const USER_ACTOR_STEP_RAW_HTML_VOID_TAG_SET = new Set([
+  'base',
+  'basefont',
+  'col',
+  'hr',
+  'link',
+  'menuitem',
+  'param',
+  'track',
+]);
+const USER_ACTOR_STEP_RAW_TEXT_HTML_TAG_SET = new Set([
+  'script',
+  'style',
+  'textarea',
+  'title',
+]);
+
 function buildRepositoryFitParagraphSpans(
   scanBody: string,
   nonInlineCodeRanges: readonly MarkdownCodeRange[],
@@ -1100,7 +1187,7 @@ function hasUserActorStepAssignedTarget(text: string): boolean {
 const USER_ACTOR_STEP_NUMBERED_TARGET =
   /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?|checklists?|lists?|items?)\s+#?\s*(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)#?\s*\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
-  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|owner|ownership|belongs?\s+to|in\s+charge\s+of|work(?:s|ed|ing)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)?|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complet(?:e|es|ed|ing)|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|hand(?:le|les|led|ling)|man(?:age|ages|aged|aging))\b/i;
+  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|owner|ownership|belongs?\s+to|in\s+charge\s+of|oversee|oversees|overseeing|oversaw|overseen|take\s+care\s+of|takes\s+care\s+of|took\s+care\s+of|taken\s+care\s+of|taking\s+care\s+of|work(?:s|ed|ing)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)?|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complet(?:e|es|ed|ing)|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|hand(?:le|les|led|ling)|man(?:age|ages|aged|aging))\b/i;
 const USER_ACTOR_STEP_GENERAL_WORK_ACTION =
   /\b(?:review|build|create|add|update|edit|fix|write|remove|delete|install|configure|prepare|investigate|document|refactor|change|migrate|deploy|publish|author|open|close|merge|inspect|analyze|analyse|validate|generate)\b/i;
 const USER_ACTOR_STEP_AGENT_RECIPIENT_RELATION =
@@ -2876,6 +2963,14 @@ function isStandaloneUserActorStepDirective(
   ) {
     return false;
   }
+  if (
+    hasOpenRawHtmlBlockBefore(body, lineStart, [
+      ...bodyCodeRanges,
+      ...bodyHtmlCommentRanges,
+    ])
+  ) {
+    return false;
+  }
 
   if (isTopLevelListItem) {
     return hasStandaloneUserActorStepBlockBoundary(index, lineIndex, listId);
@@ -2893,6 +2988,54 @@ function isStandaloneUserActorStepDirective(
     startsParagraph &&
     hasStandaloneUserActorStepBlockBoundary(index, lineIndex, null)
   );
+}
+
+function hasOpenRawHtmlBlockBefore(
+  body: string,
+  offset: number,
+  excludedRanges: readonly MarkdownCodeRange[],
+): boolean {
+  const prefix = body.slice(0, offset);
+  const openTags: string[] = [];
+  const tagPattern = /<(\/)?([A-Za-z][A-Za-z0-9:-]*)\b[^>]*>/g;
+  for (const match of prefix.matchAll(tagPattern)) {
+    const start = match.index ?? 0;
+    const end = start + (match[0]?.length ?? 0);
+    if (
+      excludedRanges.some((range) => range.start < end && range.end > start)
+    ) {
+      continue;
+    }
+
+    const tagName = (match[2] ?? '').toLowerCase();
+    const rawTextTag = openTags.at(-1);
+    if (
+      rawTextTag !== undefined &&
+      USER_ACTOR_STEP_RAW_TEXT_HTML_TAG_SET.has(rawTextTag) &&
+      !(match[1] === '/' && tagName === rawTextTag)
+    ) {
+      continue;
+    }
+    if (!USER_ACTOR_STEP_RAW_HTML_BLOCK_TAG_SET.has(tagName)) continue;
+    if (match[1] === '/') {
+      if (openTags.at(-1) === tagName) {
+        openTags.pop();
+      } else if (openTags.includes(tagName)) {
+        // Malformed nesting leaves the enclosing Markdown context ambiguous.
+        return true;
+      }
+      continue;
+    }
+
+    const tag = match[0] ?? '';
+    if (
+      !USER_ACTOR_STEP_RAW_HTML_VOID_TAG_SET.has(tagName) &&
+      !/\/\s*>$/.test(tag)
+    ) {
+      openTags.push(tagName);
+    }
+  }
+  return openTags.length > 0;
 }
 
 function hasAgentWorkAssignmentInClause(clause: string): boolean {
@@ -2925,7 +3068,7 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
         .slice(subjectStart + 1)
         .replace(/^\s*(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/, '');
       const isAgentSubject =
-        /^\s*(?:(?:and|but|while|whereas)\s+)?(?:(?:a|an|the)\s+)?$/i.test(
+        /^\s*(?:(?:and|but|while|whereas)\s+)?(?:(?:a|an|the|my|your|his|her|its|our|their|any|each|every|all|some|no|one|both|neither|either)\s+)?$/i.test(
           subjectPrefix,
         ) &&
         (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(suffix) ||
