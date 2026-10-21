@@ -997,7 +997,9 @@ const USER_ACTOR_STEP_ASSIGNMENT_CUE =
 const USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER = `(?:a|an|the|my|your|his|her|its|our|their|any|each|every|all|some|no|one|both|neither|either|this|that|these|those|several|many|most|few|none)`;
 const USER_ACTOR_STEP_AGENT_SUBJECT_QUANTIFIER = String.raw`(?:one|some|any|each|every|all|both|neither|either|none|several|many|most|few)\s+of\s+`;
 const USER_ACTOR_STEP_AGENT_SUBJECT_COLLECTIVE = String.raw`(?:a|an|the|my|your|his|her|its|our|their|any|each|every|all|some|no|one|both|neither|either|this|that|these|those)\s+(?:group|team|set|subset|pair|number|handful|collection|pool)\s+of\s+`;
-const USER_ACTOR_STEP_AGENT_SUBJECT_MODIFIERS = String.raw`(?:[\w-]+\s+)*`;
+// Keep long modifier chains while stopping at object-marking prepositions.
+// Quantifier and collective prefixes consume their own "of" first.
+const USER_ACTOR_STEP_AGENT_SUBJECT_MODIFIERS = String.raw`(?:(?!(?:about|above|across|after|against|along|around|as|at|before|behind|below|beneath|beside|between|beyond|by|despite|down|during|except|for|from|in|inside|into|like|near|of|off|on|onto|out|outside|over|past|since|through|throughout|to|toward|under|underneath|until|up|upon|via|with|within|without)\b)[\w-]+\s+)*`;
 const USER_ACTOR_STEP_AGENT_SUBJECT_PREFIX = new RegExp(
   String.raw`^\s*(?:(?:and|but|while|whereas)\s+)?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_QUANTIFIER})?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER}\s+)?${USER_ACTOR_STEP_AGENT_SUBJECT_MODIFIERS}$|^\s*(?:(?:and|but|while|whereas)\s+)?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_COLLECTIVE})(?:${USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER}\s+)?${USER_ACTOR_STEP_AGENT_SUBJECT_MODIFIERS}$`,
   'i',
@@ -2799,7 +2801,10 @@ function hasAgentWorkAssignmentInClause(clause) {
       const subjectPrefix = prefix
         .slice(subjectStart + 1)
         .replace(/^\s*(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/, '');
+      const agentObjectAssignmentRelation =
+        USER_ACTOR_STEP_AGENT_OBJECT_ASSIGNMENT_RELATION.test(prefix);
       const isAgentSubject =
+        !agentObjectAssignmentRelation &&
         USER_ACTOR_STEP_AGENT_SUBJECT_PREFIX.test(subjectPrefix) &&
         (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(suffix) ||
           USER_ACTOR_STEP_GENERAL_WORK_ACTION.test(suffix));
@@ -2824,8 +2829,6 @@ function hasAgentWorkAssignmentInClause(clause) {
       if (USER_ACTOR_STEP_AGENT_RECIPIENT_RELATION.test(prefix)) {
         return true;
       }
-      const agentObjectAssignmentRelation =
-        USER_ACTOR_STEP_AGENT_OBJECT_ASSIGNMENT_RELATION.test(prefix);
       const agentStrongWorkNoun =
         USER_ACTOR_STEP_AGENT_STRONG_WORK_NOUN_COMPLEMENT.exec(suffix);
       const agentWasGivenTechnicalSupport =
