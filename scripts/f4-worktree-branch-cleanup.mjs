@@ -12,6 +12,7 @@
 // clone-scoped lock, and delete-remote-branch. Run it from the primary
 // worktree. A dry run is the default; `--apply` mutates.
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   chmodSync,
   lstatSync,
@@ -171,6 +172,21 @@ export function lstatKind(path) {
     throw error;
   }
 }
+/** Return a stable identity for a real directory without following links. */
+function directoryIdentity(path) {
+  try {
+    const stat = lstatSync(path, { bigint: true });
+    if (stat.isSymbolicLink() || !stat.isDirectory() || stat.ino === 0n) {
+      return null;
+    }
+    return `${stat.dev}:${stat.ino}`;
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
 function realpathOrNull(path) {
   try {
     return realpathSync.native(path);
@@ -285,9 +301,11 @@ export function createLiveDeps(options) {
   );
   return {
     lstat: lstatKind,
+    directoryIdentity,
     realpath: realpathOrNull,
     stateRoot,
     now: options.now ?? (() => new Date()),
+    temporaryId: randomUUID,
     inspectDirectoryPrivacy: (path) =>
       inspectDirectoryPrivacy(path, platform, windowsAclReader),
     ensurePrivateDirectory: (path) =>

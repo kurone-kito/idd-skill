@@ -169,6 +169,7 @@ interface RunOptions {
   readonly stateRoot?: string;
   readonly statusAfterMove?: 'dirty' | 'fail';
   readonly renameError?: string;
+  readonly beforeRename?: (source: string, destination: string) => void;
   readonly worktreeRemoveError?: boolean;
   readonly claims?: readonly SpawnedResult[];
 }
@@ -218,6 +219,7 @@ function runCleanup(
         error.code = options.renameError;
         throw error;
       }
+      options.beforeRename?.(source, destination);
       renameSync(source, destination);
     },
     git: (args, cwd) => {
@@ -411,6 +413,48 @@ test('a symlinked node_modules path keeps its target and the worktree', () => {
   assert.equal(existsSync(fx.worktree), true);
   assert.equal(readFileSync(join(outside, 'keep.txt'), 'utf8'), 'keep\n');
   assert.equal(existsSync(join(stateRoot, 'idd-skill')), false);
+});
+
+test('a source-path symlink race is restored and held before preservation', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  const outside = join(fx.root, 'outside-node-modules');
+  const nodeModules = join(fx.worktree, 'node_modules');
+  const displaced = join(fx.root, 'node_modules-before-race');
+  mkdirSync(stateRoot);
+  mkdirSync(outside);
+  writeFileSync(join(outside, 'keep.txt'), 'outside data\n');
+  mkdirSync(nodeModules);
+  writeFileSync(join(nodeModules, 'keep.txt'), 'original data\n');
+  const destination = preservedPath(fx, stateRoot);
+  let staging = '';
+
+  const { report } = runCleanup(fx, {
+    stateRoot,
+    beforeRename: (source, target) => {
+      if (source === nodeModules) {
+        staging = target;
+        renameSync(source, displaced);
+        symlinkSync(outside, source);
+      }
+    },
+  });
+
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(report.steps.at(-1)?.detail ?? '', /source identity changed/u);
+  assert.match(report.steps.at(-1)?.detail ?? '', /restored to/u);
+  assert.equal(existsSync(fx.worktree), true);
+  assert.equal(lstatSync(nodeModules).isSymbolicLink(), true);
+  assert.equal(
+    readFileSync(join(outside, 'keep.txt'), 'utf8'),
+    'outside data\n',
+  );
+  assert.equal(
+    readFileSync(join(displaced, 'keep.txt'), 'utf8'),
+    'original data\n',
+  );
+  assert.equal(existsSync(staging), false);
+  assert.equal(existsSync(destination), false);
 });
 
 test('a file named node_modules does not match the directory-only status shape', () => {

@@ -34,6 +34,8 @@ const MERGE = 'c'.repeat(40);
 const F2 = 'd'.repeat(40);
 const OTHER = 'e'.repeat(40);
 const STATE_ROOT = '/state';
+const NODE_MODULES_IDENTITY = 'device-1:inode-1';
+const PRESERVE_STAGING = `${WORKTREE}/.idd-f4-node_modules-test-id`;
 const PRESERVE_DESTINATION =
   '/state/idd-skill/f4-preserved/4370-20261021T103000Z';
 
@@ -193,6 +195,7 @@ interface HarnessOptions {
   readonly nestedWorktrees?: readonly string[];
   readonly stateRoot?: string;
   readonly now?: () => Date;
+  readonly temporaryId?: () => string;
   readonly directoryPrivacy?: (path: string) => DirectoryPrivacy;
   readonly mkdir?: (path: string) => void;
   readonly rename?: (source: string, destination: string) => void;
@@ -212,14 +215,21 @@ function harness(options: HarnessOptions = {}): Harness {
   const renameCalls: string[][] = [];
   const createdDirectories = new Set<string>();
   const renamedDirectories = new Set<string>();
+  const absentPaths = new Set<string>();
+  const directoryIdentities = new Map<string, string>([
+    [`${WORKTREE}/node_modules`, NODE_MODULES_IDENTITY],
+  ]);
   let statusIndex = 0;
   const claims = options.claims ?? [claimOk()];
   const lstat = (path: string): LstatKind => {
+    if (absentPaths.has(path)) return 'absent';
     if (renamedDirectories.has(path) || createdDirectories.has(path)) {
       return 'directory';
     }
     if (options.lstat) return options.lstat(path);
-    if (path === PRESERVE_DESTINATION) return 'absent';
+    if (path === PRESERVE_DESTINATION || path === PRESERVE_STAGING) {
+      return 'absent';
+    }
     if (path === STATE_ROOT) return 'directory';
     if (
       path === `${STATE_ROOT}/idd-skill` ||
@@ -231,9 +241,11 @@ function harness(options: HarnessOptions = {}): Harness {
   };
   const deps: F4WorktreeBranchDeps = {
     lstat,
+    directoryIdentity: (path) => directoryIdentities.get(path) ?? null,
     realpath: (path) => path,
     stateRoot: options.stateRoot ?? STATE_ROOT,
     now: options.now ?? (() => new Date('2026-10-21T10:30:00.000Z')),
+    temporaryId: options.temporaryId ?? (() => 'test-id'),
     inspectDirectoryPrivacy: (path) =>
       options.directoryPrivacy?.(path) ?? 'private',
     ensurePrivateDirectory: (path) => {
@@ -250,6 +262,13 @@ function harness(options: HarnessOptions = {}): Harness {
     rename: (source, destination) => {
       renameCalls.push([source, destination]);
       options.rename?.(source, destination);
+      const identity = directoryIdentities.get(source);
+      directoryIdentities.delete(source);
+      if (identity !== undefined)
+        directoryIdentities.set(destination, identity);
+      absentPaths.add(source);
+      absentPaths.delete(destination);
+      renamedDirectories.delete(source);
       renamedDirectories.add(destination);
     },
     git: (args, cwd) => {
@@ -774,7 +793,8 @@ test('a lone ignored node_modules directory moves after the claim check', () => 
   const report = runF4WorktreeBranchSteps(input(), h.deps);
   assert.equal(report.status, 'complete');
   assert.deepEqual(h.renameCalls, [
-    [`${WORKTREE}/node_modules`, PRESERVE_DESTINATION],
+    [`${WORKTREE}/node_modules`, PRESERVE_STAGING],
+    [PRESERVE_STAGING, PRESERVE_DESTINATION],
   ]);
   assert.deepEqual(h.mkdirCalls, [
     `${STATE_ROOT}/idd-skill`,
@@ -868,7 +888,8 @@ test('a claim lost after the move keeps the preserved tree and worktree', () => 
     false,
   );
   assert.deepEqual(h.renameCalls, [
-    [`${WORKTREE}/node_modules`, PRESERVE_DESTINATION],
+    [`${WORKTREE}/node_modules`, PRESERVE_STAGING],
+    [PRESERVE_STAGING, PRESERVE_DESTINATION],
   ]);
 });
 

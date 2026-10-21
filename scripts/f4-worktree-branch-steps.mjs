@@ -634,6 +634,7 @@ function runStep4And5(
       deps,
       worktree,
       inspected.preserveNodeModules.destination,
+      inspected.preserveNodeModules.sourceIdentity,
     );
     if (moved.hold !== null || moved.result === null) {
       return {
@@ -1011,6 +1012,7 @@ function inspectWorktree(
     return none('dirty-worktree', null);
   }
   let preserveNodeModules = null;
+  let sourceIdentity = null;
   if (loneIgnoredNodeModules) {
     const nodeModules = join(worktree, 'node_modules');
     let registeredInsideNodeModules;
@@ -1019,6 +1021,13 @@ function inspectWorktree(
         return none(
           'dirty-worktree',
           'the helper did not move node_modules/: the path is not a real directory',
+        );
+      }
+      sourceIdentity = deps.directoryIdentity(nodeModules);
+      if (sourceIdentity === null) {
+        return none(
+          'dirty-worktree',
+          'the helper did not move node_modules/: its directory identity could not be verified',
         );
       }
       registeredInsideNodeModules = records.find((entry) =>
@@ -1088,6 +1097,12 @@ function inspectWorktree(
     return none('symlink-path', linked);
   }
   if (loneIgnoredNodeModules) {
+    if (sourceIdentity === null) {
+      return none(
+        'dirty-worktree',
+        'the helper did not move node_modules/: its directory identity could not be verified',
+      );
+    }
     try {
       if (
         deps.inspectDirectoryPrivacy(join(worktree, 'node_modules')) ===
@@ -1113,7 +1128,10 @@ function inspectWorktree(
     if (destination.hold !== null) {
       return none('dirty-worktree', destination.hold);
     }
-    preserveNodeModules = { destination: destination.destination };
+    preserveNodeModules = {
+      destination: destination.destination,
+      sourceIdentity,
+    };
   }
   return {
     hold: null,
@@ -1232,8 +1250,29 @@ function inspectPreserveDestination(deps, issueNumber, primary, records) {
   }
   return { destination, hold: null };
 }
-/** Create private parents and move the tree with one same-filesystem rename. */
-function moveNodeModules(deps, worktree, destination) {
+/**
+ * Create private parents, stage the source inside its worktree, and verify
+ * its identity before moving it into per-user state. A raced replacement is
+ * restored to the original path when that path remains free.
+ */
+function moveNodeModules(deps, worktree, destination, expectedIdentity) {
+  const source = join(worktree, 'node_modules');
+  let temporaryId;
+  try {
+    temporaryId = deps.temporaryId();
+  } catch (error) {
+    return {
+      result: null,
+      hold: `the helper did not move node_modules/: could not create a staging name: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (!/^[a-zA-Z0-9-]+$/.test(temporaryId)) {
+    return {
+      result: null,
+      hold: 'the helper did not move node_modules/: the staging name is invalid',
+    };
+  }
+  const staging = join(worktree, `.idd-f4-node_modules-${temporaryId}`);
   const preserveDirectory = dirname(destination);
   const iddDirectory = dirname(preserveDirectory);
   for (const path of [deps.stateRoot, iddDirectory, preserveDirectory]) {
@@ -1313,10 +1352,35 @@ function moveNodeModules(deps, worktree, destination) {
       hold: `the helper did not move node_modules/: destination already exists at ${destination}`,
     };
   }
+  let stagingKind;
   try {
-    if (
-      deps.inspectDirectoryPrivacy(join(worktree, 'node_modules')) === 'unsafe'
-    ) {
+    stagingKind = deps.lstat(staging);
+  } catch (error) {
+    return {
+      result: null,
+      hold: `the helper did not move node_modules/: could not inspect staging path ${staging}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (stagingKind !== 'absent') {
+    return {
+      result: null,
+      hold: `the helper did not move node_modules/: staging path already exists at ${staging}`,
+    };
+  }
+  if (deps.lstat(source) !== 'directory') {
+    return {
+      result: null,
+      hold: 'the helper did not move node_modules/: the source path is no longer a real directory',
+    };
+  }
+  if (deps.directoryIdentity(source) !== expectedIdentity) {
+    return {
+      result: null,
+      hold: 'the helper did not move node_modules/: the source directory changed after inspection',
+    };
+  }
+  try {
+    if (deps.inspectDirectoryPrivacy(source) === 'unsafe') {
       return {
         result: null,
         hold: 'the helper did not move node_modules/: its ownership or privacy could not be verified',
@@ -1328,17 +1392,112 @@ function moveNodeModules(deps, worktree, destination) {
       hold: 'the helper did not move node_modules/: its ownership or privacy could not be verified',
     };
   }
-  try {
-    deps.rename(join(worktree, 'node_modules'), destination);
-  } catch (error) {
+  // Recheck immediately before the path-based rename. The staged object is
+  // checked again after rename, so a replacement in this final window is
+  // returned to node_modules instead of entering the state directory.
+  if (
+    deps.lstat(source) !== 'directory' ||
+    deps.directoryIdentity(source) !== expectedIdentity
+  ) {
     return {
       result: null,
-      hold: `the helper did not move node_modules/: rename to ${destination} failed: ${error instanceof Error ? error.message : String(error)}`,
+      hold: 'the helper did not move node_modules/: the source directory changed before the move',
     };
   }
   try {
-    if (deps.lstat(destination) !== 'directory') {
-      throw new Error('renamed destination is not a real directory');
+    deps.rename(source, staging);
+  } catch (error) {
+    return {
+      result: null,
+      hold: `the helper did not move node_modules/: staging rename failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  let stagedIdentity;
+  try {
+    stagedIdentity =
+      deps.lstat(staging) === 'directory'
+        ? deps.directoryIdentity(staging)
+        : null;
+  } catch {
+    stagedIdentity = null;
+  }
+  if (stagedIdentity !== expectedIdentity) {
+    return {
+      result: null,
+      hold: restoreNodeModulesAfterRace(
+        deps,
+        staging,
+        source,
+        `the staged source identity changed; expected ${expectedIdentity}, observed ${stagedIdentity ?? 'unavailable'}`,
+      ),
+    };
+  }
+  try {
+    if (deps.inspectDirectoryPrivacy(staging) === 'unsafe') {
+      return {
+        result: null,
+        hold: restoreNodeModulesAfterRace(
+          deps,
+          staging,
+          source,
+          'the staged source ownership or privacy could not be verified',
+        ),
+      };
+    }
+    deps.ensurePrivateDirectory(staging);
+  } catch (error) {
+    return {
+      result: null,
+      hold: restoreNodeModulesAfterRace(
+        deps,
+        staging,
+        source,
+        `the staged source could not be secured: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    };
+  }
+  try {
+    if (
+      deps.lstat(staging) !== 'directory' ||
+      deps.directoryIdentity(staging) !== expectedIdentity ||
+      deps.lstat(source) !== 'absent'
+    ) {
+      return {
+        result: null,
+        hold: restoreNodeModulesAfterRace(
+          deps,
+          staging,
+          source,
+          'the staged source identity or original path changed before preservation',
+        ),
+      };
+    }
+    deps.rename(staging, destination);
+  } catch (error) {
+    return {
+      result: null,
+      hold: restoreNodeModulesAfterRace(
+        deps,
+        staging,
+        source,
+        `rename to ${destination} failed: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    };
+  }
+  try {
+    if (
+      deps.lstat(destination) !== 'directory' ||
+      deps.directoryIdentity(destination) !== expectedIdentity
+    ) {
+      return {
+        result: null,
+        hold: restoreNodeModulesAfterRace(
+          deps,
+          destination,
+          source,
+          'the preserved source identity changed during the final move',
+        ),
+      };
     }
     deps.ensurePrivateDirectory(destination);
   } catch (error) {
@@ -1351,6 +1510,22 @@ function moveNodeModules(deps, worktree, destination) {
     result: { destination },
     hold: null,
   };
+}
+/** Restore a raced or refused object without overwriting a new source path. */
+function restoreNodeModulesAfterRace(deps, movedPath, source, reason) {
+  try {
+    const movedKind = deps.lstat(movedPath);
+    if (movedKind === 'absent') {
+      return `the helper did not move node_modules/: ${reason}; the staged path is absent and no automatic recovery was possible`;
+    }
+    if (deps.lstat(source) !== 'absent') {
+      return `the helper did not move node_modules/: ${reason}; ${movedPath} was retained because ${source} is occupied`;
+    }
+    deps.rename(movedPath, source);
+    return `the helper did not move node_modules/: ${reason}; the moved object was restored to ${source}`;
+  } catch (error) {
+    return `the helper did not move node_modules/: ${reason}; automatic restoration failed and the object remains at ${movedPath}: ${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 /**
  * The first tracked entry whose path, or any ancestor inside the worktree,
