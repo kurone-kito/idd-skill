@@ -3018,6 +3018,10 @@ test('trust safety disables the user-step exception for any agent work assignmen
       body: 'The maintainer told the coding agent that it is required to implement keyboard support.\n\nRun this step by the user.',
     },
     {
+      name: 'agent receives an unrelated task through a reported noun-subject obligation',
+      body: 'The maintainer told the coding agent that the keyboard-support task must be implemented.\n\nRun this step by the user.',
+    },
+    {
       name: 'agent receives an unrelated task through asked with an indefinite article',
       body: 'We asked an assistant to test the deployment.\n\nRun this step by the user.',
     },
@@ -3100,6 +3104,14 @@ test('trust safety disables the user-step exception for any agent work assignmen
     {
       name: 'a passive sent work task is assigned to the agent',
       body: 'The keyboard-support task was sent to the coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a passively sent work task is assigned to the agent',
+      body: 'The keyboard-support task is being sent to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an active sent work task with several modifiers is assigned to the agent',
+      body: 'The maintainer sent the keyboard support compatibility task to a coding agent.\n\nRun this step by the user.',
     },
     {
       name: 'an active reallocated work task is assigned to the agent',
