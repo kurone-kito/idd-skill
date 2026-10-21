@@ -65,8 +65,6 @@ const PROPER_NAME_TITLE_ABBREVIATION =
   /(?:^|(?<![\p{L}\p{N}_./-]))(?:Mr|Mrs|Ms|Mx|Dr|Prof|Rev|Hon|Sr|Jr|St|Capt|Col|Gen|Sgt|Lt|Maj|Cmdr|Adm|Fr|Br)\.$/iu;
 const DOTTED_IDENTIFIER_PREFIX =
   /^\s*[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+$/u;
-const PARTIAL_QUALIFIED_DECLARATION_PATH =
-  /^[A-Za-z_$][A-Za-z0-9_$-]*(?:\.[A-Za-z_$][A-Za-z0-9_$-]*)*$/u;
 const MAX_DECLARATION_GENERIC_DEPTH = 8;
 const DECLARATION_CLAUSE_KEYWORDS = [
   'extends',
@@ -536,20 +534,136 @@ function isCompleteDeclarationTail(text: string): boolean {
   return false;
 }
 
-type DeclarationBodyContextKind = 'type' | 'anonymous' | 'block' | 'annotation';
+type DeclarationBodyContextKind =
+  | 'type'
+  | 'enum'
+  | 'anonymous'
+  | 'anonymous-call'
+  | 'block'
+  | 'annotation';
+
+interface DeclarationBodyContext {
+  kind: DeclarationBodyContextKind;
+  invocationDepth?: number;
+}
+
+function consumeTypeBodyRemainder(
+  text: string,
+  start: number,
+): number | undefined {
+  let cursor = skipDeclarationTrivia(text, start);
+  while (cursor < text.length) {
+    if (text[cursor] === '}') {
+      return cursor + 1;
+    }
+    const memberEnd = skipCompleteTypeBodyMember(text, cursor);
+    if (memberEnd === undefined || memberEnd <= cursor) {
+      return undefined;
+    }
+    cursor = skipDeclarationTrivia(text, memberEnd);
+  }
+  return undefined;
+}
+
+function consumeBlockRemainder(
+  text: string,
+  start: number,
+): number | undefined {
+  let cursor = skipDeclarationTrivia(text, start);
+  while (text[cursor] === ';') {
+    cursor = skipDeclarationTrivia(text, cursor + 1);
+  }
+  return text[cursor] === '}' ? cursor + 1 : undefined;
+}
+
+function skipInvocationRemainder(
+  text: string,
+  start: number,
+  invocationDepth: number,
+): number | undefined {
+  if (invocationDepth < 1) {
+    return undefined;
+  }
+  let depth = invocationDepth;
+  let cursor = start;
+  while (cursor < text.length) {
+    const character = text[cursor];
+    if (character === '"' || character === "'") {
+      const literalEnd = skipDeclarationQuotedLiteralEnd(text, cursor);
+      if (literalEnd === undefined) {
+        return undefined;
+      }
+      cursor = literalEnd;
+      continue;
+    }
+    if (
+      character === '/' &&
+      (text[cursor + 1] === '/' || text[cursor + 1] === '*')
+    ) {
+      const commentEnd = skipDeclarationCommentEnd(text, cursor);
+      if (commentEnd === undefined) {
+        return undefined;
+      }
+      cursor = commentEnd;
+      continue;
+    }
+    if (character === '(') {
+      depth += 1;
+    } else if (character === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        return cursor + 1;
+      }
+    }
+    cursor += 1;
+  }
+  return undefined;
+}
 
 function isDeclarationTailWithEnclosingBraces(
   text: string,
   start: number,
-  enclosingContexts: readonly DeclarationBodyContextKind[],
+  enclosingContexts: readonly DeclarationBodyContext[],
 ): boolean {
   let cursor = skipDeclarationTrivia(text, start);
   for (let index = enclosingContexts.length - 1; index >= 0; index -= 1) {
-    if (text[cursor] !== '}') {
+    const context = enclosingContexts[index];
+    if (context === undefined) {
       return false;
     }
-    cursor = skipDeclarationTrivia(text, cursor + 1);
-    if (enclosingContexts[index] === 'anonymous' && text[cursor] === ';') {
+    if (
+      context.kind === 'type' ||
+      context.kind === 'enum' ||
+      context.kind === 'anonymous'
+    ) {
+      const bodyEnd = consumeTypeBodyRemainder(text, cursor);
+      if (bodyEnd === undefined) {
+        return false;
+      }
+      cursor = skipDeclarationTrivia(text, bodyEnd);
+    } else if (context.kind === 'anonymous-call') {
+      if (text[cursor] !== '}') {
+        return false;
+      }
+      const invocationEnd = skipInvocationRemainder(
+        text,
+        cursor + 1,
+        context.invocationDepth ?? 0,
+      );
+      if (invocationEnd === undefined) {
+        return false;
+      }
+      cursor = skipDeclarationTrivia(text, invocationEnd);
+    } else if (context.kind === 'block') {
+      const blockEnd = consumeBlockRemainder(text, cursor);
+      if (blockEnd === undefined) {
+        return false;
+      }
+      cursor = skipDeclarationTrivia(text, blockEnd);
+    } else {
+      return false;
+    }
+    if (context.kind === 'anonymous' && text[cursor] === ';') {
       cursor = skipDeclarationTrivia(text, cursor + 1);
     }
   }
@@ -558,7 +672,7 @@ function isDeclarationTailWithEnclosingBraces(
 
 function isCompleteDeclarationBlock(
   text: string,
-  enclosingContexts: readonly DeclarationBodyContextKind[] = [],
+  enclosingContexts: readonly DeclarationBodyContext[] = [],
 ): boolean {
   const start = skipDeclarationTrivia(text, 0);
   const blockEnd = findBalancedDeclarationDelimiterEnd(text, start, '{', '}');
@@ -573,7 +687,7 @@ function isQualifiedDeclarationTypeListPrefix(text: string): boolean {
   let cursor = skipDeclarationTypeAnnotations(normalized, 0);
   while (cursor < normalized.length) {
     const remaining = normalized.slice(cursor).trimEnd();
-    if (PARTIAL_QUALIFIED_DECLARATION_PATH.test(remaining)) {
+    if (isPartialQualifiedDeclarationTypePrefix(remaining)) {
       return true;
     }
 
@@ -588,6 +702,12 @@ function isQualifiedDeclarationTypeListPrefix(text: string): boolean {
     cursor = skipDeclarationTypeAnnotations(normalized, commaIndex + 1);
   }
   return false;
+}
+
+function isPartialQualifiedDeclarationTypePrefix(text: string): boolean {
+  const normalized = text.trimEnd();
+  const typeEnd = parseDeclarationType(normalized, 0, 0, false);
+  return typeEnd === normalized.length;
 }
 
 function hasTopLevelDeclarationTypeListComma(text: string): boolean {
@@ -657,7 +777,7 @@ function isQualifiedClassExtendsPrefix(text: string): boolean {
   );
 }
 
-function isTypeDeclarationBodyHeader(text: string): boolean {
+function getTypeDeclarationBodyKind(text: string): 'type' | 'enum' | undefined {
   let cursor = skipDeclarationTrivia(text, 0);
   while (cursor < text.length) {
     const annotationEnd = skipDeclarationAnnotation(text, cursor);
@@ -679,19 +799,19 @@ function isTypeDeclarationBodyHeader(text: string): boolean {
     text.slice(cursor),
   );
   if (declarationKind === null) {
-    return false;
+    return undefined;
   }
   cursor = skipDeclarationTrivia(text, cursor + declarationKind[0].length);
   const name = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor));
   if (name === null) {
-    return false;
+    return undefined;
   }
   cursor = skipDeclarationTrivia(text, cursor + name[0].length);
   const kind = declarationKind[1];
   if (text[cursor] === '<' && kind !== 'enum') {
     const genericClauseEnd = skipDeclarationGenericClause(text, cursor);
     if (genericClauseEnd === undefined) {
-      return false;
+      return undefined;
     }
     cursor = genericClauseEnd;
   }
@@ -704,7 +824,7 @@ function isTypeDeclarationBodyHeader(text: string): boolean {
       ')',
     );
     if (componentsEnd === undefined) {
-      return false;
+      return undefined;
     }
     cursor = componentsEnd;
   }
@@ -712,7 +832,7 @@ function isTypeDeclarationBodyHeader(text: string): boolean {
   while (true) {
     cursor = skipDeclarationTrivia(text, cursor);
     if (cursor === text.length) {
-      return true;
+      return kind === 'enum' ? 'enum' : 'type';
     }
     const keyword = DECLARATION_CLAUSE_KEYWORDS.find((candidate) =>
       text.startsWith(candidate, cursor),
@@ -724,11 +844,11 @@ function isTypeDeclarationBodyHeader(text: string): boolean {
           ? (['extends', 'permits'] as const)
           : (['implements'] as const);
     if (keyword === undefined || !allowedKeywords.includes(keyword)) {
-      return false;
+      return undefined;
     }
     const typeListStart = skipDeclarationTrivia(text, cursor + keyword.length);
     if (typeListStart === cursor + keyword.length) {
-      return false;
+      return undefined;
     }
     const typeListEnd = parseDeclarationTypeList(text, typeListStart);
     if (
@@ -739,10 +859,272 @@ function isTypeDeclarationBodyHeader(text: string): boolean {
           text.slice(typeListStart, typeListEnd),
         ))
     ) {
+      return undefined;
+    }
+    cursor = typeListEnd;
+  }
+}
+
+function isDeclarationMethodHeader(text: string): boolean {
+  let cursor = skipDeclarationTrivia(text, 0);
+  while (cursor < text.length) {
+    const annotationEnd = skipDeclarationAnnotation(text, cursor);
+    if (annotationEnd !== undefined) {
+      cursor = skipDeclarationTrivia(text, annotationEnd);
+      continue;
+    }
+    const modifier =
+      /^(?:public|protected|private|abstract|static|final|default|synchronized|native|strictfp|sealed|non-sealed)\b/u.exec(
+        text.slice(cursor),
+      );
+    if (modifier === null) {
+      break;
+    }
+    cursor = skipDeclarationTrivia(text, cursor + modifier[0].length);
+  }
+
+  if (text[cursor] === '<') {
+    const typeParametersEnd = skipDeclarationGenericClause(text, cursor);
+    if (typeParametersEnd === undefined) {
+      return false;
+    }
+    cursor = skipDeclarationTrivia(text, typeParametersEnd);
+  }
+
+  const returnTypeEnd = parseDeclarationType(text, cursor, 0, false, true);
+  if (returnTypeEnd === undefined) {
+    return false;
+  }
+  cursor = skipDeclarationTrivia(text, returnTypeEnd);
+  if (cursor === returnTypeEnd) {
+    return false;
+  }
+  const name = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor));
+  if (name === null) {
+    return false;
+  }
+  cursor = skipDeclarationTrivia(text, cursor + name[0].length);
+  const parametersEnd = findBalancedDeclarationDelimiterEnd(
+    text,
+    cursor,
+    '(',
+    ')',
+  );
+  if (parametersEnd === undefined) {
+    return false;
+  }
+  cursor = skipDeclarationTrivia(text, parametersEnd);
+  const throwsClause = /^throws\b/u.exec(text.slice(cursor));
+  if (throwsClause !== null) {
+    const typeListStart = skipDeclarationTrivia(
+      text,
+      cursor + throwsClause[0].length,
+    );
+    if (typeListStart === cursor + throwsClause[0].length) {
+      return false;
+    }
+    const typeListEnd = parseDeclarationTypeList(text, typeListStart);
+    if (typeListEnd === undefined) {
       return false;
     }
     cursor = typeListEnd;
   }
+  return isDeclarationTriviaOnly(text, cursor);
+}
+
+function isDeclarationFieldHeader(text: string): boolean {
+  let cursor = skipDeclarationTrivia(text, 0);
+  while (cursor < text.length) {
+    const annotationEnd = skipDeclarationAnnotation(text, cursor);
+    if (annotationEnd !== undefined) {
+      cursor = skipDeclarationTrivia(text, annotationEnd);
+      continue;
+    }
+    const modifier =
+      /^(?:public|protected|private|static|final|transient|volatile)\b/u.exec(
+        text.slice(cursor),
+      );
+    if (modifier === null) {
+      break;
+    }
+    cursor = skipDeclarationTrivia(text, cursor + modifier[0].length);
+  }
+
+  const typeEnd = parseDeclarationType(text, cursor, 0, false, true);
+  if (typeEnd === undefined) {
+    return false;
+  }
+  cursor = skipDeclarationTrivia(text, typeEnd);
+  if (cursor === typeEnd) {
+    return false;
+  }
+  const name = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor));
+  if (name === null) {
+    return false;
+  }
+  cursor = skipDeclarationTrivia(text, cursor + name[0].length);
+  if (cursor === text.length) {
+    return true;
+  }
+  return text[cursor] === '=' && !isDeclarationTriviaOnly(text, cursor + 1);
+}
+
+function findTypeBodyMemberDelimiter(
+  text: string,
+  start: number,
+): { index: number; delimiter: '{' | ';' } | undefined {
+  let parentheses = 0;
+  let brackets = 0;
+  let generics = 0;
+  let cursor = start;
+  while (cursor < text.length) {
+    const character = text[cursor];
+    if (character === '"' || character === "'") {
+      const literalEnd = skipDeclarationQuotedLiteralEnd(text, cursor);
+      if (literalEnd === undefined) {
+        return undefined;
+      }
+      cursor = literalEnd;
+      continue;
+    }
+    if (
+      character === '/' &&
+      (text[cursor + 1] === '/' || text[cursor + 1] === '*')
+    ) {
+      const commentEnd = skipDeclarationCommentEnd(text, cursor);
+      if (commentEnd === undefined) {
+        return undefined;
+      }
+      cursor = commentEnd;
+      continue;
+    }
+    if (character === '(') {
+      parentheses += 1;
+    } else if (character === ')') {
+      parentheses = Math.max(0, parentheses - 1);
+    } else if (character === '[') {
+      brackets += 1;
+    } else if (character === ']') {
+      brackets = Math.max(0, brackets - 1);
+    } else if (parentheses === 0 && brackets === 0 && character === '<') {
+      generics += 1;
+    } else if (parentheses === 0 && brackets === 0 && character === '>') {
+      generics = Math.max(0, generics - 1);
+    } else if (
+      parentheses === 0 &&
+      brackets === 0 &&
+      generics === 0 &&
+      (character === '{' || character === ';')
+    ) {
+      return { index: cursor, delimiter: character };
+    } else if (
+      parentheses === 0 &&
+      brackets === 0 &&
+      generics === 0 &&
+      character === '}'
+    ) {
+      return undefined;
+    }
+    cursor += 1;
+  }
+  return undefined;
+}
+
+function skipCompleteTypeBodyMember(
+  text: string,
+  start: number,
+): number | undefined {
+  const boundary = findTypeBodyMemberDelimiter(text, start);
+  if (boundary === undefined) {
+    return undefined;
+  }
+  const header = text.slice(start, boundary.index);
+  if (boundary.delimiter === ';') {
+    return isDeclarationMethodHeader(header) || isDeclarationFieldHeader(header)
+      ? boundary.index + 1
+      : undefined;
+  }
+
+  const isAnonymousBody = getAnonymousClassBodyContext(header) !== undefined;
+  if (
+    getTypeDeclarationBodyKind(header) === undefined &&
+    !isDeclarationMethodHeader(header) &&
+    !isAnonymousBody &&
+    !/^(?:static)?$/u.test(header.trim())
+  ) {
+    return undefined;
+  }
+  const bodyEnd = findBalancedDeclarationDelimiterEnd(
+    text,
+    boundary.index,
+    '{',
+    '}',
+  );
+  if (bodyEnd === undefined) {
+    return undefined;
+  }
+  const afterBody = skipDeclarationTrivia(text, bodyEnd);
+  return isAnonymousBody && text[afterBody] === ';' ? afterBody + 1 : bodyEnd;
+}
+
+function getInvocationArgumentDepth(text: string): number | undefined {
+  const openings: number[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const character = text[cursor];
+    if (character === '"' || character === "'") {
+      const literalEnd = skipDeclarationQuotedLiteralEnd(text, cursor);
+      if (literalEnd === undefined) {
+        return undefined;
+      }
+      cursor = literalEnd;
+      continue;
+    }
+    if (
+      character === '/' &&
+      (text[cursor + 1] === '/' || text[cursor + 1] === '*')
+    ) {
+      const commentEnd = skipDeclarationCommentEnd(text, cursor);
+      if (commentEnd === undefined) {
+        return undefined;
+      }
+      cursor = commentEnd;
+      continue;
+    }
+    if (character === '(') {
+      openings.push(cursor);
+    } else if (character === ')') {
+      openings.pop();
+    }
+    cursor += 1;
+  }
+  const openIndex = openings.at(-1);
+  if (openIndex === undefined) {
+    return undefined;
+  }
+
+  const callee = text.slice(0, openIndex).trimEnd();
+  const calleeMatch =
+    /(?:this|super|[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*)$/u.exec(
+      callee,
+    );
+  if (calleeMatch === null) {
+    return undefined;
+  }
+  const beforeCallee = callee.slice(0, -calleeMatch[0].length).trimEnd();
+  if (
+    beforeCallee.length > 0 &&
+    !/[,(]$/u.test(beforeCallee) &&
+    !/^(?:return|throw)$/u.test(beforeCallee)
+  ) {
+    return undefined;
+  }
+
+  const argumentsPrefix = text.slice(openIndex + 1).trimEnd();
+  if (argumentsPrefix.length > 0 && !argumentsPrefix.endsWith(',')) {
+    return undefined;
+  }
+  return openings.length;
 }
 
 function isAnonymousClassCreationPrefix(text: string): boolean {
@@ -753,6 +1135,9 @@ function isAnonymousClassCreationPrefix(text: string): boolean {
   const controlPrefix = /^(return|throw)\b/u.exec(text.slice(start));
   if (controlPrefix !== null) {
     return isDeclarationTriviaOnly(text, start + controlPrefix[0].length);
+  }
+  if (getInvocationArgumentDepth(text) !== undefined) {
+    return true;
   }
 
   const prefix = text.slice(start).trimEnd();
@@ -780,14 +1165,16 @@ function isAnonymousClassCreationPrefix(text: string): boolean {
   );
 }
 
-function isAnonymousClassBodyHeader(text: string): boolean {
+function getAnonymousClassBodyContext(
+  text: string,
+): DeclarationBodyContext | undefined {
   let cursor = 0;
   while (cursor < text.length) {
     const character = text[cursor];
     if (character === '"' || character === "'") {
       const literalEnd = skipDeclarationQuotedLiteralEnd(text, cursor);
       if (literalEnd === undefined) {
-        return false;
+        return undefined;
       }
       cursor = literalEnd;
       continue;
@@ -798,7 +1185,7 @@ function isAnonymousClassBodyHeader(text: string): boolean {
     ) {
       const commentEnd = skipDeclarationCommentEnd(text, cursor);
       if (commentEnd === undefined) {
-        return false;
+        return undefined;
       }
       cursor = commentEnd;
       continue;
@@ -834,13 +1221,47 @@ function isAnonymousClassBodyHeader(text: string): boolean {
           argumentsEnd !== undefined &&
           isDeclarationTriviaOnly(text, argumentsEnd)
         ) {
-          return true;
+          const invocationDepth = getInvocationArgumentDepth(
+            text.slice(0, cursor),
+          );
+          return invocationDepth === undefined
+            ? { kind: 'anonymous' }
+            : { kind: 'anonymous-call', invocationDepth };
         }
       }
     }
     cursor += 1;
   }
-  return false;
+  return undefined;
+}
+
+function isEnumConstantBodyHeader(text: string): boolean {
+  let cursor = skipDeclarationTrivia(text, 0);
+  while (true) {
+    const annotationEnd = skipDeclarationAnnotation(text, cursor);
+    if (annotationEnd === undefined) {
+      break;
+    }
+    cursor = skipDeclarationTrivia(text, annotationEnd);
+  }
+  const name = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor));
+  if (name === null) {
+    return false;
+  }
+  cursor = skipDeclarationTrivia(text, cursor + name[0].length);
+  if (text[cursor] === '(') {
+    const argumentsEnd = findBalancedDeclarationDelimiterEnd(
+      text,
+      cursor,
+      '(',
+      ')',
+    );
+    if (argumentsEnd === undefined) {
+      return false;
+    }
+    cursor = argumentsEnd;
+  }
+  return isDeclarationTriviaOnly(text, cursor);
 }
 
 function isPackageOrImportDeclaration(text: string): boolean {
@@ -887,7 +1308,7 @@ function isPackageOrImportDeclaration(text: string): boolean {
 
 function isCompleteDeclarationTypeListAndBlock(
   text: string,
-  enclosingContexts: readonly DeclarationBodyContextKind[] = [],
+  enclosingContexts: readonly DeclarationBodyContext[] = [],
 ): boolean {
   let cursor = parseDeclarationTypeList(text, 0);
   if (cursor === undefined) {
@@ -923,7 +1344,7 @@ function isCompleteDeclarationTypeListAndBlock(
 
 function isCompleteMethodThrowsTail(
   text: string,
-  enclosingContexts: readonly DeclarationBodyContextKind[] = [],
+  enclosingContexts: readonly DeclarationBodyContext[] = [],
 ): boolean {
   const cursor = parseDeclarationTypeList(text, 0);
   if (cursor === undefined) {
@@ -1035,8 +1456,14 @@ function isQualifiedTypeInDeclaration(
     const declarationStart = declarationStarts[index];
     const declarationPrefix = prefix.slice(declarationStart?.offset ?? 0);
     const enclosingContexts = declarationStart?.enclosingContexts ?? [];
+    const containingContext = enclosingContexts.at(-1)?.kind;
     if (
       isQualifiedMethodThrowsPrefix(declarationPrefix) &&
+      (containingContext === undefined ||
+        containingContext === 'type' ||
+        containingContext === 'enum' ||
+        containingContext === 'anonymous' ||
+        containingContext === 'anonymous-call') &&
       isCompleteMethodThrowsTail(continuation, enclosingContexts)
     ) {
       return true;
@@ -1053,20 +1480,22 @@ function isQualifiedTypeInDeclaration(
 
 function findDeclarationPrefixStarts(text: string): Array<{
   offset: number;
-  enclosingContexts: DeclarationBodyContextKind[];
+  enclosingContexts: DeclarationBodyContext[];
 }> {
   const starts: Array<{
     offset: number;
-    enclosingContexts: DeclarationBodyContextKind[];
+    enclosingContexts: DeclarationBodyContext[];
   }> = [{ offset: 0, enclosingContexts: [] }];
   const contexts: Array<{
     kind: 'top-level' | DeclarationBodyContextKind;
     memberStart: number;
+    invocationDepth?: number;
   }> = [{ kind: 'top-level', memberStart: 0 }];
-  const getEnclosingContexts = (): DeclarationBodyContextKind[] =>
-    contexts
-      .slice(1)
-      .map((context) => context.kind as DeclarationBodyContextKind);
+  const getEnclosingContexts = (): DeclarationBodyContext[] =>
+    contexts.slice(1).map(({ kind, invocationDepth }) => ({
+      kind: kind as DeclarationBodyContextKind,
+      invocationDepth,
+    }));
   let parenthesisDepth = 0;
   let cursor = 0;
   while (cursor < text.length) {
@@ -1102,17 +1531,36 @@ function findDeclarationPrefixStarts(text: string): Array<{
       const header = normalizeSplitQualifiedTypeWhitespace(
         text.slice(parent.memberStart, cursor),
       );
-      if (parent.kind !== 'annotation' && isTypeDeclarationBodyHeader(header)) {
-        contexts.push({ kind: 'type', memberStart: cursor + 1 });
+      const declarationKind =
+        parent.kind === 'annotation'
+          ? undefined
+          : getTypeDeclarationBodyKind(header);
+      if (declarationKind !== undefined) {
+        contexts.push({ kind: declarationKind, memberStart: cursor + 1 });
+        starts.push({
+          offset: cursor + 1,
+          enclosingContexts: getEnclosingContexts(),
+        });
+      } else if (parent.kind === 'enum' && isEnumConstantBodyHeader(header)) {
+        contexts.push({ kind: 'anonymous', memberStart: cursor + 1 });
         starts.push({
           offset: cursor + 1,
           enclosingContexts: getEnclosingContexts(),
         });
       } else if (
         parent.kind !== 'annotation' &&
-        isAnonymousClassBodyHeader(header)
+        getAnonymousClassBodyContext(header) !== undefined
       ) {
-        contexts.push({ kind: 'anonymous', memberStart: cursor + 1 });
+        const anonymousContext = getAnonymousClassBodyContext(header);
+        if (anonymousContext === undefined) {
+          cursor += 1;
+          continue;
+        }
+        contexts.push({
+          kind: anonymousContext.kind,
+          memberStart: cursor + 1,
+          invocationDepth: anonymousContext.invocationDepth,
+        });
         starts.push({
           offset: cursor + 1,
           enclosingContexts: getEnclosingContexts(),
@@ -1122,6 +1570,12 @@ function findDeclarationPrefixStarts(text: string): Array<{
           kind: parenthesisDepth > 0 ? 'annotation' : 'block',
           memberStart: cursor + 1,
         });
+        if (parenthesisDepth === 0) {
+          starts.push({
+            offset: cursor + 1,
+            enclosingContexts: getEnclosingContexts(),
+          });
+        }
       }
     } else if (character === '}') {
       if (contexts.length === 1) {
@@ -1134,7 +1588,11 @@ function findDeclarationPrefixStarts(text: string): Array<{
         closed !== undefined &&
         closed.kind !== 'annotation' &&
         (parent.kind === 'type' ||
-          (parent.kind === 'top-level' && closed.kind === 'type'))
+          parent.kind === 'enum' ||
+          parent.kind === 'anonymous' ||
+          parent.kind === 'anonymous-call' ||
+          (parent.kind === 'top-level' &&
+            (closed.kind === 'type' || closed.kind === 'enum')))
       ) {
         starts.push({
           offset: cursor + 1,
@@ -1144,7 +1602,18 @@ function findDeclarationPrefixStarts(text: string): Array<{
       }
     } else if (character === ';') {
       const context = contexts[contexts.length - 1];
-      if (context?.kind === 'type') {
+      if (
+        context?.kind === 'type' ||
+        context?.kind === 'enum' ||
+        context?.kind === 'anonymous' ||
+        context?.kind === 'anonymous-call'
+      ) {
+        starts.push({
+          offset: cursor + 1,
+          enclosingContexts: getEnclosingContexts(),
+        });
+        context.memberStart = cursor + 1;
+      } else if (context?.kind === 'block' && parenthesisDepth === 0) {
         starts.push({
           offset: cursor + 1,
           enclosingContexts: getEnclosingContexts(),
@@ -1156,6 +1625,15 @@ function findDeclarationPrefixStarts(text: string): Array<{
           text.slice(context.memberStart, cursor + 1),
         )
       ) {
+        starts.push({
+          offset: cursor + 1,
+          enclosingContexts: getEnclosingContexts(),
+        });
+        context.memberStart = cursor + 1;
+      }
+    } else if (character === ',' && parenthesisDepth === 0) {
+      const context = contexts[contexts.length - 1];
+      if (context?.kind === 'enum') {
         starts.push({
           offset: cursor + 1,
           enclosingContexts: getEnclosingContexts(),
@@ -1534,7 +2012,9 @@ export function findCorruptingCodeSpanWraps(
       const previous = inner[delimiterIndex - 1];
       if (
         (previous === undefined && delimiter === '-') ||
-        (previous !== undefined && !TOKEN_CONTINUING.test(previous))
+        (previous !== undefined &&
+          !TOKEN_CONTINUING.test(previous) &&
+          !(delimiter === '.' && previous === '>'))
       ) {
         continue;
       }

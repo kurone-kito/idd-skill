@@ -418,6 +418,60 @@ test('flags qualified types in class extends and method throws clauses', () => {
   }
 });
 
+test('accepts generic owner segments before a split qualified type', () => {
+  for (const span of [
+    '`class Foo extends pkg.Outer<String>. MyClass {}`',
+    '`void run() throws pkg.Outer<String>. MyException {}`',
+    '`class Foo extends pkg.Outer<Map<String, Integer>>. MyClass {}`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+});
+
+test('finds declaration starts inside executable and enum bodies', () => {
+  for (const span of [
+    '`class Outer { void run() { class Local extends com.example. MyClass {} } }`',
+    '`class Outer { void run() { initialize(); class Local extends com.example. MyClass {} } }`',
+    '`enum Outer { VALUE { void run() throws com.example. MyException {} } }`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+});
+
+test('allows valid sibling members after a declaration body', () => {
+  for (const span of [
+    '`class Outer { void run() throws com.example. MyException {} void other() {} }`',
+    '`class Outer { void run() throws com.example. MyException {} void other() {} int value = 1; }`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+
+  assert.deepEqual(
+    findCorruptingCodeSpanWraps(
+      '`class Outer { void run() throws com.example. MyException {} some prose }`',
+    ),
+    [],
+  );
+});
+
+test('finds qualified throws clauses in anonymous class members', () => {
+  for (const span of [
+    '`class Outer { Object value = new Object() { void first() {} void run() throws com.example. MyException {} }; }`',
+    '`class Outer { Object value = new Object() { int value = 1; void run() throws com.example. MyException {} }; }`',
+    '`class Outer { void run() { consume(new Object() { void nested() throws com.example. MyException {} }); } }`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+});
+
 test('accepts annotation arguments and comments around declaration headers', () => {
   const cases = [
     '`class Foo extends com.example. MyClass /* note */ {}`',
