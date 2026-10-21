@@ -2904,7 +2904,7 @@ Required content:
   `authoring-bucket: blocked-by-human` marker, or a suitability score of
   `1`, may omit this section or leave it empty when no repository file
   is expected to change. Do not guess paths for unresolved or
-  human-only work.
+  human-only work. This warning is preventive; no observed incident yet.
 - an autopilot-suitability footer at the end of the body (visible line +
   `<!-- idd-skill-autopilot-suitability: N -->` marker)
 - an optional effort footer next to it (visible line +
@@ -2930,7 +2930,7 @@ Validation expectations:
   `authoring-bucket: blocked-by-human` marker, or a suitability score of
   `1`, may omit the section or leave it empty when no repository file
   is expected to change. Do not guess paths for unresolved or
-  human-only work.
+  human-only work. This warning is preventive; no observed incident yet.
 - any dependency marker is resolvable, intentionally chosen, and
   justified
 - the issue can be claimed independently without absorbing sibling work
