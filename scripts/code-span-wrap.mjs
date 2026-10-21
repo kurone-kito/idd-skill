@@ -53,10 +53,12 @@ const PROPER_NAME_TITLE_ABBREVIATION =
   /(?:^|(?<![\p{L}\p{N}_./-]))(?:Mr|Mrs|Ms|Mx|Dr|Prof|Rev|Hon|Sr|Jr|St|Capt|Col|Gen|Sgt|Lt|Maj|Cmdr|Adm|Fr|Br)\.$/iu;
 const DOTTED_IDENTIFIER_PREFIX =
   /^\s*[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+$/u;
+const PARTIAL_QUALIFIED_DECLARATION_PATH =
+  /^[A-Za-z_$][A-Za-z0-9_$-]*(?:\.[A-Za-z_$][A-Za-z0-9_$-]*)+$/u;
 const MAX_DECLARATION_GENERIC_DEPTH = 8;
 const DECLARATION_CLAUSE_KEYWORDS = ['extends', 'implements', 'permits'];
-const QUALIFIED_METHOD_THROWS_PREFIX =
-  /^\s*(?:(?:public|protected|private|static|final|abstract|synchronized|native|strictfp)\s+)*[A-Za-z_$][A-Za-z0-9_$.]*(?:<[^<>]*>)?\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\([^()]*\)\s+throws\s+(?:[A-Za-z_$][A-Za-z0-9_$]*\.)+[A-Za-z_$][A-Za-z0-9_$]*$/u;
+const QUALIFIED_METHOD_THROWS_HEADER =
+  /^\s*(?:(?:public|protected|private|static|final|abstract|synchronized|native|strictfp)\s+)*[A-Za-z_$][A-Za-z0-9_$.]*(?:<[^<>]*>)?\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\([^()]*\)\s+throws\s+/u;
 function skipDeclarationWhitespace(text, start) {
   let cursor = start;
   while (cursor < text.length && /\s/u.test(text[cursor] ?? '')) {
@@ -179,9 +181,23 @@ function isCompleteDeclarationBlock(text) {
   // are body content and must not make a valid declaration look incomplete.
   return text[start] === '{' && trimmed.endsWith('}');
 }
+function isQualifiedDeclarationTypeListPrefix(text) {
+  const items = text.split(',');
+  const partialTypePath = items.pop()?.trim();
+  if (
+    partialTypePath === undefined ||
+    !PARTIAL_QUALIFIED_DECLARATION_PATH.test(partialTypePath)
+  ) {
+    return false;
+  }
+  return items.every((item) => {
+    const type = item.trim();
+    return type.length > 0 && parseDeclarationTypeList(type, 0) === type.length;
+  });
+}
 function isQualifiedClassExtendsPrefix(text) {
   const header =
-    /^\s*(?:(?:public|protected|private|abstract|final|sealed|non-sealed)\s+)*(?:class|interface)\s+[A-Za-z_$][A-Za-z0-9_$]*/u.exec(
+    /^\s*(?:(?:public|protected|private|abstract|final|sealed|non-sealed)\s+)*(class|interface)\s+[A-Za-z_$][A-Za-z0-9_$]*/u.exec(
       text,
     );
   if (header === null) {
@@ -215,8 +231,15 @@ function isQualifiedClassExtendsPrefix(text) {
       return false;
     }
   }
-  return /^\s+extends\s+(?:[A-Za-z_$][A-Za-z0-9_$]*\.)+[A-Za-z_$][A-Za-z0-9_$]*$/u.test(
-    text.slice(cursor),
+  const extendsClause = /^\s+extends\s+(.+)$/u.exec(text.slice(cursor));
+  if (extendsClause === null) {
+    return false;
+  }
+  const typeListPrefix = extendsClause[1];
+  return (
+    typeListPrefix !== undefined &&
+    (header[1] === 'interface' || !typeListPrefix.includes(',')) &&
+    isQualifiedDeclarationTypeListPrefix(typeListPrefix)
   );
 }
 function isCompleteDeclarationTypeListAndBlock(text) {
@@ -248,6 +271,26 @@ function isCompleteDeclarationTypeListAndBlock(text) {
     cursor = typeListEnd;
   }
 }
+function isCompleteMethodThrowsTail(text) {
+  const cursor = parseDeclarationTypeList(text, 0);
+  if (cursor === undefined) {
+    return false;
+  }
+  const tail = text.slice(skipDeclarationWhitespace(text, cursor));
+  return isCompleteDeclarationBlock(tail) || tail.trim() === ';';
+}
+function isQualifiedMethodThrowsPrefix(text) {
+  const header = QUALIFIED_METHOD_THROWS_HEADER.exec(text);
+  return (
+    header !== null &&
+    isQualifiedDeclarationTypeListPrefix(text.slice(header[0].length))
+  );
+}
+function normalizeSplitQualifiedTypeWhitespace(text) {
+  // Normalize only for declaration-shape validation. The scanner still
+  // reports only the original split whose prefix is in the supported clause.
+  return text.replace(/([A-Za-z_$][A-Za-z0-9_$]*)\.\s+(?=[A-Za-z_$])/gu, '$1.');
+}
 function isQualifiedTypeInDeclaration(
   inner,
   delimiterIndex,
@@ -255,14 +298,18 @@ function isQualifiedTypeInDeclaration(
   followingText,
 ) {
   const prefix = inner.slice(0, delimiterIndex);
-  if (
-    !isQualifiedClassExtendsPrefix(prefix) &&
-    !QUALIFIED_METHOD_THROWS_PREFIX.test(prefix)
-  ) {
+  const classExtendsPrefix = isQualifiedClassExtendsPrefix(prefix);
+  const methodThrowsPrefix = isQualifiedMethodThrowsPrefix(prefix);
+  if (!classExtendsPrefix && !methodThrowsPrefix) {
     return false;
   }
   const continuation = `${nextWord} ${followingText}`;
-  return isCompleteDeclarationTypeListAndBlock(continuation);
+  if (methodThrowsPrefix) {
+    return isCompleteMethodThrowsTail(continuation);
+  }
+  return isCompleteDeclarationTypeListAndBlock(
+    normalizeSplitQualifiedTypeWhitespace(continuation),
+  );
 }
 function lineStartsFor(text) {
   const starts = [0];

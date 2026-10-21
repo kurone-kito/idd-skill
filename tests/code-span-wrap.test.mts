@@ -241,6 +241,10 @@ test('flags qualified types in class extends and method throws clauses', () => {
       'MyInterface',
     ],
     [
+      '`interface Foo extends first.One, com.example. MyInterface {}`',
+      'MyInterface',
+    ],
+    [
       '`interface Foo<T extends Comparable<List<T>>> extends com.example. MyInterface {}`',
       'MyInterface',
     ],
@@ -249,6 +253,11 @@ test('flags qualified types in class extends and method throws clauses', () => {
       '`void run() throws com.example. MyException, java.io.IOException {}`',
       'MyException',
     ],
+    [
+      '`void run() throws first.One, com.example. MyException {}`',
+      'MyException',
+    ],
+    ['`abstract void run() throws com.example. MyException;`', 'MyException'],
     [
       '`void run() throws com.example. MyException { System.out.println("}"); }`',
       'MyException',
@@ -261,6 +270,26 @@ test('flags qualified types in class extends and method throws clauses', () => {
     assert.ok(violations[0]?.after.startsWith(type), span);
     assert.equal(violations[0]?.separator, 'literal-space', span);
   }
+});
+
+test('keeps later malformed clauses from hiding an in-scope extends split', () => {
+  const violations = findCorruptingCodeSpanWraps(
+    '`class Foo extends com.example. MyClass implements other. Other {}`',
+  );
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0]?.before.endsWith('com.example.'), true);
+  assert.equal(violations[0]?.after.startsWith('MyClass'), true);
+  assert.equal(violations[0]?.separator, 'literal-space');
+});
+
+test('preserves dollar and underscore identifiers in qualified declarations', () => {
+  const violations = findCorruptingCodeSpanWraps(
+    '`class Foo extends $root._internal. MyClass {}`',
+  );
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0]?.before.endsWith('$root._internal.'), true);
+  assert.equal(violations[0]?.after.startsWith('MyClass'), true);
+  assert.equal(violations[0]?.separator, 'literal-space');
 });
 
 test('flags declarations inside one balanced outer wrapper', () => {
