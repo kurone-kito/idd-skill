@@ -155,11 +155,11 @@ function isSentencePunctuation(
   const declarationTypeContinuation =
     nextWord !== undefined &&
     /[a-z][A-Z]/u.test(nextWord) &&
-    /^(?:extends|implements|permits)\s+(?:[A-Z][A-Za-z0-9_-]*|(?:[a-z][A-Za-z0-9_-]*\.)+[A-Z][A-Za-z0-9_-]*)\b/u.test(
+    /^(?:extends|implements|permits)\s+(?:[A-Z][A-Za-z0-9_-]*|(?:[a-z][A-Za-z0-9_-]*\.)+[A-Z][A-Za-z0-9_-]*)\b$/u.test(
       followingText,
     );
-  // Declaration keywords followed by a simple or qualified type keep a
-  // camel-cased continuation code-shaped; ordinary prose remains detectable.
+  // Only a complete declaration-type tail stays code-shaped. Trailing
+  // punctuation or prose keeps sentence punctuation detectable.
   if (
     nextWord !== undefined &&
     (!followingProseWord || declarationTypeContinuation) &&
