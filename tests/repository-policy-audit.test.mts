@@ -477,7 +477,7 @@ function updateFixtureJson(
 function makeRuleViolation(
   ruleId: string,
   documents: RepositoryPolicyDocuments,
-): RuleViolationMutation {
+): RuleViolationMutation | RuleViolationMutation[] {
   switch (ruleId) {
     case 'helper-runtime-docs':
       return replaceFixtureText(
@@ -549,13 +549,24 @@ function makeRuleViolation(
         'requestReviews(input:{pullRequestId:$id,botIds:$reviewer,union:true})',
         'requestReviews(input:{pullRequestId:$id,reviewers:$reviewer,union:true})',
       );
-    case 'shadow-path-guidance':
-      return replaceFixtureText(
-        documents,
-        'idd-template/.github/instructions/idd-pre-merge.instructions.md',
-        'git ls-tree -r -z',
-        'git ls-tree -z',
-      );
+    case 'shadow-path-guidance': {
+      const path =
+        'idd-template/.github/instructions/idd-pre-merge.instructions.md';
+      return [
+        replaceFixtureText(
+          documents,
+          path,
+          'git ls-tree -r -z',
+          'git ls-tree -z',
+        ),
+        replaceFixtureText(
+          documents,
+          path,
+          'and again with `-o -i --exclude-standard`;',
+          'and again with `-o -i`;',
+        ),
+      ];
+    }
     case 'pr-head-freshness-order':
       return replaceFixtureText(
         documents,
@@ -1018,39 +1029,45 @@ test('bare-Node CLI rejects one negative fixture for every stable rule ID', (t) 
 
   for (const ruleId of repositoryPolicyRuleIds) {
     assert.ok(repositoryPolicyRulePaths[ruleId]?.length, `${ruleId} has paths`);
-    const mutation = makeRuleViolation(ruleId, initialContents);
-    const expectedDiagnosticPath = mutation.diagnosticPath ?? mutation.path;
-    const original = initialContents.get(mutation.path);
-    assert.ok(
-      original,
-      `${ruleId} input must be covered by the positive fixture`,
-    );
-    assert.notEqual(mutation.contents, original, `${ruleId} must mutate input`);
-    const mutatedSnapshot = new Map(initialContents);
-    mutatedSnapshot.set(mutation.path, mutation.contents);
-    assert.ok(
-      collectRepositoryPolicyViolationsFromDocuments(mutatedSnapshot).some(
-        (violation) =>
-          violation.ruleId === ruleId &&
-          violation.path === expectedDiagnosticPath,
-      ),
-      `${ruleId} targeted mutation must violate its substantive rule`,
-    );
-    const target = join(fixtureRoot, mutation.path);
-    writeFileSync(target, mutation.contents);
+    const mutations = makeRuleViolation(ruleId, initialContents);
+    for (const mutation of Array.isArray(mutations) ? mutations : [mutations]) {
+      const expectedDiagnosticPath = mutation.diagnosticPath ?? mutation.path;
+      const original = initialContents.get(mutation.path);
+      assert.ok(
+        original,
+        `${ruleId} input must be covered by the positive fixture`,
+      );
+      assert.notEqual(
+        mutation.contents,
+        original,
+        `${ruleId} must mutate input`,
+      );
+      const mutatedSnapshot = new Map(initialContents);
+      mutatedSnapshot.set(mutation.path, mutation.contents);
+      assert.ok(
+        collectRepositoryPolicyViolationsFromDocuments(mutatedSnapshot).some(
+          (violation) =>
+            violation.ruleId === ruleId &&
+            violation.path === expectedDiagnosticPath,
+        ),
+        `${ruleId} targeted mutation must violate its substantive rule`,
+      );
+      const target = join(fixtureRoot, mutation.path);
+      writeFileSync(target, mutation.contents);
 
-    const result = runCliAndAssertReadOnly(
-      executable,
-      fixtureRoot,
-      emptyPath,
-      initialIndexTree,
-    );
-    assert.equal(result.status, 1, `${ruleId}: ${String(result.stderr)}`);
-    assert.ok(
-      String(result.stderr).includes(`${ruleId}: ${expectedDiagnosticPath}:`),
-      `${ruleId} did not report its relative path:\n${String(result.stderr)}`,
-    );
-    writeFileSync(target, original);
+      const result = runCliAndAssertReadOnly(
+        executable,
+        fixtureRoot,
+        emptyPath,
+        initialIndexTree,
+      );
+      assert.equal(result.status, 1, `${ruleId}: ${String(result.stderr)}`);
+      assert.ok(
+        String(result.stderr).includes(`${ruleId}: ${expectedDiagnosticPath}:`),
+        `${ruleId} did not report its relative path:\n${String(result.stderr)}`,
+      );
+      writeFileSync(target, original);
+    }
   }
 
   const orderMutation =
@@ -1561,6 +1578,7 @@ test('audit-docs reports policy violations when the audit source is present', (t
   writeFileSync(manifestPath, validManifest, 'utf8');
 
   const mutation = makeRuleViolation('helper-runtime-docs', documents);
+  assert.ok(!Array.isArray(mutation));
   writeFileSync(join(fixtureRoot, mutation.path), mutation.contents, 'utf8');
   const negative = runAuditDocs(auditDocs, fixtureRoot);
   assert.equal(negative.status, 1, negative.stderr || negative.stdout);

@@ -497,7 +497,7 @@ is diagnostic and never changes the verdict.
   `git ls-tree -r -z --full-tree --name-only "$PR_HEAD_SHA" |
   (cd "$(git rev-parse --show-toplevel)" &&
   GIT_LITERAL_PATHSPECS=1 xargs -0 git ls-files -z -o --exclude-standard --)`
-  and again with `-o -i`; any output or failure holds. Then
+  and again with `-o -i --exclude-standard`; any output or failure holds. Then
   `git rev-parse HEAD` must equal `$PR_HEAD_SHA`; if HEAD is instead
   behind it (`git merge-base --is-ancestor HEAD "$PR_HEAD_SHA"`),
   re-validate the claim, run `git merge --ff-only "$PR_HEAD_SHA"` and
