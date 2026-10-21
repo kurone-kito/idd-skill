@@ -528,6 +528,7 @@ const USER_ACTOR_STEP_RAW_HTML_BLOCK_TAG_NAMES = [
   'h6',
   'head',
   'header',
+  'hgroup',
   'hr',
   'html',
   'iframe',
@@ -569,6 +570,7 @@ const USER_ACTOR_STEP_RAW_HTML_VOID_TAG_SET = new Set([
   'base',
   'basefont',
   'col',
+  'frame',
   'hr',
   'link',
   'menuitem',
@@ -576,6 +578,7 @@ const USER_ACTOR_STEP_RAW_HTML_VOID_TAG_SET = new Set([
   'track',
 ]);
 const USER_ACTOR_STEP_RAW_TEXT_HTML_TAG_SET = new Set([
+  'pre',
   'script',
   'style',
   'textarea',
@@ -996,7 +999,7 @@ const USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER = `(?:a|an|the|my|your|his|her|it
 const USER_ACTOR_STEP_AGENT_SUBJECT_QUANTIFIER = String.raw`(?:one|some|any|each|every|all|both|neither|either|none|several|many|most|few)\s+of\s+`;
 const USER_ACTOR_STEP_AGENT_SUBJECT_COLLECTIVE = String.raw`(?:a|an|the|my|your|his|her|its|our|their|any|each|every|all|some|no|one|both|neither|either|this|that|these|those)\s+(?:group|team|set|subset|pair|number|handful|collection|pool)\s+of\s+`;
 const USER_ACTOR_STEP_AGENT_SUBJECT_PREFIX = new RegExp(
-  String.raw`^\s*(?:(?:and|but|while|whereas)\s+)?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_QUANTIFIER})?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER}\s+)?(?:(?:[\w-]+\s+){0,2})?$|^\s*(?:(?:and|but|while|whereas)\s+)?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_COLLECTIVE})(?:${USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER}\s+)?(?:(?:[\w-]+\s+){0,2})?$`,
+  String.raw`^\s*(?:(?:and|but|while|whereas)\s+)?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_QUANTIFIER})?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER}\s+)?(?:(?:[\w-]+\s+){0,3})?$|^\s*(?:(?:and|but|while|whereas)\s+)?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_COLLECTIVE})(?:${USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER}\s+)?(?:(?:[\w-]+\s+){0,3})?$`,
   'i',
 );
 const USER_ACTOR_STEP_GENERAL_WORK_ACTION =
@@ -2590,8 +2593,7 @@ function isStandaloneUserActorStepDirective(
 function hasOpenRawHtmlBlockBefore(body, offset, excludedRanges) {
   const prefix = body.slice(0, offset);
   const openTags = [];
-  const htmlConstructPattern =
-    /<\?|<!\[CDATA\[|<![A-Z]|<(\/)?([A-Za-z][A-Za-z0-9:-]*)\b(?:[^>]*>|[^>]*$)/g;
+  const htmlConstructPattern = /<!--|<\?|<!\[CDATA\[|<![A-Z]|<\/?[A-Za-z]/g;
   let cursor = 0;
   while (cursor < prefix.length) {
     const rawTextTag = openTags.at(-1);
@@ -2611,16 +2613,20 @@ function hasOpenRawHtmlBlockBefore(body, offset, excludedRanges) {
     const match = htmlConstructPattern.exec(prefix);
     if (match === null) break;
     const start = match.index ?? 0;
-    const end = start + (match[0]?.length ?? 0);
+    const rawHtmlConstruct = match[0] ?? '';
+    let end = start + rawHtmlConstruct.length;
     if (
       excludedRanges.some((range) => range.start < end && range.end > start)
     ) {
       cursor = end;
       continue;
     }
-    const rawHtmlConstruct = match[0] ?? '';
-    const isClosingElement = match[1] === '/';
-    const tagName = (match[2] ?? '').toLowerCase();
+    if (rawHtmlConstruct === '<!--') {
+      const closeIndex = prefix.indexOf('-->', end);
+      if (closeIndex < 0) return true;
+      cursor = closeIndex + 3;
+      continue;
+    }
     if (rawHtmlConstruct.startsWith('<?')) {
       const closeIndex = prefix.indexOf('?>', end);
       if (closeIndex < 0) return true;
@@ -2634,17 +2640,34 @@ function hasOpenRawHtmlBlockBefore(body, offset, excludedRanges) {
       continue;
     }
     if (rawHtmlConstruct.startsWith('<!')) {
-      const closeIndex = prefix.indexOf('>', end);
+      const closeIndex = findHtmlConstructEnd(prefix, end);
       if (closeIndex < 0) return true;
       cursor = closeIndex + 1;
       continue;
     }
-    if (!rawHtmlConstruct.endsWith('>')) return true;
+    const parsedTag = parseRawHtmlTagAt(prefix, start);
+    if (parsedTag === null) {
+      cursor = start + 1;
+      continue;
+    }
+    end = parsedTag.end;
+    if (!parsedTag.complete) return true;
+    const tagName = parsedTag.name;
+    if (
+      isStandaloneRawHtmlTagLine(prefix, start, end) &&
+      !USER_ACTOR_STEP_RAW_HTML_BLOCK_TAG_SET.has(tagName)
+    ) {
+      const lineEnd = rawHtmlLineEnd(prefix, start);
+      const blankLineEnd = findNextRawHtmlBlankLineEnd(prefix, lineEnd);
+      if (blankLineEnd === null) return true;
+      cursor = blankLineEnd;
+      continue;
+    }
     if (!USER_ACTOR_STEP_RAW_HTML_BLOCK_TAG_SET.has(tagName)) {
       cursor = end;
       continue;
     }
-    if (isClosingElement) {
+    if (parsedTag.isClosing) {
       if (openTags.at(-1) === tagName) {
         openTags.pop();
       } else if (openTags.includes(tagName)) {
@@ -2654,16 +2677,86 @@ function hasOpenRawHtmlBlockBefore(body, offset, excludedRanges) {
       cursor = end;
       continue;
     }
-    const tag = match[0] ?? '';
-    if (
-      !USER_ACTOR_STEP_RAW_HTML_VOID_TAG_SET.has(tagName) &&
-      !/\/\s*>$/.test(tag)
-    ) {
+    if (!USER_ACTOR_STEP_RAW_HTML_VOID_TAG_SET.has(tagName)) {
       openTags.push(tagName);
     }
     cursor = end;
   }
   return openTags.length > 0;
+}
+function parseRawHtmlTagAt(text, start) {
+  const opener = /^<(\/)?([A-Za-z][A-Za-z0-9:-]*)/.exec(text.slice(start));
+  if (opener === null) return null;
+  const isClosing = opener[1] === '/';
+  const rawName = opener[2] ?? '';
+  const nameEnd = start + opener[0].length;
+  const nextCharacter = text[nameEnd] ?? '';
+  if (!/[\s/>]/.test(nextCharacter)) return null;
+  if (nextCharacter === '/' && !/^\/\s*>/.test(text.slice(nameEnd))) {
+    return null;
+  }
+  let quote = null;
+  for (let index = nameEnd; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    if (quote !== null) {
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === '>') {
+      return {
+        complete: true,
+        end: index + 1,
+        isClosing,
+        name: rawName.toLowerCase(),
+      };
+    }
+  }
+  return {
+    complete: false,
+    end: text.length,
+    isClosing,
+    name: rawName.toLowerCase(),
+  };
+}
+function findHtmlConstructEnd(text, start) {
+  let quote = null;
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index] ?? '';
+    if (quote !== null) {
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === '>') return index;
+  }
+  return -1;
+}
+function rawHtmlLineStart(text, offset) {
+  const newline = text.lastIndexOf('\n', Math.max(0, offset - 1));
+  return newline < 0 ? 0 : newline + 1;
+}
+function rawHtmlLineEnd(text, offset) {
+  const newline = text.indexOf('\n', offset);
+  if (newline < 0) return text.length;
+  return text[newline - 1] === '\r' ? newline - 1 : newline;
+}
+function isStandaloneRawHtmlTagLine(text, start, end) {
+  const lineStart = rawHtmlLineStart(text, start);
+  const lineEnd = rawHtmlLineEnd(text, end);
+  const before = text.slice(lineStart, start);
+  const after = text.slice(end, lineEnd);
+  return /^ {0,3}$/.test(before) && /^[ \t]*$/.test(after);
+}
+function findNextRawHtmlBlankLineEnd(text, start) {
+  const match = /\r?\n[ \t]*\r?\n/.exec(text.slice(start));
+  return match === null ? null : start + match.index + match[0].length;
 }
 function hasAgentWorkAssignmentInClause(clause) {
   const assignmentClausePattern = new RegExp(

@@ -2876,6 +2876,9 @@ test('trust safety fails closed inside raw HTML blocks for user steps -- #4596',
   for (const body of [
     '<div>\n\nRun this step by the user.\n\n</div>',
     '<div>\n\nRun this step by the user.',
+    '<div/>\n\n- Run this step by the user.',
+    '<div data-value="> </div>">\n\n- Run this step by the user.',
+    '<span>\n- Run this step by the user.',
     '<script>\n\nRun this check by the user.\n\n</script>',
     '<?php\n\nRun this step by the user.',
     '<![CDATA[\n\nRun this check by the user.',
@@ -2896,6 +2899,15 @@ test('trust safety fails closed inside raw HTML blocks for user steps -- #4596',
     trustSafetyAmbiguous: false,
   } as Context);
   assert.equal(outsideHtmlBlock.pass, true);
+
+  const outsideStandaloneHtmlBlock = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '<span>\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(outsideStandaloneHtmlBlock.pass, true);
 
   const outsideRawTextBlock = checkTrustSafety({
     issue: {
@@ -3479,6 +3491,17 @@ test('trust safety rejects agent assignment target modifiers and quantifiers -- 
     } as Context);
     assert.equal(result.pass, false, body);
   }
+});
+
+test('trust safety recognizes three-word modifiers before an assigned agent -- #4596', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The highly capable experienced coding agent must implement the feature.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
 });
 
 test('trust safety rejects passive and direct-object agent assignments -- #4577', () => {
