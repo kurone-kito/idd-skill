@@ -153,9 +153,9 @@ distributed IDD workflow a repository imported.
 - **Source-template maintainers** bump `iddVersion` whenever a change to
   the distributed instruction set, schema, or safety surface — for
   example a new guardrail, hardening section, or default change — would
-  matter to an adopter who re-syncs. Follow semantic-versioning intent: a
-  new opt-in capability or hardening is a minor bump; a breaking change
-  to existing defaults is a major bump. Keep the template config, the
+  matter to an adopter who re-syncs. Follow the release-stage policy in
+  [Phase ID Compatibility Contract](#phase-id-compatibility-contract)
+  when choosing a compatibility bump. Keep the template config, the
   annotated `config.example.jsonc`, and this repository's own
   `.github/idd/config.json` on the same value. Every
   `iddVersion` bump also requires a matching `CHANGELOG.md` entry in the
