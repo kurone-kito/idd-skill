@@ -224,6 +224,20 @@ test('flags complete declaration tails with generic and combined types', () => {
   }
 });
 
+test('flags declarations inside one balanced outer wrapper', () => {
+  for (const span of [
+    '`(com.example. MyClass extends Base)`',
+    '`[com.example. MyClass implements Base]`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.line, 1, span);
+    assert.ok(violations[0]?.before.endsWith('com.example.'), span);
+    assert.ok(violations[0]?.after.startsWith('MyClass'), span);
+    assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+});
+
 test('does not flag a sentence after a dotted name', () => {
   for (const span of [
     '`Open example.com. Then continue`',
@@ -236,6 +250,19 @@ test('does not flag a sentence after a dotted name', () => {
     '`Visit example.com. GitHub extends OAuth.`',
     '`Visit example.com. GitHub implements OAuth.`',
     '`Visit example.com. GitHub permits OAuth.`',
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
+});
+
+test('does not treat incomplete wrappers or trailing prose as declarations', () => {
+  for (const span of [
+    '`(com.example. MyClass extends Base`',
+    '`[com.example. MyClass implements Base`',
+    '`(com.example. MyClass extends Base) details`',
+    '`[com.example. MyClass implements Base] details`',
+    '`(Visit example.com. GitHub implements Interface)`',
+    '`[Visit example.com. GitHub implements Interface.]`',
   ]) {
     assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
   }

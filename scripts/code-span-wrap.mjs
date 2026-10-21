@@ -330,6 +330,28 @@ function hasLiteralSplitCandidate(text) {
   }
   return false;
 }
+function unwrapFullSpanOuterPair(text) {
+  const opener = text[0];
+  const closer = opener === '(' ? ')' : opener === '[' ? ']' : undefined;
+  if (closer === undefined || text[text.length - 1] !== closer) {
+    return undefined;
+  }
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === opener) {
+      depth += 1;
+    } else if (text[index] === closer) {
+      depth -= 1;
+      if (depth === 0 && index !== text.length - 1) {
+        return undefined;
+      }
+      if (depth < 0) {
+        return undefined;
+      }
+    }
+  }
+  return depth === 0 ? text.slice(1, -1) : undefined;
+}
 /**
  * Find inline code spans where a line break or literal horizontal
  * whitespace splits a token per the rules above. Returns one violation
@@ -427,6 +449,9 @@ export function findCorruptingCodeSpanWraps(text) {
     }
     const innerStart = range.start + tickCount;
     const inner = scanned.slice(innerStart, range.end - tickCount);
+    const wrappedContent = unwrapFullSpanOuterPair(inner);
+    const sentenceInner = wrappedContent ?? inner;
+    const sentenceIndexOffset = wrappedContent === undefined ? 0 : 1;
     for (
       let delimiterIndex = 0;
       delimiterIndex < inner.length;
@@ -458,7 +483,11 @@ export function findCorruptingCodeSpanWraps(text) {
       }
       if (
         (delimiter === '.' &&
-          isSentencePunctuation(inner, delimiterIndex, afterIndex)) ||
+          isSentencePunctuation(
+            sentenceInner,
+            delimiterIndex - sentenceIndexOffset,
+            afterIndex - sentenceIndexOffset,
+          )) ||
         (delimiter === '-' &&
           (isStandaloneDoubleDash(inner, delimiterIndex) ||
             isHtmlCommentOpener(inner, delimiterIndex))) ||
