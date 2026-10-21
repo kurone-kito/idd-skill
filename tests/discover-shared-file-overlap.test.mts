@@ -628,6 +628,7 @@ test('analyzeSharedFileOverlap flags a candidate that shares a high-contention f
   assert.deepEqual(candidate.overlaps, [
     { number: 991, reason: 'pr', files: [ADVISORY_FILE] },
   ]);
+  assert.deepEqual(candidate.sharedNonHighContention, []);
   assert.equal(result.summary.flaggedCount, 1);
 });
 
@@ -646,15 +647,133 @@ test('analyzeSharedFileOverlap does not flag a candidate with no shared high-con
   assert.deepEqual(result.candidates[0].highContentionTouched, []);
   assert.equal(result.candidates[0].overlapFlag, false);
   assert.deepEqual(result.candidates[0].overlaps, []);
+  assert.deepEqual(result.candidates[0].sharedNonHighContention, []);
   assert.equal(result.summary.flaggedCount, 0);
+});
+
+test('analyzeSharedFileOverlap reports the issue-authoring contract as non-high-contention sharing', () => {
+  const contractPath = 'skills/issue-authoring/references/contract.md';
+  const result = analyzeSharedFileOverlap({
+    candidates: [{ number: 2000, candidateFiles: [contractPath] }],
+    activeIssues: [
+      { number: 4200, reason: 'claim', candidateFiles: [contractPath] },
+    ],
+    highContentionFiles: HIGH_CONTENTION,
+  });
+
+  assert.deepEqual(result.candidates[0].highContentionTouched, []);
+  assert.deepEqual(result.candidates[0].overlaps, []);
+  assert.equal(result.candidates[0].overlapFlag, false);
+  assert.deepEqual(result.candidates[0].sharedNonHighContention, [
+    { number: 4200, reason: 'claim', files: [contractPath] },
+  ]);
+});
+
+test('analyzeSharedFileOverlap reports shared non-high-contention files separately', () => {
+  const result = analyzeSharedFileOverlap({
+    candidates: [
+      {
+        number: 2000,
+        score: 3,
+        candidateFiles: [ADVISORY_FILE, 'src/shared.mts', 'docs/shared.md'],
+      },
+    ],
+    activeIssues: [
+      {
+        number: 10,
+        reason: 'claim',
+        candidateFiles: [ADVISORY_FILE, 'docs/shared.md', 'src/shared.mts'],
+      },
+    ],
+    highContentionFiles: HIGH_CONTENTION,
+  });
+
+  assert.deepEqual(result.candidates[0].highContentionTouched, [ADVISORY_FILE]);
+  assert.deepEqual(result.candidates[0].overlaps, [
+    { number: 10, reason: 'claim', files: [ADVISORY_FILE] },
+  ]);
+  assert.deepEqual(result.candidates[0].sharedNonHighContention, [
+    {
+      number: 10,
+      reason: 'claim',
+      files: ['docs/shared.md', 'src/shared.mts'],
+    },
+  ]);
+  assert.equal(result.candidates[0].overlapFlag, true);
+});
+
+test('analyzeSharedFileOverlap sorts non-high-contention shared issues and paths', () => {
+  const result = analyzeSharedFileOverlap({
+    candidates: [{ number: 2000, candidateFiles: ['src/z.mts', 'docs/a.md'] }],
+    activeIssues: [
+      { number: 20, reason: 'pr', candidateFiles: ['src/z.mts', 'docs/a.md'] },
+      { number: 10, reason: 'claim', candidateFiles: ['docs/a.md'] },
+    ],
+    highContentionFiles: HIGH_CONTENTION,
+  });
+
+  assert.deepEqual(result.candidates[0].sharedNonHighContention, [
+    { number: 10, reason: 'claim', files: ['docs/a.md'] },
+    { number: 20, reason: 'pr', files: ['docs/a.md', 'src/z.mts'] },
+  ]);
+});
+
+test('non-high-contention sharing does not change ranking or batch decisions', () => {
+  const candidates = [
+    scored(10, [MERGE_FILE, 'docs/shared.md']),
+    scored(20, [ADVISORY_FILE]),
+  ];
+  const highOnly: ActiveIssueInput[] = [
+    { number: 900, reason: 'claim', candidateFiles: [MERGE_FILE] },
+  ];
+  const highAndNonHigh: ActiveIssueInput[] = [
+    {
+      number: 900,
+      reason: 'claim',
+      candidateFiles: [MERGE_FILE, 'docs/shared.md'],
+    },
+  ];
+  const highOnlyAnalysis = analyzeSharedFileOverlap({
+    candidates,
+    activeIssues: highOnly,
+    highContentionFiles: HIGH_CONTENTION,
+  });
+  const highAndNonHighAnalysis = analyzeSharedFileOverlap({
+    candidates,
+    activeIssues: highAndNonHigh,
+    highContentionFiles: HIGH_CONTENTION,
+  });
+
+  assert.deepEqual(
+    highAndNonHighAnalysis.recommendedOrder,
+    highOnlyAnalysis.recommendedOrder,
+  );
+  const select = (analysis: OverlapAnalysis) =>
+    selectNonOverlappingBatch({
+      analysis,
+      inFlight: [],
+      highContentionFiles: HIGH_CONTENTION,
+      batchSize: 2,
+    });
+  const highOnlyBatch = select(highOnlyAnalysis);
+  const highAndNonHighBatch = select(highAndNonHighAnalysis);
+  assert.deepEqual(highAndNonHighBatch.batch, highOnlyBatch.batch);
+  assert.deepEqual(
+    highAndNonHighBatch.batchSkipped,
+    highOnlyBatch.batchSkipped,
+  );
 });
 
 test('analyzeSharedFileOverlap never reports a candidate overlapping itself', () => {
   const candidates: OverlapCandidateInput[] = [
-    { number: 1019, score: 3, candidateFiles: [MERGE_FILE] },
+    { number: 1019, score: 3, candidateFiles: [MERGE_FILE, 'docs/self.md'] },
   ];
   const activeIssues: ActiveIssueInput[] = [
-    { number: 1019, reason: 'claim', candidateFiles: [MERGE_FILE] },
+    {
+      number: 1019,
+      reason: 'claim',
+      candidateFiles: [MERGE_FILE, 'docs/self.md'],
+    },
   ];
   const result = analyzeSharedFileOverlap({
     candidates,
@@ -662,6 +781,7 @@ test('analyzeSharedFileOverlap never reports a candidate overlapping itself', ()
     highContentionFiles: HIGH_CONTENTION,
   });
   assert.equal(result.candidates[0].overlapFlag, false);
+  assert.deepEqual(result.candidates[0].sharedNonHighContention, []);
 });
 
 test('analyzeSharedFileOverlap parses fixtures: merge and review collide on advisory-wait', () => {
@@ -1337,6 +1457,7 @@ test('selectNonOverlappingBatch sorts shared paths itself for a caller-built ana
     candidateFiles: [...reversed],
     highContentionTouched: [...reversed],
     overlaps,
+    sharedNonHighContention: [],
     overlapFlag: overlaps.length > 0,
   });
   // recommendedOrder is set by hand: the real analyzer would rank the flagged
@@ -1456,6 +1577,7 @@ test('buildOverlapOutput without a batch keeps the pre-batch key set and order',
     'candidateFiles',
     'highContentionTouched',
     'overlaps',
+    'sharedNonHighContention',
     'overlapFlag',
   ]);
 });
