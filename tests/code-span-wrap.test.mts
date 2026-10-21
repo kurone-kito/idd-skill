@@ -302,6 +302,14 @@ test('flags qualified types in class extends and method throws clauses', () => {
       'MyException',
     ],
     [
+      '`Map<? /* note */ extends /* bound */ String, Integer> run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`Map<? /* note */ super /* bound */ Number, ?> run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
       '`List<@Nullable String> run() throws com.example. MyException;`',
       'MyException',
     ],

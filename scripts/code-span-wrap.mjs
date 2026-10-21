@@ -356,17 +356,18 @@ function parseDeclarationType(
   return cursor;
 }
 function parseDeclarationTypeArgument(text, start, genericDepth) {
-  const cursor = skipDeclarationWhitespace(text, start);
+  const cursor = skipDeclarationTrivia(text, start);
   if (text[cursor] !== '?') {
     return parseDeclarationType(text, cursor, genericDepth, false, true);
   }
-  let boundStart = skipDeclarationWhitespace(text, cursor + 1);
+  let boundStart = skipDeclarationTrivia(text, cursor + 1);
   for (const bound of ['extends', 'super']) {
+    const boundEnd = boundStart + bound.length;
     if (
       text.startsWith(bound, boundStart) &&
-      /\s/u.test(text[boundStart + bound.length] ?? '')
+      !isDeclarationIdentifierContinuation(text.charCodeAt(boundEnd))
     ) {
-      boundStart = skipDeclarationWhitespace(text, boundStart + bound.length);
+      boundStart = skipDeclarationTrivia(text, boundEnd);
       return parseDeclarationType(text, boundStart, genericDepth, false, true);
     }
   }
