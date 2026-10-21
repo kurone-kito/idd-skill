@@ -245,6 +245,10 @@ test('flags qualified types in class extends and method throws clauses', () => {
       'MyInterface',
     ],
     [
+      '`interface Foo extends Existing<Map<String, Integer>>, com.example. MyInterface {}`',
+      'MyInterface',
+    ],
+    [
       '`interface Foo<T extends Comparable<List<T>>> extends com.example. MyInterface {}`',
       'MyInterface',
     ],

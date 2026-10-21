@@ -216,19 +216,24 @@ function isCompleteDeclarationBlock(text: string): boolean {
 }
 
 function isQualifiedDeclarationTypeListPrefix(text: string): boolean {
-  const items = text.split(',');
-  const partialTypePath = items.pop()?.trim();
-  if (
-    partialTypePath === undefined ||
-    !PARTIAL_QUALIFIED_DECLARATION_PATH.test(partialTypePath)
-  ) {
-    return false;
-  }
+  let cursor = skipDeclarationWhitespace(text, 0);
+  while (cursor < text.length) {
+    const remaining = text.slice(cursor).trimEnd();
+    if (PARTIAL_QUALIFIED_DECLARATION_PATH.test(remaining)) {
+      return true;
+    }
 
-  return items.every((item) => {
-    const type = item.trim();
-    return type.length > 0 && parseDeclarationTypeList(type, 0) === type.length;
-  });
+    const typeEnd = parseDeclarationType(text, cursor, 0);
+    if (typeEnd === undefined) {
+      return false;
+    }
+    const commaIndex = skipDeclarationWhitespace(text, typeEnd);
+    if (text[commaIndex] !== ',') {
+      return false;
+    }
+    cursor = skipDeclarationWhitespace(text, commaIndex + 1);
+  }
+  return false;
 }
 
 function isQualifiedClassExtendsPrefix(text: string): boolean {
