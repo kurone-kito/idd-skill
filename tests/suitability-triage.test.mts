@@ -12055,6 +12055,23 @@ test('trust safety recognizes possessive and quantified agent subjects -- #4596'
   }
 });
 
+test('trust safety recognizes quantified agent recipients -- #4596', () => {
+  for (const assignment of [
+    'The feature must be implemented by one of the coding agents.',
+    'Keyboard support was assigned to some of our coding agents.',
+    'The task is required of any coding agent.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
+});
+
 test('trust safety recognizes common agent ownership phrases -- #4596', () => {
   for (const assignment of [
     'The coding agent oversees this step.',

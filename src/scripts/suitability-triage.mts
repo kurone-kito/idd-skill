@@ -1195,6 +1195,7 @@ const USER_ACTOR_STEP_ASSIGNMENT_CUE =
   /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|owner|ownership|belongs?\s+to|in\s+charge\s+of|oversee|oversees|overseeing|oversaw|overseen|take\s+care\s+of|takes\s+care\s+of|took\s+care\s+of|taken\s+care\s+of|taking\s+care\s+of|work(?:s|ed|ing)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)?|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complet(?:e|es|ed|ing)|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|hand(?:le|les|led|ling)|man(?:age|ages|aged|aging))\b/i;
 const USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER = `(?:a|an|the|my|your|his|her|its|our|their|any|each|every|all|some|no|one|both|neither|either|this|that|these|those|several|many|most|few|none)`;
 const USER_ACTOR_STEP_AGENT_SUBJECT_QUANTIFIER = String.raw`(?:one|some|any|each|every|all|both|neither|either|none|several|many|most|few)\s+of\s+`;
+const USER_ACTOR_STEP_AGENT_RECIPIENT_SELECTOR = String.raw`(?:(?:${USER_ACTOR_STEP_AGENT_SUBJECT_QUANTIFIER})?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER}\s+)?)?`;
 const USER_ACTOR_STEP_AGENT_SUBJECT_COLLECTIVE = String.raw`(?:a|an|the|my|your|his|her|its|our|their|any|each|every|all|some|no|one|both|neither|either|this|that|these|those)\s+(?:group|team|set|subset|pair|number|handful|collection|pool)\s+of\s+`;
 // Keep long modifier chains while stopping at object-marking prepositions.
 // Quantifier and collective prefixes consume their own "of" first.
@@ -1205,8 +1206,10 @@ const USER_ACTOR_STEP_AGENT_SUBJECT_PREFIX = new RegExp(
 );
 const USER_ACTOR_STEP_GENERAL_WORK_ACTION =
   /\b(?:review|build|create|add|update|edit|fix|write|remove|delete|install|configure|prepare|investigate|document|refactor|change|migrate|deploy|publish|author|open|close|merge|inspect|analyze|analyse|validate|generate)\b/i;
-const USER_ACTOR_STEP_AGENT_RECIPIENT_RELATION =
-  /(?:^|\s)(?:(?:is|are|was|were|must|should|shall|will|has\s+been|needs?\s+to|has\s+to|is\s+required\s+to)\s+)?(?:for|required\s+of|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|in\s+charge\s+of|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by)(?:\s+(?:a|an|the))?\s*$/i;
+const USER_ACTOR_STEP_AGENT_RECIPIENT_RELATION = new RegExp(
+  String.raw`(?:^|\s)(?:(?:is|are|was|were|must|should|shall|will|has\s+been|needs?\s+to|has\s+to|is\s+required\s+to)\s+)?(?:for|required\s+of|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|in\s+charge\s+of|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by)(?:\s+${USER_ACTOR_STEP_AGENT_RECIPIENT_SELECTOR})?\s*$`,
+  'i',
+);
 const USER_ACTOR_STEP_AGENT_OBJECT_ASSIGNMENT_RELATION =
   /\b(?:ask(?:s|ed)?|request(?:s|ed)?|task(?:s|ed)?|instruct(?:s|ed)?|expect(?:s|ed)?|tells?|told|order(?:s|ed)?|want(?:s|ed)?|need(?:s|ed)?|assign(?:s|ed)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|let|lets|letting|have|has|had|give|gives|gave|given|giving)\s+(?:(?:a|an|the)\s+)?$/i;
 const USER_ACTOR_STEP_AGENT_STRONG_OBJECT_ASSIGNMENT_RELATION =
