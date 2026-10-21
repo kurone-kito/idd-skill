@@ -1002,12 +1002,25 @@ Example:
 - accepted legacy aliases (input only): `A4.5`, `A4-5`
 - preferred display label: `A4.5`
 
-Alias removal is a semver-governed change. Do not remove supported
-aliases in patch or minor releases. Removal requires:
+Version compatibility follows the project's release-stage policy:
 
-1. A major-version boundary with explicit migration guidance.
-2. A documented compatibility window where aliases are still accepted.
-3. A deprecation announcement in docs before enforcement switches.
+- Before 1.0.0, compatibility-breaking changes to supported behavior may
+  ship in a 0.y.0 minor release. Patch releases preserve compatibility.
+- Declaring 1.0.0 stable is a separate operator decision. After that
+  declaration, compatibility-breaking changes to the supported public
+  surface require a major release.
+
+Alias removal follows the same boundary, with safeguards at both stages.
+Before 1.0.0, a supported phase-ID alias may be removed in a 0.y.0 minor
+release only after the project has announced deprecation in the docs and
+documented a compatibility window in which the alias remains accepted.
+After 1.0.0, alias removal requires a major release, a deprecation
+announcement in the docs, and a documented window in which the alias
+remains accepted. In both cases, release notes must explain the user
+impact and provide migration guidance.
+
+Assess default changes against supported workflows and accepted inputs.
+A removed key or refusal alone does not determine compatibility.
 
 This issue defines the policy contract only. Broad phase renumbering or
 global identifier rewrites must land in follow-up implementation issues.
