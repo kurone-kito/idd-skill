@@ -3010,6 +3010,10 @@ test('trust safety disables the user-step exception for any agent work assignmen
       body: 'We told a coding agent to implement keyboard support.\n\nRun this step by the user.',
     },
     {
+      name: 'agent receives an unrelated task through a reported that-clause',
+      body: 'The maintainer told the coding agent that it should implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
       name: 'agent receives an unrelated task through asked with an indefinite article',
       body: 'We asked an assistant to test the deployment.\n\nRun this step by the user.',
     },
@@ -3080,6 +3084,10 @@ test('trust safety disables the user-step exception for any agent work assignmen
     {
       name: 'an active transferred work task is assigned to the agent',
       body: 'We transferred the keyboard-support task to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an active sent work task is assigned to the agent',
+      body: 'The maintainer sent the keyboard-support task to the coding agent.\n\nRun this step by the user.',
     },
     {
       name: 'an active reallocated work task is assigned to the agent',

@@ -1220,6 +1220,10 @@ const USER_ACTOR_STEP_AGENT_WORK_VERB_COMPLEMENT = new RegExp(
   `^\\s+(?:to\\s+)?(?:${USER_ACTOR_STEP_ASSIGNMENT_CUE.source}|${USER_ACTOR_STEP_GENERAL_WORK_ACTION.source})`,
   'i',
 );
+const USER_ACTOR_STEP_AGENT_REPORTED_WORK_ASSIGNMENT_COMPLEMENT = new RegExp(
+  String.raw`^\s+that\s+(?:(?:it|they|he|she)\s+|${USER_ACTOR_STEP_ASSIGNABLE_AGENT.source}\s+)?(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+to|required\s+to|expected\s+to)\s+(?:${USER_ACTOR_STEP_ASSIGNMENT_CUE.source}|${USER_ACTOR_STEP_GENERAL_WORK_ACTION.source})`,
+  'i',
+);
 const USER_ACTOR_STEP_AGENT_WORK_NOUN_COMPLEMENT =
   /^\s+(?:(?:a|an|the)\s+)?(?:(?!(?:about|around|by|can|could|concerning|does|do|did|for|from|has|have|had|how|if|in|is|may|might|must|needs?|of|on|over|regarding|requires?|should|through|that|to|under|was|were|what|when|where|whether|which|who|why|will|would|with|as|question|joke|gift|story|message|comment|note|update)\b)[\w-]+\s+){0,2}(?:work|tasks?|responsibilities|duties|assignments?)\b/i;
 const USER_ACTOR_STEP_AGENT_FOR_WORK_COMPLEMENT =
@@ -1252,7 +1256,7 @@ const USER_ACTOR_STEP_AGENT_LATER_WORK_NOUN_TASK_TRANSFER_RECIPIENT =
     'i',
   );
 const USER_ACTOR_STEP_AGENT_LATER_WORK_NOUN_TRANSFER_TO_AGENT =
-  /\b(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?)\s+(?:(?:a|an|the)\s+)?(?:[\w-]+\s+){0,2}?(?:implementations?|work|tasks?|responsibilities|duties|assignments?|projects?|features?|support|testing|tests?|reviews?|maintenance|development|debugging|refactoring|migration|deployment|analysis|build)\s+to\s+(?:(?:a|an|the)\s+)?$/i;
+  /\b(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|send|sends|sent|sending|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?)\s+(?:(?:a|an|the)\s+)?(?:[\w-]+\s+){0,2}?(?:implementations?|work|tasks?|responsibilities|duties|assignments?|projects?|features?|support|testing|tests?|reviews?|maintenance|development|debugging|refactoring|migration|deployment|analysis|build)\s+to\s+(?:(?:a|an|the)\s+)?$/i;
 const USER_ACTOR_STEP_AGENT_GIVEN_TECHNICAL_SUPPORT =
   /\b(?:give|gives|gave|given|giving)\s+(?:(?:a|an|the)\s+)?(?:technical|tech)\s+support\b/i;
 const USER_ACTOR_STEP_AGENT_GIVEN_TECHNICAL_SUPPORT_FOLLOWUP =
@@ -3345,6 +3349,9 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
       if (
         agentObjectAssignmentRelation &&
         (USER_ACTOR_STEP_AGENT_WORK_VERB_COMPLEMENT.test(suffix) ||
+          USER_ACTOR_STEP_AGENT_REPORTED_WORK_ASSIGNMENT_COMPLEMENT.test(
+            suffix,
+          ) ||
           (agentWorkNoun !== null && !agentWorkNounHasClauseContinuation) ||
           (agentForWork !== null && !agentForInformation)) &&
         !/^\s+to\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i.test(
