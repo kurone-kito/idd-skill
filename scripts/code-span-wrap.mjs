@@ -128,17 +128,17 @@ function isSentencePunctuation(inner, delimiterIndex, afterIndex) {
   const followingProseWord =
     /^[A-Za-z]/u.test(followingText) ||
     /^[,.!?;:](?:\s|`|$)/u.test(followingText);
-  const camelCaseTypeContinuation =
+  const declarationTypeContinuation =
     nextWord !== undefined &&
     /[a-z][A-Z]/u.test(nextWord) &&
-    /^(?:extends|implements|permits)\s+[A-Z][A-Za-z0-9_-]*/u.test(
+    /^(?:extends|implements|permits)\s+(?:[A-Z][A-Za-z0-9_-]*|(?:[a-z][A-Za-z0-9_-]*\.)+[A-Z][A-Za-z0-9_-]*)\b/u.test(
       followingText,
     );
-  // Declaration relationships keep a camel-cased type continuation
-  // code-shaped, while ordinary verbs after a dotted name remain prose.
+  // Declaration keywords followed by a simple or qualified type keep a
+  // camel-cased continuation code-shaped; ordinary prose remains detectable.
   if (
     nextWord !== undefined &&
-    (!followingProseWord || camelCaseTypeContinuation) &&
+    (!followingProseWord || declarationTypeContinuation) &&
     DOTTED_IDENTIFIER_PREFIX.test(inner.slice(0, delimiterIndex))
   ) {
     return false;

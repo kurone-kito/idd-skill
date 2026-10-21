@@ -173,7 +173,7 @@ test('flags uppercase dotted-token continuations', () => {
   }
 });
 
-test('flags lowercase dotted prefixes before capitalized identifiers', () => {
+test('flags lowercase dotted prefixes before capitalized declaration types', () => {
   for (const [span, after] of [
     ['`com.example. MyClass`', 'MyClass'],
     ['`com.example. MyClass extends Base`', 'MyClass extends Base'],
@@ -193,11 +193,27 @@ test('flags lowercase dotted prefixes before capitalized identifiers', () => {
   }
 });
 
+test('flags simple and qualified declaration targets', () => {
+  for (const span of [
+    '`com.example. MyClass implements Base`',
+    '`com.example. MyClass permits Base`',
+    '`com.example. MyClass extends com.other.Base`',
+    '`com.example. MyClass implements org.api.Interface`',
+    '`com.example. MyClass permits org.sealed.Subclass`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.before, 'com.example.', span);
+  }
+});
+
 test('does not flag a sentence after a dotted name', () => {
   for (const span of [
     '`Open example.com. Then continue`',
     '`Visit example.com. GitHub Actions are available.`',
     '`Visit example.com. GitHub supports Actions.`',
+    '`Visit example.com. GitHub implements additional features.`',
+    '`Visit example.com. GitHub permits temporary access.`',
   ]) {
     assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
   }
