@@ -255,6 +255,14 @@ test('flags qualified types in class extends and method throws clauses', () => {
       'MyInterface',
     ],
     ['`void run() throws com.example. MyException {}`', 'MyException'],
+    [
+      '`void run(@Size(max = 10) String value) throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`void run(@Pattern(regexp = "value)") String value) throws com.example. MyException {}`',
+      'MyException',
+    ],
     ['`String[] run() throws com.example. MyException {}`', 'MyException'],
     [
       '`Map<String, List<Integer>> run() throws com.example. MyException {}`',
@@ -407,6 +415,9 @@ test('does not treat incomplete wrappers or trailing prose as declarations', () 
     '`[com.example. MyClass implements Base`',
     '`(com.example. MyClass extends Base) details`',
     '`[com.example. MyClass implements Base] details`',
+    '`void run() throws com.example. MyException { // }`',
+    '`void run() throws com.example. MyException { /* }`',
+    '`void run() throws com.example. MyException { System.out.println("}")`',
     '`(Visit example.com. GitHub implements Interface)`',
     '`[Visit example.com. GitHub implements Interface.]`',
   ]) {

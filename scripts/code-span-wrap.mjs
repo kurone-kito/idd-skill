@@ -64,6 +64,78 @@ function skipDeclarationWhitespace(text, start) {
   }
   return cursor;
 }
+function findBalancedDeclarationDelimiterEnd(text, start, open, close) {
+  if (text[start] !== open) {
+    return undefined;
+  }
+  let depth = 0;
+  let cursor = start;
+  while (cursor < text.length) {
+    const character = text[cursor];
+    const nextCharacter = text[cursor + 1];
+    if (character === '"' && text.startsWith('"""', cursor)) {
+      cursor += 3;
+      let terminated = false;
+      while (cursor < text.length) {
+        if (text[cursor] === '\\') {
+          cursor += 2;
+          continue;
+        }
+        if (text.startsWith('"""', cursor)) {
+          cursor += 3;
+          terminated = true;
+          break;
+        }
+        cursor += 1;
+      }
+      if (!terminated) {
+        return undefined;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      const quote = character;
+      cursor += 1;
+      while (cursor < text.length) {
+        if (text[cursor] === '\\') {
+          cursor += 2;
+          continue;
+        }
+        if (text[cursor] === quote) {
+          cursor += 1;
+          break;
+        }
+        cursor += 1;
+      }
+      continue;
+    }
+    if (character === '/' && nextCharacter === '/') {
+      cursor += 2;
+      while (cursor < text.length && text[cursor] !== '\n') {
+        cursor += 1;
+      }
+      continue;
+    }
+    if (character === '/' && nextCharacter === '*') {
+      const commentEnd = text.indexOf('*/', cursor + 2);
+      if (commentEnd < 0) {
+        return undefined;
+      }
+      cursor = commentEnd + 2;
+      continue;
+    }
+    if (character === open) {
+      depth += 1;
+    } else if (character === close) {
+      depth -= 1;
+      if (depth === 0) {
+        return cursor + 1;
+      }
+    }
+    cursor += 1;
+  }
+  return undefined;
+}
 function isAsciiLetter(code) {
   return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
 }
@@ -245,9 +317,10 @@ function isCompleteDeclarationTail(text) {
 function isCompleteDeclarationBlock(text) {
   const start = skipDeclarationWhitespace(text, 0);
   const trimmed = text.trimEnd();
-  // Only the outer delimiters matter here; braces inside strings or comments
-  // are body content and must not make a valid declaration look incomplete.
-  return text[start] === '{' && trimmed.endsWith('}');
+  return (
+    findBalancedDeclarationDelimiterEnd(text, start, '{', '}') ===
+    trimmed.length
+  );
 }
 function isQualifiedDeclarationTypeListPrefix(text) {
   const normalized = normalizeSplitQualifiedTypeWhitespace(text);
@@ -373,11 +446,16 @@ function isQualifiedMethodThrowsPrefix(text) {
     return false;
   }
   cursor = skipDeclarationWhitespace(text, cursor + methodName[0].length);
-  const parameters = /^\([^()]*\)/u.exec(text.slice(cursor));
-  if (parameters === null) {
+  const parametersEnd = findBalancedDeclarationDelimiterEnd(
+    text,
+    cursor,
+    '(',
+    ')',
+  );
+  if (parametersEnd === undefined) {
     return false;
   }
-  cursor = skipDeclarationWhitespace(text, cursor + parameters[0].length);
+  cursor = skipDeclarationWhitespace(text, parametersEnd);
   if (!text.startsWith('throws', cursor)) {
     return false;
   }
