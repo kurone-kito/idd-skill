@@ -700,6 +700,8 @@ const USER_ACTOR_STEP_RAW_HTML_BLOCK_TAG_NAMES = [
   'fieldset',
   'figcaption',
   'figure',
+  'frame',
+  'frameset',
   'footer',
   'form',
   'h1',
@@ -720,6 +722,7 @@ const USER_ACTOR_STEP_RAW_HTML_BLOCK_TAG_NAMES = [
   'menu',
   'menuitem',
   'nav',
+  'noframes',
   'ol',
   'optgroup',
   'option',
@@ -1188,6 +1191,13 @@ const USER_ACTOR_STEP_NUMBERED_TARGET =
   /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?|checklists?|lists?|items?)\s+#?\s*(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)#?\s*\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
   /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|owner|ownership|belongs?\s+to|in\s+charge\s+of|oversee|oversees|overseeing|oversaw|overseen|take\s+care\s+of|takes\s+care\s+of|took\s+care\s+of|taken\s+care\s+of|taking\s+care\s+of|work(?:s|ed|ing)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)?|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complet(?:e|es|ed|ing)|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|hand(?:le|les|led|ling)|man(?:age|ages|aged|aging))\b/i;
+const USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER = `(?:a|an|the|my|your|his|her|its|our|their|any|each|every|all|some|no|one|both|neither|either|this|that|these|those|several|many|most|few|none)`;
+const USER_ACTOR_STEP_AGENT_SUBJECT_QUANTIFIER = String.raw`(?:one|some|any|each|every|all|both|neither|either|none|several|many|most|few)\s+of\s+`;
+const USER_ACTOR_STEP_AGENT_SUBJECT_COLLECTIVE = String.raw`(?:a|an|the|my|your|his|her|its|our|their|any|each|every|all|some|no|one|both|neither|either|this|that|these|those)\s+(?:group|team|set|subset|pair|number|handful|collection|pool)\s+of\s+`;
+const USER_ACTOR_STEP_AGENT_SUBJECT_PREFIX = new RegExp(
+  String.raw`^\s*(?:(?:and|but|while|whereas)\s+)?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_QUANTIFIER})?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER}\s+)?(?:(?:[\w-]+\s+){0,2})?$|^\s*(?:(?:and|but|while|whereas)\s+)?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_COLLECTIVE})(?:${USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER}\s+)?(?:(?:[\w-]+\s+){0,2})?$`,
+  'i',
+);
 const USER_ACTOR_STEP_GENERAL_WORK_ACTION =
   /\b(?:review|build|create|add|update|edit|fix|write|remove|delete|install|configure|prepare|investigate|document|refactor|change|migrate|deploy|publish|author|open|close|merge|inspect|analyze|analyse|validate|generate)\b/i;
 const USER_ACTOR_STEP_AGENT_RECIPIENT_RELATION =
@@ -2997,33 +3007,72 @@ function hasOpenRawHtmlBlockBefore(
 ): boolean {
   const prefix = body.slice(0, offset);
   const openTags: string[] = [];
-  const tagPattern = /<(\/)?([A-Za-z][A-Za-z0-9:-]*)\b[^>]*>/g;
-  for (const match of prefix.matchAll(tagPattern)) {
+  const htmlConstructPattern =
+    /<\?|<!\[CDATA\[|<![A-Z]|<(\/)?([A-Za-z][A-Za-z0-9:-]*)\b(?:[^>]*>|[^>]*$)/g;
+  let cursor = 0;
+  while (cursor < prefix.length) {
+    const rawTextTag = openTags.at(-1);
+    if (
+      rawTextTag !== undefined &&
+      USER_ACTOR_STEP_RAW_TEXT_HTML_TAG_SET.has(rawTextTag)
+    ) {
+      const closingTagPattern = new RegExp(`</${rawTextTag}\\s*>`, 'ig');
+      closingTagPattern.lastIndex = cursor;
+      const closingTag = closingTagPattern.exec(prefix);
+      if (closingTag === null) break;
+      openTags.pop();
+      cursor = closingTag.index + closingTag[0].length;
+      continue;
+    }
+
+    htmlConstructPattern.lastIndex = cursor;
+    const match = htmlConstructPattern.exec(prefix);
+    if (match === null) break;
     const start = match.index ?? 0;
     const end = start + (match[0]?.length ?? 0);
     if (
       excludedRanges.some((range) => range.start < end && range.end > start)
     ) {
+      cursor = end;
       continue;
     }
 
+    const rawHtmlConstruct = match[0] ?? '';
+    const isClosingElement = match[1] === '/';
     const tagName = (match[2] ?? '').toLowerCase();
-    const rawTextTag = openTags.at(-1);
-    if (
-      rawTextTag !== undefined &&
-      USER_ACTOR_STEP_RAW_TEXT_HTML_TAG_SET.has(rawTextTag) &&
-      !(match[1] === '/' && tagName === rawTextTag)
-    ) {
+
+    if (rawHtmlConstruct.startsWith('<?')) {
+      const closeIndex = prefix.indexOf('?>', end);
+      if (closeIndex < 0) return true;
+      cursor = closeIndex + 2;
       continue;
     }
-    if (!USER_ACTOR_STEP_RAW_HTML_BLOCK_TAG_SET.has(tagName)) continue;
-    if (match[1] === '/') {
+    if (rawHtmlConstruct.startsWith('<![CDATA[')) {
+      const closeIndex = prefix.indexOf(']]>', end);
+      if (closeIndex < 0) return true;
+      cursor = closeIndex + 3;
+      continue;
+    }
+    if (rawHtmlConstruct.startsWith('<!')) {
+      const closeIndex = prefix.indexOf('>', end);
+      if (closeIndex < 0) return true;
+      cursor = closeIndex + 1;
+      continue;
+    }
+
+    if (!rawHtmlConstruct.endsWith('>')) return true;
+    if (!USER_ACTOR_STEP_RAW_HTML_BLOCK_TAG_SET.has(tagName)) {
+      cursor = end;
+      continue;
+    }
+    if (isClosingElement) {
       if (openTags.at(-1) === tagName) {
         openTags.pop();
       } else if (openTags.includes(tagName)) {
         // Malformed nesting leaves the enclosing Markdown context ambiguous.
         return true;
       }
+      cursor = end;
       continue;
     }
 
@@ -3034,6 +3083,7 @@ function hasOpenRawHtmlBlockBefore(
     ) {
       openTags.push(tagName);
     }
+    cursor = end;
   }
   return openTags.length > 0;
 }
@@ -3068,9 +3118,7 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
         .slice(subjectStart + 1)
         .replace(/^\s*(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/, '');
       const isAgentSubject =
-        /^\s*(?:(?:and|but|while|whereas)\s+)?(?:(?:a|an|the|my|your|his|her|its|our|their|any|each|every|all|some|no|one|both|neither|either)\s+)?$/i.test(
-          subjectPrefix,
-        ) &&
+        USER_ACTOR_STEP_AGENT_SUBJECT_PREFIX.test(subjectPrefix) &&
         (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(suffix) ||
           USER_ACTOR_STEP_GENERAL_WORK_ACTION.test(suffix));
       const passiveVerb =

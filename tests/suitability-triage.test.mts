@@ -2877,6 +2877,9 @@ test('trust safety fails closed inside raw HTML blocks for user steps -- #4596',
     '<div>\n\nRun this step by the user.\n\n</div>',
     '<div>\n\nRun this step by the user.',
     '<script>\n\nRun this check by the user.\n\n</script>',
+    '<?php\n\nRun this step by the user.',
+    '<![CDATA[\n\nRun this check by the user.',
+    '<!DOCTYPE html\n\nRun this step by the user.',
   ]) {
     const result = checkTrustSafety({
       issue: { ...BASE_ISSUE, body },
@@ -2902,6 +2905,24 @@ test('trust safety fails closed inside raw HTML blocks for user steps -- #4596',
     trustSafetyAmbiguous: false,
   } as Context);
   assert.equal(outsideRawTextBlock.pass, true);
+
+  const outsideClosedOpaqueBlocks = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '<?php echo "ok"; ?>\n\n<![CDATA[example]]>\n\n<!DOCTYPE html>\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(outsideClosedOpaqueBlocks.pass, true);
+
+  const htmlLikeTextInsideRawTextBlock = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '<script>\nconst example = "<?php <div> <![CDATA[";\n</script>\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(htmlLikeTextInsideRawTextBlock.pass, true);
 });
 
 test('trust safety treats user-step examples inside code as inert content -- #4596', () => {
@@ -11974,6 +11995,10 @@ test('trust safety recognizes possessive and quantified agent subjects -- #4596'
     'Any coding agent',
     'Each coding agent',
     'Their coding agents',
+    'One of our coding agents',
+    'Some of their dedicated coding agents',
+    'The team of coding agents',
+    'Their dedicated coding agent',
   ]) {
     const result = checkTrustSafety({
       issue: {
