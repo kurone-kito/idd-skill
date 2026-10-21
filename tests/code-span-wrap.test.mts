@@ -227,7 +227,20 @@ test('flags complete declaration tails with generic and combined types', () => {
 test('flags qualified types in class extends and method throws clauses', () => {
   for (const [span, type] of [
     ['`class Foo extends com.example. MyClass {}`', 'MyClass'],
+    ['`class Foo<T> extends com.example. MyClass {}`', 'MyClass'],
+    [
+      '`class Foo<T> extends com.example. MyClass implements Runnable {}`',
+      'MyClass',
+    ],
+    [
+      '`interface Foo<T> extends com.example. MyInterface, other.Other {}`',
+      'MyInterface',
+    ],
     ['`void run() throws com.example. MyException {}`', 'MyException'],
+    [
+      '`void run() throws com.example. MyException, java.io.IOException {}`',
+      'MyException',
+    ],
     [
       '`void run() throws com.example. MyException { System.out.println("}"); }`',
       'MyException',
@@ -320,6 +333,7 @@ test('does not treat class extends or method throws prose as declarations', () =
   for (const span of [
     '`A class Foo extends com.example. MyClass is documented here.`',
     '`The method run() throws com.example. MyException during the example.`',
+    '`The method run() throws com.example. MyException {}`',
   ]) {
     assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
   }

@@ -72,9 +72,9 @@ const DECLARATION_CLAUSE_KEYWORDS = [
   'permits',
 ] as const;
 const QUALIFIED_CLASS_EXTENDS_PREFIX =
-  /^\s*(?:(?:public|protected|private|abstract|final|sealed|non-sealed)\s+)*(?:class|interface)\s+[A-Za-z_$][A-Za-z0-9_$]*\s+extends\s+(?:[A-Za-z_$][A-Za-z0-9_$]*\.)+[A-Za-z_$][A-Za-z0-9_$]*$/u;
+  /^\s*(?:(?:public|protected|private|abstract|final|sealed|non-sealed)\s+)*(?:class|interface)\s+[A-Za-z_$][A-Za-z0-9_$]*(?:<[^<>]+>)?\s+extends\s+(?:[A-Za-z_$][A-Za-z0-9_$]*\.)+[A-Za-z_$][A-Za-z0-9_$]*$/u;
 const QUALIFIED_METHOD_THROWS_PREFIX =
-  /^\s*(?:(?:public|protected|private|static|final|abstract|synchronized|native|strictfp)\s+)*(?:[A-Za-z_$][A-Za-z0-9_$.]*(?:<[^<>]*>)?\s+)+[A-Za-z_$][A-Za-z0-9_$]*\s*\([^()]*\)\s+throws\s+(?:[A-Za-z_$][A-Za-z0-9_$]*\.)+[A-Za-z_$][A-Za-z0-9_$]*$/u;
+  /^\s*(?:(?:public|protected|private|static|final|abstract|synchronized|native|strictfp)\s+)*[A-Za-z_$][A-Za-z0-9_$.]*(?:<[^<>]*>)?\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\([^()]*\)\s+throws\s+(?:[A-Za-z_$][A-Za-z0-9_$]*\.)+[A-Za-z_$][A-Za-z0-9_$]*$/u;
 
 function skipDeclarationWhitespace(text: string, start: number): number {
   let cursor = start;
@@ -95,6 +95,29 @@ function isDeclarationIdentifierContinuation(code: number): boolean {
     code === 45 ||
     code === 95
   );
+}
+
+function parseDeclarationTypeList(
+  text: string,
+  start: number,
+): number | undefined {
+  let typeEnd = parseDeclarationType(text, start, 0);
+  if (typeEnd === undefined) {
+    return undefined;
+  }
+  let cursor = typeEnd;
+  while (true) {
+    const commaIndex = skipDeclarationWhitespace(text, cursor);
+    if (text[commaIndex] !== ',') {
+      return cursor;
+    }
+    cursor = skipDeclarationWhitespace(text, commaIndex + 1);
+    typeEnd = parseDeclarationType(text, cursor, 0);
+    if (typeEnd === undefined) {
+      return undefined;
+    }
+    cursor = typeEnd;
+  }
 }
 
 function parseDeclarationType(
@@ -166,24 +189,11 @@ function isCompleteDeclarationTail(text: string): boolean {
       return false;
     }
     cursor = skipDeclarationWhitespace(text, cursor);
-    let typeEnd = parseDeclarationType(text, cursor, 0);
-    if (typeEnd === undefined) {
+    const typeListEnd = parseDeclarationTypeList(text, cursor);
+    if (typeListEnd === undefined) {
       return false;
     }
-    cursor = typeEnd;
-
-    while (true) {
-      const commaIndex = skipDeclarationWhitespace(text, cursor);
-      if (text[commaIndex] !== ',') {
-        break;
-      }
-      cursor = skipDeclarationWhitespace(text, commaIndex + 1);
-      typeEnd = parseDeclarationType(text, cursor, 0);
-      if (typeEnd === undefined) {
-        return false;
-      }
-      cursor = typeEnd;
-    }
+    cursor = typeListEnd;
 
     const nextClause = skipDeclarationWhitespace(text, cursor);
     if (nextClause === text.length) {
@@ -205,6 +215,38 @@ function isCompleteDeclarationBlock(text: string): boolean {
   return text[start] === '{' && trimmed.endsWith('}');
 }
 
+function isCompleteDeclarationTypeListAndBlock(text: string): boolean {
+  let cursor = parseDeclarationTypeList(text, 0);
+  if (cursor === undefined) {
+    return false;
+  }
+
+  while (true) {
+    cursor = skipDeclarationWhitespace(text, cursor);
+    const remaining = text.slice(cursor);
+    if (isCompleteDeclarationBlock(remaining)) {
+      return true;
+    }
+
+    const keyword = DECLARATION_CLAUSE_KEYWORDS.find((candidate) =>
+      text.startsWith(candidate, cursor),
+    );
+    if (keyword === undefined) {
+      return false;
+    }
+    cursor += keyword.length;
+    if (cursor >= text.length || !/\s/u.test(text[cursor] ?? '')) {
+      return false;
+    }
+    cursor = skipDeclarationWhitespace(text, cursor);
+    const typeListEnd = parseDeclarationTypeList(text, cursor);
+    if (typeListEnd === undefined) {
+      return false;
+    }
+    cursor = typeListEnd;
+  }
+}
+
 function isQualifiedTypeInDeclaration(
   inner: string,
   delimiterIndex: number,
@@ -219,12 +261,8 @@ function isQualifiedTypeInDeclaration(
     return false;
   }
 
-  const continuation = `${nextWord}${followingText}`;
-  const typeEnd = parseDeclarationType(continuation, 0, 0);
-  return (
-    typeEnd !== undefined &&
-    isCompleteDeclarationBlock(continuation.slice(typeEnd))
-  );
+  const continuation = `${nextWord} ${followingText}`;
+  return isCompleteDeclarationTypeListAndBlock(continuation);
 }
 
 function lineStartsFor(text: string): number[] {
