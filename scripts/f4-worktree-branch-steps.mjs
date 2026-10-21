@@ -675,23 +675,29 @@ function runStep4And5(
         at: 'step-5',
       };
     }
-    const claimAfterMove = classifyClaimAssert(
+  }
+  if (inspected.worktreePresent) {
+    // The final network-backed ownership assertion runs before this scan.
+    // Keep the ignored-inclusive status check immediately before removal so
+    // newly appearing user content is held rather than discarded.
+    const claimBeforeFinalStatus = classifyClaimAssert(
       deps.assertClaim(worktree),
       input.claimId,
       input.agentId,
     );
-    if (!claimAfterMove.ok) {
+    if (!claimBeforeFinalStatus.ok) {
       return {
         hold: {
-          code: claimAfterMove.code,
-          detail: `after preserving node_modules/ at ${preservedDestination}`,
+          code: claimBeforeFinalStatus.code,
+          detail:
+            preservedDestination === null
+              ? 'before the final worktree status check and removal'
+              : `after preserving node_modules/ at ${preservedDestination}`,
         },
         error: null,
         at: 'step-5',
       };
     }
-  }
-  if (inspected.worktreePresent) {
     const finalStatus = deps.git(
       [
         '-C',

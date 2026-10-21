@@ -150,6 +150,7 @@ function healthyRoutes(): Route[] {
 
 interface Harness {
   readonly deps: F4WorktreeBranchDeps;
+  readonly events: string[];
   readonly gitCalls: { args: Args; cwd: string }[];
   readonly remoteCalls: string[];
   readonly claimCalls: string[];
@@ -202,6 +203,7 @@ interface HarnessOptions {
   readonly now?: () => Date;
   readonly temporaryId?: () => string;
   readonly directoryPrivacy?: (path: string) => DirectoryPrivacy;
+  readonly ensurePrivateDirectory?: (path: string) => void;
   readonly mkdir?: (path: string) => void;
   readonly rename?: (source: string, destination: string) => void;
   readonly replaceIdentityAfterRename?: {
@@ -213,6 +215,7 @@ interface HarnessOptions {
 /** Build the deps: git answers by the first matching route, else success. */
 function harness(options: HarnessOptions = {}): Harness {
   const routes = [...(options.routes ?? healthyRoutes())];
+  const events: string[] = [];
   const gitCalls: { args: Args; cwd: string }[] = [];
   const remoteCalls: string[] = [];
   const claimCalls: string[] = [];
@@ -262,17 +265,21 @@ function harness(options: HarnessOptions = {}): Harness {
     inspectDirectoryPrivacy: (path) =>
       options.directoryPrivacy?.(path) ?? 'private',
     ensurePrivateDirectory: (path) => {
+      events.push(`ensure-private:${path}`);
+      options.ensurePrivateDirectory?.(path);
       if ((options.directoryPrivacy?.(path) ?? 'private') === 'unsafe') {
         throw new Error('directory is not private');
       }
     },
     mkdir: (path, mode) => {
+      events.push(`mkdir:${path}`);
       mkdirCalls.push(path);
       mkdirModes.push(mode);
       createdDirectories.add(path);
       options.mkdir?.(path);
     },
     rename: (source, destination) => {
+      events.push(`rename:${source}->${destination}`);
       renameCalls.push([source, destination]);
       options.rename?.(source, destination);
       const identity = directoryIdentities.get(source);
@@ -291,6 +298,7 @@ function harness(options: HarnessOptions = {}): Harness {
       renamedDirectories.add(destination);
     },
     git: (args, cwd) => {
+      events.push(`git:${args.join(' ')}`);
       gitCalls.push({ args: [...args], cwd });
       if (args[0] === '-C' && args[2] === 'status') {
         const result = statusResults[statusIndex];
@@ -308,6 +316,7 @@ function harness(options: HarnessOptions = {}): Harness {
       return route ? route.result : ok();
     },
     assertClaim: (worktree) => {
+      events.push(`assert-claim:${worktree}`);
       claimCalls.push(worktree);
       const index = Math.min(claimCalls.length - 1, claims.length - 1);
       return claims[index] as SpawnedResult;
@@ -339,6 +348,7 @@ function harness(options: HarnessOptions = {}): Harness {
   };
   return {
     deps,
+    events,
     gitCalls,
     remoteCalls,
     claimCalls,
@@ -821,6 +831,21 @@ test('a lone ignored node_modules directory moves after the claim check', () => 
   ]);
   assert.deepEqual(h.mkdirModes, [0o700, 0o700]);
   assert.equal(h.claimCalls.length, 5);
+  const finalStatus = h.events.lastIndexOf(
+    `git:-C ${WORKTREE} status --porcelain --ignored --untracked-files=normal`,
+  );
+  const finalAssert = h.events
+    .slice(0, finalStatus)
+    .lastIndexOf(`assert-claim:${WORKTREE}`);
+  const removal = h.events.indexOf(`git:worktree remove ${WORKTREE}`);
+  assert.ok(finalAssert >= 0 && finalStatus > finalAssert);
+  assert.ok(removal > finalStatus);
+  assert.deepEqual(h.events.slice(finalAssert, removal + 1), [
+    `assert-claim:${WORKTREE}`,
+    `git:-C ${WORKTREE} status --porcelain --ignored --untracked-files=normal`,
+    `git:worktree remove ${WORKTREE}`,
+  ]);
+  assert.ok(finalAssert < finalStatus && finalStatus < removal);
   assert.equal(
     report.steps.find((step) => step.step === 'step-5')?.detail,
     `node_modules/ was preserved at ${PRESERVE_DESTINATION}`,
