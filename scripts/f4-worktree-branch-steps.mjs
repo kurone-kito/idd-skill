@@ -18,7 +18,15 @@
 // helper, `gh` read, clone lock, and remote deletion arrives through
 // {@link F4WorktreeBranchDeps}, so the flow runs against fakes in tests. The
 // production wiring lives in f4-worktree-branch-cleanup.mts.
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {
+  dirname,
+  isAbsolute,
+  join,
+  parse,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import { parseLocalWorktreeList } from './local-worktree-occupancy.mjs';
 
 const PLAN_ORDER = [
@@ -1206,9 +1214,16 @@ function inspectPreserveDestination(deps, issueNumber, primary, records) {
       'the helper did not move node_modules/: the state root is not a directory',
     );
   }
-  if (deps.realpath(deps.stateRoot) === null) {
+  const stateRootReal = deps.realpath(deps.stateRoot);
+  if (stateRootReal === null) {
     return refuse(
       'the helper did not move node_modules/: the state root cannot be resolved',
+    );
+  }
+  const resolvedStateRoot = resolve(stateRootReal);
+  if (parse(resolvedStateRoot).root === resolvedStateRoot) {
+    return refuse(
+      'the helper did not move node_modules/: the state root resolves to a filesystem root',
     );
   }
   if (deps.inspectDirectoryPrivacy(deps.stateRoot) === 'unsafe') {

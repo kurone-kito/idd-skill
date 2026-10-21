@@ -927,6 +927,27 @@ test('a destination inside the Git common directory holds without moving node_mo
   assert.deepEqual(h.renameCalls, []);
 });
 
+test('a filesystem-root state root holds before privacy changes or moving node_modules', () => {
+  const privacyPaths: string[] = [];
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    stateRoot: '/',
+    directoryPrivacy: (path) => {
+      privacyPaths.push(path);
+      return 'private';
+    },
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /state root resolves to a filesystem root/,
+  );
+  assert.equal(privacyPaths.includes('/'), false);
+  assert.deepEqual(h.mkdirCalls, []);
+  assert.deepEqual(h.renameCalls, []);
+});
+
 test('a staged replacement object is retained when its identity changed', () => {
   const h = harness({
     statusResults: [ok('!! node_modules/\n')],
