@@ -2129,7 +2129,15 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
   - `candidates`: `[{ number: number, score: number | null,`
     `effectiveScore: number, candidateFiles: string[],`
     `highContentionTouched: string[], overlaps: [{ number: number,`
-    `reason: "claim" | "pr", files: string[] }], overlapFlag: boolean }]`
+    `reason: "claim" | "pr", files: string[] }],`
+    `sharedNonHighContention: [{ number: number, reason: "claim" | "pr",`
+    `files: string[] }], overlapFlag: boolean }]`
+    `sharedNonHighContention` reports files shared with each active issue
+    outside the configured high-contention set. It uses the same active set
+    already loaded for overlap checks, so it is empty when `--check-overlap`
+    is not enabled or when the manifest is missing. It does not affect
+    `overlapFlag`, ranking, or batch selection. Issue numbers and file paths
+    are sorted for deterministic output.
   - `recommendedOrder`: `number[]` — candidate numbers after the soft
     tie-breaker (score desc, then non-overlapping first within a score band,
     then issue number). It does **not** apply `discover.selectionDesync`;
