@@ -55,6 +55,10 @@ const DOTTED_IDENTIFIER_PREFIX =
   /^\s*[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+$/u;
 const MAX_DECLARATION_GENERIC_DEPTH = 8;
 const DECLARATION_CLAUSE_KEYWORDS = ['extends', 'implements', 'permits'];
+const QUALIFIED_CLASS_EXTENDS_PREFIX =
+  /^\s*(?:(?:public|protected|private|abstract|final|sealed|non-sealed)\s+)*(?:class|interface)\s+[A-Za-z_$][A-Za-z0-9_$]*\s+extends\s+(?:[A-Za-z_$][A-Za-z0-9_$]*\.)+[A-Za-z_$][A-Za-z0-9_$]*$/u;
+const QUALIFIED_METHOD_THROWS_PREFIX =
+  /^\s*(?:(?:public|protected|private|static|final|abstract|synchronized|native|strictfp)\s+)*(?:[A-Za-z_$][A-Za-z0-9_$.]*(?:<[^<>]*>)?\s+)+[A-Za-z_$][A-Za-z0-9_$]*\s*\([^()]*\)\s+throws\s+(?:[A-Za-z_$][A-Za-z0-9_$]*\.)+[A-Za-z_$][A-Za-z0-9_$]*$/u;
 function skipDeclarationWhitespace(text, start) {
   let cursor = start;
   while (cursor < text.length && /\s/u.test(text[cursor] ?? '')) {
@@ -163,6 +167,33 @@ function isCompleteDeclarationTail(text) {
   }
   return false;
 }
+function isCompleteDeclarationBlock(text) {
+  const start = skipDeclarationWhitespace(text, 0);
+  const trimmed = text.trimEnd();
+  // Only the outer delimiters matter here; braces inside strings or comments
+  // are body content and must not make a valid declaration look incomplete.
+  return text[start] === '{' && trimmed.endsWith('}');
+}
+function isQualifiedTypeInDeclaration(
+  inner,
+  delimiterIndex,
+  nextWord,
+  followingText,
+) {
+  const prefix = inner.slice(0, delimiterIndex);
+  if (
+    !QUALIFIED_CLASS_EXTENDS_PREFIX.test(prefix) &&
+    !QUALIFIED_METHOD_THROWS_PREFIX.test(prefix)
+  ) {
+    return false;
+  }
+  const continuation = `${nextWord}${followingText}`;
+  const typeEnd = parseDeclarationType(continuation, 0, 0);
+  return (
+    typeEnd !== undefined &&
+    isCompleteDeclarationBlock(continuation.slice(typeEnd))
+  );
+}
 function lineStartsFor(text) {
   const starts = [0];
   for (let index = 0; index < text.length; index += 1) {
@@ -242,10 +273,21 @@ function isSentencePunctuation(inner, delimiterIndex, afterIndex) {
     nextWord !== undefined &&
     /[a-z][A-Z]/u.test(nextWord) &&
     isCompleteDeclarationTail(followingText);
+  const qualifiedTypeDeclarationContinuation =
+    nextWord !== undefined &&
+    isQualifiedTypeInDeclaration(
+      inner,
+      delimiterIndex,
+      nextWord,
+      followingText,
+    );
   // Only a complete, recognized declaration tail stays code-shaped.
   // Trailing punctuation or prose keeps sentence punctuation detectable.
   // A dotted prefix counts as declaration context only at span start;
   // later domain-like text may be prose before a new sentence.
+  if (qualifiedTypeDeclarationContinuation) {
+    return false;
+  }
   if (
     nextWord !== undefined &&
     (!followingProseWord || declarationTypeContinuation) &&

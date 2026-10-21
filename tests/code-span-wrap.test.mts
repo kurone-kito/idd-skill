@@ -224,6 +224,24 @@ test('flags complete declaration tails with generic and combined types', () => {
   }
 });
 
+test('flags qualified types in class extends and method throws clauses', () => {
+  for (const [span, type] of [
+    ['`class Foo extends com.example. MyClass {}`', 'MyClass'],
+    ['`void run() throws com.example. MyException {}`', 'MyException'],
+    [
+      '`void run() throws com.example. MyException { System.out.println("}"); }`',
+      'MyException',
+    ],
+    ['`void run() throws com.example. MyException { /* } */ }`', 'MyException'],
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.ok(violations[0]?.before.endsWith('com.example.'), span);
+    assert.ok(violations[0]?.after.startsWith(type), span);
+    assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+});
+
 test('flags declarations inside one balanced outer wrapper', () => {
   for (const span of [
     '`(com.example. MyClass extends Base)`',
@@ -246,6 +264,7 @@ test('does not flag a sentence after a dotted name', () => {
     '`Visit example.com. GitHub implements additional features.`',
     '`Visit example.com. GitHub implements Interface.`',
     '`Visit example.com. GitHub implements Interface`',
+    '`Visit example.com. GitHub implements OAuth`',
     '`Visit example.com. GitHub permits temporary access.`',
     '`Visit example.com. GitHub extends OAuth.`',
     '`Visit example.com. GitHub implements OAuth.`',
@@ -295,6 +314,15 @@ test('does not flag sentence periods before prose in multi-tick code examples', 
     ),
     [],
   );
+});
+
+test('does not treat class extends or method throws prose as declarations', () => {
+  for (const span of [
+    '`A class Foo extends com.example. MyClass is documented here.`',
+    '`The method run() throws com.example. MyException during the example.`',
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
 });
 
 test('does not flag legitimate option delimiters, comments, ellipses, or words', () => {
