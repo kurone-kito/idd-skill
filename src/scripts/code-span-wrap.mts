@@ -333,7 +333,7 @@ function parseDeclarationGenericArguments(
     return undefined;
   }
 
-  let cursor = skipDeclarationWhitespace(text, start + 1);
+  let cursor = skipDeclarationTrivia(text, start + 1);
   let argumentEnd = parseDeclarationTypeArgument(
     text,
     cursor,
@@ -344,18 +344,18 @@ function parseDeclarationGenericArguments(
   }
   cursor = argumentEnd;
   while (true) {
-    const commaIndex = skipDeclarationWhitespace(text, cursor);
+    const commaIndex = skipDeclarationTrivia(text, cursor);
     if (text[commaIndex] !== ',') {
       break;
     }
-    cursor = skipDeclarationWhitespace(text, commaIndex + 1);
+    cursor = skipDeclarationTrivia(text, commaIndex + 1);
     argumentEnd = parseDeclarationTypeArgument(text, cursor, genericDepth + 1);
     if (argumentEnd === undefined) {
       return undefined;
     }
     cursor = argumentEnd;
   }
-  cursor = skipDeclarationWhitespace(text, cursor);
+  cursor = skipDeclarationTrivia(text, cursor);
   return text[cursor] === '>' ? cursor + 1 : undefined;
 }
 
@@ -555,6 +555,16 @@ function isQualifiedDeclarationTypeListPrefix(text: string): boolean {
   return false;
 }
 
+function hasTopLevelDeclarationTypeListComma(text: string): boolean {
+  const normalized = normalizeSplitQualifiedTypeWhitespace(text);
+  const firstTypeEnd = parseDeclarationType(normalized, 0, 0);
+  if (firstTypeEnd === undefined) {
+    return false;
+  }
+  const separator = skipDeclarationTrivia(normalized, firstTypeEnd);
+  return normalized[separator] === ',';
+}
+
 function isQualifiedClassExtendsPrefix(text: string): boolean {
   let cursor = skipDeclarationTrivia(text, 0);
   while (cursor < text.length) {
@@ -606,7 +616,8 @@ function isQualifiedClassExtendsPrefix(text: string): boolean {
 
   const typeListPrefix = text.slice(typeListStart);
   return (
-    (declarationKind[1] === 'interface' || !typeListPrefix.includes(',')) &&
+    (declarationKind[1] === 'interface' ||
+      !hasTopLevelDeclarationTypeListComma(typeListPrefix)) &&
     isQualifiedDeclarationTypeListPrefix(typeListPrefix)
   );
 }

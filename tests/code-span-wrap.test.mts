@@ -229,6 +229,10 @@ test('flags qualified types in class extends and method throws clauses', () => {
     ['`class Foo extends com.example. MyClass {}`', 'MyClass'],
     ['`class Foo extends com.example. $GeneratedClass {}`', '$GeneratedClass'],
     ['`class Foo extends @NonNull com.example. MyClass {}`', 'MyClass'],
+    [
+      '`class Foo extends @Anno(a = 1, b = 2) com.example. MyClass {}`',
+      'MyClass',
+    ],
     ['`class Foo<T> extends com.example. MyClass {}`', 'MyClass'],
     [
       '`class Foo<T extends Comparable<List<T>>> extends com.example. MyClass {}`',
@@ -279,6 +283,14 @@ test('flags qualified types in class extends and method throws clauses', () => {
     ['`String[] run() throws com.example. MyException {}`', 'MyException'],
     [
       '`Map<String, List<Integer>> run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`Map<String /* note */, Integer> run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`Map<String, /* note */ Integer /* note */> run() throws com.example. MyException {}`',
       'MyException',
     ],
     [
