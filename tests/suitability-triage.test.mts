@@ -2911,6 +2911,15 @@ test('trust safety fails closed inside raw HTML blocks for user steps -- #4596',
   } as Context);
   assert.equal(outsideStandaloneHtmlBlock.pass, true);
 
+  const outsideVoidSourceElement = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '<source>\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(outsideVoidSourceElement.pass, true);
+
   const outsideRawTextBlock = checkTrustSafety({
     issue: {
       ...BASE_ISSUE,
@@ -12033,6 +12042,7 @@ test('trust safety recognizes possessive and quantified agent subjects -- #4596'
     'Some of their dedicated coding agents',
     'The team of coding agents',
     'Their dedicated coding agent',
+    'The exceptionally reliable highly capable experienced coding agent',
   ]) {
     const result = checkTrustSafety({
       issue: {

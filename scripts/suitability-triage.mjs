@@ -575,6 +575,7 @@ const USER_ACTOR_STEP_RAW_HTML_VOID_TAG_SET = new Set([
   'link',
   'menuitem',
   'param',
+  'source',
   'track',
 ]);
 const USER_ACTOR_STEP_RAW_TEXT_HTML_TAG_SET = new Set([
@@ -996,8 +997,9 @@ const USER_ACTOR_STEP_ASSIGNMENT_CUE =
 const USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER = `(?:a|an|the|my|your|his|her|its|our|their|any|each|every|all|some|no|one|both|neither|either|this|that|these|those|several|many|most|few|none)`;
 const USER_ACTOR_STEP_AGENT_SUBJECT_QUANTIFIER = String.raw`(?:one|some|any|each|every|all|both|neither|either|none|several|many|most|few)\s+of\s+`;
 const USER_ACTOR_STEP_AGENT_SUBJECT_COLLECTIVE = String.raw`(?:a|an|the|my|your|his|her|its|our|their|any|each|every|all|some|no|one|both|neither|either|this|that|these|those)\s+(?:group|team|set|subset|pair|number|handful|collection|pool)\s+of\s+`;
+const USER_ACTOR_STEP_AGENT_SUBJECT_MODIFIERS = String.raw`(?:[\w-]+\s+)*`;
 const USER_ACTOR_STEP_AGENT_SUBJECT_PREFIX = new RegExp(
-  String.raw`^\s*(?:(?:and|but|while|whereas)\s+)?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_QUANTIFIER})?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER}\s+)?(?:(?:[\w-]+\s+){0,3})?$|^\s*(?:(?:and|but|while|whereas)\s+)?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_COLLECTIVE})(?:${USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER}\s+)?(?:(?:[\w-]+\s+){0,3})?$`,
+  String.raw`^\s*(?:(?:and|but|while|whereas)\s+)?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_QUANTIFIER})?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER}\s+)?${USER_ACTOR_STEP_AGENT_SUBJECT_MODIFIERS}$|^\s*(?:(?:and|but|while|whereas)\s+)?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_COLLECTIVE})(?:${USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER}\s+)?${USER_ACTOR_STEP_AGENT_SUBJECT_MODIFIERS}$`,
   'i',
 );
 const USER_ACTOR_STEP_GENERAL_WORK_ACTION =
