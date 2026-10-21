@@ -867,7 +867,7 @@ const USER_ACTOR_STEP_OTHER_ACTOR =
 const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT =
   /^\s+(?:(?:the)\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
 const USER_ACTOR_STEP_AGENT_SUBJECT = new RegExp(
-  String.raw`^\s*${USER_ACTOR_STEP_AGENT.source}`,
+  String.raw`^\s*(?:(?:a|an|the)\s+)?${USER_ACTOR_STEP_AGENT.source}`,
   'i',
 );
 // #4577: bare "following" is a target only when it introduces an assignment;
@@ -902,21 +902,19 @@ function hasUserActorStepAssignedTarget(text) {
 const USER_ACTOR_STEP_NUMBERED_TARGET =
   /\b(?:this\s+|that\s+|the\s+)?(steps?|checks?|checklists?|lists?|items?)\s+#?\s*(\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?(?:\s*(?:,\s*(?:and\s+)?|\band\b\s+|\bor\b\s+)#?\s*\d{1,9}(?:\s*(?:-|–|to|through)\s*\d{1,9})?)*)\b/gi;
 const USER_ACTOR_STEP_ASSIGNMENT_CUE =
-  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|owner|ownership|belongs?\s+to|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)?|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complet(?:e|es|ed|ing)|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|hand(?:le|les|led|ling)|man(?:age|ages|aged|aging))\b/i;
+  /\b(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+(?:to|for)|required|instructed|expected|asked|tasked|assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|responsible|responsibility|responsibilities|accountable|owns?|owned|owner|ownership|belongs?\s+to|in\s+charge\s+of|work(?:s|ed|ing)?|give|gives|gave|given|giving|runs?|running|ran|execut(?:e|es|ed|ing)|perform(?:s|ed|ing)?|follow(?:s|ed|ing)|carr(?:y\s+out|ies\s+out|ied\s+out|ying\s+out)|do(?:es|ing)?|did|done|complet(?:e|es|ed|ing)|verify|verifies|verified|verifying|check(?:s|ed|ing)?|test(?:s|ed|ing)?|implement(?:s|ed|ing)?|hand(?:le|les|led|ling)|man(?:age|ages|aged|aging))\b/i;
 const USER_ACTOR_STEP_GENERAL_WORK_ACTION =
   /\b(?:review|build|create|add|update|edit|fix|write|remove|delete|install|configure|prepare|investigate|document|refactor|change|migrate|deploy|publish|author|open|close|merge|inspect|analyze|analyse|validate|generate)\b/i;
 const USER_ACTOR_STEP_AGENT_RECIPIENT_RELATION =
-  /(?:^|\s)(?:(?:is|are|was|were|must|should|shall|will|has\s+been|needs?\s+to|has\s+to|is\s+required\s+to)\s+)?(?:for|required\s+of|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by)\s*$/i;
+  /(?:^|\s)(?:(?:is|are|was|were|must|should|shall|will|has\s+been|needs?\s+to|has\s+to|is\s+required\s+to)\s+)?(?:for|required\s+of|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|in\s+charge\s+of|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by)\s*$/i;
 const USER_ACTOR_STEP_AGENT_OBJECT_ASSIGNMENT_RELATION =
-  /\b(?:ask(?:s|ed)?|request(?:s|ed)?|task(?:s|ed)?|instruct(?:s|ed)?|expect(?:s|ed)?|tell(?:s|told)?|order(?:s|ed)?|want(?:s|ed)?|need(?:s|ed)?|assign(?:s|ed)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|give|gives|gave|given|giving)\s+(?:the\s+)?$/i;
-const USER_ACTOR_STEP_ASSIGNMENT_OBJECT_NOUN =
-  /\b(?:a|an|the|this|that|these|those|some|all|each|every)\s+(?:[a-z][\w-]*\s+){0,3}(?:tasks?|work(?:\s+items?)?|responsibilities|duties|assignments?|issues?|tickets?|features?|deliverables?)\b/i;
+  /\b(?:ask(?:s|ed)?|request(?:s|ed)?|task(?:s|ed)?|instruct(?:s|ed)?|expect(?:s|ed)?|tell(?:s|told)?|order(?:s|ed)?|want(?:s|ed)?|need(?:s|ed)?|assign(?:s|ed)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|let|lets|letting|have|has|had|give|gives|gave|given|giving)\s+(?:the\s+)?$/i;
 const USER_ACTOR_STEP_FORWARD_ASSIGNMENT_INTRODUCER = new RegExp(
   String.raw`^\s*${USER_ACTOR_STEP_AGENT.source}[^.!?;:]*\b(?:(?:is|are|was|were|remains?)\s+(?:responsible\s+for|accountable\s+for|assigned\s+to|tasked\s+with|delegated\s+to|directed\s+to))\s*:\s*$`,
   'i',
 );
 const USER_ACTOR_STEP_TARGET_AGENT_RELATION =
-  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been|needs?\s+to|has\s+to|is\s+required\s+to)\s+)?(?:for|required\s+of|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|done\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by|completed\s+by|managed\s+by|followed\s+by|carried\s+out\s+by))\s*$/i;
+  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been|needs?\s+to|has\s+to|is\s+required\s+to)\s+)?(?:for|required\s+of|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|in\s+charge\s+of|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|done\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by|completed\s+by|managed\s+by|followed\s+by|carried\s+out\s+by))\s*$/i;
 const USER_ACTOR_STEP_PASSIVE_PARTICIPLE =
   /^(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)$/i;
 const USER_ACTOR_STEP_PASSIVE_PARTICIPLE_IN_PHRASE =
@@ -1706,6 +1704,12 @@ function analyzeAgentAssignmentsToSteps(
         ')',
       'gi',
     );
+    const firstAssignmentCue = new RegExp(
+      USER_ACTOR_STEP_ASSIGNMENT_CUE.source,
+      'i',
+    ).exec(clause);
+    const firstAssignmentCueIndex =
+      firstAssignmentCue?.index ?? Number.POSITIVE_INFINITY;
     const contrastPositions = [...clause.matchAll(contrastPattern)]
       .map((match) => ({
         index: match.index ?? 0,
@@ -1721,9 +1725,7 @@ function analyzeAgentAssignmentsToSteps(
           return USER_ACTOR_STEP_USER_DIRECTIVE_START.test(rightSide);
         }
         if (!/^and$/i.test(text)) return true;
-        const leftHasPredicate = USER_ACTOR_STEP_ASSIGNMENT_CUE.test(
-          clause.slice(0, index),
-        );
+        const leftHasPredicate = firstAssignmentCueIndex < index;
         return (
           USER_ACTOR_STEP_USER_DIRECTIVE_START.test(rightSide) ||
           (leftHasPredicate &&
@@ -2404,12 +2406,15 @@ function hasAgentWorkAssignmentInClause(clause) {
     'gi',
   );
   const assignmentClauses = clause.split(assignmentClausePattern);
+  let agentMentionCount = 0;
   for (const assignmentClause of assignmentClauses) {
     const agentPattern = new RegExp(
       USER_ACTOR_STEP_ASSIGNABLE_AGENT.source,
       'gi',
     );
     for (const agent of assignmentClause.matchAll(agentPattern)) {
+      agentMentionCount += 1;
+      if (agentMentionCount > 64) return true;
       const agentStart = agent.index ?? 0;
       const agentEnd = agentStart + (agent[0]?.length ?? 0);
       const prefix = assignmentClause.slice(0, agentStart);
@@ -2420,7 +2425,7 @@ function hasAgentWorkAssignmentInClause(clause) {
       );
       const subjectPrefix = prefix.slice(subjectStart + 1);
       const isAgentSubject =
-        /^\s*(?:(?:and|but|while|whereas)\s+)?(?:the\s+)?$/i.test(
+        /^\s*(?:(?:and|but|while|whereas)\s+)?(?:(?:a|an|the)\s+)?$/i.test(
           subjectPrefix,
         ) &&
         (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(suffix) ||
@@ -2448,9 +2453,9 @@ function hasAgentWorkAssignmentInClause(clause) {
       }
       if (
         USER_ACTOR_STEP_AGENT_OBJECT_ASSIGNMENT_RELATION.test(prefix) &&
-        (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(suffix) ||
-          USER_ACTOR_STEP_GENERAL_WORK_ACTION.test(suffix) ||
-          USER_ACTOR_STEP_ASSIGNMENT_OBJECT_NOUN.test(suffix))
+        !/^\s+to\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i.test(
+          suffix,
+        )
       ) {
         return true;
       }
@@ -2527,24 +2532,105 @@ function hasAgentMentionAndAssignmentCue(text) {
     return hasVisibleAssignment || hasAmbiguousMarkdownAssignment;
   });
 }
+function hasMixedMarkdownAgentAssignment(text, codeRanges, htmlCommentRanges) {
+  const commentMaskedText = separateMarkdownRangesWithClauseBoundaries(
+    text,
+    htmlCommentRanges,
+  );
+  const paragraphBoundary = /\r?\n[ \t]*\r?\n/g;
+  let paragraphStart = 0;
+  let boundary = paragraphBoundary.exec(text);
+  while (boundary !== null) {
+    if (
+      hasMixedMarkdownAgentAssignmentInRange(
+        commentMaskedText,
+        paragraphStart,
+        boundary.index,
+        codeRanges,
+        htmlCommentRanges,
+      )
+    ) {
+      return true;
+    }
+    paragraphStart = boundary.index + boundary[0].length;
+    boundary = paragraphBoundary.exec(text);
+  }
+  paragraphBoundary.lastIndex = 0;
+  return hasMixedMarkdownAgentAssignmentInRange(
+    commentMaskedText,
+    paragraphStart,
+    text.length,
+    codeRanges,
+    htmlCommentRanges,
+  );
+}
+function hasMixedMarkdownAgentAssignmentInRange(
+  commentMaskedText,
+  start,
+  end,
+  codeRanges,
+  htmlCommentRanges,
+) {
+  const paragraph = commentMaskedText.slice(start, end);
+  if (!hasAgentWorkAssignmentInText(paragraph)) return false;
+  const localCodeRanges = codeRanges
+    .filter((range) => range.start < end && range.end > start)
+    .map((range) => ({
+      start: Math.max(0, range.start - start),
+      end: Math.min(end - start, range.end - start),
+    }));
+  if (localCodeRanges.length === 0) return false;
+  const localCommentRanges = htmlCommentRanges
+    .filter((range) => range.start < end && range.end > start)
+    .map((range) => ({
+      start: Math.max(0, range.start - start),
+      end: Math.min(end - start, range.end - start),
+    }));
+  const visibleParagraph = separateMarkdownRangesWithClauseBoundaries(
+    paragraph,
+    [...localCodeRanges, ...localCommentRanges],
+  );
+  if (hasAgentWorkAssignmentInText(visibleParagraph)) return false;
+  const codeOnlyParts = localCodeRanges.map((range) => {
+    let content = paragraph.slice(range.start, range.end);
+    for (const commentRange of localCommentRanges) {
+      const overlapStart = Math.max(range.start, commentRange.start);
+      const overlapEnd = Math.min(range.end, commentRange.end);
+      if (overlapStart < overlapEnd) {
+        const relativeStart = overlapStart - range.start;
+        const relativeEnd = overlapEnd - range.start;
+        content =
+          content.slice(0, relativeStart) +
+          ' '.repeat(relativeEnd - relativeStart) +
+          content.slice(relativeEnd);
+      }
+    }
+    return content;
+  });
+  return !hasAgentWorkAssignmentInText(codeOnlyParts.join('\n'));
+}
 function hasAnyAgentWorkAssignment(
   title,
   bodyAssignmentContext,
   titleAnalysis,
   bodyAnalysis,
+  body,
+  bodyCodeRanges,
+  bodyHtmlCommentRanges,
 ) {
   return (
     hasAgentMentionAndAssignmentCue(title) ||
     hasAgentMentionAndAssignmentCue(bodyAssignmentContext) ||
+    hasMixedMarkdownAgentAssignment(
+      body,
+      bodyCodeRanges,
+      bodyHtmlCommentRanges,
+    ) ||
     titleAnalysis.allTargetKinds.size > 0 ||
     titleAnalysis.numberedTargetRanges.size > 0 ||
     bodyAnalysis.allTargetKinds.size > 0 ||
     bodyAnalysis.numberedTargetRanges.size > 0
   );
-}
-function numberedUserStepListItemOrdinal(index, offset) {
-  const lineIndex = lineIndexAtOffset(index.lineStarts, offset);
-  return index.orderedListOrdinals[lineIndex] ?? null;
 }
 function userActorStepListId(index, offset) {
   const lineIndex = lineIndexAtOffset(index.lineStarts, offset);
@@ -2576,19 +2662,6 @@ function sliceUserActorStepWindowAtSiblingItem(
     return window.slice(0, end).replace(/[.!?][ \t\r\n]*$/, '');
   }
   return window;
-}
-function headingSectionIdAtOffset(index, offset) {
-  const ranges = index.headingSectionRanges;
-  let low = 0;
-  let high = ranges.length;
-  while (low < high) {
-    const middle = Math.floor((low + high) / 2);
-    const range = ranges[middle];
-    if (range !== undefined && range.start <= offset) low = middle + 1;
-    else high = middle;
-  }
-  const range = low > 0 ? ranges[low - 1] : undefined;
-  return range !== undefined && offset < range.end ? range.sectionId : null;
 }
 function hasBareAgentActorHeadingContext(index, offset) {
   let low = 0;
@@ -4212,24 +4285,32 @@ function findUnsafeExecutionDirectiveMatch(
   // GitHub issue titles are plain text, not rendered Markdown. Treat code
   // markers and comment-looking strings as literal untrusted title content.
   const titleAssignmentContext = title;
-  // Analyze each complete field once, then consult the indexed assignments
-  // for every candidate directive. Re-scanning both fields per `run` made
-  // adversarial issue bodies cost O(directives × body length).
-  const titleAssignmentAnalysis = analyzeAgentAssignmentsToSteps(
-    titleAssignmentContext,
-    'global',
-  );
-  const bodyAssignmentAnalysis = analyzeAgentAssignmentsToSteps(
-    normalizedBodyAssignmentContext,
-    'section',
-    bodyBoundaryIndex,
-  );
-  const hasAnyAgentAssignment = hasAnyAgentWorkAssignment(
-    titleAssignmentContext,
-    bodyAssignmentContext,
-    titleAssignmentAnalysis,
-    bodyAssignmentAnalysis,
-  );
+  // A complete assignment scan is needed only when a standalone user-step
+  // directive could use the exception. Cache that one scan across multiple
+  // directives on the same issue body.
+  let hasAnyAgentAssignment = null;
+  const hasAnyAgentWorkAssignmentInIssue = () => {
+    if (hasAnyAgentAssignment !== null) return hasAnyAgentAssignment;
+    const titleAssignmentAnalysis = analyzeAgentAssignmentsToSteps(
+      titleAssignmentContext,
+      'global',
+    );
+    const bodyAssignmentAnalysis = analyzeAgentAssignmentsToSteps(
+      normalizedBodyAssignmentContext,
+      'section',
+      bodyBoundaryIndex,
+    );
+    hasAnyAgentAssignment = hasAnyAgentWorkAssignment(
+      titleAssignmentContext,
+      bodyAssignmentContext,
+      titleAssignmentAnalysis,
+      bodyAssignmentAnalysis,
+      body,
+      bodyCodeRanges,
+      bodyHtmlCommentRanges,
+    );
+    return hasAnyAgentAssignment;
+  };
   const verbPattern = new RegExp(
     String.raw`\b${UNSAFE_DIRECTIVE_VERB}\b`,
     'gi',
@@ -4261,18 +4342,6 @@ function findUnsafeExecutionDirectiveMatch(
       const verbIsInHtmlComment =
         verbHtmlCommentRange !== null &&
         verbBodyStart + verbText.length <= verbHtmlCommentRange.end;
-      const userStepOrdinal = numberedUserStepListItemOrdinal(
-        bodyBoundaryIndex,
-        verbBodyStart,
-      );
-      const userStepListId = userActorStepListId(
-        bodyBoundaryIndex,
-        verbBodyStart,
-      );
-      const userStepSectionId = headingSectionIdAtOffset(
-        bodyBoundaryIndex,
-        verbBodyStart,
-      );
       const userActorStepWindow = sliceUserActorStepWindowAtSiblingItem(
         window,
         bodyBoundaryIndex,
@@ -4295,21 +4364,7 @@ function findUnsafeExecutionDirectiveMatch(
           bodyCodeRanges,
           bodyHtmlCommentRanges,
         ) &&
-        !hasAnyAgentAssignment &&
-        !hasAgentAssignmentForUserStep(
-          titleAssignmentAnalysis,
-          userStepOrdinal,
-          userStepKind,
-          userStepSectionId,
-          userStepListId,
-        ) &&
-        !hasAgentAssignmentForUserStep(
-          bodyAssignmentAnalysis,
-          userStepOrdinal,
-          userStepKind,
-          userStepSectionId,
-          userStepListId,
-        ) &&
+        !hasAnyAgentWorkAssignmentInIssue() &&
         !hasAgentPronounAssignmentAfterUserStep(
           bodyAssignmentContext,
           bodyBoundaryIndex,

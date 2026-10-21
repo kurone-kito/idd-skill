@@ -11579,3 +11579,57 @@ test('trust safety does not treat a double-negative agent assignment as negated 
     assert.equal(result.pass, false, assignment);
   }
 });
+
+test('trust safety fails closed on assigned-agent forms found in current review -- #4596', () => {
+  const cases = [
+    {
+      title: 'A coding agent must implement the feature',
+      body: 'Run this step by the user.',
+    },
+    {
+      body: 'Let the coding agent implement the feature.\n\nRun this step by the user.',
+    },
+    {
+      body: 'Have the coding agent implement the feature.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is in charge of this step.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is working on this step.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The maintainer assigned the coding agent keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding `agent` must perform this step.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent has been given a keyboard-support task.\n\nRun this step by the user.',
+    },
+  ];
+
+  for (const { title, body } of cases) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        ...(title === undefined ? {} : { title }),
+        body,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, title ?? body);
+  }
+});
+
+test('trust safety bounds pathological agent-mention scans by failing closed -- #4596', () => {
+  const repeatedMentions = 'The coding agent '.repeat(65);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${repeatedMentions}was mentioned.\n\nRun this step by the user.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
