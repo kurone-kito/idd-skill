@@ -421,7 +421,7 @@ function parseDeclarationTypeArgument(
   start: number,
   genericDepth: number,
 ): number | undefined {
-  const cursor = skipDeclarationTrivia(text, start);
+  const cursor = skipDeclarationTypeAnnotations(text, start);
   if (text[cursor] !== '?') {
     return parseDeclarationType(text, cursor, genericDepth, false, true);
   }
@@ -601,10 +601,64 @@ function consumeBlockRemainder(
   return undefined;
 }
 
+type DeclarationBlockCompoundKind = 'do' | 'if' | 'try' | 'type' | 'other';
+
+function getDeclarationBlockCompoundKind(
+  text: string,
+  start: number,
+): DeclarationBlockCompoundKind | undefined {
+  const cursor = skipDeclarationTrivia(text, start);
+  const keyword = /^(if|try|for|while|switch|synchronized|do)\b/u.exec(
+    text.slice(cursor),
+  );
+  if (keyword !== null) {
+    if (keyword[0] === 'if') {
+      return 'if';
+    }
+    if (keyword[0] === 'try') {
+      return 'try';
+    }
+    if (keyword[0] === 'do') {
+      return 'do';
+    }
+    return 'other';
+  }
+
+  const boundary = findTypeBodyMemberDelimiter(text, cursor);
+  return boundary?.delimiter === '{' &&
+    getTypeDeclarationBodyKind(text.slice(cursor, boundary.index)) !== undefined
+    ? 'type'
+    : undefined;
+}
+
+function hasDeclarationBlockContinuation(
+  text: string,
+  start: number,
+  kind: DeclarationBlockCompoundKind,
+): boolean {
+  const cursor = skipDeclarationTrivia(text, start);
+  const keywords =
+    kind === 'if'
+      ? ['else']
+      : kind === 'try'
+        ? ['catch', 'finally']
+        : kind === 'do'
+          ? ['while']
+          : [];
+  return keywords.some(
+    (keyword) =>
+      text.startsWith(keyword, cursor) &&
+      !isDeclarationIdentifierContinuation(
+        text.charCodeAt(cursor + keyword.length),
+      ),
+  );
+}
+
 function findDeclarationBlockStatementEnd(
   text: string,
   start: number,
 ): number | undefined {
+  const compoundKind = getDeclarationBlockCompoundKind(text, start);
   let parentheses = 0;
   let brackets = 0;
   let braces = 0;
@@ -651,13 +705,25 @@ function findDeclarationBlockStatementEnd(
         return undefined;
       }
       braces -= 1;
+      if (
+        braces === 0 &&
+        compoundKind !== undefined &&
+        !hasDeclarationBlockContinuation(text, cursor + 1, compoundKind)
+      ) {
+        return cursor + 1;
+      }
     } else if (
       character === ';' &&
       parentheses === 0 &&
       brackets === 0 &&
       braces === 0
     ) {
-      return cursor + 1;
+      if (
+        compoundKind === undefined ||
+        !hasDeclarationBlockContinuation(text, cursor + 1, compoundKind)
+      ) {
+        return cursor + 1;
+      }
     }
     cursor += 1;
   }
@@ -1099,6 +1165,82 @@ function isDeclarationConstructorHeader(text: string): boolean {
   return isDeclarationTriviaOnly(text, cursor);
 }
 
+function findDeclarationFieldInitializerDelimiter(
+  text: string,
+  start: number,
+): number | undefined {
+  let parentheses = 0;
+  let brackets = 0;
+  let braces = 0;
+  let cursor = start;
+  while (cursor < text.length) {
+    const character = text[cursor];
+    if (character === '"' || character === "'") {
+      const literalEnd = skipDeclarationQuotedLiteralEnd(text, cursor);
+      if (literalEnd === undefined) {
+        return undefined;
+      }
+      cursor = literalEnd;
+      continue;
+    }
+    if (
+      character === '/' &&
+      (text[cursor + 1] === '/' || text[cursor + 1] === '*')
+    ) {
+      const commentEnd = skipDeclarationCommentEnd(text, cursor);
+      if (commentEnd === undefined) {
+        return undefined;
+      }
+      cursor = commentEnd;
+      continue;
+    }
+    if (character === '(') {
+      parentheses += 1;
+    } else if (character === ')') {
+      if (parentheses === 0) {
+        return undefined;
+      }
+      parentheses -= 1;
+    } else if (character === '[') {
+      brackets += 1;
+    } else if (character === ']') {
+      if (brackets === 0) {
+        return undefined;
+      }
+      brackets -= 1;
+    } else if (character === '{') {
+      braces += 1;
+    } else if (character === '}') {
+      if (braces === 0) {
+        return undefined;
+      }
+      braces -= 1;
+    } else if (
+      character === '<' &&
+      parentheses === 0 &&
+      brackets === 0 &&
+      braces === 0
+    ) {
+      const genericEnd = skipDeclarationGenericClause(text, cursor);
+      if (genericEnd !== undefined) {
+        cursor = genericEnd;
+        continue;
+      }
+    } else if (
+      character === ',' &&
+      parentheses === 0 &&
+      brackets === 0 &&
+      braces === 0
+    ) {
+      return cursor;
+    }
+    cursor += 1;
+  }
+  return parentheses === 0 && brackets === 0 && braces === 0
+    ? text.length
+    : undefined;
+}
+
 function isDeclarationFieldHeader(text: string): boolean {
   let cursor = skipDeclarationTrivia(text, 0);
   while (cursor < text.length) {
@@ -1125,15 +1267,52 @@ function isDeclarationFieldHeader(text: string): boolean {
   if (cursor === typeEnd) {
     return false;
   }
-  const name = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor));
-  if (name === null) {
-    return false;
+  while (cursor < text.length) {
+    const name = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor));
+    if (name === null) {
+      return false;
+    }
+    cursor = skipDeclarationTrivia(text, cursor + name[0].length);
+    while (text[cursor] === '[') {
+      const dimensionEnd = skipDeclarationTrivia(text, cursor + 1);
+      if (text[dimensionEnd] !== ']') {
+        return false;
+      }
+      cursor = skipDeclarationTrivia(text, dimensionEnd + 1);
+    }
+    if (cursor === text.length) {
+      return true;
+    }
+    if (text[cursor] === '=') {
+      const initializerStart = skipDeclarationTrivia(text, cursor + 1);
+      if (initializerStart === text.length) {
+        return false;
+      }
+      const delimiter = findDeclarationFieldInitializerDelimiter(
+        text,
+        initializerStart,
+      );
+      if (delimiter === undefined) {
+        return false;
+      }
+      if (delimiter === text.length) {
+        return true;
+      }
+      cursor = skipDeclarationTrivia(text, delimiter + 1);
+      if (cursor === text.length) {
+        return false;
+      }
+      continue;
+    }
+    if (text[cursor] !== ',') {
+      return false;
+    }
+    cursor = skipDeclarationTrivia(text, cursor + 1);
+    if (cursor === text.length) {
+      return false;
+    }
   }
-  cursor = skipDeclarationTrivia(text, cursor + name[0].length);
-  if (cursor === text.length) {
-    return true;
-  }
-  return text[cursor] === '=' && !isDeclarationTriviaOnly(text, cursor + 1);
+  return false;
 }
 
 function findTypeBodyMemberDelimiter(
@@ -1143,6 +1322,8 @@ function findTypeBodyMemberDelimiter(
   let parentheses = 0;
   let brackets = 0;
   let generics = 0;
+  let initializerBraces = 0;
+  let inInitializer = false;
   let cursor = start;
   while (cursor < text.length) {
     const character = text[cursor];
@@ -1173,18 +1354,56 @@ function findTypeBodyMemberDelimiter(
       brackets += 1;
     } else if (character === ']') {
       brackets = Math.max(0, brackets - 1);
-    } else if (parentheses === 0 && brackets === 0 && character === '<') {
+    } else if (
+      !inInitializer &&
+      parentheses === 0 &&
+      brackets === 0 &&
+      generics === 0 &&
+      character === '=' &&
+      !['=', '!', '<', '>'].includes(text[cursor - 1] ?? '') &&
+      text[cursor + 1] !== '=' &&
+      text[cursor + 1] !== '>'
+    ) {
+      inInitializer = true;
+    } else if (
+      !inInitializer &&
+      parentheses === 0 &&
+      brackets === 0 &&
+      character === '<'
+    ) {
       generics += 1;
-    } else if (parentheses === 0 && brackets === 0 && character === '>') {
+    } else if (
+      !inInitializer &&
+      parentheses === 0 &&
+      brackets === 0 &&
+      character === '>'
+    ) {
       generics = Math.max(0, generics - 1);
+    } else if (inInitializer && character === '{') {
+      initializerBraces += 1;
+    } else if (inInitializer && character === '}') {
+      if (initializerBraces === 0) {
+        return undefined;
+      }
+      initializerBraces -= 1;
     } else if (
       parentheses === 0 &&
       brackets === 0 &&
       generics === 0 &&
+      !inInitializer &&
       (character === '{' || character === ';')
     ) {
       return { index: cursor, delimiter: character };
     } else if (
+      parentheses === 0 &&
+      brackets === 0 &&
+      initializerBraces === 0 &&
+      inInitializer &&
+      character === ';'
+    ) {
+      return { index: cursor, delimiter: ';' };
+    } else if (
+      !inInitializer &&
       parentheses === 0 &&
       brackets === 0 &&
       generics === 0 &&
@@ -1983,7 +2202,7 @@ function collectDeclarationTypeSplitOffsets(
       ) {
         if (
           text[literalIndex] === '.' &&
-          (text[literalIndex + 1] === ' ' || text[literalIndex + 1] === '\t')
+          /\s/u.test(text[literalIndex + 1] ?? '')
         ) {
           ignoredOffsets.add(literalIndex);
         }
@@ -2006,7 +2225,7 @@ function collectDeclarationTypeSplitOffsets(
       ) {
         if (
           text[commentIndex] === '.' &&
-          (text[commentIndex + 1] === ' ' || text[commentIndex + 1] === '\t')
+          /\s/u.test(text[commentIndex + 1] ?? '')
         ) {
           ignoredOffsets.add(commentIndex);
         }
@@ -2014,14 +2233,11 @@ function collectDeclarationTypeSplitOffsets(
       index = commentEnd - 1;
       continue;
     }
-    if (
-      character !== '.' ||
-      (text[index + 1] !== ' ' && text[index + 1] !== '\t')
-    ) {
+    if (character !== '.' || !/\s/u.test(text[index + 1] ?? '')) {
       continue;
     }
     let nextIndex = index + 1;
-    while (text[nextIndex] === ' ' || text[nextIndex] === '\t') {
+    while (/\s/u.test(text[nextIndex] ?? '')) {
       nextIndex += 1;
     }
     const next = text[nextIndex];
@@ -2417,6 +2633,9 @@ export function findCorruptingCodeSpanWraps(
   for (const span of findInlineCodeSpans(scanned)) {
     const { inner } = span;
     const innerStart = span.index + span.ticks.length;
+    const declarationLineBreakOffsets = /\.\n[ \t]*(?:\$|@)/u.test(inner)
+      ? findQualifiedDeclarationTypeSplitOffsets(inner).qualified
+      : undefined;
     let cursor = 0;
     for (;;) {
       const breakIndex = inner.indexOf('\n', cursor);
@@ -2431,11 +2650,14 @@ export function findCorruptingCodeSpanWraps(
       }
       const nextChar = inner[afterIndex];
       if (
-        prevChar !== undefined &&
-        MID_TOKEN_CONTINUATION.test(prevChar) &&
-        (prevPrevChar === undefined || TOKEN_CONTINUING.test(prevPrevChar)) &&
-        nextChar !== undefined &&
-        TOKEN_CONTINUING.test(nextChar)
+        (prevChar !== undefined &&
+          MID_TOKEN_CONTINUATION.test(prevChar) &&
+          (prevPrevChar === undefined || TOKEN_CONTINUING.test(prevPrevChar)) &&
+          nextChar !== undefined &&
+          TOKEN_CONTINUING.test(nextChar)) ||
+        (prevChar === '.' &&
+          (nextChar === '$' || nextChar === '@') &&
+          declarationLineBreakOffsets?.has(breakIndex - 1) === true)
       ) {
         violations.push({
           offset: innerStart + breakIndex,

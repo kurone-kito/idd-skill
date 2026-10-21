@@ -444,11 +444,29 @@ test('finds declaration starts inside executable and enum bodies', () => {
   }
 });
 
+test('consumes compound statements after a local type declaration', () => {
+  for (const span of [
+    '`class Outer { void run() { class Local extends com.example. MyClass {} if (ready) {} } }`',
+    '`class Outer { void run() { class Local extends com.example. MyClass {} if (ready) {} else {} } }`',
+    '`class Outer { void run() { class Local extends com.example. MyClass {} try {} catch (RuntimeException ex) {} finally {} } }`',
+    '`class Outer { void run() { class Local extends com.example. MyClass {} do {} while (ready); } }`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+});
+
 test('allows valid sibling members after a declaration body', () => {
   for (const span of [
     '`class Outer { void run() throws com.example. MyException {} void other() {} }`',
     '`class Outer { void run() throws com.example. MyException {} void other() {} int value = 1; }`',
     '`class Outer { void run() throws com.example. MyException {} Outer() {} }`',
+    '`class Outer { void run() throws com.example. MyException {} int first, second; }`',
+    '`class Outer { void run() throws com.example. MyException {} int first = 1, second = 2; }`',
+    '`class Outer { void run() throws com.example. MyException {} Runnable action = () -> {}; }`',
+    '`class Outer { void run() throws com.example. MyException {} int[] values = {1, 2}; }`',
+    '`class Outer { void run() throws com.example. MyException {} Map<String, Integer> values = new HashMap<String, Integer>(), other = new HashMap<>(); }`',
   ]) {
     const violations = findCorruptingCodeSpanWraps(span);
     assert.equal(violations.length, 1, span);
@@ -614,6 +632,30 @@ test('parses dollar and underscore identifiers in declaration type lists', () =>
     dollarContinuation[0]?.after.startsWith('$GeneratedException'),
     true,
   );
+});
+
+test('flags declaration-aware line breaks before dollar and annotated types', () => {
+  for (const span of [
+    '`void run() throws com.example.\n$GeneratedException;`',
+    '`void run() throws com.example.\n@Nullable MyException {}`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.line, 1, span);
+    assert.equal(violations[0]?.before.endsWith('com.example.'), true, span);
+  }
+});
+
+test('skips type annotations before wildcard generic arguments', () => {
+  for (const span of [
+    '`class Outer { List<@Nullable ?> run() throws com.example. MyException; }`',
+    '`class Outer { List<@Nullable ? extends Number> run() throws com.example. MyException; }`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.before.endsWith('com.example.'), true, span);
+    assert.equal(violations[0]?.after.startsWith('MyException'), true, span);
+  }
 });
 
 test('flags declarations inside one balanced outer wrapper', () => {
