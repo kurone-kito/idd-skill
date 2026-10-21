@@ -12042,6 +12042,9 @@ test('trust safety recognizes possessive and quantified agent subjects -- #4596'
     'One of our coding agents',
     'Some of their dedicated coding agents',
     'The team of coding agents',
+    "Our team's coding agent",
+    'Our team’s coding agent',
+    "The developers' coding agent",
     'Their dedicated coding agent',
     'The exceptionally reliable highly capable experienced coding agent',
   ]) {

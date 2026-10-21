@@ -1000,7 +1000,7 @@ const USER_ACTOR_STEP_AGENT_RECIPIENT_SELECTOR = String.raw`(?:(?:${USER_ACTOR_S
 const USER_ACTOR_STEP_AGENT_SUBJECT_COLLECTIVE = String.raw`(?:a|an|the|my|your|his|her|its|our|their|any|each|every|all|some|no|one|both|neither|either|this|that|these|those)\s+(?:group|team|set|subset|pair|number|handful|collection|pool)\s+of\s+`;
 // Keep long modifier chains while stopping at object-marking prepositions.
 // Quantifier and collective prefixes consume their own "of" first.
-const USER_ACTOR_STEP_AGENT_SUBJECT_MODIFIERS = String.raw`(?:(?!(?:about|above|across|after|against|along|around|as|at|before|behind|below|beneath|beside|between|beyond|by|despite|down|during|except|for|from|in|inside|into|like|near|of|off|on|onto|out|outside|over|past|since|through|throughout|to|toward|under|underneath|until|up|upon|via|with|within|without)\b)[\w-]+\s+)*`;
+const USER_ACTOR_STEP_AGENT_SUBJECT_MODIFIERS = String.raw`(?:(?!(?:about|above|across|after|against|along|around|as|at|before|behind|below|beneath|beside|between|beyond|by|despite|down|during|except|for|from|in|inside|into|like|near|of|off|on|onto|out|outside|over|past|since|through|throughout|to|toward|under|underneath|until|up|upon|via|with|within|without)\b)[\w-]+(?:['’]s|s['’])?\s+)*`;
 const USER_ACTOR_STEP_AGENT_SUBJECT_PREFIX = new RegExp(
   String.raw`^\s*(?:(?:and|but|while|whereas)\s+)?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_QUANTIFIER})?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER}\s+)?${USER_ACTOR_STEP_AGENT_SUBJECT_MODIFIERS}$|^\s*(?:(?:and|but|while|whereas)\s+)?(?:${USER_ACTOR_STEP_AGENT_SUBJECT_COLLECTIVE})(?:${USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER}\s+)?${USER_ACTOR_STEP_AGENT_SUBJECT_MODIFIERS}$`,
   'i',
