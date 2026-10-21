@@ -73,9 +73,6 @@ const DECLARATION_CLAUSE_KEYWORDS = [
   'implements',
   'permits',
 ] as const;
-const QUALIFIED_METHOD_THROWS_HEADER =
-  /^\s*(?:(?:public|protected|private|static|final|abstract|default|synchronized|native|strictfp)\s+)*(?:<[^<>]+>\s+)?[A-Za-z_$][A-Za-z0-9_$.]*(?:<[^<>]*>)?\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\([^()]*\)\s+throws\s+/u;
-
 function skipDeclarationWhitespace(text: string, start: number): number {
   let cursor = start;
   while (cursor < text.length && /\s/u.test(text[cursor] ?? '')) {
@@ -129,6 +126,8 @@ function parseDeclarationType(
   text: string,
   start: number,
   genericDepth: number,
+  requireUppercaseFinal = true,
+  allowArraySuffix = false,
 ): number | undefined {
   let cursor = start;
   let finalSegmentStartsUppercase = false;
@@ -147,37 +146,90 @@ function parseDeclarationType(
     }
     cursor += 1;
   }
-  if (!finalSegmentStartsUppercase) {
+  if (requireUppercaseFinal && !finalSegmentStartsUppercase) {
     return undefined;
   }
 
-  if (text[cursor] !== '<') {
-    return cursor;
-  }
-  if (genericDepth >= MAX_DECLARATION_GENERIC_DEPTH) {
-    return undefined;
-  }
-
-  cursor = skipDeclarationWhitespace(text, cursor + 1);
-  let argumentEnd = parseDeclarationType(text, cursor, genericDepth + 1);
-  if (argumentEnd === undefined) {
-    return undefined;
-  }
-  cursor = argumentEnd;
-  while (true) {
-    const commaIndex = skipDeclarationWhitespace(text, cursor);
-    if (text[commaIndex] !== ',') {
-      break;
+  if (text[cursor] === '<') {
+    if (genericDepth >= MAX_DECLARATION_GENERIC_DEPTH) {
+      return undefined;
     }
-    cursor = skipDeclarationWhitespace(text, commaIndex + 1);
-    argumentEnd = parseDeclarationType(text, cursor, genericDepth + 1);
+
+    cursor = skipDeclarationWhitespace(text, cursor + 1);
+    let argumentEnd = parseDeclarationType(
+      text,
+      cursor,
+      genericDepth + 1,
+      false,
+      true,
+    );
     if (argumentEnd === undefined) {
       return undefined;
     }
     cursor = argumentEnd;
+    while (true) {
+      const commaIndex = skipDeclarationWhitespace(text, cursor);
+      if (text[commaIndex] !== ',') {
+        break;
+      }
+      cursor = skipDeclarationWhitespace(text, commaIndex + 1);
+      argumentEnd = parseDeclarationType(
+        text,
+        cursor,
+        genericDepth + 1,
+        false,
+        true,
+      );
+      if (argumentEnd === undefined) {
+        return undefined;
+      }
+      cursor = argumentEnd;
+    }
+    cursor = skipDeclarationWhitespace(text, cursor);
+    if (text[cursor] !== '>') {
+      return undefined;
+    }
+    cursor += 1;
   }
-  cursor = skipDeclarationWhitespace(text, cursor);
-  return text[cursor] === '>' ? cursor + 1 : undefined;
+
+  if (allowArraySuffix) {
+    while (text[cursor] === '[' && text[cursor + 1] === ']') {
+      cursor += 2;
+    }
+  }
+  return cursor;
+}
+
+function skipDeclarationGenericClause(
+  text: string,
+  start: number,
+): number | undefined {
+  if (text[start] !== '<') {
+    return undefined;
+  }
+
+  let depth = 0;
+  let hasContent = false;
+  for (let cursor = start; cursor < text.length; cursor += 1) {
+    const character = text[cursor];
+    if (character === '<') {
+      depth += 1;
+      if (depth > MAX_DECLARATION_GENERIC_DEPTH) {
+        return undefined;
+      }
+    } else if (character === '>') {
+      depth -= 1;
+      if (depth < 0) {
+        return undefined;
+      }
+      if (depth === 0) {
+        return hasContent ? cursor + 1 : undefined;
+      }
+    } else if (depth > 0 && !/\s/u.test(character ?? '')) {
+      hasContent = true;
+    }
+  }
+  return undefined;
 }
 
 function isCompleteDeclarationTail(text: string): boolean {
@@ -253,31 +305,11 @@ function isQualifiedClassExtendsPrefix(text: string): boolean {
 
   let cursor = header[0].length;
   if (text[cursor] === '<') {
-    let depth = 0;
-    let hasTypeParameterContent = false;
-    for (; cursor < text.length; cursor += 1) {
-      const character = text[cursor];
-      if (character === '<') {
-        depth += 1;
-        if (depth > MAX_DECLARATION_GENERIC_DEPTH) {
-          return false;
-        }
-      } else if (character === '>') {
-        depth -= 1;
-        if (depth < 0) {
-          return false;
-        }
-        if (depth === 0) {
-          cursor += 1;
-          break;
-        }
-      } else if (depth > 0 && !/\s/u.test(character ?? '')) {
-        hasTypeParameterContent = true;
-      }
-    }
-    if (depth !== 0 || !hasTypeParameterContent) {
+    const genericClauseEnd = skipDeclarationGenericClause(text, cursor);
+    if (genericClauseEnd === undefined) {
       return false;
     }
+    cursor = genericClauseEnd;
   }
 
   const extendsClause = /^\s+extends\s+(.+)$/u.exec(text.slice(cursor));
@@ -336,10 +368,54 @@ function isCompleteMethodThrowsTail(text: string): boolean {
 }
 
 function isQualifiedMethodThrowsPrefix(text: string): boolean {
-  const header = QUALIFIED_METHOD_THROWS_HEADER.exec(text);
-  return (
-    header !== null &&
-    isQualifiedDeclarationTypeListPrefix(text.slice(header[0].length))
+  let cursor = skipDeclarationWhitespace(text, 0);
+  while (true) {
+    const modifier =
+      /^(?:public|protected|private|static|final|abstract|default|synchronized|native|strictfp)\s+/u.exec(
+        text.slice(cursor),
+      );
+    if (modifier === null) {
+      break;
+    }
+    cursor += modifier[0].length;
+  }
+
+  if (text[cursor] === '<') {
+    const typeParametersEnd = skipDeclarationGenericClause(text, cursor);
+    if (typeParametersEnd === undefined) {
+      return false;
+    }
+    cursor = skipDeclarationWhitespace(text, typeParametersEnd);
+  }
+
+  const returnTypeEnd = parseDeclarationType(text, cursor, 0, false, true);
+  if (returnTypeEnd === undefined) {
+    return false;
+  }
+  cursor = skipDeclarationWhitespace(text, returnTypeEnd);
+  if (cursor === returnTypeEnd) {
+    return false;
+  }
+
+  const methodName = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor));
+  if (methodName === null) {
+    return false;
+  }
+  cursor = skipDeclarationWhitespace(text, cursor + methodName[0].length);
+  const parameters = /^\([^()]*\)/u.exec(text.slice(cursor));
+  if (parameters === null) {
+    return false;
+  }
+  cursor = skipDeclarationWhitespace(text, cursor + parameters[0].length);
+  if (!text.startsWith('throws', cursor)) {
+    return false;
+  }
+  cursor += 'throws'.length;
+  if (cursor >= text.length || !/\s/u.test(text[cursor] ?? '')) {
+    return false;
+  }
+  return isQualifiedDeclarationTypeListPrefix(
+    text.slice(skipDeclarationWhitespace(text, cursor)),
   );
 }
 

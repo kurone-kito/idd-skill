@@ -255,6 +255,11 @@ test('flags qualified types in class extends and method throws clauses', () => {
       'MyInterface',
     ],
     ['`void run() throws com.example. MyException {}`', 'MyException'],
+    ['`String[] run() throws com.example. MyException {}`', 'MyException'],
+    [
+      '`Map<String, List<Integer>> run() throws com.example. MyException {}`',
+      'MyException',
+    ],
     [
       '`public <T> void run() throws com.example. MyException {}`',
       'MyException',
@@ -340,6 +345,12 @@ test('parses dollar and underscore identifiers in declaration type lists', () =>
     assert.equal(violations.length, 1, prefix);
     assert.equal(violations[0]?.after.startsWith('MyInterface'), true, prefix);
   }
+
+  const laterSplit = findCorruptingCodeSpanWraps(
+    '`interface Foo extends first.One, $root._internal. MyInterface {}`',
+  );
+  assert.equal(laterSplit.length, 1);
+  assert.equal(laterSplit[0]?.before.endsWith('$root._internal.'), true);
 });
 
 test('flags declarations inside one balanced outer wrapper', () => {
