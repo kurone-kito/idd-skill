@@ -7,12 +7,20 @@
 //
 // The F4 steps 4 to 6 helper (#4370). The flow and its gates live in
 // f4-worktree-branch-steps.mts. This module binds them to the real git,
-// filesystem, `resume-claim-routing` and `post-idd-marker` commands, `gh`
-// reads, the clone-scoped lock, and delete-remote-branch. Run it from the
-// primary worktree. A dry run is the default; `--apply` mutates.
+// filesystem (including preserving a lone ignored node_modules/ tree),
+// `resume-claim-routing` and `post-idd-marker` commands, `gh` reads, the
+// clone-scoped lock, and delete-remote-branch. Run it from the primary
+// worktree. A dry run is the default; `--apply` mutates.
 
 import { spawnSync } from 'node:child_process';
-import { lstatSync, realpathSync } from 'node:fs';
+import {
+  lstatSync,
+  mkdirSync,
+  realpathSync,
+  renameSync,
+  rmdirSync,
+} from 'node:fs';
+import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mts';
 import { parseCliArgs } from './cli-args.mts';
@@ -44,6 +52,7 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
+import { resolveStateBase } from './idd-local-admission.mts';
 import { parseLocalWorktreeList } from './local-worktree-occupancy.mts';
 import { gitChildEnvironment } from './provider-adapter-github.mts';
 
@@ -126,7 +135,7 @@ function printUsage(): void {
     'Usage:\n' +
       '  node scripts/f4-worktree-branch-cleanup.mjs --issue <n> --claim-id <id> --nonce <nonce> --agent-id <id> --worktree <abs-path> [--apply]\n\n' +
       'Run from the primary worktree. F4 steps 4 to 6, gated on the head proof.\n' +
-      'Dry-run is the default. --apply mutates: fetch, fast-forward, worktree and branch removal, remote branch deletion.\n',
+      'Dry-run is the default. --apply mutates: fetch, fast-forward, preserve a lone ignored node_modules/, worktree and branch removal, remote branch deletion.\n',
   );
 }
 
@@ -210,6 +219,10 @@ export interface LiveCleanupOptions {
   readonly agentId: string;
   readonly worktree: string;
   readonly primaryRoot: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly platform?: NodeJS.Platform;
+  readonly home?: string;
+  readonly now?: () => Date;
 }
 
 /** The argv of `resume-claim-routing --assert` for the claimed worktree. */
@@ -280,9 +293,19 @@ export function createLiveDeps(
   const root = resolveBundleRoot(import.meta.dirname);
   const { owner, repo } = resolveCheckoutRepository();
   const repoPath = `repos/${owner}/${repo}`;
+  const stateRoot = resolveStateBase(
+    options.env ?? process.env,
+    options.platform ?? process.platform,
+    options.home ?? homedir(),
+  );
   return {
     lstat: lstatKind,
     realpath: realpathOrNull,
+    stateRoot,
+    now: options.now ?? (() => new Date()),
+    mkdir: (path) => mkdirSync(path),
+    rename: (source, destination) => renameSync(source, destination),
+    rmdir: (path) => rmdirSync(path),
     git: (args, cwd) => runGit(args, cwd),
     assertClaim: (worktree) =>
       runSpawned(claimCheckArgv(options, worktree, owner, repo, root)),

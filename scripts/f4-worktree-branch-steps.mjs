@@ -7,16 +7,17 @@
 // F4 steps 4 to 6 (idd-merge.instructions.md), gated on the F4 head proof
 // (docs/idd-resume-detail.md#f4-head-proof). The flow runs in this order:
 // the no-follow path check, a claim check, the proof dry run, step 4 (the
-// primary fast-forward), step 5 (the worktree and local branch removal), a
-// second claim check, and step 6 (the remote branch). Each hold has a reason
-// code and a next action. The flow never passes `--force`, never posts a
-// proof, and writes only through the injected deps.
+// primary fast-forward), step 5 (preserve a lone ignored node_modules/ tree,
+// then remove the worktree and local branch), a second claim check, and step
+// 6 (the remote branch). Each hold has a reason code and a next action. The
+// flow never passes `--force`, never posts a proof, and writes only through
+// the injected deps.
 //
 // This module performs no I/O. Every git call, filesystem probe, spawned
 // helper, `gh` read, clone lock, and remote deletion arrives through
 // {@link F4WorktreeBranchDeps}, so the flow runs against fakes in tests. The
 // production wiring lives in f4-worktree-branch-cleanup.mts.
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseLocalWorktreeList } from './local-worktree-occupancy.mjs';
 
 const PLAN_ORDER = [
@@ -102,15 +103,15 @@ export const NEXT_ACTIONS = {
   'inconsistent-worktree-state':
     'Hold. The worktree path, its git registration, and the claim branch disagree, or git could not read them. Nothing was removed. The operator checks git worktree list and the claim.',
   'dirty-worktree':
-    'Hold. The worktree holds untracked, modified, or ignored files. Nothing was removed. The F4 session preserves that content outside the worktree by hand, including every reproducible configured-command output, then reruns.',
+    'Hold. The worktree holds untracked, modified, or ignored files. Nothing was removed. The helper moves only a lone ignored node_modules/ directory; when the detail says it did not move node_modules/, the F4 session preserves that directory by hand too. Preserve all other content outside the worktree, including reproducible configured-command output, then rerun.',
   'submodule-worktree':
     'Hold. The worktree holds a populated submodule. Nothing was removed. The F4 session preserves that content outside the worktree by hand. The operator then runs git -C <issue-worktree-path> submodule deinit --all with the worktree still registered, and the helper is rerun.',
   'branch-tip-mismatch':
     'Hold. The local branch tip does not equal the proof branch tip, or the ref is missing while its worktree exists. Nothing was removed. The operator checks the branch state.',
   'local-branch-unmerged-commits':
-    'Hold. git branch -d refused, and the local tip is not the proof head. The operator comments on the issue and makes a fresh claim check before any forced deletion.',
+    'Hold. git branch -d refused, and the local tip is not the proof head. The operator comments on the issue and makes a fresh claim check before any forced deletion; keep any node_modules/ destination named in the detail.',
   'worktree-remove-refused':
-    'Failed. git worktree remove refused after the checks passed, so the worktree may be partly changed. The operator inspects it. A rerun reads the proof again and posts nothing.',
+    'Failed. git worktree remove refused after the checks passed, so the worktree may be partly changed. The operator inspects it and keeps any node_modules/ destination named in the detail. A rerun reads the proof again and posts nothing.',
   'delete-setting-unreadable':
     'Hold at step 6. delete_branch_on_merge could not be read as a boolean, and nothing remote was deleted. In a dry run nothing has changed, so rerun it once the setting is readable. In an applied run, steps 4 and 5 have already run. The operator first confirms by hand that delete_branch_on_merge is false: when it is true, step 6 is skipped, because GitHub deletes the branch on merge. Only when it is false does the operator complete step 6 by hand with delete-remote-branch and the expected SHA, and the session continues from step 7 after the operator confirms. Do not rerun an applied run.',
   'remote-delete-unreadable':
@@ -590,7 +591,14 @@ function runStep4And5(
     steps.push(stepRecord('step-4', 'done'));
   }
   // Step 5, inspection then removal.
-  const inspected = inspectWorktree(deps, primary, worktree, branchRef, proof);
+  const inspected = inspectWorktree(
+    deps,
+    input.issueNumber,
+    primary,
+    worktree,
+    branchRef,
+    proof,
+  );
   if (inspected.hold !== null) {
     return { hold: inspected.hold, error: null, at: 'step-5' };
   }
@@ -598,13 +606,15 @@ function runStep4And5(
     steps.push(
       stepRecord('step-5', 'would-run', {
         detail: inspected.worktreePresent
-          ? 'the worktree and branch would be removed'
+          ? inspected.preserveNodeModules === null
+            ? 'the worktree and branch would be removed'
+            : `node_modules/ would move to ${inspected.preserveNodeModules.destination}; the worktree and branch would be removed`
           : 'the worktree is already absent; only the branch would be removed',
       }),
     );
     return { hold: null, error: null, at: 'step-5' };
   }
-  // Apply: pre-removal claim check, then removal, then branch deletion.
+  // Apply: pre-removal claim check, optional preservation, then removal.
   const claimRemoval = classifyClaimAssert(
     deps.assertClaim(worktree),
     input.claimId,
@@ -617,6 +627,68 @@ function runStep4And5(
       at: 'step-5',
     };
   }
+  let preservedDestination = null;
+  if (inspected.preserveNodeModules !== null) {
+    const moved = moveNodeModules(
+      deps,
+      worktree,
+      inspected.preserveNodeModules.destination,
+    );
+    if (moved.hold !== null || moved.result === null) {
+      return {
+        hold: { code: 'dirty-worktree', detail: moved.hold },
+        error: null,
+        at: 'step-5',
+      };
+    }
+    preservedDestination = moved.result.destination;
+    const postMoveStatus = deps.git(
+      [
+        '-C',
+        worktree,
+        'status',
+        '--porcelain',
+        '--ignored',
+        '--untracked-files=normal',
+      ],
+      primary,
+    );
+    if (postMoveStatus.status !== 0) {
+      return {
+        hold: {
+          code: 'inconsistent-worktree-state',
+          detail: `node_modules/ was preserved at ${preservedDestination}, but git status failed: ${postMoveStatus.stderr.trim()}`,
+        },
+        error: null,
+        at: 'step-5',
+      };
+    }
+    if (postMoveStatus.stdout.length > 0) {
+      return {
+        hold: {
+          code: 'dirty-worktree',
+          detail: `node_modules/ was preserved at ${preservedDestination}, but the worktree still has status output`,
+        },
+        error: null,
+        at: 'step-5',
+      };
+    }
+    const claimAfterMove = classifyClaimAssert(
+      deps.assertClaim(worktree),
+      input.claimId,
+      input.agentId,
+    );
+    if (!claimAfterMove.ok) {
+      return {
+        hold: {
+          code: claimAfterMove.code,
+          detail: `after preserving node_modules/ at ${preservedDestination}`,
+        },
+        error: null,
+        at: 'step-5',
+      };
+    }
+  }
   if (inspected.worktreePresent) {
     const removed = deps.git(['worktree', 'remove', worktree], primary);
     if (removed.status !== 0) {
@@ -625,7 +697,7 @@ function runStep4And5(
         error: {
           kind: 'failed',
           code: 'worktree-remove-refused',
-          detail: `git worktree remove refused: ${removed.stderr.trim()}`,
+          detail: `git worktree remove refused: ${removed.stderr.trim()}${preservedDestination === null ? '' : `; node_modules/ was preserved at ${preservedDestination}`}`,
         },
         at: 'step-5',
       };
@@ -639,7 +711,7 @@ function runStep4And5(
         return {
           hold: {
             code: 'local-branch-unmerged-commits',
-            detail: `git branch -d refused, and the tip ${tip ?? 'unknown'} is not the proof head ${proof.head}`,
+            detail: `git branch -d refused, and the tip ${tip ?? 'unknown'} is not the proof head ${proof.head}${preservedDestination === null ? '' : `; node_modules/ was preserved at ${preservedDestination}`}`,
           },
           error: null,
           at: 'step-5',
@@ -647,14 +719,20 @@ function runStep4And5(
       }
       steps.push(
         stepRecord('step-5', 'done', {
-          detail:
-            'git branch -d kept the branch, whose tip equals the proof head. Comment on the issue before any git branch -D, as merge doc F4 step 5 asks',
+          detail: `git branch -d kept the branch, whose tip equals the proof head. Comment on the issue before any git branch -D, as merge doc F4 step 5 asks${preservedDestination === null ? '' : `; node_modules/ was preserved at ${preservedDestination}`}`,
         }),
       );
       return { hold: null, error: null, at: 'step-5' };
     }
   }
-  steps.push(stepRecord('step-5', 'done'));
+  steps.push(
+    stepRecord('step-5', 'done', {
+      detail:
+        preservedDestination === null
+          ? null
+          : `node_modules/ was preserved at ${preservedDestination}`,
+    }),
+  );
   return { hold: null, error: null, at: 'step-5' };
 }
 function readBranchTip(deps, primary, branchRef) {
@@ -821,11 +899,19 @@ function refusalHold(deps, primary, result) {
  * worktree status, the populated submodules, and each tracked path. A hold
  * here removes nothing.
  */
-function inspectWorktree(deps, primary, worktree, branchRef, proof) {
+function inspectWorktree(
+  deps,
+  issueNumber,
+  primary,
+  worktree,
+  branchRef,
+  proof,
+) {
   const none = (code, detail) => ({
     hold: { code, detail },
     worktreePresent: false,
     branchPresent: false,
+    preserveNodeModules: null,
   });
   const listing = deps.git(['worktree', 'list', '--porcelain', '-z'], primary);
   let records;
@@ -865,7 +951,12 @@ function inspectWorktree(deps, primary, worktree, branchRef, proof) {
         `local tip ${tip ?? 'unknown'} differs from the proof`,
       );
     }
-    return { hold: null, worktreePresent: false, branchPresent: exists };
+    return {
+      hold: null,
+      worktreePresent: false,
+      branchPresent: exists,
+      preserveNodeModules: null,
+    };
   }
   if (!present || record === undefined || record.prunable) {
     return none(
@@ -911,8 +1002,42 @@ function inspectWorktree(deps, primary, worktree, branchRef, proof) {
       `git status failed: ${status.stderr.trim()}`,
     );
   }
-  if (status.stdout.split('\n').some((line) => line.length > 0)) {
+  const statusBody = status.stdout.endsWith('\n')
+    ? status.stdout.slice(0, -1)
+    : status.stdout;
+  const loneIgnoredNodeModules = statusBody === '!! node_modules/';
+  if (statusBody.length > 0 && !loneIgnoredNodeModules) {
     return none('dirty-worktree', null);
+  }
+  let preserveNodeModules = null;
+  if (loneIgnoredNodeModules) {
+    const nodeModules = join(worktree, 'node_modules');
+    let registeredInsideNodeModules;
+    try {
+      if (deps.lstat(nodeModules) !== 'directory') {
+        return none(
+          'dirty-worktree',
+          'the helper did not move node_modules/: the path is not a real directory',
+        );
+      }
+      registeredInsideNodeModules = records.find((entry) =>
+        isWithinRoot(
+          deps.realpath(nodeModules) ?? resolve(nodeModules),
+          deps.realpath(entry.path) ?? resolve(entry.path),
+        ),
+      );
+    } catch (error) {
+      return none(
+        'dirty-worktree',
+        `the helper did not move node_modules/: it could not inspect the directory or worktree paths: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (registeredInsideNodeModules !== undefined) {
+      return none(
+        'dirty-worktree',
+        `the helper did not move node_modules/: registered worktree ${registeredInsideNodeModules.path} lies at or inside it`,
+      );
+    }
   }
   const submodules = deps.git(
     ['-C', worktree, 'submodule', 'status', '--recursive'],
@@ -961,7 +1086,178 @@ function inspectWorktree(deps, primary, worktree, branchRef, proof) {
   if (linked !== null) {
     return none('symlink-path', linked);
   }
-  return { hold: null, worktreePresent: true, branchPresent: true };
+  if (loneIgnoredNodeModules) {
+    const destination = preserveDestination(
+      deps,
+      issueNumber,
+      primary,
+      records,
+    );
+    if (destination.hold !== null) {
+      return none('dirty-worktree', destination.hold);
+    }
+    preserveNodeModules = { destination: destination.destination };
+  }
+  return {
+    hold: null,
+    worktreePresent: true,
+    branchPresent: true,
+    preserveNodeModules,
+  };
+}
+/** Read-only destination validation shared by dry-run and apply. */
+function preserveDestination(deps, issueNumber, primary, records) {
+  try {
+    return inspectPreserveDestination(deps, issueNumber, primary, records);
+  } catch (error) {
+    return {
+      destination: '',
+      hold: `the helper did not move node_modules/: destination check failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+function inspectPreserveDestination(deps, issueNumber, primary, records) {
+  const refuse = (detail) => ({ destination: '', hold: detail });
+  if (!isAbsolute(deps.stateRoot)) {
+    return refuse(
+      'the helper did not move node_modules/: the state root is not absolute',
+    );
+  }
+  const stateKind = deps.lstat(deps.stateRoot);
+  if (stateKind === 'absent') {
+    return refuse(
+      'the helper did not move node_modules/: the state root does not exist',
+    );
+  }
+  if (stateKind !== 'directory' && stateKind !== 'symlink') {
+    return refuse(
+      'the helper did not move node_modules/: the state root is not a directory',
+    );
+  }
+  if (deps.realpath(deps.stateRoot) === null) {
+    return refuse(
+      'the helper did not move node_modules/: the state root cannot be resolved',
+    );
+  }
+  const iddDirectory = join(deps.stateRoot, 'idd-skill');
+  const preserveDirectory = join(iddDirectory, 'f4-preserved');
+  for (const [path, kind] of [
+    [iddDirectory, deps.lstat(iddDirectory)],
+    [preserveDirectory, deps.lstat(preserveDirectory)],
+  ]) {
+    if (kind === 'symlink') {
+      return refuse(
+        `the helper did not move node_modules/: destination component ${path} is a symlink`,
+      );
+    }
+    if (kind !== 'absent' && kind !== 'directory') {
+      return refuse(
+        `the helper did not move node_modules/: destination component ${path} is not a directory`,
+      );
+    }
+  }
+  let timestamp;
+  try {
+    timestamp = deps
+      .now()
+      .toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\.\d{3}Z$/, 'Z');
+  } catch {
+    return refuse(
+      'the helper did not move node_modules/: the UTC destination timestamp is invalid',
+    );
+  }
+  const destination = join(preserveDirectory, `${issueNumber}-${timestamp}`);
+  if (deps.lstat(destination) !== 'absent') {
+    return refuse(
+      `the helper did not move node_modules/: destination already exists at ${destination}`,
+    );
+  }
+  const deepestExisting = [
+    preserveDirectory,
+    iddDirectory,
+    deps.stateRoot,
+  ].find((path) => deps.lstat(path) !== 'absent');
+  if (deepestExisting === undefined) {
+    return refuse(
+      'the helper did not move node_modules/: no existing destination parent was found',
+    );
+  }
+  const destinationBase = deps.realpath(deepestExisting);
+  if (destinationBase === null) {
+    return refuse(
+      `the helper did not move node_modules/: destination parent ${deepestExisting} cannot be resolved`,
+    );
+  }
+  const protectedRoots = [primary, ...records.map((record) => record.path)];
+  for (const protectedRoot of protectedRoots) {
+    const protectedReal =
+      deps.realpath(protectedRoot) ?? resolve(protectedRoot);
+    if (isWithinRoot(protectedReal, destinationBase)) {
+      return refuse(
+        `the helper did not move node_modules/: destination ${destination} is inside protected worktree ${protectedRoot}`,
+      );
+    }
+  }
+  return { destination, hold: null };
+}
+/** Create missing parents and move the tree with one same-filesystem rename. */
+function moveNodeModules(deps, worktree, destination) {
+  const preserveDirectory = dirname(destination);
+  const iddDirectory = dirname(preserveDirectory);
+  for (const path of [iddDirectory, preserveDirectory]) {
+    let kind;
+    try {
+      kind = deps.lstat(path);
+    } catch (error) {
+      return {
+        result: null,
+        hold: `the helper did not move node_modules/: could not inspect ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    if (kind === 'directory') continue;
+    if (kind !== 'absent') {
+      return {
+        result: null,
+        hold: `the helper did not move node_modules/: destination component ${path} is not a real directory`,
+      };
+    }
+    try {
+      deps.mkdir(path);
+    } catch (error) {
+      return {
+        result: null,
+        hold: `the helper did not move node_modules/: could not create ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+  try {
+    deps.mkdir(destination);
+  } catch (error) {
+    return {
+      result: null,
+      hold: `the helper did not move node_modules/: could not create ${destination}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  try {
+    deps.rename(join(worktree, 'node_modules'), destination);
+  } catch (error) {
+    let cleanupDetail = '';
+    try {
+      deps.rmdir(destination);
+    } catch (cleanupError) {
+      cleanupDetail = `; could not remove empty destination ${destination}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
+    }
+    return {
+      result: null,
+      hold: `the helper did not move node_modules/: rename to ${destination} failed: ${error instanceof Error ? error.message : String(error)}${cleanupDetail}`,
+    };
+  }
+  return {
+    result: { destination },
+    hold: null,
+  };
 }
 /**
  * The first tracked entry whose path, or any ancestor inside the worktree,

@@ -32,6 +32,9 @@ const HEAD = 'b'.repeat(40);
 const MERGE = 'c'.repeat(40);
 const F2 = 'd'.repeat(40);
 const OTHER = 'e'.repeat(40);
+const STATE_ROOT = '/state';
+const PRESERVE_DESTINATION =
+  '/state/idd-skill/f4-preserved/4370-20261021T103000Z';
 
 type Args = readonly string[];
 
@@ -92,10 +95,16 @@ function proofProceed(overrides: Record<string, unknown> = {}): SpawnedResult {
   };
 }
 
-function worktreeListing(): string {
+function worktreeListing(additionalPaths: readonly string[] = []): string {
   const record = (path: string, branch: string): string =>
     `worktree ${path}\0HEAD ${OTHER}\0branch refs/heads/${branch}\0\0`;
-  return record(PRIMARY, 'main') + record(WORKTREE, BRANCH);
+  return (
+    record(PRIMARY, 'main') +
+    record(WORKTREE, BRANCH) +
+    additionalPaths
+      .map((path, index) => record(path, `issue/other-${index}`))
+      .join('')
+  );
 }
 
 /** The healthy path: every check passes, and the branch is merged. */
@@ -138,6 +147,9 @@ interface Harness {
   readonly claimCalls: string[];
   readonly proofCalls: number[];
   readonly lockCalls: number[];
+  readonly mkdirCalls: string[];
+  readonly renameCalls: string[][];
+  readonly rmdirCalls: string[];
 }
 
 function remoteVerdict(
@@ -176,6 +188,13 @@ interface HarnessOptions {
     sha: string,
   ) => RemoteBranchDeleteVerdict | null;
   readonly lockBusy?: boolean;
+  readonly statusResults?: readonly GitResult[];
+  readonly nestedWorktrees?: readonly string[];
+  readonly stateRoot?: string;
+  readonly now?: () => Date;
+  readonly mkdir?: (path: string) => void;
+  readonly rename?: (source: string, destination: string) => void;
+  readonly rmdir?: (path: string) => void;
 }
 
 /** Build the deps: git answers by the first matching route, else success. */
@@ -186,13 +205,47 @@ function harness(options: HarnessOptions = {}): Harness {
   const claimCalls: string[] = [];
   const proofCalls: number[] = [];
   const lockCalls: number[] = [];
+  const statusResults = [...(options.statusResults ?? [])];
+  const mkdirCalls: string[] = [];
+  const renameCalls: string[][] = [];
+  const rmdirCalls: string[] = [];
+  let statusIndex = 0;
   const claims = options.claims ?? [claimOk()];
-  const lstat = options.lstat ?? ((): LstatKind => 'directory');
+  const lstat =
+    options.lstat ??
+    ((path: string): LstatKind =>
+      path === PRESERVE_DESTINATION ? 'absent' : 'directory');
   const deps: F4WorktreeBranchDeps = {
     lstat,
     realpath: (path) => path,
+    stateRoot: options.stateRoot ?? STATE_ROOT,
+    now: options.now ?? (() => new Date('2026-10-21T10:30:00.000Z')),
+    mkdir: (path) => {
+      mkdirCalls.push(path);
+      options.mkdir?.(path);
+    },
+    rename: (source, destination) => {
+      renameCalls.push([source, destination]);
+      options.rename?.(source, destination);
+    },
+    rmdir: (path) => {
+      rmdirCalls.push(path);
+      options.rmdir?.(path);
+    },
     git: (args, cwd) => {
       gitCalls.push({ args: [...args], cwd });
+      if (args[0] === '-C' && args[2] === 'status') {
+        const result = statusResults[statusIndex];
+        statusIndex += 1;
+        if (result !== undefined) return result;
+      }
+      if (
+        args[0] === 'worktree' &&
+        args[1] === 'list' &&
+        options.nestedWorktrees !== undefined
+      ) {
+        return ok(worktreeListing(options.nestedWorktrees));
+      }
       const route = routes.find((candidate) => candidate.match(args));
       return route ? route.result : ok();
     },
@@ -226,7 +279,17 @@ function harness(options: HarnessOptions = {}): Harness {
       return { acquired: true, value: run() };
     },
   };
-  return { deps, gitCalls, remoteCalls, claimCalls, proofCalls, lockCalls };
+  return {
+    deps,
+    gitCalls,
+    remoteCalls,
+    claimCalls,
+    proofCalls,
+    lockCalls,
+    mkdirCalls,
+    renameCalls,
+    rmdirCalls,
+  };
 }
 
 function stepsOf(report: {
@@ -676,12 +739,100 @@ test('an ignored-only file in the worktree still holds dirty-worktree', () => {
         ...healthyRoutes().slice(0, 7),
         {
           match: (a) => a[0] === '-C' && a[2] === 'status',
-          result: ok('!! node_modules/\n'),
+          result: ok('!! build/\n'),
         },
       ],
     }).deps,
   );
   assert.equal(report.reason, 'dirty-worktree');
+});
+
+test('a lone ignored node_modules directory moves after the claim check', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n'), ok('')],
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.status, 'complete');
+  assert.deepEqual(h.renameCalls, [
+    [`${WORKTREE}/node_modules`, PRESERVE_DESTINATION],
+  ]);
+  assert.equal(h.mkdirCalls.at(-1), PRESERVE_DESTINATION);
+  assert.equal(h.claimCalls.length, 5);
+  assert.equal(
+    report.steps.find((step) => step.step === 'step-5')?.detail,
+    `node_modules/ was preserved at ${PRESERVE_DESTINATION}`,
+  );
+});
+
+test('a dry run reports the node_modules destination without creating or moving it', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+  });
+  const report = runF4WorktreeBranchSteps(input({ apply: false }), h.deps);
+  assert.equal(report.status, 'dry-run');
+  assert.match(
+    report.steps.find((step) => step.step === 'step-5')?.detail ?? '',
+    new RegExp(PRESERVE_DESTINATION.replaceAll('/', '\\/')),
+  );
+  assert.deepEqual(h.mkdirCalls, []);
+  assert.deepEqual(h.renameCalls, []);
+});
+
+test('a lone ignored node_modules path that is not a real directory still holds', () => {
+  for (const kind of ['symlink', 'file'] as const) {
+    const h = harness({
+      statusResults: [ok('!! node_modules/\n')],
+      lstat: (path) =>
+        path === `${WORKTREE}/node_modules`
+          ? kind
+          : path === PRESERVE_DESTINATION
+            ? 'absent'
+            : 'directory',
+    });
+    const report = runF4WorktreeBranchSteps(input(), h.deps);
+    assert.equal(report.reason, 'dirty-worktree');
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /did not move node_modules/,
+    );
+    assert.deepEqual(h.renameCalls, []);
+  }
+});
+
+test('a registered worktree inside node_modules prevents the move', () => {
+  const nested = `${WORKTREE}/node_modules/nested-checkout`;
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    nestedWorktrees: [nested],
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(report.steps.at(-1)?.detail ?? '', new RegExp(nested));
+  assert.match(report.steps.at(-1)?.detail ?? '', /did not move node_modules/);
+  assert.deepEqual(h.renameCalls, []);
+});
+
+test('a claim lost after the move keeps the preserved tree and worktree', () => {
+  const lost = {
+    exitCode: 0,
+    stdout: JSON.stringify({ state: 'disputed', action: 'stop' }),
+  };
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n'), ok('')],
+    claims: [claimOk(), claimOk(), claimOk(), lost],
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'claim-lost');
+  assert.match(report.steps.at(-1)?.detail ?? '', /preserving node_modules/);
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
+  assert.deepEqual(h.renameCalls, [
+    [`${WORKTREE}/node_modules`, PRESERVE_DESTINATION],
+  ]);
 });
 
 test('a skip-worktree entry holds dirty-worktree, since git status cannot vouch for it', () => {
