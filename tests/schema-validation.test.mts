@@ -2739,6 +2739,7 @@ test('format uri accepts absolute URIs and rejects malformed references', () => 
     'https://github.com/kurone-kito/idd-skill/issues/4519',
     'https://example.com/a%20b',
     'https://example.com:',
+    'https://example.com:/x',
     'mailto:team@example.com',
     'urn:example:decision',
     'file:///tmp/decision.json',
