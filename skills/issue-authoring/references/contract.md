@@ -895,7 +895,11 @@ the section parsing to zero paths -- heading missing or present but
 empty -- disqualifies it from `ready`, unless it also carries an
 `authoring-bucket: needs-decision`/`blocked-by-human` marker or a
 suitability score of `1` (`audit-authored-issue`'s
-`candidate-files-not-empty` check). A child or an orphan with an `S` or
+`candidate-files-not-empty` check). For a child routed to one of those
+exceptions, omit the section or leave it empty only when no repository
+file is expected. This is authoring guidance: the validator checks the
+route marker or score, but does not check whether a repository file is
+expected. A child or an orphan with an `S` or
 `M` effort hint must also stay within the
 [over-scope split threshold](#effort-hint)
 (`effort-candidate-file-limit`). For an orphan with an `S` or `M` hint,
@@ -999,7 +1003,9 @@ Validation expectations:
 - `## Background`
 - `## Proposed change`
 - `## Acceptance criteria`
-- `## Candidate files` (see
+- `## Candidate files` with at least one path for a ready child; a
+  human-routed child with no repository file expected may omit the
+  section or leave it empty (see
   [Candidate files format](#candidate-files-format) above)
 - optional dependency line or sequential roadmap marker when needed
 - an autopilot-suitability footer at the end of the body (visible
@@ -1013,10 +1019,14 @@ Validation expectations:
 
 - the issue is referenced from its parent roadmap task list
 - acceptance criteria are locally verifiable
-- `## Candidate files` lists the files the child is expected to touch,
-  so the A4 Step 2 high-contention shared-file check
-  (`discover-shared-file-overlap`) can actually engage instead of
-  silently no-opping for lack of input
+- for a ready child, `## Candidate files` lists the files it is expected
+  to touch so the A4 Step 2 high-contention shared-file check
+  (`discover-shared-file-overlap`) can actually engage; a child routed
+  with an `authoring-bucket: needs-decision`/`blocked-by-human` marker
+  or suitability score of `1` may omit the section or leave it empty
+  only when no repository file is expected. That condition is authoring
+  guidance: the validator recognizes the route marker or score but does
+  not check whether a repository file is expected
 - any dependency marker is resolvable, intentionally chosen, and
   justified
 - the issue can be claimed independently without absorbing sibling work
