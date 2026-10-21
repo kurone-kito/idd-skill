@@ -99,9 +99,12 @@ function proofProceed(overrides: Record<string, unknown> = {}): SpawnedResult {
   };
 }
 
-function worktreeListing(additionalPaths: readonly string[] = []): string {
+function worktreeListing(
+  additionalPaths: readonly string[] = [],
+  lockedWorktree = false,
+): string {
   const record = (path: string, branch: string): string =>
-    `worktree ${path}\0HEAD ${OTHER}\0branch refs/heads/${branch}\0\0`;
+    `worktree ${path}\0HEAD ${OTHER}\0branch refs/heads/${branch}\0${path === WORKTREE && lockedWorktree ? 'locked F4 node_modules recovery required\0' : ''}\0`;
   return (
     record(PRIMARY, 'main') +
     record(WORKTREE, BRANCH) +
@@ -199,6 +202,7 @@ interface HarnessOptions {
   readonly lockBusy?: boolean;
   readonly statusResults?: readonly GitResult[];
   readonly nestedWorktrees?: readonly string[];
+  readonly lockedWorktree?: boolean;
   readonly stateRoot?: string;
   readonly now?: () => Date;
   readonly temporaryId?: () => string;
@@ -308,9 +312,15 @@ function harness(options: HarnessOptions = {}): Harness {
       if (
         args[0] === 'worktree' &&
         args[1] === 'list' &&
-        options.nestedWorktrees !== undefined
+        (options.nestedWorktrees !== undefined ||
+          options.lockedWorktree !== undefined)
       ) {
-        return ok(worktreeListing(options.nestedWorktrees));
+        return ok(
+          worktreeListing(
+            options.nestedWorktrees,
+            options.lockedWorktree ?? false,
+          ),
+        );
       }
       const route = routes.find((candidate) => candidate.match(args));
       return route ? route.result : ok();
@@ -993,6 +1003,83 @@ test('a destination replacement object is retained when its identity changed', (
   ]);
   assert.equal(
     h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
+});
+
+test('a final preservation privacy failure restores node_modules to the worktree', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    ensurePrivateDirectory: (path) => {
+      if (path === PRESERVE_DESTINATION) {
+        throw new Error('simulated final privacy failure');
+      }
+    },
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    new RegExp(`restored to ${WORKTREE}/node_modules`),
+  );
+  assert.deepEqual(h.renameCalls, [
+    [`${WORKTREE}/node_modules`, PRESERVE_STAGING],
+    [PRESERVE_STAGING, PRESERVE_DESTINATION],
+    [PRESERVE_DESTINATION, `${WORKTREE}/node_modules`],
+  ]);
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
+});
+
+test('an unverified final privacy recovery locks the worktree against cleanup', () => {
+  const first = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    ensurePrivateDirectory: (path) => {
+      if (path === PRESERVE_DESTINATION) {
+        throw new Error('simulated final privacy failure');
+      }
+    },
+    rename: (source, destination) => {
+      if (
+        source === PRESERVE_DESTINATION &&
+        destination === `${WORKTREE}/node_modules`
+      ) {
+        throw new Error('simulated restoration failure');
+      }
+    },
+  });
+  const report = runF4WorktreeBranchSteps(input(), first.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /automatic restoration failed/,
+  );
+  assert.match(report.steps.at(-1)?.detail ?? '', /worktree was locked/);
+  assert.equal(
+    first.gitCalls.some(
+      (call) =>
+        call.args[0] === 'worktree' &&
+        call.args[1] === 'lock' &&
+        call.args.at(-1) === WORKTREE,
+    ),
+    true,
+  );
+
+  const rerun = harness({
+    lockedWorktree: true,
+    statusResults: [ok('!! node_modules/\n')],
+  });
+  const rerunReport = runF4WorktreeBranchSteps(input(), rerun.deps);
+  assert.equal(rerunReport.reason, 'inconsistent-worktree-state');
+  assert.match(rerunReport.steps.at(-1)?.detail ?? '', /worktree is locked/);
+  assert.equal(
+    rerun.gitCalls.some(
       (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
     ),
     false,

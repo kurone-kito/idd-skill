@@ -909,6 +909,7 @@ function runStep4And5(
   if (inspected.preserveNodeModules !== null) {
     const moved = moveNodeModules(
       deps,
+      primary,
       worktree,
       inspected.preserveNodeModules.destination,
       inspected.preserveNodeModules.sourceIdentity,
@@ -1326,6 +1327,12 @@ function inspectWorktree(
       `the worktree is on ${record.branchRef ?? 'a detached HEAD'}, not ${branchRef}`,
     );
   }
+  if (record.locked) {
+    return none(
+      'inconsistent-worktree-state',
+      'the worktree is locked; inspect the preservation recovery state and unlock it manually before rerunning cleanup',
+    );
+  }
   const tip = readBranchTip(deps, primary, branchRef);
   if (tip === null) {
     return none(
@@ -1671,6 +1678,7 @@ function inspectPreserveDestination(
  */
 function moveNodeModules(
   deps: F4WorktreeBranchDeps,
+  primary: string,
   worktree: string,
   destination: string,
   expectedIdentity: string,
@@ -1930,9 +1938,18 @@ function moveNodeModules(
     }
     deps.ensurePrivateDirectory(destination);
   } catch (error) {
+    const hold = restoreOrLockNodeModulesAfterRace(
+      deps,
+      primary,
+      worktree,
+      destination,
+      source,
+      expectedIdentity,
+      `the preserved directory could not be secured: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return {
       result: null,
-      hold: `node_modules/ was moved to ${destination}, but the preserved directory could not be secured: ${error instanceof Error ? error.message : String(error)}`,
+      hold,
     };
   }
   return {
@@ -1969,6 +1986,55 @@ function restoreNodeModulesAfterRace(
   } catch (error) {
     return `the helper did not move node_modules/: ${reason}; automatic restoration failed and the object remains at ${movedPath}: ${error instanceof Error ? error.message : String(error)}`;
   }
+}
+
+/** Restore a refused move, or persist a hold if restoration cannot be verified. */
+function restoreOrLockNodeModulesAfterRace(
+  deps: F4WorktreeBranchDeps,
+  primary: string,
+  worktree: string,
+  movedPath: string,
+  source: string,
+  expectedIdentity: string,
+  reason: string,
+): string {
+  const restoration = restoreNodeModulesAfterRace(
+    deps,
+    movedPath,
+    source,
+    expectedIdentity,
+    reason,
+  );
+  try {
+    if (
+      deps.lstat(source) === 'directory' &&
+      deps.directoryIdentity(source) === expectedIdentity &&
+      deps.lstat(movedPath) === 'absent'
+    ) {
+      return restoration;
+    }
+  } catch {
+    // An unverified restore keeps the worktree locked below.
+  }
+  let lock: GitResult;
+  try {
+    lock = deps.git(
+      [
+        'worktree',
+        'lock',
+        '--reason',
+        `F4 node_modules recovery required for issue ${worktree}`,
+        worktree,
+      ],
+      primary,
+    );
+  } catch (error) {
+    return `${restoration}; the helper could not persist a worktree lock: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  if (lock.status === 0) {
+    return `${restoration}; the worktree was locked to prevent a later cleanup from removing the recovery state`;
+  }
+  return `${restoration}; the helper could not persist a worktree lock: ${lock.stderr.trim()}`;
 }
 
 /**
