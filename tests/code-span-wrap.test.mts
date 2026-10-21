@@ -271,6 +271,63 @@ test('flags qualified types in class extends and method throws clauses', () => {
       'MyInterface',
     ],
     ['`void run() throws com.example. MyException {}`', 'MyException'],
+    [
+      '`java.util.@Nullable List<String> run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    ['`String [] run() throws com.example. MyException {}`', 'MyException'],
+    [
+      '`String @Nullable [] run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`String @A [] /* between dimensions */ @B [] run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`class Outer { void run() throws com.example. MyException {} }`',
+      'MyException',
+    ],
+    [
+      '`package p; class Outer { void run() throws com.example. MyException {} }`',
+      'MyException',
+    ],
+    [
+      '`import java.util.List; class Outer { void run() throws com.example. MyException {} }`',
+      'MyException',
+    ],
+    [
+      '`package p; import static java.util.Collections.emptyList; class Outer { void run() throws com.example. MyException {} }`',
+      'MyException',
+    ],
+    [
+      '`class Outer { static class Inner extends com.example. MyClass {} }`',
+      'MyClass',
+    ],
+    [
+      '`enum Outer { VALUE; void run() throws com.example. MyException {} }`',
+      'MyException',
+    ],
+    [
+      '`record Outer() { void run() throws com.example. MyException {} }`',
+      'MyException',
+    ],
+    [
+      '`class Outer { void run() { class Local { void nested() throws com.example. MyException {} } } }`',
+      'MyException',
+    ],
+    [
+      '`class Outer { Object value = new Object() { void run() throws com.example. MyException {} }; }`',
+      'MyException',
+    ],
+    [
+      '`class Outer { Object run() { return new Object() { void nested() throws com.example. MyException {} }; } }`',
+      'MyException',
+    ],
+    [
+      '`class Outer { String marker = "}"; void run() throws com.example. MyException {} }`',
+      'MyException',
+    ],
     ['`void run() throws @NonNull com.example. MyException {}`', 'MyException'],
     [
       '`void run(@Size(max = 10) String value) throws com.example. MyException {}`',
@@ -554,6 +611,11 @@ test('does not treat class extends or method throws prose as declarations', () =
     '`A class Foo extends com.example. MyClass is documented here.`',
     '`The method run() throws com.example. MyException during the example.`',
     '`The method run() throws com.example. MyException {}`',
+    '`class Outer { The method run() throws com.example. MyException {} }`',
+    '`class Outer { The type Foo extends com.example. MyClass {} }`',
+    '` } class Foo extends com.example. MyClass {}`',
+    '`Some prose; class Foo extends com.example. MyClass {}`',
+    '`if (ready) { void run() throws com.example. MyException {} }`',
   ]) {
     assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
   }
