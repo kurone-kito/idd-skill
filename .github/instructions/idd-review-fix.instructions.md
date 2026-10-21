@@ -417,7 +417,7 @@ disposed `Reject (defer)` in the Defer reply form, with clause
 Where clause (a) or (b) holds, the finding stays adopt-now. This
 overrides adopt-now clause (d) in `idd-review-triage.instructions.md`.
 The round-count step runs after the helper verdict and defers an item
-even when the verdict is `keep` with `blocked: adopt-now`.
+even when the verdict is `keep` with `blocked adopt-now`.
 Factual and correctness findings are not covered by this rule and keep
 their existing handling; adopt-now clause (c) already covers a defect in
 instruction text that changes what an agent does. PATH B, scope-fenced,
