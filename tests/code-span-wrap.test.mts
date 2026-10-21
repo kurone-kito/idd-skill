@@ -261,6 +261,14 @@ test('flags qualified types in class extends and method throws clauses', () => {
       'MyException',
     ],
     [
+      '`Map<? extends String, Integer> run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`Map<? super Number, ?> run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
       '`public <T> void run() throws com.example. MyException {}`',
       'MyException',
     ],

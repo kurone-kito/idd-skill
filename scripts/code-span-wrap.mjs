@@ -130,12 +130,10 @@ function parseDeclarationType(
       return undefined;
     }
     cursor = skipDeclarationWhitespace(text, cursor + 1);
-    let argumentEnd = parseDeclarationType(
+    let argumentEnd = parseDeclarationTypeArgument(
       text,
       cursor,
       genericDepth + 1,
-      false,
-      true,
     );
     if (argumentEnd === undefined) {
       return undefined;
@@ -147,12 +145,10 @@ function parseDeclarationType(
         break;
       }
       cursor = skipDeclarationWhitespace(text, commaIndex + 1);
-      argumentEnd = parseDeclarationType(
+      argumentEnd = parseDeclarationTypeArgument(
         text,
         cursor,
         genericDepth + 1,
-        false,
-        true,
       );
       if (argumentEnd === undefined) {
         return undefined;
@@ -171,6 +167,23 @@ function parseDeclarationType(
     }
   }
   return cursor;
+}
+function parseDeclarationTypeArgument(text, start, genericDepth) {
+  const cursor = skipDeclarationWhitespace(text, start);
+  if (text[cursor] !== '?') {
+    return parseDeclarationType(text, cursor, genericDepth, false, true);
+  }
+  let boundStart = skipDeclarationWhitespace(text, cursor + 1);
+  for (const bound of ['extends', 'super']) {
+    if (
+      text.startsWith(bound, boundStart) &&
+      /\s/u.test(text[boundStart + bound.length] ?? '')
+    ) {
+      boundStart = skipDeclarationWhitespace(text, boundStart + bound.length);
+      return parseDeclarationType(text, boundStart, genericDepth, false, true);
+    }
+  }
+  return cursor + 1;
 }
 function skipDeclarationGenericClause(text, start) {
   if (text[start] !== '<') {
