@@ -1027,10 +1027,16 @@ announcement in the docs, and a documented window in which the alias
 remains accepted. In both cases, release notes must explain the user
 impact and provide migration guidance.
 
+These release boundaries set the minimum version only when the approved
+migration design permits a particular alias to be removed. They do not
+authorize removal by themselves. If that design requires permanent alias
+acceptance, keep the alias unless a separate policy change is approved.
+
 Assess default changes against the supported public surface, including
 supported workflows and accepted inputs. Removing a key or adding a
 refusal is a review lead, not a compatibility verdict by itself. Observed
-2026-10-18 in release issue `#4520` (pull request `#4457`, merged
+2026-10-18 in release issue `kurone-kito/idd-skill#4520` (pull request
+`kurone-kito/idd-skill#4457`, merged
 2026-10-17): the claimed F4 path without helper runtime changed from its
 GraphQL fallback to a hold, so the release audit assessed its
 supported-workflow impact instead of classifying the refusal alone.
