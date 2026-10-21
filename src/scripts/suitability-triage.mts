@@ -1040,8 +1040,8 @@ const REPO_OWNED_VALIDATION_SENTENCE_START =
 // objects; keep every other supplied-content target on the unsafe path.
 const USER_ACTOR_STEP_WINDOW =
   /^[ \t]*this[ \t]+(step|check)[ \t]+by[ \t]+the[ \t]+user[ \t]*[.!?]?[ \t]*$/i;
-// #4577: allow the exact user-actor directive at a normal issue paragraph,
-// heading, or list-item boundary, or after a narrow clause connector.
+// #4577: allow the exact user-actor directive only as a standalone plain
+// paragraph or top-level list item with its own Markdown block boundary.
 // Explicit agent assignments in the issue title or body still win,
 // including assignments after the directive.
 // HTML-comment content cannot establish a visible directive boundary.
@@ -2874,7 +2874,7 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
       }
       if (
         USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(prefix) &&
-        /\bto\s+(?:the\s+)?$/i.test(prefix)
+        /\bto\s+(?:(?:a|an|the)\s+)?$/i.test(prefix)
       ) {
         return true;
       }

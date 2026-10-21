@@ -2921,6 +2921,35 @@ test('trust safety disables the user-step exception for any agent work assignmen
       body: 'The maintainer gave a keyboard-support task to the coding agent.\n\nRun this step by the user.',
     },
     {
+      name: 'agent receives a task through the passive give relation in the title',
+      title: 'The coding agent has been given a keyboard-support task',
+      body: 'Run this step by the user.',
+    },
+    {
+      name: 'agent receives a task through the passive give relation in the body',
+      body: 'The coding agent has been given a keyboard-support task.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives an assigned work object through an indefinite recipient',
+      body: 'The maintainer assigned keyboard support to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives a passive assignment through an indefinite recipient',
+      body: 'Keyboard support was assigned to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives delegated work through an indefinite recipient',
+      body: 'The maintainer delegated implementation to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives delegated work through an indefinite recipient with an',
+      body: 'The maintainer delegated implementation to an assistant.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives work through an indefinite recipient with the give relation',
+      body: 'The maintainer gave keyboard support to a coding agent.\n\nRun this step by the user.',
+    },
+    {
       name: 'negated assignment',
       body: 'The coding agent is not required to perform this unrelated task.\n\nRun this step by the user.',
     },
