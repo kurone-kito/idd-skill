@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -415,7 +416,7 @@ test('a symlinked node_modules path keeps its target and the worktree', () => {
   assert.equal(existsSync(join(stateRoot, 'idd-skill')), false);
 });
 
-test('a source-path symlink race is restored and held before preservation', () => {
+test('a source-path symlink race is quarantined and held before preservation', () => {
   const fx = makeFixture();
   const stateRoot = join(fx.root, 'state');
   const outside = join(fx.root, 'outside-node-modules');
@@ -442,9 +443,14 @@ test('a source-path symlink race is restored and held before preservation', () =
 
   assert.equal(report.reason, 'dirty-worktree');
   assert.match(report.steps.at(-1)?.detail ?? '', /source identity changed/u);
-  assert.match(report.steps.at(-1)?.detail ?? '', /restored to/u);
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /retained because it is not a real directory/u,
+  );
   assert.equal(existsSync(fx.worktree), true);
-  assert.equal(lstatSync(nodeModules).isSymbolicLink(), true);
+  assert.throws(() => lstatSync(nodeModules), { code: 'ENOENT' });
+  assert.equal(lstatSync(staging).isSymbolicLink(), true);
+  assert.equal(readlinkSync(staging), outside);
   assert.equal(
     readFileSync(join(outside, 'keep.txt'), 'utf8'),
     'outside data\n',
@@ -453,7 +459,7 @@ test('a source-path symlink race is restored and held before preservation', () =
     readFileSync(join(displaced, 'keep.txt'), 'utf8'),
     'original data\n',
   );
-  assert.equal(existsSync(staging), false);
+  assert.equal(existsSync(staging), true);
   assert.equal(existsSync(destination), false);
 });
 
