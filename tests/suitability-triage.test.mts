@@ -2874,6 +2874,7 @@ test('trust safety fails closed for unsupported or ambiguous user-step Markdown 
 
 test('trust safety fails closed inside raw HTML blocks for user steps -- #4596', () => {
   for (const body of [
+    '<div>\n<!-- </div> -->\n\nRun this step by the user.',
     '<div>\n\nRun this step by the user.\n\n</div>',
     '<div>\n\nRun this step by the user.',
     '<div/>\n\n- Run this step by the user.',
