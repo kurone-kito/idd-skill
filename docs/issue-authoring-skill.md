@@ -2899,7 +2899,12 @@ Required content:
 - `## Background`
 - `## Proposed change`
 - `## Acceptance criteria`
-- `## Candidate files`
+- `## Candidate files` for ready children; a child with an
+  `authoring-bucket: needs-decision` or
+  `authoring-bucket: blocked-by-human` marker, or a suitability score of
+  `1`, may omit this section or leave it empty when no repository file
+  is expected to change. Do not guess paths for unresolved or
+  human-only work.
 - an autopilot-suitability footer at the end of the body (visible line +
   `<!-- idd-skill-autopilot-suitability: N -->` marker)
 - an optional effort footer next to it (visible line +
@@ -2918,9 +2923,14 @@ Validation expectations:
 
 - the issue is referenced from its parent roadmap task list
 - acceptance criteria are locally verifiable
-- the required `## Candidate files` section lists the files the child is
-  expected to touch and supplies input to A4's
-  `discover-shared-file-overlap` check
+- a ready child's required `## Candidate files` section lists the files
+  it is expected to touch and supplies input to A4's
+  `discover-shared-file-overlap` check; a child with an
+  `authoring-bucket: needs-decision` or
+  `authoring-bucket: blocked-by-human` marker, or a suitability score of
+  `1`, may omit the section or leave it empty when no repository file
+  is expected to change. Do not guess paths for unresolved or
+  human-only work.
 - any dependency marker is resolvable, intentionally chosen, and
   justified
 - the issue can be claimed independently without absorbing sibling work
