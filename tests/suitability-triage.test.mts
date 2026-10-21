@@ -12060,6 +12060,8 @@ test('trust safety recognizes quantified agent recipients -- #4596', () => {
     'The feature must be implemented by one of the coding agents.',
     'Keyboard support was assigned to some of our coding agents.',
     'The task is required of any coding agent.',
+    'The task is required of any dedicated coding agent.',
+    'The feature must be implemented by one of the exceptionally reliable coding agents.',
   ]) {
     const result = checkTrustSafety({
       issue: {
