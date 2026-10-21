@@ -153,9 +153,9 @@ distributed IDD workflow a repository imported.
 - **Source-template maintainers** bump `iddVersion` whenever a change to
   the distributed instruction set, schema, or safety surface — for
   example a new guardrail, hardening section, or default change — would
-  matter to an adopter who re-syncs. Follow semantic-versioning intent: a
-  new opt-in capability or hardening is a minor bump; a breaking change
-  to existing defaults is a major bump. Keep the template config, the
+  matter to an adopter who re-syncs. Follow the release-stage policy in
+  [Phase ID Compatibility Contract](#phase-id-compatibility-contract)
+  when choosing a compatibility bump. Keep the template config, the
   annotated `config.example.jsonc`, and this repository's own
   `.github/idd/config.json` on the same value. Every
   `iddVersion` bump also requires a matching `CHANGELOG.md` entry in the
@@ -169,10 +169,17 @@ distributed IDD workflow a repository imported.
   not independently trigger a release, and its changes ship with the
   parent roadmap's release (or the next top-level trigger).
 
-  A change to a default behavior that removes or renames no setting or
-  option, and does not make a previously accepted input fail, is a minor
-  bump. The release notes list such a change first under `Changed` as
-  "Default changes". Observed 2026-10-15 (issue `#4381`): an `iddVersion`
+  Follow semantic-versioning intent and the release-stage policy in
+  [Phase ID Compatibility Contract](#phase-id-compatibility-contract):
+  a new opt-in capability or hardening is a minor bump. Before 1.0.0,
+  compatibility-breaking changes to the supported public surface may
+  ship in a 0.y.0 minor bump, while patch releases preserve
+  compatibility. Declaring 1.0.0 stable is a separate operator decision;
+  after that, compatibility-breaking changes to the supported public
+  surface require a major bump. Assess default changes against supported
+  workflows and accepted inputs before choosing a bump. The release notes
+  list default changes first under `Changed` as "Default changes".
+  Observed 2026-10-15 (issue `#4381`): an `iddVersion`
   bump issue asked the session to stop and report on "a breaking change
   to a default that existed at v0.15.0" with no test for "breaking". A
   plan's "Default changes" bullet said no such change existed, and an
@@ -1002,12 +1009,37 @@ Example:
 - accepted legacy aliases (input only): `A4.5`, `A4-5`
 - preferred display label: `A4.5`
 
-Alias removal is a semver-governed change. Do not remove supported
-aliases in patch or minor releases. Removal requires:
+Version compatibility follows the project's release-stage policy:
 
-1. A major-version boundary with explicit migration guidance.
-2. A documented compatibility window where aliases are still accepted.
-3. A deprecation announcement in docs before enforcement switches.
+- Before 1.0.0, compatibility-breaking changes to the supported public
+  surface may ship in a 0.y.0 minor release. Patch releases preserve
+  compatibility.
+- Declaring 1.0.0 stable is a separate operator decision. After that
+  declaration, compatibility-breaking changes to the supported public
+  surface require a major release.
+
+Alias removal follows the same boundary, with safeguards at both stages.
+Before 1.0.0, a supported phase-ID alias may be removed in a 0.y.0 minor
+release only after the project has announced deprecation in the docs and
+documented a compatibility window in which the alias remains accepted.
+After 1.0.0, alias removal requires a major release, a deprecation
+announcement in the docs, and a documented window in which the alias
+remains accepted. In both cases, release notes must explain the user
+impact and provide migration guidance.
+
+These release boundaries set the minimum version only when the approved
+migration design permits a particular alias to be removed. They do not
+authorize removal by themselves. If that design requires permanent alias
+acceptance, keep the alias unless a separate policy change is approved.
+
+Assess default changes against the supported public surface, including
+supported workflows and accepted inputs. Removing a key or adding a
+refusal is a review lead, not a compatibility verdict by itself. Observed
+2026-10-18 in release issue `kurone-kito/idd-skill#4520` (pull request
+`kurone-kito/idd-skill#4457`, merged
+2026-10-17): the claimed F4 path without helper runtime changed from its
+GraphQL fallback to a hold, so the release audit assessed its
+supported-workflow impact instead of classifying the refusal alone.
 
 This issue defines the policy contract only. Broad phase renumbering or
 global identifier rewrites must land in follow-up implementation issues.
