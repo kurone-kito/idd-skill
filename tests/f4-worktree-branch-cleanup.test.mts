@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -8,8 +9,8 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
-  rmdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -34,6 +35,7 @@ import {
   runF4WorktreeBranchSteps,
   type SpawnedResult,
 } from '../src/scripts/f4-worktree-branch-steps.mts';
+import type { WindowsAclReader } from '../src/scripts/windows-acl.mts';
 import { fixtureEnv } from './test-utils.mts';
 
 // Real-git coverage of the F4 steps 4 to 6 helper (#4370): temporary
@@ -209,7 +211,7 @@ function runCleanup(
     ...live,
     stateRoot,
     now: () => new Date('2026-10-21T10:30:00.000Z'),
-    mkdir: (path) => mkdirSync(path),
+    mkdir: (path, mode) => mkdirSync(path, { mode }),
     rename: (source, destination) => {
       if (options.renameError !== undefined) {
         const error = new Error(options.renameError) as NodeJS.ErrnoException;
@@ -218,7 +220,6 @@ function runCleanup(
       }
       renameSync(source, destination);
     },
-    rmdir: (path) => rmdirSync(path),
     git: (args, cwd) => {
       calls.push([...args]);
       if (args[0] === '-C' && args[2] === 'status') {
@@ -307,10 +308,10 @@ test('an ignored file holds dirty-worktree, since git would delete it silently',
   assert.equal(existsSync(join(fx.worktree, 'build', 'out.bin')), true);
 });
 
-test('a lone ignored node_modules directory moves intact before removal', () => {
+test('a lone ignored node_modules directory moves privately before removal', () => {
   const fx = makeFixture();
   const stateRoot = join(fx.root, 'state');
-  mkdirSync(stateRoot);
+  mkdirSync(stateRoot, { mode: 0o777 });
   mkdirSync(join(fx.worktree, 'node_modules'));
   writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'preserve me\n');
   const destination = preservedPath(fx, stateRoot);
@@ -334,6 +335,14 @@ test('a lone ignored node_modules directory moves intact before removal', () => 
     readFileSync(join(destination, 'keep.txt'), 'utf8'),
     'preserve me\n',
   );
+  for (const path of [
+    stateRoot,
+    join(stateRoot, 'idd-skill'),
+    join(stateRoot, 'idd-skill', 'f4-preserved'),
+    destination,
+  ]) {
+    assert.equal(statSync(path).mode & 0o777, 0o700, path);
+  }
   assert.equal(
     report.steps.find((step) => step.step === 'step-5')?.detail,
     `node_modules/ was preserved at ${destination}`,
@@ -343,7 +352,8 @@ test('a lone ignored node_modules directory moves intact before removal', () => 
 test('a dry run validates and reports the node_modules destination without changing it', () => {
   const fx = makeFixture();
   const stateRoot = join(fx.root, 'state');
-  mkdirSync(stateRoot);
+  mkdirSync(stateRoot, { mode: 0o755 });
+  chmodSync(stateRoot, 0o755);
   mkdirSync(join(fx.worktree, 'node_modules'));
   writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'preserve me\n');
   const destination = preservedPath(fx, stateRoot);
@@ -358,6 +368,7 @@ test('a dry run validates and reports the node_modules destination without chang
   assert.equal(existsSync(join(fx.worktree, 'node_modules', 'keep.txt')), true);
   assert.equal(existsSync(destination), false);
   assert.equal(existsSync(join(stateRoot, 'idd-skill')), false);
+  assert.equal(statSync(stateRoot).mode & 0o777, 0o755);
   assert.equal(existsSync(fx.worktree), true);
 });
 
@@ -496,7 +507,7 @@ test('an existing timestamp destination is left intact', () => {
   assert.equal(existsSync(join(fx.worktree, 'node_modules', 'keep.txt')), true);
 });
 
-test('a failed rename keeps node_modules and removes only the empty destination', () => {
+test('a failed rename leaves the final destination absent', () => {
   const fx = makeFixture();
   const stateRoot = join(fx.root, 'state');
   mkdirSync(stateRoot);
@@ -509,6 +520,23 @@ test('a failed rename keeps node_modules and removes only the empty destination'
   assert.equal(existsSync(join(fx.worktree, 'node_modules', 'keep.txt')), true);
   assert.equal(existsSync(destination), false);
   assert.equal(existsSync(fx.worktree), true);
+});
+
+test('a state-root symlink to a permissive directory refuses preservation', () => {
+  const fx = makeFixture();
+  const stateTarget = join(fx.root, 'shared-state');
+  const stateLink = join(fx.root, 'state-link');
+  mkdirSync(stateTarget, { mode: 0o755 });
+  chmodSync(stateTarget, 0o755);
+  symlinkSync(stateTarget, stateLink);
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
+
+  const { report } = runCleanup(fx, { stateRoot: stateLink });
+
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.equal(existsSync(join(stateTarget, 'idd-skill')), false);
+  assert.equal(existsSync(join(fx.worktree, 'node_modules', 'keep.txt')), true);
 });
 
 test('status output after the move holds and reports the preserved destination', () => {
@@ -615,7 +643,8 @@ test('an external state-root symlink is used without following destination compo
   const fx = makeFixture();
   const actualRoot = join(fx.root, 'external-state');
   const stateLink = join(fx.root, 'state-link');
-  mkdirSync(actualRoot);
+  mkdirSync(actualRoot, { mode: 0o700 });
+  chmodSync(actualRoot, 0o700);
   symlinkSync(actualRoot, stateLink);
   mkdirSync(join(fx.worktree, 'node_modules'));
   writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
@@ -1145,6 +1174,68 @@ test('production wiring resolves platform state roots for preserved node_modules
       home: 'C:\\Users\\test-user',
     }).stateRoot,
     'C:\\Users\\test-user\\AppData\\Local',
+  );
+});
+
+test('production wiring verifies Windows source and state-root ACLs', () => {
+  const fx = makeFixture();
+  const source = join(fx.root, 'node_modules');
+  mkdirSync(source);
+  const currentSid = 'S-1-5-21-1-2-3-1001';
+  const base = {
+    issueNumber: ISSUE,
+    claimId: CLAIM,
+    nonce: 'nonce-for-tests',
+    agentId: AGENT,
+    worktree: '/tmp/issue-worktree',
+    primaryRoot: process.cwd(),
+    env: { LOCALAPPDATA: fx.root },
+    platform: 'win32' as const,
+  };
+  const aclReader: WindowsAclReader = () => ({
+    kind: 'entries',
+    currentSid,
+    entries: [
+      { sid: currentSid, allow: true },
+      { sid: 'S-1-5-18', allow: true },
+    ],
+  });
+  const permissiveAclReader: WindowsAclReader = () => ({
+    kind: 'entries',
+    currentSid,
+    entries: [
+      { sid: currentSid, allow: true },
+      { sid: 'S-1-1-0', allow: true },
+    ],
+  });
+
+  assert.equal(
+    createLiveDeps({
+      ...base,
+      windowsAclReader: aclReader,
+    }).inspectDirectoryPrivacy(fx.root),
+    'private',
+  );
+  assert.equal(
+    createLiveDeps({
+      ...base,
+      windowsAclReader: aclReader,
+    }).inspectDirectoryPrivacy(source),
+    'private',
+  );
+  assert.equal(
+    createLiveDeps({
+      ...base,
+      windowsAclReader: permissiveAclReader,
+    }).inspectDirectoryPrivacy(fx.root),
+    'unsafe',
+  );
+  assert.equal(
+    createLiveDeps({
+      ...base,
+      windowsAclReader: permissiveAclReader,
+    }).inspectDirectoryPrivacy(source),
+    'unsafe',
   );
 });
 

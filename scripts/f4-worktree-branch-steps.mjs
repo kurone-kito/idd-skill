@@ -7,8 +7,9 @@
 // F4 steps 4 to 6 (idd-merge.instructions.md), gated on the F4 head proof
 // (docs/idd-resume-detail.md#f4-head-proof). The flow runs in this order:
 // the no-follow path check, a claim check, the proof dry run, step 4 (the
-// primary fast-forward), step 5 (preserve a lone ignored node_modules/ tree,
-// then remove the worktree and local branch), a second claim check, and step
+// primary fast-forward), step 5 (preserve a lone ignored node_modules/ tree
+// in a private per-user state destination, then remove the worktree and local
+// branch), a second claim check, and step
 // 6 (the remote branch). Each hold has a reason code and a next action. The
 // flow never passes `--force`, never posts a proof, and writes only through
 // the injected deps.
@@ -1087,6 +1088,22 @@ function inspectWorktree(
     return none('symlink-path', linked);
   }
   if (loneIgnoredNodeModules) {
+    try {
+      if (
+        deps.inspectDirectoryPrivacy(join(worktree, 'node_modules')) ===
+        'unsafe'
+      ) {
+        return none(
+          'dirty-worktree',
+          'the helper did not move node_modules/: its ownership or privacy could not be verified',
+        );
+      }
+    } catch {
+      return none(
+        'dirty-worktree',
+        'the helper did not move node_modules/: its ownership or privacy could not be verified',
+      );
+    }
     const destination = preserveDestination(
       deps,
       issueNumber,
@@ -1139,6 +1156,11 @@ function inspectPreserveDestination(deps, issueNumber, primary, records) {
       'the helper did not move node_modules/: the state root cannot be resolved',
     );
   }
+  if (deps.inspectDirectoryPrivacy(deps.stateRoot) === 'unsafe') {
+    return refuse(
+      'the helper did not move node_modules/: the state root is not owned and private',
+    );
+  }
   const iddDirectory = join(deps.stateRoot, 'idd-skill');
   const preserveDirectory = join(iddDirectory, 'f4-preserved');
   for (const [path, kind] of [
@@ -1153,6 +1175,14 @@ function inspectPreserveDestination(deps, issueNumber, primary, records) {
     if (kind !== 'absent' && kind !== 'directory') {
       return refuse(
         `the helper did not move node_modules/: destination component ${path} is not a directory`,
+      );
+    }
+    if (
+      kind === 'directory' &&
+      deps.inspectDirectoryPrivacy(path) === 'unsafe'
+    ) {
+      return refuse(
+        `the helper did not move node_modules/: destination component ${path} is not owned and private`,
       );
     }
   }
@@ -1202,11 +1232,11 @@ function inspectPreserveDestination(deps, issueNumber, primary, records) {
   }
   return { destination, hold: null };
 }
-/** Create missing parents and move the tree with one same-filesystem rename. */
+/** Create private parents and move the tree with one same-filesystem rename. */
 function moveNodeModules(deps, worktree, destination) {
   const preserveDirectory = dirname(destination);
   const iddDirectory = dirname(preserveDirectory);
-  for (const path of [iddDirectory, preserveDirectory]) {
+  for (const path of [deps.stateRoot, iddDirectory, preserveDirectory]) {
     let kind;
     try {
       kind = deps.lstat(path);
@@ -1216,7 +1246,20 @@ function moveNodeModules(deps, worktree, destination) {
         hold: `the helper did not move node_modules/: could not inspect ${path}: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
-    if (kind === 'directory') continue;
+    if (
+      kind === 'directory' ||
+      (path === deps.stateRoot && kind === 'symlink')
+    ) {
+      try {
+        deps.ensurePrivateDirectory(path);
+      } catch (error) {
+        return {
+          result: null,
+          hold: `the helper did not move node_modules/: could not secure ${path}: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      continue;
+    }
     if (kind !== 'absent') {
       return {
         result: null,
@@ -1224,34 +1267,84 @@ function moveNodeModules(deps, worktree, destination) {
       };
     }
     try {
-      deps.mkdir(path);
+      deps.mkdir(path, 0o700);
     } catch (error) {
       return {
         result: null,
         hold: `the helper did not move node_modules/: could not create ${path}: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
+    let createdKind;
+    try {
+      createdKind = deps.lstat(path);
+    } catch (error) {
+      return {
+        result: null,
+        hold: `the helper did not move node_modules/: could not verify created destination component ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    if (createdKind !== 'directory') {
+      return {
+        result: null,
+        hold: `the helper did not move node_modules/: created destination component ${path} is not a real directory`,
+      };
+    }
+    try {
+      deps.ensurePrivateDirectory(path);
+    } catch (error) {
+      return {
+        result: null,
+        hold: `the helper did not move node_modules/: could not secure ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
   }
+  let destinationKind;
   try {
-    deps.mkdir(destination);
+    destinationKind = deps.lstat(destination);
   } catch (error) {
     return {
       result: null,
-      hold: `the helper did not move node_modules/: could not create ${destination}: ${error instanceof Error ? error.message : String(error)}`,
+      hold: `the helper did not move node_modules/: could not inspect destination ${destination}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (destinationKind !== 'absent') {
+    return {
+      result: null,
+      hold: `the helper did not move node_modules/: destination already exists at ${destination}`,
+    };
+  }
+  try {
+    if (
+      deps.inspectDirectoryPrivacy(join(worktree, 'node_modules')) === 'unsafe'
+    ) {
+      return {
+        result: null,
+        hold: 'the helper did not move node_modules/: its ownership or privacy could not be verified',
+      };
+    }
+  } catch {
+    return {
+      result: null,
+      hold: 'the helper did not move node_modules/: its ownership or privacy could not be verified',
     };
   }
   try {
     deps.rename(join(worktree, 'node_modules'), destination);
   } catch (error) {
-    let cleanupDetail = '';
-    try {
-      deps.rmdir(destination);
-    } catch (cleanupError) {
-      cleanupDetail = `; could not remove empty destination ${destination}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
-    }
     return {
       result: null,
-      hold: `the helper did not move node_modules/: rename to ${destination} failed: ${error instanceof Error ? error.message : String(error)}${cleanupDetail}`,
+      hold: `the helper did not move node_modules/: rename to ${destination} failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  try {
+    if (deps.lstat(destination) !== 'directory') {
+      throw new Error('renamed destination is not a real directory');
+    }
+    deps.ensurePrivateDirectory(destination);
+  } catch (error) {
+    return {
+      result: null,
+      hold: `node_modules/ was moved to ${destination}, but the preserved directory could not be secured: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
   return {

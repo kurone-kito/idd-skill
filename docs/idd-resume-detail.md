@@ -486,13 +486,21 @@ The removal helper, `node scripts/f4-worktree-branch-cleanup.mjs` (see
 runs these checks and gates each removal on the proof. When the complete
 ignored-inclusive status output is exactly `!! node_modules/`, the path is a
 real directory, and no registered worktree is at or inside it, the helper
-moves the directory intact under
+moves its files intact under
 `<state>/idd-skill/f4-preserved/<issue>-<UTC timestamp>/` before removal.
 `<state>` is an absolute `XDG_STATE_HOME`, else `~/.local/state`; on Windows it
 is an absolute `LOCALAPPDATA`, else `~/AppData/Local`. The helper reports the
 destination and never deletes or expires a preserved tree; the operator
-decides when to clean it up. A dry run performs the same read-only checks and
-reports the planned destination without creating or moving anything. Observed
+decides when to clean it up. It requires an owned state root and private
+destination directories. On POSIX, the source `node_modules` directory must be
+owned by the current user; an owned direct state root and existing destination
+directories are restricted to mode `0700` during apply, and a state-root
+symlink must already target a private directory. On Windows, the state root,
+source, and destination directories must have a private ACL before the move.
+New parents and the moved `node_modules` directory are private. The rename goes
+directly to an absent destination leaf. A dry run performs the same read-only
+checks and reports the planned destination without creating, moving, or
+changing permissions. Observed
 2026-10-18 on issue `#4511` (PR `#4527`), an install-created `node_modules/`
 alone held F4 cleanup.
 

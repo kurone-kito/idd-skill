@@ -6,6 +6,7 @@ import {
   classifyClaimAssert,
   classifyPrimaryRefusal,
   classifyProofEnvelope,
+  type DirectoryPrivacy,
   type F4WorktreeBranchDeps,
   type F4WorktreeBranchInput,
   type GitResult,
@@ -148,8 +149,8 @@ interface Harness {
   readonly proofCalls: number[];
   readonly lockCalls: number[];
   readonly mkdirCalls: string[];
+  readonly mkdirModes: number[];
   readonly renameCalls: string[][];
-  readonly rmdirCalls: string[];
 }
 
 function remoteVerdict(
@@ -192,9 +193,9 @@ interface HarnessOptions {
   readonly nestedWorktrees?: readonly string[];
   readonly stateRoot?: string;
   readonly now?: () => Date;
+  readonly directoryPrivacy?: (path: string) => DirectoryPrivacy;
   readonly mkdir?: (path: string) => void;
   readonly rename?: (source: string, destination: string) => void;
-  readonly rmdir?: (path: string) => void;
 }
 
 /** Build the deps: git answers by the first matching route, else success. */
@@ -207,30 +208,49 @@ function harness(options: HarnessOptions = {}): Harness {
   const lockCalls: number[] = [];
   const statusResults = [...(options.statusResults ?? [])];
   const mkdirCalls: string[] = [];
+  const mkdirModes: number[] = [];
   const renameCalls: string[][] = [];
-  const rmdirCalls: string[] = [];
+  const createdDirectories = new Set<string>();
+  const renamedDirectories = new Set<string>();
   let statusIndex = 0;
   const claims = options.claims ?? [claimOk()];
-  const lstat =
-    options.lstat ??
-    ((path: string): LstatKind =>
-      path === PRESERVE_DESTINATION ? 'absent' : 'directory');
+  const lstat = (path: string): LstatKind => {
+    if (renamedDirectories.has(path) || createdDirectories.has(path)) {
+      return 'directory';
+    }
+    if (options.lstat) return options.lstat(path);
+    if (path === PRESERVE_DESTINATION) return 'absent';
+    if (path === STATE_ROOT) return 'directory';
+    if (
+      path === `${STATE_ROOT}/idd-skill` ||
+      path === `${STATE_ROOT}/idd-skill/f4-preserved`
+    ) {
+      return 'absent';
+    }
+    return 'directory';
+  };
   const deps: F4WorktreeBranchDeps = {
     lstat,
     realpath: (path) => path,
     stateRoot: options.stateRoot ?? STATE_ROOT,
     now: options.now ?? (() => new Date('2026-10-21T10:30:00.000Z')),
-    mkdir: (path) => {
+    inspectDirectoryPrivacy: (path) =>
+      options.directoryPrivacy?.(path) ?? 'private',
+    ensurePrivateDirectory: (path) => {
+      if ((options.directoryPrivacy?.(path) ?? 'private') === 'unsafe') {
+        throw new Error('directory is not private');
+      }
+    },
+    mkdir: (path, mode) => {
       mkdirCalls.push(path);
+      mkdirModes.push(mode);
+      createdDirectories.add(path);
       options.mkdir?.(path);
     },
     rename: (source, destination) => {
       renameCalls.push([source, destination]);
       options.rename?.(source, destination);
-    },
-    rmdir: (path) => {
-      rmdirCalls.push(path);
-      options.rmdir?.(path);
+      renamedDirectories.add(destination);
     },
     git: (args, cwd) => {
       gitCalls.push({ args: [...args], cwd });
@@ -287,8 +307,8 @@ function harness(options: HarnessOptions = {}): Harness {
     proofCalls,
     lockCalls,
     mkdirCalls,
+    mkdirModes,
     renameCalls,
-    rmdirCalls,
   };
 }
 
@@ -756,12 +776,29 @@ test('a lone ignored node_modules directory moves after the claim check', () => 
   assert.deepEqual(h.renameCalls, [
     [`${WORKTREE}/node_modules`, PRESERVE_DESTINATION],
   ]);
-  assert.equal(h.mkdirCalls.at(-1), PRESERVE_DESTINATION);
+  assert.deepEqual(h.mkdirCalls, [
+    `${STATE_ROOT}/idd-skill`,
+    `${STATE_ROOT}/idd-skill/f4-preserved`,
+  ]);
+  assert.deepEqual(h.mkdirModes, [0o700, 0o700]);
   assert.equal(h.claimCalls.length, 5);
   assert.equal(
     report.steps.find((step) => step.step === 'step-5')?.detail,
     `node_modules/ was preserved at ${PRESERVE_DESTINATION}`,
   );
+});
+
+test('an unsafe node_modules directory holds before creating the destination', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    directoryPrivacy: (path) =>
+      path === `${WORKTREE}/node_modules` ? 'unsafe' : 'private',
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(report.steps.at(-1)?.detail ?? '', /ownership or privacy/);
+  assert.deepEqual(h.mkdirCalls, []);
+  assert.deepEqual(h.renameCalls, []);
 });
 
 test('a dry run reports the node_modules destination without creating or moving it', () => {

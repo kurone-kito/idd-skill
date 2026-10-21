@@ -8769,10 +8769,19 @@ for the fetch, the fast-forward, and each removal. `--apply` performs them.
 populated submodule, or symlinked path holds before removal. When the complete
 ignored-inclusive status output is exactly `!! node_modules/`, the path is a
 real directory, and no registered worktree lies at or inside it, apply moves it
-intact to `<state>/idd-skill/f4-preserved/<issue>-<UTC timestamp>/`; the step 5
-record names the destination. Dry-run performs the same read-only checks and
-reports the destination without creating or moving anything. The helper never
-deletes or expires preserved trees; the operator decides when to clean them.
+with its files intact to `<state>/idd-skill/f4-preserved/<issue>-<UTC timestamp>/`;
+the moved directory root is restricted to mode `0700` on POSIX, and the step 5
+record names the destination. Apply requires an owned state root and private
+destination directories. An owned direct POSIX root and existing destination
+directories are restricted to `0700`; a state-root symlink must already target
+a private directory. Windows checks that the state root and destination
+directories have a private ACL. On POSIX, the existing `node_modules/`
+directory must also be owned by the current user. Windows requires its ACL to
+be private before the move. The helper creates only missing parents and
+renames directly to an absent destination leaf. Dry-run performs the same
+read-only checks and reports the destination without creating, moving, or
+changing permissions. The helper never deletes or expires preserved trees; the
+operator decides when to clean them.
 Observed 2026-10-18 on issue `#4511` (PR `#4527`), an install-created
 `node_modules/` alone held cleanup. See the
 [F4 Head Proof](idd-resume-detail.md#f4-head-proof) section for destination

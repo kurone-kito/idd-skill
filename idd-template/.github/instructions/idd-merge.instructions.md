@@ -551,7 +551,15 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    `node_modules/` directory to the per-user state directory before
    removal. It preserves the tree intact and reports its destination;
    dry-run reports the path without creating or moving anything. Every
-   other dirty shape, populated submodule (`submodule-worktree`), or
+   apply verifies the state directory: POSIX directories must be
+   owner-owned and restricted to mode `0700`; an owned direct root can
+   be restricted, but a state-root symlink must already target a private
+   directory. On POSIX, the source `node_modules/` must be owned by the current
+   user; Windows requires a private ACL on the source before the move and on
+   the state root and destination directories. Only missing parents are
+   created, and the rename destination stays absent until the move.
+   Dry-run changes no permissions. Every other dirty shape, populated
+   submodule (`submodule-worktree`), or
    symlink (`symlink-path`) keeps its hold. If the hold detail says the
    helper did not move `node_modules/`, preserve it by hand too. A
    refused worktree is never removed. Git would discard ignored
