@@ -155,9 +155,11 @@ function isSentencePunctuation(
   const camelCaseTypeContinuation =
     nextWord !== undefined &&
     /[a-z][A-Z]/u.test(nextWord) &&
-    /^[a-z][A-Za-z0-9_-]*\s+[A-Z][A-Za-z0-9_-]*/u.test(followingText);
-  // Lowercase namespace segments can continue into a camel-cased type whose
-  // lowercase clause is followed by another capitalized type.
+    /^(?:extends|implements|permits)\s+[A-Z][A-Za-z0-9_-]*/u.test(
+      followingText,
+    );
+  // Declaration relationships keep a camel-cased type continuation
+  // code-shaped, while ordinary verbs after a dotted name remain prose.
   if (
     nextWord !== undefined &&
     (!followingProseWord || camelCaseTypeContinuation) &&

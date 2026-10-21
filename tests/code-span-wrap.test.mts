@@ -197,6 +197,7 @@ test('does not flag a sentence after a dotted name', () => {
   for (const span of [
     '`Open example.com. Then continue`',
     '`Visit example.com. GitHub Actions are available.`',
+    '`Visit example.com. GitHub supports Actions.`',
   ]) {
     assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
   }
