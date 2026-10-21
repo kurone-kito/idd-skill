@@ -1029,7 +1029,7 @@ const USER_ACTOR_STEP_AGENT_WORK_VERB_COMPLEMENT = new RegExp(
   'i',
 );
 const USER_ACTOR_STEP_AGENT_REPORTED_WORK_ASSIGNMENT_COMPLEMENT = new RegExp(
-  String.raw`^\s+that\s+(?:(?:it|they|he|she)\s+|${USER_ACTOR_STEP_ASSIGNABLE_AGENT.source}\s+|(?:${USER_ACTOR_STEP_AGENT_SUBJECT_DETERMINER}\s+)?${USER_ACTOR_STEP_AGENT_SUBJECT_MODIFIERS})?(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+to|is\s+required\s+to|required\s+to|expected\s+to)\s+(?:(?:be|being)\s+)?(?:${USER_ACTOR_STEP_ASSIGNMENT_CUE.source}|${USER_ACTOR_STEP_GENERAL_WORK_ACTION.source})`,
+  String.raw`^\s+that\s+(?:(?:it|they|he|she)\s+|${USER_ACTOR_STEP_ASSIGNABLE_AGENT.source}\s+|${USER_ACTOR_STEP_AGENT_RECIPIENT_SELECTOR}${USER_ACTOR_STEP_AGENT_SUBJECT_MODIFIERS})?(?:must|should|shall|will|needs?\s+to|has\s+to|is\s+to|is\s+required\s+to|required\s+to|expected\s+to)\s+(?:(?:be|being)\s+)?(?:${USER_ACTOR_STEP_ASSIGNMENT_CUE.source}|${USER_ACTOR_STEP_GENERAL_WORK_ACTION.source})`,
   'i',
 );
 const USER_ACTOR_STEP_AGENT_WORK_NOUN_COMPLEMENT =
@@ -1064,7 +1064,7 @@ const USER_ACTOR_STEP_AGENT_LATER_WORK_NOUN_TASK_TRANSFER_RECIPIENT =
     'i',
   );
 const USER_ACTOR_STEP_AGENT_LATER_WORK_NOUN_TRANSFER_TO_AGENT = new RegExp(
-  String.raw`\b(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|${USER_ACTOR_STEP_AGENT_SEND_VERB}|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?)\s+(?:(?:a|an|the)\s+)?${USER_ACTOR_STEP_AGENT_SUBJECT_MODIFIERS}(?:implementations?|work|tasks?|responsibilities|duties|assignments?|projects?|features?|support|testing|tests?|reviews?|maintenance|development|debugging|refactoring|migration|deployment|analysis|build)\s+to\s+(?:(?:a|an|the)\s+)?$`,
+  String.raw`\b(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|${USER_ACTOR_STEP_AGENT_SEND_VERB}|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?)\s+(?:(?:a|an|the)\s+)?${USER_ACTOR_STEP_AGENT_SUBJECT_MODIFIERS}(?:implementations?|work|tasks?|responsibilities|duties|assignments?|projects?|features?|support|testing|tests?|reviews?|maintenance|development|debugging|refactoring|migration|deployment|analysis|build)(?:\s+for\s+(?:(?:a|an|the)\s+)?${USER_ACTOR_STEP_AGENT_SUBJECT_MODIFIERS}[\w-]+(?:['’]s|s['’])?)?\s+to\s+(?:(?:a|an|the)\s+)?$`,
   'i',
 );
 const USER_ACTOR_STEP_AGENT_GIVEN_TECHNICAL_SUPPORT =
