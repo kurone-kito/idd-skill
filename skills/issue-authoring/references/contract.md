@@ -888,7 +888,7 @@ for the A4 Step 2 high-contention shared-file check (see
 Populate it accurately rather than as a loose reading aid for humans.
 Required for an orphan whose effort hint is `S` or `M`; optional for an
 orphan whose effort hint is `L`, absent, or malformed, and for a roadmap
-issue. Required for a
+issue. Required for a ready
 [child issue under a roadmap](#child-issue-under-a-roadmap) (see
 [Required draft content](#required-draft-content) below). For a child,
 the section parsing to zero paths -- heading missing or present but
@@ -1003,9 +1003,11 @@ Validation expectations:
 - `## Background`
 - `## Proposed change`
 - `## Acceptance criteria`
-- `## Candidate files` with at least one path for a ready child; a
-  human-routed child with no repository file expected may omit the
-  section or leave it empty (see
+- `## Candidate files` with at least one path for a ready child; a child
+  routed by an `authoring-bucket: needs-decision` or
+  `authoring-bucket: blocked-by-human` marker, or a suitability score
+  of `1`, may omit the section or leave it empty only when no repository
+  file is expected (see
   [Candidate files format](#candidate-files-format) above)
 - optional dependency line or sequential roadmap marker when needed
 - an autopilot-suitability footer at the end of the body (visible
