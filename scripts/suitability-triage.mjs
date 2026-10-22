@@ -863,7 +863,7 @@ const USER_ACTOR_STEP_OTHER_ACTOR =
 const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT =
   /^\s+(?:(?:the)\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
 const USER_ACTOR_STEP_UNAPPROVED_ACTOR_WINDOW = new RegExp(
-  String.raw`^\s*this\s+(?:steps?|checks?)\s+(?:by|for)\s+(?:(?:a|an|the)\s+)?(?:${USER_ACTOR_STEP_AGENT.source}|${USER_ACTOR_STEP_OTHER_ACTOR.source})\s*[.!?]?\s*$`,
+  String.raw`^\s*this\s+(?:steps?|checks?)\s+(?:by|for)\s+(?:(?:a|an|the)\s+)?(?:${USER_ACTOR_STEP_AGENT.source}|${USER_ACTOR_STEP_OTHER_ACTOR.source})`,
   'i',
 );
 const USER_ACTOR_STEP_AGENT_SUBJECT = new RegExp(

@@ -2696,7 +2696,12 @@ test('trust safety allows a check assigned to the user -- #4562', () => {
 test('trust safety rejects user-step near-miss actor phrases -- #4562', () => {
   const examples = [
     'Run this step by a user.',
+    'Run this step by a user, then continue.',
+    'Run this step by a user and then continue.',
     'Run this check for the user.',
+    'Run this check for the user, as described below.',
+    'Run this check for the user as described below.',
+    'Run this step by the user guide.',
     'Run this step by the human.',
     'Run this check by the coding agent.',
   ];
