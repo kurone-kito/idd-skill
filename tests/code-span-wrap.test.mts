@@ -1304,8 +1304,10 @@ test('findCorruptingProseWraps: a real fixture file with emphasis markup has no 
 // scanner now needs a few milliseconds. Each test times its first, smaller
 // size and asserts it before the 100,000 call, so a regression fails after
 // seconds instead of hanging the suite. The ceiling stays far above the
-// measured cost to ride out a loaded shared host; on a failure here, rerun
-// this file alone before suspecting a regression.
+// measured cost. Use process CPU time so scheduling delays on a loaded shared
+// host do not inflate the measurement; a wall-clock false alarm occurred on
+// issue #4600. On a failure here, rerun this file alone before suspecting a
+// regression.
 const INLINE_CODE_SPAN_LINEAR_CEILING_MS = 2000;
 const INLINE_CODE_SPAN_LARGE_RUN = 100_000;
 
@@ -1317,9 +1319,10 @@ function assertWrapScanLinear(
 ): void {
   for (const size of [firstSize, INLINE_CODE_SPAN_LARGE_RUN]) {
     const text = buildText(size);
-    const start = performance.now();
+    const start = process.cpuUsage();
     const violations = findCorruptingCodeSpanWraps(text);
-    const elapsedMs = performance.now() - start;
+    const usage = process.cpuUsage(start);
+    const elapsedMs = (usage.user + usage.system) / 1000;
     assert.ok(
       elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
       `${label} took ${Math.round(elapsedMs)} ms for n = ${size} (ceiling ${INLINE_CODE_SPAN_LINEAR_CEILING_MS} ms)`,
