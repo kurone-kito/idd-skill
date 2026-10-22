@@ -5132,12 +5132,13 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
     and `parkedIssuesComplete` (see the live-marker rule above).
   - `--parked-issues`: the cheap mode Discover's own parked-issue skip
     runs on every pass. Prints only `{ parkedIssues, parkedIssuesComplete
-    }`. Reads the live `provider-health` report first; when EVERY
-    service is `healthy`, `parkedIssues` is empty by construction (a
-    live marker's `resumable` is `true` only once its own service is
-    healthy) and complete, so this returns without any open-pull-request
-    or per-pull-request comment read. Otherwise falls through to the
-    full list-mode collection. Mutually exclusive with `--park`.
+    }`. It collects and validates live park markers first (#4615). With
+    no live markers, it returns the marker scan's completeness result
+    without reading provider health. Otherwise it reads each distinct
+    marker service once and reuses the same markers and verdicts as list
+    mode. A truncated open-PR sample or failed PR-comment read keeps
+    `parkedIssuesComplete: false` even when no live marker was observed.
+    Mutually exclusive with `--park`.
   - `--park`: fetches the pull request's live head SHA, re-checks the
     named service's live `provider-health` verdict is `unavailable`, and
     requires every entry in `--blockers` (the caller's own fresh

@@ -554,35 +554,53 @@ export function collectCiActionsEvidence(owner, repo, options = {}) {
     observations,
   };
 }
-export function buildProviderHealthReport(owner, repo, options = {}) {
+export function buildProviderHealthServiceReport(
+  owner,
+  repo,
+  service,
+  options = {},
+) {
   const config = options.config ?? loadIddConfig();
   const policy = normalizePolicyConfig(config).providerHealth;
-  const primaryBotLogin = resolveAdvisoryPrimaryBotLogin(config ?? {});
   const now = options.now ?? new Date().toISOString();
-  const { actors: trustedMarkerLogins } = resolveTrustedMarkerActors({
-    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-    config: config,
-  });
   const samplingWindowMs = parseIsoDurationToMs(policy.samplingWindow);
-  const settledWindowMs =
-    resolveAdvisoryWaitPolicy(config).settledWindowMinutes * 60_000;
-  const advisoryReviewSnapshot = collectAdvisoryReviewEvidence(owner, repo, {
-    primaryBotLogin,
-    now,
-    trustedMarkerLogins,
-    samplingWindowMs,
-    settledWindowMs,
-  });
-  const ciActionsSnapshot = collectCiActionsEvidence(owner, repo, {
-    now,
-    samplingWindowMs,
-  });
+  let snapshot;
+  if (service === 'advisory-review') {
+    const primaryBotLogin = resolveAdvisoryPrimaryBotLogin(config ?? {});
+    const { actors: trustedMarkerLogins } = resolveTrustedMarkerActors({
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+      config: config,
+    });
+    const settledWindowMs =
+      resolveAdvisoryWaitPolicy(config).settledWindowMinutes * 60_000;
+    snapshot = collectAdvisoryReviewEvidence(owner, repo, {
+      primaryBotLogin,
+      now,
+      trustedMarkerLogins,
+      samplingWindowMs,
+      settledWindowMs,
+    });
+  } else {
+    snapshot = collectCiActionsEvidence(owner, repo, {
+      now,
+      samplingWindowMs,
+    });
+  }
+  return classifyProviderHealth(snapshot, policy);
+}
+export function buildProviderHealthReport(owner, repo, options = {}) {
+  const config = options.config ?? loadIddConfig();
+  const now = options.now ?? new Date().toISOString();
+  const readService = options.readService ?? buildProviderHealthServiceReport;
   return {
     protocolVersion: '1',
     now,
     services: {
-      'advisory-review': classifyProviderHealth(advisoryReviewSnapshot, policy),
-      'ci-actions': classifyProviderHealth(ciActionsSnapshot, policy),
+      'advisory-review': readService(owner, repo, 'advisory-review', {
+        config,
+        now,
+      }),
+      'ci-actions': readService(owner, repo, 'ci-actions', { config, now }),
     },
   };
 }

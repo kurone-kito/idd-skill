@@ -127,6 +127,19 @@ export interface ProviderHealthReport {
   services: Record<ProviderHealthService, ProviderHealthServiceVerdict>;
 }
 
+export interface ProviderHealthServiceReadOptions {
+  config?: unknown;
+  now?: string;
+}
+
+/** Typed seam for collecting and classifying one provider-health service. */
+export type ProviderHealthServiceReader = (
+  owner: string,
+  repo: string,
+  service: ProviderHealthService,
+  options?: ProviderHealthServiceReadOptions,
+) => ProviderHealthServiceVerdict;
+
 const PROVIDER_HEALTH_REASONS = {
   evidenceUnreadable: 'evidence-unreadable',
   contradictoryEvidence: 'contradictory-evidence',
@@ -752,41 +765,62 @@ export function collectCiActionsEvidence(
   };
 }
 
+export function buildProviderHealthServiceReport(
+  owner: string,
+  repo: string,
+  service: ProviderHealthService,
+  options: ProviderHealthServiceReadOptions = {},
+): ProviderHealthServiceVerdict {
+  const config = options.config ?? loadIddConfig();
+  const policy = normalizePolicyConfig(config).providerHealth;
+  const now = options.now ?? new Date().toISOString();
+  const samplingWindowMs = parseIsoDurationToMs(policy.samplingWindow);
+  let snapshot: ProviderHealthSnapshot;
+  if (service === 'advisory-review') {
+    const primaryBotLogin = resolveAdvisoryPrimaryBotLogin(config ?? {});
+    const { actors: trustedMarkerLogins } = resolveTrustedMarkerActors({
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+      config: config as { trustedMarkerActors?: unknown } | null,
+    });
+    const settledWindowMs =
+      resolveAdvisoryWaitPolicy(config).settledWindowMinutes * 60_000;
+    snapshot = collectAdvisoryReviewEvidence(owner, repo, {
+      primaryBotLogin,
+      now,
+      trustedMarkerLogins,
+      samplingWindowMs,
+      settledWindowMs,
+    });
+  } else {
+    snapshot = collectCiActionsEvidence(owner, repo, {
+      now,
+      samplingWindowMs,
+    });
+  }
+
+  return classifyProviderHealth(snapshot, policy);
+}
+
 export function buildProviderHealthReport(
   owner: string,
   repo: string,
-  options: { config?: unknown; now?: string } = {},
+  options: ProviderHealthServiceReadOptions & {
+    readService?: ProviderHealthServiceReader;
+  } = {},
 ): ProviderHealthReport {
   const config = options.config ?? loadIddConfig();
-  const policy = normalizePolicyConfig(config).providerHealth;
-  const primaryBotLogin = resolveAdvisoryPrimaryBotLogin(config ?? {});
   const now = options.now ?? new Date().toISOString();
-  const { actors: trustedMarkerLogins } = resolveTrustedMarkerActors({
-    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-    config: config as { trustedMarkerActors?: unknown } | null,
-  });
-  const samplingWindowMs = parseIsoDurationToMs(policy.samplingWindow);
-  const settledWindowMs =
-    resolveAdvisoryWaitPolicy(config).settledWindowMinutes * 60_000;
-
-  const advisoryReviewSnapshot = collectAdvisoryReviewEvidence(owner, repo, {
-    primaryBotLogin,
-    now,
-    trustedMarkerLogins,
-    samplingWindowMs,
-    settledWindowMs,
-  });
-  const ciActionsSnapshot = collectCiActionsEvidence(owner, repo, {
-    now,
-    samplingWindowMs,
-  });
+  const readService = options.readService ?? buildProviderHealthServiceReport;
 
   return {
     protocolVersion: '1',
     now,
     services: {
-      'advisory-review': classifyProviderHealth(advisoryReviewSnapshot, policy),
-      'ci-actions': classifyProviderHealth(ciActionsSnapshot, policy),
+      'advisory-review': readService(owner, repo, 'advisory-review', {
+        config,
+        now,
+      }),
+      'ci-actions': readService(owner, repo, 'ci-actions', { config, now }),
     },
   };
 }

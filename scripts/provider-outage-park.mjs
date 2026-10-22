@@ -37,8 +37,11 @@ import {
 import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mjs';
 import {
   buildProviderHealthReport,
+  buildProviderHealthServiceReport,
   PROVIDER_HEALTH_SERVICES,
 } from './provider-health.mjs';
+// #4615: discover live park markers before collecting provider health, then
+// read only the distinct service evidence those markers require.
 /**
  * Fails closed to `true` when the open-pull-request sample was truncated
  * (more may exist beyond `sampleSize`), regardless of the sampled `count` --
@@ -441,11 +444,11 @@ export function deriveParkedIssues(entries) {
  * read does NOT affect completeness, since it fails open toward keeping
  * the marker live instead of dropping it.
  *
- * `options.healthReport` lets a caller (e.g. {@link buildParkedIssuesSummary})
- * that already computed the live provider-health report pass it through
- * instead of paying for a second one; `options.buildHealthReport`
- * overrides which function computes a fresh one when `healthReport` is
- * not supplied (defaults to the real {@link buildProviderHealthReport}).
+ * Live markers are collected before health evidence (#4615), and each
+ * distinct marker service is read once through the typed service-scoped
+ * reader. This keeps empty scans free of provider-health reads and avoids
+ * collecting evidence for an unused service. `readHealthService` is an
+ * injectable seam for offline tests and runtime stage reporting.
  */
 export function buildParkedChangeReport(owner, repo, options = {}) {
   const config = options.config ?? loadIddConfig();
@@ -472,16 +475,19 @@ export function buildParkedChangeReport(owner, repo, options = {}) {
   });
   const distinctServices = [
     ...new Set(rawMarkers.map((r) => r.marker.service)),
-  ];
+  ].filter((service) => PROVIDER_HEALTH_SERVICES.includes(service));
   const verdictsByService = new Map();
-  if (distinctServices.length > 0) {
-    const buildHealthReport =
-      options.buildHealthReport ?? buildProviderHealthReport;
-    const report =
-      options.healthReport ?? buildHealthReport(owner, repo, { config, now });
-    for (const service of distinctServices) {
-      const verdict = report.services[service]?.verdict;
-      if (verdict) verdictsByService.set(service, verdict);
+  const readHealthService =
+    options.readHealthService ?? buildProviderHealthServiceReport;
+  for (const service of distinctServices) {
+    try {
+      const result = readHealthService(owner, repo, service, { config, now });
+      if (result.service === service) {
+        verdictsByService.set(service, result.verdict);
+      }
+    } catch {
+      // A failed service read leaves the verdict absent; the list builder
+      // maps that to `unknown`, which keeps the issue parked.
     }
   }
   const { entries, count } = buildParkedChangeList(
@@ -502,38 +508,14 @@ export function buildParkedChangeReport(owner, repo, options = {}) {
   };
 }
 /**
- * Cheap `--parked-issues` mode (#3277): the Discover sibling issue runs
- * this on EVERY pass, so it must not always pay for the full per-pull-
- * request comment fan-out {@link buildParkedChangeReport} performs.
- * Reads the live provider-health report FIRST, unconditionally. When
- * every {@link PROVIDER_HEALTH_SERVICES} entry's verdict is `'healthy'`,
- * `parkedIssues` is empty BY CONSTRUCTION (a live marker's `resumable` is
- * `true` only once its own service is healthy, and every service is
- * healthy) and complete, so this returns immediately -- no open-pull-
- * request read, no per-pull-request comment read. Otherwise falls
- * through to the full {@link buildParkedChangeReport}, reusing the
- * already-computed health report (never a second live-evidence read).
+ * Cheap `--parked-issues` mode (#3277): collect and validate live markers
+ * first, then read only the service evidence those markers require (#4615).
+ * With no live markers it returns the marker scan's completeness result
+ * without any provider-health read. The same collected markers and
+ * service verdicts feed list mode and this summary.
  */
 export function buildParkedIssuesSummary(owner, repo, options = {}) {
-  const config = options.config ?? loadIddConfig();
-  const now = options.now ?? toSecondPrecisionIso(new Date());
-  const buildHealthReport =
-    options.buildHealthReport ?? buildProviderHealthReport;
-  const healthReport = buildHealthReport(owner, repo, { config, now });
-  const allHealthy = PROVIDER_HEALTH_SERVICES.every(
-    (service) => healthReport.services[service]?.verdict === 'healthy',
-  );
-  if (allHealthy) {
-    return { parkedIssues: [], parkedIssuesComplete: true };
-  }
-  const report = buildParkedChangeReport(owner, repo, {
-    config,
-    now,
-    sampleSize: options.sampleSize,
-    fetchOpenPullRequests: options.fetchOpenPullRequests,
-    fetchComments: options.fetchComments,
-    healthReport,
-  });
+  const report = buildParkedChangeReport(owner, repo, options);
   return {
     parkedIssues: report.parkedIssues,
     parkedIssuesComplete: report.parkedIssuesComplete,
@@ -763,10 +745,12 @@ silently dropped a parked issue (sampleTruncated, or any per-pull-request
 comment read failed).
 
 --parked-issues: cheap mode -- prints ONLY { parkedIssues,
-parkedIssuesComplete }. Reads the live provider-health report first; when
-EVERY service is healthy, parkedIssues is empty and complete by
-construction, so this returns without any open-pull-request or
-per-pull-request comment read. Mutually exclusive with --park.
+parkedIssuesComplete }. It collects live markers first; no live markers
+means no provider-health reads. Otherwise it reads only each distinct
+marker service once, reusing the same markers and verdicts as list mode
+(#4615). A truncated sample or failed pull-request comment read keeps
+parkedIssuesComplete false even when no live marker was observed.
+Mutually exclusive with --park.
 
 --park: re-checks the named --service's LIVE provider-health verdict is
 unavailable, and requires every --blockers entry (the caller's own fresh
