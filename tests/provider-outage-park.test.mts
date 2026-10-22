@@ -7,7 +7,11 @@ import {
   renderProviderOutageParkComment,
   toSecondPrecisionIso,
 } from '../src/scripts/protocol-helpers.mts';
-import type { ProviderHealthVerdict } from '../src/scripts/provider-health.mts';
+import type {
+  ProviderHealthServiceReader,
+  ProviderHealthServiceVerdict,
+  ProviderHealthVerdict,
+} from '../src/scripts/provider-health.mts';
 import {
   buildParkedChangeList,
   buildParkedChangeReport,
@@ -30,7 +34,7 @@ import { pinLoadControlOff, useFixtureGh } from './test-utils.mts';
 // That is a load-control concern, not network isolation (#3746): the fixture
 // `gh` below serves or records every GitHub read the file could reach, and the
 // `after` hook fails the file if any call was not expected. The parked-change
-// tests also inject their health builder, so provider-health semantics come
+// tests also inject the service-scoped health reader, so provider-health semantics come
 // from a fixture, never from a live read.
 let restoreLoadControl: (() => void) | undefined;
 before(() => {
@@ -377,13 +381,13 @@ test('deriveParkedIssues: sorted and de-duplicated across entries sharing an iss
 // parkedIssuesComplete / cheap-mode contracts network-injected end to end.
 // ---------------------------------------------------------------------------
 
-function fakeHealthReport(
+function fakeHealthReader(
   verdicts: Partial<
     Record<'advisory-review' | 'ci-actions', ProviderHealthVerdict>
   > = {},
   reason = 'all-healthy',
-) {
-  const build = (service: 'advisory-review' | 'ci-actions') => ({
+): ProviderHealthServiceReader {
+  return (_owner, _repo, service): ProviderHealthServiceVerdict => ({
     service,
     verdict: verdicts[service] ?? 'healthy',
     reason,
@@ -391,14 +395,6 @@ function fakeHealthReport(
     distinctSuccessPrCount: 0,
     minCorroboratingPrs: 0,
   });
-  return {
-    protocolVersion: '1' as const,
-    now: '2026-09-02T00:00:00Z',
-    services: {
-      'advisory-review': build('advisory-review'),
-      'ci-actions': build('ci-actions'),
-    },
-  };
 }
 
 /**
@@ -410,11 +406,10 @@ function fakeHealthReport(
  * `deriveParkedIssues` drops a `resumable` (healthy) entry. This is network
  * isolation; `pinLoadControlOff` is a separate, load-control concern.
  */
-const unreadableHealthBuilder = () =>
-  fakeHealthReport(
-    { 'advisory-review': 'unknown', 'ci-actions': 'unknown' },
-    'evidence-unreadable',
-  );
+const unreadableHealthReader = fakeHealthReader(
+  { 'advisory-review': 'unknown', 'ci-actions': 'unknown' },
+  'evidence-unreadable',
+);
 
 /** Isolates a test from any host-set trusted-marker-actor env override,
  * so `config.trustedMarkerActors` below is the actual, deterministic
@@ -429,26 +424,35 @@ function withoutTrustedMarkerActorsEnv<T>(run: () => T): T {
   }
 }
 
-test('buildParkedIssuesSummary: every service healthy short-circuits with no per-PR read (#3277 AC)', () => {
+test('buildParkedIssuesSummary: no live markers skips provider health after a complete marker scan (#4615)', () => {
+  let openPrReadCalls = 0;
+  let prCommentReadCalls = 0;
+  let healthReadCalls = 0;
   const summary = withoutTrustedMarkerActorsEnv(() =>
     buildParkedIssuesSummary('acme', 'widget', {
       config: { trustedMarkerActors: ['kurone-kito'] },
-      buildHealthReport: () => fakeHealthReport(),
+      readHealthService: () => {
+        healthReadCalls += 1;
+        throw new Error('no provider-health reader should run');
+      },
       fetchOpenPullRequests: () => {
-        throw new Error(
-          'open-pull-request read must not happen when all healthy',
-        );
+        openPrReadCalls += 1;
+        return [{ number: 7, head: { sha: 'a'.repeat(40) } }];
       },
       fetchComments: () => {
-        throw new Error('comment read must not happen when all healthy');
+        prCommentReadCalls += 1;
+        return [];
       },
     }),
   );
   assert.deepEqual(summary, { parkedIssues: [], parkedIssuesComplete: true });
+  assert.equal(openPrReadCalls, 1);
+  assert.equal(prCommentReadCalls, 1);
+  assert.equal(healthReadCalls, 0);
 });
 
-test('buildParkedIssuesSummary: a non-healthy service falls through to the full report, reusing the health report', () => {
-  let healthReportCalls = 0;
+test('buildParkedIssuesSummary: one live marker reads only its service once (#4615)', () => {
+  const healthServices: string[] = [];
   const markerBody = renderProviderOutageParkComment({
     actor: 'claude-1',
     issueNumber: 555,
@@ -461,9 +465,13 @@ test('buildParkedIssuesSummary: a non-healthy service falls through to the full 
   const summary = withoutTrustedMarkerActorsEnv(() =>
     buildParkedIssuesSummary('acme', 'widget', {
       config: { trustedMarkerActors: ['kurone-kito'] },
-      buildHealthReport: () => {
-        healthReportCalls += 1;
-        return fakeHealthReport({ 'advisory-review': 'degraded' });
+      readHealthService: (_owner, _repo, service) => {
+        healthServices.push(service);
+        return fakeHealthReader({ 'advisory-review': 'degraded' })(
+          'acme',
+          'widget',
+          service,
+        );
       },
       fetchOpenPullRequests: () => [
         { number: 7, head: { sha: 'a'.repeat(40) } },
@@ -480,13 +488,206 @@ test('buildParkedIssuesSummary: a non-healthy service falls through to the full 
           : [],
     }),
   );
-  // Reused the already-computed health report -- exactly one call, not a
-  // second one inside buildParkedChangeReport.
-  assert.equal(healthReportCalls, 1);
+  assert.deepEqual(healthServices, ['advisory-review']);
   assert.deepEqual(summary, {
     parkedIssues: [555],
     parkedIssuesComplete: true,
   });
+});
+
+test('buildParkedIssuesSummary: an incomplete empty marker scan skips health reads (#4615)', () => {
+  let healthReadCalls = 0;
+  const summary = withoutTrustedMarkerActorsEnv(() =>
+    buildParkedIssuesSummary('acme', 'widget', {
+      config: { trustedMarkerActors: ['kurone-kito'] },
+      sampleSize: 1,
+      readHealthService: () => {
+        healthReadCalls += 1;
+        throw new Error('no provider-health reader should run');
+      },
+      fetchOpenPullRequests: () => [
+        { number: 7, head: { sha: 'a'.repeat(40) } },
+      ],
+      fetchComments: () => [],
+    }),
+  );
+  assert.deepEqual(summary, { parkedIssues: [], parkedIssuesComplete: false });
+  assert.equal(healthReadCalls, 0);
+});
+
+test('buildParkedIssuesSummary: a failed empty PR-comment scan skips health reads (#4615)', () => {
+  let healthReadCalls = 0;
+  const summary = withoutTrustedMarkerActorsEnv(() =>
+    buildParkedIssuesSummary('acme', 'widget', {
+      config: { trustedMarkerActors: ['kurone-kito'] },
+      readHealthService: () => {
+        healthReadCalls += 1;
+        throw new Error('no provider-health reader should run');
+      },
+      fetchOpenPullRequests: () => [
+        { number: 7, head: { sha: 'a'.repeat(40) } },
+      ],
+      fetchComments: () => {
+        throw new Error('comment read failed');
+      },
+    }),
+  );
+  assert.deepEqual(summary, { parkedIssues: [], parkedIssuesComplete: false });
+  assert.equal(healthReadCalls, 0);
+});
+
+test('buildParkedIssuesSummary: an open-PR read failure remains an error (#4615)', () => {
+  assert.throws(
+    () =>
+      buildParkedIssuesSummary('acme', 'widget', {
+        config: { trustedMarkerActors: ['kurone-kito'] },
+        readHealthService: () => {
+          throw new Error('health must not run after the marker read fails');
+        },
+        fetchOpenPullRequests: () => {
+          throw new Error('request failed');
+        },
+        fetchComments: () => [],
+      }),
+    /could not read open pull requests to list parked changes/,
+  );
+});
+
+test('buildParkedChangeReport: multiple advisory markers read advisory health once (#4615)', () => {
+  const healthServices: string[] = [];
+  const markerBodyFor = (prNumber: number) =>
+    renderProviderOutageParkComment({
+      actor: 'claude-1',
+      issueNumber: 550 + prNumber,
+      service: 'advisory-review',
+      headSha: 'a'.repeat(40),
+      claimId: `claim-${prNumber}`,
+      parkedAt: `2026-09-02T00:00:${String(prNumber).padStart(2, '0')}Z`,
+      blockers: ['advisory-wait'],
+    });
+  const report = withoutTrustedMarkerActorsEnv(() =>
+    buildParkedChangeReport('acme', 'widget', {
+      config: { trustedMarkerActors: ['kurone-kito'] },
+      readHealthService: (_owner, _repo, service) => {
+        healthServices.push(service);
+        return fakeHealthReader({ 'advisory-review': 'degraded' })(
+          'acme',
+          'widget',
+          service,
+        );
+      },
+      fetchOpenPullRequests: () => [
+        { number: 7, head: { sha: 'a'.repeat(40) } },
+        { number: 8, head: { sha: 'a'.repeat(40) } },
+      ],
+      fetchComments: (_owner, _repo, number: number) =>
+        number === 7 || number === 8
+          ? [
+              {
+                body: markerBodyFor(number),
+                created_at: '2026-09-02T00:00:05Z',
+                user: { login: 'kurone-kito' },
+              },
+            ]
+          : [],
+    }),
+  );
+  assert.deepEqual(healthServices, ['advisory-review']);
+  assert.deepEqual(report.parkedIssues, [557, 558]);
+});
+
+test('buildParkedChangeReport: Actions-only markers read only Actions health (#4615)', () => {
+  const healthServices: string[] = [];
+  const markerBody = renderProviderOutageParkComment({
+    actor: 'claude-1',
+    issueNumber: 555,
+    service: 'ci-actions',
+    headSha: 'a'.repeat(40),
+    claimId: 'claim-1',
+    parkedAt: '2026-09-02T00:00:00Z',
+    blockers: ['ci'],
+  });
+  const report = withoutTrustedMarkerActorsEnv(() =>
+    buildParkedChangeReport('acme', 'widget', {
+      config: { trustedMarkerActors: ['kurone-kito'] },
+      readHealthService: (_owner, _repo, service) => {
+        healthServices.push(service);
+        return fakeHealthReader({ 'ci-actions': 'unavailable' })(
+          'acme',
+          'widget',
+          service,
+        );
+      },
+      fetchOpenPullRequests: () => [
+        { number: 7, head: { sha: 'a'.repeat(40) } },
+      ],
+      fetchComments: (_owner, _repo, number: number) =>
+        number === 7
+          ? [
+              {
+                body: markerBody,
+                created_at: '2026-09-02T00:00:05Z',
+                user: { login: 'kurone-kito' },
+              },
+            ]
+          : [],
+    }),
+  );
+  assert.deepEqual(healthServices, ['ci-actions']);
+  assert.deepEqual(report.parkedIssues, [555]);
+});
+
+test('buildParkedChangeReport: mixed markers read each distinct service once (#4615)', () => {
+  const healthServices: string[] = [];
+  const markerBodyFor = (
+    issueNumber: number,
+    service: 'advisory-review' | 'ci-actions',
+  ) =>
+    renderProviderOutageParkComment({
+      actor: 'claude-1',
+      issueNumber,
+      service,
+      headSha: 'a'.repeat(40),
+      claimId: `claim-${issueNumber}`,
+      parkedAt: '2026-09-02T00:00:00Z',
+      blockers: service === 'advisory-review' ? ['advisory-wait'] : ['ci'],
+    });
+  const report = withoutTrustedMarkerActorsEnv(() =>
+    buildParkedChangeReport('acme', 'widget', {
+      config: { trustedMarkerActors: ['kurone-kito'] },
+      readHealthService: (_owner, _repo, service) => {
+        healthServices.push(service);
+        return fakeHealthReader({
+          'advisory-review': 'degraded',
+          'ci-actions': 'unknown',
+        })('acme', 'widget', service);
+      },
+      fetchOpenPullRequests: () => [
+        { number: 7, head: { sha: 'a'.repeat(40) } },
+        { number: 8, head: { sha: 'a'.repeat(40) } },
+      ],
+      fetchComments: (_owner, _repo, number: number) =>
+        number === 7
+          ? [
+              {
+                body: markerBodyFor(555, 'advisory-review'),
+                created_at: '2026-09-02T00:00:05Z',
+                user: { login: 'kurone-kito' },
+              },
+            ]
+          : number === 8
+            ? [
+                {
+                  body: markerBodyFor(556, 'ci-actions'),
+                  created_at: '2026-09-02T00:00:05Z',
+                  user: { login: 'kurone-kito' },
+                },
+              ]
+            : [],
+    }),
+  );
+  assert.deepEqual(healthServices, ['advisory-review', 'ci-actions']);
+  assert.deepEqual(report.parkedIssues, [555, 556]);
 });
 
 test('buildParkedChangeReport: a head-mismatched marker found via the real fetch wiring is excluded, counted as retired, and never triggers an issue-comment read (#3379 review)', () => {
@@ -502,7 +703,7 @@ test('buildParkedChangeReport: a head-mismatched marker found via the real fetch
   let issueReadCalls = 0;
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
-      buildHealthReport: unreadableHealthBuilder,
+      readHealthService: unreadableHealthReader,
       config: { trustedMarkerActors: ['kurone-kito'] },
       fetchOpenPullRequests: () => [
         { number: 7, head: { sha: 'b'.repeat(40) } }, // head moved since parking
@@ -545,7 +746,7 @@ test('buildParkedChangeReport: two markers sharing one originating issue read th
   let issueReadCalls = 0;
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
-      buildHealthReport: unreadableHealthBuilder,
+      readHealthService: unreadableHealthReader,
       config: { trustedMarkerActors: ['kurone-kito'] },
       fetchOpenPullRequests: () => [
         { number: 7, head: { sha: 'a'.repeat(40) } },
@@ -573,7 +774,7 @@ test('buildParkedChangeReport: two markers sharing one originating issue read th
   assert.deepEqual(report.parkedIssues, [555]);
 });
 
-test('buildParkedChangeReport: the health builder decides whether a parked marker stays parked (healthy retires it, unknown keeps it)', () => {
+test('buildParkedChangeReport: the service reader decides whether a parked marker stays parked', () => {
   const markerBody = renderProviderOutageParkComment({
     actor: 'claude-1',
     issueNumber: 555,
@@ -583,12 +784,10 @@ test('buildParkedChangeReport: the health builder decides whether a parked marke
     parkedAt: '2026-09-02T00:00:00Z',
     blockers: ['advisory-wait'],
   });
-  const build = (
-    buildHealthReport: () => ReturnType<typeof fakeHealthReport>,
-  ) =>
+  const build = (readHealthService: ProviderHealthServiceReader) =>
     withoutTrustedMarkerActorsEnv(() =>
       buildParkedChangeReport('acme', 'widget', {
-        buildHealthReport,
+        readHealthService,
         config: { trustedMarkerActors: ['kurone-kito'] },
         fetchOpenPullRequests: () => [
           { number: 7, head: { sha: 'a'.repeat(40) } },
@@ -605,14 +804,18 @@ test('buildParkedChangeReport: the health builder decides whether a parked marke
             : [],
       }),
     );
-  assert.deepEqual(build(unreadableHealthBuilder).parkedIssues, [555]);
-  assert.deepEqual(build(() => fakeHealthReport()).parkedIssues, []);
+  assert.deepEqual(build(unreadableHealthReader).parkedIssues, [555]);
+  assert.deepEqual(build(fakeHealthReader()).parkedIssues, []);
   assert.deepEqual(
-    build(() =>
-      fakeHealthReport({ 'advisory-review': 'degraded' }, 'corroborated'),
-    ).parkedIssues,
+    build(fakeHealthReader({ 'advisory-review': 'degraded' }, 'corroborated'))
+      .parkedIssues,
     [555],
   );
+  const failedRead = build(() => {
+    throw new Error('service evidence unavailable');
+  });
+  assert.deepEqual(failedRead.parkedIssues, [555]);
+  assert.equal(failedRead.entries[0]?.verdict, 'unknown');
 });
 
 // #3249: `idd-provider-outage-park` is one of the issue's own explicit
@@ -633,7 +836,7 @@ test('buildParkedChangeReport: an edited trusted park marker still counts (restr
   });
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
-      buildHealthReport: unreadableHealthBuilder,
+      readHealthService: unreadableHealthReader,
       config: { trustedMarkerActors: ['kurone-kito'] },
       fetchOpenPullRequests: () => [
         { number: 7, head: { sha: 'a'.repeat(40) } },
@@ -676,7 +879,7 @@ test('buildParkedChangeReport: a REAL later claimed-by comment on the originatin
   });
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
-      buildHealthReport: unreadableHealthBuilder,
+      readHealthService: unreadableHealthReader,
       config: { trustedMarkerActors: ['kurone-kito'] },
       fetchOpenPullRequests: () => [
         { number: 7, head: { sha: 'a'.repeat(40) } }, // head still matches
@@ -729,7 +932,7 @@ test('buildParkedChangeReport: an edited later claimed-by comment does not retir
   const resolveClaimEditStateCalls: boolean[] = [];
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
-      buildHealthReport: unreadableHealthBuilder,
+      readHealthService: unreadableHealthReader,
       config: { trustedMarkerActors: ['kurone-kito'] },
       fetchOpenPullRequests: () => [
         { number: 7, head: { sha: 'a'.repeat(40) } },
@@ -785,7 +988,7 @@ test('buildParkedChangeReport: a real claimed-by comment BEFORE the park comment
   });
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
-      buildHealthReport: unreadableHealthBuilder,
+      readHealthService: unreadableHealthReader,
       config: { trustedMarkerActors: ['kurone-kito'] },
       fetchOpenPullRequests: () => [
         { number: 7, head: { sha: 'a'.repeat(40) } },
@@ -826,7 +1029,7 @@ test('buildParkedChangeReport: a failed originating-issue comment read keeps the
   });
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
-      buildHealthReport: unreadableHealthBuilder,
+      readHealthService: unreadableHealthReader,
       config: { trustedMarkerActors: ['kurone-kito'] },
       fetchOpenPullRequests: () => [
         { number: 7, head: { sha: 'a'.repeat(40) } },
@@ -858,7 +1061,7 @@ test('buildParkedChangeReport: a failed originating-issue comment read keeps the
 test('buildParkedChangeReport: parkedIssuesComplete is false when the open-PR sample is truncated', () => {
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
-      buildHealthReport: unreadableHealthBuilder,
+      readHealthService: unreadableHealthReader,
       config: { trustedMarkerActors: ['kurone-kito'] },
       sampleSize: 2,
       fetchOpenPullRequests: () => [
@@ -876,7 +1079,7 @@ test('buildParkedChangeReport: parkedIssuesComplete is false when one per-PR com
   let call = 0;
   const report = withoutTrustedMarkerActorsEnv(() =>
     buildParkedChangeReport('acme', 'widget', {
-      buildHealthReport: unreadableHealthBuilder,
+      readHealthService: unreadableHealthReader,
       config: { trustedMarkerActors: ['kurone-kito'] },
       sampleSize: 50,
       fetchOpenPullRequests: () => [

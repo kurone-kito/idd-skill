@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  buildProviderHealthReport,
   classifyProviderHealth,
   deriveAdvisoryReviewObservation,
   deriveCiActionsObservation,
@@ -632,4 +633,31 @@ test('a classifier result for each service round-trips through the report schema
   };
   const fullSchema = loadJson('schemas/provider-health.schema.json');
   assert.deepEqual(validate(report, fullSchema), []);
+});
+
+test('the full provider-health report reads and includes both services', () => {
+  const calls: string[] = [];
+  const report = buildProviderHealthReport('acme', 'widget', {
+    config: {},
+    now: NOW,
+    readService: (_owner, _repo, service) => {
+      calls.push(service);
+      return {
+        service,
+        verdict: service === 'advisory-review' ? 'healthy' : 'unknown',
+        reason: 'fixture',
+        distinctFailingPrCount: 0,
+        distinctSuccessPrCount: 0,
+        minCorroboratingPrs: 2,
+      };
+    },
+  });
+
+  assert.deepEqual(calls, ['advisory-review', 'ci-actions']);
+  assert.deepEqual(Object.keys(report.services), [
+    'advisory-review',
+    'ci-actions',
+  ]);
+  assert.equal(report.services['advisory-review'].verdict, 'healthy');
+  assert.equal(report.services['ci-actions'].verdict, 'unknown');
 });
