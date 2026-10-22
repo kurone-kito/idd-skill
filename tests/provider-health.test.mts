@@ -10,6 +10,7 @@ import {
   resolveCutoffIso,
 } from '../src/scripts/provider-health.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
+import { installFixtureGh, pinLoadControlOff } from './test-utils.mts';
 
 const NOW = '2026-09-01T00:00:00Z';
 const POLICY = { minCorroboratingPrs: 2 };
@@ -660,4 +661,56 @@ test('the full provider-health report reads and includes both services', () => {
   ]);
   assert.equal(report.services['advisory-review'].verdict, 'healthy');
   assert.equal(report.services['ci-actions'].verdict, 'unknown');
+});
+
+test('the default provider-health report dispatches to both evidence collectors', () => {
+  const restoreLoadControl = pinLoadControlOff();
+  const fixtureGh = installFixtureGh({
+    responses: [
+      {
+        args: [
+          'api',
+          'repos/acme/widget/pulls?state=all&sort=updated&direction=desc&per_page=20',
+        ],
+        match: 'prefix',
+        stdout: '[]',
+      },
+      {
+        args: [
+          'api',
+          'repos/acme/widget/actions/runs?status=completed&per_page=50',
+        ],
+        match: 'prefix',
+        stdout: '{"workflow_runs":[]}',
+      },
+    ],
+  });
+
+  try {
+    const report = buildProviderHealthReport('acme', 'widget', {
+      config: {},
+      now: NOW,
+    });
+
+    assert.deepEqual(Object.keys(report.services), [
+      'advisory-review',
+      'ci-actions',
+    ]);
+    assert.equal(report.services['advisory-review'].service, 'advisory-review');
+    assert.equal(report.services['ci-actions'].service, 'ci-actions');
+    assert.deepEqual(
+      fixtureGh
+        .calls()
+        .filter((args) => args[0] === 'api')
+        .map((args) => args[1]),
+      [
+        'repos/acme/widget/pulls?state=all&sort=updated&direction=desc&per_page=20',
+        'repos/acme/widget/actions/runs?status=completed&per_page=50',
+      ],
+    );
+    assert.deepEqual(fixtureGh.unexpectedCalls(), []);
+  } finally {
+    fixtureGh.restore();
+    restoreLoadControl();
+  }
 });
