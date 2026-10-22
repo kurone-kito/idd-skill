@@ -17,7 +17,8 @@
 // (`post-idd-marker.mjs --type unclaim`) the caller takes afterward.
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { writeSync } from 'node:fs';
+import { readdirSync, readFileSync, writeSync } from 'node:fs';
+import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { parseCliArgs } from './cli-args.mjs';
@@ -761,13 +762,54 @@ function hasExplicitFlag(args, flag) {
     (argument) => argument === flag || argument.startsWith(`${flag}=`),
   );
 }
-function processGroupExists(pid) {
+function readLinuxProcessGroupStates(pid, procRoot = '/proc') {
+  let entries;
+  try {
+    entries = readdirSync(procRoot);
+  } catch {
+    return null;
+  }
+  const states = [];
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    let stat;
+    try {
+      stat = readFileSync(join(procRoot, entry, 'stat'), 'utf8');
+    } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      return null;
+    }
+    const closingParen = stat.lastIndexOf(')');
+    if (closingParen < 0) return null;
+    const fields = stat
+      .slice(closingParen + 1)
+      .trim()
+      .split(/\s+/);
+    const processGroup = Number(fields[2]);
+    if (!fields[0] || !Number.isSafeInteger(processGroup)) return null;
+    if (processGroup === pid) states.push(fields[0]);
+  }
+  return states.length > 0 ? states : null;
+}
+function processGroupExists(
+  pid,
+  platform = process.platform,
+  readStates = (groupId) => readLinuxProcessGroupStates(groupId),
+) {
+  let signalProbeFoundGroup = false;
   try {
     process.kill(-pid, 0);
-    return true;
+    signalProbeFoundGroup = true;
   } catch (error) {
-    return error.code !== 'ESRCH';
+    if (error.code === 'ESRCH') return false;
+    signalProbeFoundGroup = true;
   }
+  if (platform !== 'linux') return signalProbeFoundGroup;
+  const states = readStates(pid);
+  if (states === null) return signalProbeFoundGroup;
+  // A zombie has exited and cannot keep doing work. Linux keeps its process
+  // table entry until its parent reaps it, while kill(-pgid, 0) still sees it.
+  return states.some((state) => state !== 'Z' && state !== 'X');
 }
 function signalProcessGroup(pid, signal) {
   process.kill(-pid, signal);
@@ -959,7 +1001,12 @@ export async function superviseReadMode(
   const writeStdout =
     dependencies.writeStdout ?? ((chunk) => process.stdout.write(chunk));
   const signalGroup = dependencies.signalProcessGroup ?? signalProcessGroup;
-  const groupExists = dependencies.processGroupExists ?? processGroupExists;
+  const groupExists =
+    dependencies.processGroupExists ??
+    ((pid) =>
+      processGroupExists(pid, platform, (groupId) =>
+        readLinuxProcessGroupStates(groupId, dependencies.procRoot),
+      ));
   const startedAt = now();
   let lastStage = 'worker-startup';
   const elapsed = () => Math.max(0, Math.floor(now() - startedAt));

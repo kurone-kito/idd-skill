@@ -3,10 +3,12 @@ import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -62,6 +64,31 @@ if (args[0] === 'repo' && args[1] === 'view') {
 
 function createTempRoot(): string {
   return mkdtempSync(join(tmpdir(), 'idd-provider-outage-park-'));
+}
+
+function ownProcessGroupId(): number {
+  const stat = readFileSync('/proc/self/stat', 'utf8');
+  const fields = stat
+    .slice(stat.lastIndexOf(')') + 1)
+    .trim()
+    .split(/\s+/);
+  const processGroup = Number(fields[2]);
+  assert.ok(Number.isSafeInteger(processGroup));
+  return processGroup;
+}
+
+function writeProcStat(
+  procRoot: string,
+  pid: number,
+  processGroup: number,
+  state: string,
+): void {
+  const processRoot = join(procRoot, String(pid));
+  mkdirSync(processRoot, { recursive: true });
+  writeFileSync(
+    join(processRoot, 'stat'),
+    `${pid} (fake child) ${state} 1 ${processGroup} 1\n`,
+  );
 }
 
 function ghEnv(
@@ -447,6 +474,90 @@ test('a closed worker with an unreaped process group cannot publish success', {
   if (typeof result === 'object') assert.equal(result.exitCode, 1);
   assert.equal(Buffer.concat(output).length, 0);
   assert.match(errors.join(''), /cleanup failed within 10ms/);
+});
+
+test('Linux cleanup ignores a process group containing only zombies', {
+  skip: process.platform !== 'linux',
+}, async () => {
+  const processGroup = ownProcessGroupId();
+  const child = fakeChild(processGroup);
+  const procRoot = createTempRoot();
+  writeProcStat(procRoot, 45686, processGroup, 'Z');
+  const signals: NodeJS.Signals[] = [];
+  const output: Buffer[] = [];
+  const fakeSpawn = (() => {
+    setImmediate(() => {
+      (child.stdout as PassThrough).end('{"complete":true}\n');
+      (child.stderr as PassThrough).end();
+      (child.stdio[3] as PassThrough).end();
+      child.emit('close', 0, null);
+    });
+    return child;
+  }) as unknown as typeof spawn;
+
+  try {
+    const result = await superviseReadMode('list', 1_000, [], {
+      platform: 'linux',
+      spawnProcess: fakeSpawn,
+      procRoot,
+      signalProcessGroup: (_pid, signal) => signals.push(signal),
+      cleanupBudgetMs: 500,
+      progressIntervalMs: 10_000,
+      writeStdout: (chunk) => output.push(Buffer.from(chunk)),
+    });
+
+    assert.equal(result, 0);
+    assert.deepEqual(signals, []);
+    assert.equal(Buffer.concat(output).toString(), '{"complete":true}\n');
+  } finally {
+    rmSync(procRoot, { recursive: true, force: true });
+  }
+});
+
+test('Linux cleanup waits for live descendants while ignoring zombie siblings', {
+  skip: process.platform !== 'linux',
+}, async () => {
+  const processGroup = ownProcessGroupId();
+  const child = fakeChild(processGroup);
+  const procRoot = createTempRoot();
+  writeProcStat(procRoot, 45687, processGroup, 'S');
+  writeProcStat(procRoot, 45688, processGroup, 'Z');
+  const signals: NodeJS.Signals[] = [];
+  const output: Buffer[] = [];
+  const errors: string[] = [];
+  const fakeSpawn = (() => {
+    setImmediate(() => {
+      (child.stdout as PassThrough).end('{"complete":true}\n');
+      (child.stderr as PassThrough).end();
+      (child.stdio[3] as PassThrough).end();
+      child.emit('close', 0, null);
+    });
+    return child;
+  }) as unknown as typeof spawn;
+
+  try {
+    const result = await superviseReadMode('list', 1_000, [], {
+      platform: 'linux',
+      spawnProcess: fakeSpawn,
+      procRoot,
+      signalProcessGroup: (_pid, signal) => {
+        signals.push(signal);
+        writeProcStat(procRoot, 45687, processGroup, 'Z');
+      },
+      cleanupBudgetMs: 500,
+      progressIntervalMs: 10_000,
+      writeStdout: (chunk) => output.push(Buffer.from(chunk)),
+      writeStderr: (text) => errors.push(text),
+    });
+
+    assert.equal(result, 0);
+    assert.deepEqual(signals, ['SIGTERM']);
+    assert.equal(Buffer.concat(output).toString(), '{"complete":true}\n');
+    assert.match(errors.join(''), /stopped remaining owned descendants/);
+    assert.doesNotMatch(errors.join(''), /cleanup failed/);
+  } finally {
+    rmSync(procRoot, { recursive: true, force: true });
+  }
 });
 
 test('one deadline covers successive gh reads and suppresses partial JSON', {

@@ -19,7 +19,8 @@
 
 import { type ChildProcess, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { writeSync } from 'node:fs';
+import { readdirSync, readFileSync, writeSync } from 'node:fs';
+import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 
@@ -925,6 +926,7 @@ export interface ReadSupervisorDependencies {
   env?: NodeJS.ProcessEnv;
   progressIntervalMs?: number;
   cleanupBudgetMs?: number;
+  procRoot?: string;
   writeStderr?: (text: string) => void;
   writeStdout?: (chunk: string | Uint8Array) => void;
   signalProcessGroup?: (pid: number, signal: NodeJS.Signals) => void;
@@ -1029,13 +1031,59 @@ function hasExplicitFlag(args: readonly string[], flag: string): boolean {
   );
 }
 
-function processGroupExists(pid: number): boolean {
+function readLinuxProcessGroupStates(
+  pid: number,
+  procRoot = '/proc',
+): readonly string[] | null {
+  let entries: string[];
+  try {
+    entries = readdirSync(procRoot);
+  } catch {
+    return null;
+  }
+  const states: string[] = [];
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    let stat: string;
+    try {
+      stat = readFileSync(join(procRoot, entry, 'stat'), 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      return null;
+    }
+    const closingParen = stat.lastIndexOf(')');
+    if (closingParen < 0) return null;
+    const fields = stat
+      .slice(closingParen + 1)
+      .trim()
+      .split(/\s+/);
+    const processGroup = Number(fields[2]);
+    if (!fields[0] || !Number.isSafeInteger(processGroup)) return null;
+    if (processGroup === pid) states.push(fields[0]);
+  }
+  return states.length > 0 ? states : null;
+}
+
+function processGroupExists(
+  pid: number,
+  platform: NodeJS.Platform = process.platform,
+  readStates: (pid: number) => readonly string[] | null = (groupId) =>
+    readLinuxProcessGroupStates(groupId),
+): boolean {
+  let signalProbeFoundGroup = false;
   try {
     process.kill(-pid, 0);
-    return true;
+    signalProbeFoundGroup = true;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+    signalProbeFoundGroup = true;
   }
+  if (platform !== 'linux') return signalProbeFoundGroup;
+  const states = readStates(pid);
+  if (states === null) return signalProbeFoundGroup;
+  // A zombie has exited and cannot keep doing work. Linux keeps its process
+  // table entry until its parent reaps it, while kill(-pgid, 0) still sees it.
+  return states.some((state) => state !== 'Z' && state !== 'X');
 }
 
 function signalProcessGroup(pid: number, signal: NodeJS.Signals): void {
@@ -1280,7 +1328,12 @@ export async function superviseReadMode(
     dependencies.writeStdout ??
     ((chunk: string | Uint8Array) => process.stdout.write(chunk));
   const signalGroup = dependencies.signalProcessGroup ?? signalProcessGroup;
-  const groupExists = dependencies.processGroupExists ?? processGroupExists;
+  const groupExists =
+    dependencies.processGroupExists ??
+    ((pid: number) =>
+      processGroupExists(pid, platform, (groupId) =>
+        readLinuxProcessGroupStates(groupId, dependencies.procRoot),
+      ));
   const startedAt = now();
   let lastStage: ReadStage | 'worker-startup' = 'worker-startup';
   const elapsed = () => Math.max(0, Math.floor(now() - startedAt));
