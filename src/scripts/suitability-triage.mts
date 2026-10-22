@@ -1112,7 +1112,7 @@ const USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE =
 const USER_ACTOR_STEP_USER_DIRECTIVE_START =
   /^\s*(?:(?:then|next|now|afterwards?)\s+)?run\s+this\s+(?:step|check)\s+by\s+the\s+user\b/i;
 const USER_ACTOR_STEP_NEGATION_CUE = new RegExp(
-  String.raw`\b(?:never(?=\s+(?:(?:is|are|was|were)\s+)?${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|no\s+longer(?=\s+${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|(?:must|should|shall|will|could|would|might|may|need|do|does|did|is|are|was|were|has|have|had)n['’]t|cannot(?=\s+(?:(?:be|remain(?:s)?)\s+)?${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|(?:won|can|shan|ain)['’]t|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b`,
+  String.raw`\b(?:never(?=\s+(?:(?:is|are|was|were)\s+)?${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|no\s+longer(?=\s+${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|(?:must|should|shall|will|can|could|may|might|do|does|did|is|are|was|were|has|have|had)\s+not(?!\s+(?:only|just)\b)|need\s+not(?!\s+(?:only|just)\b)|(?:must|should|shall|will|could|would|might|may|need|do|does|did|is|are|was|were|has|have|had)n['’]t|cannot(?=\s+(?:(?:be|remain(?:s)?)\s+)?${USER_ACTOR_STEP_ASSIGNMENT_CUE.source})|(?:won|can|shan|ain)['’]t|needs?\s+to\s+not|has\s+to\s+not|not\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|tasked|responsible))\b`,
   'i',
 );
 
@@ -1131,7 +1131,13 @@ const USER_ACTOR_STEP_AGENT_HEADING_LABEL =
 function normalizeMarkdownHeadingLabel(heading: string): string {
   const isAtxHeading = /^ {0,3}#{1,6}[ \t]+/.test(heading);
   const label = heading.replace(/^ {0,3}#{1,6}[ \t]+/, '');
-  return (isAtxHeading ? label.replace(/[ \t]+#+[ \t]*$/, '') : label).trim();
+  const normalizedLabel = (
+    isAtxHeading ? label.replace(/[ \t]+#+[ \t]*$/, '') : label
+  ).trim();
+  // Emphasis changes presentation, not the parsed heading actor. This only
+  // normalizes the label after section offsets have been recorded.
+  const emphasizedLabel = /^(\*{1,3}|_{1,3})(.+)\1$/.exec(normalizedLabel);
+  return (emphasizedLabel?.[2] ?? normalizedLabel).trim();
 }
 
 function headingStartsWithAgentActor(heading: string): boolean {

@@ -11026,6 +11026,15 @@ test('trust safety carries agent task headings into nested manual checks -- #456
     trustSafetyAmbiguous: false,
   } as Context);
   assert.equal(result.pass, false);
+
+  const emphasizedHeading = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## **Coding agent steps**\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(emphasizedHeading.pass, false);
 });
 
 test('trust safety recognizes possessive agent responsibility assignments -- Codex review #4328240569', () => {
@@ -11306,6 +11315,24 @@ test('trust safety handles current review findings for user-actor assignments --
     trustSafetyAmbiguous: false,
   } as Context);
   assert.equal(explicitlyNotRequired.pass, true);
+
+  const needNotPerform = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent need not perform this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(needNotPerform.pass, true);
+
+  const needNotOnlyPerform = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent need not only perform this step.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(needNotOnlyPerform.pass, false);
 
   for (const suffix of [
     '\n\n## Additional checks',
