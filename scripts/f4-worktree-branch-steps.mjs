@@ -1694,7 +1694,7 @@ function restoreOrLockNodeModulesAfterRace(
         'worktree',
         'lock',
         '--reason',
-        `F4 node_modules recovery required for issue ${worktree}`,
+        `F4 node_modules recovery required for worktree ${worktree}`,
         worktree,
       ],
       primary,
