@@ -983,7 +983,7 @@ test('a staged replacement object is retained when its identity changed', () => 
   );
 });
 
-test('a destination replacement object is retained when its identity changed', () => {
+test('a destination identity replacement retains the object and locks cleanup', () => {
   const h = harness({
     statusResults: [ok('!! node_modules/\n')],
     replaceIdentityAfterRename: {
@@ -1001,6 +1001,23 @@ test('a destination replacement object is retained when its identity changed', (
     [`${WORKTREE}/node_modules`, PRESERVE_STAGING],
     [PRESERVE_STAGING, PRESERVE_DESTINATION],
   ]);
+  assert.match(report.steps.at(-1)?.detail ?? '', /worktree was locked/);
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'lock',
+    ),
+    true,
+  );
+  const rerun = harness({ lockedWorktree: true });
+  const rerunReport = runF4WorktreeBranchSteps(input(), rerun.deps);
+  assert.equal(rerunReport.reason, 'inconsistent-worktree-state');
+  assert.match(rerunReport.steps.at(-1)?.detail ?? '', /worktree is locked/);
+  assert.equal(
+    rerun.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
   assert.equal(
     h.gitCalls.some(
       (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',

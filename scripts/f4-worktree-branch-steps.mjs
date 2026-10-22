@@ -1587,8 +1587,10 @@ function moveNodeModules(
     ) {
       return {
         result: null,
-        hold: restoreNodeModulesAfterRace(
+        hold: restoreOrLockNodeModulesAfterRace(
           deps,
+          primary,
+          worktree,
           destination,
           source,
           expectedIdentity,
