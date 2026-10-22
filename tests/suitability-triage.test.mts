@@ -23,8 +23,10 @@ import {
   fetchMergedPrFileOverlapEvidence,
   loadHighContentionFiles,
   normalizeDuplicateCandidates,
+  normalizeMarkdownStepAssignmentText,
   parseArgs,
   resolveInputMode,
+  scanMarkdownStrikethroughRanges,
   splitLocalDraftTitleAndBody,
 } from '../src/scripts/suitability-triage.mts';
 import {
@@ -8255,7 +8257,9 @@ test('repository fit ignores an inactive strikethrough fixture cue', () => {
       ...BASE_ISSUE,
       body: `${BASE_ISSUE.body}
 
-~~Negative fixture:~~ this task requires production dashboard credentials.`,
+~~unmatched opener
+
+😀 ~~Negative fixture:~~ this task requires production dashboard credentials.`,
     },
     repository: { owner: 'kurone-kito', repo: 'idd-skill' },
   } as Context);
@@ -11907,6 +11911,59 @@ test('trust safety normalizes visible Markdown around assigned step targets -- #
     trustSafetyAmbiguous: false,
   } as Context);
   assert.equal(unrelatedTarget.pass, false);
+});
+
+test('strikethrough span scanning preserves the existing delimiter semantics', () => {
+  const cases = [
+    ['~~text~~', [{ start: 0, end: 8 }]],
+    ['~~ text~~', []],
+    ['~~text ~~', []],
+    ['~~open\n\n~~later~~', [{ start: 8, end: 17 }]],
+    ['~~a ~~b~~ c~~', [{ start: 0, end: 9 }]],
+    ['😀~~x~~', [{ start: 2, end: 7 }]],
+  ] as const;
+  for (const [text, expected] of cases) {
+    assert.deepEqual(scanMarkdownStrikethroughRanges(text), expected, text);
+  }
+
+  const normalized = normalizeMarkdownStepAssignmentText('😀 ~~a ~~b~~');
+  assert.equal(normalized, '😀   a   b  ');
+  assert.equal(normalized.length, '😀 ~~a ~~b~~'.length);
+
+  const unmatched = '😀 ~~open';
+  assert.equal(normalizeMarkdownStepAssignmentText(unmatched), unmatched);
+});
+
+test('strikethrough span scanning matches the previous matcher on short inputs', () => {
+  const alphabet = ['~', 'a', ' ', '\n', '\t', '\r'];
+  const previousMatcher = /~~(?=\S)(?:(?!\n[ \t]*\n)[\s\S])*?\S~~/g;
+  for (let length = 0; length <= 5; length += 1) {
+    const combinationCount = alphabet.length ** length;
+    for (let value = 0; value < combinationCount; value += 1) {
+      let remainder = value;
+      let text = '';
+      for (let index = 0; index < length; index += 1) {
+        text += alphabet[remainder % alphabet.length] ?? '';
+        remainder = Math.floor(remainder / alphabet.length);
+      }
+      const expected = [...text.matchAll(previousMatcher)].map((match) => ({
+        start: match.index ?? 0,
+        end: (match.index ?? 0) + match[0].length,
+      }));
+      assert.deepEqual(scanMarkdownStrikethroughRanges(text), expected, text);
+    }
+  }
+});
+
+test('strikethrough scanning counts linear work on a near-maximum unmatched body', () => {
+  const body = '~~a '.repeat(16_000);
+  const workCounter = { workUnits: 0 };
+
+  assert.deepEqual(scanMarkdownStrikethroughRanges(body, workCounter), []);
+  assert.ok(
+    workCounter.workUnits <= body.length * 4,
+    `expected at most four work units per code unit, got ${workCounter.workUnits} for ${body.length}`,
+  );
 });
 
 test('trust safety handles an unterminated escaped Markdown destination in linear time -- #4577', () => {

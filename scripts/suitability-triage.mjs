@@ -1694,10 +1694,83 @@ function separateMarkdownRangesWithClauseBoundaries(text, ranges) {
 // assignment parser while masking Markdown syntax and link destinations.
 // Every replacement preserves UTF-16 offsets so list and section scopes stay
 // aligned with the original issue body.
-function normalizeMarkdownStepAssignmentText(text) {
+// The optional counter gives the regression test deterministic scan work
+// without using elapsed time as a complexity assertion.
+export function scanMarkdownStrikethroughRanges(text, workCounter) {
+  const ranges = [];
+  const inspect = () => {
+    if (workCounter) workCounter.workUnits += 1;
+  };
+  const isNonWhitespace = (index) => {
+    inspect();
+    return /\S/.test(text[index] ?? '');
+  };
+  const blankLineEndAt = (index) => {
+    if (text[index] !== '\n') return null;
+    let lookahead = index + 1;
+    while (lookahead < text.length) {
+      inspect();
+      const character = text[lookahead];
+      if (character === ' ' || character === '\t') {
+        lookahead += 1;
+        continue;
+      }
+      return character === '\n' ? lookahead + 1 : null;
+    }
+    return null;
+  };
+  let searchFrom = 0;
+  while (searchFrom < text.length - 1) {
+    let opener = -1;
+    let blankLineEnd = null;
+    for (let index = searchFrom; index < text.length - 1; index += 1) {
+      inspect();
+      blankLineEnd = blankLineEndAt(index);
+      if (blankLineEnd !== null) break;
+      if (
+        text[index] === '~' &&
+        text[index + 1] === '~' &&
+        isNonWhitespace(index + 2)
+      ) {
+        opener = index;
+        break;
+      }
+    }
+    if (blankLineEnd !== null) {
+      searchFrom = blankLineEnd;
+      continue;
+    }
+    if (opener < 0) break;
+    let closer = -1;
+    blankLineEnd = null;
+    for (let index = opener + 3; index < text.length - 1; index += 1) {
+      inspect();
+      blankLineEnd = blankLineEndAt(index);
+      if (blankLineEnd !== null) break;
+      if (
+        text[index] === '~' &&
+        text[index + 1] === '~' &&
+        isNonWhitespace(index - 1)
+      ) {
+        closer = index;
+        break;
+      }
+    }
+    if (closer >= 0) {
+      ranges.push({ start: opener, end: closer + 2 });
+      searchFrom = closer + 2;
+    } else if (blankLineEnd !== null) {
+      searchFrom = blankLineEnd;
+    } else {
+      break;
+    }
+  }
+  return ranges;
+}
+export function normalizeMarkdownStepAssignmentText(text) {
   const inlineLinkPattern =
     /\[((?:\\.|[^\]\\\n])*)\]\((?:<[^>\n]*>|(?:\\.|[^)\\\n])*)\)/g;
-  let normalized = text.replace(inlineLinkPattern, (match, label) => {
+  const normalized = text.replace(inlineLinkPattern, (match, label) => {
     const characters = match
       .split('')
       .map((character) =>
@@ -1708,11 +1781,17 @@ function normalizeMarkdownStepAssignmentText(text) {
     }
     return characters.join('');
   });
-  const strikethroughPattern = /~~(?=\S)(?:(?!\n[ \t]*\n)[\s\S])*?\S~~/g;
-  normalized = normalized.replace(strikethroughPattern, (match) =>
-    match.replace(/~~/g, '  '),
-  );
-  return normalized;
+  const characters = normalized.split('');
+  for (const range of scanMarkdownStrikethroughRanges(normalized)) {
+    for (let index = range.start; index < range.end - 1; index += 1) {
+      if (characters[index] === '~' && characters[index + 1] === '~') {
+        characters[index] = ' ';
+        characters[index + 1] = ' ';
+        index += 1;
+      }
+    }
+  }
+  return characters.join('');
 }
 function stepCheckTargetKind(value) {
   const match = /\b(steps?|checks?)\b/i.exec(value);
@@ -5348,12 +5427,7 @@ export function checkRepositoryFit(context) {
           range.start < nonInlineRange.end && nonInlineRange.start < range.end,
       ),
   );
-  const strikethroughRanges = [
-    ...normalizedBody.matchAll(/~~(?=\S)(?:(?!\n[ \t]*\n)[\s\S])*?\S~~/g),
-  ].map((strikeMatch) => ({
-    start: strikeMatch.index ?? 0,
-    end: (strikeMatch.index ?? 0) + (strikeMatch[0] ?? '').length,
-  }));
+  const strikethroughRanges = scanMarkdownStrikethroughRanges(normalizedBody);
   const hiddenMetadataRanges =
     findRepositoryFitHiddenMetadataRanges(normalizedBody);
   const externalAccessScanBody = maskMarkdownCodeRegionsPreservingPositions(
