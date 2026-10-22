@@ -2695,6 +2695,132 @@ test('trust safety keeps agent work explicitly transferred to the user available
   assert.equal(result.pass, true);
 });
 
+test('trust safety accepts singular indefinite human handoff recipients -- #4623', () => {
+  const recipients = [
+    ['a user', 'Run this step by the user.'],
+    ['a human', 'Run this check by the user.'],
+    ['a tester', 'Run this step by the user.'],
+    ['a reviewer', 'Run this check by the user.'],
+    ['a maintainer', 'Run this step by the user.'],
+    ['an operator', 'Run this check by the user.'],
+    ['a developer', 'Run this step by the user.'],
+    ['a person', 'Run this check by the user.'],
+  ];
+  for (const [recipient, directive] of recipients) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `The coding agent handed the keyboard-support task to ${recipient}.\n\n${directive}`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, recipient);
+  }
+
+  const existingRecipientForms = [
+    'user',
+    'the user',
+    'human',
+    'the human',
+    'tester',
+    'the tester',
+    'reviewer',
+    'the reviewer',
+    'maintainer',
+    'the maintainer',
+    'operator',
+    'the operator',
+    'developer',
+    'the developer',
+    'person',
+    'the person',
+    'QA',
+    'the QA',
+    'quality assurance',
+    'the quality assurance',
+  ];
+  for (const recipient of existingRecipientForms) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `The coding agent handed the keyboard-support task to ${recipient}.\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, recipient);
+  }
+});
+
+test('trust safety keeps indefinite handoff recipients singular and role-bounded -- #4623', () => {
+  const unsupportedRecipients = [
+    'an user',
+    'an human',
+    'an tester',
+    'an reviewer',
+    'an maintainer',
+    'a operator',
+    'an developer',
+    'an person',
+    'humans',
+    'testers',
+    'operators',
+    'a QA',
+    'an QA',
+    'a quality assurance',
+    'an quality assurance',
+    'a human agent',
+    'a human assistant',
+    'a human-agent',
+    'a operator-bot',
+  ];
+  for (const recipient of unsupportedRecipients) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `The coding agent handed the keyboard-support task to ${recipient}.\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, recipient);
+  }
+});
+
+test('trust safety keeps non-step and supplied-content directives unsafe -- #4623', () => {
+  const stillUnsafeDirectives = [
+    'Execute this step by the user.',
+    'Run this script by the user.',
+    'Run the attached script.',
+    'Run the script provided by the user.',
+    'Run this user-provided script.',
+    'Run this step by user.',
+    'Run this step by a user.',
+    'Run this step by a human.',
+    'Run this step by the human.',
+    'Run this step by an operator.',
+    'Run this step by QA.',
+    'Run this step by a QA.',
+  ];
+  for (const directive of stillUnsafeDirectives) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `The coding agent handed the keyboard-support task to a human.\n\n${directive}`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, directive);
+  }
+
+  const assignedToAgent = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent must perform this step.\n\nThe coding agent handed the keyboard-support task to a human.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(assignedToAgent.pass, false);
+});
+
 test('trust safety allows a check assigned to the user -- #4562', () => {
   const result = checkTrustSafety({
     issue: {

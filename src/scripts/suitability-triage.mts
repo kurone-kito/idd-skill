@@ -1036,7 +1036,29 @@ const SUPPLIED_CONTENT_COORDINATOR = 'and|or|but|then|also';
 const SUPPLIED_CONTENT_OBJECT_FILLER = String.raw`(?:(?!\b(?:${SUPPLIED_CONTENT_COORDINATOR})\b)\S+\s+){0,1}?`;
 const SUPPLIED_CONTENT_REFERENCE = String.raw`${SUPPLIED_CONTENT_UNTRUSTED_DETERMINER}\s+(?:\S+\s+){0,2}?[\x60'"]?${SUPPLIED_CONTENT_NOUN}`;
 const SUPPLIED_CONTENT_OBJECT_REFERENCE = String.raw`^\s*${SUPPLIED_CONTENT_PARENTHETICAL_ASIDE}${SUPPLIED_CONTENT_AMBIGUOUS_DETERMINER}\s+${SUPPLIED_CONTENT_OBJECT_FILLER}[\x60'"]?${SUPPLIED_CONTENT_NOUN}`;
-const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:\b(?:untrusted|user-provided|user input|(?:from|by)\s+(?:the\s+)?user|${SUPPLIED_CONTENT_REFERENCE})\b|${SUPPLIED_CONTENT_OBJECT_REFERENCE}\b)`;
+const USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE =
+  '(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)';
+const USER_ACTOR_STEP_OTHER_ACTOR_A_NAME_SOURCE =
+  '(?:user|human|tester|reviewer|maintainer|developer|person)';
+const USER_ACTOR_STEP_OTHER_ACTOR_BOUNDARY_SOURCE = String.raw`(?![\w-]|\s+(?:agent|assistant|bot)\b)`;
+const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE = String.raw`(?:(?:the\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}|a\s+${USER_ACTOR_STEP_OTHER_ACTOR_A_NAME_SOURCE}|an\s+operator)${USER_ACTOR_STEP_OTHER_ACTOR_BOUNDARY_SOURCE}`;
+const USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_SOURCE = String.raw`\b(?:to\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}|${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}\s+to\s+(?:perform|run|execute|complete|check|test|verify|implement|handle|manage|follow))\b`;
+const USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER = new RegExp(
+  USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_SOURCE,
+  'i',
+);
+const USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_SUFFIX = new RegExp(
+  String.raw`^\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}\s*$`,
+  'i',
+);
+const USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_PREFIX = new RegExp(
+  String.raw`^\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}\b`,
+  'i',
+);
+// Other human actors remain unsafe command targets. Only the exact
+// USER_ACTOR_STEP_WINDOW signature below can make a user-actor step safe.
+const UNSAFE_HUMAN_ACTOR_TARGET_SOURCE = String.raw`by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}(?!\w)`;
+const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:\b(?:untrusted|user-provided|user input|from\s+(?:the\s+)?user|${UNSAFE_HUMAN_ACTOR_TARGET_SOURCE}|${SUPPLIED_CONTENT_REFERENCE})\b|${SUPPLIED_CONTENT_OBJECT_REFERENCE}\b)`;
 // #3073: "run this full command to validate the config" matches only
 // SUPPLIED_CONTENT_OBJECT_REFERENCE's ambiguous "this <filler> <noun>" shape
 // above -- the filler word here is a repository-scoping adjective, not an
@@ -1148,10 +1170,6 @@ const USER_ACTOR_STEP_ASSIGNABLE_AGENT = new RegExp(
   `(?:${USER_ACTOR_STEP_AGENT.source}|\\bAI\\s+models?\\b)`,
   'i',
 );
-const USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE =
-  '(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)';
-const USER_ACTOR_STEP_OTHER_ACTOR_BOUNDARY_SOURCE = String.raw`(?![\w-]|\s+(?:agent|assistant|bot)\b)`;
-const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE = String.raw`(?:the\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}${USER_ACTOR_STEP_OTHER_ACTOR_BOUNDARY_SOURCE}`;
 const USER_ACTOR_STEP_OTHER_ACTOR = new RegExp(
   String.raw`\b${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}`,
   'i',
@@ -1290,14 +1308,18 @@ const USER_ACTOR_STEP_NEUTRAL_AGENT_TRANSFER = new RegExp(
   String.raw`^(?:${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}\s+(?:(?:this|that)\s+(?:step|check|task)|(?:a|the)\s+(?:[\w-]+\s+){0,3}task)\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}|${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}\s+(?:to\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}\s+to\s+(?:perform|run|execute|complete|check|test|verify|implement|handle|manage|follow)\s+(?:(?:this|that)\s+)?(?:step|check|task))$`,
   'i',
 );
-const USER_ACTOR_STEP_NEUTRAL_AGENT_PATIENT =
-  /^(?:(?:must|should|shall|will|can|could|may|might)\s+be|is|are|was|were)\s+(?:tested|checked|reviewed)(?:\s+by\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance))?\s+in\s+this\s+(?:step|check)$/i;
+const USER_ACTOR_STEP_NEUTRAL_AGENT_PATIENT = new RegExp(
+  String.raw`^(?:(?:must|should|shall|will|can|could|may|might)\s+be|is|are|was|were)\s+(?:tested|checked|reviewed)(?:\s+by\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE})?\s+in\s+this\s+(?:step|check)$`,
+  'i',
+);
 const USER_ACTOR_STEP_HUMAN_SUBJECT_CONTINUATION = new RegExp(
   String.raw`(?:\s*[,;:—–]\s*(?:(?:and|but|then|while|whereas)\s+)*|\s+(?:(?:and|but|then|while|whereas)\s+)+)${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}`,
   'i',
 );
-const USER_ACTOR_STEP_HUMAN_AGENT_OBJECT_PREFIX =
-  /^\s*(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\s+(?:tests?|verifies|reviews?|discusses?|mentions?|show(?:s|ed|ing)?)\s+(?:(?:a|an|the)\s+)?$/i;
+const USER_ACTOR_STEP_HUMAN_AGENT_OBJECT_PREFIX = new RegExp(
+  String.raw`^\s*${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}\s+(?:tests?|verifies|reviews?|discusses?|mentions?|show(?:s|ed|ing)?)\s+(?:(?:a|an|the)\s+)?$`,
+  'i',
+);
 const USER_ACTOR_STEP_NEUTRAL_AGENT_SECTION_LABEL = new RegExp(
   String.raw`^${USER_ACTOR_STEP_ASSIGNABLE_AGENT.source}\s+implementation$`,
   'i',
@@ -3543,11 +3565,7 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
       let transferCue: RegExpExecArray | null = null;
       for (const match of suffix.matchAll(transferVerbPattern)) {
         const transferTail = suffix.slice(match.index ?? 0);
-        if (
-          /\b(?:to\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)|(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\s+to\s+(?:perform|run|execute|complete|check|test|verify|implement|handle|manage|follow))\b/i.test(
-            transferTail,
-          )
-        ) {
+        if (USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER.test(transferTail)) {
           transferCue = match;
         }
       }
@@ -3596,9 +3614,7 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
       if (
         agentObjectAssignmentRelation &&
         /^\s+to\s+/i.test(suffix) &&
-        !/^\s+to\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\s*$/i.test(
-          suffix,
-        )
+        !USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_SUFFIX.test(suffix)
       ) {
         return true;
       }
@@ -3655,9 +3671,7 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
       if (
         USER_ACTOR_STEP_AGENT_STRONG_OBJECT_ASSIGNMENT_RELATION.test(prefix) &&
         /\S/.test(suffix) &&
-        !/^\s+to\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\s*$/i.test(
-          suffix,
-        ) &&
+        !USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_SUFFIX.test(suffix) &&
         !(agentStrongWorkNounIsInformation && completeInformationComplement) &&
         !agentWasGivenGift
       ) {
@@ -3700,9 +3714,7 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
           ) ||
           (agentWorkNoun !== null && !agentWorkNounHasClauseContinuation) ||
           (agentForWork !== null && !agentForInformation)) &&
-        !/^\s+to\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i.test(
-          suffix,
-        )
+        !USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_PREFIX.test(suffix)
       ) {
         return true;
       }
