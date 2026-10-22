@@ -3138,7 +3138,7 @@ function hasAgentWorkAssignmentInText(text, plainText = false) {
   // Titles are literal fields: retain link destinations and comment text
   // while treating their punctuation as word boundaries (#4596).
   const normalized = plainText
-    ? roleNormalized.replace(/<!--|-->/g, ' ').replace(/[()[\]<>!]/g, ' ')
+    ? roleNormalized.replace(/<!--|--!?>/g, ' ').replace(/[()[\]<>!]/g, ' ')
     : roleNormalized;
   if (hasAdjacentAgentPronounWorkAssignment(normalized)) return true;
   for (const section of splitMarkdownHeadingSections(normalized)) {

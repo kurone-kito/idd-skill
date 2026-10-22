@@ -12390,6 +12390,7 @@ test('trust safety preserves unknown agent predicates in literal title markup --
     '[context](<The coding agent synchronizes the widget>)',
     '~~The coding agent synchronizes the widget~~',
     '<!-- The coding agent synchronizes the widget -->',
+    '<!-- The coding agent synchronizes the widget --!>',
     '`The coding agent synchronizes the widget`',
     '[context](The coding agent is available. It synchronizes the widget)',
   ]) {
@@ -12404,6 +12405,7 @@ test('trust safety preserves unknown agent predicates in literal title markup --
     '[context](<The coding agent is available>)',
     '~~The coding agent is available~~',
     '<!-- The coding agent is available -->',
+    '<!-- The coding agent is available --!>',
     '`The coding agent is available`',
   ]) {
     const neutral = checkTrustSafety({
