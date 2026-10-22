@@ -12411,6 +12411,15 @@ test('trust safety keeps independent agent work assignments fail-closed -- #4596
   } as Context);
   assert.equal(unrelatedActorAction.pass, true);
 
+  const explicitNewActorAfterTransfer = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent handed the implementation task to the user; the maintainer synchronizes the widget.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(explicitNewActorAfterTransfer.pass, true);
+
   for (const body of [
     'The coding agent is available while the maintainer performs deployment verification.\n\nRun this step by the user.',
     'The coding agent is available and the maintainer performs deployment verification.\n\nRun this step by the user.',
@@ -12434,12 +12443,16 @@ test('trust safety keeps independent agent work assignments fail-closed -- #4596
   assert.equal(coordinatedAgentAction.pass, false);
 });
 
-test('trust safety keeps transfer, paragraph, and recipient assignment checks fail-closed -- #4577 Copilot #4346194901, #4346194971, #4346195003', () => {
+test('trust safety keeps transfer, paragraph, and recipient assignment checks fail-closed -- #4577 Copilot #4346194901, #4346194971, #4346195003 and #4346175538', () => {
   for (const body of [
     'The maintainer delegates the coding agent a deployment step.\n\nRun this step by the user.',
     'The coding agent handed the implementation task to the user, then synchronizes the widget.\n\nRun this step by the user.',
     'The coding agent handed the implementation task to the user, synchronizes the widget.\n\nRun this step by the user.',
+    'The coding agent assigns the user to perform this step; then performs it.\n\nRun this step by the user.',
+    'The coding agent handed the implementation task to the user—synchronizes the widget.\n\nRun this step by the user.',
+    'The coding agent handed the implementation task to the user–synchronizes the widget.\n\nRun this step by the user.',
     'The coding agent\n\nmust perform this step.\n\nRun this step by the user.',
+    'The coding agent\n\n\n\nmust perform this step.\n\nRun this step by the user.',
   ]) {
     const result = checkTrustSafety({
       issue: { ...BASE_ISSUE, body },
@@ -12448,14 +12461,16 @@ test('trust safety keeps transfer, paragraph, and recipient assignment checks fa
     assert.equal(result.pass, false, body);
   }
 
-  const bareAgentSubject = checkTrustSafety({
-    issue: {
-      ...BASE_ISSUE,
-      body: 'The coding agent\n\nRun this step by the user.',
-    },
-    trustSafetyAmbiguous: false,
-  } as Context);
-  assert.equal(bareAgentSubject.pass, true);
+  for (const body of [
+    'The coding agent\n\nRun this step by the user.',
+    'The coding agent\n\n\n\nRun this step by the user.',
+  ]) {
+    const bareAgentSubject = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(bareAgentSubject.pass, true, body);
+  }
 });
 
 test('trust safety keeps long heading target scans bounded -- #4577 E10', () => {

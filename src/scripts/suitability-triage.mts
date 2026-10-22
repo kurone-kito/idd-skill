@@ -3469,7 +3469,7 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
         [
           ...suffix
             .slice(transferCue.index)
-            .matchAll(/[,;:.!?]|\b(?:and|but|then|while|whereas)\b/gi),
+            .matchAll(/[,;:.!?—–]|\b(?:and|but|then|while|whereas)\b/gi),
         ].some((match) =>
           USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.test(
             suffix.slice(
@@ -3680,9 +3680,26 @@ function hasAdjacentAgentPronounWorkAssignment(text: string): boolean {
   return false;
 }
 
+function hasAgentActionContinuationAfterSemicolon(text: string): boolean {
+  const clauses = splitSentenceAndSemicolonClauses(text);
+  const omittedSubjectAction = new RegExp(
+    String.raw`^\s*(?:then\s+)?(?:${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION_SOURCE}(?:s|es|ed|ing|d)?|built|wrote|written|ran)\b`,
+    'i',
+  );
+  for (let index = 0; index + 1 < clauses.length; index += 1) {
+    const previous = clauses[index]?.clause ?? '';
+    const following = clauses[index + 1]?.clause ?? '';
+    if (!omittedSubjectAction.test(following)) continue;
+    if (hasAgentWorkAssignmentInClause(`${previous};${following}`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function hasAgentAssignmentAcrossBareSubjectParagraphs(text: string): boolean {
   for (const section of splitMarkdownHeadingSections(text)) {
-    const paragraphs = section.body.split(/\r?\n[ \t]*\r?\n/);
+    const paragraphs = section.body.split(/\r?\n[ \t]*\r?\n(?:[ \t]*\r?\n)*/);
     for (let index = 0; index + 1 < paragraphs.length; index += 1) {
       const subject = stripAgentClauseListPrefix(
         normalizeMarkdownStepAssignmentText(paragraphs[index] ?? '')
@@ -3775,16 +3792,15 @@ function hasAgentWorkAssignmentInText(
     ) {
       return true;
     }
-    if (
-      section.body
-        .split(/\r?\n[ \t]*\r?\n/)
-        .some((paragraph) =>
-          splitSentenceAndSemicolonClauses(paragraph).some(({ clause }) =>
-            hasAgentWorkAssignmentInClause(clause),
-          ),
+    for (const paragraph of section.body.split(/\r?\n[ \t]*\r?\n/)) {
+      if (
+        hasAgentActionContinuationAfterSemicolon(paragraph) ||
+        splitSentenceAndSemicolonClauses(paragraph).some(({ clause }) =>
+          hasAgentWorkAssignmentInClause(clause),
         )
-    ) {
-      return true;
+      ) {
+        return true;
+      }
     }
   }
   return false;
