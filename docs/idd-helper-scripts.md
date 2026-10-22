@@ -11,6 +11,18 @@ This document records the current decision on optional helper scripts for
 the IDD workflow. It exists so future reviews can reference the trade-off
 directly instead of re-evaluating the same suggestion from scratch.
 
+## Release links
+
+During a staged release, default-branch links can point to a version
+before its signed tag is published. They may return 404, and
+next-release docs may appear alongside prior-version metadata. This
+occurred in the [PR #4601 review](https://github.com/kurone-kito/idd-skill/pull/4601#discussion_r4334064889).
+
+Until the next signed tag is published, use the agent-entry guide at the
+latest published signed tag. The latest is `v0.17.0`:
+
+[Agent-entry and verification guide at v0.17.0](https://github.com/kurone-kito/idd-skill/blob/v0.17.0/idd-template/docs/onboarding/agent-entry-and-verification.md).
+
 ## Flag-name and field-name conventions
 
 Several helpers require a specific flag name that does not match

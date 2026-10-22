@@ -9,9 +9,9 @@ tags: [onboarding, agent-entry]
 
 Use
 [`ONBOARDING.md`](https://github.com/kurone-kito/idd-skill/blob/v0.17.0/idd-template/ONBOARDING.md)
-with this guide. The current default branch's `v0.17.0` link may 404
-until its signed tag exists. For released docs, use this path at the
-latest published tag.
+with this guide. Default-branch links to upcoming releases may 404 until
+a signed tag is published (PR #4601). See
+[tag guidance](../idd-helper-scripts.md#release-links).
 
 This page is the detailed companion for:
 
