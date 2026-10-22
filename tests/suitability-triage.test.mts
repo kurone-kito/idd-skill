@@ -11164,6 +11164,36 @@ test('trust safety recognizes supported human recipients after a transferred tar
   }
 });
 
+test('trust safety catches agent recipients when a broad target overlaps its actor and assignment cue -- Copilot review #4344914025, Codex review #4344896527', () => {
+  for (const [assignment, directive] of [
+    [
+      'The user assigns this step to the coding agent.',
+      'Run this step by the user.',
+    ],
+    [
+      'The user assigns this specific deployment step to an assistant.',
+      'Run this step by the user.',
+    ],
+    [
+      '## The user assigns this step to the coding agent',
+      'Run this step by the user.',
+    ],
+    [
+      'The coding agent must perform the user-created deployment step.',
+      'Run this step by the user.',
+    ],
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\n${directive}`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
+});
+
 test('trust safety does not treat a hyphenated agent role as a transfer recipient -- E10', () => {
   for (const recipient of [
     'the user-facing coding agent',

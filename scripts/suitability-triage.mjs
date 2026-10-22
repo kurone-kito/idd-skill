@@ -981,12 +981,23 @@ function isUserActorStepAssignedTarget(text, match) {
   const end = (match.index ?? 0) + match[0].length;
   return !USER_ACTOR_STEP_IMPLEMENTATION_OBJECT_SUFFIX.test(text.slice(end));
 }
-function hasUserActorStepAssignedTarget(text) {
+function matchOverlappingUserActorStepAssignedTargets(text) {
+  // Copilot/Codex reviews #4344914025 and #4344896527: an outer
+  // "the ... step" match must not hide an inner "this step" after an
+  // actor and assignment cue, as in "the user assigns this step".
   const targetPattern = new RegExp(
-    USER_ACTOR_STEP_ASSIGNED_TARGET.source,
+    `(?=(${USER_ACTOR_STEP_ASSIGNED_TARGET.source}))`,
     'gi',
   );
-  return [...text.matchAll(targetPattern)].some((match) =>
+  const targets = [];
+  for (const match of text.matchAll(targetPattern)) {
+    const target = match[1];
+    if (target !== undefined) targets.push({ 0: target, index: match.index });
+  }
+  return targets;
+}
+function hasUserActorStepAssignedTarget(text) {
+  return matchOverlappingUserActorStepAssignedTargets(text).some((match) =>
     isUserActorStepAssignedTarget(text, match),
   );
 }
@@ -1240,13 +1251,37 @@ function assignmentHeadingContext(heading) {
     'i',
   );
   const numbered = numberedTargetPattern.exec(label);
-  const assignedTargetPattern = new RegExp(
-    USER_ACTOR_STEP_ASSIGNED_TARGET.source,
-    'gi',
-  );
-  const assignedTargetMatch = [...label.matchAll(assignedTargetPattern)].find(
-    (match) => isUserActorStepAssignedTarget(label, match),
-  );
+  const assignedTargetMatches = matchOverlappingUserActorStepAssignedTargets(
+    label,
+  ).filter((match) => isUserActorStepAssignedTarget(label, match));
+  const agentMentions = [
+    ...label.matchAll(new RegExp(USER_ACTOR_STEP_AGENT.source, 'gi')),
+  ];
+  const agentActorInTargetRole = (target) => {
+    const targetEnd = target.index + target[0].length;
+    return agentMentions.some((agent) => {
+      const agentStart = agent.index ?? 0;
+      if (agentStart < targetEnd) return false;
+      const targetToAgent = label.slice(targetEnd, agentStart);
+      const explicitAssignmentRelation =
+        USER_ACTOR_STEP_TARGET_AGENT_RELATION.test(targetToAgent) &&
+        !/^\s+(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?for\s*$/i.test(
+          targetToAgent,
+        );
+      const transferRecipientRelation =
+        USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(
+          label.slice(0, target.index),
+        ) && /^\s+to\s+(?:(?:a|an|the)\s*)?$/i.test(targetToAgent);
+      return (
+        explicitAssignmentRelation ||
+        transferRecipientRelation ||
+        /^\s+by\s*$/i.test(targetToAgent)
+      );
+    });
+  };
+  const assignedTargetMatch =
+    assignedTargetMatches.find(agentActorInTargetRole) ??
+    assignedTargetMatches[0];
   const assignedTarget = assignedTargetMatch?.[0];
   const genericTargetCandidate = /\b(?:steps?|checks?)\b/i.exec(label);
   const genericTargetMatch =
@@ -1256,25 +1291,10 @@ function assignmentHeadingContext(heading) {
       : null;
   const genericTarget = genericTargetMatch?.[0];
   const targetMatch = numbered ?? assignedTargetMatch ?? genericTargetMatch;
-  const targetStart = targetMatch?.index ?? -1;
-  const targetEnd = targetStart + (targetMatch?.[0].length ?? 0);
-  const agentActorInTargetRole =
-    targetMatch !== null &&
-    [...label.matchAll(new RegExp(USER_ACTOR_STEP_AGENT.source, 'gi'))].some(
-      (agent) => {
-        const agentStart = agent.index ?? 0;
-        if (agentStart < targetEnd) return false;
-        const targetToAgent = label.slice(targetEnd, agentStart);
-        const explicitAssignmentRelation =
-          USER_ACTOR_STEP_TARGET_AGENT_RELATION.test(targetToAgent) &&
-          !/^\s+(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?for\s*$/i.test(
-            targetToAgent,
-          );
-        return explicitAssignmentRelation || /^\s+by\s*$/i.test(targetToAgent);
-      },
-    );
+  const agentActorIsAssignedToTarget =
+    targetMatch !== null && agentActorInTargetRole(targetMatch);
   if (
-    (!headingStartsWithAgentActor(label) && !agentActorInTargetRole) ||
+    (!headingStartsWithAgentActor(label) && !agentActorIsAssignedToTarget) ||
     (assignedTarget === undefined &&
       numbered === null &&
       genericTarget === undefined)
@@ -1827,7 +1847,7 @@ function hasAgentActorForTarget(segment, targetStart, targetEnd, cue) {
     const beforeTarget = segment.text.slice(0, targetStart);
     return (
       USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(beforeTarget) &&
-      /^\s+to\s*$/i.test(targetToAgent)
+      /^\s+to\s+(?:(?:a|an|the)\s*)?$/i.test(targetToAgent)
     );
   });
 }
@@ -1851,22 +1871,20 @@ function assignmentSegmentHasAgentAssignmentRole(segment) {
   if (!segment.hasAgent || !USER_ACTOR_STEP_ASSIGNMENT_CUE.test(segment.text)) {
     return false;
   }
-  const targetPattern = new RegExp(
-    USER_ACTOR_STEP_ASSIGNED_TARGET.source,
-    'gi',
-  );
   const numberedTargetPattern = new RegExp(
     USER_ACTOR_STEP_NUMBERED_TARGET.source,
     'gi',
   );
   const targets = [
-    ...[...segment.text.matchAll(targetPattern)].filter((match) => {
-      const end = (match.index ?? 0) + (match[0]?.length ?? 0);
-      return (
-        !/^\s+\d/.test(segment.text.slice(end)) &&
-        isUserActorStepAssignedTarget(segment.text, match)
-      );
-    }),
+    ...matchOverlappingUserActorStepAssignedTargets(segment.text).filter(
+      (match) => {
+        const end = (match.index ?? 0) + (match[0]?.length ?? 0);
+        return (
+          !/^\s+\d/.test(segment.text.slice(end)) &&
+          isUserActorStepAssignedTarget(segment.text, match)
+        );
+      },
+    ),
     ...segment.text.matchAll(numberedTargetPattern),
   ];
   return targets.some((target) => {
@@ -2018,10 +2036,6 @@ function analyzeAgentAssignmentsToSteps(
   };
   for (const scopedClause of splitUserActorStepClauses(context, listIndex)) {
     const { clause, sectionId } = scopedClause;
-    const targetPattern = new RegExp(
-      USER_ACTOR_STEP_ASSIGNED_TARGET.source,
-      'gi',
-    );
     const numberedTargetPattern = new RegExp(
       USER_ACTOR_STEP_NUMBERED_TARGET.source,
       'gi',
@@ -2090,7 +2104,7 @@ function analyzeAgentAssignmentsToSteps(
       ),
     );
     const targets = [
-      ...[...clause.matchAll(targetPattern)]
+      ...matchOverlappingUserActorStepAssignedTargets(clause)
         .filter((match) => {
           const end = (match.index ?? 0) + (match[0]?.length ?? 0);
           return (
