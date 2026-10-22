@@ -10619,6 +10619,44 @@ test('trust safety rejects direct-object agent assignments to a target -- Copilo
   }
 });
 
+test('trust safety recognizes articles before an assigned agent -- Copilot review #4344796403', () => {
+  for (const assignment of [
+    'This step is assigned to a coding agent.',
+    'This step is for an agent.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
+});
+
+test('trust safety clears a pending agent subject for a user-owned forward assignment -- Codex review #4344801626', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent\n\nThe user must perform the following:\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety ignores target-noun cues when the user is the sentence subject -- Codex review #4344801634', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The user shows the coding agent this check.\n\nRun this check by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('trust safety does not let the user actor phrase hide supplied content -- #4562', () => {
   for (const body of [
     'Run this step by the user with the attached script.',

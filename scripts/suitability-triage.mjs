@@ -861,7 +861,7 @@ const USER_ACTOR_STEP_AGENT =
 const USER_ACTOR_STEP_OTHER_ACTOR =
   /\b(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
 const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT =
-  /^\s+(?:(?:the)\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
+  /^\s*(?:(?:the)\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
 const USER_ACTOR_STEP_UNAPPROVED_ACTOR_WINDOW = new RegExp(
   String.raw`^\s*this\s+(?:steps?|checks?)\s+(?:by|for)\s+(?:(?:a|an|the)\s+)?(?:${USER_ACTOR_STEP_AGENT.source}|${USER_ACTOR_STEP_OTHER_ACTOR.source})`,
   'i',
@@ -908,7 +908,7 @@ const USER_ACTOR_STEP_FORWARD_ASSIGNMENT_INTRODUCER = new RegExp(
   'i',
 );
 const USER_ACTOR_STEP_TARGET_AGENT_RELATION =
-  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been|needs?\s+to|has\s+to|is\s+required\s+to)\s+)?(?:for|required\s+of|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|done\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by|completed\s+by|managed\s+by|followed\s+by|carried\s+out\s+by))\s*$/i;
+  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been|needs?\s+to|has\s+to|is\s+required\s+to)\s+)?(?:for|required\s+of|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|done\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by|completed\s+by|managed\s+by|followed\s+by|carried\s+out\s+by))\s*(?:(?:a|an)\s+)?$/i;
 const USER_ACTOR_STEP_PASSIVE_PARTICIPLE =
   /^(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)$/i;
 const USER_ACTOR_STEP_PASSIVE_AUXILIARY =
@@ -1252,7 +1252,8 @@ function splitUserActorStepClauses(context, listIndex) {
       const agentPrefix =
         pendingAgentSubject !== null &&
         paragraphHasForwardAssignment &&
-        !USER_ACTOR_STEP_AGENT.test(paragraph)
+        !USER_ACTOR_STEP_AGENT.test(paragraph) &&
+        !USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT.test(paragraph)
           ? pendingAgentSubject
           : null;
       if (
@@ -1622,7 +1623,26 @@ function findNearestAssignmentCue(segment, targetStart, targetEnd) {
     priorIndex >= 0 ? cuePrefixMaxIndex[priorIndex] : undefined;
   const left =
     priorMaxIndex === undefined ? null : (cues[priorMaxIndex] ?? null);
-  const nextIndex = firstAtOrAfterTarget;
+  let targetNounRange = null;
+  const targetNounPattern =
+    /\b(?:steps?|checks?|checklists?|lists?|items?)\b/gi;
+  for (const match of segment.text
+    .slice(targetStart, targetEnd)
+    .matchAll(targetNounPattern)) {
+    const start = targetStart + (match.index ?? 0);
+    targetNounRange = { start, end: start + match[0].length };
+  }
+  let nextIndex = firstAtOrAfterTarget;
+  while (nextIndex < cues.length) {
+    const candidate = cues[nextIndex];
+    if (candidate === undefined) break;
+    const cueIsTargetNoun =
+      targetNounRange !== null &&
+      candidate.start >= targetNounRange.start &&
+      candidate.end <= targetNounRange.end;
+    if (!cueIsTargetNoun) break;
+    nextIndex += 1;
+  }
   const right = cues[nextIndex] ?? null;
   if (left !== null && left.end >= targetStart) return left;
   if (right !== null && right.start <= targetEnd) return right;
