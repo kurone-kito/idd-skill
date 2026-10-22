@@ -224,6 +224,492 @@ test('flags complete declaration tails with generic and combined types', () => {
   }
 });
 
+test('flags qualified types in class extends and method throws clauses', () => {
+  for (const [span, type] of [
+    ['`class Foo extends com.example. MyClass {}`', 'MyClass'],
+    ['`(class Foo extends com.example. MyClass {})`', 'MyClass'],
+    ['`[class Foo extends com.example. MyClass {}]`', 'MyClass'],
+    ['`class Foo extends com.example. $GeneratedClass {}`', '$GeneratedClass'],
+    ['`class Foo extends @NonNull com.example. MyClass {}`', 'MyClass'],
+    [
+      '`class Foo extends @Anno(a = 1, b = 2) com.example. MyClass {}`',
+      'MyClass',
+    ],
+    ['`class Foo<T> extends com.example. MyClass {}`', 'MyClass'],
+    [
+      '`class Foo<T extends Comparable<List<T>>> extends com.example. MyClass {}`',
+      'MyClass',
+    ],
+    ['`class Foo<@Mark(">") T> extends com.example. MyClass {}`', 'MyClass'],
+    ['`class Foo<@Mark(1 > 0) T> extends com.example. MyClass {}`', 'MyClass'],
+    [
+      '`class Foo<T> extends com.example. MyClass implements Runnable {}`',
+      'MyClass',
+    ],
+    ['`static class Foo extends com.example. MyClass {}`', 'MyClass'],
+    ['`@Deprecated class Foo extends com.example. MyClass {}`', 'MyClass'],
+    [
+      '`@SuppressWarnings("x)") class Foo extends com.example. MyClass {}`',
+      'MyClass',
+    ],
+    [
+      '`@org.example.SuppressWarnings("x)") interface Foo extends com.example. MyInterface {}`',
+      'MyInterface',
+    ],
+    [
+      '`interface Foo<T> extends com.example. MyInterface, other.Other {}`',
+      'MyInterface',
+    ],
+    [
+      '`interface Foo extends first.One, com.example. MyInterface {}`',
+      'MyInterface',
+    ],
+    [
+      '`interface Foo extends Existing<Map<String, Integer>>, com.example. MyInterface {}`',
+      'MyInterface',
+    ],
+    [
+      '`interface Foo<T extends Comparable<List<T>>> extends com.example. MyInterface {}`',
+      'MyInterface',
+    ],
+    ['`void run() throws com.example. MyException {}`', 'MyException'],
+    ['`(void run() throws com.example. MyException {})`', 'MyException'],
+    ['`[void run() throws com.example. MyException {}]`', 'MyException'],
+    [
+      '`java.util.@Nullable List<String> run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    ['`String [] run() throws com.example. MyException {}`', 'MyException'],
+    [
+      '`String @Nullable [] run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`String @A [] /* between dimensions */ @B [] run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`class Outer { void run() throws com.example. MyException {} }`',
+      'MyException',
+    ],
+    [
+      '`package p; class Outer { void run() throws com.example. MyException {} }`',
+      'MyException',
+    ],
+    [
+      '`import java.util.List; class Outer { void run() throws com.example. MyException {} }`',
+      'MyException',
+    ],
+    [
+      '`package p; import static java.util.Collections.emptyList; class Outer { void run() throws com.example. MyException {} }`',
+      'MyException',
+    ],
+    [
+      '`class Outer { static class Inner extends com.example. MyClass {} }`',
+      'MyClass',
+    ],
+    [
+      '`enum Outer { VALUE; void run() throws com.example. MyException {} }`',
+      'MyException',
+    ],
+    [
+      '`record Outer() { void run() throws com.example. MyException {} }`',
+      'MyException',
+    ],
+    [
+      '`class Outer { void run() { class Local { void nested() throws com.example. MyException {} } } }`',
+      'MyException',
+    ],
+    [
+      '`class Outer { Object value = new Object() { void run() throws com.example. MyException {} }; }`',
+      'MyException',
+    ],
+    [
+      '`class Outer { Object run() { return new Object() { void nested() throws com.example. MyException {} }; } }`',
+      'MyException',
+    ],
+    [
+      '`class Outer { String marker = "}"; void run() throws com.example. MyException {} }`',
+      'MyException',
+    ],
+    ['`void run() throws @NonNull com.example. MyException {}`', 'MyException'],
+    [
+      '`void run(@Size(max = 10) String value) throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`void run(@Pattern(regexp = "value)") String value) throws com.example. MyException {}`',
+      'MyException',
+    ],
+    ['`String[] run() throws com.example. MyException {}`', 'MyException'],
+    [
+      '`Map<String, List<Integer>> run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`Map<String /* note */, Integer> run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`Map<String, /* note */ Integer /* note */> run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`Map<? extends String, Integer> run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`Map<? super Number, ?> run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`Map<? /* note */ extends /* bound */ String, Integer> run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`Map<? /* note */ super /* bound */ Number, ?> run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`List<@Nullable String> run() throws com.example. MyException;`',
+      'MyException',
+    ],
+    [
+      '`Outer<String>.Inner run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`public <T> void run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`public <@Mark(1 > 0) T> void run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`@Override public void run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`@org.example.Override public void run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    [
+      '`@SuppressWarnings("x)") void run() throws com.example. MyException {}`',
+      'MyException',
+    ],
+    ['`default void run() throws com.example. MyException {}`', 'MyException'],
+    [
+      '`void run() throws com.example. MyException, java.io.IOException {}`',
+      'MyException',
+    ],
+    [
+      '`void run() throws first.One, com.example. MyException {}`',
+      'MyException',
+    ],
+    ['`abstract void run() throws com.example. MyException;`', 'MyException'],
+    [
+      '`void run() throws com.example. MyException { System.out.println("}"); }`',
+      'MyException',
+    ],
+    ['`void run() throws com.example. MyException { /* } */ }`', 'MyException'],
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.ok(violations[0]?.before.endsWith('com.example.'), span);
+    assert.ok(violations[0]?.after.startsWith(type), span);
+    assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+});
+
+test('accepts generic owner segments before a split qualified type', () => {
+  for (const span of [
+    '`class Foo extends pkg.Outer<String>. MyClass {}`',
+    '`void run() throws pkg.Outer<String>. MyException {}`',
+    '`class Foo extends pkg.Outer<Map<String, Integer>>. MyClass {}`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+});
+
+test('finds declaration starts inside executable and enum bodies', () => {
+  for (const span of [
+    '`class Outer { void run() { class Local extends com.example. MyClass {} } }`',
+    '`class Outer { void run() { initialize(); class Local extends com.example. MyClass {} } }`',
+    '`class Outer { void run() { if (ready) {} class Local extends com.example. MyClass {} } }`',
+    '`class Outer { void run() { class Local extends com.example. MyClass {} int n = 0; } }`',
+    '`enum Outer { VALUE { void run() throws com.example. MyException {} } }`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+});
+
+test('finds qualified throws clauses in non-final enum constant bodies', () => {
+  for (const span of [
+    '`enum E { A { void run() throws com.example. MyException {} }, B }`',
+    '`enum E { A { void run() throws com.example. MyException {} }, B(1) { void other() {} }, C; int count = 0; }`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.before.endsWith('com.example.'), true, span);
+    assert.equal(violations[0]?.after.startsWith('MyException'), true, span);
+  }
+});
+
+test('consumes compound statements after a local type declaration', () => {
+  for (const span of [
+    '`class Outer { void run() { class Local extends com.example. MyClass {} if (ready) {} } }`',
+    '`class Outer { void run() { class Local extends com.example. MyClass {} if (ready) {} else {} } }`',
+    '`class Outer { void run() { class Local extends com.example. MyClass {} try {} catch (RuntimeException ex) {} finally {} } }`',
+    '`class Outer { void run() { class Local extends com.example. MyClass {} do {} while (ready); } }`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+});
+
+test('allows valid sibling members after a declaration body', () => {
+  for (const span of [
+    '`class Outer { void run() throws com.example. MyException {} void other() {} }`',
+    '`class Outer { void run() throws com.example. MyException {} void other() {} int value = 1; }`',
+    '`class Outer { void run() throws com.example. MyException {} Outer() {} }`',
+    '`class Outer { void run() throws com.example. MyException {} int first, second; }`',
+    '`class Outer { void run() throws com.example. MyException {} int first = 1, second = 2; }`',
+    '`class Outer { void run() throws com.example. MyException {} Runnable action = () -> {}; }`',
+    '`class Outer { void run() throws com.example. MyException {} int[] values = {1, 2}; }`',
+    '`class Outer { void run() throws com.example. MyException {} Map<String, Integer> values = new HashMap<String, Integer>(), other = new HashMap<>(); }`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+
+  assert.deepEqual(
+    findCorruptingCodeSpanWraps(
+      '`class Outer { void run() throws com.example. MyException {} some prose }`',
+    ),
+    [],
+  );
+});
+
+test('finds qualified throws clauses in anonymous class members', () => {
+  for (const span of [
+    '`class Outer { Object value = new Object() { void first() {} void run() throws com.example. MyException {} }; }`',
+    '`class Outer { Object value = new Object() { int value = 1; void run() throws com.example. MyException {} }; }`',
+    '`class Outer { void run() { consume(new Object() { void nested() throws com.example. MyException {} }); } }`',
+    '`consume(new Object() { void run() throws com.example. MyException {} });`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+});
+
+test('finds split qualified types with a type-use annotation after the separator', () => {
+  for (const span of [
+    '`class Foo extends com.example. @Nullable MyClass {}`',
+    '`void run() throws com.example. @Nullable MyException {}`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+});
+
+test('finds split qualified names inside declaration type annotations', () => {
+  const violations = findCorruptingCodeSpanWraps(
+    '`class Foo extends @com.example. Anno(value = foo. bar) com.example.MyClass {}`',
+  );
+  assert.equal(violations.length, 1);
+  assert.ok(violations[0]?.before.endsWith('@com.example.'));
+});
+
+test('accepts annotation arguments and comments around declaration headers', () => {
+  const cases = [
+    '`class Foo extends com.example. MyClass /* note */ {}`',
+    '`class Foo extends com.example. MyClass {} /* note */`',
+    '`class Foo extends com.example. MyClass /* note */ implements Runnable {}`',
+    '`class Foo extends com.example. MyClass implements Runnable /* note */ {}`',
+    '`class Foo /* note */ extends com.example. MyClass {}`',
+    '`class Foo extends /* note */ com.example. MyClass {}`',
+    '`interface Foo extends First, /* note */ com.example. MyInterface {}`',
+    '`void run() throws com.example. MyException /* note */ {}`',
+    '`void run() throws com.example. MyException {} /* note */`',
+    '`abstract void run() throws com.example. MyException; /* note */`',
+    '`void run() throws com.example. MyException, /* note */ other.Other {}`',
+    '`public/* note */ void run() throws com.example. MyException {}`',
+    '`void run() throws/* note */ com.example. MyException {}`',
+  ];
+
+  for (const span of cases) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.separator, 'literal-space', span);
+  }
+
+  for (const span of [
+    '`class Foo extends com.example. MyClass /* note */`',
+    '`class Foo extends com.example. MyClass {} /* note */ prose`',
+    '`class Foo extends com.example. MyClass {} // note\n prose`',
+    '`com.example. MyClass extends Base /* note`',
+    '`void run() throws com.example. MyException /* note */ prose`',
+    '`void run() throws com.example. MyException; /* note */ prose`',
+    '`void run() throws com.example. MyException {} // note\n prose`',
+    '`The method run() throws @NonNull com.example. MyException during the example.`',
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
+});
+
+test('ignores sentence periods inside annotation string arguments', () => {
+  for (const span of [
+    '`void run() throws @Marker("not. a") com.example.MyException {}`',
+    '`class Foo extends @Marker("not. a") com.example.MyClass {}`',
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
+
+  for (const span of [
+    '`void run() throws @Marker("not. a") com.example. MyException {}`',
+    '`class Foo extends @Marker("not. a") com.example. MyClass {}`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.ok(violations[0]?.before.endsWith('com.example.'), span);
+  }
+});
+
+test('ignores split dots inside declaration annotation expressions', () => {
+  assert.deepEqual(
+    findCorruptingCodeSpanWraps(
+      '`class Foo extends @Anno(value = foo. bar) com.example.MyClass {}`',
+    ),
+    [],
+  );
+
+  const violations = findCorruptingCodeSpanWraps(
+    '`class Foo extends @Anno(value = foo. bar) com.example. MyClass {}`',
+  );
+  assert.equal(violations.length, 1);
+  assert.ok(violations[0]?.before.endsWith('com.example.'));
+
+  assert.deepEqual(
+    findCorruptingCodeSpanWraps(
+      '`class Foo extends @Anno(value = foo.\n bar) com.example.MyClass {}`',
+    ),
+    [],
+  );
+
+  const lineBreakViolations = findCorruptingCodeSpanWraps(
+    '`class Foo extends @Anno(value = foo. bar) com.example.\n MyClass {}`',
+  );
+  assert.equal(lineBreakViolations.length, 1);
+  assert.ok(lineBreakViolations[0]?.before.endsWith('com.example.'));
+});
+
+test('flags multiple split qualified types in supported declaration lists', () => {
+  const cases = [
+    {
+      span: '`interface Foo extends com.example. First, other. Second {}`',
+      packages: ['com.example.', 'other.'],
+      types: ['First', 'Second'],
+    },
+    {
+      span: '`void run() throws com.example. MyException, java.io. IOException {}`',
+      packages: ['com.example.', 'java.io.'],
+      types: ['MyException', 'IOException'],
+    },
+  ];
+
+  for (const { span, packages, types } of cases) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 2, span);
+    for (const [index, violation] of violations.entries()) {
+      assert.equal(
+        violation?.before.endsWith(packages[index] ?? ''),
+        true,
+        span,
+      );
+      assert.equal(violation?.after.startsWith(types[index] ?? ''), true, span);
+      assert.equal(violation?.separator, 'literal-space', span);
+    }
+  }
+});
+
+test('keeps later malformed clauses from hiding an in-scope extends split', () => {
+  const violations = findCorruptingCodeSpanWraps(
+    '`class Foo extends com.example. MyClass implements other. Other {}`',
+  );
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0]?.before.endsWith('com.example.'), true);
+  assert.equal(violations[0]?.after.startsWith('MyClass'), true);
+  assert.equal(violations[0]?.separator, 'literal-space');
+});
+
+test('preserves dollar and underscore identifiers in qualified declarations', () => {
+  const violations = findCorruptingCodeSpanWraps(
+    '`class Foo extends $root._internal. MyClass {}`',
+  );
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0]?.before.endsWith('$root._internal.'), true);
+  assert.equal(violations[0]?.after.startsWith('MyClass'), true);
+  assert.equal(violations[0]?.separator, 'literal-space');
+});
+
+test('parses dollar and underscore identifiers in declaration type lists', () => {
+  for (const prefix of ['$root.Base', '_root.Base']) {
+    const violations = findCorruptingCodeSpanWraps(
+      `\`interface Foo extends ${prefix}, com.example. MyInterface {}\``,
+    );
+    assert.equal(violations.length, 1, prefix);
+    assert.equal(violations[0]?.after.startsWith('MyInterface'), true, prefix);
+  }
+
+  const laterSplit = findCorruptingCodeSpanWraps(
+    '`interface Foo extends first.One, $root._internal. MyInterface {}`',
+  );
+  assert.equal(laterSplit.length, 1);
+  assert.equal(laterSplit[0]?.before.endsWith('$root._internal.'), true);
+
+  const dollarContinuation = findCorruptingCodeSpanWraps(
+    '`void run() throws com.example. $GeneratedException;`',
+  );
+  assert.equal(dollarContinuation.length, 1);
+  assert.equal(
+    dollarContinuation[0]?.after.startsWith('$GeneratedException'),
+    true,
+  );
+});
+
+test('flags declaration-aware line breaks before dollar and annotated types', () => {
+  for (const span of [
+    '`void run() throws com.example.\n$GeneratedException;`',
+    '`void run() throws com.example.\n@Nullable MyException {}`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.line, 1, span);
+    assert.equal(violations[0]?.before.endsWith('com.example.'), true, span);
+  }
+});
+
+test('skips type annotations before wildcard generic arguments', () => {
+  for (const span of [
+    '`class Outer { List<@Nullable ?> run() throws com.example. MyException; }`',
+    '`class Outer { List<@Nullable ? extends Number> run() throws com.example. MyException; }`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.before.endsWith('com.example.'), true, span);
+    assert.equal(violations[0]?.after.startsWith('MyException'), true, span);
+  }
+});
+
 test('flags declaration tails with nested Java wildcard type arguments', () => {
   const inlineCode = String.fromCharCode(96);
   for (const declaration of [
@@ -259,6 +745,7 @@ test('does not use direct wildcard supertype arguments as declaration evidence',
 test('flags nested wildcard array bounds with reference and primitive elements', () => {
   const inlineCode = String.fromCharCode(96);
   for (const bound of [
+    'lowercaseName[]',
     'String[]',
     'String[][]',
     'String [ ] [ ]',
@@ -284,6 +771,19 @@ test('flags nested wildcard array bounds with reference and primitive elements',
   }
 });
 
+test('keeps lowercase and annotated primitive wildcard bounds in throws methods', () => {
+  const inlineCode = String.fromCharCode(96);
+  for (const declaration of [
+    'abstract <t> List<? extends t> run() throws com.example. MyException;',
+    'List<? extends @A int[]> run() throws com.example. MyException;',
+  ]) {
+    const span = `${inlineCode}${declaration}${inlineCode}`;
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.before.endsWith('com.example.'), true, span);
+  }
+});
+
 test('does not accept incomplete array bounds or bare primitive bounds', () => {
   const inlineCode = String.fromCharCode(96);
   for (const bound of [
@@ -292,8 +792,8 @@ test('does not accept incomplete array bounds or bare primitive bounds', () => {
     'String[] [',
     'String[]suffix',
     'int',
+    '@A int',
     'void[]',
-    'intValue[]',
   ]) {
     const span = `${inlineCode}com.example. MyClass extends Base<List<? extends ${bound}>>${inlineCode}`;
     assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
@@ -352,11 +852,14 @@ test('flags declarations inside one balanced outer wrapper', () => {
 test('does not flag a sentence after a dotted name', () => {
   for (const span of [
     '`Open example.com. Then continue`',
+    '`command <file>. Next step`',
+    '`interface C extends Base<?>. Next step`',
     '`Visit example.com. GitHub Actions are available.`',
     '`Visit example.com. GitHub supports Actions.`',
     '`Visit example.com. GitHub implements additional features.`',
     '`Visit example.com. GitHub implements Interface.`',
     '`Visit example.com. GitHub implements Interface`',
+    '`Visit example.com. GitHub implements OAuth`',
     '`Visit example.com. GitHub permits temporary access.`',
     '`Visit example.com. GitHub extends OAuth.`',
     '`Visit example.com. GitHub implements OAuth.`',
@@ -372,10 +875,26 @@ test('does not treat incomplete wrappers or trailing prose as declarations', () 
     '`[com.example. MyClass implements Base`',
     '`(com.example. MyClass extends Base) details`',
     '`[com.example. MyClass implements Base] details`',
+    '`void run() throws com.example. MyException { // }`',
+    '`void run() throws com.example. MyException { /* }`',
+    '`void run() throws com.example. MyException { System.out.println("}")`',
     '`(Visit example.com. GitHub implements Interface)`',
     '`[Visit example.com. GitHub implements Interface.]`',
   ]) {
     assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
+});
+
+test('preserves qualified-name detection after prefixed identifiers', () => {
+  for (const span of [
+    '`_MyClass. OtherClass`',
+    '`2MyClass. OtherClass`',
+    '`path/_MyClass. OtherClass`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.ok(violations[0]?.before.endsWith('.'), span);
+    assert.ok(violations[0]?.after.startsWith('OtherClass'), span);
   }
 });
 
@@ -406,6 +925,21 @@ test('does not flag sentence periods before prose in multi-tick code examples', 
     ),
     [],
   );
+});
+
+test('does not treat class extends or method throws prose as declarations', () => {
+  for (const span of [
+    '`A class Foo extends com.example. MyClass is documented here.`',
+    '`The method run() throws com.example. MyException during the example.`',
+    '`The method run() throws com.example. MyException {}`',
+    '`class Outer { The method run() throws com.example. MyException {} }`',
+    '`class Outer { The type Foo extends com.example. MyClass {} }`',
+    '` } class Foo extends com.example. MyClass {}`',
+    '`Some prose; class Foo extends com.example. MyClass {}`',
+    '`if (ready) { void run() throws com.example. MyException {} }`',
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
 });
 
 test('does not flag legitimate option delimiters, comments, ellipses, or words', () => {
@@ -837,8 +1371,10 @@ test('findCorruptingProseWraps: a real fixture file with emphasis markup has no 
 // scanner now needs a few milliseconds. Each test times its first, smaller
 // size and asserts it before the 100,000 call, so a regression fails after
 // seconds instead of hanging the suite. The ceiling stays far above the
-// measured cost to ride out a loaded shared host; on a failure here, rerun
-// this file alone before suspecting a regression.
+// measured cost. Use process CPU time so scheduling delays on a loaded shared
+// host do not inflate the measurement; a wall-clock false alarm occurred on
+// issue #4600. On a failure here, rerun this file alone before suspecting a
+// regression.
 const INLINE_CODE_SPAN_LINEAR_CEILING_MS = 2000;
 const INLINE_CODE_SPAN_LARGE_RUN = 100_000;
 
@@ -850,9 +1386,10 @@ function assertWrapScanLinear(
 ): void {
   for (const size of [firstSize, INLINE_CODE_SPAN_LARGE_RUN]) {
     const text = buildText(size);
-    const start = performance.now();
+    const start = process.cpuUsage();
     const violations = findCorruptingCodeSpanWraps(text);
-    const elapsedMs = performance.now() - start;
+    const usage = process.cpuUsage(start);
+    const elapsedMs = (usage.user + usage.system) / 1000;
     assert.ok(
       elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
       `${label} took ${Math.round(elapsedMs)} ms for n = ${size} (ceiling ${INLINE_CODE_SPAN_LINEAR_CEILING_MS} ms)`,
@@ -886,6 +1423,144 @@ test('findCorruptingCodeSpanWraps stays linear on a long backtick run followed b
     1000,
     (size) => `text ${'`'.repeat(size)}${'a`'.repeat(size)}`,
     false,
+  );
+});
+
+test('findCorruptingCodeSpanWraps stays linear on a long qualified throws list', () => {
+  assertWrapScanLinear(
+    'qualified throws list',
+    1000,
+    (size) =>
+      `\`class C { void f() throws ${Array(size).fill('com.example. MyException').join(', ')} {} }\``,
+    false,
+  );
+});
+
+test('findCorruptingCodeSpanWraps scales linearly across sibling throws methods', () => {
+  const buildText = (size: number): string =>
+    `\`class C { ${Array.from(
+      { length: size },
+      (_, index) => `void run${index}() throws com.example. MyException {}`,
+    ).join(' ')} }\``;
+  const measure = (size: number): number => {
+    const text = buildText(size);
+    const start = process.cpuUsage();
+    const violations = findCorruptingCodeSpanWraps(text);
+    const usage = process.cpuUsage(start);
+    const elapsedMs = (usage.user + usage.system) / 1000;
+    assert.equal(violations.length, size);
+    return elapsedMs;
+  };
+
+  const smallerElapsedMs = measure(800);
+  const largerElapsedMs = measure(1600);
+  assert.ok(
+    largerElapsedMs < smallerElapsedMs * 3.2 + 100,
+    `doubling sibling methods took ${Math.round(smallerElapsedMs)} ms then ${Math.round(largerElapsedMs)} ms`,
+  );
+});
+
+test('findCorruptingCodeSpanWraps scales linearly across dollar-prefixed throws methods', () => {
+  const buildText = (size: number): string =>
+    `\`class C { ${Array.from(
+      { length: size },
+      (_, index) =>
+        `void run${index}() throws com.example. $GeneratedException {}`,
+    ).join(' ')} }\``;
+  const measure = (size: number): number => {
+    const text = buildText(size);
+    const start = process.cpuUsage();
+    const violations = findCorruptingCodeSpanWraps(text);
+    const usage = process.cpuUsage(start);
+    const elapsedMs = (usage.user + usage.system) / 1000;
+    assert.equal(violations.length, size);
+    return elapsedMs;
+  };
+
+  const smallerElapsedMs = measure(800);
+  const largerElapsedMs = measure(1600);
+  assert.ok(
+    largerElapsedMs < smallerElapsedMs * 3.2 + 100,
+    `doubling dollar-prefixed throws methods took ${Math.round(smallerElapsedMs)} ms then ${Math.round(largerElapsedMs)} ms`,
+  );
+});
+
+test('findCorruptingCodeSpanWraps scales linearly across sibling classes', () => {
+  const buildText = (size: number): string =>
+    `\`class Outer { ${Array.from(
+      { length: size },
+      (_, index) => `class C${index} extends com.example. MyClass {}`,
+    ).join(' ')} }\``;
+  const measure = (size: number): number => {
+    const text = buildText(size);
+    const start = process.cpuUsage();
+    const violations = findCorruptingCodeSpanWraps(text);
+    const usage = process.cpuUsage(start);
+    const elapsedMs = (usage.user + usage.system) / 1000;
+    assert.equal(violations.length, size);
+    return elapsedMs;
+  };
+
+  const smallerElapsedMs = measure(800);
+  const largerElapsedMs = measure(1600);
+  assert.ok(
+    largerElapsedMs < smallerElapsedMs * 3.2 + 100,
+    `doubling sibling classes took ${Math.round(smallerElapsedMs)} ms then ${Math.round(largerElapsedMs)} ms`,
+  );
+});
+
+test('findCorruptingCodeSpanWraps scales linearly across sentence punctuation', () => {
+  const buildText = (size: number): string =>
+    `\`${'word. Capital prose '.repeat(size)}\``;
+  const measure = (size: number): number => {
+    const text = buildText(size);
+    const start = process.cpuUsage();
+    const violations = findCorruptingCodeSpanWraps(text);
+    const usage = process.cpuUsage(start);
+    const elapsedMs = (usage.user + usage.system) / 1000;
+    assert.deepEqual(violations, []);
+    return elapsedMs;
+  };
+
+  const smallerElapsedMs = measure(8000);
+  const largerElapsedMs = measure(16000);
+  assert.ok(
+    largerElapsedMs < smallerElapsedMs * 3.2 + 100,
+    `doubling sentence candidates took ${Math.round(smallerElapsedMs)} ms then ${Math.round(largerElapsedMs)} ms`,
+  );
+});
+
+test('findCorruptingCodeSpanWraps stays linear with deeply nested declaration contexts', () => {
+  assertWrapScanLinear(
+    'deeply nested declaration contexts',
+    1000,
+    (size) =>
+      `\`class C { void f() throws com.example. MyException { ${'if (ready) {'.repeat(size)} work(); ${'}'.repeat(size)} } }\``,
+    false,
+  );
+});
+
+test('findCorruptingCodeSpanWraps scales linearly across nested classes with split extends types', () => {
+  const buildText = (size: number): string =>
+    `\`${Array.from(
+      { length: size },
+      (_, index) => `class C${index} extends com.example. MyClass {`,
+    ).join(' ')} work(); ${'}'.repeat(size)}\``;
+  const measure = (size: number): number => {
+    const text = buildText(size);
+    const start = process.cpuUsage();
+    const violations = findCorruptingCodeSpanWraps(text);
+    const usage = process.cpuUsage(start);
+    const elapsedMs = (usage.user + usage.system) / 1000;
+    assert.equal(violations.length, size);
+    return elapsedMs;
+  };
+
+  const smallerElapsedMs = measure(3200);
+  const largerElapsedMs = measure(6400);
+  assert.ok(
+    largerElapsedMs < smallerElapsedMs * 3.2 + 100,
+    `doubling nested split declarations took ${Math.round(smallerElapsedMs)} ms then ${Math.round(largerElapsedMs)} ms`,
   );
 });
 
