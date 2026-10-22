@@ -1527,13 +1527,11 @@ function isDeclarationFieldHeader(text) {
       return false;
     }
     cursor = skipDeclarationTrivia(text, cursor + name[0].length);
-    while (text[cursor] === '[') {
-      const dimensionEnd = skipDeclarationTrivia(text, cursor + 1);
-      if (text[dimensionEnd] !== ']') {
-        return false;
-      }
-      cursor = skipDeclarationTrivia(text, dimensionEnd + 1);
+    const dimensionsEnd = skipDeclarationArrayDimensions(text, cursor);
+    if (dimensionsEnd === undefined) {
+      return false;
     }
+    cursor = skipDeclarationTrivia(text, dimensionsEnd);
     if (cursor === text.length) {
       return true;
     }
@@ -1552,7 +1550,7 @@ function isDeclarationFieldHeader(text) {
       if (delimiter === text.length) {
         return true;
       }
-      cursor = skipDeclarationTypeAnnotations(text, delimiter + 1);
+      cursor = skipDeclarationTrivia(text, delimiter + 1);
       if (cursor === text.length) {
         return false;
       }
@@ -1561,7 +1559,7 @@ function isDeclarationFieldHeader(text) {
     if (text[cursor] !== ',') {
       return false;
     }
-    cursor = skipDeclarationTypeAnnotations(text, cursor + 1);
+    cursor = skipDeclarationTrivia(text, cursor + 1);
     if (cursor === text.length) {
       return false;
     }
