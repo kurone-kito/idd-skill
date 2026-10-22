@@ -1259,25 +1259,37 @@ function assignmentHeadingContext(heading) {
   ];
   const agentActorInTargetRole = (target) => {
     const targetEnd = target.index + target[0].length;
-    return agentMentions.some((agent) => {
-      const agentStart = agent.index ?? 0;
-      if (agentStart < targetEnd) return false;
-      const targetToAgent = label.slice(targetEnd, agentStart);
-      const explicitAssignmentRelation =
-        USER_ACTOR_STEP_TARGET_AGENT_RELATION.test(targetToAgent) &&
-        !/^\s+(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?for\s*$/i.test(
-          targetToAgent,
-        );
-      const transferRecipientRelation =
-        USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(
-          label.slice(0, target.index),
-        ) && /^\s+to\s+(?:(?:a|an|the)\s*)?$/i.test(targetToAgent);
-      return (
-        explicitAssignmentRelation ||
-        transferRecipientRelation ||
-        /^\s+by\s*$/i.test(targetToAgent)
+    let agentLow = 0;
+    let agentHigh = agentMentions.length;
+    while (agentLow < agentHigh) {
+      const middle = Math.floor((agentLow + agentHigh) / 2);
+      const agent = agentMentions[middle];
+      if (agent !== undefined && (agent.index ?? 0) < targetEnd) {
+        agentLow = middle + 1;
+      } else {
+        agentHigh = middle;
+      }
+    }
+    const agent = agentMentions[agentLow];
+    if (agent === undefined) return false;
+    // Only the first following agent can match an anchored target relation;
+    // a later mention would also include this one between the target and it.
+    const agentStart = agent.index ?? 0;
+    const targetToAgent = label.slice(targetEnd, agentStart);
+    const explicitAssignmentRelation =
+      USER_ACTOR_STEP_TARGET_AGENT_RELATION.test(targetToAgent) &&
+      !/^\s+(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?for\s*$/i.test(
+        targetToAgent,
       );
-    });
+    const transferRecipientRelation =
+      USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(
+        label.slice(0, target.index),
+      ) && /^\s+to\s+(?:(?:a|an|the)\s*)?$/i.test(targetToAgent);
+    return (
+      explicitAssignmentRelation ||
+      transferRecipientRelation ||
+      /^\s+by\s*$/i.test(targetToAgent)
+    );
   };
   const assignedTargetMatch =
     assignedTargetMatches.find(agentActorInTargetRole) ??
