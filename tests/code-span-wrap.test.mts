@@ -227,6 +227,8 @@ test('flags complete declaration tails with generic and combined types', () => {
 test('flags qualified types in class extends and method throws clauses', () => {
   for (const [span, type] of [
     ['`class Foo extends com.example. MyClass {}`', 'MyClass'],
+    ['`(class Foo extends com.example. MyClass {})`', 'MyClass'],
+    ['`[class Foo extends com.example. MyClass {}]`', 'MyClass'],
     ['`class Foo extends com.example. $GeneratedClass {}`', '$GeneratedClass'],
     ['`class Foo extends @NonNull com.example. MyClass {}`', 'MyClass'],
     [
@@ -271,6 +273,8 @@ test('flags qualified types in class extends and method throws clauses', () => {
       'MyInterface',
     ],
     ['`void run() throws com.example. MyException {}`', 'MyException'],
+    ['`(void run() throws com.example. MyException {})`', 'MyException'],
+    ['`[void run() throws com.example. MyException {}]`', 'MyException'],
     [
       '`java.util.@Nullable List<String> run() throws com.example. MyException {}`',
       'MyException',
@@ -1445,8 +1449,8 @@ test('findCorruptingCodeSpanWraps scales linearly across sentence punctuation', 
     return elapsedMs;
   };
 
-  const smallerElapsedMs = measure(2000);
-  const largerElapsedMs = measure(4000);
+  const smallerElapsedMs = measure(8000);
+  const largerElapsedMs = measure(16000);
   assert.ok(
     largerElapsedMs < smallerElapsedMs * 3.2 + 100,
     `doubling sentence candidates took ${Math.round(smallerElapsedMs)} ms then ${Math.round(largerElapsedMs)} ms`,

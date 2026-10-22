@@ -2566,13 +2566,25 @@ function isLineCommentOpener(inner: string, secondSlashIndex: number): boolean {
   return scheme === 'default' || /(?:^|\s)case\s+$/u.test(beforeScheme);
 }
 
+function getSentenceSuffixEnd(inner: string): number {
+  let end = inner.length;
+  while (end > 0 && inner[end - 1] === '_') {
+    end -= 1;
+  }
+  while (end > 0 && /\s/u.test(inner[end - 1] ?? '')) {
+    end -= 1;
+  }
+  return end;
+}
+
 function isSentencePunctuation(
   inner: string,
   delimiterIndex: number,
   afterIndex: number,
+  suffixEnd: number,
 ): boolean {
   const previous = inner[delimiterIndex - 1];
-  const suffix = inner.slice(afterIndex).replace(/_+$/u, '').trimEnd();
+  const suffix = inner.slice(afterIndex, suffixEnd);
   const punctuationPrefix = inner.slice(
     Math.max(0, delimiterIndex - 5),
     delimiterIndex + 1,
@@ -2840,16 +2852,18 @@ export function findCorruptingCodeSpanWraps(
     const wrappedContent = unwrapFullSpanOuterPair(inner);
     const sentenceInner = wrappedContent ?? inner;
     const sentenceIndexOffset = wrappedContent === undefined ? 0 : 1;
+    const sentenceSuffixEnd = getSentenceSuffixEnd(sentenceInner);
     const declarationTypeSplitOffsets =
-      findQualifiedDeclarationTypeSplitOffsets(inner);
+      findQualifiedDeclarationTypeSplitOffsets(sentenceInner);
     for (
       let delimiterIndex = 0;
       delimiterIndex < inner.length;
       delimiterIndex += 1
     ) {
+      const sentenceDelimiterIndex = delimiterIndex - sentenceIndexOffset;
       const delimiter = inner[delimiterIndex];
       const firstWhitespace = inner[delimiterIndex + 1];
-      if (declarationTypeSplitOffsets.ignored.has(delimiterIndex)) {
+      if (declarationTypeSplitOffsets.ignored.has(sentenceDelimiterIndex)) {
         continue;
       }
       if (
@@ -2868,7 +2882,7 @@ export function findCorruptingCodeSpanWraps(
           !(
             delimiter === '.' &&
             previous === '>' &&
-            declarationTypeSplitOffsets.qualified.has(delimiterIndex)
+            declarationTypeSplitOffsets.qualified.has(sentenceDelimiterIndex)
           ))
       ) {
         continue;
@@ -2883,23 +2897,24 @@ export function findCorruptingCodeSpanWraps(
         next === undefined ||
         (!TOKEN_CONTINUING.test(next) &&
           !isQualifiedDollarTypeContinuation(
-            inner,
-            delimiterIndex,
-            afterIndex,
+            sentenceInner,
+            sentenceDelimiterIndex,
+            afterIndex - sentenceIndexOffset,
             declarationTypeSplitOffsets.declarationStarts,
           ) &&
-          !declarationTypeSplitOffsets.qualified.has(delimiterIndex))
+          !declarationTypeSplitOffsets.qualified.has(sentenceDelimiterIndex))
       ) {
         continue;
       }
 
       if (
         (delimiter === '.' &&
-          !declarationTypeSplitOffsets.qualified.has(delimiterIndex) &&
+          !declarationTypeSplitOffsets.qualified.has(sentenceDelimiterIndex) &&
           isSentencePunctuation(
             sentenceInner,
-            delimiterIndex - sentenceIndexOffset,
+            sentenceDelimiterIndex,
             afterIndex - sentenceIndexOffset,
+            sentenceSuffixEnd,
           )) ||
         (delimiter === '-' &&
           (isStandaloneDoubleDash(inner, delimiterIndex) ||
