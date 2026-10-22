@@ -19,6 +19,14 @@ carries only the small amount of guidance specific to GitHub Copilot's
 own UI terminology. See [docs/ai-strategy.md](docs/ai-strategy.md) for
 the reasoning behind this layout.
 
+## Conversation
+
+- When asking the user to decide or take a
+  action, include enough context to understand the request and state the
+  exact decision or action needed in the same message. If you offer
+  options, identify the recommended option and the main cost of each.
+  Keep the ask concise and do not repeat context already present in the same message.
+
 ## Minimum requirements
 
 - Match the conversational language to the user's language.
