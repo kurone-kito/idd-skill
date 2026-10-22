@@ -3008,13 +3008,19 @@ function hasAgentWorkAssignmentInClause(clause) {
           ...suffix
             .slice(transferCue.index)
             .matchAll(/[,;:.!?—–]|\b(?:and|but|then|while|whereas)\b/gi),
-        ].some((match) =>
-          USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.test(
-            suffix.slice(
-              transferCue.index + (match.index ?? 0) + match[0].length,
-            ),
-          ),
-        );
+        ].some((match) => {
+          const continuation = suffix.slice(
+            transferCue.index + (match.index ?? 0) + match[0].length,
+          );
+          const withoutCoordinator = continuation.replace(
+            /^\s*(?:and|but|then|while|whereas)\s+/i,
+            '',
+          );
+          return (
+            !USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT.test(withoutCoordinator) &&
+            USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.test(continuation)
+          );
+        });
       const transfersWorkToAnotherActor =
         transferCue !== null &&
         !earlierIndependentWork &&
@@ -3218,7 +3224,7 @@ function hasAdjacentAgentPronounWorkAssignment(text) {
 function hasAgentActionContinuationAfterSemicolon(text) {
   const clauses = splitSentenceAndSemicolonClauses(text);
   const omittedSubjectAction = new RegExp(
-    String.raw`^\s*(?:then\s+)?(?:${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION_SOURCE}(?:s|es|ed|ing|d)?|built|wrote|written|ran)\b`,
+    String.raw`^\s*(?:then\s+)?${USER_ACTOR_STEP_AGENT_SUBJECT_PREDICATE_PREFIX_SOURCE}(?:${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION_SOURCE}(?:s|es|ed|ing|d)?|built|wrote|written|ran)\b`,
     'i',
   );
   for (let index = 0; index + 1 < clauses.length; index += 1) {

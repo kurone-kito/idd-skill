@@ -12411,14 +12411,16 @@ test('trust safety keeps independent agent work assignments fail-closed -- #4596
   } as Context);
   assert.equal(unrelatedActorAction.pass, true);
 
-  const explicitNewActorAfterTransfer = checkTrustSafety({
-    issue: {
-      ...BASE_ISSUE,
-      body: 'The coding agent handed the implementation task to the user; the maintainer synchronizes the widget.\n\nRun this step by the user.',
-    },
-    trustSafetyAmbiguous: false,
-  } as Context);
-  assert.equal(explicitNewActorAfterTransfer.pass, true);
+  for (const separator of [', and', ',', '—', '–', ';']) {
+    const explicitNewActorAfterTransfer = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `The coding agent handed the implementation task to the user${separator} the maintainer synchronizes the widget.\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(explicitNewActorAfterTransfer.pass, true, separator);
+  }
 
   for (const body of [
     'The coding agent is available while the maintainer performs deployment verification.\n\nRun this step by the user.',
@@ -12448,6 +12450,7 @@ test('trust safety keeps transfer, paragraph, and recipient assignment checks fa
     'The maintainer delegates the coding agent a deployment step.\n\nRun this step by the user.',
     'The coding agent handed the implementation task to the user, then synchronizes the widget.\n\nRun this step by the user.',
     'The coding agent handed the implementation task to the user, synchronizes the widget.\n\nRun this step by the user.',
+    'The coding agent handed the implementation task to the user; then immediately synchronizes the widget.\n\nRun this step by the user.',
     'The coding agent assigns the user to perform this step; then performs it.\n\nRun this step by the user.',
     'The coding agent handed the implementation task to the user—synchronizes the widget.\n\nRun this step by the user.',
     'The coding agent handed the implementation task to the user–synchronizes the widget.\n\nRun this step by the user.',
