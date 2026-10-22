@@ -25,7 +25,7 @@ the reasoning behind this layout.
   action, include enough context to understand the request and state the
   exact decision or action needed in the same message. If you offer
   options, identify the recommended option and the main cost of each.
-  Keep the ask concise and do not repeat context already present.
+  Keep the ask concise and do not repeat context already present in the same message.
 
 ## Minimum requirements
 
