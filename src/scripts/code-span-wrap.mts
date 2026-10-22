@@ -4,18 +4,17 @@
 // named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 //
-// Detects the *corrupting* sub-case of a Markdown-wrapped inline code
-// span (idd-skill issue #1677): CommonMark converts a line ending inside
-// a code span to a single space, so a break that falls mid-token --
-// right after a hyphen, underscore, slash, or dot that the token
-// continues through -- silently inserts a space the author never
-// intended, corrupting the rendered command or identifier so it can no
-// longer be copy-pasted correctly. A break at a real word boundary is
-// readable and is deliberately NOT flagged here (see the issue for why
-// that sub-case is left alone rather than banning multi-line spans
-// outright). Fenced code blocks are excluded first via
-// blankFencedCodeBlocks, matching the same fence semantics
-// stripMarkdownCodeRegions already uses elsewhere in this repo.
+// Detects corrupting splits inside Markdown inline code spans
+// (idd-skill issues #1677 and #4563). CommonMark converts a line ending
+// inside a code span to a single space, while a literal space or tab is
+// already rendered as whitespace. Either can split a token immediately
+// after a hyphen, underscore, slash, or dot that the token continues
+// through. The resulting command or identifier can no longer be copied
+// correctly; the literal-space incident was observed in issue #4315.
+// Breaks and spaces at real word boundaries remain readable and are
+// deliberately NOT flagged here. Fenced and indented code blocks and raw
+// HTML blocks are excluded before scanning because CommonMark does not parse
+// inline code spans inside those blocks.
 //
 // The character immediately before the break's continuation character,
 // and the character immediately after the break, must each be
@@ -37,42 +36,497 @@
 // this repository's corpus.
 
 import {
-  blankFencedCodeBlocks,
   findFencedCodeRanges,
   findHtmlBlockRanges,
+  findHtmlCommentRanges,
+  findIndentedCodeRanges,
+  findInlineCodeRanges,
   findInlineCodeSpans,
   findMarkdownCodeRanges,
   maskMarkdownCodeRegionsPreservingPositions,
+  mergeMarkdownCodeRanges,
 } from './markdown-code.mts';
 
 export interface CodeSpanWrapViolation {
-  /** 1-based line number of the line that ends mid-token (before the break). */
+  /** 1-based line number containing the corrupting split. */
   line: number;
-  /** Trailing context from the end of the line before the break. */
+  /** Context immediately before the break or literal whitespace. */
   before: string;
-  /** Leading context from the start of the line after the break. */
+  /** Context immediately after the break or literal whitespace. */
   after: string;
+  /** Present only when the split is caused by literal horizontal whitespace. */
+  separator?: 'literal-space' | 'literal-tab';
 }
 
 const MID_TOKEN_CONTINUATION = /[-_/.]/;
 const TOKEN_CONTINUING = /[A-Za-z0-9\-_/.]/;
 const CONTEXT_CHARS = 20;
+const PROPER_NAME_TITLE_ABBREVIATION =
+  /(?:^|(?<![\p{L}\p{N}_./-]))(?:Mr|Mrs|Ms|Mx|Dr|Prof|Rev|Hon|Sr|Jr|St|Capt|Col|Gen|Sgt|Lt|Maj|Cmdr|Adm|Fr|Br)\.$/iu;
+const DOTTED_IDENTIFIER_PREFIX =
+  /^\s*[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+$/u;
+const MAX_DECLARATION_GENERIC_DEPTH = 8;
+const DECLARATION_PRIMITIVE_ARRAY_ELEMENTS = [
+  'boolean',
+  'byte',
+  'char',
+  'double',
+  'float',
+  'int',
+  'long',
+  'short',
+] as const;
+const DECLARATION_CLAUSE_KEYWORDS = [
+  'extends',
+  'implements',
+  'permits',
+] as const;
+
+function skipDeclarationWhitespace(text: string, start: number): number {
+  let cursor = start;
+  while (cursor < text.length && /\s/u.test(text[cursor] ?? '')) {
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function isAsciiLetter(code: number): boolean {
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+function isDeclarationIdentifierContinuation(code: number): boolean {
+  return (
+    isAsciiLetter(code) ||
+    (code >= 48 && code <= 57) ||
+    code === 45 ||
+    code === 95
+  );
+}
+
+function parseDeclarationType(
+  text: string,
+  start: number,
+  genericDepth: number,
+): number | undefined {
+  let cursor = start;
+  let finalSegmentStartsUppercase = false;
+  while (true) {
+    const firstCode = text.charCodeAt(cursor);
+    if (!isAsciiLetter(firstCode)) {
+      return undefined;
+    }
+    finalSegmentStartsUppercase = firstCode >= 65 && firstCode <= 90;
+    cursor += 1;
+    while (isDeclarationIdentifierContinuation(text.charCodeAt(cursor))) {
+      cursor += 1;
+    }
+    if (text[cursor] !== '.') {
+      break;
+    }
+    cursor += 1;
+  }
+  if (!finalSegmentStartsUppercase) {
+    return undefined;
+  }
+
+  if (text[cursor] !== '<') {
+    return cursor;
+  }
+  if (genericDepth >= MAX_DECLARATION_GENERIC_DEPTH) {
+    return undefined;
+  }
+
+  cursor = skipDeclarationWhitespace(text, cursor + 1);
+  let argumentEnd = parseDeclarationTypeArgument(
+    text,
+    cursor,
+    genericDepth + 1,
+  );
+  if (argumentEnd === undefined) {
+    return undefined;
+  }
+  cursor = argumentEnd;
+  while (true) {
+    const commaIndex = skipDeclarationWhitespace(text, cursor);
+    if (text[commaIndex] !== ',') {
+      break;
+    }
+    cursor = skipDeclarationWhitespace(text, commaIndex + 1);
+    argumentEnd = parseDeclarationTypeArgument(text, cursor, genericDepth + 1);
+    if (argumentEnd === undefined) {
+      return undefined;
+    }
+    cursor = argumentEnd;
+  }
+  cursor = skipDeclarationWhitespace(text, cursor);
+  return text[cursor] === '>' ? cursor + 1 : undefined;
+}
+
+function parseDeclarationTypeArgument(
+  text: string,
+  start: number,
+  genericDepth: number,
+): number | undefined {
+  if (text[start] !== '?') {
+    return parseDeclarationType(text, start, genericDepth);
+  }
+  // Wildcards are limited to nested type arguments (JLS 8.1.4 and 8.1.5;
+  // PR #4605).
+  if (genericDepth === 1) {
+    return undefined;
+  }
+
+  const cursor = skipDeclarationWhitespace(text, start + 1);
+
+  const varianceKeyword = (['extends', 'super'] as const).find(
+    (keyword) =>
+      text.startsWith(keyword, cursor) &&
+      !isDeclarationIdentifierContinuation(
+        text.charCodeAt(cursor + keyword.length),
+      ),
+  );
+  if (varianceKeyword === undefined) {
+    return start + 1;
+  }
+
+  const boundStart = skipDeclarationWhitespace(
+    text,
+    cursor + varianceKeyword.length,
+  );
+  const primitive = DECLARATION_PRIMITIVE_ARRAY_ELEMENTS.find(
+    (type) =>
+      text.startsWith(type, boundStart) &&
+      !isDeclarationIdentifierContinuation(
+        text.charCodeAt(boundStart + type.length),
+      ),
+  );
+  let boundEnd =
+    primitive === undefined
+      ? parseDeclarationType(text, boundStart, genericDepth)
+      : boundStart + primitive.length;
+  if (boundEnd === undefined) {
+    return undefined;
+  }
+
+  let isArray = false;
+  while (true) {
+    const openIndex = skipDeclarationWhitespace(text, boundEnd);
+    if (text[openIndex] !== '[') {
+      break;
+    }
+    const closeIndex = skipDeclarationWhitespace(text, openIndex + 1);
+    if (text[closeIndex] !== ']') {
+      return undefined;
+    }
+    isArray = true;
+    boundEnd = closeIndex + 1;
+  }
+  return primitive !== undefined && !isArray ? undefined : boundEnd;
+}
+
+function isCompleteDeclarationTail(text: string): boolean {
+  let cursor = skipDeclarationWhitespace(text, 0);
+  while (cursor < text.length) {
+    const keyword = DECLARATION_CLAUSE_KEYWORDS.find((candidate) =>
+      text.startsWith(candidate, cursor),
+    );
+    if (keyword === undefined) {
+      return false;
+    }
+    cursor += keyword.length;
+    if (cursor >= text.length || !/\s/u.test(text[cursor] ?? '')) {
+      return false;
+    }
+    cursor = skipDeclarationWhitespace(text, cursor);
+    let typeEnd = parseDeclarationType(text, cursor, 0);
+    if (typeEnd === undefined) {
+      return false;
+    }
+    cursor = typeEnd;
+
+    while (true) {
+      const commaIndex = skipDeclarationWhitespace(text, cursor);
+      if (text[commaIndex] !== ',') {
+        break;
+      }
+      cursor = skipDeclarationWhitespace(text, commaIndex + 1);
+      typeEnd = parseDeclarationType(text, cursor, 0);
+      if (typeEnd === undefined) {
+        return false;
+      }
+      cursor = typeEnd;
+    }
+
+    const nextClause = skipDeclarationWhitespace(text, cursor);
+    if (nextClause === text.length) {
+      return true;
+    }
+    if (nextClause === cursor) {
+      return false;
+    }
+    cursor = nextClause;
+  }
+  return false;
+}
+
+function lineStartsFor(text: string): number[] {
+  const starts = [0];
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '\n') {
+      starts.push(index + 1);
+    }
+  }
+  return starts;
+}
+
+function lineNumberAt(offset: number, lineStarts: number[]): number {
+  let low = 0;
+  let high = lineStarts.length;
+  while (low + 1 < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (lineStarts[middle] <= offset) {
+      low = middle;
+    } else {
+      high = middle;
+    }
+  }
+  return low + 1;
+}
+
+function isStandaloneDoubleDash(
+  inner: string,
+  secondDashIndex: number,
+): boolean {
+  if (inner[secondDashIndex - 1] !== '-') {
+    return false;
+  }
+  const firstDashIndex = secondDashIndex - 1;
+  return firstDashIndex === 0 || /\s/.test(inner[firstDashIndex - 1]);
+}
+
+function isLineCommentOpener(inner: string, secondSlashIndex: number): boolean {
+  // A C-like line comment can start directly after code, as in
+  // `value;// note`; requiring whitespace before the opener misses it.
+  const firstSlashIndex = secondSlashIndex - 1;
+  if (inner[firstSlashIndex] !== '/') {
+    return false;
+  }
+  // A valid URI scheme's `://` is part of the token, not a line comment.
+  const colonIndex = firstSlashIndex - 1;
+  if (inner[colonIndex] !== ':') {
+    return true;
+  }
+  let schemeStart = colonIndex - 1;
+  while (schemeStart >= 0 && /[A-Za-z0-9+.-]/.test(inner[schemeStart] ?? '')) {
+    schemeStart -= 1;
+  }
+  const scheme = inner.slice(schemeStart + 1, colonIndex);
+  if (!/^[A-Za-z][A-Za-z0-9+.-]*$/.test(scheme)) {
+    return true;
+  }
+  const beforeScheme = inner.slice(0, schemeStart + 1);
+  return scheme === 'default' || /(?:^|\s)case\s+$/u.test(beforeScheme);
+}
+
+function isSentencePunctuation(
+  inner: string,
+  delimiterIndex: number,
+  afterIndex: number,
+): boolean {
+  const previous = inner[delimiterIndex - 1];
+  const suffix = inner.slice(afterIndex).replace(/_+$/u, '').trimEnd();
+  const abbreviationBeforeLowercaseProse =
+    /(?:^|(?<![\p{L}\p{N}_./-]))(?:e\.g|i\.e|etc|vs)\.$/iu.test(
+      inner.slice(0, delimiterIndex + 1),
+    ) && /^[a-z]/u.test(suffix);
+  if (abbreviationBeforeLowercaseProse) {
+    return true;
+  }
+  const nextWord =
+    /^[A-Z][A-Za-z]*(?:[-'’][A-Za-z]+)*(?=[,.!?;:]?(?:\s|`|$))/u.exec(
+      suffix,
+    )?.[0];
+  const prefix = inner.slice(0, delimiterIndex + 1);
+  if (nextWord !== undefined && PROPER_NAME_TITLE_ABBREVIATION.test(prefix)) {
+    return true;
+  }
+  const followingText =
+    nextWord === undefined ? '' : suffix.slice(nextWord.length).trimStart();
+  const followingProseWord =
+    /^[A-Za-z]/u.test(followingText) ||
+    /^[,.!?;:](?:\s|`|$)/u.test(followingText);
+  const declarationTypeContinuation =
+    nextWord !== undefined &&
+    /[a-z][A-Z]/u.test(nextWord) &&
+    isCompleteDeclarationTail(followingText);
+  // Only a complete, recognized declaration tail stays code-shaped.
+  // Trailing punctuation or prose keeps sentence punctuation detectable.
+  // A dotted prefix counts as declaration context only at span start;
+  // later domain-like text may be prose before a new sentence.
+  if (
+    nextWord !== undefined &&
+    (!followingProseWord || declarationTypeContinuation) &&
+    DOTTED_IDENTIFIER_PREFIX.test(inner.slice(0, delimiterIndex))
+  ) {
+    return false;
+  }
+  if (previous !== undefined && /[0-9]/.test(previous)) {
+    // A standalone numbered step may start with lowercase prose, while a
+    // digit-suffixed identifier still needs evidence after its capitalized
+    // continuation before this period is treated as sentence punctuation.
+    const stepWord =
+      /^[A-Za-z]+(?:[-'’][A-Za-z]+)*(?=[,.!?;:]?(?:\s|`|$))/u.exec(suffix)?.[0];
+    if (stepWord === undefined) {
+      return false;
+    }
+    let numberStart = delimiterIndex - 1;
+    while (numberStart > 0 && /[0-9]/.test(inner[numberStart - 1] ?? '')) {
+      numberStart -= 1;
+    }
+    const beforeNumber = inner[numberStart - 1];
+    return (
+      beforeNumber === undefined ||
+      /\s/.test(beforeNumber) ||
+      (/[A-Za-z]/.test(beforeNumber) &&
+        nextWord !== undefined &&
+        followingProseWord)
+    );
+  }
+  if (nextWord === undefined) {
+    return false;
+  }
+  if (/^[A-Z]{2,}$/u.test(nextWord) && !followingProseWord) {
+    return false;
+  }
+  if (previous === undefined || previous === '`') {
+    return true;
+  }
+  const previousWord = /[A-Za-z][A-Za-z0-9_-]*$/u.exec(
+    inner.slice(0, delimiterIndex),
+  )?.[0];
+  // A title-cased or uppercase prefix followed by a single capitalized token
+  // is more likely a dotted identifier than prose. A further word or
+  // sentence punctuation after the opener marks prose, while lowercase
+  // prefixes can precede any capitalized opener (including `foo. Hello`).
+  if (
+    previousWord !== undefined &&
+    /[A-Z]/u.test(previousWord) &&
+    !followingProseWord
+  ) {
+    return false;
+  }
+  return /[A-Za-z)]/.test(previous);
+}
+
+function isHtmlCommentOpener(inner: string, secondDashIndex: number): boolean {
+  return inner.slice(secondDashIndex - 3, secondDashIndex + 1) === '<!--';
+}
+
+function isPartOfEllipsis(inner: string, dotIndex: number): boolean {
+  let start = dotIndex;
+  let end = dotIndex + 1;
+  while (inner[start - 1] === '.') {
+    start -= 1;
+  }
+  while (inner[end] === '.') {
+    end += 1;
+  }
+  return end - start >= 3;
+}
+
+function hasLiteralSplitCandidate(text: string): boolean {
+  for (let index = 0; index + 1 < text.length; index += 1) {
+    const delimiter = text[index];
+    const whitespace = text[index + 1];
+    if (
+      (delimiter === '-' ||
+        delimiter === '_' ||
+        delimiter === '/' ||
+        delimiter === '.') &&
+      (whitespace === ' ' || whitespace === '\t')
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function unwrapFullSpanOuterPair(text: string): string | undefined {
+  const opener = text[0];
+  const closer = opener === '(' ? ')' : opener === '[' ? ']' : undefined;
+  if (closer === undefined || text[text.length - 1] !== closer) {
+    return undefined;
+  }
+
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === opener) {
+      depth += 1;
+    } else if (text[index] === closer) {
+      depth -= 1;
+      if (depth === 0 && index !== text.length - 1) {
+        return undefined;
+      }
+      if (depth < 0) {
+        return undefined;
+      }
+    }
+  }
+
+  return depth === 0 ? text.slice(1, -1) : undefined;
+}
 
 /**
- * Find inline code spans whose line break falls mid-token per the rule
- * above. Returns one violation per corrupting break, in document order.
+ * Find inline code spans where a line break or literal horizontal
+ * whitespace splits a token per the rules above. Returns one violation
+ * per corrupting split, in document order.
  */
 export function findCorruptingCodeSpanWraps(
   text: string,
 ): CodeSpanWrapViolation[] {
   const normalized = text.replace(/\r\n?/g, '\n');
-  // Fenced-block content is blanked to '' per line, so a code span can
-  // never start or continue inside one; blanking always leaves a blank
-  // line, which the span scan below already treats as a span terminator, so
-  // no false span can bridge a fenced block. Line counts stay aligned
-  // with `normalized` because blanking preserves the number of lines.
-  const scanned = blankFencedCodeBlocks(normalized);
-  const violations: CodeSpanWrapViolation[] = [];
+  // Mask block code and raw HTML first. Only parse inline ranges when the
+  // input contains a comment opener or a possible literal split, preserving
+  // the linear path for long backtick runs and ordinary spans.
+  const fencedRanges = findFencedCodeRanges(normalized);
+  const htmlBlockRanges = findHtmlBlockRanges(normalized, fencedRanges);
+  const blockScanned = maskMarkdownCodeRegionsPreservingPositions(
+    normalized,
+    mergeMarkdownCodeRanges([
+      ...fencedRanges,
+      ...findIndentedCodeRanges(normalized, fencedRanges),
+      ...htmlBlockRanges,
+    ]),
+  );
+  // HTML comments render as opaque text. Only ranges containing a literal
+  // opener need to be passed so a genuine opener inside a code span stays text.
+  let scanned = blockScanned;
+  if (blockScanned.includes('<!--')) {
+    const codeRangesWithCommentOpeners = findInlineCodeRanges(
+      blockScanned,
+      0,
+      blockScanned.length,
+    ).filter(({ start, end }) =>
+      blockScanned.slice(start, end).includes('<!--'),
+    );
+    const htmlCommentRanges = findHtmlCommentRanges(
+      blockScanned,
+      codeRangesWithCommentOpeners,
+      fencedRanges,
+      htmlBlockRanges,
+    );
+    if (htmlCommentRanges.length > 0) {
+      scanned = maskMarkdownCodeRegionsPreservingPositions(
+        blockScanned,
+        mergeMarkdownCodeRanges(htmlCommentRanges),
+      );
+    }
+  }
+  const lineStarts = lineStartsFor(scanned);
+  const violations: Array<{
+    offset: number;
+    violation: CodeSpanWrapViolation;
+  }> = [];
 
   for (const span of findInlineCodeSpans(scanned)) {
     const { inner } = span;
@@ -97,22 +551,103 @@ export function findCorruptingCodeSpanWraps(
         nextChar !== undefined &&
         TOKEN_CONTINUING.test(nextChar)
       ) {
-        const breakOffset = innerStart + breakIndex;
-        const line = scanned.slice(0, breakOffset).split('\n').length;
         violations.push({
-          line,
-          before: inner.slice(
-            Math.max(0, breakIndex - CONTEXT_CHARS),
-            breakIndex,
-          ),
-          after: inner.slice(afterIndex, afterIndex + CONTEXT_CHARS),
+          offset: innerStart + breakIndex,
+          violation: {
+            line: lineNumberAt(innerStart + breakIndex, lineStarts),
+            before: inner.slice(
+              Math.max(0, breakIndex - CONTEXT_CHARS),
+              breakIndex,
+            ),
+            after: inner.slice(afterIndex, afterIndex + CONTEXT_CHARS),
+          },
         });
       }
       cursor = breakIndex + 1;
     }
   }
 
-  return violations;
+  // The literal-whitespace extension follows CommonMark delimiter and
+  // escape rules. Keep the existing line-break scanner's established
+  // matching behavior above.
+  const literalCodeRanges = hasLiteralSplitCandidate(scanned)
+    ? findInlineCodeRanges(scanned, 0, scanned.length)
+    : [];
+  for (const range of literalCodeRanges) {
+    let tickCount = 0;
+    while (scanned[range.start + tickCount] === '`') {
+      tickCount += 1;
+    }
+    const innerStart = range.start + tickCount;
+    const inner = scanned.slice(innerStart, range.end - tickCount);
+    const wrappedContent = unwrapFullSpanOuterPair(inner);
+    const sentenceInner = wrappedContent ?? inner;
+    const sentenceIndexOffset = wrappedContent === undefined ? 0 : 1;
+    for (
+      let delimiterIndex = 0;
+      delimiterIndex < inner.length;
+      delimiterIndex += 1
+    ) {
+      const delimiter = inner[delimiterIndex];
+      const firstWhitespace = inner[delimiterIndex + 1];
+      if (
+        delimiter === undefined ||
+        !MID_TOKEN_CONTINUATION.test(delimiter) ||
+        (firstWhitespace !== ' ' && firstWhitespace !== '\t')
+      ) {
+        continue;
+      }
+
+      const previous = inner[delimiterIndex - 1];
+      if (
+        (previous === undefined && delimiter === '-') ||
+        (previous !== undefined && !TOKEN_CONTINUING.test(previous))
+      ) {
+        continue;
+      }
+
+      let afterIndex = delimiterIndex + 1;
+      while (/\s/.test(inner[afterIndex] ?? '')) {
+        afterIndex += 1;
+      }
+      const next = inner[afterIndex];
+      if (next === undefined || !TOKEN_CONTINUING.test(next)) {
+        continue;
+      }
+
+      if (
+        (delimiter === '.' &&
+          isSentencePunctuation(
+            sentenceInner,
+            delimiterIndex - sentenceIndexOffset,
+            afterIndex - sentenceIndexOffset,
+          )) ||
+        (delimiter === '-' &&
+          (isStandaloneDoubleDash(inner, delimiterIndex) ||
+            isHtmlCommentOpener(inner, delimiterIndex))) ||
+        (delimiter === '/' && isLineCommentOpener(inner, delimiterIndex)) ||
+        (delimiter === '.' && isPartOfEllipsis(inner, delimiterIndex))
+      ) {
+        continue;
+      }
+
+      violations.push({
+        offset: innerStart + delimiterIndex + 1,
+        violation: {
+          line: lineNumberAt(innerStart + delimiterIndex + 1, lineStarts),
+          before: inner.slice(
+            Math.max(0, delimiterIndex + 1 - CONTEXT_CHARS),
+            delimiterIndex + 1,
+          ),
+          after: inner.slice(afterIndex, afterIndex + CONTEXT_CHARS),
+          separator: firstWhitespace === ' ' ? 'literal-space' : 'literal-tab',
+        },
+      });
+    }
+  }
+
+  violations.sort((left, right) => left.offset - right.offset);
+  return violations.map(({ violation }) => violation);
 }
 
 // idd-skill issue #2876: the corrupting-line-wrap failure mode above is not

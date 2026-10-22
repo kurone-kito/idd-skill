@@ -1,13 +1,18 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
+  renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -30,7 +35,9 @@ import {
   type F4WorktreeBranchDeps,
   type F4WorktreeBranchInput,
   runF4WorktreeBranchSteps,
+  type SpawnedResult,
 } from '../src/scripts/f4-worktree-branch-steps.mts';
+import type { WindowsAclReader } from '../src/scripts/windows-acl.mts';
 import { fixtureEnv } from './test-utils.mts';
 
 // Real-git coverage of the F4 steps 4 to 6 helper (#4370): temporary
@@ -93,7 +100,9 @@ interface Fixture {
  * A bare origin, a seeded `main`, a primary clone, and the claimed worktree
  * on `BRANCH` created from `main`, as B1 would leave it.
  */
-function makeFixture(): Fixture {
+function makeFixture(
+  options: { readonly ignoreNodeModules?: boolean } = {},
+): Fixture {
   const root = mkdtempSync(join(realpathSync.native(tmpdir()), 'f4-cleanup-'));
   tempRoots.push(root);
   const origin = join(root, 'origin.git');
@@ -104,6 +113,9 @@ function makeFixture(): Fixture {
   git(root, ['clone', '-q', origin, seed]);
   git(seed, ['checkout', '-q', '-b', 'main']);
   writeAndCommit(seed, 'README.md', 'base\n');
+  if (options.ignoreNodeModules !== false) {
+    writeAndCommit(seed, '.gitignore', 'node_modules/\n');
+  }
   git(seed, ['push', '-q', 'origin', 'HEAD:main']);
   git(root, ['clone', '-q', origin, primary]);
   git(primary, ['checkout', '-q', 'main']);
@@ -113,6 +125,13 @@ function makeFixture(): Fixture {
 
 function tipOf(repo: string, branch: string): string {
   return git(repo, ['rev-parse', `refs/heads/${branch}`]);
+}
+
+function preservedPath(
+  fx: Fixture,
+  stateRoot = join(fx.root, 'state'),
+): string {
+  return join(stateRoot, 'idd-skill', 'f4-preserved', '4370-20261021T103000Z');
 }
 
 function proofStdout(branchTip: string, head: string): string {
@@ -149,6 +168,12 @@ interface RunOptions {
   readonly autoDelete?: boolean;
   readonly worktree?: string;
   readonly primary?: string;
+  readonly stateRoot?: string;
+  readonly statusAfterMove?: 'dirty' | 'fail';
+  readonly renameError?: string;
+  readonly beforeRename?: (source: string, destination: string) => void;
+  readonly worktreeRemoveError?: boolean;
+  readonly claims?: readonly SpawnedResult[];
 }
 
 /**
@@ -169,6 +194,10 @@ function runCleanup(
   const head = options.head ?? tip;
   const calls: string[][] = [];
   const remote: string[] = [];
+  const stateRoot = options.stateRoot ?? join(fx.root, 'state');
+  const claims = options.claims ?? [CLAIM_OK];
+  let claimIndex = 0;
+  let worktreeStatusCount = 0;
   const live = createLiveDeps({
     issueNumber: ISSUE,
     claimId: CLAIM,
@@ -176,14 +205,56 @@ function runCleanup(
     agentId: AGENT,
     worktree,
     primaryRoot: primary,
+    env: { XDG_STATE_HOME: stateRoot },
+    platform: 'linux',
+    home: join(fx.root, 'home'),
+    now: () => new Date('2026-10-21T10:30:00.000Z'),
   });
   const deps: F4WorktreeBranchDeps = {
     ...live,
+    stateRoot,
+    now: () => new Date('2026-10-21T10:30:00.000Z'),
+    mkdir: (path, mode) => mkdirSync(path, { mode }),
+    rename: (source, destination) => {
+      if (
+        options.renameError !== undefined &&
+        destination === preservedPath(fx, stateRoot)
+      ) {
+        const error = new Error(options.renameError) as NodeJS.ErrnoException;
+        error.code = options.renameError;
+        throw error;
+      }
+      options.beforeRename?.(source, destination);
+      renameSync(source, destination);
+    },
     git: (args, cwd) => {
       calls.push([...args]);
+      if (args[0] === '-C' && args[2] === 'status') {
+        worktreeStatusCount += 1;
+        if (worktreeStatusCount === 2 && options.statusAfterMove === 'fail') {
+          return { status: 1, stdout: '', stderr: 'injected status failure' };
+        }
+        if (worktreeStatusCount === 2 && options.statusAfterMove === 'dirty') {
+          writeFileSync(
+            join(worktree, 'scratch.txt'),
+            'arrived after the move\n',
+          );
+        }
+      }
+      if (
+        options.worktreeRemoveError &&
+        args[0] === 'worktree' &&
+        args[1] === 'remove'
+      ) {
+        return { status: 1, stdout: '', stderr: 'injected remove failure' };
+      }
       return live.git(args, cwd);
     },
-    assertClaim: () => CLAIM_OK,
+    assertClaim: () => {
+      const claim = claims[Math.min(claimIndex, claims.length - 1)];
+      claimIndex += 1;
+      return claim ?? CLAIM_OK;
+    },
     proofDryRun: () => ({ exitCode: 0, stdout: proofStdout(tip, head) }),
     prBaseRef: () => 'main',
     deleteBranchOnMerge: () => options.autoDelete ?? true,
@@ -242,6 +313,559 @@ test('an ignored file holds dirty-worktree, since git would delete it silently',
   const { report } = runCleanup(fx, { branchTip: tipOf(fx.worktree, BRANCH) });
   assert.equal(report.reason, 'dirty-worktree');
   assert.equal(existsSync(join(fx.worktree, 'build', 'out.bin')), true);
+});
+
+test('a lone ignored node_modules directory moves privately before removal', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  mkdirSync(stateRoot, { mode: 0o777 });
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'preserve me\n');
+  const destination = preservedPath(fx, stateRoot);
+
+  const { report } = runCleanup(fx, { stateRoot });
+
+  assert.equal(report.status, 'complete');
+  assert.equal(existsSync(fx.worktree), false);
+  assert.equal(
+    existsSync(
+      join(
+        fx.primary,
+        '.git',
+        'worktrees',
+        'issue-4370-feat-merge-gate-f4-worktree-branch',
+      ),
+    ),
+    false,
+  );
+  assert.equal(
+    readFileSync(join(destination, 'keep.txt'), 'utf8'),
+    'preserve me\n',
+  );
+  for (const path of [
+    stateRoot,
+    join(stateRoot, 'idd-skill'),
+    join(stateRoot, 'idd-skill', 'f4-preserved'),
+    destination,
+  ]) {
+    assert.equal(statSync(path).mode & 0o777, 0o700, path);
+  }
+  assert.equal(
+    report.steps.find((step) => step.step === 'step-5')?.detail,
+    `node_modules/ was preserved at ${destination}`,
+  );
+});
+
+test('a dry run validates and reports the node_modules destination without changing it', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  mkdirSync(stateRoot, { mode: 0o755 });
+  chmodSync(stateRoot, 0o755);
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'preserve me\n');
+  const destination = preservedPath(fx, stateRoot);
+
+  const { report } = runCleanup(fx, { apply: false, stateRoot });
+
+  assert.equal(report.status, 'dry-run');
+  assert.match(
+    report.steps.find((step) => step.step === 'step-5')?.detail ?? '',
+    new RegExp(destination),
+  );
+  assert.equal(existsSync(join(fx.worktree, 'node_modules', 'keep.txt')), true);
+  assert.equal(existsSync(destination), false);
+  assert.equal(existsSync(join(stateRoot, 'idd-skill')), false);
+  assert.equal(statSync(stateRoot).mode & 0o777, 0o755);
+  assert.equal(existsSync(fx.worktree), true);
+});
+
+test('node_modules and another dirty path remain in the worktree', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  mkdirSync(stateRoot);
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
+  writeFileSync(join(fx.worktree, 'scratch.txt'), 'keep too\n');
+  const { report } = runCleanup(fx, { stateRoot });
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.equal(existsSync(join(fx.worktree, 'node_modules', 'keep.txt')), true);
+  assert.equal(existsSync(join(fx.worktree, 'scratch.txt')), true);
+  assert.equal(existsSync(join(stateRoot, 'idd-skill')), false);
+});
+
+test('an unignored node_modules directory keeps the dirty-worktree hold', () => {
+  const fx = makeFixture({ ignoreNodeModules: false });
+  const stateRoot = join(fx.root, 'state');
+  mkdirSync(stateRoot);
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
+  const { report } = runCleanup(fx, { stateRoot });
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.equal(existsSync(join(fx.worktree, 'node_modules', 'keep.txt')), true);
+  assert.equal(existsSync(join(stateRoot, 'idd-skill')), false);
+});
+
+test('a symlinked node_modules path keeps its target and the worktree', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  const outside = join(fx.root, 'outside-node-modules');
+  mkdirSync(stateRoot);
+  mkdirSync(outside);
+  writeFileSync(join(outside, 'keep.txt'), 'keep\n');
+  symlinkSync(outside, join(fx.worktree, 'node_modules'));
+  const { report } = runCleanup(fx, { stateRoot });
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.equal(existsSync(fx.worktree), true);
+  assert.equal(readFileSync(join(outside, 'keep.txt'), 'utf8'), 'keep\n');
+  assert.equal(existsSync(join(stateRoot, 'idd-skill')), false);
+});
+
+test('a source-path symlink race is quarantined and held before preservation', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  const outside = join(fx.root, 'outside-node-modules');
+  const nodeModules = join(fx.worktree, 'node_modules');
+  const displaced = join(fx.root, 'node_modules-before-race');
+  mkdirSync(stateRoot);
+  mkdirSync(outside);
+  writeFileSync(join(outside, 'keep.txt'), 'outside data\n');
+  mkdirSync(nodeModules);
+  writeFileSync(join(nodeModules, 'keep.txt'), 'original data\n');
+  const destination = preservedPath(fx, stateRoot);
+  let staging = '';
+
+  const { report } = runCleanup(fx, {
+    stateRoot,
+    beforeRename: (source, target) => {
+      if (source === nodeModules) {
+        staging = target;
+        renameSync(source, displaced);
+        symlinkSync(outside, source);
+      }
+    },
+  });
+
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(report.steps.at(-1)?.detail ?? '', /source identity changed/u);
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /retained because it is not a real directory/u,
+  );
+  assert.equal(existsSync(fx.worktree), true);
+  assert.throws(() => lstatSync(nodeModules), { code: 'ENOENT' });
+  assert.equal(lstatSync(staging).isSymbolicLink(), true);
+  assert.equal(readlinkSync(staging), outside);
+  assert.equal(
+    readFileSync(join(outside, 'keep.txt'), 'utf8'),
+    'outside data\n',
+  );
+  assert.equal(
+    readFileSync(join(displaced, 'keep.txt'), 'utf8'),
+    'original data\n',
+  );
+  assert.equal(existsSync(staging), true);
+  assert.equal(existsSync(destination), false);
+});
+
+test('a file named node_modules does not match the directory-only status shape', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  mkdirSync(stateRoot);
+  writeFileSync(join(fx.worktree, 'node_modules'), 'keep\n');
+  const { report } = runCleanup(fx, { stateRoot });
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.equal(
+    readFileSync(join(fx.worktree, 'node_modules'), 'utf8'),
+    'keep\n',
+  );
+  assert.equal(existsSync(join(stateRoot, 'idd-skill')), false);
+});
+
+test('a populated submodule inside lone node_modules holds before any move', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  const sub = join(fx.root, 'lib-source');
+  mkdirSync(stateRoot);
+  mkdirSync(sub);
+  git(sub, ['init', '-q', '-b', 'main']);
+  writeAndCommit(sub, 'lib.txt', 'lib\n');
+  git(fx.worktree, [
+    '-c',
+    'protocol.file.allow=always',
+    'submodule',
+    'add',
+    '-q',
+    '--force',
+    sub,
+    'node_modules/vendor',
+  ]);
+  git(fx.worktree, ['commit', '-q', '-m', 'add submodule under node_modules']);
+  const { report } = runCleanup(fx, {
+    stateRoot,
+    branchTip: tipOf(fx.worktree, BRANCH),
+  });
+  assert.equal(report.reason, 'submodule-worktree');
+  assert.equal(existsSync(join(fx.worktree, 'node_modules', 'vendor')), true);
+  assert.equal(existsSync(join(stateRoot, 'idd-skill')), false);
+});
+
+test('a tracked symlink outside the worktree holds before moving node_modules', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  const outside = join(fx.root, 'outside');
+  mkdirSync(stateRoot);
+  mkdirSync(outside);
+  writeFileSync(join(outside, 'keep.txt'), 'outside\n');
+  symlinkSync(outside, join(fx.worktree, 'escape'));
+  git(fx.worktree, ['add', '--', 'escape']);
+  git(fx.worktree, ['commit', '-q', '-m', 'track escape']);
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'inside\n');
+  const { report } = runCleanup(fx, {
+    stateRoot,
+    branchTip: tipOf(fx.worktree, BRANCH),
+  });
+  assert.equal(report.reason, 'symlink-path');
+  assert.equal(existsSync(join(fx.worktree, 'node_modules', 'keep.txt')), true);
+  assert.equal(readFileSync(join(outside, 'keep.txt'), 'utf8'), 'outside\n');
+  assert.equal(existsSync(join(stateRoot, 'idd-skill')), false);
+});
+
+test('a skip-worktree entry keeps its hold before moving node_modules', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  mkdirSync(stateRoot);
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'inside\n');
+  git(fx.worktree, ['update-index', '--skip-worktree', '--', 'README.md']);
+  const { report } = runCleanup(fx, { stateRoot });
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.equal(existsSync(join(fx.worktree, 'node_modules', 'keep.txt')), true);
+  assert.equal(existsSync(join(stateRoot, 'idd-skill')), false);
+});
+
+test('an existing timestamp destination is left intact', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  const destination = preservedPath(fx, stateRoot);
+  mkdirSync(destination, { recursive: true });
+  writeFileSync(join(destination, 'existing.txt'), 'do not overwrite\n');
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
+  const { report } = runCleanup(fx, { stateRoot });
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.equal(
+    readFileSync(join(destination, 'existing.txt'), 'utf8'),
+    'do not overwrite\n',
+  );
+  assert.equal(existsSync(join(fx.worktree, 'node_modules', 'keep.txt')), true);
+});
+
+test('a cross-filesystem preservation failure restores the staged directory', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  mkdirSync(stateRoot);
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
+  const destination = preservedPath(fx, stateRoot);
+  let staging = '';
+  const { report, calls } = runCleanup(fx, {
+    stateRoot,
+    renameError: 'EXDEV',
+    beforeRename: (source, target) => {
+      if (source === join(fx.worktree, 'node_modules')) staging = target;
+    },
+  });
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(report.steps.at(-1)?.detail ?? '', /did not move node_modules/);
+  assert.equal(existsSync(join(fx.worktree, 'node_modules', 'keep.txt')), true);
+  assert.equal(existsSync(destination), false);
+  assert.notEqual(staging, '');
+  assert.equal(existsSync(staging), false);
+  assert.match(report.steps.at(-1)?.detail ?? '', /EXDEV.*restored to/u);
+  assert.equal(
+    readFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'utf8'),
+    'keep\n',
+  );
+  assert.equal(
+    calls.some((args) => args[0] === 'worktree' && args[1] === 'remove'),
+    false,
+  );
+  assert.equal(existsSync(fx.worktree), true);
+});
+
+for (const component of ['idd-skill', 'idd-skill/f4-preserved']) {
+  test(`a symlink replacement of preservation parent ${component} holds without moving outside state`, () => {
+    const fx = makeFixture();
+    const stateRoot = join(fx.root, 'state');
+    const outside = join(fx.root, 'outside-state');
+    mkdirSync(stateRoot);
+    mkdirSync(outside, { mode: 0o700 });
+    const nodeModules = join(fx.worktree, 'node_modules');
+    mkdirSync(nodeModules);
+    writeFileSync(join(nodeModules, 'keep.txt'), 'original data\n');
+    const parent = join(stateRoot, component);
+    const { report, calls } = runCleanup(fx, {
+      stateRoot,
+      beforeRename: (source) => {
+        if (source === nodeModules) {
+          renameSync(parent, `${parent}-original`);
+          symlinkSync(outside, parent, 'dir');
+        }
+      },
+    });
+    assert.equal(report.reason, 'dirty-worktree');
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /destination parent .* changed after inspection/u,
+    );
+    assert.equal(
+      readFileSync(join(nodeModules, 'keep.txt'), 'utf8'),
+      'original data\n',
+    );
+    assert.deepEqual(readdirSync(outside), []);
+    assert.equal(
+      calls.some((args) => args[0] === 'worktree' && args[1] === 'remove'),
+      false,
+    );
+  });
+}
+
+test('a state-root symlink to a permissive directory refuses preservation', () => {
+  const fx = makeFixture();
+  const stateTarget = join(fx.root, 'shared-state');
+  const stateLink = join(fx.root, 'state-link');
+  mkdirSync(stateTarget, { mode: 0o755 });
+  chmodSync(stateTarget, 0o755);
+  symlinkSync(stateTarget, stateLink);
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
+
+  const { report } = runCleanup(fx, { stateRoot: stateLink });
+
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.equal(existsSync(join(stateTarget, 'idd-skill')), false);
+  assert.equal(existsSync(join(fx.worktree, 'node_modules', 'keep.txt')), true);
+});
+
+test('status output after the move holds and reports the preserved destination', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  mkdirSync(stateRoot);
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
+  const destination = preservedPath(fx, stateRoot);
+  const { report } = runCleanup(fx, { stateRoot, statusAfterMove: 'dirty' });
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(report.steps.at(-1)?.detail ?? '', new RegExp(destination));
+  assert.equal(existsSync(join(destination, 'keep.txt')), true);
+  assert.equal(existsSync(fx.worktree), true);
+});
+
+test('the pre-removal claim check holds before moving node_modules', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  mkdirSync(stateRoot);
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  const lost = {
+    exitCode: 0,
+    stdout: JSON.stringify({ state: 'disputed', action: 'stop' }),
+  };
+  const { report } = runCleanup(fx, {
+    stateRoot,
+    claims: [CLAIM_OK, CLAIM_OK, lost],
+  });
+  assert.equal(report.reason, 'claim-lost');
+  assert.equal(existsSync(join(fx.worktree, 'node_modules')), true);
+  assert.equal(existsSync(join(stateRoot, 'idd-skill')), false);
+});
+
+test('a status failure after the move keeps the worktree and reports the destination', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  mkdirSync(stateRoot);
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
+  const destination = preservedPath(fx, stateRoot);
+  const { report } = runCleanup(fx, { stateRoot, statusAfterMove: 'fail' });
+  assert.equal(report.reason, 'inconsistent-worktree-state');
+  assert.match(report.steps.at(-1)?.detail ?? '', new RegExp(destination));
+  assert.equal(existsSync(join(destination, 'keep.txt')), true);
+  assert.equal(existsSync(fx.worktree), true);
+});
+
+test('a refused worktree removal retains the moved directory and reports its path', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  mkdirSync(stateRoot);
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
+  const destination = preservedPath(fx, stateRoot);
+  const { report } = runCleanup(fx, { stateRoot, worktreeRemoveError: true });
+  assert.equal(report.status, 'failed');
+  assert.match(
+    report.steps.find((step) => step.step === 'step-5')?.detail ?? '',
+    new RegExp(destination),
+  );
+  assert.equal(existsSync(join(destination, 'keep.txt')), true);
+  assert.equal(existsSync(fx.worktree), true);
+});
+
+test('a missing state root holds without creating it', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'missing-state');
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
+  const { report } = runCleanup(fx, { stateRoot });
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.equal(existsSync(stateRoot), false);
+  assert.equal(existsSync(join(fx.worktree, 'node_modules')), true);
+});
+
+test('a destination inside the primary checkout holds without creating it', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.primary, 'state');
+  mkdirSync(stateRoot);
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
+  const { report } = runCleanup(fx, { stateRoot });
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.equal(existsSync(join(stateRoot, 'idd-skill')), false);
+  assert.equal(existsSync(join(fx.worktree, 'node_modules')), true);
+});
+
+test('a state-root symlink resolving inside the primary checkout holds', () => {
+  const fx = makeFixture();
+  const inside = join(fx.primary, 'linked-state');
+  const stateLink = join(fx.root, 'state-link');
+  mkdirSync(inside);
+  symlinkSync(inside, stateLink);
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
+  const { report } = runCleanup(fx, { stateRoot: stateLink });
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.equal(existsSync(join(inside, 'idd-skill')), false);
+  assert.equal(existsSync(join(fx.worktree, 'node_modules')), true);
+});
+
+test('an external state-root symlink is used without following destination components', () => {
+  const fx = makeFixture();
+  const actualRoot = join(fx.root, 'external-state');
+  const stateLink = join(fx.root, 'state-link');
+  mkdirSync(actualRoot, { mode: 0o700 });
+  chmodSync(actualRoot, 0o700);
+  symlinkSync(actualRoot, stateLink);
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
+  const destination = preservedPath(fx, actualRoot);
+  const { report } = runCleanup(fx, { stateRoot: stateLink });
+  assert.equal(report.status, 'complete');
+  assert.equal(
+    readFileSync(
+      join(
+        actualRoot,
+        'idd-skill',
+        'f4-preserved',
+        '4370-20261021T103000Z',
+        'keep.txt',
+      ),
+      'utf8',
+    ),
+    'keep\n',
+  );
+  assert.equal(
+    report.steps.find((step) => step.step === 'step-5')?.detail,
+    `node_modules/ was preserved at ${destination}`,
+  );
+});
+
+test('a dry run refuses a symlinked idd-skill destination component', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  const outside = join(fx.root, 'outside-state');
+  mkdirSync(stateRoot);
+  mkdirSync(outside);
+  symlinkSync(outside, join(stateRoot, 'idd-skill'));
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
+  const { report } = runCleanup(fx, { apply: false, stateRoot });
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.equal(existsSync(join(outside, 'f4-preserved')), false);
+  assert.equal(existsSync(join(fx.worktree, 'node_modules')), true);
+});
+
+test('an applied run refuses a symlinked f4-preserved destination component', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  const outside = join(fx.root, 'outside-state');
+  mkdirSync(stateRoot);
+  mkdirSync(outside);
+  mkdirSync(join(stateRoot, 'idd-skill'));
+  symlinkSync(outside, join(stateRoot, 'idd-skill', 'f4-preserved'));
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
+  const { report } = runCleanup(fx, { stateRoot });
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.equal(existsSync(join(outside, '4370-20261021T103000Z')), false);
+  assert.equal(existsSync(join(fx.worktree, 'node_modules', 'keep.txt')), true);
+});
+
+test('a state root inside another registered worktree holds', () => {
+  const fx = makeFixture();
+  const other = join(fx.root, 'other-worktree');
+  git(fx.primary, ['worktree', 'add', '-q', '-b', 'test-other', other, 'main']);
+  const stateRoot = join(other, 'state');
+  mkdirSync(stateRoot);
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
+  const { report } = runCleanup(fx, { stateRoot });
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.equal(existsSync(join(stateRoot, 'idd-skill')), false);
+  assert.equal(existsSync(join(fx.worktree, 'node_modules')), true);
+  assert.equal(existsSync(other), true);
+});
+
+test('a registered worktree inside node_modules prevents moving it', () => {
+  const fx = makeFixture();
+  const nested = join(fx.worktree, 'node_modules', 'nested');
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  git(fx.primary, [
+    'worktree',
+    'add',
+    '-q',
+    '-b',
+    'test-nested',
+    nested,
+    'main',
+  ]);
+  const stateRoot = join(fx.root, 'state');
+  mkdirSync(stateRoot);
+  const { report } = runCleanup(fx, { stateRoot });
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(report.steps.at(-1)?.detail ?? '', new RegExp(nested));
+  assert.match(report.steps.at(-1)?.detail ?? '', /did not move node_modules/);
+  assert.equal(existsSync(nested), true);
+  assert.equal(existsSync(join(fx.worktree, 'node_modules')), true);
+});
+
+test('a nested ignored node_modules path keeps the current hold', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  mkdirSync(stateRoot);
+  mkdirSync(join(fx.worktree, 'packages', 'a', 'node_modules'), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(fx.worktree, 'packages', 'a', 'node_modules', 'keep.txt'),
+    'keep\n',
+  );
+  const { report } = runCleanup(fx, { stateRoot });
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.equal(
+    existsSync(join(fx.worktree, 'packages', 'a', 'node_modules', 'keep.txt')),
+    true,
+  );
+  assert.equal(existsSync(join(stateRoot, 'idd-skill')), false);
 });
 
 test('a populated submodule holds submodule-worktree and keeps the worktree', () => {
@@ -612,6 +1236,115 @@ test('parseArgs takes the flags and refuses a relative worktree, a bad issue, or
       '--worktree',
       '/work/wt',
     ]),
+  );
+});
+
+test('production wiring resolves platform state roots for preserved node_modules', () => {
+  const base = {
+    issueNumber: ISSUE,
+    claimId: CLAIM,
+    nonce: 'nonce-for-tests',
+    agentId: AGENT,
+    worktree: '/tmp/issue-worktree',
+    primaryRoot: process.cwd(),
+  };
+  assert.equal(
+    createLiveDeps({
+      ...base,
+      env: { XDG_STATE_HOME: '/var/test-state' },
+      platform: 'linux',
+      home: '/home/test-user',
+    }).stateRoot,
+    '/var/test-state',
+  );
+  assert.equal(
+    createLiveDeps({
+      ...base,
+      env: { XDG_STATE_HOME: 'relative-state' },
+      platform: 'linux',
+      home: '/home/test-user',
+    }).stateRoot,
+    '/home/test-user/.local/state',
+  );
+  assert.equal(
+    createLiveDeps({
+      ...base,
+      env: { LOCALAPPDATA: 'D:\\User State' },
+      platform: 'win32',
+      home: 'C:\\Users\\test-user',
+    }).stateRoot,
+    'D:\\User State',
+  );
+  assert.equal(
+    createLiveDeps({
+      ...base,
+      env: { LOCALAPPDATA: 'relative-state' },
+      platform: 'win32',
+      home: 'C:\\Users\\test-user',
+    }).stateRoot,
+    'C:\\Users\\test-user\\AppData\\Local',
+  );
+});
+
+test('production wiring verifies Windows source and state-root ACLs', () => {
+  const fx = makeFixture();
+  const source = join(fx.root, 'node_modules');
+  mkdirSync(source);
+  const currentSid = 'S-1-5-21-1-2-3-1001';
+  const base = {
+    issueNumber: ISSUE,
+    claimId: CLAIM,
+    nonce: 'nonce-for-tests',
+    agentId: AGENT,
+    worktree: '/tmp/issue-worktree',
+    primaryRoot: process.cwd(),
+    env: { LOCALAPPDATA: fx.root },
+    platform: 'win32' as const,
+  };
+  const aclReader: WindowsAclReader = () => ({
+    kind: 'entries',
+    currentSid,
+    entries: [
+      { sid: currentSid, allow: true },
+      { sid: 'S-1-5-18', allow: true },
+    ],
+  });
+  const permissiveAclReader: WindowsAclReader = () => ({
+    kind: 'entries',
+    currentSid,
+    entries: [
+      { sid: currentSid, allow: true },
+      { sid: 'S-1-1-0', allow: true },
+    ],
+  });
+
+  assert.equal(
+    createLiveDeps({
+      ...base,
+      windowsAclReader: aclReader,
+    }).inspectDirectoryPrivacy(fx.root),
+    'private',
+  );
+  assert.equal(
+    createLiveDeps({
+      ...base,
+      windowsAclReader: aclReader,
+    }).inspectDirectoryPrivacy(source),
+    'private',
+  );
+  assert.equal(
+    createLiveDeps({
+      ...base,
+      windowsAclReader: permissiveAclReader,
+    }).inspectDirectoryPrivacy(fx.root),
+    'unsafe',
+  );
+  assert.equal(
+    createLiveDeps({
+      ...base,
+      windowsAclReader: permissiveAclReader,
+    }).inspectDirectoryPrivacy(source),
+    'unsafe',
   );
 });
 

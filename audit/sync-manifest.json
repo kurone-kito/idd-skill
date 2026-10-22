@@ -1076,6 +1076,12 @@
       "glob": "**/*.md",
       "pattern": "reports any other shape as not applicable",
       "message": "The effort candidate-file check no longer reports every shape other than child as not applicable (issue #4434); restate the route rationale instead."
+    },
+    {
+      "id": "blocked-colon-adopt-now",
+      "glob": "**/*.md",
+      "pattern": "blocked:\\s+adopt-now",
+      "message": "The Triage line writes blocked adopt-now without a colon after blocked."
     }
   ],
   "rootMarkdownAllowlist": {

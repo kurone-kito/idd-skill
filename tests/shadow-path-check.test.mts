@@ -38,12 +38,32 @@ function extractPipeline(relativePath: string): string {
   return matches[0][1];
 }
 
-/** The ignored-path variant the instruction asks for: the same pipeline with `-o -i`. */
-function withIgnored(pipeline: string): string {
-  const variant = pipeline.replace(
-    ' -o --exclude-standard',
-    ' -o -i --exclude-standard',
+/** The ignored-path options spelled out by the F2 instruction. */
+function extractIgnoredOptions(relativePath: string): string {
+  const text = normalizeWhitespace(readText(relativePath));
+  const matches = [
+    ...text.matchAll(
+      /and again with `([^`]+)`; any output or failure holds\./g,
+    ),
+  ];
+  assert.equal(
+    matches.length,
+    1,
+    `${relativePath} must spell out exactly one ignored-path variant`,
   );
+  return matches[0][1];
+}
+
+/** Add the documented ignored-path options to the extracted pipeline. */
+function withIgnored(pipeline: string, options: string): string {
+  const optionSet = new Set(options.split(/\s+/));
+  assert.ok(optionSet.has('-o'), 'ignored-path options must include -o');
+  assert.ok(optionSet.has('-i'), 'ignored-path options must include -i');
+  assert.ok(
+    optionSet.has('--exclude-standard'),
+    'ignored-path options must retain --exclude-standard',
+  );
+  const variant = pipeline.replace(' -o --exclude-standard', ` ${options}`);
   assert.notEqual(
     variant,
     pipeline,
@@ -184,6 +204,8 @@ function fromRootAndSubdirectory(root: string): string[] {
 }
 
 const PIPELINE = extractPipeline(F2_FILES[0]);
+const IGNORED_OPTIONS = extractIgnoredOptions(F2_FILES[0]);
+const IGNORED_PIPELINE = withIgnored(PIPELINE, IGNORED_OPTIONS);
 
 test('the F2 shadow-path pipeline reports a non-ASCII untracked shadow that the old loop missed (#3671)', {
   skip: SKIP,
@@ -224,7 +246,7 @@ test('the F2 shadow-path pipeline reports an ASCII untracked shadow from the roo
   }
 });
 
-test('an ignored shadow needs the -o -i run, and the pipeline prints it from the root and a subdirectory (#3671)', {
+test('the ignored-path variant retains standard excludes and reports a standard-ignored shadow (#3671, #4590)', {
   skip: SKIP,
 }, () => {
   const repo = makeShadowRepo({
@@ -237,7 +259,7 @@ test('an ignored shadow needs the -o -i run, and the pipeline prints it from the
       // The plain run does not list an ignored file, so the second run is
       // what catches it.
       assert.deepEqual(run(PIPELINE, cwd, repo.headSha).paths, [], cwd);
-      const ignored = run(withIgnored(PIPELINE), cwd, repo.headSha);
+      const ignored = run(IGNORED_PIPELINE, cwd, repo.headSha);
       assert.equal(ignored.status, 0, cwd);
       assert.deepEqual(ignored.paths, ['d/ignored.log'], cwd);
     }
@@ -312,7 +334,7 @@ test('a clean tree and a path tracked in both commits print nothing and exit 0 (
   });
   try {
     for (const cwd of fromRootAndSubdirectory(repo.root)) {
-      for (const command of [PIPELINE, withIgnored(PIPELINE)]) {
+      for (const command of [PIPELINE, IGNORED_PIPELINE]) {
         const result = run(command, cwd, repo.headSha);
         assert.equal(result.status, 0, cwd);
         assert.deepEqual(result.paths, [], cwd);

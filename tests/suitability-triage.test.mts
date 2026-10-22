@@ -2682,6 +2682,17 @@ test('trust safety allows a step assigned to the user -- #4562', () => {
   assert.equal(result.pass, true);
 });
 
+test('trust safety keeps agent work explicitly transferred to the user available to the user -- #4596', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent handed the keyboard-support task to the user.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('trust safety allows a check assigned to the user -- #4562', () => {
   const result = checkTrustSafety({
     issue: {
@@ -2691,57 +2702,6 @@ test('trust safety allows a check assigned to the user -- #4562', () => {
     trustSafetyAmbiguous: false,
   } as Context);
   assert.equal(result.pass, true);
-});
-
-test('trust safety rejects user-step near-miss actor phrases -- #4562', () => {
-  const examples = [
-    'Run this step by a user.',
-    'Run this step by a user, then continue.',
-    'Run this step by a user and then continue.',
-    'Run this check for the user.',
-    'Run this check for the user, as described below.',
-    'Run this check for the user as described below.',
-    'Run this step by the user guide.',
-    'Run this step by the human.',
-    'Run this check by the coding agent.',
-  ];
-
-  for (const body of examples) {
-    const result = checkTrustSafety({
-      issue: {
-        ...BASE_ISSUE,
-        body,
-      },
-      trustSafetyAmbiguous: false,
-    } as Context);
-    assert.equal(result.pass, false, body);
-  }
-});
-
-test('trust safety accepts a user step delegated to each recognized non-agent actor -- #4577', () => {
-  const recipients = [
-    'the user',
-    'the human',
-    'the tester',
-    'the reviewer',
-    'the maintainer',
-    'the operator',
-    'the developer',
-    'the person',
-    'QA',
-    'quality assurance',
-  ];
-
-  for (const recipient of recipients) {
-    const result = checkTrustSafety({
-      issue: {
-        ...BASE_ISSUE,
-        body: `The coding agent delegates this step to ${recipient}.\n\nRun this step by the user.`,
-      },
-      trustSafetyAmbiguous: false,
-    } as Context);
-    assert.equal(result.pass, true, recipient);
-  }
 });
 
 test('trust safety scopes numbered agent assignments to the matching user step -- #4577', () => {
@@ -2761,7 +2721,7 @@ test('trust safety scopes numbered agent assignments to the matching user step -
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(unrelated.pass, true);
+  assert.equal(unrelated.pass, false);
 });
 
 test('trust safety scopes numbered agent assignments to the matching user check -- #4577', () => {
@@ -2781,7 +2741,7 @@ test('trust safety scopes numbered agent assignments to the matching user check 
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(unrelated.pass, true);
+  assert.equal(unrelated.pass, false);
 });
 
 test('trust safety allows a user-assigned step after neutral issue context -- #4577', () => {
@@ -2817,7 +2777,7 @@ test('trust safety allows a user-assigned check as a list item -- #4577', () => 
   assert.equal(result.pass, true);
 });
 
-test('trust safety allows a user-assigned step after unrelated agent work -- #4577', () => {
+test('trust safety blocks a user-step exception after unrelated agent work -- #4596', () => {
   const result = checkTrustSafety({
     issue: {
       ...BASE_ISSUE,
@@ -2825,10 +2785,10 @@ test('trust safety allows a user-assigned step after unrelated agent work -- #45
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true);
+  assert.equal(result.pass, false);
 });
 
-test('trust safety allows a user step after agent text about following behavior -- #4577', () => {
+test('trust safety blocks a user-step exception after agent work on following behavior -- #4596', () => {
   const result = checkTrustSafety({
     issue: {
       ...BASE_ISSUE,
@@ -2836,10 +2796,10 @@ test('trust safety allows a user step after agent text about following behavior 
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true);
+  assert.equal(result.pass, false);
 });
 
-test('trust safety allows a user step when the title assigns unrelated agent work -- #4577', () => {
+test('trust safety blocks a user-step exception when the title assigns unrelated agent work -- #4596', () => {
   const result = checkTrustSafety({
     issue: {
       ...BASE_ISSUE,
@@ -2848,7 +2808,7 @@ test('trust safety allows a user step when the title assigns unrelated agent wor
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true);
+  assert.equal(result.pass, false);
 });
 
 test('trust safety still flags a script assigned to the user -- #4562', () => {
@@ -2871,6 +2831,569 @@ test('trust safety still flags a different unsafe verb for a step -- #4562', () 
     trustSafetyAmbiguous: false,
   } as Context);
   assert.equal(result.pass, false);
+});
+
+test('trust safety allows only standalone user step and check sentences in supported blocks -- #4596', () => {
+  for (const body of [
+    'Run this step by the user.',
+    'Run this check by the user.',
+    '- Run this step by the user.',
+    '* Run this check by the user.',
+    '1. Run this step by the user.',
+    '- [ ] Run this check by the user.',
+    '* [x] Run this step by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, body);
+  }
+});
+
+test('trust safety fails closed for unsupported or ambiguous user-step Markdown -- #4596', () => {
+  for (const body of [
+    '## Run this step by the user.',
+    '- Parent item\n  - Run this step by the user.',
+    '> Run this step by the user.',
+    '| Run this step by the user. |',
+    '[Run this step by the user.](https://example.test)',
+    '~~Run this step by the user.~~',
+    'Run this `step` by the user.',
+    '<p>Run this step by the user.</p>',
+    'Introductory text\nRun this step by the user.',
+    'Run this step by the user.\nThis line continues the same paragraph.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+});
+
+test('trust safety fails closed inside raw HTML blocks for user steps -- #4596', () => {
+  for (const body of [
+    '<div>\n<!-- </div> -->\n\nRun this step by the user.',
+    '<div>\n\nRun this step by the user.\n\n</div>',
+    '<div>\n\nRun this step by the user.',
+    '<div/>\n\n- Run this step by the user.',
+    '<div data-value="> </div>">\n\n- Run this step by the user.',
+    '<div></div>\n- Run this step by the user.\n\nNext paragraph.',
+    '<hr>\n- Run this step by the user.\n\nNext paragraph.',
+    '<span>\n- Run this step by the user.',
+    '<script>\n\nRun this check by the user.\n\n</script>',
+    '<?php\n\nRun this step by the user.',
+    '<![CDATA[\n\nRun this check by the user.',
+    '<!DOCTYPE html\n\nRun this step by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+
+  const outsideHtmlBlock = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '<div>Closed content</div>\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(outsideHtmlBlock.pass, true);
+
+  const outsideStandaloneHtmlBlock = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '<span>\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(outsideStandaloneHtmlBlock.pass, true);
+
+  const outsideVoidSourceElement = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '<source>\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(outsideVoidSourceElement.pass, true);
+
+  const outsideRawTextBlock = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '<script>\nconst example = "<div>";\n</script>\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(outsideRawTextBlock.pass, true);
+
+  const outsideClosedOpaqueBlocks = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '<?php echo "ok"; ?>\n\n<![CDATA[example]]>\n\n<!DOCTYPE html>\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(outsideClosedOpaqueBlocks.pass, true);
+
+  const afterClosedProcessingInstruction = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '<?php ?>\n- Run this step by the user.\n\nNext paragraph.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(afterClosedProcessingInstruction.pass, true);
+
+  const htmlLikeTextInsideRawTextBlock = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '<script>\nconst example = "<?php <div> <![CDATA[";\n</script>\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(htmlLikeTextInsideRawTextBlock.pass, true);
+});
+
+test('trust safety treats user-step examples inside code as inert content -- #4596', () => {
+  for (const body of [
+    '`Run this step by the user.`',
+    '```text\nRun this step by the user.\n```',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, body);
+  }
+});
+
+test('trust safety disables the user-step exception for any agent work assignment -- #4596', () => {
+  const cases: { name: string; body: string; title?: string }[] = [
+    {
+      name: 'unrelated assignment before the directive',
+      body: 'The coding agent must implement the feature.\n\nRun this step by the user.',
+    },
+    {
+      name: 'unrelated assignment after the directive',
+      body: 'Run this step by the user.\n\nThe coding agent must implement the feature.',
+    },
+    {
+      name: 'Markdown-wrapped agent target',
+      body: 'This unrelated task is assigned to the **coding agent**.\n\nRun this step by the user.',
+    },
+    {
+      name: 'explicit pronoun assignment',
+      body: 'This step verifies deployment. The coding agent must perform it.\n\nRun this step by the user.',
+    },
+    {
+      name: 'required-of relation',
+      body: 'This unrelated task is required of the coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives an unrelated task as an object',
+      body: 'The maintainer asked the coding agent to implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives a requested unrelated task as an object',
+      body: 'The maintainer requested the coding agent to implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives an unrelated task through the told relation',
+      body: 'We told the coding agent to implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives an unrelated task through told with an indefinite article',
+      body: 'We told a coding agent to implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives an unrelated task through a reported that-clause',
+      body: 'The maintainer told the coding agent that it should implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives an unrelated task through a reported required-to clause',
+      body: 'The maintainer told the coding agent that it is required to implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives an unrelated task through a reported noun-subject obligation',
+      body: 'The maintainer told the coding agent that the keyboard-support task must be implemented.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives an unrelated task through a reported quantified obligation',
+      body: 'The maintainer told a coding agent that each of the keyboard-support tasks must be implemented.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives an unrelated task through asked with an indefinite article',
+      body: 'We asked an assistant to test the deployment.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for an implementation deliverable',
+      body: 'We asked a coding agent for an implementation of keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for a documentation deliverable',
+      body: 'We asked a coding agent for documentation.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for an adjective-modified implementation deliverable',
+      body: 'We asked a coding agent for project status and a complete implementation of keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for a written documentation deliverable',
+      body: 'We asked a coding agent for project status and written documentation of keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent must supply the written documentation deliverable',
+      body: 'We asked a coding agent for project status, and written documentation must be supplied by them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'written documentation is required of the agent',
+      body: 'We asked a coding agent for project status, and written documentation is required of them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'written documentation is required from the agent',
+      body: 'We asked a coding agent for project status, and written documentation is required from them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work task is given to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task was given to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work project is given to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support project was given to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work task is handed to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task was handed to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work task is transferred to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task was transferred to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work task is reassigned to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task was reassigned to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work task is allocated to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task was allocated to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work task is entrusted to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task was entrusted to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an active entrusted work task is assigned to the agent',
+      body: 'We entrusted the keyboard-support task to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an active handed work task is assigned to the agent',
+      body: 'We handed the keyboard-support task to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an active transferred work task is assigned to the agent',
+      body: 'We transferred the keyboard-support task to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an active sent work task is assigned to the agent',
+      body: 'The maintainer sent the keyboard-support task to the coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an active sent work task names the agent as an indirect object',
+      body: 'The maintainer sent the coding agent the keyboard-support task.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a passive sent work task is assigned to the agent',
+      body: 'The keyboard-support task was sent to the coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a passively sent work task is assigned to the agent',
+      body: 'The keyboard-support task is being sent to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an active sent work task with several modifiers is assigned to the agent',
+      body: 'The maintainer sent the keyboard support compatibility task to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an active sent work task with a prepositional attachment is assigned to the agent',
+      body: 'The maintainer sent the task for keyboard support to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an active reallocated work task is assigned to the agent',
+      body: 'We allocated the keyboard-support task to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'technical support is assigned to the agent',
+      body: 'We assigned technical support to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'technical support is explicitly assigned to the agent as a pronoun object',
+      body: 'We asked a coding agent for project status, and assigned them technical support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a later coordinated assignment refers back to the agent',
+      body: 'We gave technical support to a coding agent, and assigned keyboard support to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a later dative assignment refers back to the agent',
+      body: 'We gave technical support to a coding agent, and assigned them the keyboard-support task.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a later tasked-with assignment refers back to the agent',
+      body: 'We gave technical support to a coding agent, and tasked them with keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a later assignment infinitive refers back to the agent',
+      body: 'We gave technical support to a coding agent, and assigned them to implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a later assignment may name an intervening subject',
+      body: 'We gave technical support to a coding agent, and the maintainer assigned them the keyboard-support task.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an active reassigned work project is assigned to the agent',
+      body: 'We reassigned the keyboard-support project to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a completed passive transfer assigns the task to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task has been given to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a completed passive entrustment assigns the task to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task has been entrusted to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'an imperative assignment hands a work task to the agent',
+      body: 'Hand the keyboard-support task to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work task is being handed to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task is being handed to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'a work task is being entrusted to the agent',
+      body: 'We asked a coding agent for project status, and the keyboard-support task is being entrusted to them.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for documentation after an informational status request',
+      body: 'We asked a coding agent for project status and documentation.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for an implementation after an informational status request',
+      body: 'We asked a coding agent for project status and an implementation of keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked to implement after an informational status request',
+      body: 'We asked a coding agent for project status and to implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked to test after an informational status request',
+      body: 'We asked a coding agent for project status and to test the deployment.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for a pronoun-directed task after an informational status request',
+      body: 'We asked a coding agent for project status and for it to test the deployment.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for an explicit agent-directed task after an informational status request',
+      body: 'We asked a coding agent for project status and for the coding agent to test the deployment.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent is asked for a deliverable after an informational status request with a comma',
+      body: 'We asked a coding agent for project status, documentation.\n\nRun this step by the user.',
+    },
+    {
+      name: 'delegated work object is assigned to agent',
+      body: 'The maintainer delegated keyboard support to the coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives a named task as assignment object',
+      body: 'The maintainer assigned the coding agent a keyboard-support task.\n\nRun this step by the user.',
+    },
+    {
+      name: 'strong assignment verb assigns a project object to agent',
+      body: 'The maintainer assigned a coding agent a project.\n\nRun this step by the user.',
+    },
+    {
+      name: 'strong assignment verb assigns keyboard support to agent',
+      body: 'The maintainer assigned a coding agent keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'strong assignment verb assigns an implementation object to agent',
+      body: 'We assigned an assistant a keyboard-support implementation.\n\nRun this step by the user.',
+    },
+    {
+      name: 'strong assignment does not let informational status mask a later deliverable',
+      body: 'The maintainer assigned a coding agent the project status and documentation.\n\nRun this step by the user.',
+    },
+    {
+      name: 'give verb assigns a project object to agent',
+      body: 'The maintainer gave a coding agent a project.\n\nRun this step by the user.',
+    },
+    {
+      name: 'give verb assigns keyboard support to agent',
+      body: 'The maintainer gave a coding agent keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'give verb assigns an implementation object to agent',
+      body: 'The maintainer gave a coding agent a keyboard-support implementation.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives a task through the give relation',
+      body: 'The maintainer gave the coding agent a keyboard-support task.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives a task through the dative give relation',
+      body: 'The maintainer gave a keyboard-support task to the coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives a task through the passive give relation in the title',
+      title: 'The coding agent has been given a keyboard-support task',
+      body: 'Run this step by the user.',
+    },
+    {
+      name: 'agent receives a task through the passive give relation in the body',
+      body: 'The coding agent has been given a keyboard-support task.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives an assigned work object through an indefinite recipient',
+      body: 'The maintainer assigned keyboard support to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives a passive assignment through an indefinite recipient',
+      body: 'Keyboard support was assigned to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives delegated work through an indefinite recipient',
+      body: 'The maintainer delegated implementation to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives delegated work through an indefinite recipient with an',
+      body: 'The maintainer delegated implementation to an assistant.\n\nRun this step by the user.',
+    },
+    {
+      name: 'agent receives work through an indefinite recipient with the give relation',
+      body: 'The maintainer gave keyboard support to a coding agent.\n\nRun this step by the user.',
+    },
+    {
+      name: 'negated assignment',
+      body: 'The coding agent is not required to perform this unrelated task.\n\nRun this step by the user.',
+    },
+    {
+      name: 'ambiguous Markdown destination',
+      body: 'This unrelated task belongs to the [coding agent](https://example.test "must perform this work").\n\nRun this step by the user.',
+    },
+    {
+      name: 'assignment in an agent heading',
+      body: '## **Coding agent steps**\n\nRun this step by the user.',
+    },
+    {
+      name: 'recipient-first heading assigns implementation to the agent',
+      body: '## Implementation for the coding agent\n\nRun this step by the user.',
+    },
+    {
+      name: 'recipient-first heading assigns keyboard support to the agent',
+      body: '## Keyboard support for the coding agent\n\nRun this step by the user.',
+    },
+    {
+      name: 'top-level unordered list assigns work to the agent',
+      body: '- The coding agent must implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'top-level ordered list assigns work to the agent',
+      body: '1. The coding agent must implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'top-level task list assigns work to the agent',
+      body: '- [ ] The coding agent must implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'top-level task list keeps negated agent assignments fail closed',
+      body: '- [ ] The coding agent is not required to implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      name: 'assignment in a Setext heading',
+      body: 'The feature work is assigned to the coding agent\n---\n\nRun this step by the user.',
+    },
+    {
+      name: 'assignment split across Markdown table columns',
+      body: '| Work | Owner |\n| --- | --- |\n| Implement keyboard support | Coding agent |\n\nRun this step by the user.',
+    },
+    {
+      name: 'unrelated assignment in the title',
+      title: 'The coding agent must implement keyboard support',
+      body: 'Run this step by the user.',
+    },
+  ];
+
+  for (const { name, body, title = BASE_ISSUE.title } of cases) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, title, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, name);
+  }
+});
+
+test('trust safety keeps informational agent-object statements outside work assignments -- #4596', () => {
+  const statements = [
+    'We told the coding agent a joke.',
+    'We told a coding agent a joke.',
+    'We asked a coding agent a question.',
+    'We gave a coding agent a gift.',
+    'We told a coding agent about the project.',
+    'We told an assistant about a task.',
+    'We asked a coding agent about the tests.',
+    'We asked a coding agent how the tests work.',
+    'We told a coding agent that the project requires testing.',
+    'We told a coding agent the project requires testing.',
+    'We told a coding agent the test suite is failing.',
+    'We told a coding agent the deployment results.',
+    'We told a coding agent the project roadmap.',
+    'We asked a coding agent for the project status.',
+    'We asked a coding agent for project details.',
+    'We asked a coding agent for test results.',
+    'We asked a coding agent for project status and test results.',
+    'We asked a coding agent for project status and project details.',
+    'We asked a coding agent for project status, and written documentation is available.',
+    'We asked a coding agent for project status, and written documentation seems useful.',
+    'We asked a coding agent for project status, and written documentation is available to them.',
+    'We asked a coding agent for project status, and written documentation was provided to them.',
+    'We asked a coding agent for project status, and written documentation was given to them.',
+    'We asked a coding agent for project status, and technical support was given to them.',
+    'We asked a coding agent for project status, and written documentation was handed to them.',
+    'We asked a coding agent for project status, and written documentation was transferred to them.',
+    'We asked a coding agent for project status, and written documentation was entrusted to them.',
+    'We asked a coding agent for project status, and written documentation has been entrusted to them.',
+    'We asked a coding agent for project status, and written documentation has been transferred to them.',
+    'We gave written documentation to a coding agent.',
+    'We gave technical support to a coding agent.',
+    'We gave a coding agent technical support.',
+    'We gave tech support to a coding agent.',
+    'We gave a coding agent tech support.',
+    'We asked a coding agent for project status, and gave them technical support.',
+    'We asked a coding agent for project status, and gave technical support to them.',
+    'We gave technical support to a coding agent, and assigned them no task.',
+    'We gave technical support to a coding agent, and not assigned them the keyboard-support task.',
+    'We gave technical support to a coding agent, and no longer assigned them the keyboard-support task.',
+    'We gave technical support to a coding agent, and never assigned them the keyboard-support task.',
+    'We asked a coding agent for project status and implemented keyboard support.',
+    'We asked a coding agent for project status and reviewed the deployment.',
+    'We asked a coding agent for project status and generated test results.',
+  ];
+  for (const statement of statements) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${statement}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, statement);
+  }
 });
 
 test('trust safety rejects the user-actor phrase when the sentence assigns execution to the agent -- #4577', () => {
@@ -2953,10 +3476,7 @@ test('trust safety rejects a step assigned to the agent with "is for" -- #4577',
 test('trust safety requires an agent mention to occupy the assigned actor role -- #4577', () => {
   for (const body of [
     'This step tests the AI model.\n\nRun this step by the user.',
-    'This step tests the AI model, and run this step by the user.',
-    'The issue discusses a coding agent, and then run this step by the user.',
-    'The issue mentions a coding agent, then run this step by the user.',
-    'The issue mentions a coding agent, run this step by the user.',
+    'The issue discusses a coding agent.\n\nRun this step by the user.',
   ]) {
     const objectMention = checkTrustSafety({
       issue: { ...BASE_ISSUE, body },
@@ -2964,6 +3484,15 @@ test('trust safety requires an agent mention to occupy the assigned actor role -
     } as Context);
     assert.equal(objectMention.pass, true, body);
   }
+
+  const inlineDirective = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'This step tests the AI model, and run this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(inlineDirective.pass, false);
 
   for (const assignment of [
     'The AI model must perform this step.',
@@ -3023,6 +3552,17 @@ test('trust safety rejects agent assignment target modifiers and quantifiers -- 
     } as Context);
     assert.equal(result.pass, false, body);
   }
+});
+
+test('trust safety recognizes three-word modifiers before an assigned agent -- #4596', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The highly capable experienced coding agent must implement the feature.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
 });
 
 test('trust safety rejects passive and direct-object agent assignments -- #4577', () => {
@@ -3117,7 +3657,7 @@ test('trust safety recognizes progressive agent actions as assignments -- #4577'
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(unrelatedAgentWork.pass, true);
+  assert.equal(unrelatedAgentWork.pass, false);
 });
 
 test('trust safety does not treat unrelated implementation tasks as this step -- #4577', () => {
@@ -3132,7 +3672,7 @@ test('trust safety does not treat unrelated implementation tasks as this step --
       },
       trustSafetyAmbiguous: false,
     } as Context);
-    assert.equal(result.pass, true, agentWork);
+    assert.equal(result.pass, false, agentWork);
   }
 });
 
@@ -3152,7 +3692,7 @@ test('trust safety keeps agent assignment clauses intact around abbreviations an
   }
 });
 
-test('trust safety does not treat an explicitly negated agent step as assigned -- #4577', () => {
+test('trust safety fails closed on an explicitly negated agent assignment -- #4596', () => {
   const result = checkTrustSafety({
     issue: {
       ...BASE_ISSUE,
@@ -3160,7 +3700,7 @@ test('trust safety does not treat an explicitly negated agent step as assigned -
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true);
+  assert.equal(result.pass, false);
 });
 
 test('trust safety evaluates positive agent assignments after a negated assignment -- #4577', () => {
@@ -3187,7 +3727,7 @@ test('trust safety does not inherit a negated agent assignment over an explicit 
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true);
+  assert.equal(result.pass, false);
 });
 
 test('trust safety keeps a positive agent assignment when a later negation is unrelated -- #4577', () => {
@@ -3214,7 +3754,7 @@ test('trust safety binds a while-contrast assignment to its explicit actor -- #4
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true);
+  assert.equal(result.pass, false);
 });
 
 test('trust safety binds an and-joined step assignment to its explicit actor -- #4577', () => {
@@ -3229,7 +3769,7 @@ test('trust safety binds an and-joined step assignment to its explicit actor -- 
       },
       trustSafetyAmbiguous: false,
     } as Context);
-    assert.equal(result.pass, true, assignment);
+    assert.equal(result.pass, false, assignment);
   }
 });
 
@@ -3263,7 +3803,7 @@ test('trust safety keeps assignments in separate Markdown heading sections -- #4
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(assignedAgentHeading.pass, true);
+  assert.equal(assignedAgentHeading.pass, false);
 
   const agentSectionActor = checkTrustSafety({
     issue: {
@@ -10349,7 +10889,7 @@ test('trust safety uses the rendered ordinal of ordered-list assignments -- #457
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(separateLists.pass, true);
+  assert.equal(separateLists.pass, false);
 });
 
 test('trust safety keeps unrelated agent work separate across paragraphs -- #4577', () => {
@@ -10360,7 +10900,7 @@ test('trust safety keeps unrelated agent work separate across paragraphs -- #457
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true);
+  assert.equal(result.pass, false);
 
   const danglingAgentSubject = checkTrustSafety({
     issue: {
@@ -10405,7 +10945,7 @@ test('trust safety carries a bare agent heading only through its section -- #457
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(siblingSection.pass, true);
+  assert.equal(siblingSection.pass, false);
 });
 
 test('trust safety synthesizes agent assignments from check headings -- #4577', () => {
@@ -10441,7 +10981,7 @@ test('trust safety does not widen a numbered parent heading assignment -- #4577'
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true);
+  assert.equal(result.pass, false);
 });
 
 test('trust safety recognizes responsibility as an agent assignment cue -- #4577', () => {
@@ -10468,7 +11008,7 @@ test('trust safety does not attribute a comma-negated assignment to the agent --
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true);
+  assert.equal(result.pass, false);
 });
 
 test('trust safety does not let a comment-only line create a paragraph boundary -- #4577', () => {
@@ -10524,7 +11064,7 @@ test('trust safety scopes numbered assignments to their heading section -- Codex
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true);
+  assert.equal(result.pass, false);
 });
 
 test('trust safety scopes unnumbered assignment checks to the target kind -- Copilot review #5587836826', () => {
@@ -10535,7 +11075,7 @@ test('trust safety scopes unnumbered assignment checks to the target kind -- Cop
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(unrelatedKind.pass, true);
+  assert.equal(unrelatedKind.pass, false);
 
   const matchingKind = checkTrustSafety({
     issue: {
@@ -10555,7 +11095,7 @@ test('trust safety honors an explicit user actor after unrelated agent work -- #
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true);
+  assert.equal(result.pass, false);
 });
 
 test('trust safety honors explicit user recipients of transferred ownership -- #4562', () => {
@@ -10598,6 +11138,48 @@ test('trust safety recognizes a human recipient before a transferred target -- C
       trustSafetyAmbiguous: false,
     } as Context);
     assert.equal(result.pass, true, transfer);
+  }
+});
+
+test('trust safety recognizes supported human recipients after a transferred target -- CodeRabbit review #4344459874', () => {
+  for (const recipient of [
+    'the human',
+    'the tester',
+    'the reviewer',
+    'the maintainer',
+    'the operator',
+    'the developer',
+    'the person',
+    'QA',
+    'quality assurance',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `The coding agent delegates this step to ${recipient}.\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, recipient);
+  }
+});
+
+test('trust safety does not treat a hyphenated agent role as a transfer recipient -- E10', () => {
+  for (const recipient of [
+    'the user-facing coding agent',
+    'the user agent',
+    'the human-facing assistant',
+    'the human assistant',
+    'the QA-bot',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `The coding agent delegates this step to ${recipient}.\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, recipient);
   }
 });
 
@@ -10728,7 +11310,7 @@ test('trust safety scopes unnumbered assignments to step or check target kind --
       issue: { ...BASE_ISSUE, body },
       trustSafetyAmbiguous: false,
     } as Context);
-    assert.equal(unrelatedKind.pass, true, body);
+    assert.equal(unrelatedKind.pass, false, body);
   }
 
   for (const [assignment, directive] of [
@@ -10765,7 +11347,7 @@ test('trust safety scopes unnumbered assignments to their heading section -- Cod
     issue: { ...BASE_ISSUE, body },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true, body);
+  assert.equal(result.pass, false, body);
 });
 
 test('trust safety scopes numbered assignments to their ordered list -- Codex review #4327719905', () => {
@@ -10776,7 +11358,7 @@ test('trust safety scopes numbered assignments to their ordered list -- Codex re
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(separateLists.pass, true);
+  assert.equal(separateLists.pass, false);
 
   const sameList = checkTrustSafety({
     issue: {
@@ -10796,7 +11378,7 @@ test('trust safety scopes unnumbered assignments to their unordered list -- #456
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(separateLists.pass, true);
+  assert.equal(separateLists.pass, false);
 
   const sameList = checkTrustSafety({
     issue: {
@@ -10816,7 +11398,7 @@ test('trust safety scopes generic item assignments to their section and list -- 
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(separateSection.pass, true);
+  assert.equal(separateSection.pass, false);
 
   const separateList = checkTrustSafety({
     issue: {
@@ -10825,7 +11407,7 @@ test('trust safety scopes generic item assignments to their section and list -- 
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(separateList.pass, true);
+  assert.equal(separateList.pass, false);
 
   const sameSection = checkTrustSafety({
     issue: {
@@ -10862,7 +11444,7 @@ test('trust safety preserves list identity after masked Markdown ranges -- Copil
       issue: { ...BASE_ISSUE, body: `${prefix}${lists}` },
       trustSafetyAmbiguous: false,
     } as Context);
-    assert.equal(result.pass, true, kind);
+    assert.equal(result.pass, false, kind);
   }
 });
 
@@ -10874,7 +11456,7 @@ test('trust safety requires a direct relation between an agent cue and its targe
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(incidentalReference.pass, true);
+  assert.equal(incidentalReference.pass, false);
 
   const directAssignment = checkTrustSafety({
     issue: {
@@ -10931,7 +11513,7 @@ test('trust safety carries colon-introduced agent assignments into list items --
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(unrelatedAssignment.pass, true);
+  assert.equal(unrelatedAssignment.pass, false);
 });
 
 test('trust safety keeps a colon-introduced agent assignment across its full list -- #4562', () => {
@@ -10954,7 +11536,7 @@ test('trust safety keeps a colon-introduced agent assignment across its full lis
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(separateList.pass, true);
+  assert.equal(separateList.pass, false);
 });
 
 test('trust safety carries explicit-target colon assignments into nested lists -- Codex review #4330461972', () => {
@@ -10985,7 +11567,7 @@ test('trust safety ties an immediate agent pronoun to the user-assigned step -- 
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(explicitlyNegated.pass, true);
+  assert.equal(explicitlyNegated.pass, false);
 });
 
 test('trust safety recognizes LLM actors in step assignments -- #4562', () => {
@@ -11019,7 +11601,7 @@ test('trust safety preserves positive assignments through fail-to double negatio
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(directNegative.pass, true);
+  assert.equal(directNegative.pass, false);
 });
 
 test('trust safety recognizes hash-prefixed numbered step assignments -- #4562', () => {
@@ -11058,7 +11640,7 @@ test('trust safety maps numbered item assignments to checklist ordinals -- #4562
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(differentOrdinal.pass, true);
+  assert.equal(differentOrdinal.pass, false);
 });
 
 test('trust safety bounds the user actor exception to the current sibling item -- #4562', () => {
@@ -11126,7 +11708,7 @@ test('trust safety recognizes descriptive and owner phrasing for agent step assi
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(unrelatedImplementation.pass, true);
+  assert.equal(unrelatedImplementation.pass, false);
 });
 
 test('trust safety recognizes long colon-introduced agent assignments -- #4562', () => {
@@ -11150,15 +11732,6 @@ test('trust safety carries agent task headings into nested manual checks -- #456
     trustSafetyAmbiguous: false,
   } as Context);
   assert.equal(result.pass, false);
-
-  const emphasizedHeading = checkTrustSafety({
-    issue: {
-      ...BASE_ISSUE,
-      body: '## **Coding agent steps**\n\nRun this step by the user.',
-    },
-    trustSafetyAmbiguous: false,
-  } as Context);
-  assert.equal(emphasizedHeading.pass, false);
 });
 
 test('trust safety recognizes possessive agent responsibility assignments -- Codex review #4328240569', () => {
@@ -11202,7 +11775,7 @@ test('trust safety keeps agent actors across incidental and compound user mentio
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(replacementSubject.pass, true);
+  assert.equal(replacementSubject.pass, false);
 });
 
 test('trust safety recognizes completed, managed, followed, and carried-out assignments -- Copilot review #5588505530', () => {
@@ -11255,7 +11828,7 @@ test('trust safety treats contracted negative agent assignments as negated -- Co
       },
       trustSafetyAmbiguous: false,
     } as Context);
-    assert.equal(result.pass, true, assignment);
+    assert.equal(result.pass, false, assignment);
   }
 });
 
@@ -11303,7 +11876,7 @@ test('trust safety normalizes visible Markdown around assigned step targets -- #
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(unrelatedTarget.pass, true);
+  assert.equal(unrelatedTarget.pass, false);
 });
 
 test('trust safety handles an unterminated escaped Markdown destination in linear time -- #4577', () => {
@@ -11350,7 +11923,7 @@ test('trust safety ties a preceding agent pronoun to its explicit step anteceden
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(explicitlyNegated.pass, true);
+  assert.equal(explicitlyNegated.pass, false);
 
   const unrelatedPronoun = checkTrustSafety({
     issue: {
@@ -11359,7 +11932,7 @@ test('trust safety ties a preceding agent pronoun to its explicit step anteceden
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(unrelatedPronoun.pass, true);
+  assert.equal(unrelatedPronoun.pass, false);
 
   const parentAssignment = checkTrustSafety({
     issue: {
@@ -11377,7 +11950,7 @@ test('trust safety ties a preceding agent pronoun to its explicit step anteceden
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(siblingAssignment.pass, true);
+  assert.equal(siblingAssignment.pass, false);
 
   const sameLineAssignment = checkTrustSafety({
     issue: {
@@ -11418,7 +11991,7 @@ test('trust safety recognizes bare directional step-list assignment targets -- #
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(unrelatedTarget.pass, true);
+  assert.equal(unrelatedTarget.pass, false);
 });
 
 test('trust safety handles current review findings for user-actor assignments -- #4577', () => {
@@ -11438,25 +12011,7 @@ test('trust safety handles current review findings for user-actor assignments --
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(explicitlyNotRequired.pass, true);
-
-  const needNotPerform = checkTrustSafety({
-    issue: {
-      ...BASE_ISSUE,
-      body: 'The coding agent need not perform this step.\n\nRun this step by the user.',
-    },
-    trustSafetyAmbiguous: false,
-  } as Context);
-  assert.equal(needNotPerform.pass, true);
-
-  const needNotOnlyPerform = checkTrustSafety({
-    issue: {
-      ...BASE_ISSUE,
-      body: 'The coding agent need not only perform this step.\n\nRun this step by the user.',
-    },
-    trustSafetyAmbiguous: false,
-  } as Context);
-  assert.equal(needNotOnlyPerform.pass, false);
+  assert.equal(explicitlyNotRequired.pass, false);
 
   for (const suffix of [
     '\n\n## Additional checks',
@@ -11495,7 +12050,7 @@ test('trust safety handles current review findings for user-actor assignments --
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(differentOrdinal.pass, true);
+  assert.equal(differentOrdinal.pass, false);
 
   for (const implementationObject of [
     'this step parser',
@@ -11508,7 +12063,7 @@ test('trust safety handles current review findings for user-actor assignments --
       },
       trustSafetyAmbiguous: false,
     } as Context);
-    assert.equal(unrelatedImplementation.pass, true, implementationObject);
+    assert.equal(unrelatedImplementation.pass, false, implementationObject);
   }
 
   const headingImplementationObject = checkTrustSafety({
@@ -11518,7 +12073,7 @@ test('trust safety handles current review findings for user-actor assignments --
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(headingImplementationObject.pass, true);
+  assert.equal(headingImplementationObject.pass, false);
 });
 
 test('trust safety treats never as explicit agent-assignment negation -- Codex review #4329703866', () => {
@@ -11534,7 +12089,7 @@ test('trust safety treats never as explicit agent-assignment negation -- Codex r
       },
       trustSafetyAmbiguous: false,
     } as Context);
-    assert.equal(result.pass, true, assignment);
+    assert.equal(result.pass, false, assignment);
   }
 
   const positiveAssignmentAfterNegation = checkTrustSafety({
@@ -11572,7 +12127,7 @@ test('trust safety treats cannot as explicit agent-assignment negation -- Codex 
     },
     trustSafetyAmbiguous: false,
   } as Context);
-  assert.equal(result.pass, true);
+  assert.equal(result.pass, false);
 });
 
 test('trust safety does not treat a double-negative agent assignment as negated -- E10', () => {
@@ -11589,4 +12144,451 @@ test('trust safety does not treat a double-negative agent assignment as negated 
     } as Context);
     assert.equal(result.pass, false, assignment);
   }
+});
+
+test('trust safety fails closed on assigned-agent forms found in current review -- #4596', () => {
+  const cases = [
+    {
+      title: 'A coding agent must implement the feature',
+      body: 'Run this step by the user.',
+    },
+    {
+      body: 'Let the coding agent implement the feature.\n\nRun this step by the user.',
+    },
+    {
+      body: 'Have the coding agent implement the feature.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is in charge of this step.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is working on this step.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The maintainer assigned the coding agent keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding `agent` must perform this step.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent has been given a keyboard-support task.\n\nRun this step by the user.',
+    },
+  ];
+
+  for (const { title, body } of cases) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        ...(title === undefined ? {} : { title }),
+        body,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, title ?? body);
+  }
+});
+
+test('trust safety recognizes possessive and quantified agent subjects -- #4596', () => {
+  for (const subject of [
+    'Our coding agent',
+    'Any coding agent',
+    'Each coding agent',
+    'Their coding agents',
+    'One of our coding agents',
+    'Some of their dedicated coding agents',
+    'The team of coding agents',
+    "Our team's coding agent",
+    'Our team’s coding agent',
+    "The developers' coding agent",
+    'Their dedicated coding agent',
+    'The exceptionally reliable highly capable experienced coding agent',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${subject} must implement the feature.\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, subject);
+  }
+});
+
+test('trust safety recognizes quantified agent recipients -- #4596', () => {
+  for (const assignment of [
+    'The feature must be implemented by one of the coding agents.',
+    'Keyboard support was assigned to some of our coding agents.',
+    'The task is required of any coding agent.',
+    'The task is required of any dedicated coding agent.',
+    'The feature must be implemented by one of the exceptionally reliable coding agents.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
+});
+
+test('trust safety recognizes common agent ownership phrases -- #4596', () => {
+  for (const assignment of [
+    'The coding agent oversees this step.',
+    'The coding agent takes care of this step.',
+    'The coding agent took care of this step.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
+});
+
+test('trust safety keeps independent agent work assignments fail-closed -- #4596', () => {
+  const assignments = [
+    {
+      title: 'ChatGPT must implement the feature',
+      body: 'Run this step by the user.',
+    },
+    {
+      body: 'The coding agent implements keyboard support and hands the review to the user.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is responsible for keyboard support and hands the review to the user.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent owns keyboard support and hands the review to the user.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent was assigned keyboard support and hands the review to the user.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent built keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent wrote keyboard support documentation.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent has written keyboard support documentation.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent has already built keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It has written keyboard support documentation.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agents are ready. They have built keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent was available. It had run the verification step.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent built keyboard support and hands the review to the user.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It must implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available.\n\n- It must implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It has a clear status. It must implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It implements keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It owns keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It is responsible for keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It must not implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It doesn’t implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It can’t fail to implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent is available. It is not required to implement keyboard support.\n\nRun this step by the user.',
+    },
+    {
+      body: "This step is the coding agent's task.\n\nRun this step by the user.",
+    },
+    {
+      body: 'This step is the coding agent’s job.\n\nRun this step by the user.',
+    },
+    {
+      body: "This check is the coding agent's duty.\n\nRun this check by the user.",
+    },
+    {
+      body: "The coding agent's keyboard-support task is in progress.\n\nRun this step by the user.",
+    },
+    {
+      body: "The coding agent's platform migration job is in progress.\n\nRun this step by the user.",
+    },
+    {
+      body: 'The coding agent’s user-step verification duty is in progress.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent received the keyboard-support task.\n\nRun this step by the user.',
+    },
+    {
+      body: 'The coding agent receives the keyboard-support task.\n\nRun this step by the user.',
+    },
+    {
+      body: '## ChatGPT tasks\n\nRun this step by the user.',
+    },
+  ];
+
+  for (const { title, body } of assignments) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        ...(title === undefined ? {} : { title }),
+        body,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, title ?? body);
+  }
+
+  const handoffWithoutEarlierAgentWork = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent handed the implementation task to the user.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(handoffWithoutEarlierAgentWork.pass, true);
+
+  const unrelatedActorAction = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent attended the meeting while the maintainer writes keyboard-support documentation.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(unrelatedActorAction.pass, true);
+
+  for (const body of [
+    'The coding agent is available while the maintainer performs deployment verification.\n\nRun this step by the user.',
+    'The coding agent is available and the maintainer performs deployment verification.\n\nRun this step by the user.',
+    'The coding agent is available, but the maintainer performs deployment verification.\n\nRun this step by the user.',
+    'The coding agent is available whereas the maintainer performs deployment verification.\n\nRun this step by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, body);
+  }
+
+  const coordinatedAgentAction = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent is available and builds keyboard support.\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(coordinatedAgentAction.pass, false);
+});
+
+test('trust safety rejects predicates outside the finite neutral agent grammar -- #4596', () => {
+  const predicates = [
+    'The coding agent has carefully built keyboard support.',
+    'The coding agent made the requested changes.',
+    "The coding agent couldn't fail to implement keyboard support.",
+    'The coding agent is available, and it implements keyboard support.',
+    'The coding agent synchronizes the widget.',
+    "The maintainer's coding agent synchronizes the widget.",
+    'The user-facing coding agent synchronizes the widget.',
+    'The coding agent is available. It synchronizes the widget.',
+    'The coding agent is available.\n\n- It synchronizes the widget.',
+    'The coding agent is available, and it synchronizes the widget.',
+    'The coding agent is available and then synchronizes the widget.',
+    'The coding agent is unexpectedly available.',
+    'We asked the coding agent to synchronize the widget.',
+    'We assigned the coding agent to the user to implement keyboard support.',
+    'We assigned the coding agent nebula harmonization.',
+    'We delegated the coding agent nebula harmonization.',
+    'We gave the coding agent nebula harmonization.',
+    'We gave the coding agent technical support and nebula harmonization.',
+    'We gave the coding agent project status and nebula harmonization.',
+    'The coding agent handed the implementation task to the user and synchronized the widget.',
+    'The coding agent is available while the maintainer writes the plan, and it synchronizes the widget.',
+  ];
+  for (const predicate of predicates) {
+    for (const issue of [
+      { ...BASE_ISSUE, body: `${predicate}\n\nRun this step by the user.` },
+      { ...BASE_ISSUE, body: `Run this check by the user.\n\n${predicate}` },
+      { ...BASE_ISSUE, title: predicate, body: 'Run this step by the user.' },
+    ]) {
+      const result = checkTrustSafety({
+        issue,
+        trustSafetyAmbiguous: false,
+      } as Context);
+      assert.equal(result.pass, false, `${issue.title}: ${issue.body}`);
+    }
+  }
+  const headingAssignment = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Coding agent\n\nSynchronizes the widget.\n\n## Manual verification\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(headingAssignment.pass, false);
+  const headingPredicate = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Coding agent synchronizes the widget.\n\n## Manual verification\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(headingPredicate.pass, false);
+});
+
+test('trust safety recognizes explicit first-person agent roles -- #4596', () => {
+  for (const predicate of [
+    'I (the coding agent) must implement the feature.',
+    'As the coding agent, I must implement the feature.',
+    'I (the coding agent) synchronize the widget.',
+    'As the coding agent, I synchronize the widget.',
+    'We (the coding agents) must implement the feature.',
+    'As **the coding agent**, I synchronize the widget.',
+    'I (the coding `agent`) synchronize the widget.',
+    'As [the coding agent](https://example.test), I synchronize the widget.',
+  ]) {
+    for (const issue of [
+      { ...BASE_ISSUE, body: `${predicate}\n\nRun this step by the user.` },
+      { ...BASE_ISSUE, title: predicate, body: 'Run this step by the user.' },
+    ]) {
+      assert.equal(
+        checkTrustSafety({ issue } as Context).pass,
+        false,
+        predicate,
+      );
+    }
+  }
+  for (const predicate of [
+    'I (the coding agent) am available.',
+    'As the coding agent, I am available.',
+    'We (the coding agents) are available.',
+  ]) {
+    assert.equal(
+      checkTrustSafety({
+        issue: {
+          ...BASE_ISSUE,
+          body: `${predicate}\n\nRun this step by the user.`,
+        },
+      } as Context).pass,
+      true,
+      predicate,
+    );
+  }
+});
+
+test('trust safety preserves unknown agent predicates in literal title markup -- #4596', () => {
+  for (const title of [
+    '[context](The coding agent synchronizes the widget)',
+    '[context](<The coding agent synchronizes the widget>)',
+    '~~The coding agent synchronizes the widget~~',
+    '<!-- The coding agent synchronizes the widget -->',
+    '<!-- The coding agent synchronizes the widget --!>',
+    '`The coding agent synchronizes the widget`',
+    '[context](The coding agent is available. It synchronizes the widget)',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, title, body: 'Run this step by the user.' },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, title);
+  }
+  for (const title of [
+    '[context](The coding agent is available)',
+    '[context](<The coding agent is available>)',
+    '~~The coding agent is available~~',
+    '<!-- The coding agent is available -->',
+    '<!-- The coding agent is available --!>',
+    '`The coding agent is available`',
+  ]) {
+    const neutral = checkTrustSafety({
+      issue: { ...BASE_ISSUE, title, body: 'Run this step by the user.' },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(neutral.pass, true, title);
+  }
+});
+
+test('trust safety permits the finite neutral agent predicate inventory -- #4596', () => {
+  for (const predicate of [
+    'The coding agent is available.',
+    'The coding agents are available.',
+    'The coding agent attended the meeting.',
+    'The coding agent is available. It is available.',
+    'The coding agent is available, and it is available.',
+    'The coding agent is available while the maintainer performs deployment verification.',
+    'The coding agent handed the implementation task to the user.',
+    'The AI model should be tested by the user in this step.',
+    '## Coding agent\n\nThe coding agent is available.\n\n## Manual verification',
+    '## Coding agent\n\nis available.\n\n## Manual verification',
+    '## Coding agent is available.\n\n## Manual verification',
+    '## Coding agent\n\nThe coding agent is available. It is available.\n\n## Manual verification',
+    '## Coding agent\n\n- The coding agent is available.\n\n## Manual verification',
+    '## Coding agent\n\n1. The coding agent is available.\n\n- [x] It is available.\n\n## Manual verification',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${predicate}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, predicate);
+  }
+});
+
+test('trust safety bounds repeated agent pronoun predicates by failing closed -- #4596', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `The coding agent is available${', and it is available'.repeat(65)}.\n\nRun this step by the user.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety does not count unrelated pronouns toward the agent budget -- #4596', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${'It is available. '.repeat(65)}\n\nRun this step by the user.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety bounds pathological agent-mention scans by failing closed -- #4596', () => {
+  const repeatedMentions = 'The coding agent '.repeat(65);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${repeatedMentions}was mentioned.\n\nRun this step by the user.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
 });

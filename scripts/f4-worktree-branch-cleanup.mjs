@@ -7,11 +7,21 @@
 //
 // The F4 steps 4 to 6 helper (#4370). The flow and its gates live in
 // f4-worktree-branch-steps.mts. This module binds them to the real git,
-// filesystem, `resume-claim-routing` and `post-idd-marker` commands, `gh`
-// reads, the clone-scoped lock, and delete-remote-branch. Run it from the
-// primary worktree. A dry run is the default; `--apply` mutates.
+// filesystem (including preserving a lone ignored node_modules/ tree),
+// `resume-claim-routing` and `post-idd-marker` commands, `gh` reads, the
+// clone-scoped lock, and delete-remote-branch. Run it from the primary
+// worktree. A dry run is the default; `--apply` mutates.
 import { spawnSync } from 'node:child_process';
-import { lstatSync, realpathSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  realpathSync,
+  renameSync,
+  statSync,
+} from 'node:fs';
+import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mjs';
 import { parseCliArgs } from './cli-args.mjs';
@@ -33,8 +43,10 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
+import { resolveStateBase } from './idd-local-admission.mjs';
 import { parseLocalWorktreeList } from './local-worktree-occupancy.mjs';
 import { gitChildEnvironment } from './provider-adapter-github.mjs';
+import { evaluateWindowsAcl, readWindowsAcl } from './windows-acl.mjs';
 
 const F4_CLEANUP_FLAG_SPEC = {
   '--issue': { type: 'string' },
@@ -101,7 +113,7 @@ function printUsage() {
     'Usage:\n' +
       '  node scripts/f4-worktree-branch-cleanup.mjs --issue <n> --claim-id <id> --nonce <nonce> --agent-id <id> --worktree <abs-path> [--apply]\n\n' +
       'Run from the primary worktree. F4 steps 4 to 6, gated on the head proof.\n' +
-      'Dry-run is the default. --apply mutates: fetch, fast-forward, worktree and branch removal, remote branch deletion.\n',
+      'Dry-run is the default. --apply mutates: fetch, fast-forward, secure the state destination, preserve a lone ignored node_modules/, worktree and branch removal, remote branch deletion.\n',
   );
 }
 /** Run one git command with the child environment's locale fixed to C. */
@@ -160,6 +172,21 @@ export function lstatKind(path) {
     throw error;
   }
 }
+/** Return a stable identity for a real directory without following links. */
+function directoryIdentity(path) {
+  try {
+    const stat = lstatSync(path, { bigint: true });
+    if (stat.isSymbolicLink() || !stat.isDirectory() || stat.ino === 0n) {
+      return null;
+    }
+    return `${stat.dev}:${stat.ino}`;
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
 function realpathOrNull(path) {
   try {
     return realpathSync.native(path);
@@ -170,6 +197,46 @@ function realpathOrNull(path) {
       return null;
     }
     throw error;
+  }
+}
+function inspectDirectoryPrivacy(path, platform, windowsAclReader) {
+  try {
+    const lexical = lstatSync(path);
+    const target = statSync(path);
+    if (!target.isDirectory()) return 'unsafe';
+    if (platform === 'win32') {
+      return evaluateWindowsAcl(windowsAclReader(realpathSync.native(path))) ===
+        'private'
+        ? 'private'
+        : 'unsafe';
+    }
+    const uid = process.getuid?.();
+    if (uid !== undefined && target.uid !== uid) return 'unsafe';
+    if ((target.mode & 0o077) === 0 && (target.mode & 0o700) === 0o700) {
+      return 'private';
+    }
+    return lexical.isSymbolicLink() ? 'unsafe' : 'tightenable';
+  } catch {
+    return 'unsafe';
+  }
+}
+function ensurePrivateStateDirectory(path, platform, windowsAclReader) {
+  const privacy = inspectDirectoryPrivacy(path, platform, windowsAclReader);
+  if (privacy === 'private') return;
+  if (privacy !== 'tightenable') {
+    throw new Error('directory ownership or privacy could not be verified');
+  }
+  if (lstatSync(path).isSymbolicLink()) {
+    throw new Error('a state-root symlink target is not private');
+  }
+  const uid = process.getuid?.();
+  const target = statSync(path);
+  if (uid !== undefined && target.uid !== uid) {
+    throw new Error('directory belongs to another user');
+  }
+  chmodSync(path, 0o700);
+  if (inspectDirectoryPrivacy(path, platform, windowsAclReader) !== 'private') {
+    throw new Error('directory could not be restricted to its owner');
   }
 }
 /** The argv of `resume-claim-routing --assert` for the claimed worktree. */
@@ -225,9 +292,26 @@ export function createLiveDeps(options) {
   const root = resolveBundleRoot(import.meta.dirname);
   const { owner, repo } = resolveCheckoutRepository();
   const repoPath = `repos/${owner}/${repo}`;
+  const platform = options.platform ?? process.platform;
+  const windowsAclReader = options.windowsAclReader ?? readWindowsAcl;
+  const stateRoot = resolveStateBase(
+    options.env ?? process.env,
+    platform,
+    options.home ?? homedir(),
+  );
   return {
     lstat: lstatKind,
+    directoryIdentity,
     realpath: realpathOrNull,
+    stateRoot,
+    now: options.now ?? (() => new Date()),
+    temporaryId: randomUUID,
+    inspectDirectoryPrivacy: (path) =>
+      inspectDirectoryPrivacy(path, platform, windowsAclReader),
+    ensurePrivateDirectory: (path) =>
+      ensurePrivateStateDirectory(path, platform, windowsAclReader),
+    mkdir: (path, mode) => mkdirSync(path, { mode }),
+    rename: (source, destination) => renameSync(source, destination),
     git: (args, cwd) => runGit(args, cwd),
     assertClaim: (worktree) =>
       runSpawned(claimCheckArgv(options, worktree, owner, repo, root)),

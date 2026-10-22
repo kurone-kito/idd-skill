@@ -2779,6 +2779,70 @@ function matchInlineLinkDestTitleEnd(text, start, end, codeRanges) {
  */
 export function findInlineCodeRanges(text, start, end) {
   const ranges = [];
+  const paragraphBreakEnds = [];
+  const blankLinePattern = /\r?\n[ \t]*\r?\n/gu;
+  blankLinePattern.lastIndex = start;
+  let blankLineMatch = blankLinePattern.exec(text);
+  while (blankLineMatch !== null && blankLineMatch.index < end) {
+    const breakEnd = blankLineMatch.index + blankLineMatch[0].length;
+    if (breakEnd > end) break;
+    paragraphBreakEnds.push(breakEnd);
+    blankLineMatch = blankLinePattern.exec(text);
+  }
+  const backtickRuns = [];
+  let paragraph = 0;
+  let paragraphBreakIndex = 0;
+  let runCursor = start;
+  while (runCursor < end) {
+    while (
+      paragraphBreakIndex < paragraphBreakEnds.length &&
+      (paragraphBreakEnds[paragraphBreakIndex] ?? end) <= runCursor
+    ) {
+      paragraph += 1;
+      paragraphBreakIndex += 1;
+    }
+    if (text[runCursor] !== '`') {
+      runCursor += 1;
+      continue;
+    }
+    const runLength = countBackticks(text, runCursor, end);
+    backtickRuns.push({
+      start: runCursor,
+      end: runCursor + runLength,
+      length: runLength,
+      paragraph,
+    });
+    runCursor += runLength;
+  }
+  // Index each run's next raw-length closer once. A backslash can escape the
+  // first tick of an opener run while leaving its suffix available as the
+  // opener. Once a span is open, backslashes are literal code content, so a
+  // candidate closer still contributes its full raw run length. The former
+  // opener loop searched the rest of the paragraph for every unmatched
+  // run, making a sequence of distinct run lengths superlinear in the input
+  // size.
+  const nextSameLengthRun = new Array(backtickRuns.length).fill(-1);
+  const nextSuffixLengthRun = new Array(backtickRuns.length).fill(-1);
+  const latestRunByLength = new Map();
+  let indexedParagraph = -1;
+  for (let index = backtickRuns.length - 1; index >= 0; index -= 1) {
+    const run = backtickRuns[index];
+    if (run === undefined) continue;
+    if (run.paragraph !== indexedParagraph) {
+      latestRunByLength.clear();
+      indexedParagraph = run.paragraph;
+    }
+    nextSameLengthRun[index] = latestRunByLength.get(run.length) ?? -1;
+    if (isEscapedBacktick(text, run.start) && run.length > 1) {
+      nextSuffixLengthRun[index] = latestRunByLength.get(run.length - 1) ?? -1;
+    }
+    latestRunByLength.set(run.length, index);
+  }
+  const runIndexByStart = new Map();
+  for (let index = 0; index < backtickRuns.length; index += 1) {
+    const run = backtickRuns[index];
+    if (run !== undefined) runIndexByStart.set(run.start, index);
+  }
   let cursor = start;
   while (cursor < end) {
     // #2865: skip an inline HTML tag or a link's own destination/title span
@@ -2803,38 +2867,45 @@ export function findInlineCodeRanges(text, start, end) {
         continue;
       }
     }
-    if (text[cursor] !== '`' || isEscapedBacktick(text, cursor)) {
+    if (text[cursor] !== '`') {
       cursor += 1;
       continue;
     }
-    const openingLength = countBackticks(text, cursor, end);
-    const contentStart = cursor + openingLength;
-    let candidate = contentStart;
-    let closed = false;
-    const blockBoundary = findMarkdownBlockBoundary(text, contentStart, end);
-    const candidateEnd = blockBoundary ?? end;
-    while (candidate < candidateEnd) {
-      if (text[candidate] !== '`') {
-        candidate += 1;
-        continue;
-      }
-      const closingLength = countBackticks(text, candidate, end);
-      if (
-        closingLength === openingLength &&
-        !hasBlankLine(text, contentStart, candidate)
-      ) {
-        ranges.push({
-          start: cursor,
-          end: candidate + closingLength,
-        });
-        cursor = candidate + closingLength;
-        closed = true;
-        break;
-      }
-      candidate += closingLength;
+    const runIndex = runIndexByStart.get(cursor);
+    const run = runIndex === undefined ? undefined : backtickRuns[runIndex];
+    if (run === undefined) {
+      cursor += 1;
+      continue;
     }
-    if (!closed) {
-      cursor = contentStart;
+    const escapedOpener = isEscapedBacktick(text, cursor);
+    const openerStart = cursor + (escapedOpener ? 1 : 0);
+    const openerLength = run.length - (escapedOpener ? 1 : 0);
+    if (openerLength === 0) {
+      cursor += 1;
+      continue;
+    }
+    const closingRunIndex =
+      runIndex === undefined
+        ? -1
+        : escapedOpener
+          ? (nextSuffixLengthRun[runIndex] ?? -1)
+          : (nextSameLengthRun[runIndex] ?? -1);
+    const closingRun =
+      closingRunIndex < 0 ? undefined : backtickRuns[closingRunIndex];
+    if (closingRun === undefined || closingRun.paragraph !== run.paragraph) {
+      cursor = openerStart + openerLength;
+      continue;
+    }
+    const blockBoundary = findMarkdownBlockBoundary(
+      text,
+      openerStart + openerLength,
+      closingRun.end,
+    );
+    if (blockBoundary === null || closingRun.start < blockBoundary) {
+      ranges.push({ start: openerStart, end: closingRun.end });
+      cursor = closingRun.end;
+    } else {
+      cursor = openerStart + openerLength;
     }
   }
   return ranges;

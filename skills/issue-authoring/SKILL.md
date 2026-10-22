@@ -72,8 +72,23 @@ needs-decision, blocked-by-human, and out-of-scope.
    - keep independent sibling work in roadmap task lists unless a true
      correctness, availability, or ordering constraint requires a
      dependency edge
-6. Before the mechanical audit, run the completed-draft adversarial
-   review on each completed roadmap, child, or orphan draft. This is
+6. Before the completed-draft adversarial review, verify material
+   factual claims that justify the draft's scope or design against
+   current sources: repository behavior against current code and docs;
+   issue or pull-request status and prior decisions against live GitHub
+   records; and runtime observations under the existing artifact-citation
+   rule. Correct, qualify, or remove any such unsupported claim, and put support
+   in the review packet's existing `evidence` array. Route a materially
+   unresolved claim through the existing uncertainty and
+   human-dependency rules: `needs-decision` for unresolved product,
+   policy, or design choices, and `blocked-by-human` when verification
+   waits on a person, credential, asset, or outside system. The packet
+   schema stays unchanged. This check responds to the factual-history
+   error reported in [issue #4566](https://github.com/kurone-kito/idd-skill/issues/4566),
+   which concerns [issue #3838](https://github.com/kurone-kito/idd-skill/issues/3838)
+   and [issue #1019](https://github.com/kurone-kito/idd-skill/issues/1019).
+   Then run the completed-draft adversarial review on each completed
+   roadmap, child, or orphan draft. This is
    not the Intake critique above. The packet, checklist, mode table,
    failure stop, wait ceiling, and no-mutation boundary are normative
    in

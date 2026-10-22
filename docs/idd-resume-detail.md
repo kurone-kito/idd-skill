@@ -483,22 +483,51 @@ the existing unmerged-branch hold path.
 
 The removal helper, `node scripts/f4-worktree-branch-cleanup.mjs` (see
 [helper steps](idd-helper-scripts.md#f4-worktree-and-branch-cleanup-steps-4-to-6)),
-runs these checks and gates each removal on the proof. It refuses a worktree
-that holds untracked, modified, or ignored files (`dirty-worktree`) or a
-populated submodule (`submodule-worktree`), and it then removes nothing.
-Preserve that content by hand before rerunning the helper, including
-reproducible output. Move untracked and ignored files, and secrets such as
-`.env`, to a verified path outside the repository, and never commit or push
-them. Save uncommitted tracked edits as a patch outside the repository, then
-revert those paths. A backup ref holds commits only, so it does not clear the
-check. Make the helper's own `git status` check print nothing, then rerun.
-The helper never removes preserved content itself. For a populated submodule,
-the operator runs `git -C <issue-worktree-path> submodule deinit --all` after
+runs these checks and gates each removal on the proof. When the complete
+ignored-inclusive status output is exactly `!! node_modules/`, the path is a
+real directory, and no registered worktree is at or inside it, the helper
+moves its files intact under
+`<state>/idd-skill/f4-preserved/<issue>-<UTC timestamp>/` before removal.
+`<state>` is an absolute `XDG_STATE_HOME`, else `~/.local/state`; on Windows it
+is an absolute `LOCALAPPDATA`, else `~/AppData/Local`. The helper reports the
+destination and never deletes or expires a preserved tree; the operator
+decides when to clean it up. It requires an owned state root and private
+destination directories. On POSIX, the source `node_modules` directory must be
+owned by the current user; an owned direct state root and existing destination
+directories are restricted to mode `0700` during apply, and a state-root
+symlink must already target a private directory. On Windows, the state root,
+source, and destination directories must have a private ACL before the move.
+New parents and the moved `node_modules` directory are private. The rename goes
+directly to an absent destination leaf. A dry run performs the same read-only
+checks and reports the planned destination without creating, moving, or
+changing permissions. Observed
+2026-10-18 on issue `#4511` (PR `#4527`), an install-created `node_modules/`
+alone held F4 cleanup.
+
+The helper records destination parent identities, checks them through parent
+creation and immediately before preservation, and uses the resolved state-root
+path. A detected replacement holds. These path checks and renames are separate
+operations; the final ignored-inclusive status scan and `git worktree remove`
+are separate too. Content written after that scan can still be deleted by Git,
+and a path replacement after a check can evade that check. Stop dependency
+processes, watchers, and other writers before cleanup. These are residual races,
+not a guarantee of atomic preservation (PR `#4606`, review comments
+`#4338910285` and `#4338910384`; preventive, no observed data loss).
+
+Every other dirty shape still holds as `dirty-worktree`, as do an unsafe
+destination or failed move; when the detail says the helper did not move
+`node_modules/`, preserve it by hand before rerunning. A populated submodule
+still holds as `submodule-worktree`. Move other untracked and ignored files,
+including reproducible output, and secrets such as `.env`, to a verified path
+outside the repository; never commit or push them. Save uncommitted tracked
+edits as a patch outside the repository, then revert those paths. A backup ref
+holds commits only, so it does not clear the check. Make the helper's own
+`git status` check print nothing, then rerun. For a populated submodule, the
+operator runs `git -C <issue-worktree-path> submodule deinit --all` after
 preservation, with the worktree still registered, and then the helper is
-rerun. A forced removal is not an F4
-route: it unregisters the path, so the proof dry run and this helper cannot
-finish afterward. The F4 session never runs `git worktree remove --force`. These
-content refusals are preventive; no observed incident yet.
+rerun. A forced removal is not an F4 route: it unregisters the path, so the
+proof dry run and this helper cannot finish afterward. The F4 session never
+runs `git worktree remove --force`.
 
 For step 6, use the profile-selected `delete-remote-branch` helper with
 `BRANCH_NAME` and the verified `PR_HEAD_SHA_F3`. The removal helper makes
