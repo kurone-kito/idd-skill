@@ -263,10 +263,11 @@ export interface OverlapCandidateResult {
   candidateFiles: string[];
   highContentionTouched: string[];
   overlaps: OverlapHit[];
+  sharedNonHighContention: OverlapHit[];
   overlapFlag: boolean;
 }
 
-/** One actively-claimed / open-PR issue that shares a high-contention file. */
+/** One active issue and the shared candidate files reported for it. */
 export interface OverlapHit {
   number: number;
   reason: 'claim' | 'pr';
@@ -728,6 +729,16 @@ export function analyzeSharedFileOverlap(input: {
     reason: active.reason,
     files: intersect(active.candidateFiles, highContention),
   }));
+  const activeNonHighContention = input.activeIssues.map((active) => ({
+    number: active.number,
+    reason: active.reason,
+    files: intersectFiles(
+      active.candidateFiles,
+      new Set(
+        active.candidateFiles.filter((file) => !highContention.has(file)),
+      ),
+    ),
+  }));
 
   const candidates: OverlapCandidateResult[] = input.candidates.map(
     (candidate) => {
@@ -738,6 +749,9 @@ export function analyzeSharedFileOverlap(input: {
         highContention,
       );
       const touchedSet = new Set(highContentionTouched);
+      const nonHighContentionSet = new Set(
+        candidate.candidateFiles.filter((file) => !highContention.has(file)),
+      );
       const overlaps: OverlapHit[] = [];
       for (const active of activeTouched) {
         if (active.number === candidate.number) {
@@ -753,6 +767,21 @@ export function analyzeSharedFileOverlap(input: {
         }
       }
       overlaps.sort((left, right) => left.number - right.number);
+      const sharedNonHighContention: OverlapHit[] = [];
+      for (const active of activeNonHighContention) {
+        if (active.number === candidate.number) {
+          continue;
+        }
+        const files = intersectFiles(active.files, nonHighContentionSet);
+        if (files.length > 0) {
+          sharedNonHighContention.push({
+            number: active.number,
+            reason: active.reason,
+            files,
+          });
+        }
+      }
+      sharedNonHighContention.sort((left, right) => left.number - right.number);
       return {
         number: candidate.number,
         score,
@@ -760,6 +789,7 @@ export function analyzeSharedFileOverlap(input: {
         candidateFiles: candidate.candidateFiles,
         highContentionTouched,
         overlaps,
+        sharedNonHighContention,
         overlapFlag: overlaps.length > 0,
       };
     },
@@ -1047,6 +1077,18 @@ function intersect(files: string[], highContention: Set<string>): string[] {
   const result: string[] = [];
   for (const file of files) {
     if (highContention.has(file) && !seen.has(file)) {
+      seen.add(file);
+      result.push(file);
+    }
+  }
+  return result.sort();
+}
+
+function intersectFiles(files: string[], allowed: Set<string>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const file of files) {
+    if (allowed.has(file) && !seen.has(file)) {
       seen.add(file);
       result.push(file);
     }

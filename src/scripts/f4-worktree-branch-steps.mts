@@ -7,17 +7,27 @@
 // F4 steps 4 to 6 (idd-merge.instructions.md), gated on the F4 head proof
 // (docs/idd-resume-detail.md#f4-head-proof). The flow runs in this order:
 // the no-follow path check, a claim check, the proof dry run, step 4 (the
-// primary fast-forward), step 5 (the worktree and local branch removal), a
-// second claim check, and step 6 (the remote branch). Each hold has a reason
-// code and a next action. The flow never passes `--force`, never posts a
-// proof, and writes only through the injected deps.
+// primary fast-forward), step 5 (preserve a lone ignored node_modules/ tree
+// in a private per-user state destination, then remove the worktree and local
+// branch), a second claim check, and step
+// 6 (the remote branch). Each hold has a reason code and a next action. The
+// flow never passes `--force`, never posts a proof, and writes only through
+// the injected deps.
 //
 // This module performs no I/O. Every git call, filesystem probe, spawned
 // helper, `gh` read, clone lock, and remote deletion arrives through
 // {@link F4WorktreeBranchDeps}, so the flow runs against fakes in tests. The
 // production wiring lives in f4-worktree-branch-cleanup.mts.
 
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import {
+  dirname,
+  isAbsolute,
+  join,
+  parse,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import type { RemoteBranchDeleteVerdict } from './delete-remote-branch.mts';
 import type { Reason } from './f4-head-proof-verdict.mts';
 import {
@@ -27,6 +37,9 @@ import {
 
 /** What the filesystem reports for one path, read without following links. */
 export type LstatKind = 'absent' | 'symlink' | 'directory' | 'file' | 'other';
+
+/** Read-only privacy assessment for an existing state directory. */
+export type DirectoryPrivacy = 'private' | 'tightenable' | 'unsafe';
 
 export interface GitResult {
   readonly status: number | null;
@@ -149,7 +162,18 @@ export interface F4WorktreeBranchInput {
 /** Every side effect and read the flow needs, injected by the caller. */
 export interface F4WorktreeBranchDeps {
   readonly lstat: (path: string) => LstatKind;
+  /** Stable identity of a real directory, read with no-follow semantics. */
+  readonly directoryIdentity: (path: string) => string | null;
   readonly realpath: (path: string) => string | null;
+  readonly stateRoot: string;
+  readonly now: () => Date;
+  /** Unpredictable path component for a worktree-local staging directory. */
+  readonly temporaryId: () => string;
+  readonly inspectDirectoryPrivacy: (path: string) => DirectoryPrivacy;
+  /** Restrict an owned POSIX directory or verify its platform ACL. */
+  readonly ensurePrivateDirectory: (path: string) => void;
+  readonly mkdir: (path: string, mode: number) => void;
+  readonly rename: (source: string, destination: string) => void;
   readonly git: (args: readonly string[], cwd: string) => GitResult;
   /** `resume-claim-routing --assert` for the claimed worktree. */
   readonly assertClaim: (worktree: string) => SpawnedResult;
@@ -259,15 +283,15 @@ export const NEXT_ACTIONS: Readonly<
   'inconsistent-worktree-state':
     'Hold. The worktree path, its git registration, and the claim branch disagree, or git could not read them. Nothing was removed. The operator checks git worktree list and the claim.',
   'dirty-worktree':
-    'Hold. The worktree holds untracked, modified, or ignored files. Nothing was removed. The F4 session preserves that content outside the worktree by hand, including every reproducible configured-command output, then reruns.',
+    'Hold. The worktree holds untracked, modified, or ignored files. Nothing was removed. The helper moves only a lone ignored node_modules/ directory; when the detail says it did not move node_modules/, the F4 session preserves that directory by hand too. Preserve all other content outside the worktree, including reproducible configured-command output, then rerun.',
   'submodule-worktree':
     'Hold. The worktree holds a populated submodule. Nothing was removed. The F4 session preserves that content outside the worktree by hand. The operator then runs git -C <issue-worktree-path> submodule deinit --all with the worktree still registered, and the helper is rerun.',
   'branch-tip-mismatch':
     'Hold. The local branch tip does not equal the proof branch tip, or the ref is missing while its worktree exists. Nothing was removed. The operator checks the branch state.',
   'local-branch-unmerged-commits':
-    'Hold. git branch -d refused, and the local tip is not the proof head. The operator comments on the issue and makes a fresh claim check before any forced deletion.',
+    'Hold. git branch -d refused, and the local tip is not the proof head. The operator comments on the issue and makes a fresh claim check before any forced deletion; keep any node_modules/ destination named in the detail.',
   'worktree-remove-refused':
-    'Failed. git worktree remove refused after the checks passed, so the worktree may be partly changed. The operator inspects it. A rerun reads the proof again and posts nothing.',
+    'Failed. git worktree remove refused after the checks passed, so the worktree may be partly changed. The operator inspects it and keeps any node_modules/ destination named in the detail. A rerun reads the proof again and posts nothing.',
   'delete-setting-unreadable':
     'Hold at step 6. delete_branch_on_merge could not be read as a boolean, and nothing remote was deleted. In a dry run nothing has changed, so rerun it once the setting is readable. In an applied run, steps 4 and 5 have already run. The operator first confirms by hand that delete_branch_on_merge is false: when it is true, step 6 is skipped, because GitHub deletes the branch on merge. Only when it is false does the operator complete step 6 by hand with delete-remote-branch and the expected SHA, and the session continues from step 7 after the operator confirms. Do not rerun an applied run.',
   'remote-delete-unreadable':
@@ -844,7 +868,14 @@ function runStep4And5(
   }
 
   // Step 5, inspection then removal.
-  const inspected = inspectWorktree(deps, primary, worktree, branchRef, proof);
+  const inspected = inspectWorktree(
+    deps,
+    input.issueNumber,
+    primary,
+    worktree,
+    branchRef,
+    proof,
+  );
   if (inspected.hold !== null) {
     return { hold: inspected.hold, error: null, at: 'step-5' };
   }
@@ -852,14 +883,16 @@ function runStep4And5(
     steps.push(
       stepRecord('step-5', 'would-run', {
         detail: inspected.worktreePresent
-          ? 'the worktree and branch would be removed'
+          ? inspected.preserveNodeModules === null
+            ? 'the worktree and branch would be removed'
+            : `node_modules/ would move to ${inspected.preserveNodeModules.destination}; the worktree and branch would be removed`
           : 'the worktree is already absent; only the branch would be removed',
       }),
     );
     return { hold: null, error: null, at: 'step-5' };
   }
 
-  // Apply: pre-removal claim check, then removal, then branch deletion.
+  // Apply: pre-removal claim check, optional preservation, then removal.
   const claimRemoval = classifyClaimAssert(
     deps.assertClaim(worktree),
     input.claimId,
@@ -872,7 +905,110 @@ function runStep4And5(
       at: 'step-5',
     };
   }
+  let preservedDestination: string | null = null;
+  if (inspected.preserveNodeModules !== null) {
+    const moved = moveNodeModules(
+      deps,
+      primary,
+      worktree,
+      inspected.preserveNodeModules.destination,
+      inspected.preserveNodeModules.sourceIdentity,
+      inspected.preserveNodeModules.parents,
+    );
+    if (moved.hold !== null || moved.result === null) {
+      return {
+        hold: { code: 'dirty-worktree', detail: moved.hold },
+        error: null,
+        at: 'step-5',
+      };
+    }
+    preservedDestination = moved.result.destination;
+
+    const postMoveStatus = deps.git(
+      [
+        '-C',
+        worktree,
+        'status',
+        '--porcelain',
+        '--ignored',
+        '--untracked-files=normal',
+      ],
+      primary,
+    );
+    if (postMoveStatus.status !== 0) {
+      return {
+        hold: {
+          code: 'inconsistent-worktree-state',
+          detail: `node_modules/ was preserved at ${preservedDestination}, but git status failed: ${postMoveStatus.stderr.trim()}`,
+        },
+        error: null,
+        at: 'step-5',
+      };
+    }
+    if (postMoveStatus.stdout.length > 0) {
+      return {
+        hold: {
+          code: 'dirty-worktree',
+          detail: `node_modules/ was preserved at ${preservedDestination}, but the worktree still has status output`,
+        },
+        error: null,
+        at: 'step-5',
+      };
+    }
+  }
   if (inspected.worktreePresent) {
+    // The final network-backed ownership assertion runs before this scan.
+    // Check for content created during that assertion. This scan and git's
+    // removal are not atomic; callers must stop concurrent worktree writers.
+    const claimBeforeFinalStatus = classifyClaimAssert(
+      deps.assertClaim(worktree),
+      input.claimId,
+      input.agentId,
+    );
+    if (!claimBeforeFinalStatus.ok) {
+      return {
+        hold: {
+          code: claimBeforeFinalStatus.code,
+          detail:
+            preservedDestination === null
+              ? 'before the final worktree status check and removal'
+              : `after preserving node_modules/ at ${preservedDestination}`,
+        },
+        error: null,
+        at: 'step-5',
+      };
+    }
+    const finalStatus = deps.git(
+      [
+        '-C',
+        worktree,
+        'status',
+        '--porcelain',
+        '--ignored',
+        '--untracked-files=normal',
+      ],
+      primary,
+    );
+    if (finalStatus.status !== 0) {
+      return {
+        hold: {
+          code: 'inconsistent-worktree-state',
+          detail: `the final worktree status check failed after the claim assertion${preservedDestination === null ? '' : `; node_modules/ was preserved at ${preservedDestination}`}: ${finalStatus.stderr.trim()}`,
+        },
+        error: null,
+        at: 'step-5',
+      };
+    }
+    if (finalStatus.stdout.length > 0) {
+      return {
+        hold: {
+          code: 'dirty-worktree',
+          detail: `the worktree still has status output after the final claim assertion; the helper did not move newly appearing content${preservedDestination === null ? '' : `; node_modules/ was preserved at ${preservedDestination}`}`,
+        },
+        error: null,
+        at: 'step-5',
+      };
+    }
     const removed = deps.git(['worktree', 'remove', worktree], primary);
     if (removed.status !== 0) {
       return {
@@ -880,7 +1016,7 @@ function runStep4And5(
         error: {
           kind: 'failed',
           code: 'worktree-remove-refused',
-          detail: `git worktree remove refused: ${removed.stderr.trim()}`,
+          detail: `git worktree remove refused: ${removed.stderr.trim()}${preservedDestination === null ? '' : `; node_modules/ was preserved at ${preservedDestination}`}`,
         },
         at: 'step-5',
       };
@@ -894,7 +1030,7 @@ function runStep4And5(
         return {
           hold: {
             code: 'local-branch-unmerged-commits',
-            detail: `git branch -d refused, and the tip ${tip ?? 'unknown'} is not the proof head ${proof.head}`,
+            detail: `git branch -d refused, and the tip ${tip ?? 'unknown'} is not the proof head ${proof.head}${preservedDestination === null ? '' : `; node_modules/ was preserved at ${preservedDestination}`}`,
           },
           error: null,
           at: 'step-5',
@@ -902,14 +1038,20 @@ function runStep4And5(
       }
       steps.push(
         stepRecord('step-5', 'done', {
-          detail:
-            'git branch -d kept the branch, whose tip equals the proof head. Comment on the issue before any git branch -D, as merge doc F4 step 5 asks',
+          detail: `git branch -d kept the branch, whose tip equals the proof head. Comment on the issue before any git branch -D, as merge doc F4 step 5 asks${preservedDestination === null ? '' : `; node_modules/ was preserved at ${preservedDestination}`}`,
         }),
       );
       return { hold: null, error: null, at: 'step-5' };
     }
   }
-  steps.push(stepRecord('step-5', 'done'));
+  steps.push(
+    stepRecord('step-5', 'done', {
+      detail:
+        preservedDestination === null
+          ? null
+          : `node_modules/ was preserved at ${preservedDestination}`,
+    }),
+  );
   return { hold: null, error: null, at: 'step-5' };
 }
 
@@ -1096,6 +1238,26 @@ interface InspectResult {
   readonly hold: Hold | null;
   readonly worktreePresent: boolean;
   readonly branchPresent: boolean;
+  readonly preserveNodeModules: {
+    readonly destination: string;
+    readonly sourceIdentity: string;
+    readonly parents: readonly PreservationParent[];
+  } | null;
+}
+
+interface PreservationParent {
+  readonly path: string;
+  readonly identity: string | null;
+}
+
+interface PreserveDestinationResult {
+  readonly destination: string;
+  readonly parents: readonly PreservationParent[];
+  readonly hold: string | null;
+}
+
+interface PreserveNodeModulesResult {
+  readonly destination: string;
 }
 
 /**
@@ -1105,6 +1267,7 @@ interface InspectResult {
  */
 function inspectWorktree(
   deps: F4WorktreeBranchDeps,
+  issueNumber: number,
   primary: string,
   worktree: string,
   branchRef: string,
@@ -1114,6 +1277,7 @@ function inspectWorktree(
     hold: { code, detail },
     worktreePresent: false,
     branchPresent: false,
+    preserveNodeModules: null,
   });
 
   const listing = deps.git(['worktree', 'list', '--porcelain', '-z'], primary);
@@ -1155,7 +1319,12 @@ function inspectWorktree(
         `local tip ${tip ?? 'unknown'} differs from the proof`,
       );
     }
-    return { hold: null, worktreePresent: false, branchPresent: exists };
+    return {
+      hold: null,
+      worktreePresent: false,
+      branchPresent: exists,
+      preserveNodeModules: null,
+    };
   }
   if (!present || record === undefined || record.prunable) {
     return none(
@@ -1169,6 +1338,12 @@ function inspectWorktree(
     return none(
       'inconsistent-worktree-state',
       `the worktree is on ${record.branchRef ?? 'a detached HEAD'}, not ${branchRef}`,
+    );
+  }
+  if (record.locked) {
+    return none(
+      'inconsistent-worktree-state',
+      'the worktree is locked; inspect the preservation recovery state and unlock it manually before rerunning cleanup',
     );
   }
   const tip = readBranchTip(deps, primary, branchRef);
@@ -1202,8 +1377,55 @@ function inspectWorktree(
       `git status failed: ${status.stderr.trim()}`,
     );
   }
-  if (status.stdout.split('\n').some((line) => line.length > 0)) {
+  const statusBody = status.stdout.endsWith('\n')
+    ? status.stdout.slice(0, -1)
+    : status.stdout;
+  const loneIgnoredNodeModules = statusBody === '!! node_modules/';
+  if (statusBody.length > 0 && !loneIgnoredNodeModules) {
     return none('dirty-worktree', null);
+  }
+
+  let preserveNodeModules: {
+    readonly destination: string;
+    readonly sourceIdentity: string;
+    readonly parents: readonly PreservationParent[];
+  } | null = null;
+  let sourceIdentity: string | null = null;
+  if (loneIgnoredNodeModules) {
+    const nodeModules = join(worktree, 'node_modules');
+    let registeredInsideNodeModules: LocalWorktreeRecord | undefined;
+    try {
+      if (deps.lstat(nodeModules) !== 'directory') {
+        return none(
+          'dirty-worktree',
+          'the helper did not move node_modules/: the path is not a real directory',
+        );
+      }
+      sourceIdentity = deps.directoryIdentity(nodeModules);
+      if (sourceIdentity === null) {
+        return none(
+          'dirty-worktree',
+          'the helper did not move node_modules/: its directory identity could not be verified',
+        );
+      }
+      registeredInsideNodeModules = records.find((entry) =>
+        isWithinRoot(
+          deps.realpath(nodeModules) ?? resolve(nodeModules),
+          deps.realpath(entry.path) ?? resolve(entry.path),
+        ),
+      );
+    } catch (error) {
+      return none(
+        'dirty-worktree',
+        `the helper did not move node_modules/: it could not inspect the directory or worktree paths: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (registeredInsideNodeModules !== undefined) {
+      return none(
+        'dirty-worktree',
+        `the helper did not move node_modules/: registered worktree ${registeredInsideNodeModules.path} lies at or inside it`,
+      );
+    }
   }
 
   const submodules = deps.git(
@@ -1256,7 +1478,593 @@ function inspectWorktree(
     return none('symlink-path', linked);
   }
 
-  return { hold: null, worktreePresent: true, branchPresent: true };
+  if (loneIgnoredNodeModules) {
+    if (sourceIdentity === null) {
+      return none(
+        'dirty-worktree',
+        'the helper did not move node_modules/: its directory identity could not be verified',
+      );
+    }
+    try {
+      if (
+        deps.inspectDirectoryPrivacy(join(worktree, 'node_modules')) ===
+        'unsafe'
+      ) {
+        return none(
+          'dirty-worktree',
+          'the helper did not move node_modules/: its ownership or privacy could not be verified',
+        );
+      }
+    } catch {
+      return none(
+        'dirty-worktree',
+        'the helper did not move node_modules/: its ownership or privacy could not be verified',
+      );
+    }
+    const destination = preserveDestination(
+      deps,
+      issueNumber,
+      primary,
+      records,
+    );
+    if (destination.hold !== null) {
+      return none('dirty-worktree', destination.hold);
+    }
+    preserveNodeModules = {
+      destination: destination.destination,
+      sourceIdentity,
+      parents: destination.parents,
+    };
+  }
+
+  return {
+    hold: null,
+    worktreePresent: true,
+    branchPresent: true,
+    preserveNodeModules,
+  };
+}
+
+/** Read-only destination validation shared by dry-run and apply. */
+function preserveDestination(
+  deps: F4WorktreeBranchDeps,
+  issueNumber: number,
+  primary: string,
+  records: readonly LocalWorktreeRecord[],
+): PreserveDestinationResult {
+  try {
+    return inspectPreserveDestination(deps, issueNumber, primary, records);
+  } catch (error) {
+    return {
+      destination: '',
+      parents: [],
+      hold: `the helper did not move node_modules/: destination check failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+function inspectPreserveDestination(
+  deps: F4WorktreeBranchDeps,
+  issueNumber: number,
+  primary: string,
+  records: readonly LocalWorktreeRecord[],
+): PreserveDestinationResult {
+  const refuse = (detail: string): PreserveDestinationResult => ({
+    destination: '',
+    parents: [],
+    hold: detail,
+  });
+  if (!isAbsolute(deps.stateRoot)) {
+    return refuse(
+      'the helper did not move node_modules/: the state root is not absolute',
+    );
+  }
+  const stateKind = deps.lstat(deps.stateRoot);
+  if (stateKind === 'absent') {
+    return refuse(
+      'the helper did not move node_modules/: the state root does not exist',
+    );
+  }
+  if (stateKind !== 'directory' && stateKind !== 'symlink') {
+    return refuse(
+      'the helper did not move node_modules/: the state root is not a directory',
+    );
+  }
+  const stateRootReal = deps.realpath(deps.stateRoot);
+  if (stateRootReal === null) {
+    return refuse(
+      'the helper did not move node_modules/: the state root cannot be resolved',
+    );
+  }
+  const resolvedStateRoot = resolve(stateRootReal);
+  if (parse(resolvedStateRoot).root === resolvedStateRoot) {
+    return refuse(
+      'the helper did not move node_modules/: the state root resolves to a filesystem root',
+    );
+  }
+  if (deps.inspectDirectoryPrivacy(deps.stateRoot) === 'unsafe') {
+    return refuse(
+      'the helper did not move node_modules/: the state root is not owned and private',
+    );
+  }
+
+  const iddDirectory = join(resolvedStateRoot, 'idd-skill');
+  const preserveDirectory = join(iddDirectory, 'f4-preserved');
+  for (const [path, kind] of [
+    [iddDirectory, deps.lstat(iddDirectory)],
+    [preserveDirectory, deps.lstat(preserveDirectory)],
+  ] as const) {
+    if (kind === 'symlink') {
+      return refuse(
+        `the helper did not move node_modules/: destination component ${path} is a symlink`,
+      );
+    }
+    if (kind !== 'absent' && kind !== 'directory') {
+      return refuse(
+        `the helper did not move node_modules/: destination component ${path} is not a directory`,
+      );
+    }
+    if (
+      kind === 'directory' &&
+      deps.inspectDirectoryPrivacy(path) === 'unsafe'
+    ) {
+      return refuse(
+        `the helper did not move node_modules/: destination component ${path} is not owned and private`,
+      );
+    }
+  }
+
+  let timestamp: string;
+  try {
+    timestamp = deps
+      .now()
+      .toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\.\d{3}Z$/, 'Z');
+  } catch {
+    return refuse(
+      'the helper did not move node_modules/: the UTC destination timestamp is invalid',
+    );
+  }
+  const destination = join(preserveDirectory, `${issueNumber}-${timestamp}`);
+  if (deps.lstat(destination) !== 'absent') {
+    return refuse(
+      `the helper did not move node_modules/: destination already exists at ${destination}`,
+    );
+  }
+
+  const deepestExisting = [
+    preserveDirectory,
+    iddDirectory,
+    resolvedStateRoot,
+  ].find((path) => deps.lstat(path) !== 'absent');
+  if (deepestExisting === undefined) {
+    return refuse(
+      'the helper did not move node_modules/: no existing destination parent was found',
+    );
+  }
+  const destinationBase = deps.realpath(deepestExisting);
+  if (destinationBase === null) {
+    return refuse(
+      `the helper did not move node_modules/: destination parent ${deepestExisting} cannot be resolved`,
+    );
+  }
+
+  const commonDirectoryResult = deps.git(
+    ['rev-parse', '--git-common-dir'],
+    primary,
+  );
+  const commonDirectoryOutput = commonDirectoryResult.stdout.trim();
+  if (
+    commonDirectoryResult.status !== 0 ||
+    commonDirectoryOutput.length === 0
+  ) {
+    return refuse(
+      'the helper did not move node_modules/: Git common directory cannot be resolved',
+    );
+  }
+  const commonDirectoryPath = isAbsolute(commonDirectoryOutput)
+    ? commonDirectoryOutput
+    : resolve(primary, commonDirectoryOutput);
+  const commonDirectory = deps.realpath(commonDirectoryPath);
+  if (commonDirectory === null) {
+    return refuse(
+      'the helper did not move node_modules/: Git common directory cannot be resolved',
+    );
+  }
+
+  const protectedRoots = [
+    { path: primary, label: 'worktree' },
+    { path: commonDirectory, label: 'Git common directory' },
+    ...records.map((record) => ({ path: record.path, label: 'worktree' })),
+  ];
+  for (const protectedRoot of protectedRoots) {
+    const protectedReal =
+      deps.realpath(protectedRoot.path) ?? resolve(protectedRoot.path);
+    if (isWithinRoot(protectedReal, destinationBase)) {
+      return refuse(
+        `the helper did not move node_modules/: destination ${destination} is inside protected ${protectedRoot.label} ${protectedRoot.path}`,
+      );
+    }
+  }
+
+  const parents: PreservationParent[] = [];
+  for (const path of [resolvedStateRoot, iddDirectory, preserveDirectory]) {
+    const kind = deps.lstat(path);
+    const identity = kind === 'directory' ? deps.directoryIdentity(path) : null;
+    if (kind !== 'absent' && (kind !== 'directory' || identity === null)) {
+      return refuse(
+        `the helper did not move node_modules/: destination parent ${path} has no verified directory identity`,
+      );
+    }
+    parents.push({ path, identity });
+  }
+  return { destination, parents, hold: null };
+}
+
+/** Detect changed parents without following a replacement directory link. */
+function checkPreservationParents(
+  deps: F4WorktreeBranchDeps,
+  parents: ReadonlyMap<string, string | null>,
+): string | null {
+  try {
+    for (const [path, identity] of parents) {
+      const kind = deps.lstat(path);
+      if (identity === null && kind === 'absent') continue;
+      if (
+        identity === null ||
+        kind !== 'directory' ||
+        deps.directoryIdentity(path) !== identity ||
+        deps.realpath(path) !== resolve(path) ||
+        deps.inspectDirectoryPrivacy(path) === 'unsafe'
+      ) {
+        return `destination parent ${path} changed after inspection`;
+      }
+    }
+    return null;
+  } catch (error) {
+    return `destination parent verification failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+/**
+ * Create private parents, stage the source inside its worktree, and verify
+ * its identity before moving it into per-user state. Restore only a verified
+ * directory when the original path remains free; otherwise retain and hold.
+ */
+function moveNodeModules(
+  deps: F4WorktreeBranchDeps,
+  primary: string,
+  worktree: string,
+  destination: string,
+  expectedIdentity: string,
+  expectedParents: readonly PreservationParent[],
+): {
+  readonly result: PreserveNodeModulesResult | null;
+  readonly hold: string | null;
+} {
+  const source = join(worktree, 'node_modules');
+  let temporaryId: string;
+  try {
+    temporaryId = deps.temporaryId();
+  } catch (error) {
+    return {
+      result: null,
+      hold: `the helper did not move node_modules/: could not create a staging name: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (!/^[a-zA-Z0-9-]+$/.test(temporaryId)) {
+    return {
+      result: null,
+      hold: 'the helper did not move node_modules/: the staging name is invalid',
+    };
+  }
+  const staging = join(worktree, `.idd-f4-node_modules-${temporaryId}`);
+  const parents = new Map(
+    expectedParents.map(({ path, identity }) => [path, identity]),
+  );
+  for (const [path, identity] of parents) {
+    const changed = checkPreservationParents(deps, parents);
+    if (changed !== null)
+      return {
+        result: null,
+        hold: `the helper did not move node_modules/: ${changed}`,
+      };
+    try {
+      if (identity === null) {
+        deps.mkdir(path, 0o700);
+        const createdIdentity =
+          deps.lstat(path) === 'directory'
+            ? deps.directoryIdentity(path)
+            : null;
+        if (createdIdentity === null)
+          throw new Error('created directory identity is unavailable');
+        parents.set(path, createdIdentity);
+      }
+      deps.ensurePrivateDirectory(path);
+      const changedAfter = checkPreservationParents(deps, parents);
+      if (changedAfter !== null) throw new Error(changedAfter);
+    } catch (error) {
+      return {
+        result: null,
+        hold: `the helper did not move node_modules/: could not prepare ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  let destinationKind: LstatKind;
+  try {
+    destinationKind = deps.lstat(destination);
+  } catch (error) {
+    return {
+      result: null,
+      hold: `the helper did not move node_modules/: could not inspect destination ${destination}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (destinationKind !== 'absent') {
+    return {
+      result: null,
+      hold: `the helper did not move node_modules/: destination already exists at ${destination}`,
+    };
+  }
+  let stagingKind: LstatKind;
+  try {
+    stagingKind = deps.lstat(staging);
+  } catch (error) {
+    return {
+      result: null,
+      hold: `the helper did not move node_modules/: could not inspect staging path ${staging}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (stagingKind !== 'absent') {
+    return {
+      result: null,
+      hold: `the helper did not move node_modules/: staging path already exists at ${staging}`,
+    };
+  }
+  if (deps.lstat(source) !== 'directory') {
+    return {
+      result: null,
+      hold: 'the helper did not move node_modules/: the source path is no longer a real directory',
+    };
+  }
+  if (deps.directoryIdentity(source) !== expectedIdentity) {
+    return {
+      result: null,
+      hold: 'the helper did not move node_modules/: the source directory changed after inspection',
+    };
+  }
+  try {
+    if (deps.inspectDirectoryPrivacy(source) === 'unsafe') {
+      return {
+        result: null,
+        hold: 'the helper did not move node_modules/: its ownership or privacy could not be verified',
+      };
+    }
+  } catch {
+    return {
+      result: null,
+      hold: 'the helper did not move node_modules/: its ownership or privacy could not be verified',
+    };
+  }
+  // Recheck immediately before the path-based rename. The staged object is
+  // checked again after rename. A detected replacement holds; these separate
+  // path operations do not serialize another process changing the paths.
+  if (
+    deps.lstat(source) !== 'directory' ||
+    deps.directoryIdentity(source) !== expectedIdentity
+  ) {
+    return {
+      result: null,
+      hold: 'the helper did not move node_modules/: the source directory changed before the move',
+    };
+  }
+  try {
+    deps.rename(source, staging);
+  } catch (error) {
+    return {
+      result: null,
+      hold: `the helper did not move node_modules/: staging rename failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  let stagedIdentity: string | null;
+  try {
+    stagedIdentity =
+      deps.lstat(staging) === 'directory'
+        ? deps.directoryIdentity(staging)
+        : null;
+  } catch {
+    stagedIdentity = null;
+  }
+  if (stagedIdentity !== expectedIdentity) {
+    return {
+      result: null,
+      hold: restoreNodeModulesAfterRace(
+        deps,
+        staging,
+        source,
+        expectedIdentity,
+        `the staged source identity changed; expected ${expectedIdentity}, observed ${stagedIdentity ?? 'unavailable'}`,
+      ),
+    };
+  }
+  try {
+    if (deps.inspectDirectoryPrivacy(staging) === 'unsafe') {
+      return {
+        result: null,
+        hold: restoreNodeModulesAfterRace(
+          deps,
+          staging,
+          source,
+          expectedIdentity,
+          'the staged source ownership or privacy could not be verified',
+        ),
+      };
+    }
+    deps.ensurePrivateDirectory(staging);
+  } catch (error) {
+    return {
+      result: null,
+      hold: restoreNodeModulesAfterRace(
+        deps,
+        staging,
+        source,
+        expectedIdentity,
+        `the staged source could not be secured: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    };
+  }
+  try {
+    if (
+      deps.lstat(staging) !== 'directory' ||
+      deps.directoryIdentity(staging) !== expectedIdentity ||
+      deps.lstat(source) !== 'absent'
+    ) {
+      return {
+        result: null,
+        hold: restoreNodeModulesAfterRace(
+          deps,
+          staging,
+          source,
+          expectedIdentity,
+          'the staged source identity or original path changed before preservation',
+        ),
+      };
+    }
+    const changedParent = checkPreservationParents(deps, parents);
+    if (changedParent !== null) throw new Error(changedParent);
+    deps.rename(staging, destination);
+  } catch (error) {
+    return {
+      result: null,
+      hold: restoreNodeModulesAfterRace(
+        deps,
+        staging,
+        source,
+        expectedIdentity,
+        `rename to ${destination} failed: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    };
+  }
+  try {
+    const changedParent = checkPreservationParents(deps, parents);
+    if (changedParent !== null) throw new Error(changedParent);
+    if (
+      deps.lstat(destination) !== 'directory' ||
+      deps.directoryIdentity(destination) !== expectedIdentity
+    ) {
+      return {
+        result: null,
+        hold: restoreOrLockNodeModulesAfterRace(
+          deps,
+          primary,
+          worktree,
+          destination,
+          source,
+          expectedIdentity,
+          'the preserved source identity changed during the final move',
+        ),
+      };
+    }
+    deps.ensurePrivateDirectory(destination);
+  } catch (error) {
+    const hold = restoreOrLockNodeModulesAfterRace(
+      deps,
+      primary,
+      worktree,
+      destination,
+      source,
+      expectedIdentity,
+      `the preserved directory could not be secured: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return {
+      result: null,
+      hold,
+    };
+  }
+  return {
+    result: { destination },
+    hold: null,
+  };
+}
+
+/** Restore a raced or refused object without overwriting a new source path. */
+function restoreNodeModulesAfterRace(
+  deps: F4WorktreeBranchDeps,
+  movedPath: string,
+  source: string,
+  expectedIdentity: string,
+  reason: string,
+): string {
+  try {
+    const movedKind = deps.lstat(movedPath);
+    if (movedKind === 'absent') {
+      return `the helper did not move node_modules/: ${reason}; the staged path is absent and no automatic recovery was possible`;
+    }
+    if (movedKind !== 'directory') {
+      return `the helper did not move node_modules/: ${reason}; ${movedPath} was retained because it is not a real directory`;
+    }
+    const movedIdentity = deps.directoryIdentity(movedPath);
+    if (movedIdentity !== expectedIdentity) {
+      return `the helper did not move node_modules/: ${reason}; ${movedPath} was retained because its directory identity did not match the expected source`;
+    }
+    if (deps.lstat(source) !== 'absent') {
+      return `the helper did not move node_modules/: ${reason}; ${movedPath} was retained because ${source} is occupied`;
+    }
+    deps.rename(movedPath, source);
+    return `the helper did not move node_modules/: ${reason}; the moved object was restored to ${source}`;
+  } catch (error) {
+    return `the helper did not move node_modules/: ${reason}; automatic restoration failed and the object remains at ${movedPath}: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+/** Restore a refused move, or persist a hold if restoration cannot be verified. */
+function restoreOrLockNodeModulesAfterRace(
+  deps: F4WorktreeBranchDeps,
+  primary: string,
+  worktree: string,
+  movedPath: string,
+  source: string,
+  expectedIdentity: string,
+  reason: string,
+): string {
+  const restoration = restoreNodeModulesAfterRace(
+    deps,
+    movedPath,
+    source,
+    expectedIdentity,
+    reason,
+  );
+  try {
+    if (
+      deps.lstat(source) === 'directory' &&
+      deps.directoryIdentity(source) === expectedIdentity &&
+      deps.lstat(movedPath) === 'absent'
+    ) {
+      return restoration;
+    }
+  } catch {
+    // An unverified restore keeps the worktree locked below.
+  }
+  let lock: GitResult;
+  try {
+    lock = deps.git(
+      [
+        'worktree',
+        'lock',
+        '--reason',
+        `F4 node_modules recovery required for issue ${worktree}`,
+        worktree,
+      ],
+      primary,
+    );
+  } catch (error) {
+    return `${restoration}; the helper could not persist a worktree lock: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  if (lock.status === 0) {
+    return `${restoration}; the worktree was locked to prevent a later cleanup from removing the recovery state`;
+  }
+  return `${restoration}; the helper could not persist a worktree lock: ${lock.stderr.trim()}`;
 }
 
 /**

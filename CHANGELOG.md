@@ -14,6 +14,94 @@ discipline and has no tag.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-21
+
+Release cut after the policy-documentation and pinned-link tracks.
+Compatibility changes remain within the pre-1.0 release policy described
+below; the signed tag remains the separate operator-gated follow-up #4522.
+
+### Added
+
+- Add the read-only A5 claim pre-check, its fresh-claim route, and a
+  closed-issue guard. Malformed provider rows now stop the pre-check instead
+  of appearing to be a clean scan (#4390, #4416, #4443).
+- Add the scoped D2 push helper and the host-local load gate. The push helper
+  checks the claimed issue branch and candidate-file scope before publishing
+  (#4399, #4448, #4514).
+- Add `localExec.admission` and its command helper for host-local validation;
+  the optional Pueue backend can coordinate validation across repositories
+  (#4450, #4473, #4558).
+- Add F4 head-proof markers and the cleanup helpers for review-comment,
+  worktree, and branch cleanup (#4403, #4449, #4452, #4455).
+- Add the `--comment-id` route for disposing one non-review notice, an
+  advisory-wait state helper, and worker reports that accept unfiled follow-up
+  text (#4445, #4388, #4487).
+- Add the repository-only `dangerouslyAutoDecide` opt-in and the closed
+  provisional-decision record schema. The opt-in defaults to false and does
+  not select a decision or bypass another gate (#4548, #4572).
+- Add the annotated policy configuration example and document the first
+  durable journal for standalone issue authoring (#4568, #4504).
+
+### Changed
+
+- Default changes, read these before re-syncing:
+  - Local validation admission is enabled by default with one command at a
+    time per OS user, a `PT2H` wait, and the `flock` backend. An expired wait
+    returns 75 and proves that the command did not start. To keep immediate
+    execution, set `localExec.admission.enabled` to `false`; otherwise adjust
+    this repository setting as needed. Pueue remains an optional backend
+    (#4450, #4473, #4558).
+  - Claimed F4 cleanup requires a verified head proof and the helper runtime.
+    A claimed instructions-only run holds instead of taking the former
+    GraphQL fallback. For claimed cleanup, use the helper runtime. When a
+    worktree has a populated submodule, preserve its contents and have an
+    operator deinitialize it or handle the hold. See the related
+    PRs #4403, #4449, #4452, #4455, and #4457.
+  - At the configured review-round threshold, only wording or formatting
+    changes to Low findings are mandatory deferrals. Factual and correctness
+    findings keep the normal judgment (#4385).
+  - The orphan fallback excludes roadmap leaves, so roadmap issues are not
+    routed through orphan-only checks (#4497, #4501).
+  - A complete, consistent no-finding Codex review for an older head no
+    longer blocks readiness. Finding-bearing, malformed, mismatched,
+    incomplete, and current-head reviews remain blocking (#4503).
+  - S/M orphan issue drafts must include a non-empty `Candidate files`
+    section within the effort limit (3 paths for S, 8 for M). Update drafts
+    with their actual bounded paths or route them to a person; child work
+    issues are unchanged (#4451).
+- When the helper runtime is enabled, `claimed-push` admits the configured D2
+  validation command through local admission. The distributed runtime default
+  remains `instructions-only` (#4549).
+- Under `deferByUrgency: severity-tiered`, apply the adopt-now rule and
+  allow the supported `--adopt-now` plus `--lite` combination. When
+  configured, the secondary quiet window covers every non-primary advisory
+  bot (#4513, #4547, #4557). Keep the quiet-window setting unset to retain
+  its previous no-wait default.
+- Clarify pre-1.0 compatibility and phase-alias safeguards: `0.y.0` releases
+  may change supported behavior when the impact and migration are documented;
+  `1.0.0` remains a separate stability decision (#4597).
+- Require material factual claims in completed issue drafts to be checked
+  against current sources. Update review, claim, worker-budget, worker-report,
+  signing, onboarding, and full/lite validation guidance to match shipped
+  helper behavior. This covers PRs #4301, #4329, #4389, #4391, #4400, #4407,
+  plus #4408, #4419, #4422, #4423, #4447, #4459, #4484, #4485, #4488, #4489,
+  and #4491, #4499, #4504, #4505, #4516, #4545, #4551, #4561, #4579, #4587.
+- Update the remaining template onboarding and profile links to `v0.17.0`
+  (#4601).
+
+### Fixed
+
+- Read Copilot's current “Previously missed” heading so those items enter
+  normal review disposition (#4546). Exclude a valid published draft carrier
+  from suitability duplicate findings (#4576), and avoid false declaration
+  findings for dotted-name prose and wrapped declarations (#4591, #4602).
+- Recognize token-continuing delimiters in code-span audits, and preserve
+  standard exclusions when the ignored-path audit reruns (#4582, #4607).
+- Keep quoted issue text from changing suitability matching, share review
+  snapshot and CI state evidence, and settle acknowledgement-only activity
+  consistently (#4397, #4410, #4415, #4421, #4500).
+- Keep branch-state route values tied to their shared contract (#4420).
+
 ## [0.16.0] - 2026-10-15
 
 Release cut after the user-global installer, the draft-carrier publish and

@@ -2129,7 +2129,15 @@ A4 Step 2 de-prioritization order. Evidence-only: it claims nothing.
   - `candidates`: `[{ number: number, score: number | null,`
     `effectiveScore: number, candidateFiles: string[],`
     `highContentionTouched: string[], overlaps: [{ number: number,`
-    `reason: "claim" | "pr", files: string[] }], overlapFlag: boolean }]`
+    `reason: "claim" | "pr", files: string[] }],`
+    `sharedNonHighContention: [{ number: number, reason: "claim" | "pr",`
+    `files: string[] }], overlapFlag: boolean }]`
+    `sharedNonHighContention` reports files shared with each active issue
+    outside the configured high-contention set. It uses the same active set
+    already loaded for overlap checks, so it is empty when `--check-overlap`
+    is not enabled or when the manifest is missing. It does not affect
+    `overlapFlag`, ranking, or batch selection. Issue numbers and file paths
+    are sorted for deterministic output.
   - `recommendedOrder`: `number[]` — candidate numbers after the soft
     tie-breaker (score desc, then non-overlapping first within a score band,
     then issue number). It does **not** apply `discover.selectionDesync`;
@@ -8765,8 +8773,34 @@ and the remote branch.
 Dry-run is the default. It runs the proof, claim, and read-only
 development-branch checks, and the step 5 inspection, and it reports `would-run`
 for the fetch, the fast-forward, and each removal. `--apply` performs them.
-`git worktree remove` runs without `--force` , and a dirty, ignored,
-populated-submodule, or symlinked path holds before any removal.
+`git worktree remove` runs without `--force` , and each other dirty shape,
+populated submodule, or symlinked path holds before removal. When the complete
+ignored-inclusive status output is exactly `!! node_modules/`, the path is a
+real directory, and no registered worktree lies at or inside it, apply moves it
+with its files intact to `<state>/idd-skill/f4-preserved/<issue>-<UTC timestamp>/`;
+the moved directory root is restricted to mode `0700` on POSIX, and the step 5
+record names the destination. Apply requires an owned state root and private
+destination directories. An owned direct POSIX root and existing destination
+directories are restricted to `0700`; a state-root symlink must already target
+a private directory. Windows checks that the state root and destination
+directories have a private ACL. On POSIX, the existing `node_modules/`
+directory must also be owned by the current user. Windows requires its ACL to
+be private before the move. The helper creates only missing parents and
+renames directly to an absent destination leaf. Dry-run performs the same
+read-only checks and reports the destination without creating, moving, or
+changing permissions. The helper never deletes or expires preserved trees; the
+operator decides when to clean them.
+The helper revalidates destination parent identities before moving, but path
+checks, renames, and the final status/removal pair are not atomic. Stop
+concurrent dependency processes and other worktree writers before cleanup;
+content created after the last scan can still be removed by Git. See the
+residual-race discussion in [F4 Head Proof](idd-resume-detail.md#f4-head-proof)
+(PR `#4606`, review comments `#4338910285` and `#4338910384`; preventive,
+no observed data loss).
+Observed 2026-10-18 on issue `#4511` (PR `#4527`), an install-created
+`node_modules/` alone held cleanup. See the
+[F4 Head Proof](idd-resume-detail.md#f4-head-proof) section for destination
+checks and the manual-preservation path when the helper did not move it.
 
 Output is one JSON document with `steps[]` , `status` , `failedStep` , and
 `notRunSteps` . Status `dry-run` or `complete` exits `0` ; `hold` or `failed`
@@ -8785,11 +8819,11 @@ and that helper detail is the next action.
 | `development-branch-diverged`   | Hold. The development branch cannot fast-forward to origin. Do not reset or rebase. The operator reconciles it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `primary-update-failed`         | Hold. The primary worktree update failed for a reason this helper does not classify. Nothing was removed. The operator inspects the primary worktree. Do not reset or stash.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `inconsistent-worktree-state`   | Hold. The worktree path, its git registration, and the claim branch disagree, or git could not read them. Nothing was removed. The operator checks git worktree list and the claim.                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `dirty-worktree`                | Hold. The worktree holds untracked, modified, or ignored files. Nothing was removed. The F4 session preserves that content outside the worktree by hand, including every reproducible configured-command output, then reruns.                                                                                                                                                                                                                                                                                                                                                                                   |
+| `dirty-worktree`                | Hold. Any other untracked, modified, or ignored content remains in the worktree. Nothing was removed. When the detail says the helper did not move `node_modules/`, preserve that directory by hand too; preserve all other content outside the worktree, including reproducible configured-command output, then rerun.                                                                                                                                                                                                                                                                                         |
 | `submodule-worktree`            | Hold. The worktree holds a populated submodule. Nothing was removed. The F4 session preserves that content outside the worktree by hand. The operator then runs `git -C <issue-worktree-path> submodule deinit --all` with the worktree still registered, and the helper is rerun.                                                                                                                                                                                                                                                                                                                              |
 | `branch-tip-mismatch`           | Hold. The local branch tip does not equal the proof branch tip, or the ref is missing while its worktree exists. Nothing was removed. The operator checks the branch state.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `local-branch-unmerged-commits` | Hold. git branch -d refused, and the local tip is not the proof head. The operator comments on the issue and makes a fresh claim check before any forced deletion.                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `worktree-remove-refused`       | Failed. git worktree remove refused after the checks passed, so the worktree may be partly changed. The operator inspects it. A rerun reads the proof again and posts nothing.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `local-branch-unmerged-commits` | Hold. git branch -d refused, and the local tip is not the proof head. The operator comments on the issue and makes a fresh claim check before any forced deletion; keep any preserved `node_modules/` destination named in the step 5 record.                                                                                                                                                                                                                                                                                                                                                                   |
+| `worktree-remove-refused`       | Failed. git worktree remove refused after the checks passed, so the worktree may be partly changed. The step 5 record names any preserved `node_modules/` destination; keep it while inspecting the worktree. A rerun reads the proof again and posts nothing.                                                                                                                                                                                                                                                                                                                                                  |
 | `delete-setting-unreadable`     | Hold at step 6. delete_branch_on_merge could not be read as a boolean, and nothing remote was deleted. In a dry run nothing has changed, so rerun it once the setting is readable. In an applied run, steps 4 and 5 have already run. The operator first confirms by hand that delete_branch_on_merge is false: when it is true, step 6 is skipped, because GitHub deletes the branch on merge. Only when it is false does the operator complete step 6 by hand with delete-remote-branch and the expected SHA, and the session continues from step 7 after the operator confirms. Do not rerun an applied run. |
 | `remote-delete-unreadable`      | Hold at step 6. The output of the remote branch helper could not be read, and nothing remote was deleted. In a dry run nothing has changed, so rerun it. In an applied run, steps 4 and 5 have already run. The operator first confirms by hand that delete_branch_on_merge is false: when it is true, step 6 is skipped, because GitHub deletes the branch on merge. Only when it is false does the operator complete step 6 by hand with delete-remote-branch and the expected SHA, after reading its output, and the session continues from step 7 after the operator confirms. Do not rerun an applied run. |
 

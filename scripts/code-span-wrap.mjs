@@ -54,6 +54,16 @@ const PROPER_NAME_TITLE_ABBREVIATION =
 const DOTTED_IDENTIFIER_PREFIX =
   /^\s*[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+$/u;
 const MAX_DECLARATION_GENERIC_DEPTH = 8;
+const DECLARATION_PRIMITIVE_ARRAY_ELEMENTS = [
+  'boolean',
+  'byte',
+  'char',
+  'double',
+  'float',
+  'int',
+  'long',
+  'short',
+];
 const DECLARATION_CLAUSE_KEYWORDS = ['extends', 'implements', 'permits'];
 function skipDeclarationWhitespace(text, start) {
   let cursor = start;
@@ -247,7 +257,7 @@ function isDeclarationIdentifierContinuation(code) {
   );
 }
 function parseDeclarationTypeList(text, start) {
-  let typeEnd = parseDeclarationType(text, start, 0);
+  let typeEnd = parseDeclarationType(text, start, 0, true, false, true);
   if (typeEnd === undefined) {
     return undefined;
   }
@@ -258,7 +268,7 @@ function parseDeclarationTypeList(text, start) {
       return cursor;
     }
     cursor = skipDeclarationTrivia(text, commaIndex + 1);
-    typeEnd = parseDeclarationType(text, cursor, 0);
+    typeEnd = parseDeclarationType(text, cursor, 0, true, false, true);
     if (typeEnd === undefined) {
       return undefined;
     }
@@ -275,7 +285,12 @@ function skipDeclarationTypeAnnotations(text, start) {
     cursor = skipDeclarationTrivia(text, annotationEnd);
   }
 }
-function parseDeclarationGenericArguments(text, start, genericDepth) {
+function parseDeclarationGenericArguments(
+  text,
+  start,
+  genericDepth,
+  rejectRootWildcard,
+) {
   if (text[start] !== '<' || genericDepth >= MAX_DECLARATION_GENERIC_DEPTH) {
     return undefined;
   }
@@ -284,6 +299,7 @@ function parseDeclarationGenericArguments(text, start, genericDepth) {
     text,
     cursor,
     genericDepth + 1,
+    rejectRootWildcard,
   );
   if (argumentEnd === undefined) {
     return undefined;
@@ -295,7 +311,12 @@ function parseDeclarationGenericArguments(text, start, genericDepth) {
       break;
     }
     cursor = skipDeclarationTrivia(text, commaIndex + 1);
-    argumentEnd = parseDeclarationTypeArgument(text, cursor, genericDepth + 1);
+    argumentEnd = parseDeclarationTypeArgument(
+      text,
+      cursor,
+      genericDepth + 1,
+      rejectRootWildcard,
+    );
     if (argumentEnd === undefined) {
       return undefined;
     }
@@ -310,6 +331,7 @@ function parseDeclarationType(
   genericDepth,
   requireUppercaseFinal = true,
   allowArraySuffix = false,
+  rejectRootWildcard = false,
 ) {
   let cursor = skipDeclarationTypeAnnotations(text, start);
   let finalSegmentStartsUppercase = false;
@@ -332,6 +354,7 @@ function parseDeclarationType(
         text,
         cursor,
         genericDepth,
+        rejectRootWildcard,
       );
       if (genericArgumentsEnd === undefined) {
         return undefined;
@@ -361,23 +384,79 @@ function parseDeclarationType(
   }
   return cursor;
 }
-function parseDeclarationTypeArgument(text, start, genericDepth) {
+function parseDeclarationTypeArgument(
+  text,
+  start,
+  genericDepth,
+  rejectRootWildcard,
+) {
   const cursor = skipDeclarationTypeAnnotations(text, start);
   if (text[cursor] !== '?') {
-    return parseDeclarationType(text, cursor, genericDepth, false, true);
+    return parseDeclarationType(
+      text,
+      cursor,
+      genericDepth,
+      false,
+      true,
+      rejectRootWildcard,
+    );
+  }
+  // Wildcards directly inside a declaration supertype are invalid evidence;
+  // nested arguments such as Base<List<?>> remain valid.
+  if (rejectRootWildcard && genericDepth === 1) {
+    return undefined;
   }
   let boundStart = skipDeclarationTrivia(text, cursor + 1);
-  for (const bound of ['extends', 'super']) {
-    const boundEnd = boundStart + bound.length;
+  let varianceKeyword;
+  for (const keyword of ['extends', 'super']) {
+    const keywordEnd = boundStart + keyword.length;
     if (
-      text.startsWith(bound, boundStart) &&
-      !isDeclarationIdentifierContinuation(text.charCodeAt(boundEnd))
+      text.startsWith(keyword, boundStart) &&
+      !isDeclarationIdentifierContinuation(text.charCodeAt(keywordEnd))
     ) {
-      boundStart = skipDeclarationTrivia(text, boundEnd);
-      return parseDeclarationType(text, boundStart, genericDepth, false, true);
+      varianceKeyword = keyword;
+      boundStart = skipDeclarationTrivia(text, keywordEnd);
+      break;
     }
   }
-  return cursor + 1;
+  if (varianceKeyword === undefined) {
+    return cursor + 1;
+  }
+  const primitive = DECLARATION_PRIMITIVE_ARRAY_ELEMENTS.find(
+    (type) =>
+      text.startsWith(type, boundStart) &&
+      !isDeclarationIdentifierContinuation(
+        text.charCodeAt(boundStart + type.length),
+      ),
+  );
+  let boundEnd =
+    primitive === undefined
+      ? parseDeclarationType(
+          text,
+          boundStart,
+          genericDepth,
+          true,
+          false,
+          rejectRootWildcard,
+        )
+      : boundStart + primitive.length;
+  if (boundEnd === undefined) {
+    return undefined;
+  }
+  let isArray = false;
+  while (true) {
+    const openIndex = skipDeclarationTypeAnnotations(text, boundEnd);
+    if (text[openIndex] !== '[') {
+      break;
+    }
+    const closeIndex = skipDeclarationTrivia(text, openIndex + 1);
+    if (text[closeIndex] !== ']') {
+      return undefined;
+    }
+    isArray = true;
+    boundEnd = closeIndex + 1;
+  }
+  return primitive !== undefined && !isArray ? undefined : boundEnd;
 }
 function skipDeclarationGenericClause(text, start) {
   if (text[start] !== '<') {
