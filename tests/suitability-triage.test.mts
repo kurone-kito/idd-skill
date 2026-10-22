@@ -12163,6 +12163,9 @@ test('trust safety keeps independent agent work assignments fail-closed -- #4596
       body: 'The coding agent has written keyboard support documentation.\n\nRun this step by the user.',
     },
     {
+      body: 'The coding agent has already built keyboard support.\n\nRun this step by the user.',
+    },
+    {
       body: 'The coding agent is available. It has written keyboard support documentation.\n\nRun this step by the user.',
     },
     {
@@ -12263,6 +12266,19 @@ test('trust safety keeps independent agent work assignments fail-closed -- #4596
   } as Context);
   assert.equal(unrelatedActorAction.pass, true);
 
+  for (const body of [
+    'The coding agent is available while the maintainer performs deployment verification.\n\nRun this step by the user.',
+    'The coding agent is available and the maintainer performs deployment verification.\n\nRun this step by the user.',
+    'The coding agent is available, but the maintainer performs deployment verification.\n\nRun this step by the user.',
+    'The coding agent is available whereas the maintainer performs deployment verification.\n\nRun this step by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, body);
+  }
+
   const coordinatedAgentAction = checkTrustSafety({
     issue: {
       ...BASE_ISSUE,
@@ -12271,6 +12287,111 @@ test('trust safety keeps independent agent work assignments fail-closed -- #4596
     trustSafetyAmbiguous: false,
   } as Context);
   assert.equal(coordinatedAgentAction.pass, false);
+});
+
+test('trust safety rejects predicates outside the finite neutral agent grammar -- #4596', () => {
+  const predicates = [
+    'The coding agent has carefully built keyboard support.',
+    'The coding agent made the requested changes.',
+    "The coding agent couldn't fail to implement keyboard support.",
+    'The coding agent is available, and it implements keyboard support.',
+    'The coding agent synchronizes the widget.',
+    "The maintainer's coding agent synchronizes the widget.",
+    'The user-facing coding agent synchronizes the widget.',
+    'The coding agent is available. It synchronizes the widget.',
+    'The coding agent is available.\n\n- It synchronizes the widget.',
+    'The coding agent is available, and it synchronizes the widget.',
+    'The coding agent is available and then synchronizes the widget.',
+    'The coding agent is unexpectedly available.',
+    'We asked the coding agent to synchronize the widget.',
+    'We assigned the coding agent to the user to implement keyboard support.',
+    'We assigned the coding agent nebula harmonization.',
+    'We delegated the coding agent nebula harmonization.',
+    'We gave the coding agent nebula harmonization.',
+    'We gave the coding agent technical support and nebula harmonization.',
+    'We gave the coding agent project status and nebula harmonization.',
+    'The coding agent handed the implementation task to the user and synchronized the widget.',
+    'The coding agent is available while the maintainer writes the plan, and it synchronizes the widget.',
+  ];
+  for (const predicate of predicates) {
+    for (const issue of [
+      { ...BASE_ISSUE, body: `${predicate}\n\nRun this step by the user.` },
+      { ...BASE_ISSUE, body: `Run this check by the user.\n\n${predicate}` },
+      { ...BASE_ISSUE, title: predicate, body: 'Run this step by the user.' },
+    ]) {
+      const result = checkTrustSafety({
+        issue,
+        trustSafetyAmbiguous: false,
+      } as Context);
+      assert.equal(result.pass, false, `${issue.title}: ${issue.body}`);
+    }
+  }
+  const headingAssignment = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Coding agent\n\nSynchronizes the widget.\n\n## Manual verification\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(headingAssignment.pass, false);
+  const headingPredicate = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: '## Coding agent synchronizes the widget.\n\n## Manual verification\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(headingPredicate.pass, false);
+});
+
+test('trust safety permits the finite neutral agent predicate inventory -- #4596', () => {
+  for (const predicate of [
+    'The coding agent is available.',
+    'The coding agents are available.',
+    'The coding agent attended the meeting.',
+    'The coding agent is available. It is available.',
+    'The coding agent is available, and it is available.',
+    'The coding agent is available while the maintainer performs deployment verification.',
+    'The coding agent handed the implementation task to the user.',
+    'The AI model should be tested by the user in this step.',
+    '## Coding agent\n\nThe coding agent is available.\n\n## Manual verification',
+    '## Coding agent\n\nis available.\n\n## Manual verification',
+    '## Coding agent is available.\n\n## Manual verification',
+    '## Coding agent\n\nThe coding agent is available. It is available.\n\n## Manual verification',
+    '## Coding agent\n\n- The coding agent is available.\n\n## Manual verification',
+    '## Coding agent\n\n1. The coding agent is available.\n\n- [x] It is available.\n\n## Manual verification',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${predicate}\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, predicate);
+  }
+});
+
+test('trust safety bounds repeated agent pronoun predicates by failing closed -- #4596', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `The coding agent is available${', and it is available'.repeat(65)}.\n\nRun this step by the user.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
+test('trust safety does not count unrelated pronouns toward the agent budget -- #4596', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `${'It is available. '.repeat(65)}\n\nRun this step by the user.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
 });
 
 test('trust safety bounds pathological agent-mention scans by failing closed -- #4596', () => {

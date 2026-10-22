@@ -1248,10 +1248,79 @@ const USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION = new RegExp(
   `\\b(?:${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION_SOURCE}(?:s|es|ed|ing|d)?|built|wrote|written|ran)\\b`,
   'i',
 );
-const USER_ACTOR_STEP_AGENT_SUBJECT_WORK_ACTION = new RegExp(
-  String.raw`^\s*(?:(?:must|should|shall|will|can|could|may|might|needs?\s+to|has\s+to|is\s+to|is\s+required\s+to|required\s+to|expected\s+to|instructed\s+to|am|is|are|was|were|be|been|being|has|have|had)\s+)*${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.source}|\b(?:and|or)\s+(?:then\s+)?(?:(?:must|should|shall|will|can|could|may|might|needs?\s+to|has\s+to|is\s+to|is\s+required\s+to|required\s+to|expected\s+to|instructed\s+to|am|is|are|was|were|be|been|being|has|have|had)\s+)*${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.source}`,
+const USER_ACTOR_STEP_AGENT_SUBJECT_PREDICATE_LEAD_SOURCE = String.raw`(?:must|should|shall|will|can|could|may|might|needs?\s+to|has\s+to|is\s+to|is\s+required\s+to|required\s+to|expected\s+to|instructed\s+to|am|is|are|was|were|be|been|being|has|have|had|do|does|did|(?:must|should|is|are|was|were|does|do|did|has|have|had)n['’]t|can['’]t|won['’]t|cannot|already|also|actively|currently|finally|immediately|just|previously|recently|still|successfully|not|never|no\s+longer)`;
+const USER_ACTOR_STEP_AGENT_SUBJECT_PREDICATE_PREFIX_SOURCE = String.raw`(?:(?:${USER_ACTOR_STEP_AGENT_SUBJECT_PREDICATE_LEAD_SOURCE})\s+){0,5}`;
+const USER_ACTOR_STEP_AGENT_SUBJECT_PREDICATE_SOURCE = String.raw`(?:(?:fail(?:s|ed)?|refuse(?:s|d)?)\s+to\s+)?(?:${USER_ACTOR_STEP_ASSIGNMENT_CUE.source}|${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.source})`;
+const USER_ACTOR_STEP_AGENT_SUBJECT_WORK_ASSIGNMENT = new RegExp(
+  String.raw`^\s*${USER_ACTOR_STEP_AGENT_SUBJECT_PREDICATE_PREFIX_SOURCE}${USER_ACTOR_STEP_AGENT_SUBJECT_PREDICATE_SOURCE}|\b(?:and|or)\s+(?:then\s+)?${USER_ACTOR_STEP_AGENT_SUBJECT_PREDICATE_PREFIX_SOURCE}${USER_ACTOR_STEP_AGENT_SUBJECT_PREDICATE_SOURCE}`,
   'i',
 );
+// #4596, maintainer scope decision: neutral subject predicates are a finite
+// inventory. Unknown predicates disable the manual-step exception instead
+// of relying on an expanding list of English work verbs and adverbs.
+const USER_ACTOR_STEP_NEUTRAL_AGENT_PREDICATE =
+  /^(?:(?:am|is|are|was|were)\s+available|attend(?:s|ed|ing)?\s+(?:a|the)\s+meeting)$/i;
+const USER_ACTOR_STEP_NEUTRAL_AGENT_TRANSFER = new RegExp(
+  String.raw`^${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}\s+(?:(?:this|that)\s+(?:step|check|task)|(?:a|the)\s+(?:[\w-]+\s+){0,3}task)\s+to\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)$`,
+  'i',
+);
+const USER_ACTOR_STEP_NEUTRAL_AGENT_PATIENT =
+  /^(?:(?:must|should|shall|will|can|could|may|might)\s+be|is|are|was|were)\s+(?:tested|checked|reviewed)(?:\s+by\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance))?\s+in\s+this\s+(?:step|check)$/i;
+const USER_ACTOR_STEP_HUMAN_SUBJECT_CONTINUATION =
+  /\s*,?\s*\b(?:and|but|while|whereas)\s+(?:(?:a|an|the)\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
+const USER_ACTOR_STEP_HUMAN_AGENT_OBJECT_PREFIX =
+  /^\s*(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\s+(?:tests?|verifies|reviews?|discusses?|mentions?)\s+(?:(?:a|an|the)\s+)?$/i;
+const USER_ACTOR_STEP_NEUTRAL_AGENT_SECTION_LABEL = new RegExp(
+  String.raw`^${USER_ACTOR_STEP_ASSIGNABLE_AGENT.source}\s+implementation$`,
+  'i',
+);
+
+function isSupportedNeutralAgentPredicate(predicate: string): boolean {
+  return predicate
+    .split(/\s*,?\s*\b(?:and|or|but|while|whereas)\s+(?:it|they|he|she)\b/i)
+    .every((part) => {
+      const ownPredicate = part
+        .split(USER_ACTOR_STEP_HUMAN_SUBJECT_CONTINUATION, 1)[0]
+        ?.trim()
+        .replace(/[.!?]+$/, '')
+        .trim();
+      return (
+        ownPredicate !== undefined &&
+        (USER_ACTOR_STEP_NEUTRAL_AGENT_PREDICATE.test(ownPredicate) ||
+          USER_ACTOR_STEP_NEUTRAL_AGENT_TRANSFER.test(ownPredicate) ||
+          USER_ACTOR_STEP_NEUTRAL_AGENT_PATIENT.test(ownPredicate))
+      );
+    });
+}
+
+function stripAgentClauseListPrefix(clause: string): string {
+  return clause.replace(
+    /^\s*(?:>\s*)*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)*\s*/,
+    '',
+  );
+}
+
+function isSupportedNeutralAgentClause(clause: string): boolean {
+  const normalized = stripAgentClauseListPrefix(clause);
+  if (isSupportedNeutralAgentPredicate(normalized)) return true;
+  const pronoun = /^(?:it|they|he|she)\b/i.exec(normalized);
+  if (pronoun !== null) {
+    return isSupportedNeutralAgentPredicate(
+      normalized.slice(pronoun[0].length),
+    );
+  }
+  const agent = USER_ACTOR_STEP_ASSIGNABLE_AGENT.exec(normalized);
+  if (agent === null) return false;
+  const prefix = normalized.slice(0, agent.index);
+  return (
+    USER_ACTOR_STEP_AGENT_SUBJECT_PREFIX.test(prefix) &&
+    !USER_ACTOR_STEP_AGENT_OBJECT_ASSIGNMENT_RELATION.test(prefix) &&
+    !USER_ACTOR_STEP_HUMAN_AGENT_OBJECT_PREFIX.test(prefix) &&
+    isSupportedNeutralAgentPredicate(
+      normalized.slice(agent.index + agent[0].length),
+    )
+  );
+}
 const USER_ACTOR_STEP_AGENT_PRONOUN_ASSIGNMENT_PREDICATE_SOURCE = `(?:${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.source}|${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}|(?:responsibility|responsibilities)|responsible|accountable|owns?|owned|owner|ownership|belongs?\\s+to|in\\s+charge\\s+of|oversee(?:s|n|ing)?|required\\s+to\\s+${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.source})`;
 const USER_ACTOR_STEP_AGENT_LATER_WORK_NOUN_DELIVERABLE = new RegExp(
   String.raw`(?:\band\b|\bor\b|,)\s+(?!(?:never|not|no\s+longer)\s+(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|task(?:s|ed)?|give|gives|gave|given|giving|hand(?:s|ed|ing)?|${USER_ACTOR_STEP_AGENT_SEND_VERB}|transfer(?:s|red|ring)?|reassign(?:s|ed|ing)?|allocate|allocates|allocated|allocating|entrust(?:s|ed|ing)?)\b\s+|${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION_SOURCE}(?:s|es|ed|ing|d)?\b\s+|(?:built|wrote|ran)\b\s+)(?:(?:a|an|the)\s+)?(?:[\w-]+\s+){0,2}?(?:implementations?|work|tasks?|responsibilities|duties|assignments?|projects?|features?|support|testing|tests?|reviews?|documentation|maintenance|development|debugging|refactoring|migration|deployment|analysis|build)\b(?!\s+(?:details?|results?|status|overview|progress|history|summary)\b)`,
@@ -1423,7 +1492,7 @@ function assignmentHeadingContext(heading: string): {
     (!headingStartsWithAgentActor(label) && !agentActorInTargetRole) ||
     (assignedTarget === undefined &&
       numbered === null &&
-      genericTarget === null)
+      genericTarget === undefined)
   ) {
     return null;
   }
@@ -3285,12 +3354,28 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
         .replace(/^\s*(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/, '');
       const agentObjectAssignmentRelation =
         USER_ACTOR_STEP_AGENT_OBJECT_ASSIGNMENT_RELATION.test(prefix);
+      if (
+        !agentObjectAssignmentRelation &&
+        USER_ACTOR_STEP_AGENT_SUBJECT_PREFIX.test(subjectPrefix) &&
+        !USER_ACTOR_STEP_HUMAN_AGENT_OBJECT_PREFIX.test(subjectPrefix) &&
+        /\S/.test(suffix) &&
+        !isSupportedNeutralAgentPredicate(suffix)
+      ) {
+        return true;
+      }
+      if (
+        agentObjectAssignmentRelation &&
+        /^\s+to\s+/i.test(suffix) &&
+        !/^\s+to\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\s*$/i.test(
+          suffix,
+        )
+      ) {
+        return true;
+      }
       const isAgentSubject =
         !agentObjectAssignmentRelation &&
         USER_ACTOR_STEP_AGENT_SUBJECT_PREFIX.test(subjectPrefix) &&
-        (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(suffix) ||
-          USER_ACTOR_STEP_GENERAL_WORK_ACTION.test(suffix) ||
-          USER_ACTOR_STEP_AGENT_SUBJECT_WORK_ACTION.test(suffix));
+        USER_ACTOR_STEP_AGENT_SUBJECT_WORK_ASSIGNMENT.test(suffix);
       const passiveVerb =
         USER_ACTOR_STEP_PASSIVE_PARTICIPLE_IN_PHRASE.exec(suffix);
       const passiveSubject =
@@ -3354,10 +3439,22 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
             !USER_ACTOR_STEP_AGENT_LATER_WORK_INFINITIVE_DELIVERABLE.test(
               suffix.slice(agentStrongWorkNoun[0].length),
             )));
+      const agentWasGivenGift =
+        /\b(?:give|gives|gave|given|giving)\s+(?:(?:a|an|the)\s+)?$/i.test(
+          prefix,
+        ) && /^\s+(?:a|an|the)\s+gift\s*$/i.test(suffix);
+      const completeInformationComplement =
+        /^\s+(?:(?:a|an|the)\s+)?(?:(?:technical|tech)\s+support|(?:project|deployment|test|build|review|(?:written\s+)?documentation)\s+(?:status|details|results))\s*$/i.test(
+          suffix,
+        );
       if (
         USER_ACTOR_STEP_AGENT_STRONG_OBJECT_ASSIGNMENT_RELATION.test(prefix) &&
-        agentStrongWorkNoun !== null &&
-        !agentStrongWorkNounIsInformation
+        /\S/.test(suffix) &&
+        !/^\s+to\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\s*$/i.test(
+          suffix,
+        ) &&
+        !(agentStrongWorkNounIsInformation && completeInformationComplement) &&
+        !agentWasGivenGift
       ) {
         return true;
       }
@@ -3443,7 +3540,30 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
 
 function hasAdjacentAgentPronounWorkAssignment(text: string): boolean {
   let agentAntecedentSeen = false;
-  for (const { clause } of splitSentenceAndSemicolonClauses(text)) {
+  let pronounCount = 0;
+  for (const item of splitSentenceAndSemicolonClauses(text)) {
+    const clause = stripAgentClauseListPrefix(item.clause);
+    const agentMention = USER_ACTOR_STEP_ASSIGNABLE_AGENT.exec(clause);
+    const pronouns = clause.matchAll(
+      /(?:^\s*|,\s*(?:(?:and|but|while|whereas)\s+)?|\b(?:and|but|while|whereas)\s+)(?:it|they|he|she)\b/gi,
+    );
+    for (const pronoun of pronouns) {
+      if (
+        !agentAntecedentSeen &&
+        (agentMention === null || agentMention.index >= pronoun.index)
+      ) {
+        continue;
+      }
+      // #4596: use the same finite scan budget as explicit agent mentions.
+      if (++pronounCount > 64) return true;
+      if (
+        !isSupportedNeutralAgentPredicate(
+          clause.slice(pronoun.index + pronoun[0].length),
+        )
+      ) {
+        return true;
+      }
+    }
     if (
       agentAntecedentSeen &&
       USER_ACTOR_STEP_AGENT_PRONOUN_WORK_ASSIGNMENT.test(clause)
@@ -3458,16 +3578,32 @@ function hasAdjacentAgentPronounWorkAssignment(text: string): boolean {
 }
 
 function hasAgentWorkAssignmentInText(text: string): boolean {
-  const normalized = normalizeMarkdownStepAssignmentText(text).replace(
-    /[*_~`[\]]/g,
-    ' ',
-  );
+  const normalized = normalizeMarkdownStepAssignmentText(text)
+    .split(/\r?\n/)
+    .map(stripAgentClauseListPrefix)
+    .join('\n')
+    .replace(/[*_~`[\]]/g, ' ');
   if (hasAdjacentAgentPronounWorkAssignment(normalized)) return true;
   for (const section of splitMarkdownHeadingSections(normalized)) {
     if (
+      section.headingContext.some(
+        (heading) =>
+          !USER_ACTOR_STEP_NEUTRAL_AGENT_SECTION_LABEL.test(
+            normalizeMarkdownHeadingLabel(heading),
+          ) &&
+          hasAgentWorkAssignmentInClause(
+            normalizeMarkdownHeadingLabel(heading),
+          ),
+      )
+    ) {
+      return true;
+    }
+    if (
       USER_ACTOR_STEP_ASSIGNABLE_AGENT.test(section.headingContext.join(' ')) &&
-      (USER_ACTOR_STEP_ASSIGNMENT_CUE.test(section.body) ||
-        USER_ACTOR_STEP_GENERAL_WORK_ACTION.test(section.body))
+      splitSentenceAndSemicolonClauses(section.body).some(
+        ({ clause }) =>
+          /\S/.test(clause) && !isSupportedNeutralAgentClause(clause),
+      )
     ) {
       return true;
     }
