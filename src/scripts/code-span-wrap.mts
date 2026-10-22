@@ -160,6 +160,11 @@ function parseDeclarationTypeArgument(
   if (text[start] !== '?') {
     return parseDeclarationType(text, start, genericDepth);
   }
+  // Wildcards are limited to nested type arguments (JLS 8.1.4 and 8.1.5;
+  // PR #4605).
+  if (genericDepth === 1) {
+    return undefined;
+  }
 
   const cursor = skipDeclarationWhitespace(text, start + 1);
 

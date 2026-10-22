@@ -224,14 +224,14 @@ test('flags complete declaration tails with generic and combined types', () => {
   }
 });
 
-test('flags declaration tails with Java wildcard type arguments', () => {
+test('flags declaration tails with nested Java wildcard type arguments', () => {
   const inlineCode = String.fromCharCode(96);
   for (const declaration of [
-    'com.example. MyClass extends Base<?>',
-    'com.example. MyClass extends Base<? extends Outer.Inner>',
-    'com.example. MyClass implements Comparable<? super MyClass>',
-    'com.example. MyClass extends Base<?extends Outer.Inner>',
-    'com.example. MyClass implements Comparable<?super MyClass>',
+    'com.example. MyClass extends Base<List<?>>',
+    'com.example. MyClass extends Base<List<? extends Outer.Inner>>',
+    'com.example. MyClass implements Comparable<List<? super MyClass>>',
+    'com.example. MyClass extends Base<List<?extends Outer.Inner>>',
+    'com.example. MyClass implements Comparable<List<?super MyClass>>',
   ]) {
     const span = inlineCode + declaration + inlineCode;
     const violations = findCorruptingCodeSpanWraps(span);
@@ -240,10 +240,24 @@ test('flags declaration tails with Java wildcard type arguments', () => {
   }
 });
 
+test('does not use direct wildcard supertype arguments as declaration evidence', () => {
+  for (const span of [
+    '`com.example. MyClass extends Base<?>`',
+    '`com.example. MyClass extends Base<? extends Outer.Inner>`',
+    '`com.example. MyClass implements Comparable<? super MyClass>`',
+    '`com.example. MyClass extends Base<?extends Outer.Inner>`',
+    '`com.example. MyClass implements Comparable<?super MyClass>`',
+    '`com.example. MyClass extends Base<String, ?>`',
+    '`com.example. MyClass implements First, Second<?>`',
+  ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
+});
+
 test('does not treat identifier prefixes as wildcard variance keywords', () => {
   for (const span of [
-    '`com.example. MyClass extends Base<?extendsFoo>`',
-    '`com.example. MyClass extends Base<?superFoo>`',
+    '`com.example. MyClass extends Base<List<?extendsFoo>>`',
+    '`com.example. MyClass extends Base<List<?superFoo>>`',
   ]) {
     assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
   }
@@ -253,19 +267,19 @@ test('keeps wildcard-bound generic nesting bounded', () => {
   const inlineCode = String.fromCharCode(96);
   const atLimit =
     inlineCode +
-    'com.example. MyClass extends Base<? extends ' +
-    'List<'.repeat(7) +
+    'com.example. MyClass extends Base<List<? extends ' +
+    'List<'.repeat(6) +
     'String' +
-    '>'.repeat(7) +
-    '>' +
+    '>'.repeat(6) +
+    '>>' +
     inlineCode;
   const beyondLimit =
     inlineCode +
-    'com.example. MyClass extends Base<? extends ' +
-    'List<'.repeat(8) +
+    'com.example. MyClass extends Base<List<? extends ' +
+    'List<'.repeat(7) +
     'String' +
-    '>'.repeat(8) +
-    '>' +
+    '>'.repeat(7) +
+    '>>' +
     inlineCode;
   assert.equal(findCorruptingCodeSpanWraps(atLimit).length, 1, atLimit);
   assert.deepEqual(findCorruptingCodeSpanWraps(beyondLimit), [], beyondLimit);
