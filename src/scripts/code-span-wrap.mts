@@ -66,6 +66,16 @@ const PROPER_NAME_TITLE_ABBREVIATION =
 const DOTTED_IDENTIFIER_PREFIX =
   /^\s*[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+$/u;
 const MAX_DECLARATION_GENERIC_DEPTH = 8;
+const DECLARATION_PRIMITIVE_ARRAY_ELEMENTS = [
+  'boolean',
+  'byte',
+  'char',
+  'double',
+  'float',
+  'int',
+  'long',
+  'short',
+] as const;
 const DECLARATION_CLAUSE_KEYWORDS = [
   'extends',
   'implements',
@@ -183,7 +193,35 @@ function parseDeclarationTypeArgument(
     text,
     cursor + varianceKeyword.length,
   );
-  return parseDeclarationType(text, boundStart, genericDepth);
+  const primitive = DECLARATION_PRIMITIVE_ARRAY_ELEMENTS.find(
+    (type) =>
+      text.startsWith(type, boundStart) &&
+      !isDeclarationIdentifierContinuation(
+        text.charCodeAt(boundStart + type.length),
+      ),
+  );
+  let boundEnd =
+    primitive === undefined
+      ? parseDeclarationType(text, boundStart, genericDepth)
+      : boundStart + primitive.length;
+  if (boundEnd === undefined) {
+    return undefined;
+  }
+
+  let isArray = false;
+  while (true) {
+    const openIndex = skipDeclarationWhitespace(text, boundEnd);
+    if (text[openIndex] !== '[') {
+      break;
+    }
+    const closeIndex = skipDeclarationWhitespace(text, openIndex + 1);
+    if (text[closeIndex] !== ']') {
+      return undefined;
+    }
+    isArray = true;
+    boundEnd = closeIndex + 1;
+  }
+  return primitive !== undefined && !isArray ? undefined : boundEnd;
 }
 
 function isCompleteDeclarationTail(text: string): boolean {

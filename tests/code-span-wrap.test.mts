@@ -249,7 +249,53 @@ test('does not use direct wildcard supertype arguments as declaration evidence',
     '`com.example. MyClass implements Comparable<?super MyClass>`',
     '`com.example. MyClass extends Base<String, ?>`',
     '`com.example. MyClass implements First, Second<?>`',
+    '`com.example. MyClass extends Base<? extends String[]>`',
+    '`com.example. MyClass implements Comparable<? super int[]>`',
   ]) {
+    assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
+});
+
+test('flags nested wildcard array bounds with reference and primitive elements', () => {
+  const inlineCode = String.fromCharCode(96);
+  for (const bound of [
+    'String[]',
+    'String[][]',
+    'String [ ] [ ]',
+    'Outer.Inner[]',
+    'List<String>[]',
+    ...[
+      'boolean',
+      'byte',
+      'char',
+      'double',
+      'float',
+      'int',
+      'long',
+      'short',
+    ].map((element) => `${element}[][]`),
+  ]) {
+    for (const keyword of ['extends', 'super']) {
+      const span = `${inlineCode}com.example. MyClass extends Base<List<?${keyword} ${bound}>>${inlineCode}`;
+      const violations = findCorruptingCodeSpanWraps(span);
+      assert.equal(violations.length, 1, span);
+      assert.equal(violations[0]?.before, 'com.example.', span);
+    }
+  }
+});
+
+test('does not accept incomplete array bounds or bare primitive bounds', () => {
+  const inlineCode = String.fromCharCode(96);
+  for (const bound of [
+    'String[',
+    'String[3]',
+    'String[] [',
+    'String[]suffix',
+    'int',
+    'void[]',
+    'intValue[]',
+  ]) {
+    const span = `${inlineCode}com.example. MyClass extends Base<List<? extends ${bound}>>${inlineCode}`;
     assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
   }
 });
@@ -265,24 +311,28 @@ test('does not treat identifier prefixes as wildcard variance keywords', () => {
 
 test('keeps wildcard-bound generic nesting bounded', () => {
   const inlineCode = String.fromCharCode(96);
-  const atLimit =
-    inlineCode +
-    'com.example. MyClass extends Base<List<? extends ' +
-    'List<'.repeat(6) +
-    'String' +
-    '>'.repeat(6) +
-    '>>' +
-    inlineCode;
-  const beyondLimit =
-    inlineCode +
-    'com.example. MyClass extends Base<List<? extends ' +
-    'List<'.repeat(7) +
-    'String' +
-    '>'.repeat(7) +
-    '>>' +
-    inlineCode;
-  assert.equal(findCorruptingCodeSpanWraps(atLimit).length, 1, atLimit);
-  assert.deepEqual(findCorruptingCodeSpanWraps(beyondLimit), [], beyondLimit);
+  for (const arraySuffix of ['', '[]']) {
+    const atLimit =
+      inlineCode +
+      'com.example. MyClass extends Base<List<? extends ' +
+      'List<'.repeat(6) +
+      'String' +
+      '>'.repeat(6) +
+      arraySuffix +
+      '>>' +
+      inlineCode;
+    const beyondLimit =
+      inlineCode +
+      'com.example. MyClass extends Base<List<? extends ' +
+      'List<'.repeat(7) +
+      'String' +
+      '>'.repeat(7) +
+      arraySuffix +
+      '>>' +
+      inlineCode;
+    assert.equal(findCorruptingCodeSpanWraps(atLimit).length, 1, atLimit);
+    assert.deepEqual(findCorruptingCodeSpanWraps(beyondLimit), [], beyondLimit);
+  }
 });
 
 test('flags declarations inside one balanced outer wrapper', () => {
