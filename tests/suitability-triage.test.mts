@@ -12411,7 +12411,7 @@ test('trust safety keeps independent agent work assignments fail-closed -- #4596
   } as Context);
   assert.equal(unrelatedActorAction.pass, true);
 
-  for (const separator of [', and', ',', '—', '–', ';']) {
+  for (const separator of [', and', ', and then', ',', '—', '–', ';']) {
     const explicitNewActorAfterTransfer = checkTrustSafety({
       issue: {
         ...BASE_ISSUE,

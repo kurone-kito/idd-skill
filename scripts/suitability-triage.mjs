@@ -3013,7 +3013,7 @@ function hasAgentWorkAssignmentInClause(clause) {
             transferCue.index + (match.index ?? 0) + match[0].length,
           );
           const withoutCoordinator = continuation.replace(
-            /^\s*(?:and|but|then|while|whereas)\s+/i,
+            /^(?:\s*(?:and|but|then|while|whereas)\s+)+/i,
             '',
           );
           return (
