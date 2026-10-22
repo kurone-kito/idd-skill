@@ -1091,7 +1091,7 @@ const USER_ACTOR_STEP_NEUTRAL_AGENT_TRANSFER = new RegExp(
 const USER_ACTOR_STEP_NEUTRAL_AGENT_PATIENT =
   /^(?:(?:must|should|shall|will|can|could|may|might)\s+be|is|are|was|were)\s+(?:tested|checked|reviewed)(?:\s+by\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance))?\s+in\s+this\s+(?:step|check)$/i;
 const USER_ACTOR_STEP_HUMAN_SUBJECT_CONTINUATION = new RegExp(
-  String.raw`(?:\s*[,;:—–]\s*(?:(?:and|but|then|while|whereas)\s+)?|\s+(?:and|but|then|while|whereas)\s+)${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}`,
+  String.raw`(?:\s*[,;:—–]\s*(?:(?:and|but|then|while|whereas)\s+)*|\s+(?:(?:and|but|then|while|whereas)\s+)+)${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}`,
   'i',
 );
 const USER_ACTOR_STEP_HUMAN_AGENT_OBJECT_PREFIX =
