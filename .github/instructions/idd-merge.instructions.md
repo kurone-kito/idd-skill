@@ -552,12 +552,24 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    Off-default `{development-branch}`: `git switch {default-branch}`
    once F4 completes/holds, for B1's checkout.
 5. Run from the **primary worktree**, not one being removed. The
-   helper runs the checks in this step, and it refuses a worktree that
-   holds untracked, modified, or ignored files (`dirty-worktree`), a
-   populated submodule (`submodule-worktree`), or a symlink
-   (`symlink-path`). A refused worktree is never removed. Git would
-   discard ignored submodule data on removal, and the helper refuses
-   instead. Scope to `<path>`. Inspect leftovers under `-` (not a repo).
+   helper runs the checks in this step and moves only a lone ignored
+   `node_modules/` directory to the per-user state directory before
+   removal. It preserves the tree intact and reports its destination;
+   dry-run reports the path without creating or moving anything. Every
+   apply verifies the state directory: POSIX directories must be
+   owner-owned and restricted to mode `0700`; an owned direct root can
+   be restricted, but a state-root symlink must already target a private
+   directory. On POSIX, the source `node_modules/` must be owned by the current
+   user; Windows requires a private ACL on the source before the move and on
+   the state root and destination directories. Only missing parents are
+   created, and the rename destination stays absent until the move.
+   Dry-run changes no permissions. Every other dirty shape, populated
+   submodule (`submodule-worktree`), or
+   symlink (`symlink-path`) keeps its hold. If the hold detail says the
+   helper did not move `node_modules/`, preserve it by hand too. A
+   refused worktree is never removed. Git would discard ignored
+   submodule data on removal, and the helper refuses instead. Scope to
+   `<path>`. Inspect leftovers under `-` (not a repo).
 
    Use `--untracked-files=normal` (not `all`). A clean submodule can
    still hide a stash or unpushed commit; tag-only detached history is
@@ -572,11 +584,12 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      git -C <path> submodule foreach --recursive 'git status --porcelain --ignored --untracked-files=normal && git stash list && git rev-list --exclude=refs/tags/\* --glob=refs/\* --count --not --remotes && { git symbolic-ref -q HEAD >/dev/null || git rev-list HEAD --not --remotes --tags --count; }'
      ```
 
-   Preserve everything the helper refuses before rerunning it, including
-   reproducible output, outside the repository by hand: move rather than
-   copy, and never commit or push `.env` or other secrets. The helper never
-   removes that content itself, and a backup ref alone does not clear the
-   check. The [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof)
+   Preserve everything else the helper refuses before rerunning it,
+   including reproducible output, outside the repository by hand: move
+   rather than copy, and never commit or push `.env` or other secrets.
+   The helper never removes preserved content itself, and a backup ref
+   alone does not clear the check. The
+   [F4 Head Proof](../../docs/idd-resume-detail.md#f4-head-proof)
    section has the full steps. For a populated submodule, the operator runs
    `git -C <path> submodule deinit --all` after preservation, with the
    worktree still registered, and the helper is rerun; otherwise the session

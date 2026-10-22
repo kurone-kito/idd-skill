@@ -6,6 +6,7 @@ import {
   classifyClaimAssert,
   classifyPrimaryRefusal,
   classifyProofEnvelope,
+  type DirectoryPrivacy,
   type F4WorktreeBranchDeps,
   type F4WorktreeBranchInput,
   type GitResult,
@@ -32,6 +33,12 @@ const HEAD = 'b'.repeat(40);
 const MERGE = 'c'.repeat(40);
 const F2 = 'd'.repeat(40);
 const OTHER = 'e'.repeat(40);
+const STATE_ROOT = '/state';
+const COMMON_DIR = '/git-common';
+const NODE_MODULES_IDENTITY = 'device-1:inode-1';
+const PRESERVE_STAGING = `${WORKTREE}/.idd-f4-node_modules-test-id`;
+const PRESERVE_DESTINATION =
+  '/state/idd-skill/f4-preserved/4370-20261021T103000Z';
 
 type Args = readonly string[];
 
@@ -92,10 +99,19 @@ function proofProceed(overrides: Record<string, unknown> = {}): SpawnedResult {
   };
 }
 
-function worktreeListing(): string {
+function worktreeListing(
+  additionalPaths: readonly string[] = [],
+  lockedWorktree = false,
+): string {
   const record = (path: string, branch: string): string =>
-    `worktree ${path}\0HEAD ${OTHER}\0branch refs/heads/${branch}\0\0`;
-  return record(PRIMARY, 'main') + record(WORKTREE, BRANCH);
+    `worktree ${path}\0HEAD ${OTHER}\0branch refs/heads/${branch}\0${path === WORKTREE && lockedWorktree ? 'locked F4 node_modules recovery required\0' : ''}\0`;
+  return (
+    record(PRIMARY, 'main') +
+    record(WORKTREE, BRANCH) +
+    additionalPaths
+      .map((path, index) => record(path, `issue/other-${index}`))
+      .join('')
+  );
 }
 
 /** The healthy path: every check passes, and the branch is merged. */
@@ -108,6 +124,10 @@ function healthyRoutes(): Route[] {
       result: ok(worktreeListing()),
     },
     { match: (a) => a[0] === 'show-ref', result: ok() },
+    {
+      match: (a) => a[0] === 'rev-parse' && a.includes('--git-common-dir'),
+      result: ok(`${COMMON_DIR}\n`),
+    },
     { match: (a) => a[0] === 'switch', result: ok() },
     { match: (a) => a[0] === '-c' && a.includes('merge'), result: ok() },
     {
@@ -133,11 +153,15 @@ function healthyRoutes(): Route[] {
 
 interface Harness {
   readonly deps: F4WorktreeBranchDeps;
+  readonly events: string[];
   readonly gitCalls: { args: Args; cwd: string }[];
   readonly remoteCalls: string[];
   readonly claimCalls: string[];
   readonly proofCalls: number[];
   readonly lockCalls: number[];
+  readonly mkdirCalls: string[];
+  readonly mkdirModes: number[];
+  readonly renameCalls: string[][];
 }
 
 function remoteVerdict(
@@ -176,27 +200,141 @@ interface HarnessOptions {
     sha: string,
   ) => RemoteBranchDeleteVerdict | null;
   readonly lockBusy?: boolean;
+  readonly statusResults?: readonly GitResult[];
+  readonly nestedWorktrees?: readonly string[];
+  readonly lockedWorktree?: boolean;
+  readonly stateRoot?: string;
+  readonly now?: () => Date;
+  readonly temporaryId?: () => string;
+  readonly directoryPrivacy?: (path: string) => DirectoryPrivacy;
+  readonly directoryIdentity?: (path: string) => string | null | undefined;
+  readonly ensurePrivateDirectory?: (path: string) => void;
+  readonly mkdir?: (path: string) => void;
+  readonly rename?: (source: string, destination: string) => void;
+  readonly replaceIdentityAfterRename?: {
+    readonly destination: string;
+    readonly identity: string;
+  };
 }
 
 /** Build the deps: git answers by the first matching route, else success. */
 function harness(options: HarnessOptions = {}): Harness {
   const routes = [...(options.routes ?? healthyRoutes())];
+  const events: string[] = [];
   const gitCalls: { args: Args; cwd: string }[] = [];
   const remoteCalls: string[] = [];
   const claimCalls: string[] = [];
   const proofCalls: number[] = [];
   const lockCalls: number[] = [];
+  const statusResults = [...(options.statusResults ?? [])];
+  const mkdirCalls: string[] = [];
+  const mkdirModes: number[] = [];
+  const renameCalls: string[][] = [];
+  const createdDirectories = new Set<string>();
+  const renamedDirectories = new Set<string>();
+  const absentPaths = new Set<string>();
+  const directoryIdentities = new Map<string, string>([
+    [`${WORKTREE}/node_modules`, NODE_MODULES_IDENTITY],
+  ]);
+  let statusIndex = 0;
   const claims = options.claims ?? [claimOk()];
-  const lstat = options.lstat ?? ((): LstatKind => 'directory');
+  const lstat = (path: string): LstatKind => {
+    if (absentPaths.has(path)) return 'absent';
+    if (renamedDirectories.has(path) || createdDirectories.has(path)) {
+      return 'directory';
+    }
+    if (options.lstat) return options.lstat(path);
+    if (path === PRESERVE_DESTINATION || path === PRESERVE_STAGING) {
+      return 'absent';
+    }
+    const stateRoot = options.stateRoot ?? STATE_ROOT;
+    if (path === stateRoot) return 'directory';
+    if (
+      path === `${stateRoot}/idd-skill` ||
+      path === `${stateRoot}/idd-skill/f4-preserved`
+    ) {
+      return 'absent';
+    }
+    if (path.startsWith(`${stateRoot}/idd-skill/f4-preserved/`)) {
+      return 'absent';
+    }
+    return 'directory';
+  };
   const deps: F4WorktreeBranchDeps = {
     lstat,
+    directoryIdentity: (path) => {
+      const override = options.directoryIdentity?.(path);
+      if (override !== undefined) return override;
+      return (
+        directoryIdentities.get(path) ??
+        (lstat(path) === 'directory' ? `directory:${path}` : null)
+      );
+    },
     realpath: (path) => path,
+    stateRoot: options.stateRoot ?? STATE_ROOT,
+    now: options.now ?? (() => new Date('2026-10-21T10:30:00.000Z')),
+    temporaryId: options.temporaryId ?? (() => 'test-id'),
+    inspectDirectoryPrivacy: (path) =>
+      options.directoryPrivacy?.(path) ?? 'private',
+    ensurePrivateDirectory: (path) => {
+      events.push(`ensure-private:${path}`);
+      options.ensurePrivateDirectory?.(path);
+      if ((options.directoryPrivacy?.(path) ?? 'private') === 'unsafe') {
+        throw new Error('directory is not private');
+      }
+    },
+    mkdir: (path, mode) => {
+      events.push(`mkdir:${path}`);
+      mkdirCalls.push(path);
+      mkdirModes.push(mode);
+      createdDirectories.add(path);
+      options.mkdir?.(path);
+    },
+    rename: (source, destination) => {
+      events.push(`rename:${source}->${destination}`);
+      renameCalls.push([source, destination]);
+      options.rename?.(source, destination);
+      const identity = directoryIdentities.get(source);
+      directoryIdentities.delete(source);
+      if (identity !== undefined)
+        directoryIdentities.set(destination, identity);
+      if (options.replaceIdentityAfterRename?.destination === destination) {
+        directoryIdentities.set(
+          destination,
+          options.replaceIdentityAfterRename.identity,
+        );
+      }
+      absentPaths.add(source);
+      absentPaths.delete(destination);
+      renamedDirectories.delete(source);
+      renamedDirectories.add(destination);
+    },
     git: (args, cwd) => {
+      events.push(`git:${args.join(' ')}`);
       gitCalls.push({ args: [...args], cwd });
+      if (args[0] === '-C' && args[2] === 'status') {
+        const result = statusResults[statusIndex];
+        statusIndex += 1;
+        if (result !== undefined) return result;
+      }
+      if (
+        args[0] === 'worktree' &&
+        args[1] === 'list' &&
+        (options.nestedWorktrees !== undefined ||
+          options.lockedWorktree !== undefined)
+      ) {
+        return ok(
+          worktreeListing(
+            options.nestedWorktrees,
+            options.lockedWorktree ?? false,
+          ),
+        );
+      }
       const route = routes.find((candidate) => candidate.match(args));
       return route ? route.result : ok();
     },
     assertClaim: (worktree) => {
+      events.push(`assert-claim:${worktree}`);
       claimCalls.push(worktree);
       const index = Math.min(claimCalls.length - 1, claims.length - 1);
       return claims[index] as SpawnedResult;
@@ -226,7 +364,18 @@ function harness(options: HarnessOptions = {}): Harness {
       return { acquired: true, value: run() };
     },
   };
-  return { deps, gitCalls, remoteCalls, claimCalls, proofCalls, lockCalls };
+  return {
+    deps,
+    events,
+    gitCalls,
+    remoteCalls,
+    claimCalls,
+    proofCalls,
+    lockCalls,
+    mkdirCalls,
+    mkdirModes,
+    renameCalls,
+  };
 }
 
 function stepsOf(report: {
@@ -648,7 +797,7 @@ test('an unclassified refusal holds with primary-update-failed', () => {
 test('a dirty worktree holds at step 5 and removes nothing', () => {
   const h = harness({
     routes: [
-      ...healthyRoutes().slice(0, 7),
+      ...healthyRoutes().slice(0, 8),
       {
         match: (a) => a[0] === '-C' && a[2] === 'status',
         result: ok('?? scratch.txt\n'),
@@ -673,15 +822,407 @@ test('an ignored-only file in the worktree still holds dirty-worktree', () => {
     input(),
     harness({
       routes: [
-        ...healthyRoutes().slice(0, 7),
+        ...healthyRoutes().slice(0, 8),
         {
           match: (a) => a[0] === '-C' && a[2] === 'status',
-          result: ok('!! node_modules/\n'),
+          result: ok('!! build/\n'),
         },
       ],
     }).deps,
   );
   assert.equal(report.reason, 'dirty-worktree');
+});
+
+test('a lone ignored node_modules directory moves after the claim check', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n'), ok('')],
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.status, 'complete');
+  assert.deepEqual(h.renameCalls, [
+    [`${WORKTREE}/node_modules`, PRESERVE_STAGING],
+    [PRESERVE_STAGING, PRESERVE_DESTINATION],
+  ]);
+  assert.deepEqual(h.mkdirCalls, [
+    `${STATE_ROOT}/idd-skill`,
+    `${STATE_ROOT}/idd-skill/f4-preserved`,
+  ]);
+  assert.deepEqual(h.mkdirModes, [0o700, 0o700]);
+  assert.equal(h.claimCalls.length, 5);
+  const finalStatus = h.events.lastIndexOf(
+    `git:-C ${WORKTREE} status --porcelain --ignored --untracked-files=normal`,
+  );
+  const finalAssert = h.events
+    .slice(0, finalStatus)
+    .lastIndexOf(`assert-claim:${WORKTREE}`);
+  const removal = h.events.indexOf(`git:worktree remove ${WORKTREE}`);
+  assert.ok(finalAssert >= 0 && finalStatus > finalAssert);
+  assert.ok(removal > finalStatus);
+  assert.deepEqual(h.events.slice(finalAssert, removal + 1), [
+    `assert-claim:${WORKTREE}`,
+    `git:-C ${WORKTREE} status --porcelain --ignored --untracked-files=normal`,
+    `git:worktree remove ${WORKTREE}`,
+  ]);
+  assert.ok(finalAssert < finalStatus && finalStatus < removal);
+  assert.equal(
+    report.steps.find((step) => step.step === 'step-5')?.detail,
+    `node_modules/ was preserved at ${PRESERVE_DESTINATION}`,
+  );
+});
+
+test('an unsafe node_modules directory holds before creating the destination', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    directoryPrivacy: (path) =>
+      path === `${WORKTREE}/node_modules` ? 'unsafe' : 'private',
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(report.steps.at(-1)?.detail ?? '', /ownership or privacy/);
+  assert.deepEqual(h.mkdirCalls, []);
+  assert.deepEqual(h.renameCalls, []);
+});
+
+test('a dry run reports the node_modules destination without creating or moving it', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+  });
+  const report = runF4WorktreeBranchSteps(input({ apply: false }), h.deps);
+  assert.equal(report.status, 'dry-run');
+  assert.match(
+    report.steps.find((step) => step.step === 'step-5')?.detail ?? '',
+    new RegExp(PRESERVE_DESTINATION.replaceAll('/', '\\/')),
+  );
+  assert.deepEqual(h.mkdirCalls, []);
+  assert.deepEqual(h.renameCalls, []);
+});
+
+test('a lone ignored node_modules path that is not a real directory still holds', () => {
+  for (const kind of ['symlink', 'file'] as const) {
+    const h = harness({
+      statusResults: [ok('!! node_modules/\n')],
+      lstat: (path) =>
+        path === `${WORKTREE}/node_modules`
+          ? kind
+          : path === PRESERVE_DESTINATION
+            ? 'absent'
+            : 'directory',
+    });
+    const report = runF4WorktreeBranchSteps(input(), h.deps);
+    assert.equal(report.reason, 'dirty-worktree');
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /did not move node_modules/,
+    );
+    assert.deepEqual(h.renameCalls, []);
+  }
+});
+
+test('a registered worktree inside node_modules prevents the move', () => {
+  const nested = `${WORKTREE}/node_modules/nested-checkout`;
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    nestedWorktrees: [nested],
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(report.steps.at(-1)?.detail ?? '', new RegExp(nested));
+  assert.match(report.steps.at(-1)?.detail ?? '', /did not move node_modules/);
+  assert.deepEqual(h.renameCalls, []);
+});
+
+test('a destination inside the Git common directory holds without moving node_modules', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    stateRoot: COMMON_DIR,
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /protected Git common directory/,
+  );
+  assert.deepEqual(h.renameCalls, []);
+});
+
+test('a filesystem-root state root holds before privacy changes or moving node_modules', () => {
+  const privacyPaths: string[] = [];
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    stateRoot: '/',
+    directoryPrivacy: (path) => {
+      privacyPaths.push(path);
+      return 'private';
+    },
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /state root resolves to a filesystem root/,
+  );
+  assert.equal(privacyPaths.includes('/'), false);
+  assert.deepEqual(h.mkdirCalls, []);
+  assert.deepEqual(h.renameCalls, []);
+});
+
+for (const parent of [
+  STATE_ROOT,
+  `${STATE_ROOT}/idd-skill`,
+  `${STATE_ROOT}/idd-skill/f4-preserved`,
+]) {
+  test(`a replaced preservation parent ${parent} restores the staged tree and holds`, () => {
+    let staged = false;
+    const h = harness({
+      statusResults: [ok('!! node_modules/\n')],
+      rename: (_source, destination) => {
+        if (destination === PRESERVE_STAGING) staged = true;
+      },
+      directoryIdentity: (path) =>
+        staged && path === parent ? 'replacement-parent' : undefined,
+    });
+    const report = runF4WorktreeBranchSteps(input(), h.deps);
+    assert.equal(report.reason, 'dirty-worktree');
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /destination parent .* changed after inspection/,
+    );
+    assert.deepEqual(h.renameCalls, [
+      [`${WORKTREE}/node_modules`, PRESERVE_STAGING],
+      [PRESERVE_STAGING, `${WORKTREE}/node_modules`],
+    ]);
+    assert.equal(
+      h.gitCalls.some(
+        (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+      ),
+      false,
+    );
+  });
+}
+
+test('a parent replacement during directory creation holds before staging', () => {
+  let replaced = false;
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    mkdir: () => {
+      replaced = true;
+    },
+    directoryIdentity: (path) =>
+      replaced && path === STATE_ROOT ? 'replacement-parent' : undefined,
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /destination parent .* changed after inspection/,
+  );
+  assert.deepEqual(h.renameCalls, []);
+});
+
+test('an unreadable preservation parent identity holds in dry-run without mutation', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    directoryIdentity: (path) => (path === STATE_ROOT ? null : undefined),
+  });
+  const report = runF4WorktreeBranchSteps(input({ apply: false }), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /no verified directory identity/,
+  );
+  assert.deepEqual(h.mkdirCalls, []);
+  assert.deepEqual(h.renameCalls, []);
+});
+
+test('a staged replacement object is retained when its identity changed', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    replaceIdentityAfterRename: {
+      destination: PRESERVE_STAGING,
+      identity: 'device-2:inode-2',
+    },
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /retained because its directory identity/,
+  );
+  assert.deepEqual(h.renameCalls, [
+    [`${WORKTREE}/node_modules`, PRESERVE_STAGING],
+  ]);
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
+});
+
+test('a destination identity replacement retains the object and locks cleanup', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    replaceIdentityAfterRename: {
+      destination: PRESERVE_DESTINATION,
+      identity: 'device-2:inode-2',
+    },
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /retained because its directory identity/,
+  );
+  assert.deepEqual(h.renameCalls, [
+    [`${WORKTREE}/node_modules`, PRESERVE_STAGING],
+    [PRESERVE_STAGING, PRESERVE_DESTINATION],
+  ]);
+  assert.match(report.steps.at(-1)?.detail ?? '', /worktree was locked/);
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'lock',
+    ),
+    true,
+  );
+  const rerun = harness({ lockedWorktree: true });
+  const rerunReport = runF4WorktreeBranchSteps(input(), rerun.deps);
+  assert.equal(rerunReport.reason, 'inconsistent-worktree-state');
+  assert.match(rerunReport.steps.at(-1)?.detail ?? '', /worktree is locked/);
+  assert.equal(
+    rerun.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
+});
+
+test('a final preservation privacy failure restores node_modules to the worktree', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    ensurePrivateDirectory: (path) => {
+      if (path === PRESERVE_DESTINATION) {
+        throw new Error('simulated final privacy failure');
+      }
+    },
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    new RegExp(`restored to ${WORKTREE}/node_modules`),
+  );
+  assert.deepEqual(h.renameCalls, [
+    [`${WORKTREE}/node_modules`, PRESERVE_STAGING],
+    [PRESERVE_STAGING, PRESERVE_DESTINATION],
+    [PRESERVE_DESTINATION, `${WORKTREE}/node_modules`],
+  ]);
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
+});
+
+test('an unverified final privacy recovery locks the worktree against cleanup', () => {
+  const first = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    ensurePrivateDirectory: (path) => {
+      if (path === PRESERVE_DESTINATION) {
+        throw new Error('simulated final privacy failure');
+      }
+    },
+    rename: (source, destination) => {
+      if (
+        source === PRESERVE_DESTINATION &&
+        destination === `${WORKTREE}/node_modules`
+      ) {
+        throw new Error('simulated restoration failure');
+      }
+    },
+  });
+  const report = runF4WorktreeBranchSteps(input(), first.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /automatic restoration failed/,
+  );
+  assert.match(report.steps.at(-1)?.detail ?? '', /worktree was locked/);
+  assert.equal(
+    first.gitCalls.some(
+      (call) =>
+        call.args[0] === 'worktree' &&
+        call.args[1] === 'lock' &&
+        call.args.at(-1) === WORKTREE,
+    ),
+    true,
+  );
+
+  const rerun = harness({
+    lockedWorktree: true,
+    statusResults: [ok('!! node_modules/\n')],
+  });
+  const rerunReport = runF4WorktreeBranchSteps(input(), rerun.deps);
+  assert.equal(rerunReport.reason, 'inconsistent-worktree-state');
+  assert.match(rerunReport.steps.at(-1)?.detail ?? '', /worktree is locked/);
+  assert.equal(
+    rerun.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
+});
+
+test('a claim lost after the move keeps the preserved tree and worktree', () => {
+  const lost = {
+    exitCode: 0,
+    stdout: JSON.stringify({ state: 'disputed', action: 'stop' }),
+  };
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n'), ok('')],
+    claims: [claimOk(), claimOk(), claimOk(), lost],
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'claim-lost');
+  assert.match(report.steps.at(-1)?.detail ?? '', /preserving node_modules/);
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
+  assert.deepEqual(h.renameCalls, [
+    [`${WORKTREE}/node_modules`, PRESERVE_STAGING],
+    [PRESERVE_STAGING, PRESERVE_DESTINATION],
+  ]);
+});
+
+test('a new ignored entry after the final claim assertion prevents removal', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n'), ok(''), ok('!! node_modules/\n')],
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /status output after the final claim assertion/,
+  );
+  assert.deepEqual(h.renameCalls, [
+    [`${WORKTREE}/node_modules`, PRESERVE_STAGING],
+    [PRESERVE_STAGING, PRESERVE_DESTINATION],
+  ]);
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
 });
 
 test('a skip-worktree entry holds dirty-worktree, since git status cannot vouch for it', () => {
