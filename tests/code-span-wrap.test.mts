@@ -576,6 +576,34 @@ test('ignores sentence periods inside annotation string arguments', () => {
   }
 });
 
+test('ignores split dots inside declaration annotation expressions', () => {
+  assert.deepEqual(
+    findCorruptingCodeSpanWraps(
+      '`class Foo extends @Anno(value = foo. bar) com.example.MyClass {}`',
+    ),
+    [],
+  );
+
+  const violations = findCorruptingCodeSpanWraps(
+    '`class Foo extends @Anno(value = foo. bar) com.example. MyClass {}`',
+  );
+  assert.equal(violations.length, 1);
+  assert.ok(violations[0]?.before.endsWith('com.example.'));
+
+  assert.deepEqual(
+    findCorruptingCodeSpanWraps(
+      '`class Foo extends @Anno(value = foo.\n bar) com.example.MyClass {}`',
+    ),
+    [],
+  );
+
+  const lineBreakViolations = findCorruptingCodeSpanWraps(
+    '`class Foo extends @Anno(value = foo. bar) com.example.\n MyClass {}`',
+  );
+  assert.equal(lineBreakViolations.length, 1);
+  assert.ok(lineBreakViolations[0]?.before.endsWith('com.example.'));
+});
+
 test('flags multiple split qualified types in supported declaration lists', () => {
   const cases = [
     {

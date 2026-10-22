@@ -2219,6 +2219,25 @@ function collectDeclarationTypeSplitOffsets(
 ) {
   for (let index = start; index < end; index += 1) {
     const character = text[index];
+    if (character === '@') {
+      const annotationEnd = skipDeclarationAnnotation(text, index);
+      if (annotationEnd !== undefined && annotationEnd <= end) {
+        for (
+          let annotationIndex = index;
+          annotationIndex < annotationEnd;
+          annotationIndex += 1
+        ) {
+          if (
+            text[annotationIndex] === '.' &&
+            /\s/u.test(text[annotationIndex + 1] ?? '')
+          ) {
+            ignoredOffsets.add(annotationIndex);
+          }
+        }
+        index = annotationEnd - 1;
+        continue;
+      }
+    }
     if (character === '"' || character === "'") {
       const literalEnd = skipDeclarationQuotedLiteralEnd(text, index);
       if (literalEnd === undefined || literalEnd > end) {
@@ -2651,9 +2670,13 @@ export function findCorruptingCodeSpanWraps(text) {
   for (const span of findInlineCodeSpans(scanned)) {
     const { inner } = span;
     const innerStart = span.index + span.ticks.length;
-    const declarationLineBreakOffsets = /\.\n[ \t]*(?:\$|@)/u.test(inner)
-      ? findQualifiedDeclarationTypeSplitOffsets(inner).qualified
-      : undefined;
+    const hasSpecialDeclarationLineBreak = /\.\n[ \t]*(?:\$|@)/u.test(inner);
+    const hasAnnotationExpressionLineBreak =
+      inner.includes('@') && /\.\n[ \t]*[A-Za-z_$]/u.test(inner);
+    const declarationLineBreakOffsets =
+      hasSpecialDeclarationLineBreak || hasAnnotationExpressionLineBreak
+        ? findQualifiedDeclarationTypeSplitOffsets(inner)
+        : undefined;
     let cursor = 0;
     for (;;) {
       const breakIndex = inner.indexOf('\n', cursor);
@@ -2668,6 +2691,13 @@ export function findCorruptingCodeSpanWraps(text) {
       }
       const nextChar = inner[afterIndex];
       if (
+        prevChar === '.' &&
+        declarationLineBreakOffsets?.ignored.has(breakIndex - 1) === true
+      ) {
+        cursor = breakIndex + 1;
+        continue;
+      }
+      if (
         (prevChar !== undefined &&
           MID_TOKEN_CONTINUATION.test(prevChar) &&
           (prevPrevChar === undefined || TOKEN_CONTINUING.test(prevPrevChar)) &&
@@ -2675,7 +2705,7 @@ export function findCorruptingCodeSpanWraps(text) {
           TOKEN_CONTINUING.test(nextChar)) ||
         (prevChar === '.' &&
           (nextChar === '$' || nextChar === '@') &&
-          declarationLineBreakOffsets?.has(breakIndex - 1) === true)
+          declarationLineBreakOffsets?.qualified.has(breakIndex - 1) === true)
       ) {
         violations.push({
           offset: innerStart + breakIndex,
