@@ -12344,6 +12344,36 @@ test('trust safety rejects predicates outside the finite neutral agent grammar -
   assert.equal(headingPredicate.pass, false);
 });
 
+test('trust safety preserves unknown agent predicates in literal title markup -- #4596', () => {
+  for (const title of [
+    '[context](The coding agent synchronizes the widget)',
+    '[context](<The coding agent synchronizes the widget>)',
+    '~~The coding agent synchronizes the widget~~',
+    '<!-- The coding agent synchronizes the widget -->',
+    '`The coding agent synchronizes the widget`',
+    '[context](The coding agent is available. It synchronizes the widget)',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, title, body: 'Run this step by the user.' },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, title);
+  }
+  for (const title of [
+    '[context](The coding agent is available)',
+    '[context](<The coding agent is available>)',
+    '~~The coding agent is available~~',
+    '<!-- The coding agent is available -->',
+    '`The coding agent is available`',
+  ]) {
+    const neutral = checkTrustSafety({
+      issue: { ...BASE_ISSUE, title, body: 'Run this step by the user.' },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(neutral.pass, true, title);
+  }
+});
+
 test('trust safety permits the finite neutral agent predicate inventory -- #4596', () => {
   for (const predicate of [
     'The coding agent is available.',

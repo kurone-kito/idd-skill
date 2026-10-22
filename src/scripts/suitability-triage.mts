@@ -3577,8 +3577,17 @@ function hasAdjacentAgentPronounWorkAssignment(text: string): boolean {
   return false;
 }
 
-function hasAgentWorkAssignmentInText(text: string): boolean {
-  const normalized = normalizeMarkdownStepAssignmentText(text)
+function hasAgentWorkAssignmentInText(
+  text: string,
+  plainText = false,
+): boolean {
+  // Titles are literal fields: retain link destinations and comment text
+  // while treating their punctuation as word boundaries (#4596).
+  const normalized = (
+    plainText
+      ? text.replace(/<!--|-->/g, ' ').replace(/[()[\]<>!]/g, ' ')
+      : normalizeMarkdownStepAssignmentText(text)
+  )
     .split(/\r?\n/)
     .map(stripAgentClauseListPrefix)
     .join('\n')
@@ -3727,6 +3736,7 @@ function hasAnyAgentWorkAssignment(
   bodyHtmlCommentRanges: readonly MarkdownCodeRange[],
 ): boolean {
   return (
+    hasAgentWorkAssignmentInText(title, true) ||
     hasAgentMentionAndAssignmentCue(title) ||
     hasAgentMentionAndAssignmentCue(bodyAssignmentContext) ||
     hasMixedMarkdownAgentAssignment(
