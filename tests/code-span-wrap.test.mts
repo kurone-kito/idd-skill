@@ -448,6 +448,18 @@ test('finds declaration starts inside executable and enum bodies', () => {
   }
 });
 
+test('finds qualified throws clauses in non-final enum constant bodies', () => {
+  for (const span of [
+    '`enum E { A { void run() throws com.example. MyException {} }, B }`',
+    '`enum E { A { void run() throws com.example. MyException {} }, B(1) { void other() {} }, C; int count = 0; }`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.before.endsWith('com.example.'), true, span);
+    assert.equal(violations[0]?.after.startsWith('MyException'), true, span);
+  }
+});
+
 test('consumes compound statements after a local type declaration', () => {
   for (const span of [
     '`class Outer { void run() { class Local extends com.example. MyClass {} if (ready) {} } }`',

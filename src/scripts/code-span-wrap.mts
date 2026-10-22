@@ -681,6 +681,96 @@ function consumeTypeBodyRemainder(
   return bodyEnd;
 }
 
+function skipEnumConstant(text: string, start: number): number | undefined {
+  let cursor = skipDeclarationTypeAnnotations(text, start);
+  const name = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor));
+  if (name === null) {
+    return undefined;
+  }
+  cursor = skipDeclarationTrivia(text, cursor + name[0].length);
+  if (text[cursor] === '(') {
+    const argumentsEnd = findBalancedDeclarationDelimiterEnd(
+      text,
+      cursor,
+      '(',
+      ')',
+    );
+    if (argumentsEnd === undefined) {
+      return undefined;
+    }
+    cursor = skipDeclarationTrivia(text, argumentsEnd);
+  }
+  if (text[cursor] === '{') {
+    const bodyEnd = findBalancedDeclarationDelimiterEnd(text, cursor, '{', '}');
+    if (bodyEnd === undefined) {
+      return undefined;
+    }
+    cursor = bodyEnd;
+  }
+  return cursor;
+}
+
+function consumeEnumBodyRemainder(
+  text: string,
+  start: number,
+  typeBodyTailCache?: Map<number, number | null>,
+  enumBodyTailCache?: Map<number, number | null>,
+): number | undefined {
+  let cursor = skipDeclarationTrivia(text, start);
+  const visited: number[] = [];
+  let bodyEnd: number | undefined;
+  while (cursor < text.length) {
+    if (enumBodyTailCache?.has(cursor) === true) {
+      const cachedEnd = enumBodyTailCache.get(cursor);
+      bodyEnd = cachedEnd === null ? undefined : cachedEnd;
+      break;
+    }
+    if (text[cursor] === '}') {
+      bodyEnd = cursor + 1;
+      enumBodyTailCache?.set(cursor, bodyEnd);
+      break;
+    }
+    visited.push(cursor);
+    if (text[cursor] === ';') {
+      bodyEnd = consumeTypeBodyRemainder(text, cursor + 1, typeBodyTailCache);
+      enumBodyTailCache?.set(cursor, bodyEnd ?? null);
+      break;
+    }
+    if (text[cursor] === ',') {
+      cursor = skipDeclarationTrivia(text, cursor + 1);
+      if (cursor === text.length) {
+        break;
+      }
+      if (text[cursor] === '}' || text[cursor] === ';') {
+        continue;
+      }
+    }
+    const constantEnd = skipEnumConstant(text, cursor);
+    if (constantEnd === undefined || constantEnd <= cursor) {
+      enumBodyTailCache?.set(cursor, null);
+      break;
+    }
+    cursor = skipDeclarationTrivia(text, constantEnd);
+    if (text[cursor] === ',') {
+      cursor = skipDeclarationTrivia(text, cursor + 1);
+      continue;
+    }
+    if (text[cursor] === ';') {
+      continue;
+    }
+    if (text[cursor] === '}') {
+      bodyEnd = cursor + 1;
+      enumBodyTailCache?.set(cursor, bodyEnd);
+      break;
+    }
+    break;
+  }
+  for (const visitedCursor of visited) {
+    enumBodyTailCache?.set(visitedCursor, bodyEnd ?? null);
+  }
+  return bodyEnd;
+}
+
 function consumeBlockRemainder(
   text: string,
   start: number,
@@ -877,6 +967,7 @@ function isDeclarationTailWithEnclosingBraces(
   start: number,
   enclosingContexts: readonly DeclarationBodyContext[],
   typeBodyTailCache?: Map<number, number | null>,
+  enumBodyTailCache?: Map<number, number | null>,
 ): boolean {
   let cursor = skipDeclarationTrivia(text, start);
   for (let index = enclosingContexts.length - 1; index >= 0; index -= 1) {
@@ -884,11 +975,18 @@ function isDeclarationTailWithEnclosingBraces(
     if (context === undefined) {
       return false;
     }
-    if (
-      context.kind === 'type' ||
-      context.kind === 'enum' ||
-      context.kind === 'anonymous'
-    ) {
+    if (context.kind === 'enum') {
+      const bodyEnd = consumeEnumBodyRemainder(
+        text,
+        cursor,
+        typeBodyTailCache,
+        enumBodyTailCache,
+      );
+      if (bodyEnd === undefined) {
+        return false;
+      }
+      cursor = skipDeclarationTrivia(text, bodyEnd);
+    } else if (context.kind === 'type' || context.kind === 'anonymous') {
       const bodyEnd = consumeTypeBodyRemainder(text, cursor, typeBodyTailCache);
       if (bodyEnd === undefined) {
         return false;
@@ -931,6 +1029,7 @@ function isCompleteDeclarationBlock(
   enclosingContexts: readonly DeclarationBodyContext[] = [],
   start = 0,
   typeBodyTailCache?: Map<number, number | null>,
+  enumBodyTailCache?: Map<number, number | null>,
 ): boolean {
   const blockStart = skipDeclarationTrivia(text, start);
   const blockEnd = findBalancedDeclarationDelimiterEnd(
@@ -946,6 +1045,7 @@ function isCompleteDeclarationBlock(
       blockEnd,
       enclosingContexts,
       typeBodyTailCache,
+      enumBodyTailCache,
     )
   );
 }
@@ -1809,6 +1909,7 @@ function isCompleteDeclarationTypeListAndBlock(
   enclosingContexts: readonly DeclarationBodyContext[] = [],
   start = 0,
   typeBodyTailCache?: Map<number, number | null>,
+  enumBodyTailCache?: Map<number, number | null>,
 ): boolean {
   let cursor = parseDeclarationTypeList(text, start);
   if (cursor === undefined) {
@@ -1823,6 +1924,7 @@ function isCompleteDeclarationTypeListAndBlock(
         enclosingContexts,
         cursor,
         typeBodyTailCache,
+        enumBodyTailCache,
       )
     ) {
       return true;
@@ -1853,6 +1955,7 @@ function isCompleteMethodThrowsTail(
   enclosingContexts: readonly DeclarationBodyContext[] = [],
   start = 0,
   typeBodyTailCache?: Map<number, number | null>,
+  enumBodyTailCache?: Map<number, number | null>,
 ): boolean {
   const cursor = parseDeclarationTypeList(text, start);
   if (cursor === undefined) {
@@ -1873,6 +1976,7 @@ function isCompleteMethodThrowsTail(
         blockEnd,
         enclosingContexts,
         typeBodyTailCache,
+        enumBodyTailCache,
       )) ||
     (text[tailStart] === ';' &&
       isDeclarationTailWithEnclosingBraces(
@@ -1880,6 +1984,7 @@ function isCompleteMethodThrowsTail(
         tailStart + 1,
         enclosingContexts,
         typeBodyTailCache,
+        enumBodyTailCache,
       ))
   );
 }
@@ -2403,6 +2508,7 @@ function findQualifiedDeclarationTypeSplitOffsets(
   };
   const methodThrowsTailCache = new Map<number, number | null>();
   const declarationTailCache = new Map<number, number | null>();
+  const enumBodyTailCache = new Map<number, number | null>();
   for (const start of offsets.declarationStarts) {
     const boundary = findTypeBodyMemberDelimiter(text, start.offset);
     if (boundary?.delimiter !== '{' && boundary?.delimiter !== ';') {
@@ -2427,6 +2533,7 @@ function findQualifiedDeclarationTypeSplitOffsets(
             materializeDeclarationBodyContexts(start.contextSnapshot),
             start.offset + sourceStart,
             declarationTailCache,
+            enumBodyTailCache,
           )
         ) {
           collectDeclarationTypeSplitOffsets(
@@ -2468,6 +2575,7 @@ function findQualifiedDeclarationTypeSplitOffsets(
         materializeDeclarationBodyContexts(start.contextSnapshot),
         start.offset + sourceStart,
         methodThrowsTailCache,
+        enumBodyTailCache,
       )
     ) {
       collectDeclarationTypeSplitOffsets(

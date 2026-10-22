@@ -582,6 +582,94 @@ function consumeTypeBodyRemainder(text, start, cache) {
   }
   return bodyEnd;
 }
+function skipEnumConstant(text, start) {
+  let cursor = skipDeclarationTypeAnnotations(text, start);
+  const name = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor));
+  if (name === null) {
+    return undefined;
+  }
+  cursor = skipDeclarationTrivia(text, cursor + name[0].length);
+  if (text[cursor] === '(') {
+    const argumentsEnd = findBalancedDeclarationDelimiterEnd(
+      text,
+      cursor,
+      '(',
+      ')',
+    );
+    if (argumentsEnd === undefined) {
+      return undefined;
+    }
+    cursor = skipDeclarationTrivia(text, argumentsEnd);
+  }
+  if (text[cursor] === '{') {
+    const bodyEnd = findBalancedDeclarationDelimiterEnd(text, cursor, '{', '}');
+    if (bodyEnd === undefined) {
+      return undefined;
+    }
+    cursor = bodyEnd;
+  }
+  return cursor;
+}
+function consumeEnumBodyRemainder(
+  text,
+  start,
+  typeBodyTailCache,
+  enumBodyTailCache,
+) {
+  let cursor = skipDeclarationTrivia(text, start);
+  const visited = [];
+  let bodyEnd;
+  while (cursor < text.length) {
+    if (enumBodyTailCache?.has(cursor) === true) {
+      const cachedEnd = enumBodyTailCache.get(cursor);
+      bodyEnd = cachedEnd === null ? undefined : cachedEnd;
+      break;
+    }
+    if (text[cursor] === '}') {
+      bodyEnd = cursor + 1;
+      enumBodyTailCache?.set(cursor, bodyEnd);
+      break;
+    }
+    visited.push(cursor);
+    if (text[cursor] === ';') {
+      bodyEnd = consumeTypeBodyRemainder(text, cursor + 1, typeBodyTailCache);
+      enumBodyTailCache?.set(cursor, bodyEnd ?? null);
+      break;
+    }
+    if (text[cursor] === ',') {
+      cursor = skipDeclarationTrivia(text, cursor + 1);
+      if (cursor === text.length) {
+        break;
+      }
+      if (text[cursor] === '}' || text[cursor] === ';') {
+        continue;
+      }
+    }
+    const constantEnd = skipEnumConstant(text, cursor);
+    if (constantEnd === undefined || constantEnd <= cursor) {
+      enumBodyTailCache?.set(cursor, null);
+      break;
+    }
+    cursor = skipDeclarationTrivia(text, constantEnd);
+    if (text[cursor] === ',') {
+      cursor = skipDeclarationTrivia(text, cursor + 1);
+      continue;
+    }
+    if (text[cursor] === ';') {
+      continue;
+    }
+    if (text[cursor] === '}') {
+      bodyEnd = cursor + 1;
+      enumBodyTailCache?.set(cursor, bodyEnd);
+      break;
+    }
+    break;
+  }
+  for (const visitedCursor of visited) {
+    enumBodyTailCache?.set(visitedCursor, bodyEnd ?? null);
+  }
+  return bodyEnd;
+}
 function consumeBlockRemainder(text, start) {
   let cursor = skipDeclarationTrivia(text, start);
   while (cursor < text.length) {
@@ -753,6 +841,7 @@ function isDeclarationTailWithEnclosingBraces(
   start,
   enclosingContexts,
   typeBodyTailCache,
+  enumBodyTailCache,
 ) {
   let cursor = skipDeclarationTrivia(text, start);
   for (let index = enclosingContexts.length - 1; index >= 0; index -= 1) {
@@ -760,11 +849,18 @@ function isDeclarationTailWithEnclosingBraces(
     if (context === undefined) {
       return false;
     }
-    if (
-      context.kind === 'type' ||
-      context.kind === 'enum' ||
-      context.kind === 'anonymous'
-    ) {
+    if (context.kind === 'enum') {
+      const bodyEnd = consumeEnumBodyRemainder(
+        text,
+        cursor,
+        typeBodyTailCache,
+        enumBodyTailCache,
+      );
+      if (bodyEnd === undefined) {
+        return false;
+      }
+      cursor = skipDeclarationTrivia(text, bodyEnd);
+    } else if (context.kind === 'type' || context.kind === 'anonymous') {
       const bodyEnd = consumeTypeBodyRemainder(text, cursor, typeBodyTailCache);
       if (bodyEnd === undefined) {
         return false;
@@ -806,6 +902,7 @@ function isCompleteDeclarationBlock(
   enclosingContexts = [],
   start = 0,
   typeBodyTailCache,
+  enumBodyTailCache,
 ) {
   const blockStart = skipDeclarationTrivia(text, start);
   const blockEnd = findBalancedDeclarationDelimiterEnd(
@@ -821,6 +918,7 @@ function isCompleteDeclarationBlock(
       blockEnd,
       enclosingContexts,
       typeBodyTailCache,
+      enumBodyTailCache,
     )
   );
 }
@@ -1634,6 +1732,7 @@ function isCompleteDeclarationTypeListAndBlock(
   enclosingContexts = [],
   start = 0,
   typeBodyTailCache,
+  enumBodyTailCache,
 ) {
   let cursor = parseDeclarationTypeList(text, start);
   if (cursor === undefined) {
@@ -1647,6 +1746,7 @@ function isCompleteDeclarationTypeListAndBlock(
         enclosingContexts,
         cursor,
         typeBodyTailCache,
+        enumBodyTailCache,
       )
     ) {
       return true;
@@ -1675,6 +1775,7 @@ function isCompleteMethodThrowsTail(
   enclosingContexts = [],
   start = 0,
   typeBodyTailCache,
+  enumBodyTailCache,
 ) {
   const cursor = parseDeclarationTypeList(text, start);
   if (cursor === undefined) {
@@ -1694,6 +1795,7 @@ function isCompleteMethodThrowsTail(
         blockEnd,
         enclosingContexts,
         typeBodyTailCache,
+        enumBodyTailCache,
       )) ||
     (text[tailStart] === ';' &&
       isDeclarationTailWithEnclosingBraces(
@@ -1701,6 +1803,7 @@ function isCompleteMethodThrowsTail(
         tailStart + 1,
         enclosingContexts,
         typeBodyTailCache,
+        enumBodyTailCache,
       ))
   );
 }
@@ -2183,6 +2286,7 @@ function findQualifiedDeclarationTypeSplitOffsets(text) {
   };
   const methodThrowsTailCache = new Map();
   const declarationTailCache = new Map();
+  const enumBodyTailCache = new Map();
   for (const start of offsets.declarationStarts) {
     const boundary = findTypeBodyMemberDelimiter(text, start.offset);
     if (boundary?.delimiter !== '{' && boundary?.delimiter !== ';') {
@@ -2207,6 +2311,7 @@ function findQualifiedDeclarationTypeSplitOffsets(text) {
             materializeDeclarationBodyContexts(start.contextSnapshot),
             start.offset + sourceStart,
             declarationTailCache,
+            enumBodyTailCache,
           )
         ) {
           collectDeclarationTypeSplitOffsets(
@@ -2247,6 +2352,7 @@ function findQualifiedDeclarationTypeSplitOffsets(text) {
         materializeDeclarationBodyContexts(start.contextSnapshot),
         start.offset + sourceStart,
         methodThrowsTailCache,
+        enumBodyTailCache,
       )
     ) {
       collectDeclarationTypeSplitOffsets(
