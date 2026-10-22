@@ -1148,10 +1148,22 @@ const USER_ACTOR_STEP_ASSIGNABLE_AGENT = new RegExp(
   `(?:${USER_ACTOR_STEP_AGENT.source}|\\bAI\\s+models?\\b)`,
   'i',
 );
-const USER_ACTOR_STEP_OTHER_ACTOR =
-  /\b(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
-const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT =
-  /^\s+(?:(?:the)\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
+const USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE =
+  '(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)';
+const USER_ACTOR_STEP_OTHER_ACTOR_BOUNDARY_SOURCE = String.raw`(?![\w-]|\s+(?:agent|assistant|bot)\b)`;
+const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE = String.raw`(?:the\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}${USER_ACTOR_STEP_OTHER_ACTOR_BOUNDARY_SOURCE}`;
+const USER_ACTOR_STEP_OTHER_ACTOR = new RegExp(
+  String.raw`\b${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}`,
+  'i',
+);
+const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT = new RegExp(
+  String.raw`^\s*${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}`,
+  'i',
+);
+const USER_ACTOR_STEP_TRANSFER_RECIPIENT_RELATION = new RegExp(
+  String.raw`^\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}(?:[.,;:!?)}\]]?\s*(?:(?:(?:and|but|then|while|whereas)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}.*)?)?\s*$|^\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}\s+(?:and|but|then|while|whereas)\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}.*$`,
+  'i',
+);
 const USER_ACTOR_STEP_AGENT_SUBJECT = new RegExp(
   String.raw`^\s*(?:(?:a|an|the)\s+)?${USER_ACTOR_STEP_AGENT.source}`,
   'i',
@@ -1170,18 +1182,32 @@ const USER_ACTOR_STEP_IMPLEMENTATION_OBJECT_SUFFIX =
   /^(?:\s+(?:parser|implementation|function|module|class|component|pattern|template|workflow|routine|procedure|generator|pipeline|executor|matcher|detector|engine|description|definition|object|type|plan)\b|-by-step\b)/i;
 function isUserActorStepAssignedTarget(
   text: string,
-  match: RegExpExecArray,
+  match: { 0: string; index: number },
 ): boolean {
   const end = (match.index ?? 0) + match[0].length;
   return !USER_ACTOR_STEP_IMPLEMENTATION_OBJECT_SUFFIX.test(text.slice(end));
 }
 
-function hasUserActorStepAssignedTarget(text: string): boolean {
+function matchOverlappingUserActorStepAssignedTargets(
+  text: string,
+): Array<{ 0: string; index: number }> {
+  // Copilot/Codex reviews #4344914025 and #4344896527: an outer
+  // "the ... step" match must not hide an inner "this step" after an
+  // actor and assignment cue, as in "the user assigns this step".
   const targetPattern = new RegExp(
-    USER_ACTOR_STEP_ASSIGNED_TARGET.source,
+    `(?=(${USER_ACTOR_STEP_ASSIGNED_TARGET.source}))`,
     'gi',
   );
-  return [...text.matchAll(targetPattern)].some((match) =>
+  const targets: Array<{ 0: string; index: number }> = [];
+  for (const match of text.matchAll(targetPattern)) {
+    const target = match[1];
+    if (target !== undefined) targets.push({ 0: target, index: match.index });
+  }
+  return targets;
+}
+
+function hasUserActorStepAssignedTarget(text: string): boolean {
+  return matchOverlappingUserActorStepAssignedTargets(text).some((match) =>
     isUserActorStepAssignedTarget(text, match),
   );
 }
@@ -1221,7 +1247,7 @@ const USER_ACTOR_STEP_AGENT_OBJECT_ASSIGNMENT_RELATION = new RegExp(
   'i',
 );
 const USER_ACTOR_STEP_AGENT_STRONG_OBJECT_ASSIGNMENT_RELATION = new RegExp(
-  String.raw`\b(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|task(?:s|ed)?|${USER_ACTOR_STEP_AGENT_SEND_VERB}|give|gives|gave|given|giving)\s+(?:(?:a|an|the)\s+)?$`,
+  String.raw`\b(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|task(?:s|ed)?|${USER_ACTOR_STEP_AGENT_SEND_VERB}|give|gives|gave|given|giving)\s+(?:(?:a|an|the)\s+)?$`,
   'i',
 );
 const USER_ACTOR_STEP_AGENT_STRONG_WORK_NOUN_COMPLEMENT =
@@ -1243,7 +1269,7 @@ const USER_ACTOR_STEP_AGENT_WORK_NOUN_CLAUSE_CONTINUATION =
 const USER_ACTOR_STEP_AGENT_INFORMATION_NOUN_TAIL =
   /^\s+(?:details?|results?|status)\b/i;
 const USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION_SOURCE =
-  '(?:implement|build|create|add|update|edit|fix|write|remove|delete|install|configure|prepare|investigate|document|refactor|change|migrate|deploy|publish|author|open|close|merge|inspect|analyze|analyse|validate|generate|test|review|run|execute|perform)';
+  '(?:implement|build|create|add|update|edit|fix|write|remove|delete|install|configure|prepare|investigate|document|refactor|change|migrate|deploy|publish|author|open|close|merge|inspect|analyze|analyse|validate|generate|test|review|run|execute|perform|sync|synchronize)';
 const USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION = new RegExp(
   `\\b(?:${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION_SOURCE}(?:s|es|ed|ing|d)?|built|wrote|written|ran)\\b`,
   'i',
@@ -1261,15 +1287,17 @@ const USER_ACTOR_STEP_AGENT_SUBJECT_WORK_ASSIGNMENT = new RegExp(
 const USER_ACTOR_STEP_NEUTRAL_AGENT_PREDICATE =
   /^(?:(?:am|is|are|was|were)\s+available|attend(?:s|ed|ing)?\s+(?:a|the)\s+meeting)$/i;
 const USER_ACTOR_STEP_NEUTRAL_AGENT_TRANSFER = new RegExp(
-  String.raw`^${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}\s+(?:(?:this|that)\s+(?:step|check|task)|(?:a|the)\s+(?:[\w-]+\s+){0,3}task)\s+to\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)$`,
+  String.raw`^(?:${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}\s+(?:(?:this|that)\s+(?:step|check|task)|(?:a|the)\s+(?:[\w-]+\s+){0,3}task)\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}|${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}\s+(?:to\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}\s+to\s+(?:perform|run|execute|complete|check|test|verify|implement|handle|manage|follow)\s+(?:(?:this|that)\s+)?(?:step|check|task))$`,
   'i',
 );
 const USER_ACTOR_STEP_NEUTRAL_AGENT_PATIENT =
   /^(?:(?:must|should|shall|will|can|could|may|might)\s+be|is|are|was|were)\s+(?:tested|checked|reviewed)(?:\s+by\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance))?\s+in\s+this\s+(?:step|check)$/i;
-const USER_ACTOR_STEP_HUMAN_SUBJECT_CONTINUATION =
-  /\s*,?\s*\b(?:and|but|while|whereas)\s+(?:(?:a|an|the)\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
+const USER_ACTOR_STEP_HUMAN_SUBJECT_CONTINUATION = new RegExp(
+  String.raw`(?:\s*[,;:—–]\s*(?:(?:and|but|then|while|whereas)\s+)*|\s+(?:(?:and|but|then|while|whereas)\s+)+)${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}`,
+  'i',
+);
 const USER_ACTOR_STEP_HUMAN_AGENT_OBJECT_PREFIX =
-  /^\s*(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\s+(?:tests?|verifies|reviews?|discusses?|mentions?)\s+(?:(?:a|an|the)\s+)?$/i;
+  /^\s*(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\s+(?:tests?|verifies|reviews?|discusses?|mentions?|show(?:s|ed|ing)?)\s+(?:(?:a|an|the)\s+)?$/i;
 const USER_ACTOR_STEP_NEUTRAL_AGENT_SECTION_LABEL = new RegExp(
   String.raw`^${USER_ACTOR_STEP_ASSIGNABLE_AGENT.source}\s+implementation$`,
   'i',
@@ -1383,7 +1411,7 @@ const USER_ACTOR_STEP_FORWARD_ASSIGNMENT_INTRODUCER = new RegExp(
   'i',
 );
 const USER_ACTOR_STEP_TARGET_AGENT_RELATION =
-  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been|needs?\s+to|has\s+to|is\s+required\s+to)\s+)?(?:for|required\s+of|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|in\s+charge\s+of|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|done\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by|completed\s+by|managed\s+by|followed\s+by|carried\s+out\s+by))\s*$/i;
+  /^\s+(?:(?:(?:is|are|was|were|must|should|shall|will|has\s+been|needs?\s+to|has\s+to|is\s+required\s+to)\s+)?(?:for|required\s+of|assigned\s+to|delegated\s+to|directed\s+to|owned\s+by|responsible\s+(?:for|to)|in\s+charge\s+of|(?:the\s+)?(?:owner|ownership)\s+of|(?:the\s+)?(?:responsibility|responsibilities)\s+of|accountable\s+to|belongs?\s+to|tasked\s+with|(?:to\s+)?be\s+(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)\s+by|done\s+by|performed\s+by|run\s+by|executed\s+by|checked\s+by|tested\s+by|verified\s+by|implemented\s+by|handled\s+by|completed\s+by|managed\s+by|followed\s+by|carried\s+out\s+by))\s*(?:(?:a|an)\s+)?$/i;
 const USER_ACTOR_STEP_PASSIVE_PARTICIPLE =
   /^(?:done|performed|run|executed|checked|tested|verified|implemented|handled|completed|managed|followed|carried\s+out)$/i;
 const USER_ACTOR_STEP_PASSIVE_PARTICIPLE_IN_PHRASE =
@@ -1455,13 +1483,59 @@ function assignmentHeadingContext(heading: string): {
     'i',
   );
   const numbered = numberedTargetPattern.exec(label);
-  const assignedTargetPattern = new RegExp(
-    USER_ACTOR_STEP_ASSIGNED_TARGET.source,
-    'gi',
-  );
-  const assignedTargetMatch = [...label.matchAll(assignedTargetPattern)].find(
-    (match) => isUserActorStepAssignedTarget(label, match),
-  );
+  const assignedTargetMatches = matchOverlappingUserActorStepAssignedTargets(
+    label,
+  ).filter((match) => isUserActorStepAssignedTarget(label, match));
+  const agentMentions = [
+    ...label.matchAll(new RegExp(USER_ACTOR_STEP_AGENT.source, 'gi')),
+  ];
+  const agentActorInTargetRole = (target: {
+    0: string;
+    index: number;
+  }): boolean => {
+    const targetEnd = target.index + target[0].length;
+    let agentLow = 0;
+    let agentHigh = agentMentions.length;
+    while (agentLow < agentHigh) {
+      const middle = Math.floor((agentLow + agentHigh) / 2);
+      const agent = agentMentions[middle];
+      if (agent !== undefined && (agent.index ?? 0) < targetEnd) {
+        agentLow = middle + 1;
+      } else {
+        agentHigh = middle;
+      }
+    }
+    const agent = agentMentions[agentLow];
+    if (agent === undefined) return false;
+
+    // Only the first following agent can match an anchored target relation;
+    // a later mention would also include this one between the target and it.
+    const agentStart = agent.index ?? 0;
+    const targetToAgent = label.slice(targetEnd, agentStart);
+    const explicitAssignmentRelation =
+      USER_ACTOR_STEP_TARGET_AGENT_RELATION.test(targetToAgent) &&
+      !/^\s+(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?for\s*$/i.test(
+        targetToAgent,
+      );
+    // The transfer-cue grammar allows at most 80 trailing characters. A
+    // bounded lookback keeps many candidate targets from rescanning every
+    // preceding character while retaining room for the longest cue verb.
+    const transferCueContext = label.slice(
+      Math.max(0, target.index - 128),
+      target.index,
+    );
+    const transferRecipientRelation =
+      USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(transferCueContext) &&
+      /^\s+to\s+(?:(?:a|an|the)\s*)?$/i.test(targetToAgent);
+    return (
+      explicitAssignmentRelation ||
+      transferRecipientRelation ||
+      /^\s+by\s*$/i.test(targetToAgent)
+    );
+  };
+  const assignedTargetMatch =
+    assignedTargetMatches.find(agentActorInTargetRole) ??
+    assignedTargetMatches[0];
   const assignedTarget = assignedTargetMatch?.[0];
   const genericTargetCandidate = /\b(?:steps?|checks?)\b/i.exec(label);
   const genericTargetMatch =
@@ -1471,25 +1545,10 @@ function assignmentHeadingContext(heading: string): {
       : null;
   const genericTarget = genericTargetMatch?.[0];
   const targetMatch = numbered ?? assignedTargetMatch ?? genericTargetMatch;
-  const targetStart = targetMatch?.index ?? -1;
-  const targetEnd = targetStart + (targetMatch?.[0].length ?? 0);
-  const agentActorInTargetRole =
-    targetMatch !== null &&
-    [...label.matchAll(new RegExp(USER_ACTOR_STEP_AGENT.source, 'gi'))].some(
-      (agent) => {
-        const agentStart = agent.index ?? 0;
-        if (agentStart < targetEnd) return false;
-        const targetToAgent = label.slice(targetEnd, agentStart);
-        const explicitAssignmentRelation =
-          USER_ACTOR_STEP_TARGET_AGENT_RELATION.test(targetToAgent) &&
-          !/^\s+(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?for\s*$/i.test(
-            targetToAgent,
-          );
-        return explicitAssignmentRelation || /^\s+by\s*$/i.test(targetToAgent);
-      },
-    );
+  const agentActorIsAssignedToTarget =
+    targetMatch !== null && agentActorInTargetRole(targetMatch);
   if (
-    (!headingStartsWithAgentActor(label) && !agentActorInTargetRole) ||
+    (!headingStartsWithAgentActor(label) && !agentActorIsAssignedToTarget) ||
     (assignedTarget === undefined &&
       numbered === null &&
       genericTarget === undefined)
@@ -1816,7 +1875,8 @@ function splitUserActorStepClauses(
       const agentPrefix =
         pendingAgentSubject !== null &&
         paragraphHasForwardAssignment &&
-        !USER_ACTOR_STEP_AGENT.test(paragraph)
+        !USER_ACTOR_STEP_AGENT.test(paragraph) &&
+        !USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT.test(paragraph)
           ? pendingAgentSubject
           : null;
       if (
@@ -2064,11 +2124,35 @@ function hasAgentActorForTarget(
   return segment.agentMentions.some((agent) => {
     if (agent.start < targetEnd) {
       if (cue === null) return false;
-      const explicitUserRecipient =
+      const explicitOtherActorTransferRecipient =
+        segment.otherActorMentions.some((actor) => {
+          if (actor.end > targetStart) return false;
+          const transferCue = segment.cues.find(
+            (candidateCue) =>
+              candidateCue.end <= actor.start &&
+              USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(
+                segment.text.slice(candidateCue.start, actor.start),
+              ) &&
+              /^\s+(?:to\s+)?$/i.test(
+                segment.text.slice(candidateCue.end, actor.start),
+              ),
+          );
+          return (
+            transferCue !== undefined &&
+            /^\s+(?:(?:to\s+)?(?:perform|run|execute|complete|check|test|verify|implement|handle|manage|follow)\s+)?$/i.test(
+              segment.text.slice(actor.end, targetStart),
+            )
+          );
+        });
+      if (explicitOtherActorTransferRecipient) return false;
+      const explicitOtherActorRecipient =
         USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(
           segment.text.slice(0, targetStart),
-        ) && /^\s+to\s+(?:the\s+)?user\b/i.test(segment.text.slice(targetEnd));
-      if (explicitUserRecipient) return false;
+        ) &&
+        USER_ACTOR_STEP_TRANSFER_RECIPIENT_RELATION.test(
+          segment.text.slice(targetEnd),
+        );
+      if (explicitOtherActorRecipient) return false;
       if (agent.end > cue.start) {
         return (
           agent.start >= cue.end &&
@@ -2121,7 +2205,7 @@ function hasAgentActorForTarget(
     const beforeTarget = segment.text.slice(0, targetStart);
     return (
       USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(beforeTarget) &&
-      /^\s+to\s*$/i.test(targetToAgent)
+      /^\s+to\s+(?:(?:a|an|the)\s*)?$/i.test(targetToAgent)
     );
   });
 }
@@ -2149,22 +2233,20 @@ function assignmentSegmentHasAgentAssignmentRole(
   if (!segment.hasAgent || !USER_ACTOR_STEP_ASSIGNMENT_CUE.test(segment.text)) {
     return false;
   }
-  const targetPattern = new RegExp(
-    USER_ACTOR_STEP_ASSIGNED_TARGET.source,
-    'gi',
-  );
   const numberedTargetPattern = new RegExp(
     USER_ACTOR_STEP_NUMBERED_TARGET.source,
     'gi',
   );
   const targets = [
-    ...[...segment.text.matchAll(targetPattern)].filter((match) => {
-      const end = (match.index ?? 0) + (match[0]?.length ?? 0);
-      return (
-        !/^\s+\d/.test(segment.text.slice(end)) &&
-        isUserActorStepAssignedTarget(segment.text, match)
-      );
-    }),
+    ...matchOverlappingUserActorStepAssignedTargets(segment.text).filter(
+      (match) => {
+        const end = (match.index ?? 0) + (match[0]?.length ?? 0);
+        return (
+          !/^\s+\d/.test(segment.text.slice(end)) &&
+          isUserActorStepAssignedTarget(segment.text, match)
+        );
+      },
+    ),
     ...segment.text.matchAll(numberedTargetPattern),
   ];
   return targets.some((target) => {
@@ -2206,7 +2288,26 @@ function findNearestAssignmentCue(
     priorIndex >= 0 ? cuePrefixMaxIndex[priorIndex] : undefined;
   const left =
     priorMaxIndex === undefined ? null : (cues[priorMaxIndex] ?? null);
-  const nextIndex = firstAtOrAfterTarget;
+  let targetNounRange: { start: number; end: number } | null = null;
+  const targetNounPattern =
+    /\b(?:steps?|checks?|checklists?|lists?|items?)\b/gi;
+  for (const match of segment.text
+    .slice(targetStart, targetEnd)
+    .matchAll(targetNounPattern)) {
+    const start = targetStart + (match.index ?? 0);
+    targetNounRange = { start, end: start + match[0].length };
+  }
+  let nextIndex = firstAtOrAfterTarget;
+  while (nextIndex < cues.length) {
+    const candidate = cues[nextIndex];
+    if (candidate === undefined) break;
+    const cueIsTargetNoun =
+      targetNounRange !== null &&
+      candidate.start >= targetNounRange.start &&
+      candidate.end <= targetNounRange.end;
+    if (!cueIsTargetNoun) break;
+    nextIndex += 1;
+  }
   const right = cues[nextIndex] ?? null;
   if (left !== null && left.end >= targetStart) return left;
   if (right !== null && right.start <= targetEnd) return right;
@@ -2323,10 +2424,6 @@ function analyzeAgentAssignmentsToSteps(
   };
   for (const scopedClause of splitUserActorStepClauses(context, listIndex)) {
     const { clause, sectionId } = scopedClause;
-    const targetPattern = new RegExp(
-      USER_ACTOR_STEP_ASSIGNED_TARGET.source,
-      'gi',
-    );
     const numberedTargetPattern = new RegExp(
       USER_ACTOR_STEP_NUMBERED_TARGET.source,
       'gi',
@@ -2395,7 +2492,7 @@ function analyzeAgentAssignmentsToSteps(
       ),
     );
     const targets = [
-      ...[...clause.matchAll(targetPattern)]
+      ...matchOverlappingUserActorStepAssignedTargets(clause)
         .filter((match) => {
           const end = (match.index ?? 0) + (match[0]?.length ?? 0);
           return (
@@ -3354,11 +3451,59 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
         .replace(/^\s*(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/, '');
       const agentObjectAssignmentRelation =
         USER_ACTOR_STEP_AGENT_OBJECT_ASSIGNMENT_RELATION.test(prefix);
+      const transferVerbPattern = new RegExp(
+        String.raw`\b${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}\b`,
+        'ig',
+      );
+      let transferCue: RegExpExecArray | null = null;
+      for (const match of suffix.matchAll(transferVerbPattern)) {
+        const transferTail = suffix.slice(match.index ?? 0);
+        if (
+          /\b(?:to\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)|(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\s+to\s+(?:perform|run|execute|complete|check|test|verify|implement|handle|manage|follow))\b/i.test(
+            transferTail,
+          )
+        ) {
+          transferCue = match;
+        }
+      }
+      const workBeforeTransfer =
+        transferCue === null ? '' : suffix.slice(0, transferCue.index);
+      const earlierIndependentWork =
+        transferCue !== null &&
+        (USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.test(workBeforeTransfer) ||
+          ((USER_ACTOR_STEP_AGENT_WORK_OBJECT.test(workBeforeTransfer) ||
+            hasUserActorStepAssignedTarget(workBeforeTransfer)) &&
+            USER_ACTOR_STEP_ASSIGNMENT_CUE.test(workBeforeTransfer)));
+      const laterIndependentWork =
+        transferCue !== null &&
+        [
+          ...suffix
+            .slice(transferCue.index)
+            .matchAll(/[,;:.!?—–]|\b(?:and|but|then|while|whereas)\b/gi),
+        ].some((match) => {
+          const continuation = suffix.slice(
+            transferCue.index + (match.index ?? 0) + match[0].length,
+          );
+          const withoutCoordinator = continuation.replace(
+            /^(?:\s*(?:and|but|then|while|whereas)\s+)+/i,
+            '',
+          );
+          return (
+            !USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT.test(withoutCoordinator) &&
+            USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.test(continuation)
+          );
+        });
+      const transfersWorkToAnotherActor =
+        transferCue !== null &&
+        !earlierIndependentWork &&
+        !laterIndependentWork &&
+        isSupportedNeutralAgentPredicate(suffix);
       if (
         !agentObjectAssignmentRelation &&
         USER_ACTOR_STEP_AGENT_SUBJECT_PREFIX.test(subjectPrefix) &&
         !USER_ACTOR_STEP_HUMAN_AGENT_OBJECT_PREFIX.test(subjectPrefix) &&
         /\S/.test(suffix) &&
+        !transfersWorkToAnotherActor &&
         !isSupportedNeutralAgentPredicate(suffix)
       ) {
         return true;
@@ -3386,31 +3531,6 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
           /\b(?:must|should|shall|will|can|could|may|might|needs?\s+to|has\s+to|required\s+to|expected\s+to|instructed\s+to)\s+be$/i.test(
             suffix.slice(0, passiveVerb.index).trimEnd(),
           ));
-      const transferVerbPattern = new RegExp(
-        String.raw`\b${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}\b`,
-        'ig',
-      );
-      let transferCue: RegExpExecArray | null = null;
-      for (const match of suffix.matchAll(transferVerbPattern)) {
-        const transferTail = suffix.slice(match.index ?? 0);
-        if (
-          /\bto\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i.test(
-            transferTail,
-          )
-        ) {
-          transferCue = match;
-        }
-      }
-      const workBeforeTransfer =
-        transferCue === null ? '' : suffix.slice(0, transferCue.index);
-      const earlierIndependentWork =
-        transferCue !== null &&
-        (USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.test(workBeforeTransfer) ||
-          ((USER_ACTOR_STEP_AGENT_WORK_OBJECT.test(workBeforeTransfer) ||
-            hasUserActorStepAssignedTarget(workBeforeTransfer)) &&
-            USER_ACTOR_STEP_ASSIGNMENT_CUE.test(workBeforeTransfer)));
-      const transfersWorkToAnotherActor =
-        transferCue !== null && !earlierIndependentWork;
       if (isAgentSubject && !passiveSubject && !transfersWorkToAnotherActor) {
         return true;
       }
@@ -3577,6 +3697,64 @@ function hasAdjacentAgentPronounWorkAssignment(text: string): boolean {
   return false;
 }
 
+function hasAgentActionContinuationAfterSemicolon(text: string): boolean {
+  const clauses = splitSentenceAndSemicolonClauses(text);
+  const omittedSubjectAction = new RegExp(
+    String.raw`^\s*(?:then\s+)?${USER_ACTOR_STEP_AGENT_SUBJECT_PREDICATE_PREFIX_SOURCE}(?:${USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION_SOURCE}(?:s|es|ed|ing|d)?|built|wrote|written|ran)\b`,
+    'i',
+  );
+  for (let index = 0; index + 1 < clauses.length; index += 1) {
+    const previous = clauses[index]?.clause ?? '';
+    const following = clauses[index + 1]?.clause ?? '';
+    if (!omittedSubjectAction.test(following)) continue;
+    if (hasAgentWorkAssignmentInClause(`${previous};${following}`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasAgentAssignmentAcrossBareSubjectParagraphs(text: string): boolean {
+  for (const section of splitMarkdownHeadingSections(text)) {
+    const paragraphs = section.body.split(/\r?\n[ \t]*\r?\n(?:[ \t]*\r?\n)*/);
+    for (let index = 0; index + 1 < paragraphs.length; index += 1) {
+      const subject = stripAgentClauseListPrefix(
+        normalizeMarkdownStepAssignmentText(paragraphs[index] ?? '')
+          .replace(/[*_~`[\]]/g, ' ')
+          .trim(),
+      );
+      const subjectMatch = USER_ACTOR_STEP_AGENT.exec(subject);
+      if (
+        subjectMatch === null ||
+        subjectMatch.index !== 0 ||
+        subjectMatch[0].length !== subject.length
+      ) {
+        continue;
+      }
+      const continuation = stripAgentClauseListPrefix(
+        normalizeMarkdownStepAssignmentText(paragraphs[index + 1] ?? '')
+          .replace(/[*_~`[\]]/g, ' ')
+          .trim(),
+      );
+      if (
+        USER_ACTOR_STEP_USER_DIRECTIVE_START.test(continuation) ||
+        !USER_ACTOR_STEP_AGENT_SUBJECT_WORK_ASSIGNMENT.test(continuation)
+      ) {
+        continue;
+      }
+      const contextualClause = `${subject} ${continuation}`;
+      if (
+        splitSentenceAndSemicolonClauses(contextualClause).some(({ clause }) =>
+          hasAgentWorkAssignmentInClause(clause),
+        )
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function hasAgentWorkAssignmentInText(
   text: string,
   plainText = false,
@@ -3602,7 +3780,12 @@ function hasAgentWorkAssignmentInText(
   const normalized = plainText
     ? roleNormalized.replace(/<!--|--!?>/g, ' ').replace(/[()[\]<>!]/g, ' ')
     : roleNormalized;
-  if (hasAdjacentAgentPronounWorkAssignment(normalized)) return true;
+  if (
+    hasAdjacentAgentPronounWorkAssignment(normalized) ||
+    hasAgentAssignmentAcrossBareSubjectParagraphs(normalized)
+  ) {
+    return true;
+  }
   for (const section of splitMarkdownHeadingSections(normalized)) {
     if (
       section.headingContext.some(
@@ -3626,12 +3809,15 @@ function hasAgentWorkAssignmentInText(
     ) {
       return true;
     }
-    if (
-      splitSentenceAndSemicolonClauses(section.body).some(({ clause }) =>
-        hasAgentWorkAssignmentInClause(clause),
-      )
-    ) {
-      return true;
+    for (const paragraph of section.body.split(/\r?\n[ \t]*\r?\n/)) {
+      if (
+        hasAgentActionContinuationAfterSemicolon(paragraph) ||
+        splitSentenceAndSemicolonClauses(paragraph).some(({ clause }) =>
+          hasAgentWorkAssignmentInClause(clause),
+        )
+      ) {
+        return true;
+      }
     }
   }
   return false;
