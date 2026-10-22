@@ -1189,10 +1189,22 @@ export async function superviseReadMode(
     winner.kind === 'closed' &&
     (winner.result.code === 0 || workerCompletionReceived)
   ) {
+    const cleanupSucceeded = await terminateOwnedProcessTree(child, closed, {
+      now,
+      platform,
+      spawnProcess,
+      cleanupBudgetMs,
+      signalProcessGroup: signalGroup,
+      processGroupExists: groupExists,
+    });
     cleanupListeners();
-    const message = workerCompletionReceived
+    const reason = workerCompletionReceived
       ? 'read worker exited before its owned process tree was reaped'
       : 'read worker exited without the owned process tree completion handshake';
+    const cleanupStatus = cleanupSucceeded
+      ? 'owned process tree stopped and reaped'
+      : `owned process tree cleanup failed within ${cleanupBudgetMs}ms`;
+    const message = `${reason}; ${cleanupStatus}`;
     writeStderr(`provider-outage-park: ${message}\n`);
     return { exitCode: 1, kind: 'transport', message };
   }

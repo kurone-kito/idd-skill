@@ -236,6 +236,29 @@ function fakeWindowsSupervisorSpawn(
   }) as unknown as typeof spawn;
 }
 
+function fakeWindowsClosedWorkerSpawn(
+  worker: ChildProcess,
+  taskkillExitCodes: number[],
+  calls: string[][],
+): typeof spawn {
+  return ((command: string, args: string[]) => {
+    if (command === 'taskkill') {
+      calls.push([command, ...args]);
+      const taskkill = fakeChild(50020 + calls.length);
+      const exitCode = taskkillExitCodes.shift() ?? 0;
+      setImmediate(() => taskkill.emit('close', exitCode, null));
+      return taskkill;
+    }
+    setImmediate(() => {
+      (worker.stdout as PassThrough).end();
+      (worker.stderr as PassThrough).end();
+      (worker.stdio[3] as PassThrough).end();
+      worker.emit('close', 0, null);
+    });
+    return worker;
+  }) as unknown as typeof spawn;
+}
+
 test('read-only success works through the direct script and packaged bin', () => {
   const restoreGh = stubExecutable('gh', GH_SCRIPT);
   const root = createTempRoot();
@@ -929,6 +952,49 @@ test('Windows success reaps the owned tree before publishing worker output', asy
   );
   assert.deepEqual(calls, [['taskkill', '/PID', '45683', '/T']]);
   assert.equal(Buffer.concat(output).toString(), '{"complete":true}\n');
+});
+
+test('Windows premature worker exit attempts tree cleanup and never publishes success', async () => {
+  for (const [exitCodes, expectedCalls, expectedStatus] of [
+    [[0], [['taskkill', '/PID', '45689', '/T']], /stopped and reaped/],
+    [
+      [1, 1],
+      [
+        ['taskkill', '/PID', '45689', '/T'],
+        ['taskkill', '/PID', '45689', '/T', '/F'],
+      ],
+      /cleanup failed within 200ms/,
+    ],
+  ] as const) {
+    const worker = fakeChild(45689);
+    const calls: string[][] = [];
+    const output: Buffer[] = [];
+    const errors: string[] = [];
+    const fakeSpawn = fakeWindowsClosedWorkerSpawn(
+      worker,
+      [...exitCodes],
+      calls,
+    );
+
+    const result = await superviseReadMode('list', 1_000, [], {
+      platform: 'win32',
+      spawnProcess: fakeSpawn,
+      cleanupBudgetMs: 200,
+      progressIntervalMs: 10_000,
+      writeStdout: (chunk) => output.push(Buffer.from(chunk)),
+      writeStderr: (text) => errors.push(text),
+    });
+
+    assert.equal(typeof result, 'object');
+    if (typeof result === 'object') assert.equal(result.exitCode, 1);
+    assert.deepEqual(calls, expectedCalls);
+    assert.equal(Buffer.concat(output).length, 0);
+    assert.match(
+      errors.join(''),
+      /without the owned process tree completion handshake/,
+    );
+    assert.match(errors.join(''), expectedStatus);
+  }
 });
 
 test('Windows cleanup that crosses the read deadline cannot publish success', async () => {
