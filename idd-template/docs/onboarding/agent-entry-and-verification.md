@@ -7,11 +7,11 @@ tags: [onboarding, agent-entry]
 
 # Onboarding Reference — Agent Entry and Verification
 
-Use this reference alongside
+Use
 [`ONBOARDING.md`](https://github.com/kurone-kito/idd-skill/blob/v0.17.0/idd-template/ONBOARDING.md)
-when you need the detailed agent-entry examples and expanded
-verification guidance that the thin onboarding entry point now links
-to.
+with this guide. Default-branch links to upcoming releases may 404 until
+a signed tag is published (PR #4601). See
+[tag guidance](../idd-helper-scripts.md#release-links).
 
 This page is the detailed companion for:
 
