@@ -3581,17 +3581,27 @@ function hasAgentWorkAssignmentInText(
   text: string,
   plainText = false,
 ): boolean {
-  // Titles are literal fields: retain link destinations and comment text
-  // while treating their punctuation as word boundaries (#4596).
-  const normalized = (
-    plainText
-      ? text.replace(/<!--|-->/g, ' ').replace(/[()[\]<>!]/g, ' ')
-      : normalizeMarkdownStepAssignmentText(text)
+  const markupNormalized = (
+    plainText ? text : normalizeMarkdownStepAssignmentText(text)
   )
     .split(/\r?\n/)
     .map(stripAgentClauseListPrefix)
     .join('\n')
     .replace(/[*_~`[\]]/g, ' ');
+  const roleSubjectPattern = new RegExp(
+    String.raw`(?:\b(?:I|we)\s*\(\s*(${USER_ACTOR_STEP_ASSIGNABLE_AGENT.source})\s*\)|\bas\s+(${USER_ACTOR_STEP_ASSIGNABLE_AGENT.source})\s*,\s*(?:I|we)\b)(\s+am\b)?`,
+    'gi',
+  );
+  const roleNormalized = markupNormalized.replace(
+    roleSubjectPattern,
+    (_match, appositive: string | undefined, role: string | undefined, am) =>
+      `${appositive ?? role}${am ? ' is' : ''}`,
+  );
+  // Titles are literal fields: retain link destinations and comment text
+  // while treating their punctuation as word boundaries (#4596).
+  const normalized = plainText
+    ? roleNormalized.replace(/<!--|-->/g, ' ').replace(/[()[\]<>!]/g, ' ')
+    : roleNormalized;
   if (hasAdjacentAgentPronounWorkAssignment(normalized)) return true;
   for (const section of splitMarkdownHeadingSections(normalized)) {
     if (

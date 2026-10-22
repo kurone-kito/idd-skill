@@ -12344,6 +12344,46 @@ test('trust safety rejects predicates outside the finite neutral agent grammar -
   assert.equal(headingPredicate.pass, false);
 });
 
+test('trust safety recognizes explicit first-person agent roles -- #4596', () => {
+  for (const predicate of [
+    'I (the coding agent) must implement the feature.',
+    'As the coding agent, I must implement the feature.',
+    'I (the coding agent) synchronize the widget.',
+    'As the coding agent, I synchronize the widget.',
+    'We (the coding agents) must implement the feature.',
+    'As **the coding agent**, I synchronize the widget.',
+    'I (the coding `agent`) synchronize the widget.',
+    'As [the coding agent](https://example.test), I synchronize the widget.',
+  ]) {
+    for (const issue of [
+      { ...BASE_ISSUE, body: `${predicate}\n\nRun this step by the user.` },
+      { ...BASE_ISSUE, title: predicate, body: 'Run this step by the user.' },
+    ]) {
+      assert.equal(
+        checkTrustSafety({ issue } as Context).pass,
+        false,
+        predicate,
+      );
+    }
+  }
+  for (const predicate of [
+    'I (the coding agent) am available.',
+    'As the coding agent, I am available.',
+    'We (the coding agents) are available.',
+  ]) {
+    assert.equal(
+      checkTrustSafety({
+        issue: {
+          ...BASE_ISSUE,
+          body: `${predicate}\n\nRun this step by the user.`,
+        },
+      } as Context).pass,
+      true,
+      predicate,
+    );
+  }
+});
+
 test('trust safety preserves unknown agent predicates in literal title markup -- #4596', () => {
   for (const title of [
     '[context](The coding agent synchronizes the widget)',
