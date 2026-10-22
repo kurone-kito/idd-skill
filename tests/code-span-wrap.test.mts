@@ -1424,6 +1424,31 @@ test('findCorruptingCodeSpanWraps scales linearly across sibling throws methods'
   );
 });
 
+test('findCorruptingCodeSpanWraps scales linearly across dollar-prefixed throws methods', () => {
+  const buildText = (size: number): string =>
+    `\`class C { ${Array.from(
+      { length: size },
+      (_, index) =>
+        `void run${index}() throws com.example. $GeneratedException {}`,
+    ).join(' ')} }\``;
+  const measure = (size: number): number => {
+    const text = buildText(size);
+    const start = process.cpuUsage();
+    const violations = findCorruptingCodeSpanWraps(text);
+    const usage = process.cpuUsage(start);
+    const elapsedMs = (usage.user + usage.system) / 1000;
+    assert.equal(violations.length, size);
+    return elapsedMs;
+  };
+
+  const smallerElapsedMs = measure(800);
+  const largerElapsedMs = measure(1600);
+  assert.ok(
+    largerElapsedMs < smallerElapsedMs * 3.2 + 100,
+    `doubling dollar-prefixed throws methods took ${Math.round(smallerElapsedMs)} ms then ${Math.round(largerElapsedMs)} ms`,
+  );
+});
+
 test('findCorruptingCodeSpanWraps scales linearly across sibling classes', () => {
   const buildText = (size: number): string =>
     `\`class Outer { ${Array.from(

@@ -3004,13 +3004,13 @@ export function findCorruptingCodeSpanWraps(
       if (
         next === undefined ||
         (!TOKEN_CONTINUING.test(next) &&
+          !declarationTypeSplitOffsets.qualified.has(sentenceDelimiterIndex) &&
           !isQualifiedDollarTypeContinuation(
             sentenceInner,
             sentenceDelimiterIndex,
             afterIndex - sentenceIndexOffset,
             declarationTypeSplitOffsets.declarationStarts,
-          ) &&
-          !declarationTypeSplitOffsets.qualified.has(sentenceDelimiterIndex))
+          ))
       ) {
         continue;
       }
