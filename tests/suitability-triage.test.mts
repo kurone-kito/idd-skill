@@ -12476,6 +12476,33 @@ test('trust safety keeps transfer, paragraph, and recipient assignment checks fa
   }
 });
 
+test('trust safety limits neutral transfers to supported human handoffs -- #4577 Copilot #4346741764, #4346741774, #4346748923 and #4346749014', () => {
+  for (const body of [
+    'The coding agent compiles the widget and assigns this step to the user.\n\nRun this step by the user.',
+    'The coding agent hands the implementation task to the user, QA-bot synchronizes the widget.\n\nRun this step by the user.',
+    'The coding agent handed the implementation task to the user-facing coding agent.\n\nRun this step by the user.',
+    'The coding agent delegates this step to the user, then the maintainer asks the coding agent to perform this step.\n\nRun this step by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+
+  for (const body of [
+    'The coding agent delegates this step to the user, then the maintainer synchronizes the widget.\n\nRun this step by the user.',
+    'The coding agent assigns the user to perform this step.\n\nRun this step by the user.',
+    'The coding agent delegates this step to the human.\n\nRun this step by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, body);
+  }
+});
+
 test('trust safety keeps long heading target scans bounded -- #4577 E10', () => {
   const unrelatedTargets = 'The maintainer mentions this step, '.repeat(192);
   const result = checkTrustSafety({

@@ -953,12 +953,20 @@ const USER_ACTOR_STEP_ASSIGNABLE_AGENT = new RegExp(
   `(?:${USER_ACTOR_STEP_AGENT.source}|\\bAI\\s+models?\\b)`,
   'i',
 );
-const USER_ACTOR_STEP_OTHER_ACTOR =
-  /\b(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
-const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT =
-  /^\s*(?:(?:the)\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
+const USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE =
+  '(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)';
+const USER_ACTOR_STEP_OTHER_ACTOR_BOUNDARY_SOURCE = String.raw`(?![\w-]|\s+(?:agent|assistant|bot)\b)`;
+const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE = String.raw`(?:the\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}${USER_ACTOR_STEP_OTHER_ACTOR_BOUNDARY_SOURCE}`;
+const USER_ACTOR_STEP_OTHER_ACTOR = new RegExp(
+  String.raw`\b${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}`,
+  'i',
+);
+const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT = new RegExp(
+  String.raw`^\s*${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}`,
+  'i',
+);
 const USER_ACTOR_STEP_TRANSFER_RECIPIENT_RELATION = new RegExp(
-  String.raw`^\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR.source}\s*[.,;:!?)}\]]?\s*$`,
+  String.raw`^\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}(?:[.,;:!?)}\]]?\s*(?:(?:(?:and|but|then|while|whereas)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}.*)?)?\s*$|^\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}\s+(?:and|but|then|while|whereas)\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}.*$`,
   'i',
 );
 const USER_ACTOR_STEP_AGENT_SUBJECT = new RegExp(
@@ -1077,13 +1085,15 @@ const USER_ACTOR_STEP_AGENT_SUBJECT_WORK_ASSIGNMENT = new RegExp(
 const USER_ACTOR_STEP_NEUTRAL_AGENT_PREDICATE =
   /^(?:(?:am|is|are|was|were)\s+available|attend(?:s|ed|ing)?\s+(?:a|the)\s+meeting)$/i;
 const USER_ACTOR_STEP_NEUTRAL_AGENT_TRANSFER = new RegExp(
-  String.raw`^${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}\s+(?:(?:this|that)\s+(?:step|check|task)|(?:a|the)\s+(?:[\w-]+\s+){0,3}task)\s+to\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)$`,
+  String.raw`^(?:${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}\s+(?:(?:this|that)\s+(?:step|check|task)|(?:a|the)\s+(?:[\w-]+\s+){0,3}task)\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}|${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}\s+(?:to\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}\s+to\s+(?:perform|run|execute|complete|check|test|verify|implement|handle|manage|follow)\s+(?:(?:this|that)\s+)?(?:step|check|task))$`,
   'i',
 );
 const USER_ACTOR_STEP_NEUTRAL_AGENT_PATIENT =
   /^(?:(?:must|should|shall|will|can|could|may|might)\s+be|is|are|was|were)\s+(?:tested|checked|reviewed)(?:\s+by\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance))?\s+in\s+this\s+(?:step|check)$/i;
-const USER_ACTOR_STEP_HUMAN_SUBJECT_CONTINUATION =
-  /\s*,?\s*\b(?:and|but|while|whereas)\s+(?:(?:a|an|the)\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
+const USER_ACTOR_STEP_HUMAN_SUBJECT_CONTINUATION = new RegExp(
+  String.raw`(?:\s*[,;:—–]\s*(?:(?:and|but|then|while|whereas)\s+)?|\s+(?:and|but|then|while|whereas)\s+)${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}`,
+  'i',
+);
 const USER_ACTOR_STEP_HUMAN_AGENT_OBJECT_PREFIX =
   /^\s*(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\s+(?:tests?|verifies|reviews?|discusses?|mentions?|show(?:s|ed|ing)?)\s+(?:(?:a|an|the)\s+)?$/i;
 const USER_ACTOR_STEP_NEUTRAL_AGENT_SECTION_LABEL = new RegExp(
@@ -3024,7 +3034,8 @@ function hasAgentWorkAssignmentInClause(clause) {
       const transfersWorkToAnotherActor =
         transferCue !== null &&
         !earlierIndependentWork &&
-        !laterIndependentWork;
+        !laterIndependentWork &&
+        isSupportedNeutralAgentPredicate(suffix);
       if (
         !agentObjectAssignmentRelation &&
         USER_ACTOR_STEP_AGENT_SUBJECT_PREFIX.test(subjectPrefix) &&
