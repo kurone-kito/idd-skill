@@ -455,10 +455,11 @@ function parseDeclarationType(
     while (isDeclarationIdentifierContinuation(text.charCodeAt(cursor))) {
       cursor += 1;
     }
-    if (text[cursor] === '<') {
+    const genericStart = skipDeclarationTrivia(text, cursor);
+    if (text[genericStart] === '<') {
       const genericArgumentsEnd = parseDeclarationGenericArguments(
         text,
-        cursor,
+        genericStart,
         genericDepth,
         rejectRootWildcard,
       );
@@ -490,6 +491,26 @@ function parseDeclarationType(
     }
   }
   return cursor;
+}
+
+function skipDeclarationArrayDimensions(
+  text: string,
+  start: number,
+): number | undefined {
+  let cursor = skipDeclarationTrivia(text, start);
+  let dimensions = 0;
+  while (true) {
+    const dimensionStart = skipDeclarationTypeAnnotations(text, cursor);
+    if (text[dimensionStart] !== '[') {
+      return dimensions === 0 ? start : cursor;
+    }
+    const dimensionEnd = skipDeclarationTrivia(text, dimensionStart + 1);
+    if (text[dimensionEnd] !== ']') {
+      return undefined;
+    }
+    cursor = skipDeclarationTrivia(text, dimensionEnd + 1);
+    dimensions += 1;
+  }
 }
 
 function parseDeclarationTypeArgument(
@@ -676,6 +697,7 @@ function isCompleteDeclarationTail(text: string): boolean {
 
 type DeclarationBodyContextKind =
   | 'type'
+  | 'record'
   | 'enum'
   | 'anonymous'
   | 'anonymous-call'
@@ -692,6 +714,7 @@ interface DeclarationBodyContext {
 interface DeclarationBodyContextSnapshot {
   kind: DeclarationBodyContextKind;
   invocationDepth?: number;
+  recordName?: string;
   parent?: DeclarationBodyContextSnapshot;
 }
 
@@ -719,6 +742,7 @@ function consumeTypeBodyRemainder(
   text: string,
   start: number,
   cache?: Map<number, number | null>,
+  recordName?: string,
 ): number | undefined {
   let cursor = skipDeclarationTrivia(text, start);
   const visited: number[] = [];
@@ -735,7 +759,7 @@ function consumeTypeBodyRemainder(
       break;
     }
     visited.push(cursor);
-    const memberEnd = skipCompleteTypeBodyMember(text, cursor);
+    const memberEnd = skipCompleteTypeBodyMember(text, cursor, recordName);
     if (memberEnd === undefined || memberEnd <= cursor) {
       cache?.set(cursor, null);
       break;
@@ -962,6 +986,8 @@ function findDeclarationBlockStatementEnd(
       braces -= 1;
       if (
         braces === 0 &&
+        parentheses === 0 &&
+        brackets === 0 &&
         compoundKind !== undefined &&
         !hasDeclarationBlockContinuation(text, cursor + 1, compoundKind)
       ) {
@@ -1044,8 +1070,17 @@ function consumeEnclosingDeclarationContext(
       typeBodyTailCache,
       enumBodyTailCache,
     );
-  } else if (context.kind === 'type' || context.kind === 'anonymous') {
-    contextEnd = consumeTypeBodyRemainder(text, cursor, typeBodyTailCache);
+  } else if (
+    context.kind === 'type' ||
+    context.kind === 'record' ||
+    context.kind === 'anonymous'
+  ) {
+    contextEnd = consumeTypeBodyRemainder(
+      text,
+      cursor,
+      typeBodyTailCache,
+      context.recordName,
+    );
   } else if (context.kind === 'anonymous-call') {
     if (text[cursor] !== '}') {
       return undefined;
@@ -1260,7 +1295,9 @@ function isQualifiedClassExtendsPrefix(text: string): boolean {
   );
 }
 
-function getTypeDeclarationBodyKind(text: string): 'type' | 'enum' | undefined {
+function getTypeDeclarationBodyKind(
+  text: string,
+): 'type' | 'record' | 'enum' | undefined {
   let cursor = skipDeclarationTrivia(text, 0);
   while (cursor < text.length) {
     const annotationEnd = skipDeclarationAnnotation(text, cursor);
@@ -1315,7 +1352,7 @@ function getTypeDeclarationBodyKind(text: string): 'type' | 'enum' | undefined {
   while (true) {
     cursor = skipDeclarationTrivia(text, cursor);
     if (cursor === text.length) {
-      return kind === 'enum' ? 'enum' : 'type';
+      return kind === 'enum' ? 'enum' : kind === 'record' ? 'record' : 'type';
     }
     const keyword = DECLARATION_CLAUSE_KEYWORDS.find((candidate) =>
       text.startsWith(candidate, cursor),
@@ -1346,6 +1383,32 @@ function getTypeDeclarationBodyKind(text: string): 'type' | 'enum' | undefined {
     }
     cursor = typeListEnd;
   }
+}
+
+function getRecordDeclarationName(text: string): string | undefined {
+  let cursor = skipDeclarationTrivia(text, 0);
+  while (cursor < text.length) {
+    const annotationEnd = skipDeclarationAnnotation(text, cursor);
+    if (annotationEnd !== undefined) {
+      cursor = skipDeclarationTrivia(text, annotationEnd);
+      continue;
+    }
+    const modifier =
+      /^(?:public|protected|private|abstract|static|final|sealed|non-sealed|strictfp)\b/u.exec(
+        text.slice(cursor),
+      );
+    if (modifier === null) {
+      break;
+    }
+    cursor = skipDeclarationTrivia(text, cursor + modifier[0].length);
+  }
+
+  const recordKeyword = /^record\b/u.exec(text.slice(cursor));
+  if (recordKeyword === null) {
+    return undefined;
+  }
+  cursor = skipDeclarationTrivia(text, cursor + recordKeyword[0].length);
+  return /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor))?.[0];
 }
 
 function isDeclarationMethodHeader(text: string): boolean {
@@ -1396,7 +1459,14 @@ function isDeclarationMethodHeader(text: string): boolean {
   if (parametersEnd === undefined) {
     return false;
   }
-  cursor = skipDeclarationTrivia(text, parametersEnd);
+  const returnDimensionsEnd = skipDeclarationArrayDimensions(
+    text,
+    parametersEnd,
+  );
+  if (returnDimensionsEnd === undefined) {
+    return false;
+  }
+  cursor = skipDeclarationTrivia(text, returnDimensionsEnd);
   const throwsClause = /^throws\b/u.exec(text.slice(cursor));
   if (throwsClause !== null) {
     const typeListStart = skipDeclarationTrivia(
@@ -1471,6 +1541,75 @@ function isDeclarationConstructorHeader(text: string): boolean {
     cursor = typeListEnd;
   }
   return isDeclarationTriviaOnly(text, cursor);
+}
+
+function isDeclarationCompactRecordConstructorHeader(
+  text: string,
+  recordName: string | undefined,
+): boolean {
+  if (recordName === undefined) {
+    return false;
+  }
+
+  let cursor = skipDeclarationTrivia(text, 0);
+  while (cursor < text.length) {
+    const annotationEnd = skipDeclarationAnnotation(text, cursor);
+    if (annotationEnd !== undefined) {
+      cursor = skipDeclarationTrivia(text, annotationEnd);
+      continue;
+    }
+    const modifier = /^(?:public|protected|private)\b/u.exec(
+      text.slice(cursor),
+    );
+    if (modifier === null) {
+      break;
+    }
+    cursor = skipDeclarationTrivia(text, cursor + modifier[0].length);
+  }
+
+  const name = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor));
+  if (name === null || name[0] !== recordName) {
+    return false;
+  }
+  cursor = skipDeclarationTrivia(text, cursor + name[0].length);
+  return isDeclarationTriviaOnly(text, cursor);
+}
+
+function isAnnotationTypeDeclarationHeader(text: string): boolean {
+  let cursor = skipDeclarationTrivia(text, 0);
+  while (cursor < text.length) {
+    if (
+      text.startsWith('@interface', cursor) &&
+      !isDeclarationIdentifierContinuation(text.charCodeAt(cursor + 10))
+    ) {
+      break;
+    }
+    const annotationEnd = skipDeclarationAnnotation(text, cursor);
+    if (annotationEnd !== undefined) {
+      cursor = skipDeclarationTrivia(text, annotationEnd);
+      continue;
+    }
+    const modifier =
+      /^(?:public|protected|private|abstract|static|final|sealed|non-sealed|strictfp)\b/u.exec(
+        text.slice(cursor),
+      );
+    if (modifier === null) {
+      break;
+    }
+    cursor = skipDeclarationTrivia(text, cursor + modifier[0].length);
+  }
+
+  if (
+    !text.startsWith('@interface', cursor) ||
+    isDeclarationIdentifierContinuation(text.charCodeAt(cursor + 10))
+  ) {
+    return false;
+  }
+  cursor = skipDeclarationTrivia(text, cursor + '@interface'.length);
+  const name = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor));
+  return (
+    name !== null && isDeclarationTriviaOnly(text, cursor + name[0].length)
+  );
 }
 
 function findDeclarationFieldInitializerDelimiter(
@@ -1581,13 +1720,11 @@ function isDeclarationFieldHeader(text: string): boolean {
       return false;
     }
     cursor = skipDeclarationTrivia(text, cursor + name[0].length);
-    while (text[cursor] === '[') {
-      const dimensionEnd = skipDeclarationTrivia(text, cursor + 1);
-      if (text[dimensionEnd] !== ']') {
-        return false;
-      }
-      cursor = skipDeclarationTrivia(text, dimensionEnd + 1);
+    const dimensionsEnd = skipDeclarationArrayDimensions(text, cursor);
+    if (dimensionsEnd === undefined) {
+      return false;
     }
+    cursor = skipDeclarationTrivia(text, dimensionsEnd);
     if (cursor === text.length) {
       return true;
     }
@@ -1727,6 +1864,7 @@ function findTypeBodyMemberDelimiter(
 function skipCompleteTypeBodyMember(
   text: string,
   start: number,
+  recordName?: string,
 ): number | undefined {
   const boundary = findTypeBodyMemberDelimiter(text, start);
   if (boundary === undefined) {
@@ -1742,8 +1880,10 @@ function skipCompleteTypeBodyMember(
   const isAnonymousBody = getAnonymousClassBodyContext(header) !== undefined;
   if (
     getTypeDeclarationBodyKind(header) === undefined &&
+    !isAnnotationTypeDeclarationHeader(header) &&
     !isDeclarationMethodHeader(header) &&
     !isDeclarationConstructorHeader(header) &&
+    !isDeclarationCompactRecordConstructorHeader(header, recordName) &&
     !isAnonymousBody &&
     !/^(?:static)?$/u.test(header.trim())
   ) {
@@ -2145,7 +2285,14 @@ function isQualifiedMethodThrowsPrefix(text: string): boolean {
   if (parametersEnd === undefined) {
     return false;
   }
-  cursor = skipDeclarationTrivia(text, parametersEnd);
+  const returnDimensionsEnd = skipDeclarationArrayDimensions(
+    text,
+    parametersEnd,
+  );
+  if (returnDimensionsEnd === undefined) {
+    return false;
+  }
+  cursor = skipDeclarationTrivia(text, returnDimensionsEnd);
   const throwsClause = /^throws\b/u.exec(text.slice(cursor));
   if (throwsClause === null) {
     return false;
@@ -2196,6 +2343,7 @@ function isQualifiedTypeInDeclaration(
       isQualifiedMethodThrowsPrefix(declarationPrefix) &&
       (containingContext === undefined ||
         containingContext === 'type' ||
+        containingContext === 'record' ||
         containingContext === 'enum' ||
         containingContext === 'anonymous' ||
         containingContext === 'anonymous-call') &&
@@ -2230,11 +2378,13 @@ function findDeclarationPrefixStarts(text: string): DeclarationPrefixScan {
     memberStart: number,
     invocationDepth?: number,
     openBraceOffset?: number,
+    recordName?: string,
   ): void => {
     const parent = contexts[contexts.length - 1];
     const snapshot: DeclarationBodyContextSnapshot = {
       kind,
       invocationDepth,
+      recordName,
       parent: parent?.snapshot,
     };
     contexts.push({
@@ -2287,7 +2437,15 @@ function findDeclarationPrefixStarts(text: string): DeclarationPrefixScan {
           ? undefined
           : getTypeDeclarationBodyKind(header);
       if (declarationKind !== undefined) {
-        pushContext(declarationKind, cursor + 1, undefined, cursor);
+        pushContext(
+          declarationKind,
+          cursor + 1,
+          undefined,
+          cursor,
+          declarationKind === 'record'
+            ? getRecordDeclarationName(header)
+            : undefined,
+        );
         starts.push({
           offset: cursor + 1,
           contextSnapshot: getContextSnapshot(),
@@ -2345,12 +2503,15 @@ function findDeclarationPrefixStarts(text: string): DeclarationPrefixScan {
         closed !== undefined &&
         closed.kind !== 'annotation' &&
         (parent.kind === 'type' ||
+          parent.kind === 'record' ||
           parent.kind === 'enum' ||
           parent.kind === 'anonymous' ||
           parent.kind === 'anonymous-call' ||
           parent.kind === 'block' ||
           (parent.kind === 'top-level' &&
-            (closed.kind === 'type' || closed.kind === 'enum')))
+            (closed.kind === 'type' ||
+              closed.kind === 'record' ||
+              closed.kind === 'enum')))
       ) {
         starts.push({
           offset: cursor + 1,
@@ -2362,6 +2523,7 @@ function findDeclarationPrefixStarts(text: string): DeclarationPrefixScan {
       const context = contexts[contexts.length - 1];
       if (
         context?.kind === 'type' ||
+        context?.kind === 'record' ||
         context?.kind === 'enum' ||
         context?.kind === 'anonymous' ||
         context?.kind === 'anonymous-call'
@@ -2531,7 +2693,14 @@ function findDeclarationMethodThrowsTypeRange(
   if (parametersEnd === undefined) {
     return undefined;
   }
-  cursor = skipDeclarationTrivia(text, parametersEnd);
+  const returnDimensionsEnd = skipDeclarationArrayDimensions(
+    text,
+    parametersEnd,
+  );
+  if (returnDimensionsEnd === undefined) {
+    return undefined;
+  }
+  cursor = skipDeclarationTrivia(text, returnDimensionsEnd);
   const throwsClause = /^throws\b/u.exec(text.slice(cursor));
   if (throwsClause === null) {
     return undefined;
@@ -2705,6 +2874,7 @@ function findQualifiedDeclarationTypeSplitOffsets(
       !isDeclarationMethodHeader(normalized.text) ||
       (containingContext !== undefined &&
         containingContext !== 'type' &&
+        containingContext !== 'record' &&
         containingContext !== 'enum' &&
         containingContext !== 'anonymous' &&
         containingContext !== 'anonymous-call')

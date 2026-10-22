@@ -422,6 +422,92 @@ test('flags qualified types in class extends and method throws clauses', () => {
   }
 });
 
+test('flags qualified types across six bounded Java declaration forms', () => {
+  const wrapCode = (source: string): string => `\`${source}\``;
+  const cases = [
+    {
+      name: 'local class followed by an if condition with a braced lambda',
+      wrapped: [
+        'class Outer { void run() { class Local extends java.util.',
+        ' ArrayList {} if (check(() -> { return true; })) {} } boolean check(java.util.function.Supplier<Boolean> supplier) { return supplier.get(); } }',
+      ].join(''),
+      unwrapped:
+        'class Outer { void run() { class Local extends java.util.ArrayList {} if (check(() -> { return true; })) {} } boolean check(java.util.function.Supplier<Boolean> supplier) { return supplier.get(); } }',
+      type: 'ArrayList',
+      prefix: 'java.util.',
+    },
+    {
+      name: 'later field declarator with an annotation',
+      wrapped: [
+        'class Outer { void run() throws java.io.',
+        ' IOException {} int first, second @A []; @java.lang.annotation.Target(java.lang.annotation.ElementType.TYPE_USE) @interface A {} }',
+      ].join(''),
+      unwrapped:
+        'class Outer { void run() throws java.io.IOException {} int first, second @A []; @java.lang.annotation.Target(java.lang.annotation.ElementType.TYPE_USE) @interface A {} }',
+      type: 'IOException',
+      prefix: 'java.io.',
+    },
+    {
+      name: 'method with post-parameter return dimensions',
+      wrapped: [
+        'class Outer { String run()[] throws java.io.',
+        ' IOException { return null; } }',
+      ].join(''),
+      unwrapped:
+        'class Outer { String run()[] throws java.io.IOException { return null; } }',
+      type: 'IOException',
+      prefix: 'java.io.',
+    },
+    {
+      name: 'parameterized return type with trivia before its arguments',
+      wrapped: [
+        'class Outer { java.util.List <String> run() throws java.io.',
+        ' IOException { return null; } }',
+      ].join(''),
+      unwrapped:
+        'class Outer { java.util.List <String> run() throws java.io.IOException { return null; } }',
+      type: 'IOException',
+      prefix: 'java.io.',
+    },
+    {
+      name: 'nested annotation type after a method',
+      wrapped: [
+        'class Outer { void run() throws java.io.',
+        ' IOException {} @interface Marker { String value(); } }',
+      ].join(''),
+      unwrapped:
+        'class Outer { void run() throws java.io.IOException {} @interface Marker { String value(); } }',
+      type: 'IOException',
+      prefix: 'java.io.',
+    },
+    {
+      name: 'record compact constructor after a method',
+      wrapped: [
+        'record Outer() { void run() throws java.io.',
+        ' IOException {} Outer {} }',
+      ].join(''),
+      unwrapped:
+        'record Outer() { void run() throws java.io.IOException {} Outer {} }',
+      type: 'IOException',
+      prefix: 'java.io.',
+    },
+  ];
+
+  for (const { name, wrapped, unwrapped, type, prefix } of cases) {
+    const violations = findCorruptingCodeSpanWraps(wrapCode(wrapped));
+    assert.equal(violations.length, 1, `${name}: wrapped`);
+    assert.equal(violations[0]?.line, 1, name);
+    assert.equal(violations[0]?.before.endsWith(prefix), true, name);
+    assert.equal(violations[0]?.after.startsWith(type), true, name);
+    assert.equal(violations[0]?.separator, 'literal-space', name);
+    assert.deepEqual(
+      findCorruptingCodeSpanWraps(wrapCode(unwrapped)),
+      [],
+      name,
+    );
+  }
+});
+
 test('accepts generic owner segments before a split qualified type', () => {
   for (const span of [
     '`class Foo extends pkg.Outer<String>. MyClass {}`',
