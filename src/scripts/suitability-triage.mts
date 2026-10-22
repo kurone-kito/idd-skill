@@ -1239,7 +1239,7 @@ const USER_ACTOR_STEP_AGENT_OBJECT_ASSIGNMENT_RELATION = new RegExp(
   'i',
 );
 const USER_ACTOR_STEP_AGENT_STRONG_OBJECT_ASSIGNMENT_RELATION = new RegExp(
-  String.raw`\b(?:assign(?:s|ed|ing)?|delegat(?:e|s|ed|ing)|direct(?:s|ed|ing)?|task(?:s|ed)?|${USER_ACTOR_STEP_AGENT_SEND_VERB}|give|gives|gave|given|giving)\s+(?:(?:a|an|the)\s+)?$`,
+  String.raw`\b(?:assign(?:s|ed|ing)?|delegat(?:e|es|ed|ing)|direct(?:s|ed|ing)?|task(?:s|ed)?|${USER_ACTOR_STEP_AGENT_SEND_VERB}|give|gives|gave|given|giving)\s+(?:(?:a|an|the)\s+)?$`,
   'i',
 );
 const USER_ACTOR_STEP_AGENT_STRONG_WORK_NOUN_COMPLEMENT =
@@ -1507,10 +1507,16 @@ function assignmentHeadingContext(heading: string): {
       !/^\s+(?:(?:is|are|was|were|must|should|shall|will|has\s+been)\s+)?for\s*$/i.test(
         targetToAgent,
       );
+    // The transfer-cue grammar allows at most 80 trailing characters. A
+    // bounded lookback keeps many candidate targets from rescanning every
+    // preceding character while retaining room for the longest cue verb.
+    const transferCueContext = label.slice(
+      Math.max(0, target.index - 128),
+      target.index,
+    );
     const transferRecipientRelation =
-      USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(
-        label.slice(0, target.index),
-      ) && /^\s+to\s+(?:(?:a|an|the)\s*)?$/i.test(targetToAgent);
+      USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(transferCueContext) &&
+      /^\s+to\s+(?:(?:a|an|the)\s*)?$/i.test(targetToAgent);
     return (
       explicitAssignmentRelation ||
       transferRecipientRelation ||
@@ -3463,7 +3469,7 @@ function hasAgentWorkAssignmentInClause(clause: string): boolean {
         [
           ...suffix
             .slice(transferCue.index)
-            .matchAll(/\b(?:and|but|while|whereas)\b/gi),
+            .matchAll(/[,;:.!?]|\b(?:and|but|then|while|whereas)\b/gi),
         ].some((match) =>
           USER_ACTOR_STEP_AGENT_LATER_WORK_ACTION.test(
             suffix.slice(
@@ -3674,6 +3680,47 @@ function hasAdjacentAgentPronounWorkAssignment(text: string): boolean {
   return false;
 }
 
+function hasAgentAssignmentAcrossBareSubjectParagraphs(text: string): boolean {
+  for (const section of splitMarkdownHeadingSections(text)) {
+    const paragraphs = section.body.split(/\r?\n[ \t]*\r?\n/);
+    for (let index = 0; index + 1 < paragraphs.length; index += 1) {
+      const subject = stripAgentClauseListPrefix(
+        normalizeMarkdownStepAssignmentText(paragraphs[index] ?? '')
+          .replace(/[*_~`[\]]/g, ' ')
+          .trim(),
+      );
+      const subjectMatch = USER_ACTOR_STEP_AGENT.exec(subject);
+      if (
+        subjectMatch === null ||
+        subjectMatch.index !== 0 ||
+        subjectMatch[0].length !== subject.length
+      ) {
+        continue;
+      }
+      const continuation = stripAgentClauseListPrefix(
+        normalizeMarkdownStepAssignmentText(paragraphs[index + 1] ?? '')
+          .replace(/[*_~`[\]]/g, ' ')
+          .trim(),
+      );
+      if (
+        USER_ACTOR_STEP_USER_DIRECTIVE_START.test(continuation) ||
+        !USER_ACTOR_STEP_AGENT_SUBJECT_WORK_ASSIGNMENT.test(continuation)
+      ) {
+        continue;
+      }
+      const contextualClause = `${subject} ${continuation}`;
+      if (
+        splitSentenceAndSemicolonClauses(contextualClause).some(({ clause }) =>
+          hasAgentWorkAssignmentInClause(clause),
+        )
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function hasAgentWorkAssignmentInText(
   text: string,
   plainText = false,
@@ -3699,7 +3746,12 @@ function hasAgentWorkAssignmentInText(
   const normalized = plainText
     ? roleNormalized.replace(/<!--|--!?>/g, ' ').replace(/[()[\]<>!]/g, ' ')
     : roleNormalized;
-  if (hasAdjacentAgentPronounWorkAssignment(normalized)) return true;
+  if (
+    hasAdjacentAgentPronounWorkAssignment(normalized) ||
+    hasAgentAssignmentAcrossBareSubjectParagraphs(normalized)
+  ) {
+    return true;
+  }
   for (const section of splitMarkdownHeadingSections(normalized)) {
     if (
       section.headingContext.some(

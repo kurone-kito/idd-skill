@@ -12434,6 +12434,42 @@ test('trust safety keeps independent agent work assignments fail-closed -- #4596
   assert.equal(coordinatedAgentAction.pass, false);
 });
 
+test('trust safety keeps transfer, paragraph, and recipient assignment checks fail-closed -- #4577 Copilot #4346194901, #4346194971, #4346195003', () => {
+  for (const body of [
+    'The maintainer delegates the coding agent a deployment step.\n\nRun this step by the user.',
+    'The coding agent handed the implementation task to the user, then synchronizes the widget.\n\nRun this step by the user.',
+    'The coding agent handed the implementation task to the user, synchronizes the widget.\n\nRun this step by the user.',
+    'The coding agent\n\nmust perform this step.\n\nRun this step by the user.',
+  ]) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+
+  const bareAgentSubject = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'The coding agent\n\nRun this step by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(bareAgentSubject.pass, true);
+});
+
+test('trust safety keeps long heading target scans bounded -- #4577 E10', () => {
+  const unrelatedTargets = 'The maintainer mentions this step, '.repeat(192);
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: `## ${unrelatedTargets}then delegates this step to the coding agent\n\nRun this step by the user.`,
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, false);
+});
+
 test('trust safety rejects predicates outside the finite neutral agent grammar -- #4596', () => {
   const predicates = [
     'The coding agent has carefully built keyboard support.',
