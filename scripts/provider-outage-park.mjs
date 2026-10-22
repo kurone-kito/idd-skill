@@ -15,6 +15,10 @@
 // and a read-only cross-pull-request list of parked changes; releasing
 // the claim itself is a separate, already-existing step
 // (`post-idd-marker.mjs --type unclaim`) the caller takes afterward.
+import { spawn } from 'node:child_process';
+import { writeSync } from 'node:fs';
+import { performance } from 'node:perf_hooks';
+import { fileURLToPath } from 'node:url';
 import { parseCliArgs } from './cli-args.mjs';
 import { ghApiJson, ghText, resolveGhOwnerRepo } from './gh-exec.mjs';
 import {
@@ -330,6 +334,7 @@ function collectRawParkMarkers(owner, repo, options) {
   const fetchComments = options.fetchComments ?? defaultFetchComments;
   let openPrs;
   try {
+    options.reportReadStage?.('open-pr-enumeration');
     openPrs = fetchOpenPullRequests(owner, repo, sampleSize);
   } catch (error) {
     // #3346 review finding: preserve the original gh-exec.mts-tagged error
@@ -355,6 +360,7 @@ function collectRawParkMarkers(owner, repo, options) {
     if (cached !== undefined) return cached;
     let result;
     try {
+      options.reportReadStage?.('park-marker-and-issue-comment-reads');
       const issueComments = fetchComments(owner, repo, issueNumber, true);
       result = latestTrustedClaimCreatedAt(
         issueComments,
@@ -375,6 +381,7 @@ function collectRawParkMarkers(owner, repo, options) {
     if (typeof pr.number !== 'number') continue;
     let comments;
     try {
+      options.reportReadStage?.('park-marker-and-issue-comment-reads');
       comments = fetchComments(owner, repo, pr.number);
     } catch {
       // A per-pull-request comment read failure skips that pull request
@@ -472,6 +479,7 @@ export function buildParkedChangeReport(owner, repo, options = {}) {
     trustedMarkerLogins,
     fetchOpenPullRequests: options.fetchOpenPullRequests,
     fetchComments: options.fetchComments,
+    reportReadStage: options.reportReadStage,
   });
   const distinctServices = [
     ...new Set(rawMarkers.map((r) => r.marker.service)),
@@ -481,6 +489,7 @@ export function buildParkedChangeReport(owner, repo, options = {}) {
     options.readHealthService ?? buildProviderHealthServiceReport;
   for (const service of distinctServices) {
     try {
+      options.reportReadStage?.('provider-health-reads');
       const result = readHealthService(owner, repo, service, { config, now });
       if (result.service === service) {
         verdictsByService.set(service, result.verdict);
@@ -612,9 +621,22 @@ export function runParkPullRequest(options) {
 // `owner:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --owner spec key
 // below. See cli-args.mts's module header for the full invariant.
+export const DEFAULT_READ_BUDGET_MS = 120_000;
+export const MAX_READ_BUDGET_MS = 2_147_483_647;
+const READ_PROGRESS_INTERVAL_MS = 10_000;
+const PROCESS_TREE_CLEANUP_BUDGET_MS = 5_000;
+const READ_WORKER_ENV = 'IDD_PROVIDER_OUTAGE_PARK_READ_WORKER';
+const READ_WORKER_STAGE_FD_ENV = 'IDD_PROVIDER_OUTAGE_PARK_STAGE_FD';
+const READ_STAGES = new Set([
+  'repository/auth-resolution',
+  'open-pr-enumeration',
+  'park-marker-and-issue-comment-reads',
+  'provider-health-reads',
+]);
 const PROVIDER_OUTAGE_PARK_FLAG_SPEC = {
   '--park': { type: 'boolean', default: false },
   '--parked-issues': { type: 'boolean', default: false },
+  '--budget-ms': { type: 'string', default: String(DEFAULT_READ_BUDGET_MS) },
   '--pr': { type: 'string', default: '' },
   '--issue': { type: 'string', default: '' },
   '--service': { type: 'string', default: '' },
@@ -633,18 +655,396 @@ function parsePositiveIntegerFlag(value, flag) {
   }
   return Number(raw);
 }
+export function parseReadBudget(value) {
+  const budgetMs = parsePositiveIntegerFlag(value, '--budget-ms');
+  if (!Number.isSafeInteger(budgetMs) || budgetMs > MAX_READ_BUDGET_MS) {
+    throw markCliUsageError(
+      new Error(
+        `invalid --budget-ms value: expected an integer from 1 through ${MAX_READ_BUDGET_MS}`,
+      ),
+    );
+  }
+  return budgetMs;
+}
+function isReadWorkerProcess() {
+  return (
+    process.env[READ_WORKER_ENV] === '1' &&
+    process.env[READ_WORKER_STAGE_FD_ENV] === '3'
+  );
+}
+function reportReadStage(stage) {
+  if (!isReadWorkerProcess()) return;
+  const line = Buffer.from(`${JSON.stringify({ stage })}\n`, 'utf8');
+  try {
+    let offset = 0;
+    while (offset < line.length) {
+      offset += writeSync(3, line, offset, line.length - offset);
+    }
+  } catch {
+    // Closing the progress pipe must not change a read's result.
+  }
+}
+function hasExplicitFlag(args, flag) {
+  return args.some(
+    (argument) => argument === flag || argument.startsWith(`${flag}=`),
+  );
+}
+function processGroupExists(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return error.code !== 'ESRCH';
+  }
+}
+function signalProcessGroup(pid, signal) {
+  process.kill(-pid, signal);
+}
+function childClose(child) {
+  return new Promise((resolve) => {
+    let error = null;
+    child.once('error', (caught) => {
+      error = caught;
+    });
+    child.once('close', (code, signal) => {
+      resolve({ code, signal, error });
+    });
+  });
+}
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+function raceWithTimeout(promise, timeoutMs, timeoutValue) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(
+      () => resolve(timeoutValue),
+      Math.max(0, timeoutMs),
+    );
+    promise.then((value) => {
+      clearTimeout(timer);
+      resolve(value);
+    });
+  });
+}
+async function runTaskkill(child, force, remainingMs, spawnProcess) {
+  if (child.pid === undefined || remainingMs <= 0) {
+    return { success: false, reaped: false };
+  }
+  let taskkill;
+  try {
+    taskkill = spawnProcess(
+      'taskkill',
+      ['/PID', String(child.pid), '/T', ...(force ? ['/F'] : [])],
+      { stdio: 'ignore', windowsHide: true },
+    );
+  } catch {
+    return { success: false, reaped: true };
+  }
+  const taskkillClosed = childClose(taskkill);
+  const waitMs = force
+    ? Math.max(0, remainingMs - 100)
+    : Math.min(1_000, Math.floor(remainingMs / 2));
+  const result = await raceWithTimeout(taskkillClosed, waitMs, null);
+  if (result !== null) {
+    return {
+      success: result.code === 0 && result.error === null,
+      reaped: true,
+    };
+  }
+  try {
+    taskkill.kill('SIGKILL');
+  } catch {
+    // The bounded child-close wait below determines whether taskkill stopped.
+  }
+  const reaped = await raceWithTimeout(
+    taskkillClosed,
+    Math.min(100, Math.max(0, remainingMs - waitMs)),
+    null,
+  );
+  if (reaped === null) {
+    try {
+      taskkill.kill('SIGKILL');
+    } catch {
+      // Cleanup failure is reported by the caller.
+    }
+  }
+  return { success: false, reaped: reaped !== null };
+}
+export async function terminateOwnedProcessTree(child, closed, dependencies) {
+  const pid = child.pid;
+  if (pid === undefined) return false;
+  const deadline = dependencies.now() + dependencies.cleanupBudgetMs;
+  const remaining = () => Math.max(0, deadline - dependencies.now());
+  if (dependencies.platform === 'win32') {
+    const graceful = await runTaskkill(
+      child,
+      false,
+      remaining(),
+      dependencies.spawnProcess,
+    );
+    if (!graceful.reaped) return false;
+    if (graceful.success) {
+      const gracefulExit = await raceWithTimeout(
+        closed.then(() => true),
+        Math.min(250, remaining()),
+        false,
+      );
+      if (gracefulExit) return true;
+    }
+    const forced = await runTaskkill(
+      child,
+      true,
+      remaining(),
+      dependencies.spawnProcess,
+    );
+    if (!forced.success || !forced.reaped) return false;
+    const result = await raceWithTimeout(
+      closed.then(() => true),
+      remaining(),
+      false,
+    );
+    return result;
+  }
+  if (dependencies.processGroupExists(pid)) {
+    try {
+      dependencies.signalProcessGroup(pid, 'SIGTERM');
+    } catch (error) {
+      if (error.code !== 'ESRCH') {
+        // Continue to the liveness probe and forced-cleanup path.
+      }
+    }
+    await delay(Math.min(300, remaining()));
+  }
+  if (remaining() > 0 && dependencies.processGroupExists(pid)) {
+    try {
+      dependencies.signalProcessGroup(pid, 'SIGKILL');
+    } catch (error) {
+      if (error.code !== 'ESRCH') {
+        // The final liveness check reports a cleanup failure if it remains.
+      }
+    }
+  }
+  while (remaining() > 0 && dependencies.processGroupExists(pid)) {
+    await delay(Math.min(50, remaining()));
+  }
+  if (dependencies.processGroupExists(pid)) return false;
+  return raceWithTimeout(
+    closed.then(() => true),
+    remaining(),
+    false,
+  );
+}
+function parseWorkerErrorEnvelope(stderr) {
+  const content = stderr.replace(/\r?\n+$/, '');
+  const lineStart = content.lastIndexOf('\n') + 1;
+  const line = content.slice(lineStart).replace(/\r$/, '');
+  if (!line.startsWith('{"iddHelperError":')) {
+    return { stderr, outcome: null };
+  }
+  try {
+    const parsed = JSON.parse(line);
+    const envelope = parsed.iddHelperError;
+    if (
+      envelope?.version !== 1 ||
+      envelope.helper !== 'provider-outage-park' ||
+      !['usage', 'not-found', 'transport', 'gate', 'internal'].includes(
+        String(envelope.kind),
+      ) ||
+      typeof envelope.exitCode !== 'number'
+    ) {
+      return { stderr, outcome: null };
+    }
+    return {
+      stderr: content.slice(0, lineStart),
+      outcome: {
+        exitCode: envelope.exitCode,
+        kind: envelope.kind,
+        message: envelope.message,
+        httpStatus: envelope.httpStatus,
+        ...(envelope.notDispatched ? { notDispatched: true } : {}),
+        ...(envelope.retryAt ? { retryAt: envelope.retryAt } : {}),
+      },
+    };
+  } catch {
+    return { stderr, outcome: null };
+  }
+}
+export async function superviseReadMode(
+  mode,
+  budgetMs,
+  args,
+  dependencies = {},
+) {
+  const now = dependencies.now ?? (() => performance.now());
+  const platform = dependencies.platform ?? process.platform;
+  const spawnProcess = dependencies.spawnProcess ?? spawn;
+  const progressIntervalMs =
+    dependencies.progressIntervalMs ?? READ_PROGRESS_INTERVAL_MS;
+  const cleanupBudgetMs =
+    dependencies.cleanupBudgetMs ?? PROCESS_TREE_CLEANUP_BUDGET_MS;
+  const writeStderr =
+    dependencies.writeStderr ?? ((text) => process.stderr.write(text));
+  const writeStdout =
+    dependencies.writeStdout ?? ((chunk) => process.stdout.write(chunk));
+  const signalGroup = dependencies.signalProcessGroup ?? signalProcessGroup;
+  const groupExists = dependencies.processGroupExists ?? processGroupExists;
+  const startedAt = now();
+  let lastStage = 'worker-startup';
+  const elapsed = () => Math.max(0, Math.floor(now() - startedAt));
+  const progress = (kind) => {
+    writeStderr(
+      `provider-outage-park: ${kind} mode=${mode} elapsed=${elapsed()}ms budget=${budgetMs}ms stage=${lastStage}\n`,
+    );
+  };
+  let settleAbort;
+  let abortReason = null;
+  const abort = new Promise((resolve) => {
+    settleAbort = (reason) => {
+      abortReason ??= reason;
+      resolve(abortReason);
+    };
+  });
+  let progressTimer;
+  const onSigint = () => settleAbort('SIGINT');
+  const onSigterm = () => settleAbort('SIGTERM');
+  process.once('SIGINT', onSigint);
+  process.once('SIGTERM', onSigterm);
+  const deadlineTimer = setTimeout(
+    () => settleAbort('deadline'),
+    Math.max(0, budgetMs - elapsed()),
+  );
+  const cleanupListeners = () => {
+    clearTimeout(deadlineTimer);
+    if (progressTimer) clearInterval(progressTimer);
+    process.removeListener('SIGINT', onSigint);
+    process.removeListener('SIGTERM', onSigterm);
+  };
+  progress('start');
+  const preSpawnAbort =
+    abortReason ?? (elapsed() >= budgetMs ? 'deadline' : null);
+  if (preSpawnAbort) {
+    cleanupListeners();
+    const message =
+      preSpawnAbort === 'deadline'
+        ? `read budget expired after ${budgetMs}ms at stage ${lastStage}; worker was not started`
+        : `read interrupted by ${preSpawnAbort} at stage ${lastStage}; worker was not started`;
+    writeStderr(`provider-outage-park: ${message}\n`);
+    const exitCode =
+      preSpawnAbort === 'SIGINT' ? 130 : preSpawnAbort === 'SIGTERM' ? 143 : 1;
+    return { exitCode, kind: 'transport', message };
+  }
+  let child;
+  try {
+    child = spawnProcess(
+      process.execPath,
+      [dependencies.entryPath ?? fileURLToPath(import.meta.url), ...args],
+      {
+        cwd: dependencies.cwd,
+        detached: platform !== 'win32',
+        env: {
+          ...(dependencies.env ?? process.env),
+          [READ_WORKER_ENV]: '1',
+          [READ_WORKER_STAGE_FD_ENV]: '3',
+        },
+        stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+      },
+    );
+  } catch (error) {
+    cleanupListeners();
+    const message = `could not start bounded read worker: ${error instanceof Error ? error.message : String(error)}`;
+    writeStderr(`provider-outage-park: ${message}\n`);
+    return { exitCode: 1, kind: 'transport', message };
+  }
+  const output = [];
+  const errorOutput = [];
+  let stageBuffer = '';
+  child.stdout?.on('data', (chunk) => output.push(Buffer.from(chunk)));
+  child.stderr?.on('data', (chunk) => errorOutput.push(Buffer.from(chunk)));
+  child.stdio[3]?.on('data', (chunk) => {
+    stageBuffer += Buffer.from(chunk).toString('utf8');
+    for (;;) {
+      const newline = stageBuffer.indexOf('\n');
+      if (newline < 0) break;
+      const line = stageBuffer.slice(0, newline);
+      stageBuffer = stageBuffer.slice(newline + 1);
+      try {
+        const message = JSON.parse(line);
+        if (message.stage && READ_STAGES.has(message.stage)) {
+          lastStage = message.stage;
+        }
+      } catch {
+        // A malformed stage notice is ignored; it never affects the read.
+      }
+    }
+  });
+  const closed = childClose(child);
+  progressTimer = setInterval(() => progress('progress'), progressIntervalMs);
+  if (elapsed() >= budgetMs) settleAbort('deadline');
+  const winner = await Promise.race([
+    closed.then((result) => ({ kind: 'closed', result })),
+    abort.then((reason) => ({ kind: 'abort', reason })),
+  ]);
+  const lateCompletion =
+    winner.kind === 'closed' && now() - startedAt >= budgetMs;
+  if (winner.kind === 'abort' || lateCompletion) {
+    const reason = winner.kind === 'abort' ? winner.reason : 'deadline';
+    const cleanupSucceeded = await terminateOwnedProcessTree(child, closed, {
+      now,
+      platform,
+      spawnProcess,
+      cleanupBudgetMs,
+      signalProcessGroup: signalGroup,
+      processGroupExists: groupExists,
+    });
+    cleanupListeners();
+    const status = cleanupSucceeded
+      ? 'owned process tree stopped and reaped'
+      : `owned process tree cleanup failed within ${cleanupBudgetMs}ms`;
+    const message =
+      reason === 'deadline'
+        ? `read budget expired after ${budgetMs}ms at stage ${lastStage}; ${status}`
+        : `read interrupted by ${reason} at stage ${lastStage}; ${status}`;
+    writeStderr(`provider-outage-park: ${message}\n`);
+    const exitCode = reason === 'SIGINT' ? 130 : reason === 'SIGTERM' ? 143 : 1;
+    return { exitCode, kind: 'transport', message };
+  }
+  cleanupListeners();
+  const childResult = winner.result;
+  const stderr = Buffer.concat(errorOutput).toString('utf8');
+  if (childResult.code !== 0) {
+    const parsed = parseWorkerErrorEnvelope(stderr);
+    if (parsed.stderr) writeStderr(parsed.stderr);
+    if (parsed.outcome) return parsed.outcome;
+    return childResult.code === null
+      ? {
+          exitCode: 1,
+          kind: 'transport',
+          message: 'read worker terminated before completion',
+        }
+      : childResult.code;
+  }
+  if (stderr) writeStderr(stderr);
+  writeStdout(Buffer.concat(output));
+  return 0;
+}
 if (import.meta.main) {
   if (isHelperErrorEnvelopeEnabled()) {
     runHelperCli('provider-outage-park', main);
   } else {
-    applyHelperCliOutcomeWhenDisabled(main());
+    const outcome = main();
+    if (outcome instanceof Promise) {
+      outcome.then(applyHelperCliOutcomeWhenDisabled, (error) => {
+        throw error;
+      });
+    } else {
+      applyHelperCliOutcomeWhenDisabled(outcome);
+    }
   }
 }
-function main() {
-  const { values, help } = parseCliArgs(
-    process.argv.slice(2),
-    PROVIDER_OUTAGE_PARK_FLAG_SPEC,
-  );
+export function main() {
+  const args = process.argv.slice(2);
+  const { values, help } = parseCliArgs(args, PROVIDER_OUTAGE_PARK_FLAG_SPEC);
   if (help) {
     printHelp();
     return 0;
@@ -658,15 +1058,36 @@ function main() {
       new Error('--park and --parked-issues are mutually exclusive'),
     );
   }
+  const budgetWasExplicit = hasExplicitFlag(args, '--budget-ms');
+  if (values.park) {
+    if (budgetWasExplicit) {
+      throw markCliUsageError(
+        new Error('--budget-ms is available only in read-only modes'),
+      );
+    }
+  } else {
+    const budgetMs = parseReadBudget(values['budget-ms']);
+    const mode = values['parked-issues'] ? 'parked-issues' : 'list';
+    if (isReadWorkerProcess()) {
+      reportReadStage('repository/auth-resolution');
+      const { owner, repo } = resolveGhOwnerRepo({
+        owner: values.owner,
+        repo: values.repo,
+      });
+      const reportOptions = { reportReadStage: reportReadStage };
+      const result =
+        mode === 'parked-issues'
+          ? buildParkedIssuesSummary(owner, repo, reportOptions)
+          : buildParkedChangeReport(owner, repo, reportOptions);
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      return 0;
+    }
+    return superviseReadMode(mode, budgetMs, args);
+  }
   const { owner, repo } = resolveGhOwnerRepo({
     owner: values.owner,
     repo: values.repo,
   });
-  if (values['parked-issues']) {
-    const summary = buildParkedIssuesSummary(owner, repo);
-    process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
-    return 0;
-  }
   if (values.park) {
     const prNumber = parsePositiveIntegerFlag(values.pr, '--pr');
     const issueNumber = parsePositiveIntegerFlag(values.issue, '--issue');
@@ -706,9 +1127,9 @@ function main() {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return result.eligible ? 0 : 1;
   }
-  const report = buildParkedChangeReport(owner, repo);
-  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-  return 0;
+  throw new Error(
+    'read-only mode should have been routed through its supervisor',
+  );
 }
 function printHelp() {
   process.stdout.write(`Usage:
@@ -725,6 +1146,13 @@ resumable (true only once that verdict is healthy). Sorted by parkedAt
 then pull request number. Also reports count and boundReached against
 providerOutage.maxParkedChanges (default 10) as information only -- this
 mode enforces nothing.
+
+--budget-ms: whole-operation deadline for the default read-only list mode
+and --parked-issues (default ${DEFAULT_READ_BUDGET_MS}; valid range 1 through
+${MAX_READ_BUDGET_MS}). The deadline includes repository/auth resolution,
+all API reads and nested synchronous gh calls. Use a larger value only
+when a slow environment needs it. Expiry stops the owned process tree,
+returns nonzero, and never prints a partial success report.
 
 #3277 marker liveness: a park marker counts only when its head: still
 equals the pull request's current head SHA, AND no trusted claimed-by on
@@ -761,7 +1189,7 @@ the pull request. This command performs no claim/state gating itself --
 the calling phase runs its own claim-revalidation gate before --apply, and
 releases the issue's claim afterward as a separate, already-existing
 unclaim step (see post-idd-marker.mjs); this command never touches claim
-state.
+state. --budget-ms cannot be combined with --park.
 
 --owner/--repo default to the current repository (gh repo view).
 `);

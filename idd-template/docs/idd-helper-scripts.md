@@ -5086,7 +5086,7 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
 - Command:
   `node scripts/provider-outage-park.mjs [--park --pr <n> --issue <n>
   --service <name> --blockers <name1,name2> --claim-id <id> --agent-id
-  <id>] [--parked-issues] [--apply]`
+  <id>] [--parked-issues] [--budget-ms <milliseconds>] [--apply]`
 - Published bin: `idd-provider-outage-park`
 - Stable contract (the posted `idd-provider-outage-park` marker payload,
   not the list-mode/`--parked-issues` stdout shapes below):
@@ -5151,6 +5151,25 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
     acceptance criteria) to the pull request; releasing the originating
     issue's claim is a separate, existing step the caller takes
     afterward (`unclaimed-by`), not performed by this command.
+- **Read-operation deadline (`#4618`).** The default read-only list mode
+  and `--parked-issues` share one whole-operation deadline of `120000` ms.
+  It starts before repository/auth resolution and covers open-PR
+  enumeration, comment pagination, nested reads, API admission, and
+  synchronous `gh` execution. An operator can extend it for a slow
+  environment with `--budget-ms <milliseconds>` (integer from `1` through
+  `2147483647`); invalid values fail before remote I/O. The option is
+  rejected with `--park`, whose existing behavior is unchanged. The
+  supervisor writes a start line and progress to stderr at least every ten
+  seconds with only the mode, elapsed/budget time, and a fixed stage name.
+  On expiry or SIGINT/SIGTERM it stops and reaps only this invocation's
+  worker and `gh` process tree, allowing at most `5000` ms for cleanup.
+  Cleanup failure is reported explicitly. A timeout or interruption exits
+  nonzero, never prints a partial success JSON, and is not retried; it is
+  not converted into `parkedIssuesComplete: false`. Per-pull-request
+  failures and truncated-sample reports retain their existing semantics
+  when the operation finishes within budget. This bound follows the
+  measured `69.01`-second, `90`-call scan recorded in issue
+  [#4615](https://github.com/kurone-kito/idd-skill/issues/4615).
 - Same claim-gating contract as `post-idd-marker.mjs`: this command
   performs no claim/state gating itself -- the calling phase runs its
   own claim-revalidation gate before `--apply`.
