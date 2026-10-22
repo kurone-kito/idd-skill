@@ -521,6 +521,14 @@ test('finds split qualified types with a type-use annotation after the separator
   }
 });
 
+test('finds split qualified names inside declaration type annotations', () => {
+  const violations = findCorruptingCodeSpanWraps(
+    '`class Foo extends @com.example. Anno(value = foo. bar) com.example.MyClass {}`',
+  );
+  assert.equal(violations.length, 1);
+  assert.ok(violations[0]?.before.endsWith('@com.example.'));
+});
+
 test('accepts annotation arguments and comments around declaration headers', () => {
   const cases = [
     '`class Foo extends com.example. MyClass /* note */ {}`',
@@ -1529,6 +1537,30 @@ test('findCorruptingCodeSpanWraps stays linear with deeply nested declaration co
     (size) =>
       `\`class C { void f() throws com.example. MyException { ${'if (ready) {'.repeat(size)} work(); ${'}'.repeat(size)} } }\``,
     false,
+  );
+});
+
+test('findCorruptingCodeSpanWraps scales linearly across nested classes with split extends types', () => {
+  const buildText = (size: number): string =>
+    `\`${Array.from(
+      { length: size },
+      (_, index) => `class C${index} extends com.example. MyClass {`,
+    ).join(' ')} work(); ${'}'.repeat(size)}\``;
+  const measure = (size: number): number => {
+    const text = buildText(size);
+    const start = process.cpuUsage();
+    const violations = findCorruptingCodeSpanWraps(text);
+    const usage = process.cpuUsage(start);
+    const elapsedMs = (usage.user + usage.system) / 1000;
+    assert.equal(violations.length, size);
+    return elapsedMs;
+  };
+
+  const smallerElapsedMs = measure(3200);
+  const largerElapsedMs = measure(6400);
+  assert.ok(
+    largerElapsedMs < smallerElapsedMs * 3.2 + 100,
+    `doubling nested split declarations took ${Math.round(smallerElapsedMs)} ms then ${Math.round(largerElapsedMs)} ms`,
   );
 });
 

@@ -124,9 +124,21 @@ function isDeclarationTriviaOnly(text, start) {
   }
   return true;
 }
-function findBalancedDeclarationDelimiterEnd(text, start, open, close) {
+function findBalancedDeclarationDelimiterEnd(
+  text,
+  start,
+  open,
+  close,
+  matchingBraceEndByStart,
+) {
   if (text[start] !== open) {
     return undefined;
+  }
+  if (open === '{' && close === '}') {
+    const precomputedEnd = matchingBraceEndByStart?.get(start);
+    if (precomputedEnd !== undefined) {
+      return precomputedEnd;
+    }
   }
   let depth = 0;
   let cursor = start;
@@ -228,18 +240,56 @@ function skipDeclarationCommentEnd(text, start) {
   return undefined;
 }
 function skipDeclarationAnnotation(text, start) {
-  const annotation =
-    /^@[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*/u.exec(
-      text.slice(start),
-    );
-  if (annotation === null) {
+  return scanDeclarationAnnotationForSplitOffsets(text, start)?.end;
+}
+function scanDeclarationAnnotationForSplitOffsets(text, start) {
+  if (text[start] !== '@') {
     return undefined;
   }
-  const cursor = skipDeclarationTrivia(text, start + annotation[0].length);
-  if (text[cursor] !== '(') {
-    return cursor;
+  let cursor = start + 1;
+  const firstIdentifier = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(text.slice(cursor));
+  if (firstIdentifier === null) {
+    return undefined;
   }
-  return findBalancedDeclarationDelimiterEnd(text, cursor, '(', ')');
+  cursor += firstIdentifier[0].length;
+  const splitNameDots = [];
+  while (true) {
+    const dotIndex = skipDeclarationTrivia(text, cursor);
+    if (text[dotIndex] !== '.') {
+      cursor = dotIndex;
+      break;
+    }
+    const identifierStart = skipDeclarationTrivia(text, dotIndex + 1);
+    const identifier = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(
+      text.slice(identifierStart),
+    );
+    if (identifier === null) {
+      return undefined;
+    }
+    if (/\s/u.test(text[dotIndex + 1] ?? '')) {
+      splitNameDots.push(dotIndex);
+    }
+    cursor = identifierStart + identifier[0].length;
+  }
+  const argumentsStart = skipDeclarationTrivia(text, cursor);
+  if (text[argumentsStart] !== '(') {
+    return { end: argumentsStart, splitNameDots };
+  }
+  const argumentsEnd = findBalancedDeclarationDelimiterEnd(
+    text,
+    argumentsStart,
+    '(',
+    ')',
+  );
+  if (argumentsEnd === undefined) {
+    return undefined;
+  }
+  return {
+    end: argumentsEnd,
+    splitNameDots,
+    argumentsStart,
+    argumentsEnd,
+  };
 }
 function isAsciiLetter(code) {
   return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
@@ -836,73 +886,112 @@ function skipInvocationRemainder(text, start, invocationDepth) {
   }
   return undefined;
 }
-function isDeclarationTailWithEnclosingBraces(
+function consumeEnclosingDeclarationContext(
   text,
-  start,
-  enclosingContexts,
+  cursor,
+  context,
   typeBodyTailCache,
   enumBodyTailCache,
 ) {
+  let contextEnd;
+  if (context.kind === 'enum') {
+    contextEnd = consumeEnumBodyRemainder(
+      text,
+      cursor,
+      typeBodyTailCache,
+      enumBodyTailCache,
+    );
+  } else if (context.kind === 'type' || context.kind === 'anonymous') {
+    contextEnd = consumeTypeBodyRemainder(text, cursor, typeBodyTailCache);
+  } else if (context.kind === 'anonymous-call') {
+    if (text[cursor] !== '}') {
+      return undefined;
+    }
+    contextEnd = skipInvocationRemainder(
+      text,
+      cursor + 1,
+      context.invocationDepth ?? 0,
+    );
+    if (contextEnd !== undefined) {
+      contextEnd = skipDeclarationTrivia(text, contextEnd);
+      if (text[contextEnd] === ';') {
+        contextEnd = skipDeclarationTrivia(text, contextEnd + 1);
+      }
+    }
+  } else if (context.kind === 'block') {
+    contextEnd = consumeBlockRemainder(text, cursor);
+  } else {
+    return undefined;
+  }
+  if (contextEnd === undefined) {
+    return undefined;
+  }
+  let nextCursor = skipDeclarationTrivia(text, contextEnd);
+  if (context.kind === 'anonymous' && text[nextCursor] === ';') {
+    nextCursor = skipDeclarationTrivia(text, nextCursor + 1);
+  }
+  return nextCursor;
+}
+function isDeclarationTailWithEnclosingBraces(
+  text,
+  start,
+  enclosingContext,
+  typeBodyTailCache,
+  enumBodyTailCache,
+  contextTailValidationCache,
+) {
   let cursor = skipDeclarationTrivia(text, start);
-  for (let index = enclosingContexts.length - 1; index >= 0; index -= 1) {
-    const context = enclosingContexts[index];
-    if (context === undefined) {
-      return false;
+  let context = enclosingContext;
+  const pending = [];
+  let complete;
+  while (context !== undefined) {
+    const cachedByStart = contextTailValidationCache?.get(context);
+    if (cachedByStart?.has(cursor) === true) {
+      complete = cachedByStart.get(cursor);
+      break;
     }
-    if (context.kind === 'enum') {
-      const bodyEnd = consumeEnumBodyRemainder(
-        text,
-        cursor,
-        typeBodyTailCache,
-        enumBodyTailCache,
-      );
-      if (bodyEnd === undefined) {
-        return false;
-      }
-      cursor = skipDeclarationTrivia(text, bodyEnd);
-    } else if (context.kind === 'type' || context.kind === 'anonymous') {
-      const bodyEnd = consumeTypeBodyRemainder(text, cursor, typeBodyTailCache);
-      if (bodyEnd === undefined) {
-        return false;
-      }
-      cursor = skipDeclarationTrivia(text, bodyEnd);
-    } else if (context.kind === 'anonymous-call') {
-      if (text[cursor] !== '}') {
-        return false;
-      }
-      const invocationEnd = skipInvocationRemainder(
-        text,
-        cursor + 1,
-        context.invocationDepth ?? 0,
-      );
-      if (invocationEnd === undefined) {
-        return false;
-      }
-      cursor = skipDeclarationTrivia(text, invocationEnd);
-      if (text[cursor] === ';') {
-        cursor = skipDeclarationTrivia(text, cursor + 1);
-      }
-    } else if (context.kind === 'block') {
-      const blockEnd = consumeBlockRemainder(text, cursor);
-      if (blockEnd === undefined) {
-        return false;
-      }
-      cursor = skipDeclarationTrivia(text, blockEnd);
-    } else {
-      return false;
+    pending.push({ context, start: cursor });
+    const nextCursor = consumeEnclosingDeclarationContext(
+      text,
+      cursor,
+      context,
+      typeBodyTailCache,
+      enumBodyTailCache,
+    );
+    if (nextCursor === undefined) {
+      complete = false;
+      break;
     }
-    if (context.kind === 'anonymous' && text[cursor] === ';') {
-      cursor = skipDeclarationTrivia(text, cursor + 1);
+    cursor = nextCursor;
+    context = context.parent;
+  }
+  if (complete === undefined) {
+    complete = cursor === text.length;
+  }
+  if (contextTailValidationCache !== undefined) {
+    for (let index = pending.length - 1; index >= 0; index -= 1) {
+      const entry = pending[index];
+      if (entry === undefined) {
+        continue;
+      }
+      let cachedByStart = contextTailValidationCache.get(entry.context);
+      if (cachedByStart === undefined) {
+        cachedByStart = new Map();
+        contextTailValidationCache.set(entry.context, cachedByStart);
+      }
+      cachedByStart.set(entry.start, complete);
     }
   }
-  return cursor === text.length;
+  return complete;
 }
 function isCompleteDeclarationBlock(
   text,
-  enclosingContexts = [],
+  enclosingContext = undefined,
   start = 0,
   typeBodyTailCache,
   enumBodyTailCache,
+  contextTailValidationCache,
+  matchingBraceEndByStart,
 ) {
   const blockStart = skipDeclarationTrivia(text, start);
   const blockEnd = findBalancedDeclarationDelimiterEnd(
@@ -910,15 +999,17 @@ function isCompleteDeclarationBlock(
     blockStart,
     '{',
     '}',
+    matchingBraceEndByStart,
   );
   return (
     blockEnd !== undefined &&
     isDeclarationTailWithEnclosingBraces(
       text,
       blockEnd,
-      enclosingContexts,
+      enclosingContext,
       typeBodyTailCache,
       enumBodyTailCache,
+      contextTailValidationCache,
     )
   );
 }
@@ -941,21 +1032,6 @@ function isQualifiedDeclarationTypeListPrefix(text) {
     cursor = skipDeclarationTypeAnnotations(normalized, commaIndex + 1);
   }
   return false;
-}
-function materializeDeclarationBodyContexts(snapshot) {
-  const contexts = [];
-  for (
-    let context = snapshot;
-    context !== undefined;
-    context = context.parent
-  ) {
-    contexts.push({
-      kind: context.kind,
-      invocationDepth: context.invocationDepth,
-    });
-  }
-  contexts.reverse();
-  return contexts;
 }
 function isPartialQualifiedDeclarationTypePrefix(text) {
   const normalized = text.trimEnd();
@@ -1729,10 +1805,12 @@ function isPackageOrImportDeclaration(text) {
 }
 function isCompleteDeclarationTypeListAndBlock(
   text,
-  enclosingContexts = [],
+  enclosingContext = undefined,
   start = 0,
   typeBodyTailCache,
   enumBodyTailCache,
+  contextTailValidationCache,
+  matchingBraceEndByStart,
 ) {
   let cursor = parseDeclarationTypeList(text, start);
   if (cursor === undefined) {
@@ -1743,10 +1821,12 @@ function isCompleteDeclarationTypeListAndBlock(
     if (
       isCompleteDeclarationBlock(
         text,
-        enclosingContexts,
+        enclosingContext,
         cursor,
         typeBodyTailCache,
         enumBodyTailCache,
+        contextTailValidationCache,
+        matchingBraceEndByStart,
       )
     ) {
       return true;
@@ -1772,10 +1852,12 @@ function isCompleteDeclarationTypeListAndBlock(
 }
 function isCompleteMethodThrowsTail(
   text,
-  enclosingContexts = [],
+  enclosingContext = undefined,
   start = 0,
   typeBodyTailCache,
   enumBodyTailCache,
+  contextTailValidationCache,
+  matchingBraceEndByStart,
 ) {
   const cursor = parseDeclarationTypeList(text, start);
   if (cursor === undefined) {
@@ -1787,23 +1869,26 @@ function isCompleteMethodThrowsTail(
     tailStart,
     '{',
     '}',
+    matchingBraceEndByStart,
   );
   return (
     (blockEnd !== undefined &&
       isDeclarationTailWithEnclosingBraces(
         text,
         blockEnd,
-        enclosingContexts,
+        enclosingContext,
         typeBodyTailCache,
         enumBodyTailCache,
+        contextTailValidationCache,
       )) ||
     (text[tailStart] === ';' &&
       isDeclarationTailWithEnclosingBraces(
         text,
         tailStart + 1,
-        enclosingContexts,
+        enclosingContext,
         typeBodyTailCache,
         enumBodyTailCache,
+        contextTailValidationCache,
       ))
   );
 }
@@ -1905,19 +1990,13 @@ function isQualifiedTypeInDeclaration(
         containingContext === 'enum' ||
         containingContext === 'anonymous' ||
         containingContext === 'anonymous-call') &&
-      isCompleteMethodThrowsTail(
-        continuation,
-        materializeDeclarationBodyContexts(contextSnapshot),
-      )
+      isCompleteMethodThrowsTail(continuation, contextSnapshot)
     ) {
       return true;
     }
     if (
       isQualifiedClassExtendsPrefix(declarationPrefix) &&
-      isCompleteDeclarationTypeListAndBlock(
-        continuation,
-        materializeDeclarationBodyContexts(contextSnapshot),
-      )
+      isCompleteDeclarationTypeListAndBlock(continuation, contextSnapshot)
     ) {
       return true;
     }
@@ -1926,15 +2005,22 @@ function isQualifiedTypeInDeclaration(
 }
 function findDeclarationPrefixStarts(text) {
   const starts = [{ offset: 0, contextSnapshot: undefined }];
+  const matchingBraceEndByStart = new Map();
   const contexts = [{ kind: 'top-level', memberStart: 0 }];
-  const pushContext = (kind, memberStart, invocationDepth) => {
+  const pushContext = (kind, memberStart, invocationDepth, openBraceOffset) => {
     const parent = contexts[contexts.length - 1];
     const snapshot = {
       kind,
       invocationDepth,
       parent: parent?.snapshot,
     };
-    contexts.push({ kind, memberStart, invocationDepth, snapshot });
+    contexts.push({
+      kind,
+      memberStart,
+      invocationDepth,
+      snapshot,
+      openBraceOffset,
+    });
   };
   const getContextSnapshot = () => contexts[contexts.length - 1]?.snapshot;
   let parenthesisDepth = 0;
@@ -1977,13 +2063,13 @@ function findDeclarationPrefixStarts(text) {
           ? undefined
           : getTypeDeclarationBodyKind(header);
       if (declarationKind !== undefined) {
-        pushContext(declarationKind, cursor + 1);
+        pushContext(declarationKind, cursor + 1, undefined, cursor);
         starts.push({
           offset: cursor + 1,
           contextSnapshot: getContextSnapshot(),
         });
       } else if (parent.kind === 'enum' && isEnumConstantBodyHeader(header)) {
-        pushContext('anonymous', cursor + 1);
+        pushContext('anonymous', cursor + 1, undefined, cursor);
         starts.push({
           offset: cursor + 1,
           contextSnapshot: getContextSnapshot(),
@@ -2001,13 +2087,19 @@ function findDeclarationPrefixStarts(text) {
           anonymousContext.kind,
           cursor + 1,
           anonymousContext.invocationDepth,
+          cursor,
         );
         starts.push({
           offset: cursor + 1,
           contextSnapshot: getContextSnapshot(),
         });
       } else {
-        pushContext(parenthesisDepth > 0 ? 'annotation' : 'block', cursor + 1);
+        pushContext(
+          parenthesisDepth > 0 ? 'annotation' : 'block',
+          cursor + 1,
+          undefined,
+          cursor,
+        );
         if (parenthesisDepth === 0) {
           starts.push({
             offset: cursor + 1,
@@ -2020,6 +2112,9 @@ function findDeclarationPrefixStarts(text) {
         break;
       }
       const closed = contexts.pop();
+      if (closed?.openBraceOffset !== undefined) {
+        matchingBraceEndByStart.set(closed.openBraceOffset, cursor + 1);
+      }
       const parent = contexts[contexts.length - 1];
       if (
         parent !== undefined &&
@@ -2082,7 +2177,7 @@ function findDeclarationPrefixStarts(text) {
     }
     cursor += 1;
   }
-  return starts;
+  return { starts, matchingBraceEndByStart };
 }
 function normalizeSplitQualifiedTypeWhitespaceWithOffsets(text) {
   const normalized = [];
@@ -2220,21 +2315,29 @@ function collectDeclarationTypeSplitOffsets(
   for (let index = start; index < end; index += 1) {
     const character = text[index];
     if (character === '@') {
-      const annotationEnd = skipDeclarationAnnotation(text, index);
-      if (annotationEnd !== undefined && annotationEnd <= end) {
-        for (
-          let annotationIndex = index;
-          annotationIndex < annotationEnd;
-          annotationIndex += 1
+      const annotation = scanDeclarationAnnotationForSplitOffsets(text, index);
+      if (annotation !== undefined && annotation.end <= end) {
+        for (const splitDot of annotation.splitNameDots) {
+          qualifiedOffsets.add(splitDot);
+        }
+        if (
+          annotation.argumentsStart !== undefined &&
+          annotation.argumentsEnd !== undefined
         ) {
-          if (
-            text[annotationIndex] === '.' &&
-            /\s/u.test(text[annotationIndex + 1] ?? '')
+          for (
+            let argumentIndex = annotation.argumentsStart;
+            argumentIndex < annotation.argumentsEnd;
+            argumentIndex += 1
           ) {
-            ignoredOffsets.add(annotationIndex);
+            if (
+              text[argumentIndex] === '.' &&
+              /\s/u.test(text[argumentIndex + 1] ?? '')
+            ) {
+              ignoredOffsets.add(argumentIndex);
+            }
           }
         }
-        index = annotationEnd - 1;
+        index = annotation.end - 1;
         continue;
       }
     }
@@ -2298,10 +2401,12 @@ function collectDeclarationTypeSplitOffsets(
   }
 }
 function findQualifiedDeclarationTypeSplitOffsets(text) {
+  const declarationScan = findDeclarationPrefixStarts(text);
   const offsets = {
     qualified: new Set(),
     ignored: new Set(),
-    declarationStarts: findDeclarationPrefixStarts(text),
+    declarationStarts: declarationScan.starts,
+    contextTailValidationCache: new WeakMap(),
   };
   const methodThrowsTailCache = new Map();
   const declarationTailCache = new Map();
@@ -2322,17 +2427,19 @@ function findQualifiedDeclarationTypeSplitOffsets(text) {
       ) {
         const sourceStart = normalized.sourceOffsets[typeRange.start];
         const sourceEnd = normalized.sourceOffsets[typeRange.end - 1];
-        if (
+        const declarationIsComplete =
           sourceStart !== undefined &&
           sourceEnd !== undefined &&
           isCompleteDeclarationTypeListAndBlock(
             text,
-            materializeDeclarationBodyContexts(start.contextSnapshot),
+            start.contextSnapshot,
             start.offset + sourceStart,
             declarationTailCache,
             enumBodyTailCache,
-          )
-        ) {
+            offsets.contextTailValidationCache,
+            declarationScan.matchingBraceEndByStart,
+          );
+        if (declarationIsComplete) {
           collectDeclarationTypeSplitOffsets(
             text,
             start.offset + sourceStart,
@@ -2368,10 +2475,12 @@ function findQualifiedDeclarationTypeSplitOffsets(text) {
       sourceEnd !== undefined &&
       isCompleteMethodThrowsTail(
         text,
-        materializeDeclarationBodyContexts(start.contextSnapshot),
+        start.contextSnapshot,
         start.offset + sourceStart,
         methodThrowsTailCache,
         enumBodyTailCache,
+        offsets.contextTailValidationCache,
+        declarationScan.matchingBraceEndByStart,
       )
     ) {
       collectDeclarationTypeSplitOffsets(
