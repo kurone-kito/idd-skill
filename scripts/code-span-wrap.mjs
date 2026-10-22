@@ -422,24 +422,33 @@ function parseDeclarationTypeArgument(
   if (varianceKeyword === undefined) {
     return cursor + 1;
   }
+  const boundTypeStart = skipDeclarationTypeAnnotations(text, boundStart);
+  if (
+    text.startsWith('void', boundTypeStart) &&
+    !isDeclarationIdentifierContinuation(
+      text.charCodeAt(boundTypeStart + 'void'.length),
+    )
+  ) {
+    return undefined;
+  }
   const primitive = DECLARATION_PRIMITIVE_ARRAY_ELEMENTS.find(
     (type) =>
-      text.startsWith(type, boundStart) &&
+      text.startsWith(type, boundTypeStart) &&
       !isDeclarationIdentifierContinuation(
-        text.charCodeAt(boundStart + type.length),
+        text.charCodeAt(boundTypeStart + type.length),
       ),
   );
   let boundEnd =
     primitive === undefined
       ? parseDeclarationType(
           text,
-          boundStart,
+          boundTypeStart,
           genericDepth,
-          true,
+          false,
           false,
           rejectRootWildcard,
         )
-      : boundStart + primitive.length;
+      : boundTypeStart + primitive.length;
   if (boundEnd === undefined) {
     return undefined;
   }
@@ -545,19 +554,33 @@ function isCompleteDeclarationTail(text) {
   }
   return false;
 }
-function consumeTypeBodyRemainder(text, start) {
+function consumeTypeBodyRemainder(text, start, cache) {
   let cursor = skipDeclarationTrivia(text, start);
+  const visited = [];
+  let bodyEnd;
   while (cursor < text.length) {
     if (text[cursor] === '}') {
-      return cursor + 1;
+      bodyEnd = cursor + 1;
+      cache?.set(cursor, bodyEnd);
+      break;
     }
+    if (cache?.has(cursor) === true) {
+      const cachedEnd = cache.get(cursor);
+      bodyEnd = cachedEnd === null ? undefined : cachedEnd;
+      break;
+    }
+    visited.push(cursor);
     const memberEnd = skipCompleteTypeBodyMember(text, cursor);
     if (memberEnd === undefined || memberEnd <= cursor) {
-      return undefined;
+      cache?.set(cursor, null);
+      break;
     }
     cursor = skipDeclarationTrivia(text, memberEnd);
   }
-  return undefined;
+  for (const visitedCursor of visited) {
+    cache?.set(visitedCursor, bodyEnd ?? null);
+  }
+  return bodyEnd;
 }
 function consumeBlockRemainder(text, start) {
   let cursor = skipDeclarationTrivia(text, start);
@@ -725,7 +748,12 @@ function skipInvocationRemainder(text, start, invocationDepth) {
   }
   return undefined;
 }
-function isDeclarationTailWithEnclosingBraces(text, start, enclosingContexts) {
+function isDeclarationTailWithEnclosingBraces(
+  text,
+  start,
+  enclosingContexts,
+  typeBodyTailCache,
+) {
   let cursor = skipDeclarationTrivia(text, start);
   for (let index = enclosingContexts.length - 1; index >= 0; index -= 1) {
     const context = enclosingContexts[index];
@@ -737,7 +765,7 @@ function isDeclarationTailWithEnclosingBraces(text, start, enclosingContexts) {
       context.kind === 'enum' ||
       context.kind === 'anonymous'
     ) {
-      const bodyEnd = consumeTypeBodyRemainder(text, cursor);
+      const bodyEnd = consumeTypeBodyRemainder(text, cursor, typeBodyTailCache);
       if (bodyEnd === undefined) {
         return false;
       }
@@ -1616,26 +1644,37 @@ function isCompleteDeclarationTypeListAndBlock(text, enclosingContexts = []) {
     cursor = typeListEnd;
   }
 }
-function isCompleteMethodThrowsTail(text, enclosingContexts = []) {
-  const cursor = parseDeclarationTypeList(text, 0);
+function isCompleteMethodThrowsTail(
+  text,
+  enclosingContexts = [],
+  start = 0,
+  typeBodyTailCache,
+) {
+  const cursor = parseDeclarationTypeList(text, start);
   if (cursor === undefined) {
     return false;
   }
   const tailStart = skipDeclarationTrivia(text, cursor);
-  const tail = text.slice(tailStart);
-  const blockEnd = findBalancedDeclarationDelimiterEnd(tail, 0, '{', '}');
+  const blockEnd = findBalancedDeclarationDelimiterEnd(
+    text,
+    tailStart,
+    '{',
+    '}',
+  );
   return (
     (blockEnd !== undefined &&
       isDeclarationTailWithEnclosingBraces(
-        tail,
+        text,
         blockEnd,
         enclosingContexts,
+        typeBodyTailCache,
       )) ||
     (text[tailStart] === ';' &&
       isDeclarationTailWithEnclosingBraces(
         text,
         tailStart + 1,
         enclosingContexts,
+        typeBodyTailCache,
       ))
   );
 }
@@ -2105,6 +2144,7 @@ function findQualifiedDeclarationTypeSplitOffsets(text) {
     qualified: new Set(),
     ignored: new Set(),
   };
+  const methodThrowsTailCache = new Map();
   for (const start of findDeclarationPrefixStarts(text)) {
     const boundary = findTypeBodyMemberDelimiter(text, start.offset);
     if (boundary?.delimiter !== '{' && boundary?.delimiter !== ';') {
@@ -2163,8 +2203,10 @@ function findQualifiedDeclarationTypeSplitOffsets(text) {
       sourceStart !== undefined &&
       sourceEnd !== undefined &&
       isCompleteMethodThrowsTail(
-        text.slice(start.offset + sourceStart),
+        text,
         materializeDeclarationBodyContexts(start.contextSnapshot),
+        start.offset + sourceStart,
+        methodThrowsTailCache,
       )
     ) {
       collectDeclarationTypeSplitOffsets(

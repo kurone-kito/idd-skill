@@ -693,6 +693,7 @@ test('does not use direct wildcard supertype arguments as declaration evidence',
 test('flags nested wildcard array bounds with reference and primitive elements', () => {
   const inlineCode = String.fromCharCode(96);
   for (const bound of [
+    'lowercaseName[]',
     'String[]',
     'String[][]',
     'String [ ] [ ]',
@@ -718,6 +719,19 @@ test('flags nested wildcard array bounds with reference and primitive elements',
   }
 });
 
+test('keeps lowercase and annotated primitive wildcard bounds in throws methods', () => {
+  const inlineCode = String.fromCharCode(96);
+  for (const declaration of [
+    'abstract <t> List<? extends t> run() throws com.example. MyException;',
+    'List<? extends @A int[]> run() throws com.example. MyException;',
+  ]) {
+    const span = `${inlineCode}${declaration}${inlineCode}`;
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.equal(violations[0]?.before.endsWith('com.example.'), true, span);
+  }
+});
+
 test('does not accept incomplete array bounds or bare primitive bounds', () => {
   const inlineCode = String.fromCharCode(96);
   for (const bound of [
@@ -726,8 +740,8 @@ test('does not accept incomplete array bounds or bare primitive bounds', () => {
     'String[] [',
     'String[]suffix',
     'int',
+    '@A int',
     'void[]',
-    'intValue[]',
   ]) {
     const span = `${inlineCode}com.example. MyClass extends Base<List<? extends ${bound}>>${inlineCode}`;
     assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
@@ -1349,6 +1363,30 @@ test('findCorruptingCodeSpanWraps stays linear on a long qualified throws list',
     (size) =>
       `\`class C { void f() throws ${Array(size).fill('com.example. MyException').join(', ')} {} }\``,
     false,
+  );
+});
+
+test('findCorruptingCodeSpanWraps scales linearly across sibling throws methods', () => {
+  const buildText = (size: number): string =>
+    `\`class C { ${Array.from(
+      { length: size },
+      (_, index) =>
+        `void run${index}() throws com.example. MyException {}`,
+    ).join(' ')} }\``;
+  const measure = (size: number): number => {
+    const text = buildText(size);
+    const start = performance.now();
+    const violations = findCorruptingCodeSpanWraps(text);
+    const elapsedMs = performance.now() - start;
+    assert.equal(violations.length, size);
+    return elapsedMs;
+  };
+
+  const smallerElapsedMs = measure(800);
+  const largerElapsedMs = measure(1600);
+  assert.ok(
+    largerElapsedMs < smallerElapsedMs * 3.2 + 100,
+    `doubling sibling methods took ${Math.round(smallerElapsedMs)} ms then ${Math.round(largerElapsedMs)} ms`,
   );
 });
 
