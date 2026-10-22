@@ -800,6 +800,8 @@ test('flags declarations inside one balanced outer wrapper', () => {
 test('does not flag a sentence after a dotted name', () => {
   for (const span of [
     '`Open example.com. Then continue`',
+    '`command <file>. Next step`',
+    '`interface C extends Base<?>. Next step`',
     '`Visit example.com. GitHub Actions are available.`',
     '`Visit example.com. GitHub supports Actions.`',
     '`Visit example.com. GitHub implements additional features.`',
@@ -828,6 +830,19 @@ test('does not treat incomplete wrappers or trailing prose as declarations', () 
     '`[Visit example.com. GitHub implements Interface.]`',
   ]) {
     assert.deepEqual(findCorruptingCodeSpanWraps(span), [], span);
+  }
+});
+
+test('preserves qualified-name detection after prefixed identifiers', () => {
+  for (const span of [
+    '`_MyClass. OtherClass`',
+    '`2MyClass. OtherClass`',
+    '`path/_MyClass. OtherClass`',
+  ]) {
+    const violations = findCorruptingCodeSpanWraps(span);
+    assert.equal(violations.length, 1, span);
+    assert.ok(violations[0]?.before.endsWith('.'), span);
+    assert.ok(violations[0]?.after.startsWith('OtherClass'), span);
   }
 });
 
@@ -1377,9 +1392,10 @@ test('findCorruptingCodeSpanWraps scales linearly across sibling throws methods'
     ).join(' ')} }\``;
   const measure = (size: number): number => {
     const text = buildText(size);
-    const start = performance.now();
+    const start = process.cpuUsage();
     const violations = findCorruptingCodeSpanWraps(text);
-    const elapsedMs = performance.now() - start;
+    const usage = process.cpuUsage(start);
+    const elapsedMs = (usage.user + usage.system) / 1000;
     assert.equal(violations.length, size);
     return elapsedMs;
   };
@@ -1389,6 +1405,51 @@ test('findCorruptingCodeSpanWraps scales linearly across sibling throws methods'
   assert.ok(
     largerElapsedMs < smallerElapsedMs * 3.2 + 100,
     `doubling sibling methods took ${Math.round(smallerElapsedMs)} ms then ${Math.round(largerElapsedMs)} ms`,
+  );
+});
+
+test('findCorruptingCodeSpanWraps scales linearly across sibling classes', () => {
+  const buildText = (size: number): string =>
+    `\`class Outer { ${Array.from(
+      { length: size },
+      (_, index) => `class C${index} extends com.example. MyClass {}`,
+    ).join(' ')} }\``;
+  const measure = (size: number): number => {
+    const text = buildText(size);
+    const start = process.cpuUsage();
+    const violations = findCorruptingCodeSpanWraps(text);
+    const usage = process.cpuUsage(start);
+    const elapsedMs = (usage.user + usage.system) / 1000;
+    assert.equal(violations.length, size);
+    return elapsedMs;
+  };
+
+  const smallerElapsedMs = measure(800);
+  const largerElapsedMs = measure(1600);
+  assert.ok(
+    largerElapsedMs < smallerElapsedMs * 3.2 + 100,
+    `doubling sibling classes took ${Math.round(smallerElapsedMs)} ms then ${Math.round(largerElapsedMs)} ms`,
+  );
+});
+
+test('findCorruptingCodeSpanWraps scales linearly across sentence punctuation', () => {
+  const buildText = (size: number): string =>
+    `\`${'word. Capital prose '.repeat(size)}\``;
+  const measure = (size: number): number => {
+    const text = buildText(size);
+    const start = process.cpuUsage();
+    const violations = findCorruptingCodeSpanWraps(text);
+    const usage = process.cpuUsage(start);
+    const elapsedMs = (usage.user + usage.system) / 1000;
+    assert.deepEqual(violations, []);
+    return elapsedMs;
+  };
+
+  const smallerElapsedMs = measure(2000);
+  const largerElapsedMs = measure(4000);
+  assert.ok(
+    largerElapsedMs < smallerElapsedMs * 3.2 + 100,
+    `doubling sentence candidates took ${Math.round(smallerElapsedMs)} ms then ${Math.round(largerElapsedMs)} ms`,
   );
 });
 

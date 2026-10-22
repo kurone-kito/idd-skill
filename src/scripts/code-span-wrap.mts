@@ -929,12 +929,24 @@ function isDeclarationTailWithEnclosingBraces(
 function isCompleteDeclarationBlock(
   text: string,
   enclosingContexts: readonly DeclarationBodyContext[] = [],
+  start = 0,
+  typeBodyTailCache?: Map<number, number | null>,
 ): boolean {
-  const start = skipDeclarationTrivia(text, 0);
-  const blockEnd = findBalancedDeclarationDelimiterEnd(text, start, '{', '}');
+  const blockStart = skipDeclarationTrivia(text, start);
+  const blockEnd = findBalancedDeclarationDelimiterEnd(
+    text,
+    blockStart,
+    '{',
+    '}',
+  );
   return (
     blockEnd !== undefined &&
-    isDeclarationTailWithEnclosingBraces(text, blockEnd, enclosingContexts)
+    isDeclarationTailWithEnclosingBraces(
+      text,
+      blockEnd,
+      enclosingContexts,
+      typeBodyTailCache,
+    )
   );
 }
 
@@ -1795,16 +1807,24 @@ function isPackageOrImportDeclaration(text: string): boolean {
 function isCompleteDeclarationTypeListAndBlock(
   text: string,
   enclosingContexts: readonly DeclarationBodyContext[] = [],
+  start = 0,
+  typeBodyTailCache?: Map<number, number | null>,
 ): boolean {
-  let cursor = parseDeclarationTypeList(text, 0);
+  let cursor = parseDeclarationTypeList(text, start);
   if (cursor === undefined) {
     return false;
   }
 
   while (true) {
     cursor = skipDeclarationTrivia(text, cursor);
-    const remaining = text.slice(cursor);
-    if (isCompleteDeclarationBlock(remaining, enclosingContexts)) {
+    if (
+      isCompleteDeclarationBlock(
+        text,
+        enclosingContexts,
+        cursor,
+        typeBodyTailCache,
+      )
+    ) {
       return true;
     }
 
@@ -1940,13 +1960,23 @@ function isQualifiedTypeInDeclaration(
   delimiterIndex: number,
   nextWord: string,
   followingText: string,
+  declarationStarts: DeclarationPrefixStart[],
 ): boolean {
   const prefix = inner.slice(0, delimiterIndex);
-  const declarationStarts = findDeclarationPrefixStarts(prefix);
   const continuation = normalizeSplitQualifiedTypeWhitespace(
     `${nextWord} ${followingText}`,
   );
-  for (let index = declarationStarts.length - 1; index >= 0; index -= 1) {
+  let low = 0;
+  let high = declarationStarts.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if ((declarationStarts[middle]?.offset ?? Infinity) <= delimiterIndex) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  for (let index = low - 1; index >= 0; index -= 1) {
     const declarationStart = declarationStarts[index];
     const declarationPrefix = prefix.slice(declarationStart?.offset ?? 0);
     const contextSnapshot = declarationStart?.contextSnapshot;
@@ -2360,6 +2390,7 @@ function collectDeclarationTypeSplitOffsets(
 interface DeclarationTypeSplitOffsets {
   qualified: Set<number>;
   ignored: Set<number>;
+  declarationStarts: DeclarationPrefixStart[];
 }
 
 function findQualifiedDeclarationTypeSplitOffsets(
@@ -2368,9 +2399,11 @@ function findQualifiedDeclarationTypeSplitOffsets(
   const offsets: DeclarationTypeSplitOffsets = {
     qualified: new Set<number>(),
     ignored: new Set<number>(),
+    declarationStarts: findDeclarationPrefixStarts(text),
   };
   const methodThrowsTailCache = new Map<number, number | null>();
-  for (const start of findDeclarationPrefixStarts(text)) {
+  const declarationTailCache = new Map<number, number | null>();
+  for (const start of offsets.declarationStarts) {
     const boundary = findTypeBodyMemberDelimiter(text, start.offset);
     if (boundary?.delimiter !== '{' && boundary?.delimiter !== ';') {
       continue;
@@ -2390,8 +2423,10 @@ function findQualifiedDeclarationTypeSplitOffsets(
           sourceStart !== undefined &&
           sourceEnd !== undefined &&
           isCompleteDeclarationTypeListAndBlock(
-            text.slice(start.offset + sourceStart),
+            text,
             materializeDeclarationBodyContexts(start.contextSnapshot),
+            start.offset + sourceStart,
+            declarationTailCache,
           )
         ) {
           collectDeclarationTypeSplitOffsets(
@@ -2451,6 +2486,7 @@ function isQualifiedDollarTypeContinuation(
   inner: string,
   delimiterIndex: number,
   afterIndex: number,
+  declarationStarts: DeclarationPrefixStart[],
 ): boolean {
   if (inner[delimiterIndex] !== '.' || inner[afterIndex] !== '$') {
     return false;
@@ -2467,6 +2503,7 @@ function isQualifiedDollarTypeContinuation(
     delimiterIndex,
     nextWord,
     followingText,
+    declarationStarts,
   );
 }
 
@@ -2536,9 +2573,13 @@ function isSentencePunctuation(
 ): boolean {
   const previous = inner[delimiterIndex - 1];
   const suffix = inner.slice(afterIndex).replace(/_+$/u, '').trimEnd();
+  const punctuationPrefix = inner.slice(
+    Math.max(0, delimiterIndex - 5),
+    delimiterIndex + 1,
+  );
   const abbreviationBeforeLowercaseProse =
     /(?:^|(?<![\p{L}\p{N}_./-]))(?:e\.g|i\.e|etc|vs)\.$/iu.test(
-      inner.slice(0, delimiterIndex + 1),
+      punctuationPrefix,
     ) && /^[a-z]/u.test(suffix);
   if (abbreviationBeforeLowercaseProse) {
     return true;
@@ -2547,8 +2588,10 @@ function isSentencePunctuation(
     /^[A-Z][A-Za-z]*(?:[-'’][A-Za-z]+)*(?=[,.!?;:]?(?:\s|`|$))/u.exec(
       suffix,
     )?.[0];
-  const prefix = inner.slice(0, delimiterIndex + 1);
-  if (nextWord !== undefined && PROPER_NAME_TITLE_ABBREVIATION.test(prefix)) {
+  if (
+    nextWord !== undefined &&
+    PROPER_NAME_TITLE_ABBREVIATION.test(punctuationPrefix)
+  ) {
     return true;
   }
   const followingText =
@@ -2560,21 +2603,10 @@ function isSentencePunctuation(
     nextWord !== undefined &&
     /[a-z][A-Z]/u.test(nextWord) &&
     isCompleteDeclarationTail(followingText);
-  const qualifiedTypeDeclarationContinuation =
-    nextWord !== undefined &&
-    isQualifiedTypeInDeclaration(
-      inner,
-      delimiterIndex,
-      nextWord,
-      followingText,
-    );
   // Only a complete, recognized declaration tail stays code-shaped.
   // Trailing punctuation or prose keeps sentence punctuation detectable.
   // A dotted prefix counts as declaration context only at span start;
   // later domain-like text may be prose before a new sentence.
-  if (qualifiedTypeDeclarationContinuation) {
-    return false;
-  }
   if (
     nextWord !== undefined &&
     (!followingProseWord || declarationTypeContinuation) &&
@@ -2613,8 +2645,15 @@ function isSentencePunctuation(
   if (previous === undefined || previous === '`') {
     return true;
   }
+  let previousWordStart = delimiterIndex;
+  while (
+    previousWordStart > 0 &&
+    /[A-Za-z0-9_-]/u.test(inner[previousWordStart - 1] ?? '')
+  ) {
+    previousWordStart -= 1;
+  }
   const previousWord = /[A-Za-z][A-Za-z0-9_-]*$/u.exec(
-    inner.slice(0, delimiterIndex),
+    inner.slice(previousWordStart, delimiterIndex),
   )?.[0];
   // A title-cased or uppercase prefix followed by a single capitalized token
   // is more likely a dotted identifier than prose. A further word or
@@ -2826,7 +2865,11 @@ export function findCorruptingCodeSpanWraps(
         (previous === undefined && delimiter === '-') ||
         (previous !== undefined &&
           !TOKEN_CONTINUING.test(previous) &&
-          !(delimiter === '.' && previous === '>'))
+          !(
+            delimiter === '.' &&
+            previous === '>' &&
+            declarationTypeSplitOffsets.qualified.has(delimiterIndex)
+          ))
       ) {
         continue;
       }
@@ -2843,6 +2886,7 @@ export function findCorruptingCodeSpanWraps(
             inner,
             delimiterIndex,
             afterIndex,
+            declarationTypeSplitOffsets.declarationStarts,
           ) &&
           !declarationTypeSplitOffsets.qualified.has(delimiterIndex))
       ) {
