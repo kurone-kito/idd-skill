@@ -644,6 +644,7 @@ function runStep4And5(
       worktree,
       inspected.preserveNodeModules.destination,
       inspected.preserveNodeModules.sourceIdentity,
+      inspected.preserveNodeModules.parents,
     );
     if (moved.hold !== null || moved.result === null) {
       return {
@@ -687,8 +688,8 @@ function runStep4And5(
   }
   if (inspected.worktreePresent) {
     // The final network-backed ownership assertion runs before this scan.
-    // Keep the ignored-inclusive status check immediately before removal so
-    // newly appearing user content is held rather than discarded.
+    // Check for content created during that assertion. This scan and git's
+    // removal are not atomic; callers must stop concurrent worktree writers.
     const claimBeforeFinalStatus = classifyClaimAssert(
       deps.assertClaim(worktree),
       input.claimId,
@@ -1183,6 +1184,7 @@ function inspectWorktree(
     preserveNodeModules = {
       destination: destination.destination,
       sourceIdentity,
+      parents: destination.parents,
     };
   }
   return {
@@ -1199,12 +1201,17 @@ function preserveDestination(deps, issueNumber, primary, records) {
   } catch (error) {
     return {
       destination: '',
+      parents: [],
       hold: `the helper did not move node_modules/: destination check failed: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }
 function inspectPreserveDestination(deps, issueNumber, primary, records) {
-  const refuse = (detail) => ({ destination: '', hold: detail });
+  const refuse = (detail) => ({
+    destination: '',
+    parents: [],
+    hold: detail,
+  });
   if (!isAbsolute(deps.stateRoot)) {
     return refuse(
       'the helper did not move node_modules/: the state root is not absolute',
@@ -1238,7 +1245,7 @@ function inspectPreserveDestination(deps, issueNumber, primary, records) {
       'the helper did not move node_modules/: the state root is not owned and private',
     );
   }
-  const iddDirectory = join(deps.stateRoot, 'idd-skill');
+  const iddDirectory = join(resolvedStateRoot, 'idd-skill');
   const preserveDirectory = join(iddDirectory, 'f4-preserved');
   for (const [path, kind] of [
     [iddDirectory, deps.lstat(iddDirectory)],
@@ -1284,7 +1291,7 @@ function inspectPreserveDestination(deps, issueNumber, primary, records) {
   const deepestExisting = [
     preserveDirectory,
     iddDirectory,
-    deps.stateRoot,
+    resolvedStateRoot,
   ].find((path) => deps.lstat(path) !== 'absent');
   if (deepestExisting === undefined) {
     return refuse(
@@ -1333,12 +1340,44 @@ function inspectPreserveDestination(deps, issueNumber, primary, records) {
       );
     }
   }
-  return { destination, hold: null };
+  const parents = [];
+  for (const path of [resolvedStateRoot, iddDirectory, preserveDirectory]) {
+    const kind = deps.lstat(path);
+    const identity = kind === 'directory' ? deps.directoryIdentity(path) : null;
+    if (kind !== 'absent' && (kind !== 'directory' || identity === null)) {
+      return refuse(
+        `the helper did not move node_modules/: destination parent ${path} has no verified directory identity`,
+      );
+    }
+    parents.push({ path, identity });
+  }
+  return { destination, parents, hold: null };
+}
+/** Detect changed parents without following a replacement directory link. */
+function checkPreservationParents(deps, parents) {
+  try {
+    for (const [path, identity] of parents) {
+      const kind = deps.lstat(path);
+      if (identity === null && kind === 'absent') continue;
+      if (
+        identity === null ||
+        kind !== 'directory' ||
+        deps.directoryIdentity(path) !== identity ||
+        deps.realpath(path) !== resolve(path) ||
+        deps.inspectDirectoryPrivacy(path) === 'unsafe'
+      ) {
+        return `destination parent ${path} changed after inspection`;
+      }
+    }
+    return null;
+  } catch (error) {
+    return `destination parent verification failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 /**
  * Create private parents, stage the source inside its worktree, and verify
- * its identity before moving it into per-user state. A raced replacement is
- * restored to the original path when that path remains free.
+ * its identity before moving it into per-user state. Restore only a verified
+ * directory when the original path remains free; otherwise retain and hold.
  */
 function moveNodeModules(
   deps,
@@ -1346,6 +1385,7 @@ function moveNodeModules(
   worktree,
   destination,
   expectedIdentity,
+  expectedParents,
 ) {
   const source = join(worktree, 'node_modules');
   let temporaryId;
@@ -1364,67 +1404,34 @@ function moveNodeModules(
     };
   }
   const staging = join(worktree, `.idd-f4-node_modules-${temporaryId}`);
-  const preserveDirectory = dirname(destination);
-  const iddDirectory = dirname(preserveDirectory);
-  for (const path of [deps.stateRoot, iddDirectory, preserveDirectory]) {
-    let kind;
-    try {
-      kind = deps.lstat(path);
-    } catch (error) {
+  const parents = new Map(
+    expectedParents.map(({ path, identity }) => [path, identity]),
+  );
+  for (const [path, identity] of parents) {
+    const changed = checkPreservationParents(deps, parents);
+    if (changed !== null)
       return {
         result: null,
-        hold: `the helper did not move node_modules/: could not inspect ${path}: ${error instanceof Error ? error.message : String(error)}`,
+        hold: `the helper did not move node_modules/: ${changed}`,
       };
-    }
-    if (
-      kind === 'directory' ||
-      (path === deps.stateRoot && kind === 'symlink')
-    ) {
-      try {
-        deps.ensurePrivateDirectory(path);
-      } catch (error) {
-        return {
-          result: null,
-          hold: `the helper did not move node_modules/: could not secure ${path}: ${error instanceof Error ? error.message : String(error)}`,
-        };
+    try {
+      if (identity === null) {
+        deps.mkdir(path, 0o700);
+        const createdIdentity =
+          deps.lstat(path) === 'directory'
+            ? deps.directoryIdentity(path)
+            : null;
+        if (createdIdentity === null)
+          throw new Error('created directory identity is unavailable');
+        parents.set(path, createdIdentity);
       }
-      continue;
-    }
-    if (kind !== 'absent') {
-      return {
-        result: null,
-        hold: `the helper did not move node_modules/: destination component ${path} is not a real directory`,
-      };
-    }
-    try {
-      deps.mkdir(path, 0o700);
-    } catch (error) {
-      return {
-        result: null,
-        hold: `the helper did not move node_modules/: could not create ${path}: ${error instanceof Error ? error.message : String(error)}`,
-      };
-    }
-    let createdKind;
-    try {
-      createdKind = deps.lstat(path);
-    } catch (error) {
-      return {
-        result: null,
-        hold: `the helper did not move node_modules/: could not verify created destination component ${path}: ${error instanceof Error ? error.message : String(error)}`,
-      };
-    }
-    if (createdKind !== 'directory') {
-      return {
-        result: null,
-        hold: `the helper did not move node_modules/: created destination component ${path} is not a real directory`,
-      };
-    }
-    try {
       deps.ensurePrivateDirectory(path);
+      const changedAfter = checkPreservationParents(deps, parents);
+      if (changedAfter !== null) throw new Error(changedAfter);
     } catch (error) {
       return {
         result: null,
-        hold: `the helper did not move node_modules/: could not secure ${path}: ${error instanceof Error ? error.message : String(error)}`,
+        hold: `the helper did not move node_modules/: could not prepare ${path}: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
   }
@@ -1484,8 +1491,8 @@ function moveNodeModules(
     };
   }
   // Recheck immediately before the path-based rename. The staged object is
-  // checked again after rename, so a replacement in this final window is
-  // returned to node_modules instead of entering the state directory.
+  // checked again after rename. A detected replacement holds; these separate
+  // path operations do not serialize another process changing the paths.
   if (
     deps.lstat(source) !== 'directory' ||
     deps.directoryIdentity(source) !== expectedIdentity
@@ -1567,6 +1574,8 @@ function moveNodeModules(
         ),
       };
     }
+    const changedParent = checkPreservationParents(deps, parents);
+    if (changedParent !== null) throw new Error(changedParent);
     deps.rename(staging, destination);
   } catch (error) {
     return {
@@ -1581,6 +1590,8 @@ function moveNodeModules(
     };
   }
   try {
+    const changedParent = checkPreservationParents(deps, parents);
+    if (changedParent !== null) throw new Error(changedParent);
     if (
       deps.lstat(destination) !== 'directory' ||
       deps.directoryIdentity(destination) !== expectedIdentity

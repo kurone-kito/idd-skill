@@ -8782,6 +8782,13 @@ renames directly to an absent destination leaf. Dry-run performs the same
 read-only checks and reports the destination without creating, moving, or
 changing permissions. The helper never deletes or expires preserved trees; the
 operator decides when to clean them.
+The helper revalidates destination parent identities before moving, but path
+checks, renames, and the final status/removal pair are not atomic. Stop
+concurrent dependency processes and other worktree writers before cleanup;
+content created after the last scan can still be removed by Git. See the
+residual-race discussion in [F4 Head Proof](idd-resume-detail.md#f4-head-proof)
+(PR `#4606`, review comments `#4338910285` and `#4338910384`; preventive,
+no observed data loss).
 Observed 2026-10-18 on issue `#4511` (PR `#4527`), an install-created
 `node_modules/` alone held cleanup. See the
 [F4 Head Proof](idd-resume-detail.md#f4-head-proof) section for destination

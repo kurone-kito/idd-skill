@@ -207,6 +207,7 @@ interface HarnessOptions {
   readonly now?: () => Date;
   readonly temporaryId?: () => string;
   readonly directoryPrivacy?: (path: string) => DirectoryPrivacy;
+  readonly directoryIdentity?: (path: string) => string | null | undefined;
   readonly ensurePrivateDirectory?: (path: string) => void;
   readonly mkdir?: (path: string) => void;
   readonly rename?: (source: string, destination: string) => void;
@@ -261,7 +262,14 @@ function harness(options: HarnessOptions = {}): Harness {
   };
   const deps: F4WorktreeBranchDeps = {
     lstat,
-    directoryIdentity: (path) => directoryIdentities.get(path) ?? null,
+    directoryIdentity: (path) => {
+      const override = options.directoryIdentity?.(path);
+      if (override !== undefined) return override;
+      return (
+        directoryIdentities.get(path) ??
+        (lstat(path) === 'directory' ? `directory:${path}` : null)
+      );
+    },
     realpath: (path) => path,
     stateRoot: options.stateRoot ?? STATE_ROOT,
     now: options.now ?? (() => new Date('2026-10-21T10:30:00.000Z')),
@@ -954,6 +962,74 @@ test('a filesystem-root state root holds before privacy changes or moving node_m
     /state root resolves to a filesystem root/,
   );
   assert.equal(privacyPaths.includes('/'), false);
+  assert.deepEqual(h.mkdirCalls, []);
+  assert.deepEqual(h.renameCalls, []);
+});
+
+for (const parent of [
+  STATE_ROOT,
+  `${STATE_ROOT}/idd-skill`,
+  `${STATE_ROOT}/idd-skill/f4-preserved`,
+]) {
+  test(`a replaced preservation parent ${parent} restores the staged tree and holds`, () => {
+    let staged = false;
+    const h = harness({
+      statusResults: [ok('!! node_modules/\n')],
+      rename: (_source, destination) => {
+        if (destination === PRESERVE_STAGING) staged = true;
+      },
+      directoryIdentity: (path) =>
+        staged && path === parent ? 'replacement-parent' : undefined,
+    });
+    const report = runF4WorktreeBranchSteps(input(), h.deps);
+    assert.equal(report.reason, 'dirty-worktree');
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /destination parent .* changed after inspection/,
+    );
+    assert.deepEqual(h.renameCalls, [
+      [`${WORKTREE}/node_modules`, PRESERVE_STAGING],
+      [PRESERVE_STAGING, `${WORKTREE}/node_modules`],
+    ]);
+    assert.equal(
+      h.gitCalls.some(
+        (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+      ),
+      false,
+    );
+  });
+}
+
+test('a parent replacement during directory creation holds before staging', () => {
+  let replaced = false;
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    mkdir: () => {
+      replaced = true;
+    },
+    directoryIdentity: (path) =>
+      replaced && path === STATE_ROOT ? 'replacement-parent' : undefined,
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /destination parent .* changed after inspection/,
+  );
+  assert.deepEqual(h.renameCalls, []);
+});
+
+test('an unreadable preservation parent identity holds in dry-run without mutation', () => {
+  const h = harness({
+    statusResults: [ok('!! node_modules/\n')],
+    directoryIdentity: (path) => (path === STATE_ROOT ? null : undefined),
+  });
+  const report = runF4WorktreeBranchSteps(input({ apply: false }), h.deps);
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.match(
+    report.steps.at(-1)?.detail ?? '',
+    /no verified directory identity/,
+  );
   assert.deepEqual(h.mkdirCalls, []);
   assert.deepEqual(h.renameCalls, []);
 });

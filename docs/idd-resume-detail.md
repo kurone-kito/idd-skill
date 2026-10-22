@@ -504,6 +504,16 @@ changing permissions. Observed
 2026-10-18 on issue `#4511` (PR `#4527`), an install-created `node_modules/`
 alone held F4 cleanup.
 
+The helper records destination parent identities, checks them through parent
+creation and immediately before preservation, and uses the resolved state-root
+path. A detected replacement holds. These path checks and renames are separate
+operations; the final ignored-inclusive status scan and `git worktree remove`
+are separate too. Content written after that scan can still be deleted by Git,
+and a path replacement after a check can evade that check. Stop dependency
+processes, watchers, and other writers before cleanup. These are residual races,
+not a guarantee of atomic preservation (PR `#4606`, review comments
+`#4338910285` and `#4338910384`; preventive, no observed data loss).
+
 Every other dirty shape still holds as `dirty-worktree`, as do an unsafe
 destination or failed move; when the detail says the helper did not move
 `node_modules/`, preserve it by hand before rerunning. A populated submodule

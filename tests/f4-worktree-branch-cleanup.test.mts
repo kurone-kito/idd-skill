@@ -6,6 +6,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
   realpathSync,
@@ -215,7 +216,10 @@ function runCleanup(
     now: () => new Date('2026-10-21T10:30:00.000Z'),
     mkdir: (path, mode) => mkdirSync(path, { mode }),
     rename: (source, destination) => {
-      if (options.renameError !== undefined) {
+      if (
+        options.renameError !== undefined &&
+        destination === preservedPath(fx, stateRoot)
+      ) {
         const error = new Error(options.renameError) as NodeJS.ErrnoException;
         error.code = options.renameError;
         throw error;
@@ -557,20 +561,75 @@ test('an existing timestamp destination is left intact', () => {
   assert.equal(existsSync(join(fx.worktree, 'node_modules', 'keep.txt')), true);
 });
 
-test('a failed rename leaves the final destination absent', () => {
+test('a cross-filesystem preservation failure restores the staged directory', () => {
   const fx = makeFixture();
   const stateRoot = join(fx.root, 'state');
   mkdirSync(stateRoot);
   mkdirSync(join(fx.worktree, 'node_modules'));
   writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
   const destination = preservedPath(fx, stateRoot);
-  const { report } = runCleanup(fx, { stateRoot, renameError: 'EXDEV' });
+  let staging = '';
+  const { report, calls } = runCleanup(fx, {
+    stateRoot,
+    renameError: 'EXDEV',
+    beforeRename: (source, target) => {
+      if (source === join(fx.worktree, 'node_modules')) staging = target;
+    },
+  });
   assert.equal(report.reason, 'dirty-worktree');
   assert.match(report.steps.at(-1)?.detail ?? '', /did not move node_modules/);
   assert.equal(existsSync(join(fx.worktree, 'node_modules', 'keep.txt')), true);
   assert.equal(existsSync(destination), false);
+  assert.notEqual(staging, '');
+  assert.equal(existsSync(staging), false);
+  assert.match(report.steps.at(-1)?.detail ?? '', /EXDEV.*restored to/u);
+  assert.equal(
+    readFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'utf8'),
+    'keep\n',
+  );
+  assert.equal(
+    calls.some((args) => args[0] === 'worktree' && args[1] === 'remove'),
+    false,
+  );
   assert.equal(existsSync(fx.worktree), true);
 });
+
+for (const component of ['idd-skill', 'idd-skill/f4-preserved']) {
+  test(`a symlink replacement of preservation parent ${component} holds without moving outside state`, () => {
+    const fx = makeFixture();
+    const stateRoot = join(fx.root, 'state');
+    const outside = join(fx.root, 'outside-state');
+    mkdirSync(stateRoot);
+    mkdirSync(outside, { mode: 0o700 });
+    const nodeModules = join(fx.worktree, 'node_modules');
+    mkdirSync(nodeModules);
+    writeFileSync(join(nodeModules, 'keep.txt'), 'original data\n');
+    const parent = join(stateRoot, component);
+    const { report, calls } = runCleanup(fx, {
+      stateRoot,
+      beforeRename: (source) => {
+        if (source === nodeModules) {
+          renameSync(parent, `${parent}-original`);
+          symlinkSync(outside, parent, 'dir');
+        }
+      },
+    });
+    assert.equal(report.reason, 'dirty-worktree');
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /destination parent .* changed after inspection/u,
+    );
+    assert.equal(
+      readFileSync(join(nodeModules, 'keep.txt'), 'utf8'),
+      'original data\n',
+    );
+    assert.deepEqual(readdirSync(outside), []);
+    assert.equal(
+      calls.some((args) => args[0] === 'worktree' && args[1] === 'remove'),
+      false,
+    );
+  });
+}
 
 test('a state-root symlink to a permissive directory refuses preservation', () => {
   const fx = makeFixture();
@@ -698,7 +757,7 @@ test('an external state-root symlink is used without following destination compo
   symlinkSync(actualRoot, stateLink);
   mkdirSync(join(fx.worktree, 'node_modules'));
   writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
-  const destination = preservedPath(fx, stateLink);
+  const destination = preservedPath(fx, actualRoot);
   const { report } = runCleanup(fx, { stateRoot: stateLink });
   assert.equal(report.status, 'complete');
   assert.equal(
