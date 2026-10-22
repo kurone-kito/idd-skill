@@ -163,6 +163,52 @@ function fakeTaskkillSpawn(
   }) as unknown as typeof spawn;
 }
 
+function fakeWindowsSupervisorSpawn(
+  worker: ChildProcess,
+  taskkillExitCodes: number[],
+  onTaskkill: () => void,
+  calls: string[][],
+  workerEnvironment: { value?: NodeJS.ProcessEnv },
+): typeof spawn {
+  return ((
+    command: string,
+    args: string[],
+    options?: { env?: NodeJS.ProcessEnv },
+  ) => {
+    if (command === 'taskkill') {
+      calls.push([command, ...args]);
+      const taskkill = fakeChild(50010 + calls.length);
+      const exitCode = taskkillExitCodes.shift() ?? 0;
+      setImmediate(() => {
+        onTaskkill();
+        if (exitCode === 0) {
+          (worker.stdout as PassThrough).end();
+          (worker.stderr as PassThrough).end();
+          (worker.stdio[3] as PassThrough).end();
+          worker.emit('close', null, 'SIGTERM');
+        }
+        taskkill.emit('close', exitCode, null);
+      });
+      return taskkill;
+    }
+
+    workerEnvironment.value = options?.env;
+    const token = options?.env?.IDD_PROVIDER_OUTAGE_PARK_READ_WORKER_TOKEN;
+    setImmediate(() => {
+      (worker.stdout as PassThrough).end('{"complete":true}\n');
+      (worker.stderr as PassThrough).end();
+      (worker.stdio[3] as PassThrough).end();
+      setImmediate(() =>
+        worker.emit('message', {
+          type: 'idd-provider-outage-park-read-worker-completed',
+          token,
+        }),
+      );
+    });
+    return worker;
+  }) as unknown as typeof spawn;
+}
+
 test('read-only success works through the direct script and packaged bin', () => {
   const restoreGh = stubExecutable('gh', GH_SCRIPT);
   const root = createTempRoot();
@@ -735,6 +781,111 @@ test('Windows cleanup uses taskkill tree mode and escalates to force', async () 
     assert.equal(success, true);
     assert.deepEqual(calls, expectedCalls);
   }
+});
+
+test('Windows success reaps the owned tree before publishing worker output', async () => {
+  const worker = fakeChild(45683);
+  const calls: string[][] = [];
+  const workerEnvironment: { value?: NodeJS.ProcessEnv } = {};
+  const fakeSpawn = fakeWindowsSupervisorSpawn(
+    worker,
+    [0],
+    () => {},
+    calls,
+    workerEnvironment,
+  );
+  const output: Buffer[] = [];
+  const errors: string[] = [];
+
+  const result = await superviseReadMode('list', 1_000, [], {
+    platform: 'win32',
+    spawnProcess: fakeSpawn,
+    cleanupBudgetMs: 500,
+    progressIntervalMs: 10_000,
+    writeStdout: (chunk) => output.push(Buffer.from(chunk)),
+    writeStderr: (text) => errors.push(text),
+  });
+
+  assert.equal(result, 0);
+  assert.equal(
+    workerEnvironment.value
+      ?.IDD_PROVIDER_OUTAGE_PARK_READ_HOLD_FOR_TREE_CLEANUP,
+    '1',
+  );
+  assert.match(
+    workerEnvironment.value?.IDD_PROVIDER_OUTAGE_PARK_READ_WORKER_TOKEN ?? '',
+    /^[0-9a-f]{64}$/,
+  );
+  assert.deepEqual(calls, [['taskkill', '/PID', '45683', '/T']]);
+  assert.equal(Buffer.concat(output).toString(), '{"complete":true}\n');
+});
+
+test('Windows cleanup that crosses the read deadline cannot publish success', async () => {
+  const worker = fakeChild(45684);
+  const calls: string[][] = [];
+  const workerEnvironment: { value?: NodeJS.ProcessEnv } = {};
+  let clock = 0;
+  const fakeSpawn = fakeWindowsSupervisorSpawn(
+    worker,
+    [0],
+    () => {
+      clock = 100;
+    },
+    calls,
+    workerEnvironment,
+  );
+  const output: Buffer[] = [];
+  const errors: string[] = [];
+
+  const result = await superviseReadMode('list', 100, [], {
+    now: () => clock,
+    platform: 'win32',
+    spawnProcess: fakeSpawn,
+    cleanupBudgetMs: 500,
+    progressIntervalMs: 10_000,
+    writeStdout: (chunk) => output.push(Buffer.from(chunk)),
+    writeStderr: (text) => errors.push(text),
+  });
+
+  assert.equal(typeof result, 'object');
+  if (typeof result === 'object') assert.equal(result.exitCode, 1);
+  assert.deepEqual(calls, [['taskkill', '/PID', '45684', '/T']]);
+  assert.equal(Buffer.concat(output).length, 0);
+  assert.match(errors.join(''), /read budget expired after 100ms/);
+  assert.match(errors.join(''), /owned process tree stopped and reaped/);
+});
+
+test('Windows tree-cleanup failure cannot publish worker output', async () => {
+  const worker = fakeChild(45685);
+  const calls: string[][] = [];
+  const workerEnvironment: { value?: NodeJS.ProcessEnv } = {};
+  const fakeSpawn = fakeWindowsSupervisorSpawn(
+    worker,
+    [1, 1],
+    () => {},
+    calls,
+    workerEnvironment,
+  );
+  const output: Buffer[] = [];
+  const errors: string[] = [];
+
+  const result = await superviseReadMode('list', 1_000, [], {
+    platform: 'win32',
+    spawnProcess: fakeSpawn,
+    cleanupBudgetMs: 200,
+    progressIntervalMs: 10_000,
+    writeStdout: (chunk) => output.push(Buffer.from(chunk)),
+    writeStderr: (text) => errors.push(text),
+  });
+
+  assert.equal(typeof result, 'object');
+  if (typeof result === 'object') assert.equal(result.exitCode, 1);
+  assert.deepEqual(calls, [
+    ['taskkill', '/PID', '45685', '/T'],
+    ['taskkill', '/PID', '45685', '/T', '/F'],
+  ]);
+  assert.equal(Buffer.concat(output).length, 0);
+  assert.match(errors.join(''), /cleanup failed within 200ms/);
 });
 
 test('Windows cleanup reports failure when taskkill cannot stop the owned tree', async () => {
