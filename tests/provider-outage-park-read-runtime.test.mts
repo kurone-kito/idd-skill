@@ -47,8 +47,24 @@ const delayMs = route.includes('/comments')
     : Number(process.env.IDD_TEST_GH_DELAY_MS || 0);
 const heartbeatPath = process.env.IDD_TEST_GH_DESCENDANT_HEARTBEAT_PATH;
 if (heartbeatPath && (route.includes('/comments') || route.includes('repo view'))) {
-  const child = spawn(process.execPath, ['-e', 'const fs=require("node:fs");process.on("SIGTERM",()=>{});setInterval(()=>fs.appendFileSync(process.argv[1],"x"),20)', heartbeatPath], { stdio: 'ignore' });
+  const child = spawn(
+    process.execPath,
+    [
+      '-e',
+      'const fs=require("node:fs");const p=process.argv[1];process.on("SIGTERM",()=>{});fs.writeFileSync(p,"x");fs.writeFileSync(p+".ready","ready");setInterval(()=>fs.appendFileSync(p,"x"),20)',
+      heartbeatPath,
+    ],
+    { stdio: 'ignore' },
+  );
   fs.writeFileSync(heartbeatPath + '.pid', String(child.pid));
+  const readyPath = heartbeatPath + '.ready';
+  const readyDeadline = Date.now() + 2_000;
+  while (!fs.existsSync(readyPath) && Date.now() < readyDeadline) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+  if (!fs.existsSync(readyPath)) {
+    throw new Error('test descendant did not signal readiness');
+  }
 }
 if (delayMs > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
 if (args[0] === 'repo' && args[1] === 'view') {
@@ -595,6 +611,7 @@ test('one deadline covers successive gh reads and suppresses partial JSON', {
       stdio: 'ignore',
     },
   );
+  const descendantPids: number[] = [];
   try {
     for (const [index, [entry, modeArgs]] of [
       [SCRIPT_PATH, []] as const,
@@ -612,22 +629,27 @@ test('one deadline covers successive gh reads and suppresses partial JSON', {
           '--repo',
           'sample',
           '--budget-ms',
-          '1500',
+          '5000',
         ],
         {
           cwd: root,
           encoding: 'utf8',
           env: ghEnv(logPath, {
             delayMs: 300,
-            commentsDelayMs: 4_000,
+            commentsDelayMs: 10_000,
             openPullRequests:
               '[{"number":9001,"head":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}]',
             envelope: true,
             descendantHeartbeatPath: heartbeatPath,
           }),
-          timeout: 7_000,
+          timeout: 15_000,
         },
       );
+      const pidPath = `${heartbeatPath}.pid`;
+      if (existsSync(pidPath)) {
+        const pid = Number(readFileSync(pidPath, 'utf8'));
+        if (Number.isSafeInteger(pid)) descendantPids.push(pid);
+      }
       assert.equal(result.status, 1, result.stderr);
       assert.equal(result.stdout, '');
       assert.match(result.stderr, /read budget expired/);
@@ -639,6 +661,7 @@ test('one deadline covers successive gh reads and suppresses partial JSON', {
       const calls = readCalls(logPath);
       assert.ok(calls.some((call) => call.route.includes('/pulls?state=open')));
       assert.ok(calls.some((call) => call.route.includes('/comments')));
+      assert.equal(existsSync(`${heartbeatPath}.ready`), true);
       assert.equal(existsSync(heartbeatPath), true);
       const heartbeatSize = statSync(heartbeatPath).size;
       assert.ok(heartbeatSize > 0);
@@ -650,6 +673,13 @@ test('one deadline covers successive gh reads and suppresses partial JSON', {
     }
   } finally {
     unrelated.kill('SIGTERM');
+    for (const pid of descendantPids) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // The owned tree may already be fully reaped.
+      }
+    }
     restoreGh();
     rmSync(root, { recursive: true, force: true });
   }
