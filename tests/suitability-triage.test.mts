@@ -10584,6 +10584,41 @@ test('trust safety honors explicit user recipients of transferred ownership -- #
   assert.equal(remainsAgentOwned.pass, false);
 });
 
+test('trust safety recognizes a human recipient before a transferred target -- Copilot review #4344623959', () => {
+  for (const transfer of [
+    'assigns the user to perform this step',
+    'delegates to the user to perform this step',
+    'directs the user to perform this step',
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `The coding agent ${transfer}.\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, transfer);
+  }
+});
+
+test('trust safety rejects direct-object agent assignments to a target -- Copilot review #4344634850', () => {
+  for (const [assignment, directive] of [
+    ['Assign the coding agent this step.', 'Run this step by the user.'],
+    ['Delegate the coding agent this step.', 'Run this step by the user.'],
+    ['Direct the coding agent this step.', 'Run this step by the user.'],
+    ['Assign the coding agent this check.', 'Run this check by the user.'],
+  ]) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `${assignment}\n\n${directive}`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, assignment);
+  }
+});
+
 test('trust safety does not let the user actor phrase hide supplied content -- #4562', () => {
   for (const body of [
     'Run this step by the user with the attached script.',

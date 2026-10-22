@@ -1773,6 +1773,27 @@ function hasAgentActorForTarget(
   return segment.agentMentions.some((agent) => {
     if (agent.start < targetEnd) {
       if (cue === null) return false;
+      const explicitOtherActorTransferRecipient =
+        segment.otherActorMentions.some((actor) => {
+          if (actor.end > targetStart) return false;
+          const transferCue = segment.cues.find(
+            (candidateCue) =>
+              candidateCue.end <= actor.start &&
+              USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(
+                segment.text.slice(candidateCue.start, actor.start),
+              ) &&
+              /^\s+(?:to\s+)?$/i.test(
+                segment.text.slice(candidateCue.end, actor.start),
+              ),
+          );
+          return (
+            transferCue !== undefined &&
+            /^\s+(?:(?:to\s+)?(?:perform|run|execute|complete|check|test|verify|implement|handle|manage|follow)\s+)?$/i.test(
+              segment.text.slice(actor.end, targetStart),
+            )
+          );
+        });
+      if (explicitOtherActorTransferRecipient) return false;
       const recipientSuffix = segment.text.slice(targetEnd);
       const explicitOtherActorRecipient =
         USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(
@@ -1783,6 +1804,19 @@ function hasAgentActorForTarget(
           recipientSuffix.replace(/^\s+to\b/i, ' '),
         );
       if (explicitOtherActorRecipient) return false;
+      const directObjectTarget =
+        /^\s+(?:this|that|the)\s+(?:step|check)\b/i.exec(
+          segment.text.slice(agent.end),
+        );
+      const directObjectAgentRecipient =
+        cue.start < agent.start &&
+        agent.start >= cue.end &&
+        USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(
+          segment.text.slice(cue.start, agent.start),
+        ) &&
+        directObjectTarget !== null &&
+        agent.end + directObjectTarget[0].length <= targetEnd;
+      if (directObjectAgentRecipient) return true;
       if (agent.end > cue.start) {
         return (
           agent.start >= cue.end &&
