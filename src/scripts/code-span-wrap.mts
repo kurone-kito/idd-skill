@@ -889,11 +889,7 @@ function isDeclarationTailWithEnclosingBraces(
       context.kind === 'enum' ||
       context.kind === 'anonymous'
     ) {
-      const bodyEnd = consumeTypeBodyRemainder(
-        text,
-        cursor,
-        typeBodyTailCache,
-      );
+      const bodyEnd = consumeTypeBodyRemainder(text, cursor, typeBodyTailCache);
       if (bodyEnd === undefined) {
         return false;
       }

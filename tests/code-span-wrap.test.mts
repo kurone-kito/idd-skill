@@ -1370,8 +1370,7 @@ test('findCorruptingCodeSpanWraps scales linearly across sibling throws methods'
   const buildText = (size: number): string =>
     `\`class C { ${Array.from(
       { length: size },
-      (_, index) =>
-        `void run${index}() throws com.example. MyException {}`,
+      (_, index) => `void run${index}() throws com.example. MyException {}`,
     ).join(' ')} }\``;
   const measure = (size: number): number => {
     const text = buildText(size);
