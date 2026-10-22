@@ -1056,6 +1056,10 @@ const USER_ACTOR_STEP_OTHER_ACTOR =
   /\b(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
 const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT =
   /^\s+(?:(?:the)\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i;
+const USER_ACTOR_STEP_UNAPPROVED_ACTOR_WINDOW = new RegExp(
+  String.raw`^\s*this\s+(?:steps?|checks?)\s+(?:by|for)\s+(?:(?:a|an|the)\s+)?(?:${USER_ACTOR_STEP_AGENT.source}|${USER_ACTOR_STEP_OTHER_ACTOR.source})\s*[.!?]?\s*$`,
+  'i',
+);
 const USER_ACTOR_STEP_AGENT_SUBJECT = new RegExp(
   String.raw`^\s*${USER_ACTOR_STEP_AGENT.source}`,
   'i',
@@ -1769,11 +1773,16 @@ function hasAgentActorForTarget(
   return segment.agentMentions.some((agent) => {
     if (agent.start < targetEnd) {
       if (cue === null) return false;
-      const explicitUserRecipient =
+      const recipientSuffix = segment.text.slice(targetEnd);
+      const explicitOtherActorRecipient =
         USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_CUE.test(
           segment.text.slice(0, targetStart),
-        ) && /^\s+to\s+(?:the\s+)?user\b/i.test(segment.text.slice(targetEnd));
-      if (explicitUserRecipient) return false;
+        ) &&
+        /^\s+to\b/i.test(recipientSuffix) &&
+        USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT.test(
+          recipientSuffix.replace(/^\s+to\b/i, ' '),
+        );
+      if (explicitOtherActorRecipient) return false;
       if (agent.end > cue.start) {
         return (
           agent.start >= cue.end &&
@@ -4572,6 +4581,9 @@ function findUnsafeExecutionDirectiveMatch(
       );
       const userStepTarget = USER_ACTOR_STEP_WINDOW.exec(userActorStepWindow);
       const userStepKind = (userStepTarget?.[1] ?? '').toLowerCase();
+      const userActorStepNearMiss =
+        verbText.toLowerCase() === 'run' &&
+        USER_ACTOR_STEP_UNAPPROVED_ACTOR_WINDOW.test(userActorStepWindow);
       const userActorStepDirective =
         verbText.toLowerCase() === 'run' &&
         userActorStepWindow.length < UNSAFE_DIRECTIVE_WINDOW_CHARS &&
@@ -4621,9 +4633,10 @@ function findUnsafeExecutionDirectiveMatch(
       // the issue title), must be nothing but a sentence/paragraph
       // boundary plus an optional "Please ".
       if (
-        targetMatch &&
+        (targetMatch || userActorStepNearMiss) &&
         !userActorStepDirective &&
         !(
+          targetMatch &&
           verbText.toLowerCase() === REPO_OWNED_VALIDATION_VERB &&
           window.length < UNSAFE_DIRECTIVE_WINDOW_CHARS &&
           REPO_OWNED_VALIDATION_WINDOW.test(window) &&
@@ -4633,8 +4646,8 @@ function findUnsafeExecutionDirectiveMatch(
           )
         )
       ) {
-        const targetStart = targetMatch.index ?? 0;
-        const targetText = targetMatch[0] ?? '';
+        const targetStart = targetMatch?.index ?? 0;
+        const targetText = targetMatch?.[0] ?? userActorStepWindow.trimStart();
         return corpus.slice(
           verbStart,
           verbStart + verbText.length + targetStart + targetText.length,

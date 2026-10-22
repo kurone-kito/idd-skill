@@ -2693,6 +2693,52 @@ test('trust safety allows a check assigned to the user -- #4562', () => {
   assert.equal(result.pass, true);
 });
 
+test('trust safety rejects user-step near-miss actor phrases -- #4562', () => {
+  const examples = [
+    'Run this step by a user.',
+    'Run this check for the user.',
+    'Run this step by the human.',
+    'Run this check by the coding agent.',
+  ];
+
+  for (const body of examples) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+});
+
+test('trust safety accepts a user step delegated to each recognized non-agent actor -- #4577', () => {
+  const recipients = [
+    'the user',
+    'the human',
+    'the tester',
+    'the reviewer',
+    'the maintainer',
+    'the operator',
+    'the developer',
+    'the person',
+    'QA',
+    'quality assurance',
+  ];
+
+  for (const recipient of recipients) {
+    const result = checkTrustSafety({
+      issue: {
+        ...BASE_ISSUE,
+        body: `The coding agent delegates this step to ${recipient}.\n\nRun this step by the user.`,
+      },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, true, recipient);
+  }
+});
+
 test('trust safety scopes numbered agent assignments to the matching user step -- #4577', () => {
   const matching = checkTrustSafety({
     issue: {
