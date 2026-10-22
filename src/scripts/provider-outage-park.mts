@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 // idd-generated-from: src/scripts/provider-outage-park.mts
 //
 // The scripts/provider-outage-park.mjs copy is generated from the .mts
@@ -17,6 +18,7 @@
 // (`post-idd-marker.mjs --type unclaim`) the caller takes afterward.
 
 import { type ChildProcess, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { writeSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
@@ -861,8 +863,12 @@ export const DEFAULT_READ_BUDGET_MS = 120_000;
 export const MAX_READ_BUDGET_MS = 2_147_483_647;
 const READ_PROGRESS_INTERVAL_MS = 10_000;
 const PROCESS_TREE_CLEANUP_BUDGET_MS = 5_000;
+const READ_WORKER_HANDSHAKE_TIMEOUT_MS = 5_000;
 const READ_WORKER_ENV = 'IDD_PROVIDER_OUTAGE_PARK_READ_WORKER';
 const READ_WORKER_STAGE_FD_ENV = 'IDD_PROVIDER_OUTAGE_PARK_STAGE_FD';
+const READ_WORKER_TOKEN_ENV = 'IDD_PROVIDER_OUTAGE_PARK_READ_WORKER_TOKEN';
+const READ_WORKER_HANDSHAKE_TYPE = 'idd-provider-outage-park-read-worker';
+let readWorkerAuthorized = false;
 const READ_STAGES = new Set<ReadStage>([
   'repository/auth-resolution',
   'open-pr-enumeration',
@@ -927,23 +933,54 @@ export interface ChildCloseResult {
   error: Error | null;
 }
 
-function isReadWorkerProcess(): boolean {
+function hasReadWorkerEnvironment(): boolean {
   return (
     process.env[READ_WORKER_ENV] === '1' &&
     process.env[READ_WORKER_STAGE_FD_ENV] === '3'
   );
 }
 
-function reportReadStage(stage: ReadStage): void {
-  if (!isReadWorkerProcess()) return;
+function authorizeReadWorkerProcess(token: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timeout);
+      process.removeListener('message', onMessage);
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('read worker authorization timed out'));
+    }, READ_WORKER_HANDSHAKE_TIMEOUT_MS);
+    const onMessage = (message: unknown) => {
+      cleanup();
+      if (
+        typeof message === 'object' &&
+        message !== null &&
+        (message as { type?: unknown }).type === READ_WORKER_HANDSHAKE_TYPE &&
+        (message as { token?: unknown }).token === token
+      ) {
+        process.disconnect?.();
+        resolve();
+        return;
+      }
+      reject(new Error('read worker authorization was invalid'));
+    };
+    process.once('message', onMessage);
+  });
+}
+
+function reportReadStage(stage: ReadStage): boolean {
+  if (!readWorkerAuthorized || process.env[READ_WORKER_STAGE_FD_ENV] !== '3') {
+    return false;
+  }
   const line = Buffer.from(`${JSON.stringify({ stage })}\n`, 'utf8');
   try {
     let offset = 0;
     while (offset < line.length) {
       offset += writeSync(3, line, offset, line.length - offset);
     }
+    return true;
   } catch {
-    // Closing the progress pipe must not change a read's result.
+    return false;
   }
 }
 
@@ -1214,9 +1251,14 @@ export async function superviseReadMode(
     );
   };
 
-  let settleAbort!: (reason: 'deadline' | 'SIGINT' | 'SIGTERM') => void;
-  let abortReason: 'deadline' | 'SIGINT' | 'SIGTERM' | null = null;
-  const abort = new Promise<'deadline' | 'SIGINT' | 'SIGTERM'>((resolve) => {
+  let settleAbort!: (
+    reason: 'deadline' | 'SIGINT' | 'SIGTERM' | 'worker-startup',
+  ) => void;
+  let abortReason: 'deadline' | 'SIGINT' | 'SIGTERM' | 'worker-startup' | null =
+    null;
+  const abort = new Promise<
+    'deadline' | 'SIGINT' | 'SIGTERM' | 'worker-startup'
+  >((resolve) => {
     settleAbort = (reason) => {
       abortReason ??= reason;
       resolve(abortReason);
@@ -1225,8 +1267,8 @@ export async function superviseReadMode(
   let progressTimer: ReturnType<typeof setInterval> | undefined;
   const onSigint = () => settleAbort('SIGINT');
   const onSigterm = () => settleAbort('SIGTERM');
-  process.once('SIGINT', onSigint);
-  process.once('SIGTERM', onSigterm);
+  process.on('SIGINT', onSigint);
+  process.on('SIGTERM', onSigterm);
   const deadlineTimer = setTimeout(
     () => settleAbort('deadline'),
     Math.max(0, budgetMs - elapsed()),
@@ -1254,6 +1296,7 @@ export async function superviseReadMode(
     return { exitCode, kind: 'transport', message };
   }
 
+  const workerToken = randomBytes(32).toString('hex');
   let child: ChildProcess;
   try {
     child = spawnProcess(
@@ -1266,8 +1309,9 @@ export async function superviseReadMode(
           ...(dependencies.env ?? process.env),
           [READ_WORKER_ENV]: '1',
           [READ_WORKER_STAGE_FD_ENV]: '3',
+          [READ_WORKER_TOKEN_ENV]: workerToken,
         },
-        stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
+        stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'ipc'],
         windowsHide: true,
       },
     );
@@ -1304,6 +1348,22 @@ export async function superviseReadMode(
   });
   const closed = childClose(child);
   progressTimer = setInterval(() => progress('progress'), progressIntervalMs);
+  let workerStartupError: Error | null = null;
+  try {
+    child.send(
+      { type: READ_WORKER_HANDSHAKE_TYPE, token: workerToken },
+      (error) => {
+        if (error) {
+          workerStartupError = error;
+          settleAbort('worker-startup');
+        }
+      },
+    );
+  } catch (error) {
+    workerStartupError =
+      error instanceof Error ? error : new Error(String(error));
+    settleAbort('worker-startup');
+  }
   if (elapsed() >= budgetMs) settleAbort('deadline');
 
   const winner = await Promise.race([
@@ -1329,14 +1389,43 @@ export async function superviseReadMode(
     const message =
       reason === 'deadline'
         ? `read budget expired after ${budgetMs}ms at stage ${lastStage}; ${status}`
-        : `read interrupted by ${reason} at stage ${lastStage}; ${status}`;
+        : reason === 'worker-startup'
+          ? `bounded read worker authorization failed${workerStartupError ? `: ${workerStartupError.message}` : ''}; ${status}`
+          : `read interrupted by ${reason} at stage ${lastStage}; ${status}`;
     writeStderr(`provider-outage-park: ${message}\n`);
     const exitCode = reason === 'SIGINT' ? 130 : reason === 'SIGTERM' ? 143 : 1;
     return { exitCode, kind: 'transport', message };
   }
 
-  cleanupListeners();
   const childResult = winner.result;
+  const mustCheckClosedWorkerTree =
+    (platform !== 'win32' &&
+      child.pid !== undefined &&
+      groupExists(child.pid)) ||
+    (platform === 'win32' && childResult.signal !== null);
+  if (mustCheckClosedWorkerTree) {
+    const cleanupSucceeded = await terminateOwnedProcessTree(child, closed, {
+      now,
+      platform,
+      spawnProcess,
+      cleanupBudgetMs,
+      signalProcessGroup: signalGroup,
+      processGroupExists: groupExists,
+    });
+    if (!cleanupSucceeded) {
+      cleanupListeners();
+      const message = `read worker exited while owned process tree cleanup failed within ${cleanupBudgetMs}ms`;
+      writeStderr(`provider-outage-park: ${message}\n`);
+      return { exitCode: 1, kind: 'transport', message };
+    }
+    if (platform !== 'win32') {
+      writeStderr(
+        'provider-outage-park: stopped remaining owned descendants after worker exit\n',
+      );
+    }
+  }
+
+  cleanupListeners();
   const stderr = Buffer.concat(errorOutput).toString('utf8');
   if (childResult.code !== 0) {
     const parsed = parseWorkerErrorEnvelope(stderr);
@@ -1400,19 +1489,37 @@ export function main(): HelperCliResult | Promise<HelperCliResult> {
     const mode = (values['parked-issues'] as boolean)
       ? 'parked-issues'
       : 'list';
-    if (isReadWorkerProcess()) {
-      reportReadStage('repository/auth-resolution');
-      const { owner, repo } = resolveGhOwnerRepo({
-        owner: values.owner as string,
-        repo: values.repo as string,
+    if (
+      hasReadWorkerEnvironment() &&
+      process.connected === true &&
+      typeof process.send === 'function'
+    ) {
+      const token = process.env[READ_WORKER_TOKEN_ENV];
+      if (!token || !/^[0-9a-f]{64}$/.test(token)) {
+        throw new Error(
+          'read worker authorization token is missing or invalid',
+        );
+      }
+      return authorizeReadWorkerProcess(token).then(() => {
+        readWorkerAuthorized = true;
+        delete process.env[READ_WORKER_TOKEN_ENV];
+        if (!reportReadStage('repository/auth-resolution')) {
+          const message = 'read worker stage reporting channel is unavailable';
+          process.stderr.write(`provider-outage-park: ${message}\n`);
+          return { exitCode: 1, kind: 'transport', message };
+        }
+        const { owner, repo } = resolveGhOwnerRepo({
+          owner: values.owner as string,
+          repo: values.repo as string,
+        });
+        const reportOptions = { reportReadStage };
+        const result =
+          mode === 'parked-issues'
+            ? buildParkedIssuesSummary(owner, repo, reportOptions)
+            : buildParkedChangeReport(owner, repo, reportOptions);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return 0;
       });
-      const reportOptions = { reportReadStage: reportReadStage };
-      const result =
-        mode === 'parked-issues'
-          ? buildParkedIssuesSummary(owner, repo, reportOptions)
-          : buildParkedChangeReport(owner, repo, reportOptions);
-      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-      return 0;
     }
     return superviseReadMode(mode, budgetMs, args);
   }

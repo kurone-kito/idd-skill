@@ -7,6 +7,10 @@
 // This direct entry supervises scripts/provider-outage-park.mjs so signals
 // reach its owned read-worker process tree.
 
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+import { extractShapedCliParseErrorMessage } from '../scripts/cli-args.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
   isHelperErrorEnvelopeEnabled,
@@ -14,13 +18,41 @@ import {
 } from '../scripts/helper-cli-runner.mts';
 import { main } from '../scripts/provider-outage-park.mts';
 
+const helperScriptPath = fileURLToPath(
+  new URL('../scripts/provider-outage-park.mjs', import.meta.url),
+);
+
+function handleShapedCliParseError(error: unknown): boolean {
+  const stderrText =
+    error instanceof Error ? (error.stack ?? error.message) : String(error);
+  const message = extractShapedCliParseErrorMessage(stderrText);
+  if (message === null) return false;
+  const helpResult = spawnSync(process.execPath, [helperScriptPath, '--help'], {
+    encoding: 'utf8',
+    timeout: 5_000,
+  });
+  const usage =
+    !helpResult.error && helpResult.status === 0
+      ? helpResult.stdout?.trim()
+      : '';
+  process.stderr.write(`${message}\n${usage ? `${usage}\n` : ''}`);
+  process.exitCode = 1;
+  return true;
+}
+
 if (isHelperErrorEnvelopeEnabled()) {
   runHelperCli('provider-outage-park', main);
 } else {
-  const outcome = main();
+  let outcome: ReturnType<typeof main>;
+  try {
+    outcome = main();
+  } catch (error) {
+    if (!handleShapedCliParseError(error)) throw error;
+    outcome = 1;
+  }
   if (outcome instanceof Promise) {
     outcome.then(applyHelperCliOutcomeWhenDisabled, (error) => {
-      throw error;
+      if (!handleShapedCliParseError(error)) throw error;
     });
   } else {
     applyHelperCliOutcomeWhenDisabled(outcome);

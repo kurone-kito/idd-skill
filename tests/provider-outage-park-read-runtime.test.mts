@@ -131,6 +131,10 @@ function fakeChild(pid: number): ChildProcess {
     stdout: PassThrough;
     stderr: PassThrough;
     stdio: (PassThrough | null)[];
+    send: (
+      message: unknown,
+      callback?: (error: Error | null) => void,
+    ) => boolean;
     kill: () => boolean;
   };
   child.pid = pid;
@@ -138,6 +142,10 @@ function fakeChild(pid: number): ChildProcess {
   child.stderr = new PassThrough();
   const stage = new PassThrough();
   child.stdio = [null, child.stdout, child.stderr, stage];
+  child.send = (_message, callback) => {
+    callback?.(null);
+    return true;
+  };
   child.kill = () => true;
   return child as unknown as ChildProcess;
 }
@@ -222,6 +230,67 @@ test('invalid budgets and an explicit budget with --park fail before gh runs', (
   }
 });
 
+test('packaged unknown arguments keep concise usage output', () => {
+  const restoreGh = stubExecutable('gh', GH_SCRIPT);
+  const root = createTempRoot();
+  const logPath = join(root, 'gh.jsonl');
+  try {
+    const result = spawnSync(process.execPath, [BIN_PATH, '--wat'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: ghEnv(logPath),
+      timeout: 5_000,
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /unknown argument: --wat/);
+    assert.match(result.stderr, /Usage:/);
+    assert.doesNotMatch(result.stderr, /\n\s+at /);
+    assert.deepEqual(readCalls(logPath), []);
+  } finally {
+    restoreGh();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('worker environment flags alone cannot bypass the read supervisor', () => {
+  const restoreGh = stubExecutable('gh', GH_SCRIPT);
+  const root = createTempRoot();
+  const logPath = join(root, 'gh.jsonl');
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        BIN_PATH,
+        '--owner',
+        'example',
+        '--repo',
+        'sample',
+        '--budget-ms',
+        '700',
+      ],
+      {
+        cwd: root,
+        encoding: 'utf8',
+        env: {
+          ...ghEnv(logPath, { delayMs: 2_000, envelope: true }),
+          IDD_PROVIDER_OUTAGE_PARK_READ_WORKER: '1',
+          IDD_PROVIDER_OUTAGE_PARK_STAGE_FD: '3',
+        },
+        timeout: 6_000,
+      },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /provider-outage-park: start mode=list/);
+    assert.match(result.stderr, /read budget expired after 700ms/);
+    assert.equal((result.stderr.match(/"iddHelperError"/g) ?? []).length, 1);
+    assert.ok(readCalls(logPath).length >= 1);
+  } finally {
+    restoreGh();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('read budget parsing accepts both inclusive boundaries', () => {
   assert.equal(DEFAULT_READ_BUDGET_MS, 120_000);
   assert.equal(parseReadBudget('1'), 1);
@@ -263,6 +332,75 @@ test('the parent reports progress while a synchronous gh read is blocked', async
     restoreGh();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('a worker that exits before its owned descendants is reaped before success', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const child = fakeChild(45681);
+  const output: Buffer[] = [];
+  const errors: string[] = [];
+  const signals: NodeJS.Signals[] = [];
+  let groupAlive = true;
+  const fakeSpawn = (() => {
+    setImmediate(() => {
+      (child.stdout as PassThrough).end('{"complete":true}\n');
+      (child.stderr as PassThrough).end();
+      (child.stdio[3] as PassThrough).end();
+      child.emit('close', 0, null);
+    });
+    return child;
+  }) as unknown as typeof spawn;
+
+  const result = await superviseReadMode('list', 1_000, [], {
+    platform: 'linux',
+    spawnProcess: fakeSpawn,
+    cleanupBudgetMs: 100,
+    signalProcessGroup: (_pid, signal) => {
+      signals.push(signal);
+      groupAlive = false;
+    },
+    processGroupExists: () => groupAlive,
+    writeStdout: (chunk) => output.push(Buffer.from(chunk)),
+    writeStderr: (text) => errors.push(text),
+  });
+
+  assert.equal(result, 0);
+  assert.deepEqual(signals, ['SIGTERM']);
+  assert.equal(Buffer.concat(output).toString(), '{"complete":true}\n');
+  assert.match(errors.join(''), /stopped remaining owned descendants/);
+});
+
+test('a closed worker with an unreaped process group cannot publish success', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const child = fakeChild(45682);
+  const output: Buffer[] = [];
+  const errors: string[] = [];
+  const fakeSpawn = (() => {
+    setImmediate(() => {
+      (child.stdout as PassThrough).end('{"mustNotEscape":true}\n');
+      (child.stderr as PassThrough).end();
+      (child.stdio[3] as PassThrough).end();
+      child.emit('close', 0, null);
+    });
+    return child;
+  }) as unknown as typeof spawn;
+
+  const result = await superviseReadMode('list', 1_000, [], {
+    platform: 'linux',
+    spawnProcess: fakeSpawn,
+    cleanupBudgetMs: 10,
+    signalProcessGroup: () => {},
+    processGroupExists: () => true,
+    writeStdout: (chunk) => output.push(Buffer.from(chunk)),
+    writeStderr: (text) => errors.push(text),
+  });
+
+  assert.equal(typeof result, 'object');
+  if (typeof result === 'object') assert.equal(result.exitCode, 1);
+  assert.equal(Buffer.concat(output).length, 0);
+  assert.match(errors.join(''), /cleanup failed within 10ms/);
 });
 
 test('one deadline covers successive gh reads and suppresses partial JSON', {
@@ -436,26 +574,24 @@ test('SIGINT and SIGTERM sent to the packaged bin stop its owned process tree', 
 }, async () => {
   const restoreGh = stubExecutable('gh', GH_SCRIPT);
   const root = createTempRoot();
+  const descendantPids: number[] = [];
   try {
     for (const [signal, expectedCode] of [
       ['SIGINT', 130],
       ['SIGTERM', 143],
     ] as const) {
       const logPath = join(root, `${signal}.jsonl`);
+      const heartbeatPath = join(root, `${signal}.heartbeat`);
       const child = spawn(
         process.execPath,
-        [
-          BIN_PATH,
-          '--owner',
-          'example',
-          '--repo',
-          'sample',
-          '--budget-ms',
-          '10000',
-        ],
+        [BIN_PATH, '--budget-ms', '10000'],
         {
           cwd: root,
-          env: ghEnv(logPath, { delayMs: 5_000, envelope: true }),
+          env: ghEnv(logPath, {
+            delayMs: 5_000,
+            envelope: true,
+            descendantHeartbeatPath: heartbeatPath,
+          }),
           stdio: ['ignore', 'pipe', 'pipe'],
         },
       );
@@ -477,7 +613,9 @@ test('SIGINT and SIGTERM sent to the packaged bin stop its owned process tree', 
       });
       const start = performance.now();
       while (
-        readCalls(logPath).length === 0 &&
+        (readCalls(logPath).length === 0 ||
+          !existsSync(`${heartbeatPath}.pid`) ||
+          !existsSync(heartbeatPath)) &&
         performance.now() - start < 3_000
       ) {
         await new Promise((resolve) => setTimeout(resolve, 20));
@@ -487,7 +625,21 @@ test('SIGINT and SIGTERM sent to the packaged bin stop its owned process tree', 
         1,
         `${signal} test did not reach gh`,
       );
+      assert.equal(existsSync(heartbeatPath), true);
+      const descendantPid = Number(
+        readFileSync(`${heartbeatPath}.pid`, 'utf8'),
+      );
+      assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
+      descendantPids.push(descendantPid);
+      const heartbeatSize = statSync(heartbeatPath).size;
+      assert.ok(heartbeatSize > 0);
       child.kill(signal);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.equal(
+        child.kill(signal),
+        true,
+        `${signal} supervisor exited early (code=${child.exitCode}, signal=${child.signalCode})\n${stderr}`,
+      );
       const result = await withTimeout(
         closed,
         7_000,
@@ -498,8 +650,18 @@ test('SIGINT and SIGTERM sent to the packaged bin stop its owned process tree', 
       assert.equal(stdout, '');
       assert.match(stderr, new RegExp(`read interrupted by ${signal}`));
       assert.equal((stderr.match(/"iddHelperError"/g) ?? []).length, 1);
+      const stoppedHeartbeatSize = statSync(heartbeatPath).size;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      assert.equal(statSync(heartbeatPath).size, stoppedHeartbeatSize);
     }
   } finally {
+    for (const pid of descendantPids) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // The process tree may already have been reaped successfully.
+      }
+    }
     restoreGh();
     rmSync(root, { recursive: true, force: true });
   }
