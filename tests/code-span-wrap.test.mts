@@ -422,6 +422,86 @@ test('flags qualified types in class extends and method throws clauses', () => {
   }
 });
 
+test('flags qualified types across six bounded Java declaration forms', () => {
+  const wrapCode = (source: string): string => `\`${source}\``;
+  const cases = [
+    {
+      name: 'local class followed by an if condition with a braced lambda',
+      wrapped: [
+        'class Outer { void run() { class Local extends com.example.',
+        ' MyClass {} if (check(() -> { return true; })) {} } }',
+      ].join(''),
+      unwrapped:
+        'class Outer { void run() { class Local extends com.example.MyClass {} if (check(() -> { return true; })) {} } }',
+      type: 'MyClass',
+    },
+    {
+      name: 'later field declarator with an annotation',
+      wrapped: [
+        'class Outer { void run() throws com.example.',
+        ' MyException {} int first, @Deprecated second; }',
+      ].join(''),
+      unwrapped:
+        'class Outer { void run() throws com.example.MyException {} int first, @Deprecated second; }',
+      type: 'MyException',
+    },
+    {
+      name: 'method with post-parameter return dimensions',
+      wrapped: [
+        'class Outer { String run()[] throws com.example.',
+        ' MyException {} }',
+      ].join(''),
+      unwrapped:
+        'class Outer { String run()[] throws com.example.MyException {} }',
+      type: 'MyException',
+    },
+    {
+      name: 'parameterized return type with trivia before its arguments',
+      wrapped: [
+        'class Outer { java.util.List <String> run() throws com.example.',
+        ' MyException {} }',
+      ].join(''),
+      unwrapped:
+        'class Outer { java.util.List <String> run() throws com.example.MyException {} }',
+      type: 'MyException',
+    },
+    {
+      name: 'nested annotation type after a method',
+      wrapped: [
+        'class Outer { void run() throws com.example.',
+        ' MyException {} @interface Marker { String value(); } }',
+      ].join(''),
+      unwrapped:
+        'class Outer { void run() throws com.example.MyException {} @interface Marker { String value(); } }',
+      type: 'MyException',
+    },
+    {
+      name: 'record compact constructor after a method',
+      wrapped: [
+        'record Outer() { void run() throws com.example.',
+        ' MyException {} Outer {} }',
+      ].join(''),
+      unwrapped:
+        'record Outer() { void run() throws com.example.MyException {} Outer {} }',
+      type: 'MyException',
+    },
+  ];
+
+  for (const { name, wrapped, unwrapped, type } of cases) {
+    const violations = findCorruptingCodeSpanWraps(wrapCode(wrapped));
+    assert.equal(violations.length, 1, `${name}: wrapped`);
+    assert.equal(violations[0]?.line, 1, name);
+    assert.equal(violations[0]?.before.endsWith('com.example.'), true, name);
+    assert.equal(violations[0]?.after.startsWith(type), true, name);
+    assert.equal(violations[0]?.separator, 'literal-space', name);
+    assert.deepEqual(
+      findCorruptingCodeSpanWraps(wrapCode(unwrapped)),
+      [],
+      name,
+    );
+  }
+});
+
 test('accepts generic owner segments before a split qualified type', () => {
   for (const span of [
     '`class Foo extends pkg.Outer<String>. MyClass {}`',
