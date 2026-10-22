@@ -66,6 +66,16 @@ const PROPER_NAME_TITLE_ABBREVIATION =
 const DOTTED_IDENTIFIER_PREFIX =
   /^\s*[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+$/u;
 const MAX_DECLARATION_GENERIC_DEPTH = 8;
+const DECLARATION_PRIMITIVE_ARRAY_ELEMENTS = [
+  'boolean',
+  'byte',
+  'char',
+  'double',
+  'float',
+  'int',
+  'long',
+  'short',
+] as const;
 const DECLARATION_CLAUSE_KEYWORDS = [
   'extends',
   'implements',
@@ -127,7 +137,11 @@ function parseDeclarationType(
   }
 
   cursor = skipDeclarationWhitespace(text, cursor + 1);
-  let argumentEnd = parseDeclarationType(text, cursor, genericDepth + 1);
+  let argumentEnd = parseDeclarationTypeArgument(
+    text,
+    cursor,
+    genericDepth + 1,
+  );
   if (argumentEnd === undefined) {
     return undefined;
   }
@@ -138,7 +152,7 @@ function parseDeclarationType(
       break;
     }
     cursor = skipDeclarationWhitespace(text, commaIndex + 1);
-    argumentEnd = parseDeclarationType(text, cursor, genericDepth + 1);
+    argumentEnd = parseDeclarationTypeArgument(text, cursor, genericDepth + 1);
     if (argumentEnd === undefined) {
       return undefined;
     }
@@ -146,6 +160,68 @@ function parseDeclarationType(
   }
   cursor = skipDeclarationWhitespace(text, cursor);
   return text[cursor] === '>' ? cursor + 1 : undefined;
+}
+
+function parseDeclarationTypeArgument(
+  text: string,
+  start: number,
+  genericDepth: number,
+): number | undefined {
+  if (text[start] !== '?') {
+    return parseDeclarationType(text, start, genericDepth);
+  }
+  // Wildcards are limited to nested type arguments (JLS 8.1.4 and 8.1.5;
+  // PR #4605).
+  if (genericDepth === 1) {
+    return undefined;
+  }
+
+  const cursor = skipDeclarationWhitespace(text, start + 1);
+
+  const varianceKeyword = (['extends', 'super'] as const).find(
+    (keyword) =>
+      text.startsWith(keyword, cursor) &&
+      !isDeclarationIdentifierContinuation(
+        text.charCodeAt(cursor + keyword.length),
+      ),
+  );
+  if (varianceKeyword === undefined) {
+    return start + 1;
+  }
+
+  const boundStart = skipDeclarationWhitespace(
+    text,
+    cursor + varianceKeyword.length,
+  );
+  const primitive = DECLARATION_PRIMITIVE_ARRAY_ELEMENTS.find(
+    (type) =>
+      text.startsWith(type, boundStart) &&
+      !isDeclarationIdentifierContinuation(
+        text.charCodeAt(boundStart + type.length),
+      ),
+  );
+  let boundEnd =
+    primitive === undefined
+      ? parseDeclarationType(text, boundStart, genericDepth)
+      : boundStart + primitive.length;
+  if (boundEnd === undefined) {
+    return undefined;
+  }
+
+  let isArray = false;
+  while (true) {
+    const openIndex = skipDeclarationWhitespace(text, boundEnd);
+    if (text[openIndex] !== '[') {
+      break;
+    }
+    const closeIndex = skipDeclarationWhitespace(text, openIndex + 1);
+    if (text[closeIndex] !== ']') {
+      return undefined;
+    }
+    isArray = true;
+    boundEnd = closeIndex + 1;
+  }
+  return primitive !== undefined && !isArray ? undefined : boundEnd;
 }
 
 function isCompleteDeclarationTail(text: string): boolean {
