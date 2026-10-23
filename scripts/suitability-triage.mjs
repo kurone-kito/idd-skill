@@ -875,7 +875,7 @@ const UNSAFE_HUMAN_ACTOR_TARGET_SOURCE = String.raw`by\s+(?:(?:the|a|an)\s+)?${U
 // passive attribution ("workflow maintained by a human agent") into an
 // execution assignment; supplied executable sources have their own matcher.
 const UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE =
-  '(?:generated|maintained|provided|created|built|written|compiled|developed|authored|designed|produced)';
+  '(?:generated|maintained|provided|created|built|written|compiled|developed|authored|designed|produced|implemented)';
 const UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_FILLER_SOURCE = String.raw`(?:(?!\b(?:${SUPPLIED_CONTENT_COORDINATOR})\b)[\w-]+\s+)*?`;
 const UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE = String.raw`(?:(?:this|the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_FILLER_SOURCE}(?!(?:${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE})\b\s+by\b)[\w-]+\s+`;
 const UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE = String.raw`(?:${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}(?:\s+|-)(?:agent|assistant|bot)|user-facing\s+coding\s+agent)`;
