@@ -270,7 +270,7 @@ GH_HOST=$(gh repo view --json url --jq '.url | select(type == "string") | sub("^
   echo "repository GitHub host is empty or invalid; recovery marker not posted" >&2
   exit 2
 }
-gh auth status --hostname "$GH_HOST" >/dev/null 2>&1 || {
+gh auth status --active --hostname "$GH_HOST" >/dev/null 2>&1 || {
   echo "not authenticated to $GH_HOST; recovery marker not posted" >&2
   exit 2
 }
@@ -795,7 +795,7 @@ GH_HOST=$(gh repo view --json url --jq '.url | select(type == "string") | sub("^
   echo "repository GitHub host is empty or invalid; recovery marker not posted" >&2
   exit 2
 }
-gh auth status --hostname "$GH_HOST" >/dev/null 2>&1 || {
+gh auth status --active --hostname "$GH_HOST" >/dev/null 2>&1 || {
   echo "not authenticated to $GH_HOST; recovery marker not posted" >&2
   exit 2
 }
@@ -873,20 +873,50 @@ REVIEWS_RAW=$(gh api "repos/$OWNER/$REPO/pulls/{pr-number}/reviews" --paginate) 
   echo "F2 review list read empty; not converged (#4638)" >&2
   exit 2
 }
-printf '%s' "$REVIEWS_RAW" | jq -e -s '
+  printf '%s' "$REVIEWS_RAW" | jq -e -s '
+    def parsed_review_timestamp:
+      .submitted_at
+      | capture("^(?<whole>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})([.](?<fraction>[0-9]+))?(?<zone>Z|[+-][0-9]{2}:[0-9]{2})$");
+    def review_time_key($fraction_width):
+      parsed_review_timestamp as $timestamp
+      | if ($timestamp.zone != "Z"
+          and ((($timestamp.zone[1:3] | tonumber) > 23)
+            or (($timestamp.zone[4:6] | tonumber) > 59)))
+        then error("invalid timezone offset")
+        else
+          ($timestamp.fraction // "") as $fraction
+          | [
+              ((($timestamp.whole + "Z") | fromdateiso8601)
+                - (if $timestamp.zone == "Z" then 0
+                   else
+                     (if $timestamp.zone[0:1] == "+" then 1 else -1 end)
+                     * (($timestamp.zone[1:3] | tonumber) * 3600
+                       + ($timestamp.zone[4:6] | tonumber) * 60)
+                   end)),
+              (reduce range(($fraction | length); $fraction_width) as $_
+                ($fraction; . + "0"))
+            ]
+        end;
   length > 0
   and all(.[]; type == "array")
   and all(add[];
     type == "object"
-    and (.user | type == "object")
-    and (.user.login | type == "string")
+      and has("user")
+      and (
+        .user == null
+        or (
+          (.user | type == "object")
+          and (.user.login | type == "string")
+        )
+      )
     and (
-      if .user.login == "copilot-pull-request-reviewer"
-        or .user.login == "copilot-pull-request-reviewer[bot]"
+        if .user == null then true
+        elif .user.login == "copilot-pull-request-reviewer"
+          or .user.login == "copilot-pull-request-reviewer[bot]"
       then
-        (.submitted_at | type == "string")
-        and (.submitted_at | length > 0)
-        and ((try (.submitted_at | fromdateiso8601) catch null) != null)
+          (.submitted_at | type == "string")
+          and (.submitted_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"))
+          and (try (review_time_key(0) != null) catch false)
         and (.commit_id | type == "string")
         and (.commit_id | length > 0)
         and (.id | type == "number")
@@ -900,10 +930,33 @@ printf '%s' "$REVIEWS_RAW" | jq -e -s '
 }
 LATEST_REVIEW_JSON=$(
   printf '%s' "$REVIEWS_RAW" | jq -cs '
+    def parsed_review_timestamp:
+      .submitted_at
+      | capture("^(?<whole>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})([.](?<fraction>[0-9]+))?(?<zone>Z|[+-][0-9]{2}:[0-9]{2})$");
+    def review_time_key($fraction_width):
+      parsed_review_timestamp as $timestamp
+      | ($timestamp.fraction // "") as $fraction
+      | [
+          ((($timestamp.whole + "Z") | fromdateiso8601)
+            - (if $timestamp.zone == "Z" then 0
+               else
+                 (if $timestamp.zone[0:1] == "+" then 1 else -1 end)
+                 * (($timestamp.zone[1:3] | tonumber) * 3600
+                   + ($timestamp.zone[4:6] | tonumber) * 60)
+               end)),
+          (reduce range(($fraction | length); $fraction_width) as $_
+            ($fraction; . + "0"))
+        ];
     add
-    | map(select(.user.login == "copilot-pull-request-reviewer"
-        or .user.login == "copilot-pull-request-reviewer[bot]"))
-    | sort_by(.submitted_at)
+    | map(select(.user != null and (
+        .user.login == "copilot-pull-request-reviewer"
+        or .user.login == "copilot-pull-request-reviewer[bot]")))
+      as $bot_reviews
+    | ($bot_reviews
+        | map(parsed_review_timestamp | (.fraction // "" | length))
+        | max // 0) as $fraction_width
+    | $bot_reviews
+    | sort_by(review_time_key($fraction_width))
     | last // {}
   '
 ) || {

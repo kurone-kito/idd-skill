@@ -184,7 +184,7 @@ case "$*" in
   "repo view --json url"*) "$JQ_BIN" -r "$jq_expr" "$STUB_REPO_URL" ;;
   "pr view "*"--json headRefOid"*) cat "$STUB_HEAD" ;;
   "api user"*) echo "$STUB_LOGIN" ;;
-  "auth status --hostname "*) exit "$STUB_AUTH_STATUS_EXIT" ;;
+  "auth status --active --hostname "*) exit "$STUB_AUTH_STATUS_EXIT" ;;
   "pr edit "*) exit "\${STUB_PR_EDIT_EXIT:-0}" ;;
   "api graphql"*)
     case "$*" in
@@ -840,8 +840,10 @@ test('F2 rejects empty, malformed, and unexpected review-list data (#4638)', {
   for (const review of [
     { ...botReview, submitted_at: '' },
     { ...botReview, submitted_at: 'not-a-date' },
+    { ...botReview, submitted_at: '2026-10-08T09:00:00+25:00' },
     { ...botReview, commit_id: '' },
     { ...botReview, id: 0 },
+    { ...botReview, user: { login: null } },
   ]) {
     const run = runF2({ reviews: JSON.stringify([review]) });
     assert.equal(run.status, 2);
@@ -858,9 +860,10 @@ test('F2 selects the latest review and counts comments across valid pages (#4638
 }, () => {
   const reviews =
     JSON.stringify([
+      { user: null },
       {
         user: { login: BOT_LOGIN + '[bot]' },
-        submitted_at: '2026-10-08T08:00:00Z',
+        submitted_at: '2026-10-08T09:00:00Z',
         commit_id: '0'.repeat(40),
         id: 900,
       },
@@ -869,7 +872,7 @@ test('F2 selects the latest review and counts comments across valid pages (#4638
     JSON.stringify([
       {
         user: { login: BOT_LOGIN + '[bot]' },
-        submitted_at: '2026-10-08T09:00:00Z',
+        submitted_at: '2026-10-08T09:00:00.123Z',
         commit_id: HEAD_SHA,
         id: 901,
       },
@@ -960,6 +963,11 @@ for (const example of [
         'https://' + host + '/' + OWNER + '/' + REPO,
       );
       assert.equal(result.status, 0, result.stderr);
+      assert.ok(
+        result.ghCalls.some(
+          (call) => call === 'auth status --active --hostname ' + host,
+        ),
+      );
       assert.ok(
         result.ghCalls.some(
           (call) =>
