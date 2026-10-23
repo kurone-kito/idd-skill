@@ -1021,34 +1021,64 @@ for (const example of [
   });
 }
 
-test('manual recovery POST stops when the host is unresolved or unauthenticated (#4638)', {
+test('both manual recovery examples stop before POST when host or auth fails (#4659)', {
   skip: SKIP_REASON ?? false,
 }, () => {
-  const hostMissing = runManualRecoveryPost('## AW3-R', 'or manually:', '');
-  assert.equal(
-    hostMissing.status,
-    2,
-    hostMissing.stdout +
-      hostMissing.stderr +
-      JSON.stringify(hostMissing.ghCalls),
-  );
-  assert.ok(
-    !hostMissing.ghCalls.some((call) => call.includes('api --hostname')),
-  );
-  assert.ok(
-    !hostMissing.ghCalls.some((call) => call.includes('--method POST')),
-  );
+  const examples = [
+    { heading: '## AW3-R', marker: 'or manually:' },
+    {
+      heading: '## AW3-S',
+      marker:
+        'instructions-only profile, or any profile if the helper is unavailable',
+    },
+  ];
 
-  const unauthenticated = runManualRecoveryPost(
-    '## AW3-S',
-    'instructions-only profile, or any profile if the helper is unavailable',
-    'https://ghe.example.test/' + OWNER + '/' + REPO,
-    1,
-  );
-  assert.equal(unauthenticated.status, 2);
-  assert.ok(
-    !unauthenticated.ghCalls.some((call) => call.includes('--method POST')),
-  );
+  for (const example of examples) {
+    const hostMissing = runManualRecoveryPost(
+      example.heading,
+      example.marker,
+      '',
+    );
+    assert.equal(
+      hostMissing.status,
+      2,
+      `${example.heading}\n${hostMissing.stdout}${hostMissing.stderr}`,
+    );
+    assert.ok(
+      !hostMissing.ghCalls.some((call) => call.startsWith('auth status')),
+      example.heading,
+    );
+    assert.ok(
+      !hostMissing.ghCalls.some((call) => call.includes('api --hostname')),
+      example.heading,
+    );
+    assert.ok(
+      !hostMissing.ghCalls.some((call) => call.includes('--method POST')),
+      example.heading,
+    );
+
+    const unauthenticated = runManualRecoveryPost(
+      example.heading,
+      example.marker,
+      `https://ghe.example.test/${OWNER}/${REPO}`,
+      1,
+    );
+    assert.equal(
+      unauthenticated.status,
+      2,
+      `${example.heading}\n${unauthenticated.stdout}${unauthenticated.stderr}`,
+    );
+    assert.ok(
+      unauthenticated.ghCalls.some((call) =>
+        call.includes('auth status --active --hostname ghe.example.test'),
+      ),
+      example.heading,
+    );
+    assert.ok(
+      !unauthenticated.ghCalls.some((call) => call.includes('--method POST')),
+      example.heading,
+    );
+  }
 });
 
 test('manual recovery POST stops before authentication for invalid or mismatched repository URLs (#4638)', {
