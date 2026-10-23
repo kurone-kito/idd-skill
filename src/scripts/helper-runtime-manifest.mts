@@ -710,6 +710,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'Create one drafted issue under the issue-authoring hold (an orphan, or a draft carrier), running the New-issue ownership steps of the authoring contract in order (dry run unless --apply).',
   },
   {
+    id: 'release-tag',
+    scriptName: 'idd:release-tag',
+    binName: 'idd-release-tag',
+    entryPath: 'scripts/release-tag.mjs',
+    vendoredCommand: 'node scripts/release-tag.mjs',
+    description:
+      'Create or verify the signed annotated release tag for a merged version bump (dry-run by default).',
+  },
+  {
     id: 'rerun-advisory-convergence',
     scriptName: 'idd:rerun-advisory-convergence',
     binName: 'idd-rerun-advisory-convergence',

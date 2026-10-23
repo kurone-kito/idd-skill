@@ -6,9 +6,8 @@
 //
 // The closed core of the release-tag helper (issue #4523). It runs one
 // operation, `signed-annotated-tag`, and refuses any other before a git or
-// `gh` command runs. The command-line entry point, its `--help`, and the
-// helper-runtime registration are issue #4524; this module only decides and
-// returns `{ report, exitStatus }`.
+// `gh` command runs. The packaged command-line entry point and registration
+// are issue #4630; this module also decides and returns `{ report, exitStatus }`.
 //
 // Order: input checks, then the preconditions (the `gh` reads before any
 // fetch), then the effects. A failed check refuses with its name and stops.
@@ -35,8 +34,22 @@ import {
   type CommandResult as ClaimedPushCommandResult,
   runProductionCommand as runClaimedPushCommand,
 } from './claimed-push.mts';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
+import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mts';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  tagGhCommandError,
+} from './gh-exec.mts';
 import { isNotDispatchedRefusal } from './github-api-refusal.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  type ClassifiedHelperError,
+  classifyHelperError,
+  type HelperCliResult,
+  isHelperErrorEnvelopeEnabled,
+  markCliUsageError,
+  runHelperCli,
+} from './helper-cli-runner.mts';
 import {
   loadLayeredLocalPolicy,
   loadUserGlobalPolicyDocument,
@@ -273,6 +286,8 @@ export interface ReleaseTagOutcome {
   report: ReleaseTagReport;
   /** 0 for a passed dry run or a created, found, or pushed tag; 1 otherwise. */
   exitStatus: 0 | 1;
+  /** Present when a GitHub read failed and the CLI must preserve its class. */
+  cliError?: ClassifiedHelperError;
 }
 
 /** The inputs of `signed-annotated-tag`. Each is validated before any command. */
@@ -303,6 +318,8 @@ export interface CommandResult {
   timedOut?: boolean;
   /** Present when the time bound fired. */
   termination?: TerminationRecord;
+  /** Preserved CLI classification for a failed GitHub read. */
+  cliError?: ClassifiedHelperError;
 }
 
 /** The time bound's record of one timeout. */
@@ -433,16 +450,19 @@ export interface BoundedCommandOptions {
 class Refused extends Error {
   readonly refusal: ReleaseTagRefusal;
   readonly step: ReleaseTagPreconditionName | ReleaseTagEffectName;
+  readonly cliError: ClassifiedHelperError | null;
 
   constructor(
     step: ReleaseTagPreconditionName | ReleaseTagEffectName,
     name: ReleaseTagRefusalName,
     detail: string,
     processes: ProcessRecord | null = null,
+    cliError: ClassifiedHelperError | null = null,
   ) {
     super(`${name}: ${detail}`);
     this.step = step;
     this.refusal = { name, detail, processes };
+    this.cliError = cliError;
   }
 }
 
@@ -634,6 +654,24 @@ function outputText(value: unknown): string {
 }
 
 function fromClaimedPush(result: ClaimedPushCommandResult): CommandResult {
+  let cliError: ClassifiedHelperError | undefined;
+  if (result.status !== 0) {
+    const error = new Error(
+      result.stderr.trim() || result.error || 'the gh read failed',
+    );
+    if (result.stderr !== '') {
+      Object.defineProperty(error, 'stderr', {
+        value: result.stderr,
+        enumerable: false,
+      });
+    }
+    tagGhCommandError(error);
+    const classified = classifyHelperError(error);
+    cliError =
+      result.notDispatched === true
+        ? { ...classified, notDispatched: true }
+        : classified;
+  }
   return {
     status: result.status,
     signal: result.signal,
@@ -641,6 +679,7 @@ function fromClaimedPush(result: ClaimedPushCommandResult): CommandResult {
     stderr: result.stderr,
     ...(result.error === undefined ? {} : { error: result.error }),
     ...(result.notDispatched === true ? { notDispatched: true } : {}),
+    ...(cliError === undefined ? {} : { cliError }),
   };
 }
 
@@ -709,6 +748,7 @@ function runGhRead(args: readonly string[], cwd: string): CommandResult {
         ? { error: error instanceof Error ? error.message : String(error) }
         : {}),
       ...(isNotDispatchedRefusal(error) ? { notDispatched: true } : {}),
+      cliError: classifyHelperError(error),
     };
   }
 }
@@ -1376,6 +1416,8 @@ async function ghRead(
           ? 'GitHub API load control refused the read before it started'
           : failureDetail(result),
       ),
+      null,
+      result.cliError ?? null,
     );
   }
   return result.stdout;
@@ -2517,9 +2559,9 @@ async function runChecksAndEffects(ctx: Context): Promise<void> {
 
 /**
  * Run `signed-annotated-tag`. Returns the report and the exit status the
- * command-line main (#4524) sets; never throws for a refusal.
+ * command-line main (#4630) sets; never throws for a refusal.
  */
-// audit:ignore-dead-export: the command-line main that calls it is issue #4524
+// audit:ignore-dead-export: the command-line main that calls it is issue #4630
 export async function runReleaseTag(
   input: ReleaseTagInput,
   deps: ReleaseTagDeps = createReleaseTagDeps(),
@@ -2532,7 +2574,11 @@ export async function runReleaseTag(
     if (!(error instanceof Refused)) throw error;
     setPrecondition(report, 'input', 'failed', error.refusal.detail);
     report.refusal = error.refusal;
-    return { report, exitStatus: 1 };
+    return {
+      report,
+      exitStatus: 1,
+      ...(error.cliError === null ? {} : { cliError: error.cliError }),
+    };
   }
   report.tag = valid.tag;
   setPrecondition(
@@ -2563,7 +2609,143 @@ export async function runReleaseTag(
         error.refusal.detail,
       );
     }
-    return { report, exitStatus: 1 };
+    return {
+      report,
+      exitStatus: 1,
+      ...(error.cliError === null ? {} : { cliError: error.cliError }),
+    };
   }
   return { report, exitStatus: 0 };
+}
+
+const RELEASE_TAG_FLAG_SPEC = {
+  '--operation': { type: 'string' },
+  '--version': { type: 'string' },
+  '--merge-sha': { type: 'string' },
+  '--pr': { type: 'string' },
+  '--issue': { type: 'string' },
+  '--allowed-signers': { type: 'string' },
+  '--apply': { type: 'boolean' },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
+
+if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('release-tag', runCli);
+  } else {
+    runCli().then(applyHelperCliOutcomeWhenDisabled, (error: unknown) => {
+      throw error;
+    });
+  }
+}
+
+async function runCli(): Promise<HelperCliResult> {
+  let parsed: ReturnType<typeof parseArgs>;
+  try {
+    parsed = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    throw markCliUsageError(error);
+  }
+  if (parsed.help) {
+    printHelp();
+    return 0;
+  }
+
+  const outcome = await runReleaseTag({
+    operation: parsed.operation,
+    version: parsed.version,
+    mergeSha: parsed.mergeSha,
+    pullRequest: parsed.pullRequest,
+    issue: parsed.issue,
+    allowedSigners: parsed.allowedSigners,
+    apply: parsed.apply,
+  });
+  process.stdout.write(`${JSON.stringify(outcome.report, null, 2)}\n`);
+  if (outcome.exitStatus === 0) return 0;
+  const refusal = outcome.report.refusal;
+  const inputRefusal =
+    refusal !== null &&
+    [
+      'unknown-operation',
+      'invalid-version',
+      'invalid-merge-sha',
+      'invalid-pull-request',
+      'invalid-issue',
+      'invalid-allowed-signers',
+      'invalid-apply',
+    ].includes(refusal.name);
+  return {
+    exitCode: 1,
+    kind: outcome.cliError?.kind ?? (inputRefusal ? 'usage' : 'gate'),
+    message:
+      outcome.cliError?.message ??
+      refusal?.detail ??
+      'the release-tag operation was refused',
+    ...(outcome.cliError === undefined
+      ? {}
+      : {
+          httpStatus: outcome.cliError.httpStatus,
+          ...(outcome.cliError.notDispatched
+            ? { notDispatched: true as const }
+            : {}),
+          ...(outcome.cliError.retryAt
+            ? { retryAt: outcome.cliError.retryAt }
+            : {}),
+        }),
+  };
+}
+
+interface ParsedReleaseTagArgs {
+  operation: string | null;
+  version: string | null;
+  mergeSha: string | null;
+  pullRequest: number | null;
+  issue: number | null;
+  allowedSigners: string | null;
+  apply: boolean;
+  help: boolean;
+}
+
+function parseArgs(argv: readonly string[]): ParsedReleaseTagArgs {
+  const { values, help } = parseCliArgs(argv, RELEASE_TAG_FLAG_SPEC);
+  return {
+    operation: typeof values.operation === 'string' ? values.operation : null,
+    version: typeof values.version === 'string' ? values.version : null,
+    mergeSha:
+      typeof values['merge-sha'] === 'string' ? values['merge-sha'] : null,
+    pullRequest: parseCanonicalIntegerOrNull(
+      typeof values.pr === 'string' ? values.pr : undefined,
+    ),
+    issue: parseCanonicalIntegerOrNull(
+      typeof values.issue === 'string' ? values.issue : undefined,
+    ),
+    allowedSigners:
+      typeof values['allowed-signers'] === 'string'
+        ? values['allowed-signers']
+        : null,
+    apply: values.apply === true,
+    help,
+  };
+}
+
+function printHelp(): void {
+  process.stdout.write(`Usage:
+  idd-release-tag --operation signed-annotated-tag --version <x.y.z> \\
+    --merge-sha <commit-sha> --pr <number> --issue <number> \\
+    --allowed-signers <absolute-path> [--apply]
+
+Create or verify the signed annotated release tag for a merged version bump.
+The only supported operation is signed-annotated-tag.
+
+Inputs:
+  --version          Release version without a prefix or suffix.
+  --merge-sha        40-character lowercase merge commit SHA.
+  --pr               Merged version-bump pull request number.
+  --issue            Open release issue number.
+  --allowed-signers  Absolute path to the SSH allowed-signers file.
+  --apply            Create and push the tag after all checks pass.
+
+Dry-run is the default. It checks the release and reports planned effects;
+pass --apply to create and push the signed annotated tag.
+`);
 }

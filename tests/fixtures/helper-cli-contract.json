@@ -649,6 +649,18 @@
         }
       }
     },
+    "idd-release-tag.mjs": {
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 1,
+          "kind": "usage"
+        }
+      }
+    },
     "idd-resolve-review-thread.mjs": {
       "runs": {
         "unknownFlag": {
