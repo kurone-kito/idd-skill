@@ -876,11 +876,16 @@ const UNSAFE_HUMAN_ACTOR_TARGET_SOURCE = String.raw`by\s+(?:(?:the|a|an)\s+)?${U
 // execution assignment; supplied executable sources have their own matcher.
 const UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE =
   '(?:generated|maintained|provided|created|built|written|compiled|developed|authored|designed|produced|implemented|assembled|configured)';
-const UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_CLAUSE_SOURCE = String.raw`(?:\b(?:but|then|also)\b|\b(?:and|or)\s+(?:inspect|verify|check|test|run|execute|paste|install|invoke|record|review|read|write|update|add|remove|create|build|generate|use|open|close|follow|document|fix|resolve|ensure|compare|validate|select|download|upload|copy|move|apply|perform|handle|manage|implement|investigate)\b)`;
+// Keep coordinated nouns such as "test suite" inside the command object.
+// A coordinator plus a verb and determiner starts a separate clause, as in
+// the passive-attribution boundary "and inspect the deployment by ...".
+const UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_CLAUSE_SOURCE = String.raw`(?:\b(?:but|then|also)\b|\b(?:and|or)\s+(?:inspect|verify|check|test|run|execute|paste|install|invoke|record|review|read|write|update|add|remove|create|build|generate|use|open|close|follow|document|fix|resolve|ensure|compare|validate|select|download|upload|copy|move|apply|perform|handle|manage|implement|investigate)\b\s+(?:the|a|an|this|that|these|those|each|every|any|all|my|our|your|their|its|his|her)\b)`;
 const UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_FILLER_SOURCE = String.raw`(?:(?!${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_CLAUSE_SOURCE})[\w-]+\s+)*?`;
 const UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE = String.raw`(?:(?:this|the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_FILLER_SOURCE}(?!(?:${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE})\b\s+by\b)[\w-]+\s+`;
+const UNSAFE_DIRECT_ACTOR_ROLE_COORDINATED_COMMAND_VERB_SOURCE =
+  '(?:verify|check|test|run|execute|paste|install|invoke|record|review|read|write|update|add|remove|create|build|generate|use|open|close|follow|document|fix|resolve|ensure|compare|validate|select|download|upload|copy|move|apply|perform|handle|manage|implement|investigate)';
 const UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE = String.raw`(?:${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}(?:\s+|-)(?:agent|assistant|bot)|user-facing\s+coding\s+agent)`;
-const UNSAFE_DIRECT_ACTOR_ROLE_TARGET_SOURCE = String.raw`^\s*${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE}by\s+(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}`;
+const UNSAFE_DIRECT_ACTOR_ROLE_TARGET_SOURCE = String.raw`(?:^\s*${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE}by\s+(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}|^\s*${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE}(?:and|or)\s+${UNSAFE_DIRECT_ACTOR_ROLE_COORDINATED_COMMAND_VERB_SOURCE}\s+${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE}by\s+(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE})`;
 const UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET_SOURCE = String.raw`^\s*this\s+(?:step|check)\s+by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}(?:[\s-]+[\w-]+)*\s*[.!?]?\s*$`;
 const UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET = new RegExp(
   UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET_SOURCE,
