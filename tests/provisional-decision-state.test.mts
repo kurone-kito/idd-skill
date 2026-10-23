@@ -91,7 +91,7 @@ function completionResult(decisionGeneration: number): Event {
   return {
     kind: 'merged-pull-request',
     reference: `https://github.com/kurone-kito/idd-skill/pull/${4600 + decisionGeneration}`,
-    verifiedAt: dateAt(2 + decisionGeneration),
+    verifiedAt: dateAt(2),
     headSha: String(4600 + decisionGeneration).padStart(40, '0'),
     mergeCommitSha: String(4700 + decisionGeneration).padStart(40, '0'),
   };
@@ -856,6 +856,56 @@ test('completion evidence cannot be reused across decision generations', () => {
   assert.equal(result.valid, false);
   assert.ok(
     result.issues.some((issue) => issue.code === 'work-evidence-insufficient'),
+  );
+  assert.deepEqual(result.decisions, []);
+});
+
+test('completion cannot precede the verification timestamp it records', () => {
+  const { selected, started } = oneCompletedDecision();
+  const futureReference = 'https://example.invalid/deliverable';
+  const futureResult = {
+    kind: 'other',
+    reference: futureReference,
+    verifiedAt: dateAt(4),
+  };
+  const completed = record('complete-before-verification', {
+    type: 'work-completed',
+    result: futureResult,
+  });
+  const answer = answerComment(
+    'answer-after-premature-completion',
+    buildAnswer([selected], [completed]),
+    5,
+  );
+  const confirmation = record(
+    'confirm-premature-completion',
+    confirmedEvent(answer),
+  );
+  const result = replayProvisionalDecisionHistory(
+    input(
+      [
+        recordComment('1', selected, 1),
+        recordComment('2', started, 2),
+        recordComment('3', completed, 3),
+        answer,
+        recordComment('6', confirmation, 6),
+      ],
+      {
+        verifiedWork: [
+          {
+            ...workEvidence(),
+            reference: futureReference,
+            verifiedAt: dateAt(4),
+          },
+        ],
+      },
+    ),
+  );
+  assert.equal(result.valid, false);
+  assert.ok(
+    result.issues.some(
+      (issue) => issue.code === 'work-verification-order-invalid',
+    ),
   );
   assert.deepEqual(result.decisions, []);
 });

@@ -1379,6 +1379,21 @@ function sameWorkResult(
   );
 }
 
+function workVerificationPrecedesCompletion(
+  record: ProvisionalDecisionRecord,
+  completionComment: ProvisionalDecisionComment,
+): boolean {
+  const result = resultFor(record);
+  if (!result || typeof result.verifiedAt !== 'string') return false;
+  const verifiedAt = Date.parse(result.verifiedAt);
+  const completedAt = Date.parse(completionComment.createdAt);
+  return (
+    Number.isFinite(verifiedAt) &&
+    Number.isFinite(completedAt) &&
+    verifiedAt <= completedAt
+  );
+}
+
 function resultFor(record: ProvisionalDecisionRecord): JsonObject | undefined {
   return record.event.type === 'work-completed' && isObject(record.event.result)
     ? record.event.result
@@ -1928,6 +1943,16 @@ export function replayProvisionalDecisionHistory(
           createReplayIssue(
             'work-completion-order-invalid',
             'Completion requires one preceding work-started event.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      if (!workVerificationPrecedesCompletion(record, comment)) {
+        issues.push(
+          createReplayIssue(
+            'work-verification-order-invalid',
+            'Independent work verification must occur no later than its completion record.',
             comment.id,
           ),
         );
