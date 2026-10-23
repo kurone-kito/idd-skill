@@ -206,12 +206,19 @@ no observed incident yet).
 
 Run from the root of a full source clone and target the adopter
 explicitly. Core imports omit `scripts/helper-runtime-manifest.mjs`;
-`vendored-node` imports include it. A bare `.gitattributes` redirect
-appends to the source repo (observed 2026-10-23, issue `#4642`):
+`vendored-node` imports include it. Add a separator line before appending
+to a non-empty `.gitattributes` so generated patterns stay separate even
+when the existing file has no final newline. This may add a harmless blank
+line when the existing file already ends with a newline (observed
+2026-10-23, issue `#4642`):
 
 ```sh
 SOURCE_ROOT="$(pwd)"
 TARGET_REPO="/absolute/path/to/adopter"
+
+if [ -s "$TARGET_REPO/.gitattributes" ]; then
+  printf '\n' >> "$TARGET_REPO/.gitattributes"
+fi
 
 node "$SOURCE_ROOT/scripts/helper-runtime-manifest.mjs" \
   --profile vendored-node \
