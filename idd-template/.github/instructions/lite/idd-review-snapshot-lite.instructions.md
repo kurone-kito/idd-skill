@@ -144,10 +144,10 @@ Exact body: `<!-- review-watermark: {agent-id} {claim-id} {head-SHA}
 `_{agent-id}: review triage snapshot — IDD automation marker. Do not edit._`
 in the PR's language (English if ambiguous). Nothing follows the note.
 
-After verifying the watermark, re-fetch all review pages before cleanup
-or Step 3. Compare human rows with Step 1 by ID, author, state, commit,
-submission time, and body. Any new, removed, or changed row requires an
-E1 restart; its guard ignores human review rows.
+After watermark verification, re-fetch all review pages before cleanup
+or Step 3. Compare human rows to Step 1 by ID, author, state, commit,
+submission time, and body; any change restarts E1. The operation-local
+helper guard does not classify human rows.
 
 On resume, restore only the latest trusted same-claim watermark.
 Missing/legacy means rerun E1; never use or hide another claim's marker.
@@ -179,14 +179,14 @@ Select raw Step 1 items; record each source URL:
 - **Bot `COMMENTED` bodies:** CodeRabbit adds one PATH B item per uncovered
   `embeddedFindings[].uncoveredCount`; other bots' threadless, file/line-cited
   findings are PATH A. Refs #2197 and #2559.
-- **Human `COMMENTED` bodies:** add substantive, unsettled findings as PATH A
-  with review URLs; skip empty/ack-only bodies and selected-thread duplicates.
-  Settle only via a trusted, unedited, stamped E6 top-level
-  `**Accepted**`/`**Rejected**` reply after review, citing its exact URL and
-  unique path:line/title; `Accepted` also needs post-fix E13.
-  Missing/ambiguous matches and `**Awaiting maintainer decision**` stay
-  selected. Read raw reviews, not regular comments. `COMMENTED` grants no
-  approval and changes no `CHANGES_REQUESTED` gate.
+- **Human `COMMENTED` bodies:** use raw reviews for findings; regular
+  comments for settlement replies. Add substantive, unsettled PATH A items;
+  skip empty/ack-only bodies and selected-thread duplicates. Settle by
+  trusted, unedited, stamped top-level reply citing exact review URL and
+  unique path:line/title: E6 `**Rejected**` after review; post-fix E13
+  `**Accepted**` after E5 accepts. Missing/ambiguous matches and
+  `**Awaiting maintainer decision**` stay selected. `COMMENTED` selects
+  only; no formal approval or `CHANGES_REQUESTED` gate change.
 - **Regular comments** where the last speaker is not an IDD agent and no
   reply from **you** exists after the comment, or whose latest IDD-agent
   reply starts with `**Awaiting maintainer decision**` — exclude periodic

@@ -229,14 +229,16 @@ See the [#2197/#2559 rationale](../../docs/idd-design-rationale.md#an-advisory-b
 **Human `COMMENTED` review bodies:** Add each substantive, unsettled
 finding as PATH A with its review URL, unless a selected thread already
 covers it. Empty or acknowledgement-only bodies add no item. Read raw
-review submissions, not regular PR comments. A body item is settled only
-by its E6 trusted, unedited top-level `**Accepted**`/`**Rejected**`
-disposition, posted after the review and carrying the reply stamp, which
-names that exact review URL and a unique finding identity (cited path and
-line, or title). For `Accepted`, require the post-fix E13 reply. Keep it
-selected if that match is absent or ambiguous, or if E6 says
-`**Awaiting maintainer decision**`. `COMMENTED` affects selection only;
-it is not approval and changes no formal review-state or
+reviews for findings; check regular PR comments for stamped settlement
+replies. E6 settles a rejected body
+item only with its trusted, unedited, stamped top-level
+`**Rejected**` disposition after review, naming the exact review URL and
+a unique finding identity (cited path and line, or title). E5 records
+`Accepted`; keep that item selected until E13 posts its trusted,
+unedited, stamped post-fix top-level `**Accepted**` reply with the same
+review URL and finding identity. Keep missing or ambiguous matches and
+`**Awaiting maintainer decision**` selected. `COMMENTED` affects
+selection only; it is not approval and changes no formal review-state or
 `CHANGES_REQUESTED` gate. See the [human review-body rationale](../../docs/idd-design-rationale.md#human-commented-review-bodies-are-snapshot-input-not-approval).
 
 **Regular comments** where the last speaker isn't any IDD agent and no

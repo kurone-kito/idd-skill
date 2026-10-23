@@ -1369,18 +1369,34 @@ selection gap, not evidence of a missed live production defect
 
 The correction is selection-only: include substantive, unsettled human
 body findings as PATH A and carry them through existing E4-E6 triage and
-review-body disposition rules. A settled body item needs a trusted,
-unedited E6 top-level disposition that carries the reply stamp and names
-the exact review URL plus a unique finding identity; `Accepted` also
-requires the post-fix E13 reply. An absent or ambiguous match stays
-selected. Keep raw review submissions separate from regular PR
-conversation comments. `COMMENTED` is not `APPROVED`; it neither clears
-approval requirements nor changes the `CHANGES_REQUESTED` gate.
+review-body disposition rules. E6 settles a rejected body item only with
+a trusted, unedited, stamped top-level `**Rejected**` disposition that
+names the exact review URL and a unique finding identity. E5 records an
+Accepted decision without an E6 reply; the item stays selected until E13
+posts a trusted, unedited, stamped post-fix top-level `**Accepted**`
+reply naming the same review URL and finding identity. An absent or
+ambiguous match stays selected. Keep raw review submissions separate
+from regular PR conversation comments. `COMMENTED` is not `APPROVED`; it
+neither clears approval requirements nor changes the
+`CHANGES_REQUESTED` gate. Copilot identified the E6/E13 phase mismatch
+in [PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4357459996)
+(preventive; no production incident observed); CodeRabbit independently
+identified the same phase mismatch in
+[PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4357504432)
+(preventive; no production incident observed).
+
+Use raw review submissions to identify source findings; inspect regular
+PR comments to match the stamped E6/E13 settlement replies.
 
 The operation-local watermark helper does not classify arbitrary human
 review bodies. A fresh raw review comparison after watermark publication
-restarts E1 if any human review row changed; Codex identified this race
-in [PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4357089405)
+restarts E1 if any human review row changed; the comparison covers those
+rows even though the helper guard does not classify them. Codex identified
+this race in
+[PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4357089405)
+(preventive; no live production incident observed). CodeRabbit identified
+the ambiguous guard wording in
+[PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4357504437)
 (preventive; no live production incident observed).
 
 ##### Raw-input fixture walkthrough
@@ -1400,17 +1416,20 @@ This is fixture data, not a live review:
 ```
 
 E1 Step 3 produces one PATH A snapshot item (`ReviewItems_snapshot`
-count: 1) with the review URL above. E6 posts a settled disposition tied
-to this exact review and finding, for example:
+count: 1) with the review URL above. After E5 accepts it and E12 commits
+the fix, E13 posts a settled reply tied to this exact review and finding,
+for example:
 
 ```text
 **Accepted** — fixed in abc1234: check lock ownership before retry. Review: https://github.com/example/repo/pull/42#pullrequestreview-7; finding: src/worker.mts:42. <!-- idd-skill-review-reply -->
 ```
 
 the next snapshot has zero items for this finding because the stamped
-reply identifies the same review URL and path/line; it is not re-added
-solely because the review state remains `COMMENTED`. That state does not
-grant approval.
+post-fix reply identifies the same review URL and path/line; it is not
+re-added solely because the review state remains `COMMENTED`. An E6
+`**Rejected**` reply follows its separate rejection path. `COMMENTED`
+does not grant approval. The stamped top-level reply is regular-comment
+settlement evidence; the raw review remains the finding's source.
 
 ### E10 per-issue pass cap (kurone-kito/idd-skill#3943)
 
