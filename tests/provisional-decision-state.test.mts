@@ -1570,6 +1570,195 @@ test('one authored rework does not close an incomplete multi-decision bundle', (
   );
 });
 
+test('confirmation and rework can settle separate decisions in one bundle', () => {
+  for (const scenario of [
+    'rework-first',
+    'confirmation-first',
+    'rework-authored-first',
+  ] as const) {
+    const sourceAfterRework =
+      scenario === 'rework-authored-first'
+        ? {
+            ...source,
+            snapshot: {
+              ...source.snapshot,
+              bodySha256: 'b'.repeat(64),
+              updatedAt: dateAt(6),
+            },
+          }
+        : source;
+    const selectedOne = record(
+      `${scenario}-select-one`,
+      selectedEvent('Question one?'),
+      1,
+      1,
+    );
+    const selectedTwo = record(
+      `${scenario}-select-two`,
+      selectedEvent('Question two?'),
+      2,
+      1,
+    );
+    const startedOne = record(
+      `${scenario}-start-one`,
+      workStartedEvent(),
+      1,
+      1,
+    );
+    const startedTwo = record(
+      `${scenario}-start-two`,
+      workStartedEvent(),
+      2,
+      1,
+    );
+    const completedOne = record(
+      `${scenario}-complete-one`,
+      workCompletedEvent(1),
+      1,
+      1,
+    );
+    const completedTwo = record(
+      `${scenario}-complete-two`,
+      workCompletedEvent(2),
+      2,
+      1,
+    );
+    const acceptedAnswer = answerComment(
+      `${scenario}-accepted-answer`,
+      {
+        ...buildAnswer(
+          [selectedOne, selectedTwo],
+          [completedOne, completedTwo],
+          [firstClaim],
+          'accepted',
+          undefined,
+          undefined,
+          sourceAfterRework,
+        ),
+        answerText: 'I accept the completed choice for decision one.',
+      },
+      scenario === 'confirmation-first' ? 4 : 7,
+    );
+    const confirmation = record(
+      `${scenario}-confirmation-one`,
+      confirmedEvent(acceptedAnswer),
+      1,
+      1,
+      [firstClaim],
+      sourceAfterRework,
+    );
+    const rationale = 'The alternate better fits this decision.';
+    const reworkAnswer = answerComment(
+      `${scenario}-rework-answer`,
+      {
+        ...buildAnswer(
+          [selectedOne, selectedTwo],
+          [completedOne, completedTwo],
+          [firstClaim],
+          'rework',
+          'change',
+          rationale,
+        ),
+        answerText: 'I prefer the alternate option for decision two.',
+      },
+      scenario === 'confirmation-first' ? 6 : 4,
+    );
+    const request = record(
+      `${scenario}-rework-request-two`,
+      {
+        type: 'rework-requested',
+        reworkRequest: {
+          commentUrl: reworkAnswer.url,
+          requestedAt: reworkAnswer.createdAt,
+          requestedOptionId: 'change',
+          rationale,
+        },
+      },
+      2,
+      1,
+    );
+    const authored = record(
+      `${scenario}-rework-authored-two`,
+      {
+        type: 'rework-authored',
+        reworkRoadmap: {
+          roadmapIssueNumber: source.issueNumber,
+          roadmapMarkerId: 'same-source-rework',
+          authoringSetId: 'set-4599-rework',
+          url: `https://github.com/${source.repository}/issues/${source.issueNumber}`,
+        },
+      },
+      2,
+      1,
+      [firstClaim],
+      sourceAfterRework,
+    );
+    const nextSelection = record(
+      `${scenario}-select-next-bundle`,
+      selectedEvent('Next bundle question?'),
+      1,
+      2,
+      [firstClaim],
+      sourceAfterRework,
+    );
+    const history = [
+      recordComment('1', selectedOne, 1),
+      recordComment('2', selectedTwo, 1),
+      recordComment('3', startedOne, 2),
+      recordComment('4', startedTwo, 2),
+      recordComment('5', completedOne, 3),
+      recordComment('6', completedTwo, 3),
+    ];
+    if (scenario === 'rework-first') {
+      history.push(
+        reworkAnswer,
+        recordComment('8', request, 5),
+        acceptedAnswer,
+        recordComment('10', confirmation, 7),
+      );
+    } else if (scenario === 'confirmation-first') {
+      history.push(
+        acceptedAnswer,
+        recordComment('8', confirmation, 5),
+        reworkAnswer,
+        recordComment('10', request, 7),
+      );
+    } else {
+      history.push(
+        reworkAnswer,
+        recordComment('8', request, 5),
+        recordComment('10', authored, 6),
+        acceptedAnswer,
+        recordComment('13', confirmation, 8),
+      );
+    }
+    if (scenario !== 'rework-authored-first')
+      history.push(recordComment('11', authored, 8));
+    history.push(recordComment('14', nextSelection, 9));
+    const result = replayProvisionalDecisionHistory(
+      input(history, {
+        currentSource: sourceAfterRework,
+        verifiedWork: [workEvidence(1), workEvidence(2)],
+        verifiedReworkRoadmaps: [
+          reworkEvidence(
+            `${scenario}-rework-authored-two`,
+            source,
+            sourceAfterRework,
+          ),
+        ],
+      }),
+    );
+    assert.equal(result.valid, true, JSON.stringify(result.issues));
+    assert.equal(result.status, 'selected');
+    assert.deepEqual(
+      result.decisions
+        .filter((decision) => decision.bundleGeneration === 1)
+        .map((decision) => decision.status),
+      ['confirmed', 'rework-authored'],
+    );
+  }
+});
+
 test('every decision can finish rework before the next bundle starts', () => {
   const selectedOne = record('select-one', selectedEvent(), 1, 1);
   const selectedTwo = record(

@@ -897,17 +897,19 @@ the confirmation-provenance hold on
 No separate account, signing key, authenticated transcript, or external
 identity service is required.
 
-An explicit accepted answer must cover the entire current completed
-bundle. Once confirmation or rework begins, keep that bundle generation
-closed. Start a new generation only after every decision in the prior
-bundle is confirmed or has verified rework authoring. A different explicit
-preference records a rework request,
-preserves the earlier choices and completed-work links, and uses the
-normal held authoring process to turn the same source issue into its
-rework roadmap. Missing, edited, stale, untrusted, conflicting, or
-incomplete evidence grants no transition authority. Keep the complete
-record and answer history available through crashes, claim takeover,
-flag disablement, and comment cleanup so later sessions can replay it.
+Every answer presents the entire current completed bundle for context;
+the linked event applies that answer to its own decision generation.
+This allows one decision to be confirmed while another receives a
+different explicit preference and begins rework. Once confirmation or
+rework begins, keep that bundle generation closed. Start a new generation
+only after every decision in the prior bundle is confirmed or has
+verified rework authoring. A different explicit preference records a
+rework request, preserves the earlier choices and completed-work links,
+and uses the normal held authoring process to turn the same source issue
+into its rework roadmap. Missing, edited, stale, untrusted, conflicting,
+or incomplete evidence grants no transition authority. Keep the complete
+record and answer history available through crashes, claim takeover, flag
+disablement, and comment cleanup so later sessions can replay it.
 
 ## Roadmap completion audits
 

@@ -1719,18 +1719,11 @@ export function replayProvisionalDecisionHistory(input) {
         );
         continue;
       }
-      if (
-        currentBundle.some(
-          (state) =>
-            !state.workCompleted ||
-            state.reworkRequested ||
-            state.reworkAuthored,
-        )
-      ) {
+      if (currentBundle.some((state) => !state.workCompleted)) {
         issues.push(
           createReplayIssue(
             'confirmation-bundle-incomplete',
-            'Every decision in the current bundle must have verified completion before confirmation.',
+            'Every decision in the current bundle must have verified completion before this decision can be confirmed.',
             comment.id,
           ),
         );
@@ -1873,9 +1866,7 @@ export function replayProvisionalDecisionHistory(input) {
         commentIndexes,
       );
       if (
-        currentBundle.some(
-          (state) => !state.workCompleted || state.confirmation,
-        ) ||
+        currentBundle.some((state) => !state.workCompleted) ||
         parsedAnswer.answer.response !== 'rework' ||
         parsedAnswer.answer.requestedOptionId !== request.requestedOptionId ||
         parsedAnswer.answer.rationale !== request.rationale ||
