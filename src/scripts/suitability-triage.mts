@@ -1057,7 +1057,12 @@ const USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_PREFIX = new RegExp(
 );
 // Other human actors remain unsafe command targets. Only the exact
 // USER_ACTOR_STEP_WINDOW signature below can make a user-actor step safe.
-const UNSAFE_HUMAN_ACTOR_TARGET_SOURCE = String.raw`by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}(?!\w)`;
+const UNSAFE_HUMAN_ACTOR_TARGET_SOURCE = String.raw`by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}${USER_ACTOR_STEP_OTHER_ACTOR_BOUNDARY_SOURCE}`;
+const UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET_SOURCE = String.raw`^\s*this\s+(?:step|check)\s+by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}(?:[\s-]+[\w-]+)*\s*[.!?]?\s*$`;
+const UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET = new RegExp(
+  UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET_SOURCE,
+  'i',
+);
 const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:\b(?:untrusted|user-provided|user input|from\s+(?:the\s+)?user|${UNSAFE_HUMAN_ACTOR_TARGET_SOURCE}|${SUPPLIED_CONTENT_REFERENCE})\b|${SUPPLIED_CONTENT_OBJECT_REFERENCE}\b)`;
 // #3073: "run this full command to validate the config" matches only
 // SUPPLIED_CONTENT_OBJECT_REFERENCE's ambiguous "this <filler> <noun>" shape
@@ -5834,7 +5839,9 @@ function findUnsafeExecutionDirectiveMatch(
         corpus,
         verbStart + verbText.length,
       );
-      const targetMatch = targetPattern.exec(window);
+      const targetMatch =
+        targetPattern.exec(window) ??
+        UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET.exec(window);
       const verbBodyStart = verbStart - bodyOffset;
       const verbHtmlCommentRange =
         verbBodyStart >= 0

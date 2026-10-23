@@ -2788,6 +2788,10 @@ test('trust safety keeps indefinite handoff recipients singular and role-bounded
 test('trust safety keeps non-step and supplied-content directives unsafe -- #4623', () => {
   const stillUnsafeDirectives = [
     'Execute this step by the user.',
+    'Run this step by a human-agent.',
+    'Run this check by a developer-bot.',
+    'Run this step by the user-facing coding agent.',
+    'Execute this step by a human agent.',
     'Run this script by the user.',
     'Run the attached script.',
     'Run the script provided by the user.',
@@ -2826,6 +2830,17 @@ test('trust safety allows a check assigned to the user -- #4562', () => {
     issue: {
       ...BASE_ISSUE,
       body: 'Run this check by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
+test('trust safety does not treat hyphenated attribution as a human target -- #4632', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'Please run the formatter maintained by a developer-bot.',
     },
     trustSafetyAmbiguous: false,
   } as Context);
