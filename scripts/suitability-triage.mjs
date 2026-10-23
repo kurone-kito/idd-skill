@@ -862,7 +862,12 @@ const USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_PREFIX = new RegExp(
 );
 // Other human actors remain unsafe command targets. Only the exact
 // USER_ACTOR_STEP_WINDOW signature below can make a user-actor step safe.
-const UNSAFE_HUMAN_ACTOR_TARGET_SOURCE = String.raw`by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}${USER_ACTOR_STEP_OTHER_ACTOR_BOUNDARY_SOURCE}`;
+// A name at the start of a compound noun is not an actor target ("a user
+// interface tool"). Keep common clause continuations eligible so a command
+// that continues after an actor ("by the user to verify") stays unsafe.
+const UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE = `(?:to|and|or|but|then|while|whereas|when|because|if|as|in|on|at|during|after|before|for|with|who|that|which|can|could|may|might|must|should|will|would|is|are|was|were|has|have|had|${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE})`;
+const UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE = String.raw`(?![\w-]|\s+(?!(?:${UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE})\b)\w)`;
+const UNSAFE_HUMAN_ACTOR_TARGET_SOURCE = String.raw`by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}`;
 const UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET_SOURCE = String.raw`^\s*this\s+(?:step|check)\s+by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}(?:[\s-]+[\w-]+)*\s*[.!?]?\s*$`;
 const UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET = new RegExp(
   UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET_SOURCE,
