@@ -950,10 +950,10 @@ test('issue authoring dependency guidance verifies consumed outputs', () => {
     join(REPO_ROOT, 'skills/issue-authoring/references/contract.md'),
     'utf8',
   );
+  const perEdgeExamplesLink =
+    '[Per-edge rationale examples](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/draft-patterns.md#per-edge-rationale-examples)';
   assert.ok(
-    contract.includes(
-      '[Per-edge rationale examples](draft-patterns.md#per-edge-rationale-examples)',
-    ),
+    contract.includes(perEdgeExamplesLink),
     'contract.md links to the per-edge examples',
   );
   const docs = readFileSync(
@@ -961,9 +961,7 @@ test('issue authoring dependency guidance verifies consumed outputs', () => {
     'utf8',
   );
   assert.ok(
-    docs.includes(
-      '[Per-edge rationale examples](../skills/issue-authoring/references/draft-patterns.md#per-edge-rationale-examples)',
-    ),
+    docs.includes(perEdgeExamplesLink),
     'issue-authoring-skill.md links to the canonical per-edge examples',
   );
 

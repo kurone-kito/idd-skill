@@ -806,7 +806,7 @@ availability, or ordering constraint.
 
 Common parentage, shared files, and generic correctness claims alone do
 not establish an edge. The roadmap #4079 example is described in
-[Per-edge rationale examples](draft-patterns.md#per-edge-rationale-examples)
+[Per-edge rationale examples](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/draft-patterns.md#per-edge-rationale-examples)
 (roadmap #4079 opened 2026-10-12); the shared-file-only and
 generic-claim cases are preventive; no observed incident yet.
 
