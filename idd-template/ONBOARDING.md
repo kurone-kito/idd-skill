@@ -262,7 +262,8 @@ below instead.
 
    ```sh
    node scripts/idd-onboard.mjs --import \
-     --source <idd-skill-clone> --target <target-repo>
+     --source <idd-skill-clone> --target <target-repo> \
+     [--allow-root <root-containing-target>]
    ```
 
    **Checkpoint.** Before `--substitute`, commit the mirror:
@@ -654,8 +655,8 @@ error), so an agent can gate on the exit code without parsing prose.
 
   ```sh
   node scripts/idd-onboard.mjs --import --source <idd-skill-clone> \
-    --target <target-repo> [--profile <name>] [--force] [--dry-run] \
-    [--hold <target-path> ...]
+    --target <target-repo> [--allow-root <root-containing-target>] \
+    [--profile <name>] [--force] [--dry-run] [--hold <target-path> ...]
   ```
 
 - **Step 4 (replace placeholders) → `--substitute`**: resolves the seven
@@ -728,8 +729,7 @@ this section documents only the flags relevant to Steps 0, 1A-1C, 2, 3,
 
 ## Step 2 — Fetch or copy template files
 
-> **CLI shortcut**: See [CLI-assisted onboarding](#cli-assisted-onboarding)
-> for the complete Step 2 command.
+> **CLI**: [See the full command](docs/onboarding/template-distribution.md#local-copy-installs).
 
 You need the following core execution and profile artifact files in the
 target repository. Use whichever method applies.
@@ -933,10 +933,10 @@ for the exact `gh api` and `curl` loops (core files and the optional
 
 ### Option B — Local copy (Node.js and clone required)
 
-Run `node scripts/idd-onboard.mjs --import --source <idd-skill-clone> --target <target-repo>`
-to copy the core set only. See
-[Local-copy installs](docs/onboarding/template-distribution.md#local-copy-installs)
-for details.
+Use the complete core import command in
+[Local-copy installs](docs/onboarding/template-distribution.md#local-copy-installs).
+It includes `--allow-root` for separate checkouts; advisory workflows
+are separate.
 
 **Optional:** Host the advisory-convergence workflows with [the host-workflow instructions](docs/onboarding/optional-host-setup.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow);
 register the required check separately.
