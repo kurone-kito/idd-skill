@@ -95,6 +95,8 @@ export interface VerifiedProvisionalReworkRoadmap {
   readonly roadmapMarkerId: string;
   readonly authoringSetId: string;
   readonly url: string;
+  /** Source-issue comment that records the authoritative publication. */
+  readonly publishedCommentId: string;
   /** GitHub server time when the roadmap publication became authoritative. */
   readonly publishedAt: string;
 }
@@ -253,22 +255,47 @@ function dateTime(
   path: string,
   issues: ProvisionalDecisionParseIssue[],
 ): value is string {
+  if (typeof value !== 'string' || !parseRfc3339Instant(value)) {
+    issues.push({
+      code: 'date-time-required',
+      path,
+      message: 'Expected an RFC 3339 date-time.',
+    });
+    return false;
+  }
+  return true;
+}
+
+interface Rfc3339Instant {
+  readonly epochSeconds: number;
+  readonly fraction: string;
+}
+
+function daysBeforeYear(year: number): number {
+  return (
+    365 * year +
+    Math.floor((year + 3) / 4) -
+    Math.floor((year + 99) / 100) +
+    Math.floor((year + 399) / 400)
+  );
+}
+
+function parseRfc3339Instant(value: string): Rfc3339Instant | undefined {
   const match =
-    typeof value === 'string'
-      ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/u.exec(
-          value,
-        )
-      : null;
-  const year = match ? Number(match[1]) : NaN;
-  const month = match ? Number(match[2]) : NaN;
-  const day = match ? Number(match[3]) : NaN;
-  const hour = match ? Number(match[4]) : NaN;
-  const minute = match ? Number(match[5]) : NaN;
-  const second = match ? Number(match[6]) : NaN;
-  const offsetHour = match?.[7] === undefined ? 0 : Number(match[7]);
-  const offsetMinute = match?.[8] === undefined ? 0 : Number(match[8]);
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:Z|([+-])(\d{2}):(\d{2}))$/u.exec(
+      value,
+    );
+  if (!match) return undefined;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const offsetHour = match[9] === undefined ? 0 : Number(match[9]);
+  const offsetMinute = match[10] === undefined ? 0 : Number(match[10]);
   const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const daysInMonth = [
+  const monthLengths = [
     31,
     leapYear ? 29 : 28,
     31,
@@ -281,10 +308,9 @@ function dateTime(
     31,
     30,
     31,
-  ][month - 1];
+  ];
+  const daysInMonth = monthLengths[month - 1];
   if (
-    typeof value !== 'string' ||
-    !match ||
     daysInMonth === undefined ||
     day < 1 ||
     day > daysInMonth ||
@@ -292,17 +318,63 @@ function dateTime(
     minute > 59 ||
     second > 59 ||
     offsetHour > 23 ||
-    offsetMinute > 59 ||
-    !Number.isFinite(Date.parse(value))
+    offsetMinute > 59
   ) {
-    issues.push({
-      code: 'date-time-required',
-      path,
-      message: 'Expected an RFC 3339 date-time.',
-    });
-    return false;
+    return undefined;
   }
-  return true;
+
+  const daysInPriorMonths = monthLengths
+    .slice(0, month - 1)
+    .reduce((total, length) => total + length, 0);
+  const daysSinceEpoch =
+    daysBeforeYear(year) + daysInPriorMonths + day - 1 - daysBeforeYear(1970);
+  const offsetSign = match[8] === '+' ? 1 : match[8] === '-' ? -1 : 0;
+  const offsetSeconds = offsetSign * (offsetHour * 60 + offsetMinute) * 60;
+  return {
+    epochSeconds:
+      daysSinceEpoch * 86400 +
+      hour * 3600 +
+      minute * 60 +
+      second -
+      offsetSeconds,
+    fraction: (match[7] ?? '').replace(/0+$/u, ''),
+  };
+}
+
+function compareDateTimes(left: string, right: string): number | undefined {
+  const leftInstant = parseRfc3339Instant(left);
+  const rightInstant = parseRfc3339Instant(right);
+  if (!leftInstant || !rightInstant) return undefined;
+  if (leftInstant.epochSeconds !== rightInstant.epochSeconds) {
+    return leftInstant.epochSeconds < rightInstant.epochSeconds ? -1 : 1;
+  }
+  const fractionLength = Math.max(
+    leftInstant.fraction.length,
+    rightInstant.fraction.length,
+  );
+  for (let index = 0; index < fractionLength; index += 1) {
+    const leftDigit = leftInstant.fraction[index] ?? '0';
+    const rightDigit = rightInstant.fraction[index] ?? '0';
+    if (leftDigit !== rightDigit) return leftDigit < rightDigit ? -1 : 1;
+  }
+  return 0;
+}
+
+function commentPrecedes(
+  earlier: ProvisionalDecisionComment,
+  later: ProvisionalDecisionComment,
+  commentIndexes: ReadonlyMap<string, number>,
+): boolean {
+  const timeOrder = compareDateTimes(earlier.createdAt, later.createdAt);
+  if (timeOrder === undefined) return false;
+  if (timeOrder !== 0) return timeOrder < 0;
+  const earlierIndex = commentIndexes.get(earlier.id);
+  const laterIndex = commentIndexes.get(later.id);
+  return (
+    earlierIndex !== undefined &&
+    laterIndex !== undefined &&
+    earlierIndex < laterIndex
+  );
 }
 
 function httpUrl(
@@ -423,7 +495,7 @@ function validateClaimLineage(
     return;
   }
   const ids = new Set<string>();
-  let priorClaimedAt = -Infinity;
+  let priorClaimedAt: string | undefined;
   let priorCommentIndex: number | undefined;
   value.forEach((entry, index) => {
     const entryPath = `${path}[${index}]`;
@@ -468,12 +540,15 @@ function validateClaimLineage(
     }
     dateTime(claim.claimedAt, `${entryPath}.claimedAt`, issues);
     if (typeof claim.claimedAt === 'string') {
-      const claimedAt = Date.parse(claim.claimedAt);
+      const timeOrder =
+        priorClaimedAt === undefined
+          ? undefined
+          : compareDateTimes(claim.claimedAt, priorClaimedAt);
       if (
-        Number.isFinite(claimedAt) &&
-        (claimedAt < priorClaimedAt ||
+        timeOrder !== undefined &&
+        (timeOrder < 0 ||
           (commentIndexes !== undefined &&
-            claimedAt === priorClaimedAt &&
+            timeOrder === 0 &&
             (commentIndex === undefined ||
               priorCommentIndex === undefined ||
               commentIndex <= priorCommentIndex)))
@@ -487,8 +562,8 @@ function validateClaimLineage(
               : 'Claims must be in server-time order, using comment order when timestamps tie.',
         });
       }
-      if (Number.isFinite(claimedAt)) {
-        priorClaimedAt = claimedAt;
+      if (parseRfc3339Instant(claim.claimedAt)) {
+        priorClaimedAt = claim.claimedAt;
         priorCommentIndex = commentIndex;
       }
     }
@@ -1329,8 +1404,7 @@ function claimLineageAt(
   commentId: string,
   commentIndexes: ReadonlyMap<string, number>,
 ): ProvisionalDecisionClaim[] | undefined {
-  const eventTime = Date.parse(createdAt);
-  if (!Number.isFinite(eventTime)) return undefined;
+  if (!parseRfc3339Instant(createdAt)) return undefined;
   const eventIndex = commentIndexes.get(commentId);
   if (eventIndex === undefined) return undefined;
   const claimsAtEvent: ProvisionalDecisionClaim[] = [];
@@ -1346,11 +1420,11 @@ function claimLineageAt(
     });
   };
   for (const claim of verifiedClaims) {
-    const claimedAt = Date.parse(claim.claimedAt);
-    if (!Number.isFinite(claimedAt)) return undefined;
-    if (claimedAt < eventTime) {
+    const timeOrder = compareDateTimes(claim.claimedAt, createdAt);
+    if (timeOrder === undefined) return undefined;
+    if (timeOrder < 0) {
       appendClaim(claim);
-    } else if (claimedAt > eventTime) {
+    } else if (timeOrder > 0) {
       break;
     } else {
       if (!claim.commentId) return undefined;
@@ -1410,13 +1484,11 @@ function workVerificationPrecedesCompletion(
 ): boolean {
   const result = resultFor(record);
   if (!result || typeof result.verifiedAt !== 'string') return false;
-  const verifiedAt = Date.parse(result.verifiedAt);
-  const completedAt = Date.parse(completionComment.createdAt);
-  return (
-    Number.isFinite(verifiedAt) &&
-    Number.isFinite(completedAt) &&
-    verifiedAt <= completedAt
+  const timeOrder = compareDateTimes(
+    result.verifiedAt,
+    completionComment.createdAt,
   );
+  return timeOrder !== undefined && timeOrder <= 0;
 }
 
 function resultFor(record: ProvisionalDecisionRecord): JsonObject | undefined {
@@ -1432,17 +1504,30 @@ function sourceIssueUrl(source: ProvisionalDecisionSource): string {
 function matchesVerifiedReworkRoadmap(
   record: ProvisionalDecisionRecord,
   recordComment: ProvisionalDecisionComment,
+  requestComment: ProvisionalDecisionComment,
   input: ProvisionalDecisionReplayInput,
   sourceBefore: ProvisionalDecisionSource,
   sourceAfter: ProvisionalDecisionSource,
+  commentIndexes: ReadonlyMap<string, number>,
 ): boolean {
   if (record.event.type !== 'rework-authored') return false;
   const roadmap = record.event.reworkRoadmap;
   if (!isObject(roadmap)) return false;
-  const recordCreatedAt = Date.parse(recordComment.createdAt);
-  return input.verifiedReworkRoadmaps.some(
-    (evidence) =>
-      Date.parse(evidence.publishedAt) < recordCreatedAt &&
+  return input.verifiedReworkRoadmaps.some((evidence) => {
+    const publicationComment = input.comments.find(
+      (comment) => comment.id === evidence.publishedCommentId,
+    );
+    const publicationMatches =
+      publicationComment?.trustedAuthor &&
+      Boolean(publicationComment.authorLogin) &&
+      !publicationComment.edited &&
+      commentBelongsToSource(publicationComment, input.currentSource) &&
+      compareDateTimes(publicationComment.createdAt, evidence.publishedAt) ===
+        0 &&
+      commentPrecedes(requestComment, publicationComment, commentIndexes) &&
+      commentPrecedes(publicationComment, recordComment, commentIndexes);
+    return (
+      publicationMatches &&
       sameRepositoryName(sourceBefore.repository, sourceAfter.repository) &&
       sourceBefore.issueNumber === sourceAfter.issueNumber &&
       evidence.recordId === record.recordId &&
@@ -1454,8 +1539,9 @@ function matchesVerifiedReworkRoadmap(
       evidence.authoringSetId === roadmap.authoringSetId &&
       sameGitHubIssueUrl(evidence.url, sourceIssueUrl(sourceAfter)) &&
       roadmap.roadmapIssueNumber === evidence.roadmapIssueNumber &&
-      sameGitHubIssueUrl(roadmap.url as string, evidence.url),
-  );
+      sameGitHubIssueUrl(roadmap.url as string, evidence.url)
+    );
+  });
 }
 
 function validateVerifiedReworkRoadmaps(
@@ -1484,6 +1570,7 @@ function validateVerifiedReworkRoadmaps(
         'roadmapMarkerId',
         'authoringSetId',
         'url',
+        'publishedCommentId',
         'publishedAt',
       ],
       [],
@@ -1493,7 +1580,7 @@ function validateVerifiedReworkRoadmaps(
     if (!evidence) return;
     checkStringFields(
       evidence,
-      ['recordId', 'roadmapMarkerId', 'authoringSetId'],
+      ['recordId', 'roadmapMarkerId', 'authoringSetId', 'publishedCommentId'],
       entryPath,
       issues,
     );
@@ -1692,15 +1779,18 @@ export function replayProvisionalDecisionHistory(
   const commentsByUrl = new Map<string, ProvisionalDecisionComment>();
   const commentIndexes = new Map<string, number>();
   const commentIds = new Set<string>();
-  let priorCreatedAt = -Infinity;
+  let priorCreatedAt: string | undefined;
   for (const [commentIndex, comment] of input.comments.entries()) {
     const validCreatedAt = dateTime(
       comment.createdAt,
       `comments[${comment.id}].createdAt`,
       issues,
     );
-    const createdAt = validCreatedAt ? Date.parse(comment.createdAt) : NaN;
-    if (validCreatedAt && createdAt < priorCreatedAt) {
+    const createdAtOrder =
+      validCreatedAt && priorCreatedAt !== undefined
+        ? compareDateTimes(comment.createdAt, priorCreatedAt)
+        : undefined;
+    if (createdAtOrder !== undefined && createdAtOrder < 0) {
       issues.push(
         createReplayIssue(
           'history-order-invalid',
@@ -1709,7 +1799,7 @@ export function replayProvisionalDecisionHistory(
         ),
       );
     }
-    if (validCreatedAt) priorCreatedAt = createdAt;
+    if (validCreatedAt) priorCreatedAt = comment.createdAt;
     const urlKey = commentUrlKey(comment.url);
     if (commentIds.has(comment.id) || commentsByUrl.has(urlKey)) {
       issues.push(
@@ -1815,17 +1905,29 @@ export function replayProvisionalDecisionHistory(
       readonly sourceAfter: ProvisionalDecisionSource;
     }
   >();
+  const requestComments = new Map<string, ProvisionalDecisionComment>();
   let latestSource = originSource;
   for (const { comment, record } of recordComments) {
+    const decisionKey = `${record.bundleGeneration}:${record.decisionGeneration}`;
+    if (
+      record.event.type === 'rework-requested' &&
+      !requestComments.has(decisionKey)
+    ) {
+      requestComments.set(decisionKey, comment);
+    }
     const sourceBefore = latestSource;
     if (!sameSourceContent(record.source, sourceBefore)) {
+      const requestComment = requestComments.get(decisionKey);
       if (
+        requestComment !== undefined &&
         matchesVerifiedReworkRoadmap(
           record,
           comment,
+          requestComment,
           input,
           sourceBefore,
           record.source,
+          commentIndexes,
         )
       ) {
         latestSource = record.source;
@@ -1942,7 +2044,11 @@ export function replayProvisionalDecisionHistory(
       existing.workCompleted ??
       existing.workStarted ??
       existing.selection;
-    if (Date.parse(comment.createdAt) < Date.parse(prior.comment.createdAt)) {
+    const transitionOrder = compareDateTimes(
+      comment.createdAt,
+      prior.comment.createdAt,
+    );
+    if (transitionOrder === undefined || transitionOrder < 0) {
       issues.push(
         createReplayIssue(
           'transition-order-invalid',
@@ -1957,7 +2063,8 @@ export function replayProvisionalDecisionHistory(
         existing.workStarted ||
         existing.workCompleted ||
         existing.confirmation ||
-        existing.reworkRequested
+        existing.reworkRequested ||
+        existing.reworkAuthored
       ) {
         issues.push(
           createReplayIssue(
@@ -1974,7 +2081,8 @@ export function replayProvisionalDecisionHistory(
         !existing.workStarted ||
         existing.workCompleted ||
         existing.confirmation ||
-        existing.reworkRequested
+        existing.reworkRequested ||
+        existing.reworkAuthored
       ) {
         issues.push(
           createReplayIssue(
@@ -2060,10 +2168,18 @@ export function replayProvisionalDecisionHistory(
       const currentBundle = [...states.values()].filter(
         (state) => state.selection.record.bundleGeneration === bundleGeneration,
       );
+      const answerConfirmationOrder = compareDateTimes(
+        answerComment.createdAt,
+        confirmation.confirmedAt as string,
+      );
+      const answerRecordOrder = compareDateTimes(
+        answerComment.createdAt,
+        comment.createdAt,
+      );
       if (
-        Date.parse(answerComment.createdAt) !==
-          Date.parse(confirmation.confirmedAt as string) ||
-        Date.parse(answerComment.createdAt) > Date.parse(comment.createdAt)
+        answerConfirmationOrder !== 0 ||
+        answerRecordOrder === undefined ||
+        answerRecordOrder > 0
       ) {
         issues.push(
           createReplayIssue(
@@ -2153,7 +2269,8 @@ export function replayProvisionalDecisionHistory(
       if (
         !existing.workCompleted ||
         existing.confirmation ||
-        existing.reworkRequested
+        existing.reworkRequested ||
+        existing.reworkAuthored
       ) {
         issues.push(
           createReplayIssue(
@@ -2222,14 +2339,22 @@ export function replayProvisionalDecisionHistory(
         answerComment.id,
         commentIndexes,
       );
+      const answerRequestOrder = compareDateTimes(
+        answerComment.createdAt,
+        request.requestedAt as string,
+      );
+      const answerRecordOrder = compareDateTimes(
+        answerComment.createdAt,
+        comment.createdAt,
+      );
       if (
         currentBundle.some((state) => !state.workCompleted) ||
         parsedAnswer.answer.response !== 'rework' ||
         parsedAnswer.answer.requestedOptionId !== request.requestedOptionId ||
         parsedAnswer.answer.rationale !== request.rationale ||
-        Date.parse(answerComment.createdAt) !==
-          Date.parse(request.requestedAt as string) ||
-        Date.parse(answerComment.createdAt) > Date.parse(comment.createdAt) ||
+        answerRequestOrder !== 0 ||
+        answerRecordOrder === undefined ||
+        answerRecordOrder > 0 ||
         !answerFollowsEveryCompletion(
           answerComment,
           comment,
@@ -2279,9 +2404,11 @@ export function replayProvisionalDecisionHistory(
         !matchesVerifiedReworkRoadmap(
           record,
           comment,
+          existing.reworkRequested.comment,
           input,
           reworkSource.sourceBefore,
           reworkSource.sourceAfter,
+          commentIndexes,
         )
       ) {
         issues.push(

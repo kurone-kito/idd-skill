@@ -271,6 +271,7 @@ function reworkEvidence(
   recordId: string,
   sourceBefore: ProvisionalDecisionSource = source,
   sourceAfter: ProvisionalDecisionSource = source,
+  publishedAt = dateAt(5),
 ): VerifiedProvisionalReworkRoadmap {
   return {
     recordId,
@@ -280,8 +281,21 @@ function reworkEvidence(
     roadmapMarkerId: 'same-source-rework',
     authoringSetId: 'set-4599-rework',
     url: `https://github.com/${source.repository}/issues/${source.issueNumber}`,
-    publishedAt: dateAt(5),
+    publishedCommentId: `${recordId}-publication`,
+    publishedAt,
   };
+}
+
+function reworkPublicationComment(
+  recordId: string,
+  createdAt = dateAt(5),
+): ProvisionalDecisionComment {
+  return comment(
+    `${recordId}-publication`,
+    '<!-- idd-skill-authoring-publication: rework -->',
+    5,
+    { createdAt },
+  );
 }
 
 function oneCompletedDecision(
@@ -998,6 +1012,115 @@ test('completion cannot precede the verification timestamp it records', () => {
   assert.deepEqual(result.decisions, []);
 });
 
+test('timestamp comparisons preserve sub-millisecond precision', () => {
+  const { selected, started } = oneCompletedDecision();
+  const completionTime = '2026-10-20T00:00:03.0001Z';
+  const verifiedAt = '2026-10-20T00:00:03.0009Z';
+  const reference = 'https://example.invalid/sub-millisecond-deliverable';
+  const completed = record('complete-sub-millisecond', {
+    type: 'work-completed',
+    result: { kind: 'other', reference, verifiedAt },
+  });
+  const completionOrder = replayProvisionalDecisionHistory(
+    input(
+      [
+        recordComment('1', selected, 1),
+        recordComment('2', started, 2),
+        recordComment('3', completed, 3, { createdAt: completionTime }),
+      ],
+      {
+        verifiedWork: [
+          {
+            ...workEvidence(),
+            reference,
+            verifiedAt,
+          },
+        ],
+      },
+    ),
+  );
+  assert.equal(completionOrder.valid, false);
+  assert.ok(
+    completionOrder.issues.some(
+      (issue) => issue.code === 'work-verification-order-invalid',
+    ),
+  );
+
+  const {
+    selected: confirmedSelection,
+    started: confirmedStart,
+    completed: confirmedWork,
+  } = oneCompletedDecision();
+  const answer = answerComment(
+    'answer-sub-millisecond',
+    buildAnswer([confirmedSelection], [confirmedWork]),
+    4,
+    { createdAt: '2026-10-20T00:00:04.0009Z' },
+  );
+  const confirmationEvent = confirmedEvent(answer);
+  const confirmation = record('confirm-sub-millisecond', {
+    ...confirmationEvent,
+    confirmation: {
+      ...(confirmationEvent.confirmation as Event),
+      confirmedAt: '2026-10-20T00:00:04.0001Z',
+    },
+  });
+  const confirmationOrder = replayProvisionalDecisionHistory(
+    input([
+      recordComment('1', confirmedSelection, 1),
+      recordComment('2', confirmedStart, 2),
+      recordComment('3', confirmedWork, 3),
+      answer,
+      recordComment('5', confirmation, 5),
+    ]),
+  );
+  assert.equal(confirmationOrder.valid, false);
+  assert.ok(
+    confirmationOrder.issues.some(
+      (issue) => issue.code === 'confirmation-time-mismatch',
+    ),
+  );
+
+  const rationale = 'The alternate option is preferable.';
+  const reworkAnswer = answerComment(
+    'rework-answer-sub-millisecond',
+    buildAnswer(
+      [confirmedSelection],
+      [confirmedWork],
+      [firstClaim],
+      'rework',
+      'change',
+      rationale,
+    ),
+    4,
+    { createdAt: '2026-10-20T00:00:04.0009Z' },
+  );
+  const reworkRequest = record('rework-request-sub-millisecond', {
+    type: 'rework-requested',
+    reworkRequest: {
+      commentUrl: reworkAnswer.url,
+      requestedAt: '2026-10-20T00:00:04.0001Z',
+      requestedOptionId: 'change',
+      rationale,
+    },
+  });
+  const reworkOrder = replayProvisionalDecisionHistory(
+    input([
+      recordComment('1', confirmedSelection, 1),
+      recordComment('2', confirmedStart, 2),
+      recordComment('3', confirmedWork, 3),
+      reworkAnswer,
+      recordComment('5', reworkRequest, 5),
+    ]),
+  );
+  assert.equal(reworkOrder.valid, false);
+  assert.ok(
+    reworkOrder.issues.some(
+      (issue) => issue.code === 'rework-answer-scope-mismatch',
+    ),
+  );
+});
+
 test('a confirmed bundle generation cannot accept a later decision', () => {
   const { selected, started, completed } = oneCompletedDecision();
   const answer = answerComment('4', buildAnswer([selected], [completed]), 4);
@@ -1313,6 +1436,7 @@ test('alternate-choice rework preserves the completed work link and same source'
       [
         ...base,
         recordComment('5', request, 5),
+        reworkPublicationComment('rework-2'),
         recordComment('6', authored, 6),
       ],
       {
@@ -1325,6 +1449,79 @@ test('alternate-choice rework preserves the completed work link and same source'
     authoredResult.decisions[0]?.workCompleted?.recordId,
     'complete-1',
   );
+});
+
+test('a rework-authored decision rejects later work and rework lifecycle events', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const rationale = 'The alternate choice better fits the current need.';
+  const answer = answerComment(
+    'terminal-answer',
+    buildAnswer(
+      [selected],
+      [completed],
+      [firstClaim],
+      'rework',
+      'change',
+      rationale,
+    ),
+    4,
+  );
+  const request = record('terminal-request', {
+    type: 'rework-requested',
+    reworkRequest: {
+      commentUrl: answer.url,
+      requestedAt: answer.createdAt,
+      requestedOptionId: 'change',
+      rationale,
+    },
+  });
+  const authored = record('terminal-authored', {
+    type: 'rework-authored',
+    reworkRoadmap: {
+      roadmapIssueNumber: source.issueNumber,
+      roadmapMarkerId: 'same-source-rework',
+      authoringSetId: 'set-4599-rework',
+      url: `https://github.com/${source.repository}/issues/${source.issueNumber}`,
+    },
+  });
+  const history = [
+    recordComment('1', selected, 1),
+    recordComment('2', started, 2),
+    recordComment('3', completed, 3),
+    answer,
+    recordComment('5', request, 5),
+    reworkPublicationComment('terminal-authored'),
+    recordComment('6', authored, 6),
+  ];
+  const lateEvents: readonly [string, Event, string][] = [
+    ['late-start', workStartedEvent(), 'work-started-conflict'],
+    ['late-completion', workCompletedEvent(1), 'work-completion-order-invalid'],
+    [
+      'late-request',
+      {
+        type: 'rework-requested',
+        reworkRequest: {
+          commentUrl: answer.url,
+          requestedAt: answer.createdAt,
+          requestedOptionId: 'change',
+          rationale,
+        },
+      },
+      'rework-request-order-invalid',
+    ],
+  ];
+  for (const [recordId, event, issueCode] of lateEvents) {
+    const result = replayProvisionalDecisionHistory(
+      input([...history, recordComment(recordId, record(recordId, event), 7)], {
+        verifiedReworkRoadmaps: [reworkEvidence('terminal-authored')],
+      }),
+    );
+    assert.equal(result.valid, false, recordId);
+    assert.ok(
+      result.issues.some((issue) => issue.code === issueCode),
+      recordId,
+    );
+  }
 });
 
 test('rework authoring validates a same-issue source rewrite against independent evidence', () => {
@@ -1371,13 +1568,16 @@ test('rework authoring validates a same-issue source rewrite against independent
     }),
     source: sourceAfter,
   };
+  const requestComment = recordComment('5', request, 5);
+  const authoredComment = recordComment('6', authored, 6);
   const comments = [
     recordComment('1', selected, 1),
     recordComment('2', started, 2),
     recordComment('3', completed, 3),
     answer,
-    recordComment('5', request, 5),
-    recordComment('6', authored, 6),
+    requestComment,
+    reworkPublicationComment('rework-2'),
+    authoredComment,
   ];
   const withoutEvidence = replayProvisionalDecisionHistory(
     input(comments, { currentSource: sourceAfter }),
@@ -1403,9 +1603,22 @@ test('rework authoring validates a same-issue source rewrite against independent
   assert.equal(withEvidence.valid, true);
   assert.equal(withEvidence.status, 'rework-authored');
 
-  for (const publishedAt of [dateAt(6), dateAt(7)]) {
+  for (const publishedAt of [dateAt(5), dateAt(6)]) {
+    const publicationComment = reworkPublicationComment(
+      'rework-2',
+      publishedAt,
+    );
+    const publicationHistory =
+      publishedAt === dateAt(5)
+        ? [
+            ...comments.slice(0, 4),
+            publicationComment,
+            requestComment,
+            authoredComment,
+          ]
+        : [...comments.slice(0, 5), authoredComment, publicationComment];
     const afterPublication = replayProvisionalDecisionHistory(
-      input(comments, {
+      input(publicationHistory, {
         currentSource: sourceAfter,
         verifiedReworkRoadmaps: [
           {
@@ -1422,6 +1635,7 @@ test('rework authoring validates a same-issue source rewrite against independent
           issue.code === 'rework-roadmap-unverified' ||
           issue.code === 'source-binding-mismatch',
       ),
+      JSON.stringify(afterPublication.issues),
     );
   }
 });
@@ -1657,6 +1871,7 @@ test('one authored rework does not close an incomplete multi-decision bundle', (
     recordComment('6', completedTwo, 3),
     answer,
     recordComment('8', request, 5),
+    reworkPublicationComment('rework-authored-one'),
     recordComment('9', authored, 6),
   ];
   const partialRework = replayProvisionalDecisionHistory(
@@ -1758,6 +1973,10 @@ test('confirmation and rework can settle separate decisions in one bundle', () =
       sourceAfterRework,
     );
     const rationale = 'The alternate better fits this decision.';
+    const publicationAt =
+      scenario === 'confirmation-first'
+        ? '2026-10-20T00:00:07Z'
+        : '2026-10-20T00:00:05Z';
     const reworkAnswer = answerComment(
       `${scenario}-rework-answer`,
       {
@@ -1823,6 +2042,10 @@ test('confirmation and rework can settle separate decisions in one bundle', () =
       history.push(
         reworkAnswer,
         recordComment('8', request, 5),
+        reworkPublicationComment(
+          `${scenario}-rework-authored-two`,
+          publicationAt,
+        ),
         acceptedAnswer,
         recordComment('10', confirmation, 7),
       );
@@ -1832,11 +2055,19 @@ test('confirmation and rework can settle separate decisions in one bundle', () =
         recordComment('8', confirmation, 5),
         reworkAnswer,
         recordComment('10', request, 7),
+        reworkPublicationComment(
+          `${scenario}-rework-authored-two`,
+          publicationAt,
+        ),
       );
     } else {
       history.push(
         reworkAnswer,
         recordComment('8', request, 5),
+        reworkPublicationComment(
+          `${scenario}-rework-authored-two`,
+          publicationAt,
+        ),
         recordComment('10', authored, 6),
         acceptedAnswer,
         recordComment('13', confirmation, 8),
@@ -1854,6 +2085,7 @@ test('confirmation and rework can settle separate decisions in one bundle', () =
             `${scenario}-rework-authored-two`,
             source,
             sourceAfterRework,
+            publicationAt,
           ),
         ],
       }),
@@ -1950,7 +2182,9 @@ test('every decision can finish rework before the next bundle starts', () => {
         recordComment('6', completedTwo, 3),
         answer,
         recordComment('8', requestOne, 5),
+        reworkPublicationComment('authored-one'),
         recordComment('9', requestTwo, 6),
+        reworkPublicationComment('authored-two', dateAt(6)),
         recordComment('10', authoredOne, 7),
         recordComment('11', authoredTwo, 8),
         recordComment('12', nextSelection, 9),
@@ -1959,7 +2193,7 @@ test('every decision can finish rework before the next bundle starts', () => {
         verifiedWork: [workEvidence(1), workEvidence(2)],
         verifiedReworkRoadmaps: [
           reworkEvidence('authored-one'),
-          reworkEvidence('authored-two'),
+          reworkEvidence('authored-two', source, source, dateAt(6)),
         ],
       },
     ),
@@ -2111,12 +2345,14 @@ test('source rewrites chain across rework bundles and permit a later generation'
         recordComment('3', completed, 3),
         firstAnswer,
         recordComment('5', firstRequest, 5),
+        reworkPublicationComment('authored-one'),
         recordComment('6', firstAuthored, 6),
         recordComment('7', selectedTwo, 7),
         recordComment('8', startedTwo, 8),
         recordComment('9', completedTwo, 9),
         secondAnswer,
         recordComment('11', secondRequest, 11),
+        reworkPublicationComment('authored-two', dateAt(11)),
         recordComment('12', secondAuthored, 12),
         recordComment('13', selectedThree, 13),
       ],
@@ -2125,7 +2361,12 @@ test('source rewrites chain across rework bundles and permit a later generation'
         verifiedWork: [workEvidence(1), workEvidence(1, 2, firstSourceAfter)],
         verifiedReworkRoadmaps: [
           reworkEvidence('authored-one', source, firstSourceAfter),
-          reworkEvidence('authored-two', firstSourceAfter, secondSourceAfter),
+          reworkEvidence(
+            'authored-two',
+            firstSourceAfter,
+            secondSourceAfter,
+            dateAt(11),
+          ),
         ],
       },
     ),
