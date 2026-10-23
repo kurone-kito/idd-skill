@@ -1050,6 +1050,96 @@ test('rework authoring validates a same-issue source rewrite against independent
   assert.equal(withEvidence.status, 'rework-authored');
 });
 
+test('rework authoring cannot transition between different source issues', () => {
+  const foreignSource = { ...source, issueNumber: source.issueNumber + 1 };
+  const selected = record(
+    'select-foreign',
+    selectedEvent(),
+    1,
+    1,
+    [firstClaim],
+    foreignSource,
+  );
+  const started = record(
+    'start-foreign',
+    workStartedEvent(),
+    1,
+    1,
+    [firstClaim],
+    foreignSource,
+  );
+  const completed = record(
+    'complete-foreign',
+    workCompletedEvent(1),
+    1,
+    1,
+    [firstClaim],
+    foreignSource,
+  );
+  const rationale = 'The alternate choice better fits the current need.';
+  const answer = answerComment(
+    '4',
+    buildAnswer(
+      [selected],
+      [completed],
+      [firstClaim],
+      'rework',
+      'change',
+      rationale,
+      foreignSource,
+    ),
+    4,
+  );
+  const request = record(
+    'rework-foreign',
+    {
+      type: 'rework-requested',
+      reworkRequest: {
+        commentUrl: answer.url,
+        requestedAt: answer.createdAt,
+        requestedOptionId: 'change',
+        rationale,
+      },
+    },
+    1,
+    1,
+    [firstClaim],
+    foreignSource,
+  );
+  const authored = record('rework-authored-foreign', {
+    type: 'rework-authored',
+    reworkRoadmap: {
+      roadmapIssueNumber: source.issueNumber,
+      roadmapMarkerId: 'same-source-rework',
+      authoringSetId: 'set-4599-rework',
+      url: `https://github.com/${source.repository}/issues/${source.issueNumber}`,
+    },
+  });
+
+  const result = replayProvisionalDecisionHistory(
+    input(
+      [
+        recordComment('1', selected, 1),
+        recordComment('2', started, 2),
+        recordComment('3', completed, 3),
+        answer,
+        recordComment('5', request, 5),
+        recordComment('6', authored, 6),
+      ],
+      {
+        verifiedWork: [workEvidence(1, 1, foreignSource)],
+        verifiedReworkRoadmaps: [
+          reworkEvidence('rework-authored-foreign', foreignSource, source),
+        ],
+      },
+    ),
+  );
+  assert.equal(result.valid, false);
+  assert.ok(
+    result.issues.some((issue) => issue.code === 'source-binding-mismatch'),
+  );
+});
+
 test('rework rejects answers posted before completed work', () => {
   const { selected, started, completed } = oneCompletedDecision();
   const rationale = 'The alternate choice better fits the current need.';

@@ -1196,6 +1196,8 @@ function matchesVerifiedReworkRoadmap(
   if (!isObject(roadmap)) return false;
   return input.verifiedReworkRoadmaps.some(
     (evidence) =>
+      sourceBefore.repository === sourceAfter.repository &&
+      sourceBefore.issueNumber === sourceAfter.issueNumber &&
       evidence.recordId === record.recordId &&
       sameSourceContent(evidence.sourceBefore, sourceBefore) &&
       sameSourceContent(evidence.sourceAfter, sourceAfter) &&
