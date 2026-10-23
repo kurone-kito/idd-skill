@@ -880,7 +880,11 @@ export function auditAuthoredIssue(body, options) {
   return report;
 }
 function dependencyInventoryScope() {
-  return 'Syntax inventory of the supplied body only. It is not a live graph, an edge-necessity proof, an independence verdict, or an exhaustive history. An empty hardIssuePrerequisites list means no recognized hard prerequisite syntax.';
+  return [
+    'Syntax inventory of the supplied body only.',
+    'It is not a live graph, an edge-necessity proof, an independence verdict, or an exhaustive history.',
+    'An empty hardIssuePrerequisites list means no recognized local hard-prerequisite syntax; recognized qualified dependency tokens remain in unresolvedQualifiedReferences.',
+  ].join(' ');
 }
 function compareInventoryStrings(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -888,7 +892,10 @@ function compareInventoryStrings(left, right) {
 function dedupeAndSortRoadmapReferences(references) {
   const unique = new Map();
   for (const reference of references) {
-    const key = `${reference.relationship}\u0000${reference.target}`;
+    const key =
+      reference.relationship === 'unresolvable-reference'
+        ? `${reference.relationship}\u0000${reference.target}\u0000${reference.evidence}`
+        : `${reference.relationship}\u0000${reference.target}`;
     if (!unique.has(key)) {
       unique.set(key, reference);
     }
@@ -896,7 +903,8 @@ function dedupeAndSortRoadmapReferences(references) {
   return [...unique.values()].sort(
     (left, right) =>
       left.target - right.target ||
-      compareInventoryStrings(left.relationship, right.relationship),
+      compareInventoryStrings(left.relationship, right.relationship) ||
+      compareInventoryStrings(left.evidence, right.evidence),
   );
 }
 function buildDependencyInventory(

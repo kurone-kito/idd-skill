@@ -7345,6 +7345,7 @@ test('dependency inventory reuses shared syntax parsers without changing audit r
         '- [ ] #100',
         '- [x] [#101](https://github.com/kurone-kito/idd-skill/issues/101)',
         '- [ ] [upstream issue](https://github.com/other/repo/issues/777)',
+        '- [ ] [another upstream issue](https://github.com/different/repo/issues/777)',
         '- [ ] #100',
       ].join('\n'),
     )
@@ -7397,6 +7398,11 @@ test('dependency inventory reuses shared syntax parsers without changing audit r
   assert.match(inventory.scope, /edge-necessity proof/u);
   assert.match(inventory.scope, /independence verdict/u);
   assert.match(inventory.scope, /exhaustive history/u);
+  assert.match(
+    inventory.scope,
+    /no recognized local hard-prerequisite syntax/u,
+  );
+  assert.match(inventory.scope, /unresolvedQualifiedReferences/u);
   assert.deepEqual(inventory.hardIssuePrerequisites, [41, 42, 43, 44]);
   assert.deepEqual(inventory.unresolvedQualifiedReferences, [
     {
@@ -7418,6 +7424,24 @@ test('dependency inventory reuses shared syntax parsers without changing audit r
       { target: 100, relationship: 'task-list' },
       { target: 101, relationship: 'task-list' },
       { target: 777, relationship: 'unresolvable-reference' },
+      { target: 777, relationship: 'unresolvable-reference' },
+    ],
+  );
+  assert.deepEqual(
+    inventory.tracksMembership
+      .filter(({ relationship }) => relationship === 'unresolvable-reference')
+      .map(({ target, evidence }) => ({ target, evidence })),
+    [
+      {
+        target: 777,
+        evidence:
+          '- [ ] [another upstream issue](https://github.com/different/repo/issues/777)',
+      },
+      {
+        target: 777,
+        evidence:
+          '- [ ] [upstream issue](https://github.com/other/repo/issues/777)',
+      },
     ],
   );
   assert.deepEqual(
@@ -7518,6 +7542,7 @@ test('dependency inventory is opt-in across direct and bin CLIs without affectin
               '- [ ] #100',
               '- [x] [#101](https://github.com/kurone-kito/idd-skill/issues/101)',
               '- [ ] [upstream issue](https://github.com/other/repo/issues/777)',
+              '- [ ] [another upstream issue](https://github.com/different/repo/issues/777)',
               '- [ ] #100',
             ].join('\n'),
           )
@@ -7544,7 +7569,7 @@ test('dependency inventory is opt-in across direct and bin CLIs without affectin
             'other/repo#80',
           ],
           sequentialRoadmapBlockers: ['phase-a', 'phase-b'],
-          tracksMembership: [100, 101, 777],
+          tracksMembership: [100, 101, 777, 777],
           ordinaryReferences: [501, 502],
         },
       },
