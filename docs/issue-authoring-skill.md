@@ -809,10 +809,11 @@ this packet:
 - relationship context for a multi-issue set
 - the issue-authoring critique checklist below
 
-For a multi-issue set, use relationships to map each hard edge to its
-producer output and blocked work, and evidence to support that
-relationship. Keep both aligned with the concise rationale in the issue
-body; the packet schema stays unchanged.
+For a multi-issue set, map each hard edge in `relationships` to its
+producer output and blocked work, and use `evidence` to support that
+relationship. For a single issue, keep `relationships` empty and put
+supporting evidence in `evidence`. Keep the packet aligned with the
+concise rationale in the issue body; the packet schema stays unchanged.
 
 The packet does not include the whole conversation or unbounded work
 instructions.
@@ -825,8 +826,11 @@ instructions.
   credential, or subjective approval
 - each dependency edge names the consumed predecessor output, blocked
   operation or criterion, supporting evidence, and counterfactual with
-  other prerequisites retained in the body and packet; independent
-  siblings stay in the roadmap task list
+  other prerequisites retained. The body and packet agree; for a
+  multi-issue set, `relationships` maps each hard edge and `evidence`
+  supports it, while a single-issue packet keeps `relationships` empty
+  and uses `evidence` for support. Independent siblings stay in the
+  roadmap task list
 - the set preserves natural cohesion without a parallelism quota or a
   new approval gate
 - the draft stays inside the specificity target range: no hidden
@@ -2580,20 +2584,23 @@ availability, or ordering constraint.
   already correctly treats the closed reference as unblocking
 
 Common parentage, shared files, and generic correctness claims alone do
-not establish an edge. The #4079 example below records two children that
-did not consume a sibling's warning (roadmap #4079 opened 2026-10-12);
-the shared-file-only and generic-claim cases are preventive; no observed
-incident yet.
+not establish an edge. The roadmap #4079 example is described in
+[Per-edge rationale examples](../skills/issue-authoring/references/draft-patterns.md#per-edge-rationale-examples)
+(roadmap #4079 opened 2026-10-12); the shared-file-only and
+generic-claim cases are preventive; no observed incident yet.
 
 To justify each dependency edge, name the predecessor output, the
 dependent operation or acceptance criterion it blocks, and the evidence
 that supports the relationship. Ask what fails without that output while
-keeping the other valid prerequisites. Keep this rationale in the issue
-body and the existing relationships and evidence packet fields; do not
-add packet fields. Keep contention and preferred order in scheduling
-notes. Review each edge against the body and packet, then review the set
-for independent siblings and natural cohesion. Do not impose a
-parallelism quota or another approval gate.
+keeping the other valid prerequisites. Keep the concise rationale in
+the issue body. For a multi-issue set, map each hard edge in
+`relationships` and support it with `evidence`. For a single issue,
+keep the rationale in the body and supporting evidence in `evidence`;
+`relationships` remains empty as the packet schema requires. Do not add
+packet fields. Keep contention and preferred order in scheduling notes.
+Review each edge against the body and packet, then review the set for
+independent siblings and natural cohesion. Do not impose a parallelism
+quota or another approval gate.
 
 ## Dependency encoding rules
 
@@ -2895,7 +2902,10 @@ Validation expectations:
   as narrative text
 - dependency notes distinguish between active grouping and true
   sequential blocking
-- each dependency edge is justified and preserves natural cohesion
+- each dependency edge names its consumed predecessor output, blocked
+  operation or criterion, supporting evidence, and counterfactual with
+  other prerequisites retained; independent siblings stay in the
+  roadmap task list and the set preserves natural cohesion
 - nested roadmap entries stay identifiable as coordination/audit nodes
   instead of normal execution leaves
 - the roadmap can survive multi-session handoffs without relying on
@@ -3014,7 +3024,10 @@ Before reporting or publishing issue drafts, the skill should verify:
   and links its own active child work
 - each nested roadmap remains identifiable as a coordination/audit node
   instead of a normal execution candidate
-- each dependency edge is justified and preserves natural cohesion
+- each dependency edge names its consumed predecessor output, blocked
+  operation or criterion, supporting evidence, and counterfactual with
+  other prerequisites retained; independent siblings stay in the
+  roadmap task list and the set preserves natural cohesion
 - each `Blocked by #NNN` reference resolves to the intended issue
 - each `idd-skill-blocked-by` marker points to a real roadmap and is
   used only for true sequential dependencies, never to group nested
