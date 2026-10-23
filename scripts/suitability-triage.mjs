@@ -5258,6 +5258,19 @@ function findUnsafeExecutionDirectiveMatch(
     'gi',
   );
   const targetPattern = new RegExp(UNSAFE_DIRECTIVE_TARGET_SOURCE, 'i');
+  // The general boundary leaves unlisted compound nouns such as "user
+  // interface" available for passive attribution. After a direct command
+  // object, a recognized human prefix followed by a noun remains unsafe.
+  const directActorCompoundTargetPattern = new RegExp(
+    String.raw`^\s*${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE}by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}\s+(?!(?:${UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE})\b)[\w-]+`,
+    'i',
+  );
+  const suppliedContentHumanSourcePattern = new RegExp(
+    // A named person remains a human source; don't truncate "user
+    // interface" at its first token and treat the compound as an actor.
+    String.raw`\b${SUPPLIED_CONTENT_NOUN}\b(?:\s+\S+){0,2}?\s+provided\s+by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}\s+(?:named|called)\s+[\w'-]+`,
+    'i',
+  );
   let verbMatch = verbPattern.exec(corpus);
   while (verbMatch) {
     const verbStart = verbMatch.index;
@@ -5277,6 +5290,8 @@ function findUnsafeExecutionDirectiveMatch(
       );
       const targetMatch =
         targetPattern.exec(window) ??
+        directActorCompoundTargetPattern.exec(window) ??
+        suppliedContentHumanSourcePattern.exec(window) ??
         UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET.exec(window);
       const verbBodyStart = verbStart - bodyOffset;
       const verbHtmlCommentRange =
