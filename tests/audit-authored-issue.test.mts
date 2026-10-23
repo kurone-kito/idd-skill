@@ -23,6 +23,7 @@ import {
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const CLI_PATH = join(REPO_ROOT, 'scripts/audit-authored-issue.mjs');
+const BIN_PATH = join(REPO_ROOT, 'bin/idd-audit-authored-issue.mjs');
 
 test('defer-source-marker accepts both defined values and stays independent of --expect-bucket (#3778)', () => {
   const findingFor = (
@@ -314,8 +315,8 @@ function runCli(args: string[]): {
   }
 }
 
-function runCliRaw(args: string[]) {
-  return spawnSync(process.execPath, [CLI_PATH, ...args], {
+function runCliRaw(args: string[], cliPath = CLI_PATH) {
+  return spawnSync(process.execPath, [cliPath, ...args], {
     encoding: 'utf8',
     timeout: 60_000,
     cwd: REPO_ROOT,
@@ -7314,3 +7315,359 @@ carrierTest(
     }
   },
 );
+
+test('dependency inventory reuses shared syntax parsers without changing audit results (#4648)', () => {
+  const body = roadmapBody()
+    .replaceAll('idd-skill-', 'team-')
+    .replace(
+      'Why this exists.',
+      [
+        'Why this exists.',
+        '',
+        'Blocked by #42, other/repo#80, #0, and #43',
+        'Blocked by #42',
+        '> Depends on https://github.com/kurone-kito/idd-skill/issues/41, kurone-kito/idd-skill#44, #42',
+        'Depends on https://github.com/other/repo/issues/81',
+        'Refs #501 (non-blocking)',
+        'Ref #502',
+        '`Blocked by #90`',
+        '<!-- Depends on #91 -->',
+        '```md',
+        'Depends on #92',
+        '```',
+        'This sentence mentions Blocked by #99 without declaring a prerequisite.',
+        'See this before #98; it is not encoded as a hard edge.',
+      ].join('\n'),
+    )
+    .replace(
+      '- [ ] #100',
+      [
+        '- [ ] #100',
+        '- [x] [#101](https://github.com/kurone-kito/idd-skill/issues/101)',
+        '- [ ] [upstream issue](https://github.com/other/repo/issues/777)',
+        '- [ ] #100',
+      ].join('\n'),
+    )
+    .replace(
+      '## Success criteria',
+      [
+        '<!-- team-blocked-by: phase-b -->',
+        '<!-- team-blocked-by: phase-a -->',
+        '<!-- team-blocked-by: phase-a -->',
+        '`<!-- team-blocked-by: hidden-inline -->`',
+        '```html',
+        '<!-- team-blocked-by: hidden-fenced -->',
+        '```',
+        '',
+        '## Success criteria',
+      ].join('\n'),
+    )
+    .replace(/\n/gu, '\r\n');
+  const options = {
+    shape: 'roadmap' as const,
+    markerPrefix: 'team',
+    currentRepo: 'kurone-kito/idd-skill',
+  };
+  const withoutInventory = auditAuthoredIssue(body, options);
+  const withInventory = auditAuthoredIssue(body, {
+    ...options,
+    dependencyInventory: true,
+  });
+
+  assert.deepEqual(Object.keys(withoutInventory), [
+    'shape',
+    'markerPrefix',
+    'passed',
+    'findings',
+  ]);
+  assert.equal(withInventory.passed, withoutInventory.passed);
+  assert.deepEqual(withInventory.findings, withoutInventory.findings);
+  assert.equal(
+    withInventory.findings.find(
+      (finding) => finding.id === 'dependency-line-grammar',
+    )?.result,
+    'fail',
+    'malformed and mid-line near-misses remain visible in the existing finding',
+  );
+
+  const inventory = withInventory.dependencyInventory;
+  assert.ok(inventory);
+  assert.match(inventory.scope, /syntax inventory/iu);
+  assert.match(inventory.scope, /not a live graph/u);
+  assert.match(inventory.scope, /edge-necessity proof/u);
+  assert.match(inventory.scope, /independence verdict/u);
+  assert.match(inventory.scope, /exhaustive history/u);
+  assert.deepEqual(inventory.hardIssuePrerequisites, [41, 42, 43, 44]);
+  assert.deepEqual(inventory.unresolvedQualifiedReferences, [
+    {
+      token: 'https://github.com/other/repo/issues/81',
+      reason: 'cross_repository_reference',
+    },
+    {
+      token: 'other/repo#80',
+      reason: 'cross_repository_reference',
+    },
+  ]);
+  assert.deepEqual(inventory.sequentialRoadmapBlockers, ['phase-a', 'phase-b']);
+  assert.deepEqual(
+    inventory.tracksMembership.map(({ target, relationship }) => ({
+      target,
+      relationship,
+    })),
+    [
+      { target: 100, relationship: 'task-list' },
+      { target: 101, relationship: 'task-list' },
+      { target: 777, relationship: 'unresolvable-reference' },
+    ],
+  );
+  assert.deepEqual(
+    inventory.ordinaryReferences.map(({ target, relationship }) => ({
+      target,
+      relationship,
+    })),
+    [
+      { target: 501, relationship: 'non-blocking-reference' },
+      { target: 502, relationship: 'reference' },
+    ],
+  );
+  assert.ok(!inventory.hardIssuePrerequisites.includes(100));
+  assert.ok(!inventory.hardIssuePrerequisites.includes(501));
+});
+
+test('dependency inventory does not infer whether a well-formed edge is necessary (#4648)', () => {
+  const necessary = auditAuthoredIssue(
+    childBody({
+      extraMarkers: 'Blocked by #44\n\nImplementation needs #44 first.',
+    }),
+    { shape: 'child', dependencyInventory: true },
+  ).dependencyInventory;
+  const unnecessary = auditAuthoredIssue(
+    childBody({
+      extraMarkers: 'Blocked by #44\n\nThis edge is intentionally redundant.',
+    }),
+    { shape: 'child', dependencyInventory: true },
+  ).dependencyInventory;
+
+  assert.ok(necessary);
+  assert.ok(unnecessary);
+  assert.deepEqual(necessary, unnecessary);
+  assert.deepEqual(necessary.hardIssuePrerequisites, [44]);
+});
+
+test('dependency inventory is opt-in across direct and bin CLIs without affecting pass or exit status (#4648)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-dependency-inventory-cli-'));
+  try {
+    const bodyPath = join(tempRoot, 'draft.md');
+    const baseArgs = [
+      '--shape',
+      'roadmap',
+      '--body-file',
+      bodyPath,
+      '--marker-prefix',
+      'idd-skill',
+      '--current-repo',
+      'kurone-kito/idd-skill',
+    ];
+    const fixtures = [
+      {
+        name: 'well-formed dependency',
+        markerPrefix: 'idd-skill',
+        body: roadmapBody().replace(
+          'Why this exists.',
+          'Why this exists.\n\nBlocked by #201\n\nOnce #201 is available, work can start.',
+        ),
+        expectedStatus: 0,
+      },
+      {
+        name: 'malformed mid-line dependency',
+        markerPrefix: 'idd-skill',
+        body: roadmapBody().replace(
+          'Why this exists.',
+          'Why this exists.\n\nNarrative text Depends on #201.',
+        ),
+        expectedStatus: 1,
+      },
+      {
+        name: 'mixed dependencies, masking, CRLF, and roadmap references',
+        markerPrefix: 'team',
+        body: roadmapBody()
+          .replaceAll('idd-skill-', 'team-')
+          .replace(
+            'Why this exists.',
+            [
+              'Why this exists.',
+              '',
+              'Blocked by #42, other/repo#80, #0, and #43',
+              'Blocked by #42',
+              '> Depends on https://github.com/kurone-kito/idd-skill/issues/41, kurone-kito/idd-skill#44, #42',
+              'Depends on https://github.com/other/repo/issues/81',
+              'Refs #501 (non-blocking)',
+              'Ref #502',
+              '`Blocked by #90`',
+              '<!-- Depends on #91 -->',
+              '```md',
+              'Depends on #92',
+              '```',
+              'This sentence mentions Blocked by #99 without declaring a prerequisite.',
+              'See this before #98; it is not encoded as a hard edge.',
+            ].join('\n'),
+          )
+          .replace(
+            '- [ ] #100',
+            [
+              '- [ ] #100',
+              '- [x] [#101](https://github.com/kurone-kito/idd-skill/issues/101)',
+              '- [ ] [upstream issue](https://github.com/other/repo/issues/777)',
+              '- [ ] #100',
+            ].join('\n'),
+          )
+          .replace(
+            '## Success criteria',
+            [
+              '<!-- team-blocked-by: phase-b -->',
+              '<!-- team-blocked-by: phase-a -->',
+              '<!-- team-blocked-by: phase-a -->',
+              '`<!-- team-blocked-by: hidden-inline -->`',
+              '```html',
+              '<!-- team-blocked-by: hidden-fenced -->',
+              '```',
+              '',
+              '## Success criteria',
+            ].join('\n'),
+          )
+          .replace(/\n/gu, '\r\n'),
+        expectedStatus: 1,
+        expectedInventory: {
+          hardIssuePrerequisites: [41, 42, 43, 44],
+          unresolvedQualifiedReferences: [
+            'https://github.com/other/repo/issues/81',
+            'other/repo#80',
+          ],
+          sequentialRoadmapBlockers: ['phase-a', 'phase-b'],
+          tracksMembership: [100, 101, 777],
+          ordinaryReferences: [501, 502],
+        },
+      },
+    ];
+
+    for (const fixture of fixtures) {
+      writeFileSync(bodyPath, fixture.body);
+      for (const cliPath of [CLI_PATH, BIN_PATH]) {
+        const fixtureArgs = [
+          ...baseArgs.slice(0, baseArgs.indexOf('--marker-prefix') + 1),
+          fixture.markerPrefix,
+          ...baseArgs.slice(baseArgs.indexOf('--marker-prefix') + 2),
+        ];
+        const withoutFlag = runCliRaw(fixtureArgs, cliPath);
+        const withFlag = runCliRaw(
+          [...fixtureArgs, '--dependency-inventory'],
+          cliPath,
+        );
+        assert.equal(withoutFlag.status, fixture.expectedStatus, fixture.name);
+        assert.equal(withFlag.status, fixture.expectedStatus, fixture.name);
+        const defaultReport = JSON.parse(withoutFlag.stdout) as {
+          passed: boolean;
+          findings: unknown[];
+          dependencyInventory?: unknown;
+        };
+        const inventoryReport = JSON.parse(withFlag.stdout) as {
+          passed: boolean;
+          findings: unknown[];
+          dependencyInventory?: {
+            hardIssuePrerequisites: number[];
+            unresolvedQualifiedReferences: { token: string }[];
+            sequentialRoadmapBlockers: string[];
+            tracksMembership: { target: number }[];
+            ordinaryReferences: { target: number }[];
+            scope: string;
+          };
+        };
+        assert.deepEqual(Object.keys(defaultReport), [
+          'shape',
+          'markerPrefix',
+          'passed',
+          'findings',
+        ]);
+        assert.equal(inventoryReport.passed, defaultReport.passed);
+        assert.deepEqual(inventoryReport.findings, defaultReport.findings);
+        assert.ok(inventoryReport.dependencyInventory);
+        assert.match(
+          inventoryReport.dependencyInventory.scope,
+          /syntax inventory/iu,
+        );
+        assert.deepEqual(
+          inventoryReport.dependencyInventory.hardIssuePrerequisites,
+          fixture.expectedInventory !== undefined
+            ? fixture.expectedInventory.hardIssuePrerequisites
+            : fixture.expectedStatus === 0
+              ? [201]
+              : [],
+        );
+        if (fixture.expectedInventory !== undefined) {
+          assert.deepEqual(
+            {
+              hardIssuePrerequisites:
+                inventoryReport.dependencyInventory.hardIssuePrerequisites,
+              unresolvedQualifiedReferences:
+                inventoryReport.dependencyInventory.unresolvedQualifiedReferences.map(
+                  ({ token }) => token,
+                ),
+              sequentialRoadmapBlockers:
+                inventoryReport.dependencyInventory.sequentialRoadmapBlockers,
+              tracksMembership:
+                inventoryReport.dependencyInventory.tracksMembership.map(
+                  ({ target }) => target,
+                ),
+              ordinaryReferences:
+                inventoryReport.dependencyInventory.ordinaryReferences.map(
+                  ({ target }) => target,
+                ),
+            },
+            fixture.expectedInventory,
+          );
+        }
+
+        const defaultTable = runCliRaw(
+          [...fixtureArgs, '--format', 'table'],
+          cliPath,
+        );
+        const inventoryTable = runCliRaw(
+          [...fixtureArgs, '--format', 'table', '--dependency-inventory'],
+          cliPath,
+        );
+        assert.equal(defaultTable.status, fixture.expectedStatus, fixture.name);
+        assert.equal(
+          inventoryTable.status,
+          fixture.expectedStatus,
+          fixture.name,
+        );
+        assert.ok(!defaultTable.stdout.includes('dependency inventory:'));
+        assert.ok(
+          inventoryTable.stdout.includes('dependency inventory: syntax only'),
+        );
+        assert.ok(inventoryTable.stdout.includes('hard-issue-prerequisite'));
+        if (fixture.expectedStatus === 0) {
+          assert.ok(inventoryTable.stdout.includes('#201'));
+        }
+        if (fixture.expectedInventory !== undefined) {
+          for (const identity of [
+            'https://github.com/other/repo/issues/81',
+            'other/repo#80',
+            'phase-a',
+            'phase-b',
+            '#777',
+            '#501',
+            '#502',
+          ]) {
+            assert.ok(
+              inventoryTable.stdout.includes(identity),
+              `inventory table is missing ${identity}`,
+            );
+          }
+        }
+      }
+    }
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
