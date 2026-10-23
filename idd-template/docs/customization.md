@@ -2726,7 +2726,8 @@ context is not required. Filtering or dropping non-required workflow
 triggers can reduce usage without weakening the merge gate. Keep required
 contexts able to report under the existing gate: filtering or dropping a
 required context's trigger can leave it missing and block the pull request
-instead of saving usage. See [GitHub Actions billing and usage](https://docs.github.com/en/actions/concepts/billing-and-usage).
+instead of saving usage (preventive; no observed incident yet). See the
+[GitHub Actions billing and usage guide][actions-billing].
 This distinction corrects the summary drift reported in [issue #4641](https://github.com/kurone-kito/idd-skill/issues/4641).
 
 **On a private repository, the account Actions spend limit is where this
@@ -2743,3 +2744,4 @@ These are repository-local optimizations; they do not change the IDD merge gate
 or the cross-agent workflow.
 
 [issue-authoring-review-input-schema]: https://kurone-kito.github.io/idd-skill/schemas/issue-authoring-review-input.schema.json
+[actions-billing]: https://docs.github.com/en/actions/concepts/billing-and-usage
