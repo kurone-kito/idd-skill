@@ -16,6 +16,26 @@ Minimization is UI cleanup. It preserves the audit trail and must never
 replace review triage, conversation resolution, CI, advisory wait, or
 merge gates.
 
+## Durable provisional decision records
+
+Canonical provisional-decision event comments and the answer comments
+they reference are durable lifecycle state, not transient run notes.
+Keep them available and unedited through F4 cleanup and comment
+minimization. Later sessions need the complete history to distinguish a
+provisional choice, verified completion, explicit confirmation, and
+alternate-choice rework after a crash, claim takeover, or feature-flag
+change. The confirmed lifecycle and its retention requirement are
+recorded in [issue #4528](https://github.com/kurone-kito/idd-skill/issues/4528);
+the missing confirmation-provenance boundary was observed on
+[issue #4571](https://github.com/kurone-kito/idd-skill/issues/4571).
+
+The HTML watermark identifies the canonical comment format; it does not
+authenticate a person or grant authority by itself. Replay still checks
+the trusted API author, edit state, source and generation bindings, and
+current evidence. Do not minimize or edit an event or its referenced
+answer comment to make the comment list shorter; a missing or changed
+record can no longer support a replayed transition.
+
 ## Live Status Digest Contract
 
 A live status digest is an editable, human-facing issue or pull request

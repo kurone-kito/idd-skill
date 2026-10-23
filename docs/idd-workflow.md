@@ -849,6 +849,87 @@ is removed after the body records `Maintainer decision (Groom hearing,
 2026-06-27): TTL-based expiry, chosen over explicit
 invalidation-on-write for simplicity`.
 
+## Provisional decision lifecycle
+
+Provisional decisions are available only when a repository explicitly
+sets `dangerouslyAutoDecide: true` in trusted repository policy. The
+setting defaults to `false` and does not grant credentials, scope,
+approval, permission, or a waiver of the normal claim, safety, CI,
+review, branch, or merge gates. The IDD source repository keeps this
+feature disabled until a separate decision enables it.
+
+Before provisional work starts, persist a canonical decision record on
+the source issue. Its body begins with
+`<!-- idd-provisional-decision-record:v1 -->`, followed by one JSON value
+matching `provisional-decision-record.schema.json`. The record binds the
+source snapshot, decision bundle and generation, claim lineage, evidence,
+selected option, feasible alternatives and their rejection reasons, and
+execution criteria. Record events distinguish a provisional selection,
+work start, verified completion, confirmation, and alternate-choice
+rework. Keep every unresolved choice visible in the current bundle.
+
+A selection is provisional, not confirmation. Verified work completion
+leaves the source issue open in a confirmation-pending state; it does not
+make the decision confirmed, permit automatic close, or cause the same
+completed work to execute again. Downstream work can use completed
+provisional work only through its own opt-in and evidence gates. These
+boundaries preserve the roadmap's confirmed lifecycle contract
+([issue #4528](https://github.com/kurone-kito/idd-skill/issues/4528)).
+
+When asking for confirmation, present the complete implemented bundle,
+its alternatives, verified results, and the implications of rework. An
+interactive prompt uses `N` as its default. A non-interactive session
+needs an explicit answer in the current conversation or CLI input; `N`,
+Enter, EOF, cancellation, silence, and missing input leave the source
+pending. A previously recorded valid answer replays without asking again.
+
+An authorized recorder, including an agent using a shared authorized
+GitHub account, may persist the user's actual answer on the source issue.
+The answer comment begins with
+`<!-- idd-provisional-decision-agent-answer:v1 -->`, followed by JSON
+that records the source snapshot, current bundle and decision
+generations, claim IDs, the presented choices and verified results, the
+response, and the answer received. The `confirmed` event points to that
+comment and binds its API creation time and scope to the completion
+records. Replay checks the reference, trusted API authorship, edit state,
+source and claim freshness, generations, and completed-work evidence.
+Source freshness uses repository, issue, title, and body content; it does
+not use GitHub's `updated_at`, which changes when comments are added. Each
+record must bind to the claim lineage active when that comment was posted,
+while a prior answer remains bound to the lineage of the confirmation or
+rework record that cites it. Confirmation and rework answers must follow
+every completion comment in the bundle, using server order when timestamps
+tie. Each same-source body rewrite must match a rework-authored record and
+caller-verified authoring evidence, including the trusted author, owner,
+fresh authoring set, roadmap, and audited child wiring. The verified
+source transition becomes the basis for later records and rework
+generations.
+The watermark identifies the canonical recorded-answer format; it is
+not proof of a person's identity and does not classify the account
+operator as human or agent. A trusted recorder is responsible for
+recording an actual user response. A marker alone, an ordinary trusted
+comment, or a provisional selection does not confirm the bundle; this
+provenance boundary follows the clarification recorded in
+[issue #4528](https://github.com/kurone-kito/idd-skill/issues/4528) after
+the confirmation-provenance hold on
+[issue #4571](https://github.com/kurone-kito/idd-skill/issues/4571).
+No separate account, signing key, authenticated transcript, or external
+identity service is required.
+
+Every answer presents the entire current completed bundle for context;
+the linked event applies that answer to its own decision generation.
+This allows one decision to be confirmed while another receives a
+different explicit preference and begins rework. Once confirmation or
+rework begins, keep that bundle generation closed. Start a new generation
+only after every decision in the prior bundle is confirmed or has
+verified rework authoring. A different explicit preference records a
+rework request, preserves the earlier choices and completed-work links,
+and uses the normal held authoring process to turn the same source issue
+into its rework roadmap. Missing, edited, stale, untrusted, conflicting,
+or incomplete evidence grants no transition authority. Keep the complete
+record and answer history available through crashes, claim takeover, flag
+disablement, and comment cleanup so later sessions can replay it.
+
 ## Roadmap completion audits
 
 Discover owns roadmap-level state. After it finds an open roadmap, it

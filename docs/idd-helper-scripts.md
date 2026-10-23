@@ -10218,10 +10218,14 @@ directory. If helper scripts are introduced too early, every operational
 rule must be maintained twice: once in the instructions that agents read,
 and once in code that agents run.
 
-For now, the safer balance is to keep pre-merge and advisory
-instructions canonical while allowing three read-only evidence helpers,
-one live digest upsert helper, and one post-merge cleanup helper. Merge
-safety still depends on the written checks, not on helper output alone.
+The safer balance is to keep pre-merge and advisory instructions
+canonical while making the helpers in the current [Decision inventory](#decision)
+optional for adopters. The inventory's [helper contract classes](#helper-contract-classes)
+cover read-only evidence collectors and dry-run-by-default authoring
+helpers. The exported template remains usable without Node.js, a package
+manager, or repository-local scripts, and merge safety still depends on
+the written checks, not helper output alone. This summary was corrected
+after the stale count was reported in [issue #4641](https://github.com/kurone-kito/idd-skill/issues/4641).
 
 ## Non-goals
 

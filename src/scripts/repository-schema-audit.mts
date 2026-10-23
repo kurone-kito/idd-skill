@@ -203,9 +203,8 @@ export const SCHEMA_TYPE_CATALOG = [
   },
   {
     schemaFile: 'provisional-decision-record.schema.json',
-    exportedType: 'ProvisionalDecisionRecord (test-local; no runtime type)',
-    owningModule:
-      'schemas/provisional-decision-record.schema.json (serialized contract; replay consumer tracked by #4571)',
+    exportedType: 'ProvisionalDecisionRecord',
+    owningModule: 'src/scripts/provisional-decision-state.mts',
   },
   {
     schemaFile: 'onboarding-hearing-catalog.schema.json',
@@ -346,7 +345,8 @@ export const SCHEMA_OUTPUT_COVERAGE: readonly CoverageEntry[] = [
       'record, not a helper stdout envelope -- its fixtures and event ' +
       'variants are validated by discoverSchemaCases / ' +
       'scripts/validate-schemas.mjs and tests/schema-validation.test.mts; ' +
-      'replay behavior belongs to sibling issue #4571.',
+      'the replay consumer is covered by ' +
+      'tests/provisional-decision-state.test.mts.',
   },
   {
     schema: 'worker-report.schema.json',
