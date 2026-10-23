@@ -876,7 +876,7 @@ REVIEWS_RAW=$(gh api "repos/$OWNER/$REPO/pulls/{pr-number}/reviews" --paginate) 
   printf '%s' "$REVIEWS_RAW" | jq -e -s '
     def parsed_review_timestamp:
       .submitted_at
-      | capture("^(?<whole>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})([.](?<fraction>[0-9]+))?(?<zone>Z|[+-][0-9]{2}:[0-9]{2})$");
+      | (capture("^(?<whole>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})([.](?<fraction>[0-9]+))?(?<zone>Z|[+-][0-9]{2}:[0-9]{2})$") // null);
     def review_time_key($fraction_width):
       parsed_review_timestamp as $timestamp
       | (($timestamp.whole + "Z") | fromdateiso8601) as $whole_seconds
@@ -919,7 +919,6 @@ REVIEWS_RAW=$(gh api "repos/$OWNER/$REPO/pulls/{pr-number}/reviews" --paginate) 
           or .user.login == "copilot-pull-request-reviewer[bot]"
       then
           (.submitted_at | type == "string")
-          and (.submitted_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"))
           and (try (review_time_key(0) != null) catch false)
         and (.commit_id | type == "string")
         and (.commit_id | length > 0)
@@ -936,7 +935,7 @@ LATEST_REVIEW_JSON=$(
   printf '%s' "$REVIEWS_RAW" | jq -cs '
     def parsed_review_timestamp:
       .submitted_at
-      | capture("^(?<whole>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})([.](?<fraction>[0-9]+))?(?<zone>Z|[+-][0-9]{2}:[0-9]{2})$");
+      | (capture("^(?<whole>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})([.](?<fraction>[0-9]+))?(?<zone>Z|[+-][0-9]{2}:[0-9]{2})$") // null);
     def review_time_key($fraction_width):
       parsed_review_timestamp as $timestamp
       | (($timestamp.whole + "Z") | fromdateiso8601) as $whole_seconds
