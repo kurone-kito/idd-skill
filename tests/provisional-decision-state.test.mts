@@ -1878,6 +1878,67 @@ test('rework answers bind to the claim lineage of the citing record', () => {
   assert.equal(result.status, 'rework-requested');
 });
 
+test('a rework answer before a same-timestamp takeover keeps its event-time lineage', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const takeover = {
+    ...secondClaim,
+    claimedAt: dateAt(4),
+    commentId: 'takeover-marker',
+  };
+  const takeoverRecordClaim = {
+    ...secondClaim,
+    claimedAt: dateAt(4),
+  };
+  const rationale = 'The alternate choice better fits the current need.';
+  const answer = answerComment(
+    'answer-before-takeover',
+    buildAnswer(
+      [selected],
+      [completed],
+      [firstClaim],
+      'rework',
+      'change',
+      rationale,
+    ),
+    4,
+  );
+  const request = record(
+    'rework-after-takeover',
+    {
+      type: 'rework-requested',
+      reworkRequest: {
+        commentUrl: answer.url,
+        requestedAt: answer.createdAt,
+        requestedOptionId: 'change',
+        rationale,
+      },
+    },
+    1,
+    1,
+    [firstClaim, takeoverRecordClaim],
+  );
+  const result = replayProvisionalDecisionHistory(
+    input(
+      [
+        recordComment('1', selected, 1),
+        recordComment('2', started, 2),
+        recordComment('3', completed, 3),
+        answer,
+        comment('takeover-marker', 'verified takeover marker', 4),
+        recordComment('5', request, 5),
+      ],
+      { verifiedClaimLineage: [firstClaim, takeover] },
+    ),
+  );
+
+  assert.equal(result.valid, true, JSON.stringify(result.issues));
+  assert.equal(result.status, 'rework-requested');
+  assert.deepEqual(result.decisions[0]?.reworkRequested?.claimLineage, [
+    firstClaim,
+    takeoverRecordClaim,
+  ]);
+});
+
 test('one authored rework does not close an incomplete multi-decision bundle', () => {
   const selectedOne = record('select-one', selectedEvent(), 1, 1);
   const selectedTwo = record(
