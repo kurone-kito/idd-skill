@@ -138,7 +138,10 @@ const { spawnSync } = require('node:child_process');
 const args = process.argv.slice(2);
 const log = process.env.IDD_RELEASE_TAG_STUB_LOG;
 if (log) appendFileSync(log, 'git ' + JSON.stringify(args) + '\\n');
-if (args[0] === 'remote' && args[1] === 'get-url' && args.includes('origin')) {
+if (args[0] === '--version' && process.env.IDD_RELEASE_TAG_TEST_GIT_VERSION) {
+  process.stdout.write('git version ' + process.env.IDD_RELEASE_TAG_TEST_GIT_VERSION + '\\n');
+  process.exitCode = 0;
+} else if (args[0] === 'remote' && args[1] === 'get-url' && args.includes('origin')) {
   process.stdout.write('https://github.com/fixture-owner/fixture-repo.git\\n');
   process.exitCode = 0;
 } else if (process.env.IDD_RELEASE_TAG_FORWARD_GIT === '1') {
@@ -199,7 +202,11 @@ function runCli(
   fx: Fixture,
   args: readonly string[],
   forwardGit = false,
-  options: { ghSource?: string; helperErrorEnvelope?: boolean } = {},
+  options: {
+    ghSource?: string;
+    helperErrorEnvelope?: boolean;
+    gitVersion?: string;
+  } = {},
 ): CliResult {
   const log = join(fx.root, `cli-${runNumber++}.log`);
   writeFileSync(log, '');
@@ -210,6 +217,11 @@ function runCli(
     env.IDD_RELEASE_TAG_STUB_LOG = log;
     env.IDD_RELEASE_TAG_REAL_PATH = fx.env.PATH ?? '';
     env.IDD_RELEASE_TAG_FORWARD_GIT = forwardGit ? '1' : '0';
+    if (options.gitVersion === undefined) {
+      delete env.IDD_RELEASE_TAG_TEST_GIT_VERSION;
+    } else {
+      env.IDD_RELEASE_TAG_TEST_GIT_VERSION = options.gitVersion;
+    }
     env.GITHUB_ACTIONS = 'true';
     if (options.helperErrorEnvelope) {
       env.IDD_HELPER_ERROR_ENVELOPE = '1';
@@ -386,7 +398,9 @@ test('default dry-run validates against a local bare remote without creating or 
 test('apply creates and pushes a signed tag through the CLI', () => {
   const fx = makeFixture();
   configureSigning(fx);
-  const result = runCli(fx, [...validArgs(fx), '--apply'], true);
+  const result = runCli(fx, [...validArgs(fx), '--apply'], true, {
+    gitVersion: '2.44.0',
+  });
 
   assert.equal(
     result.status,
