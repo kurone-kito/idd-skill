@@ -932,11 +932,11 @@ test('issue authoring dependency guidance verifies consumed outputs', () => {
     'the shared-file-only and generic-claim cases are preventive; no observed incident yet.',
     'To justify each dependency edge, name the predecessor output, the dependent operation or acceptance criterion it blocks, and the evidence that supports the relationship.',
     'Ask what fails without that output while keeping the other valid prerequisites.',
-    'Keep this rationale in the issue body and the existing relationships and evidence packet fields; do not add packet fields.',
+    'Keep the concise rationale in the issue body. For a multi-issue set, map each hard edge in `relationships` and support it with `evidence`. For a single issue, keep the rationale in the body and supporting evidence in `evidence`; `relationships` remains empty as the packet schema requires. Do not add packet fields.',
     'Review each edge against the body and packet, then review the set for independent siblings and natural cohesion.',
     'Do not impose a parallelism quota or another approval gate.',
-    'each dependency edge names the consumed predecessor output, blocked operation or criterion, supporting evidence, and counterfactual with other prerequisites retained in the body and packet',
-    'For a multi-issue set, use relationships to map each hard edge to its producer output and blocked work, and evidence to support that relationship.',
+    'each dependency edge names the consumed predecessor output, blocked operation or criterion, supporting evidence, and counterfactual with other prerequisites retained. The body and packet agree; for a multi-issue set, `relationships` maps each hard edge and `evidence` supports it, while a single-issue packet keeps `relationships` empty and uses `evidence` for support. Independent siblings stay in the roadmap task list',
+    'For a multi-issue set, map each hard edge in `relationships` to its producer output and blocked work, and use `evidence` to support that relationship. For a single issue, keep `relationships` empty and put supporting evidence in `evidence`.',
     'the packet schema stays unchanged.',
   ];
   for (const path of contractPaths) {
@@ -945,6 +945,27 @@ test('issue authoring dependency guidance verifies consumed outputs', () => {
       assert.ok(content.includes(needle), `${path} is missing: ${needle}`);
     }
   }
+
+  const contract = readFileSync(
+    join(REPO_ROOT, 'skills/issue-authoring/references/contract.md'),
+    'utf8',
+  );
+  assert.ok(
+    contract.includes(
+      '[Per-edge rationale examples](draft-patterns.md#per-edge-rationale-examples)',
+    ),
+    'contract.md links to the per-edge examples',
+  );
+  const docs = readFileSync(
+    join(REPO_ROOT, 'docs/issue-authoring-skill.md'),
+    'utf8',
+  );
+  assert.ok(
+    docs.includes(
+      '[Per-edge rationale examples](../skills/issue-authoring/references/draft-patterns.md#per-edge-rationale-examples)',
+    ),
+    'issue-authoring-skill.md links to the canonical per-edge examples',
+  );
 
   const patterns = readFileSync(
     join(REPO_ROOT, 'skills/issue-authoring/references/draft-patterns.md'),
@@ -957,6 +978,7 @@ test('issue authoring dependency guidance verifies consumed outputs', () => {
     'encode an edge from the consumer to its producer',
     'consumer is blocked by #420',
     'Bad — shared parent or file.',
+    'Sharing a roadmap or editing the same file, by itself, does not identify an output that one child consumes from the other.',
     'Observed comparison — roadmap #4079.',
     'Issues #4083 and #4084 waited for the doctor warning from #4081',
     'edge to issue #4080 consumes its concrete output: the policy-constants row defining `{default-branch}`, including its resolution command, safe-character rule, and fail-closed behavior.',
@@ -978,8 +1000,16 @@ test('issue authoring dependency guidance verifies consumed outputs', () => {
     readFileSync(join(REPO_ROOT, 'skills/issue-authoring/SKILL.md'), 'utf8'),
   );
   assert.ok(
-    skill.includes('for every hard edge, name the producer output'),
+    skill.includes(
+      'For every hard dependency edge, name the consumed producer output',
+    ),
     'SKILL.md is missing the per-edge workflow reminder',
+  );
+  assert.ok(
+    skill.includes(
+      'for a single issue, keep `relationships` empty and put supporting evidence in `evidence`',
+    ),
+    'SKILL.md is missing the single-issue packet guidance',
   );
 });
 
