@@ -231,18 +231,19 @@ defect, risk, or change request as PATH A with its review URL; omit praise,
 acknowledgements, and status-only text. Split independent claims and retain
 evidence. Raw reviews supply findings; regular PR comments supply
 settlement. Identify each by unique cited `path:line` or short unique title.
-A trusted, unedited, stamped top-level E6/E13 reply must name that exact
-review URL and item identity. E6 rejects only after review; E5
-`**Accepted**` stays selected until post-fix E13 `**Accepted**`. For
-resolved-thread coverage, require same underlying claim at exact cited
-path; area/topic alone never matches. Thread must remain resolved, and its
-trusted, unedited, stamped E6/E13 reply must name the body's exact review
-URL and unique item identity. Require E13's fix commit reachable from
-current HEAD, or re-check E6 rejection evidence on current HEAD; otherwise
-keep selected. Keep missing/ambiguous matches and
+E1 requires trusted, unedited, stamped E6/E13 body replies to name the
+exact review URL and item identity; this supplements both formats. E6
+`**Rejected**` settles after review;
+`**Rejection confirmed by maintainer**` after a qualifying response. E5
+`**Accepted**` stays selected until post-fix E13 `**Accepted**`. A resolved
+thread covers the same claim at cited path, or exact unique title with no
+`path:line`; area/topic never matches. Its reply must meet the
+identity rule above. Keep selected unless E13's fix is reachable from
+current HEAD or E6 rejection/confirmation remains valid there. Keep
+missing/ambiguous matches and
 `**Awaiting maintainer decision**` selected. `COMMENTED` affects selection
-only; it is not approval and changes no formal review-state or
-`CHANGES_REQUESTED` gate. See [rationale](../../docs/idd-design-rationale.md#human-commented-review-bodies-are-snapshot-input-not-approval).
+only; it is not approval or a formal-state/`CHANGES_REQUESTED` gate change.
+See [rationale](../../docs/idd-design-rationale.md#human-commented-review-bodies-are-snapshot-input-not-approval).
 
 **Regular comments** where the last speaker isn't any IDD agent and no
 reply from **you** exists after that comment's timestamp, or where the

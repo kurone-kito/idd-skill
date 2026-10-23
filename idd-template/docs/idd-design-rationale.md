@@ -1424,6 +1424,21 @@ the ambiguous guard wording in
 [PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4357504437)
 (preventive; no live production incident observed).
 
+The same-HEAD follow-up on PR `#4651` exposed three more contract gaps:
+the E6/E13 reply formats did not repeat E1's URL/identity requirement
+(threads [#4358791099](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4358791099)
+and [#4358791159](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4358791159));
+resolved-thread coverage required a cited path even when a body item used
+its unique title (threads [#4358791189](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4358791189)
+and [#4358791225](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4358791225));
+and E1 omitted E6's maintainer-confirmed rejection terminal (review
+[#5627288243](https://github.com/kurone-kito/idd-skill/pull/4651#pullrequestreview-5627288243),
+items 1 and 2). These were observed review gaps, not production incidents.
+E1 now explicitly applies the shared identity rule to E6/E13 replies,
+matches title-only items only by exact unique title and the same claim, and
+settles a maintainer-confirmed rejection only with the same review URL and
+item identity.
+
 ##### Raw-input fixture walkthrough
 
 This is fixture data, not a live review:

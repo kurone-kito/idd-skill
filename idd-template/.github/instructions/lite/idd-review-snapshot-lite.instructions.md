@@ -179,27 +179,28 @@ Select raw Step 1 items; record each source URL:
 - **Bot `COMMENTED` bodies:** CodeRabbit adds one PATH B item per uncovered
   `embeddedFindings[].uncoveredCount`; other bots' threadless, file/line-cited
   findings are PATH A. Refs #2197 and #2559.
-- **Human `COMMENTED` bodies:** raw reviews identify findings; regular
-  comments identify settlements. Add each actionable defect, risk, or
-  concrete change request as an unsettled PATH A item; omit praise,
-  acknowledgements, status-only text, and selected-thread duplicates. Split
-  independent claims with evidence; identify each by unique cited
-  `path:line` or short unique title. A trusted, unedited, stamped
-  top-level E6 `**Rejected**` (after review) or post-fix E13
-  `**Accepted**` reply body itself must cite the exact review URL and item
-  identity; E5 `Accepted` stays selected until E13. Keep missing/ambiguous
-  identities and `**Awaiting maintainer decision**` selected. `COMMENTED`
-  is not approval or a `CHANGES_REQUESTED` gate change.
+- **Human `COMMENTED` bodies:** reviews source findings; regular comments
+  show settlements. Select each substantive, unsettled defect/risk/request
+  as PATH A; omit praise, acknowledgements, status, and selected-thread
+  duplicates. Split claims with evidence; identify by cited `path:line` or
+  unique title. A trusted, unedited, stamped E6/E13 reply, direct or via
+  thread, must name the exact review URL and item identity, supplementing
+  both formats. E6 `**Rejected**` after review or
+  `**Rejection confirmed by maintainer**` after a qualifying response
+  settles; E5 `**Accepted**` stays selected until post-fix E13
+  `**Accepted**`. Keep absent/ambiguous matches and
+  `**Awaiting maintainer decision**` selected. `COMMENTED` is not approval
+  or a formal-state/`CHANGES_REQUESTED` gate change.
 - **Regular comments:** include if the last speaker isn't an IDD agent and
   you haven't replied later, or the latest IDD-agent reply starts
   with `**Awaiting maintainer decision**` — exclude periodic bots; keep
   Copilot/CI comments as PATH B, including E6 notices.
 
-Resolved threads: index path, claim, URL, disposition for E5 and body
-coverage. Suppress only exact-path, same-claim bodies (not area/topic)
-when a trusted, unedited, stamped E6/E13 reply names the exact review URL
-and unique item identity. Require E13's cited fix commit in current HEAD
-or E6 rejection evidence still valid there; otherwise keep selected.
+Resolved threads: path, claim, URL, disposition. Cover same-claim bodies at
+cited path, or exact unique title without `path:line`; topic never matches.
+Require resolution and identity reply above.
+Keep selected unless E13's fix is reachable from current HEAD or E6
+rejection/confirmation remains valid there.
 
 ## E2 — Critique pass
 
