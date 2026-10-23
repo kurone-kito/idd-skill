@@ -1,0 +1,1826 @@
+// idd-generated-from: src/scripts/provisional-decision-state.mts
+//
+// The scripts/provisional-decision-state.mjs copy is generated from this
+// source by `pnpm run build`. Edit this .mts, never the generated .mjs. See
+// docs/typescript-sources.md.
+
+/**
+ * Pure parser and replay evaluator for the append-only provisional-decision
+ * record stream. GitHub metadata, trusted-author policy, claim lineage, and
+ * verified work are resolved by the caller and supplied as evidence.
+ */
+
+export const PROVISIONAL_DECISION_RECORD_MARKER =
+  '<!-- idd-provisional-decision-record:v1 -->';
+export const PROVISIONAL_DECISION_ANSWER_MARKER =
+  '<!-- idd-provisional-decision-agent-answer:v1 -->';
+
+type JsonObject = Record<string, unknown>;
+
+export interface ProvisionalDecisionSource {
+  readonly repository: string;
+  readonly issueNumber: number;
+  readonly snapshot: {
+    readonly title: string;
+    readonly bodySha256: string;
+    readonly updatedAt: string;
+  };
+}
+
+export interface ProvisionalDecisionClaim {
+  readonly claimId: string;
+  readonly agentId: string;
+  readonly branch: string;
+  readonly claimedAt: string;
+  readonly supersedes?: string;
+}
+
+export interface ProvisionalDecisionRecord {
+  readonly schemaVersion: 1;
+  readonly recordId: string;
+  readonly source: ProvisionalDecisionSource;
+  readonly bundleGeneration: number;
+  readonly decisionGeneration: number;
+  readonly claimLineage: readonly ProvisionalDecisionClaim[];
+  readonly evidenceReferences: readonly string[];
+  readonly event: JsonObject & { readonly type: string };
+}
+
+export interface ProvisionalDecisionComment {
+  /** GitHub's server-assigned comment ID, represented without numeric loss. */
+  readonly id: string;
+  readonly url: string;
+  readonly body: string;
+  readonly authorLogin: string | null;
+  readonly createdAt: string;
+  /** Resolved from the comment's edit history by the caller. */
+  readonly edited: boolean;
+  /** Resolved from API authorship and the repository's trusted-marker policy. */
+  readonly trustedAuthor: boolean;
+}
+
+export interface VerifiedProvisionalWork {
+  /** Source and generations prevent one decision's evidence serving another. */
+  readonly source: ProvisionalDecisionSource;
+  readonly bundleGeneration: number;
+  readonly decisionGeneration: number;
+  readonly reference: string;
+  readonly verifiedAt: string;
+  readonly headSha?: string;
+  readonly mergeCommitSha?: string;
+  /** Independently resolved against the selected decision's execution criteria. */
+  readonly executionCriteriaSatisfied: boolean;
+}
+
+export interface ProvisionalDecisionReplayInput {
+  /** Full issue history, oldest first, with every API page concatenated. */
+  readonly comments: readonly ProvisionalDecisionComment[];
+  /** False means the caller could not prove that every page was read. */
+  readonly completeHistory: boolean;
+  readonly currentSource: ProvisionalDecisionSource;
+  /** Trusted, server-verified claim lineage for this source issue. */
+  readonly verifiedClaimLineage: readonly ProvisionalDecisionClaim[];
+  /** Independent verification of completed deliverables. */
+  readonly verifiedWork: readonly VerifiedProvisionalWork[];
+}
+
+export interface ProvisionalDecisionParseIssue {
+  readonly code: string;
+  readonly path: string;
+  readonly message: string;
+}
+
+export type ProvisionalDecisionParseResult =
+  | { readonly ok: true; readonly record: ProvisionalDecisionRecord }
+  | {
+      readonly ok: false;
+      readonly issues: readonly ProvisionalDecisionParseIssue[];
+    };
+
+export interface ProvisionalDecisionAnswer {
+  readonly schemaVersion: 1;
+  readonly source: ProvisionalDecisionSource;
+  readonly bundleGeneration: number;
+  readonly decisionGenerations: readonly number[];
+  readonly claimIds: readonly string[];
+  readonly presentedBundle: readonly {
+    readonly decisionGeneration: number;
+    readonly question: string;
+    readonly selectedOptionId: string;
+    readonly feasibleAlternativeIds: readonly string[];
+    readonly workCompletedRecordId: string;
+    readonly result: JsonObject;
+  }[];
+  readonly response: 'accepted' | 'rework';
+  readonly requestedOptionId?: string;
+  readonly rationale?: string;
+  /** The actual answer received from the user, retained on the source issue. */
+  readonly answerText: string;
+}
+
+export type ProvisionalDecisionStatus =
+  | 'none'
+  | 'selected'
+  | 'in-progress'
+  | 'confirmation-pending'
+  | 'confirmed'
+  | 'rework-requested'
+  | 'rework-authored'
+  | 'invalid';
+
+export interface ReplayedProvisionalDecision {
+  readonly bundleGeneration: number;
+  readonly decisionGeneration: number;
+  readonly selection: ProvisionalDecisionRecord;
+  readonly workStarted?: ProvisionalDecisionRecord;
+  readonly workCompleted?: ProvisionalDecisionRecord;
+  readonly confirmation?: ProvisionalDecisionRecord;
+  readonly reworkRequested?: ProvisionalDecisionRecord;
+  readonly reworkAuthored?: ProvisionalDecisionRecord;
+  readonly status: Exclude<ProvisionalDecisionStatus, 'none' | 'invalid'>;
+}
+
+export interface ProvisionalDecisionReplayResult {
+  readonly valid: boolean;
+  readonly status: ProvisionalDecisionStatus;
+  /** Invalid histories expose no decisions that a caller could act on. */
+  readonly decisions: readonly ReplayedProvisionalDecision[];
+  readonly issues: readonly ProvisionalDecisionParseIssue[];
+}
+
+interface RecordComment {
+  readonly comment: ProvisionalDecisionComment;
+  readonly record: ProvisionalDecisionRecord;
+}
+
+interface MutableDecision {
+  readonly selection: RecordComment;
+  workStarted?: RecordComment;
+  workCompleted?: RecordComment;
+  confirmation?: RecordComment;
+  reworkRequested?: RecordComment;
+  reworkAuthored?: RecordComment;
+}
+
+function isObject(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function exactObject(
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[],
+  path: string,
+  issues: ProvisionalDecisionParseIssue[],
+): JsonObject | undefined {
+  if (!isObject(value)) {
+    issues.push({
+      code: 'object-required',
+      path,
+      message: 'Expected an object.',
+    });
+    return undefined;
+  }
+  for (const key of required) {
+    if (!Object.hasOwn(value, key)) {
+      issues.push({
+        code: 'required-field',
+        path: `${path}.${key}`,
+        message: 'Required field is missing.',
+      });
+    }
+  }
+  const allowed = new Set([...required, ...optional]);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      issues.push({
+        code: 'unexpected-field',
+        path: `${path}.${key}`,
+        message: 'Field is not allowed by the closed record shape.',
+      });
+    }
+  }
+  return value;
+}
+
+function nonEmptyString(
+  value: unknown,
+  path: string,
+  issues: ProvisionalDecisionParseIssue[],
+): value is string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    issues.push({
+      code: 'string-required',
+      path,
+      message: 'Expected a non-empty string.',
+    });
+    return false;
+  }
+  return true;
+}
+
+function dateTime(
+  value: unknown,
+  path: string,
+  issues: ProvisionalDecisionParseIssue[],
+): value is string {
+  if (
+    typeof value !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(
+      value,
+    ) ||
+    !Number.isFinite(Date.parse(value))
+  ) {
+    issues.push({
+      code: 'date-time-required',
+      path,
+      message: 'Expected an RFC 3339 date-time.',
+    });
+    return false;
+  }
+  return true;
+}
+
+function httpUrl(
+  value: unknown,
+  path: string,
+  issues: ProvisionalDecisionParseIssue[],
+): value is string {
+  if (typeof value !== 'string') {
+    issues.push({
+      code: 'url-required',
+      path,
+      message: 'Expected an HTTP(S) URL.',
+    });
+    return false;
+  }
+  try {
+    const url = new URL(value);
+    if (
+      (url.protocol === 'https:' || url.protocol === 'http:') &&
+      url.hostname
+    ) {
+      return true;
+    }
+  } catch {
+    // Report the uniform shape error below.
+  }
+  issues.push({
+    code: 'url-required',
+    path,
+    message: 'Expected an HTTP(S) URL.',
+  });
+  return false;
+}
+
+function positiveSafeInteger(
+  value: unknown,
+  path: string,
+  issues: ProvisionalDecisionParseIssue[],
+): value is number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    issues.push({
+      code: 'positive-safe-integer-required',
+      path,
+      message: 'Expected a positive safe integer.',
+    });
+    return false;
+  }
+  return true;
+}
+
+function checkStringFields(
+  value: JsonObject,
+  keys: readonly string[],
+  path: string,
+  issues: ProvisionalDecisionParseIssue[],
+): void {
+  for (const key of keys) nonEmptyString(value[key], `${path}.${key}`, issues);
+}
+
+function validateSource(
+  value: unknown,
+  path: string,
+  issues: ProvisionalDecisionParseIssue[],
+): void {
+  const source = exactObject(
+    value,
+    ['repository', 'issueNumber', 'snapshot'],
+    [],
+    path,
+    issues,
+  );
+  if (!source) return;
+  if (
+    typeof source.repository !== 'string' ||
+    !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(source.repository)
+  ) {
+    issues.push({
+      code: 'repository-invalid',
+      path: `${path}.repository`,
+      message: 'Expected an owner/repository slug.',
+    });
+  }
+  positiveSafeInteger(source.issueNumber, `${path}.issueNumber`, issues);
+  const snapshot = exactObject(
+    source.snapshot,
+    ['title', 'bodySha256', 'updatedAt'],
+    [],
+    `${path}.snapshot`,
+    issues,
+  );
+  if (!snapshot) return;
+  nonEmptyString(snapshot.title, `${path}.snapshot.title`, issues);
+  if (
+    typeof snapshot.bodySha256 !== 'string' ||
+    !/^[0-9a-f]{64}$/u.test(snapshot.bodySha256)
+  ) {
+    issues.push({
+      code: 'sha256-required',
+      path: `${path}.snapshot.bodySha256`,
+      message: 'Expected a lowercase SHA-256 digest.',
+    });
+  }
+  dateTime(snapshot.updatedAt, `${path}.snapshot.updatedAt`, issues);
+}
+
+function validateClaimLineage(
+  value: unknown,
+  path: string,
+  issues: ProvisionalDecisionParseIssue[],
+): void {
+  if (!Array.isArray(value) || value.length === 0) {
+    issues.push({
+      code: 'claim-lineage-required',
+      path,
+      message: 'Expected a non-empty claim lineage.',
+    });
+    return;
+  }
+  const ids = new Set<string>();
+  value.forEach((entry, index) => {
+    const entryPath = `${path}[${index}]`;
+    const claim = exactObject(
+      entry,
+      ['claimId', 'agentId', 'branch', 'claimedAt'],
+      ['supersedes'],
+      entryPath,
+      issues,
+    );
+    if (!claim) return;
+    checkStringFields(
+      claim,
+      ['claimId', 'agentId', 'branch'],
+      entryPath,
+      issues,
+    );
+    if (
+      typeof claim.branch === 'string' &&
+      !/^issue\/[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(claim.branch)
+    ) {
+      issues.push({
+        code: 'branch-invalid',
+        path: `${entryPath}.branch`,
+        message: 'Expected a canonical issue branch.',
+      });
+    }
+    dateTime(claim.claimedAt, `${entryPath}.claimedAt`, issues);
+    if (claim.supersedes !== undefined)
+      nonEmptyString(claim.supersedes, `${entryPath}.supersedes`, issues);
+    if (typeof claim.claimId === 'string') {
+      if (ids.has(claim.claimId)) {
+        issues.push({
+          code: 'duplicate-claim-id',
+          path: `${entryPath}.claimId`,
+          message: 'Claim IDs must be unique in a lineage.',
+        });
+      }
+      ids.add(claim.claimId);
+    }
+  });
+}
+
+function validateOption(
+  value: unknown,
+  path: string,
+  alternative: boolean,
+  issues: ProvisionalDecisionParseIssue[],
+): void {
+  const required = [
+    'id',
+    'description',
+    'feasibilityRationale',
+    'requirementFit',
+    'consequences',
+    'verification',
+    'reversalOrMigration',
+    ...(alternative ? ['comparison', 'rejectionReason'] : ['rationale']),
+  ];
+  const option = exactObject(value, required, [], path, issues);
+  if (option) checkStringFields(option, required, path, issues);
+}
+
+function validateEvent(
+  value: unknown,
+  issues: ProvisionalDecisionParseIssue[],
+): void {
+  if (!isObject(value) || typeof value.type !== 'string') {
+    issues.push({
+      code: 'event-required',
+      path: '$.event',
+      message: 'Expected an event object with a type.',
+    });
+    return;
+  }
+  const event = value;
+  switch (event.type) {
+    case 'selected': {
+      const shape = exactObject(
+        event,
+        [
+          'type',
+          'question',
+          'selectedOption',
+          'feasibleAlternatives',
+          'executionCriteria',
+        ],
+        [],
+        '$.event',
+        issues,
+      );
+      if (!shape) return;
+      nonEmptyString(shape.question, '$.event.question', issues);
+      validateOption(
+        shape.selectedOption,
+        '$.event.selectedOption',
+        false,
+        issues,
+      );
+      if (
+        !Array.isArray(shape.feasibleAlternatives) ||
+        shape.feasibleAlternatives.length === 0
+      ) {
+        issues.push({
+          code: 'alternatives-required',
+          path: '$.event.feasibleAlternatives',
+          message: 'At least one feasible alternative is required.',
+        });
+      } else {
+        const alternativeIds = new Set<string>();
+        shape.feasibleAlternatives.forEach((alternative, index) => {
+          const path = `$.event.feasibleAlternatives[${index}]`;
+          validateOption(alternative, path, true, issues);
+          if (isObject(alternative) && typeof alternative.id === 'string') {
+            if (
+              alternative.id ===
+                (isObject(shape.selectedOption)
+                  ? shape.selectedOption.id
+                  : undefined) ||
+              alternativeIds.has(alternative.id)
+            ) {
+              issues.push({
+                code: 'duplicate-option-id',
+                path: `${path}.id`,
+                message: 'Option IDs must be unique within a decision.',
+              });
+            }
+            alternativeIds.add(alternative.id);
+          }
+        });
+      }
+      if (
+        !Array.isArray(shape.executionCriteria) ||
+        shape.executionCriteria.length === 0
+      ) {
+        issues.push({
+          code: 'execution-criteria-required',
+          path: '$.event.executionCriteria',
+          message: 'At least one execution criterion is required.',
+        });
+      } else {
+        shape.executionCriteria.forEach((criterion, index) => {
+          nonEmptyString(
+            criterion,
+            `$.event.executionCriteria[${index}]`,
+            issues,
+          );
+        });
+      }
+      return;
+    }
+    case 'work-started': {
+      const shape = exactObject(
+        event,
+        ['type', 'startedAt', 'planReference'],
+        [],
+        '$.event',
+        issues,
+      );
+      if (shape) {
+        dateTime(shape.startedAt, '$.event.startedAt', issues);
+        httpUrl(shape.planReference, '$.event.planReference', issues);
+      }
+      return;
+    }
+    case 'work-completed': {
+      const shape = exactObject(
+        event,
+        ['type', 'result'],
+        [],
+        '$.event',
+        issues,
+      );
+      if (!shape) return;
+      if (!isObject(shape.result)) {
+        issues.push({
+          code: 'result-required',
+          path: '$.event.result',
+          message: 'Expected a completion result object.',
+        });
+        return;
+      }
+      const result = shape.result;
+      if (result.kind === 'merged-pull-request') {
+        exactObject(
+          result,
+          ['kind', 'reference', 'verifiedAt', 'headSha', 'mergeCommitSha'],
+          [],
+          '$.event.result',
+          issues,
+        );
+        httpUrl(result.reference, '$.event.result.reference', issues);
+        dateTime(result.verifiedAt, '$.event.result.verifiedAt', issues);
+        if (
+          typeof result.headSha !== 'string' ||
+          !/^[0-9a-f]{40}$/u.test(result.headSha)
+        ) {
+          issues.push({
+            code: 'sha-required',
+            path: '$.event.result.headSha',
+            message: 'Expected a lowercase commit SHA.',
+          });
+        }
+        if (
+          typeof result.mergeCommitSha !== 'string' ||
+          !/^[0-9a-f]{40}$/u.test(result.mergeCommitSha)
+        ) {
+          issues.push({
+            code: 'sha-required',
+            path: '$.event.result.mergeCommitSha',
+            message: 'Expected a lowercase commit SHA.',
+          });
+        }
+      } else if (result.kind === 'other') {
+        exactObject(
+          result,
+          ['kind', 'reference', 'verifiedAt'],
+          [],
+          '$.event.result',
+          issues,
+        );
+        httpUrl(result.reference, '$.event.result.reference', issues);
+        dateTime(result.verifiedAt, '$.event.result.verifiedAt', issues);
+      } else {
+        issues.push({
+          code: 'completion-kind-invalid',
+          path: '$.event.result.kind',
+          message: 'Expected merged-pull-request or other.',
+        });
+      }
+      return;
+    }
+    case 'confirmed': {
+      const shape = exactObject(
+        event,
+        ['type', 'confirmation'],
+        [],
+        '$.event',
+        issues,
+      );
+      if (!shape) return;
+      const confirmation = exactObject(
+        shape.confirmation,
+        ['commentUrl', 'response', 'confirmedAt'],
+        ['confirmedBy'],
+        '$.event.confirmation',
+        issues,
+      );
+      if (!confirmation) return;
+      httpUrl(
+        confirmation.commentUrl,
+        '$.event.confirmation.commentUrl',
+        issues,
+      );
+      if (confirmation.response !== 'accepted') {
+        issues.push({
+          code: 'confirmation-response-invalid',
+          path: '$.event.confirmation.response',
+          message: 'Only an explicit accepted response is valid.',
+        });
+      }
+      dateTime(
+        confirmation.confirmedAt,
+        '$.event.confirmation.confirmedAt',
+        issues,
+      );
+      if (confirmation.confirmedBy !== undefined)
+        nonEmptyString(
+          confirmation.confirmedBy,
+          '$.event.confirmation.confirmedBy',
+          issues,
+        );
+      return;
+    }
+    case 'rework-requested': {
+      const shape = exactObject(
+        event,
+        ['type', 'reworkRequest'],
+        [],
+        '$.event',
+        issues,
+      );
+      if (!shape) return;
+      const request = exactObject(
+        shape.reworkRequest,
+        ['commentUrl', 'requestedAt', 'requestedOptionId', 'rationale'],
+        [],
+        '$.event.reworkRequest',
+        issues,
+      );
+      if (!request) return;
+      httpUrl(request.commentUrl, '$.event.reworkRequest.commentUrl', issues);
+      dateTime(
+        request.requestedAt,
+        '$.event.reworkRequest.requestedAt',
+        issues,
+      );
+      checkStringFields(
+        request,
+        ['requestedOptionId', 'rationale'],
+        '$.event.reworkRequest',
+        issues,
+      );
+      return;
+    }
+    case 'rework-authored': {
+      const shape = exactObject(
+        event,
+        ['type', 'reworkRoadmap'],
+        [],
+        '$.event',
+        issues,
+      );
+      if (!shape) return;
+      const roadmap = exactObject(
+        shape.reworkRoadmap,
+        ['roadmapIssueNumber', 'roadmapMarkerId', 'authoringSetId', 'url'],
+        [],
+        '$.event.reworkRoadmap',
+        issues,
+      );
+      if (!roadmap) return;
+      positiveSafeInteger(
+        roadmap.roadmapIssueNumber,
+        '$.event.reworkRoadmap.roadmapIssueNumber',
+        issues,
+      );
+      checkStringFields(
+        roadmap,
+        ['roadmapMarkerId', 'authoringSetId'],
+        '$.event.reworkRoadmap',
+        issues,
+      );
+      httpUrl(roadmap.url, '$.event.reworkRoadmap.url', issues);
+      return;
+    }
+    default:
+      issues.push({
+        code: 'event-type-unsupported',
+        path: '$.event.type',
+        message: `Unsupported event type: ${event.type}.`,
+      });
+  }
+}
+
+function validateRecordShape(value: unknown): ProvisionalDecisionParseIssue[] {
+  const issues: ProvisionalDecisionParseIssue[] = [];
+  const record = exactObject(
+    value,
+    [
+      'schemaVersion',
+      'recordId',
+      'source',
+      'bundleGeneration',
+      'decisionGeneration',
+      'claimLineage',
+      'evidenceReferences',
+      'event',
+    ],
+    [],
+    '$',
+    issues,
+  );
+  if (!record) return issues;
+  if (record.schemaVersion !== 1) {
+    issues.push({
+      code: 'schema-version-unsupported',
+      path: '$.schemaVersion',
+      message: 'Only schema version 1 is supported.',
+    });
+  }
+  if (
+    typeof record.recordId !== 'string' ||
+    !/^[A-Za-z0-9._:-]{1,128}$/u.test(record.recordId)
+  ) {
+    issues.push({
+      code: 'record-id-invalid',
+      path: '$.recordId',
+      message: 'Expected a stable record ID.',
+    });
+  }
+  validateSource(record.source, '$.source', issues);
+  positiveSafeInteger(record.bundleGeneration, '$.bundleGeneration', issues);
+  positiveSafeInteger(
+    record.decisionGeneration,
+    '$.decisionGeneration',
+    issues,
+  );
+  validateClaimLineage(record.claimLineage, '$.claimLineage', issues);
+  if (
+    !Array.isArray(record.evidenceReferences) ||
+    record.evidenceReferences.length === 0
+  ) {
+    issues.push({
+      code: 'evidence-required',
+      path: '$.evidenceReferences',
+      message: 'At least one evidence reference is required.',
+    });
+  } else {
+    record.evidenceReferences.forEach((reference, index) => {
+      httpUrl(reference, `$.evidenceReferences[${index}]`, issues);
+    });
+  }
+  validateEvent(record.event, issues);
+  return issues;
+}
+
+function isPositiveSafeIntegerToken(token: string): boolean {
+  const match = /^(-?)(0|[1-9]\d*)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/u.exec(
+    token,
+  );
+  if (!match || match[1] === '-') return false;
+  const exponentText = match[4] ?? '0';
+  const exponentDigits =
+    exponentText.replace(/^[+-]/u, '').replace(/^0+/u, '') || '0';
+  if (exponentDigits.length > 4) return false;
+  const exponent = Number(exponentText);
+  if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > 1024)
+    return false;
+  const coefficientText = `${match[2]}${match[3] ?? ''}`;
+  const coefficient = BigInt(coefficientText);
+  if (coefficient === 0n) return false;
+  const scale = (match[3]?.length ?? 0) - exponent;
+  let value: bigint;
+  if (scale > 0) {
+    if (scale > 1024) return false;
+    const divisor = 10n ** BigInt(scale);
+    if (coefficient % divisor !== 0n) return false;
+    value = coefficient / divisor;
+  } else {
+    if (-scale > 1024) return false;
+    value = coefficient * 10n ** BigInt(-scale);
+  }
+  return value <= BigInt(Number.MAX_SAFE_INTEGER);
+}
+
+function unsafeNumberTokens(json: string): string[] {
+  const unsafe: string[] = [];
+  const numberPattern = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/u;
+  let index = 0;
+  while (index < json.length) {
+    const character = json[index];
+    if (character === '"') {
+      index++;
+      while (index < json.length) {
+        if (json[index] === '\\') index += 2;
+        else if (json[index] === '"') {
+          index++;
+          break;
+        } else index++;
+      }
+      continue;
+    }
+    if (
+      character === '-' ||
+      (character !== undefined && /\d/u.test(character))
+    ) {
+      const token = numberPattern.exec(json.slice(index))?.[0];
+      if (token) {
+        if (!isPositiveSafeIntegerToken(token)) unsafe.push(token);
+        index += token.length;
+        continue;
+      }
+    }
+    index++;
+  }
+  return unsafe;
+}
+
+function parseMarkedJson(
+  body: string,
+  marker: string,
+  issues: ProvisionalDecisionParseIssue[],
+): unknown | undefined {
+  if (!body.startsWith(marker)) {
+    issues.push({
+      code: 'marker-required',
+      path: '$',
+      message: 'The canonical marker must begin at byte zero.',
+    });
+    return undefined;
+  }
+  let payload = body.slice(marker.length);
+  if (payload.startsWith('\r\n')) payload = payload.slice(2);
+  else if (payload.startsWith('\n')) payload = payload.slice(1);
+  else {
+    issues.push({
+      code: 'marker-separator-required',
+      path: '$',
+      message: 'The marker must be followed by a newline.',
+    });
+    return undefined;
+  }
+  if (payload.trim().length === 0) {
+    issues.push({
+      code: 'json-required',
+      path: '$',
+      message: 'The marked comment must contain one JSON value.',
+    });
+    return undefined;
+  }
+  for (const token of unsafeNumberTokens(payload)) {
+    issues.push({
+      code: 'integer-token-unsafe',
+      path: '$',
+      message: `Numeric token ${token} is not a positive safe integer.`,
+    });
+  }
+  if (issues.length > 0) return undefined;
+  try {
+    return JSON.parse(payload) as unknown;
+  } catch (error) {
+    issues.push({
+      code: 'json-invalid',
+      path: '$',
+      message: error instanceof Error ? error.message : 'Invalid JSON.',
+    });
+    return undefined;
+  }
+}
+
+/** Parse one canonical provisional-decision record comment. */
+export function parseProvisionalDecisionRecordComment(
+  body: string,
+): ProvisionalDecisionParseResult {
+  const parseIssues: ProvisionalDecisionParseIssue[] = [];
+  const value = parseMarkedJson(
+    body,
+    PROVISIONAL_DECISION_RECORD_MARKER,
+    parseIssues,
+  );
+  if (parseIssues.length > 0) return { ok: false, issues: parseIssues };
+  const issues = validateRecordShape(value);
+  if (issues.length > 0) return { ok: false, issues };
+  return { ok: true, record: value as ProvisionalDecisionRecord };
+}
+
+function validateAnswerShape(value: unknown): ProvisionalDecisionParseIssue[] {
+  const issues: ProvisionalDecisionParseIssue[] = [];
+  const answer = exactObject(
+    value,
+    [
+      'schemaVersion',
+      'source',
+      'bundleGeneration',
+      'decisionGenerations',
+      'claimIds',
+      'presentedBundle',
+      'response',
+      'answerText',
+    ],
+    ['requestedOptionId', 'rationale'],
+    '$',
+    issues,
+  );
+  if (!answer) return issues;
+  if (answer.schemaVersion !== 1) {
+    issues.push({
+      code: 'schema-version-unsupported',
+      path: '$.schemaVersion',
+      message: 'Only answer version 1 is supported.',
+    });
+  }
+  validateSource(answer.source, '$.source', issues);
+  positiveSafeInteger(answer.bundleGeneration, '$.bundleGeneration', issues);
+  if (
+    !Array.isArray(answer.decisionGenerations) ||
+    answer.decisionGenerations.length === 0
+  ) {
+    issues.push({
+      code: 'decision-generations-required',
+      path: '$.decisionGenerations',
+      message: 'At least one decision generation is required.',
+    });
+  } else {
+    const seen = new Set<number>();
+    answer.decisionGenerations.forEach((generation, index) => {
+      positiveSafeInteger(
+        generation,
+        `$.decisionGenerations[${index}]`,
+        issues,
+      );
+      if (typeof generation === 'number') {
+        if (seen.has(generation))
+          issues.push({
+            code: 'duplicate-decision-generation',
+            path: `$.decisionGenerations[${index}]`,
+            message: 'Decision generations must be unique.',
+          });
+        seen.add(generation);
+      }
+    });
+  }
+  if (!Array.isArray(answer.claimIds) || answer.claimIds.length === 0) {
+    issues.push({
+      code: 'claim-ids-required',
+      path: '$.claimIds',
+      message: 'At least one verified claim ID is required.',
+    });
+  } else {
+    const seen = new Set<string>();
+    answer.claimIds.forEach((claimId, index) => {
+      nonEmptyString(claimId, `$.claimIds[${index}]`, issues);
+      if (typeof claimId === 'string') {
+        if (seen.has(claimId))
+          issues.push({
+            code: 'duplicate-claim-id',
+            path: `$.claimIds[${index}]`,
+            message: 'Claim IDs must be unique.',
+          });
+        seen.add(claimId);
+      }
+    });
+  }
+  if (
+    !Array.isArray(answer.presentedBundle) ||
+    answer.presentedBundle.length === 0
+  ) {
+    issues.push({
+      code: 'presented-bundle-required',
+      path: '$.presentedBundle',
+      message: 'The presented bundle must contain every current decision.',
+    });
+  } else {
+    answer.presentedBundle.forEach((entry, index) => {
+      const path = `$.presentedBundle[${index}]`;
+      const decision = exactObject(
+        entry,
+        [
+          'decisionGeneration',
+          'question',
+          'selectedOptionId',
+          'feasibleAlternativeIds',
+          'workCompletedRecordId',
+          'result',
+        ],
+        [],
+        path,
+        issues,
+      );
+      if (!decision) return;
+      positiveSafeInteger(
+        decision.decisionGeneration,
+        `${path}.decisionGeneration`,
+        issues,
+      );
+      checkStringFields(
+        decision,
+        ['question', 'selectedOptionId', 'workCompletedRecordId'],
+        path,
+        issues,
+      );
+      if (
+        !Array.isArray(decision.feasibleAlternativeIds) ||
+        decision.feasibleAlternativeIds.length === 0
+      ) {
+        issues.push({
+          code: 'alternatives-required',
+          path: `${path}.feasibleAlternativeIds`,
+          message:
+            'The presented decision must include its feasible alternatives.',
+        });
+      } else {
+        decision.feasibleAlternativeIds.forEach((id, alternativeIndex) => {
+          nonEmptyString(
+            id,
+            `${path}.feasibleAlternativeIds[${alternativeIndex}]`,
+            issues,
+          );
+        });
+      }
+      if (!isObject(decision.result)) {
+        issues.push({
+          code: 'result-required',
+          path: `${path}.result`,
+          message:
+            'The presented decision must include verified completion evidence.',
+        });
+      }
+    });
+  }
+  if (answer.response === 'accepted') {
+    if (
+      answer.requestedOptionId !== undefined ||
+      answer.rationale !== undefined
+    ) {
+      issues.push({
+        code: 'answer-response-shape-invalid',
+        path: '$',
+        message: 'An accepted response cannot carry rework fields.',
+      });
+    }
+  } else if (answer.response === 'rework') {
+    nonEmptyString(answer.requestedOptionId, '$.requestedOptionId', issues);
+    nonEmptyString(answer.rationale, '$.rationale', issues);
+  } else {
+    issues.push({
+      code: 'answer-response-invalid',
+      path: '$.response',
+      message: 'Expected accepted or rework.',
+    });
+  }
+  nonEmptyString(answer.answerText, '$.answerText', issues);
+  return issues;
+}
+
+function parseAnswerComment(body: string):
+  | { readonly ok: true; readonly answer: ProvisionalDecisionAnswer }
+  | {
+      readonly ok: false;
+      readonly issues: readonly ProvisionalDecisionParseIssue[];
+    } {
+  const parseIssues: ProvisionalDecisionParseIssue[] = [];
+  const value = parseMarkedJson(
+    body,
+    PROVISIONAL_DECISION_ANSWER_MARKER,
+    parseIssues,
+  );
+  if (parseIssues.length > 0) return { ok: false, issues: parseIssues };
+  const issues = validateAnswerShape(value);
+  if (issues.length > 0) return { ok: false, issues };
+  return { ok: true, answer: value as ProvisionalDecisionAnswer };
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (isObject(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'undefined';
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return stableJson(left) === stableJson(right);
+}
+
+function claimPrefixMatches(
+  recordClaims: readonly ProvisionalDecisionClaim[],
+  verifiedClaims: readonly ProvisionalDecisionClaim[],
+): boolean {
+  if (recordClaims.length === 0 || recordClaims.length > verifiedClaims.length)
+    return false;
+  return recordClaims.every((claim, index) =>
+    sameValue(claim, verifiedClaims[index]),
+  );
+}
+
+function sameWorkResult(
+  record: ProvisionalDecisionRecord,
+  evidence: VerifiedProvisionalWork,
+  source: ProvisionalDecisionSource,
+): boolean {
+  const recordResult = resultFor(record);
+  return (
+    recordResult !== undefined &&
+    sameValue(evidence.source, source) &&
+    evidence.bundleGeneration === record.bundleGeneration &&
+    evidence.decisionGeneration === record.decisionGeneration &&
+    evidence.executionCriteriaSatisfied &&
+    recordResult.reference === evidence.reference &&
+    recordResult.verifiedAt === evidence.verifiedAt &&
+    (recordResult.headSha === undefined ||
+      recordResult.headSha === evidence.headSha) &&
+    (recordResult.mergeCommitSha === undefined ||
+      recordResult.mergeCommitSha === evidence.mergeCommitSha)
+  );
+}
+
+function resultFor(record: ProvisionalDecisionRecord): JsonObject | undefined {
+  return record.event.type === 'work-completed' && isObject(record.event.result)
+    ? record.event.result
+    : undefined;
+}
+
+function sourceIssueUrl(source: ProvisionalDecisionSource): string {
+  return `https://github.com/${source.repository}/issues/${source.issueNumber}`;
+}
+
+function commentBelongsToSource(
+  comment: ProvisionalDecisionComment,
+  source: ProvisionalDecisionSource,
+): boolean {
+  try {
+    const url = new URL(comment.url);
+    return (
+      url.protocol === 'https:' &&
+      url.hostname === 'github.com' &&
+      url.port === '' &&
+      url.username === '' &&
+      url.password === '' &&
+      url.search === '' &&
+      url.pathname === `/${source.repository}/issues/${source.issueNumber}` &&
+      url.hash === `#issuecomment-${comment.id}`
+    );
+  } catch {
+    return false;
+  }
+}
+
+function answerPresentation(
+  decisions: readonly MutableDecision[],
+): ProvisionalDecisionAnswer['presentedBundle'] | undefined {
+  const presentation: ProvisionalDecisionAnswer['presentedBundle'][number][] =
+    [];
+  const ordered = [...decisions].sort(
+    (left, right) =>
+      left.selection.record.decisionGeneration -
+      right.selection.record.decisionGeneration,
+  );
+  for (const decision of ordered) {
+    const completionEvent = decision.workCompleted;
+    if (!completionEvent) return undefined;
+    const selection = decision.selection.record;
+    const selectedOption = selection.event.selectedOption as JsonObject;
+    const alternatives = selection.event.feasibleAlternatives as JsonObject[];
+    const completion = completionEvent.record;
+    const result = resultFor(completion);
+    if (!result) return undefined;
+    presentation.push({
+      decisionGeneration: selection.decisionGeneration,
+      question: selection.event.question as string,
+      selectedOptionId: selectedOption.id as string,
+      feasibleAlternativeIds: alternatives
+        .map((alternative) => alternative.id as string)
+        .sort(),
+      workCompletedRecordId: completion.recordId,
+      result,
+    });
+  }
+  return presentation;
+}
+
+function validateAnswerBinding(
+  answer: ProvisionalDecisionAnswer,
+  input: ProvisionalDecisionReplayInput,
+  bundleGeneration: number,
+  decisions: readonly MutableDecision[],
+): boolean {
+  const expectedDecisions = decisions
+    .map((decision) => decision.selection.record.decisionGeneration)
+    .sort((a, b) => a - b);
+  const answerDecisions = [...answer.decisionGenerations].sort((a, b) => a - b);
+  const expectedClaims = input.verifiedClaimLineage.map(
+    (claim) => claim.claimId,
+  );
+  const answerClaims = [...answer.claimIds];
+  if (
+    !sameValue(answer.source, input.currentSource) ||
+    answer.bundleGeneration !== bundleGeneration ||
+    !sameValue(answerDecisions, expectedDecisions) ||
+    !sameValue(answerClaims, expectedClaims)
+  )
+    return false;
+  const expectedPresentation = answerPresentation(decisions);
+  return (
+    expectedPresentation !== undefined &&
+    sameValue(answer.presentedBundle, expectedPresentation)
+  );
+}
+
+function createReplayIssue(
+  code: string,
+  message: string,
+  commentId?: string,
+): ProvisionalDecisionParseIssue {
+  return {
+    code,
+    path: commentId === undefined ? '$' : `comments[${commentId}]`,
+    message,
+  };
+}
+
+function invalidResult(
+  issues: readonly ProvisionalDecisionParseIssue[],
+): ProvisionalDecisionReplayResult {
+  return { valid: false, status: 'invalid', decisions: [], issues };
+}
+
+function decisionStatus(
+  decision: MutableDecision,
+): ReplayedProvisionalDecision['status'] {
+  if (decision.reworkAuthored) return 'rework-authored';
+  if (decision.reworkRequested) return 'rework-requested';
+  if (decision.confirmation) return 'confirmed';
+  if (decision.workCompleted) return 'confirmation-pending';
+  if (decision.workStarted) return 'in-progress';
+  return 'selected';
+}
+
+/**
+ * Replay a complete, oldest-first issue-comment history without network or
+ * prompt access. The caller owns API pagination, author trust, edit checks,
+ * claim verification, and independent work verification.
+ */
+// audit:ignore-dead-export: runtime consumer is tracked in issue #4536
+export function replayProvisionalDecisionHistory(
+  input: ProvisionalDecisionReplayInput,
+): ProvisionalDecisionReplayResult {
+  const issues: ProvisionalDecisionParseIssue[] = [];
+  if (!input.completeHistory) {
+    return invalidResult([
+      createReplayIssue(
+        'history-incomplete',
+        'The complete issue-comment history was not verified.',
+      ),
+    ]);
+  }
+  if (!input.verifiedClaimLineage.length) {
+    return invalidResult([
+      createReplayIssue(
+        'claim-lineage-unverified',
+        'No trusted claim lineage was supplied.',
+      ),
+    ]);
+  }
+  const currentSourceIssues: ProvisionalDecisionParseIssue[] = [];
+  validateSource(input.currentSource, '$.currentSource', currentSourceIssues);
+  validateClaimLineage(
+    input.verifiedClaimLineage,
+    '$.verifiedClaimLineage',
+    currentSourceIssues,
+  );
+  if (currentSourceIssues.length) return invalidResult(currentSourceIssues);
+
+  const commentsByUrl = new Map<string, ProvisionalDecisionComment>();
+  const commentIds = new Set<string>();
+  let priorCreatedAt = -Infinity;
+  for (const comment of input.comments) {
+    const createdAt = Date.parse(comment.createdAt);
+    if (!Number.isFinite(createdAt) || createdAt < priorCreatedAt) {
+      issues.push(
+        createReplayIssue(
+          'history-order-invalid',
+          'Comments must be in complete oldest-first server order.',
+          comment.id,
+        ),
+      );
+    }
+    priorCreatedAt = createdAt;
+    if (commentIds.has(comment.id) || commentsByUrl.has(comment.url)) {
+      issues.push(
+        createReplayIssue(
+          'duplicate-comment',
+          'Comment IDs and URLs must be unique in the complete history.',
+          comment.id,
+        ),
+      );
+    }
+    commentIds.add(comment.id);
+    commentsByUrl.set(comment.url, comment);
+  }
+  if (issues.length) return invalidResult(issues);
+
+  const recordComments: RecordComment[] = [];
+  const recordIds = new Set<string>();
+  for (const comment of input.comments) {
+    if (comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER)) {
+      if (!comment.trustedAuthor || !comment.authorLogin) continue;
+      if (
+        comment.edited ||
+        !commentBelongsToSource(comment, input.currentSource)
+      ) {
+        issues.push(
+          createReplayIssue(
+            'record-authority-invalid',
+            'A canonical record must be unedited and API-authored by a trusted marker actor.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      const parsed = parseProvisionalDecisionRecordComment(comment.body);
+      if (!parsed.ok) {
+        issues.push(
+          ...parsed.issues.map((issue) => ({
+            ...issue,
+            path: `comments[${comment.id}]${issue.path.slice(1)}`,
+          })),
+        );
+        continue;
+      }
+      if (recordIds.has(parsed.record.recordId)) {
+        issues.push(
+          createReplayIssue(
+            'duplicate-record-id',
+            `Duplicate record ID ${parsed.record.recordId}.`,
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      recordIds.add(parsed.record.recordId);
+      if (!sameValue(parsed.record.source, input.currentSource)) {
+        issues.push(
+          createReplayIssue(
+            'source-binding-mismatch',
+            'The record is not bound to the current source snapshot.',
+            comment.id,
+          ),
+        );
+      }
+      if (
+        !claimPrefixMatches(
+          parsed.record.claimLineage,
+          input.verifiedClaimLineage,
+        )
+      ) {
+        issues.push(
+          createReplayIssue(
+            'claim-binding-mismatch',
+            'The record claim lineage is not a verified prefix of the current lineage.',
+            comment.id,
+          ),
+        );
+      }
+      recordComments.push({ comment, record: parsed.record });
+    }
+  }
+  if (issues.length) return invalidResult(issues);
+  if (recordComments.length === 0)
+    return { valid: true, status: 'none', decisions: [], issues: [] };
+
+  const states = new Map<string, MutableDecision>();
+  let latestBundleGeneration = 0;
+  for (const entry of recordComments) {
+    const { record, comment } = entry;
+    const key = `${record.bundleGeneration}:${record.decisionGeneration}`;
+    const event = record.event;
+    if (record.bundleGeneration < latestBundleGeneration) {
+      issues.push(
+        createReplayIssue(
+          'bundle-generation-regression',
+          'A later bundle generation cannot be followed by records from an older generation.',
+          comment.id,
+        ),
+      );
+      continue;
+    }
+    if (record.bundleGeneration > latestBundleGeneration) {
+      if (latestBundleGeneration > 0) {
+        const priorBundle = [...states.values()].filter(
+          (state) =>
+            state.selection.record.bundleGeneration === latestBundleGeneration,
+        );
+        const priorBundleClosed =
+          priorBundle.length > 0 &&
+          (priorBundle.every((state) => state.confirmation) ||
+            priorBundle.some((state) => state.reworkAuthored));
+        if (!priorBundleClosed) {
+          issues.push(
+            createReplayIssue(
+              'bundle-generation-overlap',
+              'A new bundle generation cannot replace an unconfirmed bundle before its rework roadmap is recorded.',
+              comment.id,
+            ),
+          );
+          continue;
+        }
+      }
+      latestBundleGeneration = record.bundleGeneration;
+    }
+    const existing = states.get(key);
+    if (event.type === 'selected') {
+      if (existing) {
+        issues.push(
+          createReplayIssue(
+            'duplicate-selection',
+            'A decision generation may be selected only once.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      const closedBundle = [...states.values()].some(
+        (state) =>
+          state.selection.record.bundleGeneration === record.bundleGeneration &&
+          (state.confirmation || state.reworkRequested || state.reworkAuthored),
+      );
+      if (closedBundle) {
+        issues.push(
+          createReplayIssue(
+            'bundle-generation-closed',
+            'A bundle cannot accept new decisions after confirmation or rework begins; start a new bundle generation.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      states.set(key, { selection: entry });
+      continue;
+    }
+    if (!existing) {
+      issues.push(
+        createReplayIssue(
+          'transition-without-selection',
+          `${event.type} has no preceding selection for this generation.`,
+          comment.id,
+        ),
+      );
+      continue;
+    }
+    const prior =
+      existing.reworkAuthored ??
+      existing.reworkRequested ??
+      existing.confirmation ??
+      existing.workCompleted ??
+      existing.workStarted ??
+      existing.selection;
+    if (Date.parse(comment.createdAt) < Date.parse(prior.comment.createdAt)) {
+      issues.push(
+        createReplayIssue(
+          'transition-order-invalid',
+          `${event.type} precedes its prior lifecycle event.`,
+          comment.id,
+        ),
+      );
+      continue;
+    }
+    if (event.type === 'work-started') {
+      if (
+        existing.workStarted ||
+        existing.workCompleted ||
+        existing.confirmation ||
+        existing.reworkRequested
+      ) {
+        issues.push(
+          createReplayIssue(
+            'work-started-conflict',
+            'Work may start once before completion or rework.',
+            comment.id,
+          ),
+        );
+      } else existing.workStarted = entry;
+      continue;
+    }
+    if (event.type === 'work-completed') {
+      if (
+        !existing.workStarted ||
+        existing.workCompleted ||
+        existing.confirmation ||
+        existing.reworkRequested
+      ) {
+        issues.push(
+          createReplayIssue(
+            'work-completion-order-invalid',
+            'Completion requires one preceding work-started event.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      if (
+        !input.verifiedWork.some((evidence) =>
+          sameWorkResult(record, evidence, input.currentSource),
+        )
+      ) {
+        issues.push(
+          createReplayIssue(
+            'work-evidence-insufficient',
+            'Completion has no matching independently verified evidence satisfying its execution criteria.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      existing.workCompleted = entry;
+      continue;
+    }
+    if (event.type === 'confirmed') {
+      if (
+        !existing.workCompleted ||
+        existing.reworkRequested ||
+        existing.reworkAuthored
+      ) {
+        issues.push(
+          createReplayIssue(
+            'confirmation-order-invalid',
+            'Confirmation requires completed work and no active rework request.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      const confirmation = event.confirmation as JsonObject;
+      const url = confirmation.commentUrl as string;
+      const answerComment = commentsByUrl.get(url);
+      if (
+        answerComment?.trustedAuthor !== true ||
+        !answerComment.authorLogin ||
+        answerComment.edited ||
+        !commentBelongsToSource(answerComment, input.currentSource) ||
+        !answerComment.body.startsWith(PROVISIONAL_DECISION_ANSWER_MARKER)
+      ) {
+        issues.push(
+          createReplayIssue(
+            'confirmation-answer-untrusted',
+            'The referenced answer comment is missing, unmarked, edited, or not API-authored by a trusted recorder.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      const parsedAnswer = parseAnswerComment(answerComment.body);
+      if (!parsedAnswer.ok) {
+        issues.push(
+          ...parsedAnswer.issues.map((issue) => ({
+            ...issue,
+            path: `comments[${answerComment.id}]${issue.path.slice(1)}`,
+          })),
+        );
+        continue;
+      }
+      if (
+        Date.parse(answerComment.createdAt) !==
+          Date.parse(confirmation.confirmedAt as string) ||
+        Date.parse(answerComment.createdAt) > Date.parse(comment.createdAt)
+      ) {
+        issues.push(
+          createReplayIssue(
+            'confirmation-time-mismatch',
+            'The answer comment creation time must match confirmedAt and precede its record.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      const bundleGeneration = record.bundleGeneration;
+      const currentBundle = [...states.values()].filter(
+        (state) => state.selection.record.bundleGeneration === bundleGeneration,
+      );
+      if (
+        currentBundle.some(
+          (state) =>
+            !state.workCompleted ||
+            state.reworkRequested ||
+            state.reworkAuthored,
+        )
+      ) {
+        issues.push(
+          createReplayIssue(
+            'confirmation-bundle-incomplete',
+            'Every decision in the current bundle must have verified completion before confirmation.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      if (
+        !validateAnswerBinding(
+          parsedAnswer.answer,
+          input,
+          bundleGeneration,
+          currentBundle,
+        )
+      ) {
+        issues.push(
+          createReplayIssue(
+            'confirmation-scope-mismatch',
+            'The referenced answer does not present and bind the complete current source, bundle, claim, decision, and work scope.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      if (parsedAnswer.answer.response !== 'accepted') {
+        issues.push(
+          createReplayIssue(
+            'confirmation-answer-not-accepted',
+            'The referenced answer records an alternate preference, not acceptance of the completed bundle.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      if (existing.confirmation) {
+        issues.push(
+          createReplayIssue(
+            'duplicate-confirmation',
+            'A decision generation may be confirmed only once.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      existing.confirmation = entry;
+      continue;
+    }
+    if (event.type === 'rework-requested') {
+      if (
+        !existing.workCompleted ||
+        existing.confirmation ||
+        existing.reworkRequested
+      ) {
+        issues.push(
+          createReplayIssue(
+            'rework-request-order-invalid',
+            'Rework requires completed, unconfirmed work and may be requested only once.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      const request = event.reworkRequest as JsonObject;
+      const selectionEvent = existing.selection.record.event;
+      const selectedOptionId = (selectionEvent.selectedOption as JsonObject).id;
+      const alternateIds = (
+        selectionEvent.feasibleAlternatives as JsonObject[]
+      ).map((option) => option.id);
+      if (
+        request.requestedOptionId === selectedOptionId ||
+        !alternateIds.includes(request.requestedOptionId)
+      ) {
+        issues.push(
+          createReplayIssue(
+            'rework-option-invalid',
+            'Rework must select a recorded feasible alternative.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      const answerComment = commentsByUrl.get(request.commentUrl as string);
+      if (
+        answerComment?.trustedAuthor !== true ||
+        !answerComment.authorLogin ||
+        answerComment.edited ||
+        !commentBelongsToSource(answerComment, input.currentSource) ||
+        !answerComment.body.startsWith(PROVISIONAL_DECISION_ANSWER_MARKER)
+      ) {
+        issues.push(
+          createReplayIssue(
+            'rework-answer-untrusted',
+            'The rework request must reference an unedited, trusted, scoped answer comment.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      const parsedAnswer = parseAnswerComment(answerComment.body);
+      if (!parsedAnswer.ok) {
+        issues.push(
+          ...parsedAnswer.issues.map((issue) => ({
+            ...issue,
+            path: `comments[${answerComment.id}]${issue.path.slice(1)}`,
+          })),
+        );
+        continue;
+      }
+      const bundleGeneration = record.bundleGeneration;
+      const currentBundle = [...states.values()].filter(
+        (state) => state.selection.record.bundleGeneration === bundleGeneration,
+      );
+      if (
+        currentBundle.some(
+          (state) =>
+            !state.workCompleted || state.confirmation || state.reworkRequested,
+        ) ||
+        parsedAnswer.answer.response !== 'rework' ||
+        parsedAnswer.answer.requestedOptionId !== request.requestedOptionId ||
+        parsedAnswer.answer.rationale !== request.rationale ||
+        Date.parse(answerComment.createdAt) !==
+          Date.parse(request.requestedAt as string) ||
+        Date.parse(answerComment.createdAt) > Date.parse(comment.createdAt) ||
+        !validateAnswerBinding(
+          parsedAnswer.answer,
+          input,
+          bundleGeneration,
+          currentBundle,
+        )
+      ) {
+        issues.push(
+          createReplayIssue(
+            'rework-answer-scope-mismatch',
+            'The rework answer must explicitly request this feasible option for the complete current bundle and precede its record.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      existing.reworkRequested = entry;
+      continue;
+    }
+    if (event.type === 'rework-authored') {
+      if (!existing.reworkRequested || existing.reworkAuthored) {
+        issues.push(
+          createReplayIssue(
+            'rework-roadmap-order-invalid',
+            'A rework roadmap requires one preceding rework request.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      const roadmap = event.reworkRoadmap as JsonObject;
+      const source = input.currentSource;
+      const expectedUrl = sourceIssueUrl(source);
+      if (
+        roadmap.roadmapIssueNumber !== source.issueNumber ||
+        roadmap.url !== expectedUrl
+      ) {
+        issues.push(
+          createReplayIssue(
+            'rework-source-mismatch',
+            'The rework roadmap must convert the same source issue.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      existing.reworkAuthored = entry;
+    }
+  }
+  if (issues.length) return invalidResult(issues);
+
+  const allStates = [...states.values()].sort((left, right) => {
+    const bundle =
+      left.selection.record.bundleGeneration -
+      right.selection.record.bundleGeneration;
+    return (
+      bundle ||
+      left.selection.record.decisionGeneration -
+        right.selection.record.decisionGeneration
+    );
+  });
+  const currentBundleGeneration = Math.max(
+    ...allStates.map((state) => state.selection.record.bundleGeneration),
+  );
+  const currentBundle = allStates.filter(
+    (state) =>
+      state.selection.record.bundleGeneration === currentBundleGeneration,
+  );
+  const decisions: ReplayedProvisionalDecision[] = allStates.map((state) => ({
+    bundleGeneration: state.selection.record.bundleGeneration,
+    decisionGeneration: state.selection.record.decisionGeneration,
+    selection: state.selection.record,
+    ...(state.workStarted ? { workStarted: state.workStarted.record } : {}),
+    ...(state.workCompleted
+      ? { workCompleted: state.workCompleted.record }
+      : {}),
+    ...(state.confirmation ? { confirmation: state.confirmation.record } : {}),
+    ...(state.reworkRequested
+      ? { reworkRequested: state.reworkRequested.record }
+      : {}),
+    ...(state.reworkAuthored
+      ? { reworkAuthored: state.reworkAuthored.record }
+      : {}),
+    status: decisionStatus(state),
+  }));
+  let status: ProvisionalDecisionStatus;
+  if (currentBundle.some((state) => state.reworkAuthored))
+    status = 'rework-authored';
+  else if (currentBundle.some((state) => state.reworkRequested))
+    status = 'rework-requested';
+  else if (currentBundle.every((state) => state.confirmation))
+    status = 'confirmed';
+  else if (currentBundle.every((state) => state.workCompleted))
+    status = 'confirmation-pending';
+  else if (
+    currentBundle.some((state) => state.workStarted || state.workCompleted)
+  )
+    status = 'in-progress';
+  else status = 'selected';
+  return { valid: true, status, decisions, issues: [] };
+}
