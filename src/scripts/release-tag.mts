@@ -35,7 +35,11 @@ import {
   runProductionCommand as runClaimedPushCommand,
 } from './claimed-push.mts';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mts';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  tagGhCommandError,
+} from './gh-exec.mts';
 import { isNotDispatchedRefusal } from './github-api-refusal.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -650,6 +654,24 @@ function outputText(value: unknown): string {
 }
 
 function fromClaimedPush(result: ClaimedPushCommandResult): CommandResult {
+  let cliError: ClassifiedHelperError | undefined;
+  if (result.status !== 0) {
+    const error = new Error(
+      result.stderr.trim() || result.error || 'the gh read failed',
+    );
+    if (result.stderr !== '') {
+      Object.defineProperty(error, 'stderr', {
+        value: result.stderr,
+        enumerable: false,
+      });
+    }
+    tagGhCommandError(error);
+    const classified = classifyHelperError(error);
+    cliError =
+      result.notDispatched === true
+        ? { ...classified, notDispatched: true }
+        : classified;
+  }
   return {
     status: result.status,
     signal: result.signal,
@@ -657,6 +679,7 @@ function fromClaimedPush(result: ClaimedPushCommandResult): CommandResult {
     stderr: result.stderr,
     ...(result.error === undefined ? {} : { error: result.error }),
     ...(result.notDispatched === true ? { notDispatched: true } : {}),
+    ...(cliError === undefined ? {} : { cliError }),
   };
 }
 

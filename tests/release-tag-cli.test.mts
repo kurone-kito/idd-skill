@@ -112,6 +112,25 @@ function validArgs(fx: Fixture): string[] {
   ];
 }
 
+function configureSigning(fx: Fixture): void {
+  const key = join(fx.root, 'ssh-signing-key');
+  execFileSync(
+    'ssh-keygen',
+    ['-q', '-t', 'ed25519', '-N', '', '-C', EMAIL, '-f', key],
+    { env: fx.env, stdio: 'ignore' },
+  );
+  const publicKey = readFileSync(`${key}.pub`, 'utf8')
+    .trim()
+    .split(' ')
+    .slice(0, 2)
+    .join(' ');
+  writeFileSync(fx.allowedSigners, `${EMAIL} ${publicKey}\n`);
+  git(fx.env, fx.primary, ['config', 'gpg.format', 'ssh']);
+  git(fx.env, fx.primary, ['config', 'user.signingkey', key]);
+  git(fx.env, fx.primary, ['config', 'user.name', 'release fixture']);
+  git(fx.env, fx.primary, ['config', 'user.email', EMAIL]);
+}
+
 function gitStub(): string {
   return `
 const { appendFileSync } = require('node:fs');
@@ -138,7 +157,12 @@ if (args[0] === 'remote' && args[1] === 'get-url' && args.includes('origin')) {
 `;
 }
 
-function ghStub(mergeSha: string): string {
+function ghStub(
+  mergeSha: string,
+  defaultBranchFailure?: { status: number; stderr: string },
+): string {
+  const failureStatus = defaultBranchFailure?.status ?? 0;
+  const failureStderr = JSON.stringify(defaultBranchFailure?.stderr ?? '');
   return `
 const { appendFileSync } = require('node:fs');
 const args = process.argv.slice(2);
@@ -149,7 +173,12 @@ if (args[0] === 'issue' && args[1] === 'view' && args[2] === '${ISSUE}') {
 } else if (args[0] === 'pr' && args[1] === 'view' && args[2] === '${PULL_REQUEST}') {
   process.stdout.write(JSON.stringify({ state: 'MERGED', mergeCommit: { oid: '${mergeSha}' } }));
 } else if (args[0] === 'repo' && args[1] === 'view') {
-  process.stdout.write('main\\n');
+  if (${failureStatus} !== 0) {
+    process.stderr.write(${failureStderr} + '\\n');
+    process.exitCode = ${failureStatus};
+  } else {
+    process.stdout.write('main\\n');
+  }
 } else {
   process.stderr.write('unexpected gh invocation: ' + JSON.stringify(args) + '\\n');
   process.exitCode = 97;
@@ -252,6 +281,35 @@ test('helper error envelope preserves transport classification for failed gh rea
   assert.equal(envelope.notDispatched, undefined);
 });
 
+test('helper error envelope classifies failed default-branch gh reads', () => {
+  for (const scenario of [
+    { status: 404, kind: 'not-found' },
+    { status: 503, kind: 'transport' },
+  ] as const) {
+    const fx = makeFixture();
+    const result = runCli(fx, validArgs(fx), true, {
+      ghSource: ghStub(fx.sha, {
+        status: scenario.status,
+        stderr: `gh: HTTP ${scenario.status}`,
+      }),
+      helperErrorEnvelope: true,
+    });
+
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    assert.equal(
+      JSON.parse(result.stdout).refusal.name,
+      'default-branch-unreadable',
+    );
+    const envelopeLine = result.stderr
+      .split('\n')
+      .find((line) => line.startsWith('{'));
+    assert.ok(envelopeLine, result.stderr);
+    const envelope = JSON.parse(envelopeLine).iddHelperError;
+    assert.equal(envelope.kind, scenario.kind);
+    assert.equal(envelope.httpStatus, scenario.status);
+  }
+});
+
 test('unknown, missing, malformed, and unknown-flag inputs stop before git and gh', () => {
   const fx = makeFixture();
   const valid = validArgs(fx);
@@ -323,4 +381,42 @@ test('default dry-run validates against a local bare remote without creating or 
     { env: fx.env, encoding: 'utf8' },
   );
   assert.equal(remoteTag.status, 1, remoteTag.stderr);
+});
+
+test('apply creates and pushes a signed tag through the CLI', () => {
+  const fx = makeFixture();
+  configureSigning(fx);
+  const result = runCli(fx, [...validArgs(fx), '--apply'], true);
+
+  assert.equal(
+    result.status,
+    0,
+    `${result.stderr}\n${result.stdout}\n${result.log}`,
+  );
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.mode, 'apply');
+  assert.equal(report.decision, 'create');
+  assert.equal(report.created, true);
+  assert.equal(report.pushAttempts, 1);
+  assert.equal(report.pushed, true);
+
+  const localObject = git(fx.env, fx.primary, [
+    'rev-parse',
+    `refs/tags/${TAG}`,
+  ]);
+  const remoteObject = git(fx.env, fx.origin, [
+    'rev-parse',
+    `refs/tags/${TAG}`,
+  ]);
+  assert.equal(remoteObject, localObject);
+  git(fx.env, fx.primary, [
+    '-c',
+    `gpg.ssh.allowedSignersFile=${fx.allowedSigners}`,
+    'verify-tag',
+    localObject,
+  ]);
+  assert.match(
+    git(fx.env, fx.primary, ['cat-file', 'tag', localObject]),
+    new RegExp(`\\n\\nrelease ${TAG}\\n-----BEGIN SSH SIGNATURE-----`, 'u'),
+  );
 });

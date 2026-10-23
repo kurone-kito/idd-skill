@@ -30,7 +30,11 @@ import { realpathSync, statSync } from 'node:fs';
 import { basename, isAbsolute, resolve } from 'node:path';
 import { runProductionCommand as runClaimedPushCommand } from './claimed-push.mjs';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
-import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
+import {
+  GH_TEXT_LOOP_TIMEOUT_OPTIONS,
+  ghText,
+  tagGhCommandError,
+} from './gh-exec.mjs';
 import { isNotDispatchedRefusal } from './github-api-refusal.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -317,6 +321,24 @@ function outputText(value) {
   return Buffer.isBuffer(value) ? value.toString('utf8') : '';
 }
 function fromClaimedPush(result) {
+  let cliError;
+  if (result.status !== 0) {
+    const error = new Error(
+      result.stderr.trim() || result.error || 'the gh read failed',
+    );
+    if (result.stderr !== '') {
+      Object.defineProperty(error, 'stderr', {
+        value: result.stderr,
+        enumerable: false,
+      });
+    }
+    tagGhCommandError(error);
+    const classified = classifyHelperError(error);
+    cliError =
+      result.notDispatched === true
+        ? { ...classified, notDispatched: true }
+        : classified;
+  }
   return {
     status: result.status,
     signal: result.signal,
@@ -324,6 +346,7 @@ function fromClaimedPush(result) {
     stderr: result.stderr,
     ...(result.error === undefined ? {} : { error: result.error }),
     ...(result.notDispatched === true ? { notDispatched: true } : {}),
+    ...(cliError === undefined ? {} : { cliError }),
   };
 }
 /** Whether two paths name the same directory; false when either is missing. */
