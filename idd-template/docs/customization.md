@@ -387,9 +387,21 @@ from the target repository root to get the concrete import surface for
 the chosen profile:
 
 ```sh
-npx --yes --package https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main \
+npx --yes \
+  --package https://codeload.github.com/kurone-kito/idd-skill/tar.gz/77befdd4030757464bed7f31c7dfe6d0a404a18b \
   idd-helper-bundle-manifest --profile package-manager
 ```
+
+The `--package` URL selects the IDD build that runs the manifest. This
+example pins the reviewed v0.17.0 release commit. Before upgrading,
+choose the intended release or commit, resolve it to a full SHA, and
+confirm that the manifest bin and any referenced reusable workflow exist
+at that exact revision. Then update the relevant full-SHA references
+deliberately.
+
+To opt into a mutable running build, replace the SHA in the archive URL
+with `refs/heads/main`. This is an explicit choice; the reviewed full
+SHA remains the recommendation.
 
 The manifest auto-detects npm, pnpm, or yarn from the target repository
 when possible. If detection is ambiguous, pass this flag explicitly:
@@ -401,7 +413,11 @@ when possible. If detection is ambiguous, pass this flag explicitly:
 The output shows which dependency entries, `package.json` scripts,
 vendored files, or one-shot commands belong to the selected profile.
 Pass `--package-spec <pinned-spec>` when you want the manifest to emit a
-reviewed tarball or mirror URL instead of the default archive URL.
+reviewed tarball or mirror URL instead of the default archive URL. This
+option selects the helper package spec in the generated output; it does
+not select the build currently running the manifest. You may explicitly
+set it to a mutable `refs/heads/main` archive URL when that is the
+intended output. This is independent of the `--package` source above.
 
 To switch profiles later, rerun the same command with
 these flags:
@@ -1331,7 +1347,7 @@ Example downstream usage:
 ```yaml
 jobs:
   pnpm-boundary:
-    uses: kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@main
+    uses: kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@77befdd4030757464bed7f31c7dfe6d0a404a18b
     with:
       node-version: "24.x"
       lint-command: npm run lint # replace with your own lint/test command
