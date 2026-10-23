@@ -1060,7 +1060,7 @@ const USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_PREFIX = new RegExp(
 // A name at the start of a compound noun is not an actor target ("a user
 // interface tool"). Keep common clause continuations eligible so a command
 // that continues after an actor ("by the user to verify") stays unsafe.
-const UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE = `(?:to|and|or|but|then|while|whereas|when|because|if|as|in|on|at|during|after|before|for|with|who|that|which|can|could|may|might|must|should|will|would|is|are|was|were|has|have|had|${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE})`;
+const UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE = `(?:to|and|or|but|then|while|whereas|when|because|if|as|in|on|at|during|after|before|for|with|who|that|which|can|could|may|might|must|should|will|would|is|are|was|were|has|have|had|${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}|participant)`;
 const UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE = String.raw`(?![\w-]|\s+(?!(?:${UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE})\b)\w)`;
 const UNSAFE_HUMAN_ACTOR_TARGET_SOURCE = String.raw`by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}`;
 // Agent-role recipients are unsafe when they follow a direct command object.
@@ -1070,8 +1070,9 @@ const UNSAFE_HUMAN_ACTOR_TARGET_SOURCE = String.raw`by\s+(?:(?:the|a|an)\s+)?${U
 // passive attribution ("workflow maintained by a human agent") into an
 // execution assignment; supplied executable sources have their own matcher.
 const UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE =
-  '(?:generated|maintained|provided|created|built|written|compiled|developed|authored|designed|produced|implemented)';
-const UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_FILLER_SOURCE = String.raw`(?:(?!\b(?:${SUPPLIED_CONTENT_COORDINATOR})\b)[\w-]+\s+)*?`;
+  '(?:generated|maintained|provided|created|built|written|compiled|developed|authored|designed|produced|implemented|assembled|configured)';
+const UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_CLAUSE_SOURCE = String.raw`(?:\b(?:but|then|also)\b|\b(?:and|or)\s+(?:inspect|verify|check|test|run|execute|paste|install|invoke|record|review|read|write|update|add|remove|create|build|generate|use|open|close|follow|document|fix|resolve|ensure|compare|validate|select|download|upload|copy|move|apply|perform|handle|manage|implement|investigate)\b)`;
+const UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_FILLER_SOURCE = String.raw`(?:(?!${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_CLAUSE_SOURCE})[\w-]+\s+)*?`;
 const UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE = String.raw`(?:(?:this|the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_FILLER_SOURCE}(?!(?:${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE})\b\s+by\b)[\w-]+\s+`;
 const UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE = String.raw`(?:${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}(?:\s+|-)(?:agent|assistant|bot)|user-facing\s+coding\s+agent)`;
 const UNSAFE_DIRECT_ACTOR_ROLE_TARGET_SOURCE = String.raw`^\s*${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE}by\s+(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}`;
@@ -5844,7 +5845,8 @@ function findUnsafeExecutionDirectiveMatch(
     'gi',
   );
   const targetPattern = new RegExp(UNSAFE_DIRECTIVE_TARGET_SOURCE, 'gi');
-  const passiveAttributionPrefixPattern = /\b(?:generated|maintained)\s+$/i;
+  const passiveAttributionPrefixPattern =
+    /\b(?:generated|maintained|provided|created|built|written|compiled|developed|authored|designed|produced|implemented|assembled|configured)\s+$/i;
   // The general boundary leaves unlisted compound nouns such as "user
   // interface" available for passive attribution. After a direct command
   // object, a recognized human prefix followed by a noun remains unsafe.
