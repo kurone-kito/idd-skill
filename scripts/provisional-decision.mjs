@@ -5,8 +5,9 @@
 // `pnpm run build`. Edit this .mts file, never the generated copy.
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join, posix, resolve, win32 } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mjs';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import { ghApiJson, ghText, readGithubRepoDefaultBranch } from './gh-exec.mjs';
@@ -22,7 +23,11 @@ import {
   readTrustedDangerouslyAutoDecide,
   selectTrustedConfigRef,
 } from './idd-config.mjs';
-import { normalizePolicyConfig } from './policy-helpers.mjs';
+import { operationalMarkerPrefix } from './marker-helpers.mjs';
+import {
+  normalizePolicyConfig,
+  resolveCollaboratorMarkerTrust,
+} from './policy-helpers.mjs';
 import {
   filterTrustedClaimFamilyEvents,
   parseClaimComment,
@@ -89,8 +94,233 @@ function normalizedLogin(value) {
     .trim()
     .toLowerCase();
 }
+export function resolveTrustedProvisionalDecisionCollaboratorMarkerLogins(
+  comments,
+  enabled,
+  getPermission,
+  additionalLogins = [],
+) {
+  if (!enabled) return [];
+  const markerAuthors = [
+    ...new Set(
+      [
+        ...comments
+          .filter(
+            (comment) =>
+              operationalMarkerPrefix(comment.body) !== null ||
+              comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER),
+          )
+          .map((comment) => normalizedLogin(comment.authorLogin)),
+        ...additionalLogins.map(normalizedLogin),
+      ].filter(Boolean),
+    ),
+  ];
+  return markerAuthors.filter((login) => {
+    try {
+      const result = getPermission(login);
+      if (result.outcome !== 'found') return false;
+      const permission = result.permission.toLowerCase();
+      const roleName = result.roleName.toLowerCase();
+      return (
+        ['admin', 'maintain', 'write'].includes(permission) ||
+        ['admin', 'maintain', 'write'].includes(roleName)
+      );
+    } catch {
+      return false;
+    }
+  });
+}
 function commentUrl(issueUrl, id) {
   return `${issueUrl}#issuecomment-${id}`;
+}
+function pendingOperationDirectory(owner, repo, issueNumber) {
+  const pathApi = process.platform === 'win32' ? win32 : posix;
+  const configuredRoot =
+    process.platform === 'win32'
+      ? process.env.LOCALAPPDATA?.trim()
+      : process.env.XDG_STATE_HOME?.trim();
+  const usableRoot =
+    configuredRoot &&
+    pathApi.isAbsolute(configuredRoot) &&
+    (process.platform === 'win32' || !configuredRoot.startsWith('//'))
+      ? configuredRoot
+      : process.platform === 'win32'
+        ? pathApi.join(homedir(), 'AppData', 'Local')
+        : pathApi.join(homedir(), '.local', 'state');
+  const scope = createHash('sha256')
+    .update(`${owner.toLowerCase()}/${repo.toLowerCase()}#${issueNumber}`)
+    .digest('hex');
+  return pathApi.join(
+    usableRoot,
+    'idd-skill',
+    'provisional-decision-operations',
+    scope,
+  );
+}
+function pendingOperationPath(deps, issueNumber, recordId) {
+  if (!/^pd1-[0-9a-f]{64}$/u.test(recordId)) {
+    throw new Error('pending operation has an invalid record ID');
+  }
+  return join(
+    pendingOperationDirectory(deps.owner, deps.repo, issueNumber),
+    `${recordId}.json`,
+  );
+}
+function sameSourceIdentity(left, right) {
+  return (
+    left.repository.toLowerCase() === right.repository.toLowerCase() &&
+    left.issueNumber === right.issueNumber &&
+    left.snapshot.bodySha256 === right.snapshot.bodySha256
+  );
+}
+function readPendingOperation(deps, issueNumber, recordId) {
+  if (!/^pd1-[0-9a-f]{64}$/u.test(recordId)) {
+    return { status: 'none' };
+  }
+  let path;
+  try {
+    path = pendingOperationPath(deps, issueNumber, recordId);
+  } catch (error) {
+    return {
+      status: 'unreadable',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+  let source;
+  try {
+    source = readFileSync(path, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return { status: 'none' };
+    }
+    return {
+      status: 'unreadable',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+  try {
+    const value = JSON.parse(source);
+    if (
+      value.schemaVersion !== 1 ||
+      value.recordId !== recordId ||
+      typeof value.body !== 'string'
+    ) {
+      throw new Error('pending operation file has an invalid envelope');
+    }
+    const parsed = parseProvisionalDecisionRecordComment(value.body);
+    if (!parsed.ok || parsed.record.recordId !== recordId) {
+      throw new Error('pending operation file has an invalid record body');
+    }
+    let attempted = false;
+    try {
+      readFileSync(`${path}.attempted`, 'utf8');
+      attempted = true;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    return {
+      status: 'found',
+      operation: {
+        body: value.body,
+        record: parsed.record,
+        attempted,
+        path,
+      },
+    };
+  } catch (error) {
+    return {
+      status: 'unreadable',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+function preparePendingOperation(deps, issueNumber, recordId, body) {
+  const existing = readPendingOperation(deps, issueNumber, recordId);
+  if (existing.status === 'unreadable') {
+    return { ok: false, error: existing.error };
+  }
+  if (existing.status === 'found') {
+    return { ok: true, operation: existing.operation };
+  }
+  try {
+    const path = pendingOperationPath(deps, issueNumber, recordId);
+    mkdirSync(pendingOperationDirectory(deps.owner, deps.repo, issueNumber), {
+      recursive: true,
+      mode: 0o700,
+    });
+    const contents = JSON.stringify({ schemaVersion: 1, recordId, body });
+    try {
+      writeFileSync(path, contents, { flag: 'wx', mode: 0o600 });
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const raced = readPendingOperation(deps, issueNumber, recordId);
+      if (raced.status === 'found') {
+        return { ok: true, operation: raced.operation };
+      }
+      return {
+        ok: false,
+        error:
+          raced.status === 'unreadable'
+            ? raced.error
+            : 'pending operation disappeared during preparation',
+      };
+    }
+    const parsed = parseProvisionalDecisionRecordComment(body);
+    if (!parsed.ok) {
+      return { ok: false, error: 'prepared operation body is invalid' };
+    }
+    return {
+      ok: true,
+      operation: { body, record: parsed.record, attempted: false, path },
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+function markPendingOperationAttempted(operation) {
+  try {
+    writeFileSync(
+      `${operation.path}.attempted`,
+      `${operation.record.recordId}\n`,
+      { flag: 'wx', mode: 0o600 },
+    );
+    return true;
+  } catch (error) {
+    if (error.code === 'EEXIST') return false;
+    throw error;
+  }
+}
+function clearPendingOperation(deps, issueNumber, recordId) {
+  try {
+    const path = pendingOperationPath(deps, issueNumber, recordId);
+    rmSync(path, { force: true });
+    rmSync(`${path}.attempted`, { force: true });
+  } catch {
+    // The verified remote record remains authoritative if local cleanup fails.
+  }
+}
+function pendingOperationReport(input, state, label, target, message) {
+  return makeReport(
+    input,
+    'partial',
+    state.replay.status,
+    target,
+    [
+      {
+        name: 'uncertain-operation-reconciliation',
+        passed: false,
+        detail: message,
+      },
+    ],
+    label,
+    labelsContain(state.item.labels, label),
+    false,
+    false,
+    'Reread the complete issue history and reconcile this operation. Do not post a new transition while its outcome is unresolved.',
+  );
 }
 function buildFreshState(issueNumber, deps, options = {}) {
   const item = deps.getWorkItem(issueNumber);
@@ -130,7 +360,8 @@ function buildFreshState(issueNumber, deps, options = {}) {
       trustedAuthor: false,
     };
   });
-  const authority = deps.readAuthority();
+  const viewerLogin = normalizedLogin(deps.viewerLogin());
+  const authority = deps.readAuthority(issueNumber, rawComments, viewerLogin);
   if (authority.status === 'unreadable') {
     throw new Error(
       authority.error || 'trusted repository policy is unreadable',
@@ -192,7 +423,7 @@ function buildFreshState(issueNumber, deps, options = {}) {
     records,
     replay,
     authority,
-    viewerLogin: normalizedLogin(deps.viewerLogin()),
+    viewerLogin,
     issueUrl,
   };
 }
@@ -1333,6 +1564,26 @@ function startAction(input, deps) {
       detail:
         'a work-started transition already exists; the same operation will be replayed',
     });
+    const pending = readPendingOperation(
+      deps,
+      input.issueNumber,
+      existing.record.recordId,
+    );
+    if (
+      pending.status === 'unreadable' ||
+      (pending.status === 'found' &&
+        pending.operation.body !== existing.comment.body)
+    ) {
+      return pendingOperationReport(
+        input,
+        state,
+        label,
+        { ...target, recordId: existing.record.recordId },
+        pending.status === 'unreadable'
+          ? pending.error
+          : 'the persisted work-start record differs from the locally journaled operation',
+      );
+    }
     if (
       typeof planReference === 'string' &&
       planReference !== existing.record.event.planReference
@@ -1353,6 +1604,9 @@ function startAction(input, deps) {
         'Use the persisted work-started operation; do not change its plan reference.',
         target,
       );
+    }
+    if (pending.status === 'found') {
+      clearPendingOperation(deps, input.issueNumber, existing.record.recordId);
     }
     return makeReport(
       input,
@@ -1434,7 +1688,7 @@ function startAction(input, deps) {
       labelPresent,
     );
   }
-  const record = buildRecord(
+  let record = buildRecord(
     state,
     state.verifiedClaimLineage,
     target.bundleGeneration,
@@ -1442,8 +1696,58 @@ function startAction(input, deps) {
     { type: 'work-started', startedAt: isoNow(deps), planReference },
     [planReference],
   );
-  const body = serializedRecord(record);
+  let body = serializedRecord(record);
   const operationTarget = { ...target, recordId: record.recordId };
+  const pending = readPendingOperation(
+    deps,
+    input.issueNumber,
+    record.recordId,
+  );
+  if (pending.status === 'unreadable') {
+    return pendingOperationReport(
+      input,
+      state,
+      label,
+      operationTarget,
+      pending.error,
+    );
+  }
+  if (pending.status === 'found') {
+    const priorEvent = pending.operation.record.event;
+    const sameOperation =
+      sameSourceIdentity(pending.operation.record.source, record.source) &&
+      pending.operation.record.bundleGeneration === record.bundleGeneration &&
+      pending.operation.record.decisionGeneration ===
+        record.decisionGeneration &&
+      priorEvent.type === 'work-started' &&
+      priorEvent.planReference === planReference;
+    if (!sameOperation) {
+      return pendingOperationReport(
+        input,
+        state,
+        label,
+        operationTarget,
+        'the unresolved work-start operation does not match the current source, generation, or plan reference',
+      );
+    }
+    record = pending.operation.record;
+    body = pending.operation.body;
+    if (pending.operation.attempted) {
+      return pendingOperationReport(
+        input,
+        state,
+        label,
+        operationTarget,
+        'a prior work-start POST was attempted but its exact record is not yet visible in full history',
+      );
+    }
+    checks.push({
+      name: 'operation-identity',
+      passed: true,
+      detail:
+        'reusing the exact persisted work-start payload from the prior dry run',
+    });
+  }
   if (!input.apply) {
     return makeReport(
       input,
@@ -1497,6 +1801,58 @@ function startAction(input, deps) {
         operationTarget,
       );
     }
+    const prepared = preparePendingOperation(
+      deps,
+      input.issueNumber,
+      record.recordId,
+      body,
+    );
+    if (!prepared.ok) {
+      return pendingOperationReport(
+        input,
+        fresh,
+        label,
+        operationTarget,
+        prepared.error,
+      );
+    }
+    if (prepared.operation.attempted) {
+      return pendingOperationReport(
+        input,
+        fresh,
+        label,
+        operationTarget,
+        'a prior work-start POST was attempted but its exact record is not yet visible in full history',
+      );
+    }
+    const preparedEvent = prepared.operation.record.event;
+    if (
+      !sameSourceIdentity(prepared.operation.record.source, record.source) ||
+      prepared.operation.record.bundleGeneration !== record.bundleGeneration ||
+      prepared.operation.record.decisionGeneration !==
+        record.decisionGeneration ||
+      preparedEvent.type !== 'work-started' ||
+      preparedEvent.planReference !== planReference
+    ) {
+      return pendingOperationReport(
+        input,
+        fresh,
+        label,
+        operationTarget,
+        'the prepared work-start payload no longer matches the current source, generation, or plan reference',
+      );
+    }
+    record = prepared.operation.record;
+    body = prepared.operation.body;
+    if (!markPendingOperationAttempted(prepared.operation)) {
+      return pendingOperationReport(
+        input,
+        fresh,
+        label,
+        operationTarget,
+        'another invocation already attempted this work-start operation',
+      );
+    }
     postAttempted = true;
     const post = deps.postComment(input.issueNumber, body);
     const after = buildFreshState(input.issueNumber, deps);
@@ -1525,6 +1881,7 @@ function startAction(input, deps) {
       passed: true,
       detail: `comment #${post.id} was read back and the complete history replays`,
     });
+    clearPendingOperation(deps, input.issueNumber, record.recordId);
     return makeReport(
       input,
       'applied',
@@ -1564,6 +1921,9 @@ function startAction(input, deps) {
     const reconciled = after
       ? exactRecord(after, record, body) === 'exact' && after.replay.valid
       : false;
+    if (reconciled) {
+      clearPendingOperation(deps, input.issueNumber, record.recordId);
+    }
     checks.push({
       name: 'uncertain-post-recovery',
       passed: reconciled,
@@ -1759,7 +2119,47 @@ function completeAction(input, deps) {
       detail:
         'a completion record already exists; retry will reconcile its label without reposting',
     });
+    const pending = readPendingOperation(
+      deps,
+      input.issueNumber,
+      existing.record.recordId,
+    );
+    if (
+      pending.status === 'found' &&
+      pending.operation.body !== existing.comment.body
+    ) {
+      return pendingOperationReport(
+        input,
+        state,
+        label,
+        { ...targetInput, recordId: existing.record.recordId },
+        'the persisted completion record differs from the locally journaled operation',
+      );
+    }
   }
+  const pending = existing
+    ? { status: 'none' }
+    : readPendingOperation(deps, input.issueNumber, targetInput.recordId);
+  if (pending.status === 'unreadable') {
+    return pendingOperationReport(
+      input,
+      state,
+      label,
+      targetInput,
+      pending.error,
+    );
+  }
+  if (pending.status === 'found' && pending.operation.attempted) {
+    return pendingOperationReport(
+      input,
+      state,
+      label,
+      targetInput,
+      'a prior completion POST was attempted but its exact record is not yet visible in full history',
+    );
+  }
+  const pendingRecord =
+    pending.status === 'found' ? pending.operation.record : null;
   if (!pullRequest) {
     checks.push({
       name: 'deliverable',
@@ -1784,13 +2184,18 @@ function completeAction(input, deps) {
     ...(input.expectedHeadSha
       ? { expectedHeadSha: input.expectedHeadSha }
       : {}),
-    ...(existing
+    ...(existing || pendingRecord
       ? {
-          expectedHeadSha: String(existing.record.event.result.headSha ?? ''),
-          expectedMergeCommitSha: String(
-            existing.record.event.result.mergeCommitSha ?? '',
+          expectedHeadSha: String(
+            (existing?.record ?? pendingRecord)?.event.result?.headSha ?? '',
           ),
-          verifiedAt: String(existing.record.event.result.verifiedAt ?? ''),
+          expectedMergeCommitSha: String(
+            (existing?.record ?? pendingRecord)?.event.result?.mergeCommitSha ??
+              '',
+          ),
+          verifiedAt: String(
+            (existing?.record ?? pendingRecord)?.event.result?.verifiedAt ?? '',
+          ),
         }
       : {}),
   });
@@ -1851,6 +2256,7 @@ function completeAction(input, deps) {
     if ('report' in sourceOpen) return sourceOpen.report;
     state = sourceOpen.state;
     labelPresent = labelsContain(state.item.labels, label);
+    clearPendingOperation(deps, input.issueNumber, existingRecord.recordId);
     if (!labelPresent && !input.apply) {
       checks.push({
         name: 'needs-decision-label',
@@ -1913,7 +2319,7 @@ function completeAction(input, deps) {
   if ('report' in sourceOpen) return sourceOpen.report;
   state = sourceOpen.state;
   labelPresent = labelsContain(state.item.labels, label);
-  const record = buildRecord(
+  let record = buildRecord(
     state,
     state.verifiedClaimLineage,
     targetInput.bundleGeneration,
@@ -1934,8 +2340,36 @@ function completeAction(input, deps) {
       ...criteriaCheck.references,
     ],
   );
-  const body = serializedRecord(record);
+  let body = serializedRecord(record);
   const target = { ...targetInput, recordId: record.recordId };
+  if (pending.status === 'found') {
+    const sameOperation =
+      sameSourceIdentity(pending.operation.record.source, record.source) &&
+      pending.operation.record.bundleGeneration === record.bundleGeneration &&
+      pending.operation.record.decisionGeneration ===
+        record.decisionGeneration &&
+      JSON.stringify(pending.operation.record.evidenceReferences) ===
+        JSON.stringify(record.evidenceReferences) &&
+      JSON.stringify(pending.operation.record.event) ===
+        JSON.stringify(record.event);
+    if (!sameOperation) {
+      return pendingOperationReport(
+        input,
+        state,
+        label,
+        target,
+        'the prepared completion payload no longer matches current deliverable and criteria evidence',
+      );
+    }
+    record = pending.operation.record;
+    body = pending.operation.body;
+    checks.push({
+      name: 'operation-identity',
+      passed: true,
+      detail:
+        'reusing the exact persisted completion payload from the prior attempt',
+    });
+  }
   if (!input.apply) {
     return makeReport(
       input,
@@ -2012,6 +2446,96 @@ function completeAction(input, deps) {
         `deliverable changed before completion persistence: ${evidence.reason}`,
       );
     }
+    const prepared = preparePendingOperation(
+      deps,
+      input.issueNumber,
+      record.recordId,
+      body,
+    );
+    if (!prepared.ok) {
+      return pendingOperationReport(
+        input,
+        fresh,
+        label,
+        target,
+        prepared.error,
+      );
+    }
+    if (prepared.operation.attempted) {
+      return pendingOperationReport(
+        input,
+        fresh,
+        label,
+        target,
+        'a prior completion POST was attempted but its exact record is not yet visible in full history',
+      );
+    }
+    const storedResult = prepared.operation.record.event.result;
+    const storedEvent = prepared.operation.record.event;
+    const matchesCurrentEvidence =
+      prepared.operation.record.recordId === record.recordId &&
+      sameSourceIdentity(prepared.operation.record.source, record.source) &&
+      prepared.operation.record.bundleGeneration === record.bundleGeneration &&
+      prepared.operation.record.decisionGeneration ===
+        record.decisionGeneration &&
+      JSON.stringify(prepared.operation.record.evidenceReferences) ===
+        JSON.stringify(record.evidenceReferences) &&
+      storedEvent.type === 'work-completed' &&
+      storedResult.kind === 'merged-pull-request' &&
+      storedResult.reference === evidence.reference &&
+      storedResult.headSha === evidence.headSha &&
+      storedResult.mergeCommitSha === evidence.mergeCommitSha &&
+      typeof storedResult.verifiedAt === 'string';
+    if (!matchesCurrentEvidence) {
+      return pendingOperationReport(
+        input,
+        fresh,
+        label,
+        target,
+        'the prepared completion payload no longer matches current deliverable and criteria evidence',
+      );
+    }
+    evidence = deps.verifyPullRequest({
+      issueNumber: input.issueNumber,
+      pullRequest,
+      expectedHeadSha: String(storedResult.headSha),
+      expectedMergeCommitSha: String(storedResult.mergeCommitSha),
+      verifiedAt: String(storedResult.verifiedAt),
+    });
+    if (!evidence.verified) {
+      return pendingOperationReport(
+        input,
+        fresh,
+        label,
+        target,
+        `the persisted completion evidence could not be independently reverified: ${evidence.reason}`,
+      );
+    }
+    const reverifiedMatchesStored =
+      evidence.reference === storedResult.reference &&
+      evidence.headSha === storedResult.headSha &&
+      evidence.mergeCommitSha === storedResult.mergeCommitSha &&
+      evidence.verifiedAt === storedResult.verifiedAt;
+    if (!reverifiedMatchesStored) {
+      return pendingOperationReport(
+        input,
+        fresh,
+        label,
+        target,
+        'the independent deliverable verification no longer matches the prepared completion record',
+      );
+    }
+    record = prepared.operation.record;
+    body = prepared.operation.body;
+    if (!markPendingOperationAttempted(prepared.operation)) {
+      return pendingOperationReport(
+        input,
+        fresh,
+        label,
+        target,
+        'another invocation already attempted this completion operation',
+      );
+    }
     postAttempted = true;
     const post = deps.postComment(input.issueNumber, body);
     const after = buildFreshState(input.issueNumber, deps);
@@ -2045,6 +2569,7 @@ function completeAction(input, deps) {
       passed: true,
       detail: `comment #${post.id} was read back and verified completion replays as confirmation-pending`,
     });
+    clearPendingOperation(deps, input.issueNumber, record.recordId);
     return ensureCompletionLabel(
       input,
       deps,
@@ -2087,6 +2612,9 @@ function completeAction(input, deps) {
         after?.replay.valid &&
         after.replay.status === 'confirmation-pending',
     );
+    if (replayed) {
+      clearPendingOperation(deps, input.issueNumber, record.recordId);
+    }
     checks.push({
       name: 'uncertain-post-recovery',
       passed: replayed,
@@ -2356,7 +2884,7 @@ function productionDependencies(owner, repo, cwd) {
         throw new Error('source issue reopen did not return state OPEN');
       }
     },
-    readAuthority: () => {
+    readAuthority: (_issueNumber, comments = [], viewerLogin = '') => {
       const ref = selectTrustedConfigRef(
         '',
         readGithubRepoDefaultBranch(owner, repo),
@@ -2391,11 +2919,25 @@ function productionDependencies(owner, repo, cwd) {
         envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
         config,
       }).actors;
+      const allowCollaboratorMarkers = resolveCollaboratorMarkerTrust(
+        config,
+        process.env.IDD_TRUST_COLLABORATOR_MARKERS,
+      );
+      const collaboratorMarkers =
+        allowCollaboratorMarkers && comments.length > 0
+          ? resolveTrustedProvisionalDecisionCollaboratorMarkerLogins(
+              comments,
+              true,
+              (login) => port.getCollaboratorPermission(login),
+              [viewerLogin],
+            )
+          : [];
       return {
         status: autoDecide.status,
         enabled: autoDecide.enabled,
         ref,
-        trustedMarkerActors: trusted,
+        trustedMarkerActors: [...new Set([...trusted, ...collaboratorMarkers])],
+        allowCollaboratorMarkers,
         needsDecisionLabelName: normalized.labels.needsDecisionLabelName,
         ...(autoDecide.error ? { error: autoDecide.error } : {}),
       };

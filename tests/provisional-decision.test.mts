@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import type {
   ProviderComment,
   ProviderWorkItem,
@@ -10,17 +15,20 @@ import {
   type ProvisionalDecisionInput,
   type ProvisionalDecisionPullRequestEvidence,
   postProvisionalDecisionCommentOnce,
+  resolveTrustedProvisionalDecisionCollaboratorMarkerLogins,
   runProvisionalDecision,
 } from '../src/scripts/provisional-decision.mts';
 import {
   PROVISIONAL_DECISION_ANSWER_MARKER,
   PROVISIONAL_DECISION_RECORD_MARKER,
+  parseProvisionalDecisionRecordComment,
 } from '../src/scripts/provisional-decision-state.mts';
 import {
   checkSchemaKeywords,
   loadJson,
   validate,
 } from '../src/scripts/validate-schemas.mts';
+import { stubExecutable } from './test-utils.mts';
 
 const ISSUE_NUMBER = 8101;
 const REPOSITORY = 'example/project';
@@ -33,6 +41,142 @@ const MERGE_SHA = 'b'.repeat(40);
 const CLAIM_ID = 'claim-8101-current';
 const AGENT_ID = 'test-agent';
 const NONCE = '0123456789abcdef0123456789abcdef';
+const CLI = fileURLToPath(
+  new URL('../bin/idd-provisional-decision.mjs', import.meta.url),
+);
+
+test('CLI help exposes the production entry point without provider access', () => {
+  const result = spawnSync(process.execPath, [CLI, '--help'], {
+    encoding: 'utf8',
+    timeout: 10_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /--action <select\|start\|complete>/u);
+});
+
+test('CLI and GitHub provider fixture refuse a closed source without writing', () => {
+  const restoreGh = stubExecutable(
+    'gh',
+    [
+      'const args = process.argv.slice(2);',
+      'if (!args.includes("repos/kurone-kito/idd-skill/issues/8101")) {',
+      '  process.stderr.write("unexpected gh request: " + args.join(" "));',
+      '  process.exitCode = 2;',
+      '} else {',
+      '  process.stdout.write(JSON.stringify({',
+      '    number: 8101, title: "Closed source", body: "No mutation allowed.",',
+      '    state: "closed", labels: [],',
+      '    html_url: "https://github.com/kurone-kito/idd-skill/issues/8101",',
+      '    updated_at: "2026-10-24T00:00:00Z"',
+      '  }));',
+      '}',
+    ].join('\n'),
+  );
+  const root = mkdtempSync(join(tmpdir(), 'idd-provisional-decision-cli-'));
+  const inputPath = join(root, 'selection.json');
+  writeFileSync(
+    inputPath,
+    JSON.stringify({
+      question: 'Which option should be selected?',
+      selectedOption: { id: 'one' },
+      feasibleAlternatives: [{ id: 'two', rejectionReason: 'Not selected.' }],
+      executionCriteria: ['A passing check is required.'],
+      evidenceReferences: ['https://example.com/decision'],
+    }),
+  );
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        CLI,
+        '--issue',
+        '8101',
+        '--action',
+        'select',
+        '--claim-id',
+        CLAIM_ID,
+        '--agent-id',
+        AGENT_ID,
+        '--nonce',
+        NONCE,
+        '--input',
+        inputPath,
+      ],
+      {
+        cwd: fileURLToPath(new URL('../', import.meta.url)),
+        encoding: 'utf8',
+        timeout: 15_000,
+        env: {
+          ...process.env,
+          GITHUB_ACTIONS: 'true',
+          GITHUB_REPOSITORY: 'kurone-kito/idd-skill',
+          GH_REPO: '',
+        },
+      },
+    );
+    assert.notEqual(result.status, 0, result.stdout);
+    assert.match(result.stdout, /"outcome": "refused"/u);
+    assert.match(result.stdout, /issue #8101 is not open/u);
+    assert.doesNotMatch(result.stderr, /unexpected gh request/u);
+  } finally {
+    restoreGh();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('collaborator marker trust is opt-in and checks only operational marker authors', () => {
+  const claim = { ...claimComment(), authorLogin: 'admin-user' };
+  const selection = { ...existingSelection(), authorLogin: 'maintainer-user' };
+  const ordinary = {
+    ...claimComment(),
+    id: 9,
+    authorLogin: 'ordinary-user',
+    body: 'A human comment without an operational marker.',
+  };
+  const comments = [claim, selection, ordinary];
+  const calls: string[] = [];
+  const permission = (login: string) => {
+    calls.push(login);
+    if (login === 'admin-user') {
+      return {
+        outcome: 'found' as const,
+        permission: 'admin',
+        roleName: 'admin',
+      };
+    }
+    if (login === 'new-writer') {
+      return {
+        outcome: 'found' as const,
+        permission: 'write',
+        roleName: 'write',
+      };
+    }
+    return {
+      outcome: 'found' as const,
+      permission: 'read',
+      roleName: 'maintain',
+    };
+  };
+  assert.deepEqual(
+    resolveTrustedProvisionalDecisionCollaboratorMarkerLogins(
+      comments,
+      false,
+      permission,
+    ),
+    [],
+  );
+  assert.deepEqual(calls, []);
+  assert.deepEqual(
+    resolveTrustedProvisionalDecisionCollaboratorMarkerLogins(
+      comments,
+      true,
+      permission,
+      ['new-writer'],
+    ),
+    ['admin-user', 'maintainer-user', 'new-writer'],
+  );
+  assert.deepEqual(calls, ['admin-user', 'maintainer-user', 'new-writer']);
+});
 
 function sourceDigest(
   body = 'An issue requiring an operator decision.',
@@ -253,6 +397,7 @@ interface FixtureOptions {
   injectCommentsOnVerify?: number;
   injectedComments?: ProviderComment[];
   executionCriteria?: string[];
+  hiddenRecordType?: 'work-started' | 'work-completed';
 }
 
 function fixture(options: FixtureOptions = {}) {
@@ -293,7 +438,19 @@ function fixture(options: FixtureOptions = {}) {
       }
       return value;
     },
-    listComments: () => [...comments],
+    listComments: () =>
+      comments.filter((comment) => {
+        if (
+          !options.hiddenRecordType ||
+          !comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER)
+        ) {
+          return true;
+        }
+        const parsed = parseProvisionalDecisionRecordComment(comment.body);
+        return (
+          !parsed.ok || parsed.record.event.type !== options.hiddenRecordType
+        );
+      }),
     postComment: (_issueNumber, commentBody) => {
       counters.post += 1;
       if (options.postMode === 'throw-before-write') {
@@ -374,7 +531,7 @@ function fixture(options: FixtureOptions = {}) {
     },
     now: () => NOW,
   };
-  return { deps, comments, labels, counters, item };
+  return { deps, comments, labels, counters, item, options };
 }
 
 function selectionInput(
@@ -645,6 +802,29 @@ test('work-start retry replays an existing start after opt-out and refuses a new
   );
   assert.equal(refused.outcome, 'refused');
   assert.equal(noStart.counters.post, 0);
+});
+
+test('uncertain work-start POST is reconcile-only until its exact record appears', () => {
+  const state = fixture({
+    hiddenRecordType: 'work-started',
+    postMode: 'throw-after-write',
+  });
+  state.comments.push(existingSelection());
+  const first = runProvisionalDecision(startInput({ apply: true }), state.deps);
+  assert.equal(first.outcome, 'partial', JSON.stringify(first));
+  assert.equal(state.counters.post, 1);
+
+  const held = runProvisionalDecision(startInput({ apply: true }), state.deps);
+  assert.equal(held.outcome, 'partial', JSON.stringify(held));
+  assert.equal(state.counters.post, 1);
+
+  state.options.hiddenRecordType = undefined;
+  const reconciled = runProvisionalDecision(
+    startInput({ apply: true }),
+    state.deps,
+  );
+  assert.equal(reconciled.outcome, 'reconciled', JSON.stringify(reconciled));
+  assert.equal(state.counters.post, 1);
 });
 
 test('completion refuses unmerged, stale-head, failed-check, and incomplete criteria evidence', () => {
@@ -964,4 +1144,33 @@ test('label partial-write recovery reconciles the same completion without anothe
   assert.equal(retry.finalized, true);
   assert.equal(labels.has('status:needs-decision'), true);
   assert.equal(counters.post, 1);
+});
+
+test('uncertain completion POST is reconcile-only until its exact record appears', () => {
+  const state = seededWorkFixture({
+    hiddenRecordType: 'work-completed',
+    postMode: 'throw-after-write',
+  });
+  const first = runProvisionalDecision(
+    completeInput({ apply: true }),
+    state.deps,
+  );
+  assert.equal(first.outcome, 'partial', JSON.stringify(first));
+  assert.equal(state.counters.post, 1);
+
+  const held = runProvisionalDecision(
+    completeInput({ apply: true }),
+    state.deps,
+  );
+  assert.equal(held.outcome, 'partial', JSON.stringify(held));
+  assert.equal(state.counters.post, 1);
+
+  state.options.hiddenRecordType = undefined;
+  const reconciled = runProvisionalDecision(
+    completeInput({ apply: true }),
+    state.deps,
+  );
+  assert.equal(reconciled.outcome, 'reconciled', JSON.stringify(reconciled));
+  assert.equal(reconciled.finalized, true);
+  assert.equal(state.counters.post, 1);
 });

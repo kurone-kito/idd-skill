@@ -10292,8 +10292,14 @@ on the open source issue.
 If record persistence succeeds but label application or readback fails, the
 report is `partial`; retrying the same generation reconciles the existing
 completion record and label without posting another transition. An uncertain
-record POST is reread and replayed before any permission to continue is
-reported.
+work-start or completion POST is reread and replayed before any permission to
+continue is reported. Before either POST, the helper saves its exact payload in
+the operator's `idd-skill/provisional-decision-operations` state directory.
+Once a POST may have been dispatched, retries are reconcile-only until that
+exact record appears in full issue history; the helper does not send another
+POST with a fresh timestamp under the same record ID. If history remains
+inconclusive, keep the transition on hold and resolve the provider state before
+starting work or confirming completion.
 
 ## Dead-export audit (kurone-kito/idd-skill#3478)
 
