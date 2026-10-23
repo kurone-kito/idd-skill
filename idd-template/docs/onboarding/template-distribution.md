@@ -55,13 +55,14 @@ The template has three distribution surfaces:
    selected runtime-native destination per companion, only when the
    operator explicitly opts into pre-execution issue drafting or
    instruction-corpus auditing.
-3. **Local-copy installs** where an agent copies the full
-   `idd-template/` directory from a cloned `idd-skill` checkout instead
-   of fetching individual files.
+3. **Local-copy imports** that use the manifest-driven
+   `idd-onboard --import` command to copy the canonical core file set
+   from a local `idd-skill` clone.
 
-This page keeps the executable import snippets for the first two
-surfaces (see [Remote fetch examples](#remote-fetch-examples) and
-[Local-copy installs](#local-copy-installs) below);
+This page keeps the executable import snippets for all three surfaces:
+remote-fetch examples for the core and optional companions, plus the
+local-copy import below. See [Remote fetch examples](#remote-fetch-examples)
+and [Local-copy installs](#local-copy-installs);
 `idd-template/ONBOARDING.md` Option A/B point here for the exact
 commands instead of inlining them.
 
@@ -158,29 +159,14 @@ profile-conditional. This is intentional, not an oversight:
   if … the helper is unavailable"), so the practical effect of the
   exclusion is bounded capability on some install paths, not breakage.
 
-**What this means for adopters**: this helper is mirrored into
-`idd-template/` (via the `minimize-superseded-markers-helper`
-syncPair), but it is the only `vendored-node` helper a plain Option B
-copy (copying the `idd-template/` tree) supplies — Option B
-does **not** ship the rest of the `vendored-node` bundle, since none of
-the other files `collectVendoredFiles` manages under the source
-repository's own `scripts/` have an `idd-template/` mirror. Getting the
-**complete** `vendored-node` bundle requires running this from the clone
-(see
-[CLI-assisted onboarding](https://github.com/kurone-kito/idd-skill/blob/main/idd-template/ONBOARDING.md#cli-assisted-onboarding)):
+**For adopters:** the mirrored helper is outside the core set, so an
+ordinary Option B import omits it and the rest of the `vendored-node`
+bundle. To install that bundle, use a full clone and add
+`--profile vendored-node` to both [local-copy commands](#local-copy-installs).
 
-```sh
-node scripts/idd-onboard.mjs --import --source <path-to-a-cloned-idd-skill-tree> \
-  --target <target-repo> --profile vendored-node
-```
-
-This reads from the clone's repository-root `scripts/`, not
-`idd-template/scripts/` — a full `idd-skill` clone, not just the
-`idd-template/` subtree. Neither path is available to a pure Option A
-remote-fetch install with no local clone. An Option A adopter who
-selected the `vendored-node` profile and wants this one self-contained
-helper without cloning the repository can fetch it directly, the same
-way Option A fetches every other file:
+A full clone is required because the helper is in repository-root
+`scripts/`, not `idd-template/scripts/`. Without a clone, an Option A
+adopter selecting `vendored-node` can fetch this standalone helper:
 
 ```sh
 mkdir -p scripts
@@ -207,31 +193,30 @@ This needs a maintainer decision, not a mechanical file-list edit.
 
 ## `.gitattributes` linguist-vendored convention (`vendored-node`)
 
-The copied `vendored-node` helper files are third-party code, not
-first-party build output. Mark them `linguist-vendored` in the
-adopter's `.gitattributes` — the same recommendation as
-[Optional — mark the vendored helper bundle `linguist-vendored`](optional-host-setup.md#optional--mark-the-vendored-helper-bundle-linguist-vendored).
-Do **not** mark that copied set `linguist-generated=true`; that
-attribute is for first-party generated output (the `idd-skill` source
-repository uses it for its own `scripts/*.mjs` built from `.mts`
-sources — see the root `.gitattributes`; observed 2026-09-13,
-issue `#2958`, when this page previously recommended the
-generated-output stanza for the same copied files).
+The copied `vendored-node` helpers are third-party code: mark them
+`linguist-vendored` as described in [the optional setup](optional-host-setup.md#optional--mark-the-vendored-helper-bundle-linguist-vendored),
+not `linguist-generated=true` (reserved for first-party build output;
+see the root `.gitattributes` and the observed issue `#2958`).
 
-`idd-template/` ships no `.gitattributes` file, since an adopter's own
-`.gitattributes` (if any) is theirs to own, and the import mechanism
-above has no safe way to merge into a file the adopter may already
-maintain (`resolveImportFiles`'s `new`/`unchanged`/`overwrite`/
-`blocked-non-file` classification would treat a pre-existing
-`.gitattributes` as a blocked overwrite, or silently clobber one with
-`--force`). Append the exact lines from the helper-runtime manifest
-instead of a hand-written `scripts/*.mjs` glob (a target `scripts/`
-directory may also contain hand-written `.mjs` files):
+`idd-template/` omits `.gitattributes` because it belongs to the adopter
+and the importer cannot merge an existing file (it reports a blocked
+overwrite). Append the helper-runtime manifest's exact lines, not a
+`scripts/*.mjs` glob that could include handwritten files (preventive;
+no observed incident yet).
+
+Run from the root of a full source clone and target the adopter
+explicitly. Core imports omit `scripts/helper-runtime-manifest.mjs`;
+`vendored-node` imports include it. A bare `.gitattributes` redirect
+appends to the source repo (observed 2026-10-23, issue `#4642`):
 
 ```sh
-node scripts/helper-runtime-manifest.mjs --profile vendored-node \
+SOURCE_ROOT="$(pwd)"
+TARGET_REPO="/absolute/path/to/adopter"
+
+node "$SOURCE_ROOT/scripts/helper-runtime-manifest.mjs" \
+  --profile vendored-node \
   | node -e 'const m=JSON.parse(require("node:fs").readFileSync(0,"utf8"));process.stdout.write(m.profiles["vendored-node"].recommendedGitattributes.join("\n")+"\n")' \
-  >> .gitattributes
+  >> "$TARGET_REPO/.gitattributes"
 ```
 
 `idd-template/ONBOARDING.md`'s vendored-node profile guidance links
@@ -530,18 +515,34 @@ required for each nested docs directory.
 
 ## Local-copy installs
 
-The local-copy path is intentionally broader than the remote-fetch path:
-copy the contents of `idd-template/` while preserving relative paths. That
-means new core files under `idd-template/` are automatically covered by
-local-copy installs after they are committed. The optional companion is
-different: copy its canonical `skills/issue-authoring/` source contents into
-the one selected native `SKILL_DEST`, rather than into a target
-`skills/issue-authoring/` directory by assumption. `idd-template/ONBOARDING.md`'s
-Option B points here for the copy example.
+`idd-onboard --import` copies the generated `idd-template-core-files`
+set used by remote import. Do not copy the whole `idd-template/` tree:
+it also contains optional workflows (observed 2026-10-23, issue `#4642`).
 
-If you have cloned `https://github.com/kurone-kito/idd-skill`, copy
-the files from `idd-template/` into the target repository preserving
-their relative paths.
+From the clone root, set `TARGET_REPO` to the adopter. Review the dry-run
+plan first. For a target outside the source checkout, pass its path as
+`--allow-root`; default apply refuses differing existing files and
+blocking collisions:
+
+```sh
+# Run from the root of the cloned idd-skill checkout.
+SOURCE_ROOT="$(pwd)"
+TARGET_REPO="/absolute/path/to/adopter"
+
+node scripts/idd-onboard.mjs --import --source "$SOURCE_ROOT" --target "$TARGET_REPO" --allow-root "$TARGET_REPO" --dry-run
+node scripts/idd-onboard.mjs --import --source "$SOURCE_ROOT" --target "$TARGET_REPO" --allow-root "$TARGET_REPO"
+```
+
+Add `--profile vendored-node` to both commands for that selected
+profile. Core import omits the optional
+`idd-advisory-convergence.yml` and
+`idd-advisory-convergence-comment.yml` workflows. To opt in, copy both
+into `.github/workflows/` using [the host-workflow instructions](optional-host-setup.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow).
+A maintainer must register the required check separately.
+
+For the issue-authoring companion, copy canonical
+`skills/issue-authoring/` into one selected native `SKILL_DEST`, as
+described in `idd-template/ONBOARDING.md`.
 
 If the operator opts into the issue-authoring companion, copy the canonical
 `skills/issue-authoring/` source bundle from the idd-skill checkout to one

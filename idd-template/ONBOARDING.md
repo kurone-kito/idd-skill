@@ -936,41 +936,33 @@ for the exact `gh api` and `curl` loops (core files and the optional
 
 ### Option B — Local copy (idd-skill cloned)
 
-If you have cloned `https://github.com/kurone-kito/idd-skill`, copy
-the files from `idd-template/` into the target repository preserving
-their relative paths. See
+If you have cloned `https://github.com/kurone-kito/idd-skill`, run
+`idd-onboard --import` for the canonical core set used by Option A; it
+excludes the optional advisory-convergence workflows. See
 [Local-copy installs](docs/onboarding/template-distribution.md#local-copy-installs)
-for the optional issue-authoring companion copy example and the
-do-not-duplicate-native-roots rule.
+for dry-run and apply commands, the optional `vendored-node` profile,
+and companion instructions.
+
+**Optional — install the advisory-convergence workflows.** Copy
+`idd-advisory-convergence.yml` and
+`idd-advisory-convergence-comment.yml` into the adopter's
+`.github/workflows/` using [the host-workflow instructions](docs/onboarding/optional-host-setup.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow).
+A maintainer must separately register the required check.
 
 ### Optional companion boundary
 
-The issue-authoring companion drafts or refines IDD-ready issues,
-roadmaps, and sub-issues before execution starts. Checked drafts go under the
-hold; previews or non-final ones go to a draft carrier. Only
-releasing the hold needs an explicit request; Discover skips held
-issues, so no loop starts.
+The issue-authoring companion drafts IDD issues before execution. Checked
+drafts stay held; previews and other non-final drafts go in a draft carrier.
+Discover skips held issues, which require an explicit release request.
 
-Keep the companion separate from the execution instructions and distinguish
-its source from its installed destination:
+Install the canonical `skills/issue-authoring/` source under one selected
+native `SKILL_DEST`; `.github/instructions/*.instructions.md` execute
+approved issues. Keep the source bundle and references aligned with
+`docs/issue-authoring-skill.md`.
 
-- `skills/issue-authoring/` is the canonical source helper for drafting issue
-  sets.
-- The selected native `SKILL_DEST` is the target repository's installed
-  destination; it is not another canonical source.
-- `.github/instructions/*.instructions.md` execute approved issues
-  through the IDD loop.
-- In the source `idd-skill` repository, maintainers must keep
-  `skills/issue-authoring/` and its bundled references aligned with
-  `docs/issue-authoring-skill.md`.
-
-The `idd-spec-audit` companion is read-only: it audits the installed
-instruction corpus for semantic drift. When the `issue-authoring`
-companion is also installed, it routes every finding back through
-that flow for revision; otherwise it routes findings through the
-installation's normal manual issue-filing process instead (see the
-installed companion's own `SKILL.md`, Scope section). It never edits
-files or mutates issues on its own.
+The read-only `idd-spec-audit` companion checks installed instructions for
+drift. It routes findings through issue-authoring when installed, otherwise
+to the normal manual issue-filing process; it never changes files or issues.
 
 ### Optional — enable the local worktree guard
 
