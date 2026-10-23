@@ -38,6 +38,8 @@ in a single pass
 - All review body submissions (any reviewer state)
 - All regular PR comments
 
+Keep the raw review rows as the Step 2 comparison baseline.
+
 Exclude **trusted agent operational comments** from the snapshot:
 comments whose body begins with one of these prefixes and whose
 author is a trusted marker actor per
@@ -168,6 +170,12 @@ Use server-reported timestamps, not the local wall clock.
 Note: `--apply` POSTs as JSON, avoiding the HTML-body and leading-`@`
 pitfalls in Claim format (`idd-overview-core.instructions.md`).
 
+After verifying the watermark, re-fetch all review pages before cleanup
+or Step 3. Compare human rows with Step 1 by ID, author, state, commit,
+submission time, and body. Any new, removed, or changed row requires an
+E1 restart; the helper's race guard cannot classify arbitrary human
+bodies.
+
 On resume or restart, read the latest same-claim, trusted-author
 `<!-- review-watermark: {agent-id} {claim-id} … -->` comment to
 restore all six values; ignore watermarks from any other claim or
@@ -224,14 +232,17 @@ file/line-cited findings without threads; each is PATH A.
 See the [#2197/#2559 rationale](../../docs/idd-design-rationale.md#an-advisory-bots-embedded-but-unthreaded-findings-mirror-the-detection-scope-not-the-gate-scope).
 
 **Human `COMMENTED` review bodies:** Add each substantive, unsettled
-finding from a human review submission as a PATH A item with its review
-URL, unless the same finding is already represented by a selected
-thread. Skip findings validly settled under the existing review-body
-disposition rules; empty or acknowledgement-only bodies add no item.
-Read these from the raw review-body submissions, not the regular
-PR-comment collection. `COMMENTED` affects selection only: it is not
-approval and does not change formal review-state or `CHANGES_REQUESTED`
-gates. See the [human review-body rationale](../../docs/idd-design-rationale.md#human-commented-review-bodies-are-snapshot-input-not-approval).
+finding as PATH A with its review URL, unless a selected thread already
+covers it. Empty or acknowledgement-only bodies add no item. Read raw
+review submissions, not regular PR comments. A body item is settled only
+by its E6 trusted, unedited top-level `**Accepted**`/`**Rejected**`
+disposition, posted after the review and carrying the reply stamp, which
+names that exact review URL and a unique finding identity (cited path and
+line, or title). For `Accepted`, require the post-fix E13 reply. Keep it
+selected if that match is absent or ambiguous, or if E6 says
+`**Awaiting maintainer decision**`. `COMMENTED` affects selection only;
+it is not approval and changes no formal review-state or
+`CHANGES_REQUESTED` gate. See the [human review-body rationale](../../docs/idd-design-rationale.md#human-commented-review-bodies-are-snapshot-input-not-approval).
 
 **Regular comments** where the last speaker isn't any IDD agent and no
 reply from **you** exists after that comment's timestamp, or where the

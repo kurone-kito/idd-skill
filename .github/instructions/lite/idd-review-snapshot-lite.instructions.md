@@ -91,8 +91,8 @@ E1.
 3. Independently fetch, in one pass before filtering: every review
    thread (resolved or not — paginate until `hasNextPage` is `false`,
    never stop at a fixed page size), every review body submission, and
-   every regular PR comment. The helper above reports counts/timestamps
-   only; this raw set is what Step 3 filters.
+   every regular PR comment. Keep raw review rows for the Step 2
+   comparison; Step 3 filters this raw set.
 4. From that raw set, exclude trusted-agent operational marker comments
    whose body starts with one of these prefixes, authored by a trusted
    marker actor:
@@ -143,26 +143,19 @@ require each required `(checkName, workflowName)`
 producer to pass for `{head-SHA}` and verify advisory identity/event;
 raw names are insufficient. Otherwise skip Step 2 and use E15/E14.
 
-Rendered body:
+Exact body: `<!-- review-watermark: {agent-id} {claim-id} {head-SHA}
+{max-activity-updatedAt|none} {total-item-count}
+{latest-ci-completed-at|none} -->`, a blank line, then
+`_{agent-id}: review triage snapshot — IDD automation marker. Do not edit._`
+in the PR's language (English if ambiguous). Nothing follows the note.
 
-```markdown
-<!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} -->
+After verifying the watermark, re-fetch all review pages before cleanup
+or Step 3. Compare human rows with Step 1 by ID, author, state, commit,
+submission time, and body. Any new, removed, or changed row requires an
+E1 restart; its guard ignores human review rows.
 
-_{agent-id}: review triage snapshot — IDD automation marker. Do not edit._
-```
-
-Match the PR body's language for the visible note (default English if
-ambiguous). Nothing may follow the note — content after it, or after
-the token with no note, makes the whole comment unrecognized as a live
-watermark.
-
-On resume or restart, read the latest trusted same-claim
-`review-watermark` to restore all six values. Ignore watermarks from
-any other claim or untrusted author; a legacy watermark with no
-`{claim-id}` isn't resumable. If no trusted same-claim watermark
-exists, rerun E1 from scratch. After a forced handoff, prior-claim
-watermarks are foreign restore markers — ignore, never hide or
-delete, and rerun E1 under the successor claim.
+On resume, restore only the latest trusted same-claim watermark.
+Missing/legacy means rerun E1; never use or hide another claim's marker.
 
 After the new watermark is verified, minimize every strictly older
 trusted same-claim `review-watermark`/`review-baseline` comment as
@@ -192,10 +185,13 @@ Select raw Step 1 items; record each source URL:
   `embeddedFindings[].uncoveredCount`; other bots' threadless, file/line-cited
   findings are PATH A. Refs #2197 and #2559.
 - **Human `COMMENTED` bodies:** add substantive, unsettled findings as PATH A
-  with review URLs. Skip empty/ack-only bodies, findings settled by existing
-  body-disposition rules, and findings covered by selected threads. Read raw
-  review bodies, not regular comments. `COMMENTED` is not approval and changes
-  no formal review-state or `CHANGES_REQUESTED` gate.
+  with review URLs; skip empty/ack-only bodies and selected-thread duplicates.
+  Settle only via a trusted, unedited, stamped E6 top-level
+  `**Accepted**`/`**Rejected**` reply after review, citing its exact URL and
+  unique path:line/title; `Accepted` also needs post-fix E13.
+  Missing/ambiguous matches and `**Awaiting maintainer decision**` stay
+  selected. Read raw reviews, not regular comments. `COMMENTED` grants no
+  approval and changes no `CHANGES_REQUESTED` gate.
 - **Regular comments** where the last speaker is not an IDD agent and no
   reply from **you** exists after the comment, or whose latest IDD-agent
   reply starts with `**Awaiting maintainer decision**` — exclude periodic

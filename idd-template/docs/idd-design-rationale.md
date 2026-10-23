@@ -1369,10 +1369,19 @@ selection gap, not evidence of a missed live production defect
 
 The correction is selection-only: include substantive, unsettled human
 body findings as PATH A and carry them through existing E4-E6 triage and
-review-body disposition rules. Keep raw review submissions separate
-from regular PR conversation comments. `COMMENTED` is not `APPROVED`;
-it neither clears approval requirements nor changes the
-`CHANGES_REQUESTED` gate.
+review-body disposition rules. A settled body item needs a trusted,
+unedited E6 top-level disposition that carries the reply stamp and names
+the exact review URL plus a unique finding identity; `Accepted` also
+requires the post-fix E13 reply. An absent or ambiguous match stays
+selected. Keep raw review submissions separate from regular PR
+conversation comments. `COMMENTED` is not `APPROVED`; it neither clears
+approval requirements nor changes the `CHANGES_REQUESTED` gate.
+
+The operation-local watermark helper does not classify arbitrary human
+review bodies. A fresh raw review comparison after watermark publication
+restarts E1 if any human review row changed; Codex identified this race
+in [PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4357089405)
+(preventive; no live production incident observed).
 
 ##### Raw-input fixture walkthrough
 
@@ -1391,14 +1400,15 @@ This is fixture data, not a live review:
 ```
 
 E1 Step 3 produces one PATH A snapshot item (`ReviewItems_snapshot`
-count: 1) with the review URL above. After the existing rules accept a
-settled body disposition, for example:
+count: 1) with the review URL above. E6 posts a settled disposition tied
+to this exact review and finding, for example:
 
 ```text
-**Accepted** — fixed in abc1234: check lock ownership before retry. <!-- idd-skill-review-reply -->
+**Accepted** — fixed in abc1234: check lock ownership before retry. Review: https://github.com/example/repo/pull/42#pullrequestreview-7; finding: src/worker.mts:42. <!-- idd-skill-review-reply -->
 ```
 
-the next snapshot has zero items for this finding; it is not re-added
+the next snapshot has zero items for this finding because the stamped
+reply identifies the same review URL and path/line; it is not re-added
 solely because the review state remains `COMMENTED`. That state does not
 grant approval.
 
