@@ -915,6 +915,74 @@ for (const mutation of mutations) {
   });
 }
 
+test('issue authoring dependency guidance verifies consumed outputs', () => {
+  const normalize = (value: string): string =>
+    value
+      .split(String.fromCharCode(10))
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join(' ');
+  const contractPaths = [
+    'docs/issue-authoring-skill.md',
+    'skills/issue-authoring/references/contract.md',
+  ];
+  const contractNeedles = [
+    'Common parentage, shared files, and generic correctness claims alone do not establish an edge.',
+    'roadmap #4079 opened 2026-10-12',
+    'the shared-file-only and generic-claim cases are preventive; no observed incident yet.',
+    'To justify each dependency edge, name the predecessor output, the dependent operation or acceptance criterion it blocks, and the evidence that supports the relationship.',
+    'Ask what fails without that output while keeping the other valid prerequisites.',
+    'Keep this rationale in the issue body and the existing relationships and evidence packet fields; do not add packet fields.',
+    'Review each edge against the body and packet, then review the set for independent siblings and natural cohesion.',
+    'Do not impose a parallelism quota or another approval gate.',
+    'each dependency edge names the consumed predecessor output, blocked operation or criterion, supporting evidence, and counterfactual with other prerequisites retained in the body and packet',
+    'For a multi-issue set, use relationships to map each hard edge to its producer output and blocked work, and evidence to support that relationship.',
+    'the packet schema stays unchanged.',
+  ];
+  for (const path of contractPaths) {
+    const content = normalize(readFileSync(join(REPO_ROOT, path), 'utf8'));
+    for (const needle of contractNeedles) {
+      assert.ok(content.includes(needle), `${path} is missing: ${needle}`);
+    }
+  }
+
+  const patterns = readFileSync(
+    join(REPO_ROOT, 'skills/issue-authoring/references/draft-patterns.md'),
+    'utf8',
+  );
+  const normalizedPatterns = normalize(patterns);
+  for (const needle of [
+    'Good — schema consumer.',
+    'Good — shared CI definition.',
+    'encode an edge from the consumer to its producer',
+    'consumer is blocked by #420',
+    'Bad — shared parent or file.',
+    'Observed comparison — roadmap #4079.',
+    'Issues #4083 and #4084 waited for the doctor warning from #4081',
+    'edge to issue #4080 consumes its concrete output: the policy-constants row defining `{default-branch}`, including its resolution command, safe-character rule, and fail-closed behavior.',
+    'Issue #4083 consumes that output when it changes primary-worktree references from `main` to `{default-branch}`',
+    'issue #4084 consumes it in three trusted-checkout passages in `optional-host-setup.md`.',
+    'Evidence: #4080 proposed change item 1; #4083 items 7.1–7.3; #4084 items 2.1–2.3.',
+    'With other prerequisites retained, without the #4080 row those children would use a placeholder with no defined branch meaning, so their role-specific documentation cannot be checked.',
+    'this does not establish a measured elapsed-time penalty.',
+    'For documentation, retain an edge only to an implementation output the documentation child actually describes; it still documents shipped behavior.',
+    'For finalize or verify work, retain an edge only when an acceptance criterion checks that sibling',
+  ]) {
+    assert.ok(
+      normalizedPatterns.includes(needle),
+      `draft-patterns.md is missing: ${needle}`,
+    );
+  }
+
+  const skill = normalize(
+    readFileSync(join(REPO_ROOT, 'skills/issue-authoring/SKILL.md'), 'utf8'),
+  );
+  assert.ok(
+    skill.includes('for every hard edge, name the producer output'),
+    'SKILL.md is missing the per-edge workflow reminder',
+  );
+});
+
 test('A0-T step 1 stops without claiming on the three configured hold labels (#4233)', () => {
   const discover = readFileSync(
     join(

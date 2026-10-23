@@ -809,6 +809,11 @@ this packet:
 - relationship context for a multi-issue set
 - the issue-authoring critique checklist below
 
+For a multi-issue set, use relationships to map each hard edge to its
+producer output and blocked work, and evidence to support that
+relationship. Keep both aligned with the concise rationale in the issue
+body; the packet schema stays unchanged.
+
 The packet does not include the whole conversation or unbounded work
 instructions.
 
@@ -818,8 +823,12 @@ instructions.
 - a concrete surface and an objective verification are named
 - acceptance criteria are checkable without a hidden human decision,
   credential, or subjective approval
-- dependency edges are true blockers, and independent siblings stay in
-  the roadmap task list
+- each dependency edge names the consumed predecessor output, blocked
+  operation or criterion, supporting evidence, and counterfactual with
+  other prerequisites retained in the body and packet; independent
+  siblings stay in the roadmap task list
+- the set preserves natural cohesion without a parallelism quota or a
+  new approval gate
 - the draft stays inside the specificity target range: no hidden
   assumption that only a top-tier model could infer, and no
   step-by-step runbook, so a middle-tier cloud model can implement it
@@ -2570,9 +2579,21 @@ availability, or ordering constraint.
   This still fires even though the structural dependency filter
   already correctly treats the closed reference as unblocking
 
-When an issue keeps a dependency edge, justify each dependency edge in
-the surrounding issue body and confirm that the split still preserves
-natural cohesion.
+Common parentage, shared files, and generic correctness claims alone do
+not establish an edge. The #4079 example below records two children that
+did not consume a sibling's warning (roadmap #4079 opened 2026-10-12);
+the shared-file-only and generic-claim cases are preventive; no observed
+incident yet.
+
+To justify each dependency edge, name the predecessor output, the
+dependent operation or acceptance criterion it blocks, and the evidence
+that supports the relationship. Ask what fails without that output while
+keeping the other valid prerequisites. Keep this rationale in the issue
+body and the existing relationships and evidence packet fields; do not
+add packet fields. Keep contention and preferred order in scheduling
+notes. Review each edge against the body and packet, then review the set
+for independent siblings and natural cohesion. Do not impose a
+parallelism quota or another approval gate.
 
 ## Dependency encoding rules
 

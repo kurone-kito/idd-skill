@@ -72,6 +72,11 @@ needs-decision, blocked-by-human, and out-of-scope.
    - keep independent sibling work in roadmap task lists unless a true
      correctness, availability, or ordering constraint requires a
      dependency edge
+   - for every hard edge, name the producer output, the blocked
+     operation or criterion, and its evidence; check the counterfactual
+     with other valid prerequisites retained, then verify the set keeps
+     independent siblings and natural cohesion. See the contract for the
+     unchanged packet fields and worked examples.
 6. Before the completed-draft adversarial review, verify material
    factual claims that justify the draft's scope or design against
    current sources: repository behavior against current code and docs;
