@@ -265,14 +265,14 @@ ephemeral-npx / user-global: resolve from `docs/idd-helper-scripts.md`)
 GH_REPO_ROUTE=$(gh repo view --json owner,name,url --jq '
   . as $repo
   | ($repo.url | capture("^https://(?<hostname>[A-Za-z0-9.-]+)(?<port>:[0-9]{1,5})?/(?<urlOwner>[A-Za-z0-9_.-]+)/(?<urlRepo>[A-Za-z0-9_.-]+)/?$")) as $url
-  | ($url.hostname | split(".") | all(.[]; test("^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"))) as $valid_hostname
+  | ($url.hostname | split(".") | all(.[]; match("^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$") != null)) as $valid_hostname
   | (($url.port // "") | if . == "" then true else (ltrimstr(":") | tonumber) as $port | $port >= 1 and $port <= 65535 end) as $valid_port
   | ($repo.owner.login // "") as $owner
   | ($repo.name // "") as $name
   | if $valid_hostname
       and $valid_port
-      and ($owner | test("^[A-Za-z0-9_.-]+$"))
-      and ($name | test("^[A-Za-z0-9_.-]+$"))
+      and ($owner | match("^[A-Za-z0-9_.-]+$") != null)
+      and ($name | match("^[A-Za-z0-9_.-]+$") != null)
       and ($url.urlOwner | ascii_downcase) == ($owner | ascii_downcase)
       and ($url.urlRepo | ascii_downcase) == ($name | ascii_downcase)
     then {
@@ -838,14 +838,14 @@ node scripts/post-idd-marker.mjs --type advisory-recovery --target pr <pr-number
 GH_REPO_ROUTE=$(gh repo view --json owner,name,url --jq '
   . as $repo
   | ($repo.url | capture("^https://(?<hostname>[A-Za-z0-9.-]+)(?<port>:[0-9]{1,5})?/(?<urlOwner>[A-Za-z0-9_.-]+)/(?<urlRepo>[A-Za-z0-9_.-]+)/?$")) as $url
-  | ($url.hostname | split(".") | all(.[]; test("^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"))) as $valid_hostname
+  | ($url.hostname | split(".") | all(.[]; match("^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$") != null)) as $valid_hostname
   | (($url.port // "") | if . == "" then true else (ltrimstr(":") | tonumber) as $port | $port >= 1 and $port <= 65535 end) as $valid_port
   | ($repo.owner.login // "") as $owner
   | ($repo.name // "") as $name
   | if $valid_hostname
       and $valid_port
-      and ($owner | test("^[A-Za-z0-9_.-]+$"))
-      and ($name | test("^[A-Za-z0-9_.-]+$"))
+      and ($owner | match("^[A-Za-z0-9_.-]+$") != null)
+      and ($name | match("^[A-Za-z0-9_.-]+$") != null)
       and ($url.urlOwner | ascii_downcase) == ($owner | ascii_downcase)
       and ($url.urlRepo | ascii_downcase) == ($name | ascii_downcase)
     then {
