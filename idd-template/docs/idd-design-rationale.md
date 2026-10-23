@@ -1383,7 +1383,21 @@ in [PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r435
 (preventive; no production incident observed); CodeRabbit independently
 identified the same phase mismatch in
 [PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4357504432)
+(preventive; no production incident observed). The body-only rule
+requires its exact review URL and finding identity in the actual stamped
+E6/E13 top-level reply because the generic phase reply forms do not name
+them. Codex identified this gap in
+[PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4357848065)
 (preventive; no production incident observed).
+
+Copilot's follow-up review found that both standard and lite left the
+substantive boundary, splitting independent claims, and stable identity
+implicit ([PR review](https://github.com/kurone-kito/idd-skill/pull/4651#pullrequestreview-5626114653)).
+The rule now defines actionable defects, risks, and change requests as
+substantive; omits praise, acknowledgements, and status-only text; splits
+independent claims with their evidence; and identifies each by a unique
+cited `path:line` or a short unique title. This is preventive; no live
+production incident observed.
 
 Use raw review submissions to identify source findings; inspect regular
 PR comments to match the stamped E6/E13 settlement replies.

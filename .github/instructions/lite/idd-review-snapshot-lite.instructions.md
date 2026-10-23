@@ -184,21 +184,24 @@ Select raw Step 1 items; record each source URL:
 - **Bot `COMMENTED` bodies:** CodeRabbit adds one PATH B item per uncovered
   `embeddedFindings[].uncoveredCount`; other bots' threadless, file/line-cited
   findings are PATH A. Refs #2197 and #2559.
-- **Human `COMMENTED` bodies:** use raw reviews for findings; regular
-  comments for settlement replies. Add substantive, unsettled PATH A items;
-  skip empty/ack-only bodies and selected-thread duplicates. Settle by
-  trusted, unedited, stamped top-level reply citing exact review URL and
-  unique path:line/title: E6 `**Rejected**` after review; post-fix E13
-  `**Accepted**` after E5 accepts. Missing/ambiguous matches and
-  `**Awaiting maintainer decision**` stay selected. `COMMENTED` selects
-  only; no formal approval or `CHANGES_REQUESTED` gate change.
-- **Regular comments** where the last speaker is not an IDD agent and no
-  reply from **you** exists after the comment, or whose latest IDD-agent
-  reply starts with `**Awaiting maintainer decision**` — exclude periodic
-  bots; keep Copilot/CI comments for PATH B, including E6 notices.
+- **Human `COMMENTED` bodies:** raw reviews identify findings; regular
+  comments identify settlements. Add each actionable defect, risk, or
+  concrete change request as an unsettled PATH A item; omit praise,
+  acknowledgements, status-only text, and selected-thread duplicates. Split
+  independent claims, keeping their evidence. Identify each by cited
+  unique `path:line` or a short unique title. A trusted, unedited, stamped
+  top-level E6 `**Rejected**` (after review) or post-fix E13
+  `**Accepted**` reply body itself must cite the exact review URL and item
+  identity; E5 `Accepted` stays selected until E13. Keep missing/ambiguous
+  identities and `**Awaiting maintainer decision**` selected. `COMMENTED`
+  is not approval or a `CHANGES_REQUESTED` gate change.
+- **Regular comments:** include if the last speaker isn't an IDD agent and
+  you haven't replied later, or the latest IDD-agent reply starts
+  with `**Awaiting maintainer decision**` — exclude periodic bots; keep
+  Copilot/CI comments as PATH B, including E6 notices.
 
-Resolved-thread index (`isResolved=true`): file/area, claim, source URL,
-disposition; E5 duplicate checks only, never re-add.
+Resolved threads (`isResolved=true`): index file/area, claim, URL, and
+disposition for E5 duplicate checks only; never re-add.
 
 ## E2 — Critique pass
 
@@ -206,31 +209,27 @@ Run one critique pass on the branch's changes every E1-E3 pass (always).
 Add any newly found issues to
 ReviewItems_snapshot.
 
-Per-agent E2: resolve `critiqueLoop.subagentWaitCeiling` (`PT20M` default) with
-a harness timeout, not a wrapper (#3449). Only per-agent; shell-delegate rules
-unchanged. Background waits require cleanup; suppress late output.
-Timeout/cancel/interruption/error without findings uses self-critique fallback;
-mark failure/risk, never clean or phase-level `mode` wait. Without
-bound/cleanup, self-critique; record risk/no return.
+Per-agent E2: enforce `critiqueLoop.subagentWaitCeiling` (`PT20M` default)
+with a harness timeout (#3449), not a wrapper; shell-delegate unchanged.
+Clean up background waits; suppress late output. Timeout/cancel/interruption/
+error without findings: self-critique; record failure/risk, never clean or
+phase-level `mode` wait. Without bound/cleanup: self-critique; record risk/no
+return.
 
-Apply these lenses when they fit (composing when both do):
-**Mutation / write-side** (the diff implements a helper that mutates
-GitHub state, mutates git state, or performs a merge) — Fail-closed
-inputs; Validate/execute scope parity; Unsafe-output suppression;
-Schema strictness parity. **Gate-mirroring** (the diff implements a
-helper that predicts, mirrors, or pre-checks another gate's decision) —
-Validation-path parity; Input completeness; Whole-identity comparison;
-Snapshot identity; Point-in-time parity.
+Apply applicable lenses, composing both: **Mutation / write-side** (diff
+implements a helper mutating GitHub/Git state or merging) — Fail-closed
+inputs; Validate/execute scope parity; Unsafe-output suppression; Schema
+strictness parity. **Gate-mirroring** (helper predicts, mirrors, or
+pre-checks another gate) — Validation-path parity; Input completeness;
+Whole-identity comparison; Snapshot identity; Point-in-time parity.
 
-**Incremental scope**: on later passes within the same claim, review the
-diff since the previous E2 head, tracked by a same-claim
-baseline whose GraphQL `lastEditedAt` was resolved via node id/
-`includeEditState` and is explicitly `null`; use a full-branch diff if
-that proof fails, after a rebase, multi-fix batch, non-ancestor baseline,
-or active-claim change. Do not infer edit state from the body, `updatedAt`,
-author, or claim. ReviewItems_snapshot is session-local — do not inherit
-a previous claim's critique findings unless persisted as reviewer-visible
-comments.
+**Incremental scope**: later same-claim E2 passes review the diff since the
+prior head only with a same-claim baseline whose GraphQL `lastEditedAt` is
+explicitly `null` (resolved via node id/`includeEditState`). Otherwise use a
+full-branch diff after failed proof, rebase, multi-fix batch, non-ancestor
+baseline, or claim change. Never infer edit state from body, `updatedAt`,
+author, or claim. `ReviewItems_snapshot` is session-local; inherit prior-claim
+critique findings only if persisted as reviewer-visible comments.
 
 Before critique, set `{e2-review-head-SHA}` to Step 1's `{head-SHA}`;
 do not capture another HEAD. Reread HEAD before posting. If it changed,
