@@ -180,29 +180,29 @@ counts as new activity, forcing a fresh E1 snapshot before F2.
 
 ### Step 3 — Filter into ReviewItems_snapshot
 
-From the raw Step 1 set, select into **ReviewItems_snapshot** and
-record each item's source URL:
+Select raw Step 1 items; record each source URL:
 
-- **Unresolved review threads** (`isResolved=false`) — exclude when the
-  last substantive reply is by an IDD agent or PR author with no reviewer
-  reply; keep reopened threads and `**Awaiting maintainer decision**`
-  replies active.
-- **Review bodies** whose reviewer's latest state is
-  `CHANGES_REQUESTED` — exclude any already replied-to and
-  re-review-requested in a prior E13/E14 pass.
-- **Embedded CodeRabbit findings:** add one PATH B item per
-  `embeddedFindings[].uncoveredCount`; only `COMMENTED` CodeRabbit
-  reviews qualify. Inspect other bots' `COMMENTED` bodies for threadless
-  findings. See the [#2197/#2559 rationale](../../../docs/idd-design-rationale.md#an-advisory-bots-embedded-but-unthreaded-findings-mirror-the-detection-scope-not-the-gate-scope).
+- **Unresolved threads** (`isResolved=false`): exclude if the last
+  substantive reply is an IDD agent or PR author without a later reviewer
+  reply, unless a reviewer reopened it or an IDD reply starts
+  `**Awaiting maintainer decision**`.
+- **Review bodies:** for `CHANGES_REQUESTED`, exclude only reviews already
+  replied to and re-review-requested in E13/E14.
+- **Bot `COMMENTED` bodies:** CodeRabbit adds one PATH B item per uncovered
+  `embeddedFindings[].uncoveredCount`; other bots' threadless, file/line-cited
+  findings are PATH A. Refs #2197 and #2559.
+- **Human `COMMENTED` bodies:** add substantive, unsettled findings as PATH A
+  with review URLs. Skip empty/ack-only bodies, findings settled by existing
+  body-disposition rules, and findings covered by selected threads. Read raw
+  review bodies, not regular comments. `COMMENTED` is not approval and changes
+  no formal review-state or `CHANGES_REQUESTED` gate.
 - **Regular comments** where the last speaker is not an IDD agent and no
   reply from **you** exists after the comment, or whose latest IDD-agent
   reply starts with `**Awaiting maintainer decision**` — exclude periodic
   bots; keep Copilot/CI comments for PATH B, including E6 notices.
 
-Also carry a light **resolved-thread index** (`isResolved=true`) with
-file/area, claim, source URL, and any disposition marker. Never re-add
-resolved threads to ReviewItems_snapshot; use the index only for E5's
-duplicate pre-check.
+Resolved-thread index (`isResolved=true`): file/area, claim, source URL,
+disposition; E5 duplicate checks only, never re-add.
 
 ## E2 — Critique pass
 

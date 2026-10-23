@@ -1394,6 +1394,53 @@ items do not match its count fails closed, and a body with no per-item view
 counts every item as cited when it names a file or line anywhere. A reply that
 is edited, untrusted, or posted before the review was submitted does not count.
 
+#### Human COMMENTED review bodies are snapshot input, not approval
+
+The 2026-10-23 v0.17.0 import review found that standard and lite E1
+Step 3 selected review bodies by latest `CHANGES_REQUESTED` state, while
+the separate `COMMENTED` path described bot reviews. A human reviewer can
+submit a substantive, file/line-cited finding in a `COMMENTED` review
+with no corresponding thread or regular PR comment; E1 already fetches
+the review body, but the selection rule omits it. This was an instruction
+selection gap, not evidence of a missed live production defect
+([issue #4637](https://github.com/kurone-kito/idd-skill/issues/4637),
+[source Gist](https://gist.github.com/kurone-kito/9f2d7871542cb2f7a255f92a7c1232d0)).
+
+The correction is selection-only: include substantive, unsettled human
+body findings as PATH A and carry them through existing E4-E6 triage and
+review-body disposition rules. Keep raw review submissions separate
+from regular PR conversation comments. `COMMENTED` is not `APPROVED`;
+it neither clears approval requirements nor changes the
+`CHANGES_REQUESTED` gate.
+
+##### Raw-input fixture walkthrough
+
+This is fixture data, not a live review:
+
+```json
+{
+  "review": {
+    "state": "COMMENTED",
+    "html_url": "https://github.com/example/repo/pull/42#pullrequestreview-7",
+    "body": "The retry at src/worker.mts:42 can write after lock ownership is lost."
+  },
+  "reviewThreads": [],
+  "regularPrComments": []
+}
+```
+
+E1 Step 3 produces one PATH A snapshot item (`ReviewItems_snapshot`
+count: 1) with the review URL above. After the existing rules accept a
+settled body disposition, for example:
+
+```text
+**Accepted** — fixed in abc1234: check lock ownership before retry. <!-- idd-skill-review-reply -->
+```
+
+the next snapshot has zero items for this finding; it is not re-added
+solely because the review state remains `COMMENTED`. That state does not
+grant approval.
+
 ### E10 per-issue pass cap (kurone-kito/idd-skill#3943)
 
 Issue `#3878` (PR `#3919`) ran about ten E10 passes in one review cycle.

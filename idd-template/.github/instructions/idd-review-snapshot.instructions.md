@@ -218,6 +218,16 @@ finding. Inspect other bots' `COMMENTED` review bodies separately for
 file/line-cited findings without threads; each is PATH A.
 See the [#2197/#2559 rationale](../../docs/idd-design-rationale.md#an-advisory-bots-embedded-but-unthreaded-findings-mirror-the-detection-scope-not-the-gate-scope).
 
+**Human `COMMENTED` review bodies:** Add each substantive, unsettled
+finding from a human review submission as a PATH A item with its review
+URL, unless the same finding is already represented by a selected
+thread. Skip findings validly settled under the existing review-body
+disposition rules; empty or acknowledgement-only bodies add no item.
+Read these from the raw review-body submissions, not the regular
+PR-comment collection. `COMMENTED` affects selection only: it is not
+approval and does not change formal review-state or `CHANGES_REQUESTED`
+gates. See the [human review-body rationale](../../docs/idd-design-rationale.md#human-commented-review-bodies-are-snapshot-input-not-approval).
+
 **Regular comments** where the last speaker isn't any IDD agent and no
 reply from **you** exists after that comment's timestamp, or where the
 comment's most recent IDD-agent reply starts
