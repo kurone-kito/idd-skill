@@ -869,10 +869,15 @@ const UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE = `(?:to|and|or|but|then|whi
 const UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE = String.raw`(?![\w-]|\s+(?!(?:${UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE})\b)\w)`;
 const UNSAFE_HUMAN_ACTOR_TARGET_SOURCE = String.raw`by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}`;
 // Agent-role recipients are unsafe when they follow a direct command object.
-// Keep the recognized object adjacent to "by", while allowing descriptive
-// modifiers before it. The scan remains bounded by the existing
-// sliceUnsafeDirectiveWindow 100-character/sentence window.
-const UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE = String.raw`(?:(?:this|the|a|an)\s+)?(?:[\w-]+\s+)*?(?:step|check|task|script|command|program|file|test|executable|tool|formatter)\s+`;
+// The final object noun stays adjacent to "by", while the preceding phrase
+// remains inside sliceUnsafeDirectiveWindow's 100-character/sentence bound.
+// Exclude source participles so an arbitrary artifact noun does not turn
+// passive attribution ("workflow maintained by a human agent") into an
+// execution assignment; supplied executable sources have their own matcher.
+const UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE =
+  '(?:generated|maintained|provided|created|built)';
+const UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_FILLER_SOURCE = String.raw`(?:(?!\b(?:${SUPPLIED_CONTENT_COORDINATOR})\b)[\w-]+\s+)*?`;
+const UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE = String.raw`(?:(?:this|the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_FILLER_SOURCE}(?!(?:${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE})\b\s+by\b)[\w-]+\s+`;
 const UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE = String.raw`(?:${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}(?:\s+|-)(?:agent|assistant|bot)|user-facing\s+coding\s+agent)`;
 const UNSAFE_DIRECT_ACTOR_ROLE_TARGET_SOURCE = String.raw`^\s*${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE}by\s+(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}`;
 const UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET_SOURCE = String.raw`^\s*this\s+(?:step|check)\s+by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}(?:[\s-]+[\w-]+)*\s*[.!?]?\s*$`;
@@ -881,6 +886,11 @@ const UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET = new RegExp(
   'i',
 );
 const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:${UNSAFE_DIRECT_ACTOR_ROLE_TARGET_SOURCE}|\b(?:untrusted|user-provided|user input|from\s+(?:the\s+)?user|${UNSAFE_HUMAN_ACTOR_TARGET_SOURCE}|${SUPPLIED_CONTENT_REFERENCE})\b|${SUPPLIED_CONTENT_OBJECT_REFERENCE}\b)`;
+// Only this specialized path recognizes generated/supplied executable
+// sources; keeping these nouns separate avoids making ordinary "run this
+// test/check" repository commands look like supplied content.
+const SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE = `(?:${SUPPLIED_CONTENT_NOUN}|build|test|check)`;
+const SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE = String.raw`(?![\w-](?!(?:-?(?:agent|assistant|bot))\b)|\s+interface\b)`;
 // #3073: "run this full command to validate the config" matches only
 // SUPPLIED_CONTENT_OBJECT_REFERENCE's ambiguous "this <filler> <noun>" shape
 // above -- the filler word here is a repository-scoping adjective, not an
@@ -5258,7 +5268,7 @@ function findUnsafeExecutionDirectiveMatch(
     String.raw`\b${UNSAFE_DIRECTIVE_VERB}\b`,
     'gi',
   );
-  const targetPattern = new RegExp(UNSAFE_DIRECTIVE_TARGET_SOURCE, 'i');
+  const targetPattern = new RegExp(UNSAFE_DIRECTIVE_TARGET_SOURCE, 'gi');
   const passiveAttributionPrefixPattern = /\b(?:generated|maintained)\s+$/i;
   // The general boundary leaves unlisted compound nouns such as "user
   // interface" available for passive attribution. After a direct command
@@ -5270,9 +5280,10 @@ function findUnsafeExecutionDirectiveMatch(
   const suppliedContentHumanSourcePattern = new RegExp(
     // Executables supplied, generated, created, or built by a human remain
     // unsafe even when the source has a name or role modifier. Keep the
-    // article forms explicit (so QA gains no new article variants) and leave
-    // compounds such as "user interface" intact as ordinary attribution.
-    String.raw`\b(?:${SUPPLIED_CONTENT_NOUN}|build)\b\s+(?:provided|generated|created|built)\s+by\s+(?:(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person)|a\s+(?:user|human|tester|reviewer|maintainer|developer|person)|an\s+operator)(?!\s+interface\b)(?:(?:\s+|-)[\w'-]+)?`,
+    // article forms explicit (so QA gains no new article variants), require
+    // a boundary after the actor name (so "username" is not "user"), and
+    // leave compounds such as "user interface" intact as attribution.
+    String.raw`\b${SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE}\b\s+(?:provided|generated|created|built)\s+by\s+(?:(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person)|a\s+(?:user|human|tester|reviewer|maintainer|developer|person)|an\s+operator)${SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE}(?:(?:\s+|-)[\w'-]+)?`,
     'i',
   );
   let verbMatch = verbPattern.exec(corpus);
@@ -5292,15 +5303,26 @@ function findUnsafeExecutionDirectiveMatch(
         corpus,
         verbStart + verbText.length,
       );
-      const generalTargetMatch = targetPattern.exec(window);
+      // A suppressed passive attribution is not the end of the scan: a
+      // later target in the same bounded directive (for example, "and the
+      // attached script") must still be inspected.
+      targetPattern.lastIndex = 0;
+      let generalTargetMatch = null;
+      let candidateGeneralTargetMatch = targetPattern.exec(window);
+      while (candidateGeneralTargetMatch) {
+        const suppressedPassiveAttribution =
+          /^by\s/i.test(candidateGeneralTargetMatch[0] ?? '') &&
+          passiveAttributionPrefixPattern.test(
+            window.slice(0, candidateGeneralTargetMatch.index),
+          );
+        if (!suppressedPassiveAttribution) {
+          generalTargetMatch = candidateGeneralTargetMatch;
+          break;
+        }
+        candidateGeneralTargetMatch = targetPattern.exec(window);
+      }
       const targetMatch =
-        (generalTargetMatch &&
-        /^by\s/i.test(generalTargetMatch[0] ?? '') &&
-        passiveAttributionPrefixPattern.test(
-          window.slice(0, generalTargetMatch.index),
-        )
-          ? null
-          : generalTargetMatch) ??
+        generalTargetMatch ??
         directActorCompoundTargetPattern.exec(window) ??
         suppliedContentHumanSourcePattern.exec(window) ??
         UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET.exec(window);
