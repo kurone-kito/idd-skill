@@ -159,14 +159,11 @@ profile-conditional. This is intentional, not an oversight:
   if … the helper is unavailable"), so the practical effect of the
   exclusion is bounded capability on some install paths, not breakage.
 
-**For adopters:** the mirrored helper is outside the core set, so an
-ordinary Option B import omits it and the rest of the `vendored-node`
-bundle. To install that bundle, use a full clone and add
-`--profile vendored-node` to both [local-copy commands](#local-copy-installs).
-
-A full clone is required because the helper is in repository-root
-`scripts/`, not `idd-template/scripts/`. Without a clone, an Option A
-adopter selecting `vendored-node` can fetch this standalone helper:
+**For adopters:** core imports omit this helper and the rest of the
+`vendored-node` bundle. Add `--profile vendored-node` to both
+[local-copy commands](#local-copy-installs) to install them. The helper is
+in repository-root `scripts/`, so a full clone is required. Option A can
+fetch this standalone helper instead:
 
 ```sh
 mkdir -p scripts
@@ -193,16 +190,15 @@ This needs a maintainer decision, not a mechanical file-list edit.
 
 ## `.gitattributes` linguist-vendored convention (`vendored-node`)
 
-The copied `vendored-node` helpers are third-party code: mark them
-`linguist-vendored` as described in [the optional setup](optional-host-setup.md#optional--mark-the-vendored-helper-bundle-linguist-vendored),
-not `linguist-generated=true` (reserved for first-party build output;
-see the root `.gitattributes` and the observed issue `#2958`).
+The copied helpers are third-party code: mark them `linguist-vendored`
+per [the optional setup](optional-host-setup.md#optional--mark-the-vendored-helper-bundle-linguist-vendored),
+not `linguist-generated=true` (first-party output; see root
+`.gitattributes` and issue `#2958`).
 
-`idd-template/` omits `.gitattributes` because it belongs to the adopter
-and the importer cannot merge an existing file (it reports a blocked
-overwrite). Append the helper-runtime manifest's exact lines, not a
-`scripts/*.mjs` glob that could include handwritten files (preventive;
-no observed incident yet).
+`idd-template/` omits `.gitattributes` to leave the adopter's file alone;
+the importer cannot merge it safely. Append the helper-runtime manifest's
+exact lines, not a `scripts/*.mjs` glob that could include handwritten
+files (preventive; no observed incident yet).
 
 Run from the root of a full source clone and target the adopter
 explicitly. Core imports omit `scripts/helper-runtime-manifest.mjs`;
@@ -547,10 +543,6 @@ profile. Core import omits the optional
 `idd-advisory-convergence-comment.yml` workflows. To opt in, copy both
 into `.github/workflows/` using [the host-workflow instructions](optional-host-setup.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow).
 A maintainer must register the required check separately.
-
-For the issue-authoring companion, copy canonical
-`skills/issue-authoring/` into one selected native `SKILL_DEST`, as
-described in `idd-template/ONBOARDING.md`.
 
 If the operator opts into the issue-authoring companion, copy the canonical
 `skills/issue-authoring/` source bundle from the idd-skill checkout to one

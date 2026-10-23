@@ -728,10 +728,9 @@ this section documents only the flags relevant to Steps 0, 1A-1C, 2, 3,
 
 ## Step 2 — Fetch or copy template files
 
-> **CLI shortcut**: The local helper's `--import` mode automates this
-> step from a local `idd-skill` clone. See
-> [Local-copy installs](docs/onboarding/template-distribution.md#local-copy-installs)
-> for the dry-run and apply commands.
+> **CLI shortcut**: From a local clone, run
+> `node scripts/idd-onboard.mjs --import` (see
+> [Local-copy installs](docs/onboarding/template-distribution.md#local-copy-installs)).
 
 You need the following core execution and profile artifact files in the
 target repository. Use whichever method applies.
@@ -935,33 +934,42 @@ for the exact `gh api` and `curl` loops (core files and the optional
 
 ### Option B — Local copy (Node.js and clone required)
 
-With a local clone and Node.js, use its `scripts/idd-onboard.mjs` helper
-in `--import` mode to copy Option A's canonical core set, excluding the
-optional advisory-convergence workflows. See
+With Node.js and a clone, run `node scripts/idd-onboard.mjs --import`
+to copy the core set (advisory workflows excluded). See
 [Local-copy installs](docs/onboarding/template-distribution.md#local-copy-installs)
-for complete dry-run and apply commands, the optional `vendored-node`
-profile, and companion instructions.
+for details.
 
-**Optional — install the advisory-convergence workflows.** Copy
-`idd-advisory-convergence.yml` and
-`idd-advisory-convergence-comment.yml` into the adopter's
-`.github/workflows/` using [the host-workflow instructions](docs/onboarding/optional-host-setup.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow).
-A maintainer must separately register the required check.
+**Optional:** Host the advisory-convergence workflows with [the host-workflow instructions](docs/onboarding/optional-host-setup.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow);
+register the required check separately.
 
 ### Optional companion boundary
 
-The issue-authoring companion drafts IDD issues before execution. Checked
-drafts stay held; previews and other non-final drafts go in a draft carrier.
-Discover skips held issues, which require an explicit release request.
+The issue-authoring companion drafts or refines IDD-ready issues,
+roadmaps, and sub-issues before execution starts. Checked drafts go under the
+hold; previews or non-final ones go to a draft carrier. Only
+releasing the hold needs an explicit request; Discover skips held
+issues, so no loop starts.
 
-Install the canonical `skills/issue-authoring/` source under one selected
-native `SKILL_DEST`; `.github/instructions/*.instructions.md` execute
-approved issues. Keep the source bundle and references aligned with
-`docs/issue-authoring-skill.md`.
+Keep the companion separate from the execution instructions and distinguish
+its source from its installed destination:
 
-The read-only `idd-spec-audit` companion checks installed instructions for
-drift. It routes findings through issue-authoring when installed, otherwise
-to the normal manual issue-filing process; it never changes files or issues.
+- `skills/issue-authoring/` is the canonical source helper for drafting issue
+  sets.
+- The selected native `SKILL_DEST` is the target repository's installed
+  destination; it is not another canonical source.
+- `.github/instructions/*.instructions.md` execute approved issues
+  through the IDD loop.
+- In the source `idd-skill` repository, maintainers must keep
+  `skills/issue-authoring/` and its bundled references aligned with
+  `docs/issue-authoring-skill.md`.
+
+The `idd-spec-audit` companion is read-only: it audits the installed
+instruction corpus for semantic drift. When the `issue-authoring`
+companion is also installed, it routes every finding back through
+that flow for revision; otherwise it routes findings through the
+installation's normal manual issue-filing process instead (see the
+installed companion's own `SKILL.md`, Scope section). It never edits
+files or mutates issues on its own.
 
 ### Optional — enable the local worktree guard
 
