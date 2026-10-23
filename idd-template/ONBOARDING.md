@@ -334,11 +334,9 @@ Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of
 continuing below — Steps 2, 4, and 5 write the template with a direct,
 unreviewed commit (the `direct-import` default only).
 
-Otherwise continue with the Step 2 file list and Option A (or Option B
-for a local clone) below to fetch the template, apply the confirmed
-placeholder and policy values by hand (Steps 1A-1C, 3, and 4 below
-spell out the same items the catalog just asked), and finish with
-Steps 5 and 6.
+Otherwise use Option A below to fetch the template and apply the
+confirmed values in Steps 1A-1C, 3, and 4; finish with Steps 5 and 6.
+Option B requires Node.js.
 
 ---
 
@@ -935,12 +933,11 @@ for the exact `gh api` and `curl` loops (core files and the optional
 `issue-authoring` and `idd-spec-audit` companions), including the Codex
 `SKILL_DEST` examples.
 
-### Option B — Local copy (idd-skill cloned)
+### Option B — Local copy (Node.js and clone required)
 
-If you have cloned `https://github.com/kurone-kito/idd-skill`, use its
-`scripts/idd-onboard.mjs` helper in `--import` mode to copy the canonical
-core set used by Option A; it excludes the optional advisory-convergence
-workflows. See
+With a local clone and Node.js, use its `scripts/idd-onboard.mjs` helper
+in `--import` mode to copy Option A's canonical core set, excluding the
+optional advisory-convergence workflows. See
 [Local-copy installs](docs/onboarding/template-distribution.md#local-copy-installs)
 for complete dry-run and apply commands, the optional `vendored-node`
 profile, and companion instructions.

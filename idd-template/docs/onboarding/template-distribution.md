@@ -522,10 +522,10 @@ required for each nested docs directory.
 
 ## Local-copy installs
 
-The `--import` mode of `scripts/idd-onboard.mjs` copies the
-generated `idd-template-core-files` set used by remote import. Do not
-copy the whole `idd-template/` tree:
-it also contains optional workflows (observed 2026-10-23, issue `#4642`).
+Requires Node.js and a full clone. Without Node.js, use the remote-fetch
+examples above. `idd-onboard.mjs --import` copies the generated core set,
+not the whole tree (which contains optional workflows; observed
+2026-10-23, issue `#4642`).
 
 From the clone root, set `TARGET_REPO` to the adopter. Review the dry-run
 plan first. For a target outside the source checkout, pass its path as
