@@ -728,9 +728,8 @@ this section documents only the flags relevant to Steps 0, 1A-1C, 2, 3,
 
 ## Step 2 — Fetch or copy template files
 
-> **CLI shortcut**: From a local clone, run
-> `node scripts/idd-onboard.mjs --import` (see
-> [Local-copy installs](docs/onboarding/template-distribution.md#local-copy-installs)).
+> **CLI shortcut**: See [CLI-assisted onboarding](#cli-assisted-onboarding)
+> for the complete Step 2 command.
 
 You need the following core execution and profile artifact files in the
 target repository. Use whichever method applies.
@@ -934,8 +933,8 @@ for the exact `gh api` and `curl` loops (core files and the optional
 
 ### Option B — Local copy (Node.js and clone required)
 
-With Node.js and a clone, run `node scripts/idd-onboard.mjs --import`
-to copy the core set (advisory workflows excluded). See
+Run `node scripts/idd-onboard.mjs --import --source <idd-skill-clone> --target <target-repo>`
+to copy the core set only. See
 [Local-copy installs](docs/onboarding/template-distribution.md#local-copy-installs)
 for details.
 
