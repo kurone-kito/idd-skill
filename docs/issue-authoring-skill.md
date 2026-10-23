@@ -141,8 +141,9 @@ This phase may draft a roadmap issue, sub-issues, or orphan issues as
 appropriate. The remaining sections of this document define the
 normative rules for those outputs.
 
-Before the completed-draft adversarial review, verify material factual
-claims that justify each draft's scope or design against current sources:
+Before the completed-draft adversarial review and mechanical audit,
+verify material factual claims that justify each draft's scope or design
+against current sources:
 repository behavior against current code and documentation, issue or
 pull-request status and prior decisions against live GitHub records, and
 runtime observations under the existing
@@ -159,6 +160,8 @@ asset, or outside system. This check adds no packet fields. It responds
 to the factual-history error reported in [issue #4566](https://github.com/kurone-kito/idd-skill/issues/4566),
 which concerns [issue #3838](https://github.com/kurone-kito/idd-skill/issues/3838)
 and [issue #1019](https://github.com/kurone-kito/idd-skill/issues/1019).
+The checklist placement is tracked in
+[issue #4643](https://github.com/kurone-kito/idd-skill/issues/4643).
 
 ## Output readiness model
 

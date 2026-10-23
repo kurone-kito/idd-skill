@@ -1179,10 +1179,15 @@ Pre-publish validation checklist:
 4. **Human dependency isolation**: Ready issues do not hide unresolved
    decisions, credentials, subjective approvals, or mid-implementation
    human handoffs
-5. **Completed-draft review**: the drafted body has passed the
+5. **Factual-claims check**: before the completed-draft adversarial
+   review and mechanical audit, verify material factual claims under the
+   [Factual-claims check](#factual-claims-check). Put support in the
+   review packet's existing `evidence` array and route materially
+   unresolved claims under the existing rules
+6. **Completed-draft review**: the drafted body has passed the
    [completed-draft adversarial review](#completed-draft-adversarial-review)
    before the linter runs
-6. **Mechanical audit**: the drafted body passes the
+7. **Mechanical audit**: the drafted body passes the
    `audit-authored-issue` linter for its declared shape (see
    [Mechanical pre-publish gate](#mechanical-pre-publish-gate)) — for the
    `orphan` and `child` shapes, this now also runs the same A4 criteria
@@ -1199,8 +1204,9 @@ sentence, and this sentence does not turn those other checks into an ask.
 
 ## Factual-claims check
 
-Before the completed-draft adversarial review, verify material factual
-claims that justify a draft's scope or design against current sources.
+Before the completed-draft adversarial review and mechanical audit,
+verify material factual claims that justify a draft's scope or design
+against current sources.
 This includes repository behavior against current code and documentation,
 issue or pull-request status and prior decisions against live GitHub
 records, and runtime observations under
@@ -1221,6 +1227,8 @@ error reported in [issue #4566](https://github.com/kurone-kito/idd-skill/issues/
 for a draft carried in [issue #4479](https://github.com/kurone-kito/idd-skill/issues/4479),
 concerning [issue #3838](https://github.com/kurone-kito/idd-skill/issues/3838)
 and [issue #1019](https://github.com/kurone-kito/idd-skill/issues/1019).
+The checklist placement is tracked in
+[issue #4643](https://github.com/kurone-kito/idd-skill/issues/4643).
 
 ## Completed-draft adversarial review
 

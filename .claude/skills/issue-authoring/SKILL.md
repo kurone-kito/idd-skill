@@ -430,6 +430,11 @@ needs-decision, blocked-by-human, and out-of-scope.
   new issue.
 - Avoid widening drafting output beyond the user request without saying
   so.
+- Before the completed-draft adversarial review and mechanical audit,
+  verify material factual claims through the established
+  [Factual-claims check](references/contract.md#factual-claims-check)
+  and put supporting evidence in the review packet's existing
+  `evidence` array.
 - Run the completed-draft adversarial review, then the
   `audit-authored-issue` linter (or its manual fallback in
   `instructions-only` installs), against every drafted roadmap, child,
