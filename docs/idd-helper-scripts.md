@@ -9896,8 +9896,9 @@ a tag:
 - `origin` must have exactly one fetch URL and one push URL, and both must name
   the same hosted repository. A non-empty `GH_REPO` must name that repository
   too.
-- The default branch reported by `gh` must match `origin/HEAD`. The supplied
-  merge commit must be the merge commit of the supplied merged version-bump
+- The default branch reported by `gh` must match the branch named by the
+  live symbolic `HEAD` advertised by `origin`. The supplied merge commit must
+  be the merge commit of the supplied merged version-bump
   pull request and must be reachable from that default branch.
 - The supplied release issue must be open and carry none of the effective
   configured blocked-by-human labels. The default repository label is
@@ -9933,7 +9934,8 @@ it refuses before the remote read or retry. The helper allows at most two
 push invocations and one successful push. After a landed push it checks the
 remote tag object and signature again.
 The helper never deletes, moves, or force-pushes a tag, creates an unsigned
-tag, branch, or commit, or edits a tracked file.
+tag, branch, or commit, or edits a tracked file. These retry, timeout-cleanup,
+and tag-preservation safeguards are preventive; no observed incident yet.
 
 Tag creation uses the repository's configured Git signing setup. If the
 configured format is SSH and the helper would create a tag, Git 2.44 or later
