@@ -1390,6 +1390,17 @@ them. Codex identified this gap in
 [PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4357848065)
 (preventive; no production incident observed).
 
+Codex then found that a human body finding could be skipped while a
+matching thread was selected, then re-added after the thread was resolved.
+The E1 rule now matches the exact cited path and underlying claim, not just
+an area or topic, and counts a resolved thread as coverage only when its
+trusted, stamped reply names the body's exact review URL and unique item
+identity. E13's fix commit must be in current HEAD, or E6's rejection
+evidence must still hold there; otherwise the body remains selected. This
+closes the convergence gap reported in
+[PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4358413107)
+(preventive; no production incident observed).
+
 Copilot's follow-up review found that both standard and lite left the
 substantive boundary, splitting independent claims, and stable identity
 implicit ([PR review](https://github.com/kurone-kito/idd-skill/pull/4651#pullrequestreview-5626114653)).

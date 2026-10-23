@@ -226,20 +226,23 @@ finding. Inspect other bots' `COMMENTED` review bodies separately for
 file/line-cited findings without threads; each is PATH A.
 See the [#2197/#2559 rationale](../../docs/idd-design-rationale.md#an-advisory-bots-embedded-but-unthreaded-findings-mirror-the-detection-scope-not-the-gate-scope).
 
-**Human `COMMENTED` review bodies:** Add each substantive, unsettled
-finding as PATH A with its review URL, unless a selected thread already
-covers it. Substantive means an actionable defect, risk, or change
-request; omit praise, acknowledgements, and status-only text. Split
-independent claims into separate items, retaining their evidence. Read
-raw reviews for findings; check regular PR comments for settlement.
-Identify each item by a unique cited `path:line`, or a short unique title. A
-trusted, unedited, stamped top-level E6/E13 reply itself must include
-the exact review URL and item identity. E6 rejects only after review;
-E5 `Accepted` stays selected until its post-fix E13 `**Accepted**` reply.
-Keep missing or ambiguous matches and `**Awaiting maintainer decision**`
-selected. `COMMENTED` affects selection only; it is not approval and
-changes no formal review-state or `CHANGES_REQUESTED` gate. See the
-[human review-body rationale](../../docs/idd-design-rationale.md#human-commented-review-bodies-are-snapshot-input-not-approval).
+**Human `COMMENTED` review bodies:** Add each actionable, unsettled
+defect, risk, or change request as PATH A with its review URL; omit praise,
+acknowledgements, and status-only text. Split independent claims and retain
+evidence. Raw reviews supply findings; regular PR comments supply
+settlement. Identify each by unique cited `path:line` or short unique title.
+A trusted, unedited, stamped top-level E6/E13 reply must name that exact
+review URL and item identity. E6 rejects only after review; E5
+`**Accepted**` stays selected until post-fix E13 `**Accepted**`. For
+resolved-thread coverage, require same underlying claim at exact cited
+path; area/topic alone never matches. Thread must remain resolved, and its
+trusted, unedited, stamped E6/E13 reply must name the body's exact review
+URL and unique item identity. Require E13's fix commit reachable from
+current HEAD, or re-check E6 rejection evidence on current HEAD; otherwise
+keep selected. Keep missing/ambiguous matches and
+`**Awaiting maintainer decision**` selected. `COMMENTED` affects selection
+only; it is not approval and changes no formal review-state or
+`CHANGES_REQUESTED` gate. See [rationale](../../docs/idd-design-rationale.md#human-commented-review-bodies-are-snapshot-input-not-approval).
 
 **Regular comments** where the last speaker isn't any IDD agent and no
 reply from **you** exists after that comment's timestamp, or where the
@@ -251,13 +254,10 @@ rule for this plain comment) — exclude periodic notification bots
 PATH B in E4-E7 (non-review notices are dispositioned under the E6
 rule).
 
-**Resolved-thread index (for the E5 duplicate pre-check).** Also carry
-forward a light index of this PR's **resolved** threads
-(`isResolved=true`): file/area, a short claim summary, source URL, and
-any IDD-agent disposition marker found. Do **not** add resolved
-threads back into ReviewItems_snapshot. This is a **routing hint
-only** for E5's duplicate pre-check — it tells triage where a prior
-recurrence might be, not what to conclude.
+**Resolved-thread index.** Index this PR's resolved threads
+(`isResolved=true`) by path/area, claim, source URL, and IDD disposition
+marker. Use for E5 duplicate checks and body coverage; never add them to
+ReviewItems_snapshot.
 
 ## E2 — Critique pass
 

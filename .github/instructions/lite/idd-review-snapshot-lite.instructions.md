@@ -188,8 +188,8 @@ Select raw Step 1 items; record each source URL:
   comments identify settlements. Add each actionable defect, risk, or
   concrete change request as an unsettled PATH A item; omit praise,
   acknowledgements, status-only text, and selected-thread duplicates. Split
-  independent claims, keeping their evidence. Identify each by cited
-  unique `path:line` or a short unique title. A trusted, unedited, stamped
+  independent claims with evidence; identify each by unique cited
+  `path:line` or short unique title. A trusted, unedited, stamped
   top-level E6 `**Rejected**` (after review) or post-fix E13
   `**Accepted**` reply body itself must cite the exact review URL and item
   identity; E5 `Accepted` stays selected until E13. Keep missing/ambiguous
@@ -200,8 +200,11 @@ Select raw Step 1 items; record each source URL:
   with `**Awaiting maintainer decision**` — exclude periodic bots; keep
   Copilot/CI comments as PATH B, including E6 notices.
 
-Resolved threads (`isResolved=true`): index file/area, claim, URL, and
-disposition for E5 duplicate checks only; never re-add.
+Resolved threads: index path, claim, URL, disposition for E5 and body
+coverage. Suppress only exact-path, same-claim bodies (not area/topic)
+when a trusted, unedited, stamped E6/E13 reply names the exact review URL
+and unique item identity. Require E13's cited fix commit in current HEAD
+or E6 rejection evidence still valid there; otherwise keep selected.
 
 ## E2 — Critique pass
 
@@ -209,27 +212,27 @@ Run one critique pass on the branch's changes every E1-E3 pass (always).
 Add any newly found issues to
 ReviewItems_snapshot.
 
-Per-agent E2: enforce `critiqueLoop.subagentWaitCeiling` (`PT20M` default)
-with a harness timeout (#3449), not a wrapper; shell-delegate unchanged.
-Clean up background waits; suppress late output. Timeout/cancel/interruption/
-error without findings: self-critique; record failure/risk, never clean or
-phase-level `mode` wait. Without bound/cleanup: self-critique; record risk/no
-return.
+Per-agent E2: bound delegated waits by `critiqueLoop.subagentWaitCeiling`
+(`PT20M` default) with harness timeout (#3449), not wrapper;
+shell-delegate unchanged. Clean background waits; suppress late output.
+On timeout/cancel/interruption/error without findings, self-critique;
+record failure/risk, never clean or phase-level wait. Without a bound or
+cleanup, self-critique; record risk/no return.
 
-Apply applicable lenses, composing both: **Mutation / write-side** (diff
-implements a helper mutating GitHub/Git state or merging) — Fail-closed
-inputs; Validate/execute scope parity; Unsafe-output suppression; Schema
-strictness parity. **Gate-mirroring** (helper predicts, mirrors, or
-pre-checks another gate) — Validation-path parity; Input completeness;
-Whole-identity comparison; Snapshot identity; Point-in-time parity.
+Apply both applicable lenses: **Mutation / write-side** (helper mutates
+GitHub/Git or merges) — fail-closed inputs; validate/execute scope parity;
+unsafe-output suppression; schema strictness parity. **Gate-mirroring**
+(predicts, mirrors, or pre-checks a gate) — validation-path parity;
+complete inputs; whole-identity comparison; snapshot identity;
+point-in-time parity.
 
-**Incremental scope**: later same-claim E2 passes review the diff since the
-prior head only with a same-claim baseline whose GraphQL `lastEditedAt` is
-explicitly `null` (resolved via node id/`includeEditState`). Otherwise use a
+**Incremental scope**: later same-claim E2 passes may review only the diff
+since the prior head when its same-claim baseline's GraphQL
+`lastEditedAt` is proven `null` via node id/`includeEditState`. Otherwise use a
 full-branch diff after failed proof, rebase, multi-fix batch, non-ancestor
-baseline, or claim change. Never infer edit state from body, `updatedAt`,
-author, or claim. `ReviewItems_snapshot` is session-local; inherit prior-claim
-critique findings only if persisted as reviewer-visible comments.
+baseline, or claim change. Never infer edit state from body,
+`updatedAt`, author, or claim. `ReviewItems_snapshot` is session-local;
+inherit prior-claim critique findings only from reviewer-visible comments.
 
 Before critique, set `{e2-review-head-SHA}` to Step 1's `{head-SHA}`;
 do not capture another HEAD. Reread HEAD before posting. If it changed,
@@ -254,24 +257,19 @@ When Step 2 was deferred, reread the live PR HEAD before E3. A mismatch
 with Step 1's `{head-SHA}` returns to E1 for a fresh snapshot; never route
 stale items into E3/E4.
 
-- **Empty, Step 2 ready** → `idd-pre-merge-lite.instructions.md` (F1);
-  not triage.
-- **Empty, Step 2 deferred** → E15 for CI or E14 for advisory; both:
-  E14 first, then E1 before F1/F2.
-- **Non-empty** → stop; hand off to `idd-review-triage.instructions.md`
-  (E4).
+- **Empty + ready** → F1, not triage. **Empty + deferred** → E14
+  for advisory, E15 for CI; if both wait, E14 first. Then E1 before
+  F1/F2. **Non-empty** → stop; E4 triage.
 
 ## Cold-start ReviewItems_snapshot reconstruction
 
 Read this entering E4/E9 without this episode's ReviewItems_snapshot
 (lost/restarted session, or mid-review delegation hand-off).
 
-**Procedure**: rerun Step 1-3 (Step 2 posts the watermark when eligible —
-never a second one), then edge case 2's steps 1-3 unconditionally
-before E3, then E2, E3. Only when E3 is non-empty, hand off E4-E8
-fully before E9. An edge-case-1 item routed to E14 runs E14 after edge
-case 2's own push (if any, targeting post-push HEAD), before
-branch-sync.
+**Procedure**: rerun E1 Steps 1-3 (post watermark only when eligible;
+never twice); run edge case 2 steps 1-3 unconditionally before E3, then E2/E3. On
+non-empty E3, finish E4-E8 before E9; run any edge-case-1 E14 after
+edge-case-2 push, if any, against post-push HEAD, before branch-sync.
 
 **Edge case 1 — item with no completed disposition.** Covers a lost
 session mid-classification, a landed-but-unreplied E12 push, or a
