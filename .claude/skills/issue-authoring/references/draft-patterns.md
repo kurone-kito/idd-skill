@@ -487,9 +487,9 @@ It also names the check that still uses the old definition until a new
 event. This is a hard edge when the check cannot validate the consumer
 against the needed definition.
 
-**Bad — shared parent or file.** Two children belonging to the same
-roadmap, or editing the same file, does not identify an output consumed
-by either child. Keep them as siblings unless one child needs a specific
+**Bad — shared parent or file.** Sharing a roadmap or editing the same
+file, by itself, does not identify an output that one child consumes
+from the other. Keep them as siblings unless one child needs a specific
 output from the other. Common parentage is illustrated by issue #4079
 (opened 2026-10-12); shared-file-only and generic-claim cases are
 preventive; no observed incident yet.
