@@ -1239,8 +1239,10 @@ in this preamble, since the fallback differs per helper.
   ordinary `Ref(s)` references. This is a syntax inventory of the
   supplied body, not a live graph, an edge-necessity proof, an
   independence verdict, or an exhaustive history; an empty hard
-  prerequisite list means the body has no recognized hard-prerequisite
-  syntax. Malformed near-misses remain in the existing audit findings.
+  prerequisite list means no recognized local hard-prerequisite syntax;
+  recognized qualified dependency tokens remain in
+  `unresolvedQualifiedReferences`. Malformed near-misses remain in the
+  existing audit findings.
 - `scripts/audit-pr-cleanup.mjs` for post-merge comment cleanup auditing
 - `scripts/minimize-superseded-markers.mjs` for in-flight per-marker
   `minimizeComment` of strictly superseded markers — `review-watermark`/
