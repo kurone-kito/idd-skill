@@ -10,6 +10,7 @@ import {
   type ProvisionalDecisionSource,
   parseProvisionalDecisionRecordComment,
   replayProvisionalDecisionHistory,
+  type VerifiedProvisionalReworkRoadmap,
 } from '../src/scripts/provisional-decision-state.mts';
 
 type Event = Record<string, unknown>;
@@ -35,7 +36,7 @@ const secondClaim: ProvisionalDecisionClaim = {
   claimId: 'claim-4599-2',
   agentId: 'codex-takeover',
   branch: 'issue/4599-feat-decision-replay',
-  claimedAt: '2026-10-20T00:01:00Z',
+  claimedAt: '2026-10-20T00:00:01.500Z',
   supersedes: firstClaim.claimId,
 };
 
@@ -109,11 +110,12 @@ function record(
   decisionGeneration = 1,
   bundleGeneration = 1,
   claimLineage: readonly ProvisionalDecisionClaim[] = [firstClaim],
+  recordSource: ProvisionalDecisionSource = source,
 ): ProvisionalDecisionRecord {
   return {
     schemaVersion: 1,
     recordId,
-    source,
+    source: recordSource,
     bundleGeneration,
     decisionGeneration,
     claimLineage,
@@ -182,10 +184,14 @@ function confirmedEvent(answer: ProvisionalDecisionComment): Event {
   };
 }
 
-function workEvidence(decisionGeneration = 1, bundleGeneration = 1) {
+function workEvidence(
+  decisionGeneration = 1,
+  bundleGeneration = 1,
+  evidenceSource: ProvisionalDecisionSource = source,
+) {
   const result = completionResult(decisionGeneration);
   return {
-    source,
+    source: evidenceSource,
     bundleGeneration,
     decisionGeneration,
     reference: result.reference as string,
@@ -203,6 +209,8 @@ function buildAnswer(
   response: 'accepted' | 'rework' = 'accepted',
   requestedOptionId?: string,
   rationale?: string,
+  answerSource: ProvisionalDecisionSource = source,
+  bundleGeneration = 1,
 ): Event {
   const completedByGeneration = new Map(
     completed.map((item) => [item.decisionGeneration, item]),
@@ -212,8 +220,8 @@ function buildAnswer(
   );
   return {
     schemaVersion: 1,
-    source,
-    bundleGeneration: 1,
+    source: answerSource,
+    bundleGeneration,
     decisionGenerations: ordered.map((item) => item.decisionGeneration),
     claimIds: claims.map((claim) => claim.claimId),
     presentedBundle: ordered.map((item) => {
@@ -254,7 +262,24 @@ function input(
     currentSource: source,
     verifiedClaimLineage: [firstClaim],
     verifiedWork: [workEvidence()],
+    verifiedReworkRoadmaps: [],
     ...extra,
+  };
+}
+
+function reworkEvidence(
+  recordId: string,
+  sourceBefore: ProvisionalDecisionSource = source,
+  sourceAfter: ProvisionalDecisionSource = source,
+): VerifiedProvisionalReworkRoadmap {
+  return {
+    recordId,
+    sourceBefore,
+    sourceAfter,
+    roadmapIssueNumber: source.issueNumber,
+    roadmapMarkerId: 'same-source-rework',
+    authoringSetId: 'set-4599-rework',
+    url: `https://github.com/${source.repository}/issues/${source.issueNumber}`,
   };
 }
 
@@ -435,6 +460,102 @@ test('a shared-account answer from an authorized recorder confirms a complete bu
   assert.equal(firstReplay.valid, true);
   assert.equal(firstReplay.status, 'confirmed');
   assert.equal(firstReplay.decisions[0]?.status, 'confirmed');
+});
+
+test('unchanged source content remains bound after issue activity timestamps move', () => {
+  const currentSource = {
+    ...source,
+    snapshot: { ...source.snapshot, updatedAt: dateAt(2) },
+  };
+  const result = replayProvisionalDecisionHistory(
+    input([recordComment('1', record('select-1', selectedEvent()), 1)], {
+      currentSource,
+    }),
+  );
+  assert.equal(result.valid, true);
+  assert.equal(result.status, 'selected');
+});
+
+test('work evidence remains bound when only issue activity timestamps move', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const currentSource = {
+    ...source,
+    snapshot: { ...source.snapshot, updatedAt: dateAt(4) },
+  };
+  const result = replayProvisionalDecisionHistory(
+    input(
+      [
+        recordComment('1', selected, 1),
+        recordComment('2', started, 2),
+        recordComment('3', completed, 3),
+      ],
+      {
+        currentSource,
+        verifiedWork: [workEvidence(1, 1, currentSource)],
+      },
+    ),
+  );
+  assert.equal(result.valid, true);
+  assert.equal(result.status, 'confirmation-pending');
+});
+
+test('confirmation rejects an answer posted before a completed-work record', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const answer = answerComment('3', buildAnswer([selected], [completed]), 2);
+  const confirmation = record('confirm-1', confirmedEvent(answer));
+  const result = replayProvisionalDecisionHistory(
+    input([
+      recordComment('1', selected, 1),
+      recordComment('2', started, 2),
+      answer,
+      recordComment('4', completed, 3),
+      recordComment('5', confirmation, 5),
+    ]),
+  );
+  assert.equal(result.valid, false);
+  assert.ok(
+    result.issues.some((issue) => issue.code === 'confirmation-time-mismatch'),
+  );
+});
+
+test('server order settles an answer and completion with equal timestamps', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const answer = answerComment('4', buildAnswer([selected], [completed]), 3);
+  const confirmation = record('confirm-1', confirmedEvent(answer));
+  const result = replayProvisionalDecisionHistory(
+    input([
+      recordComment('1', selected, 1),
+      recordComment('2', started, 2),
+      recordComment('3', completed, 3),
+      answer,
+      recordComment('5', confirmation, 5),
+    ]),
+  );
+  assert.equal(result.valid, true);
+  assert.equal(result.status, 'confirmed');
+});
+
+test('server order rejects an equal-timestamp answer before a completion', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const answer = answerComment(
+    'answer',
+    buildAnswer([selected], [completed]),
+    3,
+  );
+  const confirmation = record('confirm-1', confirmedEvent(answer));
+  const result = replayProvisionalDecisionHistory(
+    input([
+      recordComment('1', selected, 1),
+      recordComment('2', started, 2),
+      answer,
+      recordComment('4', completed, 3),
+      recordComment('5', confirmation, 5),
+    ]),
+  );
+  assert.equal(result.valid, false);
+  assert.ok(
+    result.issues.some((issue) => issue.code === 'confirmation-time-mismatch'),
+  );
 });
 
 test('a completed bundle with no new answer remains pending and never prompts during replay', () => {
@@ -748,6 +869,51 @@ test('claim takeover can continue a selected decision without duplicating prior 
   assert.equal(result.status, 'confirmed');
 });
 
+test('a confirmed answer keeps its event-time claim lineage after a later takeover', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const answer = answerComment(
+    '4',
+    buildAnswer([selected], [completed], [firstClaim]),
+    4,
+  );
+  const confirmation = record('confirm-1', confirmedEvent(answer), 1, 1, [
+    firstClaim,
+  ]);
+  const laterClaim = { ...secondClaim, claimedAt: dateAt(6) };
+  const result = replayProvisionalDecisionHistory(
+    input(
+      [
+        recordComment('1', selected, 1),
+        recordComment('2', started, 2),
+        recordComment('3', completed, 3),
+        answer,
+        recordComment('5', confirmation, 5),
+      ],
+      { verifiedClaimLineage: [firstClaim, laterClaim] },
+    ),
+  );
+  assert.equal(result.valid, true);
+  assert.equal(result.status, 'confirmed');
+});
+
+test('a new record cannot use a superseded claim after takeover', () => {
+  const selected = recordComment('1', record('select-1', selectedEvent()), 1);
+  const started = recordComment(
+    '2',
+    record('start-2', workStartedEvent(), 1, 1, [firstClaim]),
+    2,
+  );
+  const result = replayProvisionalDecisionHistory(
+    input([selected, started], {
+      verifiedClaimLineage: [firstClaim, secondClaim],
+    }),
+  );
+  assert.equal(result.valid, false);
+  assert.ok(
+    result.issues.some((issue) => issue.code === 'claim-binding-mismatch'),
+  );
+});
+
 test('alternate-choice rework preserves the completed work link and same source', () => {
   const { selected, started, completed } = oneCompletedDecision();
   const rationale = 'The alternate choice better fits the current need.';
@@ -794,17 +960,524 @@ test('alternate-choice rework preserves the completed work link and same source'
   assert.equal(requested.decisions[0]?.workCompleted?.recordId, 'complete-1');
 
   const authoredResult = replayProvisionalDecisionHistory(
-    input([
-      ...base,
-      recordComment('5', request, 5),
-      recordComment('6', authored, 6),
-    ]),
+    input(
+      [
+        ...base,
+        recordComment('5', request, 5),
+        recordComment('6', authored, 6),
+      ],
+      {
+        verifiedReworkRoadmaps: [reworkEvidence('rework-2')],
+      },
+    ),
   );
   assert.equal(authoredResult.status, 'rework-authored');
   assert.equal(
     authoredResult.decisions[0]?.workCompleted?.recordId,
     'complete-1',
   );
+});
+
+test('rework authoring validates a same-issue source rewrite against independent evidence', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const rationale = 'The alternate choice better fits the current need.';
+  const answer = answerComment(
+    '4',
+    buildAnswer(
+      [selected],
+      [completed],
+      [firstClaim],
+      'rework',
+      'change',
+      rationale,
+    ),
+    4,
+  );
+  const request = record('rework-1', {
+    type: 'rework-requested',
+    reworkRequest: {
+      commentUrl: answer.url,
+      requestedAt: answer.createdAt,
+      requestedOptionId: 'change',
+      rationale,
+    },
+  });
+  const sourceAfter = {
+    ...source,
+    snapshot: {
+      ...source.snapshot,
+      bodySha256: 'c'.repeat(64),
+      updatedAt: dateAt(6),
+    },
+  };
+  const authored = {
+    ...record('rework-2', {
+      type: 'rework-authored',
+      reworkRoadmap: {
+        roadmapIssueNumber: source.issueNumber,
+        roadmapMarkerId: 'same-source-rework',
+        authoringSetId: 'set-4599-rework',
+        url: `https://github.com/${source.repository}/issues/${source.issueNumber}`,
+      },
+    }),
+    source: sourceAfter,
+  };
+  const comments = [
+    recordComment('1', selected, 1),
+    recordComment('2', started, 2),
+    recordComment('3', completed, 3),
+    answer,
+    recordComment('5', request, 5),
+    recordComment('6', authored, 6),
+  ];
+  const withoutEvidence = replayProvisionalDecisionHistory(
+    input(comments, { currentSource: sourceAfter }),
+  );
+  assert.equal(withoutEvidence.valid, false);
+  assert.ok(
+    withoutEvidence.issues.some(
+      (issue) => issue.code === 'source-binding-mismatch',
+    ),
+  );
+
+  const withEvidence = replayProvisionalDecisionHistory(
+    input(comments, {
+      currentSource: sourceAfter,
+      verifiedReworkRoadmaps: [reworkEvidence('rework-2', source, sourceAfter)],
+    }),
+  );
+  assert.equal(withEvidence.valid, true);
+  assert.equal(withEvidence.status, 'rework-authored');
+});
+
+test('rework rejects answers posted before completed work', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const rationale = 'The alternate choice better fits the current need.';
+  const answer = answerComment(
+    '3',
+    buildAnswer(
+      [selected],
+      [completed],
+      [firstClaim],
+      'rework',
+      'change',
+      rationale,
+    ),
+    2,
+  );
+  const request = record('rework-1', {
+    type: 'rework-requested',
+    reworkRequest: {
+      commentUrl: answer.url,
+      requestedAt: answer.createdAt,
+      requestedOptionId: 'change',
+      rationale,
+    },
+  });
+  const result = replayProvisionalDecisionHistory(
+    input([
+      recordComment('1', selected, 1),
+      recordComment('2', started, 2),
+      answer,
+      recordComment('4', completed, 3),
+      recordComment('5', request, 5),
+    ]),
+  );
+  assert.equal(result.valid, false);
+  assert.ok(
+    result.issues.some(
+      (issue) => issue.code === 'rework-answer-scope-mismatch',
+    ),
+  );
+});
+
+test('rework answers bind to the claim lineage of the citing record', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const laterClaim = { ...secondClaim, claimedAt: dateAt(4) };
+  const rationale = 'The alternate choice better fits the current need.';
+  const answer = answerComment(
+    'answer',
+    buildAnswer(
+      [selected],
+      [completed],
+      [firstClaim, laterClaim],
+      'rework',
+      'change',
+      rationale,
+    ),
+    5,
+  );
+  const request = record(
+    'rework-1',
+    {
+      type: 'rework-requested',
+      reworkRequest: {
+        commentUrl: answer.url,
+        requestedAt: answer.createdAt,
+        requestedOptionId: 'change',
+        rationale,
+      },
+    },
+    1,
+    1,
+    [firstClaim, laterClaim],
+  );
+  const result = replayProvisionalDecisionHistory(
+    input(
+      [
+        recordComment('1', selected, 1),
+        recordComment('2', started, 2),
+        recordComment('3', completed, 3),
+        answer,
+        recordComment('6', request, 6),
+      ],
+      { verifiedClaimLineage: [firstClaim, laterClaim] },
+    ),
+  );
+  assert.equal(result.valid, true);
+  assert.equal(result.status, 'rework-requested');
+});
+
+test('one authored rework does not close an incomplete multi-decision bundle', () => {
+  const selectedOne = record('select-one', selectedEvent(), 1, 1);
+  const selectedTwo = record(
+    'select-two',
+    selectedEvent('Question two?'),
+    2,
+    1,
+  );
+  const startedOne = record('start-one', workStartedEvent(), 1, 1);
+  const startedTwo = record('start-two', workStartedEvent(), 2, 1);
+  const completedOne = record('complete-one', workCompletedEvent(1), 1, 1);
+  const completedTwo = record('complete-two', workCompletedEvent(2), 2, 1);
+  const rationale = 'The alternate better fits the updated need.';
+  const answer = answerComment(
+    '7',
+    buildAnswer(
+      [selectedOne, selectedTwo],
+      [completedOne, completedTwo],
+      [firstClaim],
+      'rework',
+      'change',
+      rationale,
+    ),
+    4,
+  );
+  const request = record('rework-one', {
+    type: 'rework-requested',
+    reworkRequest: {
+      commentUrl: answer.url,
+      requestedAt: answer.createdAt,
+      requestedOptionId: 'change',
+      rationale,
+    },
+  });
+  const authored = record('rework-authored-one', {
+    type: 'rework-authored',
+    reworkRoadmap: {
+      roadmapIssueNumber: source.issueNumber,
+      roadmapMarkerId: 'same-source-rework',
+      authoringSetId: 'set-4599-rework',
+      url: `https://github.com/${source.repository}/issues/${source.issueNumber}`,
+    },
+  });
+  const nextSelection = record('select-next-bundle', selectedEvent(), 1, 2);
+  const priorHistory = [
+    recordComment('1', selectedOne, 1),
+    recordComment('2', selectedTwo, 1),
+    recordComment('3', startedOne, 2),
+    recordComment('4', startedTwo, 2),
+    recordComment('5', completedOne, 3),
+    recordComment('6', completedTwo, 3),
+    answer,
+    recordComment('8', request, 5),
+    recordComment('9', authored, 6),
+  ];
+  const partialRework = replayProvisionalDecisionHistory(
+    input(priorHistory, {
+      verifiedWork: [workEvidence(1), workEvidence(2)],
+      verifiedReworkRoadmaps: [reworkEvidence('rework-authored-one')],
+    }),
+  );
+  assert.equal(partialRework.valid, true);
+  assert.equal(partialRework.status, 'rework-requested');
+
+  const result = replayProvisionalDecisionHistory(
+    input([...priorHistory, recordComment('10', nextSelection, 7)], {
+      verifiedWork: [workEvidence(1), workEvidence(2)],
+      verifiedReworkRoadmaps: [reworkEvidence('rework-authored-one')],
+    }),
+  );
+  assert.equal(result.valid, false);
+  assert.ok(
+    result.issues.some((issue) => issue.code === 'bundle-generation-overlap'),
+  );
+});
+
+test('every decision can finish rework before the next bundle starts', () => {
+  const selectedOne = record('select-one', selectedEvent(), 1, 1);
+  const selectedTwo = record(
+    'select-two',
+    selectedEvent('Question two?'),
+    2,
+    1,
+  );
+  const startedOne = record('start-one', workStartedEvent(), 1, 1);
+  const startedTwo = record('start-two', workStartedEvent(), 2, 1);
+  const completedOne = record('complete-one', workCompletedEvent(1), 1, 1);
+  const completedTwo = record('complete-two', workCompletedEvent(2), 2, 1);
+  const rationale = 'The alternate better fits the updated need.';
+  const answer = answerComment(
+    'answer',
+    buildAnswer(
+      [selectedOne, selectedTwo],
+      [completedOne, completedTwo],
+      [firstClaim],
+      'rework',
+      'change',
+      rationale,
+    ),
+    4,
+  );
+  const requestOne = record('rework-one', {
+    type: 'rework-requested',
+    reworkRequest: {
+      commentUrl: answer.url,
+      requestedAt: answer.createdAt,
+      requestedOptionId: 'change',
+      rationale,
+    },
+  });
+  const requestTwo = record(
+    'rework-two',
+    {
+      type: 'rework-requested',
+      reworkRequest: {
+        commentUrl: answer.url,
+        requestedAt: answer.createdAt,
+        requestedOptionId: 'change',
+        rationale,
+      },
+    },
+    2,
+  );
+  const authoredOne = record('authored-one', {
+    type: 'rework-authored',
+    reworkRoadmap: {
+      roadmapIssueNumber: source.issueNumber,
+      roadmapMarkerId: 'same-source-rework',
+      authoringSetId: 'set-4599-rework',
+      url: `https://github.com/${source.repository}/issues/${source.issueNumber}`,
+    },
+  });
+  const authoredTwo = record(
+    'authored-two',
+    {
+      type: 'rework-authored',
+      reworkRoadmap: {
+        roadmapIssueNumber: source.issueNumber,
+        roadmapMarkerId: 'same-source-rework',
+        authoringSetId: 'set-4599-rework',
+        url: `https://github.com/${source.repository}/issues/${source.issueNumber}`,
+      },
+    },
+    2,
+  );
+  const nextSelection = record('select-next-bundle', selectedEvent(), 1, 2);
+  const result = replayProvisionalDecisionHistory(
+    input(
+      [
+        recordComment('1', selectedOne, 1),
+        recordComment('2', selectedTwo, 1),
+        recordComment('3', startedOne, 2),
+        recordComment('4', startedTwo, 2),
+        recordComment('5', completedOne, 3),
+        recordComment('6', completedTwo, 3),
+        answer,
+        recordComment('8', requestOne, 5),
+        recordComment('9', requestTwo, 6),
+        recordComment('10', authoredOne, 7),
+        recordComment('11', authoredTwo, 8),
+        recordComment('12', nextSelection, 9),
+      ],
+      {
+        verifiedWork: [workEvidence(1), workEvidence(2)],
+        verifiedReworkRoadmaps: [
+          reworkEvidence('authored-one'),
+          reworkEvidence('authored-two'),
+        ],
+      },
+    ),
+  );
+  assert.equal(result.valid, true, JSON.stringify(result.issues));
+  assert.equal(result.status, 'selected');
+  assert.equal(result.decisions.length, 3);
+});
+
+test('source rewrites chain across rework bundles and permit a later generation', () => {
+  const firstSourceAfter = {
+    ...source,
+    snapshot: {
+      ...source.snapshot,
+      bodySha256: 'b'.repeat(64),
+      updatedAt: dateAt(6),
+    },
+  };
+  const secondSourceAfter = {
+    ...source,
+    snapshot: {
+      ...source.snapshot,
+      bodySha256: 'c'.repeat(64),
+      updatedAt: dateAt(12),
+    },
+  };
+  const { selected, started, completed } = oneCompletedDecision();
+  const firstRationale = 'The alternate choice better fits the current need.';
+  const firstAnswer = answerComment(
+    'answer-one',
+    buildAnswer(
+      [selected],
+      [completed],
+      [firstClaim],
+      'rework',
+      'change',
+      firstRationale,
+    ),
+    4,
+  );
+  const firstRequest = record('request-one', {
+    type: 'rework-requested',
+    reworkRequest: {
+      commentUrl: firstAnswer.url,
+      requestedAt: firstAnswer.createdAt,
+      requestedOptionId: 'change',
+      rationale: firstRationale,
+    },
+  });
+  const firstAuthored = {
+    ...record('authored-one', {
+      type: 'rework-authored',
+      reworkRoadmap: {
+        roadmapIssueNumber: source.issueNumber,
+        roadmapMarkerId: 'same-source-rework',
+        authoringSetId: 'set-4599-rework',
+        url: `https://github.com/${source.repository}/issues/${source.issueNumber}`,
+      },
+    }),
+    source: firstSourceAfter,
+  };
+  const selectedTwo = record(
+    'select-two',
+    selectedEvent('Question for the second bundle?'),
+    1,
+    2,
+    [firstClaim],
+    firstSourceAfter,
+  );
+  const startedTwo = record(
+    'start-two',
+    workStartedEvent(),
+    1,
+    2,
+    [firstClaim],
+    firstSourceAfter,
+  );
+  const completedTwo = record(
+    'complete-two',
+    workCompletedEvent(1),
+    1,
+    2,
+    [firstClaim],
+    firstSourceAfter,
+  );
+  const secondRationale = 'A different alternative better fits the new need.';
+  const secondAnswer = answerComment(
+    'answer-two',
+    buildAnswer(
+      [selectedTwo],
+      [completedTwo],
+      [firstClaim],
+      'rework',
+      'change',
+      secondRationale,
+      firstSourceAfter,
+      2,
+    ),
+    10,
+  );
+  const secondRequest = record(
+    'request-two',
+    {
+      type: 'rework-requested',
+      reworkRequest: {
+        commentUrl: secondAnswer.url,
+        requestedAt: secondAnswer.createdAt,
+        requestedOptionId: 'change',
+        rationale: secondRationale,
+      },
+    },
+    1,
+    2,
+    [firstClaim],
+    firstSourceAfter,
+  );
+  const secondAuthored = {
+    ...record(
+      'authored-two',
+      {
+        type: 'rework-authored',
+        reworkRoadmap: {
+          roadmapIssueNumber: source.issueNumber,
+          roadmapMarkerId: 'same-source-rework',
+          authoringSetId: 'set-4599-rework',
+          url: `https://github.com/${source.repository}/issues/${source.issueNumber}`,
+        },
+      },
+      1,
+      2,
+      [firstClaim],
+      secondSourceAfter,
+    ),
+    source: secondSourceAfter,
+  };
+  const selectedThree = record(
+    'select-three',
+    selectedEvent('Question for the third bundle?'),
+    1,
+    3,
+    [firstClaim],
+    secondSourceAfter,
+  );
+  const result = replayProvisionalDecisionHistory(
+    input(
+      [
+        recordComment('1', selected, 1),
+        recordComment('2', started, 2),
+        recordComment('3', completed, 3),
+        firstAnswer,
+        recordComment('5', firstRequest, 5),
+        recordComment('6', firstAuthored, 6),
+        recordComment('7', selectedTwo, 7),
+        recordComment('8', startedTwo, 8),
+        recordComment('9', completedTwo, 9),
+        secondAnswer,
+        recordComment('11', secondRequest, 11),
+        recordComment('12', secondAuthored, 12),
+        recordComment('13', selectedThree, 13),
+      ],
+      {
+        currentSource: secondSourceAfter,
+        verifiedWork: [workEvidence(1), workEvidence(1, 2, firstSourceAfter)],
+        verifiedReworkRoadmaps: [
+          reworkEvidence('authored-one', source, firstSourceAfter),
+          reworkEvidence('authored-two', firstSourceAfter, secondSourceAfter),
+        ],
+      },
+    ),
+  );
+  assert.equal(result.valid, true, JSON.stringify(result.issues));
+  assert.equal(result.status, 'selected');
+  assert.equal(result.decisions.length, 3);
 });
 
 test('incomplete or stale evidence grants no replay authority', () => {

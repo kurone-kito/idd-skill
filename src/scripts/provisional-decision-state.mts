@@ -72,6 +72,21 @@ export interface VerifiedProvisionalWork {
   readonly executionCriteriaSatisfied: boolean;
 }
 
+/**
+ * Independently verified authoring state for a terminal same-source rework.
+ * The caller supplies an item only after validating the trusted authoring
+ * marker, owner, freshness, roadmap, and audited child wiring.
+ */
+export interface VerifiedProvisionalReworkRoadmap {
+  readonly recordId: string;
+  readonly sourceBefore: ProvisionalDecisionSource;
+  readonly sourceAfter: ProvisionalDecisionSource;
+  readonly roadmapIssueNumber: number;
+  readonly roadmapMarkerId: string;
+  readonly authoringSetId: string;
+  readonly url: string;
+}
+
 export interface ProvisionalDecisionReplayInput {
   /** Full issue history, oldest first, with every API page concatenated. */
   readonly comments: readonly ProvisionalDecisionComment[];
@@ -82,6 +97,8 @@ export interface ProvisionalDecisionReplayInput {
   readonly verifiedClaimLineage: readonly ProvisionalDecisionClaim[];
   /** Independent verification of completed deliverables. */
   readonly verifiedWork: readonly VerifiedProvisionalWork[];
+  /** Independently verified same-source rework authoring transitions. */
+  readonly verifiedReworkRoadmaps: readonly VerifiedProvisionalReworkRoadmap[];
 }
 
 export interface ProvisionalDecisionParseIssue {
@@ -358,6 +375,7 @@ function validateClaimLineage(
     return;
   }
   const ids = new Set<string>();
+  let priorClaimedAt = -Infinity;
   value.forEach((entry, index) => {
     const entryPath = `${path}[${index}]`;
     const claim = exactObject(
@@ -385,6 +403,17 @@ function validateClaimLineage(
       });
     }
     dateTime(claim.claimedAt, `${entryPath}.claimedAt`, issues);
+    if (typeof claim.claimedAt === 'string') {
+      const claimedAt = Date.parse(claim.claimedAt);
+      if (Number.isFinite(claimedAt) && claimedAt <= priorClaimedAt) {
+        issues.push({
+          code: 'claim-lineage-order-invalid',
+          path: `${entryPath}.claimedAt`,
+          message: 'Claims must be in strictly increasing server-time order.',
+        });
+      }
+      if (Number.isFinite(claimedAt)) priorClaimedAt = claimedAt;
+    }
     if (claim.supersedes !== undefined)
       nonEmptyString(claim.supersedes, `${entryPath}.supersedes`, issues);
     if (typeof claim.claimId === 'string') {
@@ -1096,15 +1125,33 @@ function sameValue(left: unknown, right: unknown): boolean {
   return stableJson(left) === stableJson(right);
 }
 
-function claimPrefixMatches(
+function sameSourceContent(
+  left: ProvisionalDecisionSource,
+  right: ProvisionalDecisionSource,
+): boolean {
+  return (
+    left.repository === right.repository &&
+    left.issueNumber === right.issueNumber &&
+    left.snapshot.title === right.snapshot.title &&
+    left.snapshot.bodySha256 === right.snapshot.bodySha256
+  );
+}
+
+function claimLineageMatchesAt(
   recordClaims: readonly ProvisionalDecisionClaim[],
   verifiedClaims: readonly ProvisionalDecisionClaim[],
+  createdAt: string,
 ): boolean {
-  if (recordClaims.length === 0 || recordClaims.length > verifiedClaims.length)
-    return false;
-  return recordClaims.every((claim, index) =>
-    sameValue(claim, verifiedClaims[index]),
-  );
+  const recordTime = Date.parse(createdAt);
+  if (!Number.isFinite(recordTime)) return false;
+  const claimsAtEvent: ProvisionalDecisionClaim[] = [];
+  for (const claim of verifiedClaims) {
+    const claimedAt = Date.parse(claim.claimedAt);
+    if (!Number.isFinite(claimedAt) || claimedAt === recordTime) return false;
+    if (claimedAt < recordTime) claimsAtEvent.push(claim);
+    else break;
+  }
+  return claimsAtEvent.length > 0 && sameValue(recordClaims, claimsAtEvent);
 }
 
 function sameWorkResult(
@@ -1115,7 +1162,7 @@ function sameWorkResult(
   const recordResult = resultFor(record);
   return (
     recordResult !== undefined &&
-    sameValue(evidence.source, source) &&
+    sameSourceContent(evidence.source, source) &&
     evidence.bundleGeneration === record.bundleGeneration &&
     evidence.decisionGeneration === record.decisionGeneration &&
     evidence.executionCriteriaSatisfied &&
@@ -1136,6 +1183,89 @@ function resultFor(record: ProvisionalDecisionRecord): JsonObject | undefined {
 
 function sourceIssueUrl(source: ProvisionalDecisionSource): string {
   return `https://github.com/${source.repository}/issues/${source.issueNumber}`;
+}
+
+function matchesVerifiedReworkRoadmap(
+  record: ProvisionalDecisionRecord,
+  input: ProvisionalDecisionReplayInput,
+  sourceBefore: ProvisionalDecisionSource,
+  sourceAfter: ProvisionalDecisionSource,
+): boolean {
+  if (record.event.type !== 'rework-authored') return false;
+  const roadmap = record.event.reworkRoadmap;
+  if (!isObject(roadmap)) return false;
+  return input.verifiedReworkRoadmaps.some(
+    (evidence) =>
+      evidence.recordId === record.recordId &&
+      sameSourceContent(evidence.sourceBefore, sourceBefore) &&
+      sameSourceContent(evidence.sourceAfter, sourceAfter) &&
+      sameSourceContent(record.source, sourceAfter) &&
+      evidence.roadmapIssueNumber === sourceAfter.issueNumber &&
+      evidence.roadmapMarkerId === roadmap.roadmapMarkerId &&
+      evidence.authoringSetId === roadmap.authoringSetId &&
+      evidence.url === sourceIssueUrl(sourceAfter) &&
+      roadmap.roadmapIssueNumber === evidence.roadmapIssueNumber &&
+      roadmap.url === evidence.url,
+  );
+}
+
+function validateVerifiedReworkRoadmaps(
+  value: unknown,
+  path: string,
+  issues: ProvisionalDecisionParseIssue[],
+): void {
+  if (!Array.isArray(value)) {
+    issues.push({
+      code: 'rework-evidence-invalid',
+      path,
+      message: 'Expected independently verified rework-roadmap evidence.',
+    });
+    return;
+  }
+  const recordIds = new Set<string>();
+  value.forEach((entry, index) => {
+    const entryPath = `${path}[${index}]`;
+    const evidence = exactObject(
+      entry,
+      [
+        'recordId',
+        'sourceBefore',
+        'sourceAfter',
+        'roadmapIssueNumber',
+        'roadmapMarkerId',
+        'authoringSetId',
+        'url',
+      ],
+      [],
+      entryPath,
+      issues,
+    );
+    if (!evidence) return;
+    checkStringFields(
+      evidence,
+      ['recordId', 'roadmapMarkerId', 'authoringSetId'],
+      entryPath,
+      issues,
+    );
+    validateSource(evidence.sourceBefore, `${entryPath}.sourceBefore`, issues);
+    validateSource(evidence.sourceAfter, `${entryPath}.sourceAfter`, issues);
+    positiveSafeInteger(
+      evidence.roadmapIssueNumber,
+      `${entryPath}.roadmapIssueNumber`,
+      issues,
+    );
+    httpUrl(evidence.url, `${entryPath}.url`, issues);
+    if (typeof evidence.recordId === 'string') {
+      if (recordIds.has(evidence.recordId)) {
+        issues.push({
+          code: 'duplicate-rework-evidence',
+          path: `${entryPath}.recordId`,
+          message: 'A rework record may have only one verified evidence item.',
+        });
+      }
+      recordIds.add(evidence.recordId);
+    }
+  });
 }
 
 function commentBelongsToSource(
@@ -1194,7 +1324,8 @@ function answerPresentation(
 
 function validateAnswerBinding(
   answer: ProvisionalDecisionAnswer,
-  input: ProvisionalDecisionReplayInput,
+  source: ProvisionalDecisionSource,
+  claimLineage: readonly ProvisionalDecisionClaim[],
   bundleGeneration: number,
   decisions: readonly MutableDecision[],
 ): boolean {
@@ -1202,12 +1333,10 @@ function validateAnswerBinding(
     .map((decision) => decision.selection.record.decisionGeneration)
     .sort((a, b) => a - b);
   const answerDecisions = [...answer.decisionGenerations].sort((a, b) => a - b);
-  const expectedClaims = input.verifiedClaimLineage.map(
-    (claim) => claim.claimId,
-  );
+  const expectedClaims = claimLineage.map((claim) => claim.claimId);
   const answerClaims = [...answer.claimIds];
   if (
-    !sameValue(answer.source, input.currentSource) ||
+    !sameSourceContent(answer.source, source) ||
     answer.bundleGeneration !== bundleGeneration ||
     !sameValue(answerDecisions, expectedDecisions) ||
     !sameValue(answerClaims, expectedClaims)
@@ -1217,6 +1346,27 @@ function validateAnswerBinding(
   return (
     expectedPresentation !== undefined &&
     sameValue(answer.presentedBundle, expectedPresentation)
+  );
+}
+
+function answerFollowsEveryCompletion(
+  answerComment: ProvisionalDecisionComment,
+  recordComment: ProvisionalDecisionComment,
+  decisions: readonly MutableDecision[],
+  commentIndexes: ReadonlyMap<string, number>,
+): boolean {
+  const answerIndex = commentIndexes.get(answerComment.id);
+  const recordIndex = commentIndexes.get(recordComment.id);
+  if (answerIndex === undefined || recordIndex === undefined) return false;
+  return (
+    answerIndex < recordIndex &&
+    decisions.every((decision) => {
+      if (!decision.workCompleted) return false;
+      const completionIndex = commentIndexes.get(
+        decision.workCompleted.comment.id,
+      );
+      return completionIndex !== undefined && completionIndex < answerIndex;
+    })
   );
 }
 
@@ -1282,12 +1432,18 @@ export function replayProvisionalDecisionHistory(
     '$.verifiedClaimLineage',
     currentSourceIssues,
   );
+  validateVerifiedReworkRoadmaps(
+    input.verifiedReworkRoadmaps,
+    '$.verifiedReworkRoadmaps',
+    currentSourceIssues,
+  );
   if (currentSourceIssues.length) return invalidResult(currentSourceIssues);
 
   const commentsByUrl = new Map<string, ProvisionalDecisionComment>();
+  const commentIndexes = new Map<string, number>();
   const commentIds = new Set<string>();
   let priorCreatedAt = -Infinity;
-  for (const comment of input.comments) {
+  for (const [commentIndex, comment] of input.comments.entries()) {
     const createdAt = Date.parse(comment.createdAt);
     if (!Number.isFinite(createdAt) || createdAt < priorCreatedAt) {
       issues.push(
@@ -1310,6 +1466,7 @@ export function replayProvisionalDecisionHistory(
     }
     commentIds.add(comment.id);
     commentsByUrl.set(comment.url, comment);
+    commentIndexes.set(comment.id, commentIndex);
   }
   if (issues.length) return invalidResult(issues);
 
@@ -1352,25 +1509,17 @@ export function replayProvisionalDecisionHistory(
         continue;
       }
       recordIds.add(parsed.record.recordId);
-      if (!sameValue(parsed.record.source, input.currentSource)) {
-        issues.push(
-          createReplayIssue(
-            'source-binding-mismatch',
-            'The record is not bound to the current source snapshot.',
-            comment.id,
-          ),
-        );
-      }
       if (
-        !claimPrefixMatches(
+        !claimLineageMatchesAt(
           parsed.record.claimLineage,
           input.verifiedClaimLineage,
+          comment.createdAt,
         )
       ) {
         issues.push(
           createReplayIssue(
             'claim-binding-mismatch',
-            'The record claim lineage is not a verified prefix of the current lineage.',
+            'The record claim lineage does not match the verified claims active when it was posted.',
             comment.id,
           ),
         );
@@ -1381,6 +1530,51 @@ export function replayProvisionalDecisionHistory(
   if (issues.length) return invalidResult(issues);
   if (recordComments.length === 0)
     return { valid: true, status: 'none', decisions: [], issues: [] };
+
+  const firstRecord = recordComments.at(0);
+  if (!firstRecord)
+    return { valid: true, status: 'none', decisions: [], issues: [] };
+  const originSource = firstRecord.record.source;
+  const reworkSources = new Map<
+    string,
+    {
+      readonly sourceBefore: ProvisionalDecisionSource;
+      readonly sourceAfter: ProvisionalDecisionSource;
+    }
+  >();
+  let latestSource = originSource;
+  for (const { comment, record } of recordComments) {
+    const sourceBefore = latestSource;
+    if (!sameSourceContent(record.source, sourceBefore)) {
+      if (
+        matchesVerifiedReworkRoadmap(record, input, sourceBefore, record.source)
+      ) {
+        latestSource = record.source;
+      } else {
+        issues.push(
+          createReplayIssue(
+            'source-binding-mismatch',
+            'A source-content transition must match independently verified rework authoring.',
+            comment.id,
+          ),
+        );
+      }
+    }
+    reworkSources.set(record.recordId, {
+      sourceBefore,
+      sourceAfter: record.source,
+    });
+  }
+  if (!sameSourceContent(latestSource, input.currentSource)) {
+    issues.push(
+      createReplayIssue(
+        'source-binding-mismatch',
+        'The current source content does not match the latest verified rework transition.',
+        recordComments.at(-1)?.comment.id,
+      ),
+    );
+  }
+  if (issues.length) return invalidResult(issues);
 
   const states = new Map<string, MutableDecision>();
   let latestBundleGeneration = 0;
@@ -1406,8 +1600,9 @@ export function replayProvisionalDecisionHistory(
         );
         const priorBundleClosed =
           priorBundle.length > 0 &&
-          (priorBundle.every((state) => state.confirmation) ||
-            priorBundle.some((state) => state.reworkAuthored));
+          priorBundle.every(
+            (state) => state.confirmation || state.reworkAuthored,
+          );
         if (!priorBundleClosed) {
           issues.push(
             createReplayIssue(
@@ -1513,7 +1708,7 @@ export function replayProvisionalDecisionHistory(
       }
       if (
         !input.verifiedWork.some((evidence) =>
-          sameWorkResult(record, evidence, input.currentSource),
+          sameWorkResult(record, evidence, record.source),
         )
       ) {
         issues.push(
@@ -1572,6 +1767,10 @@ export function replayProvisionalDecisionHistory(
         );
         continue;
       }
+      const bundleGeneration = record.bundleGeneration;
+      const currentBundle = [...states.values()].filter(
+        (state) => state.selection.record.bundleGeneration === bundleGeneration,
+      );
       if (
         Date.parse(answerComment.createdAt) !==
           Date.parse(confirmation.confirmedAt as string) ||
@@ -1586,10 +1785,6 @@ export function replayProvisionalDecisionHistory(
         );
         continue;
       }
-      const bundleGeneration = record.bundleGeneration;
-      const currentBundle = [...states.values()].filter(
-        (state) => state.selection.record.bundleGeneration === bundleGeneration,
-      );
       if (
         currentBundle.some(
           (state) =>
@@ -1608,9 +1803,27 @@ export function replayProvisionalDecisionHistory(
         continue;
       }
       if (
+        !answerFollowsEveryCompletion(
+          answerComment,
+          comment,
+          currentBundle,
+          commentIndexes,
+        )
+      ) {
+        issues.push(
+          createReplayIssue(
+            'confirmation-time-mismatch',
+            'The answer must follow every completed-work record in the bundle and precede its confirmation record.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      if (
         !validateAnswerBinding(
           parsedAnswer.answer,
-          input,
+          record.source,
+          record.claimLineage,
           bundleGeneration,
           currentBundle,
         )
@@ -1714,8 +1927,7 @@ export function replayProvisionalDecisionHistory(
       );
       if (
         currentBundle.some(
-          (state) =>
-            !state.workCompleted || state.confirmation || state.reworkRequested,
+          (state) => !state.workCompleted || state.confirmation,
         ) ||
         parsedAnswer.answer.response !== 'rework' ||
         parsedAnswer.answer.requestedOptionId !== request.requestedOptionId ||
@@ -1723,9 +1935,16 @@ export function replayProvisionalDecisionHistory(
         Date.parse(answerComment.createdAt) !==
           Date.parse(request.requestedAt as string) ||
         Date.parse(answerComment.createdAt) > Date.parse(comment.createdAt) ||
+        !answerFollowsEveryCompletion(
+          answerComment,
+          comment,
+          currentBundle,
+          commentIndexes,
+        ) ||
         !validateAnswerBinding(
           parsedAnswer.answer,
-          input,
+          record.source,
+          record.claimLineage,
           bundleGeneration,
           currentBundle,
         )
@@ -1754,16 +1973,24 @@ export function replayProvisionalDecisionHistory(
         continue;
       }
       const roadmap = event.reworkRoadmap as JsonObject;
-      const source = input.currentSource;
+      const source = record.source;
+      const reworkSource = reworkSources.get(record.recordId);
       const expectedUrl = sourceIssueUrl(source);
       if (
         roadmap.roadmapIssueNumber !== source.issueNumber ||
-        roadmap.url !== expectedUrl
+        roadmap.url !== expectedUrl ||
+        !reworkSource ||
+        !matchesVerifiedReworkRoadmap(
+          record,
+          input,
+          reworkSource.sourceBefore,
+          reworkSource.sourceAfter,
+        )
       ) {
         issues.push(
           createReplayIssue(
-            'rework-source-mismatch',
-            'The rework roadmap must convert the same source issue.',
+            'rework-roadmap-unverified',
+            'The rework roadmap must match independently verified authoring and same-source evidence.',
             comment.id,
           ),
         );
@@ -1809,11 +2036,15 @@ export function replayProvisionalDecisionHistory(
     status: decisionStatus(state),
   }));
   let status: ProvisionalDecisionStatus;
-  if (currentBundle.some((state) => state.reworkAuthored))
-    status = 'rework-authored';
-  else if (currentBundle.some((state) => state.reworkRequested))
-    status = 'rework-requested';
-  else if (currentBundle.every((state) => state.confirmation))
+  if (
+    currentBundle.some((state) => state.reworkRequested || state.reworkAuthored)
+  ) {
+    status =
+      currentBundle.some((state) => state.reworkAuthored) &&
+      currentBundle.every((state) => state.confirmation || state.reworkAuthored)
+        ? 'rework-authored'
+        : 'rework-requested';
+  } else if (currentBundle.every((state) => state.confirmation))
     status = 'confirmed';
   else if (currentBundle.every((state) => state.workCompleted))
     status = 'confirmation-pending';

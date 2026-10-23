@@ -893,6 +893,17 @@ response, and the answer received. The `confirmed` event points to that
 comment and binds its API creation time and scope to the completion
 records. Replay checks the reference, trusted API authorship, edit state,
 source and claim freshness, generations, and completed-work evidence.
+Source freshness uses repository, issue, title, and body content; it does
+not use GitHub's `updated_at`, which changes when comments are added. Each
+record must bind to the claim lineage active when that comment was posted,
+while a prior answer remains bound to the lineage of the confirmation or
+rework record that cites it. Confirmation and rework answers must follow
+every completion comment in the bundle, using server order when timestamps
+tie. Each same-source body rewrite must match a rework-authored record and
+caller-verified authoring evidence, including the trusted author, owner,
+fresh authoring set, roadmap, and audited child wiring. The verified
+source transition becomes the basis for later records and rework
+generations.
 The watermark identifies the canonical recorded-answer format; it is
 not proof of a person's identity and does not classify the account
 operator as human or agent. A trusted recorder is responsible for
@@ -907,8 +918,8 @@ identity service is required.
 
 An explicit accepted answer must cover the entire current completed
 bundle. Once confirmation or rework begins, keep that bundle generation
-closed. Start a new generation only after the prior bundle is fully
-confirmed or its rework roadmap is recorded. A different explicit
+closed. Start a new generation only after every decision in the prior
+bundle is confirmed or has verified rework authoring. A different explicit
 preference records a rework request,
 preserves the earlier choices and completed-work links, and uses the
 normal held authoring process to turn the same source issue into its
