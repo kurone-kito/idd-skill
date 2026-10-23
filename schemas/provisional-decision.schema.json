@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/provisional-decision.schema.json",
+  "title": "IDD Provisional Decision Helper Report",
+  "description": "Machine-readable dry-run, application, reconciliation, refusal, and partial-write result for one provisional-decision transition.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "issueNumber",
+    "action",
+    "outcome",
+    "decisionStatus",
+    "target",
+    "checks",
+    "label",
+    "finalized",
+    "nextAction"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [1]
+    },
+    "issueNumber": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "action": {
+      "type": "string",
+      "enum": ["select", "start", "complete"]
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["planned", "applied", "reconciled", "refused", "partial"]
+    },
+    "decisionStatus": {
+      "type": "string",
+      "enum": [
+        "none",
+        "selected",
+        "in-progress",
+        "confirmation-pending",
+        "confirmed",
+        "rework-requested",
+        "rework-authored",
+        "invalid"
+      ]
+    },
+    "target": {
+      "type": ["object", "null"],
+      "required": ["bundleGeneration", "decisionGeneration", "recordId"],
+      "properties": {
+        "bundleGeneration": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "decisionGeneration": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "recordId": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^pd1-[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "passed", "detail"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "label": {
+      "type": "object",
+      "required": ["name", "present", "applied", "verified"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "present": {
+          "type": "boolean"
+        },
+        "applied": {
+          "type": "boolean"
+        },
+        "verified": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "finalized": {
+      "type": "boolean",
+      "description": "True only after a verified completion record replays as confirmation-pending and the source remains open with its configured needs-decision label."
+    },
+    "nextAction": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

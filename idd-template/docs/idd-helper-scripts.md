@@ -10238,6 +10238,63 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
   which keeps the validation slot until it ends. Making the helper forward
   signals is not part of issue `#4525`.
 
+## Provisional decision transitions (kurone-kito/idd-skill#4531)
+
+`idd-provisional-decision` records and reconciles the selection, work-start,
+and verified-completion events defined by the shared
+`provisional-decision-record.schema.json` contract. Dry-run is the default;
+`--apply` is required for a GitHub write. Every invocation requires the
+source `--issue`, the current `--claim-id`, `--agent-id`, and activation
+`--nonce`. The helper runs `idd-resume-claim-routing --assert` against the
+current worktree before each mutation. Selection and a new work start require
+the trusted repository's `dangerouslyAutoDecide` opt-in; disabling it does not
+prevent verified completion of work that already started under that opt-in.
+
+Write a JSON input file for the requested action. A selection contains
+`question`, the complete `selectedOption`, at least one fully compared
+`feasibleAlternatives` entry with its rejection reason, non-empty
+`executionCriteria`, and HTTP(S) `evidenceReferences`. A start contains the
+reviewed `planReference` URL. A completion contains one passing
+`criteriaEvidence` entry per selected criterion, each with `criterion`,
+`passed: true`, and an HTTP(S) `reference`; also pass the deliverable's
+`--pull-request` number. Start and completion identify their target with
+`--bundle-generation` and `--decision-generation`.
+
+Example:
+
+```sh
+node bin/idd-provisional-decision.mjs --issue <issue> --action select \
+  --claim-id <claim-id> --agent-id <agent-id> --nonce <nonce> \
+  --input selection.json
+node bin/idd-provisional-decision.mjs --issue <issue> --action select \
+  --claim-id <claim-id> --agent-id <agent-id> --nonce <nonce> \
+  --input selection.json --apply
+```
+
+The report conforms to
+[`provisional-decision.schema.json`](https://kurone-kito.github.io/idd-skill/schemas/provisional-decision.schema.json).
+`outcome` distinguishes `planned`, `applied`, `reconciled`, `refused`, and
+`partial` writes. `decisionStatus` reports replay state independently,
+including `confirmation-pending`; `target` carries the stable generation and
+record ID, `checks` names each gate, and `nextAction` is the checkable recovery
+step. If a selection POST has an uncertain result, read `target.bundleGeneration`
+and `target.decisionGeneration` from its report and pass those same values when
+retrying the same selection so replay can reconcile the original operation.
+Completion requires a merged PR that closes the source issue, stable
+head and merge SHAs, and passing required checks. If merging that PR closed
+the source issue, the helper re-verifies the merged PR and current claim, then
+reopens the source before persisting completion or reconciling its label. The
+completion record stores evidence references in this order: the merged PR URL,
+check URLs, then one criterion evidence URL per selected criterion in selection
+order. Repeated URLs are preserved so every criterion retains its position.
+The helper verifies the trusted repository's configured needs-decision label
+on the open source issue.
+If record persistence succeeds but label application or readback fails, the
+report is `partial`; retrying the same generation reconciles the existing
+completion record and label without posting another transition. An uncertain
+record POST is reread and replayed before any permission to continue is
+reported.
+
 ## Dead-export audit (kurone-kito/idd-skill#3478)
 
 `node scripts/audit-dead-exports.mjs --check` (source repository /

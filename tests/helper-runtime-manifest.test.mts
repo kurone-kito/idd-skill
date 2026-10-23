@@ -650,6 +650,54 @@ test('helper bundle manifest publishes the phase ID resolver helper command', ()
   );
 });
 
+test('manifest exposes the provisional decision helper across supported profiles', () => {
+  const packageManagerManifest = buildHelperRuntimeManifest({
+    profile: 'package-manager',
+    packageManager: 'pnpm',
+    targetRoot: REPO_ROOT,
+  });
+  const vendoredManifest = buildHelperRuntimeManifest({
+    profile: 'vendored-node',
+    targetRoot: REPO_ROOT,
+  });
+  const managedFiles = new Set(
+    collectVendoredFiles(REPO_ROOT).map((file) => file.targetPath),
+  );
+
+  assert.equal(
+    packageManagerManifest.profiles['package-manager'].commands[
+      'idd:provisional-decision'
+    ],
+    'idd-provisional-decision',
+  );
+  assert.equal(
+    vendoredManifest.profiles['vendored-node'].commands[
+      'idd:provisional-decision'
+    ],
+    'node scripts/provisional-decision.mjs',
+  );
+  assert.equal(
+    resolveHelperCommandForProfile({
+      helperId: 'provisional-decision',
+      profile: 'ephemeral-npx',
+    }),
+    `npx --yes --package ${DEFAULT_PACKAGE_SPEC} idd-provisional-decision`,
+  );
+  assert.equal(
+    resolveHelperCommandForProfile({
+      helperId: 'provisional-decision',
+      profile: 'instructions-only',
+    }),
+    null,
+  );
+  assert.ok(managedFiles.has('scripts/provisional-decision.mjs'));
+  assert.ok(managedFiles.has('schemas/provisional-decision.schema.json'));
+  assert.equal(
+    existsSync(join(REPO_ROOT, 'bin/idd-provisional-decision.mjs')),
+    true,
+  );
+});
+
 test('manifest accepts an explicit package spec override', () => {
   const packageSpec =
     'https://codeload.github.com/kurone-kito/idd-skill/tar.gz/0123456789abcdef0123456789abcdef01234567';

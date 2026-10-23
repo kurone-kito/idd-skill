@@ -701,6 +701,16 @@ const HELPER_COMMANDS: HelperCommand[] = [
     contractPaths: ['schemas/provider-outage-park.schema.json'],
   },
   {
+    id: 'provisional-decision',
+    scriptName: 'idd:provisional-decision',
+    binName: 'idd-provisional-decision',
+    entryPath: 'scripts/provisional-decision.mjs',
+    vendoredCommand: 'node scripts/provisional-decision.mjs',
+    description:
+      'Record and reconcile provisional decision selection, work start, and verified completion transitions.',
+    contractPaths: ['schemas/provisional-decision.schema.json'],
+  },
+  {
     id: 'publish-authoring-hold',
     scriptName: 'idd:publish-authoring-hold',
     binName: 'idd-publish-authoring-hold',
