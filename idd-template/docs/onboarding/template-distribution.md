@@ -56,8 +56,8 @@ The template has three distribution surfaces:
    operator explicitly opts into pre-execution issue drafting or
    instruction-corpus auditing.
 3. **Local-copy imports** that use the manifest-driven
-   `idd-onboard --import` command to copy the canonical core file set
-   from a local `idd-skill` clone.
+   `node scripts/idd-onboard.mjs --import` command to copy the canonical
+   core file set from a local `idd-skill` clone.
 
 This page keeps the executable import snippets for all three surfaces:
 remote-fetch examples for the core and optional companions, plus the
@@ -515,8 +515,9 @@ required for each nested docs directory.
 
 ## Local-copy installs
 
-`idd-onboard --import` copies the generated `idd-template-core-files`
-set used by remote import. Do not copy the whole `idd-template/` tree:
+`node scripts/idd-onboard.mjs --import` copies the generated
+`idd-template-core-files` set used by remote import. Do not copy the
+whole `idd-template/` tree:
 it also contains optional workflows (observed 2026-10-23, issue `#4642`).
 
 From the clone root, set `TARGET_REPO` to the adopter. Review the dry-run

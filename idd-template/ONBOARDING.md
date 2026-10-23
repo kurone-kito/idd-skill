@@ -937,8 +937,8 @@ for the exact `gh api` and `curl` loops (core files and the optional
 ### Option B — Local copy (idd-skill cloned)
 
 If you have cloned `https://github.com/kurone-kito/idd-skill`, run
-`idd-onboard --import` for the canonical core set used by Option A; it
-excludes the optional advisory-convergence workflows. See
+`node scripts/idd-onboard.mjs --import` for the canonical core set used
+by Option A; it excludes the optional advisory-convergence workflows. See
 [Local-copy installs](docs/onboarding/template-distribution.md#local-copy-installs)
 for dry-run and apply commands, the optional `vendored-node` profile,
 and companion instructions.
