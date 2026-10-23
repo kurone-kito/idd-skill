@@ -732,8 +732,8 @@ this section documents only the flags relevant to Steps 0, 1A-1C, 2, 3,
 
 > **CLI shortcut**: The local helper's `--import` mode automates this
 > step from a local `idd-skill` clone. See
-> [CLI-assisted onboarding](#cli-assisted-onboarding) above for complete
-> commands.
+> [Local-copy installs](docs/onboarding/template-distribution.md#local-copy-installs)
+> for the dry-run and apply commands.
 
 You need the following core execution and profile artifact files in the
 target repository. Use whichever method applies.
