@@ -112,7 +112,7 @@ export function noticeReason(body) {
     return 'Codex usage limits for code reviews reached';
   }
   if (/skip review by coderabbit\.ai/i.test(text)) {
-    return 'review skipped (billing failure or below the manual-trigger star-count gate)';
+    return 'review skipped';
   }
   // #3260: CodeRabbit's paused-review marker ("Reviews paused") -- paraphrased
   // rather than quoting the bot's own resume/review commands.
