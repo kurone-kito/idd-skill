@@ -109,7 +109,7 @@ function dateTime(value, path, issues) {
   return true;
 }
 function httpUrl(value, path, issues) {
-  if (typeof value !== 'string') {
+  if (typeof value !== 'string' || /\s/u.test(value)) {
     issues.push({
       code: 'url-required',
       path,
@@ -1030,6 +1030,28 @@ function sameGitHubIssueUrl(left, right) {
     return false;
   }
 }
+function commentUrlKey(value) {
+  try {
+    const url = new URL(value);
+    const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/issues\/(\d+)\/?$/);
+    const commentId = url.hash.match(/^#issuecomment-(\d+)$/);
+    if (
+      url.protocol === 'https:' &&
+      url.hostname === 'github.com' &&
+      url.port === '' &&
+      url.username === '' &&
+      url.password === '' &&
+      url.search === '' &&
+      match &&
+      commentId
+    ) {
+      return `${match[1]?.toLowerCase()}/${match[2]?.toLowerCase()}/issues/${match[3]}#issuecomment-${commentId[1]}`;
+    }
+  } catch {
+    // Preserve exact lookup behavior for URLs outside the GitHub comment form.
+  }
+  return value;
+}
 function sameSourceContent(left, right) {
   return (
     sameRepositoryName(left.repository, right.repository) &&
@@ -1128,6 +1150,7 @@ function sourceIssueUrl(source) {
 }
 function matchesVerifiedReworkRoadmap(
   record,
+  recordComment,
   input,
   sourceBefore,
   sourceAfter,
@@ -1135,8 +1158,10 @@ function matchesVerifiedReworkRoadmap(
   if (record.event.type !== 'rework-authored') return false;
   const roadmap = record.event.reworkRoadmap;
   if (!isObject(roadmap)) return false;
+  const recordCreatedAt = Date.parse(recordComment.createdAt);
   return input.verifiedReworkRoadmaps.some(
     (evidence) =>
+      Date.parse(evidence.publishedAt) < recordCreatedAt &&
       sameRepositoryName(sourceBefore.repository, sourceAfter.repository) &&
       sourceBefore.issueNumber === sourceAfter.issueNumber &&
       evidence.recordId === record.recordId &&
@@ -1173,6 +1198,7 @@ function validateVerifiedReworkRoadmaps(value, path, issues) {
         'roadmapMarkerId',
         'authoringSetId',
         'url',
+        'publishedAt',
       ],
       [],
       entryPath,
@@ -1193,6 +1219,7 @@ function validateVerifiedReworkRoadmaps(value, path, issues) {
       issues,
     );
     httpUrl(evidence.url, `${entryPath}.url`, issues);
+    dateTime(evidence.publishedAt, `${entryPath}.publishedAt`, issues);
     if (typeof evidence.recordId === 'string') {
       if (recordIds.has(evidence.recordId)) {
         issues.push({
@@ -1372,7 +1399,8 @@ export function replayProvisionalDecisionHistory(input) {
       );
     }
     if (validCreatedAt) priorCreatedAt = createdAt;
-    if (commentIds.has(comment.id) || commentsByUrl.has(comment.url)) {
+    const urlKey = commentUrlKey(comment.url);
+    if (commentIds.has(comment.id) || commentsByUrl.has(urlKey)) {
       issues.push(
         createReplayIssue(
           'duplicate-comment',
@@ -1382,7 +1410,7 @@ export function replayProvisionalDecisionHistory(input) {
       );
     }
     commentIds.add(comment.id);
-    commentsByUrl.set(comment.url, comment);
+    commentsByUrl.set(urlKey, comment);
     commentIndexes.set(comment.id, commentIndex);
   }
   if (issues.length) return invalidResult(issues);
@@ -1472,7 +1500,13 @@ export function replayProvisionalDecisionHistory(input) {
     const sourceBefore = latestSource;
     if (!sameSourceContent(record.source, sourceBefore)) {
       if (
-        matchesVerifiedReworkRoadmap(record, input, sourceBefore, record.source)
+        matchesVerifiedReworkRoadmap(
+          record,
+          comment,
+          input,
+          sourceBefore,
+          record.source,
+        )
       ) {
         latestSource = record.source;
       } else {
@@ -1674,7 +1708,7 @@ export function replayProvisionalDecisionHistory(input) {
       }
       const confirmation = event.confirmation;
       const url = confirmation.commentUrl;
-      const answerComment = commentsByUrl.get(url);
+      const answerComment = commentsByUrl.get(commentUrlKey(url));
       if (
         answerComment?.trustedAuthor !== true ||
         !answerComment.authorLogin ||
@@ -1828,7 +1862,9 @@ export function replayProvisionalDecisionHistory(input) {
         );
         continue;
       }
-      const answerComment = commentsByUrl.get(request.commentUrl);
+      const answerComment = commentsByUrl.get(
+        commentUrlKey(request.commentUrl),
+      );
       if (
         answerComment?.trustedAuthor !== true ||
         !answerComment.authorLogin ||
@@ -1921,6 +1957,7 @@ export function replayProvisionalDecisionHistory(input) {
         !reworkSource ||
         !matchesVerifiedReworkRoadmap(
           record,
+          comment,
           input,
           reworkSource.sourceBefore,
           reworkSource.sourceAfter,

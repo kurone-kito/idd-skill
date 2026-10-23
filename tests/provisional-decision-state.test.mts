@@ -280,6 +280,7 @@ function reworkEvidence(
     roadmapMarkerId: 'same-source-rework',
     authoringSetId: 'set-4599-rework',
     url: `https://github.com/${source.repository}/issues/${source.issueNumber}`,
+    publishedAt: dateAt(5),
   };
 }
 
@@ -333,6 +334,20 @@ test('rejects malformed JSON, unsupported versions, and unknown event shapes', (
         (issue) => issue.code === 'event-type-unsupported',
       ),
     );
+});
+
+test('rejects URLs containing whitespace that URL would silently trim', () => {
+  const started = record('start-1', {
+    ...workStartedEvent(),
+    planReference:
+      ' https://github.com/kurone-kito/idd-skill/issues/4599#issuecomment-1 ',
+  });
+  const parsed = parseProvisionalDecisionRecordComment(
+    `${PROVISIONAL_DECISION_RECORD_MARKER}\n${JSON.stringify(started)}`,
+  );
+  assert.equal(parsed.ok, false);
+  if (!parsed.ok)
+    assert.ok(parsed.issues.some((issue) => issue.code === 'url-required'));
 });
 
 test('rejects duplicate JSON object keys, including escaped duplicates', () => {
@@ -487,6 +502,79 @@ test('repository identity and issue URLs ignore GitHub capitalization', () => {
   );
   assert.equal(result.valid, true, JSON.stringify(result.issues));
   assert.equal(result.status, 'selected');
+});
+
+test('answer references resolve when GitHub owner and repository casing differs', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const acceptedAnswer = answerComment(
+    '4',
+    buildAnswer([selected], [completed]),
+    4,
+  );
+  const confirmation = record('confirm-1', {
+    type: 'confirmed',
+    confirmation: {
+      commentUrl: acceptedAnswer.url.replace(
+        '/kurone-kito/idd-skill/',
+        '/Kurone-Kito/IDD-Skill/',
+      ),
+      response: 'accepted',
+      confirmedAt: acceptedAnswer.createdAt,
+      confirmedBy: 'Operator',
+    },
+  });
+  const confirmed = replayProvisionalDecisionHistory(
+    input([
+      recordComment('1', selected, 1),
+      recordComment('2', started, 2),
+      recordComment('3', completed, 3),
+      acceptedAnswer,
+      recordComment('5', confirmation, 5),
+    ]),
+  );
+  assert.equal(confirmed.valid, true, JSON.stringify(confirmed.issues));
+  assert.equal(confirmed.status, 'confirmed');
+
+  const rationale = 'The alternate better fits the current need.';
+  const reworkAnswer = answerComment(
+    '4',
+    buildAnswer(
+      [selected],
+      [completed],
+      [firstClaim],
+      'rework',
+      'change',
+      rationale,
+    ),
+    4,
+  );
+  const request = record('rework-1', {
+    type: 'rework-requested',
+    reworkRequest: {
+      commentUrl: reworkAnswer.url.replace(
+        '/kurone-kito/idd-skill/',
+        '/Kurone-Kito/IDD-Skill/',
+      ),
+      requestedAt: reworkAnswer.createdAt,
+      requestedOptionId: 'change',
+      rationale,
+    },
+  });
+  const reworkRequested = replayProvisionalDecisionHistory(
+    input([
+      recordComment('1', selected, 1),
+      recordComment('2', started, 2),
+      recordComment('3', completed, 3),
+      reworkAnswer,
+      recordComment('5', request, 5),
+    ]),
+  );
+  assert.equal(
+    reworkRequested.valid,
+    true,
+    JSON.stringify(reworkRequested.issues),
+  );
+  assert.equal(reworkRequested.status, 'rework-requested');
 });
 
 test('rejects duplicate record IDs and edited records', () => {
@@ -1314,6 +1402,28 @@ test('rework authoring validates a same-issue source rewrite against independent
   );
   assert.equal(withEvidence.valid, true);
   assert.equal(withEvidence.status, 'rework-authored');
+
+  for (const publishedAt of [dateAt(6), dateAt(7)]) {
+    const afterPublication = replayProvisionalDecisionHistory(
+      input(comments, {
+        currentSource: sourceAfter,
+        verifiedReworkRoadmaps: [
+          {
+            ...reworkEvidence('rework-2', source, sourceAfter),
+            publishedAt,
+          },
+        ],
+      }),
+    );
+    assert.equal(afterPublication.valid, false);
+    assert.ok(
+      afterPublication.issues.some(
+        (issue) =>
+          issue.code === 'rework-roadmap-unverified' ||
+          issue.code === 'source-binding-mismatch',
+      ),
+    );
+  }
 });
 
 test('rework authoring cannot transition between different source issues', () => {
