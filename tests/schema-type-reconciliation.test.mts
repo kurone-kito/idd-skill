@@ -28,6 +28,7 @@ import type {
   ParsedProviderOutagePark,
 } from '../src/scripts/protocol-helpers.mts';
 import type { ProviderHealthReport } from '../src/scripts/provider-health.mts';
+import type { ProvisionalDecisionRecord } from '../src/scripts/provisional-decision-state.mts';
 import {
   type CatalogSchemaFile,
   SCHEMA_TYPE_CATALOG,
@@ -157,39 +158,6 @@ interface IssueAuthoringReviewInput {
     relationships: readonly string[];
     checklist: readonly string[];
   };
-}
-
-/**
- * Provisional-decision serialized record shape
- * (schemas/provisional-decision-record.schema.json).
- *
- * The schema child defines this persisted boundary; the sibling replay issue
- * will own a runtime type when it adds the evaluator, so this reconciliation
- * keeps a test-local top-level type for now.
- */
-interface ProvisionalDecisionRecord {
-  schemaVersion: 1;
-  recordId: string;
-  source: {
-    repository: string;
-    issueNumber: number;
-    snapshot: {
-      title: string;
-      bodySha256: string;
-      updatedAt: string;
-    };
-  };
-  bundleGeneration: number;
-  decisionGeneration: number;
-  claimLineage: readonly {
-    claimId: string;
-    agentId: string;
-    branch: string;
-    claimedAt: string;
-    supersedes?: string;
-  }[];
-  evidenceReferences: readonly string[];
-  event: { type: string; [key: string]: unknown };
 }
 
 type ApprovalActorPolicy =
