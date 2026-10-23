@@ -10,6 +10,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
   realpathSync,
@@ -992,6 +993,10 @@ function cleanRepoRunGit(
 
 function fakeDeps(
   overrides: Partial<LocalWorktreeRecoveryDeps> = {},
+  options: {
+    retainRemovedWorktreePath?: boolean;
+    retainRemovedWorktreeRecord?: boolean;
+  } = {},
 ): LocalWorktreeRecoveryDeps {
   const okRouting = {
     state: 'local_worktree_occupied',
@@ -1063,7 +1068,64 @@ function fakeDeps(
       ['worktree', 'remove', ...(force ? ['--force'] : []), worktreePath],
       repoPath,
     );
-  return Object.assign(deps, overrides);
+  Object.assign(deps, overrides);
+  const removedWorktreePaths = new Set<string>();
+  const originalRunGit = deps.runGit;
+  deps.runGit = (argv, cwd) => {
+    const result = originalRunGit(argv, cwd);
+    if (argv[0] === 'worktree' && argv[1] === 'remove' && result.ok) {
+      const removedPath = argv.at(-1);
+      if (removedPath) {
+        removedWorktreePaths.add(
+          normalizeGitWorktreePathForComparison(removedPath),
+        );
+      }
+    }
+    return result;
+  };
+  const originalGuardedRemove = deps.removeWorktreeIfLockMatches;
+  if (originalGuardedRemove) {
+    deps.removeWorktreeIfLockMatches = (...args) => {
+      const result = originalGuardedRemove(...args);
+      if (result?.ok) {
+        removedWorktreePaths.add(
+          normalizeGitWorktreePathForComparison(args[0]),
+        );
+      }
+      return result;
+    };
+  }
+  const originalListWorktreeRecords = deps.listWorktreeRecords;
+  deps.listWorktreeRecords = (cwd) => {
+    const records = originalListWorktreeRecords(cwd);
+    if (
+      records === null ||
+      options.retainRemovedWorktreeRecord ||
+      removedWorktreePaths.size === 0
+    ) {
+      return records;
+    }
+    return records.filter(
+      (record) =>
+        !removedWorktreePaths.has(
+          normalizeGitWorktreePathForComparison(record.path),
+        ),
+    );
+  };
+  const originalPathExists = deps.pathExists;
+  deps.pathExists = (path) =>
+    !options.retainRemovedWorktreePath &&
+    removedWorktreePaths.has(normalizeGitWorktreePathForComparison(path))
+      ? false
+      : originalPathExists(path);
+  const originalPathPresence = deps.pathPresence;
+  deps.pathPresence = (path) =>
+    !options.retainRemovedWorktreePath &&
+    removedWorktreePaths.has(normalizeGitWorktreePathForComparison(path))
+      ? 'absent'
+      : (originalPathPresence?.(path) ??
+        (deps.pathExists(path) ? 'present' : 'absent'));
+  return deps;
 }
 
 test('never mutates without --operator-confirmed-no-live-session, regardless of --apply', () => {
@@ -1307,36 +1369,162 @@ test('step 4 still releases the clone lock when removal fails', () => {
   assert.deepEqual(callOrder, ['acquire', 'remove-failed', 'release']);
 });
 
-test('step 4 reports failure when worktree pruning fails after removal', () => {
+test('step 4 verifies only the selected worktree after removal and never prunes the clone', () => {
   const callOrder: string[] = [];
-  const deps = fakeDeps({
-    acquireCloneLock: () => {
-      callOrder.push('acquire');
-      return { path: '/repo/.idd-clone.lock', token: 'tok' };
+  let removed = false;
+  const deps = fakeDeps(
+    {
+      acquireCloneLock: () => {
+        callOrder.push('acquire');
+        return { path: '/repo/.idd-clone.lock', token: 'tok' };
+      },
+      releaseCloneLock: () => {
+        callOrder.push('release');
+      },
+      runGit: (argv) => {
+        if (argv[0] === 'worktree' && argv[1] === 'remove') {
+          callOrder.push('remove');
+          removed = true;
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        if (argv[0] === 'worktree' && argv[1] === 'prune') {
+          callOrder.push('unexpected-prune');
+        }
+        return cleanRepoRunGit(argv);
+      },
+      listWorktreeRecords: () => {
+        if (removed) callOrder.push('verify-list');
+        return removed
+          ? [
+              {
+                path: '/repo/primary',
+                branchRef: 'refs/heads/main',
+                detached: false,
+                bare: false,
+                locked: false,
+                prunable: false,
+              },
+            ]
+          : [
+              {
+                path: '/repo/primary',
+                branchRef: 'refs/heads/main',
+                detached: false,
+                bare: false,
+                locked: false,
+                prunable: false,
+              },
+              {
+                path: '/repo/linked',
+                branchRef: 'refs/heads/issue/1-task',
+                detached: false,
+                bare: false,
+                locked: false,
+                prunable: false,
+              },
+            ];
+      },
+      pathPresence: (path) => {
+        if (removed && path === '/repo/linked') {
+          callOrder.push('verify-path');
+          return 'absent';
+        }
+        return 'present';
+      },
     },
-    releaseCloneLock: () => {
-      callOrder.push('release');
-    },
-    runGit: (argv) => {
-      if (argv[0] === 'worktree' && argv[1] === 'remove') {
-        callOrder.push('remove');
-        return { ok: true, status: 0, stdout: '', stderr: '' };
-      }
-      if (argv[0] === 'worktree' && argv[1] === 'prune') {
-        callOrder.push('prune-failed');
-        return { ok: false, status: 1, stdout: '', stderr: 'stale admin data' };
-      }
-      return cleanRepoRunGit(argv);
-    },
-  });
+    { retainRemovedWorktreePath: true },
+  );
   const verdict = runLocalWorktreeRecovery(
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
   );
   assert.equal(verdict.mutated, true);
+  assert.equal(verdict.plan.removal?.ran, true);
+  assert.deepEqual(callOrder, [
+    'acquire',
+    'remove',
+    'verify-list',
+    'verify-path',
+    'release',
+  ]);
+});
+
+test('step 4 records the observed target state and recovery action when verification fails', () => {
+  const deps = fakeDeps(
+    {
+      runGit: (argv) =>
+        argv[0] === 'worktree' && argv[1] === 'remove'
+          ? { ok: true, status: 0, stdout: '', stderr: '' }
+          : cleanRepoRunGit(argv),
+      pathPresence: () => 'present',
+    },
+    {
+      retainRemovedWorktreePath: true,
+      retainRemovedWorktreeRecord: true,
+    },
+  );
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.mutated, true);
+  assert.equal(verdict.ready, false);
   assert.equal(verdict.plan.removal?.ran, false);
-  assert.match(verdict.result, /git worktree prune failed: stale admin data/);
-  assert.deepEqual(callOrder, ['acquire', 'remove', 'prune-failed', 'release']);
+  assert.match(
+    verdict.result,
+    /post-removal verification failed: path=present/,
+  );
+  assert.match(verdict.result, /target-record=present\(path=\/repo\/linked/);
+  assert.match(verdict.result, /Next action: re-run local-worktree-recovery/);
+  assert.match(verdict.result, /do not run git worktree prune/);
+});
+
+test('step 4 holds and reports both observations when post-removal probes fail', () => {
+  let removed = false;
+  const primaryRecord = {
+    path: '/repo/primary',
+    branchRef: 'refs/heads/main',
+    detached: false,
+    bare: false,
+    locked: false,
+    prunable: false,
+  };
+  const linkedRecord = {
+    path: '/repo/linked',
+    branchRef: 'refs/heads/issue/1-task',
+    detached: false,
+    bare: false,
+    locked: false,
+    prunable: false,
+  };
+  const deps = fakeDeps(
+    {
+      runGit: (argv) => {
+        if (argv[0] === 'worktree' && argv[1] === 'remove') {
+          removed = true;
+          return { ok: true, status: 0, stdout: '', stderr: '' };
+        }
+        return cleanRepoRunGit(argv);
+      },
+      listWorktreeRecords: () =>
+        removed ? null : [primaryRecord, linkedRecord],
+      pathPresence: () => {
+        if (removed) throw new Error('path probe failed');
+        return 'present';
+      },
+    },
+    { retainRemovedWorktreePath: true },
+  );
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.mutated, true);
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(verdict.result, /path=unknown \(path probe failed\)/);
+  assert.match(verdict.result, /worktree-list=unavailable/);
+  assert.match(verdict.result, /Next action: re-run local-worktree-recovery/);
 });
 
 test('step 4 returns a preservation verdict when clone-lock acquisition throws', () => {
@@ -1897,6 +2085,7 @@ test('prunable shortcut removes the worktree with `--force`', () => {
 
 test('prunable shortcut preserves the vanished worktree private admin directory', () => {
   const copied: string[] = [];
+  let removed = false;
   const deps = fakeDeps({
     pathExists: (path) => path !== '/repo/linked',
     findWorktreeAdminDir: () => ({
@@ -1904,25 +2093,41 @@ test('prunable shortcut preserves the vanished worktree private admin directory'
       error: null,
     }),
     copyPath: (_from, to) => copied.push(to),
+    runGit: (argv) => {
+      if (argv[0] === 'worktree' && argv[1] === 'remove') removed = true;
+      return cleanRepoRunGit(argv);
+    },
   });
-  deps.listWorktreeRecords = () => [
-    {
-      path: '/repo/primary',
-      branchRef: 'refs/heads/main',
-      detached: false,
-      bare: false,
-      locked: false,
-      prunable: false,
-    },
-    {
-      path: '/repo/linked',
-      branchRef: 'refs/heads/issue/1-task',
-      detached: false,
-      bare: false,
-      locked: false,
-      prunable: true,
-    },
-  ];
+  deps.listWorktreeRecords = () =>
+    removed
+      ? [
+          {
+            path: '/repo/primary',
+            branchRef: 'refs/heads/main',
+            detached: false,
+            bare: false,
+            locked: false,
+            prunable: false,
+          },
+        ]
+      : [
+          {
+            path: '/repo/primary',
+            branchRef: 'refs/heads/main',
+            detached: false,
+            bare: false,
+            locked: false,
+            prunable: false,
+          },
+          {
+            path: '/repo/linked',
+            branchRef: 'refs/heads/issue/1-task',
+            detached: false,
+            bare: false,
+            locked: false,
+            prunable: true,
+          },
+        ];
   const verdict = runLocalWorktreeRecovery(
     baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
     deps,
@@ -8511,6 +8716,39 @@ function buildSandbox(branch: string): Sandbox {
   };
 }
 
+function snapshotDirectoryTree(root: string): string {
+  const entries: string[] = [];
+  const visit = (directory: string, relativeDirectory: string): void => {
+    const children = readdirSync(directory, { withFileTypes: true }).sort(
+      (left, right) => left.name.localeCompare(right.name),
+    );
+    for (const child of children) {
+      const path = join(directory, child.name);
+      const relativePath = join(relativeDirectory, child.name);
+      const stats = lstatSync(path);
+      const entry: Record<string, string | number> = {
+        path: relativePath,
+        mode: stats.mode & 0o7777,
+      };
+      if (child.isDirectory()) {
+        entry.type = 'directory';
+        entries.push(JSON.stringify(entry));
+        visit(path, relativePath);
+      } else if (child.isSymbolicLink()) {
+        entry.type = 'symlink';
+        entry.target = readlinkSync(path);
+        entries.push(JSON.stringify(entry));
+      } else {
+        entry.type = 'file';
+        entry.contents = readFileSync(path).toString('base64');
+        entries.push(JSON.stringify(entry));
+      }
+    }
+  };
+  visit(root, '');
+  return entries.sort().join('\n');
+}
+
 function runCli(
   sandbox: Sandbox,
   issueNumber: number,
@@ -8598,6 +8836,65 @@ test('sandbox: clean worktree, no changes -- no stash, no backup ref, removal pr
       { cwd: sandbox.primary, encoding: 'utf8' },
     );
     assert.ok(!worktreeList.includes(sandbox.linked));
+  } finally {
+    restoreGh();
+    sandbox.cleanup();
+  }
+});
+
+test('sandbox: removing the selected worktree leaves unrelated prunable admin data unchanged', () => {
+  const sandbox = buildSandbox('issue/104-task');
+  const unrelated = join(sandbox.root, 'unrelated');
+  execFileSync(
+    'git',
+    ['worktree', 'add', '-b', 'issue/104-unrelated', unrelated],
+    {
+      cwd: sandbox.primary,
+      stdio: 'ignore',
+    },
+  );
+  const unrelatedAdminDir = execFileSync(
+    'git',
+    ['rev-parse', '--absolute-git-dir'],
+    { cwd: unrelated, encoding: 'utf8' },
+  ).trim();
+  rmSync(unrelated, { recursive: true, force: true });
+  const adminSnapshotBefore = snapshotDirectoryTree(unrelatedAdminDir);
+  const restoreGh = stubGhForStaleClaim({
+    issueNumber: 104,
+    branch: 'issue/104-task',
+    claimId: 'claim-104',
+    createdAt: '2026-09-24T00:00:00Z',
+  });
+  try {
+    const staleRecordsBefore = execFileSync(
+      'git',
+      ['worktree', 'list', '--porcelain'],
+      { cwd: sandbox.primary, encoding: 'utf8' },
+    );
+    assert.match(
+      staleRecordsBefore,
+      /branch refs\/heads\/issue\/104-unrelated/,
+    );
+    assert.match(staleRecordsBefore, /prunable/);
+
+    const result = runCli(sandbox, 104, [
+      '--apply',
+      '--operator-confirmed-no-live-session',
+    ]);
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.plan.removal.ran, true);
+
+    const worktreeListAfter = execFileSync(
+      'git',
+      ['worktree', 'list', '--porcelain'],
+      { cwd: sandbox.primary, encoding: 'utf8' },
+    );
+    assert.ok(!worktreeListAfter.includes(sandbox.linked));
+    assert.match(worktreeListAfter, /branch refs\/heads\/issue\/104-unrelated/);
+    assert.match(worktreeListAfter, /prunable/);
+    assert.equal(snapshotDirectoryTree(unrelatedAdminDir), adminSnapshotBefore);
   } finally {
     restoreGh();
     sandbox.cleanup();

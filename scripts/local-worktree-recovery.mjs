@@ -6864,25 +6864,61 @@ export function runLocalWorktreeRecovery(args, deps) {
       verdict.result = verdict.plan.removal.detail;
       return verdict;
     }
-    const prune = deps.runGit(['worktree', 'prune'], repoPath);
-    if (!prune.ok) {
-      verdict.plan.removal = {
-        kind: 'linked',
-        developmentBranch: null,
-        wouldRun: true,
-        ran: false,
-        detail: `git worktree remove succeeded, but git worktree prune failed: ${prune.stderr}`,
-      };
+    // `git worktree remove` already removes the selected worktree's
+    // registration. A following `git worktree prune` is clone-wide and can
+    // delete unrelated prunable records, so verify only this target instead.
+    let postRemovalRecords = null;
+    let postRemovalListError = null;
+    try {
+      postRemovalRecords = deps.listWorktreeRecords(repoPath);
+    } catch (error) {
+      postRemovalListError = errorMessage(error);
+    }
+    let postRemovalPathPresence = 'unknown';
+    let postRemovalPathError = null;
+    try {
+      postRemovalPathPresence = deps.pathPresence
+        ? deps.pathPresence(targetPath)
+        : deps.pathExists(targetPath)
+          ? 'present'
+          : 'absent';
+    } catch (error) {
+      postRemovalPathError = errorMessage(error);
+    }
+    const postRemovalTargetRecord =
+      postRemovalRecords?.find(
+        (record) =>
+          normalizeGitWorktreePathForComparison(record.path) ===
+          targetComparisonPath,
+      ) ?? null;
+    const postRemovalRecordObservation =
+      postRemovalRecords === null
+        ? `worktree-list=unavailable${postRemovalListError ? ` (${postRemovalListError})` : ''}`
+        : postRemovalRecords.length === 0
+          ? 'worktree-list=empty'
+          : postRemovalTargetRecord
+            ? `target-record=present(path=${postRemovalTargetRecord.path}, branch=${postRemovalTargetRecord.branchRef ?? 'none'}, detached=${postRemovalTargetRecord.detached}, bare=${postRemovalTargetRecord.bare}, locked=${postRemovalTargetRecord.locked}, prunable=${postRemovalTargetRecord.prunable})`
+            : 'target-record=absent';
+    const postRemovalVerified =
+      postRemovalRecords !== null &&
+      postRemovalRecords.length > 0 &&
+      postRemovalTargetRecord === null &&
+      postRemovalPathPresence === 'absent';
+    if (!postRemovalVerified) {
       verdict.mutated = true;
-      verdict.result = verdict.plan.removal.detail;
-      return verdict;
+      const nextAction =
+        're-run local-worktree-recovery in dry-run mode for this exact target; use the existing target-specific prunable shortcut only if this path is absent and its own record is confirmed prunable, otherwise preserve state and report a recovery hold; do not run git worktree prune';
+      return recordRemovalFailure(
+        `git worktree remove succeeded, but post-removal verification failed: path=${postRemovalPathPresence}${postRemovalPathError ? ` (${postRemovalPathError})` : ''}; ${postRemovalRecordObservation}. Next action: ${nextAction}`,
+      );
     }
     verdict.plan.removal = {
       kind: 'linked',
       developmentBranch: null,
       wouldRun: true,
       ran: true,
-      detail: 'git worktree remove succeeded',
+      detail:
+        'git worktree remove succeeded and the target path and record are absent',
     };
     verdict.mutated = true;
     verdict.result = 'linked worktree removed';

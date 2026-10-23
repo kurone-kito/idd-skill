@@ -1175,8 +1175,13 @@ against an unrelated branch, and none has an observed incident of its own
 
    Otherwise the same lock is already held, and the confirm-the-block
    re-check above already ran while holding it. Run `git worktree
-   remove <path>`, then `git worktree prune` — the removal that F4 step 5
-   (`idd-merge.instructions.md`) runs through the removal helper. If it fails
+   remove <path>`, then verify that this exact path is absent from disk and
+   no longer appears in `git worktree list --porcelain`; keep the hold if
+   either observation is unavailable or still names the target. Do not run
+   `git worktree prune` here: it is clone-wide and can erase unrelated
+   prunable records (observed 2026-10-23 in issue `#4639`). This is the
+   removal that F4 step 5 (`idd-merge.instructions.md`) runs through the
+   removal helper. If it fails
    with `fatal: working trees containing submodules cannot be moved or
    removed`, only the operator, never the F4 session, may retry
    `git worktree remove --force <path>`, after confirming step 3's
