@@ -1,7 +1,7 @@
 ---
 type: reference
 title: IDD — Advisory-Wait Shell Fallback (AW1 / AW2 / AW3-R / AW3-S / AW3-H / F2 detail)
-description: Provides the verbatim gh, gh api, jq, and curl commands the advisory-wait and F2 advisory-convergence shell fallbacks use when helper support cannot be trusted.
+description: Provides the verbatim gh, gh api, and jq commands the advisory-wait and F2 advisory-convergence shell fallbacks use when helper support cannot be trusted.
 tags: [advisory-wait, shell-fallback]
 ---
 
@@ -13,7 +13,7 @@ and for F2's **Advisory convergence** bullet in
 [pre-merge](../.github/instructions/idd-pre-merge.instructions.md):
 `gh`/`gh api`/`jq` for AW1/AW2 evidence collection and the F2
 convergence / `dispositionEvidence` assertion, and a mix of
-`gh`/`gh api`/`curl`/`node scripts/...` for the AW3-R/AW3-S/AW3-H
+`gh`/`gh api`/`node scripts/...` for the AW3-R/AW3-S/AW3-H
 marker-posting and cleanup mutations.
 
 These commands only apply when helper-first cannot be trusted — see
@@ -262,11 +262,64 @@ ephemeral-npx / user-global: resolve from `docs/idd-helper-scripts.md`)
 --head-sha <PR_HEAD_SHA> --timestamp <ISO8601> --apply`, or manually:
 
 ```sh
-GH_TOKEN="${GH_TOKEN:-$(gh auth token)}"
-curl -X POST "https://api.github.com/repos/{owner}/{repo}/issues/{pr-number}/comments" \
-  -H "Authorization: Bearer ${GH_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d "{\"body\":\"advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time}\"}"
+GH_REPO_ROUTE=$(gh repo view --json owner,name,url --jq '
+  . as $repo
+  | ($repo.url | capture("^https://(?<hostname>[A-Za-z0-9.-]+)(?<port>:[0-9]{1,5})?/(?<urlOwner>[A-Za-z0-9_.-]+)/(?<urlRepo>[A-Za-z0-9_.-]+)/?$")) as $url
+  | ($url.hostname | split(".") | all(.[]; match("^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$") != null)) as $valid_hostname
+  | (($url.port // "") | if . == "" then true else (ltrimstr(":") | tonumber) as $port | $port >= 1 and $port <= 65535 end) as $valid_port
+  | ($repo.owner.login // "") as $owner
+  | ($repo.name // "") as $name
+  | if $valid_hostname
+      and $valid_port
+      and ($owner | match("^[A-Za-z0-9_.-]+$") != null)
+      and ($name | match("^[A-Za-z0-9_.-]+$") != null)
+      and ($url.urlOwner | ascii_downcase) == ($owner | ascii_downcase)
+      and ($url.urlRepo | ascii_downcase) == ($name | ascii_downcase)
+    then {
+      authHost: $url.hostname,
+      owner: $owner,
+      repo: $name,
+      ported: ($url.port != null)
+    }
+    else error("unsupported or mismatched repository URL") end
+') || {
+  echo "cannot resolve the repository's GitHub host; recovery marker not posted" >&2
+  exit 2
+}
+GH_AUTH_HOST=$(printf '%s\n' "$GH_REPO_ROUTE" | jq -er '.authHost') || {
+  echo "cannot resolve the repository's authentication host; recovery marker not posted" >&2
+  exit 2
+}
+GH_API_PORTED=$(printf '%s\n' "$GH_REPO_ROUTE" | jq -r '.ported') || {
+  echo "cannot resolve whether the repository host uses a port; recovery marker not posted" >&2
+  exit 2
+}
+GH_OWNER=$(printf '%s\n' "$GH_REPO_ROUTE" | jq -er '.owner') || {
+  echo "cannot resolve the repository owner; recovery marker not posted" >&2
+  exit 2
+}
+GH_REPO_NAME=$(printf '%s\n' "$GH_REPO_ROUTE" | jq -er '.repo') || {
+  echo "cannot resolve the repository name; recovery marker not posted" >&2
+  exit 2
+}
+[ -n "$GH_AUTH_HOST" ] && [ -n "$GH_OWNER" ] && [ -n "$GH_REPO_NAME" ] && { [ "$GH_API_PORTED" = true ] || [ "$GH_API_PORTED" = false ]; } || {
+  echo "repository GitHub host is empty or invalid; recovery marker not posted" >&2
+  exit 2
+}
+if [ "$GH_API_PORTED" = true ]; then
+  # gh v2.98.0 looks up request credentials by the request host, including
+  # its port; a bare-host auth check cannot prove the ported request is
+  # authenticated (observed 2026-10-23 in #4638).
+  echo "cannot verify authentication for a ported GitHub host; recovery marker not posted" >&2
+  exit 2
+fi
+gh auth status --active --hostname "$GH_AUTH_HOST" >/dev/null 2>&1 || {
+  echo "not authenticated to $GH_AUTH_HOST; recovery marker not posted" >&2
+  exit 2
+}
+gh api --hostname "$GH_AUTH_HOST" "repos/$GH_OWNER/$GH_REPO_NAME/issues/{pr-number}/comments" \
+  --method POST --silent \
+  -f body="advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time}"
 ```
 
 ## Registration-proven review request
@@ -777,11 +830,64 @@ node scripts/post-idd-marker.mjs --type advisory-recovery --target pr <pr-number
   --head-sha <PR_HEAD_SHA> --attempt <n> --timestamp <ISO8601> --apply
 # instructions-only profile, or any profile if the helper is unavailable —
 # manually, matching the grammar renderAdvisoryWaitRecoveryMarker emits:
-GH_TOKEN="${GH_TOKEN:-$(gh auth token)}"
-curl -X POST "https://api.github.com/repos/{owner}/{repo}/issues/{pr-number}/comments" \
-  -H "Authorization: Bearer ${GH_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d "{\"body\":\"advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time} claim:{claim-id} attempt:{n}\"}"
+GH_REPO_ROUTE=$(gh repo view --json owner,name,url --jq '
+  . as $repo
+  | ($repo.url | capture("^https://(?<hostname>[A-Za-z0-9.-]+)(?<port>:[0-9]{1,5})?/(?<urlOwner>[A-Za-z0-9_.-]+)/(?<urlRepo>[A-Za-z0-9_.-]+)/?$")) as $url
+  | ($url.hostname | split(".") | all(.[]; match("^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$") != null)) as $valid_hostname
+  | (($url.port // "") | if . == "" then true else (ltrimstr(":") | tonumber) as $port | $port >= 1 and $port <= 65535 end) as $valid_port
+  | ($repo.owner.login // "") as $owner
+  | ($repo.name // "") as $name
+  | if $valid_hostname
+      and $valid_port
+      and ($owner | match("^[A-Za-z0-9_.-]+$") != null)
+      and ($name | match("^[A-Za-z0-9_.-]+$") != null)
+      and ($url.urlOwner | ascii_downcase) == ($owner | ascii_downcase)
+      and ($url.urlRepo | ascii_downcase) == ($name | ascii_downcase)
+    then {
+      authHost: $url.hostname,
+      owner: $owner,
+      repo: $name,
+      ported: ($url.port != null)
+    }
+    else error("unsupported or mismatched repository URL") end
+') || {
+  echo "cannot resolve the repository's GitHub host; recovery marker not posted" >&2
+  exit 2
+}
+GH_AUTH_HOST=$(printf '%s\n' "$GH_REPO_ROUTE" | jq -er '.authHost') || {
+  echo "cannot resolve the repository's authentication host; recovery marker not posted" >&2
+  exit 2
+}
+GH_API_PORTED=$(printf '%s\n' "$GH_REPO_ROUTE" | jq -r '.ported') || {
+  echo "cannot resolve whether the repository host uses a port; recovery marker not posted" >&2
+  exit 2
+}
+GH_OWNER=$(printf '%s\n' "$GH_REPO_ROUTE" | jq -er '.owner') || {
+  echo "cannot resolve the repository owner; recovery marker not posted" >&2
+  exit 2
+}
+GH_REPO_NAME=$(printf '%s\n' "$GH_REPO_ROUTE" | jq -er '.repo') || {
+  echo "cannot resolve the repository name; recovery marker not posted" >&2
+  exit 2
+}
+[ -n "$GH_AUTH_HOST" ] && [ -n "$GH_OWNER" ] && [ -n "$GH_REPO_NAME" ] && { [ "$GH_API_PORTED" = true ] || [ "$GH_API_PORTED" = false ]; } || {
+  echo "repository GitHub host is empty or invalid; recovery marker not posted" >&2
+  exit 2
+}
+if [ "$GH_API_PORTED" = true ]; then
+  # gh v2.98.0 looks up request credentials by the request host, including
+  # its port; a bare-host auth check cannot prove the ported request is
+  # authenticated (observed 2026-10-23 in #4638).
+  echo "cannot verify authentication for a ported GitHub host; recovery marker not posted" >&2
+  exit 2
+fi
+gh auth status --active --hostname "$GH_AUTH_HOST" >/dev/null 2>&1 || {
+  echo "not authenticated to $GH_AUTH_HOST; recovery marker not posted" >&2
+  exit 2
+}
+gh api --hostname "$GH_AUTH_HOST" "repos/$GH_OWNER/$GH_REPO_NAME/issues/{pr-number}/comments" \
+  --method POST --silent \
+  -f body="advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time} claim:{claim-id} attempt:{n}"
 ```
 
 ## AW3-H
@@ -842,23 +948,145 @@ OWNER=$(gh repo view --json owner --jq '.owner.login')
 REPO=$(gh repo view --json name --jq '.name')
 PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')
 
-# Latest primary-bot review (same login set as AW1).
+# Latest primary-bot review (same login set as AW1). Capture all pages before
+# interpreting them: an empty pipe or a failed later page is not an empty
+# review list (observed 2026-10-23 in #4638).
+REVIEWS_RAW=$(gh api "repos/$OWNER/$REPO/pulls/{pr-number}/reviews" --paginate) || {
+  echo "F2 review list read failed; not converged (observed 2026-10-23 in #4638)" >&2
+  exit 2
+}
+[ -n "$REVIEWS_RAW" ] || {
+  echo "F2 review list read empty; not converged (observed 2026-10-23 in #4638)" >&2
+  exit 2
+}
+  printf '%s' "$REVIEWS_RAW" | jq -e -s '
+    def parsed_review_timestamp:
+      .submitted_at
+      | (capture("^(?<whole>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})([.](?<fraction>[0-9]+))?(?<zone>Z|[+-][0-9]{2}:[0-9]{2})$") // null);
+    def review_time_key($fraction_width):
+      parsed_review_timestamp as $timestamp
+      | (($timestamp.whole + "Z") | fromdateiso8601) as $whole_seconds
+      | if ($whole_seconds | gmtime | strftime("%Y-%m-%dT%H:%M:%SZ"))
+          != ($timestamp.whole + "Z")
+        then error("invalid timestamp")
+        elif ($timestamp.zone != "Z"
+          and ((($timestamp.zone[1:3] | tonumber) > 23)
+            or (($timestamp.zone[4:6] | tonumber) > 59)))
+        then error("invalid timezone offset")
+        else
+          ($timestamp.fraction // "") as $fraction
+          | [
+              ($whole_seconds
+                - (if $timestamp.zone == "Z" then 0
+                   else
+                     (if $timestamp.zone[0:1] == "+" then 1 else -1 end)
+                     * (($timestamp.zone[1:3] | tonumber) * 3600
+                       + ($timestamp.zone[4:6] | tonumber) * 60)
+                   end)),
+              (reduce range(($fraction | length); $fraction_width) as $_
+                ($fraction; . + "0"))
+            ]
+        end;
+  length > 0
+  and all(.[]; type == "array")
+  and all(add[];
+    type == "object"
+      and has("user")
+      and (
+        .user == null
+        or (
+          (.user | type == "object")
+          and (.user.login | type == "string")
+        )
+      )
+    and (
+        if .user == null then true
+        elif .user.login == "copilot-pull-request-reviewer"
+          or .user.login == "copilot-pull-request-reviewer[bot]"
+      then
+          (.submitted_at | type == "string")
+          and (try (review_time_key(0) != null) catch false)
+        and (.commit_id | type == "string")
+        and (.commit_id | length > 0)
+        and (.id | type == "number")
+        and (.id > 0)
+      else true end
+    )
+  )
+' > /dev/null || {
+  echo "F2 review list malformed; not converged (observed 2026-10-23 in #4638)" >&2
+  exit 2
+}
 LATEST_REVIEW_JSON=$(
-  gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/reviews" --paginate \
-    --jq '.[] | select(.user.login == "copilot-pull-request-reviewer"
-          or .user.login == "copilot-pull-request-reviewer[bot]") |
-          {sa: .submitted_at, cid: .commit_id, id: .id}' \
-  | jq -rs 'sort_by(.sa) | last // {}'
-)
-LATEST_REVIEW_CID=$(printf '%s' "${LATEST_REVIEW_JSON}" | jq -r '.cid // ""')
+  printf '%s' "$REVIEWS_RAW" | jq -cs '
+    def parsed_review_timestamp:
+      .submitted_at
+      | (capture("^(?<whole>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})([.](?<fraction>[0-9]+))?(?<zone>Z|[+-][0-9]{2}:[0-9]{2})$") // null);
+    def review_time_key($fraction_width):
+      parsed_review_timestamp as $timestamp
+      | (($timestamp.whole + "Z") | fromdateiso8601) as $whole_seconds
+      | ($timestamp.fraction // "") as $fraction
+      | [
+          ($whole_seconds
+            - (if $timestamp.zone == "Z" then 0
+               else
+                 (if $timestamp.zone[0:1] == "+" then 1 else -1 end)
+                 * (($timestamp.zone[1:3] | tonumber) * 3600
+                   + ($timestamp.zone[4:6] | tonumber) * 60)
+               end)),
+          (reduce range(($fraction | length); $fraction_width) as $_
+            ($fraction; . + "0"))
+        ];
+    add
+    | map(select(.user != null and (
+        .user.login == "copilot-pull-request-reviewer"
+        or .user.login == "copilot-pull-request-reviewer[bot]")))
+      as $bot_reviews
+    | ($bot_reviews
+        | map(parsed_review_timestamp | (.fraction // "" | length))
+        | max // 0) as $fraction_width
+    | $bot_reviews
+    | sort_by(review_time_key($fraction_width))
+    | last // {}
+  '
+) || {
+  echo "F2 review selection failed; not converged (observed 2026-10-23 in #4638)" >&2
+  exit 2
+}
+LATEST_REVIEW_CID=$(printf '%s' "${LATEST_REVIEW_JSON}" | jq -r '.commit_id // ""')
 LATEST_REVIEW_ID=$(printf '%s' "${LATEST_REVIEW_JSON}" | jq -r '.id // empty')
 
 # Actionable items = posted review comments on that review.
 if [ -n "${LATEST_REVIEW_ID}" ]; then
+  REVIEW_COMMENTS_RAW=$(gh api "repos/$OWNER/$REPO/pulls/{pr-number}/reviews/$LATEST_REVIEW_ID/comments" --paginate) || {
+    echo "F2 review-comment read failed; not converged (observed 2026-10-23 in #4638)" >&2
+    exit 2
+  }
+  [ -n "$REVIEW_COMMENTS_RAW" ] || {
+    echo "F2 review-comment read empty; not converged (observed 2026-10-23 in #4638)" >&2
+    exit 2
+  }
+  printf '%s' "$REVIEW_COMMENTS_RAW" | jq -e -s '
+    length > 0
+    and all(.[]; type == "array")
+    and all(add[];
+      type == "object"
+      and (.id | type == "number")
+      and (.id > 0)
+      and (.path | type == "string")
+      and (.path | length > 0)
+      and (.body | type == "string")
+    )
+  ' > /dev/null || {
+    echo "F2 review-comment read malformed; not converged (observed 2026-10-23 in #4638)" >&2
+    exit 2
+  }
   ACTIONABLE_ITEM_COUNT=$(
-    gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/reviews/${LATEST_REVIEW_ID}/comments" \
-      --paginate --jq 'length' | awk '{s+=$1} END {print s+0}'
-  )
+    printf '%s' "$REVIEW_COMMENTS_RAW" | jq -cs 'add | length'
+  ) || {
+    echo "F2 review-comment count failed; not converged (observed 2026-10-23 in #4638)" >&2
+    exit 2
+  }
 else
   ACTIONABLE_ITEM_COUNT=""
 fi
