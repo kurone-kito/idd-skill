@@ -405,6 +405,22 @@ test('rejects impossible calendar dates and out-of-range clock fields', () => {
     })}`,
   );
   assert.equal(leapDay.ok, true);
+
+  const invalidCommentDate = replayProvisionalDecisionHistory(
+    input([
+      recordComment('invalid-created-at', base, 1, {
+        createdAt: '2026-02-30T00:00:00Z',
+      }),
+    ]),
+  );
+  assert.equal(invalidCommentDate.valid, false);
+  assert.ok(
+    invalidCommentDate.issues.some(
+      (issue) =>
+        issue.code === 'date-time-required' &&
+        issue.path === 'comments[invalid-created-at].createdAt',
+    ),
+  );
 });
 
 test('checks integer JSON tokens before IEEE-754 rounding', () => {
@@ -977,6 +993,88 @@ test('a confirmed answer keeps its event-time claim lineage after a later takeov
   );
   assert.equal(result.valid, true);
   assert.equal(result.status, 'confirmed');
+});
+
+test('a confirmation after takeover keeps the answer claim lineage from its own event time', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const takeover = {
+    ...secondClaim,
+    claimedAt: dateAt(4),
+    commentId: 'takeover-marker',
+  };
+  const takeoverRecordClaim = {
+    ...secondClaim,
+    claimedAt: dateAt(4),
+  };
+  const answer = answerComment(
+    'answer-before-takeover',
+    buildAnswer([selected], [completed], [firstClaim]),
+    4,
+  );
+  const confirmation = record(
+    'confirm-after-takeover',
+    confirmedEvent(answer),
+    1,
+    1,
+    [firstClaim, takeoverRecordClaim],
+  );
+  const result = replayProvisionalDecisionHistory(
+    input(
+      [
+        recordComment('1', selected, 1),
+        recordComment('2', started, 2),
+        recordComment('3', completed, 3),
+        answer,
+        comment('takeover-marker', 'verified takeover marker', 4),
+        recordComment('5', confirmation, 5),
+      ],
+      { verifiedClaimLineage: [firstClaim, takeover] },
+    ),
+  );
+  assert.equal(result.valid, true, JSON.stringify(result.issues));
+  assert.equal(result.status, 'confirmed');
+});
+
+test('an answer cannot cite a claim that starts later in server order', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const takeover = {
+    ...secondClaim,
+    claimedAt: dateAt(4),
+    commentId: 'takeover-marker',
+  };
+  const takeoverRecordClaim = {
+    ...secondClaim,
+    claimedAt: dateAt(4),
+  };
+  const answer = answerComment(
+    'answer-before-takeover',
+    buildAnswer([selected], [completed], [firstClaim, takeoverRecordClaim]),
+    4,
+  );
+  const confirmation = record(
+    'confirm-after-takeover',
+    confirmedEvent(answer),
+    1,
+    1,
+    [firstClaim, takeoverRecordClaim],
+  );
+  const result = replayProvisionalDecisionHistory(
+    input(
+      [
+        recordComment('1', selected, 1),
+        recordComment('2', started, 2),
+        recordComment('3', completed, 3),
+        answer,
+        comment('takeover-marker', 'verified takeover marker', 4),
+        recordComment('5', confirmation, 5),
+      ],
+      { verifiedClaimLineage: [firstClaim, takeover] },
+    ),
+  );
+  assert.equal(result.valid, false);
+  assert.ok(
+    result.issues.some((issue) => issue.code === 'confirmation-scope-mismatch'),
+  );
 });
 
 test('a new record cannot use a superseded claim after takeover', () => {

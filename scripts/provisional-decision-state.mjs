@@ -1038,6 +1038,43 @@ function sameSourceContent(left, right) {
     left.snapshot.bodySha256 === right.snapshot.bodySha256
   );
 }
+function claimLineageAt(verifiedClaims, createdAt, commentId, commentIndexes) {
+  const eventTime = Date.parse(createdAt);
+  if (!Number.isFinite(eventTime)) return undefined;
+  const eventIndex = commentIndexes.get(commentId);
+  if (eventIndex === undefined) return undefined;
+  const claimsAtEvent = [];
+  const appendClaim = (claim) => {
+    claimsAtEvent.push({
+      claimId: claim.claimId,
+      agentId: claim.agentId,
+      branch: claim.branch,
+      claimedAt: claim.claimedAt,
+      ...(claim.supersedes === undefined
+        ? {}
+        : { supersedes: claim.supersedes }),
+    });
+  };
+  for (const claim of verifiedClaims) {
+    const claimedAt = Date.parse(claim.claimedAt);
+    if (!Number.isFinite(claimedAt)) return undefined;
+    if (claimedAt < eventTime) {
+      appendClaim(claim);
+    } else if (claimedAt > eventTime) {
+      break;
+    } else {
+      if (!claim.commentId) return undefined;
+      const claimIndex = commentIndexes.get(claim.commentId);
+      if (claimIndex === undefined) return undefined;
+      if (claimIndex < eventIndex) {
+        appendClaim(claim);
+      } else {
+        break;
+      }
+    }
+  }
+  return claimsAtEvent.length > 0 ? claimsAtEvent : undefined;
+}
 function claimLineageMatchesAt(
   recordClaims,
   verifiedClaims,
@@ -1045,32 +1082,14 @@ function claimLineageMatchesAt(
   recordCommentId,
   commentIndexes,
 ) {
-  const recordTime = Date.parse(createdAt);
-  if (!Number.isFinite(recordTime)) return false;
-  const recordIndex = commentIndexes.get(recordCommentId);
-  if (recordIndex === undefined) return false;
-  const claimsAtEvent = [];
-  for (const claim of verifiedClaims) {
-    const claimedAt = Date.parse(claim.claimedAt);
-    if (!Number.isFinite(claimedAt)) return false;
-    if (claimedAt < recordTime) claimsAtEvent.push(claim);
-    else if (claimedAt > recordTime) break;
-    else {
-      if (!claim.commentId) return false;
-      const claimIndex = commentIndexes.get(claim.commentId);
-      if (claimIndex === undefined) return false;
-      if (claimIndex < recordIndex) claimsAtEvent.push(claim);
-      else break;
-    }
-  }
-  const persistedClaims = claimsAtEvent.map((claim) => ({
-    claimId: claim.claimId,
-    agentId: claim.agentId,
-    branch: claim.branch,
-    claimedAt: claim.claimedAt,
-    ...(claim.supersedes === undefined ? {} : { supersedes: claim.supersedes }),
-  }));
-  return claimsAtEvent.length > 0 && sameValue(recordClaims, persistedClaims);
+  const claimsAtEvent = claimLineageAt(
+    verifiedClaims,
+    createdAt,
+    recordCommentId,
+    commentIndexes,
+  );
+  if (!claimsAtEvent) return false;
+  return sameValue(recordClaims, claimsAtEvent);
 }
 function sameWorkResult(record, evidence, source) {
   const recordResult = resultFor(record);
@@ -1227,7 +1246,8 @@ function answerPresentation(decisions) {
 function validateAnswerBinding(
   answer,
   source,
-  claimLineage,
+  answerClaimLineage,
+  recordClaimLineage,
   bundleGeneration,
   decisions,
 ) {
@@ -1235,12 +1255,20 @@ function validateAnswerBinding(
     .map((decision) => decision.selection.record.decisionGeneration)
     .sort((a, b) => a - b);
   const answerDecisions = [...answer.decisionGenerations].sort((a, b) => a - b);
-  const expectedClaims = claimLineage.map((claim) => claim.claimId);
   const answerClaims = [...answer.claimIds];
+  const expectedClaims = answerClaimLineage?.map((claim) => claim.claimId);
+  const answerLineageIsRecordPrefix =
+    answerClaimLineage !== undefined &&
+    answerClaimLineage.length <= recordClaimLineage.length &&
+    answerClaimLineage.every((claim, index) =>
+      sameValue(claim, recordClaimLineage[index]),
+    );
   if (
     !sameSourceContent(answer.source, source) ||
     answer.bundleGeneration !== bundleGeneration ||
     !sameValue(answerDecisions, expectedDecisions) ||
+    !expectedClaims ||
+    !answerLineageIsRecordPrefix ||
     !sameValue(answerClaims, expectedClaims)
   )
     return false;
@@ -1317,8 +1345,13 @@ export function replayProvisionalDecisionHistory(input) {
   const commentIds = new Set();
   let priorCreatedAt = -Infinity;
   for (const [commentIndex, comment] of input.comments.entries()) {
-    const createdAt = Date.parse(comment.createdAt);
-    if (!Number.isFinite(createdAt) || createdAt < priorCreatedAt) {
+    const validCreatedAt = dateTime(
+      comment.createdAt,
+      `comments[${comment.id}].createdAt`,
+      issues,
+    );
+    const createdAt = validCreatedAt ? Date.parse(comment.createdAt) : NaN;
+    if (validCreatedAt && createdAt < priorCreatedAt) {
       issues.push(
         createReplayIssue(
           'history-order-invalid',
@@ -1327,7 +1360,7 @@ export function replayProvisionalDecisionHistory(input) {
         ),
       );
     }
-    priorCreatedAt = createdAt;
+    if (validCreatedAt) priorCreatedAt = createdAt;
     if (commentIds.has(comment.id) || commentsByUrl.has(comment.url)) {
       issues.push(
         createReplayIssue(
@@ -1699,10 +1732,17 @@ export function replayProvisionalDecisionHistory(input) {
         );
         continue;
       }
+      const answerClaimLineage = claimLineageAt(
+        input.verifiedClaimLineage,
+        answerComment.createdAt,
+        answerComment.id,
+        commentIndexes,
+      );
       if (
         !validateAnswerBinding(
           parsedAnswer.answer,
           record.source,
+          answerClaimLineage,
           record.claimLineage,
           bundleGeneration,
           currentBundle,
@@ -1805,6 +1845,12 @@ export function replayProvisionalDecisionHistory(input) {
       const currentBundle = [...states.values()].filter(
         (state) => state.selection.record.bundleGeneration === bundleGeneration,
       );
+      const answerClaimLineage = claimLineageAt(
+        input.verifiedClaimLineage,
+        answerComment.createdAt,
+        answerComment.id,
+        commentIndexes,
+      );
       if (
         currentBundle.some(
           (state) => !state.workCompleted || state.confirmation,
@@ -1824,6 +1870,7 @@ export function replayProvisionalDecisionHistory(input) {
         !validateAnswerBinding(
           parsedAnswer.answer,
           record.source,
+          answerClaimLineage,
           record.claimLineage,
           bundleGeneration,
           currentBundle,
