@@ -159,14 +159,17 @@ const CODERABBIT_RATE_LIMITED_ACK =
   '</details>';
 const CODERABBIT_SUMMARY =
   '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n## Walkthrough\nSome walkthrough text.';
-// #2161: CodeRabbit wraps a content-free skip-review notice (billing failure,
-// or a repo below the star-count manual-trigger gate) in the SAME outer
-// summarize-by-coderabbit.ai marker as a genuine walkthrough, distinguished
-// only by this nested inner marker.
+// #2161: CodeRabbit wraps a skip-review notice in the SAME outer
+// summarize-by-coderabbit.ai marker as a genuine walkthrough; the nested
+// skip-review marker distinguishes the notice.
 const CODERABBIT_SKIP_REVIEW =
   '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
   '<!-- This is an auto-generated comment: skip review by coderabbit.ai -->\n' +
   '> [!WARNING]\n> ## Review skipped\nReview was skipped due to path filters.';
+const CODERABBIT_SKIP_REVIEW_UNKNOWN_CAUSE =
+  '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
+  '<!-- This is an auto-generated comment: skip review by coderabbit.ai -->\n' +
+  '> [!WARNING]\n> ## Review skipped\nReview was skipped.';
 // #3260: fixtures trimmed (exact marker HTML comments + minimal surrounding
 // structure) from the live comments the issue cites, verified against their
 // GraphQL `userContentEdits` revision history on 2026-09-24. PR #3196
@@ -1603,9 +1606,10 @@ test('noticeReason derives the category-specific reason', () => {
     'Codex usage limits for code reviews reached',
   );
   assert.equal(noticeReason('something else'), 'advisory non-review notice');
+  assert.equal(noticeReason(CODERABBIT_SKIP_REVIEW), 'review skipped');
   assert.equal(
-    noticeReason(CODERABBIT_SKIP_REVIEW),
-    'review skipped (billing failure or below the manual-trigger star-count gate)',
+    noticeReason(CODERABBIT_SKIP_REVIEW_UNKNOWN_CAUSE),
+    'review skipped',
   );
   assert.equal(
     noticeReason(CODERABBIT_ALREADY_REVIEWED_ACK),
