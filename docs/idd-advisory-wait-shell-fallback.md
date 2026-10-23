@@ -277,7 +277,6 @@ GH_REPO_ROUTE=$(gh repo view --json owner,name,url --jq '
       and ($url.urlRepo | ascii_downcase) == ($name | ascii_downcase)
     then {
       authHost: $url.hostname,
-      apiAuthority: ($url.hostname + ($url.port // "")),
       owner: $owner,
       repo: $name,
       ported: ($url.port != null)
@@ -289,10 +288,6 @@ GH_REPO_ROUTE=$(gh repo view --json owner,name,url --jq '
 }
 GH_AUTH_HOST=$(printf '%s\n' "$GH_REPO_ROUTE" | jq -er '.authHost') || {
   echo "cannot resolve the repository's authentication host; recovery marker not posted" >&2
-  exit 2
-}
-GH_API_AUTHORITY=$(printf '%s\n' "$GH_REPO_ROUTE" | jq -er '.apiAuthority') || {
-  echo "cannot resolve the repository's API authority; recovery marker not posted" >&2
   exit 2
 }
 GH_API_PORTED=$(printf '%s\n' "$GH_REPO_ROUTE" | jq -r '.ported') || {
@@ -307,24 +302,24 @@ GH_REPO_NAME=$(printf '%s\n' "$GH_REPO_ROUTE" | jq -er '.repo') || {
   echo "cannot resolve the repository name; recovery marker not posted" >&2
   exit 2
 }
-[ -n "$GH_AUTH_HOST" ] && [ -n "$GH_API_AUTHORITY" ] && [ -n "$GH_OWNER" ] && [ -n "$GH_REPO_NAME" ] && { [ "$GH_API_PORTED" = true ] || [ "$GH_API_PORTED" = false ]; } || {
+[ -n "$GH_AUTH_HOST" ] && [ -n "$GH_OWNER" ] && [ -n "$GH_REPO_NAME" ] && { [ "$GH_API_PORTED" = true ] || [ "$GH_API_PORTED" = false ]; } || {
   echo "repository GitHub host is empty or invalid; recovery marker not posted" >&2
   exit 2
 }
+if [ "$GH_API_PORTED" = true ]; then
+  # gh v2.98.0 looks up request credentials by the request host, including
+  # its port; a bare-host auth check cannot prove the ported request is
+  # authenticated (observed 2026-10-23 in #4638).
+  echo "cannot verify authentication for a ported GitHub host; recovery marker not posted" >&2
+  exit 2
+fi
 gh auth status --active --hostname "$GH_AUTH_HOST" >/dev/null 2>&1 || {
   echo "not authenticated to $GH_AUTH_HOST; recovery marker not posted" >&2
   exit 2
 }
-if [ "$GH_API_PORTED" = true ]; then
-  gh api --hostname "$GH_AUTH_HOST" \
-    "https://$GH_API_AUTHORITY/api/v3/repos/$GH_OWNER/$GH_REPO_NAME/issues/{pr-number}/comments" \
-    --method POST --silent \
-    -f body="advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time}"
-else
-  gh api --hostname "$GH_AUTH_HOST" "repos/$GH_OWNER/$GH_REPO_NAME/issues/{pr-number}/comments" \
-    --method POST --silent \
-    -f body="advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time}"
-fi
+gh api --hostname "$GH_AUTH_HOST" "repos/$GH_OWNER/$GH_REPO_NAME/issues/{pr-number}/comments" \
+  --method POST --silent \
+  -f body="advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time}"
 ```
 
 ## Registration-proven review request
@@ -850,7 +845,6 @@ GH_REPO_ROUTE=$(gh repo view --json owner,name,url --jq '
       and ($url.urlRepo | ascii_downcase) == ($name | ascii_downcase)
     then {
       authHost: $url.hostname,
-      apiAuthority: ($url.hostname + ($url.port // "")),
       owner: $owner,
       repo: $name,
       ported: ($url.port != null)
@@ -862,10 +856,6 @@ GH_REPO_ROUTE=$(gh repo view --json owner,name,url --jq '
 }
 GH_AUTH_HOST=$(printf '%s\n' "$GH_REPO_ROUTE" | jq -er '.authHost') || {
   echo "cannot resolve the repository's authentication host; recovery marker not posted" >&2
-  exit 2
-}
-GH_API_AUTHORITY=$(printf '%s\n' "$GH_REPO_ROUTE" | jq -er '.apiAuthority') || {
-  echo "cannot resolve the repository's API authority; recovery marker not posted" >&2
   exit 2
 }
 GH_API_PORTED=$(printf '%s\n' "$GH_REPO_ROUTE" | jq -r '.ported') || {
@@ -880,24 +870,24 @@ GH_REPO_NAME=$(printf '%s\n' "$GH_REPO_ROUTE" | jq -er '.repo') || {
   echo "cannot resolve the repository name; recovery marker not posted" >&2
   exit 2
 }
-[ -n "$GH_AUTH_HOST" ] && [ -n "$GH_API_AUTHORITY" ] && [ -n "$GH_OWNER" ] && [ -n "$GH_REPO_NAME" ] && { [ "$GH_API_PORTED" = true ] || [ "$GH_API_PORTED" = false ]; } || {
+[ -n "$GH_AUTH_HOST" ] && [ -n "$GH_OWNER" ] && [ -n "$GH_REPO_NAME" ] && { [ "$GH_API_PORTED" = true ] || [ "$GH_API_PORTED" = false ]; } || {
   echo "repository GitHub host is empty or invalid; recovery marker not posted" >&2
   exit 2
 }
+if [ "$GH_API_PORTED" = true ]; then
+  # gh v2.98.0 looks up request credentials by the request host, including
+  # its port; a bare-host auth check cannot prove the ported request is
+  # authenticated (observed 2026-10-23 in #4638).
+  echo "cannot verify authentication for a ported GitHub host; recovery marker not posted" >&2
+  exit 2
+fi
 gh auth status --active --hostname "$GH_AUTH_HOST" >/dev/null 2>&1 || {
   echo "not authenticated to $GH_AUTH_HOST; recovery marker not posted" >&2
   exit 2
 }
-if [ "$GH_API_PORTED" = true ]; then
-  gh api --hostname "$GH_AUTH_HOST" \
-    "https://$GH_API_AUTHORITY/api/v3/repos/$GH_OWNER/$GH_REPO_NAME/issues/{pr-number}/comments" \
-    --method POST --silent \
-    -f body="advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time} claim:{claim-id} attempt:{n}"
-else
-  gh api --hostname "$GH_AUTH_HOST" "repos/$GH_OWNER/$GH_REPO_NAME/issues/{pr-number}/comments" \
-    --method POST --silent \
-    -f body="advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time} claim:{claim-id} attempt:{n}"
-fi
+gh api --hostname "$GH_AUTH_HOST" "repos/$GH_OWNER/$GH_REPO_NAME/issues/{pr-number}/comments" \
+  --method POST --silent \
+  -f body="advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time} claim:{claim-id} attempt:{n}"
 ```
 
 ## AW3-H

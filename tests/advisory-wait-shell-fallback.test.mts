@@ -961,25 +961,15 @@ for (const example of [
     {
       url: 'https://github.com/' + OWNER + '/' + REPO,
       authHost: 'github.com',
-      apiAuthority: 'github.com',
-      ported: false,
     },
     {
       url: 'https://ghe.example.test/' + OWNER + '/' + REPO,
       authHost: 'ghe.example.test',
-      apiAuthority: 'ghe.example.test',
-      ported: false,
-    },
-    {
-      url: 'https://ghe.example.test:8443/' + OWNER + '/' + REPO,
-      authHost: 'ghe.example.test',
-      apiAuthority: 'ghe.example.test:8443',
-      ported: true,
     },
   ]) {
     test(example.heading +
       ' keeps its manual POST on ' +
-      route.apiAuthority +
+      route.authHost +
       ' (#4638)', {
       skip: SKIP_REASON ?? false,
     }, () => {
@@ -994,14 +984,7 @@ for (const example of [
           call.includes('auth status --active --hostname ' + route.authHost),
         ),
       );
-      const apiEndpoint = route.ported
-        ? 'https://' +
-          route.apiAuthority +
-          '/api/v3/repos/' +
-          OWNER +
-          '/' +
-          REPO
-        : 'repos/' + OWNER + '/' + REPO;
+      const apiEndpoint = 'repos/' + OWNER + '/' + REPO;
       assert.ok(
         result.ghCalls.some(
           (call) =>
@@ -1011,18 +994,31 @@ for (const example of [
             call.includes('--silent'),
         ),
       );
-      if (route.ported) {
-        assert.ok(
-          !result.ghCalls.some((call) =>
-            call.includes('api --hostname ' + route.apiAuthority),
-          ),
-        );
-      }
       assert.ok(!result.ghCalls.some((call) => call.includes('auth token')));
       assert.ok(!result.stdout.includes('STUB_SECRET'));
       assert.ok(!result.stderr.includes('STUB_SECRET'));
     });
   }
+
+  test(example.heading + ' fails closed for a ported GHES URL (#4638)', {
+    skip: SKIP_REASON ?? false,
+  }, () => {
+    const result = runManualRecoveryPost(
+      example.heading,
+      example.marker,
+      'https://ghe.example.test:8443/' + OWNER + '/' + REPO,
+    );
+    assert.equal(result.status, 2, result.stdout + result.stderr);
+    assert.match(
+      result.stderr,
+      /cannot verify authentication for a ported GitHub host/,
+    );
+    assert.ok(!result.ghCalls.some((call) => call.startsWith('auth status')));
+    assert.ok(!result.ghCalls.some((call) => call.includes('--method POST')));
+    assert.ok(!result.ghCalls.some((call) => call.includes('auth token')));
+    assert.ok(!result.stdout.includes('STUB_SECRET'));
+    assert.ok(!result.stderr.includes('STUB_SECRET'));
+  });
 }
 
 test('manual recovery POST stops when the host is unresolved or unauthenticated (#4638)', {
