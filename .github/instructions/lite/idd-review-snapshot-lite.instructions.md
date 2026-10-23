@@ -91,8 +91,8 @@ E1.
 3. Independently fetch, in one pass before filtering: every review
    thread (resolved or not — paginate until `hasNextPage` is `false`,
    never stop at a fixed page size), every review body submission, and
-   every regular PR comment. The helper above reports counts/timestamps
-   only; this raw set is what Step 3 filters.
+   every regular PR comment. Keep raw review rows for the Step 2
+   comparison; Step 3 filters this raw set.
 4. From that raw set, exclude trusted-agent operational marker comments
    whose body starts with one of these prefixes, authored by a trusted
    marker actor:
@@ -143,26 +143,19 @@ require each required `(checkName, workflowName)`
 producer to pass for `{head-SHA}` and verify advisory identity/event;
 raw names are insufficient. Otherwise skip Step 2 and use E15/E14.
 
-Rendered body:
+Exact body: `<!-- review-watermark: {agent-id} {claim-id} {head-SHA}
+{max-activity-updatedAt|none} {total-item-count}
+{latest-ci-completed-at|none} -->`, a blank line, then
+`_{agent-id}: review triage snapshot — IDD automation marker. Do not edit._`
+in the PR's language (English if ambiguous). Nothing follows the note.
 
-```markdown
-<!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} -->
+After watermark verification, re-fetch all review pages before cleanup
+or Step 3. Compare human rows to Step 1 by ID, author, state, commit,
+submission time, and body; any change restarts E1. The operation-local
+helper guard does not classify human rows.
 
-_{agent-id}: review triage snapshot — IDD automation marker. Do not edit._
-```
-
-Match the PR body's language for the visible note (default English if
-ambiguous). Nothing may follow the note — content after it, or after
-the token with no note, makes the whole comment unrecognized as a live
-watermark.
-
-On resume or restart, read the latest trusted same-claim
-`review-watermark` to restore all six values. Ignore watermarks from
-any other claim or untrusted author; a legacy watermark with no
-`{claim-id}` isn't resumable. If no trusted same-claim watermark
-exists, rerun E1 from scratch. After a forced handoff, prior-claim
-watermarks are foreign restore markers — ignore, never hide or
-delete, and rerun E1 under the successor claim.
+On resume, restore only the latest trusted same-claim watermark.
+Missing/legacy means rerun E1; never use or hide another claim's marker.
 
 After the new watermark is verified, minimize every strictly older
 trusted same-claim `review-watermark`/`review-baseline` comment as
@@ -180,29 +173,39 @@ counts as new activity, forcing a fresh E1 snapshot before F2.
 
 ### Step 3 — Filter into ReviewItems_snapshot
 
-From the raw Step 1 set, select into **ReviewItems_snapshot** and
-record each item's source URL:
+Select raw Step 1 items; record each source URL:
 
-- **Unresolved review threads** (`isResolved=false`) — exclude when the
-  last substantive reply is by an IDD agent or PR author with no reviewer
-  reply; keep reopened threads and `**Awaiting maintainer decision**`
-  replies active.
-- **Review bodies** whose reviewer's latest state is
-  `CHANGES_REQUESTED` — exclude any already replied-to and
-  re-review-requested in a prior E13/E14 pass.
-- **Embedded CodeRabbit findings:** add one PATH B item per
-  `embeddedFindings[].uncoveredCount`; only `COMMENTED` CodeRabbit
-  reviews qualify. Inspect other bots' `COMMENTED` bodies for threadless
-  findings. See the [#2197/#2559 rationale](../../../docs/idd-design-rationale.md#an-advisory-bots-embedded-but-unthreaded-findings-mirror-the-detection-scope-not-the-gate-scope).
-- **Regular comments** where the last speaker is not an IDD agent and no
-  reply from **you** exists after the comment, or whose latest IDD-agent
-  reply starts with `**Awaiting maintainer decision**` — exclude periodic
-  bots; keep Copilot/CI comments for PATH B, including E6 notices.
+- **Unresolved threads** (`isResolved=false`): exclude if the last
+  substantive reply is an IDD agent or PR author without a later reviewer
+  reply, unless a reviewer reopened it or an IDD reply starts
+  `**Awaiting maintainer decision**`.
+- **Review bodies:** for `CHANGES_REQUESTED`, exclude only reviews already
+  replied to and re-review-requested in E13/E14.
+- **Bot `COMMENTED` bodies:** CodeRabbit adds one PATH B item per uncovered
+  `embeddedFindings[].uncoveredCount`; other bots' threadless, file/line-cited
+  findings are PATH A. Refs #2197 and #2559.
+- **Human `COMMENTED` bodies:** reviews source findings; regular comments
+  show settlements. Select each substantive, unsettled defect/risk/request
+  as PATH A; omit praise, acknowledgements, status, and selected-thread
+  duplicates. Split claims with evidence; identify by cited `path:line` or
+  unique title. A trusted, unedited, stamped E6/E13 reply, direct or via
+  thread, must name the exact review URL and item identity, supplementing
+  both formats. E6 `**Rejected**` after review or
+  `**Rejection confirmed by maintainer**` after a qualifying response
+  settles; E5 `**Accepted**` stays selected until post-fix E13
+  `**Accepted**`. Keep absent/ambiguous matches and
+  `**Awaiting maintainer decision**` selected. `COMMENTED` is not approval
+  or a formal-state/`CHANGES_REQUESTED` gate change.
+- **Regular comments:** include if the last speaker isn't an IDD agent and
+  you haven't replied later, or the latest IDD-agent reply starts
+  with `**Awaiting maintainer decision**` — exclude periodic bots; keep
+  Copilot/CI comments as PATH B, including E6 notices.
 
-Also carry a light **resolved-thread index** (`isResolved=true`) with
-file/area, claim, source URL, and any disposition marker. Never re-add
-resolved threads to ReviewItems_snapshot; use the index only for E5's
-duplicate pre-check.
+Resolved threads: path, claim, URL, disposition. Cover same-claim bodies at
+cited path, or exact unique title without `path:line`; topic never matches.
+Require resolution and identity reply above.
+Keep selected unless E13's fix is reachable from current HEAD or E6
+rejection/confirmation remains valid there.
 
 ## E2 — Critique pass
 
@@ -210,31 +213,27 @@ Run one critique pass on the branch's changes every E1-E3 pass (always).
 Add any newly found issues to
 ReviewItems_snapshot.
 
-Per-agent E2: resolve `critiqueLoop.subagentWaitCeiling` (`PT20M` default) with
-a harness timeout, not a wrapper (#3449). Only per-agent; shell-delegate rules
-unchanged. Background waits require cleanup; suppress late output.
-Timeout/cancel/interruption/error without findings uses self-critique fallback;
-mark failure/risk, never clean or phase-level `mode` wait. Without
-bound/cleanup, self-critique; record risk/no return.
+Per-agent E2: bound delegated waits by `critiqueLoop.subagentWaitCeiling`
+(`PT20M` default) with harness timeout (#3449), not wrapper;
+shell-delegate unchanged. Clean background waits; suppress late output.
+On timeout/cancel/interruption/error without findings, self-critique;
+record failure/risk, never clean or phase-level wait. Without a bound or
+cleanup, self-critique; record risk/no return.
 
-Apply these lenses when they fit (composing when both do):
-**Mutation / write-side** (the diff implements a helper that mutates
-GitHub state, mutates git state, or performs a merge) — Fail-closed
-inputs; Validate/execute scope parity; Unsafe-output suppression;
-Schema strictness parity. **Gate-mirroring** (the diff implements a
-helper that predicts, mirrors, or pre-checks another gate's decision) —
-Validation-path parity; Input completeness; Whole-identity comparison;
-Snapshot identity; Point-in-time parity.
+Apply both applicable lenses: **Mutation / write-side** (helper mutates
+GitHub/Git or merges) — fail-closed inputs; validate/execute scope parity;
+unsafe-output suppression; schema strictness parity. **Gate-mirroring**
+(predicts, mirrors, or pre-checks a gate) — validation-path parity;
+complete inputs; whole-identity comparison; snapshot identity;
+point-in-time parity.
 
-**Incremental scope**: on later passes within the same claim, review the
-diff since the previous E2 head, tracked by a same-claim
-baseline whose GraphQL `lastEditedAt` was resolved via node id/
-`includeEditState` and is explicitly `null`; use a full-branch diff if
-that proof fails, after a rebase, multi-fix batch, non-ancestor baseline,
-or active-claim change. Do not infer edit state from the body, `updatedAt`,
-author, or claim. ReviewItems_snapshot is session-local — do not inherit
-a previous claim's critique findings unless persisted as reviewer-visible
-comments.
+**Incremental scope**: later same-claim E2 passes may review only the diff
+since the prior head when its same-claim baseline's GraphQL
+`lastEditedAt` is proven `null` via node id/`includeEditState`. Otherwise use a
+full-branch diff after failed proof, rebase, multi-fix batch, non-ancestor
+baseline, or claim change. Never infer edit state from body,
+`updatedAt`, author, or claim. `ReviewItems_snapshot` is session-local;
+inherit prior-claim critique findings only from reviewer-visible comments.
 
 Before critique, set `{e2-review-head-SHA}` to Step 1's `{head-SHA}`;
 do not capture another HEAD. Reread HEAD before posting. If it changed,
@@ -259,24 +258,19 @@ When Step 2 was deferred, reread the live PR HEAD before E3. A mismatch
 with Step 1's `{head-SHA}` returns to E1 for a fresh snapshot; never route
 stale items into E3/E4.
 
-- **Empty, Step 2 ready** → `idd-pre-merge-lite.instructions.md` (F1);
-  not triage.
-- **Empty, Step 2 deferred** → E15 for CI or E14 for advisory; both:
-  E14 first, then E1 before F1/F2.
-- **Non-empty** → stop; hand off to `idd-review-triage.instructions.md`
-  (E4).
+- **Empty + ready** → F1, not triage. **Empty + deferred** → E14
+  for advisory, E15 for CI; if both wait, E14 first. Then E1 before
+  F1/F2. **Non-empty** → stop; E4 triage.
 
 ## Cold-start ReviewItems_snapshot reconstruction
 
 Read this entering E4/E9 without this episode's ReviewItems_snapshot
 (lost/restarted session, or mid-review delegation hand-off).
 
-**Procedure**: rerun Step 1-3 (Step 2 posts the watermark when eligible —
-never a second one), then edge case 2's steps 1-3 unconditionally
-before E3, then E2, E3. Only when E3 is non-empty, hand off E4-E8
-fully before E9. An edge-case-1 item routed to E14 runs E14 after edge
-case 2's own push (if any, targeting post-push HEAD), before
-branch-sync.
+**Procedure**: rerun E1 Steps 1-3 (post watermark only when eligible;
+never twice); run edge case 2 steps 1-3 unconditionally before E3, then E2/E3. On
+non-empty E3, finish E4-E8 before E9; run any edge-case-1 E14 after
+edge-case-2 push, if any, against post-push HEAD, before branch-sync.
 
 **Edge case 1 — item with no completed disposition.** Covers a lost
 session mid-classification, a landed-but-unreplied E12 push, or a

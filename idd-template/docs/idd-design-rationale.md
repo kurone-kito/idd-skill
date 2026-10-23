@@ -1355,6 +1355,127 @@ items do not match its count fails closed, and a body with no per-item view
 counts every item as cited when it names a file or line anywhere. A reply that
 is edited, untrusted, or posted before the review was submitted does not count.
 
+#### Human COMMENTED review bodies are snapshot input, not approval
+
+The 2026-10-23 v0.17.0 import review found that standard and lite E1
+Step 3 selected review bodies by latest `CHANGES_REQUESTED` state, while
+the separate `COMMENTED` path described bot reviews. A human reviewer can
+submit a substantive, file/line-cited finding in a `COMMENTED` review
+with no corresponding thread or regular PR comment; E1 already fetches
+the review body, but the selection rule omits it. This was an instruction
+selection gap, not evidence of a missed live production defect
+([issue #4637](https://github.com/kurone-kito/idd-skill/issues/4637),
+[source Gist](https://gist.github.com/kurone-kito/9f2d7871542cb2f7a255f92a7c1232d0)).
+
+The correction is selection-only: include substantive, unsettled human
+body findings as PATH A and carry them through existing E4-E6 triage and
+review-body disposition rules. E6 settles a rejected body item only with
+a trusted, unedited, stamped top-level `**Rejected**` disposition that
+names the exact review URL and a unique finding identity. E5 records an
+Accepted decision without an E6 reply; the item stays selected until E13
+posts a trusted, unedited, stamped post-fix top-level `**Accepted**`
+reply naming the same review URL and finding identity. An absent or
+ambiguous match stays selected. Keep raw review submissions separate
+from regular PR conversation comments. `COMMENTED` is not `APPROVED`; it
+neither clears approval requirements nor changes the
+`CHANGES_REQUESTED` gate. Copilot identified the E6/E13 phase mismatch
+in [PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4357459996)
+(preventive; no production incident observed); CodeRabbit independently
+identified the same phase mismatch in
+[PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4357504432)
+(preventive; no production incident observed). The body-only rule
+requires its exact review URL and finding identity in the actual stamped
+E6/E13 top-level reply because the generic phase reply forms do not name
+them. Codex identified this gap in
+[PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4357848065)
+(preventive; no production incident observed).
+
+Codex then found that a human body finding could be skipped while a
+matching thread was selected, then re-added after the thread was resolved.
+The E1 rule now matches the exact cited path and underlying claim, not just
+an area or topic, and counts a resolved thread as coverage only when its
+trusted, stamped reply names the body's exact review URL and unique item
+identity. E13's fix commit must be in current HEAD, or E6's rejection
+evidence must still hold there; otherwise the body remains selected. This
+closes the convergence gap reported in
+[PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4358413107)
+(preventive; no production incident observed).
+
+Copilot's follow-up review found that both standard and lite left the
+substantive boundary, splitting independent claims, and stable identity
+implicit ([PR review](https://github.com/kurone-kito/idd-skill/pull/4651#pullrequestreview-5626114653)).
+The rule now defines actionable defects, risks, and change requests as
+substantive; omits praise, acknowledgements, and status-only text; splits
+independent claims with their evidence; and identifies each by a unique
+cited `path:line` or a short unique title. This is preventive; no live
+production incident observed.
+
+Use raw review submissions to identify source findings; inspect regular
+PR comments to match the stamped E6/E13 settlement replies.
+
+The operation-local watermark helper does not classify arbitrary human
+review bodies. A fresh raw review comparison after watermark publication
+restarts E1 if any human review row changed; the comparison covers those
+rows even though the helper guard does not classify them. Codex identified
+this race in
+[PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4357089405)
+(preventive; no live production incident observed). CodeRabbit identified
+the ambiguous guard wording in
+[PR #4651](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4357504437)
+(preventive; no live production incident observed).
+
+The same-HEAD follow-up on PR `#4651` exposed three more contract gaps:
+the E6/E13 reply formats did not repeat E1's URL/identity requirement
+(threads [#4358791099](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4358791099)
+and [#4358791159](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4358791159));
+resolved-thread coverage required a cited path even when a body item used
+its unique title (threads [#4358791189](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4358791189)
+and [#4358791225](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4358791225));
+and E1 omitted E6's maintainer-confirmed rejection terminal (review
+[#5627288243](https://github.com/kurone-kito/idd-skill/pull/4651#pullrequestreview-5627288243),
+items 1 and 2). These were observed review gaps, not production incidents.
+E1 now explicitly applies the shared identity rule to E6/E13 replies,
+matches title-only items only by exact unique title and the same claim, and
+settles a maintainer-confirmed rejection only with the same review URL and
+item identity.
+
+A later Codex review [#4359120694](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4359120694)
+found standard E1 could select body and unresolved-thread versions of one
+finding. Step 3 now omits only same-claim matches at the exact cited path or
+exact unique title when no path is cited.
+
+##### Raw-input fixture walkthrough
+
+This is fixture data, not a live review:
+
+```json
+{
+  "review": {
+    "state": "COMMENTED",
+    "html_url": "https://github.com/example/repo/pull/42#pullrequestreview-7",
+    "body": "The retry at src/worker.mts:42 can write after lock ownership is lost."
+  },
+  "reviewThreads": [],
+  "regularPrComments": []
+}
+```
+
+E1 Step 3 produces one PATH A snapshot item (`ReviewItems_snapshot`
+count: 1) with the review URL above. After E5 accepts it and E12 commits
+the fix, E13 posts a settled reply tied to this exact review and finding,
+for example:
+
+```text
+**Accepted** — fixed in abc1234: check lock ownership before retry. Review: https://github.com/example/repo/pull/42#pullrequestreview-7; finding: src/worker.mts:42. <!-- idd-skill-review-reply -->
+```
+
+the next snapshot has zero items for this finding because the stamped
+post-fix reply identifies the same review URL and path/line; it is not
+re-added solely because the review state remains `COMMENTED`. An E6
+`**Rejected**` reply follows its separate rejection path. `COMMENTED`
+does not grant approval. The stamped top-level reply is regular-comment
+settlement evidence; the raw review remains the finding's source.
+
 ### E10 per-issue pass cap (kurone-kito/idd-skill#3943)
 
 Issue `#3878` (PR `#3919`) ran about ten E10 passes in one review cycle.

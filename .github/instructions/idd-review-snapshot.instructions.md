@@ -38,6 +38,8 @@ in a single pass
 - All review body submissions (any reviewer state)
 - All regular PR comments
 
+Keep the raw review rows as the Step 2 comparison baseline.
+
 Exclude **trusted agent operational comments** from the snapshot:
 comments whose body begins with one of these prefixes and whose
 author is a trusted marker actor per
@@ -168,6 +170,12 @@ Use server-reported timestamps, not the local wall clock.
 Note: `--apply` POSTs as JSON, avoiding the HTML-body and leading-`@`
 pitfalls in Claim format (`idd-overview-core.instructions.md`).
 
+After verifying the watermark, re-fetch all review pages before cleanup
+or Step 3. Compare human rows with Step 1 by ID, author, state, commit,
+submission time, and body. Any new, removed, or changed row requires an
+E1 restart; the helper's race guard cannot classify arbitrary human
+bodies.
+
 On resume or restart, read the latest same-claim, trusted-author
 `<!-- review-watermark: {agent-id} {claim-id} … -->` comment to
 restore all six values; ignore watermarks from any other claim or
@@ -223,6 +231,24 @@ finding. Inspect other bots' `COMMENTED` review bodies separately for
 file/line-cited findings without threads; each is PATH A.
 See the [#2197/#2559 rationale](../../docs/idd-design-rationale.md#an-advisory-bots-embedded-but-unthreaded-findings-mirror-the-detection-scope-not-the-gate-scope).
 
+**Human `COMMENTED` bodies:** Add actionable unsettled defect, risk or
+request as PATH A with its review URL; omit praise, acknowledgements and
+status. Split claims; keep evidence; identify by unique `path:line` or
+unique title. Omit duplicates only for a selected unresolved thread matching
+same claim at exact cited path, or exact unique title without a path;
+area/topic never match. Raw reviews provide findings; regular comments
+settle.
+
+E1 requires trusted, unedited, stamped E6/E13 replies to name exact review
+URL and item identity, extending both formats. E6 `**Rejected**` settles
+after review; `**Rejection confirmed by maintainer**` after a qualifying
+response. E5 `**Accepted**` stays selected until post-fix E13
+`**Accepted**`. Resolved threads need this same match and an identity-valid
+reply. Keep selected unless E13 fix is reachable from HEAD or E6
+rejection/confirmation holds on HEAD. Keep missing/ambiguous matches and
+`**Awaiting maintainer decision**` selected. `COMMENTED` only selects;
+it changes no approval or formal/`CHANGES_REQUESTED` gate. See [rationale](../../docs/idd-design-rationale.md#human-commented-review-bodies-are-snapshot-input-not-approval).
+
 **Regular comments** where the last speaker isn't any IDD agent and no
 reply from **you** exists after that comment's timestamp, or where the
 comment's most recent IDD-agent reply starts
@@ -233,13 +259,10 @@ rule for this plain comment) — exclude periodic notification bots
 PATH B in E4-E7 (non-review notices are dispositioned under the E6
 rule).
 
-**Resolved-thread index (for the E5 duplicate pre-check).** Also carry
-forward a light index of this PR's **resolved** threads
-(`isResolved=true`): file/area, a short claim summary, source URL, and
-any IDD-agent disposition marker found. Do **not** add resolved
-threads back into ReviewItems_snapshot. This is a **routing hint
-only** for E5's duplicate pre-check — it tells triage where a prior
-recurrence might be, not what to conclude.
+**Resolved-thread index.** Index this PR's resolved threads
+(`isResolved=true`) by path/area, claim, source URL, and IDD disposition
+marker. Use for E5 duplicate checks and body coverage; never add them to
+ReviewItems_snapshot.
 
 ## E2 — Critique pass
 
