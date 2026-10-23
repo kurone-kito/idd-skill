@@ -2719,16 +2719,15 @@ check each run's own
 `pull_requests[].number` against the target pull request (empty for a
 fork-originated pull request, where GitHub never populates that field).
 
-**Only your configured required status checks cost every pull request
-unconditionally.** A `pull_request`-triggered workflow that is _not_ one of
-your branch ruleset's required contexts -- a security scanner, a
-secondary compatibility-floor guard, anything advisory -- is safely
-droppable or path-filterable without weakening the IDD merge gate itself,
-since the gate only ever waits on the required contexts. Filtering or
-dropping a _required_ context's own trigger is the one cut this guide
-never recommends: a path-filtered required check simply never reports for
-a change outside its filter, which blocks the pull request forever rather
-than saving anything (preventive; no observed incident yet).
+**Required status checks define the merge gate; workflow triggers and
+executed jobs determine Actions usage.** A workflow or job that runs when
+its trigger and conditions match can consume runner usage even when its
+context is not required. Filtering or dropping non-required workflow
+triggers can reduce usage without weakening the merge gate. Keep required
+contexts able to report under the existing gate: filtering or dropping a
+required context's trigger can leave it missing and block the pull request
+instead of saving usage. See [GitHub Actions billing and usage](https://docs.github.com/en/actions/concepts/billing-and-usage).
+This distinction corrects the summary drift reported in [issue #4641](https://github.com/kurone-kito/idd-skill/issues/4641).
 
 **On a private repository, the account Actions spend limit is where this
 multiplier stops being merely a cost and becomes a hard block**: once the
