@@ -35,6 +35,16 @@ export interface ProvisionalDecisionClaim {
   readonly supersedes?: string;
 }
 
+/**
+ * Independently verified claim provenance supplied by the replay caller.
+ * The marker comment ID is needed when GitHub timestamps tie at one-second
+ * precision; it must point into the complete server-ordered history.
+ */
+export interface VerifiedProvisionalDecisionClaim
+  extends ProvisionalDecisionClaim {
+  readonly commentId?: string;
+}
+
 export interface ProvisionalDecisionRecord {
   readonly schemaVersion: 1;
   readonly recordId: string;
@@ -94,7 +104,7 @@ export interface ProvisionalDecisionReplayInput {
   readonly completeHistory: boolean;
   readonly currentSource: ProvisionalDecisionSource;
   /** Trusted, server-verified claim lineage for this source issue. */
-  readonly verifiedClaimLineage: readonly ProvisionalDecisionClaim[];
+  readonly verifiedClaimLineage: readonly VerifiedProvisionalDecisionClaim[];
   /** Independent verification of completed deliverables. */
   readonly verifiedWork: readonly VerifiedProvisionalWork[];
   /** Independently verified same-source rework authoring transitions. */
@@ -241,11 +251,46 @@ function dateTime(
   path: string,
   issues: ProvisionalDecisionParseIssue[],
 ): value is string {
+  const match =
+    typeof value === 'string'
+      ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/u.exec(
+          value,
+        )
+      : null;
+  const year = match ? Number(match[1]) : NaN;
+  const month = match ? Number(match[2]) : NaN;
+  const day = match ? Number(match[3]) : NaN;
+  const hour = match ? Number(match[4]) : NaN;
+  const minute = match ? Number(match[5]) : NaN;
+  const second = match ? Number(match[6]) : NaN;
+  const offsetHour = match?.[7] === undefined ? 0 : Number(match[7]);
+  const offsetMinute = match?.[8] === undefined ? 0 : Number(match[8]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [
+    31,
+    leapYear ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ][month - 1];
   if (
     typeof value !== 'string' ||
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(
-      value,
-    ) ||
+    !match ||
+    daysInMonth === undefined ||
+    day < 1 ||
+    day > daysInMonth ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHour > 23 ||
+    offsetMinute > 59 ||
     !Number.isFinite(Date.parse(value))
   ) {
     issues.push({
@@ -365,6 +410,7 @@ function validateClaimLineage(
   value: unknown,
   path: string,
   issues: ProvisionalDecisionParseIssue[],
+  commentIndexes?: ReadonlyMap<string, number>,
 ): void {
   if (!Array.isArray(value) || value.length === 0) {
     issues.push({
@@ -376,16 +422,32 @@ function validateClaimLineage(
   }
   const ids = new Set<string>();
   let priorClaimedAt = -Infinity;
+  let priorCommentIndex: number | undefined;
   value.forEach((entry, index) => {
     const entryPath = `${path}[${index}]`;
     const claim = exactObject(
       entry,
       ['claimId', 'agentId', 'branch', 'claimedAt'],
-      ['supersedes'],
+      commentIndexes ? ['supersedes', 'commentId'] : ['supersedes'],
       entryPath,
       issues,
     );
     if (!claim) return;
+    let commentIndex: number | undefined;
+    if (claim.commentId !== undefined) {
+      nonEmptyString(claim.commentId, `${entryPath}.commentId`, issues);
+      if (typeof claim.commentId === 'string') {
+        commentIndex = commentIndexes?.get(claim.commentId);
+        if (commentIndexes && commentIndex === undefined) {
+          issues.push({
+            code: 'claim-comment-missing',
+            path: `${entryPath}.commentId`,
+            message:
+              'A verified claim comment must appear in the complete history.',
+          });
+        }
+      }
+    }
     checkStringFields(
       claim,
       ['claimId', 'agentId', 'branch'],
@@ -405,14 +467,28 @@ function validateClaimLineage(
     dateTime(claim.claimedAt, `${entryPath}.claimedAt`, issues);
     if (typeof claim.claimedAt === 'string') {
       const claimedAt = Date.parse(claim.claimedAt);
-      if (Number.isFinite(claimedAt) && claimedAt <= priorClaimedAt) {
+      if (
+        Number.isFinite(claimedAt) &&
+        (claimedAt < priorClaimedAt ||
+          (commentIndexes !== undefined &&
+            claimedAt === priorClaimedAt &&
+            (commentIndex === undefined ||
+              priorCommentIndex === undefined ||
+              commentIndex <= priorCommentIndex)))
+      ) {
         issues.push({
           code: 'claim-lineage-order-invalid',
           path: `${entryPath}.claimedAt`,
-          message: 'Claims must be in strictly increasing server-time order.',
+          message:
+            commentIndexes === undefined
+              ? 'Claims must be in non-decreasing server-time order.'
+              : 'Claims must be in server-time order, using comment order when timestamps tie.',
         });
       }
-      if (Number.isFinite(claimedAt)) priorClaimedAt = claimedAt;
+      if (Number.isFinite(claimedAt)) {
+        priorClaimedAt = claimedAt;
+        priorCommentIndex = commentIndex;
+      }
     }
     if (claim.supersedes !== undefined)
       nonEmptyString(claim.supersedes, `${entryPath}.supersedes`, issues);
@@ -855,6 +931,39 @@ function unsafeNumberTokens(json: string): string[] {
   return unsafe;
 }
 
+function duplicateJsonKeys(json: string): string[] {
+  const duplicates: string[] = [];
+  const objectKeys: Set<string>[] = [];
+  let index = 0;
+  while (index < json.length) {
+    const character = json[index];
+    if (character === '"') {
+      const start = index++;
+      while (index < json.length) {
+        if (json[index] === '\\') index += 2;
+        else if (json[index] === '"') {
+          index++;
+          break;
+        } else index++;
+      }
+      let separator = index;
+      while (separator < json.length && /\s/u.test(json[separator] ?? ''))
+        separator++;
+      const keys = objectKeys.at(-1);
+      if (keys && json[separator] === ':') {
+        const key = JSON.parse(json.slice(start, index)) as string;
+        if (keys.has(key)) duplicates.push(key);
+        else keys.add(key);
+      }
+      continue;
+    }
+    if (character === '{') objectKeys.push(new Set());
+    else if (character === '}') objectKeys.pop();
+    index++;
+  }
+  return duplicates;
+}
+
 function parseMarkedJson(
   body: string,
   marker: string,
@@ -896,7 +1005,15 @@ function parseMarkedJson(
   }
   if (issues.length > 0) return undefined;
   try {
-    return JSON.parse(payload) as unknown;
+    const parsed = JSON.parse(payload) as unknown;
+    for (const key of duplicateJsonKeys(payload)) {
+      issues.push({
+        code: 'json-duplicate-key',
+        path: '$',
+        message: `JSON object keys must be unique; duplicate key ${JSON.stringify(key)}.`,
+      });
+    }
+    return issues.length === 0 ? parsed : undefined;
   } catch (error) {
     issues.push({
       code: 'json-invalid',
@@ -1125,12 +1242,56 @@ function sameValue(left: unknown, right: unknown): boolean {
   return stableJson(left) === stableJson(right);
 }
 
+function sameRepositoryName(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
+function sameGitHubIssuePathname(left: string, right: string): boolean {
+  const leftParts = left.split('/');
+  const rightParts = right.split('/');
+  return (
+    leftParts.length >= 4 &&
+    leftParts.length === rightParts.length &&
+    leftParts[0] === '' &&
+    rightParts[0] === '' &&
+    sameRepositoryName(
+      `${leftParts[1]}/${leftParts[2]}`,
+      `${rightParts[1]}/${rightParts[2]}`,
+    ) &&
+    leftParts.slice(3).join('/') === rightParts.slice(3).join('/')
+  );
+}
+
+function sameGitHubIssueUrl(left: string, right: string): boolean {
+  try {
+    const leftUrl = new URL(left);
+    const rightUrl = new URL(right);
+    return (
+      leftUrl.protocol === 'https:' &&
+      rightUrl.protocol === 'https:' &&
+      leftUrl.hostname === 'github.com' &&
+      rightUrl.hostname === 'github.com' &&
+      leftUrl.port === '' &&
+      rightUrl.port === '' &&
+      leftUrl.username === '' &&
+      rightUrl.username === '' &&
+      leftUrl.password === '' &&
+      rightUrl.password === '' &&
+      leftUrl.search === rightUrl.search &&
+      leftUrl.hash === rightUrl.hash &&
+      sameGitHubIssuePathname(leftUrl.pathname, rightUrl.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function sameSourceContent(
   left: ProvisionalDecisionSource,
   right: ProvisionalDecisionSource,
 ): boolean {
   return (
-    left.repository === right.repository &&
+    sameRepositoryName(left.repository, right.repository) &&
     left.issueNumber === right.issueNumber &&
     left.snapshot.title === right.snapshot.title &&
     left.snapshot.bodySha256 === right.snapshot.bodySha256
@@ -1139,19 +1300,37 @@ function sameSourceContent(
 
 function claimLineageMatchesAt(
   recordClaims: readonly ProvisionalDecisionClaim[],
-  verifiedClaims: readonly ProvisionalDecisionClaim[],
+  verifiedClaims: readonly VerifiedProvisionalDecisionClaim[],
   createdAt: string,
+  recordCommentId: string,
+  commentIndexes: ReadonlyMap<string, number>,
 ): boolean {
   const recordTime = Date.parse(createdAt);
   if (!Number.isFinite(recordTime)) return false;
-  const claimsAtEvent: ProvisionalDecisionClaim[] = [];
+  const recordIndex = commentIndexes.get(recordCommentId);
+  if (recordIndex === undefined) return false;
+  const claimsAtEvent: VerifiedProvisionalDecisionClaim[] = [];
   for (const claim of verifiedClaims) {
     const claimedAt = Date.parse(claim.claimedAt);
-    if (!Number.isFinite(claimedAt) || claimedAt === recordTime) return false;
+    if (!Number.isFinite(claimedAt)) return false;
     if (claimedAt < recordTime) claimsAtEvent.push(claim);
-    else break;
+    else if (claimedAt > recordTime) break;
+    else {
+      if (!claim.commentId) return false;
+      const claimIndex = commentIndexes.get(claim.commentId);
+      if (claimIndex === undefined) return false;
+      if (claimIndex < recordIndex) claimsAtEvent.push(claim);
+      else break;
+    }
   }
-  return claimsAtEvent.length > 0 && sameValue(recordClaims, claimsAtEvent);
+  const persistedClaims = claimsAtEvent.map((claim) => ({
+    claimId: claim.claimId,
+    agentId: claim.agentId,
+    branch: claim.branch,
+    claimedAt: claim.claimedAt,
+    ...(claim.supersedes === undefined ? {} : { supersedes: claim.supersedes }),
+  }));
+  return claimsAtEvent.length > 0 && sameValue(recordClaims, persistedClaims);
 }
 
 function sameWorkResult(
@@ -1196,7 +1375,7 @@ function matchesVerifiedReworkRoadmap(
   if (!isObject(roadmap)) return false;
   return input.verifiedReworkRoadmaps.some(
     (evidence) =>
-      sourceBefore.repository === sourceAfter.repository &&
+      sameRepositoryName(sourceBefore.repository, sourceAfter.repository) &&
       sourceBefore.issueNumber === sourceAfter.issueNumber &&
       evidence.recordId === record.recordId &&
       sameSourceContent(evidence.sourceBefore, sourceBefore) &&
@@ -1205,9 +1384,9 @@ function matchesVerifiedReworkRoadmap(
       evidence.roadmapIssueNumber === sourceAfter.issueNumber &&
       evidence.roadmapMarkerId === roadmap.roadmapMarkerId &&
       evidence.authoringSetId === roadmap.authoringSetId &&
-      evidence.url === sourceIssueUrl(sourceAfter) &&
+      sameGitHubIssueUrl(evidence.url, sourceIssueUrl(sourceAfter)) &&
       roadmap.roadmapIssueNumber === evidence.roadmapIssueNumber &&
-      roadmap.url === evidence.url,
+      sameGitHubIssueUrl(roadmap.url as string, evidence.url),
   );
 }
 
@@ -1283,7 +1462,10 @@ function commentBelongsToSource(
       url.username === '' &&
       url.password === '' &&
       url.search === '' &&
-      url.pathname === `/${source.repository}/issues/${source.issueNumber}` &&
+      sameGitHubIssuePathname(
+        url.pathname,
+        `/${source.repository}/issues/${source.issueNumber}`,
+      ) &&
       url.hash === `#issuecomment-${comment.id}`
     );
   } catch {
@@ -1427,19 +1609,6 @@ export function replayProvisionalDecisionHistory(
       ),
     ]);
   }
-  const currentSourceIssues: ProvisionalDecisionParseIssue[] = [];
-  validateSource(input.currentSource, '$.currentSource', currentSourceIssues);
-  validateClaimLineage(
-    input.verifiedClaimLineage,
-    '$.verifiedClaimLineage',
-    currentSourceIssues,
-  );
-  validateVerifiedReworkRoadmaps(
-    input.verifiedReworkRoadmaps,
-    '$.verifiedReworkRoadmaps',
-    currentSourceIssues,
-  );
-  if (currentSourceIssues.length) return invalidResult(currentSourceIssues);
 
   const commentsByUrl = new Map<string, ProvisionalDecisionComment>();
   const commentIndexes = new Map<string, number>();
@@ -1471,6 +1640,21 @@ export function replayProvisionalDecisionHistory(
     commentIndexes.set(comment.id, commentIndex);
   }
   if (issues.length) return invalidResult(issues);
+
+  const currentSourceIssues: ProvisionalDecisionParseIssue[] = [];
+  validateSource(input.currentSource, '$.currentSource', currentSourceIssues);
+  validateClaimLineage(
+    input.verifiedClaimLineage,
+    '$.verifiedClaimLineage',
+    currentSourceIssues,
+    commentIndexes,
+  );
+  validateVerifiedReworkRoadmaps(
+    input.verifiedReworkRoadmaps,
+    '$.verifiedReworkRoadmaps',
+    currentSourceIssues,
+  );
+  if (currentSourceIssues.length) return invalidResult(currentSourceIssues);
 
   const recordComments: RecordComment[] = [];
   const recordIds = new Set<string>();
@@ -1516,6 +1700,8 @@ export function replayProvisionalDecisionHistory(
           parsed.record.claimLineage,
           input.verifiedClaimLineage,
           comment.createdAt,
+          comment.id,
+          commentIndexes,
         )
       ) {
         issues.push(
@@ -1980,7 +2166,7 @@ export function replayProvisionalDecisionHistory(
       const expectedUrl = sourceIssueUrl(source);
       if (
         roadmap.roadmapIssueNumber !== source.issueNumber ||
-        roadmap.url !== expectedUrl ||
+        !sameGitHubIssueUrl(roadmap.url as string, expectedUrl) ||
         !reworkSource ||
         !matchesVerifiedReworkRoadmap(
           record,

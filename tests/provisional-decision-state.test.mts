@@ -335,6 +335,78 @@ test('rejects malformed JSON, unsupported versions, and unknown event shapes', (
     );
 });
 
+test('rejects duplicate JSON object keys, including escaped duplicates', () => {
+  const serialized = JSON.stringify(record('select-1', selectedEvent()));
+  const duplicateVersion = parseProvisionalDecisionRecordComment(
+    `${PROVISIONAL_DECISION_RECORD_MARKER}\n${serialized.replace(
+      '"schemaVersion":1',
+      '"schema\\u0056ersion":2,"schemaVersion":1',
+    )}`,
+  );
+  assert.equal(duplicateVersion.ok, false);
+  if (!duplicateVersion.ok)
+    assert.ok(
+      duplicateVersion.issues.some(
+        (issue) => issue.code === 'json-duplicate-key',
+      ),
+    );
+
+  const duplicateNestedKey = parseProvisionalDecisionRecordComment(
+    `${PROVISIONAL_DECISION_RECORD_MARKER}\n${serialized.replace(
+      '"repository":"kurone-kito/idd-skill"',
+      '"repository":"other/repo","repository":"kurone-kito/idd-skill"',
+    )}`,
+  );
+  assert.equal(duplicateNestedKey.ok, false);
+  if (!duplicateNestedKey.ok)
+    assert.ok(
+      duplicateNestedKey.issues.some(
+        (issue) => issue.code === 'json-duplicate-key',
+      ),
+    );
+});
+
+test('rejects impossible calendar dates and out-of-range clock fields', () => {
+  const base = record('select-1', selectedEvent());
+  const invalidDates = [
+    '2026-02-30T00:00:00Z',
+    '2025-02-29T00:00:00Z',
+    '2026-04-31T00:00:00Z',
+    '2026-01-01T24:00:00Z',
+  ];
+  for (const updatedAt of invalidDates) {
+    const parsed = parseProvisionalDecisionRecordComment(
+      `${PROVISIONAL_DECISION_RECORD_MARKER}\n${JSON.stringify({
+        ...base,
+        source: {
+          ...source,
+          snapshot: { ...source.snapshot, updatedAt },
+        },
+      })}`,
+    );
+    assert.equal(parsed.ok, false, updatedAt);
+    if (!parsed.ok)
+      assert.ok(
+        parsed.issues.some((issue) => issue.code === 'date-time-required'),
+        updatedAt,
+      );
+  }
+
+  const leapDay = parseProvisionalDecisionRecordComment(
+    `${PROVISIONAL_DECISION_RECORD_MARKER}\n${JSON.stringify({
+      ...base,
+      source: {
+        ...source,
+        snapshot: {
+          ...source.snapshot,
+          updatedAt: '2024-02-29T23:59:59Z',
+        },
+      },
+    })}`,
+  );
+  assert.equal(leapDay.ok, true);
+});
+
 test('checks integer JSON tokens before IEEE-754 rounding', () => {
   const unsafeJson = JSON.stringify(
     record('select-1', selectedEvent()),
@@ -388,6 +460,17 @@ test('a canonical record URL must belong to the GitHub source issue', () => {
   assert.ok(
     result.issues.some((issue) => issue.code === 'record-authority-invalid'),
   );
+});
+
+test('repository identity and issue URLs ignore GitHub capitalization', () => {
+  const currentSource = { ...source, repository: 'Kurone-Kito/IDD-Skill' };
+  const result = replayProvisionalDecisionHistory(
+    input([recordComment('1', record('select-1', selectedEvent()), 1)], {
+      currentSource,
+    }),
+  );
+  assert.equal(result.valid, true, JSON.stringify(result.issues));
+  assert.equal(result.status, 'selected');
 });
 
 test('rejects duplicate record IDs and edited records', () => {
@@ -914,6 +997,36 @@ test('a new record cannot use a superseded claim after takeover', () => {
   );
 });
 
+test('a claim and record in the same second use server comment order', () => {
+  const claim = { ...firstClaim, claimedAt: dateAt(1) };
+  const verifiedClaim = { ...claim, commentId: 'claim-marker' };
+  const claimComment = comment('claim-marker', 'verified claim marker', 1);
+  const selection = recordComment(
+    'selection',
+    record('select-1', selectedEvent(), 1, 1, [claim]),
+    1,
+  );
+  const result = replayProvisionalDecisionHistory(
+    input([claimComment, selection], {
+      verifiedClaimLineage: [verifiedClaim],
+    }),
+  );
+  assert.equal(result.valid, true, JSON.stringify(result.issues));
+  assert.equal(result.status, 'selected');
+
+  const recordBeforeClaim = replayProvisionalDecisionHistory(
+    input([selection, claimComment], {
+      verifiedClaimLineage: [verifiedClaim],
+    }),
+  );
+  assert.equal(recordBeforeClaim.valid, false);
+  assert.ok(
+    recordBeforeClaim.issues.some(
+      (issue) => issue.code === 'claim-binding-mismatch',
+    ),
+  );
+});
+
 test('alternate-choice rework preserves the completed work link and same source', () => {
   const { selected, started, completed } = oneCompletedDecision();
   const rationale = 'The alternate choice better fits the current need.';
@@ -1043,7 +1156,12 @@ test('rework authoring validates a same-issue source rewrite against independent
   const withEvidence = replayProvisionalDecisionHistory(
     input(comments, {
       currentSource: sourceAfter,
-      verifiedReworkRoadmaps: [reworkEvidence('rework-2', source, sourceAfter)],
+      verifiedReworkRoadmaps: [
+        {
+          ...reworkEvidence('rework-2', source, sourceAfter),
+          url: 'https://github.com/Kurone-Kito/IDD-Skill/issues/4599',
+        },
+      ],
     }),
   );
   assert.equal(withEvidence.valid, true);
