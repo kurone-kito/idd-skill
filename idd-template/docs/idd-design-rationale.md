@@ -1439,6 +1439,11 @@ matches title-only items only by exact unique title and the same claim, and
 settles a maintainer-confirmed rejection only with the same review URL and
 item identity.
 
+A later Codex review [#4359120694](https://github.com/kurone-kito/idd-skill/pull/4651#discussion_r4359120694)
+found standard E1 could select body and unresolved-thread versions of one
+finding. Step 3 now omits only same-claim matches at the exact cited path or
+exact unique title when no path is cited.
+
 ##### Raw-input fixture walkthrough
 
 This is fixture data, not a live review:
