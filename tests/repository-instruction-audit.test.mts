@@ -979,6 +979,9 @@ test('issue authoring dependency guidance verifies consumed outputs', () => {
     'Sharing a roadmap or editing the same file, by itself, does not identify an output that one child consumes from the other.',
     'Observed comparison — roadmap #4079.',
     'Issues #4083 and #4084 waited for the doctor warning from #4081',
+    'Their criteria did not consume it; PRs #4131 and #4126 also did not consume it.',
+    'Issue #4084 explicitly excludes describing the warning.',
+    'Remove those two edges.',
     'edge to issue #4080 consumes its concrete output: the policy-constants row defining `{default-branch}`, including its resolution command, safe-character rule, and fail-closed behavior.',
     'Issue #4083 consumes that output when it changes primary-worktree references from `main` to `{default-branch}`',
     'issue #4084 consumes it in three trusted-checkout passages in `optional-host-setup.md`.',
@@ -986,7 +989,7 @@ test('issue authoring dependency guidance verifies consumed outputs', () => {
     'With other prerequisites retained, without the #4080 row those children would use a placeholder with no defined branch meaning, so their role-specific documentation cannot be checked.',
     'this does not establish a measured elapsed-time penalty.',
     'For documentation, retain an edge only to an implementation output the documentation child actually describes; it still documents shipped behavior.',
-    'For finalize or verify work, retain an edge only when an acceptance criterion checks that sibling',
+    "For finalize or verify work, retain an edge only when an acceptance criterion checks that sibling's output, and wait until those inputs exist before final verification.",
   ]) {
     assert.ok(
       normalizedPatterns.includes(needle),
