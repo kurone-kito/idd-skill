@@ -170,17 +170,23 @@ function runCli(
   fx: Fixture,
   args: readonly string[],
   forwardGit = false,
+  options: { ghSource?: string; helperErrorEnvelope?: boolean } = {},
 ): CliResult {
   const log = join(fx.root, `cli-${runNumber++}.log`);
   writeFileSync(log, '');
   const restoreGit = stubExecutable('git', gitStub());
-  const restoreGh = stubExecutable('gh', ghStub(fx.sha));
+  const restoreGh = stubExecutable('gh', options.ghSource ?? ghStub(fx.sha));
   try {
     const env = fixtureEnv();
     env.IDD_RELEASE_TAG_STUB_LOG = log;
     env.IDD_RELEASE_TAG_REAL_PATH = fx.env.PATH ?? '';
     env.IDD_RELEASE_TAG_FORWARD_GIT = forwardGit ? '1' : '0';
     env.GITHUB_ACTIONS = 'true';
+    if (options.helperErrorEnvelope) {
+      env.IDD_HELPER_ERROR_ENVELOPE = '1';
+    } else {
+      delete env.IDD_HELPER_ERROR_ENVELOPE;
+    }
     delete env.GH_REPO;
     const result = spawnSync(process.execPath, [BIN, ...args], {
       cwd: fx.primary,
@@ -214,8 +220,36 @@ test('help describes the signed tag operation, inputs, and dry-run default', () 
   assert.match(result.stdout, /--pr\s/u);
   assert.match(result.stdout, /--issue/u);
   assert.match(result.stdout, /--allowed-signers/u);
+  assert.match(result.stdout, /Open release issue number\./u);
+  assert.doesNotMatch(result.stdout, /release label/u);
   assert.match(result.stdout, /Dry-run is the default/u);
   assert.equal(result.log, '');
+});
+
+test('helper error envelope preserves transport classification for failed gh reads', () => {
+  const fx = makeFixture();
+  const ghSource = [
+    "process.stderr.write('gh: HTTP 503\\n');",
+    'process.exitCode = 1;',
+  ].join('\n');
+  const result = runCli(fx, validArgs(fx), true, {
+    ghSource,
+    helperErrorEnvelope: true,
+  });
+
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  assert.equal(
+    JSON.parse(result.stdout).refusal.name,
+    'release-issue-unreadable',
+  );
+  const envelopeLine = result.stderr
+    .split('\n')
+    .find((line) => line.startsWith('{'));
+  assert.ok(envelopeLine, result.stderr);
+  const envelope = JSON.parse(envelopeLine).iddHelperError;
+  assert.equal(envelope.kind, 'transport');
+  assert.equal(envelope.httpStatus, 503);
+  assert.equal(envelope.notDispatched, undefined);
 });
 
 test('unknown, missing, malformed, and unknown-flag inputs stop before git and gh', () => {

@@ -39,6 +39,8 @@ import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { isNotDispatchedRefusal } from './github-api-refusal.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
+  type ClassifiedHelperError,
+  classifyHelperError,
   type HelperCliResult,
   isHelperErrorEnvelopeEnabled,
   markCliUsageError,
@@ -280,6 +282,8 @@ export interface ReleaseTagOutcome {
   report: ReleaseTagReport;
   /** 0 for a passed dry run or a created, found, or pushed tag; 1 otherwise. */
   exitStatus: 0 | 1;
+  /** Present when a GitHub read failed and the CLI must preserve its class. */
+  cliError?: ClassifiedHelperError;
 }
 
 /** The inputs of `signed-annotated-tag`. Each is validated before any command. */
@@ -310,6 +314,8 @@ export interface CommandResult {
   timedOut?: boolean;
   /** Present when the time bound fired. */
   termination?: TerminationRecord;
+  /** Preserved CLI classification for a failed GitHub read. */
+  cliError?: ClassifiedHelperError;
 }
 
 /** The time bound's record of one timeout. */
@@ -440,16 +446,19 @@ export interface BoundedCommandOptions {
 class Refused extends Error {
   readonly refusal: ReleaseTagRefusal;
   readonly step: ReleaseTagPreconditionName | ReleaseTagEffectName;
+  readonly cliError: ClassifiedHelperError | null;
 
   constructor(
     step: ReleaseTagPreconditionName | ReleaseTagEffectName,
     name: ReleaseTagRefusalName,
     detail: string,
     processes: ProcessRecord | null = null,
+    cliError: ClassifiedHelperError | null = null,
   ) {
     super(`${name}: ${detail}`);
     this.step = step;
     this.refusal = { name, detail, processes };
+    this.cliError = cliError;
   }
 }
 
@@ -716,6 +725,7 @@ function runGhRead(args: readonly string[], cwd: string): CommandResult {
         ? { error: error instanceof Error ? error.message : String(error) }
         : {}),
       ...(isNotDispatchedRefusal(error) ? { notDispatched: true } : {}),
+      cliError: classifyHelperError(error),
     };
   }
 }
@@ -1383,6 +1393,8 @@ async function ghRead(
           ? 'GitHub API load control refused the read before it started'
           : failureDetail(result),
       ),
+      null,
+      result.cliError ?? null,
     );
   }
   return result.stdout;
@@ -2539,7 +2551,11 @@ export async function runReleaseTag(
     if (!(error instanceof Refused)) throw error;
     setPrecondition(report, 'input', 'failed', error.refusal.detail);
     report.refusal = error.refusal;
-    return { report, exitStatus: 1 };
+    return {
+      report,
+      exitStatus: 1,
+      ...(error.cliError === null ? {} : { cliError: error.cliError }),
+    };
   }
   report.tag = valid.tag;
   setPrecondition(
@@ -2570,7 +2586,11 @@ export async function runReleaseTag(
         error.refusal.detail,
       );
     }
-    return { report, exitStatus: 1 };
+    return {
+      report,
+      exitStatus: 1,
+      ...(error.cliError === null ? {} : { cliError: error.cliError }),
+    };
   }
   return { report, exitStatus: 0 };
 }
@@ -2633,8 +2653,22 @@ async function runCli(): Promise<HelperCliResult> {
     ].includes(refusal.name);
   return {
     exitCode: 1,
-    kind: inputRefusal ? 'usage' : 'gate',
-    message: refusal?.detail ?? 'the release-tag operation was refused',
+    kind: outcome.cliError?.kind ?? (inputRefusal ? 'usage' : 'gate'),
+    message:
+      outcome.cliError?.message ??
+      refusal?.detail ??
+      'the release-tag operation was refused',
+    ...(outcome.cliError === undefined
+      ? {}
+      : {
+          httpStatus: outcome.cliError.httpStatus,
+          ...(outcome.cliError.notDispatched
+            ? { notDispatched: true as const }
+            : {}),
+          ...(outcome.cliError.retryAt
+            ? { retryAt: outcome.cliError.retryAt }
+            : {}),
+        }),
   };
 }
 
@@ -2684,7 +2718,7 @@ Inputs:
   --version          Release version without a prefix or suffix.
   --merge-sha        40-character lowercase merge commit SHA.
   --pr               Merged version-bump pull request number.
-  --issue            Open release issue number with the release label.
+  --issue            Open release issue number.
   --allowed-signers  Absolute path to the SSH allowed-signers file.
   --apply            Create and push the tag after all checks pass.
 

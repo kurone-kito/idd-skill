@@ -34,6 +34,7 @@ import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { isNotDispatchedRefusal } from './github-api-refusal.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
+  classifyHelperError,
   isHelperErrorEnvelopeEnabled,
   markCliUsageError,
   runHelperCli,
@@ -143,10 +144,12 @@ const SCHEME_TRANSPORTS = {
 class Refused extends Error {
   refusal;
   step;
-  constructor(step, name, detail, processes = null) {
+  cliError;
+  constructor(step, name, detail, processes = null, cliError = null) {
     super(`${name}: ${detail}`);
     this.step = step;
     this.refusal = { name, detail, processes };
+    this.cliError = cliError;
   }
 }
 function isRecord(value) {
@@ -387,6 +390,7 @@ function runGhRead(args, cwd) {
         ? { error: error instanceof Error ? error.message : String(error) }
         : {}),
       ...(isNotDispatchedRefusal(error) ? { notDispatched: true } : {}),
+      cliError: classifyHelperError(error),
     };
   }
 }
@@ -962,6 +966,8 @@ async function ghRead(ctx, step, args, failure, reason) {
           ? 'GitHub API load control refused the read before it started'
           : failureDetail(result),
       ),
+      null,
+      result.cliError ?? null,
     );
   }
   return result.stdout;
@@ -2037,7 +2043,11 @@ export async function runReleaseTag(input, deps = createReleaseTagDeps()) {
     if (!(error instanceof Refused)) throw error;
     setPrecondition(report, 'input', 'failed', error.refusal.detail);
     report.refusal = error.refusal;
-    return { report, exitStatus: 1 };
+    return {
+      report,
+      exitStatus: 1,
+      ...(error.cliError === null ? {} : { cliError: error.cliError }),
+    };
   }
   report.tag = valid.tag;
   setPrecondition(
@@ -2058,7 +2068,11 @@ export async function runReleaseTag(input, deps = createReleaseTagDeps()) {
     } else {
       setEffect(report, error.step, 'failed', error.refusal.detail);
     }
-    return { report, exitStatus: 1 };
+    return {
+      report,
+      exitStatus: 1,
+      ...(error.cliError === null ? {} : { cliError: error.cliError }),
+    };
   }
   return { report, exitStatus: 0 };
 }
@@ -2117,8 +2131,20 @@ async function runCli() {
     ].includes(refusal.name);
   return {
     exitCode: 1,
-    kind: inputRefusal ? 'usage' : 'gate',
-    message: refusal?.detail ?? 'the release-tag operation was refused',
+    kind: outcome.cliError?.kind ?? (inputRefusal ? 'usage' : 'gate'),
+    message:
+      outcome.cliError?.message ??
+      refusal?.detail ??
+      'the release-tag operation was refused',
+    ...(outcome.cliError === undefined
+      ? {}
+      : {
+          httpStatus: outcome.cliError.httpStatus,
+          ...(outcome.cliError.notDispatched ? { notDispatched: true } : {}),
+          ...(outcome.cliError.retryAt
+            ? { retryAt: outcome.cliError.retryAt }
+            : {}),
+        }),
   };
 }
 function parseArgs(argv) {
@@ -2155,7 +2181,7 @@ Inputs:
   --version          Release version without a prefix or suffix.
   --merge-sha        40-character lowercase merge commit SHA.
   --pr               Merged version-bump pull request number.
-  --issue            Open release issue number with the release label.
+  --issue            Open release issue number.
   --allowed-signers  Absolute path to the SSH allowed-signers file.
   --apply            Create and push the tag after all checks pass.
 
