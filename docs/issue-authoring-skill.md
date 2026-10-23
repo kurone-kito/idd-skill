@@ -3007,6 +3007,14 @@ Before reporting or publishing issue drafts, the skill should verify:
   [Draft carrier](#draft-carrier); a failed review publishes no target, and
   its drafts go into a carrier unless an exception applies
 - each draft carrier passes `audit-authored-issue --shape carrier`
+- before the completed-draft adversarial review and mechanical audit,
+  each drafted roadmap, child, or orphan body has its material factual
+  claims verified against current sources under the
+  factual-claims
+  [rule](../skills/issue-authoring/references/contract.md#factual-claims-check),
+  with support in the
+  review packet's existing `evidence` array and unsupported claims
+  handled by the existing qualification and uncertainty routes
 - each drafted roadmap, child, or orphan body passes the
   completed-draft adversarial review and then the
   `audit-authored-issue` mechanical pre-publish gate for its declared
