@@ -730,9 +730,10 @@ this section documents only the flags relevant to Steps 0, 1A-1C, 2, 3,
 
 ## Step 2 — Fetch or copy template files
 
-> **CLI shortcut**: `node scripts/idd-onboard.mjs --import` automates this
-> step from a local idd-skill clone — see
-> [CLI-assisted onboarding](#cli-assisted-onboarding) above.
+> **CLI shortcut**: The local helper's `--import` mode automates this
+> step from a local `idd-skill` clone. See
+> [CLI-assisted onboarding](#cli-assisted-onboarding) above for complete
+> commands.
 
 You need the following core execution and profile artifact files in the
 target repository. Use whichever method applies.
@@ -936,12 +937,13 @@ for the exact `gh api` and `curl` loops (core files and the optional
 
 ### Option B — Local copy (idd-skill cloned)
 
-If you have cloned `https://github.com/kurone-kito/idd-skill`, run
-`node scripts/idd-onboard.mjs --import` for the canonical core set used
-by Option A; it excludes the optional advisory-convergence workflows. See
+If you have cloned `https://github.com/kurone-kito/idd-skill`, use its
+`scripts/idd-onboard.mjs` helper in `--import` mode to copy the canonical
+core set used by Option A; it excludes the optional advisory-convergence
+workflows. See
 [Local-copy installs](docs/onboarding/template-distribution.md#local-copy-installs)
-for dry-run and apply commands, the optional `vendored-node` profile,
-and companion instructions.
+for complete dry-run and apply commands, the optional `vendored-node`
+profile, and companion instructions.
 
 **Optional — install the advisory-convergence workflows.** Copy
 `idd-advisory-convergence.yml` and
