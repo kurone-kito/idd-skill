@@ -179,6 +179,7 @@ answer() {
   if [ -n "$jq_expr" ]; then "$JQ_BIN" -c "$jq_expr" "$1"; else cat "$1"; fi
 }
 case "$*" in
+  "repo view --json owner,name,url"*) "$JQ_BIN" -c "$jq_expr" "$STUB_REPO_URL" ;;
   "repo view --json owner"*) echo "${OWNER}" ;;
   "repo view --json name"*) echo "${REPO}" ;;
   "repo view --json url"*) "$JQ_BIN" -r "$jq_expr" "$STUB_REPO_URL" ;;
@@ -293,6 +294,8 @@ function makeSandbox(fixtures: Fixtures): string {
   write('review-list-fail.txt', fixtures.reviewListFail ?? '');
   write('review-comments-fail.txt', fixtures.reviewCommentsFail ?? '');
   write('repo-url.json', {
+    owner: { login: OWNER },
+    name: REPO,
     url: fixtures.repoUrl ?? 'https://github.com/' + OWNER + '/' + REPO,
   });
   write('auth-status-exit.txt', String(fixtures.authStatusExit ?? 0));
@@ -954,38 +957,67 @@ for (const example of [
       'instructions-only profile, or any profile if the helper is unavailable',
   },
 ]) {
-  for (const host of ['github.com', 'ghe.example.test']) {
-    test(example.heading + ' routes its manual POST to ' + host + ' (#4638)', {
+  for (const route of [
+    {
+      url: 'https://github.com/' + OWNER + '/' + REPO,
+      authHost: 'github.com',
+      apiAuthority: 'github.com',
+      ported: false,
+    },
+    {
+      url: 'https://ghe.example.test/' + OWNER + '/' + REPO,
+      authHost: 'ghe.example.test',
+      apiAuthority: 'ghe.example.test',
+      ported: false,
+    },
+    {
+      url: 'https://ghe.example.test:8443/' + OWNER + '/' + REPO,
+      authHost: 'ghe.example.test',
+      apiAuthority: 'ghe.example.test:8443',
+      ported: true,
+    },
+  ]) {
+    test(example.heading +
+      ' keeps its manual POST on ' +
+      route.apiAuthority +
+      ' (#4638)', {
       skip: SKIP_REASON ?? false,
     }, () => {
       const result = runManualRecoveryPost(
         example.heading,
         example.marker,
-        'https://' + host + '/' + OWNER + '/' + REPO,
+        route.url,
       );
       assert.equal(result.status, 0, result.stderr);
       assert.ok(
-        result.ghCalls.some(
-          (call) => call === 'auth status --active --hostname ' + host,
+        result.ghCalls.some((call) =>
+          call.includes('auth status --active --hostname ' + route.authHost),
         ),
       );
+      const apiEndpoint = route.ported
+        ? 'https://' +
+          route.apiAuthority +
+          '/api/v3/repos/' +
+          OWNER +
+          '/' +
+          REPO
+        : 'repos/' + OWNER + '/' + REPO;
       assert.ok(
         result.ghCalls.some(
           (call) =>
-            call.includes('api --hostname ' + host) &&
-            call.includes(
-              'repos/' +
-                OWNER +
-                '/' +
-                REPO +
-                '/issues/' +
-                PR_NUMBER +
-                '/comments',
-            ) &&
+            call.includes('api --hostname ' + route.authHost) &&
+            call.includes(apiEndpoint + '/issues/' + PR_NUMBER + '/comments') &&
             call.includes('--method POST') &&
             call.includes('--silent'),
         ),
       );
+      if (route.ported) {
+        assert.ok(
+          !result.ghCalls.some((call) =>
+            call.includes('api --hostname ' + route.apiAuthority),
+          ),
+        );
+      }
       assert.ok(!result.ghCalls.some((call) => call.includes('auth token')));
       assert.ok(!result.stdout.includes('STUB_SECRET'));
       assert.ok(!result.stderr.includes('STUB_SECRET'));
@@ -1021,6 +1053,28 @@ test('manual recovery POST stops when the host is unresolved or unauthenticated 
   assert.ok(
     !unauthenticated.ghCalls.some((call) => call.includes('--method POST')),
   );
+});
+
+test('manual recovery POST stops before authentication for invalid or mismatched repository URLs (#4638)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  for (const repoUrl of [
+    'http://ghe.example.test/' + OWNER + '/' + REPO,
+    'https://ghe.example.test:65536/' + OWNER + '/' + REPO,
+    'https://ghe.example.test:8443/other/repo',
+    'https://ghe.example.test:8443.evil.test/' + OWNER + '/' + REPO,
+  ]) {
+    const result = runManualRecoveryPost('## AW3-R', 'or manually:', repoUrl);
+    assert.equal(result.status, 2, repoUrl + '\n' + result.stderr);
+    assert.ok(
+      !result.ghCalls.some((call) => call.startsWith('auth status')),
+      repoUrl,
+    );
+    assert.ok(
+      !result.ghCalls.some((call) => call.includes('--method POST')),
+      repoUrl,
+    );
+  }
 });
 
 test('F2 does not count an edited disposition reply as a fresh disposition (#3860)', {
