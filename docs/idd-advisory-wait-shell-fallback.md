@@ -262,11 +262,21 @@ ephemeral-npx / user-global: resolve from `docs/idd-helper-scripts.md`)
 --head-sha <PR_HEAD_SHA> --timestamp <ISO8601> --apply`, or manually:
 
 ```sh
-GH_TOKEN="${GH_TOKEN:-$(gh auth token)}"
-curl -X POST "https://api.github.com/repos/{owner}/{repo}/issues/{pr-number}/comments" \
-  -H "Authorization: Bearer ${GH_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d "{\"body\":\"advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time}\"}"
+GH_HOST=$(gh repo view --json url --jq '.url | select(type == "string") | sub("^https?://"; "") | split("/")[0]') || {
+  echo "cannot resolve the repository's GitHub host; recovery marker not posted" >&2
+  exit 2
+}
+[ -n "$GH_HOST" ] && [ "$GH_HOST" != null ] || {
+  echo "repository GitHub host is empty or invalid; recovery marker not posted" >&2
+  exit 2
+}
+gh auth status --hostname "$GH_HOST" >/dev/null 2>&1 || {
+  echo "not authenticated to $GH_HOST; recovery marker not posted" >&2
+  exit 2
+}
+gh api --hostname "$GH_HOST" "repos/{owner}/{repo}/issues/{pr-number}/comments" \
+  --method POST --silent \
+  -f body="advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time}"
 ```
 
 ## Registration-proven review request
@@ -777,11 +787,21 @@ node scripts/post-idd-marker.mjs --type advisory-recovery --target pr <pr-number
   --head-sha <PR_HEAD_SHA> --attempt <n> --timestamp <ISO8601> --apply
 # instructions-only profile, or any profile if the helper is unavailable —
 # manually, matching the grammar renderAdvisoryWaitRecoveryMarker emits:
-GH_TOKEN="${GH_TOKEN:-$(gh auth token)}"
-curl -X POST "https://api.github.com/repos/{owner}/{repo}/issues/{pr-number}/comments" \
-  -H "Authorization: Bearer ${GH_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d "{\"body\":\"advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time} claim:{claim-id} attempt:{n}\"}"
+GH_HOST=$(gh repo view --json url --jq '.url | select(type == "string") | sub("^https?://"; "") | split("/")[0]') || {
+  echo "cannot resolve the repository's GitHub host; recovery marker not posted" >&2
+  exit 2
+}
+[ -n "$GH_HOST" ] && [ "$GH_HOST" != null ] || {
+  echo "repository GitHub host is empty or invalid; recovery marker not posted" >&2
+  exit 2
+}
+gh auth status --hostname "$GH_HOST" >/dev/null 2>&1 || {
+  echo "not authenticated to $GH_HOST; recovery marker not posted" >&2
+  exit 2
+}
+gh api --hostname "$GH_HOST" "repos/{owner}/{repo}/issues/{pr-number}/comments" \
+  --method POST --silent \
+  -f body="advisory-wait-recovery: {agent-id} {PR_HEAD_SHA} {ISO8601-recovery-time} claim:{claim-id} attempt:{n}"
 ```
 
 ## AW3-H
@@ -842,23 +862,88 @@ OWNER=$(gh repo view --json owner --jq '.owner.login')
 REPO=$(gh repo view --json name --jq '.name')
 PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid')
 
-# Latest primary-bot review (same login set as AW1).
+# Latest primary-bot review (same login set as AW1). Capture all pages before
+# interpreting them: an empty pipe or a failed later page is not an empty
+# review list (#4638).
+REVIEWS_RAW=$(gh api "repos/$OWNER/$REPO/pulls/{pr-number}/reviews" --paginate) || {
+  echo "F2 review list read failed; not converged (#4638)" >&2
+  exit 2
+}
+[ -n "$REVIEWS_RAW" ] || {
+  echo "F2 review list read empty; not converged (#4638)" >&2
+  exit 2
+}
+printf '%s' "$REVIEWS_RAW" | jq -e -s '
+  length > 0
+  and all(.[]; type == "array")
+  and all(add[];
+    type == "object"
+    and (.user | type == "object")
+    and (.user.login | type == "string")
+    and (
+      if .user.login == "copilot-pull-request-reviewer"
+        or .user.login == "copilot-pull-request-reviewer[bot]"
+      then
+        (.submitted_at | type == "string")
+        and (.submitted_at | length > 0)
+        and ((try (.submitted_at | fromdateiso8601) catch null) != null)
+        and (.commit_id | type == "string")
+        and (.commit_id | length > 0)
+        and (.id | type == "number")
+        and (.id > 0)
+      else true end
+    )
+  )
+' > /dev/null || {
+  echo "F2 review list malformed; not converged (#4638)" >&2
+  exit 2
+}
 LATEST_REVIEW_JSON=$(
-  gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/reviews" --paginate \
-    --jq '.[] | select(.user.login == "copilot-pull-request-reviewer"
-          or .user.login == "copilot-pull-request-reviewer[bot]") |
-          {sa: .submitted_at, cid: .commit_id, id: .id}' \
-  | jq -rs 'sort_by(.sa) | last // {}'
-)
-LATEST_REVIEW_CID=$(printf '%s' "${LATEST_REVIEW_JSON}" | jq -r '.cid // ""')
+  printf '%s' "$REVIEWS_RAW" | jq -cs '
+    add
+    | map(select(.user.login == "copilot-pull-request-reviewer"
+        or .user.login == "copilot-pull-request-reviewer[bot]"))
+    | sort_by(.submitted_at)
+    | last // {}
+  '
+) || {
+  echo "F2 review selection failed; not converged (#4638)" >&2
+  exit 2
+}
+LATEST_REVIEW_CID=$(printf '%s' "${LATEST_REVIEW_JSON}" | jq -r '.commit_id // ""')
 LATEST_REVIEW_ID=$(printf '%s' "${LATEST_REVIEW_JSON}" | jq -r '.id // empty')
 
 # Actionable items = posted review comments on that review.
 if [ -n "${LATEST_REVIEW_ID}" ]; then
+  REVIEW_COMMENTS_RAW=$(gh api "repos/$OWNER/$REPO/pulls/{pr-number}/reviews/$LATEST_REVIEW_ID/comments" --paginate) || {
+    echo "F2 review-comment read failed; not converged (#4638)" >&2
+    exit 2
+  }
+  [ -n "$REVIEW_COMMENTS_RAW" ] || {
+    echo "F2 review-comment read empty; not converged (#4638)" >&2
+    exit 2
+  }
+  printf '%s' "$REVIEW_COMMENTS_RAW" | jq -e -s '
+    length > 0
+    and all(.[]; type == "array")
+    and all(add[];
+      type == "object"
+      and (.id | type == "number")
+      and (.id > 0)
+      and (.path | type == "string")
+      and (.path | length > 0)
+      and (.body | type == "string")
+    )
+  ' > /dev/null || {
+    echo "F2 review-comment read malformed; not converged (#4638)" >&2
+    exit 2
+  }
   ACTIONABLE_ITEM_COUNT=$(
-    gh api "repos/${OWNER}/${REPO}/pulls/{pr-number}/reviews/${LATEST_REVIEW_ID}/comments" \
-      --paginate --jq 'length' | awk '{s+=$1} END {print s+0}'
-  )
+    printf '%s' "$REVIEW_COMMENTS_RAW" | jq -cs 'add | length'
+  ) || {
+    echo "F2 review-comment count failed; not converged (#4638)" >&2
+    exit 2
+  }
 else
   ACTIONABLE_ITEM_COUNT=""
 fi
