@@ -840,6 +840,7 @@ test('F2 rejects empty, malformed, and unexpected review-list data (#4638)', {
   for (const review of [
     { ...botReview, submitted_at: '' },
     { ...botReview, submitted_at: 'not-a-date' },
+    { ...botReview, submitted_at: '2026-02-31T09:00:00Z' },
     { ...botReview, submitted_at: '2026-10-08T09:00:00+25:00' },
     { ...botReview, commit_id: '' },
     { ...botReview, id: 0 },

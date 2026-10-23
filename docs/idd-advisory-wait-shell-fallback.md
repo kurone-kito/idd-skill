@@ -879,14 +879,18 @@ REVIEWS_RAW=$(gh api "repos/$OWNER/$REPO/pulls/{pr-number}/reviews" --paginate) 
       | capture("^(?<whole>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})([.](?<fraction>[0-9]+))?(?<zone>Z|[+-][0-9]{2}:[0-9]{2})$");
     def review_time_key($fraction_width):
       parsed_review_timestamp as $timestamp
-      | if ($timestamp.zone != "Z"
+      | (($timestamp.whole + "Z") | fromdateiso8601) as $whole_seconds
+      | if ($whole_seconds | gmtime | strftime("%Y-%m-%dT%H:%M:%SZ"))
+          != ($timestamp.whole + "Z")
+        then error("invalid timestamp")
+        elif ($timestamp.zone != "Z"
           and ((($timestamp.zone[1:3] | tonumber) > 23)
             or (($timestamp.zone[4:6] | tonumber) > 59)))
         then error("invalid timezone offset")
         else
           ($timestamp.fraction // "") as $fraction
           | [
-              ((($timestamp.whole + "Z") | fromdateiso8601)
+              ($whole_seconds
                 - (if $timestamp.zone == "Z" then 0
                    else
                      (if $timestamp.zone[0:1] == "+" then 1 else -1 end)
@@ -935,9 +939,10 @@ LATEST_REVIEW_JSON=$(
       | capture("^(?<whole>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})([.](?<fraction>[0-9]+))?(?<zone>Z|[+-][0-9]{2}:[0-9]{2})$");
     def review_time_key($fraction_width):
       parsed_review_timestamp as $timestamp
+      | (($timestamp.whole + "Z") | fromdateiso8601) as $whole_seconds
       | ($timestamp.fraction // "") as $fraction
       | [
-          ((($timestamp.whole + "Z") | fromdateiso8601)
+          ($whole_seconds
             - (if $timestamp.zone == "Z" then 0
                else
                  (if $timestamp.zone[0:1] == "+" then 1 else -1 end)
