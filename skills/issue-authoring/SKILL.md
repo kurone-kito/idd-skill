@@ -72,6 +72,11 @@ needs-decision, blocked-by-human, and out-of-scope.
    - keep independent sibling work in roadmap task lists unless a true
      correctness, availability, or ordering constraint requires a
      dependency edge
+   - for every hard edge, name the producer output, the blocked
+     operation or criterion, and its evidence; check the counterfactual
+     with other valid prerequisites retained, then verify the set keeps
+     independent siblings and natural cohesion. See the contract for the
+     unchanged packet fields and worked examples.
 6. Before the completed-draft adversarial review, verify material
    factual claims that justify the draft's scope or design against
    current sources: repository behavior against current code and docs;
@@ -424,8 +429,13 @@ needs-decision, blocked-by-human, and out-of-scope.
 - Keep human-dependent setup, review, and approval work isolated from
   ready execution issues whenever possible.
 - Link every active child issue from its roadmap body.
-- Justify each dependency edge and keep independent sibling work as
-  roadmap task-list entries.
+- For every hard dependency edge, name the consumed producer output,
+  blocked operation or criterion, supporting evidence, and
+  counterfactual while retaining other valid prerequisites. Keep the
+  rationale in the issue body; for a multi-issue set, map edges in
+  `relationships` and support them with `evidence`; for a single issue,
+  keep `relationships` empty and put supporting evidence in `evidence`.
+  Keep independent sibling work in roadmap task-list entries.
 - Record reuse or extension decisions when the skill does not create a
   new issue.
 - Avoid widening drafting output beyond the user request without saying
