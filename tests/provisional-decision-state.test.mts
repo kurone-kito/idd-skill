@@ -1012,6 +1012,66 @@ test('completion cannot precede the verification timestamp it records', () => {
   assert.deepEqual(result.decisions, []);
 });
 
+test('work start timestamps fit the selection, start record, and verification order', () => {
+  const cases = [
+    {
+      id: 'after-start-record',
+      startedAt: dateAt(3),
+      verifiedAt: dateAt(4),
+      issueCode: 'work-start-time-order-invalid',
+    },
+    {
+      id: 'before-selection',
+      startedAt: dateAt(0),
+      verifiedAt: dateAt(4),
+      issueCode: 'work-start-time-order-invalid',
+    },
+    {
+      id: 'after-verification',
+      startedAt: dateAt(2),
+      verifiedAt: '2026-10-20T00:00:01.500Z',
+      issueCode: 'work-verification-order-invalid',
+    },
+  ] as const;
+
+  for (const scenario of cases) {
+    const selected = record(`select-${scenario.id}`, selectedEvent());
+    const started = record(`start-${scenario.id}`, {
+      ...workStartedEvent(),
+      startedAt: scenario.startedAt,
+    });
+    const resultEvidence = {
+      ...completionResult(1),
+      verifiedAt: scenario.verifiedAt,
+    };
+    const completed = record(`complete-${scenario.id}`, {
+      type: 'work-completed',
+      result: resultEvidence,
+    });
+    const replay = replayProvisionalDecisionHistory(
+      input(
+        [
+          recordComment(`1-${scenario.id}`, selected, 1),
+          recordComment(`2-${scenario.id}`, started, 2),
+          recordComment(`5-${scenario.id}`, completed, 5),
+        ],
+        {
+          verifiedWork: [
+            { ...workEvidence(), verifiedAt: scenario.verifiedAt },
+          ],
+        },
+      ),
+    );
+
+    assert.equal(replay.valid, false, scenario.id);
+    assert.ok(
+      replay.issues.some((issue) => issue.code === scenario.issueCode),
+      scenario.id,
+    );
+    assert.deepEqual(replay.decisions, [], scenario.id);
+  }
+});
+
 test('timestamp comparisons preserve sub-millisecond precision', () => {
   const { selected, started } = oneCompletedDecision();
   const completionTime = '2026-10-20T00:00:03.0001Z';
@@ -2265,7 +2325,7 @@ test('source rewrites chain across rework bundles and permit a later generation'
   );
   const startedTwo = record(
     'start-two',
-    workStartedEvent(),
+    { ...workStartedEvent(), startedAt: dateAt(8) },
     1,
     2,
     [firstClaim],
@@ -2273,7 +2333,10 @@ test('source rewrites chain across rework bundles and permit a later generation'
   );
   const completedTwo = record(
     'complete-two',
-    workCompletedEvent(1),
+    {
+      type: 'work-completed',
+      result: { ...completionResult(1), verifiedAt: dateAt(8) },
+    },
     1,
     2,
     [firstClaim],
@@ -2358,7 +2421,13 @@ test('source rewrites chain across rework bundles and permit a later generation'
       ],
       {
         currentSource: secondSourceAfter,
-        verifiedWork: [workEvidence(1), workEvidence(1, 2, firstSourceAfter)],
+        verifiedWork: [
+          workEvidence(1),
+          {
+            ...workEvidence(1, 2, firstSourceAfter),
+            verifiedAt: dateAt(8),
+          },
+        ],
         verifiedReworkRoadmaps: [
           reworkEvidence('authored-one', source, firstSourceAfter),
           reworkEvidence(

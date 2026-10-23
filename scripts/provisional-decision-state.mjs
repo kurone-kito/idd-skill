@@ -1187,14 +1187,45 @@ function sameWorkResult(record, evidence, source) {
       recordResult.mergeCommitSha === evidence.mergeCommitSha)
   );
 }
-function workVerificationPrecedesCompletion(record, completionComment) {
+function workVerificationPrecedesCompletion(
+  startedRecord,
+  record,
+  completionComment,
+) {
+  if (startedRecord.event.type !== 'work-started') return false;
   const result = resultFor(record);
   if (!result || typeof result.verifiedAt !== 'string') return false;
+  const startOrder = compareDateTimes(
+    startedRecord.event.startedAt,
+    result.verifiedAt,
+  );
   const timeOrder = compareDateTimes(
     result.verifiedAt,
     completionComment.createdAt,
   );
-  return timeOrder !== undefined && timeOrder <= 0;
+  return (
+    startOrder !== undefined &&
+    startOrder <= 0 &&
+    timeOrder !== undefined &&
+    timeOrder <= 0
+  );
+}
+function workStartTimeFitsLifecycle(record, selectionComment, startComment) {
+  if (record.event.type !== 'work-started') return false;
+  const afterSelection = compareDateTimes(
+    selectionComment.createdAt,
+    record.event.startedAt,
+  );
+  const beforeStartRecord = compareDateTimes(
+    record.event.startedAt,
+    startComment.createdAt,
+  );
+  return (
+    afterSelection !== undefined &&
+    afterSelection <= 0 &&
+    beforeStartRecord !== undefined &&
+    beforeStartRecord <= 0
+  );
 }
 function resultFor(record) {
   return record.event.type === 'work-completed' && isObject(record.event.result)
@@ -1736,6 +1767,16 @@ export function replayProvisionalDecisionHistory(input) {
             comment.id,
           ),
         );
+      } else if (
+        !workStartTimeFitsLifecycle(record, existing.selection.comment, comment)
+      ) {
+        issues.push(
+          createReplayIssue(
+            'work-start-time-order-invalid',
+            'The declared work start must follow selection and be no later than its start record.',
+            comment.id,
+          ),
+        );
       } else existing.workStarted = entry;
       continue;
     }
@@ -1756,11 +1797,17 @@ export function replayProvisionalDecisionHistory(input) {
         );
         continue;
       }
-      if (!workVerificationPrecedesCompletion(record, comment)) {
+      if (
+        !workVerificationPrecedesCompletion(
+          existing.workStarted.record,
+          record,
+          comment,
+        )
+      ) {
         issues.push(
           createReplayIssue(
             'work-verification-order-invalid',
-            'Independent work verification must occur no later than its completion record.',
+            'Work must start no later than independent verification, which must precede its completion record.',
             comment.id,
           ),
         );
