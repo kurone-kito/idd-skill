@@ -3262,10 +3262,32 @@ function reconcileFormerChildMembershipsInternal(
     };
   };
 
-  const orderedSelfAnchorOpenings = [...selfAnchorOpenings].sort(
-    (left, right) =>
-      commentPrecedes(left, right) ? -1 : commentPrecedes(right, left) ? 1 : 0,
-  );
+  const selfAnchorOwnerKey = (set: string, owner: string): string =>
+    `${set}\u0000${owner}`;
+  const selfAnchorResumeSuccessors = new Map<string, string[]>();
+  for (const comment of orderedSelfAnchorComments) {
+    const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
+    if (parsed?.mode !== 'resume') {
+      continue;
+    }
+    const priorOwner = selfAnchorOwnerKey(parsed.set, parsed.supersedes);
+    const successorOwner = selfAnchorOwnerKey(parsed.set, parsed.owner);
+    const successors = selfAnchorResumeSuccessors.get(priorOwner) ?? [];
+    successors.push(successorOwner);
+    selfAnchorResumeSuccessors.set(priorOwner, successors);
+  }
+  const losingSelfAnchorOwners = new Set<string>();
+  const recordLosingSelfAnchorOwner = (set: string, owner: string): void => {
+    const pending = [selfAnchorOwnerKey(set, owner)];
+    while (pending.length > 0) {
+      const nextOwner = pending.pop();
+      if (nextOwner === undefined || losingSelfAnchorOwners.has(nextOwner)) {
+        continue;
+      }
+      losingSelfAnchorOwners.add(nextOwner);
+      pending.push(...(selfAnchorResumeSuccessors.get(nextOwner) ?? []));
+    }
+  };
   type TargetWideGeneration = {
     kind: 'self' | 'foreign';
     opening: AuthoringOwnerProvenanceComment;
@@ -3312,31 +3334,18 @@ function reconcileFormerChildMembershipsInternal(
         !commentPrecedes(targetWideWinner.completion, generation.opening))
     ) {
       if (generation.kind === 'self') {
-        const start = orderedSelfAnchorComments.findIndex(
-          (comment) => comment.id === generation.opening.id,
+        const losingSelfOpening = selfAnchorOpenings.find(
+          (opening) => opening.id === generation.opening.id,
         );
-        if (start === -1) {
+        if (losingSelfOpening === undefined) {
           return {
             problem: `losing self-anchored opening ${generation.opening.id} cannot be found in the target owner history`,
           };
         }
-        const nextSelfOpening = orderedSelfAnchorOpenings.find((candidate) =>
-          commentPrecedes(generation.opening, candidate),
+        recordLosingSelfAnchorOwner(
+          losingSelfOpening.set,
+          losingSelfOpening.owner,
         );
-        const end =
-          nextSelfOpening === undefined
-            ? orderedSelfAnchorComments.length
-            : orderedSelfAnchorComments.findIndex(
-                (comment) => comment.id === nextSelfOpening.id,
-              );
-        if (end === -1) {
-          return {
-            problem: `the next self-anchored opening after ${generation.opening.id} cannot be found in the target owner history`,
-          };
-        }
-        for (const comment of orderedSelfAnchorComments.slice(start, end)) {
-          losingSelfAnchorCommentIds.add(comment.id);
-        }
       } else {
         const losingCandidate = generation.foreignCandidate;
         if (losingCandidate === undefined) {
@@ -3384,6 +3393,16 @@ function reconcileFormerChildMembershipsInternal(
       completion: verified.completion,
       foreignCandidate: candidate,
     };
+  }
+
+  for (const comment of orderedSelfAnchorComments) {
+    const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
+    if (
+      parsed !== null &&
+      losingSelfAnchorOwners.has(selfAnchorOwnerKey(parsed.set, parsed.owner))
+    ) {
+      losingSelfAnchorCommentIds.add(comment.id);
+    }
   }
 
   const reconciledComments = input.comments.filter(
