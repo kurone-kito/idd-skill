@@ -1223,11 +1223,10 @@ const AUTHORING_OWNER_OPENING_MODES = new Set([
   'resume',
 ]);
 /**
- * `authoring-owner` modes whose post must agree with an opening marker of its
- * target before it is sent (#3910), and whose set and anchor must agree with
- * the latest trusted owner marker of that target (#3899). `acquire` and
- * `bootstrap` open a generation themselves, so they are not checked and make
- * no read.
+ * `authoring-owner` continuation modes whose post must agree with an opening
+ * marker of its target before it is sent (#3910), and whose set and anchor
+ * must agree with the latest trusted owner marker of that target (#3899).
+ * `acquire` and `bootstrap` use their separate anchor-generation preflight.
  */
 const AUTHORING_OWNER_IDENTITY_CHECKED_MODES = new Set([
   'heartbeat',
@@ -1691,14 +1690,14 @@ regardless of --apply, so a dry-run preview shows the exact value that
 would actually post. A dry run of an authoring-owner heartbeat, release,
 release-guard, release-complete or resume also reads the target's comment
 log for the identity check (#3899). Acquire and bootstrap read the declared
-anchor's paginated owner log before dry-run output or POST: self-anchored posts
-may start only with a fresh set and no open generation; child posts must match
-the anchor's open, non-releasing set and session. When a self-anchor log shows
-prior child memberships, each former anchor's owner log is also read and must
-show the matching set/session release-complete after the child's release. A
-closed set ID, an open or releasing generation, or unreadable history that
-cannot be replayed conclusively refuses the post. An empty self-anchor log
-and a completed history with a fresh set are valid.
+anchor's paginated owner log before dry-run output or POST. A self-anchor or
+child post may use only a fresh set and valid open-generation state. When an
+anchor log shows prior child memberships, each former anchor's owner log is
+also read and must show the matching set/session release-complete after the
+child's release and before the next self-anchored generation. Closed set IDs,
+outdated releases, an open or releasing self-generation, or unreadable history
+that cannot be replayed conclusively refuses the post. A completed history
+with a fresh set remains valid.
 Concurrent first openers still resolve by comment order.
 --marker-target / --marker-owner map to these
 markers' own \`target=\` / \`owner=\` fields -- named with a \`marker-\`
@@ -2191,19 +2190,25 @@ function resolveFormerChildMembership(input) {
       problem: `former child membership ${input.membership.anchorRef}/${input.membership.set} has no final trusted release marker`,
     };
   }
+  if (state.open.latest.outdated) {
+    return {
+      problem: `former child membership ${input.membership.anchorRef}/${input.membership.set} has a final release marker minimized as outdated`,
+    };
+  }
   return { generation: state.open };
 }
 /**
- * A target can later become its own set anchor after being a completed child.
+ * An issue can become its own set anchor after being a completed child.
  * Reconcile each old child membership against the exact former anchor/set/
- * session completion before removing those foreign-anchor markers from the
- * self-anchor replay. Any incomplete target or former-anchor history fails
- * closed.
+ * session completion before removing those foreign-anchor markers from an
+ * anchor replay. Any later self-generation must open after that completion.
+ * Incomplete target or former-anchor history fails closed.
  */
-function reconcileFormerChildMemberships(input) {
+export function reconcileFormerChildMemberships(input) {
   const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
   const foreignMemberships = new Map();
   const foreignCommentIds = new Set();
+  const selfAnchorOpenings = [];
   for (const comment of input.comments) {
     if (
       (trustedSet.size > 0 &&
@@ -2235,12 +2240,18 @@ function reconcileFormerChildMemberships(input) {
     if (parsed === null) {
       return { problem: `owner marker ${comment.id} does not parse` };
     }
-    if (!sameIssueRef(parsed.target, input.targetRef)) {
+    if (!sameIssueRef(parsed.target, input.historyTargetRef)) {
       return {
-        problem: `owner marker ${comment.id} names target ${parsed.target}, not ${input.targetRef}`,
+        problem: `owner marker ${comment.id} names target ${parsed.target}, not ${input.historyTargetRef}`,
       };
     }
-    if (sameIssueRef(parsed.anchor, input.targetRef)) {
+    if (sameIssueRef(parsed.anchor, input.historyTargetRef)) {
+      if (AUTHORING_OWNER_OPENING_MODES.has(parsed.mode)) {
+        selfAnchorOpenings.push({
+          id: comment.id,
+          createdAt: comment.createdAt,
+        });
+      }
       continue;
     }
     if (parseIssueReference(parsed.anchor) === null) {
@@ -2259,13 +2270,14 @@ function reconcileFormerChildMemberships(input) {
     foreignCommentIds.add(comment.id);
   }
   if (foreignMemberships.size === 0) {
-    return { comments: [...input.comments] };
+    return { comments: [...input.comments], closedSets: new Set() };
   }
   const anchorReplays = new Map();
+  const closedSets = new Set();
   for (const membership of foreignMemberships.values()) {
     const childReplay = resolveFormerChildMembership({
       membership,
-      targetRef: input.targetRef,
+      targetRef: input.historyTargetRef,
       markerPrefix: input.markerPrefix,
       trusted: input.trusted,
     });
@@ -2308,23 +2320,57 @@ function reconcileFormerChildMemberships(input) {
         problem: `former anchor ${membership.anchorRef} owner history cannot be replayed: ${anchorReplay.problem}`,
       };
     }
-    const childReleaseAt = Date.parse(childReplay.generation.latest.createdAt);
-    const completion = anchorReplay.closedGenerations.find(
-      (closed) =>
+    const childRelease = childReplay.generation.latest;
+    const childReleaseAt = Date.parse(childRelease.createdAt);
+    const completion = anchorReplay.closedGenerations.find((closed) => {
+      const completionAt = Date.parse(closed.releaseComplete.createdAt);
+      return (
         closed.set === membership.set &&
-        closed.session === childReplay.generation.latest.session &&
-        Date.parse(closed.releaseComplete.createdAt) >= childReleaseAt,
-    );
+        closed.session === childRelease.session &&
+        (completionAt > childReleaseAt ||
+          (completionAt === childReleaseAt &&
+            closed.releaseComplete.id > childRelease.id))
+      );
+    });
     if (completion === undefined) {
       return {
         problem: `former child membership ${membership.anchorRef}/${membership.set}/${childReplay.generation.latest.session} has no matching trusted release-complete from the former anchor's current owner`,
       };
     }
+    const nextSelfOpening = selfAnchorOpenings
+      .filter(
+        (opening) =>
+          Date.parse(opening.createdAt) > childReleaseAt ||
+          (Date.parse(opening.createdAt) === childReleaseAt &&
+            opening.id > childRelease.id),
+      )
+      .sort(
+        (left, right) =>
+          Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
+          left.id - right.id,
+      )[0];
+    const completionAt = Date.parse(completion.releaseComplete.createdAt);
+    const nextSelfOpeningAt =
+      nextSelfOpening === undefined
+        ? Number.NaN
+        : Date.parse(nextSelfOpening.createdAt);
+    if (
+      nextSelfOpening !== undefined &&
+      (completionAt > nextSelfOpeningAt ||
+        (completionAt === nextSelfOpeningAt &&
+          completion.releaseComplete.id >= nextSelfOpening.id))
+    ) {
+      return {
+        problem: `former anchor ${membership.anchorRef}/${membership.set} release-complete does not precede the next self-anchored generation`,
+      };
+    }
+    closedSets.add(membership.set);
   }
   return {
     comments: input.comments.filter(
       (comment) => !foreignCommentIds.has(comment.id),
     ),
+    closedSets,
   };
 }
 /**
@@ -2389,23 +2435,19 @@ function checkAuthoringOwnerPostIdentity(input) {
   });
   const trustedLogins = new Set(actors);
   if (acquisitionMode) {
-    let ownerHistoryComments = comments;
-    if (sameIssueRef(post.target, post.anchor)) {
-      const reconciliation = reconcileFormerChildMemberships({
-        comments,
-        targetRef: post.target,
-        markerPrefix: input.markerPrefix,
-        trusted: actors,
-      });
-      if ('problem' in reconciliation) {
-        const refusal = `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: former child membership history cannot be reconciled: ${reconciliation.problem}`;
-        process.stderr.write(`${refusal}\n`);
-        return { exitCode: 1, kind: 'gate', message: refusal };
-      }
-      ownerHistoryComments = reconciliation.comments;
+    const reconciliation = reconcileFormerChildMemberships({
+      comments,
+      historyTargetRef: post.anchor,
+      markerPrefix: input.markerPrefix,
+      trusted: actors,
+    });
+    if ('problem' in reconciliation) {
+      const refusal = `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: former child membership history cannot be reconciled: ${reconciliation.problem}`;
+      process.stderr.write(`${refusal}\n`);
+      return { exitCode: 1, kind: 'gate', message: refusal };
     }
     const replay = resolveAnchorOwnerGeneration({
-      comments: ownerHistoryComments,
+      comments: reconciliation.comments,
       anchorRef: post.anchor,
       markerPrefix: input.markerPrefix,
       trusted: actors,
@@ -2413,11 +2455,14 @@ function checkAuthoringOwnerPostIdentity(input) {
     let refusal = null;
     if ('problem' in replay) {
       refusal = `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: the owner history of anchor ${post.anchor} cannot be replayed: ${replay.problem}`;
+    } else if (
+      replay.closedSets.has(post.set) ||
+      reconciliation.closedSets.has(post.set)
+    ) {
+      refusal = `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: set ${post.set} was already closed by a trusted release-complete marker in the verified history of anchor ${post.anchor}`;
     } else if (sameIssueRef(post.target, post.anchor)) {
       if (replay.generation !== null) {
         refusal = `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: anchor ${post.anchor} already has open set ${replay.generation.set}${replay.generation.releasing ? ' with release in progress' : ''}`;
-      } else if (replay.closedSets.has(post.set)) {
-        refusal = `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: set ${post.set} was already closed by a trusted release-complete marker on anchor ${post.anchor}`;
       }
     } else if (replay.generation === null) {
       refusal = `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: anchor ${post.anchor} has no open owner generation to join`;

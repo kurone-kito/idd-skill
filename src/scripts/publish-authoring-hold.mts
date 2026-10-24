@@ -70,6 +70,7 @@ import {
 } from './policy-helpers.mts';
 import {
   type AnchorOwnerGeneration,
+  reconcileFormerChildMemberships,
   resolveAnchorOwnerGeneration,
 } from './post-idd-marker.mts';
 import {
@@ -1201,8 +1202,19 @@ function checkAnchor(input: {
       problem: `the anchor ${ref} has an open linked pull request, or its pull-request state cannot be read`,
     };
   }
-  const replay = resolveAnchorOwnerGeneration({
+  const reconciliation = reconcileFormerChildMemberships({
     comments,
+    historyTargetRef: ref,
+    markerPrefix: input.markerPrefix,
+    trusted: input.trusted,
+  });
+  if ('problem' in reconciliation) {
+    return {
+      problem: `the former child membership history of ${ref} cannot be reconciled: ${reconciliation.problem}`,
+    };
+  }
+  const replay = resolveAnchorOwnerGeneration({
+    comments: reconciliation.comments,
     anchorRef: ref,
     markerPrefix: input.markerPrefix,
     trusted: input.trusted,
@@ -1218,6 +1230,14 @@ function checkAnchor(input: {
   if (replay.generation.releasing) {
     return {
       problem: `the set of ${ref} is being released, so a child cannot join it`,
+    };
+  }
+  if (
+    replay.closedSets.has(replay.generation.set) ||
+    reconciliation.closedSets.has(replay.generation.set)
+  ) {
+    return {
+      problem: `the open generation of ${ref} reuses a set already closed in its verified owner history`,
     };
   }
   const { owner, set, session, latest } = replay.generation;

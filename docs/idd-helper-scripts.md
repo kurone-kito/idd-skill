@@ -1035,10 +1035,17 @@ in this preamble, since the fallback differs per helper.
   or after a completed generation with a fresh set ID; a closed set ID or
   any already-open generation, including a release in progress, refuses.
   A child must match its anchor's open, non-releasing set and session; owner
-  tokens are per-target and are not compared across the set. If the self-anchor
-  log contains former child memberships, each former anchor's owner log is also
-  read and must prove the matching set and session reached `release-complete`
-  after the child's release. Trusted marker history is replayed in
+  tokens are per-target and are not compared across the set. Former-child
+  memberships are reconciled whenever an anchor log is read, including child
+  acquisition and publication from an anchor that was itself previously a
+  child. Each former anchor's owner log must prove the matching set and session
+  reached `release-complete` after the child's final release and before the
+  next self-generation in `(createdAt, id)` order; an outdated release cannot
+  prove completion. Verified former-child set IDs remain closed and unavailable
+  for reuse. This covers the promoted-
+  anchor child-acquisition failure found during review on 2026-10-24 (PR #4677,
+  [thread #4366954325](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4366954325)).
+  Trusted marker history is replayed in
   `(createdAt, id)` order; malformed, edited,
   incomplete history, or one that cannot be replayed conclusively, refuses;
   an untrusted marker cannot close a set. If concurrent first openers both

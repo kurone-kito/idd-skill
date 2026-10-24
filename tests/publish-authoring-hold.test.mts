@@ -3777,6 +3777,78 @@ test('CLI: a child apply heartbeats the anchor, joins its set and never edits th
   }
 });
 
+test('CLI: a promoted anchor remains usable for child publication (#4669)', () => {
+  const formerAnchorRef = 'o/r#4001';
+  const formerSet = 'set-former-child';
+  const formerSession = 'session-former-child';
+  const formerChildFields = {
+    target: ANCHOR_REF,
+    anchor: formerAnchorRef,
+    set: formerSet,
+    session: formerSession,
+    owner: 'owner-former-child',
+  };
+  const fixture = setup({ labels: ['status:authoring'] });
+  try {
+    seedAnchor(fixture, {
+      markers: [
+        ownerMarkerText('acquire', formerChildFields),
+        ownerMarkerText('release', formerChildFields),
+        ownerMarkerText('acquire'),
+      ],
+    });
+    fixture.seed((stored) => {
+      stored.issues['4001'] = {
+        body: 'The former anchor is closed.',
+        labels: [],
+        state: 'closed',
+      };
+      const promotedSelfAcquire = stored.comments.find(
+        (comment) => comment.issue === ANCHOR && comment.id === 4102,
+      );
+      assert.ok(promotedSelfAcquire);
+      promotedSelfAcquire.createdAt = new Date(
+        Date.UTC(2026, 9, 12, 0, 0, 6),
+      ).toISOString();
+      for (const [index, mode] of [
+        'acquire',
+        'release',
+        'release-guard',
+        'release-complete',
+      ].entries()) {
+        stored.comments.push({
+          id: 4200 + index,
+          issue: 4001,
+          body: ownerMarkerText(mode, {
+            target: formerAnchorRef,
+            anchor: formerAnchorRef,
+            set: formerSet,
+            session: formerSession,
+            owner: 'owner-former-anchor',
+          }),
+          user: 'kurone-kito',
+          createdAt: new Date(
+            Date.UTC(2026, 9, 12, 0, 0, index + 2),
+          ).toISOString(),
+        });
+      }
+    });
+
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, 'published');
+    assert.equal(report.ids.anchor, ANCHOR_REF);
+    assert.equal(report.ids.set, ANCHOR_SET);
+    assert.ok(writeKinds(fixture).includes('anchor:heartbeat'));
+    assert.ok(
+      childComments(fixture).some((body) => /mode=acquire;/.test(body)),
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
 test('CLI: a fresh matching anchor marker is reused instead of posting a heartbeat', () => {
   const fixture = setup({ labels: ['status:authoring'] });
   try {
