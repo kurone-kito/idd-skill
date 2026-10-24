@@ -1068,8 +1068,13 @@ in this preamble, since the fallback differs per helper.
   does not need a release-complete ([PR #4677, thread #4367443380](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367443380)).
   A `release-complete` minimized as outdated cannot close a generation
   ([PR #4677, thread #4367445303](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367445303)).
-  A child release remains in progress across the required pre-removal
-  heartbeat ([PR #4677, thread #4367384977](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367384977)).
+  A child release remains the completion evidence across a later heartbeat:
+  its outdated state is preserved, completion must follow the latest child
+  marker, and the former-anchor completion is matched to the replayed
+  generation session because a release may be posted by a different session
+  ([PR #4677, threads #4367384977](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367384977),
+  [#4367477638](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367477638),
+  and [#4367486495](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367486495)).
   Trusted marker history is replayed in
   `(createdAt, id)` order; malformed, edited,
   incomplete history, or one that cannot be replayed conclusively, refuses;

@@ -2198,8 +2198,9 @@ function resolveFormerChildMembership(input) {
     closedGenerations: [],
     losers: new Set(),
   };
+  let releaseMarker = null;
   for (const { comment, parsed } of shaped) {
-    const next = advanceAnchorOwnerGeneration(state, parsed, {
+    const latest = {
       id: comment.id,
       mode: parsed.mode,
       owner: parsed.owner,
@@ -2207,18 +2208,24 @@ function resolveFormerChildMembership(input) {
       createdAt: comment.createdAt,
       bodySha256: parsed.bodySha256,
       outdated: isOutdatedMinimized(comment),
+    };
+    const next = advanceAnchorOwnerGeneration(state, parsed, {
+      ...latest,
     });
     if ('problem' in next) {
       return next;
     }
     state = next;
+    if (parsed.mode === 'release') {
+      releaseMarker = latest;
+    }
   }
-  if (state.open === null || !state.open.releasing) {
+  if (state.open === null || !state.open.releasing || releaseMarker === null) {
     return {
       problem: `former child membership ${input.membership.anchorRef}/${input.membership.set} has no trusted release marker in progress`,
     };
   }
-  return { generation: state.open };
+  return { generation: state.open, releaseMarker };
 }
 const MAX_FORMER_CHILD_RECONCILIATION_DEPTH = 32;
 const MAX_FORMER_CHILD_RECONCILIATION_READS = 32;
@@ -2481,29 +2488,29 @@ function reconcileFormerChildMembershipsInternal(input, ancestry, readBudget) {
         problem: `former anchor ${membership.anchorRef} owner history cannot be replayed: ${anchorReplay.problem}`,
       };
     }
-    const childRelease = childReplay.generation.latest;
-    const childReleaseAt = Date.parse(childRelease.createdAt);
+    const childRelease = childReplay.releaseMarker;
+    const childLatestAt = Date.parse(childReplay.generation.latest.createdAt);
     const completion = anchorReplay.closedGenerations.find((closed) => {
       const completionAt = Date.parse(closed.releaseComplete.createdAt);
       return (
         closed.set === membership.set &&
-        closed.session === childRelease.session &&
-        (completionAt > childReleaseAt ||
-          (completionAt === childReleaseAt &&
-            closed.releaseComplete.id > childRelease.id))
+        closed.session === childReplay.generation.session &&
+        (completionAt > childLatestAt ||
+          (completionAt === childLatestAt &&
+            closed.releaseComplete.id > childReplay.generation.latest.id))
       );
     });
     if (completion === undefined) {
       return {
-        problem: `former child membership ${membership.anchorRef}/${membership.set}/${childReplay.generation.latest.session} has no matching trusted release-complete from the former anchor's current owner`,
+        problem: `former child membership ${membership.anchorRef}/${membership.set}/${childReplay.generation.session} has no matching trusted release-complete from the former anchor's current owner`,
       };
     }
     const nextSelfOpening = selfAnchorOpenings
       .filter(
         (opening) =>
-          Date.parse(opening.createdAt) > childReleaseAt ||
-          (Date.parse(opening.createdAt) === childReleaseAt &&
-            opening.id > childRelease.id),
+          Date.parse(opening.createdAt) > childLatestAt ||
+          (Date.parse(opening.createdAt) === childLatestAt &&
+            opening.id > childReplay.generation.latest.id),
       )
       .sort(
         (left, right) =>

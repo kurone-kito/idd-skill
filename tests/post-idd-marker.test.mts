@@ -8486,8 +8486,14 @@ test('authoring-owner acquire lets a completed child become a fresh self-anchor 
 test('authoring-owner acquire preserves child release through a removal heartbeat (#4669)', () => {
   const targetComments = [
     { id: 101, body: ownerIdChildMarker('acquire') },
-    { id: 102, body: ownerIdChildMarker('release') },
-    { id: 103, body: ownerIdChildMarker('heartbeat') },
+    {
+      id: 102,
+      body: ownerIdChildMarker('release', { session: 'session-release' }),
+    },
+    {
+      id: 103,
+      body: ownerIdChildMarker('heartbeat', { session: 'session-heartbeat' }),
+    },
   ];
   const formerAnchorComments = [
     { id: 201, body: ownerIdAnchorMarker('acquire') },
@@ -9474,9 +9480,12 @@ test('authoring-owner acquire refuses an unreconciled former-child generation (#
       ],
     },
     {
-      name: 'release session does not match the former anchor completion',
+      name: 'child generation session does not match the former anchor completion',
       targetComments: [
-        { id: 101, body: ownerIdChildMarker('acquire') },
+        {
+          id: 101,
+          body: ownerIdChildMarker('acquire', { session: 'session-child' }),
+        },
         {
           id: 102,
           body: ownerIdChildMarker('release', { session: 'session-other' }),
