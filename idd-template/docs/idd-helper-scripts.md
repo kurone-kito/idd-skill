@@ -1016,7 +1016,7 @@ in this preamble, since the fallback differs per helper.
   the reliable JSON path that HTML-comment-first bodies require
   (referenced in
   [kurone-kito/idd-skill#1047](https://github.com/kurone-kito/idd-skill/issues/1047))
-  For the `authoring-owner` marker (issues `#3910` and `#3899`), a dry
+  For the `authoring-owner` marker (issues `#3910`, `#3899` and `#4669`), a dry
   run and `--apply` both run one more check before anything is posted. A
   `heartbeat`, `release`, `release-guard`, `release-complete` or `resume`
   post is refused, with exit `1` and nothing posted, unless its `set`,
@@ -1029,10 +1029,61 @@ in this preamble, since the fallback differs per helper.
   `(createdAt, id)` order that carries the owner token, in any mode, is
   written by a trusted login when any are configured, and is not minimized
   as outdated. One that was edited, whose edit state is unknown, or that
-  does not parse refuses the post. Acquire and bootstrap make no read. The
-  session is not compared, so a release from another session stays allowed.
-  The comments are read over GraphQL, paginated to
-  completion, and a failed or incomplete read refuses the post too. The
+  does not parse refuses the post. Acquire and bootstrap now read the
+  declared anchor's complete owner log over paginated GraphQL before either
+  dry-run output or POST. A self-anchored target may open from an empty log
+  or after a completed generation with a fresh set ID; a closed set ID or
+  any already-open generation, including a release in progress, refuses.
+  A child must match its anchor's open, non-releasing set and session; owner
+  tokens are per-target and are not compared across the set. Former-child
+  memberships are reconciled whenever an anchor log is read, including child
+  acquisition and publication from an anchor that was itself previously a
+  child. Reconciliation is recursive and stops on a cycle or the depth limit.
+  One shared budget allows at most 32 former-anchor history reads across the
+  full nested and sibling reconciliation; a larger history fails closed before
+  the next read. Acquire and bootstrap also fail closed before the anchor
+  owner-history read when the resolved trusted marker actor list is empty,
+  because no owner marker can then be established as trusted.
+  Each former anchor's owner log must prove the matching set and session
+  reached `release-complete` after the child's final release and before the
+  next self-generation in `(createdAt, id)` order. A child release minimized
+  as outdated is accepted as historical input only when that matching
+  completion precedes a verified later self-generation or the self-anchor
+  acquisition or bootstrap currently being preflighted; otherwise
+  reconciliation refuses. Verified
+  former-child set IDs, including IDs closed deeper in the former-anchor
+  ancestry, remain closed and unavailable for reuse. The nested propagation
+  gap was reproduced during review on 2026-10-24 (PR #4677, thread
+  #4367196700). This covers
+  child acquisition under a promoted anchor, found during review on
+  2026-10-24 (PR #4677,
+  [thread #4366954325](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4366954325)).
+  Follow-up review on the same PR found the outdated-release history case
+  ([thread #4367046666](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367046666))
+  and nested-promotion case
+  ([thread #4367046671](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367046671)).
+  Before reconciling foreign-child memberships, replay the target's
+  self-anchor history up to each foreign opener; an opener posted while a
+  different self generation is already open lost the target-wide race and
+  does not need a release-complete ([PR #4677, thread #4367443380](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367443380)).
+  A `release-complete` minimized as outdated cannot close a generation
+  ([PR #4677, thread #4367445303](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367445303)).
+  A child release remains the completion evidence across a later heartbeat:
+  its outdated state is preserved, completion must follow the latest child
+  marker, and the former-anchor completion is matched to the replayed
+  generation session because a release may be posted by a different session
+  ([PR #4677, threads #4367384977](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367384977),
+  [#4367477638](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367477638),
+  and [#4367486495](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367486495)).
+  Trusted marker history is replayed in
+  `(createdAt, id)` order; malformed, edited,
+  incomplete history, or one that cannot be replayed conclusively, refuses;
+  an untrusted marker cannot close a set. If concurrent first openers both
+  read before either POST, replay still gives the first valid opener the
+  generation.
+  The session is not compared for continuation modes, so a release from
+  another session stays allowed. A failed or incomplete comment read refuses
+  the post too. The
   check exists because a `release` carrying the mangled set id
   `set-8fc92e9b28760e` (for `set-8fc92e8e9b28760e`) was posted on the
   three issues `#3556`, `#3557` and `#3559` on 2026-09-27, about 20
