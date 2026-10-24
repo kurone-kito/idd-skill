@@ -2724,7 +2724,7 @@ const BRIEF_ELEMENT_ROWS: readonly {
   {
     element: 'worker report request',
     source: 'idd-template/docs/idd-workflow.md',
-    anchor: 'Fill the fields of `schemas/worker-report.schema.json`',
+    anchor: 'Fill the worker-supplied fields of',
     label: '**Worker report.**',
   },
   {
@@ -2900,7 +2900,11 @@ const BRIEF_PART_BODY_REQUIREMENTS: Readonly<
   '**Worker report.**': [
     'schemas/worker-report.schema.json',
     'any non-empty value',
-    'leave `verifiedAt` and `recordedAt` out',
+    'Leave `verifiedAt`, `recordedAt`, and `reviewRounds` out',
+    'the orchestrator sets `verifiedAt` to that check',
+    'sets `recordedAt` immediately before append',
+    'derives `reviewRounds` from the complete review list',
+    'Validate the completed record against the schema before appending it',
     '(#worker-report-outcomes)',
   ],
 };
@@ -3076,16 +3080,62 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     '.github/instructions/idd-orchestrator.instructions.md',
   ];
   const routingCases = [
-    'The harness supplies an existing valid root and there is no prior record',
-    'harness context identifies a first entry before claims or dispatch',
-    'The exact record matches this session and repository, and its root is valid',
-    'Claims already exist, but live evidence establishes that no worker was dispatched',
-    'The fallback directory already exists without a valid record',
-    'A record is unreadable, invalid, linked unsafely, for another session or repository',
-    'Worker launch or prior-worker state is uncertain',
-    'Allocation succeeded but the durable record cannot be verified',
-    'Stable session identity or a verified writable root cannot be resolved',
-    'A worker receives a missing parent path',
+    {
+      evidence:
+        'harness supplies an existing valid root and there is no prior record',
+      action:
+        'Verify the root, create and verify the record exclusively, then reuse it',
+    },
+    {
+      evidence:
+        'harness context identifies a first entry before claims or dispatch',
+      action: 'Allocate the private fallback root and record before Discover',
+    },
+    {
+      evidence:
+        'exact record matches this session and repository, and its root is valid',
+      action: 'Reuse that root and recover its report locations before refill',
+    },
+    {
+      evidence:
+        'Claims already exist, but live evidence establishes that no worker was dispatched',
+      action: 'resume those claims without minting a claim or nonce',
+    },
+    {
+      evidence:
+        'A worker dispatch is proven, but no safe root or matching session record can be recovered',
+      action:
+        'do not allocate or redispatch until ownership and report locations are reconciled',
+    },
+    {
+      evidence: 'fallback directory already exists without a valid record',
+      action: 'Hold and preserve it; do not reuse or overwrite it',
+    },
+    {
+      evidence:
+        'record is unreadable, invalid, linked unsafely, for another session or repository',
+      action: 'Hold and preserve all evidence; do not allocate a replacement',
+    },
+    {
+      evidence: 'Worker launch or prior-worker state is uncertain',
+      action: 'hold while any dispatch or ownership remains unresolved',
+    },
+    {
+      evidence:
+        'Allocation succeeded but the durable record cannot be verified',
+      action:
+        'Keep the directory and known path, start no worker, and hold for reconciliation',
+    },
+    {
+      evidence:
+        'Stable session identity or a verified writable root cannot be resolved',
+      action:
+        'Hold with the missing prerequisite; do not guess a harness capability',
+    },
+    {
+      evidence: 'A worker receives a missing parent path',
+      action: 'Hold in the worker, create nothing, and never use `mkdir -p`',
+    },
   ];
 
   for (const path of workflowCopies) {
@@ -3096,7 +3146,8 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       start >= 0 && end > start,
       `${path}: lifecycle section not found`,
     );
-    const lifecycle = normalizeWhitespace(text.slice(start, end));
+    const lifecycleText = text.slice(start, end);
+    const lifecycle = normalizeWhitespace(lifecycleText);
     for (const required of [
       'stable session identifier supplied by the current harness context',
       'path-safe single component',
@@ -3117,6 +3168,17 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       'adds no helper, policy key, or automatic deletion',
       'keep the allocated directory and any known path',
       'resume those claims without minting a claim or nonce',
+      'Resume only claims classified by the no-dispatch route',
+      'a complete worker listing and session artifacts with no matching worker',
+      'eligible resumes bypass step 4',
+      'run the profile-selected `idd-worker-budget` with `--running <n> --startable <resume-count>`',
+      'Add `--harness-limit <limit>` when the worker mechanism row gives one',
+      'Pass resume IDs to the profile-selected `discover-shared-file-overlap`',
+      '`--issues <ids> --batch <slots> --check-overlap`',
+      '`--desync-token <session-agent-id>` when `discover.selectionDesync` is `session-offset`',
+      'existing claim, nonce, branch, and worktree; skip A4.5/A5',
+      'until no resume remains, then Discover fresh candidates',
+      'zero-slot result follows the normal budget wait/stop rule; no pick preserves the claim',
       'hold for reconciliation',
     ]) {
       assert.ok(
@@ -3124,10 +3186,16 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
         `${path}: lifecycle must include ${required}`,
       );
     }
-    for (const routingCase of routingCases) {
+    const routingRows = lifecycleText
+      .split('\n')
+      .filter((line) => line.startsWith('|'))
+      .map(normalizeWhitespace);
+    for (const { evidence, action } of routingCases) {
       assert.ok(
-        lifecycle.includes(routingCase),
-        `${path}: missing scratchpad route ${routingCase}`,
+        routingRows.some(
+          (row) => row.includes(evidence) && row.includes(action),
+        ),
+        path + ': missing scratchpad evidence/action pair for ' + evidence,
       );
     }
 
@@ -3147,6 +3215,26 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     );
     assert.match(text, /directly in the resolved session scratchpad root/);
     assert.match(text, /the verified root from the session\s+record/);
+    assert.match(
+      normalizeWhitespace(text),
+      /On restart, enumerate direct-child JSON drafts with that issue number prefix and select only the unique draft matching both `issue` and `claimId`; hold on unreadable or ambiguous matches/,
+    );
+    assert.match(
+      normalizeWhitespace(text),
+      /If a candidate is a symlink or non-regular file, hold and preserve it without following it/,
+    );
+    assert.match(
+      normalizeWhitespace(text),
+      /`--issues <ids> --batch <slots> --check-overlap`/,
+    );
+    assert.match(
+      normalizeWhitespace(text),
+      /An own claim that matches no worker is an unmatched claim unless the session-scratchpad lifecycle has positively classified it as an eligible never-dispatched resume/,
+    );
+    assert.match(
+      normalizeWhitespace(text),
+      /If the resume set is non-empty, use the lifecycle's budgeted resume route before fresh candidates and do not run step 4 on those claims before dispatch/,
+    );
     assert.doesNotMatch(
       text,
       /copy the scratchpad path that your harness reports/,
@@ -3164,5 +3252,9 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       /already-claimed\/no-dispatch work without new claims or nonces/,
     );
     assert.match(text, /worker missing-parent guard/);
+    assert.match(
+      text,
+      /Verify outcome on live GitHub outside the worktree; set `verifiedAt`, append-time `recordedAt`, roster `workerHandle`, and applicable `reviewRounds`\. Validate and append with the profile-selected `idd-worker-report append --file <path>`, then dispose per table/,
+    );
   }
 });

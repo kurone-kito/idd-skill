@@ -1188,6 +1188,7 @@ session-and-repository record, and live worker and artifact evidence:
 | There is no supplied root or record, and harness context identifies a first entry before claims or dispatch; the complete worker listing and session artifacts show no prior start | Allocate the private fallback root and record before Discover                                                                                                  |
 | The exact record matches this session and repository, and its root is valid                                                                                                        | Reuse that root and recover its report locations before refill                                                                                                 |
 | Claims already exist, but live evidence establishes that no worker was dispatched                                                                                                  | Revalidate every claim, winning nonce, worktree lock, and token record first; then bootstrap the root and resume those claims without minting a claim or nonce |
+| A worker dispatch is proven, but no safe root or matching session record can be recovered                                                                                          | Hold and preserve briefs and reports; do not allocate or redispatch until ownership and report locations are reconciled                                        |
 | The fallback directory already exists without a valid record                                                                                                                       | Hold and preserve it; do not reuse or overwrite it                                                                                                             |
 | A record is unreadable, invalid, linked unsafely, for another session or repository, or its root is missing, contradictory, or unsafe                                              | Hold and preserve all evidence; do not allocate a replacement                                                                                                  |
 | Worker launch or prior-worker state is uncertain                                                                                                                                   | Reconcile the live worker list and existing briefs and reports; hold while any dispatch or ownership remains unresolved                                        |
@@ -1201,6 +1202,25 @@ issue, the winning nonce, the worktree-local lock, and the generated-token
 record. Confirm the harness has no matching started worker and inspect any
 available briefs and report drafts before allocating. If worker state cannot be
 proven absent, stop for reconciliation instead of starting a replacement.
+
+**Resume dispatch.** Resume only claims classified by the no-dispatch route.
+Require an open issue and `already_owned` claim with its winning nonce,
+worktree lock, and token record, plus a complete worker listing and session
+artifacts with no matching worker, brief, or report draft. Reassert ownership
+immediately before dispatch; eligible resumes bypass step 4.
+
+Before fresh Discover, run the profile-selected `idd-worker-budget` with
+`--running <n> --startable <resume-count>`. Add `--harness-limit <limit>` when
+the worker mechanism row gives one. Pass resume IDs to the
+profile-selected `discover-shared-file-overlap` with `--issues <ids> --batch
+<slots> --check-overlap`, each live issue as `--in-flight`, and
+`--desync-token <session-agent-id>` when `discover.selectionDesync` is
+`session-offset`. Start only its picks with the normal brief/report path and
+existing claim, nonce, branch, and worktree; skip A4.5/A5. Repeat on refill
+until no resume remains, then Discover fresh candidates. A zero-slot result
+follows the normal budget wait/stop rule; no pick preserves the claim. If
+ownership changes, dispatch evidence appears, or absence is uncertain, hold;
+never start a second worker for the claim.
 
 Running this variant safely requires:
 
@@ -1679,16 +1699,20 @@ that hands a worker into E10, E13, E14, or E15 has no supported cold-entry route
 yet, so stop and report instead.
 
 **Worker report.** Write your final report as a draft to `{report-path}`,
-outside the worktree. Fill the fields of `schemas/worker-report.schema.json`:
+outside the worktree. Fill the worker-supplied fields of
+`schemas/worker-report.schema.json`:
 `schemaVersion`, `issue`, `pullRequest`, `claimId`, `harness`, `workerHandle`,
 `terminalPhase`, `outcome`, and the optional `stalls`,
 `deviations`, `frictions`, `followUps`, and `unfiledFollowUps`. Use
 `followUps` only for issues you filed; put textual follow-ups you identified but
 did not file in `unfiledFollowUps`. Give `workerHandle` any non-empty
 value, such as `{agent-id}`, which the orchestrator overwrites from its roster
-entry, and leave `verifiedAt` and `recordedAt` out, because you cannot know
-them. Also leave `reviewRounds` out: the orchestrator derives it from the
-pull request's reviews. Do not append the draft to the
+entry. Leave `verifiedAt`, `recordedAt`, and `reviewRounds` out: after
+checking the outcome against live GitHub, the orchestrator sets `verifiedAt`
+to that check, sets `recordedAt` immediately before append, and derives
+`reviewRounds` from the complete review list for a non-null pull request.
+Validate the completed record against the schema before appending it. Do not
+append the draft to the
 [worker final report store](idd-helper-scripts.md#worker-final-report-store),
 because the orchestrator checks it against live GitHub state first. The
 `outcome` that the draft proposes follows
@@ -1696,10 +1720,12 @@ because the orchestrator checks it against live GitHub state first. The
 
 Fill note: set `{report-path}` to a file whose name starts with the issue number,
 for example `2878-worker-report.json`, directly under the resolved session
-scratchpad root. The durable record lets an orchestrator restart rediscover this
-same root and report draft without depending on a fresh harness path.
-At verification, the orchestrator computes `reviewRounds` from the complete
-review list for a non-null `pullRequest`:
+scratchpad root. On restart, enumerate direct-child JSON drafts with that issue
+number prefix and select only the unique draft matching both `issue` and
+`claimId`; hold on unreadable or ambiguous matches. The durable record lets an
+orchestrator restart rediscover this same root and report draft without
+depending on a fresh harness path. At verification, the orchestrator computes
+`reviewRounds` from the complete review list for a non-null `pullRequest`:
 
 ```bash
 set -o pipefail
@@ -1935,18 +1961,23 @@ own.
    worker is matched, every own claim that reached this step goes to step 5, and
    the rest of this step is skipped, including the Discover pass, the budget
    call, the overlap check, and every worker start, because the running workers
-   are unknown. An own claim that matches no worker, unless it is a released
-   claim with no linked worktree, and a listed live worker that matches no own
-   claim, also skip the rest of this step, because such a worker may still be
-   running and hold a slot the budget cannot see, an own claim goes to step 4
-   for report recovery and then to step 5, and a listed live worker goes to step
-   5. A session without a unique session-suffixed agent id also skips the rest
-   of this step, because it cannot tell its workers from another session's. Only
+   are unknown. An own claim that matches no worker is an unmatched claim unless
+   the session-scratchpad lifecycle has positively classified it as an eligible
+   never-dispatched resume. Only such a resume skips step 4 before dispatch;
+   all other unmatched own claims go to step 4 for report recovery and then
+   step 5. A released claim with no linked worktree is never resumed. A listed
+   live worker that matches no own claim also skips refill, because it may still
+   be running and hold a slot the budget cannot see; report it in step 5. A
+   session without a unique session-suffixed agent id also skips the rest of
+   this step, because it cannot tell its workers from another session's. Only
    when a listing exists, the session has a unique session-suffixed agent id,
-   and no such unmatched claim or unmatched live worker remains, recount the
-   roster. After a restart, run a fresh Discover pass first, as section 3 of the
-   orchestrator phase file describes, and count its candidates (0 when none);
-   the cached graph is discarded and cannot supply that count. Then run the
+   and no unmatched claim outside the eligible resume set or unmatched live
+   worker remains, recount the roster. If the resume set is non-empty, use the
+   lifecycle's budgeted resume route before fresh candidates and do not run step
+   4 on those claims before dispatch. Once it is empty, run a fresh Discover
+   pass as section 3 of the orchestrator phase file describes, and count its
+   candidates (0 when none); the cached graph is discarded and cannot supply
+   that count. Then run the
    profile-selected `idd-worker-budget` command with `--running <n> --startable
    <n>`, where `--running` is the count above and `--startable` is the count
    just taken. Add `--harness-limit <limit>` when this harness's row in the
@@ -1978,10 +2009,15 @@ own.
    store dedupes on claimId, workerHandle, and terminalPhase, so a retry is
    safe. A matched running worker gets no record. A released claim whose only
    matched worker is still running gets no record and is reported in step 5.
-   Look for the worker's report draft in the verified root from the session
-   record, at `<scratchpadRoot>/<issue-number>-worker-report.json`; issue-numbered
-   scratch files remain in that root's matching issue directory. If a
-   draft is found, check that its `issue` and `claimId` match the claim. When
+   In the verified root from the session record, enumerate direct-child report
+   drafts whose filename starts with the issue number and ends in `.json`;
+   issue-numbered scratch files remain in that root's matching issue directory.
+   If a candidate is a symlink or non-regular file, hold and preserve it without
+   following it. Read each regular candidate and use only one whose `issue` and
+   `claimId` match the claim. If a candidate is unreadable, or multiple
+   candidates match, hold and preserve them for reconciliation. If no candidate
+   matches, use the no-draft route below; never append a draft for another
+   claim. When
    the claim has a matched worker, set the draft's `workerHandle` to the listed
    handle, whatever value the draft holds, as section 5 of the orchestrator
    phase file does at the append. A draft that matches the claim but has no
@@ -1995,7 +2031,7 @@ own.
    again, if no other unmatched own claim or unmatched live worker remains. Do
    not append a draft that does not match. Then verify its outcome,
    `pullRequest`, and `terminalPhase` against live GitHub state, set
-   `verifiedAt` to that check and `recordedAt` to the time of the append.
+   `verifiedAt` to that check and `recordedAt` immediately before append.
    Recompute `reviewRounds` from the complete paginated review list using the
    Worker report Fill note above, replacing any draft value. Omit the field if
    `pullRequest` is null or the complete count cannot be read. Then append it.

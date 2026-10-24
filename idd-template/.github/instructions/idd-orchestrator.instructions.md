@@ -91,9 +91,10 @@ Track each worker's issue, claim, branch, handle, report path, and state
 
 ## 5. Report and disposal
 
-Verify the schema-valid draft outside the worktree against live GitHub; set
-`workerHandle` from the roster, append with the profile-selected
-`idd-worker-report append --file <path>`, and dispose per the worker table.
+Verify outcome on live GitHub outside the worktree; set `verifiedAt`,
+append-time `recordedAt`, roster `workerHandle`, and applicable
+`reviewRounds`. Validate and append with the profile-selected
+`idd-worker-report append --file <path>`, then dispose per table.
 Without a start handle or after verification/append failure, append nothing,
 mark `stalled`, and follow fan-out recovery.
 
