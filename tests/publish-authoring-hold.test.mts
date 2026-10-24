@@ -180,8 +180,8 @@ if (args.includes('graphql')) {
     updatedAt: c.createdAt,
     body: c.body,
     author: { login: c.user },
-    isMinimized: false,
-    minimizedReason: null,
+    isMinimized: (c.minimizedReason ?? null) !== null,
+    minimizedReason: c.minimizedReason ?? null,
   }));
   out({ data: { repository: { issue: { comments: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } } } });
 }
@@ -343,6 +343,7 @@ interface StubState {
     body: string;
     user: string;
     createdAt: string;
+    minimizedReason?: string | null;
   }[];
   [key: string]: unknown;
 }
@@ -3803,6 +3804,11 @@ test('CLI: a promoted anchor remains usable for child publication (#4669)', () =
         labels: [],
         state: 'closed',
       };
+      const formerChildRelease = stored.comments.find(
+        (comment) => comment.issue === ANCHOR && comment.id === 4101,
+      );
+      assert.ok(formerChildRelease);
+      formerChildRelease.minimizedReason = 'outdated';
       const promotedSelfAcquire = stored.comments.find(
         (comment) => comment.issue === ANCHOR && comment.id === 4102,
       );

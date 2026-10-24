@@ -2030,11 +2030,13 @@ log for the identity check (#3899). Acquire and bootstrap read the declared
 anchor's paginated owner log before dry-run output or POST. A self-anchor or
 child post may use only a fresh set and valid open-generation state. When an
 anchor log shows prior child memberships, each former anchor's owner log is
-also read and must show the matching set/session release-complete after the
-child's release and before the next self-anchored generation. Closed set IDs,
-outdated releases, an open or releasing self-generation, or unreadable history
-that cannot be replayed conclusively refuses the post. A completed history
-with a fresh set remains valid.
+also read recursively, with cycle and depth guards, and must show the matching
+set/session release-complete after the child's release and before the next
+self-anchored generation. An outdated child release is usable only as historical
+input when that verified later generation exists, or the post is opening it
+now; otherwise reconciliation refuses. Closed set IDs, an open or releasing
+self-generation, or unreadable history that cannot be replayed conclusively
+refuses the post. A completed history with a fresh set remains valid.
 Concurrent first openers still resolve by comment order.
 --marker-target / --marker-owner map to these
 markers' own \`target=\` / \`owner=\` fields -- named with a \`marker-\`
@@ -2609,12 +2611,24 @@ function resolveFormerChildMembership(input: {
       problem: `former child membership ${input.membership.anchorRef}/${input.membership.set} has no final trusted release marker`,
     };
   }
-  if (state.open.latest.outdated) {
-    return {
-      problem: `former child membership ${input.membership.anchorRef}/${input.membership.set} has a final release marker minimized as outdated`,
-    };
-  }
   return { generation: state.open };
+}
+
+const MAX_FORMER_CHILD_RECONCILIATION_DEPTH = 32;
+
+type FormerChildReconciliationResult =
+  | {
+      comments: AuthoringOwnerProvenanceComment[];
+      closedSets: ReadonlySet<string>;
+    }
+  | { problem: string };
+
+interface FormerAnchorSelfOpening {
+  id: number;
+  createdAt: string;
+  owner: string;
+  set: string;
+  session: string;
 }
 
 /**
@@ -2622,23 +2636,43 @@ function resolveFormerChildMembership(input: {
  * Reconcile each old child membership against the exact former anchor/set/
  * session completion before removing those foreign-anchor markers from an
  * anchor replay. Any later self-generation must open after that completion.
- * Incomplete target or former-anchor history fails closed.
+ * Former anchors are reconciled recursively with a cycle and depth guard.
+ * An outdated child release is historical only when the matching completion
+ * precedes a verified later self-generation. Incomplete history fails closed.
  */
-export function reconcileFormerChildMemberships(input: {
-  comments: readonly AuthoringOwnerProvenanceComment[];
-  historyTargetRef: string;
-  markerPrefix: string;
-  trusted: readonly string[];
-}):
-  | {
-      comments: AuthoringOwnerProvenanceComment[];
-      closedSets: ReadonlySet<string>;
-    }
-  | { problem: string } {
+function reconcileFormerChildMembershipsInternal(
+  input: {
+    comments: readonly AuthoringOwnerProvenanceComment[];
+    historyTargetRef: string;
+    markerPrefix: string;
+    trusted: readonly string[];
+    pendingSelfAnchorOpening?: boolean;
+  },
+  ancestry: readonly string[],
+): FormerChildReconciliationResult {
+  const target = parseIssueReference(input.historyTargetRef);
+  if (target === null) {
+    return {
+      problem: `history target ${input.historyTargetRef} is not a readable issue reference`,
+    };
+  }
+  const targetKey = `${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
+  if (ancestry.includes(targetKey)) {
+    return {
+      problem: `former-anchor reconciliation cycle detected at ${input.historyTargetRef}`,
+    };
+  }
+  if (ancestry.length >= MAX_FORMER_CHILD_RECONCILIATION_DEPTH) {
+    return {
+      problem: `former-anchor reconciliation exceeded the maximum depth of ${MAX_FORMER_CHILD_RECONCILIATION_DEPTH}`,
+    };
+  }
+  const nextAncestry = [...ancestry, targetKey];
+
   const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
   const foreignMemberships = new Map<string, FormerChildMembership>();
   const foreignCommentIds = new Set<number>();
-  const selfAnchorOpenings: { id: number; createdAt: string }[] = [];
+  const selfAnchorOpenings: FormerAnchorSelfOpening[] = [];
   for (const comment of input.comments) {
     if (
       (trustedSet.size > 0 &&
@@ -2680,6 +2714,9 @@ export function reconcileFormerChildMemberships(input: {
         selfAnchorOpenings.push({
           id: comment.id,
           createdAt: comment.createdAt,
+          owner: parsed.owner,
+          set: parsed.set,
+          session: parsed.session,
         });
       }
       continue;
@@ -2706,6 +2743,7 @@ export function reconcileFormerChildMemberships(input: {
 
   const anchorReplays = new Map<string, AnchorOwnerReplayResult>();
   const closedSets = new Set<string>();
+  const outdatedReleaseSuccessors: FormerAnchorSelfOpening[] = [];
   for (const membership of foreignMemberships.values()) {
     const childReplay = resolveFormerChildMembership({
       membership,
@@ -2720,8 +2758,8 @@ export function reconcileFormerChildMemberships(input: {
     }
 
     const anchorKey = membership.anchorRef.toLowerCase();
-    let anchorReplay = anchorReplays.get(anchorKey);
-    if (anchorReplay === undefined) {
+    let cachedAnchorReplay = anchorReplays.get(anchorKey);
+    if (cachedAnchorReplay === undefined) {
       const anchor = parseIssueReference(membership.anchorRef);
       if (anchor === null) {
         return {
@@ -2740,14 +2778,45 @@ export function reconcileFormerChildMemberships(input: {
           problem: `former anchor ${membership.anchorRef} owner history cannot be read: ${(error as Error).message}`,
         };
       }
-      anchorReplay = resolveAnchorOwnerGeneration({
-        comments: anchorComments,
+      const anchorReconciliation = reconcileFormerChildMembershipsInternal(
+        {
+          comments: anchorComments,
+          historyTargetRef: membership.anchorRef,
+          markerPrefix: input.markerPrefix,
+          trusted: input.trusted,
+        },
+        nextAncestry,
+      );
+      if ('problem' in anchorReconciliation) {
+        return {
+          problem: `former anchor ${membership.anchorRef} history cannot be reconciled: ${anchorReconciliation.problem}`,
+        };
+      }
+      const anchorReplay = resolveAnchorOwnerGeneration({
+        comments: anchorReconciliation.comments,
         anchorRef: membership.anchorRef,
         markerPrefix: input.markerPrefix,
         trusted: input.trusted,
       });
-      anchorReplays.set(anchorKey, anchorReplay);
+      if ('problem' in anchorReplay) {
+        return {
+          problem: `former anchor ${membership.anchorRef} owner history cannot be replayed: ${anchorReplay.problem}`,
+        };
+      }
+      const reusedFormerChildSet = [...anchorReconciliation.closedSets].find(
+        (set) =>
+          anchorReplay.closedSets.has(set) ||
+          anchorReplay.generation?.set === set,
+      );
+      if (reusedFormerChildSet !== undefined) {
+        return {
+          problem: `former anchor ${membership.anchorRef} reuses set ${reusedFormerChildSet}, already closed by a verified former-child membership`,
+        };
+      }
+      cachedAnchorReplay = anchorReplay;
+      anchorReplays.set(anchorKey, cachedAnchorReplay);
     }
+    const anchorReplay = cachedAnchorReplay;
     if ('problem' in anchorReplay) {
       return {
         problem: `former anchor ${membership.anchorRef} owner history cannot be replayed: ${anchorReplay.problem}`,
@@ -2798,15 +2867,71 @@ export function reconcileFormerChildMemberships(input: {
         problem: `former anchor ${membership.anchorRef}/${membership.set} release-complete does not precede the next self-anchored generation`,
       };
     }
+    if (childRelease.outdated) {
+      if (nextSelfOpening === undefined) {
+        if (input.pendingSelfAnchorOpening !== true) {
+          return {
+            problem: `former child membership ${membership.anchorRef}/${membership.set} has a final release marker minimized as outdated without a later self-anchored generation`,
+          };
+        }
+      } else {
+        outdatedReleaseSuccessors.push(nextSelfOpening);
+      }
+    }
     closedSets.add(membership.set);
   }
 
-  return {
-    comments: input.comments.filter(
-      (comment) => !foreignCommentIds.has(comment.id),
-    ),
-    closedSets,
-  };
+  const reconciledComments = input.comments.filter(
+    (comment) => !foreignCommentIds.has(comment.id),
+  );
+  const selfReplay = resolveAnchorOwnerGeneration({
+    comments: reconciledComments,
+    anchorRef: input.historyTargetRef,
+    markerPrefix: input.markerPrefix,
+    trusted: input.trusted,
+  });
+  if ('problem' in selfReplay) {
+    return {
+      problem: `self-anchored owner history cannot be replayed after former-child reconciliation: ${selfReplay.problem}`,
+    };
+  }
+  const reusedFormerChildSet = [...closedSets].find(
+    (set) =>
+      selfReplay.closedSets.has(set) || selfReplay.generation?.set === set,
+  );
+  if (reusedFormerChildSet !== undefined) {
+    return {
+      problem: `self-anchored owner history reuses set ${reusedFormerChildSet}, already closed by a verified former-child membership`,
+    };
+  }
+  for (const opening of outdatedReleaseSuccessors) {
+    const verifiedGeneration = [
+      ...selfReplay.closedGenerations,
+      ...(selfReplay.generation === null ? [] : [selfReplay.generation]),
+    ].some(
+      (generation) =>
+        generation.owner === opening.owner &&
+        generation.set === opening.set &&
+        generation.session === opening.session,
+    );
+    if (!verifiedGeneration) {
+      return {
+        problem: `former child release ${opening.id} minimized as outdated has no verified later self-anchored generation`,
+      };
+    }
+  }
+
+  return { comments: reconciledComments, closedSets };
+}
+
+export function reconcileFormerChildMemberships(input: {
+  comments: readonly AuthoringOwnerProvenanceComment[];
+  historyTargetRef: string;
+  markerPrefix: string;
+  trusted: readonly string[];
+  pendingSelfAnchorOpening?: boolean;
+}): FormerChildReconciliationResult {
+  return reconcileFormerChildMembershipsInternal(input, []);
 }
 
 /**
@@ -2881,6 +3006,7 @@ function checkAuthoringOwnerPostIdentity(input: {
       historyTargetRef: post.anchor,
       markerPrefix: input.markerPrefix,
       trusted: actors,
+      pendingSelfAnchorOpening: sameIssueRef(post.target, post.anchor),
     });
     if ('problem' in reconciliation) {
       const refusal = `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: former child membership history cannot be reconciled: ${reconciliation.problem}`;

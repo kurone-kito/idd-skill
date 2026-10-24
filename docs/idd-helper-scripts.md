@@ -1038,13 +1038,22 @@ in this preamble, since the fallback differs per helper.
   tokens are per-target and are not compared across the set. Former-child
   memberships are reconciled whenever an anchor log is read, including child
   acquisition and publication from an anchor that was itself previously a
-  child. Each former anchor's owner log must prove the matching set and session
+  child. Reconciliation is recursive and stops on a cycle or the depth limit.
+  Each former anchor's owner log must prove the matching set and session
   reached `release-complete` after the child's final release and before the
-  next self-generation in `(createdAt, id)` order; an outdated release cannot
-  prove completion. Verified former-child set IDs remain closed and unavailable
-  for reuse. This covers the promoted-
-  anchor child-acquisition failure found during review on 2026-10-24 (PR #4677,
+  next self-generation in `(createdAt, id)` order. A child release minimized
+  as outdated is accepted as historical input only when that matching
+  completion precedes a verified later self-generation or the self-anchor
+  acquisition or bootstrap currently being preflighted; otherwise
+  reconciliation refuses. Verified
+  former-child set IDs remain closed and unavailable for reuse. This covers
+  child acquisition under a promoted anchor, found during review on
+  2026-10-24 (PR #4677,
   [thread #4366954325](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4366954325)).
+  Follow-up review on the same PR found the outdated-release history case
+  ([thread #4367046666](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367046666))
+  and nested-promotion case
+  ([thread #4367046671](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367046671)).
   Trusted marker history is replayed in
   `(createdAt, id)` order; malformed, edited,
   incomplete history, or one that cannot be replayed conclusively, refuses;
