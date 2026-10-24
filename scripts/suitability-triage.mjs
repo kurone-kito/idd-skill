@@ -876,6 +876,7 @@ const UNSAFE_HUMAN_ACTOR_TARGET_SOURCE = String.raw`by\s+(?:(?:the|a|an)\s+)?${U
 // execution assignment; supplied executable sources have their own matcher.
 const UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE =
   '(?:generated|maintained|provided|created|built|written|compiled|developed|authored|designed|produced|implemented|assembled|configured)';
+const UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_MODIFIER_SOURCE = String.raw`(?:\s+(?:[\w'-]+ly|in\s+(?:the\s+)?CI))*`;
 // Keep coordinated nouns such as "test suite" inside the command object.
 // A coordinator plus a verb and determiner starts a separate clause, as in
 // the passive-attribution boundary "and inspect the deployment by ...".
@@ -886,7 +887,15 @@ const UNSAFE_DIRECT_ACTOR_ROLE_COORDINATED_COMMAND_VERB_SOURCE =
   '(?:verify|check|test|run|execute|paste|install|invoke|record|review|read|write|update|add|remove|create|build|generate|use|open|close|follow|document|fix|resolve|ensure|compare|validate|select|download|upload|copy|move|apply|perform|handle|manage|implement|investigate)';
 const UNSAFE_DIRECT_ACTOR_ROLE_COORDINATED_COMMAND_CONNECTOR_SOURCE = String.raw`(?:and|or|but|then|also)(?:\s+(?:then|also))?`;
 const UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE = String.raw`(?:${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}(?:\s+|-)(?:agent|assistant|bot)|user-facing\s+coding\s+agent)`;
-const UNSAFE_DIRECT_ACTOR_ROLE_TARGET_SOURCE = String.raw`(?:^\s*${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE}by\s+(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}|^\s*${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE}${UNSAFE_DIRECT_ACTOR_ROLE_COORDINATED_COMMAND_CONNECTOR_SOURCE}\s+${UNSAFE_DIRECT_ACTOR_ROLE_COORDINATED_COMMAND_VERB_SOURCE}\s+${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE}by\s+(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE})`;
+const UNSAFE_DIRECT_ACTOR_ROLE_TARGET_SOURCE = String.raw`(?:^\s*(${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE})by\s+(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}|^\s*${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE}${UNSAFE_DIRECT_ACTOR_ROLE_COORDINATED_COMMAND_CONNECTOR_SOURCE}\s+${UNSAFE_DIRECT_ACTOR_ROLE_COORDINATED_COMMAND_VERB_SOURCE}\s+(${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE})by\s+(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE})`;
+const UNSAFE_DIRECT_ACTOR_ROLE_TARGET = new RegExp(
+  UNSAFE_DIRECT_ACTOR_ROLE_TARGET_SOURCE,
+  'i',
+);
+const UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_ATTRIBUTION_PREFIX = new RegExp(
+  String.raw`\b${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE}${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_MODIFIER_SOURCE}\s*$`,
+  'i',
+);
 const UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET_SOURCE = String.raw`^\s*this\s+(?:step|check)\s+by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}(?:[\s-]+[\w-]+)*\s*[.!?]?\s*$`;
 const UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET = new RegExp(
   UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET_SOURCE,
@@ -902,6 +911,8 @@ const SUPPLIED_CONTENT_USER_SUPPLIED_TOOL_SOURCE = String.raw`(?:(?:the|a|an)\s+
 // Preserve existing human-source detection when a relative clause or
 // provenance adverb separates an executable noun from its passive verb.
 const SUPPLIED_CONTENT_HUMAN_SOURCE_MODIFIER_SOURCE = String.raw`(?:(?:that|which)\s+(?:was|is|are|were|has been|have been|had been)\s+)?(?:(?:[\w'-]+ly|just|already|still)\s+)?`;
+const SUPPLIED_CONTENT_HUMAN_SOURCE_PASSIVE_MODIFIER_SOURCE =
+  UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_MODIFIER_SOURCE;
 const SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE = String.raw`(?:(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)|a\s+(?:user|human|tester|reviewer|maintainer|developer|person)|an\s+operator)`;
 const SUPPLIED_CONTENT_AGENT_ROLE_SOURCE = String.raw`(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}`;
 const SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE = String.raw`(?![\w-](?!(?:-?(?:agent|assistant|bot))\b)|\s+interface\b)`;
@@ -5289,7 +5300,7 @@ function findUnsafeExecutionDirectiveMatch(
   // interface" available for passive attribution. After a direct command
   // object, a recognized human prefix followed by a noun remains unsafe.
   const directActorCompoundTargetPattern = new RegExp(
-    String.raw`^\s*${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE}by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}\s+(?!(?:${UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE})\b)[\w-]+`,
+    String.raw`^\s*(${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE})by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}\s+(?!(?:${UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE})\b)[\w-]+`,
     'i',
   );
   const suppliedContentHumanSourcePattern = new RegExp(
@@ -5300,7 +5311,7 @@ function findUnsafeExecutionDirectiveMatch(
     // leave compounds such as "user interface" intact as attribution. The
     // role alternative reuses the direct-role vocabulary for executable
     // sources only; it does not change the manual-handoff grammar.
-    String.raw`\b${SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE}\b\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_MODIFIER_SOURCE})?${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE}\s+by\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE}${SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE}(?:(?:\s+|-)[\w'-]+)?|${SUPPLIED_CONTENT_AGENT_ROLE_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}|${SUPPLIED_CONTENT_USER_SUPPLIED_TOOL_SOURCE})`,
+    String.raw`\b${SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE}\b\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_MODIFIER_SOURCE})?${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE}${SUPPLIED_CONTENT_HUMAN_SOURCE_PASSIVE_MODIFIER_SOURCE}\s+by\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE}${SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE}(?:(?:\s+|-)[\w'-]+)?|${SUPPLIED_CONTENT_AGENT_ROLE_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}|${SUPPLIED_CONTENT_USER_SUPPLIED_TOOL_SOURCE})`,
     'i',
   );
   const suppliedContentUserSuppliedTargetPattern = new RegExp(
@@ -5331,20 +5342,44 @@ function findUnsafeExecutionDirectiveMatch(
       let generalTargetMatch = null;
       let candidateGeneralTargetMatch = targetPattern.exec(window);
       while (candidateGeneralTargetMatch) {
-        const suppressedPassiveAttribution =
-          /^by\s/i.test(candidateGeneralTargetMatch[0] ?? '') &&
-          passiveAttributionPrefixPattern.test(
-            window.slice(0, candidateGeneralTargetMatch.index),
+        const directRoleTargetCandidate = UNSAFE_DIRECT_ACTOR_ROLE_TARGET.exec(
+          candidateGeneralTargetMatch[0] ?? '',
+        );
+        const directRoleTargetPrefix =
+          directRoleTargetCandidate?.[1] ??
+          directRoleTargetCandidate?.[2] ??
+          '';
+        const suppressedPassiveRoleAttribution =
+          directRoleTargetCandidate !== null &&
+          UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_ATTRIBUTION_PREFIX.test(
+            directRoleTargetPrefix,
           );
+        const suppressedPassiveAttribution =
+          suppressedPassiveRoleAttribution ||
+          (/^by\s/i.test(candidateGeneralTargetMatch[0] ?? '') &&
+            passiveAttributionPrefixPattern.test(
+              window.slice(0, candidateGeneralTargetMatch.index),
+            ));
         if (!suppressedPassiveAttribution) {
           generalTargetMatch = candidateGeneralTargetMatch;
           break;
         }
         candidateGeneralTargetMatch = targetPattern.exec(window);
       }
+      const directActorCompoundMatch =
+        directActorCompoundTargetPattern.exec(window);
+      const directActorCompoundPrefix =
+        directActorCompoundMatch?.[1] ?? directActorCompoundMatch?.[2] ?? '';
+      const directActorCompoundIsPassiveAttribution =
+        directActorCompoundMatch !== null &&
+        UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_ATTRIBUTION_PREFIX.test(
+          directActorCompoundPrefix,
+        );
       const targetMatch =
         generalTargetMatch ??
-        directActorCompoundTargetPattern.exec(window) ??
+        (directActorCompoundIsPassiveAttribution
+          ? null
+          : directActorCompoundMatch) ??
         suppliedContentHumanSourcePattern.exec(window) ??
         suppliedContentUserSuppliedTargetPattern.exec(window) ??
         UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET.exec(window);
