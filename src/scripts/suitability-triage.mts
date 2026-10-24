@@ -1107,7 +1107,7 @@ const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:${UNSAFE_DIRECT_ACTOR_ROLE_
 // Only this specialized path recognizes human-sourced executable and task
 // objects; keeping these nouns separate avoids making ordinary "run this
 // test/check/step" repository commands look like supplied content.
-const SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE = `(?:${SUPPLIED_CONTENT_NOUN}|(?:build|test|check|step|task)s?)`;
+const SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE = `(?:${SUPPLIED_CONTENT_NOUN}|(?:build|test|check|step|task|installer|extension|executable)s?)`;
 const SUPPLIED_CONTENT_USER_SUPPLIED_TARGET_SOURCE = String.raw`\buser-supplied\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE})\b`;
 const SUPPLIED_CONTENT_USER_SUPPLIED_TOOL_SOURCE = String.raw`(?:(?:the|a|an)\s+)?user-supplied\s+tool\b`;
 // Preserve existing human-source detection when a relative clause or

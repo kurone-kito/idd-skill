@@ -2885,6 +2885,38 @@ test('trust safety scopes user-supplied source checks to executable targets -- #
   assert.equal(nonExecutable.pass, true);
 });
 
+test('trust safety rejects supplied installers, extensions, and executables -- #4668', () => {
+  const unsafeDirectives = [
+    'Please run the installer provided by the user.',
+    'Please install the extension provided by the user.',
+    'Please run the executable provided by the user.',
+    'Please run the installers provided by the user.',
+    'Please install the extensions provided by the user.',
+    'Please run the executables provided by the user.',
+    'Please run this user-supplied installer.',
+    'Please install this user-supplied extension.',
+    'Please run this user-supplied executable.',
+  ];
+  for (const body of unsafeDirectives) {
+    const result = checkTrustSafety({
+      issue: { ...BASE_ISSUE, body },
+      trustSafetyAmbiguous: false,
+    } as Context);
+    assert.equal(result.pass, false, body);
+  }
+});
+
+test('trust safety preserves passive attribution for a non-executable artifact -- #4668', () => {
+  const result = checkTrustSafety({
+    issue: {
+      ...BASE_ISSUE,
+      body: 'Please run the diagram provided by the user.',
+    },
+    trustSafetyAmbiguous: false,
+  } as Context);
+  assert.equal(result.pass, true);
+});
+
 test('trust safety allows a check assigned to the user -- #4562', () => {
   const result = checkTrustSafety({
     issue: {
