@@ -897,7 +897,7 @@ const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:${UNSAFE_DIRECT_ACTOR_ROLE_
 // sources; keeping these nouns separate avoids making ordinary "run this
 // test/check" repository commands look like supplied content.
 const SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE = `(?:${SUPPLIED_CONTENT_NOUN}|build|test|check)`;
-const SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE = String.raw`(?:(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person)|a\s+(?:user|human|tester|reviewer|maintainer|developer|person)|an\s+operator)`;
+const SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE = String.raw`(?:(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)|a\s+(?:user|human|tester|reviewer|maintainer|developer|person)|an\s+operator)`;
 const SUPPLIED_CONTENT_AGENT_ROLE_SOURCE = String.raw`(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}`;
 const SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE = String.raw`(?![\w-](?!(?:-?(?:agent|assistant|bot))\b)|\s+interface\b)`;
 // #3073: "run this full command to validate the config" matches only
