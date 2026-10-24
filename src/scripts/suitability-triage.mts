@@ -1092,6 +1092,8 @@ const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:${UNSAFE_DIRECT_ACTOR_ROLE_
 // sources; keeping these nouns separate avoids making ordinary "run this
 // test/check" repository commands look like supplied content.
 const SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE = `(?:${SUPPLIED_CONTENT_NOUN}|build|test|check)`;
+const SUPPLIED_CONTENT_USER_SUPPLIED_TARGET_SOURCE = String.raw`\buser-supplied\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE})\b`;
+const SUPPLIED_CONTENT_USER_SUPPLIED_TOOL_SOURCE = String.raw`(?:(?:the|a|an)\s+)?user-supplied\s+tool\b`;
 // Preserve existing human-source detection when a relative clause or
 // provenance adverb separates an executable noun from its passive verb.
 const SUPPLIED_CONTENT_HUMAN_SOURCE_MODIFIER_SOURCE = String.raw`(?:(?:that|which)\s+(?:was|is|are|were|has been|have been|had been)\s+)?(?:(?:[\w'-]+ly|just|already|still)\s+)?`;
@@ -5873,7 +5875,11 @@ function findUnsafeExecutionDirectiveMatch(
     // leave compounds such as "user interface" intact as attribution. The
     // role alternative reuses the direct-role vocabulary for executable
     // sources only; it does not change the manual-handoff grammar.
-    String.raw`\b${SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE}\b\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_MODIFIER_SOURCE})?${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE}\s+by\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE}${SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE}(?:(?:\s+|-)[\w'-]+)?|${SUPPLIED_CONTENT_AGENT_ROLE_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE})`,
+    String.raw`\b${SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE}\b\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_MODIFIER_SOURCE})?${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE}\s+by\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE}${SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE}(?:(?:\s+|-)[\w'-]+)?|${SUPPLIED_CONTENT_AGENT_ROLE_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}|${SUPPLIED_CONTENT_USER_SUPPLIED_TOOL_SOURCE})`,
+    'i',
+  );
+  const suppliedContentUserSuppliedTargetPattern = new RegExp(
+    SUPPLIED_CONTENT_USER_SUPPLIED_TARGET_SOURCE,
     'i',
   );
   let verbMatch: RegExpExecArray | null = verbPattern.exec(corpus);
@@ -5915,6 +5921,7 @@ function findUnsafeExecutionDirectiveMatch(
         generalTargetMatch ??
         directActorCompoundTargetPattern.exec(window) ??
         suppliedContentHumanSourcePattern.exec(window) ??
+        suppliedContentUserSuppliedTargetPattern.exec(window) ??
         UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET.exec(window);
       const verbBodyStart = verbStart - bodyOffset;
       const verbHtmlCommentRange =
