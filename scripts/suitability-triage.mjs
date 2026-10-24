@@ -867,7 +867,7 @@ const USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_PREFIX = new RegExp(
 // that continues after an actor ("by the user to verify") stays unsafe.
 const UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE = `(?:to|and|or|but|then|while|whereas|when|because|if|as|in|on|at|during|after|before|for|with|who|that|which|can|could|may|might|must|should|will|would|is|are|was|were|has|have|had|${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}|participant)`;
 const UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE = String.raw`(?![\w-]|\s+(?!(?:${UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE})\b)\w)`;
-const UNSAFE_HUMAN_ACTOR_TARGET_SOURCE = String.raw`by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}`;
+const UNSAFE_HUMAN_ACTOR_TARGET_SOURCE = String.raw`(?:by|from)\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}`;
 // Agent-role recipients are unsafe when they follow a direct command object.
 // The final object noun stays adjacent to "by", while the preceding phrase
 // remains inside sliceUnsafeDirectiveWindow's 100-character/sentence bound.
@@ -902,11 +902,11 @@ const UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET = new RegExp(
   UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET_SOURCE,
   'i',
 );
-const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:${UNSAFE_DIRECT_ACTOR_ROLE_TARGET_SOURCE}|\b(?:untrusted|user-provided|user input|from\s+(?:the\s+)?user|${UNSAFE_HUMAN_ACTOR_TARGET_SOURCE}|${SUPPLIED_CONTENT_REFERENCE})\b|${SUPPLIED_CONTENT_OBJECT_REFERENCE}\b)`;
+const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:${UNSAFE_DIRECT_ACTOR_ROLE_TARGET_SOURCE}|\b(?:untrusted|user-provided|user input|${UNSAFE_HUMAN_ACTOR_TARGET_SOURCE}|${SUPPLIED_CONTENT_REFERENCE})\b|${SUPPLIED_CONTENT_OBJECT_REFERENCE}\b)`;
 // Only this specialized path recognizes generated/supplied executable
 // sources; keeping these nouns separate avoids making ordinary "run this
 // test/check" repository commands look like supplied content.
-const SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE = `(?:${SUPPLIED_CONTENT_NOUN}|build|test|check)`;
+const SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE = `(?:${SUPPLIED_CONTENT_NOUN}|(?:build|test|check)s?)`;
 const SUPPLIED_CONTENT_USER_SUPPLIED_TARGET_SOURCE = String.raw`\buser-supplied\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE})\b`;
 const SUPPLIED_CONTENT_USER_SUPPLIED_TOOL_SOURCE = String.raw`(?:(?:the|a|an)\s+)?user-supplied\s+tool\b`;
 // Preserve existing human-source detection when a relative clause or
@@ -5314,7 +5314,7 @@ function findUnsafeExecutionDirectiveMatch(
     // leave compounds such as "user interface" intact as attribution. The
     // role alternative reuses the direct-role vocabulary for executable
     // sources only; it does not change the manual-handoff grammar.
-    String.raw`(?:[\x60'"]?\b${SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE}\b[\x60'"]?)\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_MODIFIER_SOURCE})?${SUPPLIED_CONTENT_HUMAN_SOURCE_PASSIVE_MODIFIER_SOURCE}\s+by\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE}${SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE}(?:(?:\s+|-)[\w'-]+)?|${SUPPLIED_CONTENT_AGENT_ROLE_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}|${SUPPLIED_CONTENT_USER_SUPPLIED_TOOL_SOURCE})`,
+    String.raw`(?:[\x60'"]?\b${SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE}\b[\x60'"]?)\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_MODIFIER_SOURCE})?${SUPPLIED_CONTENT_HUMAN_SOURCE_PASSIVE_MODIFIER_SOURCE}\s+(?:by|from)\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE}${SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE}(?:(?:\s+|-)[\w'-]+)?|${SUPPLIED_CONTENT_AGENT_ROLE_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}|${SUPPLIED_CONTENT_USER_SUPPLIED_TOOL_SOURCE})`,
     'i',
   );
   const suppliedContentUserSuppliedTargetPattern = new RegExp(
@@ -5359,7 +5359,7 @@ function findUnsafeExecutionDirectiveMatch(
           );
         const suppressedPassiveAttribution =
           suppressedPassiveRoleAttribution ||
-          (/^by\s/i.test(candidateGeneralTargetMatch[0] ?? '') &&
+          (/^(?:by|from)\s/i.test(candidateGeneralTargetMatch[0] ?? '') &&
             passiveAttributionPrefixPattern.test(
               window.slice(0, candidateGeneralTargetMatch.index),
             ));
