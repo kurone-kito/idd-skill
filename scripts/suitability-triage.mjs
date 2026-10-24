@@ -877,6 +877,7 @@ const UNSAFE_HUMAN_ACTOR_TARGET_SOURCE = String.raw`by\s+(?:(?:the|a|an)\s+)?${U
 const UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE =
   '(?:generated|maintained|provided|created|built|written|compiled|developed|authored|designed|produced|implemented|assembled|configured)';
 const UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_MODIFIER_SOURCE = String.raw`(?:\s+(?:[\w'-]+ly|in\s+(?:the\s+)?CI))*`;
+const UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_CHAIN_SOURCE = String.raw`${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE}${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_MODIFIER_SOURCE}(?:\s+(?:and|or)\s+${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE}${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_MODIFIER_SOURCE})*`;
 // Keep coordinated nouns such as "test suite" inside the command object.
 // A coordinator plus a verb and determiner starts a separate clause, as in
 // the passive-attribution boundary "and inspect the deployment by ...".
@@ -893,7 +894,7 @@ const UNSAFE_DIRECT_ACTOR_ROLE_TARGET = new RegExp(
   'i',
 );
 const UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_ATTRIBUTION_PREFIX = new RegExp(
-  String.raw`\b${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE}${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_MODIFIER_SOURCE}\s*$`,
+  String.raw`\b${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_CHAIN_SOURCE}\s*$`,
   'i',
 );
 const UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET_SOURCE = String.raw`^\s*this\s+(?:step|check)\s+by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}(?:[\s-]+[\w-]+)*\s*[.!?]?\s*$`;
@@ -912,10 +913,10 @@ const SUPPLIED_CONTENT_USER_SUPPLIED_TOOL_SOURCE = String.raw`(?:(?:the|a|an)\s+
 // provenance adverb separates an executable noun from its passive verb.
 const SUPPLIED_CONTENT_HUMAN_SOURCE_MODIFIER_SOURCE = String.raw`(?:(?:that|which)\s+(?:was|is|are|were|has been|have been|had been)\s+)?(?:(?:[\w'-]+ly|just|already|still)\s+)?`;
 const SUPPLIED_CONTENT_HUMAN_SOURCE_PASSIVE_MODIFIER_SOURCE =
-  UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_MODIFIER_SOURCE;
+  UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_CHAIN_SOURCE;
 const SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE = String.raw`(?:(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)|a\s+(?:user|human|tester|reviewer|maintainer|developer|person)|an\s+operator)`;
 const SUPPLIED_CONTENT_AGENT_ROLE_SOURCE = String.raw`(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}`;
-const SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE = String.raw`(?![\w-](?!(?:-?(?:agent|assistant|bot))\b)|\s+interface\b)`;
+const SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE = String.raw`(?![\w-](?!(?:-?(?:agent|assistant|bot))\b)|\s+(?!(?:${UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE}|agent|assistant|bot|contributor|named|called)\b)\w)`;
 // #3073: "run this full command to validate the config" matches only
 // SUPPLIED_CONTENT_OBJECT_REFERENCE's ambiguous "this <filler> <noun>" shape
 // above -- the filler word here is a repository-scoping adjective, not an
@@ -5294,8 +5295,10 @@ function findUnsafeExecutionDirectiveMatch(
     'gi',
   );
   const targetPattern = new RegExp(UNSAFE_DIRECTIVE_TARGET_SOURCE, 'gi');
-  const passiveAttributionPrefixPattern =
-    /\b(?:generated|maintained|provided|created|built|written|compiled|developed|authored|designed|produced|implemented|assembled|configured)\s+$/i;
+  const passiveAttributionPrefixPattern = new RegExp(
+    String.raw`\b${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_CHAIN_SOURCE}\s+$`,
+    'i',
+  );
   // The general boundary leaves unlisted compound nouns such as "user
   // interface" available for passive attribution. After a direct command
   // object, a recognized human prefix followed by a noun remains unsafe.
@@ -5311,7 +5314,7 @@ function findUnsafeExecutionDirectiveMatch(
     // leave compounds such as "user interface" intact as attribution. The
     // role alternative reuses the direct-role vocabulary for executable
     // sources only; it does not change the manual-handoff grammar.
-    String.raw`\b${SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE}\b\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_MODIFIER_SOURCE})?${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE}${SUPPLIED_CONTENT_HUMAN_SOURCE_PASSIVE_MODIFIER_SOURCE}\s+by\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE}${SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE}(?:(?:\s+|-)[\w'-]+)?|${SUPPLIED_CONTENT_AGENT_ROLE_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}|${SUPPLIED_CONTENT_USER_SUPPLIED_TOOL_SOURCE})`,
+    String.raw`(?:[\x60'"]?\b${SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE}\b[\x60'"]?)\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_MODIFIER_SOURCE})?${SUPPLIED_CONTENT_HUMAN_SOURCE_PASSIVE_MODIFIER_SOURCE}\s+by\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE}${SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE}(?:(?:\s+|-)[\w'-]+)?|${SUPPLIED_CONTENT_AGENT_ROLE_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}|${SUPPLIED_CONTENT_USER_SUPPLIED_TOOL_SOURCE})`,
     'i',
   );
   const suppliedContentUserSuppliedTargetPattern = new RegExp(
