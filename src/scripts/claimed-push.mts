@@ -87,6 +87,17 @@ const EFFORT_FINDING_ID = 'effort-candidate-file-limit';
 /** The sync manifest, read at the branch point for its `syncPairs` targets. */
 const SYNC_MANIFEST_PATH = 'audit/sync-manifest.json';
 
+/** Modes whose `target` is a generated copy rather than a canonical path. */
+const GENERATED_SYNC_PAIR_MODES = new Set(['exact', 'concreted']);
+
+/** Every sync-pair mode the scope check can classify. */
+const SUPPORTED_SYNC_PAIR_MODES = new Set([
+  'exact',
+  'concreted',
+  'contains',
+  'structure',
+]);
+
 /** The only default-branch read the `gh` kind runs. */
 const REPO_DEFAULT_BRANCH_ARGS = [
   'repo',
@@ -885,8 +896,8 @@ function gitPathList(stdout: string): string[] {
   return stdout.split('\0').filter((path) => path !== '');
 }
 
-/** The `syncPairs` targets of the manifest at the branch point. */
-function readManifestTargets(
+/** Generated-copy targets in the branch-point manifest's `syncPairs`. */
+function readGeneratedSyncTargets(
   ctx: Context,
   worktree: string,
   branchPoint: string,
@@ -926,12 +937,23 @@ function readManifestTargets(
     return malformed('syncPairs is not an array');
   }
   const targets = new Set<string>();
-  for (const pair of pairs) {
+  for (const [index, pair] of pairs.entries()) {
     const target = isRecord(pair) ? pair.target : undefined;
     if (typeof target !== 'string' || target === '') {
-      return malformed('a syncPairs entry has no target');
+      return malformed(`syncPairs entry ${index + 1} has no target`);
     }
-    targets.add(target);
+    const mode = isRecord(pair) ? pair.mode : undefined;
+    if (typeof mode !== 'string') {
+      return malformed(`syncPairs entry ${index + 1} has no string mode`);
+    }
+    if (!SUPPORTED_SYNC_PAIR_MODES.has(mode)) {
+      return malformed(
+        `syncPairs entry ${index + 1} has unsupported mode ${JSON.stringify(mode)}`,
+      );
+    }
+    if (GENERATED_SYNC_PAIR_MODES.has(mode)) {
+      targets.add(target);
+    }
   }
   return { ok: true, value: targets };
 }
@@ -995,13 +1017,13 @@ function readCanonicalPaths(
     ...new Set([...gitPathList(diff.stdout), ...gitPathList(untracked.stdout)]),
   ].sort();
 
-  const targets = readManifestTargets(ctx, worktree, branchPoint);
-  if (!targets.ok) {
-    return targets;
+  const generatedTargets = readGeneratedSyncTargets(ctx, worktree, branchPoint);
+  if (!generatedTargets.ok) {
+    return generatedTargets;
   }
   const paths: string[] = [];
   for (const path of changed) {
-    if (targets.value.has(path)) {
+    if (generatedTargets.value.has(path)) {
       continue;
     }
     const text = ctx.deps.readBaseText(worktree, branchPoint, path);

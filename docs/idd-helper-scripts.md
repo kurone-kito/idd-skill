@@ -10087,15 +10087,17 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
    `git diff --no-renames --name-only -z <branch point>` (committed,
    staged, and unstaged changes, and both sides of a rename) and
    `git ls-files --others --exclude-standard -z`, minus two kinds of path,
-   both read at the branch point with `git ls-tree` (a literal pathspec)
-   and `git show` so that a branch cannot exclude its own files: a file
-   whose first
-   `// idd-generated-from:` banner, read from its first 200 bytes as the
-   build reads it, names a different path, and a
-   `syncPairs` target of `audit/sync-manifest.json` (a missing manifest
-   gives none). A file absent at the branch point is never a generated
-   copy, and a deleted path counts unless it is one of the two. An empty
-   set refuses. The step then runs `audit-authored-issue` with
+   both derived from branch-point files so a branch cannot exclude its
+   own paths: a changed file whose first `// idd-generated-from:` banner,
+   read from its first 200 bytes as the build reads it, names a different
+   path; and a target listed in the branch-point manifest's `syncPairs`
+   array with mode `exact` or `concreted`. A `contains` or `structure`
+   target remains canonical. A pair with a missing or unsupported mode
+   makes the scope step refuse before the gate or push; a missing
+   manifest or `syncPairs` field gives no manifest exclusions. A file
+   absent at the branch point is never a generated copy, and a deleted
+   path counts unless it is one of the two.
+   An empty set refuses. The step then runs `audit-authored-issue` with
    `--shape child --stdin --marker-prefix <prefix> --title <title>`
    twice, in the primary checkout: on the issue body, and on a copy that
    is the body with a leading `## Candidate files` section of one
