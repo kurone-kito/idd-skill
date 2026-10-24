@@ -99,8 +99,8 @@ Track each worker's issue, claim, branch, handle, report path, and state
 Verify the schema-valid draft outside the worktree against live GitHub; set
 `workerHandle` from the roster, append with the profile-selected
 `idd-worker-report append --file <path>`, and dispose per the worker table.
-Without a start handle or after verification/append failure, leave it
-unappended, mark `stalled`, and follow fan-out recovery.
+Without a start handle or after verification/append failure, append nothing,
+mark `stalled`, and follow fan-out recovery.
 
 ## 6. Worker span
 
