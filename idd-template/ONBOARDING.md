@@ -262,7 +262,8 @@ below instead.
 
    ```sh
    node scripts/idd-onboard.mjs --import \
-     --source <idd-skill-clone> --target <target-repo>
+     --source <idd-skill-clone> --target <target-repo> \
+     [--allow-root <root-containing-target>]
    ```
 
    **Checkpoint.** Before `--substitute`, commit the mirror:
@@ -334,11 +335,9 @@ Bootstrap](docs/onboarding/issue-mediated-bootstrap.md) instead of
 continuing below — Steps 2, 4, and 5 write the template with a direct,
 unreviewed commit (the `direct-import` default only).
 
-Otherwise continue with the Step 2 file list and Option A (or Option B
-for a local clone) below to fetch the template, apply the confirmed
-placeholder and policy values by hand (Steps 1A-1C, 3, and 4 below
-spell out the same items the catalog just asked), and finish with
-Steps 5 and 6.
+Otherwise use Option A below to fetch the template and apply the
+confirmed values in Steps 1A-1C, 3, and 4; finish with Steps 5 and 6.
+Option B requires Node.js.
 
 ---
 
@@ -656,8 +655,8 @@ error), so an agent can gate on the exit code without parsing prose.
 
   ```sh
   node scripts/idd-onboard.mjs --import --source <idd-skill-clone> \
-    --target <target-repo> [--profile <name>] [--force] [--dry-run] \
-    [--hold <target-path> ...]
+    --target <target-repo> [--allow-root <root-containing-target>] \
+    [--profile <name>] [--force] [--dry-run] [--hold <target-path> ...]
   ```
 
 - **Step 4 (replace placeholders) → `--substitute`**: resolves the seven
@@ -730,9 +729,7 @@ this section documents only the flags relevant to Steps 0, 1A-1C, 2, 3,
 
 ## Step 2 — Fetch or copy template files
 
-> **CLI shortcut**: `node scripts/idd-onboard.mjs --import` automates this
-> step from a local idd-skill clone — see
-> [CLI-assisted onboarding](#cli-assisted-onboarding) above.
+> **CLI**: [See the full command](docs/onboarding/template-distribution.md#local-copy-installs).
 
 You need the following core execution and profile artifact files in the
 target repository. Use whichever method applies.
@@ -934,14 +931,15 @@ for the exact `gh api` and `curl` loops (core files and the optional
 `issue-authoring` and `idd-spec-audit` companions), including the Codex
 `SKILL_DEST` examples.
 
-### Option B — Local copy (idd-skill cloned)
+### Option B — Local copy (Node.js and clone required)
 
-If you have cloned `https://github.com/kurone-kito/idd-skill`, copy
-the files from `idd-template/` into the target repository preserving
-their relative paths. See
-[Local-copy installs](docs/onboarding/template-distribution.md#local-copy-installs)
-for the optional issue-authoring companion copy example and the
-do-not-duplicate-native-roots rule.
+Use the complete core import command in
+[Local-copy installs](docs/onboarding/template-distribution.md#local-copy-installs).
+It includes `--allow-root` for separate checkouts; advisory workflows
+are separate.
+
+**Optional:** Host the advisory-convergence workflows with [the host-workflow instructions](docs/onboarding/optional-host-setup.md#optional--host-idd-advisory-convergence-as-a-required-check-ci-workflow);
+register the required check separately.
 
 ### Optional companion boundary
 
