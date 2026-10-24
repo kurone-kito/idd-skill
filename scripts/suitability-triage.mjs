@@ -891,7 +891,9 @@ const UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE = String.raw`(?:(?:this|the
 const UNSAFE_DIRECT_ACTOR_ROLE_COORDINATED_COMMAND_VERB_SOURCE =
   '(?:verify|check|test|run|execute|paste|install|invoke|record|review|read|write|update|add|remove|create|build|generate|use|open|close|follow|document|fix|resolve|ensure|compare|validate|select|download|upload|copy|move|apply|perform|handle|manage|implement|investigate)';
 const UNSAFE_DIRECT_ACTOR_ROLE_COORDINATED_COMMAND_CONNECTOR_SOURCE = String.raw`(?:and|or|but|then|also)(?:\s+(?:then|also))?`;
-const UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE = String.raw`(?:${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}(?:\s+|-)(?:agent|assistant|bot)|user-facing\s+coding\s+agent)`;
+const UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SUFFIX_SOURCE =
+  'agent|assistant|bot|contributor|reviewer|maintainer|operator|tester|developer|person';
+const UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE = String.raw`(?:${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}(?:\s+|-)(?:${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SUFFIX_SOURCE})|user-facing\s+(?:coding\s+)?(?:${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SUFFIX_SOURCE}))`;
 const UNSAFE_DIRECT_ACTOR_ROLE_TARGET_SOURCE = String.raw`(?:^\s*(${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE})by\s+(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}|^\s*${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE}${UNSAFE_DIRECT_ACTOR_ROLE_COORDINATED_COMMAND_CONNECTOR_SOURCE}\s+${UNSAFE_DIRECT_ACTOR_ROLE_COORDINATED_COMMAND_VERB_SOURCE}\s+(${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE})by\s+(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE})`;
 const UNSAFE_DIRECT_ACTOR_ROLE_TARGET = new RegExp(
   UNSAFE_DIRECT_ACTOR_ROLE_TARGET_SOURCE,
@@ -918,11 +920,11 @@ const SUPPLIED_CONTENT_USER_SUPPLIED_TOOL_SOURCE = String.raw`(?:(?:the|a|an)\s+
 const SUPPLIED_CONTENT_HUMAN_SOURCE_MODIFIER_SOURCE = String.raw`(?:(?:that|which)\s+(?:was|is|are|were|has been|have been|had been)\s+)?(?:(?:[\w'-]+ly|just|already|still)\s+)?`;
 const SUPPLIED_CONTENT_HUMAN_SOURCE_PASSIVE_MODIFIER_SOURCE =
   UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_CHAIN_SOURCE;
-const SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE = String.raw`(?:(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)|a\s+(?:user|human|tester|reviewer|maintainer|developer|person|QA|quality assurance)|an\s+operator)`;
+const SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE = String.raw`(?:(?:the|a|an)\s+)?(?:user-facing\s+(?:coding\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SUFFIX_SOURCE}|(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance))`;
 const SUPPLIED_CONTENT_AGENT_ROLE_SOURCE = String.raw`(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}`;
 const SUPPLIED_CONTENT_HUMAN_SOURCE_PROVENANCE_MODIFIER_SOURCE =
   '(?:via|through|using)';
-const SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE = String.raw`(?![\w-](?!(?:-?(?:agent|assistant|bot))\b)|\s+(?!(?:${UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE}|${SUPPLIED_CONTENT_HUMAN_SOURCE_PROVENANCE_MODIFIER_SOURCE}|agent|assistant|bot|contributor|named|called)\b)\w)`;
+const SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE = String.raw`(?![\w-](?!(?:-?(?:${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SUFFIX_SOURCE}))\b)|\s+(?!(?:${UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE}|${SUPPLIED_CONTENT_HUMAN_SOURCE_PROVENANCE_MODIFIER_SOURCE}|${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SUFFIX_SOURCE}|named|called)\b)\w)`;
 // #3073: "run this full command to validate the config" matches only
 // SUPPLIED_CONTENT_OBJECT_REFERENCE's ambiguous "this <filler> <noun>" shape
 // above -- the filler word here is a repository-scoping adjective, not an
