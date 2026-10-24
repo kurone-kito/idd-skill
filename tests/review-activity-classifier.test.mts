@@ -128,6 +128,19 @@ const RENDERER_CASES: Array<{
     expected: 'review',
   },
   {
+    name: 'renderScopeOverrunRecordComment',
+    render: () =>
+      markerHelpers.renderScopeOverrunRecordComment({
+        markerPrefix: 'idd-skill',
+        agentId: TRUSTED_LOGIN,
+        issueNumber: 1,
+        effort: 'M',
+        candidateFiles: ['src/example.mts'],
+      }),
+    // Issue-scoped evidence, never posted as a PR comment.
+    expected: 'review',
+  },
+  {
     name: 'renderReviewWatermarkMarker',
     render: () =>
       markerHelpers.renderReviewWatermarkMarker({
@@ -414,6 +427,13 @@ const FIELDS_BY_MARKER_TYPE: Record<MarkerType, Record<string, string>> = {
     merge: SHA,
     head: SHA,
   },
+  'scope-overrun': {
+    'agent-id': TRUSTED_LOGIN,
+    'marker-prefix': 'idd-skill',
+    issue: '1',
+    effort: 'M',
+    'candidate-files': '["src/example.mts"]',
+  },
   'authoring-owner': {
     'agent-id': TRUSTED_LOGIN,
     'marker-prefix': 'idd-skill',
@@ -460,6 +480,8 @@ const EXPECTED_BY_MARKER_TYPE: Record<MarkerType, IddPrCommentClassification> =
     'idd-hold': 'review',
     // Issue-scoped like idd-hold: the proof is read from the claimed issue.
     'f4-head-proof': 'review',
+    // Issue-scoped evidence marker, never posted to a PR.
+    'scope-overrun': 'review',
     // Not part of OPERATIONAL_MARKERS at all (issue-authoring lifecycle
     // markers, contract.md) -- never recognized as PR review-activity.
     'authoring-owner': 'review',

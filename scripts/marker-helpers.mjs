@@ -215,6 +215,7 @@ function scopeOverrunResolution(
  * decision. Ordinary issue-body edits are intentionally not an input, so
  * they cannot rewrite the effort or candidate-file snapshot.
  */
+// audit:ignore-dead-export: public evidence resolver for downstream claim/resume/readiness checks; those callers are outside #4674
 export function resolveScopeOverrunEvidence(options) {
   const markerPrefix = normalizeNonWhitespaceToken(options?.markerPrefix);
   const issueNumber = normalizePositiveIntegerToken(options?.issueNumber);
