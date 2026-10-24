@@ -74,10 +74,107 @@ const ACQUIRED_LINE = 'acquired\n';
 /**
  * Acquire the inherited FD in descriptor mode, report it, then run argv with
  * the lock FD closed only in the command process. The wrapper keeps the lock
- * alive if the helper itself exits before its command.
+ * alive if the helper exits before its command, then a detached guardian keeps
+ * it until every live member of the supervised process group has exited.
  */
 const ACQUIRED_WRAPPER =
-  '"$1" "$2" "$3" "$4" "$5" "$6"; flock_status=$?; if [ "$flock_status" -ne 0 ]; then exit "$flock_status"; fi; printf "acquired\\n" >&4; exec 4>&-; shift 6; "$@" 3>&-; command_status=$?; exit "$command_status"';
+  '"$1" "$2" "$3" "$4" "$5" "$6"; flock_status=$?; if [ "$flock_status" -ne 0 ]; then exit "$flock_status"; fi; trap ":" INT TERM; printf "acquired\\n" >&4; exec 4>&-; process_state_tool=$7; node_path=$8; guardian_script=$9; shift 9; "$@" 3>&-; command_status=$?; while :; do "$node_path" -e "$guardian_script" "$$" "$process_state_tool" & guardian_pid=$!; while :; do wait "$guardian_pid"; guardian_status=$?; if ! kill -0 "$guardian_pid" 2>/dev/null; then break; fi; done; if [ "$guardian_status" -eq 0 ]; then break; fi; printf "local-admission: process-group guardian did not start; keeping the validation slot held\\n" >&2; sleep 1; done; exit "$command_status"';
+/**
+ * This guardian shares the supervised process group and keeps the inherited
+ * lock descriptor until every live member except the wrapper has left it. Its
+ * short-lived process-state probes use a separate group without the lock FD.
+ */
+const GROUP_DRAIN_GUARDIAN = String.raw`
+const { spawn } = require('node:child_process');
+const pgid = Number(process.argv[1]);
+const wrapperPid = pgid;
+const processStateTool = process.argv[2];
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {});
+const poll = () => {
+  let child;
+  try {
+    child = spawn(processStateTool, ['-A', '-o', 'pid=,pgid=,stat='], {
+      detached: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch {
+    setTimeout(poll, 1000);
+    return;
+  }
+  let output = '';
+  let settled = false;
+  const finish = (processOutput) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timeout);
+    if (processOutput === null) {
+      setTimeout(poll, 1000);
+      return;
+    }
+    const rows = processOutput.split(/\r?\n/);
+    if (rows.at(-1) === '') rows.pop();
+    if (rows.length === 0) {
+      setTimeout(poll, 1000);
+      return;
+    }
+    let valid = true;
+    let liveMember = false;
+    for (const row of rows) {
+      const fields = row.trim().split(/\s+/);
+      const [pid, processGroup, state] = fields;
+      if (
+        fields.length !== 3 ||
+        pid === undefined ||
+        !/^\d+$/.test(pid) ||
+        processGroup === undefined ||
+        !/^\d+$/.test(processGroup) ||
+        state === undefined ||
+        !/^[A-Za-z?]/.test(state)
+      ) {
+        valid = false;
+        break;
+      }
+      if (
+        processGroup === String(pgid) &&
+        pid !== String(wrapperPid) &&
+        pid !== String(process.pid) &&
+        !/^[ZzXx]/.test(state)
+      ) {
+        liveMember = true;
+      }
+    }
+    if (!valid || liveMember) {
+      setTimeout(poll, 1000);
+      return;
+    }
+    process.exit(0);
+  };
+  const timeout = setTimeout(() => {
+    try {
+      child.kill('SIGKILL');
+    } catch {}
+    finish(null);
+  }, 1000);
+  if (child.stdout === null) {
+    finish(null);
+    return;
+  }
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    if (settled) return;
+    output += chunk;
+    if (output.length > 4 * 1024 * 1024) {
+      try {
+        child.kill('SIGKILL');
+      } catch {}
+      finish(null);
+    }
+  });
+  child.once('error', () => finish(null));
+  child.once('close', (code) => finish(code === 0 ? output : null));
+};
+poll();
+`;
 /**
  * Flags for the lock descriptor: read-only, so the helper never writes or
  * truncates the file; `O_CREAT` only when absent; `O_NOFOLLOW` refuses a
@@ -474,6 +571,9 @@ function runLocked(
         'sh',
         flockPath,
         ...buildFlockArguments(maxWaitMs),
+        processStateTool,
+        process.execPath,
+        GROUP_DRAIN_GUARDIAN,
         ...command,
       ],
       {

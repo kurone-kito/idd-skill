@@ -440,14 +440,18 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
-async function stopProcess(pid: number, stopFile: string): Promise<void> {
+async function stopProcess(
+  pid: number,
+  stopFile: string,
+  exitFile: string,
+): Promise<void> {
   writeFileSync(stopFile, 'stop\n');
   try {
     process.kill(pid, 'SIGTERM');
   } catch {
     // The bounded child may already have exited.
   }
-  await waitFor(() => !processIsAlive(pid), 5000);
+  await waitFor(() => existsSync(exitFile), 5000);
 }
 
 test('buildFlockArguments locks inherited descriptor 3 with a bounded wait', () => {
@@ -2182,15 +2186,19 @@ test('a detached descendant cannot retain the validation slot', {
   const h = makeHarness();
   const ready = join(h.state, 'daemon.json');
   const stopFile = join(h.state, 'daemon.stop');
+  const exitFile = join(h.state, 'daemon.exit');
   const nextReady = join(h.state, 'next.ready');
   const lockPath = join(h.state, LOCK_RELATIVE);
   const childScript = [
     `const fs = require('node:fs');`,
     `const stopFile = ${JSON.stringify(stopFile)};`,
+    `const exitFile = ${JSON.stringify(exitFile)};`,
+    `process.on('exit', () => fs.writeFileSync(exitFile, 'exited'));`,
     `const deadline = Date.now() + 5000;`,
     `const timer = setInterval(() => {`,
     `  if (fs.existsSync(stopFile) || Date.now() >= deadline) clearInterval(timer);`,
     `}, 20);`,
+    `process.on('SIGTERM', () => clearInterval(timer));`,
   ].join('\n');
   const commandScript = [
     `const fs = require('node:fs');`,
@@ -2238,7 +2246,9 @@ test('a detached descendant cannot retain the validation slot', {
         // The command may have failed before it wrote a complete readiness file.
       }
     }
-    if (daemonPid !== undefined) await stopProcess(daemonPid, stopFile);
+    if (daemonPid !== undefined) {
+      await stopProcess(daemonPid, stopFile, exitFile);
+    }
   }
 });
 
@@ -2302,6 +2312,70 @@ test('a live supervised process group holds the slot after command exit', {
     }
     if (first.child.exitCode === null && first.child.signalCode === null) {
       first.child.kill('SIGTERM');
+      await first.done;
+    }
+    if (
+      next !== undefined &&
+      next.child.exitCode === null &&
+      next.child.signalCode === null
+    ) {
+      next.child.kill('SIGTERM');
+      await next.done;
+    }
+  }
+});
+
+test('the wrapper holds the slot after its helper is killed', {
+  skip: !REAL_LOCK,
+}, async () => {
+  const h = makeHarness();
+  const groupEnded = join(h.state, 'killed-helper.group-ended');
+  const pgidFile = join(h.state, 'killed-helper.pgid');
+  const ready = join(h.state, 'killed-helper.ready');
+  const nextReady = join(h.state, 'killed-helper.next-ready');
+  const commandScript =
+    `(sleep 1.5; touch "$1") & ` + `echo "$PPID" > "$2"; touch "$3"`;
+  const first = runBin(
+    ['--', 'sh', '-c', commandScript, 'sh', groupEnded, pgidFile, ready],
+    makeWorkDir(),
+    h.env,
+  );
+  let supervisedPgid: number | undefined;
+  let next: ReturnType<typeof runBin> | undefined;
+  try {
+    await waitFor(() => existsSync(ready));
+    supervisedPgid = Number(readFileSync(pgidFile, 'utf8'));
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+    first.child.kill('SIGKILL');
+
+    next = runBin(
+      [
+        '--',
+        process.execPath,
+        '-e',
+        `require('node:fs').writeFileSync(${JSON.stringify(nextReady)}, 'started');`,
+      ],
+      makeWorkDir(),
+      h.env,
+    );
+    await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+    assert.equal(flockStatus(join(h.state, LOCK_RELATIVE)), 1);
+    assert.equal(existsSync(nextReady), false);
+
+    await waitFor(() => existsSync(groupEnded), 5000);
+    assert.equal((await first.done).signal, 'SIGKILL');
+    assert.equal((await next.done).status, 0);
+    assert.equal(existsSync(nextReady), true);
+  } finally {
+    if (supervisedPgid !== undefined) {
+      try {
+        process.kill(-supervisedPgid, 'SIGTERM');
+      } catch {
+        // The supervised group may already have ended.
+      }
+    }
+    if (first.child.exitCode === null && first.child.signalCode === null) {
+      first.child.kill('SIGKILL');
       await first.done;
     }
     if (
