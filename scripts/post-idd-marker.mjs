@@ -2184,8 +2184,22 @@ export function resolveAnchorOwnerGeneration(input) {
     closedGenerations: state.closedGenerations,
   };
 }
-function formerChildOwnerSessionKey(owner, session) {
-  return `${owner}\u0000${session}`;
+function recordFormerChildTargetWideLosingOwner(membership, owner) {
+  const pending = [owner];
+  while (pending.length > 0) {
+    const nextOwner = pending.pop();
+    if (
+      nextOwner === undefined ||
+      membership.expandedTargetWideLosingOwners.has(nextOwner)
+    ) {
+      continue;
+    }
+    membership.expandedTargetWideLosingOwners.add(nextOwner);
+    membership.targetWideLosingOwners.add(nextOwner);
+    pending.push(
+      ...(membership.targetWideResumeSuccessors.get(nextOwner) ?? []),
+    );
+  }
 }
 /**
  * Replay one former child's markers for an anchor/set pair. A completed child
@@ -2248,19 +2262,12 @@ function resolveFormerChildMembership(input) {
       parsed.mode === 'resume' &&
       input.membership.targetWideLosingOwners.has(parsed.supersedes)
     ) {
-      input.membership.targetWideLosingOwners.add(parsed.owner);
-      input.membership.targetWideLosingOwnerSessions.add(
-        formerChildOwnerSessionKey(parsed.owner, parsed.session),
-      );
+      recordFormerChildTargetWideLosingOwner(input.membership, parsed.owner);
     }
-    const ownerSessionKey = formerChildOwnerSessionKey(
-      parsed.owner,
-      parsed.session,
-    );
-    if (input.membership.targetWideLosingOwnerSessions.has(ownerSessionKey)) {
+    if (input.membership.targetWideLosingOwners.has(parsed.owner)) {
       if (comment.id === input.membership.openingCommentId) {
         return {
-          problem: `former child opener ${comment.id} reuses the owner and session of an earlier target-wide loser`,
+          problem: `former child opener ${comment.id} reuses the owner of an earlier target-wide loser`,
         };
       }
       continue;
@@ -2473,7 +2480,17 @@ function reconcileFormerChildMembershipsInternal(input, ancestry, readBudget) {
     }
     const membershipComments = events.map((event) => event.comment);
     const targetWideLosingOwners = new Set();
-    const targetWideLosingOwnerSessions = new Set();
+    const targetWideResumeSuccessors = new Map();
+    for (const event of events) {
+      if (event.parsed.mode !== 'resume') {
+        continue;
+      }
+      const successors =
+        targetWideResumeSuccessors.get(event.parsed.supersedes) ?? [];
+      successors.push(event.parsed.owner);
+      targetWideResumeSuccessors.set(event.parsed.supersedes, successors);
+    }
+    const expandedTargetWideLosingOwners = new Set();
     for (let index = 0; index < openerIndices.length; index += 1) {
       const openerIndex = openerIndices[index];
       const first = events[0];
@@ -2495,11 +2512,11 @@ function reconcileFormerChildMembershipsInternal(input, ancestry, readBudget) {
           startIndex: index === 0 ? 0 : openerIndex,
           openingCommentId: opener.comment.id,
           targetWideLosingOwners,
-          targetWideLosingOwnerSessions,
+          targetWideResumeSuccessors,
+          expandedTargetWideLosingOwners,
         },
         opening: opener.comment,
         openingOwner: opener.parsed.owner,
-        openingSession: opener.parsed.session,
       });
     }
   }
@@ -2797,14 +2814,9 @@ function reconcileFormerChildMembershipsInternal(input, ancestry, readBudget) {
             problem: `losing foreign opening ${generation.opening.id} has no former-child membership candidate`,
           };
         }
-        losingCandidate.membership.targetWideLosingOwners.add(
+        recordFormerChildTargetWideLosingOwner(
+          losingCandidate.membership,
           losingCandidate.openingOwner,
-        );
-        losingCandidate.membership.targetWideLosingOwnerSessions.add(
-          formerChildOwnerSessionKey(
-            losingCandidate.openingOwner,
-            losingCandidate.openingSession,
-          ),
         );
       }
       continue;

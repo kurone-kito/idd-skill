@@ -7759,6 +7759,7 @@ function ownerIdHistoryMarker(input: {
   owner: string;
   set: string;
   session: string;
+  supersedes?: string;
 }): string {
   const opening = input.mode === 'acquire' || input.mode === 'bootstrap';
   return ownerIdBody(
@@ -7768,7 +7769,7 @@ function ownerIdHistoryMarker(input: {
       'marker-owner': input.owner,
       set: input.set,
       session: input.session,
-      supersedes: opening ? 'none' : input.owner,
+      supersedes: opening ? 'none' : (input.supersedes ?? input.owner),
     }),
   );
 }
@@ -10181,6 +10182,19 @@ test('former-child reconciliation ignores a target-wide loser continuation in a 
     ),
     {
       id: 106,
+      createdAt: at(3.5),
+      body: ownerIdHistoryMarker({
+        mode: 'resume',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-child-resumed-loser',
+        set: childSet,
+        session: 'session-child-resumed-loser',
+        supersedes: 'owner-child-losing',
+      }),
+    },
+    {
+      id: 107,
       createdAt: at(4),
       body: ownerIdHistoryMarker({
         mode: 'acquire',
@@ -10192,19 +10206,19 @@ test('former-child reconciliation ignores a target-wide loser continuation in a 
       }),
     },
     {
-      id: 107,
+      id: 108,
       createdAt: at(5),
       body: ownerIdHistoryMarker({
         mode: 'release',
         target: targetRef,
         anchor: formerAnchor,
-        owner: 'owner-child-losing',
+        owner: 'owner-child-resumed-loser',
         set: childSet,
-        session: 'session-child-losing',
+        session: 'session-child-loser-release',
       }),
     },
     {
-      id: 108,
+      id: 109,
       createdAt: at(6),
       body: ownerIdHistoryMarker({
         mode: 'release',
@@ -10259,7 +10273,7 @@ test('former-child reconciliation ignores a target-wide loser continuation in a 
       assert.ok(result.closedSets.has(childSet));
       assert.deepEqual(
         result.supersedingOpenings.map((opening) => opening.id),
-        [106],
+        [107],
       );
     }
   } finally {
