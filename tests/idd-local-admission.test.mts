@@ -431,23 +431,31 @@ function flockStatus(path: string): number | null {
   return spawnSync('flock', ['-n', path, 'true']).status;
 }
 
-test('buildFlockArguments locks /dev/fd/3 with no -- before the path', () => {
-  const args = buildFlockArguments(['pnpm', 'test'], 1000);
-  assert.deepEqual(args.slice(0, 6), [
-    '--timeout',
-    '1',
-    '--conflict-exit-code',
-    '75',
-    '/dev/fd/3',
-    'sh',
-  ]);
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function stopProcess(pid: number, stopFile: string): Promise<void> {
+  writeFileSync(stopFile, 'stop\n');
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    // The bounded child may already have exited.
+  }
+  await waitFor(() => !processIsAlive(pid), 5000);
+}
+
+test('buildFlockArguments locks inherited descriptor 3 with a bounded wait', () => {
+  const args = buildFlockArguments(1000);
+  assert.deepEqual(args, ['--timeout', '1', '--conflict-exit-code', '75', '3']);
   assert.equal(args.includes('--'), false);
-  assert.deepEqual(args.slice(-2), ['pnpm', 'test']);
-  assert.deepEqual(buildFlockArguments(['x'], 1500).slice(0, 2), [
-    '--timeout',
-    '2',
-  ]);
-  assert.deepEqual(buildFlockArguments(['x'], 7_200_000).slice(0, 2), [
+  assert.deepEqual(buildFlockArguments(1500).slice(0, 2), ['--timeout', '2']);
+  assert.deepEqual(buildFlockArguments(7_200_000).slice(0, 2), [
     '--timeout',
     '7200',
   ]);
@@ -2166,6 +2174,199 @@ test('SIGTERM to the helper reaches the admitted command and frees the lock', {
   assert.equal(result.status, 143);
   assert.equal(existsSync(termed), true);
   assert.equal(flockStatus(join(h.state, LOCK_RELATIVE)), 0);
+});
+
+test('a detached descendant cannot retain the validation slot', {
+  skip: !REAL_LOCK,
+}, async () => {
+  const h = makeHarness();
+  const ready = join(h.state, 'daemon.json');
+  const stopFile = join(h.state, 'daemon.stop');
+  const nextReady = join(h.state, 'next.ready');
+  const lockPath = join(h.state, LOCK_RELATIVE);
+  const childScript = [
+    `const fs = require('node:fs');`,
+    `const stopFile = ${JSON.stringify(stopFile)};`,
+    `const deadline = Date.now() + 5000;`,
+    `const timer = setInterval(() => {`,
+    `  if (fs.existsSync(stopFile) || Date.now() >= deadline) clearInterval(timer);`,
+    `}, 20);`,
+  ].join('\n');
+  const commandScript = [
+    `const fs = require('node:fs');`,
+    `const { spawn } = require('node:child_process');`,
+    `let inheritedLockFd = false;`,
+    `try { const fd = fs.fstatSync(3); const lock = fs.statSync(${JSON.stringify(lockPath)}); inheritedLockFd = fd.dev === lock.dev && fd.ino === lock.ino; } catch {}`,
+    `const stdio = inheritedLockFd ? ['ignore', 'ignore', 'ignore', 'inherit'] : 'ignore';`,
+    `const daemon = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { detached: true, stdio });`,
+    `daemon.unref();`,
+    `fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ pid: daemon.pid, inheritedLockFd }));`,
+  ].join('\n');
+  const first = runBin(
+    ['--', process.execPath, '-e', commandScript],
+    makeWorkDir(),
+    h.env,
+  );
+  let daemonPid: number | undefined;
+  try {
+    assert.equal((await first.done).status, 0);
+    await waitFor(() => existsSync(ready));
+    const daemon = JSON.parse(readFileSync(ready, 'utf8')) as {
+      pid: number;
+      inheritedLockFd: boolean;
+    };
+    daemonPid = daemon.pid;
+    assert.equal(daemon.inheritedLockFd, false);
+    assert.equal(processIsAlive(daemon.pid), true);
+    assert.equal(flockStatus(join(h.state, LOCK_RELATIVE)), 0);
+
+    const nextScript = `require('node:fs').writeFileSync(${JSON.stringify(nextReady)}, 'started');`;
+    const next = runBin(
+      ['--', process.execPath, '-e', nextScript],
+      makeWorkDir(),
+      h.env,
+    );
+    assert.equal((await next.done).status, 0);
+    assert.equal(existsSync(nextReady), true);
+    assert.equal(processIsAlive(daemon.pid), true);
+  } finally {
+    if (daemonPid === undefined && existsSync(ready)) {
+      try {
+        daemonPid = (JSON.parse(readFileSync(ready, 'utf8')) as { pid: number })
+          .pid;
+      } catch {
+        // The command may have failed before it wrote a complete readiness file.
+      }
+    }
+    if (daemonPid !== undefined) await stopProcess(daemonPid, stopFile);
+  }
+});
+
+test('a live supervised process group holds the slot after command exit', {
+  skip: !REAL_LOCK,
+}, async () => {
+  const h = makeHarness();
+  const ready = join(h.state, 'group.ready');
+  const pidFile = join(h.state, 'group.pid');
+  const pgidFile = join(h.state, 'group.pgid');
+  const groupEnded = join(h.state, 'group.ended');
+  const nextReady = join(h.state, 'next.ready');
+  const commandScript = `(sleep 1; touch "$1") & echo "$!" > "$2"; echo "$PPID" > "$3"; touch "$4"`;
+  const first = runBin(
+    [
+      '--',
+      'sh',
+      '-c',
+      commandScript,
+      'sh',
+      groupEnded,
+      pidFile,
+      pgidFile,
+      ready,
+    ],
+    makeWorkDir(),
+    h.env,
+  );
+  let next: ReturnType<typeof runBin> | undefined;
+  let supervisedPgid: number | undefined;
+  try {
+    await waitFor(() => existsSync(ready));
+    const childPid = Number(readFileSync(pidFile, 'utf8'));
+    supervisedPgid = Number(readFileSync(pgidFile, 'utf8'));
+    assert.equal(processIsAlive(childPid), true);
+    next = runBin(
+      [
+        '--',
+        process.execPath,
+        '-e',
+        `require('node:fs').writeFileSync(${JSON.stringify(nextReady)}, 'started');`,
+      ],
+      makeWorkDir(),
+      h.env,
+    );
+    await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+    assert.equal(existsSync(nextReady), false);
+    assert.equal(first.child.exitCode, null);
+
+    assert.equal((await first.done).status, 0);
+    assert.equal(existsSync(groupEnded), true);
+    assert.equal((await next.done).status, 0);
+    assert.equal(existsSync(nextReady), true);
+  } finally {
+    if (supervisedPgid !== undefined) {
+      try {
+        process.kill(-supervisedPgid, 'SIGTERM');
+      } catch {
+        // The supervised group may already have ended.
+      }
+    }
+    if (first.child.exitCode === null && first.child.signalCode === null) {
+      first.child.kill('SIGTERM');
+      await first.done;
+    }
+    if (
+      next !== undefined &&
+      next.child.exitCode === null &&
+      next.child.signalCode === null
+    ) {
+      next.child.kill('SIGTERM');
+      await next.done;
+    }
+  }
+});
+
+test('SIGTERM keeps the slot until the signalled process group exits', {
+  skip: !REAL_LOCK,
+}, async () => {
+  const h = makeHarness();
+  const ready = join(h.state, 'signal.ready');
+  const termed = join(h.state, 'signal.termed');
+  const groupEnded = join(h.state, 'signal.ended');
+  const nextReady = join(h.state, 'next.ready');
+  const script =
+    `trap 'touch "$1"; sleep 0.8; touch "$2"; exit 0' TERM; ` +
+    `touch "$3"; while :; do sleep 1; done`;
+  const first = runBin(
+    ['--', 'sh', '-c', script, 'sh', termed, groupEnded, ready],
+    makeWorkDir(),
+    h.env,
+  );
+  let next: ReturnType<typeof runBin> | undefined;
+  try {
+    await waitFor(() => existsSync(ready));
+    first.child.kill('SIGTERM');
+    await waitFor(() => existsSync(termed));
+    next = runBin(
+      [
+        '--',
+        process.execPath,
+        '-e',
+        `require('node:fs').writeFileSync(${JSON.stringify(nextReady)}, 'started');`,
+      ],
+      makeWorkDir(),
+      h.env,
+    );
+    await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+    assert.equal(existsSync(nextReady), false);
+
+    assert.equal((await first.done).status, 143);
+    assert.equal(existsSync(groupEnded), true);
+    assert.equal((await next.done).status, 0);
+    assert.equal(existsSync(nextReady), true);
+  } finally {
+    if (first.child.exitCode === null && first.child.signalCode === null) {
+      first.child.kill('SIGTERM');
+      await first.done;
+    }
+    if (
+      next !== undefined &&
+      next.child.exitCode === null &&
+      next.child.signalCode === null
+    ) {
+      next.child.kill('SIGTERM');
+      await next.done;
+    }
+  }
 });
 
 test('SIGKILL to the helper leaves the slot held until the admitted command exits', {

@@ -77,13 +77,18 @@ const FALLBACK_MAX_WAIT_MS = 2 * 60 * 60 * 1000;
 const LOCK_PARENT_DIRECTORY = 'idd-skill';
 const LOCK_DIRECTORY = 'local-admission';
 const LOCK_FILE_NAME = 'validate.lock';
-/** Descriptor the flock child reads the lock through, as `/dev/fd/3`. */
+/** Inherited descriptor that the wrapper and helper keep locked. */
 const LOCK_FD = 3;
 /** Descriptor the wrapper reports `acquired` on, through a dedicated pipe. */
 const ACQUIRED_FD = 4;
 const ACQUIRED_LINE = 'acquired\n';
-/** Runs before the child: report the lock, close the pipe, then exec the argv. */
-const ACQUIRED_WRAPPER = 'printf "acquired\\n" >&4; exec 4>&-; exec "$@"';
+/**
+ * Acquire the inherited FD in descriptor mode, report it, then run argv with
+ * the lock FD closed only in the command process. The wrapper keeps the lock
+ * alive if the helper itself exits before its command.
+ */
+const ACQUIRED_WRAPPER =
+  '"$1" "$2" "$3" "$4" "$5" "$6"; flock_status=$?; if [ "$flock_status" -ne 0 ]; then exit "$flock_status"; fi; printf "acquired\\n" >&4; exec 4>&-; shift 6; "$@" 3>&-; command_status=$?; exit "$command_status"';
 
 /**
  * Flags for the lock descriptor: read-only, so the helper never writes or
@@ -192,7 +197,7 @@ function closeQuietly(fd: number): void {
   try {
     closeSync(fd);
   } catch {
-    // Already closed: the child keeps its own copy of the descriptor.
+    // It may already be closed after a failed spawn or cleanup.
   }
 }
 
@@ -266,25 +271,18 @@ function loadRawPolicy(deps: LocalAdmissionDeps): unknown {
 }
 
 /**
- * Arguments for the `flock` spawn. The lock is `/dev/fd/3`, not a path, and no
- * `--` precedes it: `flock` stops option parsing at the first non-option.
+ * Arguments for `flock`'s inherited-descriptor form. The descriptor number
+ * follows the options; `flock` exits after acquiring it, and the wrapper and
+ * helper keep the shared open-file description alive through supervision.
  */
-export function buildFlockArguments(
-  command: readonly string[],
-  maxWaitMs: number,
-): string[] {
+export function buildFlockArguments(maxWaitMs: number): string[] {
   const timeoutSeconds = Math.max(1, Math.ceil(maxWaitMs / 1000));
   return [
     '--timeout',
     String(timeoutSeconds),
     '--conflict-exit-code',
     String(EXPIRED_EXIT_CODE),
-    `/dev/fd/${LOCK_FD}`,
-    'sh',
-    '-c',
-    ACQUIRED_WRAPPER,
-    'sh',
-    ...command,
+    String(LOCK_FD),
   ];
 }
 
@@ -461,6 +459,7 @@ function superviseChild(
 ): Promise<number> {
   return new Promise<number>((resolveOutcome) => {
     let forwarded: NodeJS.Signals | null = null;
+    let signalForwardFailed = false;
     let closed = false;
     let settled = false;
     const handlers: Array<{ signal: NodeJS.Signals; handler: () => void }> = [];
@@ -472,7 +471,7 @@ function superviseChild(
       resolveOutcome(status);
     };
     const forward = (signal: NodeJS.Signals): void => {
-      if (settled || closed) return;
+      if (settled || (closed && !options.group)) return;
       forwarded ??= signal;
       if (!options.group) {
         child.kill(signal);
@@ -482,11 +481,15 @@ function superviseChild(
       if (pgid === undefined) return;
       try {
         process.kill(-pgid, signal);
+        signalForwardFailed = false;
       } catch (error) {
+        if (closed && (error as NodeJS.ErrnoException).code === 'ESRCH') {
+          return;
+        }
+        signalForwardFailed = true;
         deps.stderr(
           `local-admission: could not signal the admitted command (process group ${pgid}): ${errorMessage(error)}; the lock stays held until the command exits\n`,
         );
-        settle(REFUSED_EXIT_CODE);
       }
     };
     for (const signal of ['SIGINT', 'SIGTERM'] as const) {
@@ -501,21 +504,25 @@ function superviseChild(
     child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) return;
       closed = true;
-      if (forwarded !== null) {
-        const status = signalStatus(forwarded);
-        const pgid = child.pid;
-        if (options.group && pgid !== undefined) {
-          void waitForGroupToEnd(
-            pgid,
-            options.processStateTool ?? null,
-            deps.env,
-          ).then(() => settle(status));
-        } else {
-          settle(status);
-        }
-        return;
+      const finish = (): void => {
+        settle(
+          signalForwardFailed
+            ? REFUSED_EXIT_CODE
+            : forwarded === null
+              ? options.onClose(code, signal)
+              : signalStatus(forwarded),
+        );
+      };
+      const pgid = child.pid;
+      if (options.group && pgid !== undefined) {
+        void waitForGroupToEnd(
+          pgid,
+          options.processStateTool ?? null,
+          deps.env,
+        ).then(finish);
+      } else {
+        finish();
       }
-      settle(options.onClose(code, signal));
     });
   });
 }
@@ -568,12 +575,23 @@ function runLocked(
 ): Promise<number> {
   let child: ChildProcess;
   try {
-    child = deps.spawn(flockPath, buildFlockArguments(command, maxWaitMs), {
-      detached: true,
-      stdio: ['inherit', 'inherit', 'inherit', lockFd, 'pipe'],
-      env: { ...deps.env, [LOCAL_ADMISSION_ENV_VAR]: '1' },
-      cwd: deps.cwd,
-    });
+    child = deps.spawn(
+      'sh',
+      [
+        '-c',
+        ACQUIRED_WRAPPER,
+        'sh',
+        flockPath,
+        ...buildFlockArguments(maxWaitMs),
+        ...command,
+      ],
+      {
+        detached: true,
+        stdio: ['inherit', 'inherit', 'inherit', lockFd, 'pipe'],
+        env: { ...deps.env, [LOCAL_ADMISSION_ENV_VAR]: '1' },
+        cwd: deps.cwd,
+      },
+    );
   } catch (error) {
     closeQuietly(lockFd);
     deps.stderr(
@@ -581,7 +599,6 @@ function runLocked(
     );
     return Promise.resolve(REFUSED_EXIT_CODE);
   }
-  closeQuietly(lockFd);
   let acquired = false;
   let ackText = '';
   const notice = setInterval(() => {
@@ -624,7 +641,7 @@ function runLocked(
       );
       return REFUSED_EXIT_CODE;
     },
-  });
+  }).finally(() => closeQuietly(lockFd));
 }
 
 interface PueueCallResult {
