@@ -2237,6 +2237,8 @@ export interface AnchorOwnerGeneration {
   set: string;
   session: string;
   releasing: boolean;
+  /** Acquire/bootstrap and resume markers in this winning generation lineage. */
+  lineageOpeningIds: readonly number[];
   latest: AnchorOwnerLatestMarker;
 }
 
@@ -2245,6 +2247,8 @@ export interface ClosedAnchorOwnerGeneration {
   owner: string;
   set: string;
   session: string;
+  /** Acquire/bootstrap and resume markers in this winning generation lineage. */
+  lineageOpeningIds: readonly number[];
   releaseComplete: AnchorOwnerLatestMarker;
 }
 
@@ -2327,6 +2331,7 @@ function advanceAnchorOwnerGeneration(
           set: parsed.set,
           session: parsed.session,
           releasing: false,
+          lineageOpeningIds: [latest.id],
           latest,
         },
         closedSets,
@@ -2347,6 +2352,7 @@ function advanceAnchorOwnerGeneration(
           set: open.set,
           session: parsed.session,
           releasing: open.releasing,
+          lineageOpeningIds: [...open.lineageOpeningIds, latest.id],
           latest,
         },
         closedSets,
@@ -2388,6 +2394,7 @@ function advanceAnchorOwnerGeneration(
               owner: open.owner,
               set: open.set,
               session: open.session,
+              lineageOpeningIds: open.lineageOpeningIds,
               releaseComplete: latest,
             },
           ],
@@ -2400,6 +2407,7 @@ function advanceAnchorOwnerGeneration(
           set: open.set,
           session: open.session,
           releasing: open.releasing || parsed.mode !== 'heartbeat',
+          lineageOpeningIds: open.lineageOpeningIds,
           latest,
         },
         closedSets,
@@ -2918,9 +2926,8 @@ function reconcileFormerChildMembershipsInternal(
       ...(selfReplay.generation === null ? [] : [selfReplay.generation]),
     ].some(
       (generation) =>
-        generation.owner === opening.owner &&
         generation.set === opening.set &&
-        generation.session === opening.session,
+        generation.lineageOpeningIds.includes(opening.id),
     );
     if (!verifiedGeneration) {
       return {

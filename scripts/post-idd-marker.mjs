@@ -1933,6 +1933,7 @@ function advanceAnchorOwnerGeneration(state, parsed, latest) {
           set: parsed.set,
           session: parsed.session,
           releasing: false,
+          lineageOpeningIds: [latest.id],
           latest,
         },
         closedSets,
@@ -1953,6 +1954,7 @@ function advanceAnchorOwnerGeneration(state, parsed, latest) {
           set: open.set,
           session: parsed.session,
           releasing: open.releasing,
+          lineageOpeningIds: [...open.lineageOpeningIds, latest.id],
           latest,
         },
         closedSets,
@@ -1994,6 +1996,7 @@ function advanceAnchorOwnerGeneration(state, parsed, latest) {
               owner: open.owner,
               set: open.set,
               session: open.session,
+              lineageOpeningIds: open.lineageOpeningIds,
               releaseComplete: latest,
             },
           ],
@@ -2006,6 +2009,7 @@ function advanceAnchorOwnerGeneration(state, parsed, latest) {
           set: open.set,
           session: open.session,
           releasing: open.releasing || parsed.mode !== 'heartbeat',
+          lineageOpeningIds: open.lineageOpeningIds,
           latest,
         },
         closedSets,
@@ -2467,9 +2471,8 @@ function reconcileFormerChildMembershipsInternal(input, ancestry) {
       ...(selfReplay.generation === null ? [] : [selfReplay.generation]),
     ].some(
       (generation) =>
-        generation.owner === opening.owner &&
         generation.set === opening.set &&
-        generation.session === opening.session,
+        generation.lineageOpeningIds.includes(opening.id),
     );
     if (!verifiedGeneration) {
       return {

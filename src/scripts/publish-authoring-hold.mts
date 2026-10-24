@@ -912,7 +912,10 @@ export function checkOwnerLogStillOurs(input: {
   return ours > 0 ? null : "this run's owner marker is not on the issue";
 }
 
-type AnchorGeneration = Omit<AnchorOwnerGeneration, 'releasing'>;
+type AnchorGeneration = Omit<
+  AnchorOwnerGeneration,
+  'releasing' | 'lineageOpeningIds'
+>;
 
 /**
  * Replay the journal's records of one publication token (contract.md, "On

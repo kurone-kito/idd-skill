@@ -8905,6 +8905,146 @@ test('authoring-owner acquire keeps nested former-anchor sets closed after promo
   }
 });
 
+test('authoring-owner acquire accepts an outdated child release after its former anchor resumes (#4669)', () => {
+  const formerAnchorRef = 'o/r#43';
+  const earlierAnchorRef = 'o/r#44';
+  const nestedSet = 'set-nested-under-b';
+  const nestedSession = 'session-nested-under-b';
+  const directSet = 'set-direct-under-a';
+  const initialSession = 'session-direct-initial';
+  const resumedSession = 'session-direct-resumed';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const targetComments = [
+    {
+      id: 401,
+      createdAt: at(11),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_TARGET,
+        anchor: formerAnchorRef,
+        owner: 'owner-target-child',
+        set: directSet,
+        session: resumedSession,
+      }),
+    },
+    {
+      id: 402,
+      createdAt: at(12),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: OWNER_ID_TARGET,
+        anchor: formerAnchorRef,
+        owner: 'owner-target-child',
+        set: directSet,
+        session: resumedSession,
+      }),
+    },
+  ];
+  const formerAnchorComments = [
+    {
+      id: 101,
+      createdAt: at(2),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: formerAnchorRef,
+        anchor: earlierAnchorRef,
+        owner: 'owner-former-anchor-child',
+        set: nestedSet,
+        session: nestedSession,
+      }),
+    },
+    {
+      id: 102,
+      createdAt: at(3),
+      minimizedReason: 'outdated',
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: formerAnchorRef,
+        anchor: earlierAnchorRef,
+        owner: 'owner-former-anchor-child',
+        set: nestedSet,
+        session: nestedSession,
+      }),
+    },
+    {
+      id: 201,
+      createdAt: at(7),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: formerAnchorRef,
+        anchor: formerAnchorRef,
+        owner: 'owner-former-anchor-initial',
+        set: directSet,
+        session: initialSession,
+      }),
+    },
+    {
+      id: 202,
+      createdAt: at(8),
+      body: ownerIdBody(
+        ownerIdFlags('resume', {
+          'marker-target': formerAnchorRef,
+          anchor: formerAnchorRef,
+          'marker-owner': 'owner-former-anchor-resumed',
+          set: directSet,
+          session: resumedSession,
+          supersedes: 'owner-former-anchor-initial',
+        }),
+      ),
+    },
+    ...(['release', 'release-guard', 'release-complete'] as const).map(
+      (mode, index) => ({
+        id: 203 + index,
+        createdAt: at([14, 15, 16][index] ?? 14),
+        body: ownerIdHistoryMarker({
+          mode,
+          target: formerAnchorRef,
+          anchor: formerAnchorRef,
+          owner: 'owner-former-anchor-resumed',
+          set: directSet,
+          session: resumedSession,
+        }),
+      }),
+    ),
+  ];
+  const earlierAnchorComments = (
+    ['acquire', 'release', 'release-guard', 'release-complete'] as const
+  ).map((mode, index) => ({
+    id: 301 + index,
+    createdAt: at([0, 4, 5, 6][index] ?? 0),
+    body: ownerIdHistoryMarker({
+      mode,
+      target: earlierAnchorRef,
+      anchor: earlierAnchorRef,
+      owner: 'owner-earlier-anchor-self',
+      set: nestedSet,
+      session: nestedSession,
+    }),
+  }));
+  const stub = withOwnerIdStub({
+    comments: targetComments,
+    commentsByIssueNumber: {
+      43: formerAnchorComments,
+      44: earlierAnchorComments,
+    },
+  });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('acquire', {
+        'marker-owner': 'owner-target-promoted',
+        set: 'set-target-promoted',
+        session: 'session-target-promoted',
+      }),
+    );
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(readOwnerIdLines(stub.readsFile).length, 3);
+    assert.equal(readOwnerIdLines(stub.postsFile).length, 1);
+  } finally {
+    stub.restore();
+  }
+});
+
 test('authoring-owner acquire fails closed when former-anchor replay cycles (#4669)', () => {
   const formerAnchorRef = 'o/r#43';
   const earlierAnchorRef = 'o/r#44';
