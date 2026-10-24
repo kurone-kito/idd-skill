@@ -217,10 +217,11 @@ npx --yes --package <reviewed-helper-spec> \
 ```
 
 When detection is ambiguous, pass `--package-manager <npm|pnpm|yarn>`.
-`--package` selects the running build; use a reviewed full SHA and
-verify its bin and referenced workflow before upgrading.
-`--package-spec` selects the emitted helper spec, not the running build.
-Treat `refs/heads/main` as a manual opt-in for either.
+`--package` selects the running build; use a reviewed full SHA.
+`--package-spec` selects emitted output, not the running build. When
+omitted, it keeps the existing mutable `DEFAULT_PACKAGE_SPEC`
+(`refs/heads/main`). Treat `refs/heads/main` as a manual opt-in for
+either explicit override.
 
 **Missing pin is a non-blocking advisory, not a blocking check.**
 Observed 2026-09-14, during the issue-mediated bootstrap of this

@@ -3402,6 +3402,20 @@ Node.js helper path.
 - `instructions-only`: keep helper dependencies, helper files, and helper
   wrapper scripts out of the target repository entirely.
 
+### Pinning executable examples
+
+The customization example pins both the `--package` archive and reusable
+workflow reference to a full commit SHA. To update them, resolve the
+intended release or commit to a full SHA. At that revision, verify the
+`idd-helper-bundle-manifest` bin and reusable workflow exist, then replace
+the SHA in both references so they stay aligned.
+
+`--package` selects the build that runs the manifest. `--package-spec`
+selects the helper spec emitted in generated output; omitting it preserves
+the existing mutable `DEFAULT_PACKAGE_SPEC` (`refs/heads/main`). A
+mutable source remains supported as an explicit choice. This guidance
+does not change the runtime default or policy.
+
 **Authoritative invocation surface per profile.** Under `vendored-node`, the
 canonical invocation is `node scripts/<name>.mjs`; the `package-manager` / `npx`
 `bin/` facade (the `idd-*` bin wrappers) is **redundant** in this profile and

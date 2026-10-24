@@ -392,16 +392,12 @@ npx --yes \
   idd-helper-bundle-manifest --profile package-manager
 ```
 
-The `--package` URL selects the IDD build that runs the manifest. This
-example pins the reviewed v0.17.0 release commit. Before upgrading,
-choose the intended release or commit, resolve it to a full SHA, and
-confirm that the manifest bin and any referenced reusable workflow exist
-at that exact revision. Then update the relevant full-SHA references
-deliberately.
-
-To opt into a mutable running build, replace the SHA in the archive URL
-with `refs/heads/main`. This is an explicit choice; the reviewed full
-SHA remains the recommendation.
+`--package` selects the running manifest build, pinned here to
+v0.17.0. Issue #4644's
+[2026-10-23 intake][reviewed-executable-example-intake] records the
+maintainer's guidance choice, not a demonstrated vulnerability. See the
+[pinning guide](idd-helper-scripts.md#pinning-executable-examples) for
+update steps and the mutable-source option.
 
 The manifest auto-detects npm, pnpm, or yarn from the target repository
 when possible. If detection is ambiguous, pass this flag explicitly:
@@ -412,12 +408,9 @@ when possible. If detection is ambiguous, pass this flag explicitly:
 
 The output shows which dependency entries, `package.json` scripts,
 vendored files, or one-shot commands belong to the selected profile.
-Pass `--package-spec <pinned-spec>` when you want the manifest to emit a
-reviewed tarball or mirror URL instead of the default archive URL. This
-option selects the helper package spec in the generated output; it does
-not select the build currently running the manifest. You may explicitly
-set it to a mutable `refs/heads/main` archive URL when that is the
-intended output. This is independent of the `--package` source above.
+`--package-spec` selects emitted output, not the running build. If
+omitted, the existing mutable `DEFAULT_PACKAGE_SPEC` (`refs/heads/main`)
+remains.
 
 To switch profiles later, rerun the same command with
 these flags:
@@ -2760,3 +2753,4 @@ These are repository-local optimizations; they do not change the IDD merge gate
 or the cross-agent workflow.
 
 [issue-authoring-review-input-schema]: https://kurone-kito.github.io/idd-skill/schemas/issue-authoring-review-input.schema.json
+[reviewed-executable-example-intake]: https://gist.github.com/kurone-kito/9f2d7871542cb2f7a255f92a7c1232d0
